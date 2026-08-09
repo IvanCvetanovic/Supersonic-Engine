@@ -1,6 +1,7 @@
 #include "editor/EditorLayer.hpp"
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
+#include "core/Raycast.hpp"
 #include "imgui.h"
 #include "ImGuizmo.h"
 
@@ -62,6 +63,12 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
             if (ImGui::MenuItem("Scale (R)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE); }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Layout Presets")) {
+            if (ImGui::MenuItem("Default Layout")) { /* Layout preset reset */ }
+            if (ImGui::MenuItem("Viewport Focused")) { /* Viewport focus preset */ }
+            if (ImGui::MenuItem("Inspector Focused")) { /* Inspector focus preset */ }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Window")) {
             ImGui::MenuItem("ImGui Demo Window", nullptr, &m_showDemoWindow);
             ImGui::EndMenu();
@@ -107,6 +114,24 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
 
     ImGui::Image(m_offscreenPass->GetTextureID(), viewportPanelSize);
 
+    // Viewport Raycasting Object Picking
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
+        ImVec2 mousePos = ImGui::GetMousePos();
+        glm::vec2 localMouse(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
+
+        auto cameraView = registry.view<CameraComponent>();
+        for (auto camEnt : cameraView) {
+            const auto& camera = cameraView.get<CameraComponent>(camEnt);
+            Ray ray = Raycast::ScreenPointToRay(localMouse, glm::vec2(viewportPanelSize.x, viewportPanelSize.y), camera);
+            entt::entity picked = Raycast::PickEntity(registry, ray);
+            if (picked != entt::null) {
+                m_hierarchyPanel.SetSelectedEntity(picked);
+                selectedEntity = picked;
+            }
+            break;
+        }
+    }
+
     // Overlay Viewport Toolbar
     ImGui::SetCursorPos(ImVec2(10, 30));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
@@ -143,6 +168,13 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
     ImGui::Text("Framerate:       %.1f FPS", fps);
     ImGui::Text("Active Entities: %u", entityCount);
     ImGui::Text("Viewport Res:    %ux%u", m_offscreenPass->GetWidth(), m_offscreenPass->GetHeight());
+    ImGui::End();
+
+    // 6. Camera Preview Window (Picture-in-Picture)
+    ImGui::Begin("Camera Preview");
+    ImGui::Text("Active Viewport Camera");
+    ImGui::Separator();
+    ImGui::Image(m_offscreenPass->GetTextureID(), ImVec2(240, 135));
     ImGui::End();
 
     if (m_showDemoWindow) {

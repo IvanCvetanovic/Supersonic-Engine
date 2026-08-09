@@ -53,6 +53,15 @@ void SceneHierarchyPanel::OnImGuiRender() {
                 m_registry->emplace<RenderableComponent>(entity);
                 m_selectedEntity = entity;
             }
+            if (ImGui::MenuItem("Create 3D Terrain")) {
+                auto entity = m_registry->create();
+                m_registry->emplace<TagComponent>(entity, "Procedural Terrain");
+                m_registry->emplace<TransformComponent>(entity, glm::vec3(0.0f, -2.0f, 0.0f));
+                m_registry->emplace<MeshComponent>(entity, "Terrain", "", 256, 512);
+                m_registry->emplace<MaterialComponent>(entity);
+                m_registry->emplace<RenderableComponent>(entity);
+                m_selectedEntity = entity;
+            }
             if (ImGui::MenuItem("Create Plane")) {
                 auto entity = m_registry->create();
                 m_registry->emplace<TagComponent>(entity, "Plane");
