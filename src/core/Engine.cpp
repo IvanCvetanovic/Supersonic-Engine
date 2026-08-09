@@ -1,6 +1,10 @@
 #include "core/Engine.hpp"
 #include "core/Components.hpp"
 #include "core/CameraSystem.hpp"
+#include "core/PhysicsSystem.hpp"
+#include "core/AudioSystem.hpp"
+#include "core/ScriptEngine.hpp"
+#include "core/ParticleSystem.hpp"
 
 #include <iostream>
 #include <glm/glm.hpp>
@@ -59,22 +63,30 @@ void EngineApp::initECS() {
     light.color = glm::vec3(1.0f, 0.95f, 0.85f);
     light.intensity = 1.2f;
 
-    // Create Primary 3D Textured Cube Entity
+    // Create Primary 3D Textured Cube Entity with Rotator Script
     auto mainCube = m_registry.create();
     m_registry.emplace<TagComponent>(mainCube, "MainTexturedCube");
     auto& transform1 = m_registry.emplace<TransformComponent>(mainCube);
     transform1.position = glm::vec3(0.0f, 0.0f, 0.0f);
     m_registry.emplace<RenderableComponent>(mainCube, 0u, 0u, true);
+    m_registry.emplace<ScriptComponent>(mainCube, "RotatorScript");
 
-    // Create Secondary Orbiting 3D Cube Entity
-    auto satelliteCube = m_registry.create();
-    m_registry.emplace<TagComponent>(satelliteCube, "SatelliteCube");
-    auto& transform2 = m_registry.emplace<TransformComponent>(satelliteCube);
-    transform2.position = glm::vec3(-1.8f, 0.5f, -0.5f);
-    transform2.scale = glm::vec3(0.55f);
-    m_registry.emplace<RenderableComponent>(satelliteCube, 0u, 0u, true);
+    // Create Physics Falling Cube Entity
+    auto physCube = m_registry.create();
+    m_registry.emplace<TagComponent>(physCube, "Physics Cube");
+    auto& transformPhys = m_registry.emplace<TransformComponent>(physCube, glm::vec3(1.5f, 4.0f, 0.0f));
+    transformPhys.scale = glm::vec3(0.7f);
+    m_registry.emplace<RigidBodyComponent>(physCube);
+    m_registry.emplace<BoxColliderComponent>(physCube);
+    m_registry.emplace<RenderableComponent>(physCube, 0u, 0u, true);
 
-    std::cout << "[EngineApp] Created Camera, Directional Light, and 2 3D Cube entities." << std::endl;
+    // Create Particle Emitter Entity
+    auto particleEntity = m_registry.create();
+    m_registry.emplace<TagComponent>(particleEntity, "Particle Emitter");
+    m_registry.emplace<TransformComponent>(particleEntity, glm::vec3(-1.5f, 0.0f, 0.0f));
+    m_registry.emplace<ParticleEmitterComponent>(particleEntity);
+
+    std::cout << "[EngineApp] Created Camera, Light, Rotator Cube, Physics Cube, and Particle Emitter." << std::endl;
 }
 
 void EngineApp::Run() {
@@ -92,13 +104,11 @@ void EngineApp::Run() {
         // Process WASD movement & Right-Click Mouse Look for Camera
         CameraSystem::Update(m_registry, *m_window, deltaTime);
 
-        // Update 3D entity rotations in ECS
-        auto view = m_registry.view<TransformComponent, RenderableComponent>();
-        for (auto entity : view) {
-            auto& transform = view.get<TransformComponent>(entity);
-            transform.rotation.y += deltaTime * 0.8f;
-            transform.rotation.x += deltaTime * 0.4f;
-        }
+        // Update Subsystems: Physics, Audio, Scripting, and Particles
+        PhysicsSystem::Update(m_registry, deltaTime);
+        AudioSystem::Update(m_registry, deltaTime);
+        ScriptEngine::Update(m_registry, deltaTime);
+        ParticleSystem::Update(m_registry, deltaTime);
 
         // Get view & proj matrices from active CameraComponent
         glm::mat4 viewMatrix(1.0f);

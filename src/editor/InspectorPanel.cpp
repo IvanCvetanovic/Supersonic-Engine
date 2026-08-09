@@ -56,7 +56,73 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
-    // 3. LightComponent
+    // 3. RigidBodyComponent
+    if (registry.all_of<RigidBodyComponent>(entity)) {
+        if (ImGui::CollapsingHeader("RigidBody Physics", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& rb = registry.get<RigidBodyComponent>(entity);
+
+            ImGui::Checkbox("Use Gravity", &rb.useGravity);
+            ImGui::Checkbox("Is Kinematic", &rb.isKinematic);
+            ImGui::DragFloat("Mass", &rb.mass, 0.1f, 0.01f, 1000.0f);
+            Theme::DrawVec3Control("Velocity", rb.velocity, 0.0f);
+        }
+    }
+
+    ImGui::Spacing();
+
+    // 4. BoxColliderComponent
+    if (registry.all_of<BoxColliderComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Box Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& box = registry.get<BoxColliderComponent>(entity);
+
+            Theme::DrawVec3Control("Size", box.size, 1.0f);
+            ImGui::Checkbox("Is Trigger", &box.isTrigger);
+        }
+    }
+
+    ImGui::Spacing();
+
+    // 5. AudioSourceComponent
+    if (registry.all_of<AudioSourceComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& audio = registry.get<AudioSourceComponent>(entity);
+
+            ImGui::Checkbox("Play On Start", &audio.isPlaying);
+            ImGui::Checkbox("Looping", &audio.loop);
+            ImGui::SliderFloat("Volume", &audio.volume, 0.0f, 1.0f);
+            ImGui::SliderFloat("Pitch", &audio.pitch, 0.5f, 2.0f);
+        }
+    }
+
+    ImGui::Spacing();
+
+    // 6. ScriptComponent
+    if (registry.all_of<ScriptComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Script Component", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& script = registry.get<ScriptComponent>(entity);
+
+            ImGui::Checkbox("Enabled", &script.isEnabled);
+            ImGui::Text("Script Name: %s", script.scriptName.c_str());
+        }
+    }
+
+    ImGui::Spacing();
+
+    // 7. ParticleEmitterComponent
+    if (registry.all_of<ParticleEmitterComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Particle Emitter", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& emitter = registry.get<ParticleEmitterComponent>(entity);
+
+            ImGui::DragFloat("Emit Rate", &emitter.emitRate, 1.0f, 1.0f, 100.0f);
+            ImGui::DragFloat("Lifetime", &emitter.particleLifetime, 0.1f, 0.1f, 10.0f);
+            ImGui::ColorEdit4("Start Color", glm::value_ptr(emitter.startColor));
+            ImGui::ColorEdit4("End Color", glm::value_ptr(emitter.endColor));
+        }
+    }
+
+    ImGui::Spacing();
+
+    // 8. LightComponent
     if (registry.all_of<LightComponent>(entity)) {
         if (ImGui::CollapsingHeader("Directional Light", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& light = registry.get<LightComponent>(entity);
@@ -70,7 +136,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
-    // 4. CameraComponent
+    // 9. CameraComponent
     if (registry.all_of<CameraComponent>(entity)) {
         if (ImGui::CollapsingHeader("Camera Component", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& camera = registry.get<CameraComponent>(entity);
@@ -79,19 +145,6 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::DragFloat("Near Plane", &camera.nearPlane, 0.01f, 0.001f, 10.0f);
             ImGui::DragFloat("Far Plane", &camera.farPlane, 1.0f, 10.0f, 1000.0f);
             Theme::DrawVec3Control("Cam Position", camera.position, 0.0f);
-        }
-    }
-
-    ImGui::Spacing();
-
-    // 5. RenderableComponent
-    if (registry.all_of<RenderableComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Renderable Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
-            auto& renderable = registry.get<RenderableComponent>(entity);
-
-            ImGui::Checkbox("Visible", &renderable.isVisible);
-            ImGui::Text("Mesh ID:     %u", renderable.meshID);
-            ImGui::Text("Material ID: %u", renderable.materialID);
         }
     }
 }

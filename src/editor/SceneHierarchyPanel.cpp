@@ -33,6 +33,17 @@ void SceneHierarchyPanel::OnImGuiRender() {
                 m_registry->emplace<RenderableComponent>(entity);
                 m_selectedEntity = entity;
             }
+            if (ImGui::MenuItem("Create Physics Cube")) {
+                auto entity = m_registry->create();
+                m_registry->emplace<TagComponent>(entity, "Physics Cube");
+                m_registry->emplace<TransformComponent>(entity, glm::vec3(0.0f, 5.0f, 0.0f));
+                m_registry->emplace<MeshComponent>(entity, "Cube", "", 24, 36);
+                m_registry->emplace<MaterialComponent>(entity);
+                m_registry->emplace<RigidBodyComponent>(entity);
+                m_registry->emplace<BoxColliderComponent>(entity);
+                m_registry->emplace<RenderableComponent>(entity);
+                m_selectedEntity = entity;
+            }
             if (ImGui::MenuItem("Create Sphere")) {
                 auto entity = m_registry->create();
                 m_registry->emplace<TagComponent>(entity, "Sphere");
@@ -52,6 +63,20 @@ void SceneHierarchyPanel::OnImGuiRender() {
                 m_selectedEntity = entity;
             }
             ImGui::Separator();
+            if (ImGui::MenuItem("Create Audio Source")) {
+                auto entity = m_registry->create();
+                m_registry->emplace<TagComponent>(entity, "3D Audio Source");
+                m_registry->emplace<TransformComponent>(entity);
+                m_registry->emplace<AudioSourceComponent>(entity);
+                m_selectedEntity = entity;
+            }
+            if (ImGui::MenuItem("Create Particle Emitter")) {
+                auto entity = m_registry->create();
+                m_registry->emplace<TagComponent>(entity, "Particle Emitter");
+                m_registry->emplace<TransformComponent>(entity);
+                m_registry->emplace<ParticleEmitterComponent>(entity);
+                m_selectedEntity = entity;
+            }
             if (ImGui::MenuItem("Create Directional Light")) {
                 auto entity = m_registry->create();
                 m_registry->emplace<TagComponent>(entity, "Directional Light");

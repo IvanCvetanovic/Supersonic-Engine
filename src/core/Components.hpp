@@ -128,7 +128,7 @@ struct MaterialComponent {
 };
 
 struct MeshComponent {
-    std::string primitiveType{"Cube"}; // Cube, Sphere, Plane, Model
+    std::string primitiveType{"Cube"};
     std::string filePath;
     uint32_t vertexCount{0};
     uint32_t indexCount{0};
@@ -142,6 +142,53 @@ struct RenderableComponent {
 
 struct TagComponent {
     std::string tag;
+};
+
+// =========================================================================
+// NEW SUB-SYSTEM COMPONENTS
+// =========================================================================
+
+struct RigidBodyComponent {
+    glm::vec3 velocity{0.0f, 0.0f, 0.0f};
+    float mass{1.0f};
+    bool isKinematic{false};
+    bool useGravity{true};
+};
+
+struct BoxColliderComponent {
+    glm::vec3 size{1.0f, 1.0f, 1.0f};
+    bool isTrigger{false};
+};
+
+struct SphereColliderComponent {
+    float radius{0.5f};
+    bool isTrigger{false};
+};
+
+struct AudioSourceComponent {
+    std::string soundFile{"assets/audio/ambient.wav"};
+    float volume{0.8f};
+    float pitch{1.0f};
+    bool isPlaying{true};
+    bool loop{true};
+};
+
+struct AudioListenerComponent {
+    bool isPrimary{true};
+};
+
+struct ScriptComponent {
+    std::string scriptName{"RotatorScript"}; // RotatorScript, OscillatorScript, LightFlickerScript
+    bool isEnabled{true};
+};
+
+struct ParticleEmitterComponent {
+    uint32_t maxParticles{100};
+    float emitRate{10.0f};
+    float particleLifetime{2.0f};
+    glm::vec4 startColor{1.0f, 0.6f, 0.1f, 1.0f};
+    glm::vec4 endColor{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 velocityRange{0.5f, 2.0f, 0.5f};
 };
 
 } // namespace Engine
