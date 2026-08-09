@@ -11,11 +11,12 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     
     createRenderPass();
     createFramebuffers();
+    createGraphicsPipeline();
     createCommandPool();
     createCommandBuffers();
     createSyncObjects();
 
-    std::cout << "[VulkanRenderer] Subsystem initialized with 2 Frames in Flight." << std::endl;
+    std::cout << "[VulkanRenderer] Subsystem initialized with Graphics Pipeline and 2 Frames in Flight." << std::endl;
 }
 
 VulkanRenderer::~VulkanRenderer() {
@@ -37,6 +38,8 @@ VulkanRenderer::~VulkanRenderer() {
         device.destroyCommandPool(m_commandPool);
         m_commandPool = nullptr;
     }
+
+    m_pipeline.reset();
 
     for (auto framebuffer : m_framebuffers) {
         if (framebuffer) {
@@ -114,6 +117,15 @@ void VulkanRenderer::createFramebuffers() {
     }
 
     std::cout << "[VulkanRenderer] Created " << m_framebuffers.size() << " Framebuffers." << std::endl;
+}
+
+void VulkanRenderer::createGraphicsPipeline() {
+    m_pipeline = std::make_unique<VulkanPipeline>(
+        m_deviceRef.GetDevice(),
+        m_renderPass,
+        "assets/shaders/vert.spv",
+        "assets/shaders/frag.spv"
+    );
 }
 
 void VulkanRenderer::createCommandPool() {
@@ -221,6 +233,10 @@ void VulkanRenderer::DrawFrame() {
     vk::Rect2D scissor{{0, 0}, m_swapchainRef.GetExtent()};
     m_commandBuffers[m_currentFrame].setViewport(0, 1, &viewport);
     m_commandBuffers[m_currentFrame].setScissor(0, 1, &scissor);
+
+    // Task 4: Bind Graphics Pipeline and issue draw call for 3 vertices (hardcoded in vertex shader)
+    m_commandBuffers[m_currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline->GetPipeline());
+    m_commandBuffers[m_currentFrame].draw(3, 1, 0, 0);
 
     m_commandBuffers[m_currentFrame].endRenderPass();
     m_commandBuffers[m_currentFrame].end();

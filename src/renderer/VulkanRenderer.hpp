@@ -1,11 +1,13 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
 
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanSwapchain.hpp"
+#include "renderer/VulkanPipeline.hpp"
 #include "platform/Window.hpp"
 
 namespace Engine {
@@ -30,6 +32,7 @@ private:
     void createCommandPool();
     void createCommandBuffers();
     void createSyncObjects();
+    void createGraphicsPipeline();
 
     VulkanDevice& m_deviceRef;
     VulkanSwapchain& m_swapchainRef;
@@ -37,6 +40,8 @@ private:
 
     vk::RenderPass m_renderPass{nullptr};
     std::vector<vk::Framebuffer> m_framebuffers;
+
+    std::unique_ptr<VulkanPipeline> m_pipeline;
 
     vk::CommandPool m_commandPool{nullptr};
     std::vector<vk::CommandBuffer> m_commandBuffers;
