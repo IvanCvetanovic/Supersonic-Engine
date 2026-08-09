@@ -4,10 +4,13 @@
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
+#include <entt/entt.hpp>
 
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanSwapchain.hpp"
 #include "renderer/VulkanPipeline.hpp"
+#include "renderer/VulkanBuffer.hpp"
+#include "renderer/VulkanImage.hpp"
 #include "platform/Window.hpp"
 
 namespace Engine {
@@ -22,9 +25,10 @@ public:
     VulkanRenderer(const VulkanRenderer&) = delete;
     VulkanRenderer& operator=(const VulkanRenderer&) = delete;
 
-    void DrawFrame();
+    void DrawFrame(entt::registry& registry, const glm::mat4& viewMatrix, const glm::mat4& projMatrix);
 
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
+    VulkanPipeline& GetPipeline() const { return *m_pipeline; }
 
 private:
     void createRenderPass();
@@ -33,6 +37,13 @@ private:
     void createCommandBuffers();
     void createSyncObjects();
     void createGraphicsPipeline();
+
+    void createVertexBuffer();
+    void createIndexBuffer();
+    void createUniformBuffers();
+    void createTextureImage();
+    void createDescriptorPool();
+    void createDescriptorSets();
 
     VulkanDevice& m_deviceRef;
     VulkanSwapchain& m_swapchainRef;
@@ -49,6 +60,21 @@ private:
     std::vector<vk::Semaphore> m_imageAvailableSemaphores;
     std::vector<vk::Semaphore> m_renderFinishedSemaphores;
     std::vector<vk::Fence> m_inFlightFences;
+
+    // Phase 5: Geometry Buffers
+    std::unique_ptr<VulkanBuffer> m_vertexBuffer;
+    std::unique_ptr<VulkanBuffer> m_indexBuffer;
+    uint32_t m_indexCount{0};
+
+    // Phase 6: UBO Buffers (1 per frame in flight)
+    std::vector<std::unique_ptr<VulkanBuffer>> m_uniformBuffers;
+
+    // Phase 7: Texture Image & Sampler
+    std::unique_ptr<VulkanImage> m_textureImage;
+
+    // Descriptors
+    vk::DescriptorPool m_descriptorPool{nullptr};
+    std::vector<vk::DescriptorSet> m_descriptorSets;
 
     uint32_t m_currentFrame{0};
 };

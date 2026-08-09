@@ -48,6 +48,8 @@ add_executable(GameEngine ${ENGINE_SOURCES})
 target_include_directories(GameEngine PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
 )
 
 target_link_libraries(GameEngine PRIVATE 

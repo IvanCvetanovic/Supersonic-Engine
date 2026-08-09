@@ -1,0 +1,95 @@
+#pragma once
+
+#include <array>
+#include <string>
+
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <vulkan/vulkan.hpp>
+
+namespace Engine {
+
+struct Vertex {
+    glm::vec3 pos;
+    glm::vec3 color;
+    glm::vec2 texCoord;
+
+    static vk::VertexInputBindingDescription getBindingDescription() {
+        vk::VertexInputBindingDescription bindingDescription{};
+        bindingDescription.binding = 0;
+        bindingDescription.stride = sizeof(Vertex);
+        bindingDescription.inputRate = vk::VertexInputRate::eVertex;
+        return bindingDescription;
+    }
+
+    static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions() {
+        std::array<vk::VertexInputAttributeDescription, 3> attributeDescriptions{};
+
+        // Position
+        attributeDescriptions[0].binding = 0;
+        attributeDescriptions[0].location = 0;
+        attributeDescriptions[0].format = vk::Format::eR32G32B32Sfloat;
+        attributeDescriptions[0].offset = offsetof(Vertex, pos);
+
+        // Color
+        attributeDescriptions[1].binding = 0;
+        attributeDescriptions[1].location = 1;
+        attributeDescriptions[1].format = vk::Format::eR32G32B32Sfloat;
+        attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+        // TexCoord
+        attributeDescriptions[2].binding = 0;
+        attributeDescriptions[2].location = 2;
+        attributeDescriptions[2].format = vk::Format::eR32G32Sfloat;
+        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
+
+        return attributeDescriptions;
+    }
+};
+
+struct TransformComponent {
+    glm::vec3 position{0.0f, 0.0f, 0.0f};
+    glm::vec3 rotation{0.0f, 0.0f, 0.0f}; // Euler angles in radians
+    glm::vec3 scale{1.0f, 1.0f, 1.0f};
+
+    glm::mat4 getModelMatrix() const {
+        glm::mat4 mat = glm::translate(glm::mat4(1.0f), position);
+        mat = glm::rotate(mat, rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+        mat = glm::rotate(mat, rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        mat = glm::rotate(mat, rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+        mat = glm::scale(mat, scale);
+        return mat;
+    }
+};
+
+struct CameraComponent {
+    float fov{45.0f};
+    float aspect{16.0f / 9.0f};
+    float nearPlane{0.1f};
+    float farPlane{100.0f};
+
+    glm::vec3 position{0.0f, 0.0f, 3.5f};
+    glm::vec3 target{0.0f, 0.0f, 0.0f};
+    glm::vec3 up{0.0f, 1.0f, 0.0f};
+
+    glm::mat4 getViewMatrix() const {
+        return glm::lookAt(position, target, up);
+    }
+
+    glm::mat4 getProjectionMatrix() const {
+        glm::mat4 proj = glm::perspective(glm::radians(fov), aspect, nearPlane, farPlane);
+        proj[1][1] *= -1.0f; // Flip Y coordinate for Vulkan
+        return proj;
+    }
+};
+
+struct RenderableComponent {
+    uint32_t meshID{0};
+    uint32_t materialID{0};
+    bool isVisible{true};
+};
+
+} // namespace Engine
