@@ -147,6 +147,48 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             Theme::DrawVec3Control("Cam Position", camera.position, 0.0f);
         }
     }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Dynamic "Add Component" Dropdown Button
+    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 160.0f) * 0.5f);
+    if (ImGui::Button("+ Add Component", ImVec2(160.0f, 28.0f))) {
+        ImGui::OpenPopup("AddComponentPopup");
+    }
+
+    if (ImGui::BeginPopup("AddComponentPopup")) {
+        if (!registry.all_of<RigidBodyComponent>(entity) && ImGui::MenuItem("RigidBody Physics")) {
+            registry.emplace<RigidBodyComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<BoxColliderComponent>(entity) && ImGui::MenuItem("Box Collider")) {
+            registry.emplace<BoxColliderComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<AudioSourceComponent>(entity) && ImGui::MenuItem("Audio Source")) {
+            registry.emplace<AudioSourceComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<ScriptComponent>(entity) && ImGui::MenuItem("Script Component")) {
+            registry.emplace<ScriptComponent>(entity, "RotatorScript");
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<ParticleEmitterComponent>(entity) && ImGui::MenuItem("Particle Emitter")) {
+            registry.emplace<ParticleEmitterComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<LightComponent>(entity) && ImGui::MenuItem("Directional Light")) {
+            registry.emplace<LightComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<CameraComponent>(entity) && ImGui::MenuItem("Camera")) {
+            registry.emplace<CameraComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void InspectorPanel::RenderGizmo(
