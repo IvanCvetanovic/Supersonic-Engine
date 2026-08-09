@@ -13,13 +13,21 @@ EngineApp::EngineApp() {
 
     m_vulkanDevice = std::make_unique<VulkanDevice>(m_vulkanContext->GetInstance(), *m_window);
     m_swapchain = std::make_unique<VulkanSwapchain>(*m_vulkanDevice, *m_window);
+    m_renderer = std::make_unique<VulkanRenderer>(*m_vulkanDevice, *m_swapchain, *m_window);
 
     initECS();
 }
 
 EngineApp::~EngineApp() {
     std::cout << "[EngineApp] Shutting down Engine Subsystems in reverse order..." << std::endl;
+
+    // CRITICAL: Wait for GPU device idle before destroying rendering resources
+    if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
+        m_vulkanDevice->GetDevice().waitIdle();
+    }
+
     m_registry.clear();
+    m_renderer.reset();
     m_swapchain.reset();
     m_vulkanDevice.reset();
     m_vulkanContext.reset();
@@ -47,9 +55,13 @@ void EngineApp::Run() {
 
     while (!m_window->ShouldClose()) {
         m_window->PollEvents();
+        m_renderer->DrawFrame();
     }
 
-    std::cout << "[EngineApp] Window close requested. Exiting main loop." << std::endl;
+    std::cout << "[EngineApp] Window close requested. Waiting for device idle..." << std::endl;
+    if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
+        m_vulkanDevice->GetDevice().waitIdle();
+    }
 }
 
 } // namespace Engine

@@ -9,6 +9,7 @@
 #include "renderer/VulkanContext.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanSwapchain.hpp"
+#include "renderer/VulkanRenderer.hpp"
 
 namespace Engine {
 
@@ -39,6 +40,7 @@ private:
     std::unique_ptr<VulkanContext> m_vulkanContext;
     std::unique_ptr<VulkanDevice> m_vulkanDevice;
     std::unique_ptr<VulkanSwapchain> m_swapchain;
+    std::unique_ptr<VulkanRenderer> m_renderer;
     entt::registry m_registry;
 };
 
