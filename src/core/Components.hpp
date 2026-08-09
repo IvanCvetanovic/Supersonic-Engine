@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -115,6 +116,22 @@ struct LightComponent {
     glm::vec3 color{1.0f, 0.95f, 0.85f};
     float intensity{1.2f};
     glm::vec3 ambient{0.15f, 0.15f, 0.2f};
+};
+
+struct MaterialComponent {
+    glm::vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
+    float roughness{0.4f};
+    float metallic{0.1f};
+    float ao{1.0f};
+    std::string albedoTexturePath;
+    std::string normalTexturePath;
+};
+
+struct MeshComponent {
+    std::string primitiveType{"Cube"}; // Cube, Sphere, Plane, Model
+    std::string filePath;
+    uint32_t vertexCount{0};
+    uint32_t indexCount{0};
 };
 
 struct RenderableComponent {

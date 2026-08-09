@@ -1,7 +1,8 @@
 #include "editor/EditorLayer.hpp"
+#include "core/Components.hpp"
+#include "core/SceneSerializer.hpp"
 #include "imgui.h"
 #include "ImGuizmo.h"
-#include "core/Components.hpp"
 
 #include <iostream>
 
@@ -43,6 +44,13 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
     // 2. Editor Main Menu Bar
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
+                SceneSerializer::Serialize(registry, "assets/scenes/MainScene.scene");
+            }
+            if (ImGui::MenuItem("Open Scene", "Ctrl+O")) {
+                SceneSerializer::Deserialize(registry, "assets/scenes/MainScene.scene");
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) {
                 glfwSetWindowShouldClose(window.GetNativeWindow(), GLFW_TRUE);
             }
@@ -61,19 +69,23 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
         ImGui::EndMenuBar();
     }
 
-    // Hotkey shortcuts for ImGuizmo mode
+    // Hotkey shortcuts for Save/Load and ImGuizmo mode
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) SceneSerializer::Serialize(registry, "assets/scenes/MainScene.scene");
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) SceneSerializer::Deserialize(registry, "assets/scenes/MainScene.scene");
         if (ImGui::IsKeyPressed(ImGuiKey_W)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE);
         if (ImGui::IsKeyPressed(ImGuiKey_E)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE);
         if (ImGui::IsKeyPressed(ImGuiKey_R)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE);
     }
 
-    // 3. Render Hierarchy and Inspector Panels
+    // 3. Render Hierarchy, Inspector, and Content Browser Panels
     m_hierarchyPanel.SetRegistry(registry);
     m_hierarchyPanel.OnImGuiRender();
 
     entt::entity selectedEntity = m_hierarchyPanel.GetSelectedEntity();
     m_inspectorPanel.OnImGuiRender(registry, selectedEntity);
+
+    m_contentBrowserPanel.OnImGuiRender();
 
     // 4. Game Viewport Window displaying Offscreen Texture
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));

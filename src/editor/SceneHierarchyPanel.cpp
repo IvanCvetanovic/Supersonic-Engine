@@ -24,10 +24,46 @@ void SceneHierarchyPanel::OnImGuiRender() {
 
         // Context Menu to create entities
         if (ImGui::BeginPopupContextWindow("HierarchyContextMenu", ImGuiPopupFlags_NoOpenOverItems | ImGuiPopupFlags_MouseButtonRight)) {
-            if (ImGui::MenuItem("Create Empty Entity")) {
+            if (ImGui::MenuItem("Create Cube")) {
                 auto entity = m_registry->create();
-                m_registry->emplace<TagComponent>(entity, "Empty Entity");
+                m_registry->emplace<TagComponent>(entity, "Cube");
                 m_registry->emplace<TransformComponent>(entity);
+                m_registry->emplace<MeshComponent>(entity, "Cube", "", 24, 36);
+                m_registry->emplace<MaterialComponent>(entity);
+                m_registry->emplace<RenderableComponent>(entity);
+                m_selectedEntity = entity;
+            }
+            if (ImGui::MenuItem("Create Sphere")) {
+                auto entity = m_registry->create();
+                m_registry->emplace<TagComponent>(entity, "Sphere");
+                m_registry->emplace<TransformComponent>(entity);
+                m_registry->emplace<MeshComponent>(entity, "Sphere", "", 64, 128);
+                m_registry->emplace<MaterialComponent>(entity);
+                m_registry->emplace<RenderableComponent>(entity);
+                m_selectedEntity = entity;
+            }
+            if (ImGui::MenuItem("Create Plane")) {
+                auto entity = m_registry->create();
+                m_registry->emplace<TagComponent>(entity, "Plane");
+                m_registry->emplace<TransformComponent>(entity, glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(10.0f, 1.0f, 10.0f));
+                m_registry->emplace<MeshComponent>(entity, "Plane", "", 4, 6);
+                m_registry->emplace<MaterialComponent>(entity);
+                m_registry->emplace<RenderableComponent>(entity);
+                m_selectedEntity = entity;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Create Directional Light")) {
+                auto entity = m_registry->create();
+                m_registry->emplace<TagComponent>(entity, "Directional Light");
+                m_registry->emplace<TransformComponent>(entity);
+                m_registry->emplace<LightComponent>(entity);
+                m_selectedEntity = entity;
+            }
+            if (ImGui::MenuItem("Create Camera")) {
+                auto entity = m_registry->create();
+                m_registry->emplace<TagComponent>(entity, "Camera");
+                m_registry->emplace<TransformComponent>(entity);
+                m_registry->emplace<CameraComponent>(entity);
                 m_selectedEntity = entity;
             }
             ImGui::EndPopup();

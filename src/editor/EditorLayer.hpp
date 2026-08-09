@@ -1,17 +1,15 @@
 #pragma once
 
 #include <memory>
-#include <entt/entt.hpp>
 
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanOffscreen.hpp"
-#include "platform/Window.hpp"
 #include "editor/SceneHierarchyPanel.hpp"
 #include "editor/InspectorPanel.hpp"
+#include "editor/ContentBrowserPanel.hpp"
+#include "platform/Window.hpp"
 
 namespace Engine {
-
-class VulkanRenderer;
 
 class EditorLayer {
 public:
@@ -24,11 +22,14 @@ public:
     void OnImGuiRender(entt::registry& registry, Window& window);
 
     VulkanOffscreen& GetOffscreen() { return *m_offscreenPass; }
+    SceneHierarchyPanel& GetHierarchyPanel() { return m_hierarchyPanel; }
+    InspectorPanel& GetInspectorPanel() { return m_inspectorPanel; }
 
 private:
     std::unique_ptr<VulkanOffscreen> m_offscreenPass;
     SceneHierarchyPanel m_hierarchyPanel;
     InspectorPanel m_inspectorPanel;
+    ContentBrowserPanel m_contentBrowserPanel;
 
     bool m_showDemoWindow{false};
 };
