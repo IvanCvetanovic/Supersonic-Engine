@@ -1,4 +1,5 @@
 #include "editor/InspectorPanel.hpp"
+#include "editor/Theme.hpp"
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtc/type_ptr.hpp>
@@ -13,7 +14,8 @@ void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity select
     if (selectedEntity != entt::null && registry.valid(selectedEntity)) {
         drawComponents(registry, selectedEntity);
     } else {
-        ImGui::TextDisabled("No Entity Selected");
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 20.0f);
+        ImGui::TextDisabled("  Select an entity from the Scene Hierarchy to inspect.");
     }
 
     ImGui::End();
@@ -27,60 +29,68 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         memset(buffer, 0, sizeof(buffer));
         strncpy(buffer, tag.tag.c_str(), sizeof(buffer) - 1);
 
-        if (ImGui::InputText("Tag", buffer, sizeof(buffer))) {
+        ImGui::TextDisabled("ENTITY TAG");
+        if (ImGui::InputText("##Tag", buffer, sizeof(buffer))) {
             tag.tag = std::string(buffer);
         }
     }
 
+    ImGui::Spacing();
     ImGui::Separator();
+    ImGui::Spacing();
 
     // 2. TransformComponent
     if (registry.all_of<TransformComponent>(entity)) {
         if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& transform = registry.get<TransformComponent>(entity);
 
-            ImGui::DragFloat3("Position", glm::value_ptr(transform.position), 0.05f);
+            Theme::DrawVec3Control("Position", transform.position, 0.0f);
 
             glm::vec3 rotDegrees = glm::degrees(transform.rotation);
-            if (ImGui::DragFloat3("Rotation", glm::value_ptr(rotDegrees), 0.5f)) {
-                transform.rotation = glm::radians(rotDegrees);
-            }
+            Theme::DrawVec3Control("Rotation", rotDegrees, 0.0f);
+            transform.rotation = glm::radians(rotDegrees);
 
-            ImGui::DragFloat3("Scale", glm::value_ptr(transform.scale), 0.05f, 0.001f, 100.0f);
+            Theme::DrawVec3Control("Scale", transform.scale, 1.0f);
         }
     }
+
+    ImGui::Spacing();
 
     // 3. LightComponent
     if (registry.all_of<LightComponent>(entity)) {
         if (ImGui::CollapsingHeader("Directional Light", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& light = registry.get<LightComponent>(entity);
 
-            ImGui::DragFloat3("Direction", glm::value_ptr(light.direction), 0.05f);
+            Theme::DrawVec3Control("Direction", light.direction, 0.0f);
             ImGui::ColorEdit3("Light Color", glm::value_ptr(light.color));
             ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 10.0f);
             ImGui::ColorEdit3("Ambient Color", glm::value_ptr(light.ambient));
         }
     }
 
+    ImGui::Spacing();
+
     // 4. CameraComponent
     if (registry.all_of<CameraComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader("Camera Component", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& camera = registry.get<CameraComponent>(entity);
 
             ImGui::DragFloat("Field of View", &camera.fov, 0.5f, 10.0f, 120.0f);
             ImGui::DragFloat("Near Plane", &camera.nearPlane, 0.01f, 0.001f, 10.0f);
             ImGui::DragFloat("Far Plane", &camera.farPlane, 1.0f, 10.0f, 1000.0f);
-            ImGui::DragFloat3("Camera Position", glm::value_ptr(camera.position), 0.05f);
+            Theme::DrawVec3Control("Cam Position", camera.position, 0.0f);
         }
     }
 
+    ImGui::Spacing();
+
     // 5. RenderableComponent
     if (registry.all_of<RenderableComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Renderable", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader("Renderable Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& renderable = registry.get<RenderableComponent>(entity);
 
             ImGui::Checkbox("Visible", &renderable.isVisible);
-            ImGui::Text("Mesh ID: %u", renderable.meshID);
+            ImGui::Text("Mesh ID:     %u", renderable.meshID);
             ImGui::Text("Material ID: %u", renderable.materialID);
         }
     }

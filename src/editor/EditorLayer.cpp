@@ -95,6 +95,20 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
 
     ImGui::Image(m_offscreenPass->GetTextureID(), viewportPanelSize);
 
+    // Overlay Viewport Toolbar
+    ImGui::SetCursorPos(ImVec2(10, 30));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.18f, 0.85f));
+
+    if (ImGui::Button("Translate (W)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE); }
+    ImGui::SameLine();
+    if (ImGui::Button("Rotate (E)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE); }
+    ImGui::SameLine();
+    if (ImGui::Button("Scale (R)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE); }
+
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+
     // Render ImGuizmo 3D Manipulators over Viewport
     auto cameraView = registry.view<CameraComponent>();
     for (auto camEnt : cameraView) {
@@ -105,6 +119,19 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
 
     ImGui::End();
     ImGui::PopStyleVar();
+
+    // 5. Engine Statistics Panel
+    ImGui::Begin("Engine Statistics");
+    float fps = io.Framerate;
+    float frameTime = 1000.0f / (fps > 0.0f ? fps : 60.0f);
+    uint32_t entityCount = static_cast<uint32_t>(registry.storage<entt::entity>().size());
+
+    ImGui::Text("Graphics API:    Vulkan 1.3 (VMA 3.1)");
+    ImGui::Text("Frame Time:      %.2f ms", frameTime);
+    ImGui::Text("Framerate:       %.1f FPS", fps);
+    ImGui::Text("Active Entities: %u", entityCount);
+    ImGui::Text("Viewport Res:    %ux%u", m_offscreenPass->GetWidth(), m_offscreenPass->GetHeight());
+    ImGui::End();
 
     if (m_showDemoWindow) {
         ImGui::ShowDemoWindow(&m_showDemoWindow);

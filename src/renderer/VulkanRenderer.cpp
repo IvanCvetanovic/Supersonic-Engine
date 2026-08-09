@@ -2,6 +2,8 @@
 #include "core/RenderSystem.hpp"
 #include "core/Components.hpp"
 
+#include "editor/Theme.hpp"
+
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -510,7 +512,7 @@ void VulkanRenderer::initImGui() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    ImGui::StyleColorsDark();
+    Theme::ApplyEngineDarkTheme();
 
     // 3. Init ImGui GLFW and Vulkan Backends
     ImGui_ImplGlfw_InitForVulkan(m_windowRef.GetNativeWindow(), true);
