@@ -5,6 +5,26 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Target Platform Detection
+if (ANDROID)
+    message(STATUS "Targeting Android NDK platform (Vulkan NativeActivity)")
+    add_compile_definitions(ENGINE_PLATFORM_ANDROID=1)
+elseif (APPLE)
+    if (IOS)
+        message(STATUS "Targeting iOS platform (MoltenVK Metal)")
+        add_compile_definitions(ENGINE_PLATFORM_IOS=1)
+    else()
+        message(STATUS "Targeting macOS platform (MoltenVK Metal)")
+        add_compile_definitions(ENGINE_PLATFORM_MACOS=1)
+    endif()
+elseif (WIN32)
+    message(STATUS "Targeting Windows platform (Win32 Vulkan)")
+    add_compile_definitions(ENGINE_PLATFORM_WINDOWS=1)
+else()
+    message(STATUS "Targeting Linux platform (X11/Wayland Vulkan)")
+    add_compile_definitions(ENGINE_PLATFORM_LINUX=1)
+endif()
+
 # Vulkan setup
 find_package(Vulkan QUIET)
 
