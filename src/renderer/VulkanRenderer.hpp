@@ -12,6 +12,7 @@
 #include "renderer/VulkanBuffer.hpp"
 #include "renderer/VulkanImage.hpp"
 #include "platform/Window.hpp"
+#include "editor/EditorLayer.hpp"
 
 namespace Engine {
 
@@ -30,10 +31,10 @@ public:
 
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
     VulkanPipeline& GetPipeline() const { return *m_pipeline; }
+    EditorLayer& GetEditorLayer() { return m_editorLayer; }
 
 private:
     void createRenderPass();
-    void createDepthResources();
     void createFramebuffers();
     void createCommandPool();
     void createCommandBuffers();
@@ -46,6 +47,7 @@ private:
     void createTextureImage();
     void createDescriptorPool();
     void createDescriptorSets();
+    void initImGui();
 
     void cleanupSwapchain();
 
@@ -53,8 +55,8 @@ private:
     VulkanSwapchain& m_swapchainRef;
     Window& m_windowRef;
 
+    // Swapchain Render Pass (ImGui UI Only)
     vk::RenderPass m_renderPass{nullptr};
-    std::unique_ptr<VulkanImage> m_depthImage;
     std::vector<vk::Framebuffer> m_framebuffers;
 
     std::unique_ptr<VulkanPipeline> m_pipeline;
@@ -80,6 +82,12 @@ private:
     // Descriptors
     vk::DescriptorPool m_descriptorPool{nullptr};
     std::vector<vk::DescriptorSet> m_descriptorSets;
+
+    // ImGui Dedicated Descriptor Pool
+    vk::DescriptorPool m_imguiPool{nullptr};
+
+    // Editor Subsystem
+    EditorLayer m_editorLayer;
 
     uint32_t m_currentFrame{0};
 };

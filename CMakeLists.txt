@@ -36,6 +36,18 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt-3.13.2)
 # VMA setup
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/VulkanMemoryAllocator-3.1.0)
 
+# Collect ImGui & ImGuizmo sources
+set(IMGUI_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/imgui.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/imgui_draw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/imgui_widgets.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/imgui_tables.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/imgui_demo.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends/imgui_impl_glfw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends/imgui_impl_vulkan.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imguizmo/ImGuizmo.cpp
+)
+
 # Collect engine sources
 file(GLOB_RECURSE ENGINE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
@@ -43,7 +55,7 @@ file(GLOB_RECURSE ENGINE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
 )
 
-add_executable(GameEngine ${ENGINE_SOURCES})
+add_executable(GameEngine ${ENGINE_SOURCES} ${IMGUI_SOURCES})
 
 target_include_directories(GameEngine PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -51,6 +63,9 @@ target_include_directories(GameEngine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tinygltf
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imguizmo
 )
 
 target_link_libraries(GameEngine PRIVATE 

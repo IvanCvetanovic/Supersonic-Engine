@@ -2,6 +2,11 @@
 #include "core/RenderSystem.hpp"
 #include "core/Components.hpp"
 
+#include "imgui.h"
+#include "backends/imgui_impl_glfw.h"
+#include "backends/imgui_impl_vulkan.h"
+#include "ImGuizmo.h"
+
 #include <array>
 #include <iostream>
 #include <stdexcept>
@@ -55,8 +60,6 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     : m_deviceRef(device), m_swapchainRef(swapchain), m_windowRef(window) {
     
     createRenderPass();
-    createGraphicsPipeline();
-    createDepthResources();
     createFramebuffers();
     createCommandPool();
     createCommandBuffers();
@@ -67,13 +70,28 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     createUniformBuffers();
     createTextureImage();
     createDescriptorPool();
+    
+    initImGui();
+    m_editorLayer.Init(m_deviceRef, m_swapchainRef.GetExtent().width, m_swapchainRef.GetExtent().height);
+    createGraphicsPipeline();
     createDescriptorSets();
 
-    std::cout << "[VulkanRenderer] Full 3D Rendering Subsystem (with Depth Buffer & Lighting) initialized." << std::endl;
+    std::cout << "[VulkanRenderer] Dockable Editor Engine Renderer initialized." << std::endl;
 }
 
 VulkanRenderer::~VulkanRenderer() {
     vk::Device device = m_deviceRef.GetDevice();
+
+    m_editorLayer.Shutdown();
+
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+
+    if (m_imguiPool) {
+        device.destroyDescriptorPool(m_imguiPool);
+        m_imguiPool = nullptr;
+    }
 
     if (m_descriptorPool) {
         device.destroyDescriptorPool(m_descriptorPool);
@@ -117,7 +135,6 @@ void VulkanRenderer::cleanupSwapchain() {
     }
     m_framebuffers.clear();
 
-    m_depthImage.reset();
     m_pipeline.reset();
 
     if (m_renderPass) {
@@ -140,7 +157,6 @@ void VulkanRenderer::RecreateSwapchain() {
     m_swapchainRef.Recreate(m_windowRef);
     createRenderPass();
     createGraphicsPipeline();
-    createDepthResources();
     createFramebuffers();
 
     m_windowRef.ResetResizedFlag();
@@ -148,7 +164,7 @@ void VulkanRenderer::RecreateSwapchain() {
 }
 
 void VulkanRenderer::createRenderPass() {
-    // 1. Color Attachment
+    // Swapchain Render Pass (Color only, loadOp = eClear, finalLayout = ePresentSrcKHR for ImGui presentation)
     vk::AttachmentDescription colorAttachment{};
     colorAttachment.format = m_swapchainRef.GetImageFormat();
     colorAttachment.samples = vk::SampleCountFlagBits::e1;
@@ -163,60 +179,29 @@ void VulkanRenderer::createRenderPass() {
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
 
-    // 2. Depth Attachment
-    vk::AttachmentDescription depthAttachment{};
-    depthAttachment.format = m_deviceRef.FindDepthFormat();
-    depthAttachment.samples = vk::SampleCountFlagBits::e1;
-    depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
-    depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
-    depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
-    depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-
-    vk::AttachmentReference depthAttachmentRef{};
-    depthAttachmentRef.attachment = 1;
-    depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
-
     vk::SubpassDescription subpass{};
     subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
-    subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
     vk::SubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     dependency.srcAccessMask = vk::AccessFlagBits::eNone;
-    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-
-    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
 
     vk::RenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
 
     m_renderPass = m_deviceRef.GetDevice().createRenderPass(renderPassInfo);
-    std::cout << "[VulkanRenderer] RenderPass created with Color and Depth attachments." << std::endl;
-}
-
-void VulkanRenderer::createDepthResources() {
-    vk::Format depthFormat = m_deviceRef.FindDepthFormat();
-    m_depthImage = std::make_unique<VulkanImage>(
-        m_deviceRef,
-        m_swapchainRef.GetExtent().width,
-        m_swapchainRef.GetExtent().height,
-        depthFormat,
-        vk::ImageUsageFlagBits::eDepthStencilAttachment,
-        vk::ImageAspectFlagBits::eDepth
-    );
-    std::cout << "[VulkanRenderer] Created Depth Buffer Image (" << m_swapchainRef.GetExtent().width << "x" << m_swapchainRef.GetExtent().height << ")." << std::endl;
+    std::cout << "[VulkanRenderer] Swapchain RenderPass (ImGui UI Pass) created." << std::endl;
 }
 
 void VulkanRenderer::createFramebuffers() {
@@ -224,15 +209,14 @@ void VulkanRenderer::createFramebuffers() {
     m_framebuffers.resize(imageViews.size());
 
     for (size_t i = 0; i < imageViews.size(); i++) {
-        std::array<vk::ImageView, 2> attachments = {
-            imageViews[i],
-            m_depthImage->GetImageView()
+        vk::ImageView attachments[] = {
+            imageViews[i]
         };
 
         vk::FramebufferCreateInfo framebufferInfo{};
         framebufferInfo.renderPass = m_renderPass;
-        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-        framebufferInfo.pAttachments = attachments.data();
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
         framebufferInfo.width = m_swapchainRef.GetExtent().width;
         framebufferInfo.height = m_swapchainRef.GetExtent().height;
         framebufferInfo.layers = 1;
@@ -240,13 +224,14 @@ void VulkanRenderer::createFramebuffers() {
         m_framebuffers[i] = m_deviceRef.GetDevice().createFramebuffer(framebufferInfo);
     }
 
-    std::cout << "[VulkanRenderer] Created " << m_framebuffers.size() << " Framebuffers with Depth Views." << std::endl;
+    std::cout << "[VulkanRenderer] Created " << m_framebuffers.size() << " Swapchain Framebuffers." << std::endl;
 }
 
 void VulkanRenderer::createGraphicsPipeline() {
+    // 3D Scene Pipeline target offscreen render pass
     m_pipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),
-        m_renderPass,
+        m_editorLayer.GetOffscreen().GetRenderPass(),
         "assets/shaders/vert.spv",
         "assets/shaders/frag.spv"
     );
@@ -494,6 +479,61 @@ void VulkanRenderer::createDescriptorSets() {
     std::cout << "[VulkanRenderer] Allocated and updated " << m_descriptorSets.size() << " DescriptorSets." << std::endl;
 }
 
+void VulkanRenderer::initImGui() {
+    // 1. Create Dedicated Descriptor Pool for ImGui
+    std::array<vk::DescriptorPoolSize, 11> poolSizes = {{
+        { vk::DescriptorType::eSampler, 1000 },
+        { vk::DescriptorType::eCombinedImageSampler, 1000 },
+        { vk::DescriptorType::eSampledImage, 1000 },
+        { vk::DescriptorType::eStorageImage, 1000 },
+        { vk::DescriptorType::eUniformTexelBuffer, 1000 },
+        { vk::DescriptorType::eStorageTexelBuffer, 1000 },
+        { vk::DescriptorType::eUniformBuffer, 1000 },
+        { vk::DescriptorType::eStorageBuffer, 1000 },
+        { vk::DescriptorType::eUniformBufferDynamic, 1000 },
+        { vk::DescriptorType::eStorageBufferDynamic, 1000 },
+        { vk::DescriptorType::eInputAttachment, 1000 }
+    }};
+
+    vk::DescriptorPoolCreateInfo poolInfo{};
+    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
+    poolInfo.maxSets = 1000 * static_cast<uint32_t>(poolSizes.size());
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+
+    m_imguiPool = m_deviceRef.GetDevice().createDescriptorPool(poolInfo);
+
+    // 2. Setup ImGui Context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+    ImGui::StyleColorsDark();
+
+    // 3. Init ImGui GLFW and Vulkan Backends
+    ImGui_ImplGlfw_InitForVulkan(m_windowRef.GetNativeWindow(), true);
+
+    ImGui_ImplVulkan_InitInfo initInfo{};
+    initInfo.Instance = static_cast<VkInstance>(m_deviceRef.GetInstance());
+    initInfo.PhysicalDevice = static_cast<VkPhysicalDevice>(m_deviceRef.GetPhysicalDevice());
+    initInfo.Device = static_cast<VkDevice>(m_deviceRef.GetDevice());
+    initInfo.QueueFamily = m_deviceRef.GetQueueFamilyIndices().graphicsFamily.value();
+    initInfo.Queue = static_cast<VkQueue>(m_deviceRef.GetGraphicsQueue());
+    initInfo.PipelineCache = VK_NULL_HANDLE;
+    initInfo.DescriptorPool = static_cast<VkDescriptorPool>(m_imguiPool);
+    initInfo.MinImageCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    initInfo.ImageCount = static_cast<uint32_t>(m_swapchainRef.GetImages().size());
+    initInfo.PipelineInfoMain.Subpass = 0;
+    initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    initInfo.PipelineInfoMain.RenderPass = static_cast<VkRenderPass>(m_renderPass);
+
+    ImGui_ImplVulkan_Init(&initInfo);
+
+    std::cout << "[VulkanRenderer] ImGui Docking & Vulkan backend initialized successfully." << std::endl;
+}
+
 void VulkanRenderer::DrawFrame(entt::registry& registry, const glm::mat4& viewMatrix, const glm::mat4& projMatrix) {
     vk::Device device = m_deviceRef.GetDevice();
 
@@ -536,38 +576,42 @@ void VulkanRenderer::DrawFrame(entt::registry& registry, const glm::mat4& viewMa
     // 4. Reset current frame's command buffer
     m_commandBuffers[m_currentFrame].reset();
 
-    // 5. Record Command Buffer
+    // 5. Begin Command Buffer Recording
     vk::CommandBufferBeginInfo beginInfo{};
     m_commandBuffers[m_currentFrame].begin(beginInfo);
 
-    vk::RenderPassBeginInfo renderPassInfo{};
-    renderPassInfo.renderPass = m_renderPass;
-    renderPassInfo.framebuffer = m_framebuffers[imageIndex];
-    renderPassInfo.renderArea.offset = vk::Offset2D{0, 0};
-    renderPassInfo.renderArea.extent = m_swapchainRef.GetExtent();
+    // =========================================================================
+    // PASS 1: OFFSCREEN RENDER PASS (3D Scene rendering into Viewport Texture)
+    // =========================================================================
+    VulkanOffscreen& offscreen = m_editorLayer.GetOffscreen();
 
-    // Clear values: Color {0.02, 0.02, 0.02, 1.0} and Depth {1.0, 0}
-    std::array<vk::ClearValue, 2> clearValues{};
-    clearValues[0].color = vk::ClearColorValue{std::array<float, 4>{0.02f, 0.02f, 0.02f, 1.0f}};
-    clearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+    vk::RenderPassBeginInfo offscreenPassInfo{};
+    offscreenPassInfo.renderPass = offscreen.GetRenderPass();
+    offscreenPassInfo.framebuffer = offscreen.GetFramebuffer();
+    offscreenPassInfo.renderArea.offset = vk::Offset2D{0, 0};
+    offscreenPassInfo.renderArea.extent = vk::Extent2D{offscreen.GetWidth(), offscreen.GetHeight()};
 
-    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-    renderPassInfo.pClearValues = clearValues.data();
+    std::array<vk::ClearValue, 2> offscreenClearValues{};
+    offscreenClearValues[0].color = vk::ClearColorValue{std::array<float, 4>{0.02f, 0.02f, 0.02f, 1.0f}};
+    offscreenClearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
-    m_commandBuffers[m_currentFrame].beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+    offscreenPassInfo.clearValueCount = static_cast<uint32_t>(offscreenClearValues.size());
+    offscreenPassInfo.pClearValues = offscreenClearValues.data();
 
-    // Set dynamic viewport and scissor matching swapchain extent
-    vk::Viewport viewport{
+    m_commandBuffers[m_currentFrame].beginRenderPass(offscreenPassInfo, vk::SubpassContents::eInline);
+
+    // Set offscreen viewport and scissor
+    vk::Viewport offscreenViewport{
         0.0f, 0.0f,
-        static_cast<float>(m_swapchainRef.GetExtent().width),
-        static_cast<float>(m_swapchainRef.GetExtent().height),
+        static_cast<float>(offscreen.GetWidth()),
+        static_cast<float>(offscreen.GetHeight()),
         0.0f, 1.0f
     };
-    vk::Rect2D scissor{{0, 0}, m_swapchainRef.GetExtent()};
-    m_commandBuffers[m_currentFrame].setViewport(0, 1, &viewport);
-    m_commandBuffers[m_currentFrame].setScissor(0, 1, &scissor);
+    vk::Rect2D offscreenScissor{{0, 0}, offscreenPassInfo.renderArea.extent};
+    m_commandBuffers[m_currentFrame].setViewport(0, 1, &offscreenViewport);
+    m_commandBuffers[m_currentFrame].setScissor(0, 1, &offscreenScissor);
 
-    // Stateless EnTT RenderSystem renders all active 3D entities
+    // Stateless EnTT RenderSystem renders 3D entities offscreen
     RenderSystem::Render(
         registry,
         *m_pipeline,
@@ -577,6 +621,48 @@ void VulkanRenderer::DrawFrame(entt::registry& registry, const glm::mat4& viewMa
         m_indexBuffer->GetBuffer(),
         m_indexCount
     );
+
+    m_commandBuffers[m_currentFrame].endRenderPass();
+
+    // =========================================================================
+    // IMGUI FRAME RECORDING (Dockspace, Scene Hierarchy, Inspector, Viewport, ImGuizmo)
+    // =========================================================================
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    ImGuizmo::BeginFrame();
+
+    m_editorLayer.OnImGuiRender(registry, m_windowRef);
+
+    ImGui::Render();
+
+    // =========================================================================
+    // PASS 2: SWAPCHAIN RENDER PASS (ImGui UI Presentation Pass)
+    // =========================================================================
+    vk::RenderPassBeginInfo swapchainPassInfo{};
+    swapchainPassInfo.renderPass = m_renderPass;
+    swapchainPassInfo.framebuffer = m_framebuffers[imageIndex];
+    swapchainPassInfo.renderArea.offset = vk::Offset2D{0, 0};
+    swapchainPassInfo.renderArea.extent = m_swapchainRef.GetExtent();
+
+    vk::ClearValue swapchainClearColor = vk::ClearColorValue{std::array<float, 4>{0.1f, 0.1f, 0.1f, 1.0f}};
+    swapchainPassInfo.clearValueCount = 1;
+    swapchainPassInfo.pClearValues = &swapchainClearColor;
+
+    m_commandBuffers[m_currentFrame].beginRenderPass(swapchainPassInfo, vk::SubpassContents::eInline);
+
+    vk::Viewport swapchainViewport{
+        0.0f, 0.0f,
+        static_cast<float>(m_swapchainRef.GetExtent().width),
+        static_cast<float>(m_swapchainRef.GetExtent().height),
+        0.0f, 1.0f
+    };
+    vk::Rect2D swapchainScissor{{0, 0}, m_swapchainRef.GetExtent()};
+    m_commandBuffers[m_currentFrame].setViewport(0, 1, &swapchainViewport);
+    m_commandBuffers[m_currentFrame].setScissor(0, 1, &swapchainScissor);
+
+    // Render ImGui draw data into Swapchain
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(m_commandBuffers[m_currentFrame]));
 
     m_commandBuffers[m_currentFrame].endRenderPass();
     m_commandBuffers[m_currentFrame].end();
