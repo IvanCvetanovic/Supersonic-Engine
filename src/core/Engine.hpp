@@ -7,10 +7,11 @@
 
 #include "platform/Window.hpp"
 #include "renderer/VulkanContext.hpp"
+#include "renderer/VulkanDevice.hpp"
+#include "renderer/VulkanSwapchain.hpp"
 
 namespace Engine {
 
-// Sample EnTT components proving DOD ECS works
 struct PositionComponent {
     float x{0.0f};
     float y{0.0f};
@@ -36,6 +37,8 @@ private:
 
     std::unique_ptr<Window> m_window;
     std::unique_ptr<VulkanContext> m_vulkanContext;
+    std::unique_ptr<VulkanDevice> m_vulkanDevice;
+    std::unique_ptr<VulkanSwapchain> m_swapchain;
     entt::registry m_registry;
 };
 
