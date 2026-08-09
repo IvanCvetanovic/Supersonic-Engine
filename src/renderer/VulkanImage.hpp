@@ -14,7 +14,8 @@ public:
         uint32_t width,
         uint32_t height,
         vk::Format format = vk::Format::eR8G8B8A8Srgb,
-        vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst
+        vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+        vk::ImageAspectFlags aspectFlags = vk::ImageAspectFlagBits::eColor
     );
     ~VulkanImage();
 

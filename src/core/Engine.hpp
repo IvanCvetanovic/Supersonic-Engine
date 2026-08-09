@@ -10,18 +10,9 @@
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanSwapchain.hpp"
 #include "renderer/VulkanRenderer.hpp"
+#include "core/Components.hpp"
 
 namespace Engine {
-
-struct PositionComponent {
-    float x{0.0f};
-    float y{0.0f};
-    float z{0.0f};
-};
-
-struct TagComponent {
-    std::string name;
-};
 
 class EngineApp {
 public:

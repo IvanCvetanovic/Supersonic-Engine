@@ -26,12 +26,14 @@ public:
     VulkanRenderer& operator=(const VulkanRenderer&) = delete;
 
     void DrawFrame(entt::registry& registry, const glm::mat4& viewMatrix, const glm::mat4& projMatrix);
+    void RecreateSwapchain();
 
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
     VulkanPipeline& GetPipeline() const { return *m_pipeline; }
 
 private:
     void createRenderPass();
+    void createDepthResources();
     void createFramebuffers();
     void createCommandPool();
     void createCommandBuffers();
@@ -45,11 +47,14 @@ private:
     void createDescriptorPool();
     void createDescriptorSets();
 
+    void cleanupSwapchain();
+
     VulkanDevice& m_deviceRef;
     VulkanSwapchain& m_swapchainRef;
     Window& m_windowRef;
 
     vk::RenderPass m_renderPass{nullptr};
+    std::unique_ptr<VulkanImage> m_depthImage;
     std::vector<vk::Framebuffer> m_framebuffers;
 
     std::unique_ptr<VulkanPipeline> m_pipeline;
@@ -61,15 +66,15 @@ private:
     std::vector<vk::Semaphore> m_renderFinishedSemaphores;
     std::vector<vk::Fence> m_inFlightFences;
 
-    // Phase 5: Geometry Buffers
+    // Geometry Buffers
     std::unique_ptr<VulkanBuffer> m_vertexBuffer;
     std::unique_ptr<VulkanBuffer> m_indexBuffer;
     uint32_t m_indexCount{0};
 
-    // Phase 6: UBO Buffers (1 per frame in flight)
+    // UBO Buffers (1 per frame in flight)
     std::vector<std::unique_ptr<VulkanBuffer>> m_uniformBuffers;
 
-    // Phase 7: Texture Image & Sampler
+    // Texture Image & Sampler
     std::unique_ptr<VulkanImage> m_textureImage;
 
     // Descriptors

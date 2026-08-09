@@ -23,6 +23,9 @@ public:
     const std::vector<vk::Image>& GetImages() const { return m_swapChainImages; }
     const std::vector<vk::ImageView>& GetImageViews() const { return m_swapChainImageViews; }
 
+    void Recreate(Window& window);
+    void Cleanup();
+
 private:
     vk::SurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats);
     vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR>& availablePresentModes);

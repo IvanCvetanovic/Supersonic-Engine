@@ -10,7 +10,8 @@ VulkanImage::VulkanImage(
     uint32_t width,
     uint32_t height,
     vk::Format format,
-    vk::ImageUsageFlags usage)
+    vk::ImageUsageFlags usage,
+    vk::ImageAspectFlags aspectFlags)
     : m_deviceRef(device), m_allocator(device.GetAllocator()), m_width(width), m_height(height), m_format(format) {
 
     if (!m_allocator) {
@@ -56,14 +57,13 @@ VulkanImage::VulkanImage(
     viewInfo.image = m_image;
     viewInfo.viewType = vk::ImageViewType::e2D;
     viewInfo.format = m_format;
-    viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
     m_imageView = m_deviceRef.GetDevice().createImageView(viewInfo);
-    CreateSampler();
 }
 
 VulkanImage::~VulkanImage() {

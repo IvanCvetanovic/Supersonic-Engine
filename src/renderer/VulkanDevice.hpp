@@ -46,6 +46,13 @@ public:
     SwapChainSupportDetails QuerySwapChainSupport() const { return querySwapChainSupport(m_physicalDevice); }
     QueueFamilyIndices FindQueueFamilies() const { return findQueueFamilies(m_physicalDevice); }
 
+    vk::Format FindSupportedFormat(
+        const std::vector<vk::Format>& candidates,
+        vk::ImageTiling tiling,
+        vk::FormatFeatureFlags features
+    ) const;
+    vk::Format FindDepthFormat() const;
+
 private:
     void createSurface(Window& window);
     void pickPhysicalDevice();

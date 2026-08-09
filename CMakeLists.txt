@@ -50,6 +50,7 @@ target_include_directories(GameEngine PRIVATE
     ${Vulkan_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tinygltf
 )
 
 target_link_libraries(GameEngine PRIVATE 

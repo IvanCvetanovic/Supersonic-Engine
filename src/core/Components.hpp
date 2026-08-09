@@ -14,6 +14,7 @@ namespace Engine {
 
 struct Vertex {
     glm::vec3 pos;
+    glm::vec3 normal;
     glm::vec3 color;
     glm::vec2 texCoord;
 
@@ -25,26 +26,32 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions() {
-        std::array<vk::VertexInputAttributeDescription, 3> attributeDescriptions{};
+    static std::array<vk::VertexInputAttributeDescription, 4> getAttributeDescriptions() {
+        std::array<vk::VertexInputAttributeDescription, 4> attributeDescriptions{};
 
-        // Position
+        // Location 0: Position
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
         attributeDescriptions[0].format = vk::Format::eR32G32B32Sfloat;
         attributeDescriptions[0].offset = offsetof(Vertex, pos);
 
-        // Color
+        // Location 1: Normal
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].location = 1;
         attributeDescriptions[1].format = vk::Format::eR32G32B32Sfloat;
-        attributeDescriptions[1].offset = offsetof(Vertex, color);
+        attributeDescriptions[1].offset = offsetof(Vertex, normal);
 
-        // TexCoord
+        // Location 2: Color
         attributeDescriptions[2].binding = 0;
         attributeDescriptions[2].location = 2;
-        attributeDescriptions[2].format = vk::Format::eR32G32Sfloat;
-        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
+        attributeDescriptions[2].format = vk::Format::eR32G32B32Sfloat;
+        attributeDescriptions[2].offset = offsetof(Vertex, color);
+
+        // Location 3: TexCoord
+        attributeDescriptions[3].binding = 0;
+        attributeDescriptions[3].location = 3;
+        attributeDescriptions[3].format = vk::Format::eR32G32Sfloat;
+        attributeDescriptions[3].offset = offsetof(Vertex, texCoord);
 
         return attributeDescriptions;
     }
@@ -71,12 +78,19 @@ struct CameraComponent {
     float nearPlane{0.1f};
     float farPlane{100.0f};
 
-    glm::vec3 position{0.0f, 0.0f, 3.5f};
-    glm::vec3 target{0.0f, 0.0f, 0.0f};
+    glm::vec3 position{0.0f, 1.0f, 4.0f};
+    glm::vec3 front{0.0f, 0.0f, -1.0f};
     glm::vec3 up{0.0f, 1.0f, 0.0f};
+    glm::vec3 right{1.0f, 0.0f, 0.0f};
+    glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
+
+    float yaw{-90.0f};
+    float pitch{0.0f};
+    float movementSpeed{3.5f};
+    float mouseSensitivity{0.1f};
 
     glm::mat4 getViewMatrix() const {
-        return glm::lookAt(position, target, up);
+        return glm::lookAt(position, position + front, up);
     }
 
     glm::mat4 getProjectionMatrix() const {
@@ -84,12 +98,33 @@ struct CameraComponent {
         proj[1][1] *= -1.0f; // Flip Y coordinate for Vulkan
         return proj;
     }
+
+    void updateCameraVectors() {
+        glm::vec3 newFront;
+        newFront.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+        newFront.y = sin(glm::radians(pitch));
+        newFront.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        front = glm::normalize(newFront);
+        right = glm::normalize(glm::cross(front, worldUp));
+        up = glm::normalize(glm::cross(right, front));
+    }
+};
+
+struct LightComponent {
+    glm::vec3 direction{-0.5f, -1.0f, -0.3f};
+    glm::vec3 color{1.0f, 0.95f, 0.85f};
+    float intensity{1.2f};
+    glm::vec3 ambient{0.15f, 0.15f, 0.2f};
 };
 
 struct RenderableComponent {
     uint32_t meshID{0};
     uint32_t materialID{0};
     bool isVisible{true};
+};
+
+struct TagComponent {
+    std::string tag;
 };
 
 } // namespace Engine

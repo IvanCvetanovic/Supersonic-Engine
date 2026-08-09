@@ -8,38 +8,38 @@
 
 namespace Engine {
 
-// 3D Cube Vertex & Index Data
+// 3D Cube Vertex & Index Data with Normals for Lighting
 static const std::vector<Vertex> cubeVertices = {
-    // Front face (Z = +0.5)
-    {{-0.5f, -0.5f,  0.5f}, {1.0f, 0.2f, 0.2f}, {0.0f, 0.0f}},
-    {{ 0.5f, -0.5f,  0.5f}, {0.2f, 1.0f, 0.2f}, {1.0f, 0.0f}},
-    {{ 0.5f,  0.5f,  0.5f}, {0.2f, 0.2f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f,  0.5f,  0.5f}, {1.0f, 1.0f, 0.2f}, {0.0f, 1.0f}},
-    // Back face (Z = -0.5)
-    {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.2f, 1.0f}, {0.0f, 0.0f}},
-    {{-0.5f, -0.5f, -0.5f}, {0.2f, 1.0f, 1.0f}, {1.0f, 0.0f}},
-    {{-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-    {{ 0.5f,  0.5f, -0.5f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f}},
-    // Top face (Y = -0.5)
-    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.4f, 0.4f}, {0.0f, 0.0f}},
-    {{ 0.5f, -0.5f, -0.5f}, {0.4f, 1.0f, 0.4f}, {1.0f, 0.0f}},
-    {{ 0.5f, -0.5f,  0.5f}, {0.4f, 0.4f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f, -0.5f,  0.5f}, {1.0f, 1.0f, 0.4f}, {0.0f, 1.0f}},
-    // Bottom face (Y = +0.5)
-    {{-0.5f,  0.5f,  0.5f}, {0.8f, 0.3f, 0.3f}, {0.0f, 0.0f}},
-    {{ 0.5f,  0.5f,  0.5f}, {0.3f, 0.8f, 0.3f}, {1.0f, 0.0f}},
-    {{ 0.5f,  0.5f, -0.5f}, {0.3f, 0.3f, 0.8f}, {1.0f, 1.0f}},
-    {{-0.5f,  0.5f, -0.5f}, {0.8f, 0.8f, 0.3f}, {0.0f, 1.0f}},
-    // Right face (X = +0.5)
-    {{ 0.5f, -0.5f,  0.5f}, {0.9f, 0.5f, 0.2f}, {0.0f, 0.0f}},
-    {{ 0.5f, -0.5f, -0.5f}, {0.2f, 0.9f, 0.5f}, {1.0f, 0.0f}},
-    {{ 0.5f,  0.5f, -0.5f}, {0.5f, 0.2f, 0.9f}, {1.0f, 1.0f}},
-    {{ 0.5f,  0.5f,  0.5f}, {0.9f, 0.9f, 0.2f}, {0.0f, 1.0f}},
-    // Left face (X = -0.5)
-    {{-0.5f, -0.5f, -0.5f}, {0.2f, 0.6f, 0.9f}, {0.0f, 0.0f}},
-    {{-0.5f, -0.5f,  0.5f}, {0.9f, 0.2f, 0.6f}, {1.0f, 0.0f}},
-    {{-0.5f,  0.5f,  0.5f}, {0.6f, 0.9f, 0.2f}, {1.0f, 1.0f}},
-    {{-0.5f,  0.5f, -0.5f}, {0.2f, 0.9f, 0.6f}, {0.0f, 1.0f}}
+    // Front face (Z = +0.5, Normal = {0, 0, 1})
+    {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.2f, 0.2f}, {0.0f, 0.0f}},
+    {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {0.2f, 1.0f, 0.2f}, {1.0f, 0.0f}},
+    {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {0.2f, 0.2f, 1.0f}, {1.0f, 1.0f}},
+    {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 0.2f}, {0.0f, 1.0f}},
+    // Back face (Z = -0.5, Normal = {0, 0, -1})
+    {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.2f, 1.0f}, {0.0f, 0.0f}},
+    {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.2f, 1.0f, 1.0f}, {1.0f, 0.0f}},
+    {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+    {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, -1.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f}},
+    // Top face (Y = -0.5, Normal = {0, -1, 0})
+    {{-0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.4f, 0.4f}, {0.0f, 0.0f}},
+    {{ 0.5f, -0.5f, -0.5f}, {0.0f, -1.0f, 0.0f}, {0.4f, 1.0f, 0.4f}, {1.0f, 0.0f}},
+    {{ 0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {0.4f, 0.4f, 1.0f}, {1.0f, 1.0f}},
+    {{-0.5f, -0.5f,  0.5f}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f, 0.4f}, {0.0f, 1.0f}},
+    // Bottom face (Y = +0.5, Normal = {0, 1, 0})
+    {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.3f, 0.3f}, {0.0f, 0.0f}},
+    {{ 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}, {0.3f, 0.8f, 0.3f}, {1.0f, 0.0f}},
+    {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.3f, 0.3f, 0.8f}, {1.0f, 1.0f}},
+    {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.3f}, {0.0f, 1.0f}},
+    // Right face (X = +0.5, Normal = {1, 0, 0})
+    {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {0.9f, 0.5f, 0.2f}, {0.0f, 0.0f}},
+    {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.2f, 0.9f, 0.5f}, {1.0f, 0.0f}},
+    {{ 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.5f, 0.2f, 0.9f}, {1.0f, 1.0f}},
+    {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}, {0.9f, 0.9f, 0.2f}, {0.0f, 1.0f}},
+    // Left face (X = -0.5, Normal = {-1, 0, 0})
+    {{-0.5f, -0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {0.2f, 0.6f, 0.9f}, {0.0f, 0.0f}},
+    {{-0.5f, -0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}, {0.9f, 0.2f, 0.6f}, {1.0f, 0.0f}},
+    {{-0.5f,  0.5f,  0.5f}, {-1.0f, 0.0f, 0.0f}, {0.6f, 0.9f, 0.2f}, {1.0f, 1.0f}},
+    {{-0.5f,  0.5f, -0.5f}, {-1.0f, 0.0f, 0.0f}, {0.2f, 0.9f, 0.6f}, {0.0f, 1.0f}}
 };
 
 static const std::vector<uint16_t> cubeIndices = {
@@ -55,8 +55,9 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     : m_deviceRef(device), m_swapchainRef(swapchain), m_windowRef(window) {
     
     createRenderPass();
-    createFramebuffers();
     createGraphicsPipeline();
+    createDepthResources();
+    createFramebuffers();
     createCommandPool();
     createCommandBuffers();
     createSyncObjects();
@@ -68,7 +69,7 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     createDescriptorPool();
     createDescriptorSets();
 
-    std::cout << "[VulkanRenderer] Full 3D Rendering Subsystem initialized successfully." << std::endl;
+    std::cout << "[VulkanRenderer] Full 3D Rendering Subsystem (with Depth Buffer & Lighting) initialized." << std::endl;
 }
 
 VulkanRenderer::~VulkanRenderer() {
@@ -101,7 +102,13 @@ VulkanRenderer::~VulkanRenderer() {
         m_commandPool = nullptr;
     }
 
-    m_pipeline.reset();
+    cleanupSwapchain();
+
+    std::cout << "[VulkanRenderer] Subsystem resources destroyed cleanly." << std::endl;
+}
+
+void VulkanRenderer::cleanupSwapchain() {
+    vk::Device device = m_deviceRef.GetDevice();
 
     for (auto framebuffer : m_framebuffers) {
         if (framebuffer) {
@@ -110,15 +117,38 @@ VulkanRenderer::~VulkanRenderer() {
     }
     m_framebuffers.clear();
 
+    m_depthImage.reset();
+    m_pipeline.reset();
+
     if (m_renderPass) {
         device.destroyRenderPass(m_renderPass);
         m_renderPass = nullptr;
     }
+}
 
-    std::cout << "[VulkanRenderer] Subsystem resources destroyed cleanly." << std::endl;
+void VulkanRenderer::RecreateSwapchain() {
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(m_windowRef.GetNativeWindow(), &width, &height);
+    while (width == 0 || height == 0) {
+        glfwGetFramebufferSize(m_windowRef.GetNativeWindow(), &width, &height);
+        glfwWaitEvents();
+    }
+
+    m_deviceRef.GetDevice().waitIdle();
+    cleanupSwapchain();
+
+    m_swapchainRef.Recreate(m_windowRef);
+    createRenderPass();
+    createGraphicsPipeline();
+    createDepthResources();
+    createFramebuffers();
+
+    m_windowRef.ResetResizedFlag();
+    std::cout << "[VulkanRenderer] Swapchain recreated successfully for window size (" << width << "x" << height << ")." << std::endl;
 }
 
 void VulkanRenderer::createRenderPass() {
+    // 1. Color Attachment
     vk::AttachmentDescription colorAttachment{};
     colorAttachment.format = m_swapchainRef.GetImageFormat();
     colorAttachment.samples = vk::SampleCountFlagBits::e1;
@@ -133,29 +163,60 @@ void VulkanRenderer::createRenderPass() {
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
 
+    // 2. Depth Attachment
+    vk::AttachmentDescription depthAttachment{};
+    depthAttachment.format = m_deviceRef.FindDepthFormat();
+    depthAttachment.samples = vk::SampleCountFlagBits::e1;
+    depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+    depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+    vk::AttachmentReference depthAttachmentRef{};
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
     vk::SubpassDescription subpass{};
     subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
     vk::SubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
     dependency.srcAccessMask = vk::AccessFlagBits::eNone;
-    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
 
     vk::RenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
 
     m_renderPass = m_deviceRef.GetDevice().createRenderPass(renderPassInfo);
-    std::cout << "[VulkanRenderer] RenderPass created successfully." << std::endl;
+    std::cout << "[VulkanRenderer] RenderPass created with Color and Depth attachments." << std::endl;
+}
+
+void VulkanRenderer::createDepthResources() {
+    vk::Format depthFormat = m_deviceRef.FindDepthFormat();
+    m_depthImage = std::make_unique<VulkanImage>(
+        m_deviceRef,
+        m_swapchainRef.GetExtent().width,
+        m_swapchainRef.GetExtent().height,
+        depthFormat,
+        vk::ImageUsageFlagBits::eDepthStencilAttachment,
+        vk::ImageAspectFlagBits::eDepth
+    );
+    std::cout << "[VulkanRenderer] Created Depth Buffer Image (" << m_swapchainRef.GetExtent().width << "x" << m_swapchainRef.GetExtent().height << ")." << std::endl;
 }
 
 void VulkanRenderer::createFramebuffers() {
@@ -163,14 +224,15 @@ void VulkanRenderer::createFramebuffers() {
     m_framebuffers.resize(imageViews.size());
 
     for (size_t i = 0; i < imageViews.size(); i++) {
-        vk::ImageView attachments[] = {
-            imageViews[i]
+        std::array<vk::ImageView, 2> attachments = {
+            imageViews[i],
+            m_depthImage->GetImageView()
         };
 
         vk::FramebufferCreateInfo framebufferInfo{};
         framebufferInfo.renderPass = m_renderPass;
-        framebufferInfo.attachmentCount = 1;
-        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
         framebufferInfo.width = m_swapchainRef.GetExtent().width;
         framebufferInfo.height = m_swapchainRef.GetExtent().height;
         framebufferInfo.layers = 1;
@@ -178,7 +240,7 @@ void VulkanRenderer::createFramebuffers() {
         m_framebuffers[i] = m_deviceRef.GetDevice().createFramebuffer(framebufferInfo);
     }
 
-    std::cout << "[VulkanRenderer] Created " << m_framebuffers.size() << " Framebuffers." << std::endl;
+    std::cout << "[VulkanRenderer] Created " << m_framebuffers.size() << " Framebuffers with Depth Views." << std::endl;
 }
 
 void VulkanRenderer::createGraphicsPipeline() {
@@ -458,8 +520,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry, const glm::mat4& viewMa
         &imageIndex
     );
 
-    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
-        // TODO: Handle Swapchain recreation later on VK_ERROR_OUT_OF_DATE_KHR
+    if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR || m_windowRef.IsResized()) {
+        RecreateSwapchain();
         return;
     } else if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("Failed to acquire Vulkan swapchain image!");
@@ -484,14 +546,17 @@ void VulkanRenderer::DrawFrame(entt::registry& registry, const glm::mat4& viewMa
     renderPassInfo.renderArea.offset = vk::Offset2D{0, 0};
     renderPassInfo.renderArea.extent = m_swapchainRef.GetExtent();
 
-    // Clear color: Dark Grey {0.02f, 0.02f, 0.02f, 1.0f}
-    vk::ClearValue clearColor = vk::ClearColorValue{std::array<float, 4>{0.02f, 0.02f, 0.02f, 1.0f}};
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearColor;
+    // Clear values: Color {0.02, 0.02, 0.02, 1.0} and Depth {1.0, 0}
+    std::array<vk::ClearValue, 2> clearValues{};
+    clearValues[0].color = vk::ClearColorValue{std::array<float, 4>{0.02f, 0.02f, 0.02f, 1.0f}};
+    clearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+
+    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
 
     m_commandBuffers[m_currentFrame].beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
 
-    // Set dynamic viewport and scissor
+    // Set dynamic viewport and scissor matching swapchain extent
     vk::Viewport viewport{
         0.0f, 0.0f,
         static_cast<float>(m_swapchainRef.GetExtent().width),
@@ -502,7 +567,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry, const glm::mat4& viewMa
     m_commandBuffers[m_currentFrame].setViewport(0, 1, &viewport);
     m_commandBuffers[m_currentFrame].setScissor(0, 1, &scissor);
 
-    // Phase 8: Stateless EnTT RenderSystem renders all active 3D entities
+    // Stateless EnTT RenderSystem renders all active 3D entities
     RenderSystem::Render(
         registry,
         *m_pipeline,
@@ -546,8 +611,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry, const glm::mat4& viewMa
     presentInfo.pImageIndices = &imageIndex;
 
     VkResult presentResult = static_cast<VkResult>(m_deviceRef.GetPresentQueue().presentKHR(&presentInfo));
-    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
-        // TODO: Handle Swapchain recreation later on VK_ERROR_OUT_OF_DATE_KHR / VK_SUBOPTIMAL_KHR
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR || m_windowRef.IsResized()) {
+        RecreateSwapchain();
     } else if (presentResult != VK_SUCCESS) {
         throw std::runtime_error("Failed to present Vulkan swapchain image!");
     }

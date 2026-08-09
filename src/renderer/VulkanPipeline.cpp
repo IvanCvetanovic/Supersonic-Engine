@@ -69,7 +69,7 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass, con
     viewportState.viewportCount = 1;
     viewportState.scissorCount = 1;
 
-    // Rasterization State: eFill, eCullBack, eCounterClockwise (CCW front face for 3D)
+    // Rasterization State: eFill, eCullBack, eCounterClockwise
     vk::PipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.depthClampEnable = VK_FALSE;
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
@@ -83,6 +83,14 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass, con
     vk::PipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+
+    // Depth Stencil State: Depth Testing Enabled (eLessOrEqual)
+    vk::PipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = vk::CompareOp::eLessOrEqual;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
 
     // Color Blend Attachment State: Opaque
     vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
@@ -115,7 +123,7 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass, con
         throw std::runtime_error("Failed to create Vulkan Pipeline Layout!");
     }
 
-    // Graphics Pipeline
+    // Graphics Pipeline with Depth Stencil State
     vk::GraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = shaderStages;
@@ -124,6 +132,7 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass, con
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = m_pipelineLayout;
@@ -140,7 +149,7 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass, con
     m_device.destroyShaderModule(fragShaderModule);
     m_device.destroyShaderModule(vertShaderModule);
 
-    std::cout << "[VulkanPipeline] 3D Graphics Pipeline created successfully with Push Constants & DescriptorSetLayout." << std::endl;
+    std::cout << "[VulkanPipeline] 3D Graphics Pipeline created with Depth Testing & Stencil State." << std::endl;
 }
 
 VulkanPipeline::~VulkanPipeline() {

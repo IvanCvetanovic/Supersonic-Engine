@@ -18,6 +18,10 @@ VulkanSwapchain::VulkanSwapchain(VulkanDevice& device, Window& window)
 }
 
 VulkanSwapchain::~VulkanSwapchain() {
+    Cleanup();
+}
+
+void VulkanSwapchain::Cleanup() {
     for (auto imageView : m_swapChainImageViews) {
         if (imageView) {
             m_device.destroyImageView(imageView);
@@ -29,6 +33,12 @@ VulkanSwapchain::~VulkanSwapchain() {
         m_device.destroySwapchainKHR(m_swapChain);
         m_swapChain = nullptr;
     }
+}
+
+void VulkanSwapchain::Recreate(Window& window) {
+    Cleanup();
+    createSwapChain(window);
+    createImageViews();
 }
 
 vk::SurfaceFormatKHR VulkanSwapchain::chooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats) {
