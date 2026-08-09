@@ -2,6 +2,8 @@
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/Raycast.hpp"
+#include "core/TimeTravelDebugger.hpp"
+#include "editor/GamePackager.hpp"
 #include "imgui.h"
 #include "ImGuizmo.h"
 
@@ -52,6 +54,10 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
                 SceneSerializer::Deserialize(registry, "assets/scenes/MainScene.scene");
             }
             ImGui::Separator();
+            if (ImGui::MenuItem("Package Standalone Game")) {
+                GamePackager::PackageStandaloneGame("dist/GameRelease");
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) {
                 glfwSetWindowShouldClose(window.GetNativeWindow(), GLFW_TRUE);
             }
@@ -93,6 +99,9 @@ void EditorLayer::OnImGuiRender(entt::registry& registry, Window& window) {
     m_inspectorPanel.OnImGuiRender(registry, selectedEntity);
 
     m_contentBrowserPanel.OnImGuiRender();
+
+    // Render Time-Travel Rewind Debugger Panel
+    TimeTravelDebugger::RenderImGuiPanel(registry);
 
     // 4. Game Viewport Window displaying Offscreen Texture
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));

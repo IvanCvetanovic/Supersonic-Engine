@@ -5,6 +5,7 @@
 #include "core/AudioSystem.hpp"
 #include "core/ScriptEngine.hpp"
 #include "core/ParticleSystem.hpp"
+#include "core/TimeTravelDebugger.hpp"
 
 #include <iostream>
 #include <glm/glm.hpp>
@@ -104,11 +105,14 @@ void EngineApp::Run() {
         // Process WASD movement & Right-Click Mouse Look for Camera
         CameraSystem::Update(m_registry, *m_window, deltaTime);
 
-        // Update Subsystems: Physics, Audio, Scripting, and Particles
-        PhysicsSystem::Update(m_registry, deltaTime);
-        AudioSystem::Update(m_registry, deltaTime);
-        ScriptEngine::Update(m_registry, deltaTime);
-        ParticleSystem::Update(m_registry, deltaTime);
+        // Update Subsystems: Physics, Audio, Scripting, and Particles (if not rewinding)
+        if (!TimeTravelDebugger::IsRewinding()) {
+            PhysicsSystem::Update(m_registry, deltaTime);
+            AudioSystem::Update(m_registry, deltaTime);
+            ScriptEngine::Update(m_registry, deltaTime);
+            ParticleSystem::Update(m_registry, deltaTime);
+            TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));
+        }
 
         // Get view & proj matrices from active CameraComponent
         glm::mat4 viewMatrix(1.0f);
