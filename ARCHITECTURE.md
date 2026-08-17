@@ -42,11 +42,13 @@ poll events
 apply pending viewport resize     <- before ImGui::NewFrame; see below
 ImGui::NewFrame                   <- computes WantCaptureMouse/Keyboard
 camera input                      <- gated on those flags
-fixed-step physics, audio, scripts, particles
+fixed-step physics, audio, scripts, particles   <- only while PLAYING
+resolve world transforms          <- so the gizmo and picking see current data
 editor BuildUI                    <- mutates ECS, records desired viewport size
 ImGui::Render
-mesh uploads
-renderer.DrawFrame                <- records and submits
+resolve world transforms again    <- so rendering reflects that edit
+mesh and texture uploads
+renderer.DrawFrame                <- shadow pass, scene pass, ImGui pass
 ```
 
 Two constraints are easy to break and expensive when broken:
@@ -61,6 +63,40 @@ Two constraints are easy to break and expensive when broken:
    data, freeing that descriptor set leaves the draw call pointing at released
    memory.
 
+### 3b. Transform hierarchy
+
+`TransformComponent` is **local to the parent**. `HierarchyComponent` holds the
+parent link, and `TransformSystem` resolves the graph into
+`WorldTransformComponent` once per frame.
+
+Everything downstream — the scene pass, the shadow pass, viewport picking and the
+gizmo — reads the **world** matrix. That is what makes parenting work everywhere
+at once instead of in one place. `TransformSystem::UpdateWorldTransforms` runs
+twice per frame: before the editor, so the gizmo and picking see current
+matrices, and after it, so rendering reflects the edit just made.
+
+Two invariants:
+
+- **Reparenting preserves world placement.** `SetParent` recomputes the local
+  transform under the new parent, so attaching something in the hierarchy does
+  not teleport it. It also refuses to parent an entity under its own descendant.
+- **Destroying a parent promotes its children to the root first.** Leaving a
+  child pointing at a released handle is not merely stale: EnTT recycles
+  handles, so it would later resolve to a completely different entity.
+
+Parent links are serialized as an **array index**, never a raw `entt::entity`,
+for the same recycling reason.
+
+### 3c. Edit / Play / Paused
+
+`PlayMode` snapshots the scene to an in-memory string on Play and restores it on
+Stop, reusing the scene serializer — so the restore path is the same code as
+loading a file, and the snapshot format cannot drift from the save format.
+
+Gameplay systems (physics, scripts, particles, audio, the time-travel recorder)
+run **only** while playing. The editor used to simulate permanently, which is
+why the demo's physics cube had already fallen before you could look at it.
+
 ### 4. Ownership
 
 ```
@@ -71,7 +107,8 @@ EngineApp
 ├── VulkanContext      (instance, debug messenger)
 ├── VulkanDevice       (physical/logical device, queues, VMA allocator)
 ├── VulkanSwapchain
-├── VulkanRenderer     (render passes, pipelines, MeshRegistry, ImGui backend)
+├── VulkanRenderer     (render passes, pipelines, MeshRegistry, TextureRegistry,
+│                        ShadowMap, ImGui backend)
 └── EditorLayer        (panels + the offscreen viewport target)
 ```
 
@@ -85,6 +122,34 @@ Teardown order is load-bearing: `EditorLayer` must be destroyed before
 `VulkanRenderer`, because it frees an ImGui descriptor set that
 `ImGui_ImplVulkan_Shutdown` invalidates.
 
+### 4b. Assets
+
+| Kind | Loader | Notes |
+|---|---|---|
+| Meshes | `MeshRegistry` | Cube/Sphere/Plane/Terrain primitives, OBJ, and glTF |
+| glTF/GLB | `GltfLoader` (tinygltf) | Bakes each node's transform chain into its primitives |
+| Textures | `TextureRegistry` (stb_image) | Cached by path; one descriptor set per texture |
+| Audio | `AudioClip` | Uncompressed RIFF/WAVE |
+
+Both registries cache failures so a missing or broken asset is not reopened
+every frame, and both fall back to something visible (unit cube, checkerboard)
+rather than dropping the draw.
+
+### 4c. Lighting and shadows
+
+The UBO carries up to **8 lights** (`kMaxLights`) with a count, and the fragment
+shader loops over them. Directional and point are supported.
+
+Shadows are a single cascade for the **first shadow-casting directional light**,
+which `gatherLights` deliberately places at index 0 because the shader only
+applies the shadow factor to `lights[0]`. The scene is rendered depth-only from
+the light into a 2048² D32 target and sampled with 3×3 PCF. Anything outside the
+light frustum is treated as lit rather than inventing a shadow.
+
+Descriptor sets: **set 0** is per-frame (UBO + shadow map), **set 1** is
+per-material (albedo), rebound per draw. A single set is what previously forced
+every object to sample one globally bound texture.
+
 ### 5. Colour pipeline
 
 There is exactly **one** sRGB encode in the chain, and it happens in
@@ -92,7 +157,7 @@ There is exactly **one** sRGB encode in the chain, and it happens in
 
 | Stage | Format | Why |
 |---|---|---|
-| Checkerboard texture | `R8G8B8A8Srgb` | decoded to linear on read, which is what the PBR maths expects |
+| Colour textures | `R8G8B8A8Srgb` | decoded to linear on read, which is what the PBR maths expects |
 | Offscreen colour target | `R8G8B8A8Unorm` | the shader already encoded; an SRGB target would encode again |
 | Swapchain surface | `B8G8R8A8Unorm` | ImGui writes sRGB-authored colours and performs no conversion |
 
