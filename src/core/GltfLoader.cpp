@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
+#include <unordered_map>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -21,18 +22,85 @@ namespace Supersonic {
 
 namespace {
 
+// Matches the palette slice a single draw can address. Vertex::jointIndices is
+// 8-bit, so 255 is the hard ceiling; 128 leaves headroom and keeps a single
+// rig's slice small enough that several fit in one frame's palette.
+constexpr uint32_t jointLimit = 128;
+
 // Reads one scalar out of an accessor, normalising the component type.
+//
+// Returns null for an accessor with no buffer view. tinygltf defaults
+// Accessor::bufferView to -1, and the cast to size_t made that index element
+// SIZE_MAX - latent while only positions and UVs came through here, and reached
+// the moment inverse bind matrices and four animation samplers did too.
 template <typename T>
 const T* accessorData(const tinygltf::Model& model, const tinygltf::Accessor& accessor, size_t& strideOut) {
+    strideOut = 0;
+    if (accessor.bufferView < 0 ||
+        static_cast<size_t>(accessor.bufferView) >= model.bufferViews.size()) {
+        return nullptr;
+    }
+
     const tinygltf::BufferView& view = model.bufferViews[static_cast<size_t>(accessor.bufferView)];
+    if (view.buffer < 0 || static_cast<size_t>(view.buffer) >= model.buffers.size()) {
+        return nullptr;
+    }
     const tinygltf::Buffer& buffer = model.buffers[static_cast<size_t>(view.buffer)];
 
     const size_t elementSize = static_cast<size_t>(
         tinygltf::GetComponentSizeInBytes(static_cast<uint32_t>(accessor.componentType)) *
         tinygltf::GetNumComponentsInType(static_cast<uint32_t>(accessor.type)));
 
+    const size_t offset = view.byteOffset + accessor.byteOffset;
+    if (offset > buffer.data.size()) return nullptr;
+
     strideOut = view.byteStride != 0 ? view.byteStride : elementSize;
-    return reinterpret_cast<const T*>(buffer.data.data() + view.byteOffset + accessor.byteOffset);
+    return reinterpret_cast<const T*>(buffer.data.data() + offset);
+}
+
+// One component, widened to float and de-normalised where the spec says it is
+// normalised. Animation outputs and vertex weights are both allowed to be
+// normalised integers, and reading them as raw floats yields garbage.
+float componentAsFloat(const uint8_t* element, int componentType, size_t component, bool normalized) {
+    switch (componentType) {
+        case TINYGLTF_COMPONENT_TYPE_FLOAT:
+            return reinterpret_cast<const float*>(element)[component];
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE: {
+            const float v = static_cast<float>(element[component]);
+            return normalized ? v / 255.0f : v;
+        }
+        case TINYGLTF_COMPONENT_TYPE_BYTE: {
+            const float v = static_cast<float>(reinterpret_cast<const int8_t*>(element)[component]);
+            return normalized ? std::max(v / 127.0f, -1.0f) : v;
+        }
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: {
+            const float v = static_cast<float>(reinterpret_cast<const uint16_t*>(element)[component]);
+            return normalized ? v / 65535.0f : v;
+        }
+        case TINYGLTF_COMPONENT_TYPE_SHORT: {
+            const float v = static_cast<float>(reinterpret_cast<const int16_t*>(element)[component]);
+            return normalized ? std::max(v / 32767.0f, -1.0f) : v;
+        }
+        default:
+            return 0.0f;
+    }
+}
+
+// One component read as an integer, for joint indices. Never float in practice -
+// glTF says JOINTS_0 is UNSIGNED_BYTE or UNSIGNED_SHORT - which is why copying
+// the float-only guard used for UVs would leave every joint index at zero, every
+// weight summing to zero, and every vertex collapsed onto the origin.
+uint32_t componentAsIndex(const uint8_t* element, int componentType, size_t component) {
+    switch (componentType) {
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+            return element[component];
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+            return reinterpret_cast<const uint16_t*>(element)[component];
+        case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+            return reinterpret_cast<const uint32_t*>(element)[component];
+        default:
+            return 0;
+    }
 }
 
 // glTF node transforms are either a full matrix or TRS components.
@@ -74,7 +142,8 @@ void appendPrimitive(const tinygltf::Model& model,
                      const glm::mat4& worldMatrix,
                      const std::string& baseDir,
                      const std::string& nodeName,
-                     std::vector<GltfLoader::Submesh>& out) {
+                     std::vector<GltfLoader::Submesh>& out,
+                    int32_t skinIndex) {
 
     // Triangles only. Fans, strips and point/line modes are not something the
     // renderer can draw, so they are skipped loudly rather than silently
@@ -94,10 +163,15 @@ void appendPrimitive(const tinygltf::Model& model,
 
     GltfLoader::Submesh submesh;
     submesh.name = nodeName;
+    submesh.skinIndex = skinIndex;
     submesh.mesh.vertices.resize(vertexCount);
 
     size_t posStride = 0;
     const auto* positions = accessorData<float>(model, posAccessor, posStride);
+    if (!positions) {
+        std::cerr << "[GltfLoader] '" << nodeName << "' has an unreadable POSITION accessor." << std::endl;
+        return;
+    }
 
     const float* normals = nullptr;
     size_t normalStride = 0;
@@ -125,6 +199,28 @@ void appendPrimitive(const tinygltf::Model& model,
         if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT) {
             uvs = accessorData<float>(model, acc, uvStride);
         }
+    }
+
+    // Skinning influences. Deliberately NOT gated on the component type being
+    // float: JOINTS_0 never is, and WEIGHTS_0 frequently is not either.
+    const uint8_t* jointBytes = nullptr;
+    size_t jointStride = 0;
+    int jointComponentType = 0;
+    if (const auto it = primitive.attributes.find("JOINTS_0"); it != primitive.attributes.end()) {
+        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
+        jointBytes = accessorData<uint8_t>(model, acc, jointStride);
+        jointComponentType = acc.componentType;
+    }
+
+    const uint8_t* weightBytes = nullptr;
+    size_t weightStride = 0;
+    int weightComponentType = 0;
+    bool weightNormalized = false;
+    if (const auto it = primitive.attributes.find("WEIGHTS_0"); it != primitive.attributes.end()) {
+        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
+        weightBytes = accessorData<uint8_t>(model, acc, weightStride);
+        weightComponentType = acc.componentType;
+        weightNormalized = acc.normalized;
     }
 
     // Normals must be transformed by the inverse-transpose, not the matrix, or
@@ -165,6 +261,28 @@ void appendPrimitive(const tinygltf::Model& model,
                                   t[3] < 0.0f ? -1.0f : 1.0f);
         }
 
+        if (jointBytes && weightBytes) {
+            const uint8_t* j = jointBytes + i * jointStride;
+            const uint8_t* w = weightBytes + i * weightStride;
+
+            glm::vec4 weights(0.0f);
+            for (size_t c = 0; c < 4; ++c) {
+                const uint32_t index = componentAsIndex(j, jointComponentType, c);
+                // Clamped, not trusted. robustBufferAccess is not enabled on
+                // this device, so an out-of-range palette read is undefined
+                // behaviour - a device loss, not a zeroed lookup.
+                v.jointIndices[static_cast<glm::length_t>(c)] =
+                    static_cast<uint8_t>(index < jointLimit ? index : 0u);
+                weights[static_cast<glm::length_t>(c)] =
+                    componentAsFloat(w, weightComponentType, c, weightNormalized);
+            }
+
+            // Renormalise. Quantised weights rarely sum to exactly one, and the
+            // error shows up as a mesh that subtly inflates or shrinks.
+            const float sum = weights.x + weights.y + weights.z + weights.w;
+            v.jointWeights = sum > 1e-6f ? weights / sum : glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+        }
+
         v.color = glm::vec3(1.0f);
     }
 
@@ -175,6 +293,7 @@ void appendPrimitive(const tinygltf::Model& model,
 
         size_t idxStride = 0;
         const auto* base = accessorData<uint8_t>(model, idxAccessor, idxStride);
+        if (!base) return;
 
         for (size_t i = 0; i < idxAccessor.count; ++i) {
             const uint8_t* element = base + i * idxStride;
@@ -243,6 +362,248 @@ void appendPrimitive(const tinygltf::Model& model,
     out.push_back(std::move(submesh));
 }
 
+
+// ---------------------------------------------------------------------------
+// Skins and animations
+// ---------------------------------------------------------------------------
+
+// Rest transform of a node, as separate components so an animation can drive
+// one of them and leave the others alone.
+void nodeRestTrs(const tinygltf::Node& node, glm::vec3& translation, glm::quat& rotation,
+                 glm::vec3& scale) {
+    translation = glm::vec3(0.0f);
+    rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    scale = glm::vec3(1.0f);
+
+    if (node.matrix.size() == 16) {
+        // A node given as a matrix still has to yield TRS, because a rotation
+        // channel replaces only the rotation.
+        const glm::mat4 m = nodeLocalMatrix(node);
+        translation = glm::vec3(m[3]);
+
+        glm::vec3 columns[3] = { glm::vec3(m[0]), glm::vec3(m[1]), glm::vec3(m[2]) };
+        for (int i = 0; i < 3; ++i) {
+            scale[i] = glm::length(columns[i]);
+            if (scale[i] > 1e-8f) columns[i] /= scale[i];
+        }
+        rotation = glm::quat_cast(glm::mat3(columns[0], columns[1], columns[2]));
+        return;
+    }
+
+    if (node.translation.size() == 3) {
+        translation = glm::vec3(static_cast<float>(node.translation[0]),
+                                static_cast<float>(node.translation[1]),
+                                static_cast<float>(node.translation[2]));
+    }
+    if (node.rotation.size() == 4) {
+        // glTF stores quaternions xyzw; glm::quat is constructed wxyz.
+        rotation = glm::quat(static_cast<float>(node.rotation[3]),
+                             static_cast<float>(node.rotation[0]),
+                             static_cast<float>(node.rotation[1]),
+                             static_cast<float>(node.rotation[2]));
+    }
+    if (node.scale.size() == 3) {
+        scale = glm::vec3(static_cast<float>(node.scale[0]),
+                          static_cast<float>(node.scale[1]),
+                          static_cast<float>(node.scale[2]));
+    }
+}
+
+// node index -> its parent node index, or -1.
+std::vector<int> buildParentTable(const tinygltf::Model& model) {
+    std::vector<int> parents(model.nodes.size(), -1);
+    for (size_t i = 0; i < model.nodes.size(); ++i) {
+        for (const int child : model.nodes[i].children) {
+            if (child >= 0 && static_cast<size_t>(child) < parents.size()) {
+                parents[static_cast<size_t>(child)] = static_cast<int>(i);
+            }
+        }
+    }
+    return parents;
+}
+
+// One skin -> one Skeleton, with joints reordered parent-before-child and the
+// parent indices remapped to match.
+//
+// skin.joints comes in whatever order the exporter felt like, so evaluating a
+// pose as a single forward pass over it reads an uninitialised parent for any
+// file that lists a child first. Sorting by depth in the node hierarchy fixes
+// that for every valid file, because a node is always deeper than its parent.
+Skeleton buildSkeleton(const tinygltf::Model& model, const tinygltf::Skin& skin,
+                       const std::vector<int>& parents,
+                       std::unordered_map<int, int32_t>& outNodeToJoint) {
+    Skeleton skeleton;
+    outNodeToJoint.clear();
+    if (skin.joints.empty()) return skeleton;
+
+    std::vector<int> jointNodes;
+    jointNodes.reserve(skin.joints.size());
+    for (const int node : skin.joints) {
+        if (node < 0 || static_cast<size_t>(node) >= model.nodes.size()) continue;
+        if (jointNodes.size() >= jointLimit) {
+            std::cerr << "[GltfLoader] Skin '" << skin.name << "' has more than " << jointLimit
+                      << " joints; the rest are ignored." << std::endl;
+            break;
+        }
+        jointNodes.push_back(node);
+    }
+    if (jointNodes.empty()) return skeleton;
+
+    std::unordered_map<int, size_t> originalIndexOf;
+    for (size_t i = 0; i < jointNodes.size(); ++i) originalIndexOf.emplace(jointNodes[i], i);
+
+    const auto depthOf = [&](int node) {
+        int depth = 0;
+        int current = node;
+        while (current >= 0 && depth < 1024) {
+            current = parents[static_cast<size_t>(current)];
+            ++depth;
+        }
+        return depth;
+    };
+
+    std::vector<int> ordered = jointNodes;
+    std::stable_sort(ordered.begin(), ordered.end(),
+                     [&](int a, int b) { return depthOf(a) < depthOf(b); });
+
+    std::unordered_map<int, int32_t> jointOf;
+    for (size_t i = 0; i < ordered.size(); ++i) {
+        jointOf.emplace(ordered[i], static_cast<int32_t>(i));
+    }
+
+    // Inverse bind matrices are indexed by the ORIGINAL skin.joints order, so
+    // they have to be permuted alongside the sort rather than read positionally.
+    const float* inverseBinds = nullptr;
+    size_t inverseBindStride = 0;
+    if (skin.inverseBindMatrices >= 0 &&
+        static_cast<size_t>(skin.inverseBindMatrices) < model.accessors.size()) {
+        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(skin.inverseBindMatrices)];
+        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc.type == TINYGLTF_TYPE_MAT4) {
+            inverseBinds = accessorData<float>(model, acc, inverseBindStride);
+        }
+    }
+
+    skeleton.joints.resize(ordered.size());
+    for (size_t i = 0; i < ordered.size(); ++i) {
+        const int nodeIndex = ordered[i];
+        const tinygltf::Node& node = model.nodes[static_cast<size_t>(nodeIndex)];
+
+        Joint& joint = skeleton.joints[i];
+        joint.name = node.name;
+        nodeRestTrs(node, joint.restTranslation, joint.restRotation, joint.restScale);
+
+        // Nearest ancestor that is itself a joint. Everything between the two is
+        // folded into preTransform: glTF does not require a joint's parent node
+        // to be a joint, and dropping those nodes puts the whole rig in the
+        // wrong place.
+        int ancestor = parents[static_cast<size_t>(nodeIndex)];
+        glm::mat4 preTransform(1.0f);
+        int guard = 0;
+        while (ancestor >= 0 && guard++ < 1024) {
+            if (const auto it = jointOf.find(ancestor); it != jointOf.end()) {
+                joint.parent = it->second;
+                break;
+            }
+            preTransform = nodeLocalMatrix(model.nodes[static_cast<size_t>(ancestor)]) * preTransform;
+            ancestor = parents[static_cast<size_t>(ancestor)];
+        }
+        joint.preTransform = preTransform;
+
+        if (inverseBinds) {
+            const size_t original = originalIndexOf[nodeIndex];
+            const auto* m = reinterpret_cast<const float*>(
+                reinterpret_cast<const uint8_t*>(inverseBinds) + original * inverseBindStride);
+            joint.inverseBind = glm::make_mat4(m);
+        }
+    }
+
+    outNodeToJoint = jointOf;
+    return skeleton;
+}
+
+AnimInterpolation interpolationFrom(const std::string& name) {
+    if (name == "STEP") return AnimInterpolation::Step;
+    if (name == "CUBICSPLINE") return AnimInterpolation::CubicSpline;
+    return AnimInterpolation::Linear;
+}
+
+// Every animation in the file, with node targets remapped to joint indices of
+// the given skin. Channels aimed at anything else are dropped.
+std::vector<AnimationClip> buildClips(const tinygltf::Model& model,
+                                      const std::unordered_map<int, int32_t>& nodeToJoint) {
+    std::vector<AnimationClip> clips;
+    clips.reserve(model.animations.size());
+
+    for (size_t animIndex = 0; animIndex < model.animations.size(); ++animIndex) {
+        const tinygltf::Animation& animation = model.animations[animIndex];
+
+        AnimationClip clip;
+        clip.name = animation.name.empty() ? ("Clip" + std::to_string(animIndex)) : animation.name;
+
+        for (const auto& channel : animation.channels) {
+            const auto jointIt = nodeToJoint.find(channel.target_node);
+            if (jointIt == nodeToJoint.end()) continue;
+
+            if (channel.sampler < 0 ||
+                static_cast<size_t>(channel.sampler) >= animation.samplers.size()) continue;
+            const tinygltf::AnimationSampler& sampler =
+                animation.samplers[static_cast<size_t>(channel.sampler)];
+
+            AnimChannel out;
+            out.joint = jointIt->second;
+            out.interpolation = interpolationFrom(sampler.interpolation);
+
+            if (channel.target_path == "translation")   out.path = AnimPath::Translation;
+            else if (channel.target_path == "rotation") out.path = AnimPath::Rotation;
+            else if (channel.target_path == "scale")    out.path = AnimPath::Scale;
+            else continue;  // morph weights are not supported
+
+            if (sampler.input < 0 || static_cast<size_t>(sampler.input) >= model.accessors.size()) continue;
+            if (sampler.output < 0 || static_cast<size_t>(sampler.output) >= model.accessors.size()) continue;
+
+            const tinygltf::Accessor& inputAcc = model.accessors[static_cast<size_t>(sampler.input)];
+            const tinygltf::Accessor& outputAcc = model.accessors[static_cast<size_t>(sampler.output)];
+
+            size_t inputStride = 0;
+            const auto* times = accessorData<uint8_t>(model, inputAcc, inputStride);
+            size_t outputStride = 0;
+            const auto* values = accessorData<uint8_t>(model, outputAcc, outputStride);
+            if (!times || !values || inputAcc.count == 0) continue;
+
+            out.times.resize(inputAcc.count);
+            for (size_t k = 0; k < inputAcc.count; ++k) {
+                out.times[k] = componentAsFloat(times + k * inputStride,
+                                                inputAcc.componentType, 0, inputAcc.normalized);
+            }
+
+            const size_t components = out.path == AnimPath::Rotation ? 4u : 3u;
+            out.values.resize(outputAcc.count);
+            for (size_t k = 0; k < outputAcc.count; ++k) {
+                const uint8_t* element = values + k * outputStride;
+                glm::vec4 value(0.0f);
+                for (size_t c = 0; c < components; ++c) {
+                    value[static_cast<glm::length_t>(c)] =
+                        componentAsFloat(element, outputAcc.componentType, c, outputAcc.normalized);
+                }
+                out.values[k] = value;
+            }
+
+            // CUBICSPLINE stores in-tangent, value and out-tangent per key, so
+            // the output accessor is three times the key count. A mismatch means
+            // a malformed file and the channel is unusable.
+            const size_t expected = out.interpolation == AnimInterpolation::CubicSpline
+                                  ? out.times.size() * 3 : out.times.size();
+            if (out.values.size() < expected) continue;
+
+            clip.duration = std::max(clip.duration, out.times.back());
+            clip.channels.push_back(std::move(out));
+        }
+
+        if (!clip.channels.empty()) clips.push_back(std::move(clip));
+    }
+    return clips;
+}
+
 void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& parentMatrix,
                const std::string& baseDir, std::vector<GltfLoader::Submesh>& out,
                std::vector<bool>& visited) {
@@ -262,7 +623,13 @@ void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& par
         const std::string name = !node.name.empty() ? node.name
                                : (!mesh.name.empty() ? mesh.name : "GltfMesh");
         for (const auto& primitive : mesh.primitives) {
-            appendPrimitive(model, primitive, world, baseDir, name, out);
+            // A skinned primitive is handed the IDENTITY, not its node's world
+            // matrix: the inverse bind matrices are authored in the skin's own
+            // space, and the glTF spec requires the skinned mesh node's own
+            // transform to be ignored. Baking it in transforms the mesh twice.
+            const int32_t skin = static_cast<int32_t>(node.skin);
+            const glm::mat4 primitiveMatrix = skin >= 0 ? glm::mat4(1.0f) : world;
+            appendPrimitive(model, primitive, primitiveMatrix, baseDir, name, out, skin);
         }
     }
 
@@ -303,6 +670,20 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
 
     const std::string baseDir = fs::path(path).parent_path().string();
     std::vector<bool> visited(model.nodes.size(), false);
+
+    // Skins first, because the node walk records a skin index per primitive and
+    // the clips are remapped onto the first skin's joints.
+    const std::vector<int> parents = buildParentTable(model);
+    std::unordered_map<int, int32_t> nodeToJoint;
+    for (size_t i = 0; i < model.skins.size(); ++i) {
+        std::unordered_map<int, int32_t> skinNodeToJoint;
+        Skeleton skeleton = buildSkeleton(model, model.skins[i], parents, skinNodeToJoint);
+        if (i == 0) nodeToJoint = skinNodeToJoint;
+        scene.skeletons.push_back(std::move(skeleton));
+    }
+    if (!nodeToJoint.empty()) {
+        scene.clips = buildClips(model, nodeToJoint);
+    }
 
     // Walk the default scene's node graph so each primitive comes out already
     // placed by its parent chain.

@@ -55,11 +55,18 @@ struct UniformBufferObject {
     GpuLight lights[kMaxLights];
 };
 
-// 96 bytes, comfortably inside the 128-byte guaranteed minimum.
+// 104 bytes, inside the 128-byte guaranteed minimum.
 struct PushConstantData {
     glm::mat4 model;         // 0..63   (vertex)
     glm::vec4 albedoColor;   // 64..79  (fragment)
     glm::vec4 material;      // 80..95  x=roughness y=metallic z=ao (fragment)
+
+    // Where this draw's joint matrices start in the frame's palette buffer.
+    // The -1 default is load-bearing: the particle path builds these with
+    // `PushConstantData push{}` and never touches these fields, and a zero would
+    // make every particle skin itself against whatever is in palette slot 0.
+    int32_t skinPaletteBase{-1};  // 96..99  (vertex)
+    int32_t skinJointCount{0};    // 100..103 (vertex)
 };
 
 // The depth pass has its own, because it needs a different second half: which
@@ -72,8 +79,15 @@ struct PushConstantData {
 //
 // 128 bytes exactly: the guaranteed minimum, and all of it.
 struct ShadowPushConstantData {
-    glm::mat4 model;           // 0..63
-    glm::mat4 cascadeViewProj; // 64..127
+    // cascadeViewProj * model, premultiplied on the CPU.
+    //
+    // Two matrices would be 128 bytes exactly, leaving nothing for the skinning
+    // indices. Premultiplying is free here - the depth pass has no use for the
+    // model matrix on its own - and matrix multiplication is associative, so
+    // the per-vertex skin matrix still composes correctly on the right.
+    glm::mat4 viewProjModel;      // 0..63
+    int32_t skinPaletteBase{-1};  // 64..67
+    int32_t skinJointCount{0};    // 68..71
 };
 
 class VulkanPipeline {

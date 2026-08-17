@@ -79,6 +79,19 @@ add_engine_test(test_gltf      ${SUPERSONIC_SRC}/src/core/GltfLoader.cpp
                                ${SUPERSONIC_SRC}/src/core/TinyGltfImplementation.cpp
                                ${SUPERSONIC_SRC}/src/core/JobSystem.cpp)
 
+# Deliberately NOT RenderSystem.cpp: it calls vkCmd*, and these targets link no
+# Vulkan library. That is exactly why the palette gather lives in
+# AnimationSystem.cpp rather than next to the draw loop that consumes it.
+add_engine_test(test_skeletal  ${SUPERSONIC_SRC}/src/core/AnimationSystem.cpp
+                               ${SUPERSONIC_SRC}/src/core/AnimationLibrary.cpp
+                               ${SUPERSONIC_SRC}/src/core/GltfLoader.cpp
+                               ${SUPERSONIC_SRC}/src/core/JobSystem.cpp
+                               ${SUPERSONIC_SRC}/src/core/TinyGltfImplementation.cpp)
+target_include_directories(test_skeletal PRIVATE ${SUPERSONIC_SRC}/third_party/tinygltf)
+set_tests_properties(test_skeletal PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")
+set_source_files_properties(${SUPERSONIC_SRC}/src/core/TinyGltfImplementation.cpp
+    TARGET_DIRECTORY test_skeletal PROPERTIES COMPILE_OPTIONS "${_vendorWarnFlag}")
+
 target_include_directories(test_gltf PRIVATE ${SUPERSONIC_SRC}/third_party/tinygltf)
 # Runs against assets/models/monument.gltf, so it needs the project root.
 set_tests_properties(test_gltf PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")

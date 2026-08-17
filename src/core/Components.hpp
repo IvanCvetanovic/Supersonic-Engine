@@ -33,6 +33,15 @@ struct Vertex {
     // that avoids storing a full bitangent.
     glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
 
+    // Skinning influences: up to four joints per vertex.
+    //
+    // 8-bit indices are exact for any rig inside the 128-joint cap, and float
+    // weights sidestep the normalised-integer renormalisation trap entirely. The
+    // default is "fully bound to joint 0 with the identity palette", so an
+    // unskinned mesh needs no special case in either vertex shader.
+    glm::u8vec4 jointIndices{0, 0, 0, 0};
+    glm::vec4 jointWeights{1.0f, 0.0f, 0.0f, 0.0f};
+
     static vk::VertexInputBindingDescription getBindingDescription() {
         vk::VertexInputBindingDescription bindingDescription{};
         bindingDescription.binding = 0;
@@ -41,8 +50,8 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static std::array<vk::VertexInputAttributeDescription, 5> getAttributeDescriptions() {
-        std::array<vk::VertexInputAttributeDescription, 5> attributeDescriptions{};
+    static std::array<vk::VertexInputAttributeDescription, 7> getAttributeDescriptions() {
+        std::array<vk::VertexInputAttributeDescription, 7> attributeDescriptions{};
 
         // Location 0: Position
         attributeDescriptions[0].binding = 0;
@@ -74,9 +83,33 @@ struct Vertex {
         attributeDescriptions[4].format = vk::Format::eR32G32B32A32Sfloat;
         attributeDescriptions[4].offset = offsetof(Vertex, tangent);
 
+        // Location 5: Joint indices. An integer format, so the shader must
+        // declare uvec4 - a float declaration against a UINT format is a
+        // vertex-input type mismatch.
+        attributeDescriptions[5].binding = 0;
+        attributeDescriptions[5].location = 5;
+        attributeDescriptions[5].format = vk::Format::eR8G8B8A8Uint;
+        attributeDescriptions[5].offset = offsetof(Vertex, jointIndices);
+
+        // Location 6: Joint weights
+        attributeDescriptions[6].binding = 0;
+        attributeDescriptions[6].location = 6;
+        attributeDescriptions[6].format = vk::Format::eR32G32B32A32Sfloat;
+        attributeDescriptions[6].offset = offsetof(Vertex, jointWeights);
+
         return attributeDescriptions;
     }
 };
+
+// Every attribute offset and the stride must stay 4-byte aligned: this repo
+// carries macOS and iOS targets, and Metal rejects an unaligned vertex attribute
+// outright. Asserted rather than assumed, because inserting a member anywhere
+// above is what would silently break it.
+static_assert(offsetof(Vertex, jointIndices) == 60, "vertex layout shifted");
+static_assert(offsetof(Vertex, jointWeights) == 64, "vertex layout shifted");
+static_assert(sizeof(Vertex) == 80, "vertex stride shifted");
+static_assert(offsetof(Vertex, jointIndices) % 4 == 0, "attribute offsets must be 4-byte aligned");
+static_assert(sizeof(Vertex) % 4 == 0, "vertex stride must be 4-byte aligned");
 
 // Parent link. Held as a separate component so the common case - an entity with
 // no parent - costs nothing, and so a view of "things with parents" is cheap.
@@ -249,6 +282,35 @@ struct AudioSourceComponent {
 
 struct AudioListenerComponent {
     bool isPrimary{true};
+};
+
+// Playback state for a skinned mesh. Authored, serialised and editable.
+struct AnimatorComponent {
+    std::string clipName;
+    float time{0.0f};
+    float speed{1.0f};
+    bool loop{true};
+    bool playing{true};
+
+    // Rate-limits the "no such clip" diagnostic to once per name change.
+    bool warnedMissing{false};
+};
+
+// Resolved rig for an entity. Entirely derived - AnimationSystem rebuilds it
+// from the mesh path every frame - which is why it is not serialised: an undo
+// or a Play/Stop must not be able to lose a rig.
+struct SkinnedMeshComponent {
+    uint32_t skeletonID{0xFFFFFFFFu};
+
+    // World-space-free joint matrices: model space, excluding the entity's own
+    // world transform, because the vertex shader already applies that.
+    std::vector<glm::mat4> jointMatrices;
+
+    // Offset into this frame's joint palette buffer, or -1 when the entity is
+    // not skinned this frame (no rig, or the palette is full).
+    int32_t paletteBase{-1};
+
+    bool valid() const { return skeletonID != 0xFFFFFFFFu && !jointMatrices.empty(); }
 };
 
 struct ScriptComponent {

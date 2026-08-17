@@ -1,4 +1,6 @@
 #include "renderer/VulkanRenderer.hpp"
+
+#include "core/AnimationSystem.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/Components.hpp"
 #include "core/EcsUtils.hpp"
@@ -69,6 +71,7 @@ VulkanRenderer::~VulkanRenderer() {
 
     m_textureRegistry.reset();
     m_uniformBuffers.clear();
+    m_jointPaletteBuffers.clear();
     m_meshRegistry.reset();
     m_shadowPipeline.reset();
     m_shadowMap.reset();
@@ -345,11 +348,27 @@ void VulkanRenderer::createUniformBuffers() {
             VMA_ALLOCATION_CREATE_MAPPED_BIT);
     }
 
-    std::cout << "[VulkanRenderer] Created " << m_uniformBuffers.size() << " VMA Uniform Buffers." << std::endl;
+    // One joint palette per frame in flight, persistently mapped. Sized once at
+    // capacity: a storage buffer descriptor has to be valid every frame whether
+    // or not the scene has anything skinned in it.
+    m_jointPaletteBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    const vk::DeviceSize paletteSize = sizeof(glm::mat4) * kMaxPaletteMatrices;
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        m_jointPaletteBuffers[i] = std::make_unique<VulkanBuffer>(
+            m_deviceRef.GetAllocator(),
+            paletteSize,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            VMA_MEMORY_USAGE_CPU_TO_GPU,
+            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    }
+
+    std::cout << "[VulkanRenderer] Created " << m_uniformBuffers.size() << " VMA Uniform Buffers and "
+              << m_jointPaletteBuffers.size() << " joint palettes ("
+              << kMaxPaletteMatrices << " matrices each)." << std::endl;
 }
 
 void VulkanRenderer::createDescriptorPool() {
-    std::array<vk::DescriptorPoolSize, 2> poolSizes{};
+    std::array<vk::DescriptorPoolSize, 3> poolSizes{};
     poolSizes[0].type = vk::DescriptorType::eUniformBuffer;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
@@ -357,6 +376,12 @@ void VulkanRenderer::createDescriptorPool() {
     // TextureRegistry's own pool.
     poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
     poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+    // The joint palette. Omitting this makes allocateDescriptorSets throw at
+    // startup, which presents as a launch failure rather than as a rendering
+    // bug - so it is worth being explicit that binding 2 needs its own size.
+    poolSizes[2].type = vk::DescriptorType::eStorageBuffer;
+    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
@@ -393,7 +418,12 @@ void VulkanRenderer::createDescriptorSets() {
             throw std::runtime_error("Shadow map is missing a sampler or view; the descriptor write would fault!");
         }
 
-        std::array<vk::WriteDescriptorSet, 2> writes{};
+        vk::DescriptorBufferInfo paletteInfo{};
+        paletteInfo.buffer = m_jointPaletteBuffers[i]->GetBuffer();
+        paletteInfo.offset = 0;
+        paletteInfo.range = sizeof(glm::mat4) * kMaxPaletteMatrices;
+
+        std::array<vk::WriteDescriptorSet, 3> writes{};
 
         writes[0].dstSet = m_descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -406,6 +436,12 @@ void VulkanRenderer::createDescriptorSets() {
         writes[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
         writes[1].descriptorCount = 1;
         writes[1].pImageInfo = &shadowInfo;
+
+        writes[2].dstSet = m_descriptorSets[i];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = vk::DescriptorType::eStorageBuffer;
+        writes[2].descriptorCount = 1;
+        writes[2].pBufferInfo = &paletteInfo;
 
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
@@ -614,6 +650,16 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         ubo.cascadeTexelWorld[static_cast<int>(i)] = cascades.texelWorldSize[i];
     }
 
+    // Joint palettes for this frame. Must happen before recording, because the
+    // per-draw push constant carries the offset this writes.
+    const uint32_t paletteCount =
+        AnimationSystem::GatherPalettes(registry, m_paletteScratch, kMaxPaletteMatrices);
+    if (paletteCount > 0) {
+        m_jointPaletteBuffers[m_currentFrame]->UploadData(
+            m_paletteScratch.data(), sizeof(glm::mat4) * paletteCount);
+    }
+    m_renderStats.skinnedMatrices = paletteCount;
+
     // Culling frustum for the scene pass. Each cascade carries its own for the
     // depth pass - an object behind the camera can still cast a shadow into
     // view, so culling the depth pass against the camera would make shadows pop
@@ -659,7 +705,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         cmd.setScissor(0, 1, &shadowScissor);
 
         RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
-                                      cmd, cascades.viewProj[cascade],
+                                      cmd, m_descriptorSets[m_currentFrame],
+                                      cascades.viewProj[cascade],
                                       cascades.frustum[cascade], m_renderStats);
 
         cmd.endRenderPass();

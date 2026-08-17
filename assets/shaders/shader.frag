@@ -43,10 +43,15 @@ layout(set = 1, binding = 0) uniform sampler2D albedoMap;
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
 
 // Must match Engine::PushConstantData.
+// A push constant block must be declared identically in every stage of a
+// pipeline that declares one, so these two ints are here even though the
+// fragment stage never reads them.
 layout(push_constant) uniform PushConstants {
     mat4 model;
     vec4 albedoColor;
     vec4 material;   // x = roughness, y = metallic, z = ao
+    int skinPaletteBase;
+    int skinJointCount;
 } push;
 
 const float PI = 3.14159265359;

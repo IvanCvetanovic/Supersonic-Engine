@@ -105,7 +105,27 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
             // share a coordinate system.
             const GltfLoader::Scene scene = GltfLoader::Load(filePath);
             if (scene.ok) {
+                // Only primitives that share ONE skin are merged.
+                //
+                // Two skeletons welded into one mesh would have their joint
+                // indices addressing the wrong palette slice, and an unskinned
+                // primitive merged into a skinned draw carries default weights -
+                // so it would either collapse onto the origin or rigidly follow
+                // joint 0. Neither reports anything.
+                int32_t mergeSkin = -1;
                 for (const auto& submesh : scene.submeshes) {
+                    if (submesh.skinIndex >= 0) { mergeSkin = submesh.skinIndex; break; }
+                }
+
+                for (const auto& submesh : scene.submeshes) {
+                    if (submesh.skinIndex != mergeSkin) {
+                        std::cerr << "[MeshRegistry] Skipping '" << submesh.name << "' in " << filePath
+                                  << ": it belongs to skin " << submesh.skinIndex
+                                  << " while the mesh is being built from skin " << mergeSkin << "."
+                                  << std::endl;
+                        continue;
+                    }
+
                     const auto vertexOffset = static_cast<uint32_t>(data.vertices.size());
                     data.vertices.insert(data.vertices.end(),
                                          submesh.mesh.vertices.begin(), submesh.mesh.vertices.end());

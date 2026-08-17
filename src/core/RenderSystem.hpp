@@ -24,6 +24,9 @@ public:
         // in two of them counts twice - which is what it costs.
         uint32_t shadowDrawn{0};
         uint32_t shadowCulled{0};
+
+        // Joint matrices uploaded this frame, across every skinned entity.
+        uint32_t skinnedMatrices{0};
     };
 
     // Draws every visible entity using its own MeshComponent geometry,
@@ -48,6 +51,7 @@ public:
         VulkanPipeline& pipeline,
         MeshRegistry& meshes,
         vk::CommandBuffer commandBuffer,
+        vk::DescriptorSet sceneSet,
         const glm::mat4& cascadeViewProj,
         const Frustum& lightFrustum,
         Stats& stats

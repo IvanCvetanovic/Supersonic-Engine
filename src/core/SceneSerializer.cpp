@@ -208,6 +208,21 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
             file << "      },\n";
         }
 
+        if (const auto* animator = registry.try_get<AnimatorComponent>(entity)) {
+            // SkinnedMeshComponent is deliberately NOT persisted: it is entirely
+            // derived from the mesh path and rebuilt every frame, so persisting
+            // it could only ever let it go stale. Time IS persisted, unlike
+            // ScriptComponent::elapsed, so Play/Stop and undo restore the pose
+            // that was on screen.
+            file << "      \"Animator\": {\n";
+            file << "        \"Clip\": \"" << Json::Escape(animator->clipName) << "\",\n";
+            file << "        \"Time\": " << animator->time << ",\n";
+            file << "        \"Speed\": " << animator->speed << ",\n";
+            file << "        \"Loop\": " << (animator->loop ? "true" : "false") << ",\n";
+            file << "        \"Playing\": " << (animator->playing ? "true" : "false") << "\n";
+            file << "      },\n";
+        }
+
         if (const auto* renderable = registry.try_get<RenderableComponent>(entity)) {
             file << "      \"Renderable\": { \"Visible\": " << (renderable->isVisible ? "true" : "false")
                  << ", \"CastsShadow\": " << (renderable->castsShadow ? "true" : "false") << " },\n";
@@ -398,6 +413,16 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
                 emitter.velocityRange = readVec3(e["VelocityRange"], glm::vec3(0.5f, 2.0f, 0.5f));
                 emitter.particleSize = e["ParticleSize"].AsFloat(0.08f);
             }
+        }
+
+        if (node.Has("Animator")) {
+            const auto& a = node["Animator"];
+            auto& animator = registry.emplace<AnimatorComponent>(entity);
+            animator.clipName = a["Clip"].AsString("");
+            animator.time = a["Time"].AsFloat(0.0f);
+            animator.speed = a["Speed"].AsFloat(1.0f);
+            animator.loop = a["Loop"].AsBool(true);
+            animator.playing = a["Playing"].AsBool(true);
         }
 
         if (node["HasRenderable"].AsBool(false)) {

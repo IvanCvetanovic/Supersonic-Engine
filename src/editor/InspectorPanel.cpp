@@ -295,6 +295,39 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // 8b. AnimatorComponent
+    if (registry.all_of<AnimatorComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Animator", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& animator = registry.get<AnimatorComponent>(entity);
+
+            char clipBuffer[64];
+            std::snprintf(clipBuffer, sizeof(clipBuffer), "%s", animator.clipName.c_str());
+            if (ImGui::InputText("Clip", clipBuffer, sizeof(clipBuffer))) {
+                animator.clipName = clipBuffer;
+                animator.warnedMissing = false;
+            }
+            ImGui::TextDisabled("Empty plays the file's first clip.");
+
+            ImGui::Checkbox("Playing", &animator.playing);
+            ImGui::SameLine();
+            ImGui::Checkbox("Loop", &animator.loop);
+            ImGui::DragFloat("Speed", &animator.speed, 0.05f, -4.0f, 4.0f);
+
+            // Scrubbable in edit mode. Poses are evaluated every frame whatever
+            // the play state, so dragging this shows the pose immediately rather
+            // than only once the scene is running.
+            ImGui::DragFloat("Time", &animator.time, 0.01f, 0.0f, 120.0f);
+
+            if (const auto* skin = registry.try_get<SkinnedMeshComponent>(entity)) {
+                ImGui::TextDisabled("Rig: %zu joints", skin->jointMatrices.size());
+            } else {
+                ImGui::TextDisabled("No rig: this mesh has no glTF skin.");
+            }
+        }
+    }
+
+    ImGui::Spacing();
+
     // 9. CameraComponent
     if (registry.all_of<CameraComponent>(entity)) {
         if (ImGui::CollapsingHeader("Camera Component", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -355,6 +388,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
         if (!registry.all_of<ScriptComponent>(entity) && ImGui::MenuItem("Script Component")) {
             registry.emplace<ScriptComponent>(entity, "RotatorScript");
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<AnimatorComponent>(entity) && ImGui::MenuItem("Animator")) {
+            registry.emplace<AnimatorComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<ParticleEmitterComponent>(entity) && ImGui::MenuItem("Particle Emitter")) {

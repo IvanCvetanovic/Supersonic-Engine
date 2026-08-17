@@ -8,19 +8,56 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec3 inColor;
 layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) in vec4 inTangent;
+layout(location = 5) in uvec4 inJointIndices;
+layout(location = 6) in vec4 inJointWeights;
 
-// The cascade's light-space transform arrives through the push constant rather
-// than being read out of the scene UBO by index.
+// Must match Engine::ShadowPushConstantData.
 //
-// The UBO is per-frame and bound once, so a cascade index would have to be a
-// second push constant anyway - and the depth pass has no use for any of the
-// UBO's other 700-odd bytes. This also keeps this stage free of the UBO block
-// entirely, so it cannot drift out of step with the other three declarations.
+// cascadeViewProj * model arrives premultiplied, for two reasons: two separate
+// matrices would be the whole 128-byte push constant budget and leave nothing
+// for the skinning indices, and taking the cascade transform this way keeps this
+// stage free of the scene UBO block entirely - so it cannot drift out of step
+// with the three other declarations of it, which is a mismatch nothing
+// diagnoses.
 layout(push_constant) uniform PushConstants {
-    mat4 model;
-    mat4 cascadeViewProj;
+    mat4 viewProjModel;
+    int skinPaletteBase;
+    int skinJointCount;
 } push;
 
+// This frame's joint matrices for every skinned entity, back to back. std430
+// spelled out so the mat4 array stride is 64 bytes and matches
+// std::vector<glm::mat4> exactly.
+layout(std430, set = 0, binding = 2) readonly buffer JointPalette {
+    mat4 joints[];
+} palette;
+
+// Identity when the draw is not skinned, so neither vertex shader needs a branch
+// around the matrix multiply itself.
+mat4 skinMatrix(int paletteBase, int jointCount, uvec4 indices, vec4 weights) {
+    if (paletteBase < 0 || jointCount <= 0) return mat4(1.0);
+
+    // Every index is clamped. robustBufferAccess is not enabled on this device,
+    // so a stray index is undefined behaviour - a device loss, not a zero read -
+    // and the loader's clamp is not something this stage can verify.
+    mat4 result = mat4(0.0);
+    for (int i = 0; i < 4; ++i) {
+        float weight = weights[i];
+        if (weight <= 0.0) continue;
+        int index = clamp(int(indices[i]), 0, jointCount - 1);
+        result += weight * palette.joints[paletteBase + index];
+    }
+
+    // A vertex with no influences at all would otherwise collapse onto the
+    // origin, which looks like the mesh imploding rather than like missing data.
+    if (result[3][3] == 0.0) return mat4(1.0);
+    return result;
+}
+
 void main() {
-    gl_Position = push.cascadeViewProj * push.model * vec4(inPosition, 1.0);
+    // A skinned character whose shadow is not skinned too stays frozen in bind
+    // pose on the ground while the character moves - and no validation layer
+    // says a word, because unconsumed vertex attributes are perfectly legal.
+    mat4 skin = skinMatrix(push.skinPaletteBase, push.skinJointCount, inJointIndices, inJointWeights);
+    gl_Position = push.viewProjModel * skin * vec4(inPosition, 1.0);
 }

@@ -98,6 +98,15 @@ private:
     // Depth-only pass from the primary directional light.
     std::unique_ptr<ShadowMap> m_shadowMap;
     std::unique_ptr<PipelineCache> m_pipelineCache;
+
+    // Every skinned entity's joint matrices for the frame, back to back. The
+    // per-draw push constant holds an index into this rather than the matrices
+    // themselves: 128 joints is 8 KB against the 128-byte push constant budget.
+    static constexpr uint32_t kMaxPaletteMatrices = 1024;
+    std::vector<std::unique_ptr<VulkanBuffer>> m_jointPaletteBuffers;
+
+    // Reused between frames so the gather does not allocate every frame.
+    std::vector<glm::mat4> m_paletteScratch;
     RenderSystem::Stats m_renderStats{};
     std::unique_ptr<VulkanPipeline> m_shadowPipeline;
 

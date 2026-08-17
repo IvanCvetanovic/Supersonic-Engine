@@ -153,6 +153,14 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
                       "Push constants must fit the 128-byte guaranteed minimum");
         static_assert(sizeof(ShadowPushConstantData) <= 128,
                       "Shadow push constants must fit the 128-byte guaranteed minimum");
+        // Pinned rather than assumed: these are the std430 push-constant offsets
+        // the shaders declare, and GLM_FORCE_ALIGNED_GENTYPES would shift every
+        // one of them without a word.
+        static_assert(sizeof(PushConstantData) == 104, "push constant layout shifted");
+        static_assert(offsetof(PushConstantData, skinPaletteBase) == 96, "push constant layout shifted");
+        static_assert(offsetof(PushConstantData, skinJointCount) == 100, "push constant layout shifted");
+        static_assert(offsetof(ShadowPushConstantData, skinPaletteBase) == 64, "shadow push layout shifted");
+        static_assert(sizeof(PushConstantData) % 4 == 0, "push constant size must be a multiple of 4");
         if (options.pushConstantSize == 0 || options.pushConstantSize > 128) {
             throw std::runtime_error("Push constant range must be 1..128 bytes, got "
                                      + std::to_string(options.pushConstantSize));
@@ -227,8 +235,16 @@ void VulkanPipeline::destroy() noexcept {
 
 void VulkanPipeline::createDescriptorSetLayout() {
     // ---- Set 0: per-frame scene data ----
-    // binding 0: UBO with camera, lights and the light-space matrix.
-    // binding 1: the shadow map, sampled by the fragment stage.
+    // binding 0: UBO with camera, lights and the cascade transforms.
+    // binding 1: the cascaded shadow map array, sampled by the fragment stage.
+    // binding 2: this frame's joint matrices, read by the vertex stage.
+    //
+    // The palette goes here rather than in a set of its own because set 0 is
+    // already bound exactly once per pass at every call site: a non-dynamic
+    // storage buffer costs no extra bindDescriptorSets and no per-draw
+    // descriptor traffic, and the per-draw offset travels in a push constant
+    // instead. Storage-buffer READS in the vertex stage are core Vulkan 1.0 -
+    // only stores and atomics there need a device feature.
     vk::DescriptorSetLayoutBinding uboBinding{};
     uboBinding.binding = 0;
     uboBinding.descriptorType = vk::DescriptorType::eUniformBuffer;
@@ -241,7 +257,15 @@ void VulkanPipeline::createDescriptorSetLayout() {
     shadowBinding.descriptorCount = 1;
     shadowBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
 
-    const std::array<vk::DescriptorSetLayoutBinding, 2> sceneBindings = { uboBinding, shadowBinding };
+    vk::DescriptorSetLayoutBinding paletteBinding{};
+    paletteBinding.binding = 2;
+    paletteBinding.descriptorType = vk::DescriptorType::eStorageBuffer;
+    paletteBinding.descriptorCount = 1;
+    paletteBinding.stageFlags = vk::ShaderStageFlagBits::eVertex;
+
+    const std::array<vk::DescriptorSetLayoutBinding, 3> sceneBindings = {
+        uboBinding, shadowBinding, paletteBinding
+    };
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};
     sceneInfo.bindingCount = static_cast<uint32_t>(sceneBindings.size());

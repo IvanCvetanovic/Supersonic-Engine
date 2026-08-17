@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-13%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-14%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 
 </div>
@@ -54,7 +54,7 @@ code quietly contradicts.
 
 ### Assets
 
-- **glTF 2.0** import via tinygltf — meshes, materials and texture references
+- **glTF 2.0** import via tinygltf — meshes, materials, texture references, **skins and animations**
 - **Wavefront OBJ** import
 - **Textures** through `stb_image`, with per-material descriptor sets cached by texture pair
 - **Procedural geometry** — cube, sphere, plane, and a heightfield **terrain generator**
@@ -67,6 +67,7 @@ code quietly contradicts.
 - **3D audio** on XAudio2 with a from-scratch WAV decoder, inverse-distance attenuation and listener-relative panning
 - **Particle systems** with per-emitter pools, so two emitters cannot starve each other
 - **Job system** — a worker pool with a counter fence, used where the work is genuinely independent: terrain generation, per-vertex tangent bases and particle integration. Command recording, the transform hierarchy, scripts and collision response stay on the main thread on purpose, and the code says why
+- **Skeletal animation** — glTF skins and animation channels with LINEAR, STEP and CUBICSPLINE interpolation; joints are reordered parent-before-child at load so a pose is one forward pass, the joint palette lives in a storage buffer indexed per draw, the shadow pass skins from the same palette, and the render bounds follow the pose so an animated character is not culled against its bind box
 - **Scripting** — built-in components plus a **hot-reloadable C++ plugin**: rebuild the script target while the engine runs and the new code is swapped in without a restart
 
 ### Editor
@@ -202,7 +203,7 @@ tests/         Pure-logic regression suites
 docs/          Screenshots
 ```
 
-Roughly 12,200 lines of engine source across 46 translation units, excluding
+Roughly 13,900 lines of engine source across 49 translation units, excluding
 vendored dependencies.
 
 ---
@@ -213,7 +214,7 @@ vendored dependencies.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Thirteen suites, each a plain executable with no test framework behind it —
+Fourteen suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 | Suite | Covers |
@@ -222,6 +223,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_hierarchy` | Parenting, world-transform caching, play/stop snapshots |
 | `test_frustum` | Plane extraction, AABB transforms, the zero-to-one near-plane convention |
 | `test_cascades` | Split distribution, slice fitting, texel snapping, depth range |
+| `test_skeletal` | glTF skin import, joint reordering, all three interpolation modes, palette packing |
 | `test_raycast` | Viewport picking, slab intersection, depth ordering |
 | `test_meshgen` | Primitive generation, winding, tangents, OBJ parsing |
 | `test_gltf` | glTF import against a real asset in the tree |
@@ -252,7 +254,7 @@ comment on each one says which.
 - [x] Frustum culling, persistent pipeline cache
 - [x] Entity-versus-entity collision with a broadphase
 - [x] Job system, applied where the work is provably independent
-- [ ] Skeletal animation (glTF skins and animation channels)
+- [x] Skeletal animation (glTF skins and animation channels)
 - [x] Cascaded shadow maps
 
 ---

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "core/MeshData.hpp"
+#include "core/Skeleton.hpp"
 
 namespace Supersonic {
 
@@ -23,10 +24,21 @@ public:
         glm::vec4 baseColorFactor{1.0f};
         float roughness{0.5f};
         float metallic{0.0f};
+
+        // Index into Scene::skeletons, or -1 for a rigid primitive. A skinned
+        // primitive is NOT baked into its node's world space: the inverse bind
+        // matrices are authored in the skin's own space, and the glTF spec says
+        // the skinned mesh node's transform must be ignored outright.
+        int32_t skinIndex{-1};
     };
 
     struct Scene {
         std::vector<Submesh> submeshes;
+
+        // One per glTF skin, joints already reordered parent-before-child.
+        std::vector<Skeleton> skeletons;
+        std::vector<AnimationClip> clips;
+
         std::string error;
         bool ok{false};
     };

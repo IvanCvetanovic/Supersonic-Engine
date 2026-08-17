@@ -6,6 +6,7 @@
 #include "core/ScriptEngine.hpp"
 #include "core/ParticleSystem.hpp"
 #include "core/JobSystem.hpp"
+#include "core/AnimationSystem.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
@@ -70,6 +71,7 @@ SupersonicApp::SupersonicApp() {
     JobSystem::Initialize();
 
     m_audioEngine = std::make_unique<AudioEngine>();
+    m_animationLibrary = std::make_unique<AnimationLibrary>();
     // Stops voices when their entity goes away; sources loop by default.
     AudioSystem::Attach(m_registry, *m_audioEngine);
 
@@ -124,6 +126,7 @@ SupersonicApp::~SupersonicApp() {
     m_vulkanContext.reset();
     m_window.reset();
     m_audioEngine.reset();
+    m_animationLibrary.reset();
 
     // Last: a worker holding a reference to anything above would otherwise
     // outlive it. Shutdown drains outstanding work before joining.
@@ -284,6 +287,20 @@ void SupersonicApp::initECS() {
     m_registry.emplace<SphereColliderComponent>(stackedCube);
     m_registry.emplace<RenderableComponent>(stackedCube);
 
+    // Skinned character, so the sample scene exercises the animation path and
+    // its shadow rather than leaving it to a test fixture nobody looks at.
+    auto animated = m_registry.create();
+    m_registry.emplace<TagComponent>(animated, "Bender (Skinned)");
+    auto& animatedTransform = m_registry.emplace<TransformComponent>(animated, glm::vec3(-2.6f, 0.0f, 1.2f));
+    animatedTransform.scale = glm::vec3(0.9f);
+    m_registry.emplace<MeshComponent>(animated, "", "assets/models/bender.gltf", 12u, 48u);
+    auto& animatedMat = m_registry.emplace<MaterialComponent>(animated);
+    animatedMat.albedoColor = glm::vec4(0.85f, 0.55f, 0.25f, 1.0f);
+    animatedMat.roughness = 0.45f;
+    auto& animator = m_registry.emplace<AnimatorComponent>(animated);
+    animator.clipName = "Bend";
+    m_registry.emplace<RenderableComponent>(animated);
+
     auto particleEntity = m_registry.create();
     m_registry.emplace<TagComponent>(particleEntity, "Particle Emitter");
     m_registry.emplace<TransformComponent>(particleEntity, glm::vec3(-1.5f, 0.5f, 0.0f));
@@ -368,6 +385,7 @@ void SupersonicApp::Run() {
 
             AudioSystem::Update(m_registry, *m_audioEngine, deltaTime);
             ScriptEngine::Update(m_registry, deltaTime);
+            AnimationSystem::Advance(m_registry, *m_animationLibrary, deltaTime);
             ParticleSystem::Update(m_registry, deltaTime);
             TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));
         }
@@ -399,6 +417,16 @@ void SupersonicApp::Run() {
         RenderSystem::SyncResources(m_registry,
                                     m_renderer->GetMeshRegistry(),
                                     m_renderer->GetTextureRegistry());
+
+        // Poses are evaluated every frame regardless of play mode, so the
+        // inspector can scrub an animation and see the result in the same frame.
+        // Only the CLOCK is gated on play mode, above.
+        //
+        // After SyncResources, not before: SyncResources rewrites the render
+        // bounds from the static mesh, and the pose bounds have to be the last
+        // word or an animated character is culled against its bind pose.
+        AnimationSystem::SyncSkeletons(m_registry, *m_animationLibrary);
+        AnimationSystem::EvaluatePoses(m_registry, *m_animationLibrary);
 
         // Whichever camera the viewport is showing - the same choice the
         // editor makes for picking and the gizmo, so all three agree.

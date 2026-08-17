@@ -21,6 +21,13 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
         push.albedoColor = glm::vec4(1.0f);
         push.material = glm::vec4(0.4f, 0.1f, 1.0f, 0.0f);
     }
+
+    // Both passes go through this one function, so the shadow pass skins with
+    // no further change. The -1 default stands for everything else.
+    if (const auto* skin = registry.try_get<SkinnedMeshComponent>(entity)) {
+        push.skinPaletteBase = skin->paletteBase;
+        push.skinJointCount = static_cast<int32_t>(skin->jointMatrices.size());
+    }
     return push;
 }
 
@@ -65,11 +72,17 @@ void RenderSystem::RenderDepthOnly(
     VulkanPipeline& pipeline,
     MeshRegistry& meshes,
     vk::CommandBuffer commandBuffer,
+    vk::DescriptorSet sceneSet,
     const glm::mat4& cascadeViewProj,
     const Frustum& lightFrustum,
     Stats& stats) {
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
+    // Bound for the joint palette at binding 2. The depth pass reads nothing
+    // else from set 0 - the cascade transform arrives premultiplied in the push
+    // constant - but a skinned draw cannot skin without it.
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                     VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
 
     uint32_t boundMesh = MeshRegistry::kInvalidMesh;
 
@@ -104,9 +117,15 @@ void RenderSystem::RenderDepthOnly(
 
         // World matrix so a child follows its parent, plus this cascade's
         // transform - the depth pass has no other use for the scene UBO.
+        // Premultiplied on the CPU: two matrices would be the whole 128-byte
+        // push constant budget, leaving nothing for the skinning indices. The
+        // per-vertex skin matrix still composes correctly on the right.
         ShadowPushConstantData push{};
-        push.model = world.matrix;
-        push.cascadeViewProj = cascadeViewProj;
+        push.viewProjModel = cascadeViewProj * world.matrix;
+        if (const auto* skin = registry.try_get<SkinnedMeshComponent>(entity)) {
+            push.skinPaletteBase = skin->paletteBase;
+            push.skinJointCount = static_cast<int32_t>(skin->jointMatrices.size());
+        }
         commandBuffer.pushConstants(
             pipeline.GetLayout(), vk::ShaderStageFlagBits::eVertex,
             0, sizeof(ShadowPushConstantData), &push);

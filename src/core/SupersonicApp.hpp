@@ -17,6 +17,7 @@
 #include "core/PlayMode.hpp"
 #include "core/Components.hpp"
 #include "core/PhysicsSystem.hpp"
+#include "core/AnimationLibrary.hpp"
 
 namespace Supersonic {
 
@@ -46,6 +47,7 @@ private:
     // Real output device. Degrades to a documented no-op where no backend is
     // compiled, instead of silently discarding every computed volume.
     std::unique_ptr<AudioEngine> m_audioEngine;
+    std::unique_ptr<AnimationLibrary> m_animationLibrary;
 
     // Watches the script plugin and swaps it in when it is rebuilt.
     std::unique_ptr<HotReloadEngine> m_hotReload;
