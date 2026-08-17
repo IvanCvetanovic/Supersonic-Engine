@@ -33,8 +33,13 @@ jobs:
             jobs: 4
           - name: Linux (GCC)
             os: ubuntu-latest
-            preset_args: -DCMAKE_BUILD_TYPE=Debug
-            config: Debug
+            # Release, unlike the Windows job, for two reasons. Debug's -O0 -g
+            # debug info is a large share of each cc1plus's peak memory, and
+            # this runner has already been killed by the OOM reaper once - and
+            # a matrix that builds Debug on one platform and Release on the
+            # other covers more than one that builds Debug twice.
+            preset_args: -DCMAKE_BUILD_TYPE=Release
+            config: Release
             # Deliberately 2, not "as many as possible" - see the Build step.
             jobs: 2
 
