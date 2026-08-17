@@ -2,6 +2,7 @@
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+
 #include "core/Components.hpp"
 
 namespace Engine {
@@ -13,16 +14,22 @@ struct Ray {
 
 class Raycast {
 public:
-    static Ray ScreenPointToRay(
-        const glm::vec2& mousePos,
-        const glm::vec2& viewportSize,
-        const CameraComponent& camera
-    );
+    // mousePos is relative to the viewport's top-left corner, in pixels.
+    static Ray ScreenPointToRay(const glm::vec2& mousePos,
+                                const glm::vec2& viewportSize,
+                                const CameraComponent& camera);
 
-    static entt::entity PickEntity(
-        entt::registry& registry,
-        const Ray& ray
-    );
+    static entt::entity PickEntity(entt::registry& registry, const Ray& ray);
+
+    // Slab test against an axis-aligned box. outTNear is the entry parameter
+    // along the ray. Exposed for testing because the depth sort depends on it
+    // being the true entry distance, not merely "some value inside the box".
+    static bool IntersectRayAABB(const glm::vec3& origin,
+                                 const glm::vec3& direction,
+                                 const glm::vec3& boundsMin,
+                                 const glm::vec3& boundsMax,
+                                 float& outTNear,
+                                 float& outTFar);
 };
 
 } // namespace Engine

@@ -47,13 +47,25 @@ void VulkanOffscreen::cleanup() {
     m_colorImage.reset();
 }
 
-void VulkanOffscreen::Recreate(uint32_t width, uint32_t height) {
-    if (width == 0 || height == 0) return;
-    if (width == m_width && height == m_height) return;
+void VulkanOffscreen::RequestResize(uint32_t width, uint32_t height) {
+    // Only records intent. Actually destroying and rebuilding the framebuffer
+    // here would be a use-after-free: this is called while building the ImGui
+    // frame, at which point DrawFrame has already recorded a render pass
+    // referencing the current framebuffer into a command buffer that has not
+    // been submitted yet. vkDeviceWaitIdle does not help - it drains submitted
+    // work, and the offending buffer is still in the recording state.
+    m_pendingWidth = width;
+    m_pendingHeight = height;
+}
 
-    m_width = width;
-    m_height = height;
+bool VulkanOffscreen::ApplyPendingResize() {
+    if (m_pendingWidth == 0 || m_pendingHeight == 0) return false;
+    if (m_pendingWidth == m_width && m_pendingHeight == m_height) return false;
 
+    m_width = m_pendingWidth;
+    m_height = m_pendingHeight;
+
+    // Safe here: called from the top of the frame, before any recording begins.
     m_deviceRef.GetDevice().waitIdle();
     cleanup();
 
@@ -62,12 +74,19 @@ void VulkanOffscreen::Recreate(uint32_t width, uint32_t height) {
     createSamplerAndTextureID();
 
     std::cout << "[VulkanOffscreen] Resized Offscreen Viewport Target (" << m_width << "x" << m_height << ")." << std::endl;
+    return true;
 }
 
 void VulkanOffscreen::createRenderPass() {
     // 1. Offscreen Color Attachment (Final layout = eShaderReadOnlyOptimal for ImGui sampling)
+    //
+    // UNORM, not SRGB. shader.frag already encodes to sRGB itself; an SRGB
+    // attachment would encode a second time on store, and because ImGui samples
+    // this image and writes it to the swapchain without any colour conversion,
+    // nothing downstream cancels it. UNORM here means the shader's encoded
+    // value is stored and presented verbatim - one encode, as intended.
     vk::AttachmentDescription colorAttachment{};
-    colorAttachment.format = vk::Format::eR8G8B8A8Srgb;
+    colorAttachment.format = kColorFormat;
     colorAttachment.samples = vk::SampleCountFlagBits::e1;
     colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
     colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
@@ -101,13 +120,32 @@ void VulkanOffscreen::createRenderPass() {
     subpass.pColorAttachments = &colorAttachmentRef;
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
-    vk::SubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    dependency.srcAccessMask = vk::AccessFlagBits::eNone;
-    dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
-    dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    // Two dependencies, because this image is both written here and sampled by
+    // ImGui in the swapchain pass, with MAX_FRAMES_IN_FLIGHT frames overlapping.
+    std::array<vk::SubpassDependency, 2> dependencies{};
+
+    // WRITE_AFTER_READ: frame N+1 must not clear this image while frame N's
+    // ImGui pass is still sampling it. eFragmentShader in srcStageMask is what
+    // makes the previous frame's read part of the hazard.
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+                                 | vk::PipelineStageFlagBits::eEarlyFragmentTests
+                                 | vk::PipelineStageFlagBits::eFragmentShader;
+    dependencies[0].srcAccessMask = vk::AccessFlagBits::eShaderRead;
+    dependencies[0].dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
+                                 | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+    dependencies[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
+                                  | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+    // READ_AFTER_WRITE: make the colour write visible to ImGui's sampled read.
+    // Without this the viewport can present a stale or torn frame.
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    dependencies[1].srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+    dependencies[1].dstStageMask = vk::PipelineStageFlagBits::eFragmentShader;
+    dependencies[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
 
     std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
 
@@ -116,8 +154,8 @@ void VulkanOffscreen::createRenderPass() {
     renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
+    renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+    renderPassInfo.pDependencies = dependencies.data();
 
     m_renderPass = m_deviceRef.GetDevice().createRenderPass(renderPassInfo);
 }
@@ -127,7 +165,7 @@ void VulkanOffscreen::createResources() {
         m_deviceRef,
         m_width,
         m_height,
-        vk::Format::eR8G8B8A8Srgb,
+        kColorFormat,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
         vk::ImageAspectFlagBits::eColor
     );

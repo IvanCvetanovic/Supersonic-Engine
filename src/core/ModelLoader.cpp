@@ -1,183 +1,317 @@
 #include "core/ModelLoader.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <unordered_map>
 
 namespace Engine {
 
-constexpr float PI = 3.14159265359f;
+namespace {
 
-bool ModelLoader::GenerateSphere(float radius, uint32_t rings, uint32_t sectors, LoadedMeshData& outMeshData) {
-    outMeshData.vertices.clear();
-    outMeshData.indices.clear();
+constexpr float kPi = 3.14159265359f;
 
-    float const R = 1.0f / static_cast<float>(rings - 1);
-    float const S = 1.0f / static_cast<float>(sectors - 1);
+// An OBJ face vertex references position/uv/normal by independent indices, so
+// a unique combination is what becomes a unique vertex in the buffer.
+struct ObjKey {
+    int p{0};
+    int t{0};
+    int n{0};
+    bool operator==(const ObjKey& o) const { return p == o.p && t == o.t && n == o.n; }
+};
 
+struct ObjKeyHash {
+    size_t operator()(const ObjKey& k) const {
+        return (static_cast<size_t>(k.p) * 73856093u)
+             ^ (static_cast<size_t>(k.t) * 19349663u)
+             ^ (static_cast<size_t>(k.n) * 83492791u);
+    }
+};
+
+// OBJ indices are 1-based and may be negative (relative to the end).
+int resolveObjIndex(int raw, size_t count) {
+    if (raw > 0) return raw - 1;
+    if (raw < 0) return static_cast<int>(count) + raw;
+    return -1;
+}
+
+} // namespace
+
+bool ModelLoader::GenerateSphere(float radius, uint32_t rings, uint32_t sectors, MeshData& out) {
+    out.clear();
+
+    // rings/sectors of 0 or 1 used to underflow to ~4.29 billion loop
+    // iterations via (rings - 1) on an unsigned type, and rings == 1 made
+    // R = 1/0 = inf, producing NaN positions.
+    if (rings < 2 || sectors < 3 || radius <= 0.0f) {
+        std::cerr << "[ModelLoader] GenerateSphere requires radius > 0, rings >= 2, sectors >= 3 (got "
+                  << radius << ", " << rings << ", " << sectors << ")." << std::endl;
+        return false;
+    }
+
+    const float R = 1.0f / static_cast<float>(rings - 1);
+    const float S = 1.0f / static_cast<float>(sectors - 1);
+
+    out.vertices.reserve(static_cast<size_t>(rings) * sectors);
     for (uint32_t r = 0; r < rings; ++r) {
         for (uint32_t s = 0; s < sectors; ++s) {
-            float y = sin(-PI / 2.0f + PI * r * R);
-            float x = cos(2.0f * PI * s * S) * sin(PI * r * R);
-            float z = sin(2.0f * PI * s * S) * sin(PI * r * R);
+            const float y = std::sin(-kPi / 2.0f + kPi * r * R);
+            const float x = std::cos(2.0f * kPi * s * S) * std::sin(kPi * r * R);
+            const float z = std::sin(2.0f * kPi * s * S) * std::sin(kPi * r * R);
 
             Vertex vertex{};
             vertex.pos = glm::vec3(x * radius, y * radius, z * radius);
-            vertex.normal = glm::normalize(vertex.pos);
+            vertex.normal = glm::normalize(glm::vec3(x, y, z));
             vertex.color = glm::vec3(0.9f, 0.9f, 0.95f);
             vertex.texCoord = glm::vec2(s * S, r * R);
-
-            outMeshData.vertices.push_back(vertex);
+            out.vertices.push_back(vertex);
         }
     }
 
-    for (uint32_t r = 0; r < rings - 1; ++r) {
-        for (uint32_t s = 0; s < sectors - 1; ++s) {
-            uint16_t idx0 = static_cast<uint16_t>(r * sectors + s);
-            uint16_t idx1 = static_cast<uint16_t>(r * sectors + (s + 1));
-            uint16_t idx2 = static_cast<uint16_t>((r + 1) * sectors + (s + 1));
-            uint16_t idx3 = static_cast<uint16_t>((r + 1) * sectors + s);
+    out.indices.reserve(static_cast<size_t>(rings - 1) * (sectors - 1) * 6);
+    for (uint32_t r = 0; r + 1 < rings; ++r) {
+        for (uint32_t s = 0; s + 1 < sectors; ++s) {
+            const uint32_t i0 = r * sectors + s;
+            const uint32_t i1 = r * sectors + (s + 1);
+            const uint32_t i2 = (r + 1) * sectors + (s + 1);
+            const uint32_t i3 = (r + 1) * sectors + s;
 
-            outMeshData.indices.push_back(idx0);
-            outMeshData.indices.push_back(idx1);
-            outMeshData.indices.push_back(idx2);
-
-            outMeshData.indices.push_back(idx0);
-            outMeshData.indices.push_back(idx2);
-            outMeshData.indices.push_back(idx3);
+            out.indices.insert(out.indices.end(), { i0, i1, i2, i0, i2, i3 });
         }
     }
 
-    std::cout << "[ModelLoader] Generated Sphere mesh (" << outMeshData.vertices.size() << " vertices)." << std::endl;
+    out.computeBounds();
     return true;
 }
 
-bool ModelLoader::GenerateCube(float size, LoadedMeshData& outMeshData) {
-    outMeshData.vertices.clear();
-    outMeshData.indices.clear();
+bool ModelLoader::GenerateCube(float size, MeshData& out) {
+    out.clear();
 
-    float halfSize = size * 0.5f;
+    if (size <= 0.0f) {
+        std::cerr << "[ModelLoader] GenerateCube requires size > 0 (got " << size << ")." << std::endl;
+        return false;
+    }
 
-    // 24 Vertices for 6 Faces with distinct Normals
-    static const std::vector<Vertex> vertices = {
-        // Front face (Z = +halfSize, Normal = {0, 0, 1})
-        {{-halfSize, -halfSize,  halfSize}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.2f, 0.2f}, {0.0f, 0.0f}},
-        {{ halfSize, -halfSize,  halfSize}, {0.0f, 0.0f, 1.0f}, {0.2f, 1.0f, 0.2f}, {1.0f, 0.0f}},
-        {{ halfSize,  halfSize,  halfSize}, {0.0f, 0.0f, 1.0f}, {0.2f, 0.2f, 1.0f}, {1.0f, 1.0f}},
-        {{-halfSize,  halfSize,  halfSize}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 0.2f}, {0.0f, 1.0f}},
-        // Back face (Z = -halfSize, Normal = {0, 0, -1})
-        {{ halfSize, -halfSize, -halfSize}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.2f, 1.0f}, {0.0f, 0.0f}},
-        {{-halfSize, -halfSize, -halfSize}, {0.0f, 0.0f, -1.0f}, {0.2f, 1.0f, 1.0f}, {1.0f, 0.0f}},
-        {{-halfSize,  halfSize, -halfSize}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-        {{ halfSize,  halfSize, -halfSize}, {0.0f, 0.0f, -1.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f}},
-        // Top face (Y = -halfSize, Normal = {0, -1, 0})
-        {{-halfSize, -halfSize, -halfSize}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.4f, 0.4f}, {0.0f, 0.0f}},
-        {{ halfSize, -halfSize, -halfSize}, {0.0f, -1.0f, 0.0f}, {0.4f, 1.0f, 0.4f}, {1.0f, 0.0f}},
-        {{ halfSize, -halfSize,  halfSize}, {0.0f, -1.0f, 0.0f}, {0.4f, 0.4f, 1.0f}, {1.0f, 1.0f}},
-        {{-halfSize, -halfSize,  halfSize}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f, 0.4f}, {0.0f, 1.0f}},
-        // Bottom face (Y = +halfSize, Normal = {0, 1, 0})
-        {{-halfSize,  halfSize,  halfSize}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.3f, 0.3f}, {0.0f, 0.0f}},
-        {{ halfSize,  halfSize,  halfSize}, {0.0f, 1.0f, 0.0f}, {0.3f, 0.8f, 0.3f}, {1.0f, 0.0f}},
-        {{ halfSize,  halfSize, -halfSize}, {0.0f, 1.0f, 0.0f}, {0.3f, 0.3f, 0.8f}, {1.0f, 1.0f}},
-        {{-halfSize,  halfSize, -halfSize}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.3f}, {0.0f, 1.0f}},
-        // Right face (X = +halfSize, Normal = {1, 0, 0})
-        {{ halfSize, -halfSize,  halfSize}, {1.0f, 0.0f, 0.0f}, {0.9f, 0.5f, 0.2f}, {0.0f, 0.0f}},
-        {{ halfSize, -halfSize, -halfSize}, {1.0f, 0.0f, 0.0f}, {0.2f, 0.9f, 0.5f}, {1.0f, 0.0f}},
-        {{ halfSize,  halfSize, -halfSize}, {1.0f, 0.0f, 0.0f}, {0.5f, 0.2f, 0.9f}, {1.0f, 1.0f}},
-        {{ halfSize,  halfSize,  halfSize}, {1.0f, 0.0f, 0.0f}, {0.9f, 0.9f, 0.2f}, {0.0f, 1.0f}},
-        // Left face (X = -halfSize, Normal = {-1, 0, 0})
-        {{-halfSize, -halfSize, -halfSize}, {-1.0f, 0.0f, 0.0f}, {0.2f, 0.6f, 0.9f}, {0.0f, 0.0f}},
-        {{-halfSize, -halfSize,  halfSize}, {-1.0f, 0.0f, 0.0f}, {0.9f, 0.2f, 0.6f}, {1.0f, 0.0f}},
-        {{-halfSize,  halfSize,  halfSize}, {-1.0f, 0.0f, 0.0f}, {0.6f, 0.9f, 0.2f}, {1.0f, 1.0f}},
-        {{-halfSize,  halfSize, -halfSize}, {-1.0f, 0.0f, 0.0f}, {0.2f, 0.9f, 0.6f}, {0.0f, 1.0f}}
+    const float h = size * 0.5f;
+
+    // 24 vertices so every face carries its own normal and UV set.
+    out.vertices = {
+        // +Z
+        {{-h, -h,  h}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.2f, 0.2f}, {0.0f, 0.0f}},
+        {{ h, -h,  h}, {0.0f, 0.0f, 1.0f}, {0.2f, 1.0f, 0.2f}, {1.0f, 0.0f}},
+        {{ h,  h,  h}, {0.0f, 0.0f, 1.0f}, {0.2f, 0.2f, 1.0f}, {1.0f, 1.0f}},
+        {{-h,  h,  h}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 0.2f}, {0.0f, 1.0f}},
+        // -Z
+        {{ h, -h, -h}, {0.0f, 0.0f, -1.0f}, {1.0f, 0.2f, 1.0f}, {0.0f, 0.0f}},
+        {{-h, -h, -h}, {0.0f, 0.0f, -1.0f}, {0.2f, 1.0f, 1.0f}, {1.0f, 0.0f}},
+        {{-h,  h, -h}, {0.0f, 0.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+        {{ h,  h, -h}, {0.0f, 0.0f, -1.0f}, {0.5f, 0.5f, 0.5f}, {0.0f, 1.0f}},
+        // -Y (bottom)
+        {{-h, -h, -h}, {0.0f, -1.0f, 0.0f}, {1.0f, 0.4f, 0.4f}, {0.0f, 0.0f}},
+        {{ h, -h, -h}, {0.0f, -1.0f, 0.0f}, {0.4f, 1.0f, 0.4f}, {1.0f, 0.0f}},
+        {{ h, -h,  h}, {0.0f, -1.0f, 0.0f}, {0.4f, 0.4f, 1.0f}, {1.0f, 1.0f}},
+        {{-h, -h,  h}, {0.0f, -1.0f, 0.0f}, {1.0f, 1.0f, 0.4f}, {0.0f, 1.0f}},
+        // +Y (top)
+        {{-h,  h,  h}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.3f, 0.3f}, {0.0f, 0.0f}},
+        {{ h,  h,  h}, {0.0f, 1.0f, 0.0f}, {0.3f, 0.8f, 0.3f}, {1.0f, 0.0f}},
+        {{ h,  h, -h}, {0.0f, 1.0f, 0.0f}, {0.3f, 0.3f, 0.8f}, {1.0f, 1.0f}},
+        {{-h,  h, -h}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.3f}, {0.0f, 1.0f}},
+        // +X
+        {{ h, -h,  h}, {1.0f, 0.0f, 0.0f}, {0.9f, 0.5f, 0.2f}, {0.0f, 0.0f}},
+        {{ h, -h, -h}, {1.0f, 0.0f, 0.0f}, {0.2f, 0.9f, 0.5f}, {1.0f, 0.0f}},
+        {{ h,  h, -h}, {1.0f, 0.0f, 0.0f}, {0.5f, 0.2f, 0.9f}, {1.0f, 1.0f}},
+        {{ h,  h,  h}, {1.0f, 0.0f, 0.0f}, {0.9f, 0.9f, 0.2f}, {0.0f, 1.0f}},
+        // -X
+        {{-h, -h, -h}, {-1.0f, 0.0f, 0.0f}, {0.2f, 0.6f, 0.9f}, {0.0f, 0.0f}},
+        {{-h, -h,  h}, {-1.0f, 0.0f, 0.0f}, {0.9f, 0.2f, 0.6f}, {1.0f, 0.0f}},
+        {{-h,  h,  h}, {-1.0f, 0.0f, 0.0f}, {0.6f, 0.9f, 0.2f}, {1.0f, 1.0f}},
+        {{-h,  h, -h}, {-1.0f, 0.0f, 0.0f}, {0.2f, 0.9f, 0.6f}, {0.0f, 1.0f}}
     };
 
-    static const std::vector<uint16_t> indices = {
-         0,  1,  2,  2,  3,  0, // Front
-         4,  5,  6,  6,  7,  4, // Back
-         8,  9, 10, 10, 11,  8, // Top
-        12, 13, 14, 14, 15, 12, // Bottom
-        16, 17, 18, 18, 19, 16, // Right
-        20, 21, 22, 22, 23, 20  // Left
+    out.indices = {
+         0,  1,  2,  2,  3,  0, // +Z
+         4,  5,  6,  6,  7,  4, // -Z
+         8,  9, 10, 10, 11,  8, // -Y
+        12, 13, 14, 14, 15, 12, // +Y
+        16, 17, 18, 18, 19, 16, // +X
+        20, 21, 22, 22, 23, 20  // -X
     };
 
-    outMeshData.vertices = vertices;
-    outMeshData.indices = indices;
-
-    std::cout << "[ModelLoader] Generated Cube mesh." << std::endl;
+    out.computeBounds();
     return true;
 }
 
-bool ModelLoader::GeneratePlane(float width, float height, LoadedMeshData& outMeshData) {
-    outMeshData.vertices.clear();
-    outMeshData.indices.clear();
+bool ModelLoader::GeneratePlane(float width, float height, MeshData& out) {
+    out.clear();
 
-    float halfW = width * 0.5f;
-    float halfH = height * 0.5f;
+    if (width <= 0.0f || height <= 0.0f) {
+        std::cerr << "[ModelLoader] GeneratePlane requires positive extents (got "
+                  << width << "x" << height << ")." << std::endl;
+        return false;
+    }
 
-    outMeshData.vertices = {
+    const float halfW = width * 0.5f;
+    const float halfH = height * 0.5f;
+
+    out.vertices = {
         {{-halfW, 0.0f, -halfH}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.8f}, {0.0f, 0.0f}},
         {{ halfW, 0.0f, -halfH}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.8f}, {1.0f, 0.0f}},
         {{ halfW, 0.0f,  halfH}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.8f}, {1.0f, 1.0f}},
         {{-halfW, 0.0f,  halfH}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.8f}, {0.0f, 1.0f}}
     };
+    out.indices = { 0, 1, 2, 2, 3, 0 };
 
-    outMeshData.indices = { 0, 1, 2, 2, 3, 0 };
-
-    std::cout << "[ModelLoader] Generated Plane mesh." << std::endl;
+    out.computeBounds();
     return true;
 }
 
-bool ModelLoader::LoadOBJ(const std::string& filepath, LoadedMeshData& outMeshData) {
+bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
+    out.clear();
+
     std::ifstream file(filepath);
     if (!file.is_open()) {
         std::cerr << "[ModelLoader] Failed to open OBJ file: " << filepath << std::endl;
         return false;
     }
 
-    std::vector<glm::vec3> tempPositions;
-    std::vector<glm::vec3> tempNormals;
-    std::vector<glm::vec2> tempUVs;
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec3> normals;
+    std::vector<glm::vec2> uvs;
+
+    std::unordered_map<ObjKey, uint32_t, ObjKeyHash> unique;
+    bool sawFace = false;
 
     std::string line;
+    size_t lineNumber = 0;
+
     while (std::getline(file, line)) {
-        std::stringstream ss(line);
+        ++lineNumber;
+        if (line.empty() || line[0] == '#') continue;
+
+        std::istringstream ss(line);
         std::string prefix;
         ss >> prefix;
 
         if (prefix == "v") {
-            glm::vec3 pos;
-            ss >> pos.x >> pos.y >> pos.z;
-            tempPositions.push_back(pos);
+            // A truncated line such as "v 1.0" used to leave y and z
+            // indeterminate: the failed extraction does not zero them.
+            glm::vec3 p{0.0f};
+            if (!(ss >> p.x >> p.y >> p.z)) {
+                std::cerr << "[ModelLoader] " << filepath << ":" << lineNumber
+                          << " malformed vertex, skipped." << std::endl;
+                continue;
+            }
+            positions.push_back(p);
         } else if (prefix == "vn") {
-            glm::vec3 norm;
-            ss >> norm.x >> norm.y >> norm.z;
-            tempNormals.push_back(norm);
+            glm::vec3 n{0.0f, 1.0f, 0.0f};
+            if (!(ss >> n.x >> n.y >> n.z)) continue;
+            normals.push_back(n);
         } else if (prefix == "vt") {
-            glm::vec2 uv;
-            ss >> uv.x >> uv.y;
-            tempUVs.push_back(uv);
+            glm::vec2 t{0.0f};
+            if (!(ss >> t.x >> t.y)) continue;
+            uvs.push_back(t);
+        } else if (prefix == "f") {
+            sawFace = true;
+
+            std::vector<uint32_t> face;
+            std::string token;
+            while (ss >> token) {
+                // Accepted forms: v, v/vt, v//vn, v/vt/vn.
+                // Split on '/' keeping empty fields, so "1//2" yields
+                // {"1", "", "2"} rather than collapsing to {"1", "2"} and
+                // mistaking the normal index for a texture index.
+                int slot[3] = {0, 0, 0};
+                size_t field = 0;
+                size_t start = 0;
+                while (field < 3) {
+                    const size_t sep = token.find('/', start);
+                    const std::string part = token.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+                    if (!part.empty()) {
+                        try {
+                            slot[field] = std::stoi(part);
+                        } catch (const std::exception&) {
+                            slot[field] = 0;
+                        }
+                    }
+                    ++field;
+                    if (sep == std::string::npos) break;
+                    start = sep + 1;
+                }
+                const int vi = slot[0];
+                const int ti = slot[1];
+                const int ni = slot[2];
+
+                const int pIdx = resolveObjIndex(vi, positions.size());
+                if (pIdx < 0 || static_cast<size_t>(pIdx) >= positions.size()) {
+                    std::cerr << "[ModelLoader] " << filepath << ":" << lineNumber
+                              << " face references out-of-range vertex " << vi << ", skipped." << std::endl;
+                    face.clear();
+                    break;
+                }
+                const int tIdx = ti != 0 ? resolveObjIndex(ti, uvs.size()) : -1;
+                const int nIdx = ni != 0 ? resolveObjIndex(ni, normals.size()) : -1;
+
+                const ObjKey key{ pIdx, tIdx, nIdx };
+                auto it = unique.find(key);
+                if (it == unique.end()) {
+                    Vertex vertex{};
+                    vertex.pos = positions[static_cast<size_t>(pIdx)];
+                    vertex.normal = (nIdx >= 0 && static_cast<size_t>(nIdx) < normals.size())
+                                    ? normals[static_cast<size_t>(nIdx)]
+                                    : glm::vec3(0.0f, 1.0f, 0.0f);
+                    vertex.color = glm::vec3(1.0f);
+                    vertex.texCoord = (tIdx >= 0 && static_cast<size_t>(tIdx) < uvs.size())
+                                      ? uvs[static_cast<size_t>(tIdx)]
+                                      : glm::vec2(0.0f);
+
+                    const auto newIndex = static_cast<uint32_t>(out.vertices.size());
+                    out.vertices.push_back(vertex);
+                    unique.emplace(key, newIndex);
+                    face.push_back(newIndex);
+                } else {
+                    face.push_back(it->second);
+                }
+            }
+
+            // Triangulate as a fan; handles quads and larger n-gons.
+            for (size_t i = 2; i < face.size(); ++i) {
+                out.indices.push_back(face[0]);
+                out.indices.push_back(face[i - 1]);
+                out.indices.push_back(face[i]);
+            }
         }
     }
 
-    // Default fallback cube if obj is empty
-    if (tempPositions.empty()) {
-        return GenerateCube(1.0f, outMeshData);
+    if (!sawFace) {
+        // Without face data there is no topology to build. The old code
+        // fabricated a sequential index list over raw positions, which turned
+        // any real model into unrelated disjoint triangles.
+        std::cerr << "[ModelLoader] " << filepath
+                  << " contains no face (f) records; cannot build a mesh." << std::endl;
+        return false;
     }
 
-    for (size_t i = 0; i < tempPositions.size(); i++) {
-        Vertex vertex{};
-        vertex.pos = tempPositions[i];
-        vertex.normal = i < tempNormals.size() ? tempNormals[i] : glm::vec3(0.0f, 1.0f, 0.0f);
-        vertex.color = glm::vec3(1.0f, 1.0f, 1.0f);
-        vertex.texCoord = i < tempUVs.size() ? tempUVs[i] : glm::vec2(0.0f, 0.0f);
-
-        outMeshData.vertices.push_back(vertex);
-        outMeshData.indices.push_back(static_cast<uint16_t>(i));
+    if (out.empty()) {
+        std::cerr << "[ModelLoader] " << filepath << " produced no usable geometry." << std::endl;
+        return false;
     }
 
-    std::cout << "[ModelLoader] Parsed OBJ file " << filepath << " (" << outMeshData.vertices.size() << " vertices)." << std::endl;
+    // Supply flat normals when the file carried none.
+    if (normals.empty()) {
+        for (size_t i = 0; i + 2 < out.indices.size(); i += 3) {
+            Vertex& a = out.vertices[out.indices[i]];
+            Vertex& b = out.vertices[out.indices[i + 1]];
+            Vertex& c = out.vertices[out.indices[i + 2]];
+            const glm::vec3 n = glm::normalize(glm::cross(b.pos - a.pos, c.pos - a.pos));
+            a.normal = b.normal = c.normal = n;
+        }
+    }
+
+    out.computeBounds();
+    std::cout << "[ModelLoader] Loaded " << filepath << " (" << out.vertices.size()
+              << " vertices, " << out.indices.size() / 3 << " triangles)." << std::endl;
     return true;
 }
 

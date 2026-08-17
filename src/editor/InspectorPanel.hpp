@@ -26,6 +26,10 @@ public:
 private:
     void drawComponents(entt::registry& registry, entt::entity entity);
 
+    // Decomposes using TransformComponent::getModelMatrix's own Euler order,
+    // rather than ImGuizmo's, which is a different convention.
+    static void decomposeToTransform(const glm::mat4& model, TransformComponent& transform);
+
     ImGuizmo::OPERATION m_gizmoOperation{ImGuizmo::TRANSLATE};
 };
 

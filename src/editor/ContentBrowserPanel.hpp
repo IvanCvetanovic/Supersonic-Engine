@@ -9,7 +9,9 @@ class ContentBrowserPanel {
 public:
     ContentBrowserPanel();
 
-    void OnImGuiRender();
+    // Returns a non-empty status message when something went wrong, so the
+    // editor can show it rather than throwing out of the render loop.
+    std::string OnImGuiRender();
 
 private:
     std::filesystem::path m_assetsDirectory;

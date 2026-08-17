@@ -17,8 +17,12 @@ void SceneHierarchyPanel::OnImGuiRender() {
             drawEntityNode(entityID);
         }
 
-        // Click on blank space to deselect entity
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::IsWindowHovered()) {
+        // Click on blank space to deselect. IsMouseDown + IsWindowHovered
+        // cleared the selection on the same frame drawEntityNode set it; this
+        // only fires on a fresh click that did not land on a row.
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            !ImGui::IsAnyItemHovered()) {
             m_selectedEntity = entt::null;
         }
 
@@ -137,6 +141,9 @@ void SceneHierarchyPanel::drawEntityNode(entt::entity entity) {
     }
 
     if (entityDeleted) {
+        // Clearing the selection first matters: the Inspector and the gizmo run
+        // later in this same frame and would otherwise dereference a destroyed
+        // entity handle.
         if (m_selectedEntity == entity) {
             m_selectedEntity = entt::null;
         }

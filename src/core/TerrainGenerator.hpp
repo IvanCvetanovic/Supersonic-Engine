@@ -1,19 +1,14 @@
 #pragma once
 
-#include <vector>
-#include "core/Components.hpp"
+#include "core/MeshData.hpp"
 
 namespace Engine {
 
 class TerrainGenerator {
 public:
-    static bool GenerateTerrainMesh(
-        uint32_t width,
-        uint32_t height,
-        float heightScale,
-        std::vector<Vertex>& outVertices,
-        std::vector<uint16_t>& outIndices
-    );
+    // width/height are vertex counts per axis, so both must be at least 2 to
+    // produce a single quad. Returns false rather than looping on underflow.
+    static bool GenerateTerrainMesh(uint32_t width, uint32_t height, float heightScale, MeshData& out);
 };
 
 } // namespace Engine

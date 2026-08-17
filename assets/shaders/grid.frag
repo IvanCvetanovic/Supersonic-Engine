@@ -26,16 +26,23 @@ vec4 grid(vec3 fragPos3D, float scale) {
 }
 
 void main() {
-    float t = -nearPoint.y / (farPoint.y - nearPoint.y);
-    if (t < 0.0) discard;
+    float denom = farPoint.y - nearPoint.y;
+    if (abs(denom) < 1e-6) discard;   // ray parallel to the ground plane
+
+    float t = -nearPoint.y / denom;
+    if (t < 0.0) discard;             // plane is behind the camera
 
     vec3 fragPos3D = nearPoint + t * (farPoint - nearPoint);
 
-    vec4 color = grid(fragPos3D, 1.0) * float(t > 0.0);
-    
-    // Distance Fading
-    float linearDepth = length(fragPos3D);
-    float fading = max(0.0, (1.0 - linearDepth / 80.0));
+    // Write real depth so scene geometry occludes the grid instead of the grid
+    // always compositing on top of it.
+    vec4 clip = projMat * viewMat * vec4(fragPos3D, 1.0);
+    gl_FragDepth = clip.z / clip.w;
+
+    vec4 color = grid(fragPos3D, 1.0);
+
+    // Distance fading
+    float fading = max(0.0, 1.0 - length(fragPos3D) / 80.0);
 
     outColor = color;
     outColor.a *= fading * 0.7;

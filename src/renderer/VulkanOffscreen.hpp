@@ -12,13 +12,23 @@ namespace Engine {
 
 class VulkanOffscreen {
 public:
+    // Manual sRGB encoding happens in shader.frag, so the attachment must be
+    // UNORM or the value is gamma-encoded twice. See createRenderPass().
+    static constexpr vk::Format kColorFormat = vk::Format::eR8G8B8A8Unorm;
+
     VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height);
     ~VulkanOffscreen();
 
     VulkanOffscreen(const VulkanOffscreen&) = delete;
     VulkanOffscreen& operator=(const VulkanOffscreen&) = delete;
 
-    void Recreate(uint32_t width, uint32_t height);
+    // Records a desired size. Safe to call at any point in the frame, including
+    // while ImGui is being built.
+    void RequestResize(uint32_t width, uint32_t height);
+
+    // Performs any pending resize. MUST only be called at the top of a frame,
+    // before command buffer recording begins. Returns true if it resized.
+    bool ApplyPendingResize();
 
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
     vk::Framebuffer GetFramebuffer() const { return m_framebuffer; }
@@ -36,6 +46,8 @@ private:
     VulkanDevice& m_deviceRef;
     uint32_t m_width{1280};
     uint32_t m_height{720};
+    uint32_t m_pendingWidth{0};
+    uint32_t m_pendingHeight{0};
 
     vk::RenderPass m_renderPass{nullptr};
     std::unique_ptr<VulkanImage> m_colorImage;

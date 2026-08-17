@@ -141,6 +141,12 @@ struct RenderableComponent {
     uint32_t meshID{0};
     uint32_t materialID{0};
     bool isVisible{true};
+
+    // Local-space bounds of the resolved mesh, refreshed by
+    // RenderSystem::SyncMeshes. Picking uses these so selection matches the
+    // geometry actually drawn instead of assuming a unit cube.
+    glm::vec3 localBoundsMin{-0.5f};
+    glm::vec3 localBoundsMax{0.5f};
 };
 
 struct TagComponent {
@@ -183,6 +189,22 @@ struct AudioListenerComponent {
 struct ScriptComponent {
     std::string scriptName{"RotatorScript"}; // RotatorScript, OscillatorScript, LightFlickerScript
     bool isEnabled{true};
+
+    // Per-entity script state. A single file-static clock in ScriptEngine meant
+    // oscillators could not be rewound or phase-offset from each other.
+    float elapsed{0.0f};
+    glm::vec3 baseline{0.0f};
+    float baseIntensity{0.0f};
+    bool baselineCaptured{false};
+};
+
+struct Particle {
+    glm::vec3 position{0.0f};
+    glm::vec3 velocity{0.0f};
+    glm::vec4 color{1.0f};
+    float lifetime{0.0f};
+    float maxLifetime{1.0f};
+    bool active{false};
 };
 
 struct ParticleEmitterComponent {
@@ -192,6 +214,13 @@ struct ParticleEmitterComponent {
     glm::vec4 startColor{1.0f, 0.6f, 0.1f, 1.0f};
     glm::vec4 endColor{1.0f, 0.0f, 0.0f, 0.0f};
     glm::vec3 velocityRange{0.5f, 2.0f, 0.5f};
+    float particleSize{0.08f};
+
+    // Each emitter owns its particles. They used to share one 200-entry static
+    // pool, so two emitters silently halved each other's throughput and
+    // maxParticles/emitRate were never read at all.
+    std::vector<Particle> particles;
+    float emitAccumulator{0.0f};
 };
 
 } // namespace Engine

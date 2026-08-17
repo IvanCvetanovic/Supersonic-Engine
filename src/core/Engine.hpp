@@ -10,6 +10,7 @@
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanSwapchain.hpp"
 #include "renderer/VulkanRenderer.hpp"
+#include "editor/EditorLayer.hpp"
 #include "core/Components.hpp"
 
 namespace Engine {
@@ -32,7 +33,16 @@ private:
     std::unique_ptr<VulkanDevice> m_vulkanDevice;
     std::unique_ptr<VulkanSwapchain> m_swapchain;
     std::unique_ptr<VulkanRenderer> m_renderer;
+
+    // The editor owns the offscreen viewport target and is driven by Run(),
+    // not by the renderer. See EditorLayer for why that ordering matters.
+    std::unique_ptr<EditorLayer> m_editorLayer;
+
     entt::registry m_registry;
+
+    // Physics runs on a fixed step fed by this accumulator, so a stalled frame
+    // cannot integrate a two-second delta in one go.
+    float m_physicsAccumulator{0.0f};
 };
 
 } // namespace Engine

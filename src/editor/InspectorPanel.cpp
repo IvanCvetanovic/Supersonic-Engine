@@ -4,6 +4,10 @@
 // GLM_ENABLE_EXPERIMENTAL is set on the target in CMakeLists.txt.
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <iostream>
 
 namespace Engine {
@@ -12,7 +16,13 @@ void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity select
     ImGui::Begin("Inspector");
 
     if (selectedEntity != entt::null && registry.valid(selectedEntity)) {
+        // Scope every widget ID to the entity. Without this, the tag field has
+        // the same ImGui ID for all entities, and switching selection while an
+        // edit is uncommitted makes ImGui reapply the old text to the newly
+        // selected entity - silently renaming it.
+        ImGui::PushID(static_cast<int>(entt::to_integral(selectedEntity)));
         drawComponents(registry, selectedEntity);
+        ImGui::PopID();
     } else {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 20.0f);
         ImGui::TextDisabled("  Select an entity from the Scene Hierarchy to inspect.");
@@ -25,9 +35,9 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
     // 1. TagComponent
     if (registry.all_of<TagComponent>(entity)) {
         auto& tag = registry.get<TagComponent>(entity);
-        char buffer[256];
-        memset(buffer, 0, sizeof(buffer));
-        strncpy(buffer, tag.tag.c_str(), sizeof(buffer) - 1);
+        char buffer[256] = {};
+        const size_t copyLength = std::min(tag.tag.size(), sizeof(buffer) - 1);
+        std::memcpy(buffer, tag.tag.data(), copyLength);
 
         ImGui::TextDisabled("ENTITY TAG");
         if (ImGui::InputText("##Tag", buffer, sizeof(buffer))) {
@@ -51,6 +61,43 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             transform.rotation = glm::radians(rotDegrees);
 
             Theme::DrawVec3Control("Scale", transform.scale, 1.0f);
+        }
+    }
+
+    ImGui::Spacing();
+
+    // 2b. MeshComponent - now actually drives which geometry is drawn.
+    if (registry.all_of<MeshComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& mesh = registry.get<MeshComponent>(entity);
+
+            static const char* kPrimitives[] = { "Cube", "Sphere", "Plane", "Terrain" };
+            int current = 0;
+            for (int i = 0; i < IM_ARRAYSIZE(kPrimitives); ++i) {
+                if (mesh.primitiveType == kPrimitives[i]) { current = i; break; }
+            }
+            if (ImGui::Combo("Primitive", &current, kPrimitives, IM_ARRAYSIZE(kPrimitives))) {
+                mesh.primitiveType = kPrimitives[current];
+                mesh.filePath.clear();
+            }
+
+            if (!mesh.filePath.empty()) {
+                ImGui::TextDisabled("Source: %s", mesh.filePath.c_str());
+            }
+        }
+    }
+
+    ImGui::Spacing();
+
+    // 2c. MaterialComponent - reaches the GPU via push constants.
+    if (registry.all_of<MaterialComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& material = registry.get<MaterialComponent>(entity);
+
+            ImGui::ColorEdit4("Albedo", glm::value_ptr(material.albedoColor));
+            ImGui::SliderFloat("Roughness", &material.roughness, 0.02f, 1.0f);
+            ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
+            ImGui::SliderFloat("Ambient Occlusion", &material.ao, 0.0f, 1.0f);
         }
     }
 
@@ -211,6 +258,7 @@ void InspectorPanel::RenderGizmo(
 
     auto& transform = registry.get<TransformComponent>(selectedEntity);
     glm::mat4 model = transform.getModelMatrix();
+    const glm::mat4 before = model;
 
     ImGuizmo::Manipulate(
         glm::value_ptr(view),
@@ -220,18 +268,55 @@ void InspectorPanel::RenderGizmo(
         glm::value_ptr(model)
     );
 
-    if (ImGuizmo::IsUsing()) {
-        float matrixTranslation[3], matrixRotation[3], matrixScale[3];
-        ImGuizmo::DecomposeMatrixToComponents(
-            glm::value_ptr(model),
-            matrixTranslation,
-            matrixRotation,
-            matrixScale
-        );
+    // Only write back when the gizmo actually changed the matrix. IsUsing() is
+    // already true on the click frame with a zero drag delta.
+    if (ImGuizmo::IsUsing() && model != before) {
+        decomposeToTransform(model, transform);
+    }
+}
 
-        transform.position = glm::vec3(matrixTranslation[0], matrixTranslation[1], matrixTranslation[2]);
-        transform.rotation = glm::vec3(glm::radians(matrixRotation[0]), glm::radians(matrixRotation[1]), glm::radians(matrixRotation[2]));
-        transform.scale = glm::vec3(matrixScale[0], matrixScale[1], matrixScale[2]);
+void InspectorPanel::decomposeToTransform(const glm::mat4& model, TransformComponent& transform) {
+    // Decomposed with the SAME convention getModelMatrix() composes with
+    // (T * Rx * Ry * Rz * S). ImGuizmo::DecomposeMatrixToComponents returns
+    // angles in its own Rz*Ry*Rx order, so feeding those straight back
+    // reinterpreted them and made objects snap the instant a handle was pressed.
+    transform.position = glm::vec3(model[3]);
+
+    glm::vec3 scale(glm::length(glm::vec3(model[0])),
+                    glm::length(glm::vec3(model[1])),
+                    glm::length(glm::vec3(model[2])));
+
+    // A mirrored matrix has a negative determinant; fold that into X.
+    if (glm::determinant(glm::mat3(model)) < 0.0f) {
+        scale.x = -scale.x;
+    }
+
+    if (scale.x != 0.0f && scale.y != 0.0f && scale.z != 0.0f) {
+        transform.scale = scale;
+
+        glm::mat3 rot(glm::vec3(model[0]) / scale.x,
+                      glm::vec3(model[1]) / scale.y,
+                      glm::vec3(model[2]) / scale.z);
+
+        // For R = Rx(a)Ry(b)Rz(c), in glm's column-major storage rot[col][row]:
+        //   b = asin(rot[2][0])
+        //   a = atan2(-rot[2][1], rot[2][2])
+        //   c = atan2(-rot[1][0], rot[0][0])
+        const float sy = glm::clamp(rot[2][0], -1.0f, 1.0f);
+        const float b = std::asin(sy);
+
+        float a = 0.0f;
+        float c = 0.0f;
+        if (std::fabs(sy) < 0.99999f) {
+            a = std::atan2(-rot[2][1], rot[2][2]);
+            c = std::atan2(-rot[1][0], rot[0][0]);
+        } else {
+            // Gimbal lock: X and Z are degenerate, so fold everything into X.
+            a = std::atan2(rot[1][2], rot[1][1]);
+            c = 0.0f;
+        }
+
+        transform.rotation = glm::vec3(a, b, c);
     }
 }
 

@@ -5,9 +5,14 @@ layout(location = 1) out vec3 farPoint;
 layout(location = 2) out mat4 viewMat;
 layout(location = 6) out mat4 projMat;
 
+// Must match Engine::UniformBufferObject in renderer/VulkanPipeline.hpp.
 layout(binding = 0) uniform UniformBufferObject {
     mat4 view;
     mat4 proj;
+    vec4 cameraPosition;
+    vec4 lightDirection;
+    vec4 lightColor;
+    vec4 ambientColor;
 } ubo;
 
 vec3 gridPlane[6] = vec3[](

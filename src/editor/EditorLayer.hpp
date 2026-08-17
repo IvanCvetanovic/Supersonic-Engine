@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanOffscreen.hpp"
@@ -11,27 +12,60 @@
 
 namespace Engine {
 
+// Owns the editor UI and the offscreen target the scene renders into.
+//
+// This used to be a by-value member of VulkanRenderer, with OnImGuiRender
+// called from inside DrawFrame. That inversion is what allowed the editor to
+// destroy GPU resources the renderer had already recorded into a live command
+// buffer. EngineApp now owns the editor and drives it before the renderer.
 class EditorLayer {
 public:
     EditorLayer() = default;
     ~EditorLayer() = default;
 
+    EditorLayer(const EditorLayer&) = delete;
+    EditorLayer& operator=(const EditorLayer&) = delete;
+
+    // Must be called after the ImGui Vulkan backend is initialised, because the
+    // offscreen target registers a descriptor set with it.
     void Init(VulkanDevice& device, uint32_t initialWidth, uint32_t initialHeight);
+
+    // Must be called before ImGui_ImplVulkan_Shutdown.
     void Shutdown();
 
-    void OnImGuiRender(entt::registry& registry, Window& window);
+    // Builds the whole editor UI for this frame. Mutates ECS state and records
+    // the desired viewport size, but never touches GPU resource lifetimes.
+    void BuildUI(entt::registry& registry, Window& window);
+
+    // Applies any viewport resize requested during BuildUI. Call at the top of
+    // the frame, before the renderer starts recording.
+    void ApplyPendingResize();
 
     VulkanOffscreen& GetOffscreen() { return *m_offscreenPass; }
     SceneHierarchyPanel& GetHierarchyPanel() { return m_hierarchyPanel; }
     InspectorPanel& GetInspectorPanel() { return m_inspectorPanel; }
 
+    // Transient status line shown in the editor, so failures stop being
+    // console-only messages a GUI user never sees.
+    void SetStatus(const std::string& message, bool isError = false);
+
 private:
+    void drawStatusBar();
+
     std::unique_ptr<VulkanOffscreen> m_offscreenPass;
     SceneHierarchyPanel m_hierarchyPanel;
     InspectorPanel m_inspectorPanel;
     ContentBrowserPanel m_contentBrowserPanel;
 
     bool m_showDemoWindow{false};
+
+    std::string m_statusMessage;
+    bool m_statusIsError{false};
+    float m_statusAge{0.0f};
+
+    // Set by BuildUI, consumed by ApplyPendingResize.
+    uint32_t m_desiredViewportWidth{0};
+    uint32_t m_desiredViewportHeight{0};
 };
 
 } // namespace Engine

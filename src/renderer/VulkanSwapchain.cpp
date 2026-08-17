@@ -42,8 +42,17 @@ void VulkanSwapchain::Recreate(Window& window) {
 }
 
 vk::SurfaceFormatKHR VulkanSwapchain::chooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats) {
+    // UNORM, not SRGB.
+    //
+    // Everything drawn into this surface is already sRGB-encoded: the scene
+    // shader encodes its own output, and ImGui's style colours are authored as
+    // display-referred sRGB and written through a backend that performs no
+    // colour conversion. An SRGB surface would encode all of it a second time,
+    // which is why the theme's near-black (0.10, 0.10, 0.12) panels rendered as
+    // mid-grey and the whole dark ramp collapsed into one narrow band.
     for (const auto& availableFormat : availableFormats) {
-        if (availableFormat.format == vk::Format::eB8G8R8A8Srgb &&
+        if ((availableFormat.format == vk::Format::eB8G8R8A8Unorm ||
+             availableFormat.format == vk::Format::eR8G8B8A8Unorm) &&
             availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
             return availableFormat;
         }

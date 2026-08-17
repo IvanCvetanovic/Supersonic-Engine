@@ -8,8 +8,11 @@ namespace Engine {
 
 class CameraSystem {
 public:
-    static void Update(entt::registry& registry, Window& window, float deltaTime);
-    static void ProcessMouseInput(entt::registry& registry, Window& window);
+    // allowKeyboard/allowMouse come from ImGui's WantCapture flags. Camera input
+    // is polled straight from GLFW, which ImGui's callbacks cannot suppress.
+    static void Update(entt::registry& registry, Window& window, float deltaTime,
+                       bool allowKeyboard = true, bool allowMouse = true);
+    static void ProcessMouseInput(entt::registry& registry, Window& window, bool allowMouse = true);
 
 private:
     static bool s_firstMouse;

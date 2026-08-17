@@ -29,3 +29,9 @@ function(add_engine_test name)
 endfunction()
 
 add_engine_test(test_transform)
+add_engine_test(test_raycast   ${ENGINE_SRC}/src/core/Raycast.cpp)
+add_engine_test(test_meshgen   ${ENGINE_SRC}/src/core/ModelLoader.cpp
+                               ${ENGINE_SRC}/src/core/TerrainGenerator.cpp)
+add_engine_test(test_serialize ${ENGINE_SRC}/src/core/SceneSerializer.cpp
+                               ${ENGINE_SRC}/src/core/PrefabSerializer.cpp)
+add_engine_test(test_physics   ${ENGINE_SRC}/src/core/PhysicsSystem.cpp)
