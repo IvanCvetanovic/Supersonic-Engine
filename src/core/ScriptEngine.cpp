@@ -1,5 +1,6 @@
 #include "core/ScriptEngine.hpp"
 #include "core/Input.hpp"
+#include "core/PhysicsSystem.hpp"
 #include "core/Components.hpp"
 #include "core/ScriptRegistry.hpp"
 
@@ -30,6 +31,54 @@ int scriptWasReleased(void*, const char* action) {
 }
 float scriptAxis(void*, const char* axis) {
     return axis ? Input::GetAxis(axis) : 0.0f;
+}
+
+
+// The engine side of SupersonicScriptPhysics. `opaque` is the registry the
+// current update is running over, so a script queries the world it lives in
+// rather than a snapshot of it.
+int scriptRaycast(void* opaque, const float origin[3], const float direction[3],
+                  float maxDistance, unsigned int ignoreEntity,
+                  float outPoint[3], float outNormal[3], float* outDistance,
+                  unsigned int* outEntity) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry || !origin || !direction) return 0;
+
+    const auto ignore = ignoreEntity == 0xFFFFFFFFu
+                      ? entt::null
+                      : static_cast<entt::entity>(ignoreEntity);
+
+    const PhysicsSystem::RayHit hit = PhysicsSystem::Raycast(
+        *registry, glm::vec3(origin[0], origin[1], origin[2]),
+        glm::vec3(direction[0], direction[1], direction[2]), maxDistance, ignore);
+
+    if (!hit.hit) return 0;
+
+    // Every out parameter is optional, so a script that only wants "did I hit
+    // anything" passes nulls rather than dummy storage.
+    if (outPoint) {
+        outPoint[0] = hit.point.x; outPoint[1] = hit.point.y; outPoint[2] = hit.point.z;
+    }
+    if (outNormal) {
+        outNormal[0] = hit.normal.x; outNormal[1] = hit.normal.y; outNormal[2] = hit.normal.z;
+    }
+    if (outDistance) *outDistance = hit.distance;
+    if (outEntity) *outEntity = static_cast<unsigned int>(entt::to_integral(hit.entity));
+    return 1;
+}
+
+int scriptIsGrounded(void* opaque, const float position[3], float distance,
+                     unsigned int ignoreEntity) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry || !position) return 0;
+
+    const auto ignore = ignoreEntity == 0xFFFFFFFFu
+                      ? entt::null
+                      : static_cast<entt::entity>(ignoreEntity);
+
+    return PhysicsSystem::IsGrounded(*registry,
+                                     glm::vec3(position[0], position[1], position[2]),
+                                     distance, ignore) ? 1 : 0;
 }
 
 const SupersonicScriptInput& scriptInput() {
@@ -125,6 +174,11 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
         ctx.elapsed = script.elapsed;
         ctx.entityId = static_cast<unsigned int>(entt::to_integral(entity));
         ctx.input = &scriptInput();
+
+        // Rebuilt per entity because it carries the registry pointer; the
+        // function pointers themselves are constant.
+        const SupersonicScriptPhysics physics{&registry, scriptRaycast, scriptIsGrounded};
+        ctx.physics = &physics;
         ctx.position[0] = transform.position.x;
         ctx.position[1] = transform.position.y;
         ctx.position[2] = transform.position.z;

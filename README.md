@@ -67,6 +67,7 @@ code quietly contradicts.
 
 - **Input** — named actions and axes over keyboard, mouse and gamepad; any bound source satisfies an action, so a pad and a keyboard drive the same game without either knowing about the other
 - **Fixed-step physics** with an accumulator capped so a hitch costs fidelity rather than exploding the solver
+- **World queries** — raycast, sphere overlap and a ground check against *colliders* rather than render bounds, available to C++ and to hot-reloaded scripts
 - **Collision** — sort-and-sweep broadphase, exact sphere–sphere and sphere–box narrowphase, box–box by world AABB along the axis of least overlap; mass-weighted impulse response with Coulomb friction, slop-limited positional correction so stacks settle instead of vibrating, immovable collider-only obstacles, and non-resolving trigger volumes
 - **3D audio** on XAudio2 with a from-scratch WAV decoder, inverse-distance attenuation and listener-relative panning
 - **Particle systems** with per-emitter pools, so two emitters cannot starve each other
@@ -239,7 +240,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence |
 | `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
-| `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers |
+| `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
 | `test_audio` | WAV decoding, including the shipped clip |
 | `test_scripts` | Script registry and dispatch |
 

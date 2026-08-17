@@ -399,6 +399,133 @@ static void testFixedStepDoesNotTunnel() {
     CHECK_MSG(transform.position.y < 3.0f, "and must not be launched into the air");
 }
 
+
+// ---------------------------------------------------------------------------
+// Queries
+// ---------------------------------------------------------------------------
+
+static void testRaycastHitsTheNearestCollider() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 0.0f, -5.0f));
+    makeStaticBox(registry, glm::vec3(0.0f, 0.0f, -10.0f));
+
+    const auto hit = PhysicsSystem::Raycast(registry, glm::vec3(0.0f, 0.0f, 0.0f),
+                                            glm::vec3(0.0f, 0.0f, -1.0f), 100.0f);
+    CHECK_MSG(hit.hit, "the ray must find something");
+    // Near face of the closer box: centre -5, half extent 0.5.
+    CHECK_NEAR(hit.distance, 4.5f);
+    CHECK_MSG(hit.normal.z > 0.9f, "the normal must face back along the ray");
+}
+
+static void testRaycastMissesAndRespectsRange() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 0.0f, -5.0f));
+
+    CHECK_MSG(!PhysicsSystem::Raycast(registry, glm::vec3(0.0f, 20.0f, 0.0f),
+                                      glm::vec3(0.0f, 0.0f, -1.0f), 100.0f).hit,
+              "a ray that passes overhead must miss");
+
+    CHECK_MSG(!PhysicsSystem::Raycast(registry, glm::vec3(0.0f, 0.0f, 0.0f),
+                                      glm::vec3(0.0f, 0.0f, -1.0f), 2.0f).hit,
+              "and a range shorter than the distance must not reach it");
+
+    CHECK_MSG(!PhysicsSystem::Raycast(registry, glm::vec3(0.0f, 0.0f, 0.0f),
+                                      glm::vec3(0.0f, 0.0f, 1.0f), 100.0f).hit,
+              "nor may a ray pointing the other way");
+}
+
+static void testRaycastIgnoresTheCasterAndTriggers() {
+    entt::registry registry;
+    const auto self = makeStaticBox(registry, glm::vec3(0.0f, 0.0f, -2.0f));
+
+    const auto trigger = registry.create();
+    auto& triggerTransform = registry.emplace<TransformComponent>(trigger);
+    triggerTransform.position = glm::vec3(0.0f, 0.0f, -6.0f);
+    registry.emplace<BoxColliderComponent>(trigger).isTrigger = true;
+
+    makeStaticBox(registry, glm::vec3(0.0f, 0.0f, -9.0f));
+
+    // Ignoring the caster is what stops a character's own collider from
+    // absorbing every shot it fires.
+    const auto hit = PhysicsSystem::Raycast(registry, glm::vec3(0.0f, 0.0f, 0.0f),
+                                            glm::vec3(0.0f, 0.0f, -1.0f), 100.0f, self);
+    CHECK_MSG(hit.hit, "something must still be hit");
+    CHECK_NEAR(hit.distance, 8.5f);   // the solid box, not the trigger at 5.5
+
+    const auto withTriggers = PhysicsSystem::Raycast(registry, glm::vec3(0.0f, 0.0f, 0.0f),
+                                                     glm::vec3(0.0f, 0.0f, -1.0f), 100.0f,
+                                                     self, /*includeTriggers=*/true);
+    CHECK_NEAR(withTriggers.distance, 5.5f);
+}
+
+static void testRaycastHitsSpheres() {
+    entt::registry registry;
+    const auto ball = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(ball);
+    transform.position = glm::vec3(0.0f, 0.0f, -4.0f);
+    registry.emplace<SphereColliderComponent>(ball).radius = 1.0f;
+
+    const auto hit = PhysicsSystem::Raycast(registry, glm::vec3(0.0f, 0.0f, 0.0f),
+                                            glm::vec3(0.0f, 0.0f, -1.0f), 100.0f);
+    CHECK_MSG(hit.hit, "a sphere collider must be hittable");
+    CHECK_NEAR(hit.distance, 3.0f);
+    CHECK_MSG(hit.entity == ball, "and report which entity was hit");
+}
+
+static void testRaycastRejectsDegenerateInput() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 0.0f, -5.0f));
+
+    // A zero direction would normalise to NaN and report an impossible hit.
+    CHECK_MSG(!PhysicsSystem::Raycast(registry, glm::vec3(0.0f), glm::vec3(0.0f), 100.0f).hit,
+              "a zero-length direction must simply miss");
+    CHECK_MSG(!PhysicsSystem::Raycast(registry, glm::vec3(0.0f),
+                                      glm::vec3(0.0f, 0.0f, -1.0f), -1.0f).hit,
+              "and a negative range must too");
+}
+
+static void testRaycastDirectionNeedNotBeNormalised() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 0.0f, -5.0f));
+
+    const auto hit = PhysicsSystem::Raycast(registry, glm::vec3(0.0f),
+                                            glm::vec3(0.0f, 0.0f, -7.3f), 100.0f);
+    CHECK_MSG(hit.hit, "an unnormalised direction must work");
+    CHECK_NEAR(hit.distance, 4.5f);
+}
+
+static void testOverlapSphereFindsWhatItTouches() {
+    entt::registry registry;
+    const auto near = makeStaticBox(registry, glm::vec3(1.0f, 0.0f, 0.0f));
+    makeStaticBox(registry, glm::vec3(30.0f, 0.0f, 0.0f));
+
+    std::vector<entt::entity> found;
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(0.0f), 2.0f, found);
+
+    CHECK_EQ(found.size(), size_t{1});
+    if (!found.empty()) CHECK_MSG(found[0] == near, "the near box, not the far one");
+
+    // Appends rather than clears, so several queries can accumulate.
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(0.0f), 2.0f, found);
+    CHECK_EQ(found.size(), size_t{2});
+}
+
+static void testGroundCheck() {
+    entt::registry registry;
+    // A platform whose top surface is at y = 1.15.
+    makeStaticBox(registry, glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(4.0f, 0.3f, 4.0f));
+
+    CHECK_MSG(PhysicsSystem::IsGrounded(registry, glm::vec3(0.0f, 1.2f, 0.0f), 0.2f),
+              "standing just above the platform is grounded");
+    CHECK_MSG(!PhysicsSystem::IsGrounded(registry, glm::vec3(0.0f, 6.0f, 0.0f), 0.2f),
+              "six units up is not");
+
+    // The world ground plane counts even though no entity represents it.
+    entt::registry empty;
+    CHECK_MSG(PhysicsSystem::IsGrounded(empty, glm::vec3(0.0f, 0.05f, 0.0f), 0.2f),
+              "the world plane counts as ground");
+}
+
 static void runTests() {
     testSweepAndPruneFindsOverlappingPairs();
     testSweepAndPruneSkipsPairsSeparatedOffAxis();
@@ -414,6 +541,14 @@ static void runTests() {
     testKinematicBodyIsNotPushed();
     testDistantBodiesNeverContact();
     testParentedBodyFallsInWorldSpace();
+    testRaycastHitsTheNearestCollider();
+    testRaycastMissesAndRespectsRange();
+    testRaycastIgnoresTheCasterAndTriggers();
+    testRaycastHitsSpheres();
+    testRaycastRejectsDegenerateInput();
+    testRaycastDirectionNeedNotBeNormalised();
+    testOverlapSphereFindsWhatItTouches();
+    testGroundCheck();
     testGravityAccelerates();
     testKinematicBodiesDoNotMove();
     testRestsOnColliderBottomNotOrigin();

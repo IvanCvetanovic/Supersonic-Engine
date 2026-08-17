@@ -130,7 +130,7 @@ static void testApiVersionIsPinned() {
     // The engine refuses to load a plugin whose version differs; if this
     // constant changes, every plugin must be rebuilt. Version 2 added the input
     // accessors, which is exactly the kind of change the check exists to catch.
-    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 2);
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 3);
 
     // Context layout is part of the ABI. Offsets rather than a total size: the
     // total moves with padding on a different platform, while an offset that
@@ -146,6 +146,14 @@ static void testApiVersionIsPinned() {
     SupersonicScriptInput api{};
     CHECK_MSG(api.isDown == nullptr && api.axis == nullptr,
               "a zero-initialised input block must be inert, not garbage");
+
+    SupersonicScriptPhysics physics{};
+    CHECK_MSG(physics.raycast == nullptr && physics.isGrounded == nullptr,
+              "and so must the physics block");
+    CHECK_MSG(offsetof(SupersonicScriptContext, physics) >
+                  offsetof(SupersonicScriptContext, input),
+              "physics follows input; reordering would silently swap them for a "
+              "plugin built against the older header");
 }
 
 static void runTests() {

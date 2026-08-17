@@ -15,7 +15,7 @@
  * build into a clear log line instead of undefined behaviour.
  */
 
-#define SUPERSONIC_SCRIPT_API_VERSION 2
+#define SUPERSONIC_SCRIPT_API_VERSION 3
 
 #if defined(_WIN32)
 #  define SUPERSONIC_SCRIPT_EXPORT __declspec(dllexport)
@@ -42,6 +42,27 @@ typedef struct SupersonicScriptInput {
     float (*axis)(void* opaque, const char* axis);
 } SupersonicScriptInput;
 
+/* World queries, so a script can ask what is in front of it or whether it is
+ * standing on anything.
+ *
+ * Same shape as the input block and for the same reason: engine-owned function
+ * pointers, POD arguments, no ownership crossing. Entity ids travel as the same
+ * unsigned int the context already uses, so a hit can be compared against
+ * context->entityId directly.
+ *
+ * raycast returns 1 on a hit and fills the out parameters; every out pointer
+ * may be null if the caller does not want that field. */
+typedef struct SupersonicScriptPhysics {
+    void* opaque;
+    int (*raycast)(void* opaque,
+                   const float origin[3], const float direction[3], float maxDistance,
+                   unsigned int ignoreEntity,
+                   float outPoint[3], float outNormal[3], float* outDistance,
+                   unsigned int* outEntity);
+    int (*isGrounded)(void* opaque, const float position[3], float distance,
+                      unsigned int ignoreEntity);
+} SupersonicScriptPhysics;
+
 /* Per-entity state handed to a script each frame. The engine copies values in
  * before the call and copies them back out afterwards. */
 typedef struct SupersonicScriptContext {
@@ -54,6 +75,7 @@ typedef struct SupersonicScriptContext {
 
     /* Never null. Valid only for the duration of the call. */
     const SupersonicScriptInput* input;
+    const SupersonicScriptPhysics* physics;
 } SupersonicScriptContext;
 
 typedef void (*SupersonicScriptUpdateFn)(SupersonicScriptContext* context);

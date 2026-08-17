@@ -418,4 +418,195 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     }
 }
 
+
+namespace {
+
+// Slab test against a world-space AABB. Returns the entry distance, which is
+// what a ray hit means - the exit is behind the surface.
+bool rayHitsAabb(const glm::vec3& origin, const glm::vec3& direction,
+                 const glm::vec3& boxMin, const glm::vec3& boxMax,
+                 float maxDistance, float& outDistance, glm::vec3& outNormal) {
+    float tMin = 0.0f;
+    float tMax = maxDistance;
+    int entryAxis = 0;
+    float entrySign = 1.0f;
+
+    for (int axis = 0; axis < 3; ++axis) {
+        // A ray parallel to a slab either misses entirely or is unconstrained
+        // by it; dividing would produce an infinity that poisons the compare.
+        if (std::fabs(direction[axis]) < 1e-8f) {
+            if (origin[axis] < boxMin[axis] || origin[axis] > boxMax[axis]) return false;
+            continue;
+        }
+
+        const float inverse = 1.0f / direction[axis];
+        float near = (boxMin[axis] - origin[axis]) * inverse;
+        float far = (boxMax[axis] - origin[axis]) * inverse;
+        float sign = -1.0f;
+        if (near > far) { std::swap(near, far); sign = 1.0f; }
+
+        if (near > tMin) {
+            tMin = near;
+            entryAxis = axis;
+            entrySign = sign;
+        }
+        tMax = std::min(tMax, far);
+        if (tMin > tMax) return false;
+    }
+
+    outDistance = tMin;
+    outNormal = glm::vec3(0.0f);
+    outNormal[entryAxis] = entrySign;
+    return true;
+}
+
+bool rayHitsSphere(const glm::vec3& origin, const glm::vec3& direction,
+                   const glm::vec3& centre, float radius,
+                   float maxDistance, float& outDistance, glm::vec3& outNormal) {
+    const glm::vec3 toCentre = centre - origin;
+    const float projection = glm::dot(toCentre, direction);
+    const float distanceSquared = glm::dot(toCentre, toCentre) - projection * projection;
+    const float radiusSquared = radius * radius;
+    if (distanceSquared > radiusSquared) return false;
+
+    const float half = std::sqrt(radiusSquared - distanceSquared);
+    float distance = projection - half;
+    // Origin inside the sphere: the near root is behind us, so use the far one.
+    if (distance < 0.0f) distance = projection + half;
+    if (distance < 0.0f || distance > maxDistance) return false;
+
+    outDistance = distance;
+    const glm::vec3 point = origin + direction * distance;
+    const glm::vec3 offset = point - centre;
+    const float length = glm::length(offset);
+    outNormal = length > 1e-6f ? offset / length : glm::vec3(0.0f, 1.0f, 0.0f);
+    return true;
+}
+
+// The world-space shape of one collider, shared by every query.
+struct QueryShape {
+    entt::entity entity{entt::null};
+    bool isSphere{false};
+    bool isTrigger{false};
+    glm::vec3 centre{0.0f};
+    glm::vec3 halfExtent{0.5f};
+    float radius{0.5f};
+};
+
+void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
+    const auto collect = [&](entt::entity entity, bool sphere,
+                             const glm::vec3& localHalfExtent, bool isTrigger) {
+        const auto* transform = registry.try_get<TransformComponent>(entity);
+        if (!transform) return;
+
+        QueryShape shape;
+        shape.entity = entity;
+        shape.isSphere = sphere;
+        shape.isTrigger = isTrigger;
+
+        const glm::mat4 world = parentWorldMatrix(registry, entity) * transform->getModelMatrix();
+        worldBounds(world, localHalfExtent, shape.centre, shape.halfExtent);
+
+        if (sphere) {
+            shape.radius = std::max({shape.halfExtent.x, shape.halfExtent.y, shape.halfExtent.z});
+            shape.halfExtent = glm::vec3(shape.radius);
+        }
+        out.push_back(shape);
+    };
+
+    for (auto entity : registry.view<BoxColliderComponent>()) {
+        const auto& box = registry.get<BoxColliderComponent>(entity);
+        collect(entity, false, box.size * 0.5f, box.isTrigger);
+    }
+    for (auto entity : registry.view<SphereColliderComponent>()) {
+        // Matching the solver: an entity with both colliders is a box, and must
+        // not be gathered twice or a query would report it against itself.
+        if (registry.all_of<BoxColliderComponent>(entity)) continue;
+        const auto& sphere = registry.get<SphereColliderComponent>(entity);
+        collect(entity, true, glm::vec3(sphere.radius), sphere.isTrigger);
+    }
+}
+
+} // namespace
+
+PhysicsSystem::RayHit PhysicsSystem::Raycast(entt::registry& registry, const glm::vec3& origin,
+                                             const glm::vec3& direction, float maxDistance,
+                                             entt::entity ignore, bool includeTriggers) {
+    RayHit result;
+
+    const float length = glm::length(direction);
+    // A zero-length direction has no meaning; normalising it would be a NaN
+    // that silently reports a hit at an impossible distance.
+    if (length < 1e-8f || maxDistance <= 0.0f) return result;
+    const glm::vec3 ray = direction / length;
+
+    std::vector<QueryShape> shapes;
+    gatherShapes(registry, shapes);
+
+    float nearest = maxDistance;
+    for (const QueryShape& shape : shapes) {
+        if (shape.entity == ignore) continue;
+        if (shape.isTrigger && !includeTriggers) continue;
+
+        float distance = 0.0f;
+        glm::vec3 normal(0.0f);
+        const bool hit = shape.isSphere
+            ? rayHitsSphere(origin, ray, shape.centre, shape.radius, nearest, distance, normal)
+            : rayHitsAabb(origin, ray, shape.centre - shape.halfExtent,
+                          shape.centre + shape.halfExtent, nearest, distance, normal);
+
+        if (!hit || distance > nearest) continue;
+
+        nearest = distance;
+        result.hit = true;
+        result.entity = shape.entity;
+        result.distance = distance;
+        result.point = origin + ray * distance;
+        result.normal = normal;
+    }
+    return result;
+}
+
+void PhysicsSystem::OverlapSphere(entt::registry& registry, const glm::vec3& centre, float radius,
+                                  std::vector<entt::entity>& outEntities, entt::entity ignore,
+                                  bool includeTriggers) {
+    if (radius <= 0.0f) return;
+
+    std::vector<QueryShape> shapes;
+    gatherShapes(registry, shapes);
+
+    for (const QueryShape& shape : shapes) {
+        if (shape.entity == ignore) continue;
+        if (shape.isTrigger && !includeTriggers) continue;
+
+        if (shape.isSphere) {
+            const float reach = radius + shape.radius;
+            if (glm::dot(shape.centre - centre, shape.centre - centre) <= reach * reach) {
+                outEntities.push_back(shape.entity);
+            }
+            continue;
+        }
+
+        // Closest point on the box to the sphere's centre - exact, unlike
+        // treating the sphere as its own box, which over-reports at corners.
+        const glm::vec3 closest = glm::clamp(centre, shape.centre - shape.halfExtent,
+                                             shape.centre + shape.halfExtent);
+        const glm::vec3 delta = centre - closest;
+        if (glm::dot(delta, delta) <= radius * radius) {
+            outEntities.push_back(shape.entity);
+        }
+    }
+}
+
+bool PhysicsSystem::IsGrounded(entt::registry& registry, const glm::vec3& footPosition,
+                               float distance, entt::entity ignore) {
+    // The world ground plane counts, since the solver treats it as solid even
+    // though no entity represents it.
+    if (footPosition.y - distance <= 0.0f) return true;
+
+    const RayHit hit = Raycast(registry, footPosition, glm::vec3(0.0f, -1.0f, 0.0f),
+                               distance, ignore, /*includeTriggers=*/false);
+    return hit.hit;
+}
+
 } // namespace Supersonic

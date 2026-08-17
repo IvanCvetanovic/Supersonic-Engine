@@ -75,9 +75,13 @@ void playerScript(SupersonicScriptContext* ctx) {
         ctx->position[1] += 1.2f;
     }
 
-    // Fall back toward the ground, so repeated hops do not accumulate forever.
-    if (ctx->position[1] > 0.5f) {
-        ctx->position[1] -= 2.4f * ctx->deltaTime;
+    // Fall until something solid is underfoot, rather than toward a hardcoded
+    // height. This is the query that did not exist before: a script had no way
+    // to ask the world what was beneath it.
+    const bool grounded = ctx->physics &&
+        ctx->physics->isGrounded(ctx->physics->opaque, ctx->position, 0.2f, ctx->entityId);
+    if (!grounded) {
+        ctx->position[1] -= 4.0f * ctx->deltaTime;
     }
 
     // Face the direction of travel.
