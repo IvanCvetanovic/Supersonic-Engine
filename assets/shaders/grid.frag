@@ -44,6 +44,10 @@ void main() {
     // Distance fading
     float fading = max(0.0, 1.0 - length(fragPos3D) / 80.0);
 
-    outColor = color;
+    // The grid's colours are authored as sRGB values, but it now blends into a
+    // linear floating-point target alongside the lit scene. Without this the
+    // grid reads far brighter than it was drawn, because a value meant to be
+    // displayed as 0.2 would be treated as 0.2 of linear light.
+    outColor = vec4(pow(color.rgb, vec3(2.2)), color.a);
     outColor.a *= fading * 0.7;
 }

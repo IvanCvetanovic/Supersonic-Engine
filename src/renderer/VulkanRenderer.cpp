@@ -746,7 +746,15 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     offscreenPassInfo.renderArea.extent = vk::Extent2D{offscreen.GetWidth(), offscreen.GetHeight()};
 
     std::array<vk::ClearValue, 2> offscreenClearValues{};
-    offscreenClearValues[0].color = vk::ClearColorValue{std::array<float, 4>{0.02f, 0.02f, 0.02f, 1.0f}};
+    // Linear, not display-referred. This value now passes through the tone map
+    // and the sRGB encode in the composite, so the old 0.02 - which used to be
+    // written straight to a UNORM image and shown verbatim - came out at about
+    // 0.18 and turned the background from near-black into mid-grey.
+    //
+    // 0.00023 is the linear radiance that encodes back to 0.02 on screen:
+    // pow(x / (1 + x), 1/2.2) == 0.02.
+    offscreenClearValues[0].color =
+        vk::ClearColorValue{std::array<float, 4>{0.00023f, 0.00023f, 0.00023f, 1.0f}};
     offscreenClearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
     offscreenPassInfo.clearValueCount = static_cast<uint32_t>(offscreenClearValues.size());
@@ -775,6 +783,11 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     cmd.draw(6, 1, 0, 0);
 
     cmd.endRenderPass();
+
+    // Bloom and the tone map, on the same command buffer and after the scene
+    // pass has ended. The scene image is linear and floating point until this
+    // runs; the chain's output is what the editor actually displays.
+    offscreen.RecordPostProcess(cmd);
 
     // ---------------------------------------------------------------------
     // PASS 2: Swapchain (ImGui)

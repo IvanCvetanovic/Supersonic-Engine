@@ -17,6 +17,7 @@ VulkanOffscreen::VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t 
     createResources();
     createFramebuffer();
     createSamplerAndTextureID();
+    createBloom();
 
     std::cout << "[VulkanOffscreen] Created Offscreen Render Target (" << m_width << "x" << m_height
               << ", " << static_cast<uint32_t>(m_samples) << "x MSAA)." << std::endl;
@@ -48,6 +49,9 @@ void VulkanOffscreen::cleanup() {
         m_framebuffer = nullptr;
     }
 
+    // Before the images it samples.
+    m_bloom.reset();
+
     m_depthImage.reset();
     m_colorImage.reset();
     m_resolveImage.reset();
@@ -78,6 +82,7 @@ bool VulkanOffscreen::ApplyPendingResize() {
     createResources();
     createFramebuffer();
     createSamplerAndTextureID();
+    createBloom();
 
     std::cout << "[VulkanOffscreen] Resized Offscreen Viewport Target (" << m_width << "x" << m_height << ")." << std::endl;
     return true;
@@ -274,19 +279,33 @@ void VulkanOffscreen::createSamplerAndTextureID() {
 
     m_sampler = m_deviceRef.GetDevice().createSampler(samplerInfo);
 
-    // The resolve when multisampling, because the multisampled image cannot be
-    // sampled at all - binding it would be a validation error and a black
-    // viewport.
-    const vk::ImageView sampled = m_resolveImage ? m_resolveImage->GetImageView()
-                                                 : m_colorImage->GetImageView();
+    // Only the sampler is made here; the view ImGui shows is decided in
+    // createBloom(), because the scene image is floating point and un-encoded -
+    // showing it directly would present linear values as if they were sRGB.
+}
 
+
+void VulkanOffscreen::createBloom() {
+    // The scene image the chain reads: the resolve when multisampling, because
+    // a multisampled image cannot be sampled at all.
+    const vk::ImageView sceneView = m_resolveImage ? m_resolveImage->GetImageView()
+                                                   : m_colorImage->GetImageView();
+
+    m_bloom = std::make_unique<BloomPass>(m_deviceRef, m_width, m_height, sceneView, m_sampler);
+
+    // ImGui shows the bloom chain's output, not the scene image. The scene
+    // image is linear and floating point; presenting it directly would show
+    // un-tone-mapped, un-encoded values.
     VkDescriptorSet ds = ImGui_ImplVulkan_AddTexture(
-        static_cast<VkSampler>(m_sampler),
-        static_cast<VkImageView>(sampled),
+        static_cast<VkSampler>(m_bloom->GetOutputSampler()),
+        static_cast<VkImageView>(m_bloom->GetOutputView()),
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     );
-
     m_textureID = (ImTextureID)(uintptr_t)ds;
+}
+
+void VulkanOffscreen::RecordPostProcess(vk::CommandBuffer commandBuffer) const {
+    if (m_bloom) m_bloom->Record(commandBuffer);
 }
 
 } // namespace Supersonic

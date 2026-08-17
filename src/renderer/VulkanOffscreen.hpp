@@ -5,6 +5,7 @@
 
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanImage.hpp"
+#include "renderer/BloomPass.hpp"
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
 
@@ -12,9 +13,11 @@ namespace Supersonic {
 
 class VulkanOffscreen {
 public:
-    // Manual sRGB encoding happens in shader.frag, so the attachment must be
-    // UNORM or the value is gamma-encoded twice. See createRenderPass().
-    static constexpr vk::Format kColorFormat = vk::Format::eR8G8B8A8Unorm;
+    // Floating point, so highlights can exceed 1.0 and the bloom pass has
+    // something to threshold. Tone mapping and the sRGB encode moved out of
+    // shader.frag and into BloomPass's composite, which is the only place
+    // either now happens - see BloomPass for why that order is required.
+    static constexpr vk::Format kColorFormat = BloomPass::kHdrFormat;
 
     VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height);
     ~VulkanOffscreen();
@@ -34,6 +37,10 @@ public:
 
     // Pipelines drawing into this pass must declare the same count.
     vk::SampleCountFlagBits GetSampleCount() const { return m_samples; }
+
+    // Runs the bloom chain and the tone map. Called after the scene render pass
+    // has ended, on the same command buffer.
+    void RecordPostProcess(vk::CommandBuffer commandBuffer) const;
     vk::Framebuffer GetFramebuffer() const { return m_framebuffer; }
     uint32_t GetWidth() const { return m_width; }
     uint32_t GetHeight() const { return m_height; }
@@ -44,6 +51,7 @@ private:
     void createResources();
     void createFramebuffer();
     void createSamplerAndTextureID();
+    void createBloom();
     void cleanup();
 
     VulkanDevice& m_deviceRef;
@@ -61,6 +69,9 @@ private:
     std::unique_ptr<VulkanImage> m_colorImage;
     std::unique_ptr<VulkanImage> m_depthImage;
     std::unique_ptr<VulkanImage> m_resolveImage;
+
+    // Rebuilt with the target, because every image in the chain is sized to it.
+    std::unique_ptr<BloomPass> m_bloom;
     vk::Framebuffer m_framebuffer{nullptr};
 
     vk::Sampler m_sampler{nullptr};

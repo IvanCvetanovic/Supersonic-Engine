@@ -94,7 +94,7 @@ jobs:
           # shadow pass was missing here while it was being rewritten for
           # cascades and skinning - precisely when a missing blob would have
           # mattered most.
-          for spv in vert frag grid_vert grid_frag shadow_vert shadow_frag; do
+          for spv in vert frag grid_vert grid_frag shadow_vert shadow_frag \n                     fullscreen_vert bloom_bright bloom_blur bloom_composite; do
             test -f "assets/shaders/$spv.spv" || { echo "missing assets/shaders/$spv.spv"; exit 1; }
           done
           echo "Build outputs present."
@@ -123,7 +123,7 @@ jobs:
           set -euo pipefail
           for pair in "shader.vert:vert.spv" "shader.frag:frag.spv" \
                       "grid.vert:grid_vert.spv" "grid.frag:grid_frag.spv" \
-                      "shadow.vert:shadow_vert.spv" "shadow.frag:shadow_frag.spv"; do
+                      "shadow.vert:shadow_vert.spv" "shadow.frag:shadow_frag.spv"                       "fullscreen.vert:fullscreen_vert.spv"                       "bloom_bright.frag:bloom_bright.spv"                       "bloom_blur.frag:bloom_blur.spv"                       "bloom_composite.frag:bloom_composite.spv"; do
             src="${pair%%:*}"
             out="${pair##*:}"
             echo "Compiling $src"

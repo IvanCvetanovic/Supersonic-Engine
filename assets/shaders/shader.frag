@@ -221,14 +221,13 @@ void main() {
     vec3 ambient = ubo.ambientColor.rgb * albedo * ao;
     vec3 color = ambient + Lo;
 
-    // Reinhard tone map, then encode to sRGB.
+    // Linear, unbounded, un-encoded.
     //
-    // This manual encode is why the offscreen colour attachment is UNORM
-    // (VulkanOffscreen::kColorFormat). An sRGB attachment would encode a second
-    // time on store and nothing downstream cancels it, because ImGui samples
-    // this image and blits it to the swapchain without colour conversion.
-    color = color / (color + vec3(1.0));
-    color = pow(color, vec3(1.0 / 2.2));
-
+    // Tone mapping and the sRGB encode used to happen here, which was right
+    // while this shader produced the final image. The scene target is now
+    // floating point and feeds a bloom chain, so squashing values into 0..1
+    // here would destroy exactly the above-white highlights bloom exists to
+    // find. Both steps moved to bloom_composite.frag, which is now the only
+    // place either happens.
     outColor = vec4(color, albedoTex.a * push.albedoColor.a);
 }

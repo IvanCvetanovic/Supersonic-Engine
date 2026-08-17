@@ -260,6 +260,10 @@ set(SHADER_JOBS
     "grid.frag=grid_frag.spv"
     "shadow.vert=shadow_vert.spv"
     "shadow.frag=shadow_frag.spv"
+    "fullscreen.vert=fullscreen_vert.spv"
+    "bloom_bright.frag=bloom_bright.spv"
+    "bloom_blur.frag=bloom_blur.spv"
+    "bloom_composite.frag=bloom_composite.spv"
 )
 
 if (GLSL_COMPILER)

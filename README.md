@@ -49,7 +49,8 @@ code quietly contradicts.
 | **Cascaded shadows** | Four 2048² D32 cascades in one array image, fitted to the camera by bounding sphere and snapped to the texel grid so edges do not crawl; per-cascade normal offset, 3×3 PCF, and a cross-fade across each split |
 | **Normal mapping** | Tangent-space, with glTF-convention `vec4` tangents (handedness in `w`) generated for procedural meshes too |
 | **Frustum culling** | Gribb–Hartmann plane extraction; the scene pass culls against the camera, the shadow pass against the light, so nothing off-screen pops its shadow in and out |
-| **Colour correctness** | Linear throughout, encoded to sRGB exactly once — no double gamma |
+| **HDR + bloom** | Floating-point scene target, luminance-thresholded bright pass with a soft knee, separable half-res blur, then tone map and sRGB encode — exactly one encode, at the end of the chain |
+| **Anti-aliasing** | 4× MSAA, resolved into the image the editor samples |
 | **Pipeline cache** | The driver's compiled pipelines persist to disk between runs, validated against vendor, device and driver UUID before reuse |
 | **Grid** | Procedural infinite ground grid, depth-tested and analytically anti-aliased |
 
