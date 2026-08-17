@@ -48,8 +48,11 @@ jobs:
         with:
           cache: true
 
+      # GLFW 3.4 defaults GLFW_BUILD_WAYLAND=ON and hard-fails at configure with
+      # FATAL_ERROR "Failed to find wayland-scanner" unless the full Wayland
+      # toolchain is present. X11 is enough for CI.
       - name: Configure
-        run: cmake -S . -B build ${{ matrix.preset_args }}
+        run: cmake -S . -B build ${{ matrix.preset_args }} ${{ runner.os == 'Linux' && '-DGLFW_BUILD_WAYLAND=OFF' || '' }}
 
       - name: Build
         run: cmake --build build --config ${{ matrix.config }} --parallel
@@ -63,13 +66,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            test -f build/${{ matrix.config }}/GameEngine.exe
-            test -f build/${{ matrix.config }}/GameScripts.dll
-          else
-            test -f build/GameEngine
-            test -f build/GameScripts.so || test -f build/libGameScripts.so
-          fi
+          # Location-agnostic: multi-config generators nest outputs under the
+          # configuration directory, single-config ones do not, and the plugin
+          # sets its own per-config output path.
+          find build -name 'GameEngine' -o -name 'GameEngine.exe' | grep -q . \
+            || { echo "engine binary not found"; exit 1; }
+          find build -name 'GameScripts*' -type f | grep -q . \
+            || { echo "script plugin not found"; exit 1; }
           test -f assets/shaders/vert.spv
           test -f assets/shaders/frag.spv
           test -f assets/shaders/grid_vert.spv

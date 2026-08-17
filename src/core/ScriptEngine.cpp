@@ -18,8 +18,13 @@ extern "C" void builtinRotator(EngineScriptContext* ctx) {
 }
 
 extern "C" void builtinOscillator(EngineScriptContext* ctx) {
-    // Relative to wherever the entity started, not an absolute world height.
-    ctx->position[1] += std::sin(ctx->elapsed * 2.0f) * 0.5f * ctx->deltaTime * 2.0f;
+    // Exact frame-to-frame delta of 0.5*sin(2t), applied relative to wherever
+    // the entity already is. The old version snapped every oscillator to an
+    // absolute world height; integrating sin() instead would change both the
+    // amplitude and the phase the name implies, and accumulate float error.
+    const float now = ctx->elapsed;
+    const float previous = now - ctx->deltaTime;
+    ctx->position[1] += (std::sin(now * 2.0f) - std::sin(previous * 2.0f)) * 0.5f;
 }
 
 extern "C" void builtinSpinner(EngineScriptContext* ctx) {

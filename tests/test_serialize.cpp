@@ -78,6 +78,16 @@ static void testSceneRoundTrip() {
     auto& lightComp = source.emplace<LightComponent>(light);
     lightComp.intensity = 3.25f;
 
+    const auto speaker = source.create();
+    source.emplace<TagComponent>(speaker, "Speaker");
+    auto& audio = source.emplace<AudioSourceComponent>(speaker);
+    audio.soundFile = "assets/audio/ambient.wav";
+    audio.volume = 0.42f;
+    audio.pitch = 1.25f;
+    audio.loop = false;
+    audio.referenceDistance = 2.5f;
+    audio.maxDistance = 66.0f;
+
     const auto saved = SceneSerializer::Serialize(source, kScene);
     CHECK_MSG(saved.ok, saved.message);
 
@@ -88,6 +98,7 @@ static void testSceneRoundTrip() {
     size_t count = 0;
     bool foundCube = false;
     bool foundLight = false;
+    bool foundAudio = false;
 
     for (auto entity : loaded.view<entt::entity>()) {
         ++count;
@@ -118,12 +129,27 @@ static void testSceneRoundTrip() {
             const auto* l = loaded.try_get<LightComponent>(entity);
             CHECK(l != nullptr);
             if (l) CHECK_NEAR(l->intensity, 3.25f);
+        } else if (tag->tag == "Speaker") {
+            foundAudio = true;
+            // Audio sources were originally left out of the writer entirely, so
+            // a save/load round trip silently dropped every one of them.
+            const auto* a = loaded.try_get<AudioSourceComponent>(entity);
+            CHECK(a != nullptr);
+            if (a) {
+                CHECK_MSG(a->soundFile == "assets/audio/ambient.wav", "clip path must survive");
+                CHECK_NEAR(a->volume, 0.42f);
+                CHECK_NEAR(a->pitch, 1.25f);
+                CHECK_MSG(!a->loop, "loop flag must survive");
+                CHECK_NEAR(a->referenceDistance, 2.5f);
+                CHECK_NEAR(a->maxDistance, 66.0f);
+            }
         }
     }
 
-    CHECK_EQ(count, size_t{2});
+    CHECK_EQ(count, size_t{3});
     CHECK_MSG(foundCube, "the cube must come back with its data");
     CHECK_MSG(foundLight, "the light must come back with its data");
+    CHECK_MSG(foundAudio, "the audio source must come back with its data");
 
     std::remove(kScene.c_str());
 }

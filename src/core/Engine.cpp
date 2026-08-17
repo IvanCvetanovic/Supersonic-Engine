@@ -64,6 +64,8 @@ EngineApp::EngineApp() {
     }
 
     m_audioEngine = std::make_unique<AudioEngine>();
+    // Stops voices when their entity goes away; sources loop by default.
+    AudioSystem::Attach(m_registry, *m_audioEngine);
 
     // Scripts: built-ins first, then whatever the plugin adds on top.
     ScriptEngine::RegisterBuiltInScripts();
@@ -99,7 +101,9 @@ EngineApp::~EngineApp() {
         m_vulkanDevice->GetDevice().waitIdle();
     }
 
+    // Clearing fires the destruction hook, which stops any voice still playing.
     m_registry.clear();
+    AudioSystem::Detach(m_registry);
 
     // Order matters: the editor frees an ImGui descriptor set, which must
     // happen before ImGui_ImplVulkan_Shutdown runs in ~VulkanRenderer.

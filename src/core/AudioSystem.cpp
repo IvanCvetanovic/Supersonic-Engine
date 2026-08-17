@@ -17,7 +17,30 @@ float attenuationFor(float distance, float referenceDistance, float maxDistance)
     return referenceDistance / distance;
 }
 
+// Fired by EnTT just before the component is removed, so the handle is still
+// readable here. Covers both registry.destroy() and registry.clear().
+void onAudioSourceDestroyed(entt::registry& registry, entt::entity entity) {
+    auto* slot = registry.ctx().find<AudioEngine*>();
+    if (!slot || !*slot) return;
+
+    auto& source = registry.get<AudioSourceComponent>(entity);
+    if (source.voice != AudioEngine::kInvalidVoice) {
+        (*slot)->Stop(source.voice);
+        source.voice = AudioEngine::kInvalidVoice;
+    }
+}
+
 } // namespace
+
+void AudioSystem::Attach(entt::registry& registry, AudioEngine& audio) {
+    registry.ctx().insert_or_assign<AudioEngine*>(&audio);
+    registry.on_destroy<AudioSourceComponent>().connect<&onAudioSourceDestroyed>();
+}
+
+void AudioSystem::Detach(entt::registry& registry) {
+    registry.on_destroy<AudioSourceComponent>().disconnect<&onAudioSourceDestroyed>();
+    registry.ctx().erase<AudioEngine*>();
+}
 
 void AudioSystem::Update(entt::registry& registry, AudioEngine& audio, float deltaTime) {
     (void)deltaTime;

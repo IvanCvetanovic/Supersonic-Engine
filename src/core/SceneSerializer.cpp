@@ -129,6 +129,20 @@ SerializationResult SceneSerializer::Serialize(entt::registry& registry, const s
             file << " },\n";
         }
 
+        if (const auto* audio = registry.try_get<AudioSourceComponent>(entity)) {
+            // voice/failedToLoad are runtime state owned by AudioSystem and are
+            // deliberately not persisted.
+            file << "      \"AudioSource\": {\n";
+            file << "        \"Clip\": \"" << Json::Escape(audio->soundFile) << "\",\n";
+            file << "        \"Volume\": " << audio->volume << ",\n";
+            file << "        \"Pitch\": " << audio->pitch << ",\n";
+            file << "        \"Playing\": " << (audio->isPlaying ? "true" : "false") << ",\n";
+            file << "        \"Loop\": " << (audio->loop ? "true" : "false") << ",\n";
+            file << "        \"ReferenceDistance\": " << audio->referenceDistance << ",\n";
+            file << "        \"MaxDistance\": " << audio->maxDistance << "\n";
+            file << "      },\n";
+        }
+
         if (const auto* script = registry.try_get<ScriptComponent>(entity)) {
             file << "      \"Script\": {\n";
             file << "        \"Name\": \"" << Json::Escape(script->scriptName) << "\",\n";
@@ -250,6 +264,18 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
         if (node.Has("BoxCollider")) {
             auto& box = registry.emplace<BoxColliderComponent>(entity);
             box.size = readVec3(node["BoxCollider"]["Size"], glm::vec3(1.0f));
+        }
+
+        if (node.Has("AudioSource")) {
+            const auto& a = node["AudioSource"];
+            auto& audio = registry.emplace<AudioSourceComponent>(entity);
+            audio.soundFile = a["Clip"].AsString("assets/audio/ambient.wav");
+            audio.volume = a["Volume"].AsFloat(0.8f);
+            audio.pitch = a["Pitch"].AsFloat(1.0f);
+            audio.isPlaying = a["Playing"].AsBool(true);
+            audio.loop = a["Loop"].AsBool(true);
+            audio.referenceDistance = a["ReferenceDistance"].AsFloat(1.5f);
+            audio.maxDistance = a["MaxDistance"].AsFloat(40.0f);
         }
 
         if (node.Has("Script")) {
