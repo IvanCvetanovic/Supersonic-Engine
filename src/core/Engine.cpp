@@ -127,13 +127,13 @@ void EngineApp::initECS() {
     // "Entity 0" that can be deleted without realising it is the camera.
     auto cameraEntity = m_registry.create();
     m_registry.emplace<TagComponent>(cameraEntity, "Main Camera");
-    m_registry.emplace<TransformComponent>(cameraEntity, glm::vec3(0.0f, 1.2f, 4.0f));
+    m_registry.emplace<TransformComponent>(cameraEntity, glm::vec3(0.6f, 2.6f, 9.5f));
     auto& camera = m_registry.emplace<CameraComponent>(cameraEntity);
-    camera.fov = 45.0f;
+    camera.fov = 50.0f;
     camera.aspect = 1280.0f / 720.0f;
-    camera.position = glm::vec3(0.0f, 1.2f, 4.0f);
-    camera.yaw = -90.0f;
-    camera.pitch = -10.0f;
+    camera.position = glm::vec3(0.6f, 2.6f, 9.5f);
+    camera.yaw = -92.0f;
+    camera.pitch = -12.0f;
     camera.updateCameraVectors();
 
     auto lightEntity = m_registry.create();
@@ -143,8 +143,8 @@ void EngineApp::initECS() {
     light.type = static_cast<int>(LightType::Directional);
     light.direction = glm::normalize(glm::vec3(0.55f, 1.0f, 0.42f));
     light.color = glm::vec3(1.0f, 0.96f, 0.88f);
-    light.intensity = 2.6f;
-    light.ambient = glm::vec3(0.10f, 0.11f, 0.14f);
+    light.intensity = 1.6f;
+    light.ambient = glm::vec3(0.05f, 0.055f, 0.07f);
     light.castsShadow = true;
 
     // Two point lights, to exercise the multi-light path the single hardcoded
@@ -155,7 +155,7 @@ void EngineApp::initECS() {
     auto& lightA = m_registry.emplace<LightComponent>(pointA);
     lightA.type = static_cast<int>(LightType::Point);
     lightA.color = glm::vec3(1.0f, 0.55f, 0.25f);
-    lightA.intensity = 7.0f;
+    lightA.intensity = 2.2f;
     lightA.range = 14.0f;
 
     auto pointB = m_registry.create();
@@ -164,7 +164,7 @@ void EngineApp::initECS() {
     auto& lightB = m_registry.emplace<LightComponent>(pointB);
     lightB.type = static_cast<int>(LightType::Point);
     lightB.color = glm::vec3(0.30f, 0.55f, 1.0f);
-    lightB.intensity = 7.0f;
+    lightB.intensity = 2.2f;
     lightB.range = 14.0f;
 
     // Ground plane. Without a receiver there is nothing for the shadow map to
@@ -199,6 +199,17 @@ void EngineApp::initECS() {
     sphereMat.roughness = 0.18f;
     sphereMat.metallic = 0.90f;
     m_registry.emplace<RenderableComponent>(sphere);
+
+    // glTF import: a node hierarchy with TRS transforms and PBR materials,
+    // loaded through tinygltf, which was vendored but unreferenced until now.
+    auto monument = m_registry.create();
+    m_registry.emplace<TagComponent>(monument, "Monument (glTF)");
+    m_registry.emplace<TransformComponent>(monument, glm::vec3(3.6f, 0.0f, 0.5f));
+    m_registry.emplace<MeshComponent>(monument, "", "assets/models/monument.gltf", 0u, 0u);
+    auto& monumentMat = m_registry.emplace<MaterialComponent>(monument);
+    monumentMat.albedoTexturePath = "assets/textures/uv_grid.png";
+    monumentMat.roughness = 0.55f;
+    m_registry.emplace<RenderableComponent>(monument);
 
     auto physCube = m_registry.create();
     m_registry.emplace<TagComponent>(physCube, "Physics Cube");

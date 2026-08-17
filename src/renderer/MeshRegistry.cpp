@@ -2,7 +2,10 @@
 
 #include "core/ModelLoader.hpp"
 #include "core/TerrainGenerator.hpp"
+#include "core/GltfLoader.hpp"
 
+#include <algorithm>
+#include <filesystem>
 #include <iostream>
 
 namespace Engine {
@@ -92,7 +95,32 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
     bool ok = false;
 
     if (!filePath.empty()) {
-        ok = ModelLoader::LoadOBJ(filePath, data);
+        std::string extension = std::filesystem::path(filePath).extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (extension == ".gltf" || extension == ".glb") {
+            // Merge every primitive in the file into one mesh. The importer has
+            // already baked each node's transform into its vertices, so they
+            // share a coordinate system.
+            const GltfLoader::Scene scene = GltfLoader::Load(filePath);
+            if (scene.ok) {
+                for (const auto& submesh : scene.submeshes) {
+                    const auto vertexOffset = static_cast<uint32_t>(data.vertices.size());
+                    data.vertices.insert(data.vertices.end(),
+                                         submesh.mesh.vertices.begin(), submesh.mesh.vertices.end());
+                    for (const uint32_t index : submesh.mesh.indices) {
+                        data.indices.push_back(index + vertexOffset);
+                    }
+                }
+                data.computeBounds();
+                ok = !data.empty();
+            } else {
+                std::cerr << "[MeshRegistry] " << scene.error << std::endl;
+            }
+        } else {
+            ok = ModelLoader::LoadOBJ(filePath, data);
+        }
     } else if (primitiveType == "Cube") {
         ok = ModelLoader::GenerateCube(1.0f, data);
     } else if (primitiveType == "Sphere") {

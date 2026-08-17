@@ -192,6 +192,7 @@ target_compile_definitions(GameEngine PRIVATE
 set(VENDORED_SOURCES
     ${IMGUI_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/VmaImplementation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/TinyGltfImplementation.cpp
 )
 
 if (MSVC)

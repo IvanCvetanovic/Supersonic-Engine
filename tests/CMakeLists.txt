@@ -37,6 +37,20 @@ add_engine_test(test_serialize ${ENGINE_SRC}/src/core/SceneSerializer.cpp
 add_engine_test(test_physics   ${ENGINE_SRC}/src/core/PhysicsSystem.cpp)
 add_engine_test(test_audio     ${ENGINE_SRC}/src/core/AudioClip.cpp)
 add_engine_test(test_scripts   ${ENGINE_SRC}/src/core/ScriptRegistry.cpp)
+add_engine_test(test_gltf      ${ENGINE_SRC}/src/core/GltfLoader.cpp
+                               ${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp)
+
+target_include_directories(test_gltf PRIVATE ${ENGINE_SRC}/third_party/tinygltf)
+# Runs against assets/models/monument.gltf, so it needs the project root.
+set_tests_properties(test_gltf PROPERTIES WORKING_DIRECTORY "${ENGINE_SRC}")
+
+if (MSVC)
+    set_source_files_properties(${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp
+        TARGET_DIRECTORY test_gltf PROPERTIES COMPILE_OPTIONS "/W0")
+else()
+    set_source_files_properties(${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp
+        TARGET_DIRECTORY test_gltf PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 
 # test_audio also opportunistically checks the shipped ambient clip, so run the
 # suite from the project root where assets/ resolves.
