@@ -73,10 +73,13 @@ jobs:
             || { echo "engine binary not found"; exit 1; }
           find build -name 'GameScripts*' -type f | grep -q . \
             || { echo "script plugin not found"; exit 1; }
-          test -f assets/shaders/vert.spv
-          test -f assets/shaders/frag.spv
-          test -f assets/shaders/grid_vert.spv
-          test -f assets/shaders/grid_frag.spv
+          # Every blob CMake knows how to build, not just the first four. The
+          # shadow pass was missing here while it was being rewritten for
+          # cascades and skinning - precisely when a missing blob would have
+          # mattered most.
+          for spv in vert frag grid_vert grid_frag shadow_vert shadow_frag; do
+            test -f "assets/shaders/$spv.spv" || { echo "missing assets/shaders/$spv.spv"; exit 1; }
+          done
           echo "Build outputs present."
 
   shader-check:
@@ -93,14 +96,34 @@ jobs:
       # The committed .spv blobs must actually correspond to the GLSL sources.
       # compile_shaders.bat could never regenerate the grid shaders, so they
       # could drift from their source indefinitely.
+      #
+      # Every shader CMake knows how to build is listed, not a subset: the two
+      # shadow shaders were missing from this loop while they were being
+      # rewritten for cascades and skinning, which is exactly when a shader that
+      # no longer compiles would have gone unnoticed.
       - name: Recompile every shader
         run: |
           set -euo pipefail
           for pair in "shader.vert:vert.spv" "shader.frag:frag.spv" \
-                      "grid.vert:grid_vert.spv" "grid.frag:grid_frag.spv"; do
+                      "grid.vert:grid_vert.spv" "grid.frag:grid_frag.spv" \
+                      "shadow.vert:shadow_vert.spv" "shadow.frag:shadow_frag.spv"; do
             src="${pair%%:*}"
             out="${pair##*:}"
             echo "Compiling $src"
             glslc "assets/shaders/$src" -o "/tmp/$out"
           done
           echo "All shaders compile cleanly."
+
+      # Every shader CMake compiles must be in the list above. A new shader
+      # added to SHADER_JOBS and not added here would otherwise never be checked.
+      - name: Shader list matches CMakeLists
+        run: |
+          set -euo pipefail
+          declared=$(grep -oE '"[a-z_]+\.(vert|frag)=' CMakeLists.txt | tr -d '"=' | sort)
+          checked=$(printf '%s\n' shader.vert shader.frag grid.vert grid.frag shadow.vert shadow.frag | sort)
+          if [ "$declared" != "$checked" ]; then
+            echo "CMakeLists.txt builds a different set of shaders than CI checks:"
+            diff <(echo "$declared") <(echo "$checked") || true
+            exit 1
+          fi
+          echo "Shader lists agree."

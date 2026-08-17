@@ -1,0 +1,55 @@
+# Line endings and binary handling.
+#
+# Without this, every commit from Windows prints "LF will be replaced by CRLF",
+# and a contributor whose core.autocrlf differs produces a diff where every line
+# has changed. Normalising in the repository and letting each checkout use its
+# platform's convention is the fix.
+#
+# The index already stores LF, so adding this changes nothing that is committed
+# today - it just stops the behaviour depending on each contributor's settings.
+
+* text=auto
+
+# Sources and text assets: LF in the repository.
+*.cpp    text
+*.hpp    text
+*.h      text
+*.c      text
+*.vert   text
+*.frag   text
+*.glsl   text
+*.gltf   text
+*.json   text
+*.md     text
+*.txt    text
+*.yml    text
+*.yaml   text
+*.cmake  text
+CMakeLists.txt text
+
+# Windows-only scripts, which cmd.exe requires to have CRLF.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+
+# Shell scripts must keep LF even when checked out on Windows, or they will not
+# run under WSL or Git Bash.
+*.sh     text eol=lf
+
+# Binaries: never normalise, never diff as text. Compiled SPIR-V in particular
+# would be corrupted by line-ending translation.
+*.spv    binary
+*.bin    binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.wav    binary
+*.ttf    binary
+*.glb    binary
+
+# SVG is XML, so it is text - but it is authored art, so keep it out of diffs
+# that are about code.
+*.svg    text
+
+# Vendored dependencies are not the project's code: exclude them from language
+# statistics and collapse them in pull request diffs.
+third_party/** linguist-vendored

@@ -1,0 +1,71 @@
+# Third-Party Licenses
+
+Supersonic Engine vendors every dependency under `third_party/` rather than
+fetching them at build time. That means a copy of this repository redistributes
+them, and their copyright notices have to travel with it — which is what this
+file is for.
+
+All of them are permissive. None is copyleft, and none imposes a condition on
+what you may build with the engine beyond keeping the notices below.
+
+| Component | Version | License | Copyright |
+|---|---|---|---|
+| [EnTT](https://github.com/skypjack/entt) | 3.13.2 | MIT | © 2017–2023 Michele Caini |
+| [GLFW](https://www.glfw.org/) | 3.4 | zlib/libpng | © 2002–2006 Marcus Geelnard, © 2006–2019 Camilla Löwy |
+| [GLM](https://github.com/g-truc/glm) | — | The Happy Bunny License **or** MIT, at your option | © 2005 G-Truc Creation |
+| [Dear ImGui](https://github.com/ocornut/imgui) | docking branch | MIT | © 2014–2026 Omar Cornut |
+| [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) | — | MIT | © 2016–2026 Cedric Guillemet and contributors |
+| [stb](https://github.com/nothings/stb) (`stb_image`, `stb_image_write`) | — | Public domain (Unlicense) **or** MIT, at your option | Sean Barrett |
+| [tinygltf](https://github.com/syoyo/tinygltf) | — | MIT | © 2015–present Syoyo Fujita, Aurélien Chatelain and contributors |
+| [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | 3.1.0 | MIT | © 2017–2024 Advanced Micro Devices, Inc. |
+| [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | 1.3.290 | Apache-2.0 **or** MIT, at your option | © 2015–2023 The Khronos Group Inc. |
+
+## Full texts
+
+Each dependency ships its own licence text in the tree:
+
+```
+third_party/entt-3.13.2/LICENSE
+third_party/glfw-3.4/LICENSE.md
+third_party/glm/copying.txt
+third_party/imgui/LICENSE.txt
+third_party/VulkanMemoryAllocator-3.1.0/LICENSE.txt
+third_party/Vulkan-Headers-1.3.290/LICENSE.md
+third_party/Vulkan-Headers-1.3.290/LICENSES/          Apache-2.0.txt, MIT.txt
+```
+
+Three carry their licence in the header comment rather than in a separate file:
+
+```
+third_party/imguizmo/ImGuizmo.h        MIT, at the top of the file
+third_party/stb/stb_image.h            dual public-domain / MIT, at the foot of the file
+third_party/tinygltf/tiny_gltf.h       MIT, at the top of the file
+```
+
+## Code bundled inside those dependencies
+
+`tinygltf` vendors further components of its own, each under its own notice
+inside the file:
+
+- `third_party/tinygltf/json.hpp` — [nlohmann/json](https://github.com/nlohmann/json), MIT,
+  which itself incorporates the Grisu2 float printer (MIT, © 2009 Florian Loitsch)
+  and a UTF-8 decoder (MIT, © 2008–2009 Björn Höhrmann).
+- Base64 decoding by René Nyffenegger, and a portion adapted from
+  [dlib](http://dlib.net) (Boost Software License, © 2003 Davis E. King) — both
+  noted inline in `tiny_gltf.h`.
+
+Dear ImGui embeds the ProggyClean bitmap font by Tristan Grimmer, covered by
+ImGui's own MIT licence.
+
+## Assets
+
+Everything under `assets/` — shaders, branding, procedural textures and the
+glTF test fixtures — is the engine's own work and falls under the project
+licence in [LICENSE](LICENSE). The one exception worth checking before a public
+release is `assets/audio/ambient.wav`, which predates this file; confirm its
+provenance if you did not author it yourself.
+
+## Reporting an omission
+
+If something is attributed incorrectly or is missing here, that is a bug worth
+filing. Open an issue and it will be corrected.

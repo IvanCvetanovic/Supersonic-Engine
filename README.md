@@ -11,6 +11,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
 [![Tests](https://img.shields.io/badge/tests-14%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
+[![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
 </div>
 
@@ -202,6 +203,7 @@ plugins/       Hot-reloadable C++ gameplay scripts
 platform/      Android and Apple target scaffolding
 tests/         Pure-logic regression suites
 docs/          Screenshots
+.github/       CI: builds on Windows and Linux, runs the suites, recompiles every shader
 ```
 
 Roughly 13,900 lines of engine source across 49 translation units, excluding
@@ -275,9 +277,21 @@ Built on the work of others, all vendored in `third_party/`:
 
 ## License
 
-Not yet assigned. The intent is a permissive open-source licence, but until a
-`LICENSE` file lands in this repository no rights are granted beyond viewing the
-source.
+[MIT](LICENSE). Use it, change it, ship it, sell it — commercially or otherwise,
+with or without credit. The only condition is that the copyright notice travels
+with copies of the engine's own source.
+
+It comes with **no warranty of any kind, and no liability**. If you build
+something with it and that something breaks, that is yours to own, not the
+author's.
+
+Every vendored dependency under `third_party/` is permissive too — MIT, zlib or
+Apache-2.0 — and none of them puts a condition on what you may build.
+Attributions and full licence texts are in
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+Contributions are welcome under the same licence; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 <div align="center">
 <br>
