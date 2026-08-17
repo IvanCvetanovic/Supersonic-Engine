@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-14%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-15%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
@@ -59,6 +59,7 @@ code quietly contradicts.
 - **Wavefront OBJ** import
 - **Textures** through `stb_image`, with per-material descriptor sets cached by texture pair
 - **Procedural geometry** — cube, sphere, plane, and a heightfield **terrain generator**
+- **Shared materials** as `.material` assets — one asset, many entities, edited once; create and assign them from the content browser, or detach an entity with *Make Unique*
 - **Scenes and prefabs** as readable JSON (`.scene`, `.prefab`), parsed by a hand-written reader with no external dependency
 
 ### Simulation
@@ -85,8 +86,8 @@ code quietly contradicts.
 | **Animator** | Clip, speed, loop and a scrubbable time slider — poses evaluate every frame, so scrubbing shows the result immediately |
 | **Time-travel rewind** | Scrub backwards through recorded simulation frames |
 | **Fly camera** | The viewport has its own camera, so framing a shot in the editor does not move the game's |
-| **Statistics** | Frame time, entity count, draw/cull counts per pass, contact count, worker threads, script-host state |
-| **Interface** | Inter and Font Awesome embedded in the binary, an accent palette taken from the engine's own branding, and DPI scaling from the monitor |
+| **Statistics** | Frame-time graph, entity count, draw/cull counts per pass, contact count, worker threads, script-host state |
+| **Interface** | Inter and Font Awesome embedded in the binary, an accent palette from the engine's own branding, image thumbnails in the browser, a floating viewport HUD, and DPI scaling from the monitor |
 | **Packaging** | One-click standalone build of the current scene |
 
 ### Platforms
@@ -218,7 +219,7 @@ vendored dependencies.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Fourteen suites, each a plain executable with no test framework behind it —
+Fifteen suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 | Suite | Covers |
@@ -233,6 +234,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_gltf` | glTF import against a real asset in the tree |
 | `test_serialize` | JSON reader, scene and prefab round-trips |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
+| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence |
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers |
 | `test_audio` | WAV decoding, including the shipped clip |

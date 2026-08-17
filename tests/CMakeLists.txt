@@ -58,6 +58,9 @@ add_engine_test(test_cascades  ${SUPERSONIC_SRC}/src/renderer/ShadowCascades.cpp
 add_engine_test(test_jobs      ${SUPERSONIC_SRC}/src/core/JobSystem.cpp)
 add_engine_test(test_undo      ${SUPERSONIC_SRC}/src/editor/EditHistory.cpp
                                ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp)
+add_engine_test(test_materials ${SUPERSONIC_SRC}/src/core/MaterialLibrary.cpp
+                               ${SUPERSONIC_SRC}/src/core/MaterialSystem.cpp
+                               ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp)
 add_engine_test(test_physics   ${SUPERSONIC_SRC}/src/core/PhysicsSystem.cpp
                                ${SUPERSONIC_SRC}/src/core/TransformSystem.cpp)
 add_engine_test(test_audio     ${SUPERSONIC_SRC}/src/core/AudioClip.cpp)

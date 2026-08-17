@@ -14,6 +14,7 @@
 #include "editor/EditHistory.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/PhysicsSystem.hpp"
+#include "core/MaterialLibrary.hpp"
 #include "platform/Window.hpp"
 
 namespace Supersonic {
@@ -71,6 +72,10 @@ public:
     bool IsViewportHovered() const { return m_viewportHovered; }
     bool IsViewportFocused() const { return m_viewportFocused; }
 
+    // Shared material assets, for the inspector's editor and the browser's
+    // create/assign actions. Non-owning.
+    void SetMaterialLibrary(MaterialLibrary* library);
+
     // Last frame's culling counters, shown in the statistics panel.
     void SetRenderStats(const RenderSystem::Stats& stats) { m_renderStats = stats; }
 
@@ -126,6 +131,7 @@ private:
     PlayMode* m_playMode{nullptr};
     EditorCamera m_editorCamera;
     EditHistory m_history;
+    MaterialLibrary* m_materialLibrary{nullptr};
     bool m_viewportHovered{false};
     bool m_viewportFocused{false};
     RenderSystem::Stats m_renderStats{};

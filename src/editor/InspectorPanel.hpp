@@ -7,8 +7,14 @@
 
 namespace Supersonic {
 
+class MaterialLibrary;
+
 class InspectorPanel {
 public:
+    // Non-owning; null simply means the material section edits the entity's own
+    // values, which is what it did before assets existed.
+    void SetMaterialLibrary(MaterialLibrary* library) { m_materialLibrary = library; }
+
     InspectorPanel() = default;
 
     void OnImGuiRender(entt::registry& registry, entt::entity selectedEntity);
@@ -24,6 +30,8 @@ public:
     void SetGizmoOperation(ImGuizmo::OPERATION op) { m_gizmoOperation = op; }
 
 private:
+    MaterialLibrary* m_materialLibrary{nullptr};
+
     void drawComponents(entt::registry& registry, entt::entity entity);
 
     // Decomposes using TransformComponent::getModelMatrix's own Euler order,

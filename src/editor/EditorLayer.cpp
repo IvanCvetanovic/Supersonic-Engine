@@ -1,6 +1,7 @@
 #include "editor/EditorLayer.hpp"
 #include "editor/EditorIcons.hpp"
 #include "editor/Theme.hpp"
+#include "core/MaterialSystem.hpp"
 
 #include <algorithm>
 #include "core/JobSystem.hpp"
@@ -28,6 +29,12 @@ void EditorLayer::Init(VulkanDevice& device, uint32_t initialWidth, uint32_t ini
     m_thumbnails = std::make_unique<ThumbnailCache>(device);
     m_contentBrowserPanel.SetThumbnails(m_thumbnails.get());
     std::cout << "[EditorLayer] Dockable Editor Layer & Offscreen Viewport initialized." << std::endl;
+}
+
+void EditorLayer::SetMaterialLibrary(MaterialLibrary* library) {
+    m_materialLibrary = library;
+    m_inspectorPanel.SetMaterialLibrary(library);
+    m_contentBrowserPanel.SetMaterialLibrary(library);
 }
 
 void EditorLayer::Shutdown() {
@@ -403,6 +410,21 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
     if (const auto browserStatus = m_contentBrowserPanel.OnImGuiRender(); !browserStatus.empty()) {
         SetStatus(browserStatus, true);
+    }
+
+    // Clicking a material in the browser assigns it to whatever is selected.
+    // The browser reports the click and the editor owns the selection, so
+    // neither has to know about the other.
+    if (const std::string clicked = m_contentBrowserPanel.ConsumeMaterialClick(); !clicked.empty()) {
+        if (m_materialLibrary && selectedEntity != entt::null && registry.valid(selectedEntity)) {
+            if (MaterialSystem::Assign(registry, selectedEntity, *m_materialLibrary, clicked)) {
+                SetStatus("Assigned " + clicked + ".");
+            } else {
+                SetStatus("Could not load " + clicked + ".", true);
+            }
+        } else {
+            SetStatus("Select an entity first, then click a material to assign it.");
+        }
     }
 
     TimeTravelDebugger::RenderImGuiPanel(registry);

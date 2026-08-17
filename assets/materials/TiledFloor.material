@@ -1,0 +1,9 @@
+{
+  "Material": "TiledFloor",
+  "Albedo": [1, 1, 1, 1],
+  "Roughness": 0.65,
+  "Metallic": 0.05,
+  "AO": 1,
+  "AlbedoTexture": "assets/textures/floor_tiles.png",
+  "NormalTexture": "assets/textures/tiles_normal.png"
+}

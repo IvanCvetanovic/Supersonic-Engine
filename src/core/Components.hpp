@@ -209,6 +209,18 @@ struct MaterialComponent {
     float ao{1.0f};
     std::string albedoTexturePath;
     std::string normalTexturePath;
+
+    // When set, the fields above are driven by a shared .material asset and
+    // MaterialSystem overwrites them every frame. Empty means the entity owns
+    // its own values, which is how every material worked before assets existed.
+    //
+    // The values are still stored here rather than only in the asset, because
+    // the renderer reads this component and should not have to know that assets
+    // exist at all.
+    std::string materialPath;
+
+    // Rate-limits the "asset is missing" diagnostic to once per path change.
+    bool warnedMissingAsset{false};
 };
 
 struct MeshComponent {

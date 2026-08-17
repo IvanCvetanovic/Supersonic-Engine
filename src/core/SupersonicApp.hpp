@@ -18,6 +18,7 @@
 #include "core/Components.hpp"
 #include "core/PhysicsSystem.hpp"
 #include "core/AnimationLibrary.hpp"
+#include "core/MaterialLibrary.hpp"
 
 namespace Supersonic {
 
@@ -48,6 +49,7 @@ private:
     // compiled, instead of silently discarding every computed volume.
     std::unique_ptr<AudioEngine> m_audioEngine;
     std::unique_ptr<AnimationLibrary> m_animationLibrary;
+    std::unique_ptr<MaterialLibrary> m_materialLibrary;
 
     // Watches the script plugin and swaps it in when it is rebuilt.
     std::unique_ptr<HotReloadEngine> m_hotReload;

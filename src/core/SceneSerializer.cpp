@@ -134,7 +134,11 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
             file << "        \"NormalTexture\": \"" << Json::Escape(mat->normalTexturePath) << "\",\n";
             file << "        \"Roughness\": " << mat->roughness << ",\n";
             file << "        \"Metallic\": " << mat->metallic << ",\n";
-            file << "        \"AO\": " << mat->ao << "\n";
+            file << "        \"AO\": " << mat->ao << ",\n";
+            // The asset link, not just the values it resolves to. A scene that
+            // stored only the resolved numbers would silently detach every
+            // entity from its shared material the first time it was saved.
+            file << "        \"Asset\": \"" << Json::Escape(mat->materialPath) << "\"\n";
             file << "      },\n";
         }
 
@@ -352,6 +356,7 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
             material.roughness = m["Roughness"].AsFloat(0.4f);
             material.metallic = m["Metallic"].AsFloat(0.1f);
             material.ao = m["AO"].AsFloat(1.0f);
+            material.materialPath = m["Asset"].AsString("");
         }
 
         if (node.Has("RigidBody")) {

@@ -1,4 +1,6 @@
 #include "editor/InspectorPanel.hpp"
+#include "editor/EditorIcons.hpp"
+#include "core/MaterialSystem.hpp"
 #include "editor/Theme.hpp"
 #include "core/ScriptRegistry.hpp"
 #include "core/TransformSystem.hpp"
@@ -118,6 +120,52 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& material = registry.get<MaterialComponent>(entity);
 
+            // A linked entity edits the SHARED asset, so the change lands on
+            // every entity using it. An unlinked one edits only itself. Saying
+            // which is which up front is the whole point - an inspector that
+            // looked identical either way would make shared edits a surprise.
+            const bool linked = !material.materialPath.empty() && m_materialLibrary != nullptr;
+            MaterialAsset* asset = nullptr;
+            if (linked) {
+                asset = m_materialLibrary->Get(m_materialLibrary->Acquire(material.materialPath));
+            }
+
+            if (asset) {
+                ImGui::PushStyleColor(ImGuiCol_Text, Brand::Cyan);
+                ImGui::Text(ICON_FA_LAYER_GROUP "  %s", material.materialPath.c_str());
+                ImGui::PopStyleColor();
+                ImGui::TextDisabled("Shared asset - edits apply to every entity using it.");
+
+                ImGui::ColorEdit4("Albedo Tint", glm::value_ptr(asset->albedoColor));
+                ImGui::SliderFloat("Roughness", &asset->roughness, 0.02f, 1.0f);
+                ImGui::SliderFloat("Metallic", &asset->metallic, 0.0f, 1.0f);
+                ImGui::SliderFloat("Ambient Occlusion", &asset->ao, 0.0f, 1.0f);
+
+                char assetAlbedo[512] = {};
+                const size_t albedoLen = std::min(asset->albedoTexturePath.size(), sizeof(assetAlbedo) - 1);
+                std::memcpy(assetAlbedo, asset->albedoTexturePath.data(), albedoLen);
+                if (ImGui::InputText("Albedo Texture", assetAlbedo, sizeof(assetAlbedo))) {
+                    asset->albedoTexturePath = assetAlbedo;
+                }
+
+                char assetNormal[512] = {};
+                const size_t normalLen = std::min(asset->normalTexturePath.size(), sizeof(assetNormal) - 1);
+                std::memcpy(assetNormal, asset->normalTexturePath.data(), normalLen);
+                if (ImGui::InputText("Normal Map", assetNormal, sizeof(assetNormal))) {
+                    asset->normalTexturePath = assetNormal;
+                }
+
+                if (ImGui::Button(ICON_FA_FLOPPY "  Save Asset")) {
+                    m_materialLibrary->Save(m_materialLibrary->Acquire(material.materialPath));
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Make Unique")) {
+                    // Keeps the look, drops the link - so an entity can diverge
+                    // from the shared asset without first losing its appearance.
+                    MaterialSystem::MakeUnique(registry, entity, *m_materialLibrary);
+                }
+            } else {
+
             ImGui::ColorEdit4("Albedo Tint", glm::value_ptr(material.albedoColor));
             ImGui::SliderFloat("Roughness", &material.roughness, 0.02f, 1.0f);
             ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
@@ -142,6 +190,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             }
             if (material.normalTexturePath.empty()) {
                 ImGui::TextDisabled("Empty = flat normal; lighting uses the mesh normals.");
+            }
             }
         }
     }

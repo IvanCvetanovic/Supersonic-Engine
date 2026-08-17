@@ -7,6 +7,7 @@
 #include "core/ParticleSystem.hpp"
 #include "core/JobSystem.hpp"
 #include "core/AnimationSystem.hpp"
+#include "core/MaterialSystem.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
@@ -72,6 +73,7 @@ SupersonicApp::SupersonicApp() {
 
     m_audioEngine = std::make_unique<AudioEngine>();
     m_animationLibrary = std::make_unique<AnimationLibrary>();
+    m_materialLibrary = std::make_unique<MaterialLibrary>();
     // Stops voices when their entity goes away; sources loop by default.
     AudioSystem::Attach(m_registry, *m_audioEngine);
 
@@ -127,6 +129,7 @@ SupersonicApp::~SupersonicApp() {
     m_window.reset();
     m_audioEngine.reset();
     m_animationLibrary.reset();
+    m_materialLibrary.reset();
 
     // Last: a worker holding a reference to anything above would otherwise
     // outlive it. Shutdown drains outstanding work before joining.
@@ -191,6 +194,9 @@ void SupersonicApp::initECS() {
     groundTransform.scale = glm::vec3(40.0f, 1.0f, 40.0f);
     m_registry.emplace<MeshComponent>(ground, "Plane", "", 0u, 0u);
     auto& groundMat = m_registry.emplace<MaterialComponent>(ground);
+    // Through a shared asset rather than inline values, so the sample scene
+    // exercises the path and the material is editable from the browser.
+    groundMat.materialPath = "assets/materials/TiledFloor.material";
     groundMat.albedoTexturePath = "assets/textures/floor_tiles.png";
     groundMat.normalTexturePath = "assets/textures/tiles_normal.png";
     groundMat.roughness = 0.72f;
@@ -399,6 +405,7 @@ void SupersonicApp::Run() {
         // Editor UI runs after the systems and before rendering, so gizmo drags
         // and inspector edits appear in the same frame instead of one late.
         m_editorLayer->SetPlayMode(&m_playMode);
+        m_editorLayer->SetMaterialLibrary(m_materialLibrary.get());
         m_editorLayer->SetRenderStats(m_renderer->GetRenderStats());
         m_editorLayer->SetContacts(m_contacts);
         m_editorLayer->SetScriptHostInfo(m_hotReload->IsLoaded(),
@@ -411,6 +418,11 @@ void SupersonicApp::Run() {
         // entities. Rendering reads world matrices, so they must reflect what
         // the user just did rather than lagging a frame behind it.
         TransformSystem::UpdateWorldTransforms(m_registry);
+
+        // Shared materials resolve onto their components before the renderer
+        // reads them, so an edit to one asset shows on every entity using it in
+        // the same frame.
+        MaterialSystem::Sync(m_registry, *m_materialLibrary);
 
         // Mesh and texture uploads submit their own transfers, so they happen
         // here rather than mid-recording.

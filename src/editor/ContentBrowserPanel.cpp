@@ -5,6 +5,7 @@
 #include <cctype>
 #include "editor/Theme.hpp"
 #include "editor/ThumbnailCache.hpp"
+#include "core/MaterialLibrary.hpp"
 #include "imgui.h"
 
 #include <system_error>
@@ -40,6 +41,37 @@ ContentBrowserPanel::ContentBrowserPanel()
     std::filesystem::create_directories(m_assetsDirectory, ec);
 }
 
+
+std::string ContentBrowserPanel::ConsumeMaterialClick() {
+    std::string clicked;
+    clicked.swap(m_clickedMaterial);
+    return clicked;
+}
+
+// Creates assets/materials/Material_N.material, picking the first N that is
+// free so repeated clicks do not overwrite each other.
+std::string ContentBrowserPanel::createMaterial() {
+    if (!m_materials) return {};
+
+    std::error_code ec;
+    const std::filesystem::path dir = m_currentDirectory;
+    std::filesystem::create_directories(dir, ec);
+
+    for (int index = 0; index < 1000; ++index) {
+        const std::filesystem::path candidate =
+            dir / ("Material_" + std::to_string(index) + ".material");
+        if (std::filesystem::exists(candidate, ec)) continue;
+
+        MaterialAsset asset;
+        asset.name = candidate.stem().string();
+        if (m_materials->Create(candidate.string(), asset) == MaterialLibrary::kInvalidMaterial) {
+            return "Could not create " + candidate.string();
+        }
+        return {};
+    }
+    return "Too many materials in this directory.";
+}
+
 std::string ContentBrowserPanel::OnImGuiRender() {
     std::string status;
 
@@ -53,6 +85,14 @@ std::string ContentBrowserPanel::OnImGuiRender() {
     }
 
     ImGui::Text("Directory: %s", m_currentDirectory.string().c_str());
+
+    if (m_materials) {
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_PLUS "  New Material")) {
+            status = createMaterial();
+        }
+    }
+
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -113,6 +153,13 @@ std::string ContentBrowserPanel::OnImGuiRender() {
                         ImGui::PushStyleColor(ImGuiCol_Text, Brand::TextDim);
                         ImGui::TextWrapped("%s", filenameString.c_str());
                         ImGui::PopStyleColor();
+                    }
+
+                    // Clicking a material tile hands the path up to the editor,
+                    // which owns the selection. The browser stays ignorant of
+                    // what is selected, which is why it can be tested alone.
+                    if (path.extension() == ".material" && ImGui::IsItemClicked()) {
+                        m_clickedMaterial = path.string();
                     }
                 }
                 ec.clear();
