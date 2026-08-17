@@ -1,6 +1,7 @@
 #include "core/AudioEngine.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
 #if defined(_WIN32)

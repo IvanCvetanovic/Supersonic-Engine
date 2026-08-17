@@ -91,33 +91,46 @@ struct ShadowPushConstantData {
     // 72 bytes total, and a multiple of 4 as vkCmdPushConstants requires.
 };
 
+// Pipeline creation switches, at namespace scope rather than nested inside
+// VulkanPipeline.
+//
+// It has to be: the constructor takes `const Options& = {}`, and a nested
+// class's default member initializers may not be used inside the enclosing
+// class's own definition. MSVC accepts it as an extension, so this compiled
+// here for weeks while GCC and Clang rejected every translation unit that
+// included the header - which is what the Linux CI job had been failing on.
+//
+// The alias inside the class keeps every VulkanPipeline::Options call site
+// working unchanged.
+struct VulkanPipelineOptions {
+    bool depthWrite{true};
+    bool blendEnable{false};
+    vk::CullModeFlags cullMode{vk::CullModeFlagBits::eBack};
+    bool useVertexInput{true};
+
+    // 0 for the depth-only shadow pass, whose render pass has no colour
+    // attachment; a mismatch here is a pipeline/render-pass incompatibility.
+    uint32_t colorAttachmentCount{1};
+
+    // Constant + slope-scaled depth bias, which is what keeps a surface
+    // from shadowing itself with acne.
+    bool depthBias{false};
+    float depthBiasConstant{1.25f};
+    float depthBiasSlope{1.75f};
+
+    // Optional. Null still works - it just means the driver recompiles the
+    // SPIR-V from scratch, which is what happened for every pipeline on
+    // every launch before PipelineCache existed.
+    vk::PipelineCache cache{nullptr};
+
+    // The depth pass declares a different push constant block from the scene
+    // pass, so the range cannot be one fixed size for every pipeline.
+    uint32_t pushConstantSize{static_cast<uint32_t>(sizeof(PushConstantData))};
+};
+
 class VulkanPipeline {
 public:
-    struct Options {
-        bool depthWrite{true};
-        bool blendEnable{false};
-        vk::CullModeFlags cullMode{vk::CullModeFlagBits::eBack};
-        bool useVertexInput{true};
-
-        // 0 for the depth-only shadow pass, whose render pass has no colour
-        // attachment; a mismatch here is a pipeline/render-pass incompatibility.
-        uint32_t colorAttachmentCount{1};
-
-        // Constant + slope-scaled depth bias, which is what keeps a surface
-        // from shadowing itself with acne.
-        bool depthBias{false};
-        float depthBiasConstant{1.25f};
-        float depthBiasSlope{1.75f};
-
-        // Optional. Null still works - it just means the driver recompiles the
-        // SPIR-V from scratch, which is what happened for every pipeline on
-        // every launch before PipelineCache existed.
-        vk::PipelineCache cache{nullptr};
-
-        // The depth pass declares a different push constant block from the scene
-        // pass, so the range cannot be one fixed size for every pipeline.
-        uint32_t pushConstantSize{static_cast<uint32_t>(sizeof(PushConstantData))};
-    };
+    using Options = VulkanPipelineOptions;
 
     VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
                    const std::string& vertPath, const std::string& fragPath,

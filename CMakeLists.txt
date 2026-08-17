@@ -44,6 +44,12 @@ endif()
 # needs an *import library*, not the DLL itself. On Windows with MSVC we
 # synthesise one from the loader's export table at configure time.
 # ---------------------------------------------------------------------------
+# JobSystem uses std::thread. MSVC needs nothing for that; GCC and Clang need
+# the platform's thread library, and omitting it is either a link error or a
+# std::system_error the first time a worker starts.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 find_package(Vulkan QUIET)
 
 if (Vulkan_FOUND)
@@ -208,6 +214,7 @@ target_link_libraries(SupersonicEngine PRIVATE
     glfw
     EnTT::EnTT
     VulkanMemoryAllocator
+    Threads::Threads
 )
 
 # Audio output. XAudio2 ships with Windows, so this adds no third-party

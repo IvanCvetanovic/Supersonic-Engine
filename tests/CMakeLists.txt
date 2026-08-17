@@ -34,6 +34,11 @@ function(add_engine_test name)
     else()
         target_compile_options(${name} PRIVATE -Wall -Wextra)
     endif()
+    # Several suites compile JobSystem.cpp, which starts std::threads. Linking
+    # this unconditionally is simpler than tracking which ones, and costs the
+    # others nothing.
+    target_link_libraries(${name} PRIVATE Threads::Threads)
+
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
