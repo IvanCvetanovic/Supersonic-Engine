@@ -103,7 +103,12 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         rasterizer.lineWidth = 1.0f;
         rasterizer.cullMode = options.cullMode;
         rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
-        rasterizer.depthBiasEnable = VK_FALSE;
+        rasterizer.depthBiasEnable = options.depthBias ? VK_TRUE : VK_FALSE;
+        if (options.depthBias) {
+            rasterizer.depthBiasConstantFactor = options.depthBiasConstant;
+            rasterizer.depthBiasSlopeFactor = options.depthBiasSlope;
+            rasterizer.depthBiasClamp = 0.0f;
+        }
 
         vk::PipelineMultisampleStateCreateInfo multisampling{};
         multisampling.sampleShadingEnable = VK_FALSE;
@@ -135,8 +140,8 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
 
         vk::PipelineColorBlendStateCreateInfo colorBlending{};
         colorBlending.logicOpEnable = VK_FALSE;
-        colorBlending.attachmentCount = 1;
-        colorBlending.pAttachments = &colorBlendAttachment;
+        colorBlending.attachmentCount = options.colorAttachmentCount;
+        colorBlending.pAttachments = options.colorAttachmentCount > 0 ? &colorBlendAttachment : nullptr;
 
         // One range spanning both stages: the vertex stage reads the model
         // matrix, the fragment stage reads albedo and material parameters.
@@ -147,9 +152,13 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         static_assert(sizeof(PushConstantData) <= 128,
                       "Push constants must fit the 128-byte guaranteed minimum");
 
+        const std::array<vk::DescriptorSetLayout, 2> setLayouts = {
+            m_sceneSetLayout, m_materialSetLayout
+        };
+
         vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-        pipelineLayoutInfo.setLayoutCount = 1;
-        pipelineLayoutInfo.pSetLayouts = &m_descriptorSetLayout;
+        pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+        pipelineLayoutInfo.pSetLayouts = setLayouts.data();
         pipelineLayoutInfo.pushConstantRangeCount = 1;
         pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
@@ -200,38 +209,52 @@ void VulkanPipeline::destroy() noexcept {
         m_device.destroyPipelineLayout(m_pipelineLayout);
         m_pipelineLayout = nullptr;
     }
-    if (m_descriptorSetLayout) {
-        m_device.destroyDescriptorSetLayout(m_descriptorSetLayout);
-        m_descriptorSetLayout = nullptr;
+    if (m_materialSetLayout) {
+        m_device.destroyDescriptorSetLayout(m_materialSetLayout);
+        m_materialSetLayout = nullptr;
+    }
+    if (m_sceneSetLayout) {
+        m_device.destroyDescriptorSetLayout(m_sceneSetLayout);
+        m_sceneSetLayout = nullptr;
     }
 }
 
 void VulkanPipeline::createDescriptorSetLayout() {
-    vk::DescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0;
-    uboLayoutBinding.descriptorType = vk::DescriptorType::eUniformBuffer;
-    uboLayoutBinding.descriptorCount = 1;
-    // The fragment stage now reads light and camera data from the same UBO.
-    uboLayoutBinding.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
-    uboLayoutBinding.pImmutableSamplers = nullptr;
+    // ---- Set 0: per-frame scene data ----
+    // binding 0: UBO with camera, lights and the light-space matrix.
+    // binding 1: the shadow map, sampled by the fragment stage.
+    vk::DescriptorSetLayoutBinding uboBinding{};
+    uboBinding.binding = 0;
+    uboBinding.descriptorType = vk::DescriptorType::eUniformBuffer;
+    uboBinding.descriptorCount = 1;
+    uboBinding.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
 
-    vk::DescriptorSetLayoutBinding samplerLayoutBinding{};
-    samplerLayoutBinding.binding = 1;
-    samplerLayoutBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    samplerLayoutBinding.descriptorCount = 1;
-    samplerLayoutBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-    samplerLayoutBinding.pImmutableSamplers = nullptr;
+    vk::DescriptorSetLayoutBinding shadowBinding{};
+    shadowBinding.binding = 1;
+    shadowBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    shadowBinding.descriptorCount = 1;
+    shadowBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
 
-    const std::array<vk::DescriptorSetLayoutBinding, 2> bindings = {
-        uboLayoutBinding,
-        samplerLayoutBinding
-    };
+    const std::array<vk::DescriptorSetLayoutBinding, 2> sceneBindings = { uboBinding, shadowBinding };
 
-    vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings = bindings.data();
+    vk::DescriptorSetLayoutCreateInfo sceneInfo{};
+    sceneInfo.bindingCount = static_cast<uint32_t>(sceneBindings.size());
+    sceneInfo.pBindings = sceneBindings.data();
+    m_sceneSetLayout = m_device.createDescriptorSetLayout(sceneInfo);
 
-    m_descriptorSetLayout = m_device.createDescriptorSetLayout(layoutInfo);
+    // ---- Set 1: per-material ----
+    // binding 0: albedo. Rebound per draw, which is what lets each entity have
+    // its own texture rather than sharing one global sampler.
+    vk::DescriptorSetLayoutBinding albedoBinding{};
+    albedoBinding.binding = 0;
+    albedoBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    albedoBinding.descriptorCount = 1;
+    albedoBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+    vk::DescriptorSetLayoutCreateInfo materialInfo{};
+    materialInfo.bindingCount = 1;
+    materialInfo.pBindings = &albedoBinding;
+    m_materialSetLayout = m_device.createDescriptorSetLayout(materialInfo);
 }
 
 vk::ShaderModule VulkanPipeline::createShaderModule(const std::vector<char>& code) {

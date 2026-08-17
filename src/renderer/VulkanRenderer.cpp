@@ -26,9 +26,9 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     createSyncObjects();
 
     m_meshRegistry = std::make_unique<MeshRegistry>(m_deviceRef, m_commandPool);
+    m_shadowMap = std::make_unique<ShadowMap>(m_deviceRef);
 
     createUniformBuffers();
-    createTextureImage();
     createDescriptorPool();
 
     initImGui();
@@ -41,6 +41,12 @@ void VulkanRenderer::SetOffscreenRenderPass(vk::RenderPass pass) {
     // editor owns. It is supplied once the editor has created its target.
     m_offscreenRenderPass = pass;
     createGraphicsPipeline();
+
+    // The texture registry allocates against the pipeline's material set layout,
+    // so it cannot exist until the pipeline does.
+    m_textureRegistry = std::make_unique<TextureRegistry>(
+        m_deviceRef, m_commandPool, m_pipeline->GetMaterialSetLayout());
+
     createDescriptorSets();
 }
 
@@ -61,9 +67,11 @@ VulkanRenderer::~VulkanRenderer() {
         m_descriptorPool = nullptr;
     }
 
-    m_textureImage.reset();
+    m_textureRegistry.reset();
     m_uniformBuffers.clear();
     m_meshRegistry.reset();
+    m_shadowPipeline.reset();
+    m_shadowMap.reset();
 
     destroySyncObjects();
 
@@ -275,7 +283,23 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/grid_frag.spv",
         gridOptions);
 
-    std::cout << "[VulkanRenderer] Scene and grid pipelines created." << std::endl;
+    // Depth-only pass from the light. No colour attachment, and depth bias to
+    // stop surfaces shadowing themselves.
+    VulkanPipeline::Options shadowOptions{};
+    shadowOptions.colorAttachmentCount = 0;
+    shadowOptions.depthBias = true;
+    // Front-face culling during the depth pass pushes acne to back faces, which
+    // the camera cannot see.
+    shadowOptions.cullMode = vk::CullModeFlagBits::eFront;
+
+    m_shadowPipeline = std::make_unique<VulkanPipeline>(
+        m_deviceRef.GetDevice(),
+        m_shadowMap->GetRenderPass(),
+        "assets/shaders/shadow_vert.spv",
+        "assets/shaders/shadow_frag.spv",
+        shadowOptions);
+
+    std::cout << "[VulkanRenderer] Scene, grid and shadow pipelines created." << std::endl;
 }
 
 void VulkanRenderer::createUniformBuffers() {
@@ -294,57 +318,13 @@ void VulkanRenderer::createUniformBuffers() {
     std::cout << "[VulkanRenderer] Created " << m_uniformBuffers.size() << " VMA Uniform Buffers." << std::endl;
 }
 
-void VulkanRenderer::createTextureImage() {
-    const uint32_t texWidth = 64;
-    const uint32_t texHeight = 64;
-    const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(texWidth) * texHeight * 4;
-
-    std::vector<uint8_t> pixels(imageSize);
-    for (uint32_t y = 0; y < texHeight; y++) {
-        for (uint32_t x = 0; x < texWidth; x++) {
-            const bool isWhite = ((x / 8) + (y / 8)) % 2 == 0;
-            const uint32_t idx = (y * texWidth + x) * 4;
-            pixels[idx + 0] = isWhite ? 255 : 40;
-            pixels[idx + 1] = isWhite ? 255 : 120;
-            pixels[idx + 2] = isWhite ? 255 : 220;
-            pixels[idx + 3] = 255;
-        }
-    }
-
-    VulkanBuffer stagingBuffer(
-        m_deviceRef.GetAllocator(),
-        imageSize,
-        vk::BufferUsageFlagBits::eTransferSrc,
-        VMA_MEMORY_USAGE_CPU_ONLY);
-    stagingBuffer.UploadData(pixels.data(), imageSize);
-
-    // SRGB is correct here: the hardware decodes to linear on read, which is
-    // what the PBR maths expects. Only the render *target* must be UNORM.
-    m_textureImage = std::make_unique<VulkanImage>(
-        m_deviceRef, texWidth, texHeight, vk::Format::eR8G8B8A8Srgb);
-
-    // Without this the descriptor is written with a VK_NULL_HANDLE sampler and
-    // the driver faults inside vkUpdateDescriptorSets.
-    m_textureImage->CreateSampler();
-
-    VulkanImage::TransitionLayout(m_deviceRef, m_commandPool, m_textureImage->GetImage(),
-                                  vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
-
-    VulkanImage::CopyBufferToImage(m_deviceRef, m_commandPool, stagingBuffer.GetBuffer(),
-                                   m_textureImage->GetImage(), texWidth, texHeight);
-
-    VulkanImage::TransitionLayout(m_deviceRef, m_commandPool, m_textureImage->GetImage(),
-                                  vk::ImageLayout::eTransferDstOptimal,
-                                  vk::ImageLayout::eShaderReadOnlyOptimal);
-
-    std::cout << "[VulkanRenderer] Created and uploaded 2D Checkerboard Texture Image." << std::endl;
-}
-
 void VulkanRenderer::createDescriptorPool() {
     std::array<vk::DescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = vk::DescriptorType::eUniformBuffer;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
+    // One shadow map sampler per frame in flight. Material textures live in the
+    // TextureRegistry's own pool.
     poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
     poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
@@ -358,7 +338,7 @@ void VulkanRenderer::createDescriptorPool() {
 }
 
 void VulkanRenderer::createDescriptorSets() {
-    const std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, m_pipeline->GetDescriptorSetLayout());
+    const std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, m_pipeline->GetSceneSetLayout());
 
     vk::DescriptorSetAllocateInfo allocInfo{};
     allocInfo.descriptorPool = m_descriptorPool;
@@ -373,35 +353,100 @@ void VulkanRenderer::createDescriptorSets() {
         bufferInfo.offset = 0;
         bufferInfo.range = sizeof(UniformBufferObject);
 
-        vk::DescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        imageInfo.imageView = m_textureImage->GetImageView();
-        imageInfo.sampler = m_textureImage->GetSampler();
+        vk::DescriptorImageInfo shadowInfo{};
+        // The shadow render pass leaves the image in this layout.
+        shadowInfo.imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        shadowInfo.imageView = m_shadowMap->GetImageView();
+        shadowInfo.sampler = m_shadowMap->GetSampler();
 
-        if (!imageInfo.sampler) {
-            throw std::runtime_error("Texture sampler is null; descriptor write would fault the driver!");
+        if (!shadowInfo.sampler || !shadowInfo.imageView) {
+            throw std::runtime_error("Shadow map is missing a sampler or view; the descriptor write would fault!");
         }
 
-        std::array<vk::WriteDescriptorSet, 2> descriptorWrites{};
+        std::array<vk::WriteDescriptorSet, 2> writes{};
 
-        descriptorWrites[0].dstSet = m_descriptorSets[i];
-        descriptorWrites[0].dstBinding = 0;
-        descriptorWrites[0].dstArrayElement = 0;
-        descriptorWrites[0].descriptorType = vk::DescriptorType::eUniformBuffer;
-        descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pBufferInfo = &bufferInfo;
+        writes[0].dstSet = m_descriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &bufferInfo;
 
-        descriptorWrites[1].dstSet = m_descriptorSets[i];
-        descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].dstArrayElement = 0;
-        descriptorWrites[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pImageInfo = &imageInfo;
+        writes[1].dstSet = m_descriptorSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &shadowInfo;
 
-        m_deviceRef.GetDevice().updateDescriptorSets(descriptorWrites, nullptr);
+        m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
 
-    std::cout << "[VulkanRenderer] Allocated and updated " << m_descriptorSets.size() << " DescriptorSets." << std::endl;
+    std::cout << "[VulkanRenderer] Allocated and updated " << m_descriptorSets.size() << " scene DescriptorSets." << std::endl;
+}
+
+glm::mat4 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo) const {
+    int count = 0;
+    glm::mat4 lightSpace(1.0f);
+    bool haveShadowCaster = false;
+
+    // The first directional light is the shadow caster, and is deliberately
+    // placed at index 0 because the shader only shadows lights[0].
+    for (auto entity : registry.view<LightComponent>()) {
+        if (count >= kMaxLights) break;
+        const auto& light = registry.get<LightComponent>(entity);
+
+        GpuLight gpu{};
+        if (light.type == static_cast<int>(LightType::Point)) {
+            glm::vec3 position(0.0f);
+            if (const auto* transform = registry.try_get<TransformComponent>(entity)) {
+                position = transform->position;
+            }
+            gpu.positionOrDirection = glm::vec4(position, 1.0f);
+        } else {
+            const glm::vec3 dir = glm::length(light.direction) > 1e-4f
+                                ? glm::normalize(light.direction)
+                                : glm::vec3(0.0f, 1.0f, 0.0f);
+            gpu.positionOrDirection = glm::vec4(dir, 0.0f);
+
+            if (!haveShadowCaster && light.castsShadow) {
+                lightSpace = ShadowMap::ComputeLightSpaceMatrix(dir);
+                haveShadowCaster = true;
+                // Swap into slot 0 so the shadowed light is the one the shader
+                // applies the shadow factor to.
+                if (count != 0) {
+                    ubo.lights[count] = ubo.lights[0];
+                    ubo.lights[0] = gpu;
+                    ubo.lights[0].colorAndIntensity = glm::vec4(light.color, light.intensity);
+                    ubo.lights[0].attenuation = glm::vec4(light.range, 0.0f, 0.0f, 0.0f);
+                    ++count;
+                    continue;
+                }
+            }
+        }
+
+        gpu.colorAndIntensity = glm::vec4(light.color, light.intensity);
+        gpu.attenuation = glm::vec4(light.range, 0.0f, 0.0f, 0.0f);
+        ubo.lights[count] = gpu;
+
+        if (count == 0) {
+            ubo.ambientColor = glm::vec4(light.ambient, 1.0f);
+        }
+        ++count;
+    }
+
+    if (count == 0) {
+        // No lights authored: fall back to a single overhead key light so the
+        // scene is not simply black.
+        ubo.lights[0].positionOrDirection = glm::vec4(glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f)), 0.0f);
+        ubo.lights[0].colorAndIntensity = glm::vec4(1.0f, 0.95f, 0.88f, 1.5f);
+        ubo.lights[0].attenuation = glm::vec4(25.0f, 0.0f, 0.0f, 0.0f);
+        ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
+        lightSpace = ShadowMap::ComputeLightSpaceMatrix(glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f)));
+        count = 1;
+    }
+
+    ubo.lightCount = glm::vec4(static_cast<float>(count), 0.0f, 0.0f, 0.0f);
+    ubo.lightSpace = lightSpace;
+    return lightSpace;
 }
 
 void VulkanRenderer::initImGui() {
@@ -520,20 +565,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     ubo.view = viewMatrix;
     ubo.proj = projMatrix;
     ubo.cameraPosition = glm::vec4(cameraPosition, 1.0f);
-    ubo.lightDirection = glm::vec4(glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f)), 0.0f);
-    ubo.lightColor = glm::vec4(1.0f, 0.95f, 0.88f, 1.5f);
-    ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.12f, 1.0f);
-
-    if (const auto lightEntity = FirstEntityOf(registry.view<LightComponent>());
-        lightEntity != entt::null) {
-        const auto& light = registry.get<LightComponent>(lightEntity);
-        const glm::vec3 dir = glm::length(light.direction) > 0.0001f
-                            ? glm::normalize(light.direction)
-                            : glm::vec3(0.0f, 1.0f, 0.0f);
-        ubo.lightDirection = glm::vec4(dir, 0.0f);
-        ubo.lightColor = glm::vec4(light.color, light.intensity);
-        ubo.ambientColor = glm::vec4(light.ambient, 1.0f);
-    }
+    ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
+    gatherLights(registry, ubo);
 
     m_uniformBuffers[m_currentFrame]->UploadData(&ubo, sizeof(ubo));
 
@@ -547,6 +580,36 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
 
     vk::CommandBufferBeginInfo beginInfo{};
     cmd.begin(beginInfo);
+
+    // ---------------------------------------------------------------------
+    // PASS 0: Shadow map (depth only, from the light)
+    // ---------------------------------------------------------------------
+    {
+        vk::RenderPassBeginInfo shadowPassInfo{};
+        shadowPassInfo.renderPass = m_shadowMap->GetRenderPass();
+        shadowPassInfo.framebuffer = m_shadowMap->GetFramebuffer();
+        shadowPassInfo.renderArea.offset = vk::Offset2D{0, 0};
+        shadowPassInfo.renderArea.extent = vk::Extent2D{m_shadowMap->GetResolution(),
+                                                        m_shadowMap->GetResolution()};
+
+        vk::ClearValue shadowClear{};
+        shadowClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+        shadowPassInfo.clearValueCount = 1;
+        shadowPassInfo.pClearValues = &shadowClear;
+
+        cmd.beginRenderPass(shadowPassInfo, vk::SubpassContents::eInline);
+
+        const float shadowDim = static_cast<float>(m_shadowMap->GetResolution());
+        const vk::Viewport shadowViewport{ 0.0f, 0.0f, shadowDim, shadowDim, 0.0f, 1.0f };
+        const vk::Rect2D shadowScissor{{0, 0}, shadowPassInfo.renderArea.extent};
+        cmd.setViewport(0, 1, &shadowViewport);
+        cmd.setScissor(0, 1, &shadowScissor);
+
+        RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
+                                      cmd, m_descriptorSets[m_currentFrame]);
+
+        cmd.endRenderPass();
+    }
 
     // ---------------------------------------------------------------------
     // PASS 1: Offscreen 3D scene
@@ -576,12 +639,13 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     cmd.setViewport(0, 1, &offscreenViewport);
     cmd.setScissor(0, 1, &offscreenScissor);
 
-    RenderSystem::Render(registry, *m_pipeline, *m_meshRegistry, cmd, m_descriptorSets[m_currentFrame]);
+    RenderSystem::Render(registry, *m_pipeline, *m_meshRegistry, *m_textureRegistry,
+                         cmd, m_descriptorSets[m_currentFrame]);
 
     // Ground grid last so it blends over the scene it is depth-tested against.
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetLayout(),
-                           0, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+                           VulkanPipeline::kSceneSet, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
     cmd.draw(6, 1, 0, 0);
 
     cmd.endRenderPass();

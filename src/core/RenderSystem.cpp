@@ -4,9 +4,28 @@
 
 namespace Engine {
 
-void RenderSystem::SyncMeshes(entt::registry& registry, MeshRegistry& meshes) {
-    // Uploads happen here, before recording starts, because MeshRegistry submits
-    // transfer command buffers of its own.
+namespace {
+
+PushConstantData buildPushConstants(const entt::registry& registry, entt::entity entity,
+                                    const glm::mat4& model) {
+    PushConstantData push{};
+    push.model = model;
+
+    if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
+        push.albedoColor = material->albedoColor;
+        push.material = glm::vec4(material->roughness, material->metallic, material->ao, 0.0f);
+    } else {
+        push.albedoColor = glm::vec4(1.0f);
+        push.material = glm::vec4(0.4f, 0.1f, 1.0f, 0.0f);
+    }
+    return push;
+}
+
+} // namespace
+
+void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes, TextureRegistry& textures) {
+    // Uploads happen here, before recording starts, because both registries
+    // submit transfer command buffers of their own.
     for (auto entity : registry.view<RenderableComponent>()) {
         auto& renderable = registry.get<RenderableComponent>(entity);
 
@@ -16,11 +35,60 @@ void RenderSystem::SyncMeshes(entt::registry& registry, MeshRegistry& meshes) {
             renderable.meshID = meshes.GetCubeMesh();
         }
 
-        // Keep the picking bounds in step with the resolved geometry.
         if (const GpuMesh* gpuMesh = meshes.Get(renderable.meshID)) {
             renderable.localBoundsMin = gpuMesh->boundsMin;
             renderable.localBoundsMax = gpuMesh->boundsMax;
         }
+
+        // MaterialComponent::albedoTexturePath used to be a field nothing read.
+        if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
+            renderable.albedoTextureID = material->albedoTexturePath.empty()
+                                       ? textures.GetWhiteTexture()
+                                       : textures.Acquire(material->albedoTexturePath, true);
+        } else {
+            renderable.albedoTextureID = textures.GetWhiteTexture();
+        }
+    }
+}
+
+void RenderSystem::RenderDepthOnly(
+    entt::registry& registry,
+    VulkanPipeline& pipeline,
+    MeshRegistry& meshes,
+    vk::CommandBuffer commandBuffer,
+    vk::DescriptorSet sceneSet) {
+
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                     VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
+
+    uint32_t boundMesh = MeshRegistry::kInvalidMesh;
+
+    auto view = registry.view<TransformComponent, RenderableComponent>();
+    for (auto entity : view) {
+        const auto& transform = view.get<TransformComponent>(entity);
+        const auto& renderable = view.get<RenderableComponent>(entity);
+
+        if (!renderable.isVisible || !renderable.castsShadow) continue;
+
+        const GpuMesh* mesh = meshes.Get(renderable.meshID);
+        if (!mesh || mesh->indexCount == 0) continue;
+
+        if (renderable.meshID != boundMesh) {
+            const vk::Buffer buffers[] = { mesh->vertexBuffer->GetBuffer() };
+            const vk::DeviceSize offsets[] = { 0 };
+            commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
+            commandBuffer.bindIndexBuffer(mesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
+            boundMesh = renderable.meshID;
+        }
+
+        const PushConstantData push = buildPushConstants(registry, entity, transform.getModelMatrix());
+        commandBuffer.pushConstants(
+            pipeline.GetLayout(),
+            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+            0, sizeof(PushConstantData), &push);
+
+        commandBuffer.drawIndexed(mesh->indexCount, 1, 0, 0, 0);
     }
 }
 
@@ -28,20 +96,20 @@ void RenderSystem::Render(
     entt::registry& registry,
     VulkanPipeline& pipeline,
     MeshRegistry& meshes,
+    TextureRegistry& textures,
     vk::CommandBuffer commandBuffer,
-    vk::DescriptorSet descriptorSet) {
+    vk::DescriptorSet sceneSet) {
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
 
-    commandBuffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eGraphics,
-        pipeline.GetLayout(),
-        0, 1, &descriptorSet,
-        0, nullptr);
+    // Set 0 is per-frame and bound once.
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                     VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
 
-    // Avoid redundant vertex/index buffer rebinds when consecutive entities
-    // share a mesh, which is the common case.
+    // Avoid redundant rebinds when consecutive entities share a mesh or
+    // texture, which is the common case.
     uint32_t boundMesh = MeshRegistry::kInvalidMesh;
+    uint32_t boundTexture = TextureRegistry::kInvalidTexture;
 
     auto view = registry.view<TransformComponent, RenderableComponent>();
     for (auto entity : view) {
@@ -54,37 +122,32 @@ void RenderSystem::Render(
         if (!mesh || mesh->indexCount == 0) continue;
 
         if (renderable.meshID != boundMesh) {
-            const vk::Buffer vertexBuffers[] = { mesh->vertexBuffer->GetBuffer() };
+            const vk::Buffer buffers[] = { mesh->vertexBuffer->GetBuffer() };
             const vk::DeviceSize offsets[] = { 0 };
-            commandBuffer.bindVertexBuffers(0, 1, vertexBuffers, offsets);
+            commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
             commandBuffer.bindIndexBuffer(mesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
             boundMesh = renderable.meshID;
         }
 
-        PushConstantData pushData{};
-        pushData.model = transform.getModelMatrix();
-
-        if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
-            pushData.albedoColor = material->albedoColor;
-            pushData.material = glm::vec4(material->roughness, material->metallic, material->ao, 0.0f);
-        } else {
-            pushData.albedoColor = glm::vec4(1.0f);
-            pushData.material = glm::vec4(0.4f, 0.1f, 1.0f, 0.0f);
+        if (renderable.albedoTextureID != boundTexture) {
+            if (vk::DescriptorSet materialSet = textures.GetDescriptorSet(renderable.albedoTextureID)) {
+                commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                                 VulkanPipeline::kMaterialSet, 1, &materialSet, 0, nullptr);
+                boundTexture = renderable.albedoTextureID;
+            }
         }
 
+        const PushConstantData push = buildPushConstants(registry, entity, transform.getModelMatrix());
         commandBuffer.pushConstants(
             pipeline.GetLayout(),
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-            0,
-            sizeof(PushConstantData),
-            &pushData);
+            0, sizeof(PushConstantData), &push);
 
         commandBuffer.drawIndexed(mesh->indexCount, 1, 0, 0, 0);
     }
 
-    // Particles. Previously simulated into a pool nothing ever read, so no
-    // particle could appear on screen. Drawn as small cubes reusing the scene
-    // pipeline, shrinking as they age.
+    // Particles. Drawn as small cubes reusing the scene pipeline, shrinking as
+    // they age. They were previously simulated into a pool nothing ever read.
     const GpuMesh* particleMesh = meshes.Get(meshes.GetCubeMesh());
     if (!particleMesh || particleMesh->indexCount == 0) return;
 
@@ -96,26 +159,30 @@ void RenderSystem::Render(
             if (!particle.active) continue;
 
             if (!particleMeshBound) {
-                const vk::Buffer vertexBuffers[] = { particleMesh->vertexBuffer->GetBuffer() };
+                const vk::Buffer buffers[] = { particleMesh->vertexBuffer->GetBuffer() };
                 const vk::DeviceSize offsets[] = { 0 };
-                commandBuffer.bindVertexBuffers(0, 1, vertexBuffers, offsets);
+                commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
                 commandBuffer.bindIndexBuffer(particleMesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
+
+                if (vk::DescriptorSet whiteSet = textures.GetDescriptorSet(textures.GetWhiteTexture())) {
+                    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                                     VulkanPipeline::kMaterialSet, 1, &whiteSet, 0, nullptr);
+                }
                 particleMeshBound = true;
             }
 
             const float age = particle.maxLifetime > 0.0f ? particle.lifetime / particle.maxLifetime : 0.0f;
             const float size = emitter.particleSize * glm::clamp(age, 0.15f, 1.0f);
 
-            PushConstantData pushData{};
-            pushData.model = glm::scale(glm::translate(glm::mat4(1.0f), particle.position), glm::vec3(size));
-            pushData.albedoColor = particle.color;
-            // Fully rough and emissive-ish so particles read as glowing motes.
-            pushData.material = glm::vec4(1.0f, 0.0f, 1.0f, 0.0f);
+            PushConstantData push{};
+            push.model = glm::scale(glm::translate(glm::mat4(1.0f), particle.position), glm::vec3(size));
+            push.albedoColor = particle.color;
+            push.material = glm::vec4(1.0f, 0.0f, 1.0f, 0.0f);
 
             commandBuffer.pushConstants(
                 pipeline.GetLayout(),
                 vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                0, sizeof(PushConstantData), &pushData);
+                0, sizeof(PushConstantData), &push);
 
             commandBuffer.drawIndexed(particleMesh->indexCount, 1, 0, 0, 0);
         }

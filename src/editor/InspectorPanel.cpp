@@ -1,6 +1,7 @@
 #include "editor/InspectorPanel.hpp"
 #include "editor/Theme.hpp"
 #include "core/ScriptRegistry.hpp"
+#include "renderer/VulkanPipeline.hpp"   // LightType
 
 // GLM_ENABLE_EXPERIMENTAL is set on the target in CMakeLists.txt.
 #include <glm/gtc/type_ptr.hpp>
@@ -95,10 +96,21 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& material = registry.get<MaterialComponent>(entity);
 
-            ImGui::ColorEdit4("Albedo", glm::value_ptr(material.albedoColor));
+            ImGui::ColorEdit4("Albedo Tint", glm::value_ptr(material.albedoColor));
             ImGui::SliderFloat("Roughness", &material.roughness, 0.02f, 1.0f);
             ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
             ImGui::SliderFloat("Ambient Occlusion", &material.ao, 0.0f, 1.0f);
+
+            // albedoTexturePath used to be a field nothing read.
+            char texBuffer[512] = {};
+            const size_t texLen = std::min(material.albedoTexturePath.size(), sizeof(texBuffer) - 1);
+            std::memcpy(texBuffer, material.albedoTexturePath.data(), texLen);
+            if (ImGui::InputText("Albedo Texture", texBuffer, sizeof(texBuffer))) {
+                material.albedoTexturePath = texBuffer;
+            }
+            if (material.albedoTexturePath.empty()) {
+                ImGui::TextDisabled("Empty = flat white; the tint and vertex colour still apply.");
+            }
         }
     }
 
@@ -212,13 +224,26 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     // 8. LightComponent
     if (registry.all_of<LightComponent>(entity)) {
-        if (ImGui::CollapsingHeader("Directional Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& light = registry.get<LightComponent>(entity);
 
-            Theme::DrawVec3Control("Direction", light.direction, 0.0f);
+            static const char* kTypes[] = { "Directional", "Point" };
+            ImGui::Combo("Type", &light.type, kTypes, IM_ARRAYSIZE(kTypes));
+
+            if (light.type == static_cast<int>(LightType::Directional)) {
+                Theme::DrawVec3Control("Direction", light.direction, 0.0f);
+                ImGui::TextDisabled("Points toward the light.");
+                ImGui::Checkbox("Casts Shadow", &light.castsShadow);
+                ImGui::TextDisabled("Only the first shadow-casting directional light casts.");
+            } else {
+                ImGui::TextDisabled("Position comes from the Transform.");
+                ImGui::DragFloat("Range", &light.range, 0.5f, 0.5f, 200.0f);
+            }
+
             ImGui::ColorEdit3("Light Color", glm::value_ptr(light.color));
-            ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 10.0f);
+            ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 50.0f);
             ImGui::ColorEdit3("Ambient Color", glm::value_ptr(light.ambient));
+            ImGui::TextDisabled("Ambient is scene-wide; taken from the first light.");
         }
     }
 

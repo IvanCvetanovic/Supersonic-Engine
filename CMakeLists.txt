@@ -238,6 +238,8 @@ set(SHADER_JOBS
     "shader.frag=frag.spv"
     "grid.vert=grid_vert.spv"
     "grid.frag=grid_frag.spv"
+    "shadow.vert=shadow_vert.spv"
+    "shadow.frag=shadow_frag.spv"
 )
 
 if (GLSL_COMPILER)

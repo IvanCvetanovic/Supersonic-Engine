@@ -115,10 +115,21 @@ struct CameraComponent {
 };
 
 struct LightComponent {
-    glm::vec3 direction{-0.5f, -1.0f, -0.3f};
+    // 0 = directional (uses `direction`), 1 = point (uses the entity transform).
+    int type{0};
+
+    // Points TOWARD the light, matching the shader's L vector.
+    glm::vec3 direction{0.6f, 1.0f, 0.5f};
     glm::vec3 color{1.0f, 0.95f, 0.85f};
     float intensity{1.2f};
-    glm::vec3 ambient{0.15f, 0.15f, 0.2f};
+
+    // Ambient is a scene-wide term; only the first light's value is used.
+    glm::vec3 ambient{0.12f, 0.12f, 0.14f};
+
+    // Point lights only: cutoff distance.
+    float range{25.0f};
+
+    bool castsShadow{true};
 };
 
 struct MaterialComponent {
@@ -140,7 +151,13 @@ struct MeshComponent {
 struct RenderableComponent {
     uint32_t meshID{0};
     uint32_t materialID{0};
+
+    // Resolved from MaterialComponent::albedoTexturePath by
+    // RenderSystem::SyncResources. Defaults to the built-in white texture.
+    uint32_t albedoTextureID{0};
+
     bool isVisible{true};
+    bool castsShadow{true};
 
     // Local-space bounds of the resolved mesh, refreshed by
     // RenderSystem::SyncMeshes. Picking uses these so selection matches the

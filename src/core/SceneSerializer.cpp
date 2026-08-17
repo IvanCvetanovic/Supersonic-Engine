@@ -86,10 +86,13 @@ SerializationResult SceneSerializer::Serialize(entt::registry& registry, const s
 
         if (const auto* light = registry.try_get<LightComponent>(entity)) {
             file << "      \"Light\": {\n";
+            file << "        \"Type\": " << light->type << ",\n";
             file << "        \"Direction\": "; writeVec3(file, light->direction); file << ",\n";
             file << "        \"Color\": ";     writeVec3(file, light->color);     file << ",\n";
             file << "        \"Ambient\": ";   writeVec3(file, light->ambient);   file << ",\n";
-            file << "        \"Intensity\": " << light->intensity << "\n";
+            file << "        \"Intensity\": " << light->intensity << ",\n";
+            file << "        \"Range\": " << light->range << ",\n";
+            file << "        \"CastsShadow\": " << (light->castsShadow ? "true" : "false") << "\n";
             file << "      },\n";
         }
 
@@ -108,6 +111,8 @@ SerializationResult SceneSerializer::Serialize(entt::registry& registry, const s
             file << "      \"Material\": {\n";
             file << "        \"Albedo\": [" << mat->albedoColor.x << ", " << mat->albedoColor.y << ", "
                  << mat->albedoColor.z << ", " << mat->albedoColor.w << "],\n";
+            file << "        \"AlbedoTexture\": \"" << Json::Escape(mat->albedoTexturePath) << "\",\n";
+            file << "        \"NormalTexture\": \"" << Json::Escape(mat->normalTexturePath) << "\",\n";
             file << "        \"Roughness\": " << mat->roughness << ",\n";
             file << "        \"Metallic\": " << mat->metallic << ",\n";
             file << "        \"AO\": " << mat->ao << "\n";
@@ -225,10 +230,13 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
         if (node.Has("Light")) {
             const auto& l = node["Light"];
             auto& light = registry.emplace<LightComponent>(entity);
+            light.type = static_cast<int>(l["Type"].AsNumber(0.0));
             light.direction = readVec3(l["Direction"], glm::vec3(0.6f, 1.0f, 0.5f));
             light.color = readVec3(l["Color"], glm::vec3(1.0f));
             light.ambient = readVec3(l["Ambient"], glm::vec3(0.12f));
             light.intensity = l["Intensity"].AsFloat(1.5f);
+            light.range = l["Range"].AsFloat(25.0f);
+            light.castsShadow = l["CastsShadow"].AsBool(true);
         }
 
         if (node.Has("Camera")) {
@@ -247,6 +255,8 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
             const auto& m = node["Material"];
             auto& material = registry.emplace<MaterialComponent>(entity);
             material.albedoColor = readVec4(m["Albedo"], glm::vec4(1.0f));
+            material.albedoTexturePath = m["AlbedoTexture"].AsString("");
+            material.normalTexturePath = m["NormalTexture"].AsString("");
             material.roughness = m["Roughness"].AsFloat(0.4f);
             material.metallic = m["Metallic"].AsFloat(0.1f);
             material.ao = m["AO"].AsFloat(1.0f);

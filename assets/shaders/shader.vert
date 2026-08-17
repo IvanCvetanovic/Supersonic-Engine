@@ -9,15 +9,23 @@ layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec3 fragColor;
 layout(location = 2) out vec2 fragTexCoord;
 layout(location = 3) out vec3 fragWorldPos;
+layout(location = 4) out vec4 fragLightSpacePos;
 
 // Must match Engine::UniformBufferObject in renderer/VulkanPipeline.hpp.
-layout(binding = 0) uniform UniformBufferObject {
+struct Light {
+    vec4 positionOrDirection;   // xyz = position (point) or direction (dir), w = type
+    vec4 colorAndIntensity;     // rgb = colour, a = intensity
+    vec4 attenuation;           // x = range
+};
+
+layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 view;
     mat4 proj;
+    mat4 lightSpace;
     vec4 cameraPosition;
-    vec4 lightDirection;
-    vec4 lightColor;
     vec4 ambientColor;
+    vec4 lightCount;
+    Light lights[8];
 } ubo;
 
 // Must match Engine::PushConstantData.
@@ -35,4 +43,8 @@ void main() {
     fragNormal = mat3(transpose(inverse(push.model))) * inNormal;
     fragColor = inColor;
     fragTexCoord = inTexCoord;
+
+    // Same transform the shadow pass rasterised with, so the comparison in the
+    // fragment stage is consistent regardless of clip-space handedness.
+    fragLightSpacePos = ubo.lightSpace * worldPos;
 }

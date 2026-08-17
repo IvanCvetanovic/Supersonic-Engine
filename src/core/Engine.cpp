@@ -137,37 +137,76 @@ void EngineApp::initECS() {
     camera.updateCameraVectors();
 
     auto lightEntity = m_registry.create();
-    m_registry.emplace<TagComponent>(lightEntity, "Directional Light");
+    m_registry.emplace<TagComponent>(lightEntity, "Sun (Directional)");
     m_registry.emplace<TransformComponent>(lightEntity);
     auto& light = m_registry.emplace<LightComponent>(lightEntity);
-    light.direction = glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f));
-    light.color = glm::vec3(1.0f, 0.95f, 0.85f);
-    light.intensity = 1.5f;
-    light.ambient = glm::vec3(0.12f);
+    light.type = static_cast<int>(LightType::Directional);
+    light.direction = glm::normalize(glm::vec3(0.55f, 1.0f, 0.42f));
+    light.color = glm::vec3(1.0f, 0.96f, 0.88f);
+    light.intensity = 2.6f;
+    light.ambient = glm::vec3(0.10f, 0.11f, 0.14f);
+    light.castsShadow = true;
+
+    // Two point lights, to exercise the multi-light path the single hardcoded
+    // direction in the old shader could not express.
+    auto pointA = m_registry.create();
+    m_registry.emplace<TagComponent>(pointA, "Point Light (Warm)");
+    m_registry.emplace<TransformComponent>(pointA, glm::vec3(-3.2f, 1.6f, 2.0f));
+    auto& lightA = m_registry.emplace<LightComponent>(pointA);
+    lightA.type = static_cast<int>(LightType::Point);
+    lightA.color = glm::vec3(1.0f, 0.55f, 0.25f);
+    lightA.intensity = 7.0f;
+    lightA.range = 14.0f;
+
+    auto pointB = m_registry.create();
+    m_registry.emplace<TagComponent>(pointB, "Point Light (Cool)");
+    m_registry.emplace<TransformComponent>(pointB, glm::vec3(3.4f, 1.4f, 2.2f));
+    auto& lightB = m_registry.emplace<LightComponent>(pointB);
+    lightB.type = static_cast<int>(LightType::Point);
+    lightB.color = glm::vec3(0.30f, 0.55f, 1.0f);
+    lightB.intensity = 7.0f;
+    lightB.range = 14.0f;
+
+    // Ground plane. Without a receiver there is nothing for the shadow map to
+    // fall on - the grid is a shader overlay, not geometry.
+    auto ground = m_registry.create();
+    m_registry.emplace<TagComponent>(ground, "Ground");
+    auto& groundTransform = m_registry.emplace<TransformComponent>(ground, glm::vec3(0.0f, 0.0f, 0.0f));
+    groundTransform.scale = glm::vec3(40.0f, 1.0f, 40.0f);
+    m_registry.emplace<MeshComponent>(ground, "Plane", "", 0u, 0u);
+    auto& groundMat = m_registry.emplace<MaterialComponent>(ground);
+    groundMat.albedoTexturePath = "assets/textures/floor_tiles.png";
+    groundMat.roughness = 0.92f;
+    groundMat.metallic = 0.0f;
+    auto& groundRenderable = m_registry.emplace<RenderableComponent>(ground);
+    groundRenderable.castsShadow = false; // a flat receiver casting onto itself only adds acne
 
     auto mainCube = m_registry.create();
-    m_registry.emplace<TagComponent>(mainCube, "MainTexturedCube");
-    m_registry.emplace<TransformComponent>(mainCube, glm::vec3(0.0f, 0.5f, 0.0f));
+    m_registry.emplace<TagComponent>(mainCube, "Textured Cube");
+    m_registry.emplace<TransformComponent>(mainCube, glm::vec3(0.0f, 0.9f, 0.0f));
     m_registry.emplace<MeshComponent>(mainCube, "Cube", "", 24u, 36u);
-    m_registry.emplace<MaterialComponent>(mainCube);
+    auto& cubeMat = m_registry.emplace<MaterialComponent>(mainCube);
+    cubeMat.albedoTexturePath = "assets/textures/uv_grid.png";
+    cubeMat.roughness = 0.45f;
     m_registry.emplace<RenderableComponent>(mainCube);
     m_registry.emplace<ScriptComponent>(mainCube, "RotatorScript");
 
     auto sphere = m_registry.create();
-    m_registry.emplace<TagComponent>(sphere, "Sphere");
-    m_registry.emplace<TransformComponent>(sphere, glm::vec3(-2.0f, 0.6f, 0.0f));
+    m_registry.emplace<TagComponent>(sphere, "Metal Sphere");
+    m_registry.emplace<TransformComponent>(sphere, glm::vec3(-2.2f, 0.75f, 0.0f));
     m_registry.emplace<MeshComponent>(sphere, "Sphere", "", 0u, 0u);
     auto& sphereMat = m_registry.emplace<MaterialComponent>(sphere);
     sphereMat.roughness = 0.18f;
-    sphereMat.metallic = 0.85f;
+    sphereMat.metallic = 0.90f;
     m_registry.emplace<RenderableComponent>(sphere);
 
     auto physCube = m_registry.create();
     m_registry.emplace<TagComponent>(physCube, "Physics Cube");
-    auto& transformPhys = m_registry.emplace<TransformComponent>(physCube, glm::vec3(1.5f, 4.0f, 0.0f));
+    auto& transformPhys = m_registry.emplace<TransformComponent>(physCube, glm::vec3(2.0f, 4.0f, 0.0f));
     transformPhys.scale = glm::vec3(0.7f);
     m_registry.emplace<MeshComponent>(physCube, "Cube", "", 24u, 36u);
-    m_registry.emplace<MaterialComponent>(physCube);
+    auto& physMat = m_registry.emplace<MaterialComponent>(physCube);
+    physMat.albedoTexturePath = "assets/textures/uv_grid.png";
     m_registry.emplace<RigidBodyComponent>(physCube);
     m_registry.emplace<BoxColliderComponent>(physCube);
     m_registry.emplace<RenderableComponent>(physCube);
@@ -252,8 +291,11 @@ void EngineApp::Run() {
         m_editorLayer->BuildUI(m_registry, *m_window);
         ImGui::Render();
 
-        // Mesh uploads also submit their own transfers, so they happen here.
-        RenderSystem::SyncMeshes(m_registry, m_renderer->GetMeshRegistry());
+        // Mesh and texture uploads submit their own transfers, so they happen
+        // here rather than mid-recording.
+        RenderSystem::SyncResources(m_registry,
+                                    m_renderer->GetMeshRegistry(),
+                                    m_renderer->GetTextureRegistry());
 
         glm::mat4 viewMatrix(1.0f);
         glm::mat4 projMatrix(1.0f);

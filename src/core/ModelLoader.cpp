@@ -161,7 +161,14 @@ bool ModelLoader::GeneratePlane(float width, float height, MeshData& out) {
         {{ halfW, 0.0f,  halfH}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.8f}, {1.0f, 1.0f}},
         {{-halfW, 0.0f,  halfH}, {0.0f, 1.0f, 0.0f}, {0.8f, 0.8f, 0.8f}, {0.0f, 1.0f}}
     };
-    out.indices = { 0, 1, 2, 2, 3, 0 };
+
+    // Wound so the geometric normal matches the +Y vertex normal.
+    //
+    // The original order (0,1,2, 2,3,0) produced cross(b-a, c-a) = -Y, i.e. a
+    // plane facing DOWN, which back-face culling then discarded when viewed
+    // from above. It went unnoticed because RenderSystem used to draw a cube for
+    // every entity, so this mesh was never actually rasterised.
+    out.indices = { 0, 3, 2, 0, 2, 1 };
 
     out.computeBounds();
     return true;

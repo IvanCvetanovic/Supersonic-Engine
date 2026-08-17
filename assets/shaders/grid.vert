@@ -6,13 +6,20 @@ layout(location = 2) out mat4 viewMat;
 layout(location = 6) out mat4 projMat;
 
 // Must match Engine::UniformBufferObject in renderer/VulkanPipeline.hpp.
-layout(binding = 0) uniform UniformBufferObject {
+struct Light {
+    vec4 positionOrDirection;
+    vec4 colorAndIntensity;
+    vec4 attenuation;
+};
+
+layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 view;
     mat4 proj;
+    mat4 lightSpace;
     vec4 cameraPosition;
-    vec4 lightDirection;
-    vec4 lightColor;
     vec4 ambientColor;
+    vec4 lightCount;
+    Light lights[8];
 } ubo;
 
 vec3 gridPlane[6] = vec3[](

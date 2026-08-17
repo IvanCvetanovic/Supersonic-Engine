@@ -50,6 +50,15 @@ static void testSphereRejectsDegenerateParameters() {
     CHECK_MSG(mesh.indices.size() % 3 == 0, "index count must be a whole number of triangles");
 }
 
+// Geometric normal of a triangle, which must agree with the stored vertex
+// normal or back-face culling discards the surface from the side you can see.
+static glm::vec3 faceNormal(const MeshData& mesh, size_t tri) {
+    const glm::vec3 a = mesh.vertices[mesh.indices[tri * 3 + 0]].pos;
+    const glm::vec3 b = mesh.vertices[mesh.indices[tri * 3 + 1]].pos;
+    const glm::vec3 c = mesh.vertices[mesh.indices[tri * 3 + 2]].pos;
+    return glm::normalize(glm::cross(b - a, c - a));
+}
+
 static void testPlane() {
     MeshData mesh;
     CHECK(ModelLoader::GeneratePlane(4.0f, 6.0f, mesh));
@@ -60,6 +69,32 @@ static void testPlane() {
 
     MeshData bad;
     CHECK(!ModelLoader::GeneratePlane(0.0f, 1.0f, bad));
+}
+
+static void testPlaneFacesUpward() {
+    // The plane shipped wound the wrong way: its geometric normal pointed -Y
+    // while every vertex normal said +Y, so a ground plane was culled when
+    // viewed from above. It was invisible for as long as RenderSystem drew a
+    // cube for every entity regardless of its mesh.
+    MeshData mesh;
+    CHECK(ModelLoader::GeneratePlane(2.0f, 2.0f, mesh));
+
+    for (size_t tri = 0; tri < mesh.indices.size() / 3; ++tri) {
+        const glm::vec3 n = faceNormal(mesh, tri);
+        CHECK_MSG(n.y > 0.9f, "plane triangles must wind so the face normal points +Y");
+    }
+    for (const auto& v : mesh.vertices) {
+        CHECK_NEAR(v.normal.y, 1.0f);
+    }
+}
+
+static void testTerrainFacesUpward() {
+    MeshData mesh;
+    CHECK(TerrainGenerator::GenerateTerrainMesh(4, 4, 0.0f, mesh)); // flat, so normals are exactly +Y
+
+    for (size_t tri = 0; tri < mesh.indices.size() / 3; ++tri) {
+        CHECK_MSG(faceNormal(mesh, tri).y > 0.9f, "terrain triangles must face upward");
+    }
 }
 
 static void testTerrainRejectsDegenerateSize() {
@@ -179,6 +214,8 @@ static void runTests() {
     testCube();
     testSphereRejectsDegenerateParameters();
     testPlane();
+    testPlaneFacesUpward();
+    testTerrainFacesUpward();
     testTerrainRejectsDegenerateSize();
     testTerrainSurvivesPast65kVertices();
     testObjParsesFaces();

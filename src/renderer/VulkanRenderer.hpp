@@ -13,6 +13,8 @@
 #include "renderer/VulkanImage.hpp"
 #include "renderer/VulkanOffscreen.hpp"
 #include "renderer/MeshRegistry.hpp"
+#include "renderer/TextureRegistry.hpp"
+#include "renderer/ShadowMap.hpp"
 #include "platform/Window.hpp"
 
 struct ImDrawData;
@@ -50,6 +52,7 @@ public:
     void SetOffscreenRenderPass(vk::RenderPass pass);
 
     MeshRegistry& GetMeshRegistry() { return *m_meshRegistry; }
+    TextureRegistry& GetTextureRegistry() { return *m_textureRegistry; }
 
 private:
     void createRenderPass();
@@ -61,10 +64,13 @@ private:
     void createGraphicsPipeline();
 
     void createUniformBuffers();
-    void createTextureImage();
     void createDescriptorPool();
     void createDescriptorSets();
     void initImGui();
+
+    // Fills the UBO from the scene's lights and returns the light-space matrix
+    // used by both the shadow pass and the shadow lookup.
+    glm::mat4 gatherLights(entt::registry& registry, UniformBufferObject& ubo) const;
 
     void cleanupSwapchain();
 
@@ -82,6 +88,10 @@ private:
     std::unique_ptr<VulkanPipeline> m_pipeline;
     std::unique_ptr<VulkanPipeline> m_gridPipeline;
 
+    // Depth-only pass from the primary directional light.
+    std::unique_ptr<ShadowMap> m_shadowMap;
+    std::unique_ptr<VulkanPipeline> m_shadowPipeline;
+
     vk::CommandPool m_commandPool{nullptr};
     std::vector<vk::CommandBuffer> m_commandBuffers;
 
@@ -95,14 +105,12 @@ private:
     std::vector<vk::Fence> m_imagesInFlight;
 
     std::unique_ptr<MeshRegistry> m_meshRegistry;
+    std::unique_ptr<TextureRegistry> m_textureRegistry;
 
     // UBO Buffers (1 per frame in flight)
     std::vector<std::unique_ptr<VulkanBuffer>> m_uniformBuffers;
 
-    // Texture Image & Sampler
-    std::unique_ptr<VulkanImage> m_textureImage;
-
-    // Descriptors
+    // Per-frame scene descriptor sets (UBO + shadow map).
     vk::DescriptorPool m_descriptorPool{nullptr};
     std::vector<vk::DescriptorSet> m_descriptorSets;
 
