@@ -23,7 +23,12 @@ jobs:
         include:
           - name: Windows (MSVC)
             os: windows-latest
-            preset_args: -G "Visual Studio 17 2022" -A x64
+            # No -G: the runner image moves to a newer Visual Studio over time,
+            # and pinning "Visual Studio 17 2022" fails outright the moment it
+            # does - which is what happened. CMake's default generator on
+            # Windows is the newest Visual Studio actually installed, so letting
+            # it choose is both correct today and correct after the next bump.
+            preset_args: -A x64
             config: Debug
           - name: Linux (GCC)
             os: ubuntu-latest

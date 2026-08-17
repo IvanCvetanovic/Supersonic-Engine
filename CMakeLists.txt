@@ -190,6 +190,18 @@ target_compile_definitions(SupersonicEngine PRIVATE
     GLM_FORCE_RADIANS
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_ENABLE_EXPERIMENTAL
+
+    # glfw3.h includes <GL/gl.h> unless told not to. This is a Vulkan engine and
+    # never touches OpenGL, but the header does not know that - so on a machine
+    # with no OpenGL development headers installed, every file that reaches
+    # Window.hpp fails to compile. Windows and macOS ship GL headers with their
+    # SDKs, which is exactly why this went unnoticed until a Linux CI runner
+    # without libgl1-mesa-dev tried it.
+    #
+    # PRIVATE on the target rather than in a header, because the vendored
+    # imgui_impl_glfw.cpp is compiled into this target and includes glfw3.h
+    # itself.
+    GLFW_INCLUDE_NONE
 )
 
 # Vendored code we do not maintain: ImGui/ImGuizmo, and the VMA implementation,
