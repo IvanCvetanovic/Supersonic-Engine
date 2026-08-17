@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="Supersonic Engine">
+  <title>Supersonic Engine</title>
+  <defs>
+    <linearGradient id="l-wedge" x1="256" y1="118" x2="106" y2="198" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC59A"/>
+      <stop offset="0.28" stop-color="#FF7A3D"/>
+      <stop offset="1" stop-color="#D6420A"/>
+    </linearGradient>
+    <linearGradient id="l-facet" x1="256" y1="160" x2="116" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B33307"/>
+      <stop offset="1" stop-color="#7A1F03"/>
+    </linearGradient>
+    <linearGradient id="l-shock" x1="30" y1="160" x2="105" y2="160" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0E9AB0"/>
+      <stop offset="1" stop-color="#4FE3F2"/>
+    </linearGradient>
+    <linearGradient id="l-rule" x1="330" y1="0" x2="1160" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF7A3D"/>
+      <stop offset="0.55" stop-color="#E8500F" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#E8500F" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- The panel carries its own ground, so the lockup looks identical under a
+       light or a dark README theme instead of half-vanishing in one of them. -->
+  <rect width="1200" height="320" rx="28" fill="#14171C"/>
+
+  <!-- Faint schlieren bands: the alternating density fringes a knife-edge
+       filter produces when you photograph a shock wave. -->
+  <g fill="#35D6E8" opacity="0.045">
+    <rect x="940" y="0" width="34" height="320"/>
+    <rect x="1000" y="0" width="20" height="320"/>
+    <rect x="1046" y="0" width="12" height="320"/>
+    <rect x="1082" y="0" width="7" height="320"/>
+  </g>
+
+  <!-- Mark -->
+  <g>
+    <g fill="none" stroke="url(#l-shock)" stroke-linecap="round">
+      <path d="M 96 103 Q 66 160 96 217" stroke-width="11" opacity="0.95"/>
+      <path d="M 74 87 Q 38 160 74 233" stroke-width="8" opacity="0.6"/>
+      <path d="M 53 74 Q 13 160 53 246" stroke-width="5" opacity="0.32"/>
+    </g>
+    <path d="M 48 160 H 274" stroke="#6B7A85" stroke-width="2" opacity="0.35"/>
+    <path d="M 262 160 L 100 96 L 133 160 L 100 224 Z" fill="url(#l-wedge)"/>
+    <path d="M 262 160 L 133 160 L 100 224 Z" fill="url(#l-facet)" opacity="0.85"/>
+    <path d="M 262 160 L 100 96" stroke="#FFE0C6" stroke-width="3" stroke-linecap="round" opacity="0.75" fill="none"/>
+  </g>
+
+  <!-- Wordmark. Instrument-panel setting: heavy caps for the name, a thin
+       widely-tracked sublabel under it. -->
+  <text x="332" y="166"
+        font-family="'Helvetica Neue', Helvetica, Arial, 'Segoe UI', sans-serif"
+        font-size="98" font-weight="700" letter-spacing="1" fill="#F2F4F7">SUPERSONIC</text>
+  <path d="M 334 189 H 1160" stroke="url(#l-rule)" stroke-width="3"/>
+  <text x="336" y="236"
+        font-family="'Helvetica Neue', Helvetica, Arial, 'Segoe UI', sans-serif"
+        font-size="31" font-weight="500" letter-spacing="19" fill="#4FE3F2">ENGINE</text>
+</svg>

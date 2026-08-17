@@ -59,9 +59,13 @@ cmake --build build --parallel
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Seven suites covering the maths conventions, viewport picking, mesh generation
-and OBJ parsing, scene/prefab persistence, physics, the WAV decoder, and the
-script registry. Disable with `-DSUPERSONIC_BUILD_TESTS=OFF`.
+Eleven suites: `test_transform`, `test_hierarchy`, `test_frustum`,
+`test_raycast`, `test_meshgen`, `test_gltf`, `test_serialize`, `test_undo`,
+`test_physics`, `test_audio`, `test_scripts`. They cover the maths conventions,
+transform parenting and play/stop snapshots, frustum plane extraction, viewport
+picking, mesh generation and OBJ parsing, glTF import, scene/prefab persistence,
+editor undo/redo, physics, the WAV decoder and the script registry. Disable with
+`-DSUPERSONIC_BUILD_TESTS=OFF`.
 
 ## Run
 
