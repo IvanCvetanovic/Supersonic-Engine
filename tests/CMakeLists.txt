@@ -47,7 +47,8 @@ add_engine_test(test_serialize ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp
 add_engine_test(test_frustum)
 add_engine_test(test_undo      ${SUPERSONIC_SRC}/src/editor/EditHistory.cpp
                                ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp)
-add_engine_test(test_physics   ${SUPERSONIC_SRC}/src/core/PhysicsSystem.cpp)
+add_engine_test(test_physics   ${SUPERSONIC_SRC}/src/core/PhysicsSystem.cpp
+                               ${SUPERSONIC_SRC}/src/core/TransformSystem.cpp)
 add_engine_test(test_audio     ${SUPERSONIC_SRC}/src/core/AudioClip.cpp)
 add_engine_test(test_scripts   ${SUPERSONIC_SRC}/src/core/ScriptRegistry.cpp)
 add_engine_test(test_hierarchy ${SUPERSONIC_SRC}/src/core/TransformSystem.cpp

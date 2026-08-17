@@ -12,6 +12,7 @@
 #include "editor/EditorCamera.hpp"
 #include "editor/EditHistory.hpp"
 #include "core/RenderSystem.hpp"
+#include "core/PhysicsSystem.hpp"
 #include "platform/Window.hpp"
 
 namespace Supersonic {
@@ -72,6 +73,11 @@ public:
     // Last frame's culling counters, shown in the statistics panel.
     void SetRenderStats(const RenderSystem::Stats& stats) { m_renderStats = stats; }
 
+    // This frame's collision contacts. Counted in the statistics panel, because
+    // collision that resolves correctly is otherwise indistinguishable from
+    // collision that never ran.
+    void SetContacts(const std::vector<PhysicsSystem::Contact>& contacts);
+
 private:
     void drawStatusBar();
 
@@ -116,6 +122,8 @@ private:
     bool m_viewportHovered{false};
     bool m_viewportFocused{false};
     RenderSystem::Stats m_renderStats{};
+    uint32_t m_contactCount{0};
+    uint32_t m_triggerCount{0};
 
     // Ensures the built-in layout is applied once on a fresh install rather
     // than fighting a user's saved arrangement every frame.

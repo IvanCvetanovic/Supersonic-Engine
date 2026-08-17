@@ -243,6 +243,35 @@ void SupersonicApp::initECS() {
     m_registry.emplace<BoxColliderComponent>(physCube);
     m_registry.emplace<RenderableComponent>(physCube);
 
+    // A static platform the falling cube lands on, so the sample scene actually
+    // exercises entity-versus-entity collision rather than only the ground
+    // plane. No RigidBodyComponent, which is what makes it immovable.
+    auto platform = m_registry.create();
+    m_registry.emplace<TagComponent>(platform, "Platform (Static)");
+    auto& platformTransform = m_registry.emplace<TransformComponent>(platform, glm::vec3(2.0f, 0.6f, 0.0f));
+    platformTransform.scale = glm::vec3(2.0f, 0.3f, 2.0f);
+    m_registry.emplace<MeshComponent>(platform, "Cube", "", 24u, 36u);
+    auto& platformMat = m_registry.emplace<MaterialComponent>(platform);
+    platformMat.albedoColor = glm::vec4(0.55f, 0.57f, 0.62f, 1.0f);
+    platformMat.roughness = 0.7f;
+    m_registry.emplace<BoxColliderComponent>(platform);
+    m_registry.emplace<RenderableComponent>(platform);
+
+    // A second body, offset so it lands on the first and the pair has to be
+    // separated rather than merely stopped by the floor.
+    auto stackedCube = m_registry.create();
+    m_registry.emplace<TagComponent>(stackedCube, "Falling Sphere");
+    auto& stackedTransform = m_registry.emplace<TransformComponent>(stackedCube, glm::vec3(2.35f, 6.5f, 0.0f));
+    stackedTransform.scale = glm::vec3(0.6f);
+    m_registry.emplace<MeshComponent>(stackedCube, "Sphere", "", 1024u, 5766u);
+    auto& stackedMat = m_registry.emplace<MaterialComponent>(stackedCube);
+    stackedMat.albedoColor = glm::vec4(0.85f, 0.35f, 0.20f, 1.0f);
+    stackedMat.metallic = 0.2f;
+    auto& stackedBody = m_registry.emplace<RigidBodyComponent>(stackedCube);
+    stackedBody.mass = 2.0f; // heavier, so the mass term in the response is visible
+    m_registry.emplace<SphereColliderComponent>(stackedCube);
+    m_registry.emplace<RenderableComponent>(stackedCube);
+
     auto particleEntity = m_registry.create();
     m_registry.emplace<TagComponent>(particleEntity, "Particle Emitter");
     m_registry.emplace<TransformComponent>(particleEntity, glm::vec3(-1.5f, 0.5f, 0.0f));
@@ -313,8 +342,12 @@ void SupersonicApp::Run() {
             // costs fidelity rather than exploding the simulation.
             m_physicsAccumulator += deltaTime;
             int steps = 0;
+            m_contacts.clear();
             while (m_physicsAccumulator >= kFixedPhysicsStep && steps < kMaxPhysicsStepsPerFrame) {
-                PhysicsSystem::Update(m_registry, kFixedPhysicsStep);
+                PhysicsSystem::Update(m_registry, kFixedPhysicsStep, &m_stepContacts);
+                // Accumulated across the frame's steps, so the count the editor
+                // shows is the frame's contacts rather than the last step's.
+                m_contacts.insert(m_contacts.end(), m_stepContacts.begin(), m_stepContacts.end());
                 m_physicsAccumulator -= kFixedPhysicsStep;
                 ++steps;
             }
@@ -338,6 +371,7 @@ void SupersonicApp::Run() {
         // and inspector edits appear in the same frame instead of one late.
         m_editorLayer->SetPlayMode(&m_playMode);
         m_editorLayer->SetRenderStats(m_renderer->GetRenderStats());
+        m_editorLayer->SetContacts(m_contacts);
         m_editorLayer->SetScriptHostInfo(m_hotReload->IsLoaded(),
                                          m_hotReload->GetStatus(),
                                          m_hotReload->GetReloadCount());

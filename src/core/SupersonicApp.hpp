@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <entt/entt.hpp>
 
@@ -15,6 +16,7 @@
 #include "core/HotReloadEngine.hpp"
 #include "core/PlayMode.hpp"
 #include "core/Components.hpp"
+#include "core/PhysicsSystem.hpp"
 
 namespace Supersonic {
 
@@ -56,6 +58,10 @@ private:
     // Physics runs on a fixed step fed by this accumulator, so a stalled frame
     // cannot integrate a two-second delta in one go.
     float m_physicsAccumulator{0.0f};
+
+    // Reused between frames so the fixed-step loop does not allocate per step.
+    std::vector<PhysicsSystem::Contact> m_stepContacts;
+    std::vector<PhysicsSystem::Contact> m_contacts;
 };
 
 } // namespace Supersonic

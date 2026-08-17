@@ -412,6 +412,10 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     }
 
     ImGui::Separator();
+    ImGui::TextDisabled("PHYSICS");
+    ImGui::Text("Contacts: %u  (%u trigger)", m_contactCount, m_triggerCount);
+
+    ImGui::Separator();
     ImGui::TextDisabled("CULLING");
     ImGui::Text("Scene:  %u drawn / %u culled", m_renderStats.drawn, m_renderStats.culled);
     ImGui::Text("Shadow: %u drawn / %u culled", m_renderStats.shadowDrawn, m_renderStats.shadowCulled);
@@ -447,6 +451,14 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     handleUndoRedo(registry);
 
     ImGui::End(); // End DockSpace
+}
+
+void EditorLayer::SetContacts(const std::vector<PhysicsSystem::Contact>& contacts) {
+    m_contactCount = static_cast<uint32_t>(contacts.size());
+    m_triggerCount = 0;
+    for (const auto& contact : contacts) {
+        if (contact.isTrigger) ++m_triggerCount;
+    }
 }
 
 void EditorLayer::handleUndoRedo(entt::registry& registry) {
