@@ -1,0 +1,103 @@
+name: CI
+
+# The engine did not compile for six commits because nothing ever built it.
+# This is the cheapest possible guard against that happening again.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (MSVC)
+            os: windows-latest
+            preset_args: -G "Visual Studio 17 2022" -A x64
+            config: Debug
+          - name: Linux (GCC)
+            os: ubuntu-latest
+            preset_args: -DCMAKE_BUILD_TYPE=Debug
+            config: Debug
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GLFW needs X11/Wayland development headers to configure on Linux.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxkbcommon-dev pkg-config
+
+      # Supplies glslc so the shader build step runs, and the validation layers.
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          cache: true
+
+      - name: Configure
+        run: cmake -S . -B build ${{ matrix.preset_args }}
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure
+
+      # A headless runner has no GPU, so the engine itself cannot be launched.
+      # Confirming the binary and its assets exist still catches packaging slips.
+      - name: Check build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            test -f build/${{ matrix.config }}/GameEngine.exe
+            test -f build/${{ matrix.config }}/GameScripts.dll
+          else
+            test -f build/GameEngine
+            test -f build/GameScripts.so || test -f build/libGameScripts.so
+          fi
+          test -f assets/shaders/vert.spv
+          test -f assets/shaders/frag.spv
+          test -f assets/shaders/grid_vert.spv
+          test -f assets/shaders/grid_frag.spv
+          echo "Build outputs present."
+
+  shader-check:
+    name: Shaders compile from source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          cache: true
+
+      # The committed .spv blobs must actually correspond to the GLSL sources.
+      # compile_shaders.bat could never regenerate the grid shaders, so they
+      # could drift from their source indefinitely.
+      - name: Recompile every shader
+        run: |
+          set -euo pipefail
+          for pair in "shader.vert:vert.spv" "shader.frag:frag.spv" \
+                      "grid.vert:grid_vert.spv" "grid.frag:grid_frag.spv"; do
+            src="${pair%%:*}"
+            out="${pair##*:}"
+            echo "Compiling $src"
+            glslc "assets/shaders/$src" -o "/tmp/$out"
+          done
+          echo "All shaders compile cleanly."

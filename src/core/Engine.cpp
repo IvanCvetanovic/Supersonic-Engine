@@ -7,6 +7,7 @@
 #include "core/ParticleSystem.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
+#include "core/EcsUtils.hpp"
 
 #include "imgui.h"
 
@@ -254,13 +255,12 @@ void EngineApp::Run() {
         glm::mat4 projMatrix(1.0f);
         glm::vec3 cameraPosition(0.0f);
 
-        auto cameraView = m_registry.view<CameraComponent>();
-        for (auto camEntity : cameraView) {
-            auto& cam = cameraView.get<CameraComponent>(camEntity);
+        if (const auto camEntity = FirstEntityOf(m_registry.view<CameraComponent>());
+            camEntity != entt::null) {
+            const auto& cam = m_registry.get<CameraComponent>(camEntity);
             viewMatrix = cam.getViewMatrix();
             projMatrix = cam.getProjectionMatrix();
             cameraPosition = cam.position;
-            break;
         }
 
         m_renderer->DrawFrame(m_registry,

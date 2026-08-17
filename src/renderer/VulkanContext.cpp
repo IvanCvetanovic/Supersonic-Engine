@@ -1,4 +1,5 @@
-#define VMA_IMPLEMENTATION
+// VMA_IMPLEMENTATION lives in VmaImplementation.cpp so its warnings can be
+// suppressed without suppressing warnings here.
 #include "renderer/VulkanContext.hpp"
 
 #include <stdexcept>
@@ -54,11 +55,6 @@ VulkanContext::VulkanContext(const std::vector<const char*>& windowExtensions) {
 }
 
 VulkanContext::~VulkanContext() {
-    if (m_allocator != VK_NULL_HANDLE) {
-        vmaDestroyAllocator(m_allocator);
-        m_allocator = VK_NULL_HANDLE;
-    }
-
     if (m_enableValidationLayers && m_debugMessenger != VK_NULL_HANDLE) {
         DestroyDebugUtilsMessengerEXT(m_instance, m_debugMessenger, nullptr);
         m_debugMessenger = VK_NULL_HANDLE;
@@ -99,12 +95,39 @@ std::vector<const char*> VulkanContext::getRequiredExtensions(const std::vector<
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
 
+#if defined(__APPLE__)
+    // MoltenVK is a portability driver. Since loader 1.3.216 it is not
+    // enumerated at all unless this extension is requested and the portability
+    // bit is set on the create info, so vkCreateInstance returned
+    // VK_ERROR_INCOMPATIBLE_DRIVER on every Mac.
+    extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+#endif
+
     return extensions;
 }
 
 void VulkanContext::createInstance(const std::vector<const char*>& windowExtensions) {
     if (m_enableValidationLayers && !checkValidationLayerSupport()) {
-        std::cerr << "[VulkanContext] Validation layers requested, but 'VK_LAYER_KHRONOS_validation' is not available!" << std::endl;
+        // This used to be a bare one-line warning that scrolled past in the
+        // startup log while ARCHITECTURE.md claimed validation was enabled on
+        // all Debug builds. Two showstopper bugs survived six commits behind it,
+        // so the consequence is now spelled out.
+        std::cerr <<
+            "\n"
+            "================================================================\n"
+            "  WARNING: VK_LAYER_KHRONOS_validation is NOT available.\n"
+            "\n"
+            "  This is a Debug build, so the engine expects it. Without it,\n"
+            "  invalid Vulkan usage is not diagnosed - it becomes a driver\n"
+            "  crash or silent corruption instead of a clear error message.\n"
+            "\n"
+            "  Install the Vulkan SDK, or point VK_LAYER_PATH at a directory\n"
+            "  containing VkLayer_khronos_validation.json.\n"
+            "\n"
+            "  Continuing WITHOUT validation.\n"
+            "================================================================\n"
+            << std::endl;
     }
 
     VkApplicationInfo appInfo{};
@@ -118,6 +141,10 @@ void VulkanContext::createInstance(const std::vector<const char*>& windowExtensi
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
+
+#if defined(__APPLE__)
+    createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
 
     auto requiredExtensions = getRequiredExtensions(windowExtensions);
     createInfo.enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size());

@@ -1,60 +1,132 @@
-# AGENTS.md - Build & Automation Instructions
+# AGENTS.md — Build & Run
 
-This document provides exact build, compilation, and execution commands for AI agents and developers working on this project.
+Exact commands for building, testing and running this project.
 
-## Build Requirements
-- **C++ Compiler**: Modern C++20 compliant compiler (GCC 11+, Clang 13+, MSVC 2019/2022).
-- **Build System**: CMake (v3.20+).
-- **Graphics Driver**: Vulkan-compatible driver installed on host system.
+## Requirements
 
-## Standard CMake Build Commands
+- **Compiler**: C++20 (MSVC 2022, GCC 11+, Clang 13+).
+- **CMake**: 3.20+.
+- **Graphics**: a Vulkan-capable driver.
+- **Vulkan SDK**: strongly recommended, and effectively required for development.
+  Without it you get no validation layers and no shader compiler — see below.
 
-### 1. Configure the Project
-Generate build configuration in the `/build` directory:
+### Why the SDK matters
+
+Without `VK_LAYER_KHRONOS_validation`, invalid Vulkan usage does not produce an
+error message. It produces an access violation, or nothing at all until the code
+runs on someone else's driver. Two showstopper bugs in this repository survived
+six commits for exactly that reason.
+
+The SDK also supplies `glslc`. Without it CMake cannot rebuild the shaders and
+falls back to the committed `.spv` blobs, so edits to the GLSL are silently
+ignored. CMake prints a warning when this happens.
+
+The build **works** without the SDK: it falls back to the vendored Vulkan
+headers plus the loader that ships with the driver, generating an import library
+from the loader's export table at configure time.
+
+## Build
+
+### Configure
 
 ```bash
-# Debug Build (Default, enables Vulkan Validation Layers)
+# Single-config generators (Ninja, Makefiles) - build type chosen here.
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
-
-# Release Build (Optimized)
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 ```
 
-On Windows with Visual Studio:
 ```powershell
+# Visual Studio is a MULTI-CONFIG generator: it ignores CMAKE_BUILD_TYPE.
+# Choose the configuration at build time with --config, not here.
 cmake -B build -G "Visual Studio 17 2022" -A x64
 ```
 
-Or with Ninja / MinGW:
-```powershell
-cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Debug
-```
-
-### 2. Compile the Executable
-Build target `GameEngine`:
+### Compile
 
 ```bash
-cmake --build build --config Debug
+cmake --build build --config Debug      # --config is required for VS/Xcode
+cmake --build build --config Release    # and ignored by Ninja/Makefiles
+cmake --build build --parallel
 ```
 
-### 3. Run the Executable
-Run the compiled binary:
+> Passing `-DCMAKE_BUILD_TYPE=Release` to the Visual Studio generator and then
+> building `--config Debug` produces a Debug binary. CMake prints a note about
+> this at configure time.
 
-On Linux / macOS:
+### Test
+
 ```bash
-./build/GameEngine
+ctest --test-dir build -C Debug --output-on-failure
 ```
 
-On Windows:
+Seven suites covering the maths conventions, viewport picking, mesh generation
+and OBJ parsing, scene/prefab persistence, physics, the WAV decoder, and the
+script registry. Disable with `-DENGINE_BUILD_TESTS=OFF`.
+
+## Run
+
+**Asset paths are relative to the working directory. Launch from the project
+root**, or shaders, scenes and audio will not resolve.
+
+```bash
+# Linux / macOS
+./build/GameEngine                          # from the project root
+
+# Windows
+.\build\Debug\GameEngine.exe                # from the project root
+```
+
+Visual Studio's `VS_DEBUGGER_WORKING_DIRECTORY` is set to the project root, so
+pressing F5 works without any extra setup.
+
+### With validation layers, if the SDK is not installed system-wide
+
 ```powershell
+$env:VK_LAYER_PATH = "C:\path\to\VulkanSDK\Bin"
 .\build\Debug\GameEngine.exe
-# or if built with Ninja:
-.\build\GameEngine.exe
 ```
 
-### 4. Clean Build Directory
+Add `$env:VK_LAYER_VALIDATE_SYNC = "1"` to enable synchronization validation,
+which catches the frame-overlap hazards a plain validation run does not.
+
+## Hot-reloading scripts
+
+The engine loads `GameScripts` from the build output directory and watches it.
+
+```bash
+# with the engine already running:
+cmake --build build --config Debug --target GameScripts
+```
+
+Edit `plugins/sample_scripts/SampleScripts.cpp`, rebuild that target, and the
+new code is swapped in without a restart. The statistics panel shows the reload
+count; assign scripts by name in the Inspector.
+
+Disable the plugin with `-DENGINE_BUILD_SCRIPT_PLUGIN=OFF`; the engine runs with
+built-in scripts only.
+
+## Shaders
+
+CMake compiles `assets/shaders/*.vert|frag` to SPIR-V automatically when a
+compiler is available. To do it by hand:
+
+```powershell
+.\compile_shaders.bat
+```
+
+The script reports failures rather than always printing success, and covers the
+grid shaders as well as the main pair.
+
+## Clean
+
 ```bash
 cmake --build build --target clean
-# Or remove the build folder entirely:
-rm -rf build
+rm -rf build            # or: Remove-Item -Recurse -Force build
 ```
+
+## Other platforms
+
+Android and iOS scripts exist under `platform/` but **do not produce runnable
+apps yet** — the engine creates its window and surface through GLFW, which has
+no backend on either. Each script explains what is missing. See the platform
+table in `ARCHITECTURE.md`.

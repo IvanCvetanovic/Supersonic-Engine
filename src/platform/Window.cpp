@@ -8,8 +8,21 @@ namespace Engine {
 Window::Window(int width, int height, const std::string& title)
     : m_width(width), m_height(height), m_title(title) {
 
+    // Installed before glfwInit so initialisation failures explain themselves.
+    // Without it GLFW errors were silently discarded and surfaced much later.
+    glfwSetErrorCallback([](int code, const char* description) {
+        std::cerr << "[GLFW] error " << code << ": " << (description ? description : "(no detail)") << std::endl;
+    });
+
     if (!glfwInit()) {
         throw std::runtime_error("Failed to initialize GLFW!");
+    }
+
+    if (!glfwVulkanSupported()) {
+        glfwTerminate();
+        throw std::runtime_error(
+            "No Vulkan loader or ICD was found. Install up-to-date graphics drivers "
+            "(or the Vulkan SDK) and try again.");
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -57,8 +70,17 @@ std::vector<const char*> Window::GetRequiredExtensions() const {
     uint32_t glfwExtensionCount = 0;
     const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
-    std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-    return extensions;
+    // A NULL return means GLFW could not find a usable loader. Ignoring it
+    // produced an instance with zero surface extensions and a "created
+    // successfully" log line, with the real failure surfacing later and
+    // misleadingly at glfwCreateWindowSurface.
+    if (!glfwExtensions || glfwExtensionCount == 0) {
+        throw std::runtime_error(
+            "GLFW could not report the required Vulkan instance extensions. "
+            "This usually means no Vulkan loader or ICD is installed.");
+    }
+
+    return std::vector<const char*>(glfwExtensions, glfwExtensions + glfwExtensionCount);
 }
 
 } // namespace Engine

@@ -29,6 +29,11 @@ struct SwapChainSupportDetails {
 
 class VulkanDevice {
 public:
+    // The instance requests this version and VMA is configured for it, so a
+    // physical device below it is rejected during selection rather than
+    // failing later inside VMA's statically bound 1.1 entry points.
+    static constexpr uint32_t kRequiredApiVersion = VK_API_VERSION_1_2;
+
     VulkanDevice(vk::Instance instance, Window& window);
     ~VulkanDevice();
 

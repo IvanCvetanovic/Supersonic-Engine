@@ -186,13 +186,20 @@ target_compile_definitions(GameEngine PRIVATE
     GLM_ENABLE_EXPERIMENTAL
 )
 
+# Vendored code we do not maintain: ImGui/ImGuizmo, and the VMA implementation,
+# which is header-only and lives in its own TU precisely so it can be silenced
+# without silencing first-party code.
+set(VENDORED_SOURCES
+    ${IMGUI_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/VmaImplementation.cpp
+)
+
 if (MSVC)
     target_compile_options(GameEngine PRIVATE /W4 /permissive-)
-    # ImGui/ImGuizmo are vendored; do not fail the build on their warnings.
-    set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
+    set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
 else()
     target_compile_options(GameEngine PRIVATE -Wall -Wextra -Wpedantic)
-    set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+    set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
 target_link_libraries(GameEngine PRIVATE

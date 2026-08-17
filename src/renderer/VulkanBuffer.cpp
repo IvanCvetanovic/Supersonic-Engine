@@ -77,6 +77,13 @@ void VulkanBuffer::UploadData(const void* data, vk::DeviceSize size) {
         std::memcpy(mappedPtr, data, static_cast<size_t>(size));
         Unmap();
     }
+
+    // Required for correctness on HOST_VISIBLE memory that is not
+    // HOST_COHERENT. Desktop drivers usually hand out coherent memory for
+    // CPU_TO_GPU, so this is a no-op there, but on a non-coherent fallback heap
+    // the matrices written each frame would sit in a write-combine buffer the
+    // GPU never sees - a frozen camera with no error anywhere.
+    vmaFlushAllocation(m_allocator, m_allocation, 0, size);
 }
 
 void VulkanBuffer::CopyBuffer(

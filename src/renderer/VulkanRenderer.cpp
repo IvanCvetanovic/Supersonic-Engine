@@ -1,6 +1,7 @@
 #include "renderer/VulkanRenderer.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/Components.hpp"
+#include "core/EcsUtils.hpp"
 
 #include "editor/Theme.hpp"
 
@@ -523,7 +524,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     ubo.lightColor = glm::vec4(1.0f, 0.95f, 0.88f, 1.5f);
     ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.12f, 1.0f);
 
-    for (auto lightEntity : registry.view<LightComponent>()) {
+    if (const auto lightEntity = FirstEntityOf(registry.view<LightComponent>());
+        lightEntity != entt::null) {
         const auto& light = registry.get<LightComponent>(lightEntity);
         const glm::vec3 dir = glm::length(light.direction) > 0.0001f
                             ? glm::normalize(light.direction)
@@ -531,7 +533,6 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         ubo.lightDirection = glm::vec4(dir, 0.0f);
         ubo.lightColor = glm::vec4(light.color, light.intensity);
         ubo.ambientColor = glm::vec4(light.ambient, 1.0f);
-        break;
     }
 
     m_uniformBuffers[m_currentFrame]->UploadData(&ubo, sizeof(ubo));

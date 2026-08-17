@@ -3,6 +3,7 @@
 #include "core/SceneSerializer.hpp"
 #include "core/Raycast.hpp"
 #include "core/TimeTravelDebugger.hpp"
+#include "core/EcsUtils.hpp"
 #include "editor/GamePackager.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -183,9 +184,9 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             // so the camera's aspect ratio has to come from this panel. Taking it
             // from the window squashed everything by ~14% at the default layout.
             const float aspect = viewportPanelSize.x / viewportPanelSize.y;
-            for (auto camEntity : registry.view<CameraComponent>()) {
+            if (const auto camEntity = FirstEntityOf(registry.view<CameraComponent>());
+                camEntity != entt::null) {
                 registry.get<CameraComponent>(camEntity).aspect = aspect;
-                break;
             }
         }
 
@@ -199,14 +200,14 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             const ImVec2 mousePos = ImGui::GetMousePos();
             const glm::vec2 localMouse(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
 
-            for (auto camEnt : registry.view<CameraComponent>()) {
+            if (const auto camEnt = FirstEntityOf(registry.view<CameraComponent>());
+                camEnt != entt::null) {
                 const auto& camera = registry.get<CameraComponent>(camEnt);
                 const Ray ray = Raycast::ScreenPointToRay(
                     localMouse, glm::vec2(viewportPanelSize.x, viewportPanelSize.y), camera);
                 const entt::entity picked = Raycast::PickEntity(registry, ray);
                 m_hierarchyPanel.SetSelectedEntity(picked);
                 selectedEntity = picked;
-                break;
             }
         }
 
@@ -224,10 +225,10 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
 
-        for (auto camEnt : registry.view<CameraComponent>()) {
+        if (const auto camEnt = FirstEntityOf(registry.view<CameraComponent>());
+            camEnt != entt::null) {
             const auto& camera = registry.get<CameraComponent>(camEnt);
             m_inspectorPanel.RenderGizmo(registry, selectedEntity, camera, viewportPos, viewportPanelSize);
-            break;
         }
     }
 

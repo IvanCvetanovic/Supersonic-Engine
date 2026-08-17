@@ -89,6 +89,23 @@ void VulkanDevice::pickPhysicalDevice() {
 }
 
 bool VulkanDevice::isDeviceSuitable(vk::PhysicalDevice device) {
+    // VMA is configured for Vulkan 1.2 and statically binds the 1.1 core entry
+    // points on that basis, asserting they are non-null. A 1.2 loader in front
+    // of a 1.0/1.1-only physical device (real on older iGPUs, and on the Android
+    // target this project advertises) would satisfy vkCreateInstance and then
+    // fail inside VMA, so the device's own apiVersion has to be checked.
+    const vk::PhysicalDeviceProperties properties = device.getProperties();
+    if (properties.apiVersion < kRequiredApiVersion) {
+        std::cout << "[VulkanDevice] Skipping " << properties.deviceName
+                  << ": reports Vulkan "
+                  << VK_API_VERSION_MAJOR(properties.apiVersion) << "."
+                  << VK_API_VERSION_MINOR(properties.apiVersion)
+                  << ", engine requires "
+                  << VK_API_VERSION_MAJOR(kRequiredApiVersion) << "."
+                  << VK_API_VERSION_MINOR(kRequiredApiVersion) << "." << std::endl;
+        return false;
+    }
+
     QueueFamilyIndices indices = findQueueFamilies(device);
     bool extensionsSupported = checkDeviceExtensionSupport(device);
 
@@ -208,7 +225,8 @@ void VulkanDevice::createLogicalDevice() {
 
 void VulkanDevice::initVMA() {
     VmaAllocatorCreateInfo allocatorCreateInfo{};
-    allocatorCreateInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+    // Guaranteed safe: isDeviceSuitable rejected anything below this version.
+    allocatorCreateInfo.vulkanApiVersion = kRequiredApiVersion;
     allocatorCreateInfo.instance = static_cast<VkInstance>(m_instance);
     allocatorCreateInfo.physicalDevice = static_cast<VkPhysicalDevice>(m_physicalDevice);
     allocatorCreateInfo.device = static_cast<VkDevice>(m_device);

@@ -1,5 +1,6 @@
 #include "core/AudioSystem.hpp"
 #include "core/Components.hpp"
+#include "core/EcsUtils.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -27,13 +28,14 @@ void AudioSystem::Update(entt::registry& registry, AudioEngine& audio, float del
     glm::vec3 listenerRight(1.0f, 0.0f, 0.0f);
     glm::vec3 listenerForward(0.0f, 0.0f, -1.0f);
 
-    for (auto camEntity : registry.view<CameraComponent>()) {
+    if (const auto camEntity = FirstEntityOf(registry.view<CameraComponent>());
+        camEntity != entt::null) {
         const auto& camera = registry.get<CameraComponent>(camEntity);
         listenerPos = camera.position;
         listenerRight = camera.right;
         listenerForward = camera.front;
-        break;
     }
+    (void)listenerForward; // reserved for cone attenuation / doppler
 
     for (auto entity : registry.view<TransformComponent, AudioSourceComponent>()) {
         const auto& transform = registry.get<TransformComponent>(entity);
