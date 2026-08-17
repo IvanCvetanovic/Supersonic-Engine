@@ -67,6 +67,17 @@ void EditorLayer::drawStatusBar() {
     ImGui::PopStyleColor();
 }
 
+const CameraComponent& EditorLayer::viewportCamera(entt::registry& registry) const {
+    // Edit mode looks through the editor's own camera; play mode looks through
+    // the scene's, which is what makes Play show the game's point of view.
+    if (m_playMode && !m_playMode->IsEditing()) {
+        if (const auto entity = FindPrimaryCamera(registry); entity != entt::null) {
+            return registry.get<CameraComponent>(entity);
+        }
+    }
+    return m_editorCamera.Get();
+}
+
 void EditorLayer::buildLayout(unsigned int dockspaceId, int preset) {
     ImGui::DockBuilderRemoveNode(dockspaceId);
     ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
@@ -286,6 +297,12 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     const bool viewportVisible = ImGui::Begin("Viewport");
 
+    // Sampled here rather than from io.WantCaptureMouse, which is true
+    // everywhere inside an ImGui window and therefore true across the whole
+    // viewport.
+    m_viewportHovered = viewportVisible && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+    m_viewportFocused = viewportVisible && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+
     if (viewportVisible && m_offscreenPass) {
         const ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
 
@@ -297,8 +314,8 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             // so the camera's aspect ratio has to come from this panel. Taking it
             // from the window squashed everything by ~14% at the default layout.
             const float aspect = viewportPanelSize.x / viewportPanelSize.y;
-            if (const auto camEntity = FirstEntityOf(registry.view<CameraComponent>());
-                camEntity != entt::null) {
+            m_editorCamera.SetAspect(aspect);
+            if (const auto camEntity = FindPrimaryCamera(registry); camEntity != entt::null) {
                 registry.get<CameraComponent>(camEntity).aspect = aspect;
             }
         }
@@ -313,9 +330,8 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             const ImVec2 mousePos = ImGui::GetMousePos();
             const glm::vec2 localMouse(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
 
-            if (const auto camEnt = FirstEntityOf(registry.view<CameraComponent>());
-                camEnt != entt::null) {
-                const auto& camera = registry.get<CameraComponent>(camEnt);
+            {
+                const CameraComponent& camera = viewportCamera(registry);
                 const Ray ray = Raycast::ScreenPointToRay(
                     localMouse, glm::vec2(viewportPanelSize.x, viewportPanelSize.y), camera);
                 const entt::entity picked = Raycast::PickEntity(registry, ray);
@@ -338,9 +354,8 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
 
-        if (const auto camEnt = FirstEntityOf(registry.view<CameraComponent>());
-            camEnt != entt::null) {
-            const auto& camera = registry.get<CameraComponent>(camEnt);
+        {
+            const CameraComponent& camera = viewportCamera(registry);
             m_inspectorPanel.RenderGizmo(registry, selectedEntity, camera, viewportPos, viewportPanelSize);
         }
     }
@@ -365,6 +380,11 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     if (m_offscreenPass) {
         ImGui::Text("Viewport Res:    %ux%u", m_offscreenPass->GetWidth(), m_offscreenPass->GetHeight());
     }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("CULLING");
+    ImGui::Text("Scene:  %u drawn / %u culled", m_renderStats.drawn, m_renderStats.culled);
+    ImGui::Text("Shadow: %u drawn / %u culled", m_renderStats.shadowDrawn, m_renderStats.shadowCulled);
 
     ImGui::Separator();
     ImGui::TextDisabled("SCRIPT HOST");

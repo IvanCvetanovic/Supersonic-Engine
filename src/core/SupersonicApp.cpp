@@ -290,10 +290,19 @@ void SupersonicApp::Run() {
         m_renderer->NewImGuiFrame();
 
         const ImGuiIO& io = ImGui::GetIO();
-        const bool uiWantsMouse = io.WantCaptureMouse;
-        const bool uiWantsKeyboard = io.WantCaptureKeyboard || io.WantTextInput;
 
-        CameraSystem::Update(m_registry, *m_window, deltaTime, !uiWantsKeyboard, !uiWantsMouse);
+        // Edit mode flies the editor's own camera; play mode drives the
+        // scene's. Before this the two were the same object, so positioning the
+        // view in the editor silently authored the game camera.
+        if (m_playMode.IsEditing()) {
+            m_editorLayer->GetEditorCamera().Update(*m_window, deltaTime,
+                                                    m_editorLayer->IsViewportHovered(),
+                                                    m_editorLayer->IsViewportFocused() && !io.WantTextInput);
+        } else {
+            CameraSystem::Update(m_registry, *m_window, deltaTime,
+                                 m_editorLayer->IsViewportFocused() && !io.WantTextInput,
+                                 m_editorLayer->IsViewportHovered());
+        }
 
         // Gameplay only runs in play mode. The editor used to simulate
         // permanently, so a scene could never be authored and then tried.
@@ -328,6 +337,7 @@ void SupersonicApp::Run() {
         // Editor UI runs after the systems and before rendering, so gizmo drags
         // and inspector edits appear in the same frame instead of one late.
         m_editorLayer->SetPlayMode(&m_playMode);
+        m_editorLayer->SetRenderStats(m_renderer->GetRenderStats());
         m_editorLayer->SetScriptHostInfo(m_hotReload->IsLoaded(),
                                          m_hotReload->GetStatus(),
                                          m_hotReload->GetReloadCount());
@@ -349,12 +359,18 @@ void SupersonicApp::Run() {
         glm::mat4 projMatrix(1.0f);
         glm::vec3 cameraPosition(0.0f);
 
-        if (const auto camEntity = FirstEntityOf(m_registry.view<CameraComponent>());
-            camEntity != entt::null) {
-            const auto& cam = m_registry.get<CameraComponent>(camEntity);
-            viewMatrix = cam.getViewMatrix();
-            projMatrix = cam.getProjectionMatrix();
-            cameraPosition = cam.position;
+        // Whichever camera the viewport is showing - the same choice the
+        // editor makes for picking and the gizmo, so all three agree.
+        {
+            const CameraComponent* cam = &m_editorLayer->GetEditorCamera().Get();
+            if (!m_playMode.IsEditing()) {
+                if (const auto camEntity = FindPrimaryCamera(m_registry); camEntity != entt::null) {
+                    cam = &m_registry.get<CameraComponent>(camEntity);
+                }
+            }
+            viewMatrix = cam->getViewMatrix();
+            projMatrix = cam->getProjectionMatrix();
+            cameraPosition = cam->position;
         }
 
         m_renderer->DrawFrame(m_registry,

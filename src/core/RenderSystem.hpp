@@ -9,11 +9,21 @@
 #include "renderer/VulkanPipeline.hpp"
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
+#include "renderer/Frustum.hpp"
 
 namespace Supersonic {
 
 class RenderSystem {
 public:
+    // Per-pass counters, surfaced in the editor so culling is measurable
+    // rather than something you have to take on faith.
+    struct Stats {
+        uint32_t drawn{0};
+        uint32_t culled{0};
+        uint32_t shadowDrawn{0};
+        uint32_t shadowCulled{0};
+    };
+
     // Draws every visible entity using its own MeshComponent geometry,
     // MaterialComponent parameters and its own albedo texture, rather than one
     // hardcoded cube and one global checkerboard for everything.
@@ -23,7 +33,9 @@ public:
         MeshRegistry& meshes,
         TextureRegistry& textures,
         vk::CommandBuffer commandBuffer,
-        vk::DescriptorSet sceneSet
+        vk::DescriptorSet sceneSet,
+        const Frustum& frustum,
+        Stats& stats
     );
 
     // Shadow pass: same geometry, no materials, no textures. Only positions
@@ -33,7 +45,9 @@ public:
         VulkanPipeline& pipeline,
         MeshRegistry& meshes,
         vk::CommandBuffer commandBuffer,
-        vk::DescriptorSet sceneSet
+        vk::DescriptorSet sceneSet,
+        const Frustum& lightFrustum,
+        Stats& stats
     );
 
     // Resolves MeshComponent descriptions and material texture paths to GPU

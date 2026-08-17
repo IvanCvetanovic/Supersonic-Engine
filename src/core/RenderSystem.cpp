@@ -63,7 +63,9 @@ void RenderSystem::RenderDepthOnly(
     VulkanPipeline& pipeline,
     MeshRegistry& meshes,
     vk::CommandBuffer commandBuffer,
-    vk::DescriptorSet sceneSet) {
+    vk::DescriptorSet sceneSet,
+    const Frustum& lightFrustum,
+    Stats& stats) {
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
@@ -80,6 +82,17 @@ void RenderSystem::RenderDepthOnly(
 
         const GpuMesh* mesh = meshes.Get(renderable.meshID);
         if (!mesh || mesh->indexCount == 0) continue;
+
+        // Cull against the LIGHT's frustum here, not the camera's: an object
+        // behind the viewer can still cast a shadow into view.
+        glm::vec3 worldMin, worldMax;
+        Frustum::TransformAABB(world.matrix, renderable.localBoundsMin, renderable.localBoundsMax,
+                               worldMin, worldMax);
+        if (!lightFrustum.IntersectsAABB(worldMin, worldMax)) {
+            ++stats.shadowCulled;
+            continue;
+        }
+        ++stats.shadowDrawn;
 
         if (renderable.meshID != boundMesh) {
             const vk::Buffer buffers[] = { mesh->vertexBuffer->GetBuffer() };
@@ -106,7 +119,9 @@ void RenderSystem::Render(
     MeshRegistry& meshes,
     TextureRegistry& textures,
     vk::CommandBuffer commandBuffer,
-    vk::DescriptorSet sceneSet) {
+    vk::DescriptorSet sceneSet,
+    const Frustum& frustum,
+    Stats& stats) {
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
 
@@ -128,6 +143,15 @@ void RenderSystem::Render(
 
         const GpuMesh* mesh = meshes.Get(renderable.meshID);
         if (!mesh || mesh->indexCount == 0) continue;
+
+        glm::vec3 worldMin, worldMax;
+        Frustum::TransformAABB(world.matrix, renderable.localBoundsMin, renderable.localBoundsMax,
+                               worldMin, worldMax);
+        if (!frustum.IntersectsAABB(worldMin, worldMax)) {
+            ++stats.culled;
+            continue;
+        }
+        ++stats.drawn;
 
         if (renderable.meshID != boundMesh) {
             const vk::Buffer buffers[] = { mesh->vertexBuffer->GetBuffer() };

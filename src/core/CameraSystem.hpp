@@ -15,6 +15,7 @@ public:
     static void ProcessMouseInput(entt::registry& registry, Window& window, bool allowMouse = true);
 
 private:
+    static bool s_looking;
     static bool s_firstMouse;
     static double s_lastX;
     static double s_lastY;

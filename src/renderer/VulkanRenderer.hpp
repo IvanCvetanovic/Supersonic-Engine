@@ -12,6 +12,7 @@
 #include "renderer/VulkanBuffer.hpp"
 #include "renderer/VulkanImage.hpp"
 #include "renderer/VulkanOffscreen.hpp"
+#include "core/RenderSystem.hpp"
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
 #include "renderer/ShadowMap.hpp"
@@ -50,6 +51,9 @@ public:
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
     vk::RenderPass GetOffscreenRenderPass() const { return m_offscreenRenderPass; }
     void SetOffscreenRenderPass(vk::RenderPass pass);
+
+    // Last frame's culling counters, for the editor's statistics panel.
+    const RenderSystem::Stats& GetRenderStats() const { return m_renderStats; }
 
     MeshRegistry& GetMeshRegistry() { return *m_meshRegistry; }
     TextureRegistry& GetTextureRegistry() { return *m_textureRegistry; }
@@ -90,6 +94,7 @@ private:
 
     // Depth-only pass from the primary directional light.
     std::unique_ptr<ShadowMap> m_shadowMap;
+    RenderSystem::Stats m_renderStats{};
     std::unique_ptr<VulkanPipeline> m_shadowPipeline;
 
     vk::CommandPool m_commandPool{nullptr};

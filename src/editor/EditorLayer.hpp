@@ -9,6 +9,8 @@
 #include "editor/SceneHierarchyPanel.hpp"
 #include "editor/InspectorPanel.hpp"
 #include "editor/ContentBrowserPanel.hpp"
+#include "editor/EditorCamera.hpp"
+#include "core/RenderSystem.hpp"
 #include "platform/Window.hpp"
 
 namespace Supersonic {
@@ -56,6 +58,19 @@ public:
     // Drives the Play/Pause/Stop toolbar. Non-owning.
     void SetPlayMode(PlayMode* playMode) { m_playMode = playMode; }
 
+    // The viewport's own fly camera, used in edit mode so flying around does
+    // not move the scene's game camera.
+    EditorCamera& GetEditorCamera() { return m_editorCamera; }
+
+    // Whether the viewport panel currently owns the pointer / the keyboard.
+    // The camera used to be gated on ImGui's WantCaptureMouse, which is true
+    // for the whole viewport window - so right-drag look never fired at all.
+    bool IsViewportHovered() const { return m_viewportHovered; }
+    bool IsViewportFocused() const { return m_viewportFocused; }
+
+    // Last frame's culling counters, shown in the statistics panel.
+    void SetRenderStats(const RenderSystem::Stats& stats) { m_renderStats = stats; }
+
 private:
     void drawStatusBar();
 
@@ -81,7 +96,16 @@ private:
     std::string m_scriptHostStatus;
     uint32_t m_scriptReloadCount{0};
 
+    // The camera the viewport is currently looking through: the editor's in
+    // edit mode, the scene's primary in play mode. Picking, the gizmo and the
+    // renderer all go through this so they cannot disagree.
+    const CameraComponent& viewportCamera(entt::registry& registry) const;
+
     PlayMode* m_playMode{nullptr};
+    EditorCamera m_editorCamera;
+    bool m_viewportHovered{false};
+    bool m_viewportFocused{false};
+    RenderSystem::Stats m_renderStats{};
 
     // Ensures the built-in layout is applied once on a fresh install rather
     // than fighting a user's saved arrangement every frame.

@@ -566,7 +566,15 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     ubo.proj = projMatrix;
     ubo.cameraPosition = glm::vec4(cameraPosition, 1.0f);
     ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
-    gatherLights(registry, ubo);
+    const glm::mat4 lightSpace = gatherLights(registry, ubo);
+
+    // Culling frusta for this frame. The scene pass uses the camera's, the
+    // shadow pass the light's - an object behind the camera can still cast a
+    // shadow into view, so culling the shadow pass against the camera would
+    // make shadows pop in and out.
+    const Frustum cameraFrustum = Frustum::FromMatrix(projMatrix * viewMatrix);
+    const Frustum lightFrustum = Frustum::FromMatrix(lightSpace);
+    m_renderStats = RenderSystem::Stats{};
 
     m_uniformBuffers[m_currentFrame]->UploadData(&ubo, sizeof(ubo));
 
@@ -606,7 +614,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         cmd.setScissor(0, 1, &shadowScissor);
 
         RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
-                                      cmd, m_descriptorSets[m_currentFrame]);
+                                      cmd, m_descriptorSets[m_currentFrame],
+                                      lightFrustum, m_renderStats);
 
         cmd.endRenderPass();
     }
@@ -640,7 +649,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     cmd.setScissor(0, 1, &offscreenScissor);
 
     RenderSystem::Render(registry, *m_pipeline, *m_meshRegistry, *m_textureRegistry,
-                         cmd, m_descriptorSets[m_currentFrame]);
+                         cmd, m_descriptorSets[m_currentFrame],
+                         cameraFrustum, m_renderStats);
 
     // Ground grid last so it blends over the scene it is depth-tested against.
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetPipeline());

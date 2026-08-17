@@ -125,6 +125,11 @@ struct CameraComponent {
     float movementSpeed{3.5f};
     float mouseSensitivity{0.1f};
 
+    // The scene can hold several cameras; this marks the one play mode renders
+    // through and the one input drives. CameraSystem used to move every camera
+    // entity in lockstep, which broke as soon as a scene had two.
+    bool isPrimary{true};
+
     glm::mat4 getViewMatrix() const {
         return glm::lookAt(position, position + front, up);
     }
