@@ -30,10 +30,13 @@ jobs:
             # it choose is both correct today and correct after the next bump.
             preset_args: -A x64
             config: Debug
+            jobs: 4
           - name: Linux (GCC)
             os: ubuntu-latest
             preset_args: -DCMAKE_BUILD_TYPE=Debug
             config: Debug
+            # Deliberately 2, not "as many as possible" - see the Build step.
+            jobs: 2
 
     steps:
       - uses: actions/checkout@v4
@@ -59,8 +62,17 @@ jobs:
       - name: Configure
         run: cmake -S . -B build ${{ matrix.preset_args }} ${{ runner.os == 'Linux' && '-DGLFW_BUILD_WAYLAND=OFF' || '' }}
 
+      # --parallel with NO number hands make a bare -j, which means unbounded
+      # parallelism. Roughly forty translation units then compile at once, each
+      # pulling in vulkan.hpp, and the runner's memory does not survive it: the
+      # OOM killer takes cc1plus and the job dies with "Killed signal terminated
+      # program cc1plus", which reads like a compiler crash rather than the
+      # resource exhaustion it is.
+      #
+      # A concrete job count bounds peak memory. Two matches the Linux runner's
+      # core count and leaves headroom for the heaviest translation units.
       - name: Build
-        run: cmake --build build --config ${{ matrix.config }} --parallel
+        run: cmake --build build --config ${{ matrix.config }} --parallel ${{ matrix.jobs }}
 
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure
