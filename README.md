@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-11%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-12%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 
 </div>
@@ -63,8 +63,10 @@ code quietly contradicts.
 ### Simulation
 
 - **Fixed-step physics** with an accumulator capped so a hitch costs fidelity rather than exploding the solver
+- **Collision** — sort-and-sweep broadphase, exact sphere–sphere and sphere–box narrowphase, box–box by world AABB along the axis of least overlap; mass-weighted impulse response with Coulomb friction, slop-limited positional correction so stacks settle instead of vibrating, immovable collider-only obstacles, and non-resolving trigger volumes
 - **3D audio** on XAudio2 with a from-scratch WAV decoder, inverse-distance attenuation and listener-relative panning
 - **Particle systems** with per-emitter pools, so two emitters cannot starve each other
+- **Job system** — a worker pool with a counter fence, used where the work is genuinely independent: terrain generation, per-vertex tangent bases and particle integration. Command recording, the transform hierarchy, scripts and collision response stay on the main thread on purpose, and the code says why
 - **Scripting** — built-in components plus a **hot-reloadable C++ plugin**: rebuild the script target while the engine runs and the new code is swapped in without a restart
 
 ### Editor
@@ -80,7 +82,7 @@ code quietly contradicts.
 | **Undo / redo** | 64 steps over the scene serializer — `Ctrl+Z`, `Ctrl+Y` |
 | **Time-travel rewind** | Scrub backwards through recorded simulation frames |
 | **Fly camera** | The viewport has its own camera, so framing a shot in the editor does not move the game's |
-| **Statistics** | Frame time, entity count, draw/cull counts per pass, script-host state |
+| **Statistics** | Frame time, entity count, draw/cull counts per pass, contact count, worker threads, script-host state |
 | **Packaging** | One-click standalone build of the current scene |
 
 ### Platforms
@@ -200,7 +202,7 @@ tests/         Pure-logic regression suites
 docs/          Screenshots
 ```
 
-Roughly 11,000 lines of engine source across 45 translation units, excluding
+Roughly 12,200 lines of engine source across 46 translation units, excluding
 vendored dependencies.
 
 ---
@@ -211,7 +213,7 @@ vendored dependencies.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Eleven suites, each a plain executable with no test framework behind it —
+Twelve suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 | Suite | Covers |
@@ -223,8 +225,9 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_meshgen` | Primitive generation, winding, tangents, OBJ parsing |
 | `test_gltf` | glTF import against a real asset in the tree |
 | `test_serialize` | JSON reader, scene and prefab round-trips |
-| `test_undo` | Undo/redo stacks, redo invalidation, depth bounds |
-| `test_physics` | Integration and collision response |
+| `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
+| `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
+| `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers |
 | `test_audio` | WAV decoding, including the shipped clip |
 | `test_scripts` | Script registry and dispatch |
 
@@ -246,9 +249,9 @@ comment on each one says which.
 - [x] Transform hierarchy, prefabs, scene serialization
 - [x] Play/Stop, undo/redo, time-travel rewind
 - [x] Frustum culling, persistent pipeline cache
-- [ ] Entity-versus-entity collision with a broadphase
+- [x] Entity-versus-entity collision with a broadphase
+- [x] Job system, applied where the work is provably independent
 - [ ] Skeletal animation (glTF skins and animation channels)
-- [ ] Job system and multithreaded simulation
 - [ ] Cascaded shadow maps
 
 ---

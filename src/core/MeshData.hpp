@@ -104,6 +104,14 @@ struct MeshData {
             const float handedness = (glm::dot(glm::cross(n, t), bitan[i]) < 0.0f) ? -1.0f : 1.0f;
             vertices[i].tangent = glm::vec4(t, handedness);
         });
+
+        // Not optional. The jobs capture `tan`, `bitan` and `this` by reference,
+        // and all three are gone the moment this function returns - so without
+        // the fence the workers write into freed memory, and every caller reads
+        // `vertices` while they are still writing it. Nothing caught this
+        // locally: the tests never start a pool, and no mesh in the sample scene
+        // exceeds one group, so both paths fell back to the inline loop.
+        JobSystem::Wait();
     }
 
     bool empty() const { return vertices.empty() || indices.empty(); }

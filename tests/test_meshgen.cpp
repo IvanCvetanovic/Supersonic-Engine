@@ -7,7 +7,9 @@
 #include "TestHarness.hpp"
 #include "core/ModelLoader.hpp"
 #include "core/TerrainGenerator.hpp"
+#include "core/JobSystem.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -258,6 +260,66 @@ static void testTerrainHasTangents() {
     }
 }
 
+// Everything above runs with no worker pool, so every JobSystem::Dispatch takes
+// the inline fallback. That is exactly the blind spot that let a missing fence
+// ship: computeTangents' jobs capture the local accumulator vectors and `this`
+// by reference, and without a Wait they outlived all three.
+//
+// Reaching the parallel path needs BOTH a running pool AND a mesh larger than
+// the dispatch group size. 128x128 is 16,384 vertices - 8 groups of 2048 for the
+// tangent pass and 4 of 4096 for terrain generation - so a dangling capture has
+// real concurrency to go wrong in.
+static void testLargeMeshIsIdenticalWithAndWithoutWorkers() {
+    constexpr uint32_t kDim = 128;
+
+    JobSystem::Shutdown();
+    MeshData serial;
+    CHECK(TerrainGenerator::GenerateTerrainMesh(kDim, kDim, 1.5f, serial));
+    CHECK_MSG(serial.vertices.size() > 4096, "the grid must exceed one dispatch group");
+
+    JobSystem::Initialize(4);
+    CHECK(JobSystem::IsInitialized());
+
+    MeshData parallel;
+    CHECK(TerrainGenerator::GenerateTerrainMesh(kDim, kDim, 1.5f, parallel));
+
+    CHECK_EQ(parallel.vertices.size(), serial.vertices.size());
+    CHECK_EQ(parallel.indices.size(), serial.indices.size());
+
+    size_t vertexMismatch = 0;
+    for (size_t i = 0; i < serial.vertices.size(); ++i) {
+        const Vertex& a = serial.vertices[i];
+        const Vertex& b = parallel.vertices[i];
+        if (a.pos != b.pos || a.normal != b.normal || a.texCoord != b.texCoord ||
+            a.tangent != b.tangent) {
+            ++vertexMismatch;
+        }
+    }
+    CHECK_MSG(vertexMismatch == 0,
+              "the parallel build must be bit-identical to the serial one (" +
+                  std::to_string(vertexMismatch) + " differed)");
+
+    size_t indexMismatch = 0;
+    for (size_t i = 0; i < serial.indices.size(); ++i) {
+        if (serial.indices[i] != parallel.indices[i]) ++indexMismatch;
+    }
+    CHECK_MSG(indexMismatch == 0, "and the winding order must not depend on completion order");
+
+    // Independently of the comparison: every tangent must be finite and unit
+    // length. A tangent written after `tan` was freed is neither.
+    size_t badTangent = 0;
+    for (const auto& v : parallel.vertices) {
+        const float length = std::sqrt(v.tangent.x * v.tangent.x +
+                                       v.tangent.y * v.tangent.y +
+                                       v.tangent.z * v.tangent.z);
+        if (!std::isfinite(length) || std::fabs(length - 1.0f) > 1e-3f) ++badTangent;
+        if (v.tangent.w != 1.0f && v.tangent.w != -1.0f) ++badTangent;
+    }
+    CHECK_MSG(badTangent == 0, "every tangent must be finite, unit length and correctly signed");
+
+    JobSystem::Shutdown();
+}
+
 static void runTests() {
     testCube();
     testSphereRejectsDegenerateParameters();
@@ -269,6 +331,7 @@ static void runTests() {
     testTerrainFacesUpward();
     testTerrainRejectsDegenerateSize();
     testTerrainSurvivesPast65kVertices();
+    testLargeMeshIsIdenticalWithAndWithoutWorkers();
     testObjParsesFaces();
     testObjQuadIsTriangulated();
     testObjWithoutFacesIsRejected();
