@@ -6,6 +6,15 @@
 
 set(ENGINE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+# tinygltf and json.hpp are vendored; they must not be held to the engine's
+# warning level. Both branches matter - the MSVC-only guard left them compiling
+# under -Wall -Wextra -Wpedantic on the Linux CI job.
+if (MSVC)
+    set(_vendorWarnFlag "/W0")
+else()
+    set(_vendorWarnFlag "-w")
+endif()
+
 function(add_engine_test name)
     add_executable(${name} ${name}.cpp ${ARGN})
     target_include_directories(${name} PRIVATE
@@ -50,14 +59,12 @@ target_sources(test_hierarchy PRIVATE
     ${ENGINE_SRC}/third_party/imgui/imgui_draw.cpp
     ${ENGINE_SRC}/third_party/imgui/imgui_tables.cpp
     ${ENGINE_SRC}/third_party/imgui/imgui_widgets.cpp)
-if (MSVC)
-    set_source_files_properties(
-        ${ENGINE_SRC}/third_party/imgui/imgui.cpp
-        ${ENGINE_SRC}/third_party/imgui/imgui_draw.cpp
-        ${ENGINE_SRC}/third_party/imgui/imgui_tables.cpp
-        ${ENGINE_SRC}/third_party/imgui/imgui_widgets.cpp
-        TARGET_DIRECTORY test_hierarchy PROPERTIES COMPILE_OPTIONS "/W0")
-endif()
+set_source_files_properties(
+    ${ENGINE_SRC}/third_party/imgui/imgui.cpp
+    ${ENGINE_SRC}/third_party/imgui/imgui_draw.cpp
+    ${ENGINE_SRC}/third_party/imgui/imgui_tables.cpp
+    ${ENGINE_SRC}/third_party/imgui/imgui_widgets.cpp
+    TARGET_DIRECTORY test_hierarchy PROPERTIES COMPILE_OPTIONS "${_vendorWarnFlag}")
 add_engine_test(test_gltf      ${ENGINE_SRC}/src/core/GltfLoader.cpp
                                ${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp)
 
@@ -65,13 +72,8 @@ target_include_directories(test_gltf PRIVATE ${ENGINE_SRC}/third_party/tinygltf)
 # Runs against assets/models/monument.gltf, so it needs the project root.
 set_tests_properties(test_gltf PROPERTIES WORKING_DIRECTORY "${ENGINE_SRC}")
 
-if (MSVC)
-    set_source_files_properties(${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp
-        TARGET_DIRECTORY test_gltf PROPERTIES COMPILE_OPTIONS "/W0")
-else()
-    set_source_files_properties(${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp
-        TARGET_DIRECTORY test_gltf PROPERTIES COMPILE_OPTIONS "-w")
-endif()
+set_source_files_properties(${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp
+    TARGET_DIRECTORY test_gltf PROPERTIES COMPILE_OPTIONS "${_vendorWarnFlag}")
 
 # test_audio also opportunistically checks the shipped ambient clip, so run the
 # suite from the project root where assets/ resolves.

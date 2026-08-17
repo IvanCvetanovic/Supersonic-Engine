@@ -46,7 +46,13 @@ private:
     VulkanDevice& m_deviceRef;
     uint32_t m_resolution;
 
+    // Chosen at construction: must be both a depth attachment and sampleable,
+    // which the generic depth-format query does not guarantee.
     vk::Format m_format{vk::Format::eD32Sfloat};
+
+    // Linear depth filtering is an optional format feature; falls back to
+    // nearest where the driver does not advertise it.
+    vk::Filter m_filter{vk::Filter::eLinear};
     vk::RenderPass m_renderPass{nullptr};
     std::unique_ptr<VulkanImage> m_depthImage;
     vk::Framebuffer m_framebuffer{nullptr};

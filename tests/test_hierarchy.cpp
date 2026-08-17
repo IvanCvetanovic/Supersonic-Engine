@@ -256,6 +256,29 @@ static void testPauseAndStep() {
     CHECK(play.IsPlaying());
 }
 
+static void testInvalidSnapshotLeavesSceneIntact() {
+    // applyScene must clear before it can populate, so a document that parses
+    // but is not a usable scene has to be rejected while the live scene is
+    // still intact - the same principle that made a failed file load
+    // non-destructive.
+    entt::registry registry;
+    makeEntity(registry, "Precious", glm::vec3(1.0f));
+
+    const std::string bad =
+        R"({"Scene":"x","Entities":[{"Tag":"A","Parent":99}]})";
+
+    const auto result = SceneSerializer::DeserializeFromString(registry, bad);
+    CHECK_MSG(!result.ok, "an out-of-range Parent index must be rejected");
+
+    size_t count = 0;
+    bool foundPrecious = false;
+    for (auto e : registry.view<TagComponent>()) {
+        ++count;
+        if (registry.get<TagComponent>(e).tag == "Precious") foundPrecious = true;
+    }
+    CHECK_MSG(count == 1 && foundPrecious, "a rejected snapshot must not destroy the scene");
+}
+
 static void testStopWithoutPlayIsHarmless() {
     entt::registry registry;
     makeEntity(registry, "A", glm::vec3(0.0f));
@@ -281,6 +304,7 @@ static void runTests() {
     testHierarchySurvivesSerialization();
     testPlayStopRestoresScene();
     testPauseAndStep();
+    testInvalidSnapshotLeavesSceneIntact();
     testStopWithoutPlayIsHarmless();
 }
 

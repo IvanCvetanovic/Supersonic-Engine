@@ -180,7 +180,11 @@ void EngineApp::initECS() {
     groundMat.roughness = 0.92f;
     groundMat.metallic = 0.0f;
     auto& groundRenderable = m_registry.emplace<RenderableComponent>(ground);
-    groundRenderable.castsShadow = false; // a flat receiver casting onto itself only adds acne
+    // A demo-scene choice, not a rule: this plane is only ever a receiver, so
+    // excluding it from the depth pass costs nothing. Geometry that should cast
+    // onto other geometry must leave castsShadow on - front-face culling in the
+    // shadow pass is what handles self-shadowing acne in general.
+    groundRenderable.castsShadow = false;
 
     auto mainCube = m_registry.create();
     m_registry.emplace<TagComponent>(mainCube, "Textured Cube");

@@ -175,9 +175,43 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
     return entities.size();
 }
 
+// Structural check run BEFORE the registry is touched.
+//
+// applyScene has to clear before it can populate, so anything that would make
+// population fail must be caught while the live scene is still intact. This is
+// the same principle that made Deserialize non-destructive on a parse failure,
+// extended to a document that parses but is not a usable scene.
+bool validateSceneArray(const Json::Array& entities, std::string& error) {
+    size_t objectCount = 0;
+    for (const auto& node : entities) {
+        if (!node.IsObject()) continue;
+        ++objectCount;
+    }
+
+    size_t index = 0;
+    for (const auto& node : entities) {
+        if (!node.IsObject()) continue;
+        if (node.Has("Parent")) {
+            const double raw = node["Parent"].AsNumber(-1.0);
+            if (raw < 0.0 || static_cast<size_t>(raw) >= objectCount) {
+                error = "entity " + std::to_string(index) +
+                        " has an out-of-range Parent index (" + std::to_string(raw) + ")";
+                return false;
+            }
+        }
+        ++index;
+    }
+    return true;
+}
+
 // One reader, shared by the on-disk load and the Play-mode restore.
 SerializationResult applyScene(entt::registry& registry, const Json::Array& entities,
                                const std::string& source) {
+    std::string error;
+    if (!validateSceneArray(entities, error)) {
+        return { false, source + " is structurally invalid: " + error + " (scene left untouched)." };
+    }
+
     registry.clear();
 
     // Created up front so a Parent reference resolves even when the parent

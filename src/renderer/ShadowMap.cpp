@@ -10,14 +10,44 @@ namespace Engine {
 ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution)
     : m_deviceRef(device), m_resolution(resolution == 0 ? 1024 : resolution) {
 
-    m_format = m_deviceRef.FindDepthFormat();
+    // This image is SAMPLED, not just used as an attachment, so the generic
+    // FindDepthFormat is not sufficient: it can return a depth/stencil format,
+    // which would need a single-aspect view to sample, and linear filtering of
+    // depth is only guaranteed where the driver advertises it.
+    const vk::PhysicalDevice physical = m_deviceRef.GetPhysicalDevice();
+
+    const auto supports = [&](vk::Format format, vk::FormatFeatureFlags features) {
+        const vk::FormatProperties properties = physical.getFormatProperties(format);
+        return (properties.optimalTilingFeatures & features) == features;
+    };
+
+    constexpr auto kAttachment = vk::FormatFeatureFlagBits::eDepthStencilAttachment;
+    constexpr auto kSampled = vk::FormatFeatureFlagBits::eSampledImage;
+
+    if (supports(vk::Format::eD32Sfloat, kAttachment | kSampled)) {
+        m_format = vk::Format::eD32Sfloat;
+    } else if (supports(vk::Format::eD16Unorm, kAttachment | kSampled)) {
+        m_format = vk::Format::eD16Unorm;
+    } else {
+        m_format = m_deviceRef.FindDepthFormat();
+        std::cerr << "[ShadowMap] No sampleable depth-only format; falling back to "
+                  << vk::to_string(m_format) << "." << std::endl;
+    }
+
+    // Linear filtering of a depth image is an optional feature. Falling back to
+    // nearest costs almost nothing here because the 3x3 PCF kernel in
+    // shader.frag already does the smoothing.
+    m_filter = supports(m_format, vk::FormatFeatureFlagBits::eSampledImageFilterLinear)
+             ? vk::Filter::eLinear
+             : vk::Filter::eNearest;
 
     createRenderPass();
     createResources();
     createFramebuffer();
 
     std::cout << "[ShadowMap] Created " << m_resolution << "x" << m_resolution
-              << " directional shadow map." << std::endl;
+              << " directional shadow map (" << vk::to_string(m_format) << ", "
+              << (m_filter == vk::Filter::eLinear ? "linear" : "nearest") << " filter)." << std::endl;
 }
 
 ShadowMap::~ShadowMap() {
@@ -96,7 +126,7 @@ void ShadowMap::createResources() {
     // Clamp to edge: fragments outside the light frustum sample the border
     // depth rather than wrapping and producing phantom shadows on the far side
     // of the scene. The shader also range-checks the projected coordinate.
-    m_depthImage->CreateSampler(vk::Filter::eLinear, vk::SamplerAddressMode::eClampToEdge);
+    m_depthImage->CreateSampler(m_filter, vk::SamplerAddressMode::eClampToEdge);
 }
 
 void ShadowMap::createFramebuffer() {
