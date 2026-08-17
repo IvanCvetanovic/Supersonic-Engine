@@ -19,6 +19,8 @@ what you may build with the engine beyond keeping the notices below.
 | [tinygltf](https://github.com/syoyo/tinygltf) | — | MIT | © 2015–present Syoyo Fujita, Aurélien Chatelain and contributors |
 | [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | 3.1.0 | MIT | © 2017–2024 Advanced Micro Devices, Inc. |
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | 1.3.290 | Apache-2.0 **or** MIT, at your option | © 2015–2023 The Khronos Group Inc. |
+| [Inter](https://github.com/rsms/inter) | 4.0 | SIL Open Font License 1.1 | © 2016 The Inter Project Authors |
+| [Font Awesome Free](https://fontawesome.com) (Solid) | 6.x | SIL Open Font License 1.1 (fonts) | © Fonticons, Inc. |
 
 ## Full texts
 
@@ -41,6 +43,24 @@ third_party/imguizmo/ImGuizmo.h        MIT, at the top of the file
 third_party/stb/stb_image.h            dual public-domain / MIT, at the foot of the file
 third_party/tinygltf/tiny_gltf.h       MIT, at the top of the file
 ```
+
+## Fonts
+
+The editor embeds two typefaces as compressed byte arrays in
+`src/editor/fonts/`, rather than loading them from disk — a packaged build has
+to carry its own text, and `GamePackager` produces standalone folders.
+
+Both are subset to what the editor draws (Latin plus thirty-six icon glyphs),
+which is why the embedded arrays are a fraction of the original files. Subsetting
+does not change the licence.
+
+```
+src/editor/fonts/Inter-OFL.txt              Inter, SIL OFL 1.1
+src/editor/fonts/FontAwesome-LICENSE.txt    Font Awesome Free
+```
+
+Font Awesome Free is multi-licensed: the **font files are SIL OFL 1.1**, the
+icons themselves are CC BY 4.0, and its code is MIT. Only the font is used here.
 
 ## Code bundled inside those dependencies
 

@@ -1,4 +1,5 @@
 #include "editor/SceneHierarchyPanel.hpp"
+#include "editor/EditorIcons.hpp"
 #include "core/Components.hpp"
 #include "core/TransformSystem.hpp"
 
@@ -81,6 +82,33 @@ void SceneHierarchyPanel::OnImGuiRender() {
     ImGui::End();
 }
 
+namespace {
+
+// Icon for an entity, from the most telling component it carries. Ordered most
+// specific first: a camera that also has a light is still a camera.
+const char* iconForEntity(entt::registry& registry, entt::entity entity) {
+    if (registry.all_of<CameraComponent>(entity))            return ICON_FA_VIDEO;
+    if (registry.all_of<LightComponent>(entity)) {
+        const auto& light = registry.get<LightComponent>(entity);
+        return light.type == 0 ? ICON_FA_SUN : ICON_FA_LIGHTBULB;
+    }
+    if (registry.all_of<AnimatorComponent>(entity))           return ICON_FA_PERSON_RUNNING;
+    if (registry.all_of<ParticleEmitterComponent>(entity))    return ICON_FA_FIRE;
+    if (registry.all_of<AudioSourceComponent>(entity))        return ICON_FA_VOLUME;
+    if (registry.all_of<ScriptComponent>(entity))             return ICON_FA_CODE;
+    if (registry.all_of<RigidBodyComponent>(entity))          return ICON_FA_CUBES;
+    if (const auto* mesh = registry.try_get<MeshComponent>(entity)) {
+        if (!mesh->filePath.empty())                          return ICON_FA_DIAGRAM;
+        if (mesh->primitiveType == "Sphere")                  return ICON_FA_CIRCLE;
+        if (mesh->primitiveType == "Plane")                   return ICON_FA_SQUARE;
+        if (mesh->primitiveType == "Terrain")                 return ICON_FA_MOUNTAIN;
+        return ICON_FA_CUBE;
+    }
+    return ICON_FA_LAYER_GROUP;
+}
+
+} // namespace
+
 bool SceneHierarchyPanel::drawEntityNode(entt::entity entity) {
     if (!m_registry->valid(entity)) return false;
 
@@ -99,6 +127,11 @@ bool SceneHierarchyPanel::drawEntityNode(entt::entity entity) {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
     if (m_selectedEntity == entity) flags |= ImGuiTreeNodeFlags_Selected;
     if (children.empty()) flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+    // An icon per row, picked from what the entity actually is. A list of
+    // twelve identical text labels is far harder to scan than the same list
+    // with a shape at the head of each line.
+    label = std::string(iconForEntity(*m_registry, entity)) + "  " + label;
 
     const bool opened = ImGui::TreeNodeEx(
         reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint32_t>(entity))),

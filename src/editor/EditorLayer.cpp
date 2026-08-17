@@ -1,4 +1,6 @@
 #include "editor/EditorLayer.hpp"
+#include "editor/EditorIcons.hpp"
+#include "editor/Theme.hpp"
 #include "core/JobSystem.hpp"
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
@@ -144,11 +146,11 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     // 2. Editor Main Menu Bar
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
+            if (ImGui::MenuItem(ICON_FA_FLOPPY "  Save Scene", "Ctrl+S")) {
                 const auto result = SceneSerializer::Serialize(registry, kScenePath);
                 SetStatus(result.message, !result.ok);
             }
-            if (ImGui::MenuItem("Open Scene", "Ctrl+O")) {
+            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Open Scene", "Ctrl+O")) {
                 const auto result = SceneSerializer::Deserialize(registry, kScenePath);
                 SetStatus(result.message, !result.ok);
                 if (result.ok) m_hierarchyPanel.SetSelectedEntity(entt::null);
@@ -181,9 +183,9 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Gizmo Mode")) {
-            if (ImGui::MenuItem("Translate (W)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE); }
-            if (ImGui::MenuItem("Rotate (E)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE); }
-            if (ImGui::MenuItem("Scale (R)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE); }
+            if (ImGui::MenuItem(ICON_FA_ARROWS "  Translate (W)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE); }
+            if (ImGui::MenuItem(ICON_FA_ROTATE "  Rotate (E)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE); }
+            if (ImGui::MenuItem(ICON_FA_MAXIMIZE "  Scale (R)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Layout Presets")) {
@@ -214,7 +216,7 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.22f, 0.26f, 1.0f));
         }
 
-        if (ImGui::Button(playing ? "Pause##play" : "Play##play", ImVec2(70, 0))) {
+        if (ImGui::Button(playing ? ICON_FA_PAUSE "  Pause##play" : ICON_FA_PLAY "  Play##play", ImVec2(96, 0))) {
             if (playing) {
                 m_playMode->Pause();
                 SetStatus("Paused.");
@@ -227,13 +229,13 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
         ImGui::SameLine();
         ImGui::BeginDisabled(m_playMode->IsEditing());
-        if (ImGui::Button("Stop##play", ImVec2(70, 0))) {
+        if (ImGui::Button(ICON_FA_STOP "  Stop##play", ImVec2(90, 0))) {
             const auto result = m_playMode->Stop(registry);
             SetStatus(result.message, !result.ok);
             m_hierarchyPanel.SetSelectedEntity(entt::null);
         }
         ImGui::SameLine();
-        if (ImGui::Button("Step##play", ImVec2(70, 0))) {
+        if (ImGui::Button(ICON_FA_FORWARD_STEP "  Step##play", ImVec2(90, 0))) {
             if (m_playMode->IsPlaying()) m_playMode->Pause();
             m_playMode->RequestSingleStep();
         }
@@ -422,7 +424,7 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     }
 
     ImGui::Separator();
-    ImGui::TextDisabled("JOBS");
+    Theme::SectionLabel(ICON_FA_MICROCHIP "  JOBS");
     if (JobSystem::IsInitialized()) {
         ImGui::Text("Workers: %u", JobSystem::ThreadCount());
     } else {
@@ -430,16 +432,16 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     }
 
     ImGui::Separator();
-    ImGui::TextDisabled("PHYSICS");
+    Theme::SectionLabel(ICON_FA_CUBES "  PHYSICS");
     ImGui::Text("Contacts: %u  (%u trigger)", m_contactCount, m_triggerCount);
 
     ImGui::Separator();
-    ImGui::TextDisabled("CULLING");
+    Theme::SectionLabel(ICON_FA_EYE "  CULLING");
     ImGui::Text("Scene:  %u drawn / %u culled", m_renderStats.drawn, m_renderStats.culled);
     ImGui::Text("Shadow: %u drawn / %u culled", m_renderStats.shadowDrawn, m_renderStats.shadowCulled);
 
     ImGui::Separator();
-    ImGui::TextDisabled("SCRIPT HOST");
+    Theme::SectionLabel(ICON_FA_CODE "  SCRIPT HOST");
     if (m_pluginLoaded) {
         ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.60f, 1.0f), "Plugin loaded");
         ImGui::Text("Reloads:         %u", m_scriptReloadCount);

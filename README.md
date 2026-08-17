@@ -33,7 +33,7 @@ code quietly contradicts.
 <div align="center">
 <img src="docs/images/editor.png" alt="The Supersonic editor: dockable panels, gizmo, live statistics" width="880">
 <br>
-<sub>The editor running the sample scene — shadow-mapped PBR, normal-mapped surfaces, glTF and procedural geometry, live frame statistics.</sub>
+<sub>The editor running the sample scene — shadow-mapped PBR, normal-mapped surfaces, skeletal animation, glTF and procedural geometry, live frame statistics.</sub>
 </div>
 
 ---
@@ -86,6 +86,7 @@ code quietly contradicts.
 | **Time-travel rewind** | Scrub backwards through recorded simulation frames |
 | **Fly camera** | The viewport has its own camera, so framing a shot in the editor does not move the game's |
 | **Statistics** | Frame time, entity count, draw/cull counts per pass, contact count, worker threads, script-host state |
+| **Interface** | Inter and Font Awesome embedded in the binary, an accent palette taken from the engine's own branding, and DPI scaling from the monitor |
 | **Packaging** | One-click standalone build of the current scene |
 
 ### Platforms

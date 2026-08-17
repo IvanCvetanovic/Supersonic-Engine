@@ -6,6 +6,7 @@
 #include "core/EcsUtils.hpp"
 
 #include "editor/Theme.hpp"
+#include "editor/EditorFonts.hpp"
 
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
@@ -546,7 +547,25 @@ void VulkanRenderer::initImGui() {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    Theme::ApplyEngineDarkTheme();
+    // Fonts are built BEFORE the Vulkan backend is initialised. Adding a font
+    // afterwards means destroying and re-uploading a font texture the backend
+    // may already have recorded into an unsubmitted command buffer - the same
+    // class of use-after-free that the offscreen target's descriptor set caused
+    // twice in this renderer.
+    //
+    // The DPI scale comes from the monitor GLFW put the window on, so the
+    // editor is legible on a 4K panel instead of being rendered at a third the
+    // intended size.
+    float dpiScale = 1.0f;
+    if (GLFWmonitor* monitor = glfwGetPrimaryMonitor()) {
+        float xScale = 1.0f;
+        float yScale = 1.0f;
+        glfwGetMonitorContentScale(monitor, &xScale, &yScale);
+        if (xScale > 0.0f) dpiScale = xScale;
+    }
+
+    EditorFonts::Load(dpiScale);
+    Theme::ApplyEngineDarkTheme(dpiScale);
 
     // 3. Init ImGui GLFW and Vulkan Backends
     ImGui_ImplGlfw_InitForVulkan(m_windowRef.GetNativeWindow(), true);

@@ -1,9 +1,35 @@
 #include "editor/ContentBrowserPanel.hpp"
+#include "editor/EditorIcons.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include "editor/Theme.hpp"
 #include "imgui.h"
 
 #include <system_error>
 
 namespace Supersonic {
+
+namespace {
+
+// Icon for a file, by extension. A grid of identical [FILE] tags tells the user
+// nothing; a shape per kind is legible at a glance.
+const char* iconForFile(const std::filesystem::path& path) {
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".tga") return ICON_FA_IMAGE;
+    if (ext == ".gltf" || ext == ".glb" || ext == ".obj")                  return ICON_FA_DIAGRAM;
+    if (ext == ".wav" || ext == ".ogg" || ext == ".mp3")                   return ICON_FA_MUSIC;
+    if (ext == ".scene" || ext == ".prefab")                               return ICON_FA_LAYER_GROUP;
+    if (ext == ".vert" || ext == ".frag" || ext == ".spv")                 return ICON_FA_CODE;
+    if (ext == ".svg")                                                     return ICON_FA_IMAGE;
+    return ICON_FA_FILE;
+}
+
+} // namespace
+
 
 ContentBrowserPanel::ContentBrowserPanel()
     : m_assetsDirectory("assets"), m_currentDirectory("assets") {
@@ -57,19 +83,18 @@ std::string ContentBrowserPanel::OnImGuiRender() {
                 ImGui::PushID(filenameString.c_str());
 
                 if (directoryEntry.is_directory(ec) && !ec) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.45f, 0.85f, 0.35f));
-                    if (ImGui::Button(("[DIR]\n" + filenameString).c_str(), ImVec2(thumbnailSize, thumbnailSize))) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, Brand::Bg3);
+                    if (ImGui::Button((std::string(ICON_FA_FOLDER) + "\n" + filenameString).c_str(), ImVec2(thumbnailSize, thumbnailSize))) {
                         m_currentDirectory /= path.filename();
                     }
                     ImGui::PopStyleColor();
                 } else {
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.18f, 0.22f, 0.85f));
-                    ImGui::Button(("[FILE]\n" + filenameString).c_str(), ImVec2(thumbnailSize, thumbnailSize));
+                    ImGui::PushStyleColor(ImGuiCol_Button, Brand::Bg2);
+                    ImGui::Button((std::string(iconForFile(path)) + "\n" + filenameString).c_str(), ImVec2(thumbnailSize, thumbnailSize));
                     ImGui::PopStyleColor();
                 }
                 ec.clear();
 
-                ImGui::TextWrapped("%s", filenameString.c_str());
                 ImGui::NextColumn();
                 ImGui::PopID();
             }
