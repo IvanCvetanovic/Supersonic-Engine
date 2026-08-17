@@ -5,7 +5,7 @@
 #include "ImGuizmo.h"
 #include "core/Components.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class InspectorPanel {
 public:
@@ -33,4 +33,4 @@ private:
     ImGuizmo::OPERATION m_gizmoOperation{ImGuizmo::TRANSLATE};
 };
 
-} // namespace Engine
+} // namespace Supersonic

@@ -8,7 +8,7 @@
 #include "core/Raycast.hpp"
 #include "core/TransformSystem.hpp"
 
-using namespace Engine;
+using namespace Supersonic;
 
 static CameraComponent makeCamera() {
     CameraComponent cam;

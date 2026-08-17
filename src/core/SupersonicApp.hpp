@@ -16,15 +16,15 @@
 #include "core/PlayMode.hpp"
 #include "core/Components.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
-class EngineApp {
+class SupersonicApp {
 public:
-    EngineApp();
-    ~EngineApp();
+    SupersonicApp();
+    ~SupersonicApp();
 
-    EngineApp(const EngineApp&) = delete;
-    EngineApp& operator=(const EngineApp&) = delete;
+    SupersonicApp(const SupersonicApp&) = delete;
+    SupersonicApp& operator=(const SupersonicApp&) = delete;
 
     void Run();
 
@@ -58,4 +58,4 @@ private:
     float m_physicsAccumulator{0.0f};
 };
 
-} // namespace Engine
+} // namespace Supersonic

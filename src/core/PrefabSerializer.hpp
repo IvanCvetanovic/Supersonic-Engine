@@ -6,7 +6,7 @@
 
 #include "core/SceneSerializer.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class PrefabSerializer {
 public:
@@ -20,4 +20,4 @@ public:
                                           SerializationResult* outResult = nullptr);
 };
 
-} // namespace Engine
+} // namespace Supersonic

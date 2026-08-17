@@ -8,7 +8,7 @@
 #include <filesystem>
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 MeshRegistry::MeshRegistry(VulkanDevice& device, vk::CommandPool commandPool)
     : m_deviceRef(device), m_commandPool(commandPool) {
@@ -149,4 +149,4 @@ const GpuMesh* MeshRegistry::Get(uint32_t id) const {
     return &m_meshes[id];
 }
 
-} // namespace Engine
+} // namespace Supersonic

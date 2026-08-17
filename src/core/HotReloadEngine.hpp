@@ -4,7 +4,9 @@
 #include <filesystem>
 #include <string>
 
-namespace Engine {
+#include "core/ScriptPluginApi.h"
+
+namespace Supersonic {
 
 // Watches a native script plugin and reloads it when it changes on disk.
 //
@@ -37,17 +39,21 @@ public:
     bool ReloadNow();
 
 private:
-    bool load();
+    // Opens and validates a candidate module WITHOUT disturbing the one already
+    // loaded, so a failed attempt leaves the running plugin intact.
+    bool openPlugin(int slot, void*& outHandle, SupersonicScriptPluginRegisterFn& outRegister);
     void unload();
+
+    // The plugin is shadow-copied before loading so the build system can relink
+    // the original while a copy is still mapped. Two slots are alternated so a
+    // new copy never collides with the one currently in use.
+    std::filesystem::path shadowPathFor(int slot) const;
 
     std::string m_pluginPath;
     std::string m_status{"no plugin configured"};
 
-    // The plugin is copied here before loading so the build system can relink
-    // the original while a previous copy is still mapped into this process.
-    std::filesystem::path m_shadowPath;
-
     void* m_library{nullptr};
+    int m_shadowSlot{0};
     std::filesystem::file_time_type m_lastWriteTime{};
     bool m_haveWriteTime{false};
     uint32_t m_reloadCount{0};
@@ -57,6 +63,11 @@ private:
     bool m_pendingSeen{false};
     std::filesystem::file_time_type m_pendingWriteTime{};
     uintmax_t m_pendingSize{0};
+
+    // A reload stays pending until it succeeds, and its failure is reported
+    // once rather than every frame the file remains locked.
+    bool m_reloadPending{false};
+    bool m_reportedFailure{false};
 };
 
-} // namespace Engine
+} // namespace Supersonic

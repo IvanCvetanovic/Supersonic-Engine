@@ -3,7 +3,7 @@
 
 #include <cmath>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 constexpr float kGravity = -9.81f;
@@ -54,4 +54,4 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime) {
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

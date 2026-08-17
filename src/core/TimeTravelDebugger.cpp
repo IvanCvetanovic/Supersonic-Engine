@@ -3,7 +3,7 @@
 
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 std::deque<FrameSnapshot> TimeTravelDebugger::s_history;
 bool TimeTravelDebugger::s_isRewinding = false;
@@ -142,4 +142,4 @@ void TimeTravelDebugger::RenderImGuiPanel(entt::registry& registry) {
     ImGui::End();
 }
 
-} // namespace Engine
+} // namespace Supersonic

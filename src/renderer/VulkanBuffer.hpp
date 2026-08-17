@@ -5,7 +5,7 @@
 
 #include "renderer/VulkanDevice.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class VulkanBuffer {
 public:
@@ -46,4 +46,4 @@ private:
     vk::DeviceSize m_size{0};
 };
 
-} // namespace Engine
+} // namespace Supersonic

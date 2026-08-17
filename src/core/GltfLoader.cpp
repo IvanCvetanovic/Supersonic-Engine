@@ -17,7 +17,7 @@
 
 namespace fs = std::filesystem;
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -308,4 +308,4 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
     return scene;
 }
 
-} // namespace Engine
+} // namespace Supersonic

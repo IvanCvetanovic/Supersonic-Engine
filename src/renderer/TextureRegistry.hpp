@@ -10,7 +10,7 @@
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanImage.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 // Loads, uploads and caches textures, and owns one descriptor set per texture.
 //
@@ -66,4 +66,4 @@ private:
     uint32_t m_checkerTexture{kInvalidTexture};
 };
 
-} // namespace Engine
+} // namespace Supersonic

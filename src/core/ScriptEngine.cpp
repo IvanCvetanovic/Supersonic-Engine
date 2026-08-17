@@ -5,7 +5,7 @@
 #include <cmath>
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -13,11 +13,11 @@ namespace {
 // so both go through one code path. ScriptEngine used to be a two-branch
 // if/else on a string with no way to add a third.
 
-extern "C" void builtinRotator(EngineScriptContext* ctx) {
+extern "C" void builtinRotator(SupersonicScriptContext* ctx) {
     ctx->rotation[1] += 0.8f * ctx->deltaTime;
 }
 
-extern "C" void builtinOscillator(EngineScriptContext* ctx) {
+extern "C" void builtinOscillator(SupersonicScriptContext* ctx) {
     // Exact frame-to-frame delta of 0.5*sin(2t), applied relative to wherever
     // the entity already is. The old version snapped every oscillator to an
     // absolute world height; integrating sin() instead would change both the
@@ -27,13 +27,13 @@ extern "C" void builtinOscillator(EngineScriptContext* ctx) {
     ctx->position[1] += (std::sin(now * 2.0f) - std::sin(previous * 2.0f)) * 0.5f;
 }
 
-extern "C" void builtinSpinner(EngineScriptContext* ctx) {
+extern "C" void builtinSpinner(SupersonicScriptContext* ctx) {
     ctx->rotation[0] += 0.4f * ctx->deltaTime;
     ctx->rotation[1] += 0.9f * ctx->deltaTime;
     ctx->rotation[2] += 0.2f * ctx->deltaTime;
 }
 
-extern "C" void builtinPulse(EngineScriptContext* ctx) {
+extern "C" void builtinPulse(SupersonicScriptContext* ctx) {
     const float s = 1.0f + 0.15f * std::sin(ctx->elapsed * 3.0f);
     ctx->scale[0] = s;
     ctx->scale[1] = s;
@@ -92,7 +92,7 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
 
         // Flat POD in, flat POD out. Nothing with a C++ layout crosses into a
         // module that can be unloaded underneath us.
-        EngineScriptContext ctx{};
+        SupersonicScriptContext ctx{};
         ctx.deltaTime = deltaTime;
         ctx.elapsed = script.elapsed;
         ctx.entityId = static_cast<unsigned int>(entt::to_integral(entity));
@@ -114,4 +114,4 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

@@ -6,7 +6,7 @@
 
 #include "core/Components.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 // CPU-side mesh, shared by every generator and loader.
 //
@@ -46,4 +46,4 @@ struct MeshData {
     bool empty() const { return vertices.empty() || indices.empty(); }
 };
 
-} // namespace Engine
+} // namespace Supersonic

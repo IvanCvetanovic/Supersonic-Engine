@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <random>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -71,4 +71,4 @@ void ParticleSystem::Update(entt::registry& registry, float deltaTime) {
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

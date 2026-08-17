@@ -32,6 +32,6 @@ cmake --build "${BUILD_DIR}" --parallel
 echo "[INFO] Running tests..."
 ctest --test-dir "${BUILD_DIR}" --output-on-failure
 
-echo "[OK] Built ${BUILD_DIR}/GameEngine"
+echo "[OK] Built ${BUILD_DIR}/SupersonicEngine"
 echo "[INFO] Run it from the project root so relative asset paths resolve:"
-echo "         (cd '${PROJECT_ROOT}' && '${BUILD_DIR}/GameEngine')"
+echo "         (cd '${PROJECT_ROOT}' && '${BUILD_DIR}/SupersonicEngine')"

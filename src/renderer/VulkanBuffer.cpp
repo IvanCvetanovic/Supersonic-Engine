@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace Engine {
+namespace Supersonic {
 
 VulkanBuffer::VulkanBuffer(
     VmaAllocator allocator,
@@ -125,4 +125,4 @@ void VulkanBuffer::CopyBuffer(
     device.GetDevice().freeCommandBuffers(commandPool, 1, &commandBuffer);
 }
 
-} // namespace Engine
+} // namespace Supersonic

@@ -2,7 +2,7 @@
 
 #include <entt/entt.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 class ScriptEngine {
 public:
@@ -12,4 +12,4 @@ public:
     static void Update(entt::registry& registry, float deltaTime);
 };
 
-} // namespace Engine
+} // namespace Supersonic

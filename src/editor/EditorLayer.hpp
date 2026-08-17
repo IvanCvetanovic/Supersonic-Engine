@@ -11,14 +11,14 @@
 #include "editor/ContentBrowserPanel.hpp"
 #include "platform/Window.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 // Owns the editor UI and the offscreen target the scene renders into.
 //
 // This used to be a by-value member of VulkanRenderer, with OnImGuiRender
 // called from inside DrawFrame. That inversion is what allowed the editor to
 // destroy GPU resources the renderer had already recorded into a live command
-// buffer. EngineApp now owns the editor and drives it before the renderer.
+// buffer. SupersonicApp now owns the editor and drives it before the renderer.
 class EditorLayer {
 public:
     EditorLayer() = default;
@@ -91,4 +91,4 @@ private:
     int m_pendingLayoutPreset{-1};
 };
 
-} // namespace Engine
+} // namespace Supersonic

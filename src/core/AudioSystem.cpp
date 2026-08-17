@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -110,4 +110,4 @@ void AudioSystem::Update(entt::registry& registry, AudioEngine& audio, float del
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

@@ -13,7 +13,7 @@
 #include <cstring>
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity selectedEntity) {
     ImGui::Begin("Inspector");
@@ -411,4 +411,4 @@ void InspectorPanel::decomposeToTransform(const glm::mat4& model, TransformCompo
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

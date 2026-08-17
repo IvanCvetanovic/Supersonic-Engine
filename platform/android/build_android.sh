@@ -10,8 +10,8 @@
 #      glfwCreateWindowSurface). GLFW 3.4 has no Android backend, so a native
 #      ANativeWindow path plus VK_KHR_android_surface is required first.
 #   2. Packaging. AndroidManifest.xml declares NativeActivity with
-#      android.app.lib_name=GameEngine, so the runtime dlopen()s
-#      libGameEngine.so and calls ANativeActivity_onCreate. CMake currently
+#      android.app.lib_name=SupersonicEngine, so the runtime dlopen()s
+#      libSupersonicEngine.so and calls ANativeActivity_onCreate. CMake currently
 #      produces an executable, and there is no glue source, no APK step and no
 #      signing.
 #
@@ -44,8 +44,8 @@ cmake -S "${PROJECT_ROOT}" -B "${BUILD_DIR}" \
     -DANDROID_ABI="${ABI}" \
     -DANDROID_PLATFORM="android-${API}" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DENGINE_BUILD_TESTS=OFF \
-    -DENGINE_BUILD_SCRIPT_PLUGIN=OFF
+    -DSUPERSONIC_BUILD_TESTS=OFF \
+    -DSUPERSONIC_BUILD_SCRIPT_PLUGIN=OFF
 
 echo "[INFO] Building..."
 cmake --build "${BUILD_DIR}" --parallel

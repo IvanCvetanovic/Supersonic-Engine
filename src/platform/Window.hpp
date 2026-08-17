@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine {
+namespace Supersonic {
 
 class Window {
 public:
@@ -37,4 +37,4 @@ private:
     bool m_framebufferResized{false};
 };
 
-} // namespace Engine
+} // namespace Supersonic

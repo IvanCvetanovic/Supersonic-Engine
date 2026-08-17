@@ -9,7 +9,7 @@
 #include "renderer/VulkanBuffer.hpp"
 #include "renderer/VulkanDevice.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 // GPU-resident mesh: device-local vertex and index buffers plus the local-space
 // bounds the picker uses.
@@ -57,4 +57,4 @@ private:
     uint32_t m_cubeMesh{kInvalidMesh};
 };
 
-} // namespace Engine
+} // namespace Supersonic

@@ -7,7 +7,7 @@
 
 #include "core/Components.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 struct EntityStateSnapshot {
     entt::entity entity{entt::null};
@@ -51,4 +51,4 @@ private:
     static constexpr size_t MAX_HISTORY_FRAMES = 1200; // 20 seconds at 60 FPS
 };
 
-} // namespace Engine
+} // namespace Supersonic

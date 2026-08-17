@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace Engine {
+namespace Supersonic {
 
 class ContentBrowserPanel {
 public:
@@ -18,4 +18,4 @@ private:
     std::filesystem::path m_currentDirectory;
 };
 
-} // namespace Engine
+} // namespace Supersonic

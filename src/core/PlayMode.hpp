@@ -6,7 +6,7 @@
 
 #include "core/SceneSerializer.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 // Edit / Play / Paused, with the scene restored on Stop.
 //
@@ -49,4 +49,4 @@ private:
     bool m_singleStepRequested{false};
 };
 
-} // namespace Engine
+} // namespace Supersonic

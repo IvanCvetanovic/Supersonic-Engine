@@ -3,7 +3,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -192,4 +192,4 @@ void RenderSystem::Render(
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

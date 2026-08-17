@@ -1,6 +1,6 @@
 # AGENTS.md — Build & Run
 
-Exact commands for building, testing and running this project.
+Exact commands for building, testing and running **Supersonic Engine**.
 
 ## Requirements
 
@@ -61,7 +61,7 @@ ctest --test-dir build -C Debug --output-on-failure
 
 Seven suites covering the maths conventions, viewport picking, mesh generation
 and OBJ parsing, scene/prefab persistence, physics, the WAV decoder, and the
-script registry. Disable with `-DENGINE_BUILD_TESTS=OFF`.
+script registry. Disable with `-DSUPERSONIC_BUILD_TESTS=OFF`.
 
 ## Run
 
@@ -70,10 +70,10 @@ root**, or shaders, scenes and audio will not resolve.
 
 ```bash
 # Linux / macOS
-./build/GameEngine                          # from the project root
+./build/SupersonicEngine                          # from the project root
 
 # Windows
-.\build\Debug\GameEngine.exe                # from the project root
+.\build\Debug\SupersonicEngine.exe                # from the project root
 ```
 
 Visual Studio's `VS_DEBUGGER_WORKING_DIRECTORY` is set to the project root, so
@@ -83,7 +83,7 @@ pressing F5 works without any extra setup.
 
 ```powershell
 $env:VK_LAYER_PATH = "C:\path\to\VulkanSDK\Bin"
-.\build\Debug\GameEngine.exe
+.\build\Debug\SupersonicEngine.exe
 ```
 
 Add `$env:VK_LAYER_VALIDATE_SYNC = "1"` to enable synchronization validation,
@@ -102,7 +102,7 @@ Edit `plugins/sample_scripts/SampleScripts.cpp`, rebuild that target, and the
 new code is swapped in without a restart. The statistics panel shows the reload
 count; assign scripts by name in the Inspector.
 
-Disable the plugin with `-DENGINE_BUILD_SCRIPT_PLUGIN=OFF`; the engine runs with
+Disable the plugin with `-DSUPERSONIC_BUILD_SCRIPT_PLUGIN=OFF`; the engine runs with
 built-in scripts only.
 
 ## Shaders

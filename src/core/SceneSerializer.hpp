@@ -4,7 +4,7 @@
 
 #include <entt/entt.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 // Both operations report what happened so the editor can surface it. The old
 // bool return was discarded at every call site, so a failed save was invisible
@@ -26,4 +26,4 @@ public:
     static SerializationResult DeserializeFromString(entt::registry& registry, const std::string& text);
 };
 
-} // namespace Engine
+} // namespace Supersonic

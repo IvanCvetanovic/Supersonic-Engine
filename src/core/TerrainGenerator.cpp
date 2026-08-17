@@ -3,7 +3,7 @@
 #include <cmath>
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 bool TerrainGenerator::GenerateTerrainMesh(uint32_t width, uint32_t height, float heightScale, MeshData& out) {
     out.clear();
@@ -61,4 +61,4 @@ bool TerrainGenerator::GenerateTerrainMesh(uint32_t width, uint32_t height, floa
     return true;
 }
 
-} // namespace Engine
+} // namespace Supersonic

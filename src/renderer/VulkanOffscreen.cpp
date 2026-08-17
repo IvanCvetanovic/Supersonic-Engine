@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace Engine {
+namespace Supersonic {
 
 VulkanOffscreen::VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height)
     : m_deviceRef(device), m_width(width > 0 ? width : 1), m_height(height > 0 ? height : 1) {
@@ -226,4 +226,4 @@ void VulkanOffscreen::createSamplerAndTextureID() {
     m_textureID = (ImTextureID)(uintptr_t)ds;
 }
 
-} // namespace Engine
+} // namespace Supersonic

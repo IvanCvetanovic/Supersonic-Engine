@@ -3,7 +3,7 @@
 
 #include <system_error>
 
-namespace Engine {
+namespace Supersonic {
 
 ContentBrowserPanel::ContentBrowserPanel()
     : m_assetsDirectory("assets"), m_currentDirectory("assets") {
@@ -84,4 +84,4 @@ std::string ContentBrowserPanel::OnImGuiRender() {
     return status;
 }
 
-} // namespace Engine
+} // namespace Supersonic

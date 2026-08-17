@@ -3,7 +3,7 @@
 
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 SerializationResult PlayMode::Play(entt::registry& registry) {
     if (m_state == State::Paused) {
@@ -76,4 +76,4 @@ bool PlayMode::ConsumeSingleStep() {
     return true;
 }
 
-} // namespace Engine
+} // namespace Supersonic

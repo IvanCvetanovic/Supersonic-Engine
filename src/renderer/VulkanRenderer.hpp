@@ -19,7 +19,7 @@
 
 struct ImDrawData;
 
-namespace Engine {
+namespace Supersonic {
 
 // Records and submits frames. Deliberately knows nothing about the editor:
 // the offscreen target and the finished ImGui draw data are handed in, so the
@@ -120,4 +120,4 @@ private:
     uint32_t m_currentFrame{0};
 };
 
-} // namespace Engine
+} // namespace Supersonic

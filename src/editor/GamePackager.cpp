@@ -16,13 +16,13 @@
 
 namespace fs = std::filesystem;
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
 // Asking the OS where we are removes the guesswork entirely. The old code
-// probed a hardcoded "build/GameEngine.exe", which is the Ninja layout; the
-// documented Visual Studio build emits build/Debug/GameEngine.exe and POSIX
+// probed a hardcoded "build/SupersonicEngine.exe", which is the Ninja layout; the
+// documented Visual Studio build emits build/Debug/SupersonicEngine.exe and POSIX
 // builds have no .exe suffix at all, so the copy silently did nothing.
 fs::path executablePath() {
     std::error_code ec;
@@ -110,4 +110,4 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
     return { true, "Packaged " + exe.filename().string() + " to " + fs::absolute(out, ec).string() + note };
 }
 
-} // namespace Engine
+} // namespace Supersonic

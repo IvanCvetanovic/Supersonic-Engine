@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 constexpr const char* kDragPayload = "ENGINE_ENTITY";
@@ -251,4 +251,4 @@ void SceneHierarchyPanel::drawCreateMenu() {
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

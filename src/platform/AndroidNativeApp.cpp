@@ -1,9 +1,9 @@
 #include "platform/AndroidNativeApp.hpp"
 
-#if defined(ENGINE_PLATFORM_ANDROID)
+#if defined(SUPERSONIC_PLATFORM_ANDROID)
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 ANativeWindow* AndroidNativeApp::s_window = nullptr;
 bool AndroidNativeApp::s_initialized = false;
@@ -25,5 +25,5 @@ bool AndroidNativeApp::IsAppInitialized() {
     return s_initialized;
 }
 
-} // namespace Engine
+} // namespace Supersonic
 #endif

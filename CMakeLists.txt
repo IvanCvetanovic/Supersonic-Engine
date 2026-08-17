@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GameEngine LANGUAGES C CXX)
+project(SupersonicEngine LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,21 +19,21 @@ endif()
 # Target Platform Detection
 if (ANDROID)
     message(STATUS "Targeting Android NDK platform (Vulkan NativeActivity)")
-    add_compile_definitions(ENGINE_PLATFORM_ANDROID=1)
+    add_compile_definitions(SUPERSONIC_PLATFORM_ANDROID=1)
 elseif (APPLE)
     if (IOS)
         message(STATUS "Targeting iOS platform (MoltenVK Metal)")
-        add_compile_definitions(ENGINE_PLATFORM_IOS=1)
+        add_compile_definitions(SUPERSONIC_PLATFORM_IOS=1)
     else()
         message(STATUS "Targeting macOS platform (MoltenVK Metal)")
-        add_compile_definitions(ENGINE_PLATFORM_MACOS=1)
+        add_compile_definitions(SUPERSONIC_PLATFORM_MACOS=1)
     endif()
 elseif (WIN32)
     message(STATUS "Targeting Windows platform (Win32 Vulkan)")
-    add_compile_definitions(ENGINE_PLATFORM_WINDOWS=1)
+    add_compile_definitions(SUPERSONIC_PLATFORM_WINDOWS=1)
 else()
     message(STATUS "Targeting Linux platform (X11/Wayland Vulkan)")
-    add_compile_definitions(ENGINE_PLATFORM_LINUX=1)
+    add_compile_definitions(SUPERSONIC_PLATFORM_LINUX=1)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -160,13 +160,13 @@ if (NOT ANDROID)
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/AndroidNativeApp\\.(cpp|hpp)$")
 endif()
 
-add_executable(GameEngine ${ENGINE_SOURCES} ${IMGUI_SOURCES})
+add_executable(SupersonicEngine ${ENGINE_SOURCES} ${IMGUI_SOURCES})
 
 # Keep the IDE tree mirroring the source tree instead of one flat blob.
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src PREFIX "src" FILES ${ENGINE_SOURCES})
 source_group("third_party/imgui" FILES ${IMGUI_SOURCES})
 
-target_include_directories(GameEngine PRIVATE
+target_include_directories(SupersonicEngine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
@@ -180,7 +180,7 @@ target_include_directories(GameEngine PRIVATE
 # GLM's configuration MUST be identical in every translation unit. Defining
 # these in headers is order-dependent and silently produces an ODR violation
 # where getProjectionMatrix() compiles differently per TU.
-target_compile_definitions(GameEngine PRIVATE
+target_compile_definitions(SupersonicEngine PRIVATE
     GLM_FORCE_RADIANS
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_ENABLE_EXPERIMENTAL
@@ -196,14 +196,14 @@ set(VENDORED_SOURCES
 )
 
 if (MSVC)
-    target_compile_options(GameEngine PRIVATE /W4 /permissive-)
+    target_compile_options(SupersonicEngine PRIVATE /W4 /permissive-)
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
 else()
-    target_compile_options(GameEngine PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(SupersonicEngine PRIVATE -Wall -Wextra -Wpedantic)
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
-target_link_libraries(GameEngine PRIVATE
+target_link_libraries(SupersonicEngine PRIVATE
     Vulkan::Vulkan
     glfw
     EnTT::EnTT
@@ -213,16 +213,16 @@ target_link_libraries(GameEngine PRIVATE
 # Audio output. XAudio2 ships with Windows, so this adds no third-party
 # dependency; other platforms compile AudioEngine's documented no-op path.
 if (WIN32)
-    target_link_libraries(GameEngine PRIVATE xaudio2 ole32)
+    target_link_libraries(SupersonicEngine PRIVATE xaudio2 ole32)
 endif()
 
 # Assets are loaded with paths relative to the working directory, so make F5
 # in Visual Studio launch from the project root rather than the build folder.
-set_target_properties(GameEngine PROPERTIES
+set_target_properties(SupersonicEngine PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 if (_isMultiConfig)
-    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT GameEngine)
+    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT SupersonicEngine)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -271,7 +271,7 @@ if (GLSL_COMPILER)
     endforeach()
 
     add_custom_target(Shaders DEPENDS ${SPIRV_OUTPUTS})
-    add_dependencies(GameEngine Shaders)
+    add_dependencies(SupersonicEngine Shaders)
 else()
     message(WARNING
         "No GLSL compiler found (glslc/glslangValidator). The committed .spv blobs in "
@@ -282,19 +282,19 @@ endif()
 # ---------------------------------------------------------------------------
 # Hot-reloadable script plugin
 # ---------------------------------------------------------------------------
-option(ENGINE_BUILD_SCRIPT_PLUGIN "Build the sample hot-reload script plugin" ON)
-if (ENGINE_BUILD_SCRIPT_PLUGIN)
+option(SUPERSONIC_BUILD_SCRIPT_PLUGIN "Build the sample hot-reload script plugin" ON)
+if (SUPERSONIC_BUILD_SCRIPT_PLUGIN)
     add_subdirectory(plugins)
     # Not a link dependency - the engine loads it at runtime and tolerates its
     # absence - but building it by default makes the feature work out of the box.
-    add_dependencies(GameEngine GameScripts)
+    add_dependencies(SupersonicEngine GameScripts)
 endif()
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-option(ENGINE_BUILD_TESTS "Build engine unit tests" ON)
-if (ENGINE_BUILD_TESTS)
+option(SUPERSONIC_BUILD_TESTS "Build engine unit tests" ON)
+if (SUPERSONIC_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

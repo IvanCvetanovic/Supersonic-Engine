@@ -4,7 +4,7 @@
 
 #include "core/SceneSerializer.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class GamePackager {
 public:
@@ -13,4 +13,4 @@ public:
     static SerializationResult PackageStandaloneGame(const std::string& outputFolder);
 };
 
-} // namespace Engine
+} // namespace Supersonic

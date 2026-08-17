@@ -2,11 +2,11 @@
 
 #include <entt/entt.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 class PhysicsSystem {
 public:
     static void Update(entt::registry& registry, float deltaTime);
 };
 
-} // namespace Engine
+} // namespace Supersonic

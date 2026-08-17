@@ -4,7 +4,7 @@
 #include "platform/Window.hpp"
 #include "core/Components.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class CameraSystem {
 public:
@@ -20,4 +20,4 @@ private:
     static double s_lastY;
 };
 
-} // namespace Engine
+} // namespace Supersonic

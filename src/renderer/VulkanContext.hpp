@@ -9,7 +9,7 @@
 // VMA placeholder include (VMA implementation is in VulkanContext.cpp)
 #include <vk_mem_alloc.h>
 
-namespace Engine {
+namespace Supersonic {
 
 class VulkanContext {
 public:
@@ -46,4 +46,4 @@ private:
 #endif
 };
 
-} // namespace Engine
+} // namespace Supersonic

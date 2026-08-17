@@ -10,7 +10,7 @@
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class RenderSystem {
 public:
@@ -42,4 +42,4 @@ public:
     static void SyncResources(entt::registry& registry, MeshRegistry& meshes, TextureRegistry& textures);
 };
 
-} // namespace Engine
+} // namespace Supersonic

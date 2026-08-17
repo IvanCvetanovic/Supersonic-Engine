@@ -11,7 +11,7 @@
 
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 constexpr float kStatusVisibleSeconds = 6.0f;
@@ -395,4 +395,4 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     ImGui::End(); // End DockSpace
 }
 
-} // namespace Engine
+} // namespace Supersonic

@@ -3,7 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace Engine {
+namespace Supersonic {
 
 Window::Window(int width, int height, const std::string& title)
     : m_width(width), m_height(height), m_title(title) {
@@ -83,4 +83,4 @@ std::vector<const char*> Window::GetRequiredExtensions() const {
     return std::vector<const char*>(glfwExtensions, glfwExtensions + glfwExtensionCount);
 }
 
-} // namespace Engine
+} // namespace Supersonic

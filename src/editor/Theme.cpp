@@ -1,7 +1,7 @@
 #include "editor/Theme.hpp"
 #include "imgui_internal.h"
 
-namespace Engine {
+namespace Supersonic {
 
 void Theme::ApplyEngineDarkTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
@@ -139,4 +139,4 @@ void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float r
     ImGui::PopID();
 }
 
-} // namespace Engine
+} // namespace Supersonic

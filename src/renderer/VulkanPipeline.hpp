@@ -8,7 +8,7 @@
 // GLM configuration lives on the CMake target - see core/Components.hpp.
 #include <glm/glm.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 // Maximum simultaneous lights. Kept small and fixed so the whole set fits in a
 // plain UBO with no storage buffer or bindless machinery.
@@ -99,4 +99,4 @@ private:
     vk::Pipeline m_graphicsPipeline{nullptr};
 };
 
-} // namespace Engine
+} // namespace Supersonic

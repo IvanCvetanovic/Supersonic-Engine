@@ -7,7 +7,7 @@
 #include <sstream>
 #include <unordered_map>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -322,4 +322,4 @@ bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
     return true;
 }
 
-} // namespace Engine
+} // namespace Supersonic

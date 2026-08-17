@@ -29,8 +29,8 @@ echo "[INFO] Configuring for iOS..."
 cmake -S "${PROJECT_ROOT}" -B "${BUILD_DIR}" -G Xcode \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-    -DENGINE_BUILD_TESTS=OFF \
-    -DENGINE_BUILD_SCRIPT_PLUGIN=OFF
+    -DSUPERSONIC_BUILD_TESTS=OFF \
+    -DSUPERSONIC_BUILD_SCRIPT_PLUGIN=OFF
 
 echo "[INFO] Building..."
 cmake --build "${BUILD_DIR}" --config Release

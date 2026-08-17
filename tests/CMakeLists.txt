@@ -4,7 +4,7 @@
 # library target, because the engine builds as an executable. None of the code
 # under test issues Vulkan calls, so only the headers are required.
 
-set(ENGINE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+set(SUPERSONIC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 # tinygltf and json.hpp are vendored; they must not be held to the engine's
 # warning level. Both branches matter - the MSVC-only guard left them compiling
@@ -18,11 +18,11 @@ endif()
 function(add_engine_test name)
     add_executable(${name} ${name}.cpp ${ARGN})
     target_include_directories(${name} PRIVATE
-        ${ENGINE_SRC}/src
-        ${ENGINE_SRC}/tests
+        ${SUPERSONIC_SRC}/src
+        ${SUPERSONIC_SRC}/tests
         ${Vulkan_INCLUDE_DIRS}
-        ${ENGINE_SRC}/third_party/glm
-        ${ENGINE_SRC}/third_party/entt-3.13.2/src
+        ${SUPERSONIC_SRC}/third_party/glm
+        ${SUPERSONIC_SRC}/third_party/entt-3.13.2/src
     )
     target_compile_definitions(${name} PRIVATE
         GLM_FORCE_RADIANS
@@ -38,43 +38,43 @@ function(add_engine_test name)
 endfunction()
 
 add_engine_test(test_transform)
-add_engine_test(test_raycast   ${ENGINE_SRC}/src/core/Raycast.cpp
-                               ${ENGINE_SRC}/src/core/TransformSystem.cpp)
-add_engine_test(test_meshgen   ${ENGINE_SRC}/src/core/ModelLoader.cpp
-                               ${ENGINE_SRC}/src/core/TerrainGenerator.cpp)
-add_engine_test(test_serialize ${ENGINE_SRC}/src/core/SceneSerializer.cpp
-                               ${ENGINE_SRC}/src/core/PrefabSerializer.cpp)
-add_engine_test(test_physics   ${ENGINE_SRC}/src/core/PhysicsSystem.cpp)
-add_engine_test(test_audio     ${ENGINE_SRC}/src/core/AudioClip.cpp)
-add_engine_test(test_scripts   ${ENGINE_SRC}/src/core/ScriptRegistry.cpp)
-add_engine_test(test_hierarchy ${ENGINE_SRC}/src/core/TransformSystem.cpp
-                               ${ENGINE_SRC}/src/core/PlayMode.cpp
-                               ${ENGINE_SRC}/src/core/SceneSerializer.cpp
-                               ${ENGINE_SRC}/src/core/TimeTravelDebugger.cpp)
+add_engine_test(test_raycast   ${SUPERSONIC_SRC}/src/core/Raycast.cpp
+                               ${SUPERSONIC_SRC}/src/core/TransformSystem.cpp)
+add_engine_test(test_meshgen   ${SUPERSONIC_SRC}/src/core/ModelLoader.cpp
+                               ${SUPERSONIC_SRC}/src/core/TerrainGenerator.cpp)
+add_engine_test(test_serialize ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp
+                               ${SUPERSONIC_SRC}/src/core/PrefabSerializer.cpp)
+add_engine_test(test_physics   ${SUPERSONIC_SRC}/src/core/PhysicsSystem.cpp)
+add_engine_test(test_audio     ${SUPERSONIC_SRC}/src/core/AudioClip.cpp)
+add_engine_test(test_scripts   ${SUPERSONIC_SRC}/src/core/ScriptRegistry.cpp)
+add_engine_test(test_hierarchy ${SUPERSONIC_SRC}/src/core/TransformSystem.cpp
+                               ${SUPERSONIC_SRC}/src/core/PlayMode.cpp
+                               ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp
+                               ${SUPERSONIC_SRC}/src/core/TimeTravelDebugger.cpp)
 
 # TimeTravelDebugger's panel uses ImGui, which PlayMode::Play touches via Clear().
-target_include_directories(test_hierarchy PRIVATE ${ENGINE_SRC}/third_party/imgui)
+target_include_directories(test_hierarchy PRIVATE ${SUPERSONIC_SRC}/third_party/imgui)
 target_sources(test_hierarchy PRIVATE
-    ${ENGINE_SRC}/third_party/imgui/imgui.cpp
-    ${ENGINE_SRC}/third_party/imgui/imgui_draw.cpp
-    ${ENGINE_SRC}/third_party/imgui/imgui_tables.cpp
-    ${ENGINE_SRC}/third_party/imgui/imgui_widgets.cpp)
+    ${SUPERSONIC_SRC}/third_party/imgui/imgui.cpp
+    ${SUPERSONIC_SRC}/third_party/imgui/imgui_draw.cpp
+    ${SUPERSONIC_SRC}/third_party/imgui/imgui_tables.cpp
+    ${SUPERSONIC_SRC}/third_party/imgui/imgui_widgets.cpp)
 set_source_files_properties(
-    ${ENGINE_SRC}/third_party/imgui/imgui.cpp
-    ${ENGINE_SRC}/third_party/imgui/imgui_draw.cpp
-    ${ENGINE_SRC}/third_party/imgui/imgui_tables.cpp
-    ${ENGINE_SRC}/third_party/imgui/imgui_widgets.cpp
+    ${SUPERSONIC_SRC}/third_party/imgui/imgui.cpp
+    ${SUPERSONIC_SRC}/third_party/imgui/imgui_draw.cpp
+    ${SUPERSONIC_SRC}/third_party/imgui/imgui_tables.cpp
+    ${SUPERSONIC_SRC}/third_party/imgui/imgui_widgets.cpp
     TARGET_DIRECTORY test_hierarchy PROPERTIES COMPILE_OPTIONS "${_vendorWarnFlag}")
-add_engine_test(test_gltf      ${ENGINE_SRC}/src/core/GltfLoader.cpp
-                               ${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp)
+add_engine_test(test_gltf      ${SUPERSONIC_SRC}/src/core/GltfLoader.cpp
+                               ${SUPERSONIC_SRC}/src/core/TinyGltfImplementation.cpp)
 
-target_include_directories(test_gltf PRIVATE ${ENGINE_SRC}/third_party/tinygltf)
+target_include_directories(test_gltf PRIVATE ${SUPERSONIC_SRC}/third_party/tinygltf)
 # Runs against assets/models/monument.gltf, so it needs the project root.
-set_tests_properties(test_gltf PROPERTIES WORKING_DIRECTORY "${ENGINE_SRC}")
+set_tests_properties(test_gltf PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")
 
-set_source_files_properties(${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp
+set_source_files_properties(${SUPERSONIC_SRC}/src/core/TinyGltfImplementation.cpp
     TARGET_DIRECTORY test_gltf PROPERTIES COMPILE_OPTIONS "${_vendorWarnFlag}")
 
 # test_audio also opportunistically checks the shipped ambient clip, so run the
 # suite from the project root where assets/ resolves.
-set_tests_properties(test_audio PROPERTIES WORKING_DIRECTORY "${ENGINE_SRC}")
+set_tests_properties(test_audio PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")

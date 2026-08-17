@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-using namespace Engine;
+using namespace Supersonic;
 
 static const std::string kScene = "test_scene_tmp.scene";
 static const std::string kPrefab = "test_prefab_tmp.prefab";

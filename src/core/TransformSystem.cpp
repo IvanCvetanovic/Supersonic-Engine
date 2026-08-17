@@ -5,7 +5,7 @@
 #include <cmath>
 #include <vector>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -180,4 +180,4 @@ void TransformSystem::OnParentDestroyed(entt::registry& registry, entt::entity p
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

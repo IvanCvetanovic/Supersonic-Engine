@@ -6,7 +6,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -170,4 +170,4 @@ entt::entity PrefabSerializer::InstantiatePrefab(entt::registry& registry, const
     return entity;
 }
 
-} // namespace Engine
+} // namespace Supersonic

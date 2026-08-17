@@ -6,7 +6,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -291,4 +291,4 @@ std::vector<char> VulkanPipeline::readFile(const std::string& filename) {
     return buffer;
 }
 
-} // namespace Engine
+} // namespace Supersonic

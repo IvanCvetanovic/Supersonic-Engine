@@ -8,7 +8,7 @@
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanImage.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 struct LightComponent;
 
@@ -58,4 +58,4 @@ private:
     vk::Framebuffer m_framebuffer{nullptr};
 };
 
-} // namespace Engine
+} // namespace Supersonic

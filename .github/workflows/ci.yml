@@ -69,7 +69,7 @@ jobs:
           # Location-agnostic: multi-config generators nest outputs under the
           # configuration directory, single-config ones do not, and the plugin
           # sets its own per-config output path.
-          find build -name 'GameEngine' -o -name 'GameEngine.exe' | grep -q . \
+          find build -name 'SupersonicEngine' -o -name 'SupersonicEngine.exe' | grep -q . \
             || { echo "engine binary not found"; exit 1; }
           find build -name 'GameScripts*' -type f | grep -q . \
             || { echo "script plugin not found"; exit 1; }

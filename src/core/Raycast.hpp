@@ -5,7 +5,7 @@
 
 #include "core/Components.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 struct Ray {
     glm::vec3 origin{0.0f};
@@ -32,4 +32,4 @@ public:
                                  float& outTFar);
 };
 
-} // namespace Engine
+} // namespace Supersonic

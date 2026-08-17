@@ -5,7 +5,7 @@
 
 #include "core/MeshData.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 // glTF 2.0 importer.
 //
@@ -35,4 +35,4 @@ public:
     static Scene Load(const std::string& path);
 };
 
-} // namespace Engine
+} // namespace Supersonic

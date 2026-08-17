@@ -8,7 +8,7 @@
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
 
-namespace Engine {
+namespace Supersonic {
 
 class VulkanOffscreen {
 public:
@@ -58,4 +58,4 @@ private:
     ImTextureID m_textureID{0};
 };
 
-} // namespace Engine
+} // namespace Supersonic

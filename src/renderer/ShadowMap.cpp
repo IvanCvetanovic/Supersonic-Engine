@@ -5,7 +5,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution)
     : m_deviceRef(device), m_resolution(resolution == 0 ? 1024 : resolution) {
@@ -167,4 +167,4 @@ glm::mat4 ShadowMap::ComputeLightSpaceMatrix(const glm::vec3& lightDirection,
     return proj * view;
 }
 
-} // namespace Engine
+} // namespace Supersonic

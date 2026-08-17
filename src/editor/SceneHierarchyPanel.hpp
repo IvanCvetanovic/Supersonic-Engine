@@ -3,7 +3,7 @@
 #include <entt/entt.hpp>
 #include "imgui.h"
 
-namespace Engine {
+namespace Supersonic {
 
 class SceneHierarchyPanel {
 public:
@@ -33,4 +33,4 @@ private:
     bool m_hasPendingReparent{false};
 };
 
-} // namespace Engine
+} // namespace Supersonic

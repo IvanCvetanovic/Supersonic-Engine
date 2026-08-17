@@ -9,24 +9,24 @@
 #include <algorithm>
 #include <string>
 
-using namespace Engine;
+using namespace Supersonic;
 
 namespace {
 
 int g_builtinCalls = 0;
 int g_pluginCalls = 0;
 
-void builtinA(EngineScriptContext* ctx) {
+void builtinA(SupersonicScriptContext* ctx) {
     ++g_builtinCalls;
     ctx->rotation[1] += 1.0f;
 }
 
-void pluginA(EngineScriptContext* ctx) {
+void pluginA(SupersonicScriptContext* ctx) {
     ++g_pluginCalls;
     ctx->position[1] += 2.0f;
 }
 
-void pluginB(EngineScriptContext*) { ++g_pluginCalls; }
+void pluginB(SupersonicScriptContext*) { ++g_pluginCalls; }
 
 bool contains(const std::vector<std::string>& names, const std::string& needle) {
     return std::find(names.begin(), names.end(), needle) != names.end();
@@ -65,7 +65,7 @@ static void testScriptIsInvokable() {
     registry.Register("BuiltinA", &builtinA, ScriptRegistry::Origin::BuiltIn);
 
     g_builtinCalls = 0;
-    EngineScriptContext ctx{};
+    SupersonicScriptContext ctx{};
     ctx.deltaTime = 1.0f / 60.0f;
 
     const auto* entry = registry.Find("BuiltinA");
@@ -127,10 +127,10 @@ static void testNamesAreSorted() {
 static void testApiVersionIsPinned() {
     // The engine refuses to load a plugin whose version differs; if this
     // constant changes, every plugin must be rebuilt.
-    CHECK_EQ(ENGINE_SCRIPT_API_VERSION, 1);
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 1);
 
     // Context layout is part of the ABI.
-    CHECK_EQ(sizeof(EngineScriptContext),
+    CHECK_EQ(sizeof(SupersonicScriptContext),
              sizeof(float) * 11 + sizeof(unsigned int));
 }
 

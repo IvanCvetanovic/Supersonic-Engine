@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::Json {
+namespace Supersonic::Json {
 
 class Value;
 using Object = std::map<std::string, Value>;
@@ -290,4 +290,4 @@ inline bool Parse(const std::string& text, Value& out, std::string& error) {
     return false;
 }
 
-} // namespace Engine::Json
+} // namespace Supersonic::Json

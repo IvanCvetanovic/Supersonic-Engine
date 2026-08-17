@@ -2,7 +2,7 @@
 
 #include <entt/entt.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 // Several systems want "the one active camera" or "the one directional light".
 // Writing that as a view loop with a break at the end works, but the loop
@@ -14,4 +14,4 @@ entt::entity FirstEntityOf(View&& view) {
     return it == view.end() ? entt::null : *it;
 }
 
-} // namespace Engine
+} // namespace Supersonic

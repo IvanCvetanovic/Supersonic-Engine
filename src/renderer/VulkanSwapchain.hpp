@@ -7,7 +7,7 @@
 #include "renderer/VulkanDevice.hpp"
 #include "platform/Window.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class VulkanSwapchain {
 public:
@@ -45,4 +45,4 @@ private:
     std::vector<vk::ImageView> m_swapChainImageViews;
 };
 
-} // namespace Engine
+} // namespace Supersonic

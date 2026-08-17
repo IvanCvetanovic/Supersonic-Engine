@@ -1,4 +1,4 @@
-#include "core/Engine.hpp"
+#include "core/SupersonicApp.hpp"
 #include "core/Components.hpp"
 #include "core/CameraSystem.hpp"
 #include "core/PhysicsSystem.hpp"
@@ -18,7 +18,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 // A frame longer than this is treated as a hitch rather than elapsed time.
@@ -54,14 +54,14 @@ std::string scriptPluginPath() {
 }
 } // namespace
 
-EngineApp::EngineApp() {
-    std::cout << "[EngineApp] Initializing Engine Subsystems..." << std::endl;
+SupersonicApp::SupersonicApp() {
+    std::cout << "[SupersonicApp] Initializing Engine Subsystems..." << std::endl;
 
     // Asset writes target these; create them before anything tries to save.
     std::error_code ec;
     std::filesystem::create_directories("assets/scenes", ec);
     if (ec) {
-        std::cerr << "[EngineApp] Could not create assets/scenes: " << ec.message() << std::endl;
+        std::cerr << "[SupersonicApp] Could not create assets/scenes: " << ec.message() << std::endl;
     }
 
     m_audioEngine = std::make_unique<AudioEngine>();
@@ -73,7 +73,7 @@ EngineApp::EngineApp() {
     m_hotReload = std::make_unique<HotReloadEngine>();
     m_hotReload->WatchPlugin(scriptPluginPath());
 
-    m_window = std::make_unique<Window>(1280, 720, "Vulkan EnTT 3D Game Engine");
+    m_window = std::make_unique<Window>(1280, 720, "Supersonic Engine");
 
     auto requiredExtensions = m_window->GetRequiredExtensions();
     m_vulkanContext = std::make_unique<VulkanContext>(requiredExtensions);
@@ -95,8 +95,8 @@ EngineApp::EngineApp() {
     initECS();
 }
 
-EngineApp::~EngineApp() {
-    std::cout << "[EngineApp] Shutting down Engine Subsystems in reverse order..." << std::endl;
+SupersonicApp::~SupersonicApp() {
+    std::cout << "[SupersonicApp] Shutting down Engine Subsystems in reverse order..." << std::endl;
 
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
         m_vulkanDevice->GetDevice().waitIdle();
@@ -121,8 +121,8 @@ EngineApp::~EngineApp() {
     m_audioEngine.reset();
 }
 
-void EngineApp::initECS() {
-    std::cout << "[EngineApp] Initializing EnTT 3D Entities, Components & Lighting..." << std::endl;
+void SupersonicApp::initECS() {
+    std::cout << "[SupersonicApp] Initializing EnTT 3D Entities, Components & Lighting..." << std::endl;
 
     // Tagged, so it does not show up in the hierarchy as an anonymous
     // "Entity 0" that can be deleted without realising it is the camera.
@@ -254,11 +254,11 @@ void EngineApp::initECS() {
     audioSource.soundFile = "assets/audio/ambient.wav";
     audioSource.volume = 0.35f;
 
-    std::cout << "[EngineApp] Scene created." << std::endl;
+    std::cout << "[SupersonicApp] Scene created." << std::endl;
 }
 
-void EngineApp::Run() {
-    std::cout << "[EngineApp] Starting Main 3D Game Loop..." << std::endl;
+void SupersonicApp::Run() {
+    std::cout << "[SupersonicApp] Starting Main 3D Game Loop..." << std::endl;
 
     double lastTime = glfwGetTime();
 
@@ -363,10 +363,10 @@ void EngineApp::Run() {
                               cameraPosition);
     }
 
-    std::cout << "[EngineApp] Window close requested. Waiting for GPU idle..." << std::endl;
+    std::cout << "[SupersonicApp] Window close requested. Waiting for GPU idle..." << std::endl;
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
         m_vulkanDevice->GetDevice().waitIdle();
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

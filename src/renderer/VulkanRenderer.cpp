@@ -14,7 +14,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace Engine {
+namespace Supersonic {
 
 VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window)
     : m_deviceRef(device), m_swapchainRef(swapchain), m_windowRef(window) {
@@ -719,4 +719,4 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
-} // namespace Engine
+} // namespace Supersonic

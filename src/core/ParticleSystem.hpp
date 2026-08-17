@@ -4,7 +4,7 @@
 
 #include "core/Components.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class ParticleSystem {
 public:
@@ -13,4 +13,4 @@ public:
     static void Update(entt::registry& registry, float deltaTime);
 };
 
-} // namespace Engine
+} // namespace Supersonic

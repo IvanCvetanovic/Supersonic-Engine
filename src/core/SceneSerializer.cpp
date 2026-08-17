@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -407,4 +407,4 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
     return applyScene(registry, root["Entities"].AsArray(), filepath);
 }
 
-} // namespace Engine
+} // namespace Supersonic

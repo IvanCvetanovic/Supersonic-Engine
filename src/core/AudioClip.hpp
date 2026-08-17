@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine {
+namespace Supersonic {
 
 // Decoded PCM audio.
 //
@@ -33,4 +33,4 @@ struct AudioClip {
     static bool LoadWav(const std::string& path, AudioClip& out, std::string& error);
 };
 
-} // namespace Engine
+} // namespace Supersonic

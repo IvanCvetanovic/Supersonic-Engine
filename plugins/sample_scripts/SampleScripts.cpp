@@ -20,7 +20,7 @@ namespace {
 constexpr float kTau = 6.28318530718f;
 
 // A figure-eight orbit in the XZ plane.
-void orbitScript(EngineScriptContext* ctx) {
+void orbitScript(SupersonicScriptContext* ctx) {
     const float t = ctx->elapsed * 0.9f;
     const float radius = 2.0f;
     ctx->position[0] = std::sin(t) * radius;
@@ -30,20 +30,20 @@ void orbitScript(EngineScriptContext* ctx) {
 
 // Bobs up and down with a per-entity phase offset, so several entities using
 // this script do not move in lockstep.
-void bobScript(EngineScriptContext* ctx) {
+void bobScript(SupersonicScriptContext* ctx) {
     const float phase = static_cast<float>(ctx->entityId % 16u) / 16.0f * kTau;
     ctx->position[1] += std::cos(ctx->elapsed * 2.2f + phase) * 1.2f * ctx->deltaTime;
 }
 
 // Tumbles on all three axes at mutually irrational-ish rates.
-void tumbleScript(EngineScriptContext* ctx) {
+void tumbleScript(SupersonicScriptContext* ctx) {
     ctx->rotation[0] += 1.10f * ctx->deltaTime;
     ctx->rotation[1] += 0.70f * ctx->deltaTime;
     ctx->rotation[2] += 0.31f * ctx->deltaTime;
 }
 
 // Breathes between two sizes; edit the constants and rebuild to see the reload.
-void breatheScript(EngineScriptContext* ctx) {
+void breatheScript(SupersonicScriptContext* ctx) {
     const float s = 1.0f + 0.30f * std::sin(ctx->elapsed * 1.7f);
     ctx->scale[0] = s;
     ctx->scale[1] = s;
@@ -54,12 +54,12 @@ void breatheScript(EngineScriptContext* ctx) {
 
 extern "C" {
 
-ENGINE_SCRIPT_EXPORT int EngineScriptPluginVersion(void) {
-    return ENGINE_SCRIPT_API_VERSION;
+SUPERSONIC_SCRIPT_EXPORT int SupersonicScriptPluginVersion(void) {
+    return SUPERSONIC_SCRIPT_API_VERSION;
 }
 
-ENGINE_SCRIPT_EXPORT void EngineScriptPluginRegister(EngineScriptHost* host) {
-    if (!host || host->apiVersion != ENGINE_SCRIPT_API_VERSION || !host->registerScript) {
+SUPERSONIC_SCRIPT_EXPORT void SupersonicScriptPluginRegister(SupersonicScriptHost* host) {
+    if (!host || host->apiVersion != SUPERSONIC_SCRIPT_API_VERSION || !host->registerScript) {
         return;
     }
 

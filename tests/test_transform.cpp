@@ -11,7 +11,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
-using namespace Engine;
+using namespace Supersonic;
 
 static void testDepthRangeIsZeroToOne() {
     // With GLM_FORCE_DEPTH_ZERO_TO_ONE, a point on the near plane maps to z=0

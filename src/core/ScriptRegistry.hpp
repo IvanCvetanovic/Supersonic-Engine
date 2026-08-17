@@ -6,7 +6,7 @@
 
 #include "core/ScriptPluginApi.h"
 
-namespace Engine {
+namespace Supersonic {
 
 // Name -> script lookup, replacing the hardcoded if/else chain in ScriptEngine.
 //
@@ -17,13 +17,13 @@ public:
     enum class Origin { BuiltIn, Plugin };
 
     struct Entry {
-        EngineScriptUpdateFn update{nullptr};
+        SupersonicScriptUpdateFn update{nullptr};
         Origin origin{Origin::BuiltIn};
     };
 
     static ScriptRegistry& Get();
 
-    void Register(const std::string& name, EngineScriptUpdateFn update, Origin origin);
+    void Register(const std::string& name, SupersonicScriptUpdateFn update, Origin origin);
 
     // Called before unloading a plugin. Leaving a function pointer that lives in
     // a freed module is the classic hot-reload crash.
@@ -40,4 +40,4 @@ private:
     std::unordered_map<std::string, Entry> m_scripts;
 };
 
-} // namespace Engine
+} // namespace Supersonic

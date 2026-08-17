@@ -4,7 +4,7 @@
 
 #include "core/MeshData.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class ModelLoader {
 public:
@@ -18,4 +18,4 @@ public:
     static bool LoadOBJ(const std::string& filepath, MeshData& out);
 };
 
-} // namespace Engine
+} // namespace Supersonic

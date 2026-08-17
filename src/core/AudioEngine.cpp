@@ -9,7 +9,7 @@
 #include <xaudio2.h>
 #endif
 
-namespace Engine {
+namespace Supersonic {
 
 #if defined(_WIN32)
 
@@ -211,4 +211,4 @@ const AudioClip* AudioEngine::LoadClip(const std::string& path) {
     return &it->second;
 }
 
-} // namespace Engine
+} // namespace Supersonic

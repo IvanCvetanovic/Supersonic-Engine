@@ -14,7 +14,7 @@
 #include <fstream>
 #include <string>
 
-using namespace Engine;
+using namespace Supersonic;
 
 namespace {
 const std::string kModel = "assets/models/monument.gltf";

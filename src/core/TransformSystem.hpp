@@ -5,7 +5,7 @@
 
 #include "core/Components.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 // Resolves the parent/child graph into world matrices once per frame.
 //
@@ -41,4 +41,4 @@ public:
     static void SetWorldMatrix(entt::registry& registry, entt::entity entity, const glm::mat4& world);
 };
 
-} // namespace Engine
+} // namespace Supersonic

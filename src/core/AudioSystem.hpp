@@ -4,7 +4,7 @@
 
 #include "core/AudioEngine.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class AudioSystem {
 public:
@@ -21,4 +21,4 @@ public:
     static void Update(entt::registry& registry, AudioEngine& audio, float deltaTime);
 };
 
-} // namespace Engine
+} // namespace Supersonic

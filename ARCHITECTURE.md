@@ -1,4 +1,4 @@
-# Engine Architecture
+# Supersonic Engine — Architecture
 
 ## Manifesto
 
@@ -35,7 +35,7 @@ than left as an aspiration the code quietly contradicts.
 
 ### 3. Frame structure
 
-`EngineApp::Run` owns the frame. The order is deliberate and load-bearing:
+`SupersonicApp::Run` owns the frame. The order is deliberate and load-bearing:
 
 ```
 poll events
@@ -100,7 +100,7 @@ why the demo's physics cube had already fallen before you could look at it.
 ### 4. Ownership
 
 ```
-EngineApp
+SupersonicApp
 ├── AudioEngine        (XAudio2 on Windows; explicit no-op elsewhere)
 ├── HotReloadEngine    (watches the script plugin)
 ├── Window
@@ -112,7 +112,7 @@ EngineApp
 └── EditorLayer        (panels + the offscreen viewport target)
 ```
 
-`EditorLayer` is owned by `EngineApp`, **not** by `VulkanRenderer`. It used to be
+`EditorLayer` is owned by `SupersonicApp`, **not** by `VulkanRenderer`. It used to be
 a by-value member of the renderer whose UI was built from inside `DrawFrame`,
 which is what allowed the editor to destroy renderer resources mid-recording.
 The renderer now receives the offscreen target and finished ImGui draw data as

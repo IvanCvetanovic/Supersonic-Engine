@@ -5,7 +5,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace Engine {
+namespace Supersonic {
 
 VulkanSwapchain::VulkanSwapchain(VulkanDevice& device, Window& window)
     : m_deviceRef(device), m_device(device.GetDevice()) {
@@ -176,4 +176,4 @@ void VulkanSwapchain::createImageViews() {
               << " Swapchain Image Views." << std::endl;
 }
 
-} // namespace Engine
+} // namespace Supersonic

@@ -2,7 +2,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 
-namespace Engine {
+namespace Supersonic {
 
 bool CameraSystem::s_firstMouse = true;
 double CameraSystem::s_lastX = 640.0;
@@ -73,4 +73,4 @@ void CameraSystem::ProcessMouseInput(entt::registry& registry, Window& window, b
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

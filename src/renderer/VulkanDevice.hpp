@@ -10,7 +10,7 @@
 
 #include "platform/Window.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphicsFamily;
@@ -86,4 +86,4 @@ private:
     };
 };
 
-} // namespace Engine
+} // namespace Supersonic

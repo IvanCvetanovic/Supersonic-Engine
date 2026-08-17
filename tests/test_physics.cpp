@@ -8,7 +8,7 @@
 #include "core/PhysicsSystem.hpp"
 #include "core/Components.hpp"
 
-using namespace Engine;
+using namespace Supersonic;
 
 static void stepFor(entt::registry& registry, float seconds, float step = 1.0f / 60.0f) {
     for (float t = 0.0f; t < seconds; t += step) {
@@ -120,7 +120,7 @@ static void testZeroAndNegativeDeltaAreIgnored() {
 }
 
 static void testFixedStepDoesNotTunnel() {
-    // Engine::Run feeds this a fixed 1/60 step. Handing the integrator a raw
+    // Supersonic::Run feeds this a fixed 1/60 step. Handing the integrator a raw
     // two-second delta (a title-bar drag on Win32) moved a body 39 units in one
     // frame, straight through the floor.
     entt::registry registry;

@@ -2,7 +2,7 @@
 
 #include "core/MeshData.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class TerrainGenerator {
 public:
@@ -11,4 +11,4 @@ public:
     static bool GenerateTerrainMesh(uint32_t width, uint32_t height, float heightScale, MeshData& out);
 };
 
-} // namespace Engine
+} // namespace Supersonic

@@ -3,7 +3,7 @@
 #include <cstring>
 #include <fstream>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -107,4 +107,4 @@ bool AudioClip::LoadWav(const std::string& path, AudioClip& out, std::string& er
     return true;
 }
 
-} // namespace Engine
+} // namespace Supersonic

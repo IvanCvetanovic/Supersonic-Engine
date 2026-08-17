@@ -12,7 +12,7 @@
 #include <fstream>
 #include <string>
 
-using namespace Engine;
+using namespace Supersonic;
 
 static bool indicesInRange(const MeshData& mesh) {
     for (const uint32_t index : mesh.indices) {

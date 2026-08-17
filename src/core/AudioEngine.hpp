@@ -8,7 +8,7 @@
 
 #include "core/AudioClip.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 // Minimal audio output device.
 //
@@ -53,4 +53,4 @@ private:
     std::unique_ptr<Impl> m_impl;
 };
 
-} // namespace Engine
+} // namespace Supersonic

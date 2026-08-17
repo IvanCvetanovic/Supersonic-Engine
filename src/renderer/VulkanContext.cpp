@@ -6,7 +6,7 @@
 #include <iostream>
 #include <cstring>
 
-namespace Engine {
+namespace Supersonic {
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -132,9 +132,9 @@ void VulkanContext::createInstance(const std::vector<const char*>& windowExtensi
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "Game Engine App";
+    appInfo.pApplicationName = "Supersonic Engine";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.pEngineName = "Engine";
+    appInfo.pEngineName = "Supersonic";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_2;
 
@@ -198,4 +198,4 @@ void VulkanContext::setupDebugMessenger() {
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

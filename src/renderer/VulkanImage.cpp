@@ -3,7 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace Engine {
+namespace Supersonic {
 
 VulkanImage::VulkanImage(
     VulkanDevice& device,
@@ -220,4 +220,4 @@ void VulkanImage::CopyBufferToImage(
     device.GetDevice().freeCommandBuffers(commandPool, 1, &commandBuffer);
 }
 
-} // namespace Engine
+} // namespace Supersonic

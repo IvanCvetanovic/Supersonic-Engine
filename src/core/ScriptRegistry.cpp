@@ -3,14 +3,14 @@
 #include <algorithm>
 #include <iostream>
 
-namespace Engine {
+namespace Supersonic {
 
 ScriptRegistry& ScriptRegistry::Get() {
     static ScriptRegistry instance;
     return instance;
 }
 
-void ScriptRegistry::Register(const std::string& name, EngineScriptUpdateFn update, Origin origin) {
+void ScriptRegistry::Register(const std::string& name, SupersonicScriptUpdateFn update, Origin origin) {
     if (name.empty() || update == nullptr) {
         std::cerr << "[ScriptRegistry] Refusing to register an unnamed or null script." << std::endl;
         return;
@@ -60,4 +60,4 @@ size_t ScriptRegistry::PluginScriptCount() const {
         [](const auto& pair) { return pair.second.origin == Origin::Plugin; }));
 }
 
-} // namespace Engine
+} // namespace Supersonic

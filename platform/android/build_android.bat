@@ -34,8 +34,8 @@ cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" ^
     -DANDROID_ABI=%ANDROID_ABI% ^
     -DANDROID_PLATFORM=android-%ANDROID_API% ^
     -DCMAKE_BUILD_TYPE=Release ^
-    -DENGINE_BUILD_TESTS=OFF ^
-    -DENGINE_BUILD_SCRIPT_PLUGIN=OFF
+    -DSUPERSONIC_BUILD_TESTS=OFF ^
+    -DSUPERSONIC_BUILD_SCRIPT_PLUGIN=OFF
 if errorlevel 1 (
     echo [ERROR] CMake configure failed.
     exit /b 1

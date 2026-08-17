@@ -2,11 +2,11 @@
 
 #include "platform/PlatformDefs.hpp"
 
-#if defined(ENGINE_PLATFORM_ANDROID)
+#if defined(SUPERSONIC_PLATFORM_ANDROID)
 #include <android/native_window.h>
 #include <android_native_app_glue.h>
 
-namespace Engine {
+namespace Supersonic {
 
 class AndroidNativeApp {
 public:
@@ -19,5 +19,5 @@ private:
     static bool s_initialized;
 };
 
-} // namespace Engine
+} // namespace Supersonic
 #endif

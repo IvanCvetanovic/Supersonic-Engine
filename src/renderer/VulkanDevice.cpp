@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <cstring>
 
-namespace Engine {
+namespace Supersonic {
 
 VulkanDevice::VulkanDevice(vk::Instance instance, Window& window)
     : m_instance(instance) {
@@ -239,4 +239,4 @@ void VulkanDevice::initVMA() {
     std::cout << "[VulkanDevice] VmaAllocator initialized successfully." << std::endl;
 }
 
-} // namespace Engine
+} // namespace Supersonic

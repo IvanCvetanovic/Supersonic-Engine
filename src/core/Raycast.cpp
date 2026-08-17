@@ -6,7 +6,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <limits>
 
-namespace Engine {
+namespace Supersonic {
 
 Ray Raycast::ScreenPointToRay(
     const glm::vec2& mousePos,
@@ -142,4 +142,4 @@ entt::entity Raycast::PickEntity(entt::registry& registry, const Ray& ray) {
     return closestEntity;
 }
 
-} // namespace Engine
+} // namespace Supersonic

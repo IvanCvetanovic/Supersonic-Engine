@@ -11,7 +11,7 @@
 #define STBI_FAILURE_USERMSG
 #include <stb_image.h>
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 // Generous, but each set is tiny and this is allocated once.
@@ -188,4 +188,4 @@ vk::DescriptorSet TextureRegistry::GetDescriptorSet(uint32_t id) const {
     return m_textures[id].descriptorSet;
 }
 
-} // namespace Engine
+} // namespace Supersonic

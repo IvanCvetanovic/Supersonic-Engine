@@ -17,7 +17,7 @@
 
 #include <vulkan/vulkan.hpp>
 
-namespace Engine {
+namespace Supersonic {
 
 struct Vertex {
     glm::vec3 pos;
@@ -270,4 +270,4 @@ struct ParticleEmitterComponent {
     float emitAccumulator{0.0f};
 };
 
-} // namespace Engine
+} // namespace Supersonic

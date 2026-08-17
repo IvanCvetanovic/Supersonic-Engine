@@ -13,7 +13,7 @@
 
 namespace fs = std::filesystem;
 
-namespace Engine {
+namespace Supersonic {
 
 namespace {
 
@@ -51,7 +51,7 @@ std::string lastLibraryError() {
 }
 
 // Trampoline the plugin calls to announce a script.
-void registerScriptThunk(void* /*opaque*/, const char* name, EngineScriptUpdateFn update) {
+void registerScriptThunk(void* /*opaque*/, const char* name, SupersonicScriptUpdateFn update) {
     if (!name || !update) return;
     ScriptRegistry::Get().Register(name, update, ScriptRegistry::Origin::Plugin);
 }
@@ -62,11 +62,14 @@ HotReloadEngine::~HotReloadEngine() {
     unload();
 }
 
+std::filesystem::path HotReloadEngine::shadowPathFor(int slot) const {
+    const fs::path source(m_pluginPath);
+    return source.parent_path() /
+           (source.stem().string() + ".loaded" + std::to_string(slot) + source.extension().string());
+}
+
 void HotReloadEngine::WatchPlugin(const std::string& pluginPath) {
     m_pluginPath = pluginPath;
-    m_shadowPath = fs::path(pluginPath).parent_path() /
-                   (fs::path(pluginPath).stem().string() + ".loaded" +
-                    fs::path(pluginPath).extension().string());
 
     std::error_code ec;
     if (!fs::exists(m_pluginPath, ec)) {
@@ -75,7 +78,10 @@ void HotReloadEngine::WatchPlugin(const std::string& pluginPath) {
         return;
     }
 
-    ReloadNow();
+    if (ReloadNow()) {
+        m_lastWriteTime = fs::last_write_time(m_pluginPath, ec);
+        m_haveWriteTime = !ec;
+    }
 }
 
 void HotReloadEngine::Poll() {
@@ -88,47 +94,77 @@ void HotReloadEngine::Poll() {
     const auto size = fs::file_size(m_pluginPath, ec);
     if (ec || size == 0) return;
 
-    if (m_haveWriteTime && writeTime == m_lastWriteTime) {
+    if (!m_haveWriteTime || writeTime != m_lastWriteTime) {
+        // A linker writes its output in several passes, so a changed timestamp
+        // does not mean the file is finished. Wait until timestamp and size hold
+        // steady across two polls before touching it.
+        if (!m_pendingSeen || writeTime != m_pendingWriteTime || size != m_pendingSize) {
+            m_pendingSeen = true;
+            m_pendingWriteTime = writeTime;
+            m_pendingSize = size;
+            return;
+        }
+
+        if (!m_reloadPending) {
+            std::cout << "[HotReload] Detected change in " << m_pluginPath << "; reloading." << std::endl;
+            m_reloadPending = true;
+            m_reportedFailure = false;
+        }
         m_pendingSeen = false;
-        return;
     }
 
-    // A linker writes the output in several passes, so a changed timestamp does
-    // not mean the file is finished. Wait until the same timestamp and size have
-    // been observed on two consecutive polls before loading, otherwise a single
-    // rebuild triggers several reloads and can briefly map a partial DLL.
-    if (!m_pendingSeen || writeTime != m_pendingWriteTime || size != m_pendingSize) {
-        m_pendingSeen = true;
-        m_pendingWriteTime = writeTime;
-        m_pendingSize = size;
-        return;
-    }
+    if (!m_reloadPending) return;
 
-    std::cout << "[HotReload] Detected change in " << m_pluginPath << "; reloading." << std::endl;
-    m_pendingSeen = false;
-
-    // Only remember this timestamp once the load actually succeeded. A build
-    // tool can still hold the file open for a moment after finishing its last
-    // write, and treating that transient sharing violation as "done" would
-    // leave the plugin unloaded until the file happened to change again.
+    // Retry until it succeeds: a build tool can hold the file open for a moment
+    // after its final write, and that is not a reason to give up. The previously
+    // loaded plugin stays live and working throughout.
     if (ReloadNow()) {
         m_lastWriteTime = writeTime;
         m_haveWriteTime = true;
+        m_reloadPending = false;
+    } else if (!m_reportedFailure) {
+        // Once per reload attempt, not once per frame.
+        std::cerr << "[HotReload] " << m_status << std::endl;
+        m_reportedFailure = true;
     }
 }
 
 bool HotReloadEngine::ReloadNow() {
-    unload();
-    if (!load()) {
-        std::cerr << "[HotReload] " << m_status << std::endl;
-        return false;
+    if (m_pluginPath.empty()) return false;
+
+    // Open the NEW module before tearing down the old one.
+    //
+    // Unloading first meant every failed retry left the plugin's scripts
+    // unregistered for as long as the file stayed locked, so entities using
+    // them silently fell back to nothing in the meantime.
+    void* newHandle = nullptr;
+    SupersonicScriptPluginRegisterFn registerFn = nullptr;
+    const int newSlot = 1 - m_shadowSlot;
+
+    if (!openPlugin(newSlot, newHandle, registerFn)) {
+        return false; // m_status explains why; the old plugin is still live
     }
+
+    // Only now is it safe to drop the previous module and its function pointers.
+    unload();
+
+    m_library = newHandle;
+    m_shadowSlot = newSlot;
+
+    SupersonicScriptHost host{};
+    host.apiVersion = SUPERSONIC_SCRIPT_API_VERSION;
+    host.opaque = this;
+    host.registerScript = &registerScriptThunk;
+    registerFn(&host);
+
     ++m_reloadCount;
+    m_status = "loaded " + fs::path(m_pluginPath).filename().string() + " with " +
+               std::to_string(ScriptRegistry::Get().PluginScriptCount()) + " script(s)";
     std::cout << "[HotReload] " << m_status << " (reload #" << m_reloadCount << ")." << std::endl;
     return true;
 }
 
-bool HotReloadEngine::load() {
+bool HotReloadEngine::openPlugin(int slot, void*& outHandle, SupersonicScriptPluginRegisterFn& outRegister) {
     std::error_code ec;
 
     if (!fs::exists(m_pluginPath, ec)) {
@@ -136,58 +172,48 @@ bool HotReloadEngine::load() {
         return false;
     }
 
-    // Copy before loading. On Windows a mapped DLL is locked, so building the
-    // plugin again would fail while the engine is running; loading a private
-    // copy leaves the build output free to be replaced.
-    //
-    // A failure here is almost always the build tool still holding the file, so
-    // it is retryable rather than fatal. Loading it in place instead would lock
-    // the build output and break the next rebuild.
-    fs::copy_file(m_pluginPath, m_shadowPath, fs::copy_options::overwrite_existing, ec);
+    // Copy before loading. On Windows a mapped DLL is locked, so rebuilding the
+    // plugin would fail while the engine is running; loading a private copy
+    // leaves the build output free to be replaced. Two slots are alternated so
+    // the new copy never collides with the one still mapped.
+    const fs::path shadow = shadowPathFor(slot);
+    fs::copy_file(m_pluginPath, shadow, fs::copy_options::overwrite_existing, ec);
     if (ec) {
         m_status = "plugin is still locked by another process; will retry";
         return false;
     }
 
-    m_library = openLibrary(m_shadowPath.string());
-    if (!m_library) {
-        m_status = "failed to load " + m_shadowPath.string() + ": " + lastLibraryError();
+    void* handle = openLibrary(shadow.string());
+    if (!handle) {
+        m_status = "failed to load " + shadow.string() + ": " + lastLibraryError();
         return false;
     }
 
-    auto versionFn = reinterpret_cast<EngineScriptPluginVersionFn>(
-        findSymbol(m_library, ENGINE_SCRIPT_PLUGIN_VERSION_SYMBOL));
-    auto registerFn = reinterpret_cast<EngineScriptPluginRegisterFn>(
-        findSymbol(m_library, ENGINE_SCRIPT_PLUGIN_REGISTER_SYMBOL));
+    auto versionFn = reinterpret_cast<SupersonicScriptPluginVersionFn>(
+        findSymbol(handle, SUPERSONIC_SCRIPT_PLUGIN_VERSION_SYMBOL));
+    auto registerFn = reinterpret_cast<SupersonicScriptPluginRegisterFn>(
+        findSymbol(handle, SUPERSONIC_SCRIPT_PLUGIN_REGISTER_SYMBOL));
 
     if (!versionFn || !registerFn) {
-        m_status = std::string("plugin is missing ") + ENGINE_SCRIPT_PLUGIN_VERSION_SYMBOL +
-                   " / " + ENGINE_SCRIPT_PLUGIN_REGISTER_SYMBOL;
-        closeLibrary(m_library);
-        m_library = nullptr;
+        m_status = std::string("plugin is missing ") + SUPERSONIC_SCRIPT_PLUGIN_VERSION_SYMBOL +
+                   " / " + SUPERSONIC_SCRIPT_PLUGIN_REGISTER_SYMBOL;
+        closeLibrary(handle);
         return false;
     }
 
     const int pluginVersion = versionFn();
-    if (pluginVersion != ENGINE_SCRIPT_API_VERSION) {
+    if (pluginVersion != SUPERSONIC_SCRIPT_API_VERSION) {
         // A stale plugin built against a different context layout would
         // otherwise scribble over the wrong fields.
         m_status = "plugin API version " + std::to_string(pluginVersion) +
-                   " does not match engine version " + std::to_string(ENGINE_SCRIPT_API_VERSION) +
+                   " does not match engine version " + std::to_string(SUPERSONIC_SCRIPT_API_VERSION) +
                    "; rebuild the plugin";
-        closeLibrary(m_library);
-        m_library = nullptr;
+        closeLibrary(handle);
         return false;
     }
 
-    EngineScriptHost host{};
-    host.apiVersion = ENGINE_SCRIPT_API_VERSION;
-    host.opaque = this;
-    host.registerScript = &registerScriptThunk;
-    registerFn(&host);
-
-    m_status = "loaded " + fs::path(m_pluginPath).filename().string() + " with " +
-               std::to_string(ScriptRegistry::Get().PluginScriptCount()) + " script(s)";
+    outHandle = handle;
+    outRegister = registerFn;
     return true;
 }
 
@@ -202,4 +228,4 @@ void HotReloadEngine::unload() {
     }
 }
 
-} // namespace Engine
+} // namespace Supersonic

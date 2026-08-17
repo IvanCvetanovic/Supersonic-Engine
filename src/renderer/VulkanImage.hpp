@@ -5,7 +5,7 @@
 
 #include "renderer/VulkanDevice.hpp"
 
-namespace Engine {
+namespace Supersonic {
 
 class VulkanImage {
 public:
@@ -61,4 +61,4 @@ private:
     vk::Format m_format{vk::Format::eR8G8B8A8Srgb};
 };
 
-} // namespace Engine
+} // namespace Supersonic
