@@ -5,6 +5,17 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Default to Debug for single-config generators (Ninja/Makefiles). Multi-config
+# generators (Visual Studio, Xcode) ignore CMAKE_BUILD_TYPE and use --config.
+get_property(_isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if (NOT _isMultiConfig AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+    message(STATUS "CMAKE_BUILD_TYPE not set; defaulting to Debug")
+endif()
+if (_isMultiConfig)
+    message(STATUS "Multi-config generator: CMAKE_BUILD_TYPE is ignored, use --config <cfg>")
+endif()
+
 # Target Platform Detection
 if (ANDROID)
     message(STATUS "Targeting Android NDK platform (Vulkan NativeActivity)")
@@ -25,22 +36,90 @@ else()
     add_compile_definitions(ENGINE_PLATFORM_LINUX=1)
 endif()
 
-# Vulkan setup
+# ---------------------------------------------------------------------------
+# Vulkan
+#
+# Prefer a real SDK. Without one we can still build against the vendored
+# headers plus the loader that ships with the graphics driver, but a linker
+# needs an *import library*, not the DLL itself. On Windows with MSVC we
+# synthesise one from the loader's export table at configure time.
+# ---------------------------------------------------------------------------
 find_package(Vulkan QUIET)
 
-if (NOT Vulkan_FOUND)
-    message(STATUS "Using Vulkan-Headers from third_party and vulkan-1.dll from System32...")
-    set(VULKAN_SYS_LIB "$ENV{SystemRoot}/System32/vulkan-1.dll")
-    if (NOT EXISTS "${VULKAN_SYS_LIB}")
-        message(FATAL_ERROR "Could not locate vulkan-1.dll in System32.")
-    endif()
-
-    add_library(Vulkan::Vulkan UNKNOWN IMPORTED)
-    set_target_properties(Vulkan::Vulkan PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Vulkan-Headers-1.3.290/include"
-        IMPORTED_LOCATION "${VULKAN_SYS_LIB}"
-    )
+if (Vulkan_FOUND)
+    message(STATUS "Vulkan SDK found: ${Vulkan_LIBRARY}")
+else()
+    message(STATUS "No Vulkan SDK found - falling back to vendored headers + system loader")
     set(Vulkan_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Vulkan-Headers-1.3.290/include")
+
+    if (WIN32 AND MSVC)
+        set(_vkLoaderDll "$ENV{SystemRoot}/System32/vulkan-1.dll")
+        if (NOT EXISTS "${_vkLoaderDll}")
+            message(FATAL_ERROR
+                "Vulkan loader not found at ${_vkLoaderDll}.\n"
+                "Install a Vulkan-capable graphics driver, or install the Vulkan SDK "
+                "and re-run CMake.")
+        endif()
+
+        # Locate dumpbin/lib from the active MSVC toolchain.
+        get_filename_component(_msvcBinDir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        find_program(MSVC_DUMPBIN dumpbin HINTS "${_msvcBinDir}")
+        find_program(MSVC_LIB     lib     HINTS "${_msvcBinDir}")
+        if (NOT MSVC_DUMPBIN OR NOT MSVC_LIB)
+            message(FATAL_ERROR
+                "Could not locate dumpbin/lib in ${_msvcBinDir}.\n"
+                "Install the Vulkan SDK instead, or build from a Developer Command Prompt.")
+        endif()
+
+        set(_vkGenDir "${CMAKE_CURRENT_BINARY_DIR}/vulkan-import")
+        set(_vkImportLib "${_vkGenDir}/vulkan-1.lib")
+
+        if (NOT EXISTS "${_vkImportLib}")
+            message(STATUS "Generating Vulkan import library from ${_vkLoaderDll}")
+            file(MAKE_DIRECTORY "${_vkGenDir}")
+            execute_process(
+                COMMAND "${CMAKE_COMMAND}"
+                        -DDUMPBIN=${MSVC_DUMPBIN}
+                        -DLIBTOOL=${MSVC_LIB}
+                        -DDLL=${_vkLoaderDll}
+                        -DOUTDIR=${_vkGenDir}
+                        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateVulkanImportLib.cmake"
+                RESULT_VARIABLE _vkGenResult
+                OUTPUT_VARIABLE _vkGenOut
+                ERROR_VARIABLE  _vkGenOut)
+            if (NOT _vkGenResult EQUAL 0 OR NOT EXISTS "${_vkImportLib}")
+                message(FATAL_ERROR "Failed to generate Vulkan import library:\n${_vkGenOut}")
+            endif()
+        endif()
+
+        add_library(Vulkan::Vulkan UNKNOWN IMPORTED)
+        set_target_properties(Vulkan::Vulkan PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${Vulkan_INCLUDE_DIRS}"
+            IMPORTED_LOCATION "${_vkImportLib}")
+
+    elseif (WIN32)
+        # MinGW's ld can link a DLL directly.
+        add_library(Vulkan::Vulkan UNKNOWN IMPORTED)
+        set_target_properties(Vulkan::Vulkan PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${Vulkan_INCLUDE_DIRS}"
+            IMPORTED_LOCATION "$ENV{SystemRoot}/System32/vulkan-1.dll")
+    else()
+        # Linux / macOS: link the loader shared object by name.
+        if (APPLE)
+            find_library(_vkLoader NAMES vulkan MoltenVK)
+        else()
+            find_library(_vkLoader NAMES vulkan)
+        endif()
+        if (NOT _vkLoader)
+            message(FATAL_ERROR
+                "No Vulkan loader found. Install the Vulkan SDK or your distribution's "
+                "vulkan-loader package (libvulkan.so.1 / libMoltenVK.dylib).")
+        endif()
+        add_library(Vulkan::Vulkan UNKNOWN IMPORTED)
+        set_target_properties(Vulkan::Vulkan PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${Vulkan_INCLUDE_DIRS}"
+            IMPORTED_LOCATION "${_vkLoader}")
+    endif()
 endif()
 
 # GLFW setup
@@ -68,16 +147,26 @@ set(IMGUI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imguizmo/ImGuizmo.cpp
 )
 
-# Collect engine sources
-file(GLOB_RECURSE ENGINE_SOURCES
+# Collect engine sources. CONFIGURE_DEPENDS re-globs on build so adding or
+# removing a file does not silently produce a stale project.
+file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
 )
 
+# Android-only sources must not enter a desktop build.
+if (NOT ANDROID)
+    list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/AndroidNativeApp\\.(cpp|hpp)$")
+endif()
+
 add_executable(GameEngine ${ENGINE_SOURCES} ${IMGUI_SOURCES})
 
-target_include_directories(GameEngine PRIVATE 
+# Keep the IDE tree mirroring the source tree instead of one flat blob.
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src PREFIX "src" FILES ${ENGINE_SOURCES})
+source_group("third_party/imgui" FILES ${IMGUI_SOURCES})
+
+target_include_directories(GameEngine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
@@ -88,9 +177,97 @@ target_include_directories(GameEngine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imguizmo
 )
 
-target_link_libraries(GameEngine PRIVATE 
-    Vulkan::Vulkan 
-    glfw 
+# GLM's configuration MUST be identical in every translation unit. Defining
+# these in headers is order-dependent and silently produces an ODR violation
+# where getProjectionMatrix() compiles differently per TU.
+target_compile_definitions(GameEngine PRIVATE
+    GLM_FORCE_RADIANS
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_ENABLE_EXPERIMENTAL
+)
+
+if (MSVC)
+    target_compile_options(GameEngine PRIVATE /W4 /permissive-)
+    # ImGui/ImGuizmo are vendored; do not fail the build on their warnings.
+    set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
+else()
+    target_compile_options(GameEngine PRIVATE -Wall -Wextra -Wpedantic)
+    set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+
+target_link_libraries(GameEngine PRIVATE
+    Vulkan::Vulkan
+    glfw
     EnTT::EnTT
     VulkanMemoryAllocator
 )
+
+# Assets are loaded with paths relative to the working directory, so make F5
+# in Visual Studio launch from the project root rather than the build folder.
+set_target_properties(GameEngine PROPERTIES
+    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+if (_isMultiConfig)
+    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT GameEngine)
+endif()
+
+# ---------------------------------------------------------------------------
+# Shaders: compile GLSL -> SPIR-V as part of the build when a compiler exists.
+# ---------------------------------------------------------------------------
+find_program(GLSL_COMPILER
+    NAMES glslc glslangValidator glslang
+    HINTS ENV VULKAN_SDK
+    PATH_SUFFIXES bin)
+
+set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders")
+set(SHADER_JOBS
+    "shader.vert=vert.spv"
+    "shader.frag=frag.spv"
+    "grid.vert=grid_vert.spv"
+    "grid.frag=grid_frag.spv"
+)
+
+if (GLSL_COMPILER)
+    message(STATUS "Shader compiler: ${GLSL_COMPILER}")
+    get_filename_component(_glslName "${GLSL_COMPILER}" NAME_WE)
+
+    set(SPIRV_OUTPUTS "")
+    foreach (job ${SHADER_JOBS})
+        string(REPLACE "=" ";" _pair "${job}")
+        list(GET _pair 0 _src)
+        list(GET _pair 1 _out)
+        set(_srcPath "${SHADER_DIR}/${_src}")
+        set(_outPath "${SHADER_DIR}/${_out}")
+
+        if (_glslName STREQUAL "glslc")
+            set(_cmd "${GLSL_COMPILER}" "${_srcPath}" -o "${_outPath}")
+        else()
+            set(_cmd "${GLSL_COMPILER}" -V "${_srcPath}" -o "${_outPath}")
+        endif()
+
+        add_custom_command(
+            OUTPUT "${_outPath}"
+            COMMAND ${_cmd}
+            DEPENDS "${_srcPath}"
+            COMMENT "Compiling ${_src} -> ${_out}"
+            VERBATIM)
+        list(APPEND SPIRV_OUTPUTS "${_outPath}")
+    endforeach()
+
+    add_custom_target(Shaders DEPENDS ${SPIRV_OUTPUTS})
+    add_dependencies(GameEngine Shaders)
+else()
+    message(WARNING
+        "No GLSL compiler found (glslc/glslangValidator). The committed .spv blobs in "
+        "assets/shaders will be used as-is and will NOT be regenerated if you edit the "
+        "GLSL sources. Install the Vulkan SDK to enable shader compilation.")
+endif()
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+option(ENGINE_BUILD_TESTS "Build engine unit tests" ON)
+if (ENGINE_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

@@ -5,8 +5,7 @@
 
 #include <vulkan/vulkan.hpp>
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+// GLM configuration lives on the CMake target - see core/Components.hpp.
 #include <glm/glm.hpp>
 
 namespace Engine {

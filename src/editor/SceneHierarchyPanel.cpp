@@ -28,7 +28,7 @@ void SceneHierarchyPanel::OnImGuiRender() {
                 auto entity = m_registry->create();
                 m_registry->emplace<TagComponent>(entity, "Cube");
                 m_registry->emplace<TransformComponent>(entity);
-                m_registry->emplace<MeshComponent>(entity, "Cube", "", 24, 36);
+                m_registry->emplace<MeshComponent>(entity, "Cube", "", 24u, 36u);
                 m_registry->emplace<MaterialComponent>(entity);
                 m_registry->emplace<RenderableComponent>(entity);
                 m_selectedEntity = entity;
@@ -37,7 +37,7 @@ void SceneHierarchyPanel::OnImGuiRender() {
                 auto entity = m_registry->create();
                 m_registry->emplace<TagComponent>(entity, "Physics Cube");
                 m_registry->emplace<TransformComponent>(entity, glm::vec3(0.0f, 5.0f, 0.0f));
-                m_registry->emplace<MeshComponent>(entity, "Cube", "", 24, 36);
+                m_registry->emplace<MeshComponent>(entity, "Cube", "", 24u, 36u);
                 m_registry->emplace<MaterialComponent>(entity);
                 m_registry->emplace<RigidBodyComponent>(entity);
                 m_registry->emplace<BoxColliderComponent>(entity);
@@ -48,7 +48,7 @@ void SceneHierarchyPanel::OnImGuiRender() {
                 auto entity = m_registry->create();
                 m_registry->emplace<TagComponent>(entity, "Sphere");
                 m_registry->emplace<TransformComponent>(entity);
-                m_registry->emplace<MeshComponent>(entity, "Sphere", "", 64, 128);
+                m_registry->emplace<MeshComponent>(entity, "Sphere", "", 64u, 128u);
                 m_registry->emplace<MaterialComponent>(entity);
                 m_registry->emplace<RenderableComponent>(entity);
                 m_selectedEntity = entity;
@@ -57,7 +57,7 @@ void SceneHierarchyPanel::OnImGuiRender() {
                 auto entity = m_registry->create();
                 m_registry->emplace<TagComponent>(entity, "Procedural Terrain");
                 m_registry->emplace<TransformComponent>(entity, glm::vec3(0.0f, -2.0f, 0.0f));
-                m_registry->emplace<MeshComponent>(entity, "Terrain", "", 256, 512);
+                m_registry->emplace<MeshComponent>(entity, "Terrain", "", 256u, 512u);
                 m_registry->emplace<MaterialComponent>(entity);
                 m_registry->emplace<RenderableComponent>(entity);
                 m_selectedEntity = entity;
@@ -66,7 +66,7 @@ void SceneHierarchyPanel::OnImGuiRender() {
                 auto entity = m_registry->create();
                 m_registry->emplace<TagComponent>(entity, "Plane");
                 m_registry->emplace<TransformComponent>(entity, glm::vec3(0.0f, -1.0f, 0.0f), glm::vec3(0.0f), glm::vec3(10.0f, 1.0f, 10.0f));
-                m_registry->emplace<MeshComponent>(entity, "Plane", "", 4, 6);
+                m_registry->emplace<MeshComponent>(entity, "Plane", "", 4u, 6u);
                 m_registry->emplace<MaterialComponent>(entity);
                 m_registry->emplace<RenderableComponent>(entity);
                 m_selectedEntity = entity;

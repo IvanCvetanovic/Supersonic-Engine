@@ -4,8 +4,11 @@
 #include <string>
 #include <vector>
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+// GLM_FORCE_RADIANS / GLM_FORCE_DEPTH_ZERO_TO_ONE are set on the target in
+// CMakeLists.txt, never here. glm/detail/setup.hpp latches its configuration on
+// first inclusion, so a header-local define only applies when this header
+// happens to be the first one to pull GLM in - which silently produced two
+// different getProjectionMatrix() bodies across translation units.
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 

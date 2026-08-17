@@ -31,7 +31,7 @@ entt::entity PrefabSerializer::InstantiatePrefab(entt::registry& registry, const
     auto entity = registry.create();
     registry.emplace<TagComponent>(entity, "Instantiated Prefab");
     registry.emplace<TransformComponent>(entity, glm::vec3(0.0f, 2.0f, 0.0f));
-    registry.emplace<MeshComponent>(entity, "Cube", "", 24, 36);
+    registry.emplace<MeshComponent>(entity, "Cube", "", 24u, 36u);
     registry.emplace<MaterialComponent>(entity);
     registry.emplace<RenderableComponent>(entity);
 

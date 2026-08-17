@@ -1,7 +1,7 @@
 #include "editor/InspectorPanel.hpp"
 #include "editor/Theme.hpp"
 
-#define GLM_ENABLE_EXPERIMENTAL
+// GLM_ENABLE_EXPERIMENTAL is set on the target in CMakeLists.txt.
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <iostream>
