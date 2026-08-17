@@ -1,6 +1,8 @@
 #include "editor/EditorLayer.hpp"
 #include "editor/EditorIcons.hpp"
 #include "editor/Theme.hpp"
+
+#include <algorithm>
 #include "core/JobSystem.hpp"
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
@@ -23,10 +25,16 @@ constexpr const char* kScenePath = "assets/scenes/MainScene.scene";
 
 void EditorLayer::Init(VulkanDevice& device, uint32_t initialWidth, uint32_t initialHeight) {
     m_offscreenPass = std::make_unique<VulkanOffscreen>(device, initialWidth, initialHeight);
+    m_thumbnails = std::make_unique<ThumbnailCache>(device);
+    m_contentBrowserPanel.SetThumbnails(m_thumbnails.get());
     std::cout << "[EditorLayer] Dockable Editor Layer & Offscreen Viewport initialized." << std::endl;
 }
 
 void EditorLayer::Shutdown() {
+    // Before the offscreen target, and both before ImGui_ImplVulkan_Shutdown:
+    // each holds ImGui descriptor sets that have to be handed back first.
+    m_contentBrowserPanel.SetThumbnails(nullptr);
+    m_thumbnails.reset();
     m_offscreenPass.reset();
     std::cout << "[EditorLayer] Editor Layer shutdown cleanly." << std::endl;
 }
@@ -52,6 +60,70 @@ void EditorLayer::ApplyPendingResize() {
     if (m_desiredViewportWidth == 0 || m_desiredViewportHeight == 0) return;
     m_offscreenPass->RequestResize(m_desiredViewportWidth, m_desiredViewportHeight);
     m_offscreenPass->ApplyPendingResize();
+}
+
+
+void EditorLayer::drawViewportOverlay(const ImVec2& viewportPos, const ImVec2& viewportSize) {
+    const float pad = 12.0f;
+
+    // Both overlays are child-less windows placed over the viewport image.
+    // NoInputs on the readout matters: it sits where the user drags to orbit,
+    // and a panel that swallowed those clicks would be worse than no panel.
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoMove;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 7.0f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(Brand::Bg0.x, Brand::Bg0.y, Brand::Bg0.z, 0.82f));
+    ImGui::PushStyleColor(ImGuiCol_Border, Brand::Line);
+
+    // ---- Gizmo mode, top left ----
+    ImGui::SetNextWindowPos(ImVec2(viewportPos.x + pad, viewportPos.y + pad), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.82f);
+    if (ImGui::Begin("##viewport_tools", nullptr, kFlags)) {
+        const ImGuizmo::OPERATION current = m_inspectorPanel.GetGizmoOperation();
+
+        const auto modeButton = [&](const char* label, ImGuizmo::OPERATION op, const char* tip) {
+            const bool active = current == op;
+            if (active) ImGui::PushStyleColor(ImGuiCol_Button, Brand::Amber);
+            if (ImGui::Button(label, ImVec2(34.0f, 28.0f))) {
+                m_inspectorPanel.SetGizmoOperation(op);
+            }
+            if (active) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+        };
+
+        modeButton(ICON_FA_ARROWS, ImGuizmo::TRANSLATE, "Translate  (W)");
+        ImGui::SameLine();
+        modeButton(ICON_FA_ROTATE, ImGuizmo::ROTATE, "Rotate  (E)");
+        ImGui::SameLine();
+        modeButton(ICON_FA_MAXIMIZE, ImGuizmo::SCALE, "Scale  (R)");
+    }
+    ImGui::End();
+
+    // ---- Live counters, top right ----
+    ImGui::SetNextWindowPos(ImVec2(viewportPos.x + viewportSize.x - pad, viewportPos.y + pad),
+                            ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.82f);
+    if (ImGui::Begin("##viewport_stats", nullptr, kFlags | ImGuiWindowFlags_NoInputs)) {
+        ImGui::PushStyleColor(ImGuiCol_Text, Brand::TextDim);
+        ImGui::Text("%.1f fps", ImGui::GetIO().Framerate);
+        ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+        ImGui::TextColored(Brand::Cyan, "%.2f ms", m_smoothedFrameTime);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, Brand::TextDim);
+        ImGui::Text(ICON_FA_EYE "  %u drawn  %u culled", m_renderStats.drawn, m_renderStats.culled);
+        ImGui::PopStyleColor();
+    }
+    ImGui::End();
+
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(2);
 }
 
 void EditorLayer::drawStatusBar() {
@@ -368,6 +440,9 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
         ImGui::Image(m_offscreenPass->GetTextureID(), viewportPanelSize);
 
+        // After the image, so it draws over it rather than under.
+        drawViewportOverlay(viewportPos, viewportPanelSize);
+
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
             const ImVec2 mousePos = ImGui::GetMousePos();
             const glm::vec2 localMouse(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
@@ -382,19 +457,9 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             }
         }
 
-        // Overlay Viewport Toolbar
-        ImGui::SetCursorPos(ImVec2(10, 30));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.18f, 0.85f));
-
-        if (ImGui::Button("Translate (W)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE); }
-        ImGui::SameLine();
-        if (ImGui::Button("Rotate (E)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE); }
-        ImGui::SameLine();
-        if (ImGui::Button("Scale (R)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE); }
-
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar();
+        // The gizmo-mode buttons moved into drawViewportOverlay, which draws
+        // them as icons in a floating panel rather than as a row of labelled
+        // buttons pinned to the image with a hardcoded cursor position.
 
         {
             const CameraComponent& camera = viewportCamera(registry);
@@ -415,9 +480,29 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     const auto& entityStorage = registry.storage<entt::entity>();
     const auto entityCount = static_cast<uint32_t>(entityStorage.free_list());
 
+    // Rolling history. The instantaneous number swings by several milliseconds
+    // frame to frame, which reads as noise; the shape over two seconds is the
+    // part that actually tells you something.
+    m_frameTimes[m_frameTimeCursor] = frameTime;
+    m_frameTimeCursor = (m_frameTimeCursor + 1) % kFrameHistory;
+    m_smoothedFrameTime = m_smoothedFrameTime == 0.0f
+                        ? frameTime
+                        : m_smoothedFrameTime * 0.92f + frameTime * 0.08f;
+
+    float worstFrame = 0.0f;
+    for (const float sample : m_frameTimes) worstFrame = std::max(worstFrame, sample);
+
     ImGui::Text("Graphics API:    Vulkan 1.2 (VMA 3.1)");
-    ImGui::Text("Frame Time:      %.2f ms", frameTime);
+    ImGui::Text("Frame Time:      %.2f ms", static_cast<double>(m_smoothedFrameTime));
     ImGui::Text("Framerate:       %.1f FPS", fps);
+
+    // Scaled to the worst frame in the window rather than a fixed ceiling, so a
+    // hitch is visible instead of being flattened against the top.
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, Brand::Bg0);
+    ImGui::PlotLines("##frametime", m_frameTimes, kFrameHistory, m_frameTimeCursor,
+                     nullptr, 0.0f, std::max(worstFrame * 1.15f, 4.0f),
+                     ImVec2(-1.0f, 34.0f));
+    ImGui::PopStyleColor();
     ImGui::Text("Active Entities: %u", entityCount);
     if (m_offscreenPass) {
         ImGui::Text("Viewport Res:    %ux%u", m_offscreenPass->GetWidth(), m_offscreenPass->GetHeight());

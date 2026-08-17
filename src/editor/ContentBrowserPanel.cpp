@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include "editor/Theme.hpp"
+#include "editor/ThumbnailCache.hpp"
 #include "imgui.h"
 
 #include <system_error>
@@ -89,9 +90,30 @@ std::string ContentBrowserPanel::OnImGuiRender() {
                     }
                     ImGui::PopStyleColor();
                 } else {
+                    // A real preview where the file can be decoded, the type
+                    // glyph otherwise. A grid of identical tiles told the user
+                    // nothing about which texture was which.
+                    const ImTextureID preview =
+                        m_thumbnails ? m_thumbnails->Get(path) : ImTextureID{0};
+
                     ImGui::PushStyleColor(ImGuiCol_Button, Brand::Bg2);
-                    ImGui::Button((std::string(iconForFile(path)) + "\n" + filenameString).c_str(), ImVec2(thumbnailSize, thumbnailSize));
+                    if (preview != 0) {
+                        const float inset = 12.0f;
+                        ImGui::ImageButton("##thumb", preview,
+                                           ImVec2(thumbnailSize - inset, thumbnailSize - inset));
+                    } else {
+                        ImGui::Button((std::string(iconForFile(path)) + "\n\n" + filenameString).c_str(),
+                                      ImVec2(thumbnailSize, thumbnailSize));
+                    }
                     ImGui::PopStyleColor();
+
+                    // The image tile carries no label of its own, so it gets a
+                    // caption; the glyph tile already has the name inside it.
+                    if (preview != 0) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, Brand::TextDim);
+                        ImGui::TextWrapped("%s", filenameString.c_str());
+                        ImGui::PopStyleColor();
+                    }
                 }
                 ec.clear();
 

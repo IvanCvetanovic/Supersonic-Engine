@@ -9,6 +9,7 @@
 #include "editor/SceneHierarchyPanel.hpp"
 #include "editor/InspectorPanel.hpp"
 #include "editor/ContentBrowserPanel.hpp"
+#include "editor/ThumbnailCache.hpp"
 #include "editor/EditorCamera.hpp"
 #include "editor/EditHistory.hpp"
 #include "core/RenderSystem.hpp"
@@ -81,6 +82,11 @@ public:
 private:
     void drawStatusBar();
 
+    // Floating chrome over the viewport image: gizmo mode on the left, live
+    // counters on the right. Overlaid rather than docked, because a 3D viewport
+    // is the one panel whose whole value is its area.
+    void drawViewportOverlay(const ImVec2& viewportPos, const ImVec2& viewportSize);
+
     // Ctrl+Z / Ctrl+Y and the Edit menu, plus the once-per-frame commit that
     // turns "the scene changed" into an undo step.
     void handleUndoRedo(entt::registry& registry);
@@ -93,6 +99,7 @@ private:
     void buildLayout(unsigned int dockspaceId, int preset);
 
     std::unique_ptr<VulkanOffscreen> m_offscreenPass;
+    std::unique_ptr<ThumbnailCache> m_thumbnails;
     SceneHierarchyPanel m_hierarchyPanel;
     InspectorPanel m_inspectorPanel;
     ContentBrowserPanel m_contentBrowserPanel;
@@ -122,6 +129,13 @@ private:
     bool m_viewportHovered{false};
     bool m_viewportFocused{false};
     RenderSystem::Stats m_renderStats{};
+
+    // Rolling frame-time history for the statistics graph. A single number
+    // jitters too much to read; the shape of the last two seconds does not.
+    static constexpr int kFrameHistory = 120;
+    float m_frameTimes[kFrameHistory]{};
+    int m_frameTimeCursor{0};
+    float m_smoothedFrameTime{0.0f};
     uint32_t m_contactCount{0};
     uint32_t m_triggerCount{0};
 
