@@ -3,8 +3,6 @@
 #include <array>
 #include <iostream>
 
-#include <glm/gtc/matrix_transform.hpp>
-
 namespace Supersonic {
 
 ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution)
@@ -43,20 +41,20 @@ ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution)
 
     createRenderPass();
     createResources();
-    createFramebuffer();
+    createFramebuffers();
 
-    std::cout << "[ShadowMap] Created " << m_resolution << "x" << m_resolution
-              << " directional shadow map (" << vk::to_string(m_format) << ", "
+    std::cout << "[ShadowMap] Created " << kShadowCascadeCount << " x " << m_resolution << "x"
+              << m_resolution << " cascaded shadow map (" << vk::to_string(m_format) << ", "
               << (m_filter == vk::Filter::eLinear ? "linear" : "nearest") << " filter)." << std::endl;
 }
 
 ShadowMap::~ShadowMap() {
     vk::Device device = m_deviceRef.GetDevice();
 
-    if (m_framebuffer) {
-        device.destroyFramebuffer(m_framebuffer);
-        m_framebuffer = nullptr;
+    for (auto framebuffer : m_framebuffers) {
+        if (framebuffer) device.destroyFramebuffer(framebuffer);
     }
+    m_framebuffers.clear();
     m_depthImage.reset();
 
     if (m_renderPass) {
@@ -121,7 +119,8 @@ void ShadowMap::createResources() {
     m_depthImage = std::make_unique<VulkanImage>(
         m_deviceRef, m_resolution, m_resolution, m_format,
         vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
-        vk::ImageAspectFlagBits::eDepth);
+        vk::ImageAspectFlagBits::eDepth,
+        kShadowCascadeCount);
 
     // Clamp to edge: fragments outside the light frustum sample the border
     // depth rather than wrapping and producing phantom shadows on the far side
@@ -129,42 +128,26 @@ void ShadowMap::createResources() {
     m_depthImage->CreateSampler(m_filter, vk::SamplerAddressMode::eClampToEdge);
 }
 
-void ShadowMap::createFramebuffer() {
-    vk::ImageView attachment = m_depthImage->GetImageView();
+void ShadowMap::createFramebuffers() {
+    // One framebuffer per cascade, each bound to a single-layer view. Four
+    // render pass instances in the same command buffer, rather than one
+    // multiview pass: multiview would rasterise every caster into every layer,
+    // which throws away exactly the per-cascade culling the depth pass exists
+    // to do.
+    m_framebuffers.reserve(kShadowCascadeCount);
+    for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
+        vk::ImageView attachment = m_depthImage->GetLayerView(cascade);
 
-    vk::FramebufferCreateInfo info{};
-    info.renderPass = m_renderPass;
-    info.attachmentCount = 1;
-    info.pAttachments = &attachment;
-    info.width = m_resolution;
-    info.height = m_resolution;
-    info.layers = 1;
+        vk::FramebufferCreateInfo info{};
+        info.renderPass = m_renderPass;
+        info.attachmentCount = 1;
+        info.pAttachments = &attachment;
+        info.width = m_resolution;
+        info.height = m_resolution;
+        info.layers = 1;
 
-    m_framebuffer = m_deviceRef.GetDevice().createFramebuffer(info);
-}
-
-glm::mat4 ShadowMap::ComputeLightSpaceMatrix(const glm::vec3& lightDirection,
-                                             float halfExtent, float distance) {
-    // lightDirection points TOWARD the light, matching LightComponent and the
-    // shader's L vector, so the eye sits along it and looks back at the origin.
-    glm::vec3 dir = lightDirection;
-    if (glm::length(dir) < 1e-4f) dir = glm::vec3(0.0f, 1.0f, 0.0f);
-    dir = glm::normalize(dir);
-
-    const glm::vec3 eye = dir * distance;
-
-    // Avoid a degenerate up vector when the light is straight overhead.
-    const glm::vec3 up = std::abs(dir.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f)
-                                                 : glm::vec3(0.0f, 1.0f, 0.0f);
-
-    const glm::mat4 view = glm::lookAt(eye, glm::vec3(0.0f), up);
-
-    glm::mat4 proj = glm::ortho(-halfExtent, halfExtent,
-                                -halfExtent, halfExtent,
-                                0.1f, distance * 2.0f);
-    proj[1][1] *= -1.0f; // Vulkan clip space, same convention as the camera
-
-    return proj * view;
+        m_framebuffers.push_back(m_deviceRef.GetDevice().createFramebuffer(info));
+    }
 }
 
 } // namespace Supersonic

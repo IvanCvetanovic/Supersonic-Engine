@@ -20,6 +20,8 @@ public:
     struct Stats {
         uint32_t drawn{0};
         uint32_t culled{0};
+        // Summed across every cascade, so with four cascades an object visible
+        // in two of them counts twice - which is what it costs.
         uint32_t shadowDrawn{0};
         uint32_t shadowCulled{0};
     };
@@ -38,17 +40,24 @@ public:
         Stats& stats
     );
 
-    // Shadow pass: same geometry, no materials, no textures. Only positions
-    // matter, so this binds nothing but the scene set for the light matrix.
+    // Shadow pass for one cascade: same geometry, no materials, no textures.
+    // Only positions matter, and the cascade's transform arrives in the push
+    // constant, so this binds no descriptor set at all.
     static void RenderDepthOnly(
         entt::registry& registry,
         VulkanPipeline& pipeline,
         MeshRegistry& meshes,
         vk::CommandBuffer commandBuffer,
-        vk::DescriptorSet sceneSet,
+        const glm::mat4& cascadeViewProj,
         const Frustum& lightFrustum,
         Stats& stats
     );
+
+    // World bounds of everything that can cast or receive, used to fit the
+    // cascades' depth range along the light axis. Returns false when the scene
+    // has nothing renderable in it.
+    static bool ComputeSceneBounds(entt::registry& registry, MeshRegistry& meshes,
+                                   glm::vec3& outMin, glm::vec3& outMax);
 
     // Resolves MeshComponent descriptions and material texture paths to GPU
     // resources, uploading any that are new. Runs outside command buffer

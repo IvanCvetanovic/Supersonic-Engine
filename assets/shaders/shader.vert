@@ -10,9 +10,8 @@ layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec3 fragColor;
 layout(location = 2) out vec2 fragTexCoord;
 layout(location = 3) out vec3 fragWorldPos;
-layout(location = 4) out vec4 fragLightSpacePos;
-layout(location = 5) out vec3 fragTangent;
-layout(location = 6) out vec3 fragBitangent;
+layout(location = 4) out vec3 fragTangent;
+layout(location = 5) out vec3 fragBitangent;
 
 // Must match Engine::UniformBufferObject in renderer/VulkanPipeline.hpp.
 struct Light {
@@ -24,7 +23,9 @@ struct Light {
 layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 view;
     mat4 proj;
-    mat4 lightSpace;
+    mat4 cascadeViewProj[4];
+    vec4 cascadeSplits;      // view-space far depth per cascade
+    vec4 cascadeTexelWorld;  // world size of one shadow texel per cascade
     vec4 cameraPosition;
     vec4 ambientColor;
     vec4 lightCount;
@@ -54,7 +55,7 @@ void main() {
     fragColor = inColor;
     fragTexCoord = inTexCoord;
 
-    // Same transform the shadow pass rasterised with, so the comparison in the
-    // fragment stage is consistent regardless of clip-space handedness.
-    fragLightSpacePos = ubo.lightSpace * worldPos;
+    // No light-space position is interpolated any more: which cascade to use
+    // depends on the fragment's view depth, and the lookup is offset along the
+    // shaded normal, so both have to happen in the fragment stage.
 }

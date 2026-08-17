@@ -4,9 +4,8 @@ layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec3 fragColor;
 layout(location = 2) in vec2 fragTexCoord;
 layout(location = 3) in vec3 fragWorldPos;
-layout(location = 4) in vec4 fragLightSpacePos;
-layout(location = 5) in vec3 fragTangent;
-layout(location = 6) in vec3 fragBitangent;
+layout(location = 4) in vec3 fragTangent;
+layout(location = 5) in vec3 fragBitangent;
 
 layout(location = 0) out vec4 outColor;
 
@@ -21,14 +20,20 @@ struct Light {
 layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 view;
     mat4 proj;
-    mat4 lightSpace;
+    mat4 cascadeViewProj[4];
+    vec4 cascadeSplits;      // view-space far depth per cascade
+    vec4 cascadeTexelWorld;  // world size of one shadow texel per cascade
     vec4 cameraPosition;
     vec4 ambientColor;
     vec4 lightCount;
     Light lights[8];
 } ubo;
 
-layout(set = 0, binding = 1) uniform sampler2D shadowMap;
+// One array image, sampled with a per-fragment layer. An array of separate
+// sampler2Ds would need a dynamically-uniform index, and the cascade choice
+// differs within a quad at every seam - which is undefined behaviour, not a
+// style preference.
+layout(set = 0, binding = 1) uniform sampler2DArray shadowMaps;
 
 // Set 1: per-material. Rebound per draw, which is what gives each entity its
 // own texture instead of every object sampling one global checkerboard.
@@ -71,33 +76,77 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-// 3x3 PCF. Returns 1.0 when fully lit, 0.0 when fully shadowed.
-float shadowFactor(vec4 lightSpacePos, float NdotL) {
+// Which cascade covers this view depth. Returns 4 - one past the last - for
+// anything beyond the shadow distance, and every caller must test for that
+// BEFORE indexing, since both cascade arrays hold exactly four elements.
+int selectCascade(float viewDepth) {
+    int layer = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (viewDepth > ubo.cascadeSplits[i]) layer = i + 1;
+    }
+    return layer;
+}
+
+// 3x3 PCF against one cascade. Returns 1.0 when fully lit, 0.0 when fully
+// shadowed.
+float sampleCascade(int layer, vec3 worldPos, vec3 N, float NdotL) {
+    // Normal offset, scaled by the world size of a texel in THIS cascade. Moving
+    // the lookup off the surface along its own normal is what removes acne
+    // without the depth bias having to be large enough to detach contact
+    // shadows - and it has to scale per cascade, because a distant cascade's
+    // texel covers far more world space than a near one's.
+    float texelWorld = ubo.cascadeTexelWorld[layer];
+    float slope = clamp(1.0 - NdotL, 0.0, 1.0);
+    vec3 offsetPos = worldPos + N * (texelWorld * (1.0 + 2.0 * slope));
+
+    vec4 lightSpacePos = ubo.cascadeViewProj[layer] * vec4(offsetPos, 1.0);
     vec3 proj = lightSpacePos.xyz / lightSpacePos.w;
 
     // xy to [0,1] texture space. z is already [0,1] because the projection is
     // built with GLM_FORCE_DEPTH_ZERO_TO_ONE.
     vec2 uv = proj.xy * 0.5 + 0.5;
 
-    // Outside the light frustum there is no information, so treat it as lit
-    // rather than inventing a shadow on the far side of the scene.
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || proj.z > 1.0) {
+    // Outside this cascade there is no information, so treat it as lit rather
+    // than inventing a shadow.
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || proj.z > 1.0 || proj.z < 0.0) {
         return 1.0;
     }
 
-    // Slope-scaled bias on top of the rasteriser's depth bias: grazing angles
-    // need more margin, head-on surfaces need almost none.
-    float bias = max(0.0015 * (1.0 - NdotL), 0.0004);
+    // A small residual constant bias, now that the normal offset does the work.
+    float bias = 0.0006;
 
     float lit = 0.0;
-    vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
+    vec2 texel = 1.0 / vec2(textureSize(shadowMaps, 0).xy);
     for (int x = -1; x <= 1; ++x) {
         for (int y = -1; y <= 1; ++y) {
-            float closest = texture(shadowMap, uv + vec2(x, y) * texel).r;
+            float closest = texture(shadowMaps, vec3(uv + vec2(x, y) * texel, float(layer))).r;
             lit += (proj.z - bias) > closest ? 0.0 : 1.0;
         }
     }
     return lit / 9.0;
+}
+
+float shadowFactor(vec3 worldPos, vec3 N, float NdotL) {
+    float viewDepth = -(ubo.view * vec4(worldPos, 1.0)).z;
+
+    int layer = selectCascade(viewDepth);
+    if (layer >= 4) return 1.0;   // past the shadow distance
+
+    float result = sampleCascade(layer, worldPos, N, NdotL);
+
+    // Cross-fade the last tenth of a cascade into the next one. Without it the
+    // split is a hard line across the ground where the penumbra width changes,
+    // which reads as a rendering error rather than as a level-of-detail change.
+    if (layer < 3) {
+        float start = (layer == 0) ? 0.0 : ubo.cascadeSplits[layer - 1];
+        float end = ubo.cascadeSplits[layer];
+        float band = (end - start) * 0.1;
+        if (band > 0.0 && viewDepth > end - band) {
+            float t = clamp((viewDepth - (end - band)) / band, 0.0, 1.0);
+            result = mix(result, sampleCascade(layer + 1, worldPos, N, NdotL), t);
+        }
+    }
+    return result;
 }
 
 void main() {
@@ -159,7 +208,7 @@ void main() {
 
         // Only the first light casts; it is the one the shadow map was
         // rendered from.
-        float shadow = (i == 0) ? shadowFactor(fragLightSpacePos, NdotL) : 1.0;
+        float shadow = (i == 0) ? shadowFactor(fragWorldPos, N, NdotL) : 1.0;
 
         Lo += (kD * albedo / PI + specular) * radiance * NdotL * shadow;
     }

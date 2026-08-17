@@ -308,6 +308,16 @@ void VulkanRenderer::createGraphicsPipeline() {
     // the camera cannot see.
     shadowOptions.cullMode = vk::CullModeFlagBits::eFront;
     shadowOptions.cache = m_pipelineCache->Get();
+    // The depth pass takes the cascade's transform in the push constant instead
+    // of reading the scene UBO, so its range is a different size.
+    shadowOptions.pushConstantSize = static_cast<uint32_t>(sizeof(ShadowPushConstantData));
+    // Retuned down. These constants were set against a fixed ~80-unit ortho
+    // range; a cascade's depth range now spans the whole scene along the light
+    // axis and can be several times that, which turns the same constants into
+    // several times the world-space offset and visibly detaches contact
+    // shadows. The shader's per-cascade normal offset does the work now.
+    shadowOptions.depthBiasConstant = 0.6f;
+    shadowOptions.depthBiasSlope = 1.1f;
 
     m_shadowPipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),
@@ -403,9 +413,9 @@ void VulkanRenderer::createDescriptorSets() {
     std::cout << "[VulkanRenderer] Allocated and updated " << m_descriptorSets.size() << " scene DescriptorSets." << std::endl;
 }
 
-glm::mat4 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo) const {
+glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo) const {
     int count = 0;
-    glm::mat4 lightSpace(1.0f);
+    glm::vec3 shadowDirection(0.0f, 1.0f, 0.0f);
     bool haveShadowCaster = false;
 
     // The first directional light is the shadow caster, and is deliberately
@@ -428,7 +438,7 @@ glm::mat4 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
             gpu.positionOrDirection = glm::vec4(dir, 0.0f);
 
             if (!haveShadowCaster && light.castsShadow) {
-                lightSpace = ShadowMap::ComputeLightSpaceMatrix(dir);
+                shadowDirection = dir;
                 haveShadowCaster = true;
                 // Swap into slot 0 so the shadowed light is the one the shader
                 // applies the shadow factor to.
@@ -460,13 +470,12 @@ glm::mat4 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         ubo.lights[0].colorAndIntensity = glm::vec4(1.0f, 0.95f, 0.88f, 1.5f);
         ubo.lights[0].attenuation = glm::vec4(25.0f, 0.0f, 0.0f, 0.0f);
         ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
-        lightSpace = ShadowMap::ComputeLightSpaceMatrix(glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f)));
+        shadowDirection = glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f));
         count = 1;
     }
 
     ubo.lightCount = glm::vec4(static_cast<float>(count), 0.0f, 0.0f, 0.0f);
-    ubo.lightSpace = lightSpace;
-    return lightSpace;
+    return shadowDirection;
 }
 
 void VulkanRenderer::initImGui() {
@@ -535,10 +544,12 @@ void VulkanRenderer::NewImGuiFrame() {
 void VulkanRenderer::DrawFrame(entt::registry& registry,
                                VulkanOffscreen& offscreen,
                                ImDrawData* drawData,
-                               const glm::mat4& viewMatrix,
-                               const glm::mat4& projMatrix,
-                               const glm::vec3& cameraPosition) {
+                               const CameraComponent& camera) {
     vk::Device device = m_deviceRef.GetDevice();
+
+    const glm::mat4 viewMatrix = camera.getViewMatrix();
+    const glm::mat4 projMatrix = camera.getProjectionMatrix();
+    const glm::vec3 cameraPosition = camera.position;
 
     // The resize flag is checked BEFORE acquiring. Checking it after a
     // successful acquire abandoned the frame with the acquire semaphore left
@@ -586,14 +597,28 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     ubo.proj = projMatrix;
     ubo.cameraPosition = glm::vec4(cameraPosition, 1.0f);
     ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
-    const glm::mat4 lightSpace = gatherLights(registry, ubo);
+    const glm::vec3 shadowDirection = gatherLights(registry, ubo);
 
-    // Culling frusta for this frame. The scene pass uses the camera's, the
-    // shadow pass the light's - an object behind the camera can still cast a
-    // shadow into view, so culling the shadow pass against the camera would
-    // make shadows pop in and out.
+    // Cascades are fitted to the camera, so they need the same camera the scene
+    // pass is about to use rather than a fixed box around the origin.
+    glm::vec3 sceneMin(-20.0f);
+    glm::vec3 sceneMax(20.0f);
+    RenderSystem::ComputeSceneBounds(registry, *m_meshRegistry, sceneMin, sceneMax);
+
+    const CascadeSetup cascades = ShadowCascades::Build(
+        camera, shadowDirection, sceneMin, sceneMax, m_shadowMap->GetResolution());
+
+    for (uint32_t i = 0; i < kShadowCascadeCount; ++i) {
+        ubo.cascadeViewProj[i] = cascades.viewProj[i];
+        ubo.cascadeSplits[static_cast<int>(i)] = cascades.splitDepth[i];
+        ubo.cascadeTexelWorld[static_cast<int>(i)] = cascades.texelWorldSize[i];
+    }
+
+    // Culling frustum for the scene pass. Each cascade carries its own for the
+    // depth pass - an object behind the camera can still cast a shadow into
+    // view, so culling the depth pass against the camera would make shadows pop
+    // in and out.
     const Frustum cameraFrustum = Frustum::FromMatrix(projMatrix * viewMatrix);
-    const Frustum lightFrustum = Frustum::FromMatrix(lightSpace);
     m_renderStats = RenderSystem::Stats{};
 
     m_uniformBuffers[m_currentFrame]->UploadData(&ubo, sizeof(ubo));
@@ -612,10 +637,10 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // ---------------------------------------------------------------------
     // PASS 0: Shadow map (depth only, from the light)
     // ---------------------------------------------------------------------
-    {
+    for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
         vk::RenderPassBeginInfo shadowPassInfo{};
         shadowPassInfo.renderPass = m_shadowMap->GetRenderPass();
-        shadowPassInfo.framebuffer = m_shadowMap->GetFramebuffer();
+        shadowPassInfo.framebuffer = m_shadowMap->GetFramebuffer(cascade);
         shadowPassInfo.renderArea.offset = vk::Offset2D{0, 0};
         shadowPassInfo.renderArea.extent = vk::Extent2D{m_shadowMap->GetResolution(),
                                                         m_shadowMap->GetResolution()};
@@ -634,8 +659,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         cmd.setScissor(0, 1, &shadowScissor);
 
         RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
-                                      cmd, m_descriptorSets[m_currentFrame],
-                                      lightFrustum, m_renderStats);
+                                      cmd, cascades.viewProj[cascade],
+                                      cascades.frustum[cascade], m_renderStats);
 
         cmd.endRenderPass();
     }

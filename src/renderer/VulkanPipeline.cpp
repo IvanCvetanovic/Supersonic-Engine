@@ -148,9 +148,15 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         vk::PushConstantRange pushConstantRange{};
         pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
         pushConstantRange.offset = 0;
-        pushConstantRange.size = sizeof(PushConstantData);
+        pushConstantRange.size = options.pushConstantSize;
         static_assert(sizeof(PushConstantData) <= 128,
                       "Push constants must fit the 128-byte guaranteed minimum");
+        static_assert(sizeof(ShadowPushConstantData) <= 128,
+                      "Shadow push constants must fit the 128-byte guaranteed minimum");
+        if (options.pushConstantSize == 0 || options.pushConstantSize > 128) {
+            throw std::runtime_error("Push constant range must be 1..128 bytes, got "
+                                     + std::to_string(options.pushConstantSize));
+        }
 
         const std::array<vk::DescriptorSetLayout, 2> setLayouts = {
             m_sceneSetLayout, m_materialSetLayout

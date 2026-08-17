@@ -40,12 +40,14 @@ public:
     // then passes the resulting draw data to DrawFrame.
     void NewImGuiFrame();
 
+    // Takes the camera itself rather than pre-derived matrices: cascade fitting
+    // needs the field of view, the aspect ratio and the near/far planes, and
+    // recovering those from a projection matrix is a worse idea than passing
+    // the thing they came from.
     void DrawFrame(entt::registry& registry,
                    VulkanOffscreen& offscreen,
                    ImDrawData* drawData,
-                   const glm::mat4& viewMatrix,
-                   const glm::mat4& projMatrix,
-                   const glm::vec3& cameraPosition);
+                   const CameraComponent& camera);
 
     void RecreateSwapchain();
 
@@ -75,7 +77,7 @@ private:
 
     // Fills the UBO from the scene's lights and returns the light-space matrix
     // used by both the shadow pass and the shadow lookup.
-    glm::mat4 gatherLights(entt::registry& registry, UniformBufferObject& ubo) const;
+    glm::vec3 gatherLights(entt::registry& registry, UniformBufferObject& ubo) const;
 
     void cleanupSwapchain();
 

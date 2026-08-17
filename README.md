@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-12%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-13%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 
 </div>
@@ -45,7 +45,7 @@ code quietly contradicts.
 |---|---|
 | **Physically based shading** | Cook–Torrance GGX with metallic / roughness / ambient-occlusion inputs, per-material |
 | **Lighting** | Up to 8 simultaneous lights, directional and point, with distance attenuation |
-| **Shadows** | 2048² D32 depth pass, 3×3 PCF, slope-scaled depth bias and front-face culling to keep surfaces off their own shadows |
+| **Cascaded shadows** | Four 2048² D32 cascades in one array image, fitted to the camera by bounding sphere and snapped to the texel grid so edges do not crawl; per-cascade normal offset, 3×3 PCF, and a cross-fade across each split |
 | **Normal mapping** | Tangent-space, with glTF-convention `vec4` tangents (handedness in `w`) generated for procedural meshes too |
 | **Frustum culling** | Gribb–Hartmann plane extraction; the scene pass culls against the camera, the shadow pass against the light, so nothing off-screen pops its shadow in and out |
 | **Colour correctness** | Linear throughout, encoded to sRGB exactly once — no double gamma |
@@ -213,7 +213,7 @@ vendored dependencies.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Twelve suites, each a plain executable with no test framework behind it —
+Thirteen suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 | Suite | Covers |
@@ -221,6 +221,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_transform` | Matrix and projection conventions |
 | `test_hierarchy` | Parenting, world-transform caching, play/stop snapshots |
 | `test_frustum` | Plane extraction, AABB transforms, the zero-to-one near-plane convention |
+| `test_cascades` | Split distribution, slice fitting, texel snapping, depth range |
 | `test_raycast` | Viewport picking, slab intersection, depth ordering |
 | `test_meshgen` | Primitive generation, winding, tangents, OBJ parsing |
 | `test_gltf` | glTF import against a real asset in the tree |
@@ -252,7 +253,7 @@ comment on each one says which.
 - [x] Entity-versus-entity collision with a broadphase
 - [x] Job system, applied where the work is provably independent
 - [ ] Skeletal animation (glTF skins and animation channels)
-- [ ] Cascaded shadow maps
+- [x] Cascaded shadow maps
 
 ---
 

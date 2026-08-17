@@ -11,8 +11,11 @@ VulkanImage::VulkanImage(
     uint32_t height,
     vk::Format format,
     vk::ImageUsageFlags usage,
-    vk::ImageAspectFlags aspectFlags)
+    vk::ImageAspectFlags aspectFlags,
+    uint32_t arrayLayers)
     : m_deviceRef(device), m_allocator(device.GetAllocator()), m_width(width), m_height(height), m_format(format) {
+
+    m_arrayLayers = arrayLayers == 0 ? 1 : arrayLayers;
 
     if (!m_allocator) {
         throw std::runtime_error("Cannot create VulkanImage with null VmaAllocator!");
@@ -25,7 +28,7 @@ VulkanImage::VulkanImage(
     imageInfo.extent.height = height;
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
+    imageInfo.arrayLayers = m_arrayLayers;
     imageInfo.format = static_cast<VkFormat>(m_format);
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -55,15 +58,28 @@ VulkanImage::VulkanImage(
     // Create Image View
     vk::ImageViewCreateInfo viewInfo{};
     viewInfo.image = m_image;
-    viewInfo.viewType = vk::ImageViewType::e2D;
+    viewInfo.viewType = m_arrayLayers > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
     viewInfo.format = m_format;
     viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    viewInfo.subresourceRange.layerCount = m_arrayLayers;
 
     m_imageView = m_deviceRef.GetDevice().createImageView(viewInfo);
+
+    // Per-layer views for framebuffer attachments. Only worth creating for an
+    // array image; a single-layer image's own view already is one.
+    if (m_arrayLayers > 1) {
+        m_layerViews.reserve(m_arrayLayers);
+        for (uint32_t layer = 0; layer < m_arrayLayers; ++layer) {
+            vk::ImageViewCreateInfo layerInfo = viewInfo;
+            layerInfo.viewType = vk::ImageViewType::e2D;
+            layerInfo.subresourceRange.baseArrayLayer = layer;
+            layerInfo.subresourceRange.layerCount = 1;
+            m_layerViews.push_back(m_deviceRef.GetDevice().createImageView(layerInfo));
+        }
+    }
 }
 
 VulkanImage::~VulkanImage() {
@@ -73,6 +89,11 @@ VulkanImage::~VulkanImage() {
         device.destroySampler(m_sampler);
         m_sampler = nullptr;
     }
+
+    for (auto view : m_layerViews) {
+        if (view) device.destroyImageView(view);
+    }
+    m_layerViews.clear();
 
     if (m_imageView) {
         device.destroyImageView(m_imageView);

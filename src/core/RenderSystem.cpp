@@ -1,4 +1,6 @@
 #include "core/RenderSystem.hpp"
+
+#include <limits>
 #include "core/TransformSystem.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -63,13 +65,11 @@ void RenderSystem::RenderDepthOnly(
     VulkanPipeline& pipeline,
     MeshRegistry& meshes,
     vk::CommandBuffer commandBuffer,
-    vk::DescriptorSet sceneSet,
+    const glm::mat4& cascadeViewProj,
     const Frustum& lightFrustum,
     Stats& stats) {
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
-                                     VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
 
     uint32_t boundMesh = MeshRegistry::kInvalidMesh;
 
@@ -102,15 +102,43 @@ void RenderSystem::RenderDepthOnly(
             boundMesh = renderable.meshID;
         }
 
-        // World matrix, so a child follows its parent.
-        const PushConstantData push = buildPushConstants(registry, entity, world.matrix);
+        // World matrix so a child follows its parent, plus this cascade's
+        // transform - the depth pass has no other use for the scene UBO.
+        ShadowPushConstantData push{};
+        push.model = world.matrix;
+        push.cascadeViewProj = cascadeViewProj;
         commandBuffer.pushConstants(
-            pipeline.GetLayout(),
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-            0, sizeof(PushConstantData), &push);
+            pipeline.GetLayout(), vk::ShaderStageFlagBits::eVertex,
+            0, sizeof(ShadowPushConstantData), &push);
 
         commandBuffer.drawIndexed(mesh->indexCount, 1, 0, 0, 0);
     }
+}
+
+bool RenderSystem::ComputeSceneBounds(entt::registry& registry, MeshRegistry& meshes,
+                                      glm::vec3& outMin, glm::vec3& outMax) {
+    constexpr float big = std::numeric_limits<float>::max();
+    outMin = glm::vec3(big);
+    outMax = glm::vec3(-big);
+
+    bool any = false;
+    auto view = registry.view<WorldTransformComponent, RenderableComponent>();
+    for (auto entity : view) {
+        const auto& renderable = view.get<RenderableComponent>(entity);
+        if (!renderable.isVisible) continue;
+
+        const GpuMesh* mesh = meshes.Get(renderable.meshID);
+        if (!mesh || mesh->indexCount == 0) continue;
+
+        glm::vec3 worldMin, worldMax;
+        Frustum::TransformAABB(view.get<WorldTransformComponent>(entity).matrix,
+                               renderable.localBoundsMin, renderable.localBoundsMax,
+                               worldMin, worldMax);
+        outMin = glm::min(outMin, worldMin);
+        outMax = glm::max(outMax, worldMax);
+        any = true;
+    }
+    return any;
 }
 
 void RenderSystem::Render(

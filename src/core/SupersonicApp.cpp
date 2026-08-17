@@ -400,30 +400,19 @@ void SupersonicApp::Run() {
                                     m_renderer->GetMeshRegistry(),
                                     m_renderer->GetTextureRegistry());
 
-        glm::mat4 viewMatrix(1.0f);
-        glm::mat4 projMatrix(1.0f);
-        glm::vec3 cameraPosition(0.0f);
-
         // Whichever camera the viewport is showing - the same choice the
         // editor makes for picking and the gizmo, so all three agree.
-        {
-            const CameraComponent* cam = &m_editorLayer->GetEditorCamera().Get();
-            if (!m_playMode.IsEditing()) {
-                if (const auto camEntity = FindPrimaryCamera(m_registry); camEntity != entt::null) {
-                    cam = &m_registry.get<CameraComponent>(camEntity);
-                }
+        const CameraComponent* renderCamera = &m_editorLayer->GetEditorCamera().Get();
+        if (!m_playMode.IsEditing()) {
+            if (const auto camEntity = FindPrimaryCamera(m_registry); camEntity != entt::null) {
+                renderCamera = &m_registry.get<CameraComponent>(camEntity);
             }
-            viewMatrix = cam->getViewMatrix();
-            projMatrix = cam->getProjectionMatrix();
-            cameraPosition = cam->position;
         }
 
         m_renderer->DrawFrame(m_registry,
                               m_editorLayer->GetOffscreen(),
                               ImGui::GetDrawData(),
-                              viewMatrix,
-                              projMatrix,
-                              cameraPosition);
+                              *renderCamera);
     }
 
     std::cout << "[SupersonicApp] Window close requested. Waiting for GPU idle..." << std::endl;

@@ -8,6 +8,8 @@
 // GLM configuration lives on the CMake target - see core/Components.hpp.
 #include <glm/glm.hpp>
 
+#include "renderer/ShadowCascades.hpp"
+
 namespace Supersonic {
 
 // Maximum simultaneous lights. Kept small and fixed so the whole set fits in a
@@ -32,7 +34,21 @@ struct GpuLight {
 struct UniformBufferObject {
     alignas(16) glm::mat4 view;
     alignas(16) glm::mat4 proj;
-    alignas(16) glm::mat4 lightSpace;      // shadow lookup transform
+
+    // One light-space transform per shadow cascade, replacing the single
+    // lightSpace matrix. view and proj deliberately stay first: grid.vert reads
+    // only those two, at offsets 0 and 64, so its own copy of this block does
+    // not have to care about anything after them.
+    alignas(16) glm::mat4 cascadeViewProj[kShadowCascadeCount];
+
+    // x..w = view-space distance to each cascade's far plane. A vec4 rather than
+    // float[4] because a std140 float array has a 16-byte stride per element,
+    // which would silently desync from the C++ side.
+    alignas(16) glm::vec4 cascadeSplits;
+
+    // x..w = world size of one shadow texel per cascade, for the normal offset.
+    alignas(16) glm::vec4 cascadeTexelWorld;
+
     alignas(16) glm::vec4 cameraPosition;  // xyz = world position
     alignas(16) glm::vec4 ambientColor;    // rgb = ambient term
     alignas(16) glm::vec4 lightCount;      // x = active light count
@@ -44,6 +60,20 @@ struct PushConstantData {
     glm::mat4 model;         // 0..63   (vertex)
     glm::vec4 albedoColor;   // 64..79  (fragment)
     glm::vec4 material;      // 80..95  x=roughness y=metallic z=ao (fragment)
+};
+
+// The depth pass has its own, because it needs a different second half: which
+// cascade is being rasterised, as its full transform.
+//
+// Passing the matrix rather than an index into the scene UBO is what keeps
+// shadow.vert free of the UBO block entirely - and therefore unable to drift out
+// of step with the three other declarations of it, which is a mismatch nothing
+// diagnoses.
+//
+// 128 bytes exactly: the guaranteed minimum, and all of it.
+struct ShadowPushConstantData {
+    glm::mat4 model;           // 0..63
+    glm::mat4 cascadeViewProj; // 64..127
 };
 
 class VulkanPipeline {
@@ -68,6 +98,10 @@ public:
         // SPIR-V from scratch, which is what happened for every pipeline on
         // every launch before PipelineCache existed.
         vk::PipelineCache cache{nullptr};
+
+        // The depth pass declares a different push constant block from the scene
+        // pass, so the range cannot be one fixed size for every pipeline.
+        uint32_t pushConstantSize{static_cast<uint32_t>(sizeof(PushConstantData))};
     };
 
     VulkanPipeline(vk::Device device, vk::RenderPass renderPass,

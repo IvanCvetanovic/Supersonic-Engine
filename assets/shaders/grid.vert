@@ -15,7 +15,9 @@ struct Light {
 layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 view;
     mat4 proj;
-    mat4 lightSpace;
+    mat4 cascadeViewProj[4];
+    vec4 cascadeSplits;      // view-space far depth per cascade
+    vec4 cascadeTexelWorld;  // world size of one shadow texel per cascade
     vec4 cameraPosition;
     vec4 ambientColor;
     vec4 lightCount;
