@@ -1,52 +1,18 @@
 #include "editor/GamePackager.hpp"
 
+#include "core/GameRuntime.hpp"
+#include "platform/ExecutablePath.hpp"
+
 #include <filesystem>
+#include <fstream>
 #include <system_error>
 #include <vector>
-
-#if defined(_WIN32)
-#include <windows.h>
-#elif defined(__APPLE__)
-#include <mach-o/dyld.h>
-#include <climits>
-#else
-#include <unistd.h>
-#include <climits>
-#endif
 
 namespace fs = std::filesystem;
 
 namespace Supersonic {
 
 namespace {
-
-// Asking the OS where we are removes the guesswork entirely. The old code
-// probed a hardcoded "build/SupersonicEngine.exe", which is the Ninja layout; the
-// documented Visual Studio build emits build/Debug/SupersonicEngine.exe and POSIX
-// builds have no .exe suffix at all, so the copy silently did nothing.
-fs::path executablePath() {
-    std::error_code ec;
-
-#if defined(_WIN32)
-    std::vector<wchar_t> buffer(MAX_PATH);
-    for (;;) {
-        const DWORD written = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (written == 0) return {};
-        if (written < buffer.size()) return fs::path(std::wstring(buffer.data(), written));
-        buffer.resize(buffer.size() * 2);
-    }
-#elif defined(__APPLE__)
-    uint32_t size = 0;
-    _NSGetExecutablePath(nullptr, &size);
-    std::vector<char> buffer(size + 1, '\0');
-    if (_NSGetExecutablePath(buffer.data(), &size) != 0) return {};
-    return fs::weakly_canonical(fs::path(buffer.data()), ec);
-#else
-    const fs::path self = fs::read_symlink("/proc/self/exe", ec);
-    if (ec) return {};
-    return self;
-#endif
-}
 
 bool copyTreeIfPresent(const fs::path& from, const fs::path& to, std::string& note) {
     std::error_code ec;
@@ -68,7 +34,7 @@ bool copyTreeIfPresent(const fs::path& from, const fs::path& to, std::string& no
 SerializationResult GamePackager::PackageStandaloneGame(const std::string& outputFolder) {
     std::error_code ec;
 
-    const fs::path exe = executablePath();
+    const fs::path exe = ExecutablePath();
     if (exe.empty() || !fs::exists(exe, ec)) {
         return { false, "Could not locate the running executable; nothing was packaged." };
     }
@@ -92,7 +58,15 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
         const auto& p = entry.path();
         if (!entry.is_regular_file()) continue;
         const std::string ext = p.extension().string();
-        if (ext == ".dll" || ext == ".so" || ext == ".dylib") {
+        if (ext != ".dll" && ext != ".so" && ext != ".dylib") continue;
+
+        // Hot reload works by loading a numbered copy of the script plugin, so
+        // a build tree accumulates GameScripts.loaded1.dll and friends. Those
+        // are scratch files; shipping them puts a stale copy of the game's
+        // scripts in the release folder.
+        if (p.stem().string().find(".loaded") != std::string::npos) continue;
+
+        {
             fs::copy_file(p, out / p.filename(), fs::copy_options::overwrite_existing, ec);
             ec.clear();
         }
@@ -100,8 +74,37 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
 
     std::string note;
     bool ok = true;
-    ok &= copyTreeIfPresent("assets/shaders", out / "assets" / "shaders", note);
-    ok &= copyTreeIfPresent("assets/scenes", out / "assets" / "scenes", note);
+
+    // Everything a scene can reference, not just shaders and scenes. A
+    // packaged game used to start with no textures, no models, no audio, no
+    // materials and no prefabs - every one of which a scene file names by
+    // path and expects to find.
+    for (const char* directory : { "shaders", "scenes", "textures", "models",
+                                   "materials", "audio", "prefabs", "branding" }) {
+        ok &= copyTreeIfPresent(fs::path("assets") / directory,
+                                out / "assets" / directory, note);
+    }
+
+    // The marker that stops the copied binary from starting the editor. Without
+    // it the packaged folder was an editor that happened to have a game's
+    // assets next to it.
+    GameManifest manifest;
+    manifest.isGame = true;
+    manifest.title = out.filename().empty() ? std::string("Supersonic Game")
+                                            : out.filename().string();
+    manifest.startupScene = "assets/scenes/MainScene.scene";
+
+    {
+        std::ofstream file(out / GameRuntime::kManifestFilename);
+        if (!file.is_open()) {
+            return { false, "Could not write " + std::string(GameRuntime::kManifestFilename) +
+                            " to " + out.string() + "; the copy would have started the editor." };
+        }
+        file << GameRuntime::Serialize(manifest);
+        if (!file) {
+            return { false, "Failed writing " + std::string(GameRuntime::kManifestFilename) + "." };
+        }
+    }
 
     if (!ok) {
         return { false, "Packaged partially to " + fs::absolute(out, ec).string() + note };

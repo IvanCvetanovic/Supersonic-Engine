@@ -14,6 +14,9 @@
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
 #include "core/TransformSystem.hpp"
+#include "core/GameRuntime.hpp"
+#include "core/SceneSerializer.hpp"
+#include "platform/ExecutablePath.hpp"
 
 #include "imgui.h"
 
@@ -40,21 +43,6 @@ constexpr float kMaxFrameDelta = 0.10f;
 constexpr float kFixedPhysicsStep = 1.0f / 60.0f;
 constexpr int kMaxPhysicsStepsPerFrame = 5;
 
-// Absolute path of the running binary, or empty when the platform has no cheap
-// way to ask. Used to find the script plugin that was built alongside it.
-std::filesystem::path executablePath() {
-#if defined(_WIN32)
-    wchar_t buffer[MAX_PATH]{};
-    const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
-    if (length == 0 || length == MAX_PATH) return {};
-    return std::filesystem::path(buffer);
-#else
-    std::error_code ec;
-    const std::filesystem::path self = std::filesystem::read_symlink("/proc/self/exe", ec);
-    return ec ? std::filesystem::path{} : self;
-#endif
-}
-
 // The script plugin lives next to the executable, so this works both from a
 // build tree and from a packaged folder.
 std::string scriptPluginPath() {
@@ -71,7 +59,7 @@ std::string scriptPluginPath() {
     // build/Release meant a Release build loaded a stale Debug plugin - which
     // the ABI version check caught, but only as a refusal to load any scripts
     // at all, with a message that blamed the plugin rather than the lookup.
-    const std::filesystem::path exePath = executablePath();
+    const std::filesystem::path exePath = ExecutablePath();
     if (!exePath.empty()) {
         const std::filesystem::path beside = exePath.parent_path() / name;
         if (std::filesystem::exists(beside, ec)) return beside.string();
@@ -114,7 +102,11 @@ SupersonicApp::SupersonicApp() {
     m_hotReload = std::make_unique<HotReloadEngine>();
     m_hotReload->WatchPlugin(scriptPluginPath());
 
-    m_window = std::make_unique<Window>(1280, 720, "Supersonic Engine");
+    // Read before the window exists, because it decides the title on it.
+    m_manifest = GameRuntime::Load();
+
+    m_window = std::make_unique<Window>(1280, 720,
+                                        m_manifest.isGame ? m_manifest.title : "Supersonic Engine");
 
     auto requiredExtensions = m_window->GetRequiredExtensions();
     m_vulkanContext = std::make_unique<VulkanContext>(requiredExtensions);
@@ -134,7 +126,27 @@ SupersonicApp::SupersonicApp() {
     m_renderer->SetOffscreenRenderPass(m_editorLayer->GetOffscreen().GetRenderPass(),
                                        m_editorLayer->GetOffscreen().GetSampleCount());
 
+    m_editorLayer->SetGameMode(m_manifest.isGame);
+
     initECS();
+
+    if (m_manifest.isGame) {
+        // The demo scene initECS just built is the editor's starting point, not
+        // the game's. A packaged game that opened it was the clearest symptom
+        // that packaging shipped an editor.
+        const auto loaded = SceneSerializer::Deserialize(m_registry, m_manifest.startupScene);
+        std::cout << "[SupersonicApp] " << loaded.message << std::endl;
+        if (!loaded.ok) {
+            std::cerr << "[SupersonicApp] Falling back to the built-in scene." << std::endl;
+        }
+
+        // Straight into Play: a game has no edit mode to be in, and without
+        // this nothing would move, no script would run and no sound would play.
+        const auto started = m_playMode.Play(m_registry);
+        if (!started.ok) {
+            std::cerr << "[SupersonicApp] " << started.message << std::endl;
+        }
+    }
 }
 
 SupersonicApp::~SupersonicApp() {

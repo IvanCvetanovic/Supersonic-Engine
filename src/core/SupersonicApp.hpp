@@ -15,6 +15,7 @@
 #include "core/AudioEngine.hpp"
 #include "core/HotReloadEngine.hpp"
 #include "core/PlayMode.hpp"
+#include "core/GameRuntime.hpp"
 #include "core/Components.hpp"
 #include "core/PhysicsSystem.hpp"
 #include "core/AnimationLibrary.hpp"
@@ -56,6 +57,9 @@ private:
 
     // Edit / Play / Paused, with a scene snapshot restored on Stop.
     PlayMode m_playMode;
+
+    // Empty (isGame false) in the editor, which is the usual case.
+    GameManifest m_manifest;
 
     entt::registry m_registry;
 

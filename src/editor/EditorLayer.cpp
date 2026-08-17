@@ -202,7 +202,69 @@ void EditorLayer::buildLayout(unsigned int dockspaceId, int preset) {
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
+void EditorLayer::buildGameView(entt::registry& registry) {
+    // A shipped game has no dockable panels to remember, and writing an
+    // imgui.ini into the player's game folder is editor litter.
+    ImGui::GetIO().IniFilename = nullptr;
+
+    // The scene already renders into the offscreen target and comes back tone
+    // mapped; presenting it is one textured quad filling the window. Doing it
+    // through ImGui rather than a dedicated blit keeps a single presentation
+    // path - the same image, the same descriptor, drawn edge to edge instead of
+    // inside a dockable panel.
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                                   ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                   ImGuiWindowFlags_NoNavFocus |
+                                   ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoDocking |
+                                   ImGuiWindowFlags_NoBackground;
+
+    ImGui::Begin("##GameView", nullptr, flags);
+
+    // A game owns the mouse and keyboard outright. In the editor these track
+    // whether the pointer is over the viewport panel, because the panel is one
+    // window among many; here there is nothing else to give input to.
+    m_viewportHovered = true;
+    m_viewportFocused = true;
+
+    const ImVec2 size = viewport->Size;
+    if (m_offscreenPass && size.x >= 1.0f && size.y >= 1.0f) {
+        m_desiredViewportWidth = static_cast<uint32_t>(size.x);
+        m_desiredViewportHeight = static_cast<uint32_t>(size.y);
+
+        // The render target is the window now, not a panel inside it, so the
+        // camera's aspect comes from the window.
+        const float aspect = size.x / size.y;
+        if (const auto camEntity = FindPrimaryCamera(registry); camEntity != entt::null) {
+            registry.get<CameraComponent>(camEntity).aspect = aspect;
+        }
+        m_editorCamera.SetAspect(aspect);
+
+        ImGui::Image(m_offscreenPass->GetTextureID(), size);
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
 void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
+    if (m_gameMode) {
+        // Nothing below this line runs in a shipped game: no menu bar, no
+        // dockspace, no panels, and none of the editor keyboard shortcuts,
+        // which would otherwise let a player press Ctrl+Z during play.
+        buildGameView(registry);
+        return;
+    }
+
     // 1. Enable Fullscreen Central Dockspace
     ImGuiDockNodeFlags dockspaceFlags = ImGuiDockNodeFlags_None;
     ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;

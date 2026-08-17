@@ -44,6 +44,12 @@ public:
     // the desired viewport size, but never touches GPU resource lifetimes.
     void BuildUI(entt::registry& registry, Window& window);
 
+    // A packaged game runs the same binary as the editor, so the difference is
+    // this flag rather than a separate build. When set, BuildUI draws the game
+    // filling the window and nothing else: no menu bar, no dockspace, no
+    // panels, no editor shortcuts.
+    void SetGameMode(bool gameMode) { m_gameMode = gameMode; }
+
     // Applies any viewport resize requested during BuildUI. Call at the top of
     // the frame, before the renderer starts recording.
     void ApplyPendingResize();
@@ -109,6 +115,7 @@ private:
     InspectorPanel m_inspectorPanel;
     ContentBrowserPanel m_contentBrowserPanel;
 
+    bool m_gameMode{false};
     bool m_showDemoWindow{false};
 
     std::string m_statusMessage;
@@ -127,6 +134,9 @@ private:
     // edit mode, the scene's primary in play mode. Picking, the gizmo and the
     // renderer all go through this so they cannot disagree.
     const CameraComponent& viewportCamera(entt::registry& registry) const;
+
+    // The whole of the UI in game mode: the rendered scene, edge to edge.
+    void buildGameView(entt::registry& registry);
 
     PlayMode* m_playMode{nullptr};
     EditorCamera m_editorCamera;

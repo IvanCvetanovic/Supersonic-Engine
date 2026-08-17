@@ -1,0 +1,349 @@
+{
+  "Scene": "MainScene",
+  "Entities": [
+    {
+      "Tag": "Main Camera",
+      "Transform": {
+        "Position": [0.6, 2.6, 9.5],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "Camera": {
+        "FOV": 50,
+        "NearPlane": 0.1,
+        "FarPlane": 100,
+        "Position": [0.6, 2.6, 9.5],
+        "Yaw": -92,
+        "Pitch": -12,
+        "MovementSpeed": 3.5,
+        "MouseSensitivity": 0.1,
+        "IsPrimary": true
+      },
+      "HasRenderable": false
+    },
+    {
+      "Tag": "Sun (Directional)",
+      "Transform": {
+        "Position": [0, 0, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "Light": {
+        "Type": 0,
+        "Direction": [0.452265, 0.822301, 0.345366],
+        "Color": [1, 0.96, 0.88],
+        "Ambient": [0.05, 0.055, 0.07],
+        "Intensity": 1.6,
+        "Range": 25,
+        "CastsShadow": true
+      },
+      "HasRenderable": false
+    },
+    {
+      "Tag": "Point Light (Warm)",
+      "Transform": {
+        "Position": [-3.2, 1.6, 2],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "Light": {
+        "Type": 1,
+        "Direction": [0.6, 1, 0.5],
+        "Color": [1, 0.55, 0.25],
+        "Ambient": [0.12, 0.12, 0.14],
+        "Intensity": 2.2,
+        "Range": 14,
+        "CastsShadow": true
+      },
+      "HasRenderable": false
+    },
+    {
+      "Tag": "Point Light (Cool)",
+      "Transform": {
+        "Position": [3.4, 1.4, 2.2],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "Light": {
+        "Type": 1,
+        "Direction": [0.6, 1, 0.5],
+        "Color": [0.3, 0.55, 1],
+        "Ambient": [0.12, 0.12, 0.14],
+        "Intensity": 2.2,
+        "Range": 14,
+        "CastsShadow": true
+      },
+      "HasRenderable": false
+    },
+    {
+      "Tag": "Ground",
+      "Transform": {
+        "Position": [0, 0, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [40, 1, 40]
+      },
+      "Mesh": {
+        "Primitive": "Plane",
+        "Path": ""
+      },
+      "Material": {
+        "Albedo": [1, 1, 1, 1],
+        "AlbedoTexture": "assets/textures/floor_tiles.png",
+        "NormalTexture": "assets/textures/tiles_normal.png",
+        "Roughness": 0.65,
+        "Metallic": 0.05,
+        "AO": 1,
+        "Asset": "assets/materials/TiledFloor.material"
+      },
+      "Renderable": { "Visible": true, "CastsShadow": false },
+      "HasRenderable": true
+    },
+    {
+      "Tag": "Textured Cube",
+      "Transform": {
+        "Position": [0, 0.9, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "Mesh": {
+        "Primitive": "Cube",
+        "Path": ""
+      },
+      "Material": {
+        "Albedo": [1, 1, 1, 1],
+        "AlbedoTexture": "assets/textures/uv_grid.png",
+        "NormalTexture": "assets/textures/tiles_normal.png",
+        "Roughness": 0.45,
+        "Metallic": 0.1,
+        "AO": 1,
+        "Asset": ""
+      },
+      "Script": {
+        "Name": "RotatorScript",
+        "Enabled": true
+      },
+      "Renderable": { "Visible": true, "CastsShadow": true },
+      "HasRenderable": true
+    },
+    {
+      "Parent": 5,
+      "Tag": "Satellite (child)",
+      "Transform": {
+        "Position": [1.6, 0.6, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [0.35, 0.35, 0.35]
+      },
+      "Mesh": {
+        "Primitive": "Sphere",
+        "Path": ""
+      },
+      "Material": {
+        "Albedo": [1, 0.45, 0.25, 1],
+        "AlbedoTexture": "",
+        "NormalTexture": "",
+        "Roughness": 0.35,
+        "Metallic": 0.1,
+        "AO": 1,
+        "Asset": ""
+      },
+      "Renderable": { "Visible": true, "CastsShadow": true },
+      "HasRenderable": true
+    },
+    {
+      "Tag": "Metal Sphere",
+      "Transform": {
+        "Position": [-2.2, 0.75, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "Mesh": {
+        "Primitive": "Sphere",
+        "Path": ""
+      },
+      "Material": {
+        "Albedo": [1, 1, 1, 1],
+        "AlbedoTexture": "",
+        "NormalTexture": "",
+        "Roughness": 0.18,
+        "Metallic": 0.9,
+        "AO": 1,
+        "Asset": ""
+      },
+      "Renderable": { "Visible": true, "CastsShadow": true },
+      "HasRenderable": true
+    },
+    {
+      "Tag": "Monument (glTF)",
+      "Transform": {
+        "Position": [3.6, 0, 0.5],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "Mesh": {
+        "Primitive": "",
+        "Path": "assets/models/monument.gltf"
+      },
+      "Material": {
+        "Albedo": [1, 1, 1, 1],
+        "AlbedoTexture": "assets/textures/uv_grid.png",
+        "NormalTexture": "",
+        "Roughness": 0.55,
+        "Metallic": 0.1,
+        "AO": 1,
+        "Asset": ""
+      },
+      "Renderable": { "Visible": true, "CastsShadow": true },
+      "HasRenderable": true
+    },
+    {
+      "Tag": "Physics Cube",
+      "Transform": {
+        "Position": [2, 4, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [0.7, 0.7, 0.7]
+      },
+      "Mesh": {
+        "Primitive": "Cube",
+        "Path": ""
+      },
+      "Material": {
+        "Albedo": [1, 1, 1, 1],
+        "AlbedoTexture": "assets/textures/uv_grid.png",
+        "NormalTexture": "",
+        "Roughness": 0.4,
+        "Metallic": 0.1,
+        "AO": 1,
+        "Asset": ""
+      },
+      "RigidBody": {
+        "Velocity": [0, 0, 0],
+        "Mass": 1,
+        "UseGravity": true,
+        "IsKinematic": false
+      },
+      "BoxCollider": { "Size": [1, 1, 1], "IsTrigger": false },
+      "Renderable": { "Visible": true, "CastsShadow": true },
+      "HasRenderable": true
+    },
+    {
+      "Tag": "Platform (Static)",
+      "Transform": {
+        "Position": [2, 0.6, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [2, 0.3, 2]
+      },
+      "Mesh": {
+        "Primitive": "Cube",
+        "Path": ""
+      },
+      "Material": {
+        "Albedo": [0.55, 0.57, 0.62, 1],
+        "AlbedoTexture": "",
+        "NormalTexture": "",
+        "Roughness": 0.7,
+        "Metallic": 0.1,
+        "AO": 1,
+        "Asset": ""
+      },
+      "BoxCollider": { "Size": [1, 1, 1], "IsTrigger": false },
+      "Renderable": { "Visible": true, "CastsShadow": true },
+      "HasRenderable": true
+    },
+    {
+      "Tag": "Falling Sphere",
+      "Transform": {
+        "Position": [2.35, 6.5, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [0.6, 0.6, 0.6]
+      },
+      "Mesh": {
+        "Primitive": "Sphere",
+        "Path": ""
+      },
+      "Material": {
+        "Albedo": [0.85, 0.35, 0.2, 1],
+        "AlbedoTexture": "",
+        "NormalTexture": "",
+        "Roughness": 0.4,
+        "Metallic": 0.2,
+        "AO": 1,
+        "Asset": ""
+      },
+      "RigidBody": {
+        "Velocity": [0, 0, 0],
+        "Mass": 2,
+        "UseGravity": true,
+        "IsKinematic": false
+      },
+      "SphereCollider": { "Radius": 0.5, "IsTrigger": false },
+      "Renderable": { "Visible": true, "CastsShadow": true },
+      "HasRenderable": true
+    },
+    {
+      "Tag": "Bender (Skinned)",
+      "Transform": {
+        "Position": [-2.6, 0, 1.2],
+        "Rotation": [0, 0, 0],
+        "Scale": [0.9, 0.9, 0.9]
+      },
+      "Mesh": {
+        "Primitive": "",
+        "Path": "assets/models/bender.gltf"
+      },
+      "Material": {
+        "Albedo": [0.85, 0.55, 0.25, 1],
+        "AlbedoTexture": "",
+        "NormalTexture": "",
+        "Roughness": 0.45,
+        "Metallic": 0.1,
+        "AO": 1,
+        "Asset": ""
+      },
+      "Animator": {
+        "Clip": "Bend",
+        "Time": 0,
+        "Speed": 1,
+        "Loop": true,
+        "Playing": true
+      },
+      "Renderable": { "Visible": true, "CastsShadow": true },
+      "HasRenderable": true
+    },
+    {
+      "Tag": "Particle Emitter",
+      "Transform": {
+        "Position": [-1.5, 0.5, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "ParticleEmitter": {
+        "MaxParticles": 100,
+        "EmitRate": 10,
+        "ParticleLifetime": 2,
+        "StartColor": [1, 0.6, 0.1, 1],
+        "EndColor": [1, 0, 0, 0],
+        "VelocityRange": [0.5, 2, 0.5],
+        "ParticleSize": 0.08
+      },
+      "HasRenderable": false
+    },
+    {
+      "Tag": "3D Audio Source",
+      "Transform": {
+        "Position": [3, 1, 0],
+        "Rotation": [0, 0, 0],
+        "Scale": [1, 1, 1]
+      },
+      "AudioSource": {
+        "Clip": "assets/audio/ambient.wav",
+        "Volume": 0.35,
+        "Pitch": 1,
+        "Playing": true,
+        "Loop": true,
+        "ReferenceDistance": 1.5,
+        "MaxDistance": 40
+      },
+      "HasRenderable": false
+    }
+  ]
+}

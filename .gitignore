@@ -8,3 +8,7 @@ build/
 third_party/tools/
 
 imgui.ini
+
+# Packaged games. Build output, not source - and a full copy of the engine
+# binary plus every asset, which has no business in the repository.
+/dist/
