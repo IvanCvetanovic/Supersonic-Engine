@@ -243,17 +243,20 @@ void VulkanPipeline::createDescriptorSetLayout() {
     m_sceneSetLayout = m_device.createDescriptorSetLayout(sceneInfo);
 
     // ---- Set 1: per-material ----
-    // binding 0: albedo. Rebound per draw, which is what lets each entity have
-    // its own texture rather than sharing one global sampler.
-    vk::DescriptorSetLayoutBinding albedoBinding{};
-    albedoBinding.binding = 0;
-    albedoBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    albedoBinding.descriptorCount = 1;
-    albedoBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+    // binding 0: albedo, binding 1: tangent-space normal map. Rebound per draw,
+    // which is what lets each entity carry its own maps rather than sharing one
+    // global sampler.
+    std::array<vk::DescriptorSetLayoutBinding, 2> materialBindings{};
+    for (uint32_t i = 0; i < materialBindings.size(); ++i) {
+        materialBindings[i].binding = i;
+        materialBindings[i].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        materialBindings[i].descriptorCount = 1;
+        materialBindings[i].stageFlags = vk::ShaderStageFlagBits::eFragment;
+    }
 
     vk::DescriptorSetLayoutCreateInfo materialInfo{};
-    materialInfo.bindingCount = 1;
-    materialInfo.pBindings = &albedoBinding;
+    materialInfo.bindingCount = static_cast<uint32_t>(materialBindings.size());
+    materialInfo.pBindings = materialBindings.data();
     m_materialSetLayout = m_device.createDescriptorSetLayout(materialInfo);
 }
 

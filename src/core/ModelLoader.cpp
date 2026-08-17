@@ -82,6 +82,7 @@ bool ModelLoader::GenerateSphere(float radius, uint32_t rings, uint32_t sectors,
         }
     }
 
+    out.computeTangents();
     out.computeBounds();
     return true;
 }
@@ -139,6 +140,7 @@ bool ModelLoader::GenerateCube(float size, MeshData& out) {
         20, 21, 22, 22, 23, 20  // -X
     };
 
+    out.computeTangents();
     out.computeBounds();
     return true;
 }
@@ -170,6 +172,7 @@ bool ModelLoader::GeneratePlane(float width, float height, MeshData& out) {
     // every entity, so this mesh was never actually rasterised.
     out.indices = { 0, 3, 2, 0, 2, 1 };
 
+    out.computeTangents();
     out.computeBounds();
     return true;
 }
@@ -316,6 +319,7 @@ bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
         }
     }
 
+    out.computeTangents();
     out.computeBounds();
     std::cout << "[ModelLoader] Loaded " << filepath << " (" << out.vertices.size()
               << " vertices, " << out.indices.size() / 3 << " triangles)." << std::endl;

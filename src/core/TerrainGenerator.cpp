@@ -55,6 +55,7 @@ bool TerrainGenerator::GenerateTerrainMesh(uint32_t width, uint32_t height, floa
         }
     }
 
+    out.computeTangents();
     out.computeBounds();
     std::cout << "[TerrainGenerator] Generated terrain mesh (" << out.vertices.size()
               << " vertices, " << out.indices.size() / 3 << " triangles)." << std::endl;

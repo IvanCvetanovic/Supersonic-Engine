@@ -5,6 +5,8 @@ layout(location = 1) in vec3 fragColor;
 layout(location = 2) in vec2 fragTexCoord;
 layout(location = 3) in vec3 fragWorldPos;
 layout(location = 4) in vec4 fragLightSpacePos;
+layout(location = 5) in vec3 fragTangent;
+layout(location = 6) in vec3 fragBitangent;
 
 layout(location = 0) out vec4 outColor;
 
@@ -31,6 +33,9 @@ layout(set = 0, binding = 1) uniform sampler2D shadowMap;
 // Set 1: per-material. Rebound per draw, which is what gives each entity its
 // own texture instead of every object sampling one global checkerboard.
 layout(set = 1, binding = 0) uniform sampler2D albedoMap;
+// Tangent-space normal map. Materials without one sample a 1x1 flat
+// (0.5, 0.5, 1.0) texture, so no branch is needed here.
+layout(set = 1, binding = 1) uniform sampler2D normalMap;
 
 // Must match Engine::PushConstantData.
 layout(push_constant) uniform PushConstants {
@@ -103,7 +108,18 @@ void main() {
     float metallic  = clamp(push.material.y, 0.0, 1.0);
     float ao        = clamp(push.material.z, 0.0, 1.0);
 
+    // Re-orthonormalise the interpolated basis: interpolation across a
+    // triangle does not preserve orthogonality, and a skewed basis tilts the
+    // mapped normal.
     vec3 N = normalize(fragNormal);
+    vec3 T = normalize(fragTangent - N * dot(N, fragTangent));
+    vec3 B = normalize(fragBitangent);
+    mat3 TBN = mat3(T, B, N);
+
+    // Unpack from [0,1] to [-1,1] and rotate into world space.
+    vec3 sampledNormal = texture(normalMap, fragTexCoord).xyz * 2.0 - 1.0;
+    N = normalize(TBN * sampledNormal);
+
     vec3 V = normalize(ubo.cameraPosition.xyz - fragWorldPos);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 

@@ -105,6 +105,17 @@ void appendPrimitive(const tinygltf::Model& model,
         normals = accessorData<float>(model, model.accessors[static_cast<size_t>(it->second)], normalStride);
     }
 
+    const float* tangents = nullptr;
+    size_t tangentStride = 0;
+    if (const auto it = primitive.attributes.find("TANGENT"); it != primitive.attributes.end()) {
+        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
+        // glTF TANGENT is vec4: xyz plus a handedness sign in w, which is
+        // exactly the layout Vertex::tangent uses.
+        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc.type == TINYGLTF_TYPE_VEC4) {
+            tangents = accessorData<float>(model, acc, tangentStride);
+        }
+    }
+
     const float* uvs = nullptr;
     size_t uvStride = 0;
     if (const auto it = primitive.attributes.find("TEXCOORD_0"); it != primitive.attributes.end()) {
@@ -141,6 +152,17 @@ void appendPrimitive(const tinygltf::Model& model,
             v.texCoord = glm::vec2(t[0], t[1]);
         } else {
             v.texCoord = glm::vec2(0.0f);
+        }
+
+        if (tangents) {
+            const auto* t = reinterpret_cast<const float*>(
+                reinterpret_cast<const uint8_t*>(tangents) + i * tangentStride);
+            // The tangent is a direction, so it takes the world matrix; the
+            // handedness in w is a sign and must pass through untouched.
+            const glm::vec3 worldTangent = glm::vec3(worldMatrix * glm::vec4(t[0], t[1], t[2], 0.0f));
+            const float length = glm::length(worldTangent);
+            v.tangent = glm::vec4(length > 1e-8f ? worldTangent / length : glm::vec3(1.0f, 0.0f, 0.0f),
+                                  t[3] < 0.0f ? -1.0f : 1.0f);
         }
 
         v.color = glm::vec3(1.0f);
@@ -212,6 +234,11 @@ void appendPrimitive(const tinygltf::Model& model,
         }
     }
 
+    // A file that supplies tangents keeps them; one that does not gets a basis
+    // derived from its UVs, so normal mapping works either way.
+    if (!tangents) {
+        submesh.mesh.computeTangents();
+    }
     submesh.mesh.computeBounds();
     out.push_back(std::move(submesh));
 }

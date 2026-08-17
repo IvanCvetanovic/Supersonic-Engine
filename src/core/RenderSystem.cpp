@@ -41,13 +41,19 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
             renderable.localBoundsMax = gpuMesh->boundsMax;
         }
 
-        // MaterialComponent::albedoTexturePath used to be a field nothing read.
+        // Both texture paths used to be fields nothing read.
         if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
             renderable.albedoTextureID = material->albedoTexturePath.empty()
                                        ? textures.GetWhiteTexture()
                                        : textures.Acquire(material->albedoTexturePath, true);
+            // srgb=false: a normal map holds directions, not colour, so it must
+            // not be gamma-decoded on read.
+            renderable.normalTextureID = material->normalTexturePath.empty()
+                                       ? textures.GetFlatNormalTexture()
+                                       : textures.Acquire(material->normalTexturePath, false);
         } else {
             renderable.albedoTextureID = textures.GetWhiteTexture();
+            renderable.normalTextureID = textures.GetFlatNormalTexture();
         }
     }
 }
@@ -111,7 +117,7 @@ void RenderSystem::Render(
     // Avoid redundant rebinds when consecutive entities share a mesh or
     // texture, which is the common case.
     uint32_t boundMesh = MeshRegistry::kInvalidMesh;
-    uint32_t boundTexture = TextureRegistry::kInvalidTexture;
+    vk::DescriptorSet boundMaterialSet{};
 
     auto view = registry.view<WorldTransformComponent, RenderableComponent>();
     for (auto entity : view) {
@@ -131,12 +137,14 @@ void RenderSystem::Render(
             boundMesh = renderable.meshID;
         }
 
-        if (renderable.albedoTextureID != boundTexture) {
-            if (vk::DescriptorSet materialSet = textures.GetDescriptorSet(renderable.albedoTextureID)) {
-                commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
-                                                 VulkanPipeline::kMaterialSet, 1, &materialSet, 0, nullptr);
-                boundTexture = renderable.albedoTextureID;
-            }
+        // One set per (albedo, normal) pair, cached, so entities sharing a
+        // material do not rebind.
+        if (vk::DescriptorSet materialSet =
+                textures.AcquireMaterialSet(renderable.albedoTextureID, renderable.normalTextureID);
+            materialSet && materialSet != boundMaterialSet) {
+            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                             VulkanPipeline::kMaterialSet, 1, &materialSet, 0, nullptr);
+            boundMaterialSet = materialSet;
         }
 
         // World matrix, so a child follows its parent.
@@ -167,7 +175,8 @@ void RenderSystem::Render(
                 commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
                 commandBuffer.bindIndexBuffer(particleMesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
 
-                if (vk::DescriptorSet whiteSet = textures.GetDescriptorSet(textures.GetWhiteTexture())) {
+                if (vk::DescriptorSet whiteSet = textures.AcquireMaterialSet(
+                        textures.GetWhiteTexture(), textures.GetFlatNormalTexture())) {
                     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
                                                      VulkanPipeline::kMaterialSet, 1, &whiteSet, 0, nullptr);
                 }

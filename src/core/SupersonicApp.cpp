@@ -177,7 +177,8 @@ void SupersonicApp::initECS() {
     m_registry.emplace<MeshComponent>(ground, "Plane", "", 0u, 0u);
     auto& groundMat = m_registry.emplace<MaterialComponent>(ground);
     groundMat.albedoTexturePath = "assets/textures/floor_tiles.png";
-    groundMat.roughness = 0.92f;
+    groundMat.normalTexturePath = "assets/textures/tiles_normal.png";
+    groundMat.roughness = 0.72f;
     groundMat.metallic = 0.0f;
     auto& groundRenderable = m_registry.emplace<RenderableComponent>(ground);
     // A demo-scene choice, not a rule: this plane is only ever a receiver, so
@@ -192,6 +193,7 @@ void SupersonicApp::initECS() {
     m_registry.emplace<MeshComponent>(mainCube, "Cube", "", 24u, 36u);
     auto& cubeMat = m_registry.emplace<MaterialComponent>(mainCube);
     cubeMat.albedoTexturePath = "assets/textures/uv_grid.png";
+    cubeMat.normalTexturePath = "assets/textures/tiles_normal.png";
     cubeMat.roughness = 0.45f;
     m_registry.emplace<RenderableComponent>(mainCube);
     m_registry.emplace<ScriptComponent>(mainCube, "RotatorScript");

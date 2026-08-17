@@ -4,12 +4,15 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec3 inColor;
 layout(location = 3) in vec2 inTexCoord;
+layout(location = 4) in vec4 inTangent;   // xyz tangent, w handedness
 
 layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec3 fragColor;
 layout(location = 2) out vec2 fragTexCoord;
 layout(location = 3) out vec3 fragWorldPos;
 layout(location = 4) out vec4 fragLightSpacePos;
+layout(location = 5) out vec3 fragTangent;
+layout(location = 6) out vec3 fragBitangent;
 
 // Must match Engine::UniformBufferObject in renderer/VulkanPipeline.hpp.
 struct Light {
@@ -40,7 +43,14 @@ void main() {
     gl_Position = ubo.proj * ubo.view * worldPos;
 
     fragWorldPos = worldPos.xyz;
-    fragNormal = mat3(transpose(inverse(push.model))) * inNormal;
+
+    // Normals need the inverse-transpose (non-uniform scale would shear them
+    // off the surface); tangents are true directions and take the model matrix.
+    mat3 normalMatrix = mat3(transpose(inverse(push.model)));
+    fragNormal = normalMatrix * inNormal;
+    fragTangent = mat3(push.model) * inTangent.xyz;
+    // Handedness in w reconstructs the bitangent without storing it.
+    fragBitangent = cross(fragNormal, fragTangent) * inTangent.w;
     fragColor = inColor;
     fragTexCoord = inTexCoord;
 

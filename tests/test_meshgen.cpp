@@ -210,11 +210,62 @@ static void testObjMissingFileFails() {
     CHECK(!ModelLoader::LoadOBJ("definitely_not_here_12345.obj", mesh));
 }
 
+static void testTangentsAreValid() {
+    // Normal mapping needs a tangent basis. Without one there is nothing to
+    // rotate a tangent-space normal into world space with.
+    MeshData mesh;
+    CHECK(ModelLoader::GenerateCube(1.0f, mesh));
+
+    for (const auto& v : mesh.vertices) {
+        const glm::vec3 t(v.tangent);
+        CHECK_MSG(std::isfinite(t.x) && std::isfinite(t.y) && std::isfinite(t.z),
+                  "tangents must never be NaN");
+        CHECK_NEAR(glm::length(t), 1.0f);
+        // Orthogonal to the normal, or the mapped normal comes out skewed.
+        CHECK_MSG(std::abs(glm::dot(t, v.normal)) < 1e-3f,
+                  "tangent must be orthogonal to the vertex normal");
+        CHECK_MSG(std::abs(v.tangent.w) == 1.0f, "handedness must be exactly +/-1");
+    }
+}
+
+static void testTangentsSurviveDegenerateUVs() {
+    // A face whose UVs have no area gives no usable direction. The generator
+    // must fall back to an arbitrary perpendicular rather than divide by zero
+    // and write NaN into a device-local vertex buffer.
+    MeshData mesh;
+    mesh.vertices = {
+        {{0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.5f, 0.5f}, {}},
+        {{1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.5f, 0.5f}, {}},
+        {{0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.5f, 0.5f}, {}},
+    };
+    mesh.indices = { 0, 1, 2 };
+    mesh.computeTangents();
+
+    for (const auto& v : mesh.vertices) {
+        const glm::vec3 t(v.tangent);
+        CHECK_MSG(std::isfinite(t.x) && std::isfinite(t.y) && std::isfinite(t.z),
+                  "degenerate UVs must not produce NaN tangents");
+        CHECK_NEAR(glm::length(t), 1.0f);
+        CHECK_MSG(std::abs(glm::dot(t, v.normal)) < 1e-3f, "fallback tangent must still be perpendicular");
+    }
+}
+
+static void testTerrainHasTangents() {
+    MeshData mesh;
+    CHECK(TerrainGenerator::GenerateTerrainMesh(8, 8, 0.5f, mesh));
+    for (const auto& v : mesh.vertices) {
+        CHECK_NEAR(glm::length(glm::vec3(v.tangent)), 1.0f);
+    }
+}
+
 static void runTests() {
     testCube();
     testSphereRejectsDegenerateParameters();
     testPlane();
     testPlaneFacesUpward();
+    testTangentsAreValid();
+    testTangentsSurviveDegenerateUVs();
+    testTerrainHasTangents();
     testTerrainFacesUpward();
     testTerrainRejectsDegenerateSize();
     testTerrainSurvivesPast65kVertices();

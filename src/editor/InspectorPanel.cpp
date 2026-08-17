@@ -133,6 +133,16 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             if (material.albedoTexturePath.empty()) {
                 ImGui::TextDisabled("Empty = flat white; the tint and vertex colour still apply.");
             }
+
+            char normalBuffer[512] = {};
+            const size_t normalLen = std::min(material.normalTexturePath.size(), sizeof(normalBuffer) - 1);
+            std::memcpy(normalBuffer, material.normalTexturePath.data(), normalLen);
+            if (ImGui::InputText("Normal Map", normalBuffer, sizeof(normalBuffer))) {
+                material.normalTexturePath = normalBuffer;
+            }
+            if (material.normalTexturePath.empty()) {
+                ImGui::TextDisabled("Empty = flat normal; lighting uses the mesh normals.");
+            }
         }
     }
 

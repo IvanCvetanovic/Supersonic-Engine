@@ -25,6 +25,14 @@ struct Vertex {
     glm::vec3 color;
     glm::vec2 texCoord;
 
+    // xyz = tangent, w = bitangent handedness (+1 or -1).
+    //
+    // Required for normal mapping: a normal map stores directions in tangent
+    // space, and without a tangent basis there is nothing to transform them
+    // into world space with. Packing handedness into w is the standard trick
+    // that avoids storing a full bitangent.
+    glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
+
     static vk::VertexInputBindingDescription getBindingDescription() {
         vk::VertexInputBindingDescription bindingDescription{};
         bindingDescription.binding = 0;
@@ -33,8 +41,8 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static std::array<vk::VertexInputAttributeDescription, 4> getAttributeDescriptions() {
-        std::array<vk::VertexInputAttributeDescription, 4> attributeDescriptions{};
+    static std::array<vk::VertexInputAttributeDescription, 5> getAttributeDescriptions() {
+        std::array<vk::VertexInputAttributeDescription, 5> attributeDescriptions{};
 
         // Location 0: Position
         attributeDescriptions[0].binding = 0;
@@ -59,6 +67,12 @@ struct Vertex {
         attributeDescriptions[3].location = 3;
         attributeDescriptions[3].format = vk::Format::eR32G32Sfloat;
         attributeDescriptions[3].offset = offsetof(Vertex, texCoord);
+
+        // Location 4: Tangent (xyz) + handedness (w)
+        attributeDescriptions[4].binding = 0;
+        attributeDescriptions[4].location = 4;
+        attributeDescriptions[4].format = vk::Format::eR32G32B32A32Sfloat;
+        attributeDescriptions[4].offset = offsetof(Vertex, tangent);
 
         return attributeDescriptions;
     }
@@ -170,9 +184,11 @@ struct RenderableComponent {
     uint32_t meshID{0};
     uint32_t materialID{0};
 
-    // Resolved from MaterialComponent::albedoTexturePath by
-    // RenderSystem::SyncResources. Defaults to the built-in white texture.
+    // Resolved from MaterialComponent's texture paths by
+    // RenderSystem::SyncResources. Default to the built-in white albedo and
+    // flat normal, so an untextured material needs no special case.
     uint32_t albedoTextureID{0};
+    uint32_t normalTextureID{1};
 
     bool isVisible{true};
     bool castsShadow{true};
