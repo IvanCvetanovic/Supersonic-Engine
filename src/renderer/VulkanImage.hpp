@@ -24,7 +24,12 @@ public:
         // cascades through one array view avoids indexing an array of
         // descriptors, which requires a dynamically-uniform index and therefore
         // cannot be driven per fragment.
-        uint32_t arrayLayers = 1
+        uint32_t arrayLayers = 1,
+
+        // More than one sample makes this a multisample attachment. Such an
+        // image can never be sampled in a shader or copied from - it is
+        // resolved into a single-sample image by the render pass instead.
+        vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1
     );
     ~VulkanImage();
 
@@ -72,6 +77,7 @@ private:
     vk::ImageView m_imageView{nullptr};
     std::vector<vk::ImageView> m_layerViews;
     uint32_t m_arrayLayers{1};
+    vk::SampleCountFlagBits m_samples{vk::SampleCountFlagBits::e1};
     vk::Sampler m_sampler{nullptr};
 
     uint32_t m_width{0};

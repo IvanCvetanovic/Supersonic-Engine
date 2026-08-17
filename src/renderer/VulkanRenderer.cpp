@@ -39,10 +39,13 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     std::cout << "[VulkanRenderer] Renderer initialized (pipeline pending offscreen render pass)." << std::endl;
 }
 
-void VulkanRenderer::SetOffscreenRenderPass(vk::RenderPass pass) {
+void VulkanRenderer::SetOffscreenRenderPass(vk::RenderPass pass, vk::SampleCountFlagBits samples) {
     // The scene pipeline is built against the offscreen render pass, which the
-    // editor owns. It is supplied once the editor has created its target.
+    // editor owns. It is supplied once the editor has created its target - and
+    // with its sample count, because a pipeline whose rasterizationSamples does
+    // not match its render pass is invalid, not merely lower quality.
     m_offscreenRenderPass = pass;
+    m_offscreenSamples = samples;
     createGraphicsPipeline();
 
     // The texture registry allocates against the pipeline's material set layout,
@@ -279,6 +282,7 @@ void VulkanRenderer::createGraphicsPipeline() {
 
     VulkanPipeline::Options sceneOptions{};
     sceneOptions.cache = m_pipelineCache->Get();
+    sceneOptions.samples = m_offscreenSamples;
 
     m_pipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),
@@ -295,6 +299,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     gridOptions.cullMode = vk::CullModeFlagBits::eNone;
     gridOptions.useVertexInput = false;
     gridOptions.cache = m_pipelineCache->Get();
+    gridOptions.samples = m_offscreenSamples;
 
     m_gridPipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),

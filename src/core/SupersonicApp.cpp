@@ -99,7 +99,8 @@ SupersonicApp::SupersonicApp() {
                         m_swapchain->GetExtent().height);
 
     // The scene pipeline targets the editor's offscreen render pass.
-    m_renderer->SetOffscreenRenderPass(m_editorLayer->GetOffscreen().GetRenderPass());
+    m_renderer->SetOffscreenRenderPass(m_editorLayer->GetOffscreen().GetRenderPass(),
+                                       m_editorLayer->GetOffscreen().GetSampleCount());
 
     initECS();
 }

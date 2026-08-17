@@ -31,6 +31,9 @@ public:
     bool ApplyPendingResize();
 
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
+
+    // Pipelines drawing into this pass must declare the same count.
+    vk::SampleCountFlagBits GetSampleCount() const { return m_samples; }
     vk::Framebuffer GetFramebuffer() const { return m_framebuffer; }
     uint32_t GetWidth() const { return m_width; }
     uint32_t GetHeight() const { return m_height; }
@@ -50,8 +53,14 @@ private:
     uint32_t m_pendingHeight{0};
 
     vk::RenderPass m_renderPass{nullptr};
+
+    // Multisampled colour and depth are what the scene rasterises into;
+    // m_resolveImage is the single-sample copy the render pass resolves to and
+    // the only one that can be sampled.
+    vk::SampleCountFlagBits m_samples{vk::SampleCountFlagBits::e1};
     std::unique_ptr<VulkanImage> m_colorImage;
     std::unique_ptr<VulkanImage> m_depthImage;
+    std::unique_ptr<VulkanImage> m_resolveImage;
     vk::Framebuffer m_framebuffer{nullptr};
 
     vk::Sampler m_sampler{nullptr};

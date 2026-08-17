@@ -126,6 +126,10 @@ struct VulkanPipelineOptions {
     // The depth pass declares a different push constant block from the scene
     // pass, so the range cannot be one fixed size for every pipeline.
     uint32_t pushConstantSize{static_cast<uint32_t>(sizeof(PushConstantData))};
+
+    // Must match the render pass's attachments exactly; a mismatch is an
+    // invalid pipeline, not a quality difference.
+    vk::SampleCountFlagBits samples{vk::SampleCountFlagBits::e1};
 };
 
 class VulkanPipeline {

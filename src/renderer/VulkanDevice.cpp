@@ -239,4 +239,25 @@ void VulkanDevice::initVMA() {
     std::cout << "[VulkanDevice] VmaAllocator initialized successfully." << std::endl;
 }
 
+
+vk::SampleCountFlagBits VulkanDevice::GetMaxUsableSampleCount(vk::SampleCountFlagBits cap) const {
+    if (!m_physicalDevice) return vk::SampleCountFlagBits::e1;
+
+    const vk::PhysicalDeviceProperties properties = m_physicalDevice.getProperties();
+    const vk::SampleCountFlags counts = properties.limits.framebufferColorSampleCounts &
+                                        properties.limits.framebufferDepthSampleCounts;
+
+    // Descending, so the first hit is the best the device and the cap agree on.
+    const vk::SampleCountFlagBits ladder[] = {
+        vk::SampleCountFlagBits::e64, vk::SampleCountFlagBits::e32,
+        vk::SampleCountFlagBits::e16, vk::SampleCountFlagBits::e8,
+        vk::SampleCountFlagBits::e4,  vk::SampleCountFlagBits::e2,
+    };
+    for (const vk::SampleCountFlagBits bit : ladder) {
+        if (static_cast<uint32_t>(bit) > static_cast<uint32_t>(cap)) continue;
+        if (counts & bit) return bit;
+    }
+    return vk::SampleCountFlagBits::e1;
+}
+
 } // namespace Supersonic

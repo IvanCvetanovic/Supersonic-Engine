@@ -9,12 +9,17 @@ namespace Supersonic {
 VulkanOffscreen::VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height)
     : m_deviceRef(device), m_width(width > 0 ? width : 1), m_height(height > 0 ? height : 1) {
     
+    // Chosen before anything else: the render pass, the images and every
+    // pipeline drawing into this target all have to agree on it.
+    m_samples = m_deviceRef.GetMaxUsableSampleCount(vk::SampleCountFlagBits::e4);
+
     createRenderPass();
     createResources();
     createFramebuffer();
     createSamplerAndTextureID();
 
-    std::cout << "[VulkanOffscreen] Created Offscreen Render Target (" << m_width << "x" << m_height << ")." << std::endl;
+    std::cout << "[VulkanOffscreen] Created Offscreen Render Target (" << m_width << "x" << m_height
+              << ", " << static_cast<uint32_t>(m_samples) << "x MSAA)." << std::endl;
 }
 
 VulkanOffscreen::~VulkanOffscreen() {
@@ -45,6 +50,7 @@ void VulkanOffscreen::cleanup() {
 
     m_depthImage.reset();
     m_colorImage.reset();
+    m_resolveImage.reset();
 }
 
 void VulkanOffscreen::RequestResize(uint32_t width, uint32_t height) {
@@ -85,24 +91,47 @@ void VulkanOffscreen::createRenderPass() {
     // this image and writes it to the swapchain without any colour conversion,
     // nothing downstream cancels it. UNORM here means the shader's encoded
     // value is stored and presented verbatim - one encode, as intended.
+    const bool multisampled = m_samples != vk::SampleCountFlagBits::e1;
+
     vk::AttachmentDescription colorAttachment{};
     colorAttachment.format = kColorFormat;
-    colorAttachment.samples = vk::SampleCountFlagBits::e1;
+    colorAttachment.samples = m_samples;
     colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
-    colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    // Nothing reads the multisampled image after the pass: the resolve is what
+    // survives, so storing the samples would be pure bandwidth.
+    colorAttachment.storeOp = multisampled ? vk::AttachmentStoreOp::eDontCare
+                                           : vk::AttachmentStoreOp::eStore;
     colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
     colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
     colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
-    colorAttachment.finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    colorAttachment.finalLayout = multisampled ? vk::ImageLayout::eColorAttachmentOptimal
+                                               : vk::ImageLayout::eShaderReadOnlyOptimal;
 
     vk::AttachmentReference colorAttachmentRef{};
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
 
+    // The single-sample image ImGui samples. A multisampled image cannot be
+    // sampled in a shader at all, so with MSAA on this is the only one that can
+    // be shown.
+    vk::AttachmentDescription resolveAttachment{};
+    resolveAttachment.format = kColorFormat;
+    resolveAttachment.samples = vk::SampleCountFlagBits::e1;
+    resolveAttachment.loadOp = vk::AttachmentLoadOp::eDontCare;
+    resolveAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    resolveAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    resolveAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    resolveAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    resolveAttachment.finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+    vk::AttachmentReference resolveAttachmentRef{};
+    resolveAttachmentRef.attachment = 2;
+    resolveAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
     // 2. Offscreen Depth Attachment
     vk::AttachmentDescription depthAttachment{};
     depthAttachment.format = m_deviceRef.FindDepthFormat();
-    depthAttachment.samples = vk::SampleCountFlagBits::e1;
+    depthAttachment.samples = m_samples;
     depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
     depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
     depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
@@ -118,6 +147,7 @@ void VulkanOffscreen::createRenderPass() {
     subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.pResolveAttachments = multisampled ? &resolveAttachmentRef : nullptr;
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
     // Two dependencies, because this image is both written here and sampled by
@@ -155,10 +185,12 @@ void VulkanOffscreen::createRenderPass() {
     dependencies[1].dstStageMask = vk::PipelineStageFlagBits::eFragmentShader;
     dependencies[1].dstAccessMask = vk::AccessFlagBits::eShaderRead;
 
-    std::array<vk::AttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+    const std::array<vk::AttachmentDescription, 3> attachments = {
+        colorAttachment, depthAttachment, resolveAttachment
+    };
 
     vk::RenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.attachmentCount = multisampled ? 3u : 2u;
     renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
@@ -169,13 +201,22 @@ void VulkanOffscreen::createRenderPass() {
 }
 
 void VulkanOffscreen::createResources() {
+    const bool multisampled = m_samples != vk::SampleCountFlagBits::e1;
+
+    // eTransientAttachment would be the ideal usage for the multisampled colour
+    // and depth, since neither outlives the pass - but it requires lazily
+    // allocated memory that VMA is not being asked for here, so plain
+    // attachment usage it is.
     m_colorImage = std::make_unique<VulkanImage>(
         m_deviceRef,
         m_width,
         m_height,
         kColorFormat,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
-        vk::ImageAspectFlagBits::eColor
+        multisampled ? vk::ImageUsageFlags(vk::ImageUsageFlagBits::eColorAttachment)
+                     : (vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled),
+        vk::ImageAspectFlagBits::eColor,
+        1,
+        m_samples
     );
 
     vk::Format depthFormat = m_deviceRef.FindDepthFormat();
@@ -185,19 +226,35 @@ void VulkanOffscreen::createResources() {
         m_height,
         depthFormat,
         vk::ImageUsageFlagBits::eDepthStencilAttachment,
-        vk::ImageAspectFlagBits::eDepth
+        vk::ImageAspectFlagBits::eDepth,
+        1,
+        m_samples
     );
+
+    if (multisampled) {
+        m_resolveImage = std::make_unique<VulkanImage>(
+            m_deviceRef,
+            m_width,
+            m_height,
+            kColorFormat,
+            vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+            vk::ImageAspectFlagBits::eColor
+        );
+    }
 }
 
 void VulkanOffscreen::createFramebuffer() {
-    std::array<vk::ImageView, 2> attachments = {
+    const bool multisampled = m_resolveImage != nullptr;
+
+    const std::array<vk::ImageView, 3> attachments = {
         m_colorImage->GetImageView(),
-        m_depthImage->GetImageView()
+        m_depthImage->GetImageView(),
+        multisampled ? m_resolveImage->GetImageView() : vk::ImageView{}
     };
 
     vk::FramebufferCreateInfo framebufferInfo{};
     framebufferInfo.renderPass = m_renderPass;
-    framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    framebufferInfo.attachmentCount = multisampled ? 3u : 2u;
     framebufferInfo.pAttachments = attachments.data();
     framebufferInfo.width = m_width;
     framebufferInfo.height = m_height;
@@ -217,9 +274,15 @@ void VulkanOffscreen::createSamplerAndTextureID() {
 
     m_sampler = m_deviceRef.GetDevice().createSampler(samplerInfo);
 
+    // The resolve when multisampling, because the multisampled image cannot be
+    // sampled at all - binding it would be a validation error and a black
+    // viewport.
+    const vk::ImageView sampled = m_resolveImage ? m_resolveImage->GetImageView()
+                                                 : m_colorImage->GetImageView();
+
     VkDescriptorSet ds = ImGui_ImplVulkan_AddTexture(
         static_cast<VkSampler>(m_sampler),
-        static_cast<VkImageView>(m_colorImage->GetImageView()),
+        static_cast<VkImageView>(sampled),
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     );
 

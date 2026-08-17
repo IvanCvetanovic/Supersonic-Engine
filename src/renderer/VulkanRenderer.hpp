@@ -53,7 +53,7 @@ public:
 
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
     vk::RenderPass GetOffscreenRenderPass() const { return m_offscreenRenderPass; }
-    void SetOffscreenRenderPass(vk::RenderPass pass);
+    void SetOffscreenRenderPass(vk::RenderPass pass, vk::SampleCountFlagBits samples);
 
     // Last frame's culling counters, for the editor's statistics panel.
     const RenderSystem::Stats& GetRenderStats() const { return m_renderStats; }
@@ -92,6 +92,7 @@ private:
     // Render pass the 3D scene pipeline is built against; owned by the
     // offscreen target, cached here so the pipeline can be rebuilt.
     vk::RenderPass m_offscreenRenderPass{nullptr};
+    vk::SampleCountFlagBits m_offscreenSamples{vk::SampleCountFlagBits::e1};
     std::unique_ptr<VulkanPipeline> m_pipeline;
     std::unique_ptr<VulkanPipeline> m_gridPipeline;
 

@@ -12,10 +12,12 @@ VulkanImage::VulkanImage(
     vk::Format format,
     vk::ImageUsageFlags usage,
     vk::ImageAspectFlags aspectFlags,
-    uint32_t arrayLayers)
+    uint32_t arrayLayers,
+    vk::SampleCountFlagBits samples)
     : m_deviceRef(device), m_allocator(device.GetAllocator()), m_width(width), m_height(height), m_format(format) {
 
     m_arrayLayers = arrayLayers == 0 ? 1 : arrayLayers;
+    m_samples = samples;
 
     if (!m_allocator) {
         throw std::runtime_error("Cannot create VulkanImage with null VmaAllocator!");
@@ -33,7 +35,7 @@ VulkanImage::VulkanImage(
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = static_cast<VkImageUsageFlags>(usage);
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.samples = static_cast<VkSampleCountFlagBits>(m_samples);
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo allocInfo{};
