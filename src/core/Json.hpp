@@ -57,6 +57,14 @@ public:
         return m_type == Type::Array ? m_array : kEmpty;
     }
 
+    // Lets a caller enumerate members rather than only ask for ones it already
+    // knows the name of, which is what makes "do these two writers emit the
+    // same components?" answerable.
+    const Object& AsObject() const {
+        static const Object kEmpty;
+        return m_type == Type::Object ? m_object : kEmpty;
+    }
+
     double AsNumber(double fallback = 0.0) const {
         return m_type == Type::Number ? m_number : fallback;
     }

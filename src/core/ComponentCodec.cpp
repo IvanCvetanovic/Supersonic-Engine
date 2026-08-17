@@ -1,0 +1,334 @@
+#include "core/ComponentCodec.hpp"
+
+#include "core/Components.hpp"
+
+namespace Supersonic {
+
+namespace {
+
+void writeVec3(std::ostream& os, const glm::vec3& v) {
+    os << "[" << v.x << ", " << v.y << ", " << v.z << "]";
+}
+
+glm::vec3 readVec3(const Json::Value& value, const glm::vec3& fallback) {
+    const auto& arr = value.AsArray();
+    if (arr.size() != 3) return fallback;
+    return glm::vec3(arr[0].AsFloat(fallback.x),
+                     arr[1].AsFloat(fallback.y),
+                     arr[2].AsFloat(fallback.z));
+}
+
+glm::vec4 readVec4(const Json::Value& value, const glm::vec4& fallback) {
+    const auto& arr = value.AsArray();
+    if (arr.size() != 4) return fallback;
+    return glm::vec4(arr[0].AsFloat(fallback.x),
+                     arr[1].AsFloat(fallback.y),
+                     arr[2].AsFloat(fallback.z),
+                     arr[3].AsFloat(fallback.w));
+}
+
+} // namespace
+
+namespace ComponentCodec {
+
+void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
+           const std::string& indent) {
+    if (const auto* tag = registry.try_get<TagComponent>(entity)) {
+        out << indent << "\"Tag\": \"" << Json::Escape(tag->tag) << "\",\n";
+    }
+
+    if (const auto* transform = registry.try_get<TransformComponent>(entity)) {
+        out << indent << "\"Transform\": {\n";
+        out << indent << "  \"Position\": "; writeVec3(out, transform->position); out << ",\n";
+        out << indent << "  \"Rotation\": "; writeVec3(out, transform->rotation); out << ",\n";
+        out << indent << "  \"Scale\": ";    writeVec3(out, transform->scale);    out << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* mesh = registry.try_get<MeshComponent>(entity)) {
+        out << indent << "\"Mesh\": {\n";
+        out << indent << "  \"Primitive\": \"" << Json::Escape(mesh->primitiveType) << "\",\n";
+        out << indent << "  \"Path\": \"" << Json::Escape(mesh->filePath) << "\"\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* light = registry.try_get<LightComponent>(entity)) {
+        out << indent << "\"Light\": {\n";
+        out << indent << "  \"Type\": " << light->type << ",\n";
+        out << indent << "  \"Direction\": "; writeVec3(out, light->direction); out << ",\n";
+        out << indent << "  \"Color\": ";     writeVec3(out, light->color);     out << ",\n";
+        out << indent << "  \"Ambient\": ";   writeVec3(out, light->ambient);   out << ",\n";
+        out << indent << "  \"Intensity\": " << light->intensity << ",\n";
+        out << indent << "  \"Range\": " << light->range << ",\n";
+        out << indent << "  \"CastsShadow\": " << (light->castsShadow ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* camera = registry.try_get<CameraComponent>(entity)) {
+        out << indent << "\"Camera\": {\n";
+        out << indent << "  \"FOV\": " << camera->fov << ",\n";
+        out << indent << "  \"NearPlane\": " << camera->nearPlane << ",\n";
+        out << indent << "  \"FarPlane\": " << camera->farPlane << ",\n";
+        out << indent << "  \"Position\": "; writeVec3(out, camera->position); out << ",\n";
+        out << indent << "  \"Yaw\": " << camera->yaw << ",\n";
+        out << indent << "  \"Pitch\": " << camera->pitch << ",\n";
+        out << indent << "  \"MovementSpeed\": " << camera->movementSpeed << ",\n";
+        out << indent << "  \"MouseSensitivity\": " << camera->mouseSensitivity << ",\n";
+        // aspect is not persisted: it is recomputed from the viewport panel
+        // every frame, so a stored value would be wrong on any other layout.
+        out << indent << "  \"IsPrimary\": " << (camera->isPrimary ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* mat = registry.try_get<MaterialComponent>(entity)) {
+        out << indent << "\"Material\": {\n";
+        out << indent << "  \"Albedo\": [" << mat->albedoColor.x << ", " << mat->albedoColor.y << ", "
+             << mat->albedoColor.z << ", " << mat->albedoColor.w << "],\n";
+        out << indent << "  \"AlbedoTexture\": \"" << Json::Escape(mat->albedoTexturePath) << "\",\n";
+        out << indent << "  \"NormalTexture\": \"" << Json::Escape(mat->normalTexturePath) << "\",\n";
+        out << indent << "  \"Roughness\": " << mat->roughness << ",\n";
+        out << indent << "  \"Metallic\": " << mat->metallic << ",\n";
+        out << indent << "  \"AO\": " << mat->ao << ",\n";
+        // The asset link, not just the values it resolves to. A scene that
+        // stored only the resolved numbers would silently detach every
+        // entity from its shared material the first time it was saved.
+        out << indent << "  \"Asset\": \"" << Json::Escape(mat->materialPath) << "\"\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* body = registry.try_get<RigidBodyComponent>(entity)) {
+        out << indent << "\"RigidBody\": {\n";
+        out << indent << "  \"Velocity\": "; writeVec3(out, body->velocity); out << ",\n";
+        out << indent << "  \"Mass\": " << body->mass << ",\n";
+        out << indent << "  \"UseGravity\": " << (body->useGravity ? "true" : "false") << ",\n";
+        out << indent << "  \"IsKinematic\": " << (body->isKinematic ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* box = registry.try_get<BoxColliderComponent>(entity)) {
+        out << indent << "\"BoxCollider\": { \"Size\": ";
+        writeVec3(out, box->size);
+        out << ", \"IsTrigger\": " << (box->isTrigger ? "true" : "false") << " },\n";
+    }
+
+    // Neither of these was written at all. A sphere collider therefore
+    // vanished on Play, on Stop, on undo and on save - silently, because a
+    // missing collider looks exactly like a body that was never given one.
+    if (const auto* sphere = registry.try_get<SphereColliderComponent>(entity)) {
+        out << indent << "\"SphereCollider\": { \"Radius\": " << sphere->radius
+             << ", \"IsTrigger\": " << (sphere->isTrigger ? "true" : "false") << " },\n";
+    }
+
+    if (const auto* listener = registry.try_get<AudioListenerComponent>(entity)) {
+        out << indent << "\"AudioListener\": { \"IsPrimary\": "
+             << (listener->isPrimary ? "true" : "false") << " },\n";
+    }
+
+    if (const auto* audio = registry.try_get<AudioSourceComponent>(entity)) {
+        // voice/failedToLoad are runtime state owned by AudioSystem and are
+        // deliberately not persisted.
+        out << indent << "\"AudioSource\": {\n";
+        out << indent << "  \"Clip\": \"" << Json::Escape(audio->soundFile) << "\",\n";
+        out << indent << "  \"Volume\": " << audio->volume << ",\n";
+        out << indent << "  \"Pitch\": " << audio->pitch << ",\n";
+        out << indent << "  \"Playing\": " << (audio->isPlaying ? "true" : "false") << ",\n";
+        out << indent << "  \"Loop\": " << (audio->loop ? "true" : "false") << ",\n";
+        out << indent << "  \"ReferenceDistance\": " << audio->referenceDistance << ",\n";
+        out << indent << "  \"MaxDistance\": " << audio->maxDistance << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* script = registry.try_get<ScriptComponent>(entity)) {
+        out << indent << "\"Script\": {\n";
+        out << indent << "  \"Name\": \"" << Json::Escape(script->scriptName) << "\",\n";
+        out << indent << "  \"Enabled\": " << (script->isEnabled ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* emitter = registry.try_get<ParticleEmitterComponent>(entity)) {
+        // Previously written as a bare `true`, so every emitter setting the
+        // user had authored was reset by the next load, Play, Stop or undo -
+        // and because the text never changed when those fields were edited,
+        // the edit was not undoable in the first place.
+        //
+        // particles/emitAccumulator are runtime state and stay unpersisted,
+        // like AudioSourceComponent::voice.
+        out << indent << "\"ParticleEmitter\": {\n";
+        out << indent << "  \"MaxParticles\": " << emitter->maxParticles << ",\n";
+        out << indent << "  \"EmitRate\": " << emitter->emitRate << ",\n";
+        out << indent << "  \"ParticleLifetime\": " << emitter->particleLifetime << ",\n";
+        out << indent << "  \"StartColor\": [" << emitter->startColor.x << ", " << emitter->startColor.y << ", "
+             << emitter->startColor.z << ", " << emitter->startColor.w << "],\n";
+        out << indent << "  \"EndColor\": [" << emitter->endColor.x << ", " << emitter->endColor.y << ", "
+             << emitter->endColor.z << ", " << emitter->endColor.w << "],\n";
+        out << indent << "  \"VelocityRange\": "; writeVec3(out, emitter->velocityRange); out << ",\n";
+        out << indent << "  \"ParticleSize\": " << emitter->particleSize << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* animator = registry.try_get<AnimatorComponent>(entity)) {
+        // SkinnedMeshComponent is deliberately NOT persisted: it is entirely
+        // derived from the mesh path and rebuilt every frame, so persisting
+        // it could only ever let it go stale. Time IS persisted, unlike
+        // ScriptComponent::elapsed, so Play/Stop and undo restore the pose
+        // that was on screen.
+        out << indent << "\"Animator\": {\n";
+        out << indent << "  \"Clip\": \"" << Json::Escape(animator->clipName) << "\",\n";
+        out << indent << "  \"Time\": " << animator->time << ",\n";
+        out << indent << "  \"Speed\": " << animator->speed << ",\n";
+        out << indent << "  \"Loop\": " << (animator->loop ? "true" : "false") << ",\n";
+        out << indent << "  \"Playing\": " << (animator->playing ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* renderable = registry.try_get<RenderableComponent>(entity)) {
+        out << indent << "\"Renderable\": { \"Visible\": " << (renderable->isVisible ? "true" : "false")
+             << ", \"CastsShadow\": " << (renderable->castsShadow ? "true" : "false") << " },\n";
+    }
+
+    out << indent << "\"HasRenderable\": " << (registry.all_of<RenderableComponent>(entity) ? "true" : "false") << "\n";
+}
+
+void Read(entt::registry& registry, entt::entity entity, const Json::Value& node) {
+    if (node.Has("Tag")) {
+        registry.emplace_or_replace<TagComponent>(entity, node["Tag"].AsString("Entity"));
+    }
+
+    if (node.Has("Transform")) {
+        const auto& t = node["Transform"];
+        auto& transform = registry.emplace<TransformComponent>(entity);
+        transform.position = readVec3(t["Position"], glm::vec3(0.0f));
+        transform.rotation = readVec3(t["Rotation"], glm::vec3(0.0f));
+        transform.scale = readVec3(t["Scale"], glm::vec3(1.0f));
+    }
+
+    if (node.Has("Mesh")) {
+        const auto& m = node["Mesh"];
+        registry.emplace<MeshComponent>(entity,
+            m["Primitive"].AsString("Cube"), m["Path"].AsString(""), 0u, 0u);
+    }
+
+    if (node.Has("Light")) {
+        const auto& l = node["Light"];
+        auto& light = registry.emplace<LightComponent>(entity);
+        light.type = static_cast<int>(l["Type"].AsNumber(0.0));
+        light.direction = readVec3(l["Direction"], glm::vec3(0.6f, 1.0f, 0.5f));
+        light.color = readVec3(l["Color"], glm::vec3(1.0f));
+        light.ambient = readVec3(l["Ambient"], glm::vec3(0.12f));
+        light.intensity = l["Intensity"].AsFloat(1.5f);
+        light.range = l["Range"].AsFloat(25.0f);
+        light.castsShadow = l["CastsShadow"].AsBool(true);
+    }
+
+    if (node.Has("Camera")) {
+        const auto& c = node["Camera"];
+        auto& camera = registry.emplace<CameraComponent>(entity);
+        camera.fov = c["FOV"].AsFloat(45.0f);
+        camera.nearPlane = c["NearPlane"].AsFloat(0.1f);
+        camera.farPlane = c["FarPlane"].AsFloat(100.0f);
+        camera.position = readVec3(c["Position"], glm::vec3(0.0f, 1.2f, 4.0f));
+        camera.yaw = c["Yaw"].AsFloat(-90.0f);
+        camera.pitch = c["Pitch"].AsFloat(-10.0f);
+        camera.movementSpeed = c["MovementSpeed"].AsFloat(3.5f);
+        camera.mouseSensitivity = c["MouseSensitivity"].AsFloat(0.1f);
+        // Defaults true, matching the component, so a scene authored before
+        // the flag existed still yields a usable camera.
+        camera.isPrimary = c["IsPrimary"].AsBool(true);
+        camera.updateCameraVectors();
+    }
+
+    if (node.Has("Material")) {
+        const auto& m = node["Material"];
+        auto& material = registry.emplace<MaterialComponent>(entity);
+        material.albedoColor = readVec4(m["Albedo"], glm::vec4(1.0f));
+        material.albedoTexturePath = m["AlbedoTexture"].AsString("");
+        material.normalTexturePath = m["NormalTexture"].AsString("");
+        material.roughness = m["Roughness"].AsFloat(0.4f);
+        material.metallic = m["Metallic"].AsFloat(0.1f);
+        material.ao = m["AO"].AsFloat(1.0f);
+        material.materialPath = m["Asset"].AsString("");
+    }
+
+    if (node.Has("RigidBody")) {
+        const auto& r = node["RigidBody"];
+        auto& body = registry.emplace<RigidBodyComponent>(entity);
+        body.velocity = readVec3(r["Velocity"], glm::vec3(0.0f));
+        body.mass = r["Mass"].AsFloat(1.0f);
+        body.useGravity = r["UseGravity"].AsBool(true);
+        body.isKinematic = r["IsKinematic"].AsBool(false);
+    }
+
+    if (node.Has("BoxCollider")) {
+        auto& box = registry.emplace<BoxColliderComponent>(entity);
+        box.size = readVec3(node["BoxCollider"]["Size"], glm::vec3(1.0f));
+        box.isTrigger = node["BoxCollider"]["IsTrigger"].AsBool(false);
+    }
+
+    if (node.Has("SphereCollider")) {
+        auto& sphere = registry.emplace<SphereColliderComponent>(entity);
+        sphere.radius = node["SphereCollider"]["Radius"].AsFloat(0.5f);
+        sphere.isTrigger = node["SphereCollider"]["IsTrigger"].AsBool(false);
+    }
+
+    if (node.Has("AudioListener")) {
+        auto& listener = registry.emplace<AudioListenerComponent>(entity);
+        listener.isPrimary = node["AudioListener"]["IsPrimary"].AsBool(true);
+    }
+
+    if (node.Has("AudioSource")) {
+        const auto& a = node["AudioSource"];
+        auto& audio = registry.emplace<AudioSourceComponent>(entity);
+        audio.soundFile = a["Clip"].AsString("assets/audio/ambient.wav");
+        audio.volume = a["Volume"].AsFloat(0.8f);
+        audio.pitch = a["Pitch"].AsFloat(1.0f);
+        audio.isPlaying = a["Playing"].AsBool(true);
+        audio.loop = a["Loop"].AsBool(true);
+        audio.referenceDistance = a["ReferenceDistance"].AsFloat(1.5f);
+        audio.maxDistance = a["MaxDistance"].AsFloat(40.0f);
+    }
+
+    if (node.Has("Script")) {
+        const auto& s = node["Script"];
+        registry.emplace<ScriptComponent>(entity,
+            s["Name"].AsString("RotatorScript"), s["Enabled"].AsBool(true));
+    }
+
+    if (node.Has("ParticleEmitter")) {
+        auto& emitter = registry.emplace<ParticleEmitterComponent>(entity);
+        const auto& e = node["ParticleEmitter"];
+        // Older scenes wrote a bare `true` here. AsBool on an object returns
+        // the fallback, so those still load - they just get the defaults,
+        // which is exactly what they stored.
+        if (e.IsObject()) {
+            emitter.maxParticles = static_cast<uint32_t>(e["MaxParticles"].AsNumber(100.0));
+            emitter.emitRate = e["EmitRate"].AsFloat(10.0f);
+            emitter.particleLifetime = e["ParticleLifetime"].AsFloat(2.0f);
+            emitter.startColor = readVec4(e["StartColor"], glm::vec4(1.0f, 0.6f, 0.1f, 1.0f));
+            emitter.endColor = readVec4(e["EndColor"], glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+            emitter.velocityRange = readVec3(e["VelocityRange"], glm::vec3(0.5f, 2.0f, 0.5f));
+            emitter.particleSize = e["ParticleSize"].AsFloat(0.08f);
+        }
+    }
+
+    if (node.Has("Animator")) {
+        const auto& a = node["Animator"];
+        auto& animator = registry.emplace<AnimatorComponent>(entity);
+        animator.clipName = a["Clip"].AsString("");
+        animator.time = a["Time"].AsFloat(0.0f);
+        animator.speed = a["Speed"].AsFloat(1.0f);
+        animator.loop = a["Loop"].AsBool(true);
+        animator.playing = a["Playing"].AsBool(true);
+    }
+
+    if (node["HasRenderable"].AsBool(false)) {
+        auto& renderable = registry.emplace<RenderableComponent>(entity);
+        if (node.Has("Renderable")) {
+            renderable.isVisible = node["Renderable"]["Visible"].AsBool(true);
+            renderable.castsShadow = node["Renderable"]["CastsShadow"].AsBool(true);
+        }
+    }
+}
+
+} // namespace ComponentCodec
+
+} // namespace Supersonic

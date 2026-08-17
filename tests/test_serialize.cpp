@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -252,6 +253,224 @@ static void testPrefabRoundTrip() {
     std::remove(kPrefab.c_str());
 }
 
+
+// Builds one entity carrying every component the engine serialises.
+//
+// ADD NEW COMPONENTS HERE. Both prefab tests below draw their coverage from
+// this builder: the key-set comparison can only report a component that one
+// writer emits and the other does not, and a component absent from this entity
+// is emitted by neither.
+static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
+    const auto entity = registry.create();
+    registry.emplace<TagComponent>(entity, "Turret");
+
+    auto& transform = registry.emplace<TransformComponent>(entity);
+    transform.position = glm::vec3(4.0f, 5.0f, 6.0f);
+    transform.rotation = glm::vec3(0.0f, 90.0f, 0.0f);
+    transform.scale = glm::vec3(2.0f, 2.0f, 2.0f);
+
+    registry.emplace<MeshComponent>(entity, "Sphere", "", 0u, 0u);
+    registry.emplace<RenderableComponent>(entity);
+
+    auto& material = registry.emplace<MaterialComponent>(entity);
+    material.albedoColor = glm::vec4(0.9f, 0.2f, 0.1f, 1.0f);
+    material.albedoTexturePath = "assets/textures/turret.png";
+    material.metallic = 0.75f;
+    material.roughness = 0.25f;
+
+    auto& light = registry.emplace<LightComponent>(entity);
+    light.type = 1;
+    light.intensity = 3.5f;
+    light.range = 12.0f;
+    light.castsShadow = false;
+
+    auto& camera = registry.emplace<CameraComponent>(entity);
+    camera.fov = 72.0f;
+    camera.farPlane = 500.0f;
+
+    auto& script = registry.emplace<ScriptComponent>(entity);
+    script.scriptName = "OscillatorScript";
+    script.isEnabled = false;
+
+    auto& audio = registry.emplace<AudioSourceComponent>(entity);
+    audio.soundFile = "assets/audio/turret.wav";
+    audio.volume = 0.35f;
+    audio.loop = false;
+    audio.maxDistance = 77.0f;
+
+    registry.emplace<AudioListenerComponent>(entity).isPrimary = false;
+
+    auto& animator = registry.emplace<AnimatorComponent>(entity);
+    animator.clipName = "Fire";
+    animator.speed = 1.75f;
+    animator.loop = false;
+
+    auto& body = registry.emplace<RigidBodyComponent>(entity);
+    body.mass = 12.0f;
+    body.useGravity = false;
+
+    auto& box = registry.emplace<BoxColliderComponent>(entity);
+    box.size = glm::vec3(3.0f, 1.0f, 2.0f);
+    box.isTrigger = true;
+
+    registry.emplace<SphereColliderComponent>(entity).radius = 4.25f;
+
+    auto& emitter = registry.emplace<ParticleEmitterComponent>(entity);
+    emitter.maxParticles = 512u;
+    emitter.emitRate = 33.0f;
+    emitter.particleSize = 0.5f;
+
+    return entity;
+}
+
+// The failure this is here to catch is silent: a prefab that comes back looking
+// fine but missing whatever the prefab writer never learned about. Rather than
+// list the components by hand - which is exactly the enumeration that fell out
+// of date - compare against what the scene writer emits for the same entity.
+// Any component added to one path and not the other fails here.
+//
+// Both paths call ComponentCodec today, so this cannot fail as written. It is
+// here for the day someone re-forks the writer "just for prefabs", which is
+// exactly how the two formats diverged the first time.
+static void testPrefabCarriesEverythingASceneDoes() {
+    entt::registry registry;
+    const auto entity = makeFullyLoadedEntity(registry);
+
+    const auto saved = PrefabSerializer::SavePrefab(registry, entity, kPrefab);
+    CHECK_MSG(saved.ok, saved.message);
+
+    std::ifstream in(kPrefab);
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    in.close();
+
+    Json::Value prefab;
+    std::string error;
+    CHECK_MSG(Json::Parse(buffer.str(), prefab, error), error);
+
+    Json::Value scene;
+    CHECK_MSG(Json::Parse(SceneSerializer::SerializeToString(registry), scene, error), error);
+    const auto& sceneEntities = scene["Entities"].AsArray();
+    CHECK(sceneEntities.size() == 1);
+
+    if (sceneEntities.size() == 1) {
+        for (const auto& [key, value] : sceneEntities[0].AsObject()) {
+            // Parent is an index into a scene's entity array; a standalone
+            // prefab has nothing to index into, so it is the one exception.
+            if (key == "Parent") continue;
+            CHECK_MSG(prefab.Has(key),
+                      "a scene stores \"" + key + "\" but a prefab of the same entity does not");
+        }
+    }
+
+    std::remove(kPrefab.c_str());
+}
+
+// And the values have to survive, not just the keys.
+static void testPrefabRoundTripsEveryField() {
+    entt::registry registry;
+    const auto entity = makeFullyLoadedEntity(registry);
+
+    const auto saved = PrefabSerializer::SavePrefab(registry, entity, kPrefab);
+    CHECK_MSG(saved.ok, saved.message);
+
+    SerializationResult loadResult;
+    const auto clone = PrefabSerializer::InstantiatePrefab(registry, kPrefab, &loadResult);
+    CHECK_MSG(loadResult.ok, loadResult.message);
+    CHECK(clone != entt::null);
+
+    // try_get rather than get: a prefab that dropped a component has to name
+    // which one, not crash the suite on undefined behaviour and leave the
+    // reason to a debugger.
+    if (clone != entt::null) {
+        CHECK(clone != entity);
+
+        const auto* transform = registry.try_get<TransformComponent>(clone);
+        CHECK(transform != nullptr);
+        if (transform) CHECK_NEAR(transform->scale.x, 2.0f);
+
+        const auto* material = registry.try_get<MaterialComponent>(clone);
+        CHECK(material != nullptr);
+        if (material) {
+            CHECK_NEAR(material->metallic, 0.75f);
+            CHECK(material->albedoTexturePath == "assets/textures/turret.png");
+        }
+
+        // Every one of these was dropped by the five-component writer.
+        const auto* light = registry.try_get<LightComponent>(clone);
+        CHECK_MSG(light != nullptr, "prefab lost its LightComponent");
+        if (light) {
+            CHECK(light->type == 1);
+            CHECK_NEAR(light->intensity, 3.5f);
+            CHECK_MSG(!light->castsShadow, "castsShadow must survive as false, not default to true");
+        }
+
+        const auto* camera = registry.try_get<CameraComponent>(clone);
+        CHECK_MSG(camera != nullptr, "prefab lost its CameraComponent");
+        if (camera) CHECK_NEAR(camera->fov, 72.0f);
+
+        const auto* script = registry.try_get<ScriptComponent>(clone);
+        CHECK_MSG(script != nullptr, "prefab lost its ScriptComponent");
+        if (script) {
+            CHECK(script->scriptName == "OscillatorScript");
+            CHECK(!script->isEnabled);
+            // Per-entity runtime state must NOT come across, or a cloned
+            // oscillator swings around the original's position instead of
+            // its own.
+            CHECK_MSG(!script->baselineCaptured,
+                      "a clone must capture its own baseline, not inherit one");
+        }
+
+        const auto* audio = registry.try_get<AudioSourceComponent>(clone);
+        CHECK_MSG(audio != nullptr, "prefab lost its AudioSourceComponent");
+        if (audio) {
+            CHECK(audio->soundFile == "assets/audio/turret.wav");
+            CHECK_NEAR(audio->volume, 0.35f);
+            CHECK(!audio->loop);
+            // voice is an AudioSystem-owned handle. Copying it would leave two
+            // entities driving one voice, which goes wrong silently.
+            CHECK_MSG(audio->voice == 0xFFFFFFFFu,
+                      "a clone must not inherit the original's voice handle");
+        }
+
+        const auto* listener = registry.try_get<AudioListenerComponent>(clone);
+        CHECK_MSG(listener != nullptr, "prefab lost its AudioListenerComponent");
+        if (listener) CHECK(!listener->isPrimary);
+
+        const auto* animator = registry.try_get<AnimatorComponent>(clone);
+        CHECK_MSG(animator != nullptr, "prefab lost its AnimatorComponent");
+        if (animator) {
+            CHECK(animator->clipName == "Fire");
+            CHECK_NEAR(animator->speed, 1.75f);
+        }
+
+        const auto* body = registry.try_get<RigidBodyComponent>(clone);
+        CHECK_MSG(body != nullptr, "prefab lost its RigidBodyComponent");
+        if (body) {
+            CHECK_NEAR(body->mass, 12.0f);
+            CHECK(!body->useGravity);
+        }
+
+        const auto* box = registry.try_get<BoxColliderComponent>(clone);
+        CHECK_MSG(box != nullptr, "prefab lost its BoxColliderComponent");
+        if (box) {
+            CHECK_MSG(box->isTrigger,
+                      "a trigger volume that comes back solid is a gameplay bug, "
+                      "not a cosmetic one");
+        }
+
+        const auto* sphere = registry.try_get<SphereColliderComponent>(clone);
+        CHECK_MSG(sphere != nullptr, "prefab lost its SphereColliderComponent");
+        if (sphere) CHECK_NEAR(sphere->radius, 4.25f);
+
+        const auto* emitter = registry.try_get<ParticleEmitterComponent>(clone);
+        CHECK_MSG(emitter != nullptr, "prefab lost its ParticleEmitterComponent");
+        if (emitter) CHECK(emitter->maxParticles == 512u);
+    }
+
+    std::remove(kPrefab.c_str());
+}
+
 static void testMissingPrefabReturnsNull() {
     // The old version never opened the file and returned a valid entity for a
     // path that did not exist, making a missing asset indistinguishable from a
@@ -274,6 +493,8 @@ static void runTests() {
     testMissingSceneReportsFailure();
     testSerializeCreatesParentDirectory();
     testPrefabRoundTrip();
+    testPrefabCarriesEverythingASceneDoes();
+    testPrefabRoundTripsEveryField();
     testMissingPrefabReturnsNull();
 }
 
