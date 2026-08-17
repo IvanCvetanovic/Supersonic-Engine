@@ -40,11 +40,16 @@ endfunction()
 add_engine_test(test_transform)
 add_engine_test(test_raycast   ${SUPERSONIC_SRC}/src/core/Raycast.cpp
                                ${SUPERSONIC_SRC}/src/core/TransformSystem.cpp)
+# MeshData::computeTangents dispatches its per-vertex pass through JobSystem, so
+# every target that builds a mesh needs it. With no pool running it falls back to
+# an inline loop, which is what keeps these tests single-threaded and repeatable.
 add_engine_test(test_meshgen   ${SUPERSONIC_SRC}/src/core/ModelLoader.cpp
-                               ${SUPERSONIC_SRC}/src/core/TerrainGenerator.cpp)
+                               ${SUPERSONIC_SRC}/src/core/TerrainGenerator.cpp
+                               ${SUPERSONIC_SRC}/src/core/JobSystem.cpp)
 add_engine_test(test_serialize ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp
                                ${SUPERSONIC_SRC}/src/core/PrefabSerializer.cpp)
 add_engine_test(test_frustum)
+add_engine_test(test_jobs      ${SUPERSONIC_SRC}/src/core/JobSystem.cpp)
 add_engine_test(test_undo      ${SUPERSONIC_SRC}/src/editor/EditHistory.cpp
                                ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp)
 add_engine_test(test_physics   ${SUPERSONIC_SRC}/src/core/PhysicsSystem.cpp
@@ -70,7 +75,8 @@ set_source_files_properties(
     ${SUPERSONIC_SRC}/third_party/imgui/imgui_widgets.cpp
     TARGET_DIRECTORY test_hierarchy PROPERTIES COMPILE_OPTIONS "${_vendorWarnFlag}")
 add_engine_test(test_gltf      ${SUPERSONIC_SRC}/src/core/GltfLoader.cpp
-                               ${SUPERSONIC_SRC}/src/core/TinyGltfImplementation.cpp)
+                               ${SUPERSONIC_SRC}/src/core/TinyGltfImplementation.cpp
+                               ${SUPERSONIC_SRC}/src/core/JobSystem.cpp)
 
 target_include_directories(test_gltf PRIVATE ${SUPERSONIC_SRC}/third_party/tinygltf)
 # Runs against assets/models/monument.gltf, so it needs the project root.

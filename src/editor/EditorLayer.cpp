@@ -1,4 +1,5 @@
 #include "editor/EditorLayer.hpp"
+#include "core/JobSystem.hpp"
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/Raycast.hpp"
@@ -164,13 +165,13 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) {
-            const bool editing = !m_playMode || m_playMode->IsEditing();
-            ImGui::BeginDisabled(!editing || !m_history.CanUndo());
+            const bool menuEditing = !m_playMode || m_playMode->IsEditing();
+            ImGui::BeginDisabled(!menuEditing || !m_history.CanUndo());
             if (ImGui::MenuItem(m_history.UndoLabel().c_str(), "Ctrl+Z")) {
                 if (m_history.Undo(registry)) afterHistoryJump(registry, "Undone.");
             }
             ImGui::EndDisabled();
-            ImGui::BeginDisabled(!editing || !m_history.CanRedo());
+            ImGui::BeginDisabled(!menuEditing || !m_history.CanRedo());
             if (ImGui::MenuItem(m_history.RedoLabel().c_str(), "Ctrl+Y")) {
                 if (m_history.Redo(registry)) afterHistoryJump(registry, "Redone.");
             }
@@ -256,6 +257,8 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
     // Hotkeys. Suppressed whenever ImGui is routing keys to a widget, so typing
     // "Rock" into a text field no longer switches gizmo modes or wipes the scene.
+    const bool editing = !m_playMode || m_playMode->IsEditing();
+
     if (!io.WantTextInput && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
             const auto result = SceneSerializer::Serialize(registry, kScenePath);
@@ -266,7 +269,11 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             SetStatus(result.message, !result.ok);
             if (result.ok) m_hierarchyPanel.SetSelectedEntity(entt::null);
         }
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) {
+        // Gated on edit mode, matching the Edit menu. Undo replaces the whole
+        // registry, so running it mid-play wiped the simulating scene - and
+        // because handleUndoRedo bails out during play, nothing rebalanced the
+        // stacks afterwards and the history collapsed for good.
+        if (editing && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) {
             // Ctrl+Shift+Z is the other half of the same muscle memory.
             if (io.KeyShift) {
                 if (m_history.Redo(registry)) afterHistoryJump(registry, "Redone.");
@@ -276,11 +283,14 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
                 else SetStatus("Nothing to undo.");
             }
         }
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) {
+        if (editing && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) {
             if (m_history.Redo(registry)) afterHistoryJump(registry, "Redone.");
             else SetStatus("Nothing to redo.");
         }
-        if (!io.KeyCtrl) {
+        // Gizmo mode shortcuts only in edit mode. During play they served no
+        // purpose and the play camera's own W/A/S/D re-forced TRANSLATE on every
+        // frame the key was held.
+        if (editing && !io.KeyCtrl) {
             if (ImGui::IsKeyPressed(ImGuiKey_W)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE);
             if (ImGui::IsKeyPressed(ImGuiKey_E)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE);
             if (ImGui::IsKeyPressed(ImGuiKey_R)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE);
@@ -409,6 +419,14 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     ImGui::Text("Active Entities: %u", entityCount);
     if (m_offscreenPass) {
         ImGui::Text("Viewport Res:    %ux%u", m_offscreenPass->GetWidth(), m_offscreenPass->GetHeight());
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("JOBS");
+    if (JobSystem::IsInitialized()) {
+        ImGui::Text("Workers: %u", JobSystem::ThreadCount());
+    } else {
+        ImGui::TextDisabled("Single-threaded");
     }
 
     ImGui::Separator();

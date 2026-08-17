@@ -2,6 +2,7 @@
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -44,6 +45,16 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
     for (auto entity : registry.view<entt::entity>()) {
         entities.push_back(entity);
     }
+    // EnTT walks its packed array back to front, so the view yields entities in
+    // reverse creation order. Reversing here makes the round trip stable: a
+    // scene written, loaded and written again produces byte-identical text.
+    //
+    // Without this, applyScene's create-in-file-order rebuild flipped the order
+    // every load, so the hierarchy panel reversed itself on every undo - and,
+    // worse, EditHistory's "has the scene changed?" text comparison saw a
+    // difference where there was none, which spuriously recorded a step after
+    // every undo and left redo permanently dead.
+    std::reverse(entities.begin(), entities.end());
 
     // Parent links are written as an index into this array, not as a raw
     // entt::entity: handles are recycled and carry a version, so persisting
@@ -106,7 +117,12 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
             file << "        \"FarPlane\": " << camera->farPlane << ",\n";
             file << "        \"Position\": "; writeVec3(file, camera->position); file << ",\n";
             file << "        \"Yaw\": " << camera->yaw << ",\n";
-            file << "        \"Pitch\": " << camera->pitch << "\n";
+            file << "        \"Pitch\": " << camera->pitch << ",\n";
+            file << "        \"MovementSpeed\": " << camera->movementSpeed << ",\n";
+            file << "        \"MouseSensitivity\": " << camera->mouseSensitivity << ",\n";
+            // aspect is not persisted: it is recomputed from the viewport panel
+            // every frame, so a stored value would be wrong on any other layout.
+            file << "        \"IsPrimary\": " << (camera->isPrimary ? "true" : "false") << "\n";
             file << "      },\n";
         }
 
@@ -134,7 +150,20 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
         if (const auto* box = registry.try_get<BoxColliderComponent>(entity)) {
             file << "      \"BoxCollider\": { \"Size\": ";
             writeVec3(file, box->size);
-            file << " },\n";
+            file << ", \"IsTrigger\": " << (box->isTrigger ? "true" : "false") << " },\n";
+        }
+
+        // Neither of these was written at all. A sphere collider therefore
+        // vanished on Play, on Stop, on undo and on save - silently, because a
+        // missing collider looks exactly like a body that was never given one.
+        if (const auto* sphere = registry.try_get<SphereColliderComponent>(entity)) {
+            file << "      \"SphereCollider\": { \"Radius\": " << sphere->radius
+                 << ", \"IsTrigger\": " << (sphere->isTrigger ? "true" : "false") << " },\n";
+        }
+
+        if (const auto* listener = registry.try_get<AudioListenerComponent>(entity)) {
+            file << "      \"AudioListener\": { \"IsPrimary\": "
+                 << (listener->isPrimary ? "true" : "false") << " },\n";
         }
 
         if (const auto* audio = registry.try_get<AudioSourceComponent>(entity)) {
@@ -158,8 +187,25 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
             file << "      },\n";
         }
 
-        if (registry.all_of<ParticleEmitterComponent>(entity)) {
-            file << "      \"ParticleEmitter\": true,\n";
+        if (const auto* emitter = registry.try_get<ParticleEmitterComponent>(entity)) {
+            // Previously written as a bare `true`, so every emitter setting the
+            // user had authored was reset by the next load, Play, Stop or undo -
+            // and because the text never changed when those fields were edited,
+            // the edit was not undoable in the first place.
+            //
+            // particles/emitAccumulator are runtime state and stay unpersisted,
+            // like AudioSourceComponent::voice.
+            file << "      \"ParticleEmitter\": {\n";
+            file << "        \"MaxParticles\": " << emitter->maxParticles << ",\n";
+            file << "        \"EmitRate\": " << emitter->emitRate << ",\n";
+            file << "        \"ParticleLifetime\": " << emitter->particleLifetime << ",\n";
+            file << "        \"StartColor\": [" << emitter->startColor.x << ", " << emitter->startColor.y << ", "
+                 << emitter->startColor.z << ", " << emitter->startColor.w << "],\n";
+            file << "        \"EndColor\": [" << emitter->endColor.x << ", " << emitter->endColor.y << ", "
+                 << emitter->endColor.z << ", " << emitter->endColor.w << "],\n";
+            file << "        \"VelocityRange\": "; writeVec3(file, emitter->velocityRange); file << ",\n";
+            file << "        \"ParticleSize\": " << emitter->particleSize << "\n";
+            file << "      },\n";
         }
 
         if (const auto* renderable = registry.try_get<RenderableComponent>(entity)) {
@@ -274,6 +320,11 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
             camera.position = readVec3(c["Position"], glm::vec3(0.0f, 1.2f, 4.0f));
             camera.yaw = c["Yaw"].AsFloat(-90.0f);
             camera.pitch = c["Pitch"].AsFloat(-10.0f);
+            camera.movementSpeed = c["MovementSpeed"].AsFloat(3.5f);
+            camera.mouseSensitivity = c["MouseSensitivity"].AsFloat(0.1f);
+            // Defaults true, matching the component, so a scene authored before
+            // the flag existed still yields a usable camera.
+            camera.isPrimary = c["IsPrimary"].AsBool(true);
             camera.updateCameraVectors();
         }
 
@@ -300,6 +351,18 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
         if (node.Has("BoxCollider")) {
             auto& box = registry.emplace<BoxColliderComponent>(entity);
             box.size = readVec3(node["BoxCollider"]["Size"], glm::vec3(1.0f));
+            box.isTrigger = node["BoxCollider"]["IsTrigger"].AsBool(false);
+        }
+
+        if (node.Has("SphereCollider")) {
+            auto& sphere = registry.emplace<SphereColliderComponent>(entity);
+            sphere.radius = node["SphereCollider"]["Radius"].AsFloat(0.5f);
+            sphere.isTrigger = node["SphereCollider"]["IsTrigger"].AsBool(false);
+        }
+
+        if (node.Has("AudioListener")) {
+            auto& listener = registry.emplace<AudioListenerComponent>(entity);
+            listener.isPrimary = node["AudioListener"]["IsPrimary"].AsBool(true);
         }
 
         if (node.Has("AudioSource")) {
@@ -320,8 +383,21 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
                 s["Name"].AsString("RotatorScript"), s["Enabled"].AsBool(true));
         }
 
-        if (node["ParticleEmitter"].AsBool(false)) {
-            registry.emplace<ParticleEmitterComponent>(entity);
+        if (node.Has("ParticleEmitter")) {
+            auto& emitter = registry.emplace<ParticleEmitterComponent>(entity);
+            const auto& e = node["ParticleEmitter"];
+            // Older scenes wrote a bare `true` here. AsBool on an object returns
+            // the fallback, so those still load - they just get the defaults,
+            // which is exactly what they stored.
+            if (e.IsObject()) {
+                emitter.maxParticles = static_cast<uint32_t>(e["MaxParticles"].AsNumber(100.0));
+                emitter.emitRate = e["EmitRate"].AsFloat(10.0f);
+                emitter.particleLifetime = e["ParticleLifetime"].AsFloat(2.0f);
+                emitter.startColor = readVec4(e["StartColor"], glm::vec4(1.0f, 0.6f, 0.1f, 1.0f));
+                emitter.endColor = readVec4(e["EndColor"], glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+                emitter.velocityRange = readVec3(e["VelocityRange"], glm::vec3(0.5f, 2.0f, 0.5f));
+                emitter.particleSize = e["ParticleSize"].AsFloat(0.08f);
+            }
         }
 
         if (node["HasRenderable"].AsBool(false)) {

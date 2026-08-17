@@ -8,6 +8,7 @@
 #include "TestHarness.hpp"
 #include "core/TransformSystem.hpp"
 #include "core/PlayMode.hpp"
+#include "core/TimeTravelDebugger.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/Components.hpp"
 
@@ -292,7 +293,37 @@ static void testStopWithoutPlayIsHarmless() {
     CHECK_MSG(count == 1, "a spurious Stop must not clear the scene");
 }
 
+static void testStopClearsTheRewindFlag() {
+    // Clear() reset the history but left s_isRewinding set. The only widget that
+    // can clear the flag lives behind an early return taken when the history is
+    // empty, and SupersonicApp gates physics, audio, scripts, particles AND the
+    // frame recorder on !IsRewinding() - so pressing Stop while scrubbing left
+    // Play and Step dead for the rest of the session, with no way back.
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TagComponent>(entity, "Cube");
+    registry.emplace<TransformComponent>(entity);
+
+    PlayMode playMode;
+    CHECK(playMode.Play(registry).ok);
+
+    TimeTravelDebugger::SetRewinding(true);
+    CHECK(TimeTravelDebugger::IsRewinding());
+
+    CHECK(playMode.Stop(registry).ok);
+    CHECK_MSG(!TimeTravelDebugger::IsRewinding(),
+              "Stop must clear the rewind flag, or nothing simulates ever again");
+
+    // And Play again must leave it clear, so the recorder can refill the history.
+    TimeTravelDebugger::SetRewinding(true);
+    CHECK(playMode.Play(registry).ok);
+    CHECK_MSG(!TimeTravelDebugger::IsRewinding(), "Play must start un-paused too");
+
+    TimeTravelDebugger::SetRewinding(false);
+}
+
 static void runTests() {
+    testStopClearsTheRewindFlag();
     testChildInheritsParentTranslation();
     testChildInheritsParentScaleAndRotation();
     testGrandchildChains();

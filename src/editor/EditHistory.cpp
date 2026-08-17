@@ -58,7 +58,11 @@ bool EditHistory::Undo(entt::registry& registry) {
     m_redo.push_back(std::move(m_current));
     if (m_redo.size() > kMaxDepth) m_redo.pop_front();
 
-    m_current = std::move(target);
+    // Re-captured rather than assumed equal to `target`. Assuming a restore
+    // reproduces byte-identical text made the next CommitIfChanged see a
+    // spurious difference, record a phantom step and clear the redo stack - so
+    // redo never worked and undo could not go back more than one step.
+    m_current = capture(registry);
     return true;
 }
 
@@ -73,7 +77,7 @@ bool EditHistory::Redo(entt::registry& registry) {
     m_undo.push_back(std::move(m_current));
     if (m_undo.size() > kMaxDepth) m_undo.pop_front();
 
-    m_current = std::move(target);
+    m_current = capture(registry);
     return true;
 }
 

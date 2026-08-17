@@ -5,6 +5,7 @@
 #include "core/AudioSystem.hpp"
 #include "core/ScriptEngine.hpp"
 #include "core/ParticleSystem.hpp"
+#include "core/JobSystem.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
@@ -64,6 +65,10 @@ SupersonicApp::SupersonicApp() {
         std::cerr << "[SupersonicApp] Could not create assets/scenes: " << ec.message() << std::endl;
     }
 
+    // Workers come up before anything that might dispatch to them: mesh
+    // generation during initECS already parallelises its per-vertex passes.
+    JobSystem::Initialize();
+
     m_audioEngine = std::make_unique<AudioEngine>();
     // Stops voices when their entity goes away; sources loop by default.
     AudioSystem::Attach(m_registry, *m_audioEngine);
@@ -119,6 +124,10 @@ SupersonicApp::~SupersonicApp() {
     m_vulkanContext.reset();
     m_window.reset();
     m_audioEngine.reset();
+
+    // Last: a worker holding a reference to anything above would otherwise
+    // outlive it. Shutdown drains outstanding work before joining.
+    JobSystem::Shutdown();
 }
 
 void SupersonicApp::initECS() {
@@ -135,6 +144,9 @@ void SupersonicApp::initECS() {
     camera.position = glm::vec3(0.6f, 2.6f, 9.5f);
     camera.yaw = -92.0f;
     camera.pitch = -12.0f;
+    // Stated rather than left to the component default, so the scene says which
+    // camera play mode renders through instead of it falling out of pool order.
+    camera.isPrimary = true;
     camera.updateCameraVectors();
 
     auto lightEntity = m_registry.create();
@@ -325,8 +337,7 @@ void SupersonicApp::Run() {
         // view in the editor silently authored the game camera.
         if (m_playMode.IsEditing()) {
             m_editorLayer->GetEditorCamera().Update(*m_window, deltaTime,
-                                                    m_editorLayer->IsViewportHovered(),
-                                                    m_editorLayer->IsViewportFocused() && !io.WantTextInput);
+                                                    m_editorLayer->IsViewportHovered());
         } else {
             CameraSystem::Update(m_registry, *m_window, deltaTime,
                                  m_editorLayer->IsViewportFocused() && !io.WantTextInput,

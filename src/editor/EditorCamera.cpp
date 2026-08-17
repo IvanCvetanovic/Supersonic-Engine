@@ -5,7 +5,7 @@
 
 namespace Supersonic {
 
-void EditorCamera::Update(Window& window, float deltaTime, bool viewportHovered, bool viewportFocused) {
+void EditorCamera::Update(Window& window, float deltaTime, bool viewportHovered) {
     GLFWwindow* native = window.GetNativeWindow();
 
     const bool rightHeld = glfwGetMouseButton(native, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
@@ -22,9 +22,14 @@ void EditorCamera::Update(Window& window, float deltaTime, bool viewportHovered,
         m_looking = false;
     }
 
-    // Fly keys work while the viewport has focus, and unconditionally while
-    // looking, which is the WASD-with-right-mouse-held idiom every editor uses.
-    if (m_looking || viewportFocused) {
+    // Fly keys require the right button held - the WASD-with-right-mouse idiom.
+    //
+    // Not merely "the viewport has focus": E and Q would then collide with the
+    // E and R gizmo-mode hotkeys, so flying up silently turned the translate
+    // gizmo into a rotate ring, and holding W to fly forward re-forced translate
+    // every frame. Requiring the button resolves it outright, because the gizmo
+    // hotkeys are already suppressed while the right button is down.
+    if (m_looking) {
         float speed = m_camera.movementSpeed * deltaTime;
         // Shift is the usual "move faster" modifier in an editor viewport.
         if (glfwGetKey(native, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) speed *= 3.0f;

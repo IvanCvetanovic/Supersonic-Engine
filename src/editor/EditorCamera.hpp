@@ -16,10 +16,11 @@ namespace Supersonic {
 // through the scene's active camera.
 class EditorCamera {
 public:
-    // viewportHovered gates the *start* of a look; viewportFocused gates the
-    // fly keys. Neither is ImGui's WantCaptureMouse, which the viewport window
-    // sets unconditionally.
-    void Update(Window& window, float deltaTime, bool viewportHovered, bool viewportFocused);
+    // viewportHovered gates the *start* of a look, and holding the right button
+    // is what enables both looking and the fly keys. Deliberately not ImGui's
+    // WantCaptureMouse, which the viewport window sets unconditionally and which
+    // therefore suppressed camera input across the entire viewport.
+    void Update(Window& window, float deltaTime, bool viewportHovered);
 
     void SetAspect(float aspect) { m_camera.aspect = aspect; }
     const CameraComponent& Get() const { return m_camera; }

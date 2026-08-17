@@ -8,6 +8,7 @@
 #include "TestHarness.hpp"
 #include "editor/EditHistory.hpp"
 #include "core/Components.hpp"
+#include "core/SceneSerializer.hpp"
 
 #include <string>
 
@@ -224,7 +225,192 @@ static void testCommitBeforeResetSelfInitialises() {
     CHECK_MSG(history.CommitIfChanged(registry), "and the next change is a real step");
 }
 
+static void testCommitAfterUndoRecordsNothing() {
+    // The editor runs CommitIfChanged at the end of every frame, including the
+    // frame Ctrl+Z fired in. Undo used to assume a restore reproduced the exact
+    // text it was restored from; it did not, because the serializer rebuilt the
+    // scene in the opposite order, so that commit saw a phantom change, pushed a
+    // step and cleared the redo stack. Redo could therefore never do anything
+    // and undo was stuck at a single step.
+    entt::registry registry;
+    addEntity(registry, "Cube");
+
+    EditHistory history;
+    history.Reset(registry);
+
+    addEntity(registry, "Sphere");
+    CHECK(history.CommitIfChanged(registry));
+    CHECK(history.Undo(registry));
+    CHECK_MSG(history.CanRedo(), "the undo must leave a redo available");
+
+    CHECK_MSG(!history.CommitIfChanged(registry),
+              "the frame's commit right after an undo must record nothing");
+    CHECK_MSG(history.CanRedo(), "and must not wipe the redo stack");
+    CHECK_EQ(entityCount(registry), size_t{1});
+
+    CHECK_MSG(history.Redo(registry), "redo must still work");
+    CHECK_EQ(entityCount(registry), size_t{2});
+}
+
+static void testUndoWalksBackSeveralStepsThroughFrameCommits() {
+    // The same failure, seen from the user's side: undo, undo, undo with a
+    // frame commit in between each, as the editor actually runs it.
+    entt::registry registry;
+    EditHistory history;
+    history.Reset(registry);
+
+    for (int i = 0; i < 4; ++i) {
+        addEntity(registry, "Entity" + std::to_string(i));
+        CHECK(history.CommitIfChanged(registry));
+    }
+    CHECK_EQ(entityCount(registry), size_t{4});
+
+    for (int expected = 3; expected >= 0; --expected) {
+        CHECK(history.Undo(registry));
+        history.CommitIfChanged(registry); // the end-of-frame commit
+        CHECK_EQ(entityCount(registry), static_cast<size_t>(expected));
+    }
+}
+
+static void testSnapshotTextIsStableAcrossARoundTrip() {
+    // The root cause, pinned directly: capture(restore(T)) must equal T, or
+    // every consumer of "has the scene changed?" gets a false positive.
+    entt::registry registry;
+    const auto a = addEntity(registry, "A", glm::vec3(1.0f, 0.0f, 0.0f));
+    addEntity(registry, "B", glm::vec3(2.0f, 0.0f, 0.0f));
+    const auto c = addEntity(registry, "C", glm::vec3(3.0f, 0.0f, 0.0f));
+    registry.emplace<HierarchyComponent>(c, a);
+
+    const std::string first = SceneSerializer::SerializeToString(registry);
+    CHECK(SceneSerializer::DeserializeFromString(registry, first).ok);
+    const std::string second = SceneSerializer::SerializeToString(registry);
+
+    CHECK_MSG(first == second, "a scene written, loaded and written again must be identical");
+
+    CHECK(SceneSerializer::DeserializeFromString(registry, second).ok);
+    CHECK_MSG(SceneSerializer::SerializeToString(registry) == first,
+              "and stable over any number of round trips, not merely period-2");
+}
+
+static void testEmitterSettingsSurviveAnUndo() {
+    // The emitter was written as a bare `true`, so every authored setting was
+    // reset by the next undo - and, because the text never changed when those
+    // fields were edited, the edit was not undoable in the first place.
+    entt::registry registry;
+    const auto emitterEntity = addEntity(registry, "Emitter");
+    auto& emitter = registry.emplace<ParticleEmitterComponent>(emitterEntity);
+    emitter.emitRate = 60.0f;
+    emitter.particleLifetime = 7.5f;
+    emitter.maxParticles = 512;
+    emitter.startColor = glm::vec4(0.1f, 0.2f, 0.9f, 1.0f);
+    emitter.particleSize = 0.25f;
+
+    EditHistory history;
+    history.Reset(registry);
+
+    // An unrelated edit elsewhere in the scene.
+    const auto other = addEntity(registry, "Cube");
+    registry.get<TransformComponent>(other).position.x = 5.0f;
+    CHECK(history.CommitIfChanged(registry));
+    CHECK(history.Undo(registry));
+
+    bool found = false;
+    for (auto e : registry.view<ParticleEmitterComponent>()) {
+        found = true;
+        const auto& restored = registry.get<ParticleEmitterComponent>(e);
+        CHECK_NEAR(restored.emitRate, 60.0f);
+        CHECK_NEAR(restored.particleLifetime, 7.5f);
+        CHECK_EQ(restored.maxParticles, uint32_t{512});
+        CHECK_NEAR(restored.startColor.z, 0.9f);
+        CHECK_NEAR(restored.particleSize, 0.25f);
+    }
+    CHECK_MSG(found, "the emitter must still exist");
+}
+
+static void testEmitterEditIsItselfUndoable() {
+    entt::registry registry;
+    const auto emitterEntity = addEntity(registry, "Emitter");
+    registry.emplace<ParticleEmitterComponent>(emitterEntity);
+
+    EditHistory history;
+    history.Reset(registry);
+
+    registry.get<ParticleEmitterComponent>(emitterEntity).emitRate = 99.0f;
+    CHECK_MSG(history.CommitIfChanged(registry), "changing an emitter field must be a recordable edit");
+    CHECK(history.Undo(registry));
+
+    for (auto e : registry.view<ParticleEmitterComponent>()) {
+        CHECK_NEAR(registry.get<ParticleEmitterComponent>(e).emitRate, 10.0f);
+    }
+}
+
+static void testColliderAndCameraFlagsSurviveAnUndo() {
+    // SphereColliderComponent and AudioListenerComponent were not serialised at
+    // all, and BoxCollider::isTrigger and Camera::isPrimary were dropped - so an
+    // undo silently deleted colliders and moved the primary camera.
+    entt::registry registry;
+
+    const auto ball = addEntity(registry, "Ball");
+    auto& sphere = registry.emplace<SphereColliderComponent>(ball);
+    sphere.radius = 1.75f;
+    sphere.isTrigger = true;
+
+    const auto crate = addEntity(registry, "Crate");
+    registry.emplace<BoxColliderComponent>(crate).isTrigger = true;
+
+    const auto camA = addEntity(registry, "Camera A");
+    registry.emplace<CameraComponent>(camA).isPrimary = false;
+    const auto camB = addEntity(registry, "Camera B");
+    registry.emplace<CameraComponent>(camB).isPrimary = true;
+
+    const auto ears = addEntity(registry, "Listener");
+    registry.emplace<AudioListenerComponent>(ears);
+
+    EditHistory history;
+    history.Reset(registry);
+
+    addEntity(registry, "Something Else");
+    CHECK(history.CommitIfChanged(registry));
+    CHECK(history.Undo(registry));
+
+    bool sawSphere = false, sawTriggerBox = false, sawListener = false;
+    for (auto e : registry.view<TagComponent>()) {
+        const std::string& tag = registry.get<TagComponent>(e).tag;
+        if (tag == "Ball") {
+            const auto* restored = registry.try_get<SphereColliderComponent>(e);
+            CHECK_MSG(restored != nullptr, "the sphere collider must survive an undo");
+            if (restored) {
+                sawSphere = true;
+                CHECK_NEAR(restored->radius, 1.75f);
+                CHECK_MSG(restored->isTrigger, "and keep its trigger flag");
+            }
+        }
+        if (tag == "Crate") {
+            const auto* restored = registry.try_get<BoxColliderComponent>(e);
+            if (restored) sawTriggerBox = restored->isTrigger;
+        }
+        if (tag == "Listener") sawListener = registry.all_of<AudioListenerComponent>(e);
+        if (tag == "Camera B") {
+            CHECK_MSG(registry.get<CameraComponent>(e).isPrimary,
+                      "the primary camera must stay the primary camera");
+        }
+        if (tag == "Camera A") {
+            CHECK_MSG(!registry.get<CameraComponent>(e).isPrimary,
+                      "and a non-primary camera must not become one");
+        }
+    }
+    CHECK_MSG(sawSphere, "the ball entity must be found");
+    CHECK_MSG(sawTriggerBox, "the box collider's trigger flag must survive");
+    CHECK_MSG(sawListener, "the audio listener must survive");
+}
+
 static void runTests() {
+    testCommitAfterUndoRecordsNothing();
+    testUndoWalksBackSeveralStepsThroughFrameCommits();
+    testSnapshotTextIsStableAcrossARoundTrip();
+    testEmitterSettingsSurviveAnUndo();
+    testEmitterEditIsItselfUndoable();
+    testColliderAndCameraFlagsSurviveAnUndo();
     testFreshHistoryHasNothingToUndo();
     testCommitWithoutChangeRecordsNothing();
     testUndoRestoresADeletedEntity();

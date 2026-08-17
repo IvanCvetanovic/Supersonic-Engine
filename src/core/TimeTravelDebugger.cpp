@@ -11,6 +11,13 @@ size_t TimeTravelDebugger::s_currentFrameIndex = 0;
 size_t TimeTravelDebugger::s_lastRestoreCount = 0;
 
 void TimeTravelDebugger::Clear() {
+    // The rewind flag has to come down with the history. The checkbox that sets
+    // it lives behind an early-return that fires when the history is empty, so
+    // leaving it set after a Clear made it unreachable - and SupersonicApp gates
+    // physics, audio, scripts, particles AND the recorder on !IsRewinding(), so
+    // nothing could ever record a frame again. Play and Step stayed dead for the
+    // rest of the session.
+    s_isRewinding = false;
     s_history.clear();
     s_currentFrameIndex = 0;
     s_lastRestoreCount = 0;

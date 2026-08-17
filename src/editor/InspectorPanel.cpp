@@ -174,6 +174,20 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // 4b. SphereColliderComponent
+    //
+    // The component, its narrowphase and its serialization all existed; there
+    // was simply no way to see or add one from the editor.
+    if (registry.all_of<SphereColliderComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Sphere Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& sphere = registry.get<SphereColliderComponent>(entity);
+            ImGui::DragFloat("Radius", &sphere.radius, 0.01f, 0.01f, 100.0f);
+            ImGui::Checkbox("Is Trigger##sphere", &sphere.isTrigger);
+        }
+    }
+
+    ImGui::Spacing();
+
     // 5. AudioSourceComponent
     if (registry.all_of<AudioSourceComponent>(entity)) {
         if (ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -290,6 +304,25 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::DragFloat("Near Plane", &camera.nearPlane, 0.01f, 0.001f, 10.0f);
             ImGui::DragFloat("Far Plane", &camera.farPlane, 1.0f, 10.0f, 1000.0f);
             Theme::DrawVec3Control("Cam Position", camera.position, 0.0f);
+            ImGui::DragFloat("Move Speed", &camera.movementSpeed, 0.1f, 0.1f, 100.0f);
+
+            // Nothing wrote isPrimary before this, so which camera play mode
+            // rendered through was decided by EnTT pool order - and therefore
+            // changed on Play, Stop and undo. Exclusive by construction: there is
+            // no useful meaning to two primaries.
+            bool primary = camera.isPrimary;
+            if (ImGui::Checkbox("Primary Camera", &primary)) {
+                if (primary) {
+                    for (auto other : registry.view<CameraComponent>()) {
+                        registry.get<CameraComponent>(other).isPrimary = (other == entity);
+                    }
+                } else {
+                    camera.isPrimary = false;
+                }
+            }
+            if (!camera.isPrimary) {
+                ImGui::TextDisabled("Play mode renders through the primary camera.");
+            }
         }
     }
 
@@ -312,6 +345,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             registry.emplace<BoxColliderComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
+        if (!registry.all_of<SphereColliderComponent>(entity) && ImGui::MenuItem("Sphere Collider")) {
+            registry.emplace<SphereColliderComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
         if (!registry.all_of<AudioSourceComponent>(entity) && ImGui::MenuItem("Audio Source")) {
             registry.emplace<AudioSourceComponent>(entity);
             ImGui::CloseCurrentPopup();
@@ -329,7 +366,18 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<CameraComponent>(entity) && ImGui::MenuItem("Camera")) {
-            registry.emplace<CameraComponent>(entity);
+            // A second camera must not silently steal the primary flag from the
+            // one the scene is already using, so it only claims it if nothing
+            // else holds it.
+            bool anotherIsPrimary = false;
+            for (auto other : registry.view<CameraComponent>()) {
+                if (registry.get<CameraComponent>(other).isPrimary) {
+                    anotherIsPrimary = true;
+                    break;
+                }
+            }
+            auto& camera = registry.emplace<CameraComponent>(entity);
+            camera.isPrimary = !anotherIsPrimary;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

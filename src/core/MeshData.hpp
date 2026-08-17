@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/Components.hpp"
+#include "core/JobSystem.hpp"
 
 namespace Supersonic {
 
@@ -77,7 +78,14 @@ struct MeshData {
             bitan[i0] += b; bitan[i1] += b; bitan[i2] += b;
         }
 
-        for (size_t i = 0; i < vertices.size(); ++i) {
+        // The accumulation loop above cannot be parallelised: several triangles
+        // add into the same vertex slot. This one can - each iteration reads its
+        // own accumulator and writes its own vertex, touching nothing shared.
+        // A 512x512 terrain is a quarter of a million iterations of normalize
+        // and cross.
+        JobSystem::Dispatch(static_cast<uint32_t>(vertices.size()), 2048u,
+                            [this, &tan, &bitan](JobSystem::JobArgs args) {
+            const size_t i = args.jobIndex;
             const glm::vec3 n = vertices[i].normal;
             glm::vec3 t = tan[i];
 
@@ -95,7 +103,7 @@ struct MeshData {
 
             const float handedness = (glm::dot(glm::cross(n, t), bitan[i]) < 0.0f) ? -1.0f : 1.0f;
             vertices[i].tangent = glm::vec4(t, handedness);
-        }
+        });
     }
 
     bool empty() const { return vertices.empty() || indices.empty(); }
