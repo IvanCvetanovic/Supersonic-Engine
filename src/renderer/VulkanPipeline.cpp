@@ -160,6 +160,8 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         static_assert(offsetof(PushConstantData, skinPaletteBase) == 96, "push constant layout shifted");
         static_assert(offsetof(PushConstantData, skinJointCount) == 100, "push constant layout shifted");
         static_assert(offsetof(ShadowPushConstantData, skinPaletteBase) == 64, "shadow push layout shifted");
+        static_assert(sizeof(ShadowPushConstantData) == 72, "shadow push layout shifted");
+        static_assert(sizeof(ShadowPushConstantData) % 4 == 0, "push constant size must be a multiple of 4");
         static_assert(sizeof(PushConstantData) % 4 == 0, "push constant size must be a multiple of 4");
         if (options.pushConstantSize == 0 || options.pushConstantSize > 128) {
             throw std::runtime_error("Push constant range must be 1..128 bytes, got "

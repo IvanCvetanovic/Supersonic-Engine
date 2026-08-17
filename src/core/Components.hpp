@@ -310,6 +310,18 @@ struct SkinnedMeshComponent {
     // not skinned this frame (no rig, or the palette is full).
     int32_t paletteBase{-1};
 
+    // The mesh's own bind-pose bounds, captured once.
+    //
+    // The pose bounds are the union of the bind box carried by each joint, and
+    // unioning that into RenderableComponent's CURRENT bounds would feed the
+    // result back into itself and grow without limit. It happens to be safe
+    // today only because SyncResources resets those bounds from the static mesh
+    // every frame - a coupling that would break silently the moment that refresh
+    // was gated on anything. Keeping our own copy removes the dependency.
+    glm::vec3 bindBoundsMin{0.0f};
+    glm::vec3 bindBoundsMax{0.0f};
+    bool bindBoundsCaptured{false};
+
     bool valid() const { return skeletonID != 0xFFFFFFFFu && !jointMatrices.empty(); }
 };
 

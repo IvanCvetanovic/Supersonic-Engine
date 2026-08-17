@@ -281,6 +281,18 @@ static void testSnapshotTextIsStableAcrossARoundTrip() {
     const auto c = addEntity(registry, "C", glm::vec3(3.0f, 0.0f, 0.0f));
     registry.emplace<HierarchyComponent>(c, a);
 
+    // Deliberately awkward floats, and every component block that carries them:
+    // a value that does not survive the text round trip makes the whole snapshot
+    // unstable, and every consumer of "has the scene changed?" then sees a
+    // change that is not there.
+    auto& animator = registry.emplace<AnimatorComponent>(c);
+    animator.clipName = "Bend";
+    animator.time = 0.8333333f;
+    animator.speed = 1.4285714f;
+    auto& emitter = registry.emplace<ParticleEmitterComponent>(a);
+    emitter.emitRate = 33.333333f;
+    emitter.particleSize = 0.1234567f;
+
     const std::string first = SceneSerializer::SerializeToString(registry);
     CHECK(SceneSerializer::DeserializeFromString(registry, first).ok);
     const std::string second = SceneSerializer::SerializeToString(registry);

@@ -191,6 +191,8 @@ void AnimationSystem::SyncSkeletons(entt::registry& registry, AnimationLibrary& 
         if (skin.skeletonID != skeletonID) {
             skin.skeletonID = skeletonID;
             skin.jointMatrices.clear();
+            // A different mesh has different bind bounds.
+            skin.bindBoundsCaptured = false;
         }
 
         const Skeleton* skeleton = library.GetSkeleton(skeletonID);
@@ -259,8 +261,18 @@ void AnimationSystem::EvaluatePoses(entt::registry& registry, const AnimationLib
         // AABB leaves the frustum, which is the exact failure the frustum tests
         // exist to prevent, arriving through a different door.
         if (auto* renderable = registry.try_get<RenderableComponent>(entity)) {
-            const glm::vec3 bindMin = renderable->localBoundsMin;
-            const glm::vec3 bindMax = renderable->localBoundsMax;
+            // Captured once, and every union goes against the captured value
+            // rather than the widened one - so calling this twice in a frame, or
+            // in any order relative to SyncResources, gives the same answer
+            // instead of inflating a little more each time.
+            if (!skin.bindBoundsCaptured) {
+                skin.bindBoundsMin = renderable->localBoundsMin;
+                skin.bindBoundsMax = renderable->localBoundsMax;
+                skin.bindBoundsCaptured = true;
+            }
+
+            const glm::vec3 bindMin = skin.bindBoundsMin;
+            const glm::vec3 bindMax = skin.bindBoundsMax;
 
             glm::vec3 posedMin(std::numeric_limits<float>::max());
             glm::vec3 posedMax(std::numeric_limits<float>::lowest());

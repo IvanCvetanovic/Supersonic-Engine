@@ -19,6 +19,8 @@
 #include "core/Components.hpp"
 #include "core/GltfLoader.hpp"
 
+#include <glm/gtc/epsilon.hpp>
+
 #include <cmath>
 #include <string>
 #include <vector>
@@ -371,6 +373,39 @@ static void testPoseBoundsCoverTheAnimation() {
     CHECK_MSG(renderable.localBoundsMax.y >= bindMax.y, "the bounds must never shrink below bind pose");
 }
 
+static void testPoseBoundsDoNotAccumulate() {
+    // The pose bounds are the union of the bind box carried by each joint. Union
+    // that into the CURRENT bounds and the result feeds back into itself, growing
+    // a little every frame until the pick box swallows the space around the
+    // character. Safe today only because SyncResources happens to reset the
+    // bounds each frame - so the invariant is pinned here rather than left to
+    // that ordering.
+    entt::registry registry;
+    AnimationLibrary library;
+    const auto entity = makeAnimated(registry, library);
+
+    auto& renderable = registry.get<RenderableComponent>(entity);
+    renderable.localBoundsMin = glm::vec3(-0.35f, 0.0f, -0.35f);
+    renderable.localBoundsMax = glm::vec3(0.35f, 2.0f, 0.35f);
+
+    auto& animator = registry.get<AnimatorComponent>(entity);
+    animator.clipName = "Bend";
+    animator.time = 1.0f;
+
+    AnimationSystem::EvaluatePoses(registry, library);
+    const glm::vec3 firstMin = renderable.localBoundsMin;
+    const glm::vec3 firstMax = renderable.localBoundsMax;
+
+    for (int i = 0; i < 100; ++i) {
+        AnimationSystem::EvaluatePoses(registry, library);
+    }
+
+    CHECK_MSG(glm::all(glm::epsilonEqual(renderable.localBoundsMin, firstMin, 1e-5f)),
+              "evaluating the same pose again must not widen the bounds");
+    CHECK_MSG(glm::all(glm::epsilonEqual(renderable.localBoundsMax, firstMax, 1e-5f)),
+              "and the maximum must be just as stable");
+}
+
 static void testPaletteGatherPacksAndBoundsCheck() {
     entt::registry registry;
     AnimationLibrary library;
@@ -424,6 +459,7 @@ static void runTests() {
     testSyncSkeletonsResolvesTheRig();
     testClockLoopsAndRunsBackwards();
     testPoseBoundsCoverTheAnimation();
+    testPoseBoundsDoNotAccumulate();
     testPaletteGatherPacksAndBoundsCheck();
     testMissingFileIsHandled();
 }

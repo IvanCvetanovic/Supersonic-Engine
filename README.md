@@ -81,6 +81,7 @@ code quietly contradicts.
 | **Selection** | Viewport raycast picking against real mesh bounds, not an assumed unit cube |
 | **Play / Pause / Stop / Step** | Snapshots the scene on Play and restores it on Stop, so a scene can be authored, tried, and got back |
 | **Undo / redo** | 64 steps over the scene serializer — `Ctrl+Z`, `Ctrl+Y` |
+| **Animator** | Clip, speed, loop and a scrubbable time slider — poses evaluate every frame, so scrubbing shows the result immediately |
 | **Time-travel rewind** | Scrub backwards through recorded simulation frames |
 | **Fly camera** | The viewport has its own camera, so framing a shot in the editor does not move the game's |
 | **Statistics** | Frame time, entity count, draw/cull counts per pass, contact count, worker threads, script-host state |

@@ -88,6 +88,7 @@ struct ShadowPushConstantData {
     glm::mat4 viewProjModel;      // 0..63
     int32_t skinPaletteBase{-1};  // 64..67
     int32_t skinJointCount{0};    // 68..71
+    // 72 bytes total, and a multiple of 4 as vkCmdPushConstants requires.
 };
 
 class VulkanPipeline {
