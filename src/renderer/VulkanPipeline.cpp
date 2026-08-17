@@ -182,7 +182,7 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         pipelineInfo.renderPass = renderPass;
         pipelineInfo.subpass = 0;
 
-        auto result = m_device.createGraphicsPipeline(nullptr, pipelineInfo);
+        auto result = m_device.createGraphicsPipeline(options.cache, pipelineInfo);
         if (result.result != vk::Result::eSuccess) {
             throw std::runtime_error("Failed to create Vulkan Graphics Pipeline! Result code: "
                                      + std::to_string(static_cast<int>(result.result)));

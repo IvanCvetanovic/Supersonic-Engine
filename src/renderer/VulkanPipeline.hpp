@@ -63,6 +63,11 @@ public:
         bool depthBias{false};
         float depthBiasConstant{1.25f};
         float depthBiasSlope{1.75f};
+
+        // Optional. Null still works - it just means the driver recompiles the
+        // SPIR-V from scratch, which is what happened for every pipeline on
+        // every launch before PipelineCache existed.
+        vk::PipelineCache cache{nullptr};
     };
 
     VulkanPipeline(vk::Device device, vk::RenderPass renderPass,

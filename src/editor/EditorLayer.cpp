@@ -163,6 +163,22 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Edit")) {
+            const bool editing = !m_playMode || m_playMode->IsEditing();
+            ImGui::BeginDisabled(!editing || !m_history.CanUndo());
+            if (ImGui::MenuItem(m_history.UndoLabel().c_str(), "Ctrl+Z")) {
+                if (m_history.Undo(registry)) afterHistoryJump(registry, "Undone.");
+            }
+            ImGui::EndDisabled();
+            ImGui::BeginDisabled(!editing || !m_history.CanRedo());
+            if (ImGui::MenuItem(m_history.RedoLabel().c_str(), "Ctrl+Y")) {
+                if (m_history.Redo(registry)) afterHistoryJump(registry, "Redone.");
+            }
+            ImGui::EndDisabled();
+            ImGui::Separator();
+            ImGui::TextDisabled("%zu step(s) of history", m_history.UndoDepth());
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Gizmo Mode")) {
             if (ImGui::MenuItem("Translate (W)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE); }
             if (ImGui::MenuItem("Rotate (E)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE); }
@@ -249,6 +265,20 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             const auto result = SceneSerializer::Deserialize(registry, kScenePath);
             SetStatus(result.message, !result.ok);
             if (result.ok) m_hierarchyPanel.SetSelectedEntity(entt::null);
+        }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) {
+            // Ctrl+Shift+Z is the other half of the same muscle memory.
+            if (io.KeyShift) {
+                if (m_history.Redo(registry)) afterHistoryJump(registry, "Redone.");
+                else SetStatus("Nothing to redo.");
+            } else {
+                if (m_history.Undo(registry)) afterHistoryJump(registry, "Undone.");
+                else SetStatus("Nothing to undo.");
+            }
+        }
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) {
+            if (m_history.Redo(registry)) afterHistoryJump(registry, "Redone.");
+            else SetStatus("Nothing to redo.");
         }
         if (!io.KeyCtrl) {
             if (ImGui::IsKeyPressed(ImGuiKey_W)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE);
@@ -412,7 +442,39 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
         ImGui::ShowDemoWindow(&m_showDemoWindow);
     }
 
+    // Recorded last, after every panel has had its say, so one frame of
+    // editing is one undo step.
+    handleUndoRedo(registry);
+
     ImGui::End(); // End DockSpace
+}
+
+void EditorLayer::handleUndoRedo(entt::registry& registry) {
+    // Play mode mutates the scene every frame by design; recording that would
+    // fill the history with physics ticks and bury the actual edits. PlayMode
+    // restores the pre-Play scene on Stop, which is the state already recorded
+    // here, so nothing is lost by skipping it.
+    if (m_playMode && !m_playMode->IsEditing()) return;
+
+    // Only once the edit has settled. Mid-drag the scene changes every frame,
+    // and a gizmo drag would otherwise become a hundred undo steps that each
+    // rewind by a pixel.
+    if (ImGuizmo::IsUsing()) return;
+    if (ImGui::IsAnyItemActive()) return;
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) return;
+
+    m_history.CommitIfChanged(registry);
+}
+
+void EditorLayer::afterHistoryJump(entt::registry& registry, const std::string& what) {
+    // Deserialisation rebuilds the registry from scratch, so the selected
+    // handle refers to an entity that no longer exists - and picking a stale
+    // handle out of EnTT is how you get a crash rather than a wrong selection.
+    const entt::entity selected = m_hierarchyPanel.GetSelectedEntity();
+    if (selected != entt::null && !registry.valid(selected)) {
+        m_hierarchyPanel.SetSelectedEntity(entt::null);
+    }
+    SetStatus(what);
 }
 
 } // namespace Supersonic

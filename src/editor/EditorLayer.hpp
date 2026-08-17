@@ -10,6 +10,7 @@
 #include "editor/InspectorPanel.hpp"
 #include "editor/ContentBrowserPanel.hpp"
 #include "editor/EditorCamera.hpp"
+#include "editor/EditHistory.hpp"
 #include "core/RenderSystem.hpp"
 #include "platform/Window.hpp"
 
@@ -74,6 +75,14 @@ public:
 private:
     void drawStatusBar();
 
+    // Ctrl+Z / Ctrl+Y and the Edit menu, plus the once-per-frame commit that
+    // turns "the scene changed" into an undo step.
+    void handleUndoRedo(entt::registry& registry);
+
+    // An undo swaps the whole registry, so every entity handle the panels are
+    // holding is stale.
+    void afterHistoryJump(entt::registry& registry, const std::string& what);
+
     // Must be called right after DockSpace(), before any panel is submitted.
     void buildLayout(unsigned int dockspaceId, int preset);
 
@@ -103,6 +112,7 @@ private:
 
     PlayMode* m_playMode{nullptr};
     EditorCamera m_editorCamera;
+    EditHistory m_history;
     bool m_viewportHovered{false};
     bool m_viewportFocused{false};
     RenderSystem::Stats m_renderStats{};

@@ -82,6 +82,10 @@ VulkanRenderer::~VulkanRenderer() {
 
     cleanupSwapchain();
 
+    // After the pipelines, so anything compiled during this run is in the blob
+    // that gets written out.
+    m_pipelineCache.reset();
+
     std::cout << "[VulkanRenderer] Subsystem resources destroyed cleanly." << std::endl;
 }
 
@@ -262,11 +266,22 @@ void VulkanRenderer::createGraphicsPipeline() {
         throw std::runtime_error("Offscreen render pass must be set before creating the scene pipeline!");
     }
 
+    // One cache backs all three pipelines and outlives the process, so a
+    // swapchain recreation - which rebuilds every pipeline - costs a lookup
+    // rather than three shader compiles.
+    if (!m_pipelineCache) {
+        m_pipelineCache = std::make_unique<PipelineCache>(m_deviceRef, "cache/pipeline_cache.bin");
+    }
+
+    VulkanPipeline::Options sceneOptions{};
+    sceneOptions.cache = m_pipelineCache->Get();
+
     m_pipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),
         m_offscreenRenderPass,
         "assets/shaders/vert.spv",
-        "assets/shaders/frag.spv");
+        "assets/shaders/frag.spv",
+        sceneOptions);
 
     // Infinite ground grid: a full-screen triangle pair with no vertex input,
     // alpha blended, writing depth so scene geometry occludes it.
@@ -275,6 +290,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     gridOptions.depthWrite = false;
     gridOptions.cullMode = vk::CullModeFlagBits::eNone;
     gridOptions.useVertexInput = false;
+    gridOptions.cache = m_pipelineCache->Get();
 
     m_gridPipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),
@@ -291,6 +307,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     // Front-face culling during the depth pass pushes acne to back faces, which
     // the camera cannot see.
     shadowOptions.cullMode = vk::CullModeFlagBits::eFront;
+    shadowOptions.cache = m_pipelineCache->Get();
 
     m_shadowPipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),
@@ -298,6 +315,9 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/shadow_vert.spv",
         "assets/shaders/shadow_frag.spv",
         shadowOptions);
+
+    // Persist whatever the driver just compiled, so the next launch starts warm.
+    m_pipelineCache->Save();
 
     std::cout << "[VulkanRenderer] Scene, grid and shadow pipelines created." << std::endl;
 }

@@ -16,6 +16,7 @@
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
 #include "renderer/ShadowMap.hpp"
+#include "renderer/PipelineCache.hpp"
 #include "platform/Window.hpp"
 
 struct ImDrawData;
@@ -94,6 +95,7 @@ private:
 
     // Depth-only pass from the primary directional light.
     std::unique_ptr<ShadowMap> m_shadowMap;
+    std::unique_ptr<PipelineCache> m_pipelineCache;
     RenderSystem::Stats m_renderStats{};
     std::unique_ptr<VulkanPipeline> m_shadowPipeline;
 
