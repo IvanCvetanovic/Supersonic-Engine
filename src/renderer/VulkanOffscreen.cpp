@@ -124,15 +124,23 @@ void VulkanOffscreen::createRenderPass() {
     // ImGui in the swapchain pass, with MAX_FRAMES_IN_FLIGHT frames overlapping.
     std::array<vk::SubpassDependency, 2> dependencies{};
 
-    // WRITE_AFTER_READ: frame N+1 must not clear this image while frame N's
-    // ImGui pass is still sampling it. eFragmentShader in srcStageMask is what
-    // makes the previous frame's read part of the hazard.
+    // Frame N+1 must not touch this image while frame N is still using it. A
+    // single colour/depth target is shared by MAX_FRAMES_IN_FLIGHT frames, so
+    // there are two distinct hazards to cover:
+    //   WRITE_AFTER_READ  - N+1's clear vs N's ImGui sample (eFragmentShader /
+    //                       eShaderRead)
+    //   WRITE_AFTER_WRITE - N+1's loadOp clear vs N's storeOp write
+    //                       (eColorAttachmentWrite / eDepthStencilAttachmentWrite)
+    // Declaring only eShaderRead left the write-after-write uncovered, which
+    // synchronization validation reports at every vkQueueSubmit.
     dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
     dependencies[0].dstSubpass = 0;
     dependencies[0].srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
-                                 | vk::PipelineStageFlagBits::eEarlyFragmentTests
+                                 | vk::PipelineStageFlagBits::eLateFragmentTests
                                  | vk::PipelineStageFlagBits::eFragmentShader;
-    dependencies[0].srcAccessMask = vk::AccessFlagBits::eShaderRead;
+    dependencies[0].srcAccessMask = vk::AccessFlagBits::eShaderRead
+                                  | vk::AccessFlagBits::eColorAttachmentWrite
+                                  | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
     dependencies[0].dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput
                                  | vk::PipelineStageFlagBits::eEarlyFragmentTests;
     dependencies[0].dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite
