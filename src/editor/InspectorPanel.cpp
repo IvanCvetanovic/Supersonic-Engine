@@ -1,5 +1,6 @@
 #include "editor/InspectorPanel.hpp"
 #include "editor/Theme.hpp"
+#include "core/ScriptRegistry.hpp"
 
 // GLM_ENABLE_EXPERIMENTAL is set on the target in CMakeLists.txt.
 #include <glm/gtc/type_ptr.hpp>
@@ -156,7 +157,40 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             auto& script = registry.get<ScriptComponent>(entity);
 
             ImGui::Checkbox("Enabled", &script.isEnabled);
-            ImGui::Text("Script Name: %s", script.scriptName.c_str());
+
+            // Populated from ScriptRegistry, so hot-reloaded plugin scripts show
+            // up here without any editor change.
+            const std::vector<std::string> names = ScriptRegistry::Get().Names();
+            int current = -1;
+            for (size_t i = 0; i < names.size(); ++i) {
+                if (names[i] == script.scriptName) { current = static_cast<int>(i); break; }
+            }
+
+            if (ImGui::BeginCombo("Script", script.scriptName.c_str())) {
+                for (size_t i = 0; i < names.size(); ++i) {
+                    const bool selected = (current == static_cast<int>(i));
+                    if (ImGui::Selectable(names[i].c_str(), selected)) {
+                        script.scriptName = names[i];
+                        script.elapsed = 0.0f;
+                        script.baselineCaptured = false;
+                        script.warnedMissing = false;
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                // LightFlicker is native because it needs LightComponent, which
+                // the flat script ABI does not carry.
+                if (ImGui::Selectable("LightFlickerScript", script.scriptName == "LightFlickerScript")) {
+                    script.scriptName = "LightFlickerScript";
+                    script.elapsed = 0.0f;
+                    script.baselineCaptured = false;
+                }
+                ImGui::EndCombo();
+            }
+
+            if (current < 0 && script.scriptName != "LightFlickerScript") {
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f), "Not registered.");
+            }
+            ImGui::TextDisabled("Elapsed: %.1fs", static_cast<double>(script.elapsed));
         }
     }
 

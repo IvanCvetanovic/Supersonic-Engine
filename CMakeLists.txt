@@ -270,6 +270,17 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# Hot-reloadable script plugin
+# ---------------------------------------------------------------------------
+option(ENGINE_BUILD_SCRIPT_PLUGIN "Build the sample hot-reload script plugin" ON)
+if (ENGINE_BUILD_SCRIPT_PLUGIN)
+    add_subdirectory(plugins)
+    # Not a link dependency - the engine loads it at runtime and tolerates its
+    # absence - but building it by default makes the feature work out of the box.
+    add_dependencies(GameEngine GameScripts)
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 option(ENGINE_BUILD_TESTS "Build engine unit tests" ON)

@@ -205,6 +205,9 @@ struct ScriptComponent {
     glm::vec3 baseline{0.0f};
     float baseIntensity{0.0f};
     bool baselineCaptured{false};
+
+    // Rate-limits the "no such script" diagnostic to once per name change.
+    bool warnedMissing{false};
 };
 
 struct Particle {

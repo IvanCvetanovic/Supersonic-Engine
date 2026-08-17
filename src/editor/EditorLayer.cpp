@@ -34,6 +34,15 @@ void EditorLayer::SetStatus(const std::string& message, bool isError) {
     (isError ? std::cerr : std::cout) << "[Editor] " << message << std::endl;
 }
 
+void EditorLayer::SetScriptHostInfo(bool pluginLoaded, const std::string& status, uint32_t reloadCount) {
+    if (m_pluginLoaded && reloadCount > m_scriptReloadCount) {
+        SetStatus("Script plugin reloaded (" + std::to_string(reloadCount) + ").");
+    }
+    m_pluginLoaded = pluginLoaded;
+    m_scriptHostStatus = status;
+    m_scriptReloadCount = reloadCount;
+}
+
 void EditorLayer::ApplyPendingResize() {
     if (!m_offscreenPass) return;
     if (m_desiredViewportWidth == 0 || m_desiredViewportHeight == 0) return;
@@ -241,6 +250,18 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     ImGui::Text("Active Entities: %u", entityCount);
     if (m_offscreenPass) {
         ImGui::Text("Viewport Res:    %ux%u", m_offscreenPass->GetWidth(), m_offscreenPass->GetHeight());
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("SCRIPT HOST");
+    if (m_pluginLoaded) {
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.60f, 1.0f), "Plugin loaded");
+        ImGui::Text("Reloads:         %u", m_scriptReloadCount);
+    } else {
+        ImGui::TextDisabled("Built-in scripts only");
+    }
+    if (!m_scriptHostStatus.empty()) {
+        ImGui::TextWrapped("%s", m_scriptHostStatus.c_str());
     }
     ImGui::End();
 

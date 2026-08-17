@@ -49,6 +49,9 @@ public:
     // console-only messages a GUI user never sees.
     void SetStatus(const std::string& message, bool isError = false);
 
+    // Hot-reload state, shown in the statistics panel.
+    void SetScriptHostInfo(bool pluginLoaded, const std::string& status, uint32_t reloadCount);
+
 private:
     void drawStatusBar();
 
@@ -66,6 +69,10 @@ private:
     // Set by BuildUI, consumed by ApplyPendingResize.
     uint32_t m_desiredViewportWidth{0};
     uint32_t m_desiredViewportHeight{0};
+
+    bool m_pluginLoaded{false};
+    std::string m_scriptHostStatus;
+    uint32_t m_scriptReloadCount{0};
 };
 
 } // namespace Engine

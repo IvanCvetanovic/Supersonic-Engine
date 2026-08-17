@@ -26,6 +26,30 @@ constexpr float kMaxFrameDelta = 0.10f;
 
 constexpr float kFixedPhysicsStep = 1.0f / 60.0f;
 constexpr int kMaxPhysicsStepsPerFrame = 5;
+
+// The script plugin lives next to the executable, so this works both from a
+// build tree and from a packaged folder.
+std::string scriptPluginPath() {
+#if defined(_WIN32)
+    constexpr const char* name = "GameScripts.dll";
+#elif defined(__APPLE__)
+    constexpr const char* name = "GameScripts.dylib";
+#else
+    constexpr const char* name = "GameScripts.so";
+#endif
+    std::error_code ec;
+    const auto exeDir = std::filesystem::current_path(ec);
+    (void)exeDir;
+    // Relative to the working directory first (repo root during development),
+    // then next to the binary.
+    if (std::filesystem::exists(std::string("build/Debug/") + name, ec)) {
+        return std::string("build/Debug/") + name;
+    }
+    if (std::filesystem::exists(std::string("build/Release/") + name, ec)) {
+        return std::string("build/Release/") + name;
+    }
+    return name;
+}
 } // namespace
 
 EngineApp::EngineApp() {
@@ -39,6 +63,11 @@ EngineApp::EngineApp() {
     }
 
     m_audioEngine = std::make_unique<AudioEngine>();
+
+    // Scripts: built-ins first, then whatever the plugin adds on top.
+    ScriptEngine::RegisterBuiltInScripts();
+    m_hotReload = std::make_unique<HotReloadEngine>();
+    m_hotReload->WatchPlugin(scriptPluginPath());
 
     m_window = std::make_unique<Window>(1280, 720, "Vulkan EnTT 3D Game Engine");
 
@@ -167,6 +196,9 @@ void EngineApp::Run() {
         lastTime = currentTime;
         const float deltaTime = std::clamp(rawDelta, 0.0f, kMaxFrameDelta);
 
+        // Swap in a rebuilt script plugin. Cheap: one stat unless it changed.
+        m_hotReload->Poll();
+
         // Rebuild the offscreen target before anything else touches it.
         //
         // This has to happen before ImGui::NewFrame, not after ImGui::Render:
@@ -209,6 +241,9 @@ void EngineApp::Run() {
 
         // Editor UI runs after the systems and before rendering, so gizmo drags
         // and inspector edits appear in the same frame instead of one late.
+        m_editorLayer->SetScriptHostInfo(m_hotReload->IsLoaded(),
+                                         m_hotReload->GetStatus(),
+                                         m_hotReload->GetReloadCount());
         m_editorLayer->BuildUI(m_registry, *m_window);
         ImGui::Render();
 

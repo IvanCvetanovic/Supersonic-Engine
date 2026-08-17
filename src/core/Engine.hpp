@@ -12,6 +12,7 @@
 #include "renderer/VulkanRenderer.hpp"
 #include "editor/EditorLayer.hpp"
 #include "core/AudioEngine.hpp"
+#include "core/HotReloadEngine.hpp"
 #include "core/Components.hpp"
 
 namespace Engine {
@@ -42,6 +43,9 @@ private:
     // Real output device. Degrades to a documented no-op where no backend is
     // compiled, instead of silently discarding every computed volume.
     std::unique_ptr<AudioEngine> m_audioEngine;
+
+    // Watches the script plugin and swaps it in when it is rebuilt.
+    std::unique_ptr<HotReloadEngine> m_hotReload;
 
     entt::registry m_registry;
 

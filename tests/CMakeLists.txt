@@ -36,6 +36,7 @@ add_engine_test(test_serialize ${ENGINE_SRC}/src/core/SceneSerializer.cpp
                                ${ENGINE_SRC}/src/core/PrefabSerializer.cpp)
 add_engine_test(test_physics   ${ENGINE_SRC}/src/core/PhysicsSystem.cpp)
 add_engine_test(test_audio     ${ENGINE_SRC}/src/core/AudioClip.cpp)
+add_engine_test(test_scripts   ${ENGINE_SRC}/src/core/ScriptRegistry.cpp)
 
 # test_audio also opportunistically checks the shipped ambient clip, so run the
 # suite from the project root where assets/ resolves.
