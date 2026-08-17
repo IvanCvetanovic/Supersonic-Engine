@@ -8,6 +8,14 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <xaudio2.h>
+#elif defined(SUPERSONIC_AUDIO_ALSA)
+#include <alsa/asoundlib.h>
+
+#include <atomic>
+#include <thread>
+#include <vector>
+
+#include "core/AudioMixer.hpp"
 #endif
 
 namespace Supersonic {
@@ -166,6 +174,128 @@ bool AudioEngine::IsVoicePlaying(VoiceId voice) const {
     XAUDIO2_VOICE_STATE state{};
     it->second.source->GetState(&state);
     return state.BuffersQueued > 0;
+}
+
+#elif defined(SUPERSONIC_AUDIO_ALSA)
+
+// ---------------------------------------------------------------------------
+// ALSA backend. Linux had no audio at all: the non-Windows path was an
+// explicit no-op, so every AudioSourceComponent in a scene was silent and
+// nothing said why beyond one line at startup.
+//
+// ALSA gives one output stream rather than XAudio2's per-sound source voices,
+// so the summing that XAudio2 does internally happens in AudioMixer here. A
+// dedicated thread fills the device; snd_pcm_writei blocks until the buffer
+// has room, which is what paces the loop without a timer.
+// ---------------------------------------------------------------------------
+namespace {
+constexpr uint32_t kOutputRate = 48000;
+constexpr uint16_t kOutputChannels = 2;
+
+// ~21 ms. Small enough that a sound starts when it is meant to, large enough
+// that an ordinary desktop scheduler will not underrun between wakeups.
+constexpr snd_pcm_uframes_t kPeriodFrames = 1024;
+} // namespace
+
+struct AudioEngine::Impl {
+    snd_pcm_t* pcm{nullptr};
+    AudioMixer mixer{kOutputRate, kOutputChannels};
+    std::thread thread;
+    std::atomic<bool> running{false};
+
+    void run() {
+        std::vector<int16_t> buffer(kPeriodFrames * kOutputChannels);
+
+        while (running.load(std::memory_order_relaxed)) {
+            mixer.MixInt16(buffer.data(), kPeriodFrames);
+
+            snd_pcm_sframes_t written = snd_pcm_writei(pcm, buffer.data(), kPeriodFrames);
+            if (written < 0) {
+                // An underrun is normal under load and is recoverable; anything
+                // it cannot recover from means the device is gone, and spinning
+                // on a dead device would peg a core forever.
+                written = snd_pcm_recover(pcm, static_cast<int>(written), 1);
+                if (written < 0) {
+                    std::cerr << "[AudioEngine] ALSA write failed: "
+                              << snd_strerror(static_cast<int>(written)) << std::endl;
+                    break;
+                }
+            }
+        }
+    }
+};
+
+AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
+    int err = snd_pcm_open(&m_impl->pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
+    if (err < 0) {
+        m_status = std::string("snd_pcm_open failed: ") + snd_strerror(err);
+        std::cout << "[AudioEngine] " << m_status << "." << std::endl;
+        return;
+    }
+
+    // The high-level parameter call rather than the hw_params dance: it picks a
+    // sane buffer size and will resample if the device cannot do 48 kHz, which
+    // is the difference between "works on this machine" and "works".
+    err = snd_pcm_set_params(m_impl->pcm,
+                             SND_PCM_FORMAT_S16_LE,
+                             SND_PCM_ACCESS_RW_INTERLEAVED,
+                             kOutputChannels,
+                             kOutputRate,
+                             1,        /* allow the driver to resample */
+                             100000);  /* 100 ms of latency to play with */
+    if (err < 0) {
+        m_status = std::string("snd_pcm_set_params failed: ") + snd_strerror(err);
+        std::cout << "[AudioEngine] " << m_status << "." << std::endl;
+        snd_pcm_close(m_impl->pcm);
+        m_impl->pcm = nullptr;
+        return;
+    }
+
+    m_impl->running.store(true, std::memory_order_relaxed);
+    m_impl->thread = std::thread([this] { m_impl->run(); });
+
+    m_available = true;
+    m_status = "ALSA output device ready";
+    std::cout << "[AudioEngine] " << m_status << "." << std::endl;
+}
+
+AudioEngine::~AudioEngine() {
+    // Stop the thread before closing the device: snd_pcm_close while a write is
+    // in flight is a use-after-free in the driver, not a tidy shutdown.
+    m_impl->running.store(false, std::memory_order_relaxed);
+    if (m_impl->thread.joinable()) m_impl->thread.join();
+
+    if (m_impl->pcm) {
+        snd_pcm_drain(m_impl->pcm);
+        snd_pcm_close(m_impl->pcm);
+    }
+}
+
+AudioEngine::VoiceId AudioEngine::Play(const std::string& path, bool loop, float volume, float pitch) {
+    if (!m_available) return kInvalidVoice;
+
+    const AudioClip* clip = LoadClip(path);
+    if (!clip) return kInvalidVoice;
+
+    // m_clips is an unordered_map, whose nodes keep their addresses when other
+    // entries are inserted, so this pointer stays valid for the audio thread
+    // even as more clips are loaded.
+    return m_impl->mixer.Add(*clip, loop, volume, pitch);
+}
+
+void AudioEngine::Stop(VoiceId voice) {
+    if (!m_available) return;
+    m_impl->mixer.Remove(voice);
+}
+
+void AudioEngine::SetVoiceParameters(VoiceId voice, float volume, float pitch, float pan) {
+    if (!m_available) return;
+    m_impl->mixer.SetParameters(voice, volume, pitch, pan);
+}
+
+bool AudioEngine::IsVoicePlaying(VoiceId voice) const {
+    if (!m_available) return false;
+    return m_impl->mixer.IsPlaying(voice);
 }
 
 #else

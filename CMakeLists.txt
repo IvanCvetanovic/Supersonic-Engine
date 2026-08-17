@@ -229,10 +229,26 @@ target_link_libraries(SupersonicEngine PRIVATE
     Threads::Threads
 )
 
-# Audio output. XAudio2 ships with Windows, so this adds no third-party
-# dependency; other platforms compile AudioEngine's documented no-op path.
+# Audio output.
+#
+# XAudio2 ships with Windows, so that path adds no third-party dependency.
+# Linux has no equivalent in the base system, so ALSA is used when its
+# development headers are present and the engine falls back to the documented
+# no-op when they are not - a missing package must not fail the build for
+# someone who does not care about sound.
 if (WIN32)
     target_link_libraries(SupersonicEngine PRIVATE xaudio2 ole32)
+elseif (UNIX AND NOT APPLE AND NOT ANDROID)
+    find_path(ALSA_INCLUDE_DIR alsa/asoundlib.h)
+    find_library(ALSA_LIBRARY NAMES asound)
+    if (ALSA_INCLUDE_DIR AND ALSA_LIBRARY)
+        message(STATUS "Audio backend: ALSA (${ALSA_LIBRARY})")
+        target_compile_definitions(SupersonicEngine PRIVATE SUPERSONIC_AUDIO_ALSA=1)
+        target_include_directories(SupersonicEngine PRIVATE ${ALSA_INCLUDE_DIR})
+        target_link_libraries(SupersonicEngine PRIVATE ${ALSA_LIBRARY})
+    else()
+        message(STATUS "Audio backend: none (install libasound2-dev for sound on Linux)")
+    endif()
 endif()
 
 # Assets are loaded with paths relative to the working directory, so make F5

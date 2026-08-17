@@ -58,6 +58,8 @@ add_engine_test(test_frustum)
 add_engine_test(test_input     ${SUPERSONIC_SRC}/src/core/Input.cpp)
 add_engine_test(test_cascades  ${SUPERSONIC_SRC}/src/renderer/ShadowCascades.cpp)
 add_engine_test(test_jobs      ${SUPERSONIC_SRC}/src/core/JobSystem.cpp)
+add_engine_test(test_mixer     ${SUPERSONIC_SRC}/src/core/AudioMixer.cpp
+                               ${SUPERSONIC_SRC}/src/core/AudioClip.cpp)
 add_engine_test(test_undo      ${SUPERSONIC_SRC}/src/editor/EditHistory.cpp
                                ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp
                                ${SUPERSONIC_SRC}/src/core/ComponentCodec.cpp)
