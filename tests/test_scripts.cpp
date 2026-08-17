@@ -4,6 +4,8 @@
 // because calling into a freed module is the classic hot-reload crash.
 
 #include "TestHarness.hpp"
+
+#include <cstddef>
 #include "core/ScriptRegistry.hpp"
 
 #include <algorithm>
@@ -126,12 +128,24 @@ static void testNamesAreSorted() {
 
 static void testApiVersionIsPinned() {
     // The engine refuses to load a plugin whose version differs; if this
-    // constant changes, every plugin must be rebuilt.
-    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 1);
+    // constant changes, every plugin must be rebuilt. Version 2 added the input
+    // accessors, which is exactly the kind of change the check exists to catch.
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 2);
 
-    // Context layout is part of the ABI.
-    CHECK_EQ(sizeof(SupersonicScriptContext),
-             sizeof(float) * 11 + sizeof(unsigned int));
+    // Context layout is part of the ABI. Offsets rather than a total size: the
+    // total moves with padding on a different platform, while an offset that
+    // shifts means a plugin built against the old header reads the wrong field.
+    CHECK_EQ(offsetof(SupersonicScriptContext, deltaTime), size_t{0});
+    CHECK_EQ(offsetof(SupersonicScriptContext, position), sizeof(float) * 2);
+    CHECK_EQ(offsetof(SupersonicScriptContext, entityId), sizeof(float) * 11);
+    CHECK_MSG(offsetof(SupersonicScriptContext, input) >= sizeof(float) * 11 + sizeof(unsigned int),
+              "the input pointer must follow entityId, not displace it");
+
+    // The accessors are function pointers into the ENGINE, so a plugin reload
+    // cannot dangle them. Their presence is the ABI contract.
+    SupersonicScriptInput api{};
+    CHECK_MSG(api.isDown == nullptr && api.axis == nullptr,
+              "a zero-initialised input block must be inert, not garbage");
 }
 
 static void runTests() {

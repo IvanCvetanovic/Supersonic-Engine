@@ -146,7 +146,7 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         // One range spanning both stages: the vertex stage reads the model
         // matrix, the fragment stage reads albedo and material parameters.
         vk::PushConstantRange pushConstantRange{};
-        pushConstantRange.stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+        pushConstantRange.stageFlags = options.pushConstantStages;
         pushConstantRange.offset = 0;
         pushConstantRange.size = options.pushConstantSize;
         static_assert(sizeof(PushConstantData) <= 128,

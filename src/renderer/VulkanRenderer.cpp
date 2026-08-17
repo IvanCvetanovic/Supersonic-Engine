@@ -320,6 +320,10 @@ void VulkanRenderer::createGraphicsPipeline() {
     // The depth pass takes the cascade's transform in the push constant instead
     // of reading the scene UBO, so its range is a different size.
     shadowOptions.pushConstantSize = static_cast<uint32_t>(sizeof(ShadowPushConstantData));
+    // Vertex only: shadow.frag declares no push constant block, and pushing a
+    // vertex-only range against a pipeline that claims both stages is a
+    // validation error on every shadow draw.
+    shadowOptions.pushConstantStages = vk::ShaderStageFlagBits::eVertex;
     // Retuned down. These constants were set against a fixed ~80-unit ortho
     // range; a cascade's depth range now spans the whole scene along the light
     // axis and can be several times that, which turns the same constants into

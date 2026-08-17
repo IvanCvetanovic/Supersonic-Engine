@@ -130,6 +130,13 @@ struct VulkanPipelineOptions {
     // Must match the render pass's attachments exactly; a mismatch is an
     // invalid pipeline, not a quality difference.
     vk::SampleCountFlagBits samples{vk::SampleCountFlagBits::e1};
+
+    // Which stages the push constant range covers. vkCmdPushConstants requires
+    // the stageFlags passed at record time to include EVERY stage the range
+    // declares, so a range covering both stages cannot be pushed for one - the
+    // depth pass declares vertex only because shadow.frag has no push block.
+    vk::ShaderStageFlags pushConstantStages{
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment};
 };
 
 class VulkanPipeline {

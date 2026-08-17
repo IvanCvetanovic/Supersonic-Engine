@@ -50,6 +50,42 @@ void breatheScript(SupersonicScriptContext* ctx) {
     ctx->scale[2] = s;
 }
 
+
+// Drives the entity from the player's input: WASD or the left stick to move,
+// Space or gamepad A to hop, Shift to sprint.
+//
+// This is the script that proves gameplay can read input at all - before the
+// input layer existed there was no way to write it without reaching past the
+// engine into GLFW, and a hot-reloaded plugin certainly could not.
+void playerScript(SupersonicScriptContext* ctx) {
+    if (!ctx->input) return;
+
+    const float speed = ctx->input->isDown(ctx->input->opaque, "Sprint") ? 9.0f : 3.5f;
+
+    // The axes read the same whether the player is on a keyboard or a pad; the
+    // script never finds out which.
+    const float moveX = ctx->input->axis(ctx->input->opaque, "MoveX");
+    const float moveY = ctx->input->axis(ctx->input->opaque, "MoveY");
+
+    ctx->position[0] += moveX * speed * ctx->deltaTime;
+    ctx->position[2] -= moveY * speed * ctx->deltaTime;
+
+    // wasPressed is an edge, so holding the button does not re-trigger.
+    if (ctx->input->wasPressed(ctx->input->opaque, "Jump")) {
+        ctx->position[1] += 1.2f;
+    }
+
+    // Fall back toward the ground, so repeated hops do not accumulate forever.
+    if (ctx->position[1] > 0.5f) {
+        ctx->position[1] -= 2.4f * ctx->deltaTime;
+    }
+
+    // Face the direction of travel.
+    if (moveX * moveX + moveY * moveY > 0.01f) {
+        ctx->rotation[1] = std::atan2(moveX, moveY);
+    }
+}
+
 } // namespace
 
 extern "C" {
@@ -67,6 +103,7 @@ SUPERSONIC_SCRIPT_EXPORT void SupersonicScriptPluginRegister(SupersonicScriptHos
     host->registerScript(host->opaque, "BobScript", &bobScript);
     host->registerScript(host->opaque, "TumbleScript", &tumbleScript);
     host->registerScript(host->opaque, "BreatheScript", &breatheScript);
+    host->registerScript(host->opaque, "PlayerScript", &playerScript);
 }
 
 } // extern "C"

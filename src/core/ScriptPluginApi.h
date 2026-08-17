@@ -15,7 +15,7 @@
  * build into a clear log line instead of undefined behaviour.
  */
 
-#define SUPERSONIC_SCRIPT_API_VERSION 1
+#define SUPERSONIC_SCRIPT_API_VERSION 2
 
 #if defined(_WIN32)
 #  define SUPERSONIC_SCRIPT_EXPORT __declspec(dllexport)
@@ -27,6 +27,21 @@
 extern "C" {
 #endif
 
+/* Input, exposed to scripts as function pointers rather than as a snapshot
+ * struct.
+ *
+ * The pointers are ENGINE functions, so unloading the plugin cannot dangle
+ * them - the direction that matters here, since the plugin is the thing that
+ * gets swapped. Names are passed as plain const char*, which keeps the
+ * boundary POD and means adding an action needs no ABI change at all. */
+typedef struct SupersonicScriptInput {
+    void* opaque;
+    int   (*isDown)(void* opaque, const char* action);
+    int   (*wasPressed)(void* opaque, const char* action);
+    int   (*wasReleased)(void* opaque, const char* action);
+    float (*axis)(void* opaque, const char* axis);
+} SupersonicScriptInput;
+
 /* Per-entity state handed to a script each frame. The engine copies values in
  * before the call and copies them back out afterwards. */
 typedef struct SupersonicScriptContext {
@@ -36,6 +51,9 @@ typedef struct SupersonicScriptContext {
     float rotation[3];    /* in/out, radians, Euler XYZ                    */
     float scale[3];       /* in/out                                        */
     unsigned int entityId; /* opaque; stable for the lifetime of the entity */
+
+    /* Never null. Valid only for the duration of the call. */
+    const SupersonicScriptInput* input;
 } SupersonicScriptContext;
 
 typedef void (*SupersonicScriptUpdateFn)(SupersonicScriptContext* context);

@@ -1,4 +1,5 @@
 #include "core/ScriptEngine.hpp"
+#include "core/Input.hpp"
 #include "core/Components.hpp"
 #include "core/ScriptRegistry.hpp"
 
@@ -12,6 +13,33 @@ namespace {
 // Built-in transform scripts, written against the same C ABI as plugin scripts
 // so both go through one code path. ScriptEngine used to be a two-branch
 // if/else on a string with no way to add a third.
+
+namespace {
+
+// The engine side of SupersonicScriptInput. These live in the executable, not
+// in the plugin, so a reload cannot leave a script holding a pointer into a
+// module that has been freed.
+int scriptIsDown(void*, const char* action) {
+    return (action && Input::IsDown(action)) ? 1 : 0;
+}
+int scriptWasPressed(void*, const char* action) {
+    return (action && Input::WasPressed(action)) ? 1 : 0;
+}
+int scriptWasReleased(void*, const char* action) {
+    return (action && Input::WasReleased(action)) ? 1 : 0;
+}
+float scriptAxis(void*, const char* axis) {
+    return axis ? Input::GetAxis(axis) : 0.0f;
+}
+
+const SupersonicScriptInput& scriptInput() {
+    static const SupersonicScriptInput api{
+        nullptr, scriptIsDown, scriptWasPressed, scriptWasReleased, scriptAxis
+    };
+    return api;
+}
+
+} // namespace
 
 extern "C" void builtinRotator(SupersonicScriptContext* ctx) {
     ctx->rotation[1] += 0.8f * ctx->deltaTime;
@@ -96,6 +124,7 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
         ctx.deltaTime = deltaTime;
         ctx.elapsed = script.elapsed;
         ctx.entityId = static_cast<unsigned int>(entt::to_integral(entity));
+        ctx.input = &scriptInput();
         ctx.position[0] = transform.position.x;
         ctx.position[1] = transform.position.y;
         ctx.position[2] = transform.position.z;

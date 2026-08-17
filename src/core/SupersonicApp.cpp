@@ -8,12 +8,20 @@
 #include "core/JobSystem.hpp"
 #include "core/AnimationSystem.hpp"
 #include "core/MaterialSystem.hpp"
+#include "core/Input.hpp"
+#include "platform/InputPolling.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
 #include "core/TransformSystem.hpp"
 
 #include "imgui.h"
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <filesystem>
@@ -32,6 +40,21 @@ constexpr float kMaxFrameDelta = 0.10f;
 constexpr float kFixedPhysicsStep = 1.0f / 60.0f;
 constexpr int kMaxPhysicsStepsPerFrame = 5;
 
+// Absolute path of the running binary, or empty when the platform has no cheap
+// way to ask. Used to find the script plugin that was built alongside it.
+std::filesystem::path executablePath() {
+#if defined(_WIN32)
+    wchar_t buffer[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    if (length == 0 || length == MAX_PATH) return {};
+    return std::filesystem::path(buffer);
+#else
+    std::error_code ec;
+    const std::filesystem::path self = std::filesystem::read_symlink("/proc/self/exe", ec);
+    return ec ? std::filesystem::path{} : self;
+#endif
+}
+
 // The script plugin lives next to the executable, so this works both from a
 // build tree and from a packaged folder.
 std::string scriptPluginPath() {
@@ -43,15 +66,21 @@ std::string scriptPluginPath() {
     constexpr const char* name = "GameScripts.so";
 #endif
     std::error_code ec;
-    const auto exeDir = std::filesystem::current_path(ec);
-    (void)exeDir;
-    // Relative to the working directory first (repo root during development),
-    // then next to the binary.
-    if (std::filesystem::exists(std::string("build/Debug/") + name, ec)) {
-        return std::string("build/Debug/") + name;
+
+    // Next to the running executable first. Checking build/Debug before
+    // build/Release meant a Release build loaded a stale Debug plugin - which
+    // the ABI version check caught, but only as a refusal to load any scripts
+    // at all, with a message that blamed the plugin rather than the lookup.
+    const std::filesystem::path exePath = executablePath();
+    if (!exePath.empty()) {
+        const std::filesystem::path beside = exePath.parent_path() / name;
+        if (std::filesystem::exists(beside, ec)) return beside.string();
     }
-    if (std::filesystem::exists(std::string("build/Release/") + name, ec)) {
-        return std::string("build/Release/") + name;
+
+    // Then the usual build trees, relative to the working directory.
+    for (const char* config : {"build/Release/", "build/Debug/"}) {
+        const std::string candidate = std::string(config) + name;
+        if (std::filesystem::exists(candidate, ec)) return candidate;
     }
     return name;
 }
@@ -70,6 +99,9 @@ SupersonicApp::SupersonicApp() {
     // Workers come up before anything that might dispatch to them: mesh
     // generation during initECS already parallelises its per-vertex passes.
     JobSystem::Initialize();
+
+    // Before any system can ask for input, and before the first frame.
+    Input::LoadDefaultBindings();
 
     m_audioEngine = std::make_unique<AudioEngine>();
     m_animationLibrary = std::make_unique<AnimationLibrary>();
@@ -353,6 +385,11 @@ void SupersonicApp::Run() {
         // what lets the camera know whether the UI owns the input. Running the
         // camera before this could only ever consult the previous frame's flags.
         m_renderer->NewImGuiFrame();
+
+        // Devices are read once, here, and every consumer queries the snapshot.
+        // Polling per-consumer would give two systems different answers within
+        // the same frame, and edge detection would fire more than once.
+        InputPolling::Poll(*m_window);
 
         const ImGuiIO& io = ImGui::GetIO();
 
