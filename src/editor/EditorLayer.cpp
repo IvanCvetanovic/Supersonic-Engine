@@ -67,6 +67,47 @@ void EditorLayer::drawStatusBar() {
     ImGui::PopStyleColor();
 }
 
+void EditorLayer::buildLayout(unsigned int dockspaceId, int preset) {
+    ImGui::DockBuilderRemoveNode(dockspaceId);
+    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+
+    float leftRatio = 0.20f;
+    float rightRatio = 0.24f;
+    float bottomRatio = 0.30f;
+
+    if (preset == 1) {          // Viewport focused
+        leftRatio = 0.14f; rightRatio = 0.16f; bottomRatio = 0.22f;
+    } else if (preset == 2) {   // Inspector focused
+        leftRatio = 0.16f; rightRatio = 0.40f; bottomRatio = 0.26f;
+    }
+
+    // Splitting a node turns it into a parent, so the original id is no longer
+    // a leaf you can dock into. The last argument returns the id of the
+    // remaining half, and that is what must be docked to - passing nullptr
+    // there is why panels ended up floating.
+    ImGuiID centre = dockspaceId;
+    ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, leftRatio, nullptr, &centre);
+    ImGuiID right = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, rightRatio, nullptr, &centre);
+    const ImGuiID bottom = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, bottomRatio, nullptr, &centre);
+
+    ImGuiID leftTop = left;
+    const ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.45f, nullptr, &leftTop);
+
+    ImGuiID rightTop = right;
+    const ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.55f, nullptr, &rightTop);
+
+    ImGui::DockBuilderDockWindow("Scene Hierarchy", leftTop);
+    ImGui::DockBuilderDockWindow("Content Browser", leftBottom);
+    ImGui::DockBuilderDockWindow("Viewport", centre);
+    ImGui::DockBuilderDockWindow("Inspector", bottom);
+    ImGui::DockBuilderDockWindow("Time-Travel Rewind Debugger", bottom);
+    ImGui::DockBuilderDockWindow("Engine Statistics", rightTop);
+    ImGui::DockBuilderDockWindow("Camera Preview", rightBottom);
+
+    ImGui::DockBuilderFinish(dockspaceId);
+}
+
 void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     // 1. Enable Fullscreen Central Dockspace
     ImGuiDockNodeFlags dockspaceFlags = ImGuiDockNodeFlags_None;
@@ -86,12 +127,7 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
     ImGuiIO& io = ImGui::GetIO();
     ImGuiID dockspaceId = 0;
-    if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
-        dockspaceId = ImGui::GetID("MyDockSpace");
-        ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), dockspaceFlags);
-    }
 
-    int applyLayoutPreset = -1;
 
     // 2. Editor Main Menu Bar
     if (ImGui::BeginMenuBar()) {
@@ -123,9 +159,9 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Layout Presets")) {
-            if (ImGui::MenuItem("Default Layout")) { applyLayoutPreset = 0; }
-            if (ImGui::MenuItem("Viewport Focused")) { applyLayoutPreset = 1; }
-            if (ImGui::MenuItem("Inspector Focused")) { applyLayoutPreset = 2; }
+            if (ImGui::MenuItem("Default Layout")) { m_pendingLayoutPreset = 0; }
+            if (ImGui::MenuItem("Viewport Focused")) { m_pendingLayoutPreset = 1; }
+            if (ImGui::MenuItem("Inspector Focused")) { m_pendingLayoutPreset = 2; }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Window")) {
@@ -133,6 +169,60 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
+    }
+
+    // ---- Play / Pause / Stop toolbar ----
+    if (m_playMode) {
+        const bool playing = m_playMode->IsPlaying();
+        const bool paused = m_playMode->IsPaused();
+
+        // Tinted while simulating, so the mode is obvious at a glance rather
+        // than something you infer from whether things are moving.
+        if (playing) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.45f, 0.22f, 1.0f));
+        } else if (paused) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.50f, 0.42f, 0.12f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.22f, 0.26f, 1.0f));
+        }
+
+        if (ImGui::Button(playing ? "Pause##play" : "Play##play", ImVec2(70, 0))) {
+            if (playing) {
+                m_playMode->Pause();
+                SetStatus("Paused.");
+            } else {
+                const auto result = m_playMode->Play(registry);
+                SetStatus(result.message, !result.ok);
+            }
+        }
+        ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(m_playMode->IsEditing());
+        if (ImGui::Button("Stop##play", ImVec2(70, 0))) {
+            const auto result = m_playMode->Stop(registry);
+            SetStatus(result.message, !result.ok);
+            m_hierarchyPanel.SetSelectedEntity(entt::null);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Step##play", ImVec2(70, 0))) {
+            if (m_playMode->IsPlaying()) m_playMode->Pause();
+            m_playMode->RequestSingleStep();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        const char* label = playing ? "PLAYING" : (paused ? "PAUSED" : "EDIT MODE");
+        const ImVec4 colour = playing ? ImVec4(0.55f, 0.90f, 0.60f, 1.0f)
+                            : paused  ? ImVec4(0.95f, 0.82f, 0.35f, 1.0f)
+                                      : ImVec4(0.60f, 0.62f, 0.68f, 1.0f);
+        ImGui::TextColored(colour, "%s", label);
+
+        if (!m_playMode->IsEditing()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("- Stop restores the scene as it was before Play.");
+        }
+        ImGui::Separator();
     }
 
     drawStatusBar();
@@ -154,6 +244,29 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             if (ImGui::IsKeyPressed(ImGuiKey_E)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE);
             if (ImGui::IsKeyPressed(ImGuiKey_R)) m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE);
         }
+    }
+
+    // The dockspace is submitted AFTER the menu bar, toolbar and status
+    // line, because DockSpace() consumes every remaining pixel of the
+    // window. Anything drawn after it has no room and silently vanishes.
+    if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable) {
+        dockspaceId = ImGui::GetID("MyDockSpace");
+
+        // Layout construction must happen BEFORE DockSpace() and before any
+        // panel is submitted. DockSpace() creates the node itself, so testing
+        // for a missing node after calling it never fires, and building the
+        // layout at the end of the frame leaves every window half-docked.
+        // DockBuilderDockWindow works by name, so the windows need not exist.
+        if (!m_defaultLayoutApplied && ImGui::DockBuilderGetNode(dockspaceId) == nullptr) {
+            m_pendingLayoutPreset = 0;   // fresh install: build the default layout
+        }
+        if (m_pendingLayoutPreset >= 0) {
+            buildLayout(dockspaceId, m_pendingLayoutPreset);
+            m_pendingLayoutPreset = -1;
+            m_defaultLayoutApplied = true;
+        }
+
+        ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), dockspaceFlags);
     }
 
     // 3. Render Hierarchy, Inspector, and Content Browser Panels
@@ -277,39 +390,6 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
     if (m_showDemoWindow) {
         ImGui::ShowDemoWindow(&m_showDemoWindow);
-    }
-
-    if (applyLayoutPreset >= 0 && dockspaceId != 0) {
-        ImGui::DockBuilderRemoveNode(dockspaceId);
-        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-        ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
-
-        ImGuiID centre = dockspaceId;
-        float leftRatio = 0.20f;
-        float rightRatio = 0.25f;
-        float bottomRatio = 0.25f;
-
-        if (applyLayoutPreset == 1) {          // Viewport focused
-            leftRatio = 0.14f; rightRatio = 0.16f; bottomRatio = 0.16f;
-        } else if (applyLayoutPreset == 2) {   // Inspector focused
-            leftRatio = 0.16f; rightRatio = 0.42f; bottomRatio = 0.20f;
-        }
-
-        const ImGuiID left = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, leftRatio, nullptr, &centre);
-        const ImGuiID right = ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, rightRatio, nullptr, &centre);
-        const ImGuiID bottomLeft = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, bottomRatio, nullptr, nullptr);
-        const ImGuiID rightBottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.45f, nullptr, nullptr);
-
-        ImGui::DockBuilderDockWindow("Scene Hierarchy", left);
-        ImGui::DockBuilderDockWindow("Content Browser", bottomLeft);
-        ImGui::DockBuilderDockWindow("Viewport", centre);
-        ImGui::DockBuilderDockWindow("Engine Statistics", right);
-        ImGui::DockBuilderDockWindow("Camera Preview", rightBottom);
-        ImGui::DockBuilderDockWindow("Inspector", rightBottom);
-        ImGui::DockBuilderDockWindow("Time-Travel Rewind Debugger", bottomLeft);
-        ImGui::DockBuilderFinish(dockspaceId);
-
-        SetStatus("Applied workspace layout preset.");
     }
 
     ImGui::End(); // End DockSpace

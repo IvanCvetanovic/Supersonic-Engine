@@ -6,6 +6,8 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <unordered_map>
+#include <vector>
 
 namespace Engine {
 
@@ -32,25 +34,9 @@ glm::vec4 readVec4(const Json::Value& value, const glm::vec4& fallback) {
                      arr[3].AsFloat(fallback.w));
 }
 
-} // namespace
-
-SerializationResult SceneSerializer::Serialize(entt::registry& registry, const std::string& filepath) {
-    // ofstream will not create missing parent directories, and assets/scenes is
-    // not in the repository, so saving used to fail silently on a fresh clone.
-    const std::filesystem::path path(filepath);
-    if (path.has_parent_path()) {
-        std::error_code ec;
-        std::filesystem::create_directories(path.parent_path(), ec);
-        if (ec) {
-            return { false, "Could not create " + path.parent_path().string() + ": " + ec.message() };
-        }
-    }
-
-    std::ofstream file(filepath);
-    if (!file.is_open()) {
-        return { false, "Failed to open " + filepath + " for writing." };
-    }
-
+// One writer, used by both the on-disk save and the in-memory Play snapshot, so
+// the two formats cannot drift apart.
+size_t writeScene(entt::registry& registry, std::ostream& file) {
     // Collect first: the entity count must match what is actually written.
     // storage<entt::entity>().size() includes released entities under EnTT's
     // swap_only policy, which produced a trailing comma and invalid JSON.
@@ -59,11 +45,28 @@ SerializationResult SceneSerializer::Serialize(entt::registry& registry, const s
         entities.push_back(entity);
     }
 
+    // Parent links are written as an index into this array, not as a raw
+    // entt::entity: handles are recycled and carry a version, so persisting
+    // them would reattach to whatever occupied that slot on load.
+    std::unordered_map<entt::entity, size_t> indexOf;
+    indexOf.reserve(entities.size());
+    for (size_t i = 0; i < entities.size(); ++i) {
+        indexOf.emplace(entities[i], i);
+    }
+
     file << "{\n  \"Scene\": \"MainScene\",\n  \"Entities\": [\n";
 
     for (size_t i = 0; i < entities.size(); ++i) {
         const entt::entity entity = entities[i];
         file << "    {\n";
+
+        if (const auto* hierarchy = registry.try_get<HierarchyComponent>(entity)) {
+            if (hierarchy->parent != entt::null) {
+                if (const auto it = indexOf.find(hierarchy->parent); it != indexOf.end()) {
+                    file << "      \"Parent\": " << it->second << ",\n";
+                }
+            }
+        }
 
         if (const auto* tag = registry.try_get<TagComponent>(entity)) {
             file << "      \"Tag\": \"" << Json::Escape(tag->tag) << "\",\n";
@@ -159,53 +162,44 @@ SerializationResult SceneSerializer::Serialize(entt::registry& registry, const s
             file << "      \"ParticleEmitter\": true,\n";
         }
 
+        if (const auto* renderable = registry.try_get<RenderableComponent>(entity)) {
+            file << "      \"Renderable\": { \"Visible\": " << (renderable->isVisible ? "true" : "false")
+                 << ", \"CastsShadow\": " << (renderable->castsShadow ? "true" : "false") << " },\n";
+        }
+
         file << "      \"HasRenderable\": " << (registry.all_of<RenderableComponent>(entity) ? "true" : "false") << "\n";
         file << "    }" << (i + 1 < entities.size() ? "," : "") << "\n";
     }
 
     file << "  ]\n}\n";
-    file.flush();
-
-    if (!file) {
-        return { false, "Write error while saving " + filepath + "." };
-    }
-
-    return { true, "Saved " + std::to_string(entities.size()) + " entities to " + filepath + "." };
+    return entities.size();
 }
 
-SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const std::string& filepath) {
-    std::ifstream file(filepath);
-    if (!file.is_open()) {
-        return { false, "No scene file at " + filepath + "." };
-    }
-
-    std::stringstream ss;
-    ss << file.rdbuf();
-    const std::string content = ss.str();
-
-    Json::Value root;
-    std::string error;
-    if (!Json::Parse(content, root, error)) {
-        // Parse BEFORE touching the registry. The previous implementation
-        // cleared the scene first and then never read the file at all, so a
-        // load destroyed the user's work whatever the file contained.
-        return { false, "Could not parse " + filepath + ": " + error + " (scene left untouched)." };
-    }
-
-    if (!root.IsObject() || !root["Entities"].IsArray()) {
-        return { false, filepath + " is not a scene file (no Entities array); scene left untouched." };
-    }
-
-    const auto& entities = root["Entities"].AsArray();
-
+// One reader, shared by the on-disk load and the Play-mode restore.
+SerializationResult applyScene(entt::registry& registry, const Json::Array& entities,
+                               const std::string& source) {
     registry.clear();
 
-    size_t loaded = 0;
+    // Created up front so a Parent reference resolves even when the parent
+    // appears later in the array.
+    std::vector<entt::entity> created;
+    created.reserve(entities.size());
     for (const auto& node : entities) {
         if (!node.IsObject()) continue;
+        created.push_back(registry.create());
+    }
 
-        const entt::entity entity = registry.create();
-        ++loaded;
+    size_t cursor = 0;
+    for (const auto& node : entities) {
+        if (!node.IsObject()) continue;
+        const entt::entity entity = created[cursor++];
+
+        if (node.Has("Parent")) {
+            const auto parentIndex = static_cast<size_t>(node["Parent"].AsNumber(-1.0));
+            if (parentIndex < created.size() && created[parentIndex] != entity) {
+                registry.emplace<HierarchyComponent>(entity, created[parentIndex]);
+            }
+        }
 
         if (node.Has("Tag")) {
             registry.emplace<TagComponent>(entity, node["Tag"].AsString("Entity"));
@@ -222,9 +216,7 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
         if (node.Has("Mesh")) {
             const auto& m = node["Mesh"];
             registry.emplace<MeshComponent>(entity,
-                m["Primitive"].AsString("Cube"),
-                m["Path"].AsString(""),
-                0u, 0u);
+                m["Primitive"].AsString("Cube"), m["Path"].AsString(""), 0u, 0u);
         }
 
         if (node.Has("Light")) {
@@ -291,8 +283,7 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
         if (node.Has("Script")) {
             const auto& s = node["Script"];
             registry.emplace<ScriptComponent>(entity,
-                s["Name"].AsString("RotatorScript"),
-                s["Enabled"].AsBool(true));
+                s["Name"].AsString("RotatorScript"), s["Enabled"].AsBool(true));
         }
 
         if (node["ParticleEmitter"].AsBool(false)) {
@@ -300,11 +291,86 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
         }
 
         if (node["HasRenderable"].AsBool(false)) {
-            registry.emplace<RenderableComponent>(entity);
+            auto& renderable = registry.emplace<RenderableComponent>(entity);
+            if (node.Has("Renderable")) {
+                renderable.isVisible = node["Renderable"]["Visible"].AsBool(true);
+                renderable.castsShadow = node["Renderable"]["CastsShadow"].AsBool(true);
+            }
         }
     }
 
-    return { true, "Loaded " + std::to_string(loaded) + " entities from " + filepath + "." };
+    return { true, "Loaded " + std::to_string(cursor) + " entities from " + source + "." };
+}
+
+} // namespace
+
+std::string SceneSerializer::SerializeToString(entt::registry& registry) {
+    std::ostringstream out;
+    writeScene(registry, out);
+    return out.str();
+}
+
+SerializationResult SceneSerializer::DeserializeFromString(entt::registry& registry, const std::string& text) {
+    Json::Value root;
+    std::string error;
+    if (!Json::Parse(text, root, error)) {
+        return { false, "snapshot could not be parsed: " + error };
+    }
+    if (!root.IsObject() || !root["Entities"].IsArray()) {
+        return { false, "snapshot has no Entities array" };
+    }
+    return applyScene(registry, root["Entities"].AsArray(), "snapshot");
+}
+
+SerializationResult SceneSerializer::Serialize(entt::registry& registry, const std::string& filepath) {
+    // ofstream will not create missing parent directories, and assets/scenes is
+    // not in the repository, so saving used to fail silently on a fresh clone.
+    const std::filesystem::path path(filepath);
+    if (path.has_parent_path()) {
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        if (ec) {
+            return { false, "Could not create " + path.parent_path().string() + ": " + ec.message() };
+        }
+    }
+
+    std::ofstream file(filepath);
+    if (!file.is_open()) {
+        return { false, "Failed to open " + filepath + " for writing." };
+    }
+
+    const size_t count = writeScene(registry, file);
+    file.flush();
+
+    if (!file) {
+        return { false, "Write error while saving " + filepath + "." };
+    }
+    return { true, "Saved " + std::to_string(count) + " entities to " + filepath + "." };
+}
+
+SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const std::string& filepath) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        return { false, "No scene file at " + filepath + "." };
+    }
+
+    std::stringstream ss;
+    ss << file.rdbuf();
+
+    Json::Value root;
+    std::string error;
+    if (!Json::Parse(ss.str(), root, error)) {
+        // Parse BEFORE touching the registry. The original implementation
+        // cleared the scene first and then never read the file at all, so a
+        // load destroyed the user's work whatever the file contained.
+        return { false, "Could not parse " + filepath + ": " + error + " (scene left untouched)." };
+    }
+
+    if (!root.IsObject() || !root["Entities"].IsArray()) {
+        return { false, filepath + " is not a scene file (no Entities array); scene left untouched." };
+    }
+
+    return applyScene(registry, root["Entities"].AsArray(), filepath);
 }
 
 } // namespace Engine

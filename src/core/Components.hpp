@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 
+// HierarchyComponent stores an entt::entity, so the handle type is needed here.
+#include <entt/entt.hpp>
+
 // GLM_FORCE_RADIANS / GLM_FORCE_DEPTH_ZERO_TO_ONE are set on the target in
 // CMakeLists.txt, never here. glm/detail/setup.hpp latches its configuration on
 // first inclusion, so a header-local define only applies when this header
@@ -61,7 +64,22 @@ struct Vertex {
     }
 };
 
+// Parent link. Held as a separate component so the common case - an entity with
+// no parent - costs nothing, and so a view of "things with parents" is cheap.
+struct HierarchyComponent {
+    entt::entity parent{entt::null};
+};
+
+// Cached world matrix, recomputed each frame by TransformSystem. Rendering,
+// picking and the gizmo all read this rather than composing the local transform
+// themselves, which is what makes parenting work everywhere at once.
+struct WorldTransformComponent {
+    glm::mat4 matrix{1.0f};
+};
+
 struct TransformComponent {
+    // Local to the parent. With no parent this is world space, which is why the
+    // engine behaved correctly before hierarchies existed.
     glm::vec3 position{0.0f, 0.0f, 0.0f};
     glm::vec3 rotation{0.0f, 0.0f, 0.0f}; // Euler angles in radians
     glm::vec3 scale{1.0f, 1.0f, 1.0f};

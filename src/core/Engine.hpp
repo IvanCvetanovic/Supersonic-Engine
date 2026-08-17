@@ -13,6 +13,7 @@
 #include "editor/EditorLayer.hpp"
 #include "core/AudioEngine.hpp"
 #include "core/HotReloadEngine.hpp"
+#include "core/PlayMode.hpp"
 #include "core/Components.hpp"
 
 namespace Engine {
@@ -46,6 +47,9 @@ private:
 
     // Watches the script plugin and swaps it in when it is rebuilt.
     std::unique_ptr<HotReloadEngine> m_hotReload;
+
+    // Edit / Play / Paused, with a scene snapshot restored on Stop.
+    PlayMode m_playMode;
 
     entt::registry m_registry;
 

@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 
+#include "core/PlayMode.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanOffscreen.hpp"
 #include "editor/SceneHierarchyPanel.hpp"
@@ -52,8 +53,14 @@ public:
     // Hot-reload state, shown in the statistics panel.
     void SetScriptHostInfo(bool pluginLoaded, const std::string& status, uint32_t reloadCount);
 
+    // Drives the Play/Pause/Stop toolbar. Non-owning.
+    void SetPlayMode(PlayMode* playMode) { m_playMode = playMode; }
+
 private:
     void drawStatusBar();
+
+    // Must be called right after DockSpace(), before any panel is submitted.
+    void buildLayout(unsigned int dockspaceId, int preset);
 
     std::unique_ptr<VulkanOffscreen> m_offscreenPass;
     SceneHierarchyPanel m_hierarchyPanel;
@@ -73,6 +80,15 @@ private:
     bool m_pluginLoaded{false};
     std::string m_scriptHostStatus;
     uint32_t m_scriptReloadCount{0};
+
+    PlayMode* m_playMode{nullptr};
+
+    // Ensures the built-in layout is applied once on a fresh install rather
+    // than fighting a user's saved arrangement every frame.
+    bool m_defaultLayoutApplied{false};
+
+    // Preset requested from the menu, applied at the top of the next frame.
+    int m_pendingLayoutPreset{-1};
 };
 
 } // namespace Engine

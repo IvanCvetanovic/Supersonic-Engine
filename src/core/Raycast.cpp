@@ -1,4 +1,5 @@
 #include "core/Raycast.hpp"
+#include "core/TransformSystem.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -90,9 +91,8 @@ entt::entity Raycast::PickEntity(entt::registry& registry, const Ray& ray) {
     entt::entity closestEntity = entt::null;
     float minDistance = std::numeric_limits<float>::max();
 
-    auto view = registry.view<TransformComponent, RenderableComponent>();
+    auto view = registry.view<WorldTransformComponent, RenderableComponent>();
     for (auto entity : view) {
-        const auto& transform = view.get<TransformComponent>(entity);
         const auto& renderable = view.get<RenderableComponent>(entity);
 
         if (!renderable.isVisible) continue;
@@ -100,7 +100,8 @@ entt::entity Raycast::PickEntity(entt::registry& registry, const Ray& ray) {
         // Test in the entity's local space so rotation and non-uniform scale
         // are handled exactly, instead of approximating with a world-space AABB
         // that ignores both.
-        const glm::mat4 model = transform.getModelMatrix();
+        // World matrix, so picking follows parenting.
+        const glm::mat4 model = view.get<WorldTransformComponent>(entity).matrix;
         const float det = glm::determinant(model);
         if (std::fabs(det) < 1e-12f) continue; // degenerate (zero scale)
 

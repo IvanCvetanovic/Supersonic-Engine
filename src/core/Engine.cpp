@@ -8,6 +8,7 @@
 #include "core/RenderSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
+#include "core/TransformSystem.hpp"
 
 #include "imgui.h"
 
@@ -191,6 +192,20 @@ void EngineApp::initECS() {
     m_registry.emplace<RenderableComponent>(mainCube);
     m_registry.emplace<ScriptComponent>(mainCube, "RotatorScript");
 
+    // Parented to the rotating cube: it inherits the rotation, which is the
+    // whole point of a transform hierarchy. Flat transforms could not express
+    // this at all.
+    auto satellite = m_registry.create();
+    m_registry.emplace<TagComponent>(satellite, "Satellite (child)");
+    auto& satelliteTransform = m_registry.emplace<TransformComponent>(satellite, glm::vec3(1.6f, 0.6f, 0.0f));
+    satelliteTransform.scale = glm::vec3(0.35f);
+    m_registry.emplace<MeshComponent>(satellite, "Sphere", "", 0u, 0u);
+    auto& satelliteMat = m_registry.emplace<MaterialComponent>(satellite);
+    satelliteMat.albedoColor = glm::vec4(1.0f, 0.45f, 0.25f, 1.0f);
+    satelliteMat.roughness = 0.35f;
+    m_registry.emplace<RenderableComponent>(satellite);
+    m_registry.emplace<HierarchyComponent>(satellite, mainCube);
+
     auto sphere = m_registry.create();
     m_registry.emplace<TagComponent>(sphere, "Metal Sphere");
     m_registry.emplace<TransformComponent>(sphere, glm::vec3(-2.2f, 0.75f, 0.0f));
@@ -274,6 +289,10 @@ void EngineApp::Run() {
 
         CameraSystem::Update(m_registry, *m_window, deltaTime, !uiWantsKeyboard, !uiWantsMouse);
 
+        // Gameplay only runs in play mode. The editor used to simulate
+        // permanently, so a scene could never be authored and then tried.
+        const bool stepping = m_playMode.ConsumeSingleStep();
+        if (m_playMode.ShouldSimulate() || stepping) {
         if (!TimeTravelDebugger::IsRewinding()) {
             // Fixed-step physics. The accumulator is capped so a long hitch
             // costs fidelity rather than exploding the simulation.
@@ -293,14 +312,26 @@ void EngineApp::Run() {
             ParticleSystem::Update(m_registry, deltaTime);
             TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));
         }
+        }
+
+        // Resolve the parent/child graph before the editor runs, so the gizmo
+        // and viewport picking operate on current world matrices rather than
+        // last frame's.
+        TransformSystem::UpdateWorldTransforms(m_registry);
 
         // Editor UI runs after the systems and before rendering, so gizmo drags
         // and inspector edits appear in the same frame instead of one late.
+        m_editorLayer->SetPlayMode(&m_playMode);
         m_editorLayer->SetScriptHostInfo(m_hotReload->IsLoaded(),
                                          m_hotReload->GetStatus(),
                                          m_hotReload->GetReloadCount());
         m_editorLayer->BuildUI(m_registry, *m_window);
         ImGui::Render();
+
+        // Again, because the editor may have moved, reparented or created
+        // entities. Rendering reads world matrices, so they must reflect what
+        // the user just did rather than lagging a frame behind it.
+        TransformSystem::UpdateWorldTransforms(m_registry);
 
         // Mesh and texture uploads submit their own transfers, so they happen
         // here rather than mid-recording.

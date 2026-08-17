@@ -1,6 +1,7 @@
 #include "editor/InspectorPanel.hpp"
 #include "editor/Theme.hpp"
 #include "core/ScriptRegistry.hpp"
+#include "core/TransformSystem.hpp"
 #include "renderer/VulkanPipeline.hpp"   // LightType
 
 // GLM_ENABLE_EXPERIMENTAL is set on the target in CMakeLists.txt.
@@ -63,6 +64,27 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             transform.rotation = glm::radians(rotDegrees);
 
             Theme::DrawVec3Control("Scale", transform.scale, 1.0f);
+
+            // Make it obvious these numbers are parent-relative once an entity
+            // is attached to something.
+            if (const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+                hierarchy && hierarchy->parent != entt::null && registry.valid(hierarchy->parent)) {
+                const char* parentName = "unnamed";
+                if (const auto* tag = registry.try_get<TagComponent>(hierarchy->parent)) {
+                    parentName = tag->tag.c_str();
+                }
+                ImGui::TextDisabled("Local to parent: %s", parentName);
+
+                const glm::vec3 worldPos = glm::vec3(TransformSystem::GetWorldMatrix(registry, entity)[3]);
+                ImGui::TextDisabled("World position: %.2f, %.2f, %.2f",
+                                    static_cast<double>(worldPos.x),
+                                    static_cast<double>(worldPos.y),
+                                    static_cast<double>(worldPos.z));
+
+                if (ImGui::Button("Detach from Parent")) {
+                    TransformSystem::SetParent(registry, entity, entt::null);
+                }
+            }
         }
     }
 
@@ -322,8 +344,9 @@ void InspectorPanel::RenderGizmo(
     glm::mat4 proj = camera.getProjectionMatrix();
     proj[1][1] *= -1.0f; // Unflip Y projection matrix for ImGuizmo screen-space picking
 
-    auto& transform = registry.get<TransformComponent>(selectedEntity);
-    glm::mat4 model = transform.getModelMatrix();
+    // The gizmo manipulates in WORLD space, so a child of a moved parent shows
+    // its handles where it actually appears rather than at its local offset.
+    glm::mat4 model = TransformSystem::GetWorldMatrix(registry, selectedEntity);
     const glm::mat4 before = model;
 
     ImGuizmo::Manipulate(
@@ -337,7 +360,9 @@ void InspectorPanel::RenderGizmo(
     // Only write back when the gizmo actually changed the matrix. IsUsing() is
     // already true on the click frame with a zero drag delta.
     if (ImGuizmo::IsUsing() && model != before) {
-        decomposeToTransform(model, transform);
+        // Converts the new world matrix back into a local transform under the
+        // entity's parent, using the engine's own Euler convention.
+        TransformSystem::SetWorldMatrix(registry, selectedEntity, model);
     }
 }
 

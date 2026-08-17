@@ -1,4 +1,5 @@
 #include "core/RenderSystem.hpp"
+#include "core/TransformSystem.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -64,9 +65,9 @@ void RenderSystem::RenderDepthOnly(
 
     uint32_t boundMesh = MeshRegistry::kInvalidMesh;
 
-    auto view = registry.view<TransformComponent, RenderableComponent>();
+    auto view = registry.view<WorldTransformComponent, RenderableComponent>();
     for (auto entity : view) {
-        const auto& transform = view.get<TransformComponent>(entity);
+        const auto& world = view.get<WorldTransformComponent>(entity);
         const auto& renderable = view.get<RenderableComponent>(entity);
 
         if (!renderable.isVisible || !renderable.castsShadow) continue;
@@ -82,7 +83,8 @@ void RenderSystem::RenderDepthOnly(
             boundMesh = renderable.meshID;
         }
 
-        const PushConstantData push = buildPushConstants(registry, entity, transform.getModelMatrix());
+        // World matrix, so a child follows its parent.
+        const PushConstantData push = buildPushConstants(registry, entity, world.matrix);
         commandBuffer.pushConstants(
             pipeline.GetLayout(),
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
@@ -111,9 +113,9 @@ void RenderSystem::Render(
     uint32_t boundMesh = MeshRegistry::kInvalidMesh;
     uint32_t boundTexture = TextureRegistry::kInvalidTexture;
 
-    auto view = registry.view<TransformComponent, RenderableComponent>();
+    auto view = registry.view<WorldTransformComponent, RenderableComponent>();
     for (auto entity : view) {
-        const auto& transform = view.get<TransformComponent>(entity);
+        const auto& world = view.get<WorldTransformComponent>(entity);
         const auto& renderable = view.get<RenderableComponent>(entity);
 
         if (!renderable.isVisible) continue;
@@ -137,7 +139,8 @@ void RenderSystem::Render(
             }
         }
 
-        const PushConstantData push = buildPushConstants(registry, entity, transform.getModelMatrix());
+        // World matrix, so a child follows its parent.
+        const PushConstantData push = buildPushConstants(registry, entity, world.matrix);
         commandBuffer.pushConstants(
             pipeline.GetLayout(),
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,

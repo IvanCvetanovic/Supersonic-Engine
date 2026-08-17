@@ -29,7 +29,8 @@ function(add_engine_test name)
 endfunction()
 
 add_engine_test(test_transform)
-add_engine_test(test_raycast   ${ENGINE_SRC}/src/core/Raycast.cpp)
+add_engine_test(test_raycast   ${ENGINE_SRC}/src/core/Raycast.cpp
+                               ${ENGINE_SRC}/src/core/TransformSystem.cpp)
 add_engine_test(test_meshgen   ${ENGINE_SRC}/src/core/ModelLoader.cpp
                                ${ENGINE_SRC}/src/core/TerrainGenerator.cpp)
 add_engine_test(test_serialize ${ENGINE_SRC}/src/core/SceneSerializer.cpp
@@ -37,6 +38,26 @@ add_engine_test(test_serialize ${ENGINE_SRC}/src/core/SceneSerializer.cpp
 add_engine_test(test_physics   ${ENGINE_SRC}/src/core/PhysicsSystem.cpp)
 add_engine_test(test_audio     ${ENGINE_SRC}/src/core/AudioClip.cpp)
 add_engine_test(test_scripts   ${ENGINE_SRC}/src/core/ScriptRegistry.cpp)
+add_engine_test(test_hierarchy ${ENGINE_SRC}/src/core/TransformSystem.cpp
+                               ${ENGINE_SRC}/src/core/PlayMode.cpp
+                               ${ENGINE_SRC}/src/core/SceneSerializer.cpp
+                               ${ENGINE_SRC}/src/core/TimeTravelDebugger.cpp)
+
+# TimeTravelDebugger's panel uses ImGui, which PlayMode::Play touches via Clear().
+target_include_directories(test_hierarchy PRIVATE ${ENGINE_SRC}/third_party/imgui)
+target_sources(test_hierarchy PRIVATE
+    ${ENGINE_SRC}/third_party/imgui/imgui.cpp
+    ${ENGINE_SRC}/third_party/imgui/imgui_draw.cpp
+    ${ENGINE_SRC}/third_party/imgui/imgui_tables.cpp
+    ${ENGINE_SRC}/third_party/imgui/imgui_widgets.cpp)
+if (MSVC)
+    set_source_files_properties(
+        ${ENGINE_SRC}/third_party/imgui/imgui.cpp
+        ${ENGINE_SRC}/third_party/imgui/imgui_draw.cpp
+        ${ENGINE_SRC}/third_party/imgui/imgui_tables.cpp
+        ${ENGINE_SRC}/third_party/imgui/imgui_widgets.cpp
+        TARGET_DIRECTORY test_hierarchy PROPERTIES COMPILE_OPTIONS "/W0")
+endif()
 add_engine_test(test_gltf      ${ENGINE_SRC}/src/core/GltfLoader.cpp
                                ${ENGINE_SRC}/src/core/TinyGltfImplementation.cpp)
 

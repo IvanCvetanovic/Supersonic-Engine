@@ -6,6 +6,7 @@
 
 #include "TestHarness.hpp"
 #include "core/Raycast.hpp"
+#include "core/TransformSystem.hpp"
 
 using namespace Engine;
 
@@ -132,6 +133,7 @@ static void testPickHonoursRotation() {
 
     // Aim at a point far along +X. Unrotated, the thin box does not reach it.
     const Ray ray{ glm::vec3(3.0f, 0.0f, 10.0f), glm::vec3(0.0f, 0.0f, -1.0f) };
+    TransformSystem::UpdateWorldTransforms(registry);
     CHECK_MSG(Raycast::PickEntity(registry, ray) == entt::null,
               "unrotated thin box should not be under the ray");
 
@@ -139,6 +141,7 @@ static void testPickHonoursRotation() {
     // under the ray. A world-space AABB built from position +/- scale ignores
     // rotation entirely and cannot distinguish these two cases.
     transform.rotation = glm::vec3(0.0f, glm::radians(90.0f), 0.0f);
+    TransformSystem::UpdateWorldTransforms(registry);
     CHECK_MSG(Raycast::PickEntity(registry, ray) == entity,
               "rotated box should now be under the ray");
 }
@@ -152,14 +155,40 @@ static void testPickUsesColliderSize() {
     registry.emplace<RenderableComponent>(entity);
 
     const Ray ray{ glm::vec3(2.0f, 0.0f, 10.0f), glm::vec3(0.0f, 0.0f, -1.0f) };
+    TransformSystem::UpdateWorldTransforms(registry);
     CHECK(Raycast::PickEntity(registry, ray) == entt::null);
 
     // BoxColliderComponent::size used to be an editor control that affected
     // nothing at all.
     auto& box = registry.emplace<BoxColliderComponent>(entity);
     box.size = glm::vec3(6.0f, 1.0f, 1.0f);
+    TransformSystem::UpdateWorldTransforms(registry);
     CHECK_MSG(Raycast::PickEntity(registry, ray) == entity,
               "widening the collider must widen the pick volume");
+}
+
+static void testPickFollowsParenting() {
+    // Picking reads world matrices, so a child must be selectable where its
+    // parent has moved it to, not at its local offset.
+    entt::registry registry;
+
+    const auto parent = registry.create();
+    registry.emplace<TransformComponent>(parent, glm::vec3(6.0f, 0.0f, 0.0f));
+
+    const auto child = registry.create();
+    registry.emplace<TransformComponent>(child, glm::vec3(0.0f));
+    registry.emplace<RenderableComponent>(child);
+    registry.emplace<HierarchyComponent>(child, parent);
+
+    TransformSystem::UpdateWorldTransforms(registry);
+
+    const Ray atParent{ glm::vec3(6.0f, 0.0f, 10.0f), glm::vec3(0.0f, 0.0f, -1.0f) };
+    const Ray atOrigin{ glm::vec3(0.0f, 0.0f, 10.0f), glm::vec3(0.0f, 0.0f, -1.0f) };
+
+    CHECK_MSG(Raycast::PickEntity(registry, atParent) == child,
+              "the child must be pickable where its parent placed it");
+    CHECK_MSG(Raycast::PickEntity(registry, atOrigin) == entt::null,
+              "and not at its local origin");
 }
 
 static void runTests() {
@@ -173,6 +202,7 @@ static void runTests() {
     testBoxBehindRayMisses();
     testPickHonoursRotation();
     testPickUsesColliderSize();
+    testPickFollowsParenting();
 }
 
 TEST_MAIN("test_raycast")
