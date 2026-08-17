@@ -11,6 +11,7 @@
 #include "renderer/VulkanSwapchain.hpp"
 #include "renderer/VulkanRenderer.hpp"
 #include "editor/EditorLayer.hpp"
+#include "core/AudioEngine.hpp"
 #include "core/Components.hpp"
 
 namespace Engine {
@@ -37,6 +38,10 @@ private:
     // The editor owns the offscreen viewport target and is driven by Run(),
     // not by the renderer. See EditorLayer for why that ordering matters.
     std::unique_ptr<EditorLayer> m_editorLayer;
+
+    // Real output device. Degrades to a documented no-op where no backend is
+    // compiled, instead of silently discarding every computed volume.
+    std::unique_ptr<AudioEngine> m_audioEngine;
 
     entt::registry m_registry;
 

@@ -38,6 +38,8 @@ EngineApp::EngineApp() {
         std::cerr << "[EngineApp] Could not create assets/scenes: " << ec.message() << std::endl;
     }
 
+    m_audioEngine = std::make_unique<AudioEngine>();
+
     m_window = std::make_unique<Window>(1280, 720, "Vulkan EnTT 3D Game Engine");
 
     auto requiredExtensions = m_window->GetRequiredExtensions();
@@ -81,6 +83,7 @@ EngineApp::~EngineApp() {
     m_vulkanDevice.reset();
     m_vulkanContext.reset();
     m_window.reset();
+    m_audioEngine.reset();
 }
 
 void EngineApp::initECS() {
@@ -140,6 +143,14 @@ void EngineApp::initECS() {
     m_registry.emplace<TransformComponent>(particleEntity, glm::vec3(-1.5f, 0.5f, 0.0f));
     m_registry.emplace<ParticleEmitterComponent>(particleEntity);
 
+    // A positioned audio source so the spatialisation is audible and testable.
+    auto audioEntity = m_registry.create();
+    m_registry.emplace<TagComponent>(audioEntity, "3D Audio Source");
+    m_registry.emplace<TransformComponent>(audioEntity, glm::vec3(3.0f, 1.0f, 0.0f));
+    auto& audioSource = m_registry.emplace<AudioSourceComponent>(audioEntity);
+    audioSource.soundFile = "assets/audio/ambient.wav";
+    audioSource.volume = 0.35f;
+
     std::cout << "[EngineApp] Scene created." << std::endl;
 }
 
@@ -190,7 +201,7 @@ void EngineApp::Run() {
                 m_physicsAccumulator = 0.0f;
             }
 
-            AudioSystem::Update(m_registry, deltaTime);
+            AudioSystem::Update(m_registry, *m_audioEngine, deltaTime);
             ScriptEngine::Update(m_registry, deltaTime);
             ParticleSystem::Update(m_registry, deltaTime);
             TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));

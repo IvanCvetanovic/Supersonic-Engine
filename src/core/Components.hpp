@@ -180,6 +180,15 @@ struct AudioSourceComponent {
     float pitch{1.0f};
     bool isPlaying{true};
     bool loop{true};
+
+    // Inverse-distance attenuation bounds.
+    float referenceDistance{1.5f};
+    float maxDistance{40.0f};
+
+    // Runtime state owned by AudioSystem. 0xFFFFFFFF is AudioEngine::kInvalidVoice;
+    // spelled out here so Components.hpp stays free of renderer/audio includes.
+    uint32_t voice{0xFFFFFFFFu};
+    bool failedToLoad{false};
 };
 
 struct AudioListenerComponent {

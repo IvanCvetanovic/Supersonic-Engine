@@ -134,10 +134,17 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& audio = registry.get<AudioSourceComponent>(entity);
 
-            ImGui::Checkbox("Play On Start", &audio.isPlaying);
+            ImGui::Checkbox("Playing", &audio.isPlaying);
             ImGui::Checkbox("Looping", &audio.loop);
             ImGui::SliderFloat("Volume", &audio.volume, 0.0f, 1.0f);
             ImGui::SliderFloat("Pitch", &audio.pitch, 0.5f, 2.0f);
+            ImGui::DragFloat("Reference Distance", &audio.referenceDistance, 0.1f, 0.1f, 100.0f);
+            ImGui::DragFloat("Max Distance", &audio.maxDistance, 0.5f, 1.0f, 500.0f);
+            ImGui::TextDisabled("Clip: %s", audio.soundFile.c_str());
+            if (audio.failedToLoad) {
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f), "Clip failed to load.");
+                if (ImGui::Button("Retry Load")) { audio.failedToLoad = false; }
+            }
         }
     }
 

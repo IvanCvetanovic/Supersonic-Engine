@@ -35,3 +35,8 @@ add_engine_test(test_meshgen   ${ENGINE_SRC}/src/core/ModelLoader.cpp
 add_engine_test(test_serialize ${ENGINE_SRC}/src/core/SceneSerializer.cpp
                                ${ENGINE_SRC}/src/core/PrefabSerializer.cpp)
 add_engine_test(test_physics   ${ENGINE_SRC}/src/core/PhysicsSystem.cpp)
+add_engine_test(test_audio     ${ENGINE_SRC}/src/core/AudioClip.cpp)
+
+# test_audio also opportunistically checks the shipped ambient clip, so run the
+# suite from the project root where assets/ resolves.
+set_tests_properties(test_audio PROPERTIES WORKING_DIRECTORY "${ENGINE_SRC}")

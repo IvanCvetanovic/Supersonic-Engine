@@ -202,6 +202,12 @@ target_link_libraries(GameEngine PRIVATE
     VulkanMemoryAllocator
 )
 
+# Audio output. XAudio2 ships with Windows, so this adds no third-party
+# dependency; other platforms compile AudioEngine's documented no-op path.
+if (WIN32)
+    target_link_libraries(GameEngine PRIVATE xaudio2 ole32)
+endif()
+
 # Assets are loaded with paths relative to the working directory, so make F5
 # in Visual Studio launch from the project root rather than the build folder.
 set_target_properties(GameEngine PROPERTIES
