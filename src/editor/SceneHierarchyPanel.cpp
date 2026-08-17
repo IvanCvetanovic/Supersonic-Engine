@@ -162,6 +162,9 @@ bool SceneHierarchyPanel::drawEntityNode(entt::entity entity) {
             m_pendingDelete = entity;
             deleted = true;
         }
+        if (ImGui::MenuItem("Save as Prefab")) {
+            m_pendingPrefabSave = entity;
+        }
         if (m_registry->all_of<HierarchyComponent>(entity)) {
             if (ImGui::MenuItem("Detach from Parent")) {
                 m_pendingReparentChild = entity;
@@ -282,6 +285,12 @@ void SceneHierarchyPanel::drawCreateMenu() {
         registry.emplace<CameraComponent>(entity);
         m_selectedEntity = entity;
     }
+}
+
+entt::entity SceneHierarchyPanel::ConsumePrefabSaveRequest() {
+    const entt::entity requested = m_pendingPrefabSave;
+    m_pendingPrefabSave = entt::null;
+    return requested;
 }
 
 } // namespace Supersonic

@@ -48,6 +48,12 @@ std::string ContentBrowserPanel::ConsumeMaterialClick() {
     return clicked;
 }
 
+std::string ContentBrowserPanel::ConsumePrefabClick() {
+    std::string clicked;
+    clicked.swap(m_clickedPrefab);
+    return clicked;
+}
+
 // Creates assets/materials/Material_N.material, picking the first N that is
 // free so repeated clicks do not overwrite each other.
 std::string ContentBrowserPanel::createMaterial() {
@@ -160,6 +166,19 @@ std::string ContentBrowserPanel::OnImGuiRender() {
                     // what is selected, which is why it can be tested alone.
                     if (path.extension() == ".material" && ImGui::IsItemClicked()) {
                         m_clickedMaterial = path.string();
+                    }
+
+                    // Double-click, not single: dropping an entity into the
+                    // scene is a bigger action than assigning a material to
+                    // the thing you already picked, and a stray click through
+                    // the browser should not spawn geometry.
+                    if (path.extension() == ".prefab") {
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Double-click to place in the scene");
+                        }
+                        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {
+                            m_clickedPrefab = path.string();
+                        }
                     }
                 }
                 ec.clear();

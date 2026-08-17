@@ -7,6 +7,7 @@
 #include "core/JobSystem.hpp"
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
+#include "core/PrefabSerializer.hpp"
 #include "core/Raycast.hpp"
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
@@ -424,6 +425,52 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             }
         } else {
             SetStatus("Select an entity first, then click a material to assign it.");
+        }
+    }
+
+    // Save as Prefab, from the hierarchy row's context menu.
+    if (const entt::entity toSave = m_hierarchyPanel.ConsumePrefabSaveRequest();
+        toSave != entt::null && registry.valid(toSave)) {
+        // Named after the tag, so a prefab is findable in the browser without
+        // a save dialog the editor does not have. Non-filename characters are
+        // stripped rather than rejected: a tag is free-form text.
+        std::string name = "Prefab";
+        if (const auto* tag = registry.try_get<TagComponent>(toSave); tag && !tag->tag.empty()) {
+            name.clear();
+            for (const char c : tag->tag) {
+                const bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                  (c >= '0' && c <= '9') || c == '_' || c == '-' || c == ' ';
+                name += safe ? c : '_';
+            }
+            if (name.empty()) name = "Prefab";
+        }
+
+        const std::string path = "assets/prefabs/" + name + ".prefab";
+        const auto result = PrefabSerializer::SavePrefab(registry, toSave, path);
+        SetStatus(result.message, !result.ok);
+    }
+
+    // Double-clicking a .prefab tile places it.
+    if (const std::string prefab = m_contentBrowserPanel.ConsumePrefabClick(); !prefab.empty()) {
+        SerializationResult result;
+        const entt::entity placed = PrefabSerializer::InstantiatePrefab(registry, prefab, &result);
+        SetStatus(result.message, !result.ok);
+        if (placed != entt::null) {
+            // In front of the editor camera, not at the position the prefab
+            // was saved from. A clone that lands exactly on top of its
+            // original is invisible, and double-clicking a prefab then looks
+            // like it did nothing at all.
+            if (auto* transform = registry.try_get<TransformComponent>(placed)) {
+                const CameraComponent& camera = m_editorCamera.Get();
+                transform->position = camera.position + camera.front * 6.0f;
+            }
+
+            m_hierarchyPanel.SetSelectedEntity(placed);
+            // Placing an entity is an edit like any other. Without this the
+            // scene text changes and handleUndoRedo picks it up on the next
+            // settled frame anyway - but recording it here means the step
+            // exists before anything else can be done to the new entity.
+            m_history.CommitIfChanged(registry);
         }
     }
 

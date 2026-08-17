@@ -14,6 +14,11 @@ public:
     void OnImGuiRender();
 
     entt::entity GetSelectedEntity() const { return m_selectedEntity; }
+
+    // Set when the user picks "Save as Prefab" on a row. The panel does not
+    // write the file: choosing a path and reporting the result belongs to the
+    // editor, which already owns the status line.
+    entt::entity ConsumePrefabSaveRequest();
     void SetSelectedEntity(entt::entity entity) { m_selectedEntity = entity; }
 
 private:
@@ -28,6 +33,7 @@ private:
 
     // Deferred so the tree is not mutated midway through being walked.
     entt::entity m_pendingDelete{entt::null};
+    entt::entity m_pendingPrefabSave{entt::null};
     entt::entity m_pendingReparentChild{entt::null};
     entt::entity m_pendingReparentParent{entt::null};
     bool m_hasPendingReparent{false};
