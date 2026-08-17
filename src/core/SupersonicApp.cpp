@@ -365,6 +365,38 @@ void SupersonicApp::initECS() {
     audioSource.soundFile = "assets/audio/ambient.wav";
     audioSource.volume = 0.35f;
 
+    // A small HUD, so the in-game UI is visible in the viewport rather than
+    // being a feature you have to know to go looking for. Screen-space, so
+    // none of these carry a TransformComponent.
+    auto hudTitle = m_registry.create();
+    m_registry.emplace<TagComponent>(hudTitle, "HUD Title");
+    auto& title = m_registry.emplace<UITextComponent>(hudTitle);
+    title.text = "SUPERSONIC";
+    title.anchor = UIAnchor::TopLeft;
+    title.offset = glm::vec2(32.0f, 24.0f);
+    title.fontSize = 40.0f;
+    title.color = glm::vec4(1.0f, 1.0f, 1.0f, 0.92f);
+
+    auto hudScore = m_registry.create();
+    m_registry.emplace<TagComponent>(hudScore, "HUD Score");
+    auto& score = m_registry.emplace<UITextComponent>(hudScore);
+    score.text = "SCORE 0";
+    score.anchor = UIAnchor::TopRight;
+    score.offset = glm::vec2(32.0f, 28.0f);
+    score.fontSize = 30.0f;
+
+    auto hudHealth = m_registry.create();
+    m_registry.emplace<TagComponent>(hudHealth, "HUD Health Bar");
+    auto& health = m_registry.emplace<UIPanelComponent>(hudHealth);
+    health.anchor = UIAnchor::BottomLeft;
+    health.offset = glm::vec2(32.0f, 32.0f);
+    health.size = glm::vec2(360.0f, 26.0f);
+    health.color = glm::vec4(0.90f, 0.26f, 0.28f, 0.95f);
+    health.trackColor = glm::vec4(0.0f, 0.0f, 0.0f, 0.55f);
+    health.drawTrack = true;
+    health.cornerRadius = 13.0f;
+    health.fill = 0.72f;
+
     std::cout << "[SupersonicApp] Scene created." << std::endl;
 }
 

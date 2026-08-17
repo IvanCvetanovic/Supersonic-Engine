@@ -1,4 +1,6 @@
 #include "editor/InspectorPanel.hpp"
+
+#include <cstdio>
 #include "editor/EditorIcons.hpp"
 #include "core/MaterialSystem.hpp"
 #include "editor/Theme.hpp"
@@ -35,6 +37,27 @@ void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity select
 
     ImGui::End();
 }
+
+namespace {
+
+// The nine anchors, in the enum's order. A HUD element's anchor is the single
+// setting that decides whether it survives a change of resolution, so it is
+// worth a named dropdown rather than a raw integer.
+bool drawAnchorCombo(const char* label, UIAnchor& anchor) {
+    static const char* kAnchors[] = {
+        "Top Left", "Top Center", "Top Right",
+        "Middle Left", "Center", "Middle Right",
+        "Bottom Left", "Bottom Center", "Bottom Right",
+    };
+    int current = static_cast<int>(anchor);
+    if (ImGui::Combo(label, &current, kAnchors, IM_ARRAYSIZE(kAnchors))) {
+        anchor = static_cast<UIAnchor>(current);
+        return true;
+    }
+    return false;
+}
+
+} // namespace
 
 void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entity) {
     // 1. TagComponent
@@ -412,6 +435,54 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
     ImGui::Separator();
     ImGui::Spacing();
 
+    // UITextComponent
+    if (registry.all_of<UITextComponent>(entity)) {
+        if (ImGui::CollapsingHeader("HUD Text", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& text = registry.get<UITextComponent>(entity);
+
+            // Fixed buffer with an explicit copy back, matching how the tag
+            // field works: ImGui writes into the buffer, not the std::string.
+            char buffer[256];
+            std::snprintf(buffer, sizeof(buffer), "%s", text.text.c_str());
+            if (ImGui::InputText("Text", buffer, sizeof(buffer))) {
+                text.text = buffer;
+            }
+
+            drawAnchorCombo("Anchor", text.anchor);
+            ImGui::DragFloat2("Offset", glm::value_ptr(text.offset), 1.0f, -4000.0f, 4000.0f);
+            ImGui::DragFloat("Font Size", &text.fontSize, 0.5f, 4.0f, 300.0f);
+            ImGui::ColorEdit4("Text Color", glm::value_ptr(text.color));
+            ImGui::Checkbox("Drop Shadow", &text.shadow);
+            ImGui::SameLine();
+            ImGui::Checkbox("Visible##text", &text.visible);
+            ImGui::TextDisabled("Sizes are authored at 1080p and scale with the window.");
+        }
+    }
+
+    ImGui::Spacing();
+
+    // UIPanelComponent
+    if (registry.all_of<UIPanelComponent>(entity)) {
+        if (ImGui::CollapsingHeader("HUD Panel", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& panel = registry.get<UIPanelComponent>(entity);
+
+            drawAnchorCombo("Anchor##panel", panel.anchor);
+            ImGui::DragFloat2("Offset##panel", glm::value_ptr(panel.offset), 1.0f, -4000.0f, 4000.0f);
+            ImGui::DragFloat2("Size", glm::value_ptr(panel.size), 1.0f, 1.0f, 4000.0f);
+            ImGui::ColorEdit4("Fill Color", glm::value_ptr(panel.color));
+            ImGui::DragFloat("Corner Radius", &panel.cornerRadius, 0.5f, 0.0f, 64.0f);
+            ImGui::SliderFloat("Fill", &panel.fill, 0.0f, 1.0f);
+            ImGui::TextDisabled("Fill turns the panel into a bar; 1 is a plain rectangle.");
+            ImGui::Checkbox("Draw Track", &panel.drawTrack);
+            if (panel.drawTrack) {
+                ImGui::ColorEdit4("Track Color", glm::value_ptr(panel.trackColor));
+            }
+            ImGui::Checkbox("Visible##panel", &panel.visible);
+        }
+    }
+
+    ImGui::Spacing();
+
     // Dynamic "Add Component" Dropdown Button
     ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 160.0f) * 0.5f);
     if (ImGui::Button("+ Add Component", ImVec2(160.0f, 28.0f))) {
@@ -464,6 +535,14 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             }
             auto& camera = registry.emplace<CameraComponent>(entity);
             camera.isPrimary = !anotherIsPrimary;
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<UITextComponent>(entity) && ImGui::MenuItem("HUD Text")) {
+            registry.emplace<UITextComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<UIPanelComponent>(entity) && ImGui::MenuItem("HUD Panel")) {
+            registry.emplace<UIPanelComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

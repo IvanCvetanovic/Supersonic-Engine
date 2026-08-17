@@ -7,6 +7,7 @@
 #include "core/JobSystem.hpp"
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
+#include "core/UISystem.hpp"
 #include "core/PrefabSerializer.hpp"
 #include "core/Raycast.hpp"
 #include "core/TimeTravelDebugger.hpp"
@@ -249,7 +250,12 @@ void EditorLayer::buildGameView(entt::registry& registry) {
         }
         m_editorCamera.SetAspect(aspect);
 
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
         ImGui::Image(m_offscreenPass->GetTextureID(), size);
+
+        // The HUD, over the game and nothing else.
+        UISystem::Render(registry, UIRect{ glm::vec2(origin.x, origin.y),
+                                           glm::vec2(origin.x + size.x, origin.y + size.y) });
     }
 
     ImGui::End();
@@ -573,6 +579,13 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
         // After the image, so it draws over it rather than under.
         drawViewportOverlay(viewportPos, viewportPanelSize);
+
+        // The game's own UI, drawn against the viewport rather than the window,
+        // so a HUD authored here lands in the same place when the game ships.
+        UISystem::Render(registry,
+                         UIRect{ glm::vec2(viewportPos.x, viewportPos.y),
+                                 glm::vec2(viewportPos.x + viewportPanelSize.x,
+                                           viewportPos.y + viewportPanelSize.y) });
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
             const ImVec2 mousePos = ImGui::GetMousePos();

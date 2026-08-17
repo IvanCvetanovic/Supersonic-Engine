@@ -315,6 +315,20 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
 
     registry.emplace<SphereColliderComponent>(entity).radius = 4.25f;
 
+    auto& hud = registry.emplace<UITextComponent>(entity);
+    hud.text = "Ammo 12/30";
+    hud.anchor = UIAnchor::BottomRight;
+    hud.offset = glm::vec2(48.0f, 32.0f);
+    hud.fontSize = 44.0f;
+    hud.shadow = false;
+
+    auto& bar = registry.emplace<UIPanelComponent>(entity);
+    bar.anchor = UIAnchor::TopCenter;
+    bar.size = glm::vec2(480.0f, 24.0f);
+    bar.fill = 0.35f;
+    bar.drawTrack = true;
+    bar.cornerRadius = 12.0f;
+
     auto& emitter = registry.emplace<ParticleEmitterComponent>(entity);
     emitter.maxParticles = 512u;
     emitter.emitRate = 33.0f;
@@ -462,6 +476,24 @@ static void testPrefabRoundTripsEveryField() {
         const auto* sphere = registry.try_get<SphereColliderComponent>(clone);
         CHECK_MSG(sphere != nullptr, "prefab lost its SphereColliderComponent");
         if (sphere) CHECK_NEAR(sphere->radius, 4.25f);
+
+        const auto* hud = registry.try_get<UITextComponent>(clone);
+        CHECK_MSG(hud != nullptr, "prefab lost its UITextComponent");
+        if (hud) {
+            CHECK(hud->text == "Ammo 12/30");
+            CHECK_MSG(hud->anchor == UIAnchor::BottomRight,
+                      "an anchor that resets to TopLeft moves the whole HUD");
+            CHECK_NEAR(hud->fontSize, 44.0f);
+            CHECK(!hud->shadow);
+        }
+
+        const auto* bar = registry.try_get<UIPanelComponent>(clone);
+        CHECK_MSG(bar != nullptr, "prefab lost its UIPanelComponent");
+        if (bar) {
+            CHECK_NEAR(bar->fill, 0.35f);
+            CHECK(bar->drawTrack);
+            CHECK_NEAR(bar->size.x, 480.0f);
+        }
 
         const auto* emitter = registry.try_get<ParticleEmitterComponent>(clone);
         CHECK_MSG(emitter != nullptr, "prefab lost its ParticleEmitterComponent");

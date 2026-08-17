@@ -344,6 +344,47 @@
         "MaxDistance": 40
       },
       "HasRenderable": false
+    },
+    {
+      "Tag": "HUD Title",
+      "UIText": {
+        "Text": "SUPERSONIC",
+        "Anchor": 0,
+        "Offset": [32, 24],
+        "FontSize": 40,
+        "Color": [1, 1, 1, 0.92],
+        "Shadow": true,
+        "Visible": true
+      },
+      "HasRenderable": false
+    },
+    {
+      "Tag": "HUD Score",
+      "UIText": {
+        "Text": "SCORE 0",
+        "Anchor": 2,
+        "Offset": [32, 28],
+        "FontSize": 30,
+        "Color": [1, 1, 1, 1],
+        "Shadow": true,
+        "Visible": true
+      },
+      "HasRenderable": false
+    },
+    {
+      "Tag": "HUD Health Bar",
+      "UIPanel": {
+        "Anchor": 6,
+        "Offset": [32, 32],
+        "Size": [360, 26],
+        "Color": [0.9, 0.26, 0.28, 0.95],
+        "CornerRadius": 13,
+        "Fill": 0.72,
+        "DrawTrack": true,
+        "TrackColor": [0, 0, 0, 0.55],
+        "Visible": true
+      },
+      "HasRenderable": false
     }
   ]
 }

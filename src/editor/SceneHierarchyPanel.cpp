@@ -278,6 +278,25 @@ void SceneHierarchyPanel::drawCreateMenu() {
         light.intensity = 3.0f;
         m_selectedEntity = entity;
     }
+    if (ImGui::MenuItem("Create HUD Text")) {
+        const auto entity = m_registry->create();
+        m_registry->emplace<TagComponent>(entity, "HUD Text");
+        // Deliberately no TransformComponent: a HUD element lives in screen
+        // space and has nothing to place in the world.
+        m_registry->emplace<UITextComponent>(entity);
+        m_selectedEntity = entity;
+    }
+    if (ImGui::MenuItem("Create HUD Bar")) {
+        const auto entity = m_registry->create();
+        m_registry->emplace<TagComponent>(entity, "HUD Bar");
+        auto& panel = m_registry->emplace<UIPanelComponent>(entity);
+        panel.anchor = UIAnchor::BottomLeft;
+        panel.size = glm::vec2(360.0f, 26.0f);
+        panel.color = glm::vec4(0.85f, 0.22f, 0.24f, 0.95f);
+        panel.drawTrack = true;
+        panel.fill = 0.7f;
+        m_selectedEntity = entity;
+    }
     if (ImGui::MenuItem("Create Camera")) {
         const auto entity = registry.create();
         registry.emplace<TagComponent>(entity, "Camera");

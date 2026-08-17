@@ -13,6 +13,8 @@
 // happens to be the first one to pull GLM in - which silently produced two
 // different getProjectionMatrix() bodies across translation units.
 #include <glm/glm.hpp>
+
+#include "core/UICanvas.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <vulkan/vulkan.hpp>
@@ -375,6 +377,61 @@ struct ParticleEmitterComponent {
     // maxParticles/emitRate were never read at all.
     std::vector<Particle> particles;
     float emitAccumulator{0.0f};
+};
+
+// ---------------------------------------------------------------------------
+// In-game UI.
+//
+// ImGui is the editor's UI and only the editor's: a running game had no way to
+// draw a score, a health bar, a menu or a single line of text. These components
+// are that - authored in the inspector, saved with the scene, carried by a
+// prefab, and drawn over the game whether it is running in the viewport or as a
+// packaged executable.
+//
+// Screen-space, so they carry no TransformComponent: an anchor and an offset
+// place them, because a HUD has to survive every window size rather than the
+// one it was authored at.
+// ---------------------------------------------------------------------------
+
+struct UITextComponent {
+    std::string text{"Score: 0"};
+
+    UIAnchor anchor{UIAnchor::TopLeft};
+    glm::vec2 offset{24.0f, 24.0f};
+
+    // In authored units at the reference height, like every other UI size, so
+    // text keeps its proportion of the screen rather than shrinking to nothing
+    // on a large display.
+    float fontSize{32.0f};
+
+    glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
+
+    // A drop shadow behind the glyphs. White text over a bright sky is
+    // unreadable without one, and every HUD ends up wanting it.
+    bool shadow{true};
+
+    bool visible{true};
+};
+
+// A rectangle: a backdrop, a bar, a crosshair, a menu panel.
+struct UIPanelComponent {
+    UIAnchor anchor{UIAnchor::TopLeft};
+    glm::vec2 offset{24.0f, 24.0f};
+    glm::vec2 size{320.0f, 32.0f};
+
+    glm::vec4 color{0.0f, 0.0f, 0.0f, 0.55f};
+    float cornerRadius{6.0f};
+
+    // Fraction of the width actually drawn, which is what turns a rectangle
+    // into a health or progress bar. 1 is a plain panel.
+    float fill{1.0f};
+
+    // Drawn behind the fill at full width, so a bar reads as "empty" rather
+    // than as nothing at all when it runs low.
+    bool drawTrack{false};
+    glm::vec4 trackColor{0.0f, 0.0f, 0.0f, 0.45f};
+
+    bool visible{true};
 };
 
 } // namespace Supersonic

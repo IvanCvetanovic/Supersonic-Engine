@@ -2,6 +2,8 @@
 
 #include "core/Components.hpp"
 
+#include <algorithm>
+
 namespace Supersonic {
 
 namespace {
@@ -16,6 +18,22 @@ glm::vec3 readVec3(const Json::Value& value, const glm::vec3& fallback) {
     return glm::vec3(arr[0].AsFloat(fallback.x),
                      arr[1].AsFloat(fallback.y),
                      arr[2].AsFloat(fallback.z));
+}
+
+glm::vec2 readVec2(const Json::Value& value, const glm::vec2& fallback) {
+    const auto& arr = value.AsArray();
+    if (arr.size() != 2) return fallback;
+    return glm::vec2(arr[0].AsFloat(fallback.x),
+                     arr[1].AsFloat(fallback.y));
+}
+
+// Clamped rather than cast straight through: an out-of-range value from a
+// hand-edited scene would index past the anchor table and place the element
+// at whatever happened to be in memory after it.
+UIAnchor readAnchor(const Json::Value& value, UIAnchor fallback) {
+    if (!value.IsNumber()) return fallback;
+    const int raw = static_cast<int>(value.AsNumber(0.0));
+    return static_cast<UIAnchor>(std::clamp(raw, 0, static_cast<int>(UIAnchor::BottomRight)));
 }
 
 glm::vec4 readVec4(const Json::Value& value, const glm::vec4& fallback) {
@@ -135,6 +153,35 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"Loop\": " << (audio->loop ? "true" : "false") << ",\n";
         out << indent << "  \"ReferenceDistance\": " << audio->referenceDistance << ",\n";
         out << indent << "  \"MaxDistance\": " << audio->maxDistance << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* text = registry.try_get<UITextComponent>(entity)) {
+        out << indent << "\"UIText\": {\n";
+        out << indent << "  \"Text\": \"" << Json::Escape(text->text) << "\",\n";
+        out << indent << "  \"Anchor\": " << static_cast<int>(text->anchor) << ",\n";
+        out << indent << "  \"Offset\": [" << text->offset.x << ", " << text->offset.y << "],\n";
+        out << indent << "  \"FontSize\": " << text->fontSize << ",\n";
+        out << indent << "  \"Color\": [" << text->color.x << ", " << text->color.y << ", "
+             << text->color.z << ", " << text->color.w << "],\n";
+        out << indent << "  \"Shadow\": " << (text->shadow ? "true" : "false") << ",\n";
+        out << indent << "  \"Visible\": " << (text->visible ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
+    if (const auto* panel = registry.try_get<UIPanelComponent>(entity)) {
+        out << indent << "\"UIPanel\": {\n";
+        out << indent << "  \"Anchor\": " << static_cast<int>(panel->anchor) << ",\n";
+        out << indent << "  \"Offset\": [" << panel->offset.x << ", " << panel->offset.y << "],\n";
+        out << indent << "  \"Size\": [" << panel->size.x << ", " << panel->size.y << "],\n";
+        out << indent << "  \"Color\": [" << panel->color.x << ", " << panel->color.y << ", "
+             << panel->color.z << ", " << panel->color.w << "],\n";
+        out << indent << "  \"CornerRadius\": " << panel->cornerRadius << ",\n";
+        out << indent << "  \"Fill\": " << panel->fill << ",\n";
+        out << indent << "  \"DrawTrack\": " << (panel->drawTrack ? "true" : "false") << ",\n";
+        out << indent << "  \"TrackColor\": [" << panel->trackColor.x << ", " << panel->trackColor.y << ", "
+             << panel->trackColor.z << ", " << panel->trackColor.w << "],\n";
+        out << indent << "  \"Visible\": " << (panel->visible ? "true" : "false") << "\n";
         out << indent << "},\n";
     }
 
@@ -285,6 +332,32 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         audio.loop = a["Loop"].AsBool(true);
         audio.referenceDistance = a["ReferenceDistance"].AsFloat(1.5f);
         audio.maxDistance = a["MaxDistance"].AsFloat(40.0f);
+    }
+
+    if (node.Has("UIText")) {
+        const auto& t = node["UIText"];
+        auto& text = registry.emplace<UITextComponent>(entity);
+        text.text = t["Text"].AsString("Score: 0");
+        text.anchor = readAnchor(t["Anchor"], text.anchor);
+        text.offset = readVec2(t["Offset"], text.offset);
+        text.fontSize = t["FontSize"].AsFloat(32.0f);
+        text.color = readVec4(t["Color"], text.color);
+        text.shadow = t["Shadow"].AsBool(true);
+        text.visible = t["Visible"].AsBool(true);
+    }
+
+    if (node.Has("UIPanel")) {
+        const auto& p = node["UIPanel"];
+        auto& panel = registry.emplace<UIPanelComponent>(entity);
+        panel.anchor = readAnchor(p["Anchor"], panel.anchor);
+        panel.offset = readVec2(p["Offset"], panel.offset);
+        panel.size = readVec2(p["Size"], panel.size);
+        panel.color = readVec4(p["Color"], panel.color);
+        panel.cornerRadius = p["CornerRadius"].AsFloat(6.0f);
+        panel.fill = p["Fill"].AsFloat(1.0f);
+        panel.drawTrack = p["DrawTrack"].AsBool(false);
+        panel.trackColor = readVec4(p["TrackColor"], panel.trackColor);
+        panel.visible = p["Visible"].AsBool(true);
     }
 
     if (node.Has("Script")) {
