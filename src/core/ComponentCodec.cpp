@@ -75,7 +75,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"Type\": " << light->type << ",\n";
         out << indent << "  \"Direction\": "; writeVec3(out, light->direction); out << ",\n";
         out << indent << "  \"Color\": ";     writeVec3(out, light->color);     out << ",\n";
-        out << indent << "  \"Ambient\": ";   writeVec3(out, light->ambient);   out << ",\n";
+        out << indent << "  \"Ambient\": ";       writeVec3(out, light->ambient);       out << ",\n";
+        out << indent << "  \"AmbientGround\": "; writeVec3(out, light->ambientGround); out << ",\n";
         out << indent << "  \"Intensity\": " << light->intensity << ",\n";
         out << indent << "  \"Range\": " << light->range << ",\n";
         out << indent << "  \"CastsShadow\": " << (light->castsShadow ? "true" : "false") << "\n";
@@ -263,6 +264,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         light.direction = readVec3(l["Direction"], glm::vec3(0.6f, 1.0f, 0.5f));
         light.color = readVec3(l["Color"], glm::vec3(1.0f));
         light.ambient = readVec3(l["Ambient"], glm::vec3(0.12f));
+        light.ambientGround = readVec3(l["AmbientGround"], glm::vec3(0.10f, 0.09f, 0.08f));
         light.intensity = l["Intensity"].AsFloat(1.5f);
         light.range = l["Range"].AsFloat(25.0f);
         light.castsShadow = l["CastsShadow"].AsBool(true);

@@ -186,6 +186,13 @@ struct CameraComponent {
     }
 };
 
+// Named here rather than in the renderer, because it describes what
+// LightComponent::type means and core code has to be able to ask.
+enum class LightType : int {
+    Directional = 0,
+    Point = 1,
+};
+
 struct LightComponent {
     // 0 = directional (uses `direction`), 1 = point (uses the entity transform).
     int type{0};
@@ -196,7 +203,13 @@ struct LightComponent {
     float intensity{1.2f};
 
     // Ambient is a scene-wide term; only the first light's value is used.
-    glm::vec3 ambient{0.12f, 0.12f, 0.14f};
+    //
+    // Two colours rather than one: everything outdoors is lit from above by
+    // sky and from below by bounce off the ground, and a single flat term
+    // makes the underside of every object exactly as blue as its top. The
+    // shader interpolates between them by how far the surface faces up.
+    glm::vec3 ambient{0.12f, 0.12f, 0.14f};        // sky, above the horizon
+    glm::vec3 ambientGround{0.10f, 0.09f, 0.08f};  // bounce, below it
 
     // Point lights only: cutoff distance.
     float range{25.0f};

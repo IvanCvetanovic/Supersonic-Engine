@@ -27,4 +27,32 @@ inline entt::entity FindPrimaryCamera(entt::registry& registry) {
     return fallback;
 }
 
+// The light whose ambient colours light the scene.
+//
+// Ambient is a scene-wide term taken from one light, and which one used to be
+// decided by EnTT's iteration order - which walks its packed array backwards,
+// so it was the light created LAST. A scene's sun could carry a carefully
+// authored sky colour and be ignored in favour of a point light's default,
+// and adding any light changed the ambient of the whole scene.
+//
+// Hemispheric ambient stands in for the sky, so the sky light is the one that
+// should supply it: the first shadow-casting directional light, then any
+// directional light, then whatever exists at all so a scene of nothing but
+// point lights is not black.
+inline entt::entity FindAmbientLight(entt::registry& registry) {
+    entt::entity anyDirectional = entt::null;
+    entt::entity anyLight = entt::null;
+
+    for (auto entity : registry.view<LightComponent>()) {
+        const auto& light = registry.get<LightComponent>(entity);
+        const bool directional = light.type == static_cast<int>(LightType::Directional);
+
+        if (directional && light.castsShadow) return entity;
+        if (directional && anyDirectional == entt::null) anyDirectional = entity;
+        if (anyLight == entt::null) anyLight = entity;
+    }
+
+    return anyDirectional != entt::null ? anyDirectional : anyLight;
+}
+
 } // namespace Supersonic

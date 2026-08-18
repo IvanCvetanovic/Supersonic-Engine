@@ -25,6 +25,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 cascadeTexelWorld;  // world size of one shadow texel per cascade
     vec4 cameraPosition;
     vec4 ambientColor;
+    vec4 ambientGround;
     vec4 lightCount;
     Light lights[8];
 } ubo;
@@ -154,6 +155,32 @@ float shadowFactor(vec3 worldPos, vec3 N, float NdotL) {
     return result;
 }
 
+// Ambient arriving at a surface facing `dir`: sky above, ground bounce below,
+// blended across the horizon. The blend is by height rather than a hard split,
+// so a surface tilting past horizontal does not change colour in one step.
+vec3 hemisphere(vec3 dir) {
+    float up = dir.y * 0.5 + 0.5;
+    return mix(ubo.ambientGround.rgb, ubo.ambientColor.rgb, up);
+}
+
+// Fresnel with roughness folded in. The plain Schlick term goes to white at
+// grazing angles regardless of roughness, which on a rough ambient-lit surface
+// produces a bright rim that is not there.
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Karis's analytic fit to the split-sum environment BRDF, standing in for the
+// usual lookup texture. Two fewer descriptor bindings and one fewer image to
+// generate, for an error well below what is visible here.
+vec2 EnvBRDFApprox(float roughness, float NoV) {
+    const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+    const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+    vec4 r = roughness * c0 + c1;
+    float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+    return vec2(-1.04, 1.04) * a004 + r.zw;
+}
+
 void main() {
     vec4 albedoTex = texture(albedoMap, fragTexCoord);
     vec3 albedo = albedoTex.rgb * fragColor * push.albedoColor.rgb;
@@ -218,7 +245,29 @@ void main() {
         Lo += (kD * albedo / PI + specular) * radiance * NdotL * shadow;
     }
 
-    vec3 ambient = ubo.ambientColor.rgb * albedo * ao;
+    // Ambient, hemispherically. A flat term lit the underside of everything
+    // exactly as brightly as its top, which is the single most obvious way a
+    // render reads as untextured plastic - nothing outdoors is lit like that.
+    vec3 irradiance = hemisphere(N);
+
+    // Metals have no diffuse response at all. The old term multiplied ambient
+    // by albedo unconditionally, so a mirror picked up a flat wash of ambient
+    // colour it should not have had - the one case where ambient was not
+    // merely crude but wrong.
+    vec3 F_ambient = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
+    vec3 kD_ambient = (vec3(1.0) - F_ambient) * (1.0 - metallic);
+
+    vec3 ambientDiffuse = irradiance * albedo * kD_ambient;
+
+    // And a specular lobe along the reflection, so a smooth surface picks up
+    // the sky where it is pointing rather than an average of everything. The
+    // split-sum BRDF is Karis's analytic fit, which is close enough at this
+    // scale to not be worth a lookup texture and a descriptor binding.
+    vec3 R = reflect(-V, N);
+    vec2 envBRDF = EnvBRDFApprox(roughness, max(dot(N, V), 0.0));
+    vec3 ambientSpecular = hemisphere(R) * (F0 * envBRDF.x + envBRDF.y);
+
+    vec3 ambient = (ambientDiffuse + ambientSpecular) * ao;
     vec3 color = ambient + Lo;
 
     // Linear, unbounded, un-encoded.

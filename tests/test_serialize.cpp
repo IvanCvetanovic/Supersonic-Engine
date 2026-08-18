@@ -282,6 +282,8 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     light.type = 1;
     light.intensity = 3.5f;
     light.range = 12.0f;
+    light.ambient = glm::vec3(0.2f, 0.3f, 0.5f);
+    light.ambientGround = glm::vec3(0.4f, 0.2f, 0.1f);
     light.castsShadow = false;
 
     auto& camera = registry.emplace<CameraComponent>(entity);
@@ -417,6 +419,8 @@ static void testPrefabRoundTripsEveryField() {
         if (light) {
             CHECK(light->type == 1);
             CHECK_NEAR(light->intensity, 3.5f);
+            CHECK_NEAR(light->ambient.z, 0.5f);
+            CHECK_NEAR(light->ambientGround.x, 0.4f);
             CHECK_MSG(!light->castsShadow, "castsShadow must survive as false, not default to true");
         }
 

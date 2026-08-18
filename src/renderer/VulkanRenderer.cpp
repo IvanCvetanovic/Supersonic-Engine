@@ -464,6 +464,15 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
     glm::vec3 shadowDirection(0.0f, 1.0f, 0.0f);
     bool haveShadowCaster = false;
 
+    // Chosen before the loop, so it does not depend on which light the packing
+    // order happens to put in slot 0 - and so the directional-light swap below
+    // cannot skip past it.
+    if (const auto ambientLight = FindAmbientLight(registry); ambientLight != entt::null) {
+        const auto& source = registry.get<LightComponent>(ambientLight);
+        ubo.ambientColor = glm::vec4(source.ambient, 1.0f);
+        ubo.ambientGround = glm::vec4(source.ambientGround, 1.0f);
+    }
+
     // The first directional light is the shadow caster, and is deliberately
     // placed at index 0 because the shader only shadows lights[0].
     for (auto entity : registry.view<LightComponent>()) {
@@ -503,9 +512,6 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         gpu.attenuation = glm::vec4(light.range, 0.0f, 0.0f, 0.0f);
         ubo.lights[count] = gpu;
 
-        if (count == 0) {
-            ubo.ambientColor = glm::vec4(light.ambient, 1.0f);
-        }
         ++count;
     }
 
@@ -516,6 +522,7 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         ubo.lights[0].colorAndIntensity = glm::vec4(1.0f, 0.95f, 0.88f, 1.5f);
         ubo.lights[0].attenuation = glm::vec4(25.0f, 0.0f, 0.0f, 0.0f);
         ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
+        ubo.ambientGround = glm::vec4(0.10f, 0.09f, 0.08f, 1.0f);
         shadowDirection = glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f));
         count = 1;
     }
@@ -661,6 +668,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     ubo.proj = projMatrix;
     ubo.cameraPosition = glm::vec4(cameraPosition, 1.0f);
     ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
+    ubo.ambientGround = glm::vec4(0.10f, 0.09f, 0.08f, 1.0f);
     const glm::vec3 shadowDirection = gatherLights(registry, ubo);
 
     // Cascades are fitted to the camera, so they need the same camera the scene

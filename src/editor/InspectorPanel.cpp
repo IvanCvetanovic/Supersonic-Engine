@@ -360,7 +360,9 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
             ImGui::ColorEdit3("Light Color", glm::value_ptr(light.color));
             ImGui::DragFloat("Intensity", &light.intensity, 0.05f, 0.0f, 50.0f);
-            ImGui::ColorEdit3("Ambient Color", glm::value_ptr(light.ambient));
+            ImGui::ColorEdit3("Ambient Sky", glm::value_ptr(light.ambient));
+            ImGui::ColorEdit3("Ambient Ground", glm::value_ptr(light.ambientGround));
+            ImGui::TextDisabled("Ambient is hemispheric: sky above, bounce below.");
             ImGui::TextDisabled("Ambient is scene-wide; taken from the first light.");
         }
     }

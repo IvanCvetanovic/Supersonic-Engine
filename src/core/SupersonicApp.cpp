@@ -208,7 +208,11 @@ void SupersonicApp::initECS() {
     light.direction = glm::normalize(glm::vec3(0.55f, 1.0f, 0.42f));
     light.color = glm::vec3(1.0f, 0.96f, 0.88f);
     light.intensity = 1.6f;
-    light.ambient = glm::vec3(0.05f, 0.055f, 0.07f);
+    // Hemispheric: a cool sky above, a warmer bounce off the ground below.
+    // A single flat term lit the underside of everything exactly as brightly
+    // and as blue as its top.
+    light.ambient = glm::vec3(0.055f, 0.065f, 0.09f);
+    light.ambientGround = glm::vec3(0.06f, 0.05f, 0.04f);
     light.castsShadow = true;
 
     // Two point lights, to exercise the multi-light path the single hardcoded

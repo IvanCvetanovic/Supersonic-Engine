@@ -9,17 +9,13 @@
 #include <glm/glm.hpp>
 
 #include "renderer/ShadowCascades.hpp"
+#include "core/Components.hpp"   // LightType
 
 namespace Supersonic {
 
 // Maximum simultaneous lights. Kept small and fixed so the whole set fits in a
 // plain UBO with no storage buffer or bindless machinery.
 inline constexpr int kMaxLights = 8;
-
-enum class LightType : int {
-    Directional = 0,
-    Point = 1,
-};
 
 // std140 layout: every member is vec4-aligned so the C++ and GLSL views match.
 struct GpuLight {
@@ -50,7 +46,8 @@ struct UniformBufferObject {
     alignas(16) glm::vec4 cascadeTexelWorld;
 
     alignas(16) glm::vec4 cameraPosition;  // xyz = world position
-    alignas(16) glm::vec4 ambientColor;    // rgb = ambient term
+    alignas(16) glm::vec4 ambientColor;    // rgb = sky ambient, above the horizon
+    alignas(16) glm::vec4 ambientGround;   // rgb = ground bounce, below it
     alignas(16) glm::vec4 lightCount;      // x = active light count
     GpuLight lights[kMaxLights];
 };
