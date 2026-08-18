@@ -78,7 +78,14 @@ bool ModelLoader::GenerateSphere(float radius, uint32_t rings, uint32_t sectors,
             const uint32_t i2 = (r + 1) * sectors + (s + 1);
             const uint32_t i3 = (r + 1) * sectors + s;
 
-            out.indices.insert(out.indices.end(), { i0, i1, i2, i0, i2, i3 });
+            // Wound so the face normal agrees with the vertex normals. The
+            // original order was the reverse, which made every sphere in the
+            // engine inside-out: back-face culling removed the near hemisphere
+            // and what you saw was the inside of the far one. Smooth and
+            // plausible at a glance, and wrong for every lighting term that
+            // uses the view direction - a sphere had no specular highlight it
+            // could possibly show, because its normals all faced away.
+            out.indices.insert(out.indices.end(), { i0, i2, i1, i0, i3, i2 });
         }
     }
 

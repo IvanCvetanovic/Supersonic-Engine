@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <fstream>
 #include <string>
+#include <vector>
 
 using namespace Supersonic;
 
@@ -320,6 +321,68 @@ static void testLargeMeshIsIdenticalWithAndWithoutWorkers() {
     JobSystem::Shutdown();
 }
 
+// Winding has to agree with the vertex normals, on every primitive.
+//
+// The sphere's did not: its triangles were wound the other way round, so
+// back-face culling removed the near hemisphere and what reached the screen was
+// the inside of the far one. A smooth ball looks entirely plausible inside-out,
+// which is why it survived - but every normal faced away from the camera, so
+// the sphere could not show a specular highlight, and any lighting term using
+// the view direction was computed against a surface that was not there.
+//
+// Checked as a property rather than a golden index list, so it holds for any
+// tessellation and catches the same mistake in a primitive added later.
+static void testFaceWindingAgreesWithNormals() {
+    struct Case {
+        const char* name;
+        MeshData mesh;
+    };
+
+    std::vector<Case> cases;
+    {
+        Case sphere{ "sphere", {} };
+        CHECK(ModelLoader::GenerateSphere(1.0f, 16, 24, sphere.mesh));
+        cases.push_back(std::move(sphere));
+
+        Case cube{ "cube", {} };
+        CHECK(ModelLoader::GenerateCube(1.0f, cube.mesh));
+        cases.push_back(std::move(cube));
+
+        Case plane{ "plane", {} };
+        CHECK(ModelLoader::GeneratePlane(4.0f, 4.0f, plane.mesh));
+        cases.push_back(std::move(plane));
+
+        Case terrain{ "terrain", {} };
+        CHECK(TerrainGenerator::GenerateTerrainMesh(8, 8, 1.0f, terrain.mesh));
+        cases.push_back(std::move(terrain));
+    }
+
+    for (const auto& testCase : cases) {
+        const MeshData& mesh = testCase.mesh;
+        size_t inverted = 0;
+        size_t checked = 0;
+
+        for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            const Vertex& a = mesh.vertices[mesh.indices[i]];
+            const Vertex& b = mesh.vertices[mesh.indices[i + 1]];
+            const Vertex& c = mesh.vertices[mesh.indices[i + 2]];
+
+            const glm::vec3 faceNormal = glm::cross(b.pos - a.pos, c.pos - a.pos);
+            // A degenerate triangle has no winding to check. Sphere poles are
+            // legitimately degenerate, so this is a skip rather than a failure.
+            if (glm::dot(faceNormal, faceNormal) < 1e-16f) continue;
+
+            ++checked;
+            if (glm::dot(faceNormal, a.normal + b.normal + c.normal) <= 0.0f) ++inverted;
+        }
+
+        CHECK_MSG(checked > 0, std::string(testCase.name) + " has no non-degenerate triangles");
+        CHECK_MSG(inverted == 0,
+                  std::string(testCase.name) + " has " + std::to_string(inverted) + " of " +
+                      std::to_string(checked) + " triangles wound against their normals");
+    }
+}
+
 static void runTests() {
     testCube();
     testSphereRejectsDegenerateParameters();
@@ -337,6 +400,7 @@ static void runTests() {
     testObjWithoutFacesIsRejected();
     testObjTruncatedVertexIsSkipped();
     testObjMissingFileFails();
+    testFaceWindingAgreesWithNormals();
 }
 
 TEST_MAIN("test_meshgen")
