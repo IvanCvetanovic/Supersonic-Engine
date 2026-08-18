@@ -420,17 +420,21 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         body.min = body.centre - body.halfExtent;
         body.max = body.centre + body.halfExtent;
 
-        // Computed after the shape is final, because a sphere collapses its
-        // half extents to one radius above and a box does not.
+        // From the same extents the collision uses, and in the same frame.
         //
-        // In the collider's own axes, so a long crate is harder to spin about
-        // its length than across it - and rotated into world space, because
-        // that is where the impulses are.
-        const glm::mat3 orientation = glm::mat3_cast(glm::quat(transform->rotation));
+        // body.halfExtent is the WORLD-AXIS-ALIGNED extent - a rotated collider
+        // is enclosed by it, which is how collision treats it too. Taking the
+        // inertia of that box and then rotating it would describe neither the
+        // box nor its bounding box, and would disagree with the very contacts
+        // it is used to resolve. So: the mass properties of the collision
+        // shape, which for a rotated crate means the shape it actually
+        // collides as. Already world-aligned, so no rotation is applied.
+        //
+        // A sphere is isotropic, so this costs it nothing either way.
         body.inverseInertia = worldInverseInertia(
             inverseInertiaLocal(registry.try_get<RigidBodyComponent>(entity),
                                 shape, body.halfExtent, body.radius),
-            orientation);
+            glm::mat3(1.0f));
 
         Proxy proxy;
         proxy.entity = entity;

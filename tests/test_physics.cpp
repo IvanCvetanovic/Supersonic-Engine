@@ -18,6 +18,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/constants.hpp>
 #include <string>
+#include <cstdio>
 #include <vector>
 
 using namespace Supersonic;
@@ -712,15 +713,77 @@ static void testSpinDoesNotAppearFromNothing() {
     entt::registry registry;
     makeStaticBox(registry, glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(40.0f, 1.0f, 40.0f));
 
-    const auto resting = makeBox(registry, glm::vec3(0.0f, 0.5f, 0.0f));
+    // On a block well above the world ground plane, so it is genuinely
+    // resting on a collider rather than on the integrator's floor clamp.
+    const auto block = registry.create();
+    registry.emplace<TransformComponent>(block, glm::vec3(0.0f, 1.0f, 0.0f),
+                                         glm::vec3(0.0f), glm::vec3(6.0f, 1.0f, 6.0f));
+    registry.emplace<BoxColliderComponent>(block);
+
+    const auto resting = makeBox(registry, glm::vec3(0.0f, 2.05f, 0.0f));
     auto& body = registry.get<RigidBodyComponent>(resting);
     body.angularDamping = 0.0f;
     body.velocity = glm::vec3(0.0f);
 
-    stepFor(registry, 3.0f);
+    std::vector<PhysicsSystem::Contact> contacts;
+    bool touched = false;
+    for (int i = 0; i < 180; ++i) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f, &contacts);
+        if (!contacts.empty()) touched = true;
+    }
+    // Without this the test could pass by never touching the floor at all,
+    // which is the one way a stability test silently stops covering anything.
+    CHECK_MSG(touched, "the body must actually be resting ON something");
 
     const float spin = glm::length(registry.get<RigidBodyComponent>(resting).angularVelocity);
     CHECK_MSG(spin < 0.05f, "a resting body must not spin up: got " + std::to_string(spin));
+}
+
+static void testALongBoxIsHarderToTipAboutItsLongAxis() {
+    // Inertia has to depend on the shape, not just the mass. A crate three
+    // times longer in x resists turning about z far more than a cube of the
+    // same mass, and a solver using mass alone would spin both identically.
+    //
+    // The comparison is controlled: same mass, same drop, and blocks placed so
+    // the contact lands the same distance from each centre of mass, because
+    // torque is force times arm and an uncontrolled arm would explain any
+    // difference by itself.
+    //
+    // Everything sits well above y = 0: below that the integrator's world
+    // ground plane catches a body before it ever reaches a collider, which is
+    // how the first version of this test managed to make no contact at all.
+    entt::registry registry;
+    const float arm = 0.35f;
+
+    const auto cube = makeBox(registry, glm::vec3(-20.0f, 2.5f, 0.0f), 1.0f, glm::vec3(1.0f));
+    registry.get<RigidBodyComponent>(cube).angularDamping = 0.0f;
+    const auto cubeBlock = registry.create();
+    registry.emplace<TransformComponent>(cubeBlock, glm::vec3(-20.0f + arm, 1.0f, 0.0f));
+    registry.emplace<BoxColliderComponent>(cubeBlock);
+
+    const auto longBox = makeBox(registry, glm::vec3(20.0f, 2.5f, 0.0f), 1.0f,
+                                 glm::vec3(3.0f, 1.0f, 1.0f));
+    registry.get<RigidBodyComponent>(longBox).angularDamping = 0.0f;
+    const auto longBlock = registry.create();
+    registry.emplace<TransformComponent>(longBlock, glm::vec3(20.0f + arm, 1.0f, 0.0f));
+    registry.emplace<BoxColliderComponent>(longBlock);
+
+    std::vector<PhysicsSystem::Contact> contacts;
+    bool touched = false;
+    for (int i = 0; i < 45; ++i) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f, &contacts);
+        if (!contacts.empty()) touched = true;
+    }
+    CHECK_MSG(touched, "the boxes must actually land on their blocks");
+
+    const float cubeSpin = std::abs(registry.get<RigidBodyComponent>(cube).angularVelocity.z);
+    const float longSpin = std::abs(registry.get<RigidBodyComponent>(longBox).angularVelocity.z);
+
+    CHECK_MSG(cubeSpin > 1e-3f, "the cube must tip: got " + std::to_string(cubeSpin));
+    CHECK_MSG(longSpin > 1e-4f, "and so must the long box: got " + std::to_string(longSpin));
+    CHECK_MSG(cubeSpin > longSpin * 1.5f,
+              "the longer box resists turning about z: cube " + std::to_string(cubeSpin) +
+                  " vs long " + std::to_string(longSpin));
 }
 
 static void runTests() {
@@ -767,6 +830,7 @@ static void runTests() {
     testAnOffCentreImpactCreatesSpin();
     testACentredImpactCreatesNoSpin();
     testSpinDoesNotAppearFromNothing();
+    testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
 TEST_MAIN("test_physics")
