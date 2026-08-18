@@ -14,6 +14,7 @@
 #include "core/ScriptPluginApi.h"
 
 #include <cstdio>
+#include <unordered_map>
 
 #include <cmath>
 
@@ -126,26 +127,29 @@ void animatedPlayerScript(SupersonicScriptContext* ctx) {
 
 // Counts clicks on its own entity into a label.
 //
-// The entity carries both the button and the text, so the script needs no way
-// to name another entity - which the plugin ABI has no type for yet. A menu
-// wiring one widget to another is the next thing this wants, and this is
-// deliberately the smaller version that proves the loop end to end: pointer,
-// hit test, click edge, script, and a label that changes because of it.
+// The count lives in the plugin, keyed by entity, rather than in
+// ScriptComponent::elapsed - which is a CLOCK the engine advances every frame,
+// so a counter kept there drifts upward whether anything was clicked or not.
+// The first version of this script did exactly that and reported four clicks
+// for one, which is a good demonstration of why per-entity script state and
+// per-entity script time are not the same thing.
+//
+// Plugin-local means the count resets when the plugin is hot-reloaded. For a
+// sample that is fine, and it shows a plugin may keep state of its own.
+std::unordered_map<unsigned int, int> g_clickCounts;
+
 void ClickCounterScript(SupersonicScriptContext* ctx) {
     if (!ctx->ui) return;
 
     if (ctx->ui->wasClicked(ctx->ui->opaque, ctx->entityId)) {
-        // elapsed is per-entity script state, so two buttons count
-        // independently without this script needing storage of its own. It is
-        // runtime state and is not serialised, so the count resets on Stop -
-        // which is what a play session should do anyway.
-        ctx->elapsed += 1.0f;
+        const int count = ++g_clickCounts[ctx->entityId];
 
         char label[64];
-        std::snprintf(label, sizeof(label), "CLICKED %d", static_cast<int>(ctx->elapsed));
+        std::snprintf(label, sizeof(label), "CLICKED %d", count);
         ctx->ui->setText(ctx->ui->opaque, ctx->entityId, label);
     }
 }
+
 } // namespace
 
 extern "C" {

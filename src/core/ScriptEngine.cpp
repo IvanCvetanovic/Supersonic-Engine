@@ -229,9 +229,13 @@ void ScriptEngine::RegisterBuiltInScripts() {
 void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
     auto& scripts = ScriptRegistry::Get();
 
-    auto view = registry.view<TransformComponent, ScriptComponent>();
+    // Every scripted entity, with or without a place in the world. Requiring a
+    // transform meant a script on a HUD element never ran - and a HUD element
+    // has no transform by design, because it lives in screen space - so
+    // "when this button is clicked, do something" could not be written at all.
+    auto view = registry.view<ScriptComponent>();
     for (auto entity : view) {
-        auto& transform = view.get<TransformComponent>(entity);
+        auto* transform = registry.try_get<TransformComponent>(entity);
         auto& script = view.get<ScriptComponent>(entity);
 
         if (!script.isEnabled) continue;
@@ -285,21 +289,34 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
         const SupersonicScriptUI ui{&registry, scriptUiWasClicked, scriptUiIsHovered,
                                     scriptUiSetText, scriptUiSetVisible, scriptUiSetFill};
         ctx.ui = &ui;
-        ctx.position[0] = transform.position.x;
-        ctx.position[1] = transform.position.y;
-        ctx.position[2] = transform.position.z;
-        ctx.rotation[0] = transform.rotation.x;
-        ctx.rotation[1] = transform.rotation.y;
-        ctx.rotation[2] = transform.rotation.z;
-        ctx.scale[0] = transform.scale.x;
-        ctx.scale[1] = transform.scale.y;
-        ctx.scale[2] = transform.scale.z;
+        // A transform-less entity is handed an identity one, so a script that
+        // only touches the UI does not have to care.
+        if (transform) {
+            ctx.position[0] = transform->position.x;
+            ctx.position[1] = transform->position.y;
+            ctx.position[2] = transform->position.z;
+            ctx.rotation[0] = transform->rotation.x;
+            ctx.rotation[1] = transform->rotation.y;
+            ctx.rotation[2] = transform->rotation.z;
+            ctx.scale[0] = transform->scale.x;
+            ctx.scale[1] = transform->scale.y;
+            ctx.scale[2] = transform->scale.z;
+        } else {
+            ctx.scale[0] = 1.0f;
+            ctx.scale[1] = 1.0f;
+            ctx.scale[2] = 1.0f;
+        }
 
         entry->update(&ctx);
 
-        transform.position = glm::vec3(ctx.position[0], ctx.position[1], ctx.position[2]);
-        transform.rotation = glm::vec3(ctx.rotation[0], ctx.rotation[1], ctx.rotation[2]);
-        transform.scale = glm::vec3(ctx.scale[0], ctx.scale[1], ctx.scale[2]);
+        // Nowhere to write the result back to for an entity with no place in
+        // the world, which is exactly right: a HUD button that moved itself
+        // would be moving something that does not exist.
+        if (transform) {
+            transform->position = glm::vec3(ctx.position[0], ctx.position[1], ctx.position[2]);
+            transform->rotation = glm::vec3(ctx.rotation[0], ctx.rotation[1], ctx.rotation[2]);
+            transform->scale = glm::vec3(ctx.scale[0], ctx.scale[1], ctx.scale[2]);
+        }
     }
 }
 
