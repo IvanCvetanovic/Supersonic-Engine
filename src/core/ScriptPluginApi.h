@@ -15,7 +15,7 @@
  * build into a clear log line instead of undefined behaviour.
  */
 
-#define SUPERSONIC_SCRIPT_API_VERSION 4
+#define SUPERSONIC_SCRIPT_API_VERSION 5
 
 #if defined(_WIN32)
 #  define SUPERSONIC_SCRIPT_EXPORT __declspec(dllexport)
@@ -83,6 +83,24 @@ typedef struct SupersonicScriptAnimation {
     int (*isPlaying)(void* opaque, unsigned int entity, const char* clipName);
 } SupersonicScriptAnimation;
 
+/* The user interface.
+ *
+ * A button could be pressed and nothing in the game could find out, and a score
+ * could be drawn but never counted: the UI was one-way. Entities are named by
+ * the same unsigned int the rest of this header uses, so a script can hold the
+ * id of its menu button the way it holds any other.
+ *
+ * setText copies the string immediately; the pointer is not retained, so a
+ * script may pass a stack buffer it is about to overwrite. */
+typedef struct SupersonicScriptUI {
+    void* opaque;
+    int (*wasClicked)(void* opaque, unsigned int entity);
+    int (*isHovered)(void* opaque, unsigned int entity);
+    void (*setText)(void* opaque, unsigned int entity, const char* text);
+    void (*setVisible)(void* opaque, unsigned int entity, int visible);
+    void (*setFill)(void* opaque, unsigned int entity, float fill);
+} SupersonicScriptUI;
+
 /* Per-entity state handed to a script each frame. The engine copies values in
  * before the call and copies them back out afterwards. */
 typedef struct SupersonicScriptContext {
@@ -97,6 +115,7 @@ typedef struct SupersonicScriptContext {
     const SupersonicScriptInput* input;
     const SupersonicScriptPhysics* physics;
     const SupersonicScriptAnimation* animation;
+    const SupersonicScriptUI* ui;
 } SupersonicScriptContext;
 
 typedef void (*SupersonicScriptUpdateFn)(SupersonicScriptContext* context);

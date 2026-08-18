@@ -465,4 +465,40 @@ struct UIPanelComponent {
     bool visible{true};
 };
 
+// A button: a panel that knows it was touched.
+//
+// Deliberately one component rather than a panel plus a label plus a collider.
+// A button is a single thing to the person authoring a menu, and splitting it
+// into three entities that have to be kept aligned by hand is how menus end up
+// with click targets that do not match what is drawn.
+struct UIButtonComponent {
+    std::string label{"Play"};
+
+    UIAnchor anchor{UIAnchor::Center};
+    glm::vec2 offset{0.0f, 0.0f};
+    glm::vec2 size{280.0f, 64.0f};
+
+    float fontSize{28.0f};
+    float cornerRadius{10.0f};
+
+    glm::vec4 color{0.16f, 0.17f, 0.21f, 0.96f};
+    glm::vec4 hoverColor{0.24f, 0.26f, 0.32f, 0.98f};
+    glm::vec4 pressColor{0.10f, 0.11f, 0.14f, 1.0f};
+    glm::vec4 disabledColor{0.14f, 0.14f, 0.16f, 0.55f};
+    glm::vec4 textColor{0.94f, 0.95f, 0.97f, 1.0f};
+
+    bool visible{true};
+
+    // A disabled button still draws - greyed - because a menu item that
+    // vanishes when unavailable moves everything below it.
+    bool enabled{true};
+
+    // Rebuilt from the pointer every frame and deliberately NOT serialised: a
+    // button saved mid-press would come back stuck, and a click restored from
+    // a snapshot would fire an action nobody asked for.
+    bool hovered{false};
+    bool pressed{false};
+    bool clicked{false};
+};
+
 } // namespace Supersonic

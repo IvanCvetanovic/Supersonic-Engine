@@ -332,6 +332,13 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     bar.drawTrack = true;
     bar.cornerRadius = 12.0f;
 
+    auto& menuButton = registry.emplace<UIButtonComponent>(entity);
+    menuButton.label = "Resume";
+    menuButton.anchor = UIAnchor::MiddleLeft;
+    menuButton.size = glm::vec2(220.0f, 48.0f);
+    menuButton.fontSize = 26.0f;
+    menuButton.enabled = false;
+
     auto& emitter = registry.emplace<ParticleEmitterComponent>(entity);
     emitter.maxParticles = 512u;
     emitter.emitRate = 33.0f;
@@ -503,6 +510,18 @@ static void testPrefabRoundTripsEveryField() {
             CHECK_NEAR(bar->fill, 0.35f);
             CHECK(bar->drawTrack);
             CHECK_NEAR(bar->size.x, 480.0f);
+        }
+
+        const auto* menu = registry.try_get<UIButtonComponent>(clone);
+        CHECK_MSG(menu != nullptr, "prefab lost its UIButtonComponent");
+        if (menu) {
+            CHECK(menu->label == "Resume");
+            CHECK(menu->anchor == UIAnchor::MiddleLeft);
+            CHECK_NEAR(menu->size.x, 220.0f);
+            CHECK_MSG(!menu->enabled, "a disabled button must come back disabled");
+            // Interaction state is derived; a clone must not arrive pressed.
+            CHECK_MSG(!menu->pressed && !menu->clicked,
+                      "a clone must not inherit a press that was in flight");
         }
 
         const auto* emitter = registry.try_get<ParticleEmitterComponent>(clone);

@@ -1,6 +1,7 @@
 #include "core/UISystem.hpp"
 
 #include "core/Components.hpp"
+#include "core/UIInput.hpp"
 
 #include "imgui.h"
 
@@ -18,7 +19,8 @@ ImVec2 toVec(const glm::vec2& v) { return ImVec2(v.x, v.y); }
 
 } // namespace
 
-void Render(entt::registry& registry, const UIRect& gameRect) {
+void Render(entt::registry& registry, const UIRect& gameRect,
+            const UICanvas::UIPointer& pointer) {
     const glm::vec2 screenSize = gameRect.size();
     if (screenSize.x < 1.0f || screenSize.y < 1.0f) return;
 
@@ -34,6 +36,10 @@ void Render(entt::registry& registry, const UIRect& gameRect) {
     draw->PushClipRect(toVec(gameRect.min), toVec(gameRect.max), true);
 
     const float scale = UICanvas::ScaleFor(screenSize);
+
+    // Before drawing, so a button drawn this frame reflects the pointer this
+    // frame rather than lagging it by one.
+    UIInput::Update(registry, gameRect, pointer);
 
     // Panels first, then text, so a label always reads on top of its backdrop
     // regardless of the order the entities happen to be in.
@@ -64,6 +70,44 @@ void Render(entt::registry& registry, const UIRect& gameRect) {
     }
 
     ImFont* font = ImGui::GetFont();
+
+    // Interaction ran above; this only draws what it decided.
+    for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
+        if (!button.visible) continue;
+
+        // The same placement UIInput used, from the same component - not a
+        // second calculation that could disagree with it.
+        const UIRect rect = UICanvas::Place(button.anchor, button.offset * scale,
+                                            button.size * scale, gameRect);
+
+        // Pressed beats hovered: while held, the button reads as held even
+        // though the pointer is still over it.
+        glm::vec4 fill = button.color;
+        if (!button.enabled)      fill = button.disabledColor;
+        else if (button.pressed)  fill = button.pressColor;
+        else if (button.hovered)  fill = button.hoverColor;
+
+        draw->AddRectFilled(toVec(rect.min), toVec(rect.max), toColor(fill),
+                            button.cornerRadius * scale);
+
+        if (!button.label.empty()) {
+            const float size = button.fontSize * scale;
+            if (size >= 1.0f) {
+                const ImVec2 measured = font->CalcTextSizeA(size, FLT_MAX, 0.0f,
+                                                            button.label.c_str());
+                // Centred on the button rather than placed by anchor: a label
+                // is part of the button, not an element in its own right.
+                const glm::vec2 centre = (rect.min + rect.max) * 0.5f;
+                const ImVec2 origin(centre.x - measured.x * 0.5f,
+                                    centre.y - measured.y * 0.5f);
+
+                glm::vec4 textColor = button.textColor;
+                if (!button.enabled) textColor.a *= 0.45f;
+
+                draw->AddText(font, size, origin, toColor(textColor), button.label.c_str());
+            }
+        }
+    }
 
     for (auto [entity, text] : registry.view<UITextComponent>().each()) {
         if (!text.visible || text.text.empty()) continue;

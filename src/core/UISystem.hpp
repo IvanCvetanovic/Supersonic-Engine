@@ -20,7 +20,13 @@ namespace Supersonic {
 // the editor sits where it will sit when the game ships.
 namespace UISystem {
 
-void Render(entt::registry& registry, const UIRect& gameRect);
+// Updates every interactive element against the pointer, then draws
+// everything. One call rather than an update pass and a draw pass, because the
+// two must agree on the rectangle each element occupies - and the surest way
+// to have a click target that does not match what is on screen is to compute
+// it twice.
+void Render(entt::registry& registry, const UIRect& gameRect,
+            const UICanvas::UIPointer& pointer);
 
 } // namespace UISystem
 

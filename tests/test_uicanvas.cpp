@@ -170,6 +170,144 @@ static void testFillClampsOutOfRangeValues() {
               "an overfull bar must stop at its own right edge, not run past it");
 }
 
+// --- interaction ------------------------------------------------------------
+//
+// Whether a press counts as a click is the whole of a button, and every way of
+// getting it wrong still produces something that looks like it works: a menu
+// that fires whatever you happen to release over, a button that arms itself
+// when you drag a held pointer across it, one that cannot be cancelled once
+// pressed. None of that shows up in a screenshot.
+
+namespace {
+
+// The rectangle used by every interaction test.
+UIRect testButton() {
+    return { glm::vec2(100.0f, 100.0f), glm::vec2(300.0f, 160.0f) };
+}
+
+const glm::vec2 kInside(200.0f, 130.0f);
+const glm::vec2 kOutside(600.0f, 400.0f);
+
+// One frame of pointer input. `wasDown` is threaded by the caller, exactly as
+// UISystem threads it from the previous frame.
+UICanvas::UIPointer pointerAt(const glm::vec2& position, bool down, bool wasDown,
+                              bool active = true) {
+    UICanvas::UIPointer pointer;
+    pointer.position = position;
+    pointer.down = down;
+    pointer.wasDown = wasDown;
+    pointer.active = active;
+    return pointer;
+}
+
+} // namespace
+
+static void testHoverWithoutPressing() {
+    const UICanvas::UIButtonState state =
+        UICanvas::UpdateButton({}, testButton(), pointerAt(kInside, false, false));
+
+    CHECK(state.hovered);
+    CHECK(!state.pressed);
+    CHECK(!state.clicked);
+}
+
+static void testPointerOutsideIsNotHovered() {
+    const UICanvas::UIButtonState state =
+        UICanvas::UpdateButton({}, testButton(), pointerAt(kOutside, false, false));
+    CHECK(!state.hovered);
+}
+
+static void testPressAndReleaseInsideClicksOnce() {
+    const UIRect rect = testButton();
+
+    const auto pressed = UICanvas::UpdateButton({}, rect, pointerAt(kInside, true, false));
+    CHECK_MSG(pressed.pressed, "pressing on the button must arm it");
+    CHECK_MSG(!pressed.clicked, "the click belongs to the release, not the press");
+
+    const auto held = UICanvas::UpdateButton(pressed, rect, pointerAt(kInside, true, true));
+    CHECK(held.pressed);
+    CHECK(!held.clicked);
+
+    const auto released = UICanvas::UpdateButton(held, rect, pointerAt(kInside, false, true));
+    CHECK_MSG(released.clicked, "releasing over the button must click it");
+    CHECK(!released.pressed);
+
+    // Exactly one frame. A click that stays true is a menu button that fires
+    // every frame the player leaves the pointer where it is.
+    const auto after = UICanvas::UpdateButton(released, rect, pointerAt(kInside, false, false));
+    CHECK_MSG(!after.clicked, "a click must last exactly one frame");
+}
+
+static void testReleasingAwayFromTheButtonDoesNotClick() {
+    const UIRect rect = testButton();
+
+    const auto pressed = UICanvas::UpdateButton({}, rect, pointerAt(kInside, true, false));
+    const auto draggedOff = UICanvas::UpdateButton(pressed, rect, pointerAt(kOutside, true, true));
+
+    CHECK_MSG(draggedOff.pressed,
+              "dragging off a held button keeps the press, so sliding back on works");
+    CHECK(!draggedOff.hovered);
+
+    const auto released = UICanvas::UpdateButton(draggedOff, rect, pointerAt(kOutside, false, true));
+    CHECK_MSG(!released.clicked,
+              "letting go away from the button is how a player cancels; it must not click");
+}
+
+static void testDraggingBackOnStillClicks() {
+    const UIRect rect = testButton();
+
+    const auto pressed = UICanvas::UpdateButton({}, rect, pointerAt(kInside, true, false));
+    const auto off = UICanvas::UpdateButton(pressed, rect, pointerAt(kOutside, true, true));
+    const auto back = UICanvas::UpdateButton(off, rect, pointerAt(kInside, true, true));
+    const auto released = UICanvas::UpdateButton(back, rect, pointerAt(kInside, false, true));
+
+    CHECK_MSG(released.clicked,
+              "sliding off a button and back on before releasing must still click it");
+}
+
+static void testDraggingOntoAButtonWhileHeldDoesNotPressIt() {
+    // The pointer went down somewhere else entirely. Without a press edge this
+    // button would arm itself as the pointer crossed it, so dragging across a
+    // menu would trigger every button on the way.
+    const UIRect rect = testButton();
+
+    const auto crossing = UICanvas::UpdateButton({}, rect, pointerAt(kInside, true, true));
+    CHECK(crossing.hovered);
+    CHECK_MSG(!crossing.pressed, "a press that began elsewhere must not arm this button");
+
+    const auto released = UICanvas::UpdateButton(crossing, rect, pointerAt(kInside, false, true));
+    CHECK_MSG(!released.clicked, "and it must not click when the pointer is let go over it");
+}
+
+static void testAnInactivePointerDoesNothing() {
+    // The editor has a panel over the viewport, or the game has released the
+    // mouse. Everything stops, including a press already in flight.
+    const UIRect rect = testButton();
+
+    const auto pressed = UICanvas::UpdateButton({}, rect, pointerAt(kInside, true, false));
+    CHECK(pressed.pressed);
+
+    const auto blocked =
+        UICanvas::UpdateButton(pressed, rect, pointerAt(kInside, true, true, /*active=*/false));
+    CHECK_MSG(!blocked.hovered && !blocked.pressed && !blocked.clicked,
+              "an inactive pointer must not hover, press or click");
+
+    const auto released =
+        UICanvas::UpdateButton(blocked, rect, pointerAt(kInside, false, true));
+    CHECK_MSG(!released.clicked,
+              "a press interrupted by something taking the pointer must not fire later");
+}
+
+static void testContainsIncludesTheEdges() {
+    const UIRect rect = testButton();
+
+    CHECK(UICanvas::Contains(rect, rect.min));
+    CHECK(UICanvas::Contains(rect, rect.max));
+    CHECK(UICanvas::Contains(rect, glm::vec2(rect.min.x, rect.max.y)));
+    CHECK(!UICanvas::Contains(rect, glm::vec2(rect.min.x - 0.5f, rect.min.y)));
+    CHECK(!UICanvas::Contains(rect, glm::vec2(rect.max.x + 0.5f, rect.max.y)));
+}
+
 static void runTests() {
     testScaleIsOneAtTheReferenceHeight();
     testScaleSurvivesADegenerateScreen();
@@ -184,6 +322,15 @@ static void runTests() {
     testEveryAnchorStaysInsideTheScreen();
     testFillTakesTheLeftPortion();
     testFillClampsOutOfRangeValues();
+
+    testContainsIncludesTheEdges();
+    testHoverWithoutPressing();
+    testPointerOutsideIsNotHovered();
+    testPressAndReleaseInsideClicksOnce();
+    testReleasingAwayFromTheButtonDoesNotClick();
+    testDraggingBackOnStillClicks();
+    testDraggingOntoAButtonWhileHeldDoesNotPressIt();
+    testAnInactivePointerDoesNothing();
 }
 
 TEST_MAIN("test_uicanvas")

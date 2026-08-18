@@ -170,6 +170,32 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* button = registry.try_get<UIButtonComponent>(entity)) {
+        // hovered/pressed/clicked are rebuilt from the pointer every frame and
+        // are deliberately absent: a button saved mid-press would come back
+        // stuck, and a restored click would fire an action nobody asked for.
+        out << indent << "\"UIButton\": {\n";
+        out << indent << "  \"Label\": \"" << Json::Escape(button->label) << "\",\n";
+        out << indent << "  \"Anchor\": " << static_cast<int>(button->anchor) << ",\n";
+        out << indent << "  \"Offset\": [" << button->offset.x << ", " << button->offset.y << "],\n";
+        out << indent << "  \"Size\": [" << button->size.x << ", " << button->size.y << "],\n";
+        out << indent << "  \"FontSize\": " << button->fontSize << ",\n";
+        out << indent << "  \"CornerRadius\": " << button->cornerRadius << ",\n";
+        out << indent << "  \"Color\": [" << button->color.x << ", " << button->color.y << ", "
+             << button->color.z << ", " << button->color.w << "],\n";
+        out << indent << "  \"HoverColor\": [" << button->hoverColor.x << ", " << button->hoverColor.y << ", "
+             << button->hoverColor.z << ", " << button->hoverColor.w << "],\n";
+        out << indent << "  \"PressColor\": [" << button->pressColor.x << ", " << button->pressColor.y << ", "
+             << button->pressColor.z << ", " << button->pressColor.w << "],\n";
+        out << indent << "  \"DisabledColor\": [" << button->disabledColor.x << ", " << button->disabledColor.y << ", "
+             << button->disabledColor.z << ", " << button->disabledColor.w << "],\n";
+        out << indent << "  \"TextColor\": [" << button->textColor.x << ", " << button->textColor.y << ", "
+             << button->textColor.z << ", " << button->textColor.w << "],\n";
+        out << indent << "  \"Enabled\": " << (button->enabled ? "true" : "false") << ",\n";
+        out << indent << "  \"Visible\": " << (button->visible ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
     if (const auto* panel = registry.try_get<UIPanelComponent>(entity)) {
         out << indent << "\"UIPanel\": {\n";
         out << indent << "  \"Anchor\": " << static_cast<int>(panel->anchor) << ",\n";
@@ -347,6 +373,24 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         text.color = readVec4(t["Color"], text.color);
         text.shadow = t["Shadow"].AsBool(true);
         text.visible = t["Visible"].AsBool(true);
+    }
+
+    if (node.Has("UIButton")) {
+        const auto& b = node["UIButton"];
+        auto& button = registry.emplace<UIButtonComponent>(entity);
+        button.label = b["Label"].AsString("Play");
+        button.anchor = readAnchor(b["Anchor"], button.anchor);
+        button.offset = readVec2(b["Offset"], button.offset);
+        button.size = readVec2(b["Size"], button.size);
+        button.fontSize = b["FontSize"].AsFloat(28.0f);
+        button.cornerRadius = b["CornerRadius"].AsFloat(10.0f);
+        button.color = readVec4(b["Color"], button.color);
+        button.hoverColor = readVec4(b["HoverColor"], button.hoverColor);
+        button.pressColor = readVec4(b["PressColor"], button.pressColor);
+        button.disabledColor = readVec4(b["DisabledColor"], button.disabledColor);
+        button.textColor = readVec4(b["TextColor"], button.textColor);
+        button.enabled = b["Enabled"].AsBool(true);
+        button.visible = b["Visible"].AsBool(true);
     }
 
     if (node.Has("UIPanel")) {

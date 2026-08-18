@@ -61,9 +61,57 @@ inline UIRect PlaceMeasured(UIAnchor anchor, const glm::vec2& offset,
     return Place(anchor, offset, measuredSize, screen);
 }
 
+// True when a point falls inside the rectangle, edges included.
+bool Contains(const UIRect& rect, const glm::vec2& point);
+
 // Left portion of a rect, for a bar that fills from 0 to 1. Clamped, because a
 // health value can go negative in the same frame the death handler runs.
 UIRect FillHorizontal(const UIRect& rect, float fraction);
+
+
+// ---------------------------------------------------------------------------
+// Interaction
+//
+// The HUD could be drawn but not touched: no hit testing existed anywhere, so
+// a shipped game could not have a main menu, a pause screen or a single
+// button. What follows is the part that decides whether a press counts as a
+// click, which is where the mistakes are - and none of them are visible in a
+// screenshot, so it lives here rather than in the renderer.
+// ---------------------------------------------------------------------------
+
+// The pointer for one frame.
+struct UIPointer {
+    glm::vec2 position{0.0f};
+
+    bool down{false};
+
+    // Last frame, so a press EDGE can be told from a button already being held.
+    // Without it, dragging a held pointer onto a button would press it, and a
+    // player dragging across a menu would trigger everything they crossed.
+    bool wasDown{false};
+
+    // False when something else owns the pointer - an editor panel over the
+    // viewport, or a game that has released the mouse. Interaction stops
+    // entirely rather than the element merely not being hovered.
+    bool active{true};
+};
+
+// What a button carries from one frame to the next.
+struct UIButtonState {
+    bool hovered{false};
+
+    // Held, having been pressed on this button. Stays true while the pointer
+    // is dragged off it, which is what lets a player slide off a button they
+    // did not mean to press and back on again.
+    bool pressed{false};
+
+    // Released over this button, true for exactly one frame.
+    bool clicked{false};
+};
+
+// Advances one button. `previous` is that button's state last frame.
+UIButtonState UpdateButton(const UIButtonState& previous, const UIRect& rect,
+                           const UIPointer& pointer);
 
 } // namespace UICanvas
 

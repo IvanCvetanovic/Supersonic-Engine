@@ -13,6 +13,8 @@
 
 #include "core/ScriptPluginApi.h"
 
+#include <cstdio>
+
 #include <cmath>
 
 namespace {
@@ -121,6 +123,29 @@ void animatedPlayerScript(SupersonicScriptContext* ctx) {
                              moving ? "Twist" : "Bend");
     }
 }
+
+// Counts clicks on its own entity into a label.
+//
+// The entity carries both the button and the text, so the script needs no way
+// to name another entity - which the plugin ABI has no type for yet. A menu
+// wiring one widget to another is the next thing this wants, and this is
+// deliberately the smaller version that proves the loop end to end: pointer,
+// hit test, click edge, script, and a label that changes because of it.
+void ClickCounterScript(SupersonicScriptContext* ctx) {
+    if (!ctx->ui) return;
+
+    if (ctx->ui->wasClicked(ctx->ui->opaque, ctx->entityId)) {
+        // elapsed is per-entity script state, so two buttons count
+        // independently without this script needing storage of its own. It is
+        // runtime state and is not serialised, so the count resets on Stop -
+        // which is what a play session should do anyway.
+        ctx->elapsed += 1.0f;
+
+        char label[64];
+        std::snprintf(label, sizeof(label), "CLICKED %d", static_cast<int>(ctx->elapsed));
+        ctx->ui->setText(ctx->ui->opaque, ctx->entityId, label);
+    }
+}
 } // namespace
 
 extern "C" {
@@ -140,6 +165,7 @@ SUPERSONIC_SCRIPT_EXPORT void SupersonicScriptPluginRegister(SupersonicScriptHos
     host->registerScript(host->opaque, "BreatheScript", &breatheScript);
     host->registerScript(host->opaque, "PlayerScript", &playerScript);
     host->registerScript(host->opaque, "AnimatedPlayerScript", &animatedPlayerScript);
+    host->registerScript(host->opaque, "ClickCounterScript", &ClickCounterScript);
 }
 
 } // extern "C"

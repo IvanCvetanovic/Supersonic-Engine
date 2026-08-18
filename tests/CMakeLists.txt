@@ -59,6 +59,8 @@ add_engine_test(test_input     ${SUPERSONIC_SRC}/src/core/Input.cpp)
 add_engine_test(test_pointshadow ${SUPERSONIC_SRC}/src/renderer/PointShadow.cpp)
 add_engine_test(test_cascades  ${SUPERSONIC_SRC}/src/renderer/ShadowCascades.cpp)
 add_engine_test(test_jobs      ${SUPERSONIC_SRC}/src/core/JobSystem.cpp)
+add_engine_test(test_uiinput   ${SUPERSONIC_SRC}/src/core/UIInput.cpp
+                               ${SUPERSONIC_SRC}/src/core/UICanvas.cpp)
 add_engine_test(test_uicanvas  ${SUPERSONIC_SRC}/src/core/UICanvas.cpp)
 add_engine_test(test_gameruntime ${SUPERSONIC_SRC}/src/core/GameRuntime.cpp
                                  ${SUPERSONIC_SRC}/src/platform/ExecutablePath.cpp)

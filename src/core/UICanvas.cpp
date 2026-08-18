@@ -50,9 +50,46 @@ UIRect Place(UIAnchor anchor, const glm::vec2& offset, const glm::vec2& size,
     return { topLeft, topLeft + size };
 }
 
+bool Contains(const UIRect& rect, const glm::vec2& point) {
+    return point.x >= rect.min.x && point.x <= rect.max.x &&
+           point.y >= rect.min.y && point.y <= rect.max.y;
+}
+
 UIRect FillHorizontal(const UIRect& rect, float fraction) {
     const float clamped = std::clamp(fraction, 0.0f, 1.0f);
     return { rect.min, glm::vec2(rect.min.x + rect.size().x * clamped, rect.max.y) };
+}
+
+
+UIButtonState UpdateButton(const UIButtonState& previous, const UIRect& rect,
+                           const UIPointer& pointer) {
+    UIButtonState state;
+
+    // Something else owns the pointer. Everything resets, including a press
+    // that was in progress: a button left armed while a dialog is open would
+    // fire the moment the dialog closed.
+    if (!pointer.active) return state;
+
+    state.hovered = Contains(rect, pointer.position);
+
+    const bool pressEdge = pointer.down && !pointer.wasDown;
+
+    if (previous.pressed && pointer.down) {
+        // Still held. Deliberately not re-testing the rectangle: sliding off a
+        // button and back on is how every real toolkit behaves, and a player
+        // adjusting their aim mid-press should not lose the press.
+        state.pressed = true;
+    } else if (pressEdge && state.hovered) {
+        state.pressed = true;
+    }
+
+    // The release has to happen over the same button the press started on.
+    // Testing only "the pointer is up and over the button" would fire for a
+    // press that began somewhere else entirely - which is how a player who
+    // drags across a menu ends up activating whatever they let go over.
+    state.clicked = previous.pressed && !pointer.down && state.hovered;
+
+    return state;
 }
 
 } // namespace UICanvas

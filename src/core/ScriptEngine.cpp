@@ -1,4 +1,6 @@
 #include "core/ScriptEngine.hpp"
+
+#include <algorithm>
 #include "core/Input.hpp"
 #include "core/PhysicsSystem.hpp"
 #include "core/Components.hpp"
@@ -115,6 +117,69 @@ int scriptIsPlayingClip(void* opaque, unsigned int entityId, const char* clipNam
     return (animator && animator->clipName == clipName) ? 1 : 0;
 }
 
+
+// The engine side of SupersonicScriptUI. `opaque` is the registry the current
+// update is running over.
+entt::entity uiEntity(void* opaque, unsigned int entityId, entt::registry*& outRegistry) {
+    outRegistry = static_cast<entt::registry*>(opaque);
+    if (!outRegistry) return entt::null;
+
+    const auto entity = static_cast<entt::entity>(entityId);
+    return outRegistry->valid(entity) ? entity : entt::null;
+}
+
+int scriptUiWasClicked(void* opaque, unsigned int entityId) {
+    entt::registry* registry = nullptr;
+    const auto entity = uiEntity(opaque, entityId, registry);
+    if (entity == entt::null) return 0;
+
+    const auto* button = registry->try_get<UIButtonComponent>(entity);
+    return (button && button->clicked) ? 1 : 0;
+}
+
+int scriptUiIsHovered(void* opaque, unsigned int entityId) {
+    entt::registry* registry = nullptr;
+    const auto entity = uiEntity(opaque, entityId, registry);
+    if (entity == entt::null) return 0;
+
+    const auto* button = registry->try_get<UIButtonComponent>(entity);
+    return (button && button->hovered) ? 1 : 0;
+}
+
+void scriptUiSetText(void* opaque, unsigned int entityId, const char* text) {
+    entt::registry* registry = nullptr;
+    const auto entity = uiEntity(opaque, entityId, registry);
+    if (entity == entt::null || !text) return;
+
+    // Whichever of the two carries text. A caller should not have to know
+    // which kind of element it is holding to change what it says.
+    if (auto* label = registry->try_get<UITextComponent>(entity)) label->text = text;
+    if (auto* button = registry->try_get<UIButtonComponent>(entity)) button->label = text;
+}
+
+void scriptUiSetVisible(void* opaque, unsigned int entityId, int visible) {
+    entt::registry* registry = nullptr;
+    const auto entity = uiEntity(opaque, entityId, registry);
+    if (entity == entt::null) return;
+
+    const bool show = visible != 0;
+    if (auto* label = registry->try_get<UITextComponent>(entity)) label->visible = show;
+    if (auto* panel = registry->try_get<UIPanelComponent>(entity)) panel->visible = show;
+    if (auto* button = registry->try_get<UIButtonComponent>(entity)) button->visible = show;
+}
+
+void scriptUiSetFill(void* opaque, unsigned int entityId, float fill) {
+    entt::registry* registry = nullptr;
+    const auto entity = uiEntity(opaque, entityId, registry);
+    if (entity == entt::null) return;
+
+    // Clamped here as well as at draw time: a health bar driven straight from
+    // a hit-points variable goes negative on the frame the player dies.
+    if (auto* panel = registry->try_get<UIPanelComponent>(entity)) {
+        panel->fill = std::clamp(fill, 0.0f, 1.0f);
+    }
+}
+
 const SupersonicScriptInput& scriptInput() {
     static const SupersonicScriptInput api{
         nullptr, scriptIsDown, scriptWasPressed, scriptWasReleased, scriptAxis
@@ -216,6 +281,10 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
 
         const SupersonicScriptAnimation animation{&registry, scriptPlayClip, scriptIsPlayingClip};
         ctx.animation = &animation;
+
+        const SupersonicScriptUI ui{&registry, scriptUiWasClicked, scriptUiIsHovered,
+                                    scriptUiSetText, scriptUiSetVisible, scriptUiSetFill};
+        ctx.ui = &ui;
         ctx.position[0] = transform.position.x;
         ctx.position[1] = transform.position.y;
         ctx.position[2] = transform.position.z;

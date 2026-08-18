@@ -41,13 +41,29 @@ inline int summary(const char* suite) {
 #define CHECK_MSG(expr, msg) \
     ::test::report((expr), #expr, __FILE__, __LINE__, (msg))
 
+// Both arguments are evaluated exactly once.
+//
+// These used to mention each argument twice - once to compare, once to build
+// the failure message - and the order of the two is unspecified. A call with a
+// side effect therefore ran twice, in whichever order the compiler chose, and
+// the message reported a different evaluation than the one compared. The
+// symptom is a test failing with "got 1, expected 1", which sends you looking
+// for a bug in the code under test.
 #define CHECK_NEAR(a, b) \
-    ::test::report(::test::nearly((a), (b)), #a " ~= " #b, __FILE__, __LINE__, \
-        "got " + std::to_string(a) + ", expected " + std::to_string(b))
+    do { \
+        const auto _checkA = (a); \
+        const auto _checkB = (b); \
+        ::test::report(::test::nearly(_checkA, _checkB), #a " ~= " #b, __FILE__, __LINE__, \
+            "got " + std::to_string(_checkA) + ", expected " + std::to_string(_checkB)); \
+    } while (false)
 
 #define CHECK_EQ(a, b) \
-    ::test::report((a) == (b), #a " == " #b, __FILE__, __LINE__, \
-        "got " + std::to_string(a) + ", expected " + std::to_string(b))
+    do { \
+        const auto _checkA = (a); \
+        const auto _checkB = (b); \
+        ::test::report(_checkA == _checkB, #a " == " #b, __FILE__, __LINE__, \
+            "got " + std::to_string(_checkA) + ", expected " + std::to_string(_checkB)); \
+    } while (false)
 
 #define TEST_MAIN(suite) \
     int main() { runTests(); return ::test::summary(suite); }

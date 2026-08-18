@@ -203,6 +203,31 @@ void EditorLayer::buildLayout(unsigned int dockspaceId, int preset) {
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
+namespace {
+
+// The pointer, as the UI sees it.
+//
+// Taken from ImGui rather than the engine's Input layer for one reason: the UI
+// is drawn into an ImGui draw list, in ImGui's coordinate space, and hit
+// testing has to happen in the same space as the drawing or the click target
+// drifts from what is on screen. `active` is where the two worlds meet - the
+// editor hands it false whenever a panel, a menu or a drag owns the mouse.
+UICanvas::UIPointer uiPointer(bool active) {
+    const ImGuiIO& io = ImGui::GetIO();
+
+    UICanvas::UIPointer pointer;
+    pointer.position = glm::vec2(io.MousePos.x, io.MousePos.y);
+    pointer.down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    // Down last frame, which is what separates a press from a hold. Derived
+    // rather than remembered, so it cannot fall out of step with the frame.
+    pointer.wasDown = pointer.down ? !ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+                                   : ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    pointer.active = active;
+    return pointer;
+}
+
+} // namespace
+
 void EditorLayer::buildGameView(entt::registry& registry) {
     // A shipped game has no dockable panels to remember, and writing an
     // imgui.ini into the player's game folder is editor litter.
@@ -253,9 +278,12 @@ void EditorLayer::buildGameView(entt::registry& registry) {
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         ImGui::Image(m_offscreenPass->GetTextureID(), size);
 
-        // The HUD, over the game and nothing else.
-        UISystem::Render(registry, UIRect{ glm::vec2(origin.x, origin.y),
-                                           glm::vec2(origin.x + size.x, origin.y + size.y) });
+        // The HUD, over the game and nothing else. Nothing else is on screen
+        // to take the pointer, so it is always the game's.
+        UISystem::Render(registry,
+                         UIRect{ glm::vec2(origin.x, origin.y),
+                                 glm::vec2(origin.x + size.x, origin.y + size.y) },
+                         uiPointer(true));
     }
 
     ImGui::End();
@@ -582,10 +610,17 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
         // The game's own UI, drawn against the viewport rather than the window,
         // so a HUD authored here lands in the same place when the game ships.
+        // Live only while the viewport owns the mouse, and never while a gizmo
+        // is being dragged: a menu button under the gizmo would otherwise
+        // swallow the drag, and clicking through a panel that happens to
+        // overlap the viewport would press a button the user cannot see.
+        const bool uiOwnsPointer = m_viewportHovered && !ImGuizmo::IsUsing();
+
         UISystem::Render(registry,
                          UIRect{ glm::vec2(viewportPos.x, viewportPos.y),
                                  glm::vec2(viewportPos.x + viewportPanelSize.x,
-                                           viewportPos.y + viewportPanelSize.y) });
+                                           viewportPos.y + viewportPanelSize.y) },
+                         uiPointer(uiOwnsPointer));
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
             const ImVec2 mousePos = ImGui::GetMousePos();

@@ -498,6 +498,43 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // UIButtonComponent
+    if (registry.all_of<UIButtonComponent>(entity)) {
+        if (ImGui::CollapsingHeader("HUD Button", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& button = registry.get<UIButtonComponent>(entity);
+
+            char buffer[128];
+            std::snprintf(buffer, sizeof(buffer), "%s", button.label.c_str());
+            if (ImGui::InputText("Label", buffer, sizeof(buffer))) {
+                button.label = buffer;
+            }
+
+            drawAnchorCombo("Anchor##button", button.anchor);
+            ImGui::DragFloat2("Offset##button", glm::value_ptr(button.offset), 1.0f, -4000.0f, 4000.0f);
+            ImGui::DragFloat2("Size##button", glm::value_ptr(button.size), 1.0f, 8.0f, 4000.0f);
+            ImGui::DragFloat("Font Size##button", &button.fontSize, 0.5f, 4.0f, 300.0f);
+            ImGui::DragFloat("Corner Radius##button", &button.cornerRadius, 0.5f, 0.0f, 64.0f);
+
+            ImGui::ColorEdit4("Normal", glm::value_ptr(button.color));
+            ImGui::ColorEdit4("Hovered", glm::value_ptr(button.hoverColor));
+            ImGui::ColorEdit4("Pressed", glm::value_ptr(button.pressColor));
+            ImGui::ColorEdit4("Label Color", glm::value_ptr(button.textColor));
+
+            ImGui::Checkbox("Enabled", &button.enabled);
+            ImGui::SameLine();
+            ImGui::Checkbox("Visible##button", &button.visible);
+
+            // Live state, so it is obvious the button is actually reacting
+            // rather than merely drawn.
+            ImGui::TextDisabled("%s%s%s", button.hovered ? "hovered " : "",
+                                button.pressed ? "pressed " : "",
+                                (!button.hovered && !button.pressed) ? "idle" : "");
+            ImGui::TextDisabled("Scripts read clicks through ctx->ui->wasClicked.");
+        }
+    }
+
+    ImGui::Spacing();
+
     // Dynamic "Add Component" Dropdown Button
     ImGui::SetCursorPosX((ImGui::GetWindowWidth() - 160.0f) * 0.5f);
     if (ImGui::Button("+ Add Component", ImVec2(160.0f, 28.0f))) {
@@ -558,6 +595,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
         if (!registry.all_of<UIPanelComponent>(entity) && ImGui::MenuItem("HUD Panel")) {
             registry.emplace<UIPanelComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<UIButtonComponent>(entity) && ImGui::MenuItem("HUD Button")) {
+            registry.emplace<UIButtonComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

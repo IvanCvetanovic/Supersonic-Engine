@@ -297,6 +297,12 @@ void SceneHierarchyPanel::drawCreateMenu() {
         panel.fill = 0.7f;
         m_selectedEntity = entity;
     }
+    if (ImGui::MenuItem("Create HUD Button")) {
+        const auto entity = m_registry->create();
+        m_registry->emplace<TagComponent>(entity, "HUD Button");
+        m_registry->emplace<UIButtonComponent>(entity);
+        m_selectedEntity = entity;
+    }
     if (ImGui::MenuItem("Create Camera")) {
         const auto entity = registry.create();
         registry.emplace<TagComponent>(entity, "Camera");

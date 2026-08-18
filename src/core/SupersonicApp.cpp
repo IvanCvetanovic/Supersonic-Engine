@@ -401,6 +401,19 @@ void SupersonicApp::initECS() {
     health.cornerRadius = 13.0f;
     health.fill = 0.72f;
 
+    // A button, so the in-game UI is demonstrably interactive rather than
+    // merely drawn. The script counts its own clicks into its own label.
+    auto hudButton = m_registry.create();
+    m_registry.emplace<TagComponent>(hudButton, "HUD Button");
+    auto& demoButton = m_registry.emplace<UIButtonComponent>(hudButton);
+    demoButton.label = "CLICK ME";
+    demoButton.anchor = UIAnchor::BottomRight;
+    demoButton.offset = glm::vec2(32.0f, 32.0f);
+    demoButton.size = glm::vec2(240.0f, 56.0f);
+    demoButton.fontSize = 24.0f;
+    auto& buttonScript = m_registry.emplace<ScriptComponent>(hudButton);
+    buttonScript.scriptName = "ClickCounterScript";
+
     std::cout << "[SupersonicApp] Scene created." << std::endl;
 }
 
