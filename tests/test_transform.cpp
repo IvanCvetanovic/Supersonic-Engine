@@ -8,6 +8,7 @@
 
 #include "TestHarness.hpp"
 #include "core/Components.hpp"
+#include "core/EcsUtils.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -93,11 +94,74 @@ static void testCameraVectorsStayOrthonormal() {
     CHECK_NEAR(glm::dot(cam.right, cam.up), 0.0f);
 }
 
+// Which light supplies the scene's ambient.
+//
+// This used to be whichever light EnTT iterated first, and EnTT walks its
+// packed array backwards, so it was the light created LAST: a sun carrying a
+// carefully authored sky colour was ignored in favour of a lamp's default, and
+// adding any light changed the ambient of the whole scene.
+static void testAmbientComesFromTheSkyLight() {
+    entt::registry registry;
+
+    // Created first, so it is the LAST one EnTT hands back - which is exactly
+    // the case that used to pick the wrong light.
+    const auto sun = registry.create();
+    auto& sunLight = registry.emplace<LightComponent>(sun);
+    sunLight.type = static_cast<int>(LightType::Directional);
+    sunLight.castsShadow = true;
+
+    const auto lamp = registry.create();
+    auto& lampLight = registry.emplace<LightComponent>(lamp);
+    lampLight.type = static_cast<int>(LightType::Point);
+
+    CHECK_MSG(FindAmbientLight(registry) == sun,
+              "the shadow-casting directional light supplies the ambient, "
+              "not whichever light happens to be iterated first");
+}
+
+static void testANonCastingDirectionalStillBeatsAPointLight() {
+    entt::registry registry;
+
+    const auto lamp = registry.create();
+    registry.emplace<LightComponent>(lamp).type = static_cast<int>(LightType::Point);
+
+    const auto sun = registry.create();
+    auto& sunLight = registry.emplace<LightComponent>(sun);
+    sunLight.type = static_cast<int>(LightType::Directional);
+    sunLight.castsShadow = false;
+
+    CHECK_MSG(FindAmbientLight(registry) == sun,
+              "hemispheric ambient stands in for the sky, so a directional "
+              "light supplies it whether or not it casts");
+}
+
+static void testAPointLightOnlySceneStillHasAmbient() {
+    // Order-dependent by design in this case: with no directional light there
+    // is no sky light to prefer, and any answer is as good as another. What
+    // must not happen is returning nothing, which would leave the scene black
+    // rather than merely differently lit.
+    entt::registry registry;
+    const auto lamp = registry.create();
+    registry.emplace<LightComponent>(lamp).type = static_cast<int>(LightType::Point);
+
+    CHECK_MSG(FindAmbientLight(registry) != entt::null,
+              "a scene of nothing but lamps must still get an ambient term");
+}
+
+static void testAnEmptySceneHasNoAmbientLight() {
+    entt::registry registry;
+    CHECK(FindAmbientLight(registry) == entt::null);
+}
+
 static void runTests() {
     testDepthRangeIsZeroToOne();
     testProjectionFlipsYForVulkan();
     testModelMatrixEulerOrder();
     testCameraVectorsStayOrthonormal();
+    testAmbientComesFromTheSkyLight();
+    testANonCastingDirectionalStillBeatsAPointLight();
+    testAPointLightOnlySceneStillHasAmbient();
+    testAnEmptySceneHasNoAmbientLight();
 }
 
 TEST_MAIN("test_transform")

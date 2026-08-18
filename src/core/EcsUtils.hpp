@@ -38,7 +38,10 @@ inline entt::entity FindPrimaryCamera(entt::registry& registry) {
 // Hemispheric ambient stands in for the sky, so the sky light is the one that
 // should supply it: the first shadow-casting directional light, then any
 // directional light, then whatever exists at all so a scene of nothing but
-// point lights is not black.
+// point lights is not black. That last case is order-dependent, deliberately:
+// with no directional light there is no sky light to prefer and any lamp is as
+// good an answer as another - what matters is that there IS one, or the scene
+// goes black rather than merely differently lit.
 inline entt::entity FindAmbientLight(entt::registry& registry) {
     entt::entity anyDirectional = entt::null;
     entt::entity anyLight = entt::null;
