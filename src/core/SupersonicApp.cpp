@@ -309,7 +309,12 @@ void SupersonicApp::initECS() {
     m_registry.emplace<MeshComponent>(physCube, "Cube", "", 24u, 36u);
     auto& physMat = m_registry.emplace<MaterialComponent>(physCube);
     physMat.albedoTexturePath = "assets/textures/uv_grid.png";
-    m_registry.emplace<RigidBodyComponent>(physCube);
+    // Dropped spinning and slightly off centre, so the demo scene shows a
+    // crate tumbling and settling rather than descending perfectly level -
+    // which is all a scene without rotational dynamics could ever do.
+    auto& physBody = m_registry.emplace<RigidBodyComponent>(physCube);
+    physBody.angularVelocity = glm::vec3(0.0f, 1.2f, 2.4f);
+    physBody.restitution = 0.45f;
     m_registry.emplace<BoxColliderComponent>(physCube);
     m_registry.emplace<RenderableComponent>(physCube);
 

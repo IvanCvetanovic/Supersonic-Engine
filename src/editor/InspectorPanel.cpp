@@ -228,6 +228,17 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             auto& rb = registry.get<RigidBodyComponent>(entity);
 
             ImGui::Checkbox("Use Gravity", &rb.useGravity);
+
+            ImGui::SliderFloat("Restitution", &rb.restitution, 0.0f, 0.99f);
+            ImGui::SliderFloat("Friction", &rb.friction, 0.0f, 2.0f);
+            ImGui::TextDisabled("Bounce takes the livelier surface; grip is the "
+                                "geometric mean, so ice stays slippery.");
+
+            ImGui::DragFloat("Linear Damping", &rb.linearDamping, 0.01f, 0.0f, 1.0f);
+            Theme::DrawVec3Control("Angular Velocity", rb.angularVelocity, 0.0f);
+            ImGui::DragFloat("Angular Damping", &rb.angularDamping, 0.01f, 0.0f, 1.0f);
+            ImGui::Checkbox("Freeze Rotation", &rb.freezeRotation);
+            ImGui::TextDisabled("Frozen bodies are pushed around but never tip over.");
             ImGui::Checkbox("Is Kinematic", &rb.isKinematic);
             ImGui::DragFloat("Mass", &rb.mass, 0.1f, 0.01f, 1000.0f);
             Theme::DrawVec3Control("Velocity", rb.velocity, 0.0f);

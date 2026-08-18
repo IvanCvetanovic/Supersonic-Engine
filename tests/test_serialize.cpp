@@ -311,6 +311,11 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     auto& body = registry.emplace<RigidBodyComponent>(entity);
     body.mass = 12.0f;
     body.useGravity = false;
+    body.restitution = 0.85f;
+    body.friction = 1.2f;
+    body.linearDamping = 0.25f;
+    body.angularVelocity = glm::vec3(0.0f, 3.5f, 0.0f);
+    body.freezeRotation = true;
 
     auto& box = registry.emplace<BoxColliderComponent>(entity);
     box.size = glm::vec3(3.0f, 1.0f, 2.0f);
@@ -480,6 +485,12 @@ static void testPrefabRoundTripsEveryField() {
         if (body) {
             CHECK_NEAR(body->mass, 12.0f);
             CHECK(!body->useGravity);
+            CHECK_NEAR(body->restitution, 0.85f);
+            CHECK_NEAR(body->friction, 1.2f);
+            CHECK_NEAR(body->linearDamping, 0.25f);
+            CHECK_NEAR(body->angularVelocity.y, 3.5f);
+            CHECK_MSG(body->freezeRotation,
+                      "a body that must not tip over has to come back that way");
         }
 
         const auto* box = registry.try_get<BoxColliderComponent>(clone);

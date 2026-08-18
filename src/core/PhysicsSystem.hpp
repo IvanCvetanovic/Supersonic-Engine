@@ -48,6 +48,11 @@ public:
     static void SweepAndPrune(std::vector<Proxy>& proxies,
                               std::vector<std::pair<size_t, size_t>>& outPairs);
 
+    // How two surfaces combine, exposed because the rules are choices rather
+    // than arithmetic and each is wrong in a way that only shows up in play.
+    static float CombineRestitution(float a, float b);
+    static float CombineFriction(float a, float b);
+
     // ---- Queries ----
     //
     // Gameplay had no way to ask the world a question: no ground check, no

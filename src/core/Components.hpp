@@ -278,6 +278,37 @@ struct RigidBodyComponent {
     float mass{1.0f};
     bool isKinematic{false};
     bool useGravity{true};
+
+    // How much of the approach speed comes back as bounce, and how hard it is
+    // to slide. These were one pair of constants for the entire world, so a
+    // rubber ball and a wooden crate behaved identically - which is not a
+    // tuning problem, it is the absence of the setting.
+    //
+    // 0 is dead, 1 bounces forever. Above 1 gains energy every impact and
+    // shakes the scene apart, so the solver clamps.
+    float restitution{0.3f};
+
+    // 0 is ice. There is no upper bound in principle - rubber on rubber is
+    // above 1 - but the solver clamps to something sane rather than letting a
+    // typo stop a body dead.
+    float friction{0.4f};
+
+    // Bleeds off speed with no contact involved: air resistance, near enough.
+    // Zero is a vacuum, which is what this used to be, and is why a nudged
+    // body drifted forever.
+    float linearDamping{0.0f};
+
+    // Radians per second about each world axis. Nothing rotated at all before
+    // this: a crate dropped on its corner landed flat, a ball never rolled,
+    // and a hit off the centre of mass pushed a body without turning it.
+    glm::vec3 angularVelocity{0.0f};
+
+    float angularDamping{0.05f};
+
+    // Locks rotation. A character or a camera boom wants to be pushed around
+    // without ever tipping over, and the alternative - an enormous inertia -
+    // is a number nobody can pick correctly.
+    bool freezeRotation{false};
 };
 
 struct BoxColliderComponent {

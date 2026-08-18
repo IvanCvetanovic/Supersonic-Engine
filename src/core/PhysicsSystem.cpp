@@ -1,4 +1,7 @@
 #include "core/PhysicsSystem.hpp"
+
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/quaternion.hpp>
 #include "core/Components.hpp"
 
 #include <algorithm>
@@ -10,6 +13,8 @@ namespace {
 
 constexpr float kGravity = -9.81f;
 constexpr float kGroundPlaneY = 0.0f;
+// Defaults for a body that has no RigidBodyComponent at all - a static
+// collider. A body that has one carries its own.
 constexpr float kRestitution = 0.3f;
 constexpr float kRestVelocity = 0.1f;
 
@@ -23,6 +28,25 @@ constexpr float kCorrection = 0.8f;
 // Coulomb friction. Without it a box landing on a slope slides forever and a
 // stack of boxes never settles laterally.
 constexpr float kFriction = 0.4f;
+
+// How two surfaces combine.
+//
+// Restitution takes the larger of the two: a superball dropped on concrete
+// bounces, and taking the smaller or the average would mean any dead surface
+// killed every ball that touched it.
+float combineRestitution(float a, float b) {
+    return std::clamp(std::max(a, b), 0.0f, 0.99f);
+}
+
+// Friction is the geometric mean, which is the usual choice and has the
+// property that matters: ice against anything is still slippery, because a
+// zero on either side takes the result to zero. An average would let a rough
+// floor grip a puck.
+float combineFriction(float a, float b) {
+    const float clampedA = std::clamp(a, 0.0f, 4.0f);
+    const float clampedB = std::clamp(b, 0.0f, 4.0f);
+    return std::sqrt(clampedA * clampedB);
+}
 
 enum class Shape { Box, Sphere };
 
@@ -40,6 +64,11 @@ struct Body {
 
     float inverseMass{0.0f};
     bool isTrigger{false};
+
+    // World-space inverse inertia. Zero for anything that cannot turn, which
+    // makes the impulse arithmetic treat it as infinitely hard to turn without
+    // a branch at every use.
+    glm::mat3 inverseInertia{0.0f};
 
     // Converts a world-space displacement into the entity's local space. A
     // parented body stores its position relative to its parent, so applying a
@@ -87,14 +116,70 @@ float inverseMassOf(const RigidBodyComponent* rigidBody) {
     return 1.0f / rigidBody->mass;
 }
 
+
+// Inverse inertia, in the body's own axes, as a diagonal.
+//
+// Both shapes are symmetric enough that the tensor is diagonal in local axes,
+// which is what keeps this three floats instead of a matrix: a box about its
+// centre and a solid sphere both have no products of inertia.
+//
+// A body that cannot rotate - static, kinematic, or explicitly frozen - gets
+// zero, which falls out of the impulse arithmetic as "infinitely hard to
+// turn" without needing a branch at every use.
+glm::vec3 inverseInertiaLocal(const RigidBodyComponent* rigidBody, Shape shape,
+                              const glm::vec3& halfExtent, float radius) {
+    if (!rigidBody || rigidBody->isKinematic || rigidBody->freezeRotation) return glm::vec3(0.0f);
+    if (rigidBody->mass <= 0.0f) return glm::vec3(0.0f);
+
+    const float mass = rigidBody->mass;
+
+    if (shape == Shape::Sphere) {
+        // Solid sphere: 2/5 m r^2 about every axis.
+        const float inertia = 0.4f * mass * radius * radius;
+        return inertia > 1e-9f ? glm::vec3(1.0f / inertia) : glm::vec3(0.0f);
+    }
+
+    // Solid box, from FULL extents: m/12 * (y^2 + z^2) about x, and so on.
+    const glm::vec3 full = halfExtent * 2.0f;
+    const glm::vec3 inertia(
+        mass * (full.y * full.y + full.z * full.z) / 12.0f,
+        mass * (full.x * full.x + full.z * full.z) / 12.0f,
+        mass * (full.x * full.x + full.y * full.y) / 12.0f);
+
+    return glm::vec3(inertia.x > 1e-9f ? 1.0f / inertia.x : 0.0f,
+                     inertia.y > 1e-9f ? 1.0f / inertia.y : 0.0f,
+                     inertia.z > 1e-9f ? 1.0f / inertia.z : 0.0f);
+}
+
+// The same tensor in world axes: R * I * R^T, which for a diagonal I is the
+// sum of each axis scaled by its column.
+glm::mat3 worldInverseInertia(const glm::vec3& inverseLocal, const glm::mat3& orientation) {
+    glm::mat3 result(0.0f);
+    for (int axis = 0; axis < 3; ++axis) {
+        const glm::vec3 column = orientation[axis];
+        result += inverseLocal[axis] * glm::outerProduct(column, column);
+    }
+    return result;
+}
+
 // Box against box, as world AABBs. The separating axis is the one of least
 // overlap, which is what makes a body landing on top of another get pushed up
 // rather than sideways.
-bool collideBoxBox(const Body& a, const Body& b, glm::vec3& normal, float& penetration) {
+bool collideBoxBox(const Body& a, const Body& b, glm::vec3& normal, float& penetration,
+                   glm::vec3& point) {
     const glm::vec3 delta = b.centre - a.centre;
     const glm::vec3 overlap = (a.halfExtent + b.halfExtent) - glm::abs(delta);
 
     if (overlap.x <= 0.0f || overlap.y <= 0.0f || overlap.z <= 0.0f) return false;
+
+    // The middle of the overlapping region. A single point stands in for
+    // what is really a face or an edge, which is why a box settling flat
+    // still rocks slightly before it comes to rest - but it is on the right
+    // side of the centre of mass, which is what decides which way a crate
+    // tips when it lands on the corner of something.
+    const glm::vec3 overlapMin = glm::max(a.centre - a.halfExtent, b.centre - b.halfExtent);
+    const glm::vec3 overlapMax = glm::min(a.centre + a.halfExtent, b.centre + b.halfExtent);
+    point = (overlapMin + overlapMax) * 0.5f;
 
     if (overlap.x <= overlap.y && overlap.x <= overlap.z) {
         penetration = overlap.x;
@@ -109,7 +194,8 @@ bool collideBoxBox(const Body& a, const Body& b, glm::vec3& normal, float& penet
     return true;
 }
 
-bool collideSphereSphere(const Body& a, const Body& b, glm::vec3& normal, float& penetration) {
+bool collideSphereSphere(const Body& a, const Body& b, glm::vec3& normal, float& penetration,
+                         glm::vec3& point) {
     const glm::vec3 delta = b.centre - a.centre;
     const float sum = a.radius + b.radius;
     const float distanceSquared = glm::dot(delta, delta);
@@ -122,17 +208,21 @@ bool collideSphereSphere(const Body& a, const Body& b, glm::vec3& normal, float&
         // launched sideways at enormous speed.
         normal = glm::vec3(0.0f, 1.0f, 0.0f);
         penetration = sum;
+        point = a.centre;
         return true;
     }
 
     normal = delta / distance;
     penetration = sum - distance;
+    // On the line of centres, between the two surfaces.
+    point = a.centre + normal * (a.radius - penetration * 0.5f);
     return true;
 }
 
 // Sphere against box, via the closest point on the box. Exact, unlike treating
 // the sphere as its own bounding box, which would let it catch on corners.
-bool collideBoxSphere(const Body& box, const Body& sphere, glm::vec3& normal, float& penetration) {
+bool collideBoxSphere(const Body& box, const Body& sphere, glm::vec3& normal, float& penetration,
+                      glm::vec3& point) {
     const glm::vec3 boxMin = box.centre - box.halfExtent;
     const glm::vec3 boxMax = box.centre + box.halfExtent;
     const glm::vec3 closest = glm::clamp(sphere.centre, boxMin, boxMax);
@@ -141,6 +231,10 @@ bool collideBoxSphere(const Body& box, const Body& sphere, glm::vec3& normal, fl
     const float distanceSquared = glm::dot(delta, delta);
 
     if (distanceSquared > sphere.radius * sphere.radius) return false;
+
+    // The closest point on the box IS the contact, which is exact here
+    // rather than the approximation box-box has to make.
+    point = closest;
 
     if (distanceSquared > 1e-12f) {
         const float distance = std::sqrt(distanceSquared);
@@ -195,6 +289,9 @@ void PhysicsSystem::SweepAndPrune(std::vector<Proxy>& proxies,
     }
 }
 
+float PhysicsSystem::CombineRestitution(float a, float b) { return combineRestitution(a, b); }
+float PhysicsSystem::CombineFriction(float a, float b) { return combineFriction(a, b); }
+
 void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                            std::vector<Contact>* outContacts) {
     if (outContacts) outContacts->clear();
@@ -217,6 +314,39 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // of falling straight down.
         const glm::mat4 parentWorld = parentWorldMatrix(registry, entity);
         const glm::mat3 worldToLocal = glm::inverse(glm::mat3(parentWorld));
+        // Air resistance. Framerate-independent: a fixed multiplier per step
+        // would damp twice as hard at 120Hz as at 60Hz, so the same scene
+        // would behave differently on a faster machine.
+        if (rigidBody.linearDamping > 0.0f) {
+            rigidBody.velocity *= std::pow(std::max(0.0f, 1.0f - rigidBody.linearDamping),
+                                           deltaTime);
+        }
+
+        if (rigidBody.freezeRotation) {
+            rigidBody.angularVelocity = glm::vec3(0.0f);
+        } else {
+            if (rigidBody.angularDamping > 0.0f) {
+                rigidBody.angularVelocity *=
+                    std::pow(std::max(0.0f, 1.0f - rigidBody.angularDamping), deltaTime);
+            }
+
+            // Integrated as a quaternion and written back as Euler angles.
+            //
+            // Adding the angular velocity to the Euler triple directly is only
+            // correct for spin about one axis at a time: Euler rates are not
+            // the angular velocity, and a body tumbling about two axes at once
+            // would wander off in a way that looks like the physics is broken.
+            // The transform stores Euler because that is what an inspector can
+            // sensibly edit, so the conversion happens here, once per step.
+            const float speed = glm::length(rigidBody.angularVelocity);
+            if (speed > 1e-6f) {
+                const glm::quat current(transform.rotation);
+                const glm::quat spin =
+                    glm::angleAxis(speed * deltaTime, rigidBody.angularVelocity / speed);
+                transform.rotation = glm::eulerAngles(glm::normalize(spin * current));
+            }
+        }
+
         transform.position += worldToLocal * (rigidBody.velocity * deltaTime);
 
         // Resolve against the bottom of the collider, not the transform origin.
@@ -245,7 +375,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // Only reflect when actually moving into the plane. Inverting
             // unconditionally re-launched bodies that were already rising.
             if (rigidBody.velocity.y < 0.0f) {
-                rigidBody.velocity.y = -rigidBody.velocity.y * kRestitution;
+                rigidBody.velocity.y = -rigidBody.velocity.y *
+                    std::clamp(rigidBody.restitution, 0.0f, 0.99f);
                 if (std::fabs(rigidBody.velocity.y) < kRestVelocity) {
                     rigidBody.velocity.y = 0.0f;
                 }
@@ -289,6 +420,18 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         body.min = body.centre - body.halfExtent;
         body.max = body.centre + body.halfExtent;
 
+        // Computed after the shape is final, because a sphere collapses its
+        // half extents to one radius above and a box does not.
+        //
+        // In the collider's own axes, so a long crate is harder to spin about
+        // its length than across it - and rotated into world space, because
+        // that is where the impulses are.
+        const glm::mat3 orientation = glm::mat3_cast(glm::quat(transform->rotation));
+        body.inverseInertia = worldInverseInertia(
+            inverseInertiaLocal(registry.try_get<RigidBodyComponent>(entity),
+                                shape, body.halfExtent, body.radius),
+            orientation);
+
         Proxy proxy;
         proxy.entity = entity;
         proxy.index = bodies.size();
@@ -326,18 +469,19 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
         glm::vec3 normal(0.0f, 1.0f, 0.0f);
         float penetration = 0.0f;
+        glm::vec3 point = (a.centre + b.centre) * 0.5f;
         bool hit = false;
 
         if (a.shape == Shape::Box && b.shape == Shape::Box) {
-            hit = collideBoxBox(a, b, normal, penetration);
+            hit = collideBoxBox(a, b, normal, penetration, point);
         } else if (a.shape == Shape::Sphere && b.shape == Shape::Sphere) {
-            hit = collideSphereSphere(a, b, normal, penetration);
+            hit = collideSphereSphere(a, b, normal, penetration, point);
         } else if (a.shape == Shape::Box) {
-            hit = collideBoxSphere(a, b, normal, penetration);
+            hit = collideBoxSphere(a, b, normal, penetration, point);
         } else {
             // Sphere against box: solve it the other way round and flip, so
             // there is one implementation rather than two that can disagree.
-            hit = collideBoxSphere(b, a, normal, penetration);
+            hit = collideBoxSphere(b, a, normal, penetration, point);
             normal = -normal;
         }
 
@@ -379,8 +523,20 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         auto* rigidA = registry.try_get<RigidBodyComponent>(a.entity);
         auto* rigidB = registry.try_get<RigidBodyComponent>(b.entity);
 
-        const glm::vec3 velocityA = (rigidA && a.inverseMass > 0.0f) ? rigidA->velocity : glm::vec3(0.0f);
-        const glm::vec3 velocityB = (rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f);
+        // Where the contact is, relative to each centre of mass. This is the
+        // whole of the difference between a body that slides and one that
+        // turns: an impulse through the centre only pushes, the same impulse
+        // applied at arm's length also spins.
+        const glm::vec3 armA = point - a.centre;
+        const glm::vec3 armB = point - b.centre;
+
+        const glm::vec3 spinA = (rigidA && a.inverseMass > 0.0f) ? rigidA->angularVelocity : glm::vec3(0.0f);
+        const glm::vec3 spinB = (rigidB && b.inverseMass > 0.0f) ? rigidB->angularVelocity : glm::vec3(0.0f);
+
+        const glm::vec3 velocityA = ((rigidA && a.inverseMass > 0.0f) ? rigidA->velocity : glm::vec3(0.0f))
+                                  + glm::cross(spinA, armA);
+        const glm::vec3 velocityB = ((rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f))
+                                  + glm::cross(spinB, armB);
 
         const glm::vec3 relative = velocityB - velocityA;
         const float alongNormal = glm::dot(relative, normal);
@@ -389,32 +545,71 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         if (alongNormal > 0.0f) continue;
 
         // Bounce dies out near rest, otherwise a settling box jitters forever.
-        const float restitution = (std::abs(alongNormal) < kRestVelocity) ? 0.0f : kRestitution;
+        const float bounceA = rigidA ? rigidA->restitution : kRestitution;
+        const float bounceB = rigidB ? rigidB->restitution : kRestitution;
+        const float restitution = (std::abs(alongNormal) < kRestVelocity)
+                                ? 0.0f
+                                : combineRestitution(bounceA, bounceB);
 
-        const float impulse = -(1.0f + restitution) * alongNormal / inverseSum;
+        // Effective mass along the normal, including how hard each body is to
+        // turn about this contact. Using the linear term alone would apply an
+        // impulse far too large for a glancing hit near a corner.
+        const glm::vec3 angularA = glm::cross(a.inverseInertia * glm::cross(armA, normal), armA);
+        const glm::vec3 angularB = glm::cross(b.inverseInertia * glm::cross(armB, normal), armB);
+        const float effectiveMass = inverseSum + glm::dot(angularA + angularB, normal);
+        if (effectiveMass <= 1e-9f) continue;
+
+        const float impulse = -(1.0f + restitution) * alongNormal / effectiveMass;
         const glm::vec3 impulseVector = normal * impulse;
 
-        if (rigidA && a.inverseMass > 0.0f) rigidA->velocity -= impulseVector * a.inverseMass;
-        if (rigidB && b.inverseMass > 0.0f) rigidB->velocity += impulseVector * b.inverseMass;
+        if (rigidA && a.inverseMass > 0.0f) {
+            rigidA->velocity -= impulseVector * a.inverseMass;
+            rigidA->angularVelocity -= a.inverseInertia * glm::cross(armA, impulseVector);
+        }
+        if (rigidB && b.inverseMass > 0.0f) {
+            rigidB->velocity += impulseVector * b.inverseMass;
+            rigidB->angularVelocity += b.inverseInertia * glm::cross(armB, impulseVector);
+        }
 
         // Coulomb friction along the contact tangent, clamped to the normal
         // impulse so it can slow sliding but never reverse it.
+        // Recomputed at the contact, spin included: friction on a rolling ball
+        // acts on the surface speed, which is zero when it rolls without
+        // slipping and is the entire reason a ball rolls instead of sliding.
+        const glm::vec3 postSpinA = (rigidA && a.inverseMass > 0.0f) ? rigidA->angularVelocity : glm::vec3(0.0f);
+        const glm::vec3 postSpinB = (rigidB && b.inverseMass > 0.0f) ? rigidB->angularVelocity : glm::vec3(0.0f);
+
         const glm::vec3 postRelative =
-            ((rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f)) -
-            ((rigidA && a.inverseMass > 0.0f) ? rigidA->velocity : glm::vec3(0.0f));
+            (((rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f))
+                + glm::cross(postSpinB, armB)) -
+            (((rigidA && a.inverseMass > 0.0f) ? rigidA->velocity : glm::vec3(0.0f))
+                + glm::cross(postSpinA, armA));
 
         glm::vec3 tangent = postRelative - normal * glm::dot(postRelative, normal);
         const float tangentLength = glm::length(tangent);
         if (tangentLength < 1e-5f) continue;
         tangent /= tangentLength;
 
-        float frictionImpulse = -glm::dot(postRelative, tangent) / inverseSum;
-        const float maxFriction = kFriction * std::abs(impulse);
+        const glm::vec3 tangentialA = glm::cross(a.inverseInertia * glm::cross(armA, tangent), armA);
+        const glm::vec3 tangentialB = glm::cross(b.inverseInertia * glm::cross(armB, tangent), armB);
+        const float tangentMass = inverseSum + glm::dot(tangentialA + tangentialB, tangent);
+        if (tangentMass <= 1e-9f) continue;
+
+        float frictionImpulse = -glm::dot(postRelative, tangent) / tangentMass;
+        const float gripA = rigidA ? rigidA->friction : kFriction;
+        const float gripB = rigidB ? rigidB->friction : kFriction;
+        const float maxFriction = combineFriction(gripA, gripB) * std::abs(impulse);
         frictionImpulse = std::clamp(frictionImpulse, -maxFriction, maxFriction);
 
         const glm::vec3 frictionVector = tangent * frictionImpulse;
-        if (rigidA && a.inverseMass > 0.0f) rigidA->velocity -= frictionVector * a.inverseMass;
-        if (rigidB && b.inverseMass > 0.0f) rigidB->velocity += frictionVector * b.inverseMass;
+        if (rigidA && a.inverseMass > 0.0f) {
+            rigidA->velocity -= frictionVector * a.inverseMass;
+            rigidA->angularVelocity -= a.inverseInertia * glm::cross(armA, frictionVector);
+        }
+        if (rigidB && b.inverseMass > 0.0f) {
+            rigidB->velocity += frictionVector * b.inverseMass;
+            rigidB->angularVelocity += b.inverseInertia * glm::cross(armB, frictionVector);
+        }
     }
 }
 

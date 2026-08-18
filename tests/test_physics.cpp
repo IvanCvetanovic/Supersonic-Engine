@@ -15,6 +15,9 @@
 #include "core/TransformSystem.hpp"
 
 #include <cmath>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/constants.hpp>
+#include <string>
 #include <vector>
 
 using namespace Supersonic;
@@ -526,6 +529,200 @@ static void testGroundCheck() {
               "the world plane counts as ground");
 }
 
+// --- materials --------------------------------------------------------------
+//
+// Bounce and grip used to be two constants for the whole world, so a rubber
+// ball and a wooden crate behaved identically. That is not a tuning problem;
+// it is the absence of the setting.
+
+static void testRestitutionTakesTheBouncierSurface() {
+    // A superball dropped on concrete bounces. Taking the smaller - or the
+    // average - would mean any dead surface killed every ball that touched it.
+    CHECK_NEAR(PhysicsSystem::CombineRestitution(0.9f, 0.0f), 0.9f);
+    CHECK_NEAR(PhysicsSystem::CombineRestitution(0.2f, 0.5f), 0.5f);
+}
+
+static void testRestitutionCannotGainEnergy() {
+    // Above 1 a body leaves every impact faster than it arrived, and the scene
+    // shakes itself apart within seconds.
+    CHECK_MSG(PhysicsSystem::CombineRestitution(5.0f, 5.0f) < 1.0f,
+              "restitution must stay below 1 or bouncing adds energy");
+    CHECK_MSG(PhysicsSystem::CombineRestitution(-3.0f, 0.0f) >= 0.0f,
+              "and negative restitution must not suck bodies together");
+}
+
+static void testFrictionIsZeroIfEitherSurfaceIsIce() {
+    // The geometric mean has the property that matters: ice against anything
+    // is still slippery. An average would let a rough floor grip a puck.
+    CHECK_NEAR(PhysicsSystem::CombineFriction(0.0f, 1.0f), 0.0f);
+    CHECK_NEAR(PhysicsSystem::CombineFriction(0.4f, 0.4f), 0.4f);
+}
+
+static void testABouncierBallReboundsHigher() {
+    // The property has to reach the solver, not merely be stored.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(40.0f, 1.0f, 40.0f));
+
+    const auto dead = makeSphere(registry, glm::vec3(-4.0f, 3.0f, 0.0f));
+    registry.get<RigidBodyComponent>(dead).restitution = 0.0f;
+
+    const auto bouncy = makeSphere(registry, glm::vec3(4.0f, 3.0f, 0.0f));
+    registry.get<RigidBodyComponent>(bouncy).restitution = 0.9f;
+
+    stepFor(registry, 2.0f);
+
+    const float deadHeight = registry.get<TransformComponent>(dead).position.y;
+    const float bouncyHeight = registry.get<TransformComponent>(bouncy).position.y;
+
+    CHECK_MSG(bouncyHeight > deadHeight + 0.05f,
+              "the bouncier ball must still be higher: dead " + std::to_string(deadHeight) +
+                  " vs bouncy " + std::to_string(bouncyHeight));
+}
+
+static void testDampingSlowsABodyWithNothingTouchingIt() {
+    entt::registry registry;
+
+    const auto drifting = registry.create();
+    registry.emplace<TransformComponent>(drifting, glm::vec3(0.0f, 50.0f, 0.0f));
+    auto& body = registry.emplace<RigidBodyComponent>(drifting);
+    body.useGravity = false;
+    body.velocity = glm::vec3(10.0f, 0.0f, 0.0f);
+    body.linearDamping = 0.9f;
+
+    stepFor(registry, 1.0f);
+
+    const float speed = glm::length(registry.get<RigidBodyComponent>(drifting).velocity);
+    CHECK_MSG(speed < 5.0f, "damping must bleed off speed: got " + std::to_string(speed));
+    CHECK_MSG(speed > 0.0f, "but not stop the body dead in one second");
+}
+
+// --- rotation ---------------------------------------------------------------
+//
+// Nothing rotated at all: a crate dropped on its corner landed flat, a ball
+// never rolled, and a hit off the centre of mass pushed a body without turning
+// it.
+
+static void testAngularVelocityTurnsTheTransform() {
+    entt::registry registry;
+
+    const auto spinner = registry.create();
+    registry.emplace<TransformComponent>(spinner, glm::vec3(0.0f, 50.0f, 0.0f));
+    auto& body = registry.emplace<RigidBodyComponent>(spinner);
+    body.useGravity = false;
+    body.angularDamping = 0.0f;
+    // A quarter turn per second about Y.
+    body.angularVelocity = glm::vec3(0.0f, glm::half_pi<float>(), 0.0f);
+
+    stepFor(registry, 1.0f);
+
+    // Compared as a rotation rather than as three numbers: the Euler triple
+    // for a given orientation is not unique, so checking the angles directly
+    // fails on a representation change that means nothing.
+    const glm::quat actual(registry.get<TransformComponent>(spinner).rotation);
+    const glm::quat expected =
+        glm::angleAxis(glm::half_pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
+
+    const float alignment = std::abs(glm::dot(glm::normalize(actual), glm::normalize(expected)));
+    CHECK_MSG(alignment > 0.99f,
+              "a quarter turn per second must be a quarter turn after a second: "
+              "alignment " + std::to_string(alignment));
+}
+
+static void testFrozenRotationNeverTurns() {
+    // A character or a camera boom wants to be shoved around without tipping.
+    entt::registry registry;
+
+    const auto upright = registry.create();
+    registry.emplace<TransformComponent>(upright, glm::vec3(0.0f, 50.0f, 0.0f));
+    auto& body = registry.emplace<RigidBodyComponent>(upright);
+    body.useGravity = false;
+    body.freezeRotation = true;
+    body.angularVelocity = glm::vec3(3.0f, 3.0f, 3.0f);
+
+    stepFor(registry, 1.0f);
+
+    const glm::vec3 rotation = registry.get<TransformComponent>(upright).rotation;
+    CHECK_MSG(glm::length(rotation) < 1e-4f, "a frozen body must not turn at all");
+    CHECK_MSG(glm::length(registry.get<RigidBodyComponent>(upright).angularVelocity) < 1e-6f,
+              "and its spin must be cleared, not merely ignored");
+}
+
+static void testAngularDampingSlowsSpin() {
+    entt::registry registry;
+
+    const auto spinner = registry.create();
+    registry.emplace<TransformComponent>(spinner, glm::vec3(0.0f, 50.0f, 0.0f));
+    auto& body = registry.emplace<RigidBodyComponent>(spinner);
+    body.useGravity = false;
+    body.angularVelocity = glm::vec3(0.0f, 8.0f, 0.0f);
+    body.angularDamping = 0.9f;
+
+    stepFor(registry, 1.0f);
+
+    const float speed = registry.get<RigidBodyComponent>(spinner).angularVelocity.y;
+    CHECK_MSG(speed < 4.0f, "spin must decay: got " + std::to_string(speed));
+    CHECK_MSG(speed > 0.0f, "but not reverse");
+}
+
+static void testAnOffCentreImpactCreatesSpin() {
+    // The whole point. A box landing with only one corner over an obstacle
+    // must start turning; before this it stayed perfectly level.
+    entt::registry registry;
+
+    // A small static block, offset so the falling box lands on its edge.
+    const auto block = registry.create();
+    registry.emplace<TransformComponent>(block, glm::vec3(0.9f, 0.0f, 0.0f));
+    registry.emplace<BoxColliderComponent>(block);
+
+    const auto falling = makeBox(registry, glm::vec3(0.0f, 1.6f, 0.0f));
+    registry.get<RigidBodyComponent>(falling).angularDamping = 0.0f;
+
+    stepFor(registry, 0.6f);
+
+    const glm::vec3 spin = registry.get<RigidBodyComponent>(falling).angularVelocity;
+    CHECK_MSG(glm::length(spin) > 0.05f,
+              "landing on one corner must impart spin: got " + std::to_string(glm::length(spin)));
+
+    // And about the right axis: the contact is offset along x, so the box
+    // tips about z. A spin about the wrong axis would look like the box
+    // spinning on the spot instead of toppling.
+    CHECK_MSG(std::abs(spin.z) > std::abs(spin.y),
+              "a contact offset along x must tip the box about z, not spin it about y");
+}
+
+static void testACentredImpactCreatesNoSpin() {
+    // The control for the test above. A box landing squarely must not start
+    // turning, or every stack in the scene would slowly come apart.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(40.0f, 1.0f, 40.0f));
+
+    const auto falling = makeBox(registry, glm::vec3(0.0f, 2.0f, 0.0f));
+    registry.get<RigidBodyComponent>(falling).angularDamping = 0.0f;
+
+    stepFor(registry, 1.5f);
+
+    const float spin = glm::length(registry.get<RigidBodyComponent>(falling).angularVelocity);
+    CHECK_MSG(spin < 0.05f,
+              "a square landing must not impart spin: got " + std::to_string(spin));
+}
+
+static void testSpinDoesNotAppearFromNothing() {
+    // A body resting undisturbed must stay still. Angular terms that leak
+    // energy show up here first, as a stack that slowly rotates itself apart.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(40.0f, 1.0f, 40.0f));
+
+    const auto resting = makeBox(registry, glm::vec3(0.0f, 0.5f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(resting);
+    body.angularDamping = 0.0f;
+    body.velocity = glm::vec3(0.0f);
+
+    stepFor(registry, 3.0f);
+
+    const float spin = glm::length(registry.get<RigidBodyComponent>(resting).angularVelocity);
+    CHECK_MSG(spin < 0.05f, "a resting body must not spin up: got " + std::to_string(spin));
+}
+
 static void runTests() {
     testSweepAndPruneFindsOverlappingPairs();
     testSweepAndPruneSkipsPairsSeparatedOffAxis();
@@ -557,6 +754,19 @@ static void runTests() {
     testColliderSizeAffectsRestHeight();
     testZeroAndNegativeDeltaAreIgnored();
     testFixedStepDoesNotTunnel();
+
+    testRestitutionTakesTheBouncierSurface();
+    testRestitutionCannotGainEnergy();
+    testFrictionIsZeroIfEitherSurfaceIsIce();
+    testABouncierBallReboundsHigher();
+    testDampingSlowsABodyWithNothingTouchingIt();
+
+    testAngularVelocityTurnsTheTransform();
+    testFrozenRotationNeverTurns();
+    testAngularDampingSlowsSpin();
+    testAnOffCentreImpactCreatesSpin();
+    testACentredImpactCreatesNoSpin();
+    testSpinDoesNotAppearFromNothing();
 }
 
 TEST_MAIN("test_physics")

@@ -120,6 +120,12 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"Velocity\": "; writeVec3(out, body->velocity); out << ",\n";
         out << indent << "  \"Mass\": " << body->mass << ",\n";
         out << indent << "  \"UseGravity\": " << (body->useGravity ? "true" : "false") << ",\n";
+        out << indent << "  \"Restitution\": " << body->restitution << ",\n";
+        out << indent << "  \"Friction\": " << body->friction << ",\n";
+        out << indent << "  \"LinearDamping\": " << body->linearDamping << ",\n";
+        out << indent << "  \"AngularVelocity\": "; writeVec3(out, body->angularVelocity); out << ",\n";
+        out << indent << "  \"AngularDamping\": " << body->angularDamping << ",\n";
+        out << indent << "  \"FreezeRotation\": " << (body->freezeRotation ? "true" : "false") << ",\n";
         out << indent << "  \"IsKinematic\": " << (body->isKinematic ? "true" : "false") << "\n";
         out << indent << "},\n";
     }
@@ -332,6 +338,12 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         body.mass = r["Mass"].AsFloat(1.0f);
         body.useGravity = r["UseGravity"].AsBool(true);
         body.isKinematic = r["IsKinematic"].AsBool(false);
+        body.restitution = r["Restitution"].AsFloat(0.3f);
+        body.friction = r["Friction"].AsFloat(0.4f);
+        body.linearDamping = r["LinearDamping"].AsFloat(0.0f);
+        body.angularVelocity = readVec3(r["AngularVelocity"], glm::vec3(0.0f));
+        body.angularDamping = r["AngularDamping"].AsFloat(0.05f);
+        body.freezeRotation = r["FreezeRotation"].AsBool(false);
     }
 
     if (node.Has("BoxCollider")) {
