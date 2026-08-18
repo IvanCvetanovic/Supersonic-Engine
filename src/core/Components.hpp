@@ -306,8 +306,26 @@ struct AnimatorComponent {
     bool loop{true};
     bool playing{true};
 
+    // How long a change of clip takes to cross-fade. Zero snaps, which is what
+    // the engine used to do unconditionally: a character switching from idle to
+    // run jumped between two unrelated poses in a single frame.
+    float blendDuration{0.25f};
+
     // Rate-limits the "no such clip" diagnostic to once per name change.
     bool warnedMissing{false};
+
+    // Transition state. Derived from a change of clipName and deliberately not
+    // serialised: persisting a half-finished cross-fade would restore a pose
+    // the scene was never actually in, and a Play/Stop or an undo would land
+    // mid-transition between two clips it no longer remembers choosing.
+    std::string blendFromClip;
+    float blendFromTime{0.0f};
+    float blendRemaining{0.0f};
+    float blendTotal{0.0f};
+
+    // What clipName was the last time it was looked at, so a change can be
+    // noticed wherever it came from - the inspector, a script, or a load.
+    std::string activeClip;
 };
 
 // Resolved rig for an entity. Entirely derived - AnimationSystem rebuilds it

@@ -304,6 +304,7 @@
         "Time": 0,
         "Speed": 1,
         "Loop": true,
+        "BlendDuration": 0.25,
         "Playing": true
       },
       "Renderable": { "Visible": true, "CastsShadow": true },

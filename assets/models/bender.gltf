@@ -1,304 +1,351 @@
 {
-  "asset": {
-    "version": "2.0",
-    "generator": "Supersonic engine test fixture"
+ "asset": {
+  "version": "2.0",
+  "generator": "Supersonic engine test fixture"
+ },
+ "scene": 0,
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "name": "BenderMesh",
+   "mesh": 0,
+   "skin": 0,
+   "translation": [
+    5.0,
+    3.0,
+    -2.0
+   ]
   },
-  "scene": 0,
-  "scenes": [
+  {
+   "name": "Lower",
+   "children": [
+    2
+   ]
+  },
+  {
+   "name": "Upper",
+   "translation": [
+    0.0,
+    1.0,
+    0.0
+   ]
+  }
+ ],
+ "skins": [
+  {
+   "name": "BenderRig",
+   "joints": [
+    2,
+    1
+   ],
+   "inverseBindMatrices": 5
+  }
+ ],
+ "meshes": [
+  {
+   "name": "Bender",
+   "primitives": [
     {
-      "nodes": [
-        0,
-        1
-      ]
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "JOINTS_0": 2,
+      "WEIGHTS_0": 3
+     },
+     "indices": 4,
+     "material": 0
     }
-  ],
-  "nodes": [
+   ]
+  }
+ ],
+ "materials": [
+  {
+   "name": "BenderMaterial",
+   "pbrMetallicRoughness": {
+    "baseColorFactor": [
+     0.85,
+     0.55,
+     0.25,
+     1.0
+    ],
+    "metallicFactor": 0.1,
+    "roughnessFactor": 0.5
+   }
+  }
+ ],
+ "animations": [
+  {
+   "name": "Bend",
+   "samplers": [
     {
-      "name": "BenderMesh",
-      "mesh": 0,
-      "skin": 0,
-      "translation": [
-        5.0,
-        3.0,
-        -2.0
-      ]
+     "input": 6,
+     "output": 7,
+     "interpolation": "LINEAR"
     },
     {
-      "name": "Lower",
-      "children": [
-        2
-      ]
+     "input": 8,
+     "output": 9,
+     "interpolation": "STEP"
     },
     {
-      "name": "Upper",
-      "translation": [
-        0.0,
-        1.0,
-        0.0
-      ]
+     "input": 10,
+     "output": 11,
+     "interpolation": "CUBICSPLINE"
     }
-  ],
-  "skins": [
+   ],
+   "channels": [
     {
-      "name": "BenderRig",
-      "joints": [
-        2,
-        1
-      ],
-      "inverseBindMatrices": 5
+     "sampler": 0,
+     "target": {
+      "node": 2,
+      "path": "rotation"
+     }
+    },
+    {
+     "sampler": 1,
+     "target": {
+      "node": 1,
+      "path": "translation"
+     }
+    },
+    {
+     "sampler": 2,
+     "target": {
+      "node": 2,
+      "path": "scale"
+     }
     }
-  ],
-  "meshes": [
+   ]
+  },
+  {
+   "name": "Twist",
+   "samplers": [
     {
-      "name": "Bender",
-      "primitives": [
-        {
-          "attributes": {
-            "POSITION": 0,
-            "NORMAL": 1,
-            "JOINTS_0": 2,
-            "WEIGHTS_0": 3
-          },
-          "indices": 4,
-          "material": 0
-        }
-      ]
+     "input": 12,
+     "output": 13,
+     "interpolation": "LINEAR"
     }
-  ],
-  "materials": [
+   ],
+   "channels": [
     {
-      "name": "BenderMaterial",
-      "pbrMetallicRoughness": {
-        "baseColorFactor": [
-          0.85,
-          0.55,
-          0.25,
-          1.0
-        ],
-        "metallicFactor": 0.1,
-        "roughnessFactor": 0.5
-      }
+     "sampler": 0,
+     "target": {
+      "node": 2,
+      "path": "rotation"
+     }
     }
-  ],
-  "animations": [
-    {
-      "name": "Bend",
-      "samplers": [
-        {
-          "input": 6,
-          "output": 7,
-          "interpolation": "LINEAR"
-        },
-        {
-          "input": 8,
-          "output": 9,
-          "interpolation": "STEP"
-        },
-        {
-          "input": 10,
-          "output": 11,
-          "interpolation": "CUBICSPLINE"
-        }
-      ],
-      "channels": [
-        {
-          "sampler": 0,
-          "target": {
-            "node": 2,
-            "path": "rotation"
-          }
-        },
-        {
-          "sampler": 1,
-          "target": {
-            "node": 1,
-            "path": "translation"
-          }
-        },
-        {
-          "sampler": 2,
-          "target": {
-            "node": 2,
-            "path": "scale"
-          }
-        }
-      ]
-    }
-  ],
-  "accessors": [
-    {
-      "bufferView": 0,
-      "componentType": 5126,
-      "count": 12,
-      "type": "VEC3",
-      "min": [
-        -0.35,
-        0.0,
-        -0.35
-      ],
-      "max": [
-        0.35,
-        2.0,
-        0.35
-      ]
-    },
-    {
-      "bufferView": 1,
-      "componentType": 5126,
-      "count": 12,
-      "type": "VEC3"
-    },
-    {
-      "bufferView": 2,
-      "componentType": 5121,
-      "count": 12,
-      "type": "VEC4"
-    },
-    {
-      "bufferView": 3,
-      "componentType": 5126,
-      "normalized": false,
-      "count": 12,
-      "type": "VEC4"
-    },
-    {
-      "bufferView": 4,
-      "componentType": 5123,
-      "count": 48,
-      "type": "SCALAR"
-    },
-    {
-      "bufferView": 5,
-      "componentType": 5126,
-      "count": 2,
-      "type": "MAT4"
-    },
-    {
-      "bufferView": 6,
-      "componentType": 5126,
-      "count": 3,
-      "type": "SCALAR",
-      "min": [
-        0.0
-      ],
-      "max": [
-        2.0
-      ]
-    },
-    {
-      "bufferView": 7,
-      "componentType": 5126,
-      "count": 3,
-      "type": "VEC4"
-    },
-    {
-      "bufferView": 8,
-      "componentType": 5126,
-      "count": 3,
-      "type": "SCALAR",
-      "min": [
-        0.0
-      ],
-      "max": [
-        2.0
-      ]
-    },
-    {
-      "bufferView": 9,
-      "componentType": 5126,
-      "count": 3,
-      "type": "VEC3"
-    },
-    {
-      "bufferView": 10,
-      "componentType": 5126,
-      "count": 3,
-      "type": "SCALAR",
-      "min": [
-        0.0
-      ],
-      "max": [
-        2.0
-      ]
-    },
-    {
-      "bufferView": 11,
-      "componentType": 5126,
-      "count": 9,
-      "type": "VEC3"
-    }
-  ],
-  "bufferViews": [
-    {
-      "buffer": 0,
-      "byteOffset": 0,
-      "byteLength": 144,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 144,
-      "byteLength": 144,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 288,
-      "byteLength": 48,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 336,
-      "byteLength": 192,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 528,
-      "byteLength": 96,
-      "target": 34963
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 624,
-      "byteLength": 128
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 752,
-      "byteLength": 12
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 764,
-      "byteLength": 48
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 812,
-      "byteLength": 12
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 824,
-      "byteLength": 36
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 860,
-      "byteLength": 12
-    },
-    {
-      "buffer": 0,
-      "byteOffset": 872,
-      "byteLength": 108
-    }
-  ],
-  "buffers": [
-    {
-      "uri": "bender.bin",
-      "byteLength": 980
-    }
-  ]
+   ]
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 12,
+   "type": "VEC3",
+   "min": [
+    -0.35,
+    0.0,
+    -0.35
+   ],
+   "max": [
+    0.35,
+    2.0,
+    0.35
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 12,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5121,
+   "count": 12,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "normalized": false,
+   "count": 12,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5123,
+   "count": 48,
+   "type": "SCALAR"
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 2,
+   "type": "MAT4"
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 3,
+   "type": "SCALAR",
+   "min": [
+    0.0
+   ],
+   "max": [
+    2.0
+   ]
+  },
+  {
+   "bufferView": 7,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 8,
+   "componentType": 5126,
+   "count": 3,
+   "type": "SCALAR",
+   "min": [
+    0.0
+   ],
+   "max": [
+    2.0
+   ]
+  },
+  {
+   "bufferView": 9,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 10,
+   "componentType": 5126,
+   "count": 3,
+   "type": "SCALAR",
+   "min": [
+    0.0
+   ],
+   "max": [
+    2.0
+   ]
+  },
+  {
+   "bufferView": 11,
+   "componentType": 5126,
+   "count": 9,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 12,
+   "componentType": 5126,
+   "count": 3,
+   "type": "SCALAR",
+   "min": [
+    0.0
+   ],
+   "max": [
+    1.2
+   ]
+  },
+  {
+   "bufferView": 13,
+   "componentType": 5126,
+   "count": 3,
+   "type": "VEC4"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 144,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 144,
+   "byteLength": 144,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 288,
+   "byteLength": 48,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 336,
+   "byteLength": 192,
+   "target": 34962
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 528,
+   "byteLength": 96,
+   "target": 34963
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 624,
+   "byteLength": 128
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 752,
+   "byteLength": 12
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 764,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 812,
+   "byteLength": 12
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 824,
+   "byteLength": 36
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 860,
+   "byteLength": 12
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 872,
+   "byteLength": 108
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 980,
+   "byteLength": 12
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 992,
+   "byteLength": 48
+  }
+ ],
+ "buffers": [
+  {
+   "uri": "bender.bin",
+   "byteLength": 1040
+  }
+ ]
 }

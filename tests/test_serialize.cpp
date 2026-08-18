@@ -304,6 +304,7 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     animator.clipName = "Fire";
     animator.speed = 1.75f;
     animator.loop = false;
+    animator.blendDuration = 0.6f;
 
     auto& body = registry.emplace<RigidBodyComponent>(entity);
     body.mass = 12.0f;
@@ -456,6 +457,11 @@ static void testPrefabRoundTripsEveryField() {
         if (animator) {
             CHECK(animator->clipName == "Fire");
             CHECK_NEAR(animator->speed, 1.75f);
+            CHECK_NEAR(animator->blendDuration, 0.6f);
+            // Transition state is derived, and restoring a half-finished
+            // cross-fade would put the rig in a pose the scene was never in.
+            CHECK_MSG(animator->blendRemaining == 0.0f,
+                      "a clone must not resume the original's transition");
         }
 
         const auto* body = registry.try_get<RigidBodyComponent>(clone);

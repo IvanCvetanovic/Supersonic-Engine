@@ -224,6 +224,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"Time\": " << animator->time << ",\n";
         out << indent << "  \"Speed\": " << animator->speed << ",\n";
         out << indent << "  \"Loop\": " << (animator->loop ? "true" : "false") << ",\n";
+        out << indent << "  \"BlendDuration\": " << animator->blendDuration << ",\n";
         out << indent << "  \"Playing\": " << (animator->playing ? "true" : "false") << "\n";
         out << indent << "},\n";
     }
@@ -390,6 +391,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         animator.time = a["Time"].AsFloat(0.0f);
         animator.speed = a["Speed"].AsFloat(1.0f);
         animator.loop = a["Loop"].AsBool(true);
+        animator.blendDuration = a["BlendDuration"].AsFloat(0.25f);
         animator.playing = a["Playing"].AsBool(true);
     }
 

@@ -16,6 +16,17 @@ namespace Supersonic {
 // than in RenderSystem: RenderSystem calls vkCmd* and cannot be linked by a test
 // target, and this is precisely the code - interpolation, joint composition,
 // bounds - that most needs one.
+// One joint's transform before it is composed into a matrix.
+//
+// Blending has to happen here rather than on the composed matrices: lerping two
+// rotation matrices component by component does not produce a rotation, and a
+// character mid-transition shears and collapses instead of turning.
+struct JointPose {
+    glm::vec3 translation{0.0f};
+    glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec3 scale{1.0f};
+};
+
 class AnimationSystem {
 public:
     // Resolves each animated entity's rig from its mesh path, replacing
@@ -43,6 +54,21 @@ public:
     // Samples one clip at a time into local joint transforms. Exposed for tests.
     static void SampleClip(const Skeleton& skeleton, const AnimationClip& clip, float time,
                            std::vector<glm::mat4>& outLocals);
+
+    // Same, stopping at TRS so the result can be blended with another pose.
+    static void SamplePose(const Skeleton& skeleton, const AnimationClip& clip, float time,
+                           std::vector<JointPose>& outPose);
+
+    // Cross-fades two poses. weight 0 is entirely `from`, 1 is entirely `to`.
+    // Rotations take the shortest path; without that a transition between two
+    // nearly identical orientations can spin the whole way round.
+    static void BlendPoses(const std::vector<JointPose>& from,
+                           const std::vector<JointPose>& to,
+                           float weight,
+                           std::vector<JointPose>& outPose);
+
+    static void PoseToLocals(const std::vector<JointPose>& pose,
+                             std::vector<glm::mat4>& outLocals);
 
     // Composes local transforms into model-space joint matrices, applying the
     // inverse bind. One forward pass, which is only correct because the skeleton

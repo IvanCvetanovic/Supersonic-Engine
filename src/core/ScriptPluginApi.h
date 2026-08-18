@@ -15,7 +15,7 @@
  * build into a clear log line instead of undefined behaviour.
  */
 
-#define SUPERSONIC_SCRIPT_API_VERSION 3
+#define SUPERSONIC_SCRIPT_API_VERSION 4
 
 #if defined(_WIN32)
 #  define SUPERSONIC_SCRIPT_EXPORT __declspec(dllexport)
@@ -63,6 +63,26 @@ typedef struct SupersonicScriptPhysics {
                       unsigned int ignoreEntity);
 } SupersonicScriptPhysics;
 
+/* Animation control.
+ *
+ * Cross-fading exists in the engine, and without this nothing in a running
+ * game could trigger it: only the inspector could change an animator's clip,
+ * which is no use to a character that should switch to a run when it starts
+ * moving.
+ *
+ * isPlaying takes the name rather than returning one, so no pointer to engine
+ * storage crosses the boundary and there is nothing for a plugin to hold on to
+ * after the call returns.
+ *
+ * play does nothing for an entity with no animator, and requesting the clip
+ * that is already playing is ignored rather than restarting it - otherwise a
+ * script calling play every frame would hold the animation on frame zero. */
+typedef struct SupersonicScriptAnimation {
+    void* opaque;
+    void (*play)(void* opaque, unsigned int entity, const char* clipName);
+    int (*isPlaying)(void* opaque, unsigned int entity, const char* clipName);
+} SupersonicScriptAnimation;
+
 /* Per-entity state handed to a script each frame. The engine copies values in
  * before the call and copies them back out afterwards. */
 typedef struct SupersonicScriptContext {
@@ -76,6 +96,7 @@ typedef struct SupersonicScriptContext {
     /* Never null. Valid only for the duration of the call. */
     const SupersonicScriptInput* input;
     const SupersonicScriptPhysics* physics;
+    const SupersonicScriptAnimation* animation;
 } SupersonicScriptContext;
 
 typedef void (*SupersonicScriptUpdateFn)(SupersonicScriptContext* context);

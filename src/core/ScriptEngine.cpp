@@ -81,6 +81,40 @@ int scriptIsGrounded(void* opaque, const float position[3], float distance,
                                      distance, ignore) ? 1 : 0;
 }
 
+
+// The engine side of SupersonicScriptAnimation. `opaque` is the registry the
+// current update is running over.
+void scriptPlayClip(void* opaque, unsigned int entityId, const char* clipName) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry || !clipName) return;
+
+    const auto entity = static_cast<entt::entity>(entityId);
+    if (!registry->valid(entity)) return;
+
+    auto* animator = registry->try_get<AnimatorComponent>(entity);
+    if (!animator) return;
+
+    // Ignored when it is already the requested clip. A script that calls this
+    // every frame - which is the natural way to write "play run while moving" -
+    // would otherwise restart the transition on every one of them and hold the
+    // character at the first frame of the blend forever.
+    if (animator->clipName == clipName) return;
+
+    animator->clipName = clipName;
+    animator->playing = true;
+}
+
+int scriptIsPlayingClip(void* opaque, unsigned int entityId, const char* clipName) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry || !clipName) return 0;
+
+    const auto entity = static_cast<entt::entity>(entityId);
+    if (!registry->valid(entity)) return 0;
+
+    const auto* animator = registry->try_get<AnimatorComponent>(entity);
+    return (animator && animator->clipName == clipName) ? 1 : 0;
+}
+
 const SupersonicScriptInput& scriptInput() {
     static const SupersonicScriptInput api{
         nullptr, scriptIsDown, scriptWasPressed, scriptWasReleased, scriptAxis
@@ -179,6 +213,9 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
         // function pointers themselves are constant.
         const SupersonicScriptPhysics physics{&registry, scriptRaycast, scriptIsGrounded};
         ctx.physics = &physics;
+
+        const SupersonicScriptAnimation animation{&registry, scriptPlayClip, scriptIsPlayingClip};
+        ctx.animation = &animation;
         ctx.position[0] = transform.position.x;
         ctx.position[1] = transform.position.y;
         ctx.position[2] = transform.position.z;

@@ -107,19 +107,17 @@ glm::quat sampleRotation(const AnimChannel& channel, float time) {
 
 } // namespace
 
-void AnimationSystem::SampleClip(const Skeleton& skeleton, const AnimationClip& clip, float time,
-                                 std::vector<glm::mat4>& outLocals) {
+void AnimationSystem::SamplePose(const Skeleton& skeleton, const AnimationClip& clip, float time,
+                                 std::vector<JointPose>& outPose) {
     const size_t jointCount = skeleton.joints.size();
 
     // Start from the rest pose: a clip is only required to drive the channels it
     // mentions, and anything it leaves alone keeps its authored transform.
-    std::vector<glm::vec3> translations(jointCount);
-    std::vector<glm::quat> rotations(jointCount);
-    std::vector<glm::vec3> scales(jointCount);
+    outPose.resize(jointCount);
     for (size_t i = 0; i < jointCount; ++i) {
-        translations[i] = skeleton.joints[i].restTranslation;
-        rotations[i] = skeleton.joints[i].restRotation;
-        scales[i] = skeleton.joints[i].restScale;
+        outPose[i].translation = skeleton.joints[i].restTranslation;
+        outPose[i].rotation = skeleton.joints[i].restRotation;
+        outPose[i].scale = skeleton.joints[i].restScale;
     }
 
     for (const auto& channel : clip.channels) {
@@ -128,23 +126,54 @@ void AnimationSystem::SampleClip(const Skeleton& skeleton, const AnimationClip& 
 
         switch (channel.path) {
             case AnimPath::Translation:
-                translations[joint] = glm::vec3(sampleChannel(channel, time));
+                outPose[joint].translation = glm::vec3(sampleChannel(channel, time));
                 break;
             case AnimPath::Scale:
-                scales[joint] = glm::vec3(sampleChannel(channel, time));
+                outPose[joint].scale = glm::vec3(sampleChannel(channel, time));
                 break;
             case AnimPath::Rotation:
-                rotations[joint] = sampleRotation(channel, time);
+                outPose[joint].rotation = sampleRotation(channel, time);
                 break;
         }
     }
+}
 
-    outLocals.resize(jointCount);
-    for (size_t i = 0; i < jointCount; ++i) {
-        outLocals[i] = glm::translate(glm::mat4(1.0f), translations[i])
-                     * glm::mat4_cast(rotations[i])
-                     * glm::scale(glm::mat4(1.0f), scales[i]);
+void AnimationSystem::BlendPoses(const std::vector<JointPose>& from,
+                                 const std::vector<JointPose>& to,
+                                 float weight,
+                                 std::vector<JointPose>& outPose) {
+    const float t = std::clamp(weight, 0.0f, 1.0f);
+    const size_t count = std::min(from.size(), to.size());
+
+    outPose.resize(count);
+    for (size_t i = 0; i < count; ++i) {
+        outPose[i].translation = glm::mix(from[i].translation, to[i].translation, t);
+        outPose[i].scale = glm::mix(from[i].scale, to[i].scale, t);
+
+        // glm::slerp already flips the target when the two quaternions face
+        // opposite ways, which matters because q and -q are the same
+        // orientation and slerping between them the long way sends a limb
+        // swinging through the body on a transition nobody should notice.
+        // test_blending pins that behaviour rather than trusting it silently.
+        outPose[i].rotation = glm::normalize(glm::slerp(from[i].rotation, to[i].rotation, t));
     }
+}
+
+void AnimationSystem::PoseToLocals(const std::vector<JointPose>& pose,
+                                   std::vector<glm::mat4>& outLocals) {
+    outLocals.resize(pose.size());
+    for (size_t i = 0; i < pose.size(); ++i) {
+        outLocals[i] = glm::translate(glm::mat4(1.0f), pose[i].translation)
+                     * glm::mat4_cast(pose[i].rotation)
+                     * glm::scale(glm::mat4(1.0f), pose[i].scale);
+    }
+}
+
+void AnimationSystem::SampleClip(const Skeleton& skeleton, const AnimationClip& clip, float time,
+                                 std::vector<glm::mat4>& outLocals) {
+    std::vector<JointPose> pose;
+    SamplePose(skeleton, clip, time, pose);
+    PoseToLocals(pose, outLocals);
 }
 
 void AnimationSystem::ComposePose(const Skeleton& skeleton, const std::vector<glm::mat4>& locals,
@@ -202,33 +231,98 @@ void AnimationSystem::SyncSkeletons(entt::registry& registry, AnimationLibrary& 
     }
 }
 
+namespace {
+
+// One clip's clock, wrapped or clamped. Shared by the playing clip and the
+// outgoing one during a transition, which is what keeps the two in step.
+float advanceClock(float time, float delta, float duration, bool loop) {
+    float advanced = time + delta;
+    if (loop) {
+        advanced = std::fmod(advanced, duration);
+        // fmod keeps the sign of the dividend, so playing backwards would
+        // otherwise walk off into negative time and clamp to the first key.
+        if (advanced < 0.0f) advanced += duration;
+        return advanced;
+    }
+    return std::clamp(advanced, 0.0f, duration);
+}
+
+// Starts a cross-fade when the requested clip differs from the one playing.
+void BeginTransitionIfClipChanged(AnimatorComponent& animator) {
+    if (animator.clipName == animator.activeClip) return;
+
+    const std::string outgoing = animator.activeClip;
+    animator.activeClip = animator.clipName;
+
+    // Nothing to fade from on the first frame, or when the transition is
+    // authored as instant.
+    if (outgoing.empty() || animator.blendDuration <= 0.0f) {
+        animator.blendRemaining = 0.0f;
+        animator.blendTotal = 0.0f;
+        animator.blendFromClip.clear();
+        animator.time = 0.0f;
+        return;
+    }
+
+    // Interrupting a transition blends from wherever it had got to, so
+    // hammering a key does not snap back to the pose the first fade started
+    // from. Approximated by fading from the clip that was winning, which is
+    // the incoming one - the pose on screen is already mostly that.
+    animator.blendFromClip = outgoing;
+    animator.blendFromTime = animator.time;
+    animator.blendTotal = animator.blendDuration;
+    animator.blendRemaining = animator.blendDuration;
+    animator.time = 0.0f;
+}
+
+} // namespace
+
 void AnimationSystem::Advance(entt::registry& registry, const AnimationLibrary& library,
                               float deltaTime) {
     if (deltaTime == 0.0f) return;
 
     for (auto entity : registry.view<AnimatorComponent, SkinnedMeshComponent>()) {
         auto& animator = registry.get<AnimatorComponent>(entity);
+        const auto& skin = registry.get<SkinnedMeshComponent>(entity);
+
+        // Noticed here rather than pushed by whoever assigns the clip, so a
+        // change transitions the same way whether it came from the inspector,
+        // a script or a scene load.
+        BeginTransitionIfClipChanged(animator);
+
         if (!animator.playing) continue;
 
-        const auto& skin = registry.get<SkinnedMeshComponent>(entity);
+        // The outgoing clip keeps running for the length of the fade. Freezing
+        // it instead makes a character stop dead and slide into the new
+        // animation, which reads worse than no blending at all.
+        if (animator.blendRemaining > 0.0f) {
+            if (const AnimationClip* previous =
+                    library.FindClip(skin.skeletonID, animator.blendFromClip);
+                previous && previous->duration > 0.0f) {
+                animator.blendFromTime = advanceClock(animator.blendFromTime,
+                                                      deltaTime * animator.speed,
+                                                      previous->duration, animator.loop);
+            }
+            // Real time, not scaled by speed: a transition is a presentation
+            // choice measured in seconds, and tying it to playback rate makes a
+            // slowed-down animation take proportionally longer to blend in.
+            animator.blendRemaining = std::max(0.0f, animator.blendRemaining - std::abs(deltaTime));
+        }
+
         const AnimationClip* clip = library.FindClip(skin.skeletonID, animator.clipName);
         if (!clip || clip->duration <= 0.0f) continue;
 
-        animator.time += deltaTime * animator.speed;
-
-        if (animator.loop) {
-            animator.time = std::fmod(animator.time, clip->duration);
-            // fmod keeps the sign of the dividend, so playing backwards would
-            // otherwise walk off into negative time and clamp to the first key.
-            if (animator.time < 0.0f) animator.time += clip->duration;
-        } else {
-            animator.time = std::clamp(animator.time, 0.0f, clip->duration);
-        }
+        animator.time = advanceClock(animator.time, deltaTime * animator.speed,
+                                     clip->duration, animator.loop);
     }
 }
 
 void AnimationSystem::EvaluatePoses(entt::registry& registry, const AnimationLibrary& library) {
+    // Reused across entities rather than allocated per entity per frame.
     std::vector<glm::mat4> locals;
+    std::vector<JointPose> pose;
+    std::vector<JointPose> previousPose;
+    std::vector<JointPose> blended;
 
     for (auto entity : registry.view<AnimatorComponent, SkinnedMeshComponent>()) {
         auto& animator = registry.get<AnimatorComponent>(entity);
@@ -250,7 +344,23 @@ void AnimationSystem::EvaluatePoses(entt::registry& registry, const AnimationLib
         }
         animator.warnedMissing = false;
 
-        SampleClip(*skeleton, *clip, animator.time, locals);
+        SamplePose(*skeleton, *clip, animator.time, pose);
+
+        if (animator.blendRemaining > 0.0f && animator.blendTotal > 0.0f) {
+            if (const AnimationClip* previous =
+                    library.FindClip(skin.skeletonID, animator.blendFromClip)) {
+                SamplePose(*skeleton, *previous, animator.blendFromTime, previousPose);
+
+                // Weight runs 0 to 1 as the remaining time runs down, so the
+                // incoming clip arrives at full strength exactly when the
+                // transition ends.
+                const float weight = 1.0f - (animator.blendRemaining / animator.blendTotal);
+                BlendPoses(previousPose, pose, weight, blended);
+                pose.swap(blended);
+            }
+        }
+
+        PoseToLocals(pose, locals);
         ComposePose(*skeleton, locals, skin.jointMatrices);
 
         // Widen the render bounds to the posed extent.

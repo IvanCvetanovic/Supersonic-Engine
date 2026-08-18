@@ -90,6 +90,37 @@ void playerScript(SupersonicScriptContext* ctx) {
     }
 }
 
+
+// Switches clips on the move, which is what animation blending exists for.
+//
+// The engine cross-fades whenever an animator's clip changes; before the
+// animation block on the script context, nothing in a running game could make
+// that happen - only the inspector could, which is no use to a character that
+// should break into a run when it starts moving.
+void animatedPlayerScript(SupersonicScriptContext* ctx) {
+    if (!ctx->input) return;
+
+    const float moveX = ctx->input->axis(ctx->input->opaque, "MoveX");
+    const float moveY = ctx->input->axis(ctx->input->opaque, "MoveY");
+    const bool moving = (moveX * moveX + moveY * moveY) > 0.04f;
+
+    const float speed = ctx->input->isDown(ctx->input->opaque, "Sprint") ? 9.0f : 3.5f;
+    ctx->position[0] += moveX * speed * ctx->deltaTime;
+    ctx->position[2] -= moveY * speed * ctx->deltaTime;
+
+    if (moving) {
+        ctx->rotation[1] = std::atan2(moveX, moveY);
+    }
+
+    // Asked every frame on purpose. The engine ignores a request for the clip
+    // already playing, so this does not restart the animation or hold it at
+    // frame zero - which is what makes "play this while that is true" the
+    // natural way to write it.
+    if (ctx->animation) {
+        ctx->animation->play(ctx->animation->opaque, ctx->entityId,
+                             moving ? "Twist" : "Bend");
+    }
+}
 } // namespace
 
 extern "C" {
@@ -108,6 +139,7 @@ SUPERSONIC_SCRIPT_EXPORT void SupersonicScriptPluginRegister(SupersonicScriptHos
     host->registerScript(host->opaque, "TumbleScript", &tumbleScript);
     host->registerScript(host->opaque, "BreatheScript", &breatheScript);
     host->registerScript(host->opaque, "PlayerScript", &playerScript);
+    host->registerScript(host->opaque, "AnimatedPlayerScript", &animatedPlayerScript);
 }
 
 } // extern "C"

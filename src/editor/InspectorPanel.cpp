@@ -384,6 +384,13 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::SameLine();
             ImGui::Checkbox("Loop", &animator.loop);
             ImGui::DragFloat("Speed", &animator.speed, 0.05f, -4.0f, 4.0f);
+            ImGui::DragFloat("Blend", &animator.blendDuration, 0.01f, 0.0f, 2.0f, "%.2f s");
+            ImGui::TextDisabled("Cross-fade when the clip changes. 0 snaps.");
+            if (animator.blendRemaining > 0.0f) {
+                ImGui::TextDisabled("Blending from '%s' (%.2fs left)",
+                                    animator.blendFromClip.c_str(),
+                                    static_cast<double>(animator.blendRemaining));
+            }
 
             // Scrubbable in edit mode. Poses are evaluated every frame whatever
             // the play state, so dragging this shows the pose immediately rather
