@@ -12,3 +12,8 @@ imgui.ini
 # Packaged games. Build output, not source - and a full copy of the engine
 # binary plus every asset, which has no business in the repository.
 /dist/
+
+# The pipeline cache is a per-machine, per-driver build artifact that the
+# engine rewrites on every run. Committing it churns a binary in every diff
+# and is worse than useless on anyone else's GPU, which will not accept it.
+cache/
