@@ -235,6 +235,22 @@ void SupersonicApp::initECS() {
     lightB.intensity = 2.2f;
     lightB.range = 14.0f;
 
+    // A spot light over the platform, aimed down and slightly forward. The
+    // engine had no way to aim a light at all before this: a torch, a street
+    // lamp or a stage light was a point light that lit the whole room.
+    auto spot = m_registry.create();
+    m_registry.emplace<TagComponent>(spot, "Spot Light");
+    m_registry.emplace<TransformComponent>(spot, glm::vec3(0.4f, 5.4f, 2.6f));
+    auto& spotLight = m_registry.emplace<LightComponent>(spot);
+    spotLight.type = static_cast<int>(LightType::Spot);
+    spotLight.direction = glm::normalize(glm::vec3(0.0f, -1.0f, -0.35f));
+    spotLight.color = glm::vec3(1.0f, 0.93f, 0.78f);
+    spotLight.intensity = 14.0f;
+    spotLight.range = 22.0f;
+    spotLight.innerAngle = glm::radians(16.0f);
+    spotLight.outerAngle = glm::radians(26.0f);
+    spotLight.castsShadow = true;
+
     // Ground plane. Without a receiver there is nothing for the shadow map to
     // fall on - the grid is a shader overlay, not geometry.
     auto ground = m_registry.create();

@@ -23,7 +23,13 @@ struct LightComponent;
 // per-fragment cascade choice is not.
 class ShadowMap {
 public:
-    explicit ShadowMap(VulkanDevice& device, uint32_t resolution = 2048);
+    // layerCount is how many depth slices the array holds. Four is the
+    // cascade count and the reason this class exists; a spot light wants one
+    // layer per caster and needs nothing else this class does differently, so
+    // it borrows the same render pass, format selection and per-layer
+    // framebuffers rather than duplicating them.
+    explicit ShadowMap(VulkanDevice& device, uint32_t resolution = 2048,
+                       uint32_t layerCount = kShadowCascadeCount);
     ~ShadowMap();
 
     ShadowMap(const ShadowMap&) = delete;
@@ -32,10 +38,10 @@ public:
     vk::RenderPass GetRenderPass() const { return m_renderPass; }
 
     // One framebuffer per cascade, each attached to a single layer.
-    vk::Framebuffer GetFramebuffer(uint32_t cascade) const {
-        return cascade < m_framebuffers.size() ? m_framebuffers[cascade] : nullptr;
+    vk::Framebuffer GetFramebuffer(uint32_t layer) const {
+        return layer < m_framebuffers.size() ? m_framebuffers[layer] : nullptr;
     }
-    uint32_t GetCascadeCount() const { return kShadowCascadeCount; }
+    uint32_t GetLayerCount() const { return m_layerCount; }
 
     // The 2D_ARRAY view covering every layer, which is what the scene pass
     // samples.
@@ -50,6 +56,7 @@ private:
 
     VulkanDevice& m_deviceRef;
     uint32_t m_resolution;
+    uint32_t m_layerCount;
 
     // Chosen at construction: must be both a depth attachment and sampleable,
     // which the generic depth-format query does not guarantee.

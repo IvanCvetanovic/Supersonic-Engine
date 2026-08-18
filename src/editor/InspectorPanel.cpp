@@ -1,6 +1,7 @@
 #include "editor/InspectorPanel.hpp"
 
 #include "renderer/PointShadow.hpp"
+#include "renderer/SpotLight.hpp"
 
 #include <cstdio>
 #include "editor/EditorIcons.hpp"
@@ -358,7 +359,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& light = registry.get<LightComponent>(entity);
 
-            static const char* kTypes[] = { "Directional", "Point" };
+            static const char* kTypes[] = { "Directional", "Point", "Spot" };
             ImGui::Combo("Type", &light.type, kTypes, IM_ARRAYSIZE(kTypes));
 
             if (light.type == static_cast<int>(LightType::Directional)) {
@@ -366,6 +367,26 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 ImGui::TextDisabled("Points toward the light.");
                 ImGui::Checkbox("Casts Shadow", &light.castsShadow);
                 ImGui::TextDisabled("Only the first shadow-casting directional light casts.");
+            } else if (light.type == static_cast<int>(LightType::Spot)) {
+                ImGui::TextDisabled("Position comes from the Transform; the cone "
+                                    "points along Direction.");
+                Theme::DrawVec3Control("Direction", light.direction, 0.0f);
+                ImGui::DragFloat("Range", &light.range, 0.5f, 0.5f, 200.0f);
+
+                float innerDegrees = glm::degrees(light.innerAngle);
+                float outerDegrees = glm::degrees(light.outerAngle);
+                if (ImGui::SliderFloat("Inner Angle", &innerDegrees, 0.5f, 89.0f, "%.1f deg")) {
+                    light.innerAngle = glm::radians(innerDegrees);
+                }
+                if (ImGui::SliderFloat("Outer Angle", &outerDegrees, 0.5f, 89.0f, "%.1f deg")) {
+                    light.outerAngle = glm::radians(outerDegrees);
+                }
+                ImGui::TextDisabled("Full brightness inside the inner angle, fading "
+                                    "to nothing at the outer one.");
+
+                ImGui::Checkbox("Casts Shadow", &light.castsShadow);
+                ImGui::TextDisabled("The first %d spot lights that ask for a shadow get one.",
+                                    static_cast<int>(SpotLight::kMaxShadowCasters));
             } else {
                 ImGui::TextDisabled("Position comes from the Transform.");
                 ImGui::DragFloat("Range", &light.range, 0.5f, 0.5f, 200.0f);

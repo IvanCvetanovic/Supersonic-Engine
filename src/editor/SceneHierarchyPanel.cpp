@@ -303,6 +303,17 @@ void SceneHierarchyPanel::drawCreateMenu() {
         m_registry->emplace<UIButtonComponent>(entity);
         m_selectedEntity = entity;
     }
+    if (ImGui::MenuItem("Create Spot Light")) {
+        const auto entity = m_registry->create();
+        m_registry->emplace<TagComponent>(entity, "Spot Light");
+        m_registry->emplace<TransformComponent>(entity, glm::vec3(0.0f, 5.0f, 0.0f));
+        auto& light = m_registry->emplace<LightComponent>(entity);
+        light.type = static_cast<int>(LightType::Spot);
+        light.direction = glm::vec3(0.0f, -1.0f, 0.0f);
+        light.intensity = 6.0f;
+        light.range = 20.0f;
+        m_selectedEntity = entity;
+    }
     if (ImGui::MenuItem("Create Camera")) {
         const auto entity = registry.create();
         registry.emplace<TagComponent>(entity, "Camera");

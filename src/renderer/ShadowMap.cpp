@@ -5,8 +5,9 @@
 
 namespace Supersonic {
 
-ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution)
-    : m_deviceRef(device), m_resolution(resolution == 0 ? 1024 : resolution) {
+ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution, uint32_t layerCount)
+    : m_deviceRef(device), m_resolution(resolution == 0 ? 1024 : resolution),
+      m_layerCount(layerCount == 0 ? 1 : layerCount) {
 
     // This image is SAMPLED, not just used as an attachment, so the generic
     // FindDepthFormat is not sufficient: it can return a depth/stencil format,
@@ -43,8 +44,8 @@ ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution)
     createResources();
     createFramebuffers();
 
-    std::cout << "[ShadowMap] Created " << kShadowCascadeCount << " x " << m_resolution << "x"
-              << m_resolution << " cascaded shadow map (" << vk::to_string(m_format) << ", "
+    std::cout << "[ShadowMap] Created " << m_layerCount << " x " << m_resolution << "x"
+              << m_resolution << " shadow map layer(s) (" << vk::to_string(m_format) << ", "
               << (m_filter == vk::Filter::eLinear ? "linear" : "nearest") << " filter)." << std::endl;
 }
 
@@ -120,7 +121,7 @@ void ShadowMap::createResources() {
         m_deviceRef, m_resolution, m_resolution, m_format,
         vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
         vk::ImageAspectFlagBits::eDepth,
-        kShadowCascadeCount);
+        m_layerCount);
 
     // Clamp to edge: fragments outside the light frustum sample the border
     // depth rather than wrapping and producing phantom shadows on the far side
@@ -134,9 +135,9 @@ void ShadowMap::createFramebuffers() {
     // multiview pass: multiview would rasterise every caster into every layer,
     // which throws away exactly the per-cascade culling the depth pass exists
     // to do.
-    m_framebuffers.reserve(kShadowCascadeCount);
-    for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
-        vk::ImageView attachment = m_depthImage->GetLayerView(cascade);
+    m_framebuffers.reserve(m_layerCount);
+    for (uint32_t layer = 0; layer < m_layerCount; ++layer) {
+        vk::ImageView attachment = m_depthImage->GetLayerView(layer);
 
         vk::FramebufferCreateInfo info{};
         info.renderPass = m_renderPass;

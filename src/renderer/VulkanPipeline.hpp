@@ -10,6 +10,7 @@
 
 #include "renderer/ShadowCascades.hpp"
 #include "renderer/PointShadow.hpp"
+#include "renderer/SpotLight.hpp"
 #include "core/Components.hpp"   // LightType
 
 namespace Supersonic {
@@ -25,7 +26,16 @@ struct GpuLight {
     // y is the index of this light's cube shadow map, or -1 when it does not
     // cast. Carried in the light rather than a parallel array so the shader
     // cannot pair a light with someone else's shadow.
-    alignas(16) glm::vec4 attenuation{25.0f, -1.0f, 0.0f, 0.0f};       // x = range, y = shadow slot
+    //
+    // z is the cosine of a spot's inner angle and w is its shadow slot, kept
+    // here rather than in a fourth vec4 because a light is already the widest
+    // thing in this block and every one of them pays for the padding.
+    alignas(16) glm::vec4 attenuation{25.0f, -1.0f, 1.0f, -1.0f};      // x = range, y = cube slot, z = cos inner, w = spot slot
+
+    // Spot lights: xyz is the direction the cone points, w the cosine of the
+    // outer angle. A spot needs both a position and a direction, and
+    // positionOrDirection can only carry one of them.
+    alignas(16) glm::vec4 spotDirection{0.0f, -1.0f, 0.0f, 0.0f};
 };
 
 // Per-frame scene constants. Light and camera data travel to the GPU instead of
@@ -53,6 +63,11 @@ struct UniformBufferObject {
     alignas(16) glm::vec4 ambientColor;    // rgb = sky ambient, above the horizon
     alignas(16) glm::vec4 ambientGround;   // rgb = ground bounce, below it
     alignas(16) glm::vec4 lightCount;      // x = active light count
+
+    // One transform per shadow-casting spot light. A spot is a single frustum,
+    // so unlike a point light it is sampled exactly like a cascade: project,
+    // compare.
+    alignas(16) glm::mat4 spotViewProj[SpotLight::kMaxShadowCasters];
     GpuLight lights[kMaxLights];
 };
 

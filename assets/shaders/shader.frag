@@ -1,5 +1,8 @@
 #version 450
 
+// Must match SpotLight::kMaxShadowCasters.
+#define SPOT_SHADOW_CASTERS 2
+
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec3 fragColor;
 layout(location = 2) in vec2 fragTexCoord;
@@ -11,9 +14,10 @@ layout(location = 0) out vec4 outColor;
 
 // Must match Engine::UniformBufferObject in renderer/VulkanPipeline.hpp.
 struct Light {
-    vec4 positionOrDirection;   // xyz, w = type (0 = directional, 1 = point)
+    vec4 positionOrDirection;   // xyz, w = type (0 = directional, 1 = point, 2 = spot)
     vec4 colorAndIntensity;     // rgb, a = intensity
-    vec4 attenuation;           // x = range
+    vec4 attenuation;           // x = range, y = cube slot, z = cos inner, w = spot slot
+    vec4 spotDirection;         // xyz = aim, w = cos outer
 };
 
 // Set 0: per-frame scene data.
@@ -27,6 +31,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 ambientColor;
     vec4 ambientGround;
     vec4 lightCount;
+    mat4 spotViewProj[SPOT_SHADOW_CASTERS];
     Light lights[8];
 } ubo;
 
@@ -42,6 +47,11 @@ layout(set = 0, binding = 1) uniform sampler2DArray shadowMaps;
 // actually requires. Must match PointShadow::kMaxShadowCasters.
 #define POINT_SHADOW_CASTERS 2
 layout(set = 0, binding = 3) uniform samplerCube pointShadowMaps[POINT_SHADOW_CASTERS];
+
+// One layer per shadow-casting spot light. A 2D array rather than an array of
+// samplers, because a spot is one frustum and is sampled exactly like a
+// cascade - project, compare - so the layer index can travel in the light.
+layout(set = 0, binding = 4) uniform sampler2DArray spotShadowMaps;
 
 // Set 1: per-material. Rebound per draw, which is what gives each entity its
 // own texture instead of every object sampling one global checkerboard.
@@ -237,6 +247,59 @@ float pointShadowFactor(int slot, vec3 fragToLight, float range, float NdotL) {
     return lit * 0.2;
 }
 
+// How much of the cone reaches this fragment: 1 inside the inner angle,
+// fading to 0 at the outer one.
+//
+// Compared as cosines, which is why the tests for this live in C++ against the
+// same arithmetic: no inverse trigonometry per fragment, and the comparison
+// flips because cosine decreases as the angle grows.
+float spotCone(vec3 spotDirection, vec3 fromLight, float cosInner, float cosOuter) {
+    float cosAngle = dot(spotDirection, fromLight);
+    if (cosAngle <= cosOuter) return 0.0;
+    if (cosAngle >= cosInner) return 1.0;
+
+    float span = cosInner - cosOuter;
+    if (span <= 1e-6) return 1.0;
+
+    float t = (cosAngle - cosOuter) / span;
+    // Smoothstep rather than linear: a linear ramp in cosine leaves a visible
+    // crease where the falloff meets full brightness.
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Shadowing for one spot light. The same projection the cascades use, because
+// a spot is the same shape of problem: one frustum, one depth map, project and
+// compare.
+float spotShadowFactor(int slot, float NdotL) {
+    vec4 lightSpace = ubo.spotViewProj[slot] * vec4(fragWorldPos, 1.0);
+    if (lightSpace.w <= 0.0) return 1.0;
+
+    vec3 projected = lightSpace.xyz / lightSpace.w;
+
+    // Outside the cone's frustum there is no depth to compare against, and
+    // treating "no data" as shadow would put a black border around every spot.
+    if (projected.z < 0.0 || projected.z > 1.0) return 1.0;
+
+    vec2 uv = projected.xy * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+
+    // Slope-scaled: a surface nearly edge-on to the light needs more bias, and
+    // a constant large enough for it would peel the shadow off contact points.
+    float bias = clamp(0.0015 * tan(acos(clamp(NdotL, 0.0, 1.0))), 0.0005, 0.01);
+
+    // 3x3, like the cascades, so the two kinds of shadow soften alike.
+    float lit = 0.0;
+    vec2 texel = 1.0 / vec2(textureSize(spotShadowMaps, 0).xy);
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            float closest = texture(spotShadowMaps,
+                                    vec3(uv + vec2(x, y) * texel, float(slot))).r;
+            lit += (projected.z - bias <= closest) ? 1.0 : 0.0;
+        }
+    }
+    return lit / 9.0;
+}
+
 void main() {
     vec4 albedoTex = texture(albedoMap, fragTexCoord);
     vec3 albedo = albedoTex.rgb * fragColor * push.albedoColor.rgb;
@@ -269,16 +332,28 @@ void main() {
         vec3 L;
         float attenuation = 1.0;
 
+        float cone = 1.0;
+
         if (light.positionOrDirection.w < 0.5) {
             // Directional: xyz already points toward the light.
             L = normalize(light.positionOrDirection.xyz);
         } else {
-            // Point: falls off with distance, cut off at its range.
+            // Point and spot both fall off with distance from a position.
             vec3 toLight = light.positionOrDirection.xyz - fragWorldPos;
             float dist = length(toLight);
             if (dist > light.attenuation.x) continue;
             L = dist > 0.0001 ? toLight / dist : vec3(0.0, 1.0, 0.0);
             attenuation = 1.0 / (1.0 + 0.09 * dist + 0.032 * dist * dist);
+
+            if (light.positionOrDirection.w > 1.5) {
+                // A spot is a point light that only shines within a cone. -L
+                // runs from the light toward the fragment, the same way the
+                // cone points.
+                cone = spotCone(normalize(light.spotDirection.xyz), -L,
+                                light.attenuation.z, light.spotDirection.w);
+                if (cone <= 0.0) continue;
+                attenuation *= cone;
+            }
         }
 
         vec3 H = normalize(V + L);
@@ -301,6 +376,11 @@ void main() {
         float shadow = 1.0;
         if (i == 0 && light.positionOrDirection.w < 0.5) {
             shadow = shadowFactor(fragWorldPos, N, NdotL);
+        } else if (light.positionOrDirection.w > 1.5) {
+            int spotSlot = int(light.attenuation.w);
+            if (spotSlot >= 0 && spotSlot < SPOT_SHADOW_CASTERS) {
+                shadow = spotShadowFactor(spotSlot, NdotL);
+            }
         } else if (light.positionOrDirection.w >= 0.5) {
             int slot = int(light.attenuation.y);
             if (slot >= 0 && slot < POINT_SHADOW_CASTERS) {

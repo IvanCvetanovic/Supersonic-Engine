@@ -191,6 +191,11 @@ struct CameraComponent {
 enum class LightType : int {
     Directional = 0,
     Point = 1,
+
+    // A point light that only shines within a cone. A torch, a street lamp, a
+    // stage light, headlights - none of which could be expressed by the two
+    // above, because neither can be aimed.
+    Spot = 2,
 };
 
 struct LightComponent {
@@ -211,8 +216,15 @@ struct LightComponent {
     glm::vec3 ambient{0.12f, 0.12f, 0.14f};        // sky, above the horizon
     glm::vec3 ambientGround{0.10f, 0.09f, 0.08f};  // bounce, below it
 
-    // Point lights only: cutoff distance.
+    // Point and spot lights: cutoff distance.
     float range{25.0f};
+
+    // Spot lights only. Full brightness within the inner angle, fading to
+    // nothing at the outer one - a single angle would give a hard-edged circle
+    // that crawls across the floor, which is the classic look of a spotlight
+    // done badly. Measured from the axis, so these are half-angles.
+    float innerAngle{0.35f};   // ~20 degrees
+    float outerAngle{0.52f};   // ~30 degrees
 
     bool castsShadow{true};
 };

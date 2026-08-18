@@ -275,8 +275,17 @@ void VulkanPipeline::createDescriptorSetLayout() {
     pointShadowBinding.descriptorCount = PointShadow::kMaxShadowCasters;
     pointShadowBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
 
-    const std::array<vk::DescriptorSetLayoutBinding, 4> sceneBindings = {
-        uboBinding, shadowBinding, paletteBinding, pointShadowBinding
+    // binding 4: one depth map per spot light that can cast. Same shape as the
+    // cube array above, deliberately: a second convention for the same idea
+    // would be one more thing to get wrong.
+    vk::DescriptorSetLayoutBinding spotShadowBinding{};
+    spotShadowBinding.binding = 4;
+    spotShadowBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    spotShadowBinding.descriptorCount = 1;
+    spotShadowBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+    const std::array<vk::DescriptorSetLayoutBinding, 5> sceneBindings = {
+        uboBinding, shadowBinding, paletteBinding, pointShadowBinding, spotShadowBinding
     };
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};

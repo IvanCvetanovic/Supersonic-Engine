@@ -79,6 +79,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"AmbientGround\": "; writeVec3(out, light->ambientGround); out << ",\n";
         out << indent << "  \"Intensity\": " << light->intensity << ",\n";
         out << indent << "  \"Range\": " << light->range << ",\n";
+        out << indent << "  \"InnerAngle\": " << light->innerAngle << ",\n";
+        out << indent << "  \"OuterAngle\": " << light->outerAngle << ",\n";
         out << indent << "  \"CastsShadow\": " << (light->castsShadow ? "true" : "false") << "\n";
         out << indent << "},\n";
     }
@@ -299,6 +301,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         light.ambientGround = readVec3(l["AmbientGround"], glm::vec3(0.10f, 0.09f, 0.08f));
         light.intensity = l["Intensity"].AsFloat(1.5f);
         light.range = l["Range"].AsFloat(25.0f);
+        light.innerAngle = l["InnerAngle"].AsFloat(0.35f);
+        light.outerAngle = l["OuterAngle"].AsFloat(0.52f);
         light.castsShadow = l["CastsShadow"].AsBool(true);
     }
 

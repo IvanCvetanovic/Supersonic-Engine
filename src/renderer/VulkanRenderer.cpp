@@ -31,6 +31,8 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     m_meshRegistry = std::make_unique<MeshRegistry>(m_deviceRef, m_commandPool);
     m_shadowMap = std::make_unique<ShadowMap>(m_deviceRef);
     m_pointShadowMap = std::make_unique<PointShadowMap>(m_deviceRef);
+    m_spotShadowMap = std::make_unique<ShadowMap>(m_deviceRef, 1024,
+                                                 SpotLight::kMaxShadowCasters);
 
     createUniformBuffers();
     createDescriptorPool();
@@ -392,7 +394,7 @@ void VulkanRenderer::createDescriptorPool() {
     // memory rather than about the array nobody counted.
     poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
     poolSizes[1].descriptorCount =
-        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * (1u + PointShadow::kMaxShadowCasters);
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * (2u + PointShadow::kMaxShadowCasters);
 
     // The joint palette. Omitting this makes allocateDescriptorSets throw at
     // startup, which presents as a launch failure rather than as a rendering
@@ -443,7 +445,12 @@ void VulkanRenderer::createDescriptorSets() {
         const std::vector<vk::DescriptorImageInfo>& pointShadowInfos =
             m_pointShadowMap->GetDescriptorInfos();
 
-        std::array<vk::WriteDescriptorSet, 4> writes{};
+        vk::DescriptorImageInfo spotShadowInfo{};
+        spotShadowInfo.imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        spotShadowInfo.imageView = m_spotShadowMap->GetImageView();
+        spotShadowInfo.sampler = m_spotShadowMap->GetSampler();
+
+        std::array<vk::WriteDescriptorSet, 5> writes{};
 
         writes[0].dstSet = m_descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -472,6 +479,12 @@ void VulkanRenderer::createDescriptorSets() {
         writes[3].descriptorCount = static_cast<uint32_t>(pointShadowInfos.size());
         writes[3].pImageInfo = pointShadowInfos.data();
 
+        writes[4].dstSet = m_descriptorSets[i];
+        writes[4].dstBinding = 4;
+        writes[4].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        writes[4].descriptorCount = 1;
+        writes[4].pImageInfo = &spotShadowInfo;
+
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
 
@@ -479,8 +492,10 @@ void VulkanRenderer::createDescriptorSets() {
 }
 
 glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo,
-                                       std::vector<PointShadowCaster>& outCasters) const {
+                                       std::vector<PointShadowCaster>& outCasters,
+                                       std::vector<SpotShadowCaster>& outSpots) const {
     outCasters.clear();
+    outSpots.clear();
     int count = 0;
     glm::vec3 shadowDirection(0.0f, 1.0f, 0.0f);
     bool haveShadowCaster = false;
@@ -501,7 +516,38 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         const auto& light = registry.get<LightComponent>(entity);
 
         GpuLight gpu{};
-        if (light.type == static_cast<int>(LightType::Point)) {
+        if (light.type == static_cast<int>(LightType::Spot)) {
+            glm::vec3 position(0.0f);
+            if (const auto* transform = registry.try_get<TransformComponent>(entity)) {
+                position = transform->position;
+            }
+            // A spot needs a position AND an aim, so w = 2 tells the shader to
+            // read spotDirection as well and apply the cone.
+            gpu.positionOrDirection = glm::vec4(position, 2.0f);
+
+            const glm::vec3 aim = glm::length(light.direction) > 1e-4f
+                                ? glm::normalize(light.direction)
+                                : glm::vec3(0.0f, -1.0f, 0.0f);
+
+            const float inner = std::min(light.innerAngle, light.outerAngle);
+            const float outer = std::max(light.innerAngle, light.outerAngle);
+
+            // Cosines rather than angles: the shader compares a dot product,
+            // and doing the trigonometry here costs nothing per frame instead
+            // of an inverse cosine per fragment per light.
+            gpu.spotDirection = glm::vec4(aim, std::cos(outer));
+            gpu.attenuation.z = std::cos(inner);
+
+            if (light.castsShadow && outSpots.size() < SpotLight::kMaxShadowCasters) {
+                const auto slot = static_cast<uint32_t>(outSpots.size());
+                const glm::mat4 viewProj =
+                    SpotLight::BuildViewProj(position, aim, outer, light.range);
+
+                outSpots.push_back({ viewProj, slot });
+                ubo.spotViewProj[slot] = viewProj;
+                gpu.attenuation.w = static_cast<float>(slot);
+            }
+        } else if (light.type == static_cast<int>(LightType::Point)) {
             glm::vec3 position(0.0f);
             if (const auto* transform = registry.try_get<TransformComponent>(entity)) {
                 position = transform->position;
@@ -539,11 +585,11 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         }
 
         gpu.colorAndIntensity = glm::vec4(light.color, light.intensity);
-        // y carries the cube shadow slot assigned above, so it is preserved
-        // rather than rewritten: overwriting it here made every point light
-        // report slot 0, which is both wrong for the second light and wrong
-        // for a light that was never given a cube at all.
-        gpu.attenuation = glm::vec4(light.range, gpu.attenuation.y, 0.0f, 0.0f);
+        // Only x is rewritten. y, z and w carry the cube slot, the spot's
+        // inner cone and the spot's shadow slot, all assigned above - and
+        // overwriting the lot is exactly the bug that once made every point
+        // light report cube slot 0.
+        gpu.attenuation.x = light.range;
         ubo.lights[count] = gpu;
 
         ++count;
@@ -703,7 +749,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     ubo.cameraPosition = glm::vec4(cameraPosition, 1.0f);
     ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
     ubo.ambientGround = glm::vec4(0.10f, 0.09f, 0.08f, 1.0f);
-    const glm::vec3 shadowDirection = gatherLights(registry, ubo, m_pointShadowCasters);
+    const glm::vec3 shadowDirection =
+        gatherLights(registry, ubo, m_pointShadowCasters, m_spotShadowCasters);
 
     // Cascades are fitted to the camera, so they need the same camera the scene
     // pass is about to use rather than a fixed box around the origin.
@@ -785,13 +832,27 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // ---------------------------------------------------------------------
     // PASS 0b: Cube shadow maps, six faces per shadow-casting point light
     // ---------------------------------------------------------------------
-    for (const PointShadowCaster& caster : m_pointShadowCasters) {
-        const auto faceViewProj = PointShadow::BuildFaceViewProj(caster.position, caster.range);
+    //
+    // Every slot is visited, not only the ones a light claimed. An unrendered
+    // slot keeps the layout it was created with while its descriptor says it
+    // is ready to sample - and since the cubes are one descriptor array, a
+    // single untouched one is enough to make the whole array invalid. Clearing
+    // it also discards whatever a previous frame left there, which would
+    // otherwise be a shadow cast by a light that has stopped casting.
+    for (uint32_t slot = 0; slot < PointShadow::kMaxShadowCasters; ++slot) {
+        const PointShadowCaster* caster = nullptr;
+        for (const PointShadowCaster& candidate : m_pointShadowCasters) {
+            if (candidate.slot == slot) { caster = &candidate; break; }
+        }
+
+        const auto faceViewProj = caster
+            ? PointShadow::BuildFaceViewProj(caster->position, caster->range)
+            : std::array<glm::mat4, PointShadow::kFaceCount>{};
 
         for (uint32_t face = 0; face < PointShadow::kFaceCount; ++face) {
             vk::RenderPassBeginInfo facePass{};
             facePass.renderPass = m_pointShadowMap->GetRenderPass();
-            facePass.framebuffer = m_pointShadowMap->GetFramebuffer(caster.slot, face);
+            facePass.framebuffer = m_pointShadowMap->GetFramebuffer(slot, face);
             facePass.renderArea.offset = vk::Offset2D{0, 0};
             facePass.renderArea.extent = vk::Extent2D{m_pointShadowMap->GetResolution(),
                                                       m_pointShadowMap->GetResolution()};
@@ -811,15 +872,62 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
 
             // Culled per face, which is the whole reason for six passes rather
             // than one multiview pass: a face only rasterises what it can see.
-            RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
-                                          cmd, m_descriptorSets[m_currentFrame],
-                                          faceViewProj[face],
-                                          Frustum::FromMatrix(faceViewProj[face]),
-                                          m_renderStats);
+            // A slot with no light draws nothing and keeps its clear, which
+            // reads as "no occluder anywhere" and therefore as fully lit.
+            if (caster) {
+                RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
+                                              cmd, m_descriptorSets[m_currentFrame],
+                                              faceViewProj[face],
+                                              Frustum::FromMatrix(faceViewProj[face]),
+                                              m_renderStats);
+            }
 
             cmd.endRenderPass();
         }
     }
+    // ---------------------------------------------------------------------
+    // PASS 0c: Spot light shadow maps, one frustum each
+    // ---------------------------------------------------------------------
+    // Every layer, for the same reason as the cubes above.
+    for (uint32_t slot = 0; slot < SpotLight::kMaxShadowCasters; ++slot) {
+        const SpotShadowCaster* spot = nullptr;
+        for (const SpotShadowCaster& candidate : m_spotShadowCasters) {
+            if (candidate.slot == slot) { spot = &candidate; break; }
+        }
+
+        vk::RenderPassBeginInfo spotPass{};
+        spotPass.renderPass = m_spotShadowMap->GetRenderPass();
+        spotPass.framebuffer = m_spotShadowMap->GetFramebuffer(slot);
+        spotPass.renderArea.offset = vk::Offset2D{0, 0};
+        spotPass.renderArea.extent = vk::Extent2D{m_spotShadowMap->GetResolution(),
+                                                  m_spotShadowMap->GetResolution()};
+
+        vk::ClearValue spotClear{};
+        spotClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+        spotPass.clearValueCount = 1;
+        spotPass.pClearValues = &spotClear;
+
+        cmd.beginRenderPass(spotPass, vk::SubpassContents::eInline);
+
+        const float spotDim = static_cast<float>(m_spotShadowMap->GetResolution());
+        const vk::Viewport spotViewport{ 0.0f, 0.0f, spotDim, spotDim, 0.0f, 1.0f };
+        const vk::Rect2D spotScissor{{0, 0}, spotPass.renderArea.extent};
+        cmd.setViewport(0, 1, &spotViewport);
+        cmd.setScissor(0, 1, &spotScissor);
+
+        // One frustum, unlike the six a point light needs: a cone only ever
+        // looks one way.
+        if (spot) {
+            RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
+                                          cmd, m_descriptorSets[m_currentFrame],
+                                          spot->viewProj,
+                                          Frustum::FromMatrix(spot->viewProj),
+                                          m_renderStats);
+        }
+
+        cmd.endRenderPass();
+    }
+
     // ---------------------------------------------------------------------
     // PASS 1: Offscreen 3D scene
     // ---------------------------------------------------------------------
