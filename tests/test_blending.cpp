@@ -286,7 +286,8 @@ static void testMidTransitionPoseIsBetweenTheTwoClips() {
 
     // Switch one of them, then run exactly half the fade.
     blending.get<AnimatorComponent>(blendEntity).clipName = "Twist";
-    AnimationSystem::Advance(blending, library, 0.0f);   // notices the change
+    // One call: Advance returns early on a zero delta, so it both notices the
+    // change and runs half the fade.
     AnimationSystem::Advance(blending, library, 0.5f);   // half of blendDuration
 
     // Put the pure-Twist rig at the same clip time the blended one reached, so
@@ -369,6 +370,51 @@ static void testTransitionSurvivesAMissingOutgoingClip() {
               "a missing outgoing clip must still produce a pose");
 }
 
+static void testALoadedAnimatorKeepsItsTime() {
+    // AnimatorComponent::time is persisted precisely so a Play/Stop or an undo
+    // restores the pose that was on screen. activeClip is not - it is derived -
+    // so after a load the first Advance sees a clip it has not adopted yet.
+    // Treating that as a change and resetting the clock silently discards the
+    // restored time, which is the thing the serializer went out of its way to
+    // keep.
+    entt::registry registry;
+    AnimationLibrary library;
+    const auto entity = makeAnimatedEntity(registry, library, "Bend");
+    registry.get<AnimatorComponent>(entity).time = 0.75f;
+
+    // As a load leaves it: time restored, activeClip empty.
+    registry.get<AnimatorComponent>(entity).activeClip.clear();
+
+    AnimationSystem::Advance(registry, library, 0.016f);
+
+    const auto& animator = registry.get<AnimatorComponent>(entity);
+    CHECK_MSG(animator.time > 0.7f,
+              "a loaded animator must resume where it was, not restart: got " +
+                  std::to_string(animator.time));
+    CHECK_MSG(animator.blendRemaining == 0.0f,
+              "adopting a clip after a load is not a transition");
+}
+
+static void testSwitchingWithNoBlendStillRestartsTheClip() {
+    // The other half of the same distinction: an actual change of clip with
+    // blending turned off must start the new clip from the beginning.
+    entt::registry registry;
+    AnimationLibrary library;
+    const auto entity = makeAnimatedEntity(registry, library, "Bend");
+    registry.get<AnimatorComponent>(entity).blendDuration = 0.0f;
+
+    AnimationSystem::Advance(registry, library, 0.4f);
+    CHECK(registry.get<AnimatorComponent>(entity).time > 0.3f);
+
+    registry.get<AnimatorComponent>(entity).clipName = "Twist";
+    AnimationSystem::Advance(registry, library, 0.016f);
+
+    const auto& animator = registry.get<AnimatorComponent>(entity);
+    CHECK_MSG(animator.time < 0.1f,
+              "a snap to a different clip must start it from the beginning: got " +
+                  std::to_string(animator.time));
+}
+
 static void runTests() {
     testWeightZeroIsTheOutgoingPose();
     testWeightOneIsTheIncomingPose();
@@ -387,6 +433,8 @@ static void runTests() {
     testZeroDurationSnaps();
     testRepeatedlyRequestingTheSameClipDoesNotRestartIt();
     testTransitionSurvivesAMissingOutgoingClip();
+    testALoadedAnimatorKeepsItsTime();
+    testSwitchingWithNoBlendStillRestartsTheClip();
 }
 
 TEST_MAIN("test_blending")

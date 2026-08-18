@@ -254,9 +254,21 @@ void BeginTransitionIfClipChanged(AnimatorComponent& animator) {
     const std::string outgoing = animator.activeClip;
     animator.activeClip = animator.clipName;
 
-    // Nothing to fade from on the first frame, or when the transition is
-    // authored as instant.
-    if (outgoing.empty() || animator.blendDuration <= 0.0f) {
+    // Adoption, not a change: an empty outgoing clip means nobody switched
+    // away from anything. It happens on the first frame, and after every load,
+    // Play, Stop and undo - activeClip is derived and so is not serialised,
+    // while time is. Resetting the clock here would throw away the restored
+    // pose, which is the whole reason time is persisted at all.
+    if (outgoing.empty()) {
+        animator.blendRemaining = 0.0f;
+        animator.blendTotal = 0.0f;
+        animator.blendFromClip.clear();
+        return;
+    }
+
+    // A real switch with blending turned off. The new clip starts from the
+    // beginning, as it always did.
+    if (animator.blendDuration <= 0.0f) {
         animator.blendRemaining = 0.0f;
         animator.blendTotal = 0.0f;
         animator.blendFromClip.clear();
