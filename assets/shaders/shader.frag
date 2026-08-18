@@ -36,6 +36,13 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
 // style preference.
 layout(set = 0, binding = 1) uniform sampler2DArray shadowMaps;
 
+// One cube per point light that can cast. An array of cube samplers rather than
+// a cube ARRAY image, so no optional device feature is needed; indexing it by
+// the light loop's counter is dynamically uniform, which is what the rule
+// actually requires. Must match PointShadow::kMaxShadowCasters.
+#define POINT_SHADOW_CASTERS 2
+layout(set = 0, binding = 3) uniform samplerCube pointShadowMaps[POINT_SHADOW_CASTERS];
+
 // Set 1: per-material. Rebound per draw, which is what gives each entity its
 // own texture instead of every object sampling one global checkerboard.
 layout(set = 1, binding = 0) uniform sampler2D albedoMap;
@@ -181,6 +188,55 @@ vec2 EnvBRDFApprox(float roughness, float NoV) {
     return vec2(-1.04, 1.04) * a004 + r.zw;
 }
 
+// Shadowing for one point light, sampled by direction.
+//
+// The cube stores the same projected depth its faces were rendered with, so the
+// value to compare against can be reconstructed from the distance along the
+// major axis alone: the face looks straight down that axis with a 90-degree
+// frustum, so the other two components move the fragment within the face and
+// never along its depth. That is what makes this one texture fetch instead of
+// six matrices in a uniform block. test_pointshadow pins the two against each
+// other.
+float pointShadowFactor(int slot, vec3 fragToLight, float range, float NdotL) {
+    // The near plane must match PointShadow::kNearPlane.
+    const float nearPlane = 0.05;
+    float far = max(range, nearPlane * 2.0);
+
+    vec3 magnitude = abs(fragToLight);
+    float major = max(magnitude.x, max(magnitude.y, magnitude.z));
+    if (major <= nearPlane) return 1.0;
+
+    float a = far / (nearPlane - far);
+    float b = (nearPlane * far) / (nearPlane - far);
+    float current = (-a * major + b) / major;
+
+    // Slope-scaled, in the same units as the stored depth. A constant bias is
+    // either useless up close or peels the shadow off contact at a distance,
+    // because projected depth is not linear in world units.
+    float slope = clamp(1.0 - NdotL, 0.0, 1.0);
+    float bias = (0.0015 + 0.006 * slope) * (1.0 - current) * (1.0 - current) * 20.0;
+    bias = clamp(bias, 0.00005, 0.02);
+
+    // Four taps around the direction rather than a full PCF kernel: a cube
+    // lookup is not separable, and the softening this buys is enough at the
+    // resolution these maps run at.
+    const vec3 offsets[5] = vec3[5](
+        vec3( 0.0,  0.0,  0.0),
+        vec3( 1.0,  1.0,  1.0),
+        vec3(-1.0, -1.0,  1.0),
+        vec3( 1.0, -1.0, -1.0),
+        vec3(-1.0,  1.0, -1.0)
+    );
+    float radius = major * 0.006;
+
+    float lit = 0.0;
+    for (int tap = 0; tap < 5; ++tap) {
+        float closest = texture(pointShadowMaps[slot], fragToLight + offsets[tap] * radius).r;
+        lit += (current - bias <= closest) ? 1.0 : 0.0;
+    }
+    return lit * 0.2;
+}
+
 void main() {
     vec4 albedoTex = texture(albedoMap, fragTexCoord);
     vec3 albedo = albedoTex.rgb * fragColor * push.albedoColor.rgb;
@@ -238,9 +294,20 @@ void main() {
         vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
         float NdotL = max(dot(N, L), 0.0);
 
-        // Only the first light casts; it is the one the shadow map was
-        // rendered from.
-        float shadow = (i == 0) ? shadowFactor(fragWorldPos, N, NdotL) : 1.0;
+        // The first light is the one the cascades were rendered from. Point
+        // lights carry the index of their own cube, or -1 when they missed out
+        // on one, so a lamp shining through a wall is no longer the only
+        // possible outcome.
+        float shadow = 1.0;
+        if (i == 0 && light.positionOrDirection.w < 0.5) {
+            shadow = shadowFactor(fragWorldPos, N, NdotL);
+        } else if (light.positionOrDirection.w >= 0.5) {
+            int slot = int(light.attenuation.y);
+            if (slot >= 0 && slot < POINT_SHADOW_CASTERS) {
+                shadow = pointShadowFactor(slot, fragWorldPos - light.positionOrDirection.xyz,
+                                           light.attenuation.x, NdotL);
+            }
+        }
 
         Lo += (kD * albedo / PI + specular) * radiance * NdotL * shadow;
     }

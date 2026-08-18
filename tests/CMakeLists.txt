@@ -56,6 +56,7 @@ add_engine_test(test_serialize ${SUPERSONIC_SRC}/src/core/SceneSerializer.cpp
                                ${SUPERSONIC_SRC}/src/core/PrefabSerializer.cpp)
 add_engine_test(test_frustum)
 add_engine_test(test_input     ${SUPERSONIC_SRC}/src/core/Input.cpp)
+add_engine_test(test_pointshadow ${SUPERSONIC_SRC}/src/renderer/PointShadow.cpp)
 add_engine_test(test_cascades  ${SUPERSONIC_SRC}/src/renderer/ShadowCascades.cpp)
 add_engine_test(test_jobs      ${SUPERSONIC_SRC}/src/core/JobSystem.cpp)
 add_engine_test(test_uicanvas  ${SUPERSONIC_SRC}/src/core/UICanvas.cpp)

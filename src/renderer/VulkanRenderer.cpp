@@ -30,6 +30,7 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
 
     m_meshRegistry = std::make_unique<MeshRegistry>(m_deviceRef, m_commandPool);
     m_shadowMap = std::make_unique<ShadowMap>(m_deviceRef);
+    m_pointShadowMap = std::make_unique<PointShadowMap>(m_deviceRef);
 
     createUniformBuffers();
     createDescriptorPool();
@@ -384,8 +385,14 @@ void VulkanRenderer::createDescriptorPool() {
 
     // One shadow map sampler per frame in flight. Material textures live in the
     // TextureRegistry's own pool.
+    //
+    // Plus the point-light cubes, which are a second binding of the same type:
+    // a pool size counts DESCRIPTORS, not bindings, so leaving these out makes
+    // allocation fail at startup with a message about the pool being out of
+    // memory rather than about the array nobody counted.
     poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolSizes[1].descriptorCount =
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * (1u + PointShadow::kMaxShadowCasters);
 
     // The joint palette. Omitting this makes allocateDescriptorSets throw at
     // startup, which presents as a launch failure rather than as a rendering
@@ -433,7 +440,10 @@ void VulkanRenderer::createDescriptorSets() {
         paletteInfo.offset = 0;
         paletteInfo.range = sizeof(glm::mat4) * kMaxPaletteMatrices;
 
-        std::array<vk::WriteDescriptorSet, 3> writes{};
+        const std::vector<vk::DescriptorImageInfo>& pointShadowInfos =
+            m_pointShadowMap->GetDescriptorInfos();
+
+        std::array<vk::WriteDescriptorSet, 4> writes{};
 
         writes[0].dstSet = m_descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -453,13 +463,24 @@ void VulkanRenderer::createDescriptorSets() {
         writes[2].descriptorCount = 1;
         writes[2].pBufferInfo = &paletteInfo;
 
+        // Every slot is written whether a light is using it or not: reading an
+        // unwritten descriptor is undefined behaviour even inside a branch the
+        // shader never takes.
+        writes[3].dstSet = m_descriptorSets[i];
+        writes[3].dstBinding = 3;
+        writes[3].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        writes[3].descriptorCount = static_cast<uint32_t>(pointShadowInfos.size());
+        writes[3].pImageInfo = pointShadowInfos.data();
+
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
 
     std::cout << "[VulkanRenderer] Allocated and updated " << m_descriptorSets.size() << " scene DescriptorSets." << std::endl;
 }
 
-glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo) const {
+glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo,
+                                       std::vector<PointShadowCaster>& outCasters) const {
+    outCasters.clear();
     int count = 0;
     glm::vec3 shadowDirection(0.0f, 1.0f, 0.0f);
     bool haveShadowCaster = false;
@@ -486,6 +507,15 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
                 position = transform->position;
             }
             gpu.positionOrDirection = glm::vec4(position, 1.0f);
+
+            // First come, first served, up to the fixed number of cubes. A
+            // light that misses out simply does not cast, which is visible and
+            // predictable - unlike reallocating images mid-frame to fit it.
+            if (light.castsShadow && outCasters.size() < PointShadow::kMaxShadowCasters) {
+                const auto slot = static_cast<uint32_t>(outCasters.size());
+                outCasters.push_back({ position, light.range, slot });
+                gpu.attenuation.y = static_cast<float>(slot);
+            }
         } else {
             const glm::vec3 dir = glm::length(light.direction) > 1e-4f
                                 ? glm::normalize(light.direction)
@@ -501,7 +531,7 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
                     ubo.lights[count] = ubo.lights[0];
                     ubo.lights[0] = gpu;
                     ubo.lights[0].colorAndIntensity = glm::vec4(light.color, light.intensity);
-                    ubo.lights[0].attenuation = glm::vec4(light.range, 0.0f, 0.0f, 0.0f);
+                    ubo.lights[0].attenuation = glm::vec4(light.range, -1.0f, 0.0f, 0.0f);
                     ++count;
                     continue;
                 }
@@ -509,7 +539,11 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         }
 
         gpu.colorAndIntensity = glm::vec4(light.color, light.intensity);
-        gpu.attenuation = glm::vec4(light.range, 0.0f, 0.0f, 0.0f);
+        // y carries the cube shadow slot assigned above, so it is preserved
+        // rather than rewritten: overwriting it here made every point light
+        // report slot 0, which is both wrong for the second light and wrong
+        // for a light that was never given a cube at all.
+        gpu.attenuation = glm::vec4(light.range, gpu.attenuation.y, 0.0f, 0.0f);
         ubo.lights[count] = gpu;
 
         ++count;
@@ -520,7 +554,7 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         // scene is not simply black.
         ubo.lights[0].positionOrDirection = glm::vec4(glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f)), 0.0f);
         ubo.lights[0].colorAndIntensity = glm::vec4(1.0f, 0.95f, 0.88f, 1.5f);
-        ubo.lights[0].attenuation = glm::vec4(25.0f, 0.0f, 0.0f, 0.0f);
+        ubo.lights[0].attenuation = glm::vec4(25.0f, -1.0f, 0.0f, 0.0f);
         ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
         ubo.ambientGround = glm::vec4(0.10f, 0.09f, 0.08f, 1.0f);
         shadowDirection = glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f));
@@ -669,7 +703,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     ubo.cameraPosition = glm::vec4(cameraPosition, 1.0f);
     ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
     ubo.ambientGround = glm::vec4(0.10f, 0.09f, 0.08f, 1.0f);
-    const glm::vec3 shadowDirection = gatherLights(registry, ubo);
+    const glm::vec3 shadowDirection = gatherLights(registry, ubo, m_pointShadowCasters);
 
     // Cascades are fitted to the camera, so they need the same camera the scene
     // pass is about to use rather than a fixed box around the origin.
@@ -748,6 +782,44 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         cmd.endRenderPass();
     }
 
+    // ---------------------------------------------------------------------
+    // PASS 0b: Cube shadow maps, six faces per shadow-casting point light
+    // ---------------------------------------------------------------------
+    for (const PointShadowCaster& caster : m_pointShadowCasters) {
+        const auto faceViewProj = PointShadow::BuildFaceViewProj(caster.position, caster.range);
+
+        for (uint32_t face = 0; face < PointShadow::kFaceCount; ++face) {
+            vk::RenderPassBeginInfo facePass{};
+            facePass.renderPass = m_pointShadowMap->GetRenderPass();
+            facePass.framebuffer = m_pointShadowMap->GetFramebuffer(caster.slot, face);
+            facePass.renderArea.offset = vk::Offset2D{0, 0};
+            facePass.renderArea.extent = vk::Extent2D{m_pointShadowMap->GetResolution(),
+                                                      m_pointShadowMap->GetResolution()};
+
+            vk::ClearValue faceClear{};
+            faceClear.depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
+            facePass.clearValueCount = 1;
+            facePass.pClearValues = &faceClear;
+
+            cmd.beginRenderPass(facePass, vk::SubpassContents::eInline);
+
+            const float faceDim = static_cast<float>(m_pointShadowMap->GetResolution());
+            const vk::Viewport faceViewport{ 0.0f, 0.0f, faceDim, faceDim, 0.0f, 1.0f };
+            const vk::Rect2D faceScissor{{0, 0}, facePass.renderArea.extent};
+            cmd.setViewport(0, 1, &faceViewport);
+            cmd.setScissor(0, 1, &faceScissor);
+
+            // Culled per face, which is the whole reason for six passes rather
+            // than one multiview pass: a face only rasterises what it can see.
+            RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
+                                          cmd, m_descriptorSets[m_currentFrame],
+                                          faceViewProj[face],
+                                          Frustum::FromMatrix(faceViewProj[face]),
+                                          m_renderStats);
+
+            cmd.endRenderPass();
+        }
+    }
     // ---------------------------------------------------------------------
     // PASS 1: Offscreen 3D scene
     // ---------------------------------------------------------------------

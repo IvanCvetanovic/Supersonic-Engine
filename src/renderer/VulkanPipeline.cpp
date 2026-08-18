@@ -265,8 +265,18 @@ void VulkanPipeline::createDescriptorSetLayout() {
     paletteBinding.descriptorCount = 1;
     paletteBinding.stageFlags = vk::ShaderStageFlagBits::eVertex;
 
-    const std::array<vk::DescriptorSetLayoutBinding, 3> sceneBindings = {
-        uboBinding, shadowBinding, paletteBinding
+    // binding 3: one cube shadow map per point light that can cast. An array
+    // of descriptors rather than a cube ARRAY image, so no optional device
+    // feature is needed - and indexing it by the light loop's counter is
+    // dynamically uniform, which is what the rule actually requires.
+    vk::DescriptorSetLayoutBinding pointShadowBinding{};
+    pointShadowBinding.binding = 3;
+    pointShadowBinding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    pointShadowBinding.descriptorCount = PointShadow::kMaxShadowCasters;
+    pointShadowBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+    const std::array<vk::DescriptorSetLayoutBinding, 4> sceneBindings = {
+        uboBinding, shadowBinding, paletteBinding, pointShadowBinding
     };
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};

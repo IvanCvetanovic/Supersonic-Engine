@@ -29,7 +29,14 @@ public:
         // More than one sample makes this a multisample attachment. Such an
         // image can never be sampled in a shader or copied from - it is
         // resolved into a single-sample image by the render pass instead.
-        vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1
+        vk::SampleCountFlagBits samples = vk::SampleCountFlagBits::e1,
+
+        // Makes this a cube map: exactly six layers, created with the
+        // cube-compatible flag, and GetImageView() returns a CUBE view. Six
+        // layers on their own are just an array - the sampler will not do the
+        // direction-to-face selection without this, which is the entire point
+        // of using a cube for an omnidirectional shadow.
+        bool cubeCompatible = false
     );
     ~VulkanImage();
 

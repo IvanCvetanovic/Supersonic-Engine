@@ -16,6 +16,7 @@
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
 #include "renderer/ShadowMap.hpp"
+#include "renderer/PointShadowMap.hpp"
 #include "renderer/PipelineCache.hpp"
 #include "platform/Window.hpp"
 
@@ -77,7 +78,18 @@ private:
 
     // Fills the UBO from the scene's lights and returns the light-space matrix
     // used by both the shadow pass and the shadow lookup.
-    glm::vec3 gatherLights(entt::registry& registry, UniformBufferObject& ubo) const;
+    // A point light that was given a cube this frame.
+    struct PointShadowCaster {
+        glm::vec3 position{0.0f};
+        float range{25.0f};
+        uint32_t slot{0};
+    };
+
+    // Fills the light block and returns the direction the cascades should be
+    // fitted to. Point lights that win a cube are appended to outCasters, in
+    // slot order.
+    glm::vec3 gatherLights(entt::registry& registry, UniformBufferObject& ubo,
+                           std::vector<PointShadowCaster>& outCasters) const;
 
     void cleanupSwapchain();
 
@@ -98,6 +110,10 @@ private:
 
     // Depth-only pass from the primary directional light.
     std::unique_ptr<ShadowMap> m_shadowMap;
+    std::unique_ptr<PointShadowMap> m_pointShadowMap;
+
+    // Rebuilt each frame by gatherLights, consumed by the cube shadow pass.
+    mutable std::vector<PointShadowCaster> m_pointShadowCasters;
     std::unique_ptr<PipelineCache> m_pipelineCache;
 
     // Every skinned entity's joint matrices for the frame, back to back. The

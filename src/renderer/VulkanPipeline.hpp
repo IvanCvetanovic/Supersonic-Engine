@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 
 #include "renderer/ShadowCascades.hpp"
+#include "renderer/PointShadow.hpp"
 #include "core/Components.hpp"   // LightType
 
 namespace Supersonic {
@@ -21,7 +22,10 @@ inline constexpr int kMaxLights = 8;
 struct GpuLight {
     alignas(16) glm::vec4 positionOrDirection{0.0f, 1.0f, 0.0f, 0.0f}; // w = type
     alignas(16) glm::vec4 colorAndIntensity{1.0f};                     // rgb, a = intensity
-    alignas(16) glm::vec4 attenuation{25.0f, 0.0f, 0.0f, 0.0f};        // x = range
+    // y is the index of this light's cube shadow map, or -1 when it does not
+    // cast. Carried in the light rather than a parallel array so the shader
+    // cannot pair a light with someone else's shadow.
+    alignas(16) glm::vec4 attenuation{25.0f, -1.0f, 0.0f, 0.0f};       // x = range, y = shadow slot
 };
 
 // Per-frame scene constants. Light and camera data travel to the GPU instead of

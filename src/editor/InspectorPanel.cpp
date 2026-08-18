@@ -1,5 +1,7 @@
 #include "editor/InspectorPanel.hpp"
 
+#include "renderer/PointShadow.hpp"
+
 #include <cstdio>
 #include "editor/EditorIcons.hpp"
 #include "core/MaterialSystem.hpp"
@@ -356,6 +358,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             } else {
                 ImGui::TextDisabled("Position comes from the Transform.");
                 ImGui::DragFloat("Range", &light.range, 0.5f, 0.5f, 200.0f);
+                ImGui::Checkbox("Casts Shadow", &light.castsShadow);
+                ImGui::TextDisabled("Cube shadow map. The first %d point lights that ask "
+                                    "for one get it; the rest shine through walls.",
+                                    static_cast<int>(PointShadow::kMaxShadowCasters));
             }
 
             ImGui::ColorEdit3("Light Color", glm::value_ptr(light.color));

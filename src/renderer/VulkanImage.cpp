@@ -13,11 +13,21 @@ VulkanImage::VulkanImage(
     vk::ImageUsageFlags usage,
     vk::ImageAspectFlags aspectFlags,
     uint32_t arrayLayers,
-    vk::SampleCountFlagBits samples)
+    vk::SampleCountFlagBits samples,
+    bool cubeCompatible)
     : m_deviceRef(device), m_allocator(device.GetAllocator()), m_width(width), m_height(height), m_format(format) {
 
     m_arrayLayers = arrayLayers == 0 ? 1 : arrayLayers;
     m_samples = samples;
+
+    // A cube is six faces, no more and no less. Asking for a cube with any
+    // other layer count is a caller bug, and creating a plain array instead
+    // would fail later at descriptor binding with a message about view types
+    // that says nothing about why.
+    if (cubeCompatible && m_arrayLayers != 6) {
+        throw std::runtime_error("A cube-compatible image needs exactly 6 layers, got " +
+                                 std::to_string(m_arrayLayers));
+    }
 
     if (!m_allocator) {
         throw std::runtime_error("Cannot create VulkanImage with null VmaAllocator!");
@@ -37,6 +47,7 @@ VulkanImage::VulkanImage(
     imageInfo.usage = static_cast<VkImageUsageFlags>(usage);
     imageInfo.samples = static_cast<VkSampleCountFlagBits>(m_samples);
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (cubeCompatible) imageInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -60,7 +71,9 @@ VulkanImage::VulkanImage(
     // Create Image View
     vk::ImageViewCreateInfo viewInfo{};
     viewInfo.image = m_image;
-    viewInfo.viewType = m_arrayLayers > 1 ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
+    viewInfo.viewType = cubeCompatible ? vk::ImageViewType::eCube
+                      : (m_arrayLayers > 1 ? vk::ImageViewType::e2DArray
+                                           : vk::ImageViewType::e2D);
     viewInfo.format = m_format;
     viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
