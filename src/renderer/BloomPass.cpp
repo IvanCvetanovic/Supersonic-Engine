@@ -92,13 +92,16 @@ vk::Sampler makeClampedSampler(vk::Device device) {
 } // namespace
 
 BloomPass::BloomPass(VulkanDevice& device, uint32_t width, uint32_t height,
-                     vk::ImageView sceneView, vk::Sampler sceneSampler)
+                     vk::ImageView sceneView, vk::Sampler sceneSampler,
+                     vk::PipelineCache cache)
     : m_deviceRef(device),
       m_width(width == 0 ? 1 : width),
       m_height(height == 0 ? 1 : height) {
 
     m_halfWidth = m_width / 2 > 0 ? m_width / 2 : 1;
     m_halfHeight = m_height / 2 > 0 ? m_height / 2 : 1;
+
+    m_pipelineCache = cache;
 
     createRenderPasses();
     createImages();
@@ -334,7 +337,7 @@ vk::Pipeline BloomPass::buildPipeline(const std::string& fragmentPath, vk::Rende
     info.renderPass = pass;
     info.subpass = 0;
 
-    const auto result = device.createGraphicsPipeline(nullptr, info);
+    const auto result = device.createGraphicsPipeline(m_pipelineCache, info);
 
     device.destroyShaderModule(vertModule);
     device.destroyShaderModule(fragModule);

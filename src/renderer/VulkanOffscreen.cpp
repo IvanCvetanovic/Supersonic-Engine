@@ -303,7 +303,8 @@ void VulkanOffscreen::createBloom() {
     const vk::ImageView sceneView = m_resolveImage ? m_resolveImage->GetImageView()
                                                    : m_colorImage->GetImageView();
 
-    m_bloom = std::make_unique<BloomPass>(m_deviceRef, m_width, m_height, sceneView, m_sampler);
+    m_bloom = std::make_unique<BloomPass>(m_deviceRef, m_width, m_height, sceneView,
+                                          m_sampler, m_pipelineCache);
 
     // ImGui shows the bloom chain's output, not the scene image. The scene
     // image is linear and floating point; presenting it directly would show

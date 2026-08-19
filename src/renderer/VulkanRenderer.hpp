@@ -64,6 +64,11 @@ public:
     // Last frame's culling counters, for the editor's statistics panel.
     const RenderSystem::Stats& GetRenderStats() const { return m_renderStats; }
 
+    // The persistent, disk-backed, driver-UUID-validated pipeline cache. Handed
+    // out so the editor's offscreen chain can use it too rather than compiling
+    // its pipelines from SPIR-V on every viewport resize.
+    vk::PipelineCache GetPipelineCache() const;
+
     MeshRegistry& GetMeshRegistry() { return *m_meshRegistry; }
     TextureRegistry& GetTextureRegistry() { return *m_textureRegistry; }
 

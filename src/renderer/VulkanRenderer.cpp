@@ -43,6 +43,10 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Renderer initialized (pipeline pending offscreen render pass)." << std::endl;
 }
 
+vk::PipelineCache VulkanRenderer::GetPipelineCache() const {
+    return m_pipelineCache ? m_pipelineCache->Get() : nullptr;
+}
+
 void VulkanRenderer::SetOffscreenRenderPass(vk::RenderPass pass, vk::SampleCountFlagBits samples) {
     // The scene pipeline is built against the offscreen render pass, which the
     // editor owns. It is supplied once the editor has created its target - and

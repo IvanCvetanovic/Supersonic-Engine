@@ -26,8 +26,14 @@ class BloomPass {
 public:
     // sceneView/sceneSampler are the resolved scene image. They are sampled, so
     // they must already be in eShaderReadOnlyOptimal when Record runs.
+    // `cache` is the renderer's persistent pipeline cache. Optional only so a
+    // caller without one still compiles; passing it is what stops a viewport
+    // drag recompiling three pipelines from source on every resize, while the
+    // renderer's own cache - which exists, persists to disk and is validated
+    // against the driver UUID - sat unused two frames away.
     BloomPass(VulkanDevice& device, uint32_t width, uint32_t height,
-              vk::ImageView sceneView, vk::Sampler sceneSampler);
+              vk::ImageView sceneView, vk::Sampler sceneSampler,
+              vk::PipelineCache cache = nullptr);
     ~BloomPass();
 
     BloomPass(const BloomPass&) = delete;
@@ -77,6 +83,7 @@ private:
     uint32_t m_halfWidth{1};
     uint32_t m_halfHeight{1};
 
+    vk::PipelineCache m_pipelineCache{nullptr};
     vk::RenderPass m_hdrPass{nullptr};     // half-res float targets
     vk::RenderPass m_outputPass{nullptr};  // full-res encoded target
 

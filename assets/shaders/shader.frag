@@ -322,7 +322,26 @@ void main() {
             float dist = length(toLight);
             if (dist > light.attenuation.x) continue;
             L = dist > 0.0001 ? toLight / dist : vec3(0.0, 1.0, 0.0);
-            attenuation = 1.0 / (1.0 + 0.09 * dist + 0.032 * dist * dist);
+
+            // Windowed inverse-square, not the legacy constant table.
+            //
+            // The old curve was 1/(1 + 0.09d + 0.032d^2) with `range` used only
+            // as a hard cutoff. Two problems followed from that. It is not
+            // inverse-square, so `intensity` meant nothing physical and every
+            // light had to be re-tuned by eye whenever its distance changed.
+            // And at d = range the curve has NOT reached zero - at range 25 it
+            // evaluates to about 0.043 - so the `continue` above chopped it off
+            // mid-slope and every point light ended in a visible hard-edged
+            // sphere.
+            //
+            // The window is Karis's: (1 - (d/range)^4)^2, clamped, which
+            // reaches exactly zero AT range and meets the cutoff smoothly. The
+            // +1 in the denominator keeps the term finite as d approaches zero,
+            // where true inverse-square goes to infinity.
+            float distOverRange = dist / max(light.attenuation.x, 0.0001);
+            float window = clamp(1.0 - distOverRange * distOverRange * distOverRange * distOverRange,
+                                 0.0, 1.0);
+            attenuation = (window * window) / (dist * dist + 1.0);
 
             if (light.positionOrDirection.w > 1.5) {
                 // A spot is a point light that only shines within a cone. -L

@@ -22,6 +22,13 @@ public:
     VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height);
     ~VulkanOffscreen();
 
+    // The renderer's persistent pipeline cache, handed down so the bloom chain
+    // stops recompiling its pipelines from SPIR-V on every viewport resize -
+    // while that cache, which persists to disk and is validated against the
+    // driver UUID, sat unused two frames away. Set before the first resize; a
+    // null cache is legal and merely slow.
+    void SetPipelineCache(vk::PipelineCache cache) { m_pipelineCache = cache; }
+
     VulkanOffscreen(const VulkanOffscreen&) = delete;
     VulkanOffscreen& operator=(const VulkanOffscreen&) = delete;
 
@@ -71,6 +78,7 @@ private:
     std::unique_ptr<VulkanImage> m_resolveImage;
 
     // Rebuilt with the target, because every image in the chain is sized to it.
+    vk::PipelineCache m_pipelineCache{nullptr};
     std::unique_ptr<BloomPass> m_bloom;
     vk::Framebuffer m_framebuffer{nullptr};
 

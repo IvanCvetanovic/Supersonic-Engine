@@ -146,6 +146,12 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
                         m_swapchain->GetExtent().height);
 
     // The scene pipeline targets the editor's offscreen render pass.
+    // Before the first resize, so the bloom chain is rebuilt from the cache
+    // rather than from SPIR-V. Dragging the viewport edge previously destroyed
+    // and recompiled three pipelines per resize, reading four .spv files off
+    // disk each time, while the renderer's own cache sat unused.
+    m_editorLayer->GetOffscreen().SetPipelineCache(m_renderer->GetPipelineCache());
+
     m_renderer->SetOffscreenRenderPass(m_editorLayer->GetOffscreen().GetRenderPass(),
                                        m_editorLayer->GetOffscreen().GetSampleCount());
 
