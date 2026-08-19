@@ -118,6 +118,11 @@ private:
     vk::RenderPass m_offscreenRenderPass{nullptr};
     vk::SampleCountFlagBits m_offscreenSamples{vk::SampleCountFlagBits::e1};
     std::unique_ptr<VulkanPipeline> m_pipeline;
+
+    // Same shaders and same layouts, blended and depth-write-off. A second
+    // pipeline rather than dynamic state because blend and depthWrite are not
+    // dynamic in core Vulkan 1.2 without EXT_extended_dynamic_state3.
+    std::unique_ptr<VulkanPipeline> m_transparentPipeline;
     std::unique_ptr<VulkanPipeline> m_gridPipeline;
 
     // Depth-only pass from the primary directional light.

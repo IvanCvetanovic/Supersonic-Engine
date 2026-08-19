@@ -248,6 +248,20 @@ struct MaterialComponent {
     std::string materialPath;
 
     // Rate-limits the "asset is missing" diagnostic to once per path change.
+    // Opaque or blended.
+    //
+    // Alpha was authored everywhere and honoured nowhere: the inspector draws a
+    // four-component albedo tint on every material, ParticleEmitterComponent's
+    // endColor defaults to alpha zero, and shader.frag dutifully computes
+    // albedoTex.a * push.albedoColor.a - which the scene pipeline then
+    // discarded, because blendEnable was false and never overridden. The only
+    // blended thing in the renderer was the editor grid.
+    //
+    // What that cost is not polish. It is a construction site that cannot fade
+    // in, a build-placement ghost that cannot be tinted, glass, water, foliage,
+    // smoke, and every fade-out in any game built on this.
+    bool transparent{false};
+
     bool warnedMissingAsset{false};
 };
 

@@ -144,6 +144,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         // The asset link, not just the values it resolves to. A scene that
         // stored only the resolved numbers would silently detach every
         // entity from its shared material the first time it was saved.
+        out << indent << "  \"Transparent\": " << (mat->transparent ? "true" : "false") << ",\n";
         out << indent << "  \"Asset\": \"" << Json::Escape(mat->materialPath) << "\"\n";
         out << indent << "},\n";
     }
@@ -382,6 +383,9 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         material.metallic = m["Metallic"].AsFloat(0.1f);
         material.ao = m["AO"].AsFloat(1.0f);
         material.materialPath = m["Asset"].AsString("");
+        // Absent in every scene written before the blended pass existed, and
+        // false is what those scenes rendered as.
+        material.transparent = m["Transparent"].AsBool(false);
     }
 
     if (node.Has("RigidBody")) {

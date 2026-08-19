@@ -552,6 +552,21 @@ void SupersonicApp::Run() {
                 << "Mid-run invalidate: texture=" << (tex ? "dropped" : "absent")
                 << ", mesh=" << (mesh ? "dropped" : "absent")
                 << "; both will be re-acquired next frame.";
+
+            // Drive something through the transparent pipeline as well. It has
+            // its own blend state, its own depth-write setting and its own
+            // sort, and none of that is reachable from a test without a device
+            // - so the headless run is where it gets exercised.
+            size_t madeTransparent = 0;
+            for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
+                if (madeTransparent >= 2) break;
+                material.transparent = true;
+                material.albedoColor.a = 0.5f;
+                ++madeTransparent;
+            }
+            SUPERSONIC_LOG_INFO("SelfCheck")
+                << "Marked " << madeTransparent << " material(s) transparent; "
+                << "the blended pass draws from the next frame on.";
         }
 
         m_window->PollEvents();

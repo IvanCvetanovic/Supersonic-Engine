@@ -297,6 +297,14 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::SliderFloat("Metallic", &material.metallic, 0.0f, 1.0f);
             ImGui::SliderFloat("Ambient Occlusion", &material.ao, 0.0f, 1.0f);
 
+            // The blend state is per-material and the draw order depends on
+            // it, so this is a rendering decision rather than a colour one.
+            ImGui::Checkbox("Transparent", &material.transparent);
+            if (material.transparent) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(alpha from Albedo, drawn back to front)");
+            }
+
             // albedoTexturePath used to be a field nothing read.
             char texBuffer[512] = {};
             const size_t texLen = std::min(material.albedoTexturePath.size(), sizeof(texBuffer) - 1);

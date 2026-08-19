@@ -300,6 +300,26 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/frag.spv",
         sceneOptions);
 
+    // The same shaders, blended, for anything a material marks transparent.
+    //
+    // depthWrite off: a transparent surface must not occlude what is behind it,
+    // which is the whole reason the pass is separate. Depth TEST stays on, so
+    // opaque geometry still hides it.
+    //
+    // cullMode none, because a transparent surface is usually one someone
+    // expects to see from both sides - a window, a sheet of water, a decal.
+    VulkanPipeline::Options blendOptions = sceneOptions;
+    blendOptions.blendEnable = true;
+    blendOptions.depthWrite = false;
+    blendOptions.cullMode = vk::CullModeFlagBits::eNone;
+
+    m_transparentPipeline = std::make_unique<VulkanPipeline>(
+        m_deviceRef.GetDevice(),
+        m_offscreenRenderPass,
+        "assets/shaders/vert.spv",
+        "assets/shaders/frag.spv",
+        blendOptions);
+
     // Infinite ground grid: a full-screen triangle pair with no vertex input,
     // alpha blended, writing depth so scene geometry occludes it.
     VulkanPipeline::Options gridOptions{};
@@ -989,9 +1009,10 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     cmd.setViewport(0, 1, &offscreenViewport);
     cmd.setScissor(0, 1, &offscreenScissor);
 
-    RenderSystem::Render(registry, *m_pipeline, *m_meshRegistry, *m_textureRegistry,
+    RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline,
+                         *m_meshRegistry, *m_textureRegistry,
                          cmd, m_descriptorSets[m_currentFrame],
-                         cameraFrustum, m_renderStats);
+                         cameraFrustum, glm::vec3(ubo.cameraPosition), m_renderStats);
 
     // Ground grid last so it blends over the scene it is depth-tested against.
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetPipeline());

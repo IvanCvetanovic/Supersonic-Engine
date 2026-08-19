@@ -32,14 +32,22 @@ public:
     // Draws every visible entity using its own MeshComponent geometry,
     // MaterialComponent parameters and its own albedo texture, rather than one
     // hardcoded cube and one global checkerboard for everything.
+    // Opaque geometry first, then transparent back-to-front.
+    //
+    // Two passes rather than one sorted list: opaque draws want to be grouped
+    // by material to avoid rebinding, and transparent draws must be ordered by
+    // distance instead. Those are different orders and cannot both be had from
+    // one traversal.
     static void Render(
         entt::registry& registry,
         VulkanPipeline& pipeline,
+        VulkanPipeline& transparentPipeline,
         MeshRegistry& meshes,
         TextureRegistry& textures,
         vk::CommandBuffer commandBuffer,
         vk::DescriptorSet sceneSet,
         const Frustum& frustum,
+        const glm::vec3& viewPosition,
         Stats& stats
     );
 
