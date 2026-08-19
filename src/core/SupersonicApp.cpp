@@ -74,7 +74,8 @@ std::string scriptPluginPath() {
 }
 } // namespace
 
-SupersonicApp::SupersonicApp() {
+SupersonicApp::SupersonicApp(const LaunchOptions& options)
+    : m_options(options) {
     std::cout << "[SupersonicApp] Initializing Engine Subsystems..." << std::endl;
 
     // Asset writes target these; create them before anything tries to save.
@@ -130,11 +131,16 @@ SupersonicApp::SupersonicApp() {
 
     initECS();
 
-    if (m_manifest.isGame) {
+    // --scene wins over the manifest, and applies in the editor too: a smoke
+    // test is only worth running against the scene you want to smoke test.
+    const std::string startupScene =
+        m_options.scenePath.empty() ? m_manifest.startupScene : m_options.scenePath;
+
+    if (m_manifest.isGame || !m_options.scenePath.empty()) {
         // The demo scene initECS just built is the editor's starting point, not
         // the game's. A packaged game that opened it was the clearest symptom
         // that packaging shipped an editor.
-        const auto loaded = SceneSerializer::Deserialize(m_registry, m_manifest.startupScene);
+        const auto loaded = SceneSerializer::Deserialize(m_registry, startupScene);
         std::cout << "[SupersonicApp] " << loaded.message << std::endl;
         if (!loaded.ok) {
             std::cerr << "[SupersonicApp] Falling back to the built-in scene." << std::endl;
@@ -443,7 +449,20 @@ void SupersonicApp::Run() {
 
     double lastTime = glfwGetTime();
 
+    // --frames renders a fixed count and exits. The check is at the top of the
+    // loop rather than the bottom so --frames 0 keeps meaning "run until the
+    // window closes" without a special case, and --frames 1 renders exactly
+    // one frame rather than two.
+    long long frame = 0;
+
     while (!m_window->ShouldClose()) {
+        if (m_options.maxFrames > 0 && frame >= m_options.maxFrames) {
+            std::cout << "[SupersonicApp] Rendered " << frame
+                      << " frame(s) as requested; exiting." << std::endl;
+            break;
+        }
+        ++frame;
+
         m_window->PollEvents();
 
         const double currentTime = glfwGetTime();

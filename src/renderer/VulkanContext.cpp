@@ -5,20 +5,45 @@
 #include <stdexcept>
 #include <iostream>
 #include <cstring>
+#include <atomic>
 
 namespace Supersonic {
+
+namespace {
+// The driver calls the messenger on whichever thread made the offending call,
+// so these are atomics rather than plain counters.
+std::atomic<unsigned> g_validationErrors{0};
+std::atomic<bool> g_validationActive{false};
+} // namespace
+
+unsigned VulkanContext::ValidationErrorCount() {
+    return g_validationErrors.load(std::memory_order_relaxed);
+}
+
+bool VulkanContext::ValidationLayersActive() {
+    return g_validationActive.load(std::memory_order_relaxed);
+}
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
     void* pUserData) {
-    
-    (void)messageSeverity;
+
     (void)messageType;
     (void)pUserData;
 
-    std::cerr << "[Vulkan Validation Layer]: " << pCallbackData->pMessage << std::endl;
+    // Severity was discarded here, which is why an error and a warning were
+    // equally invisible to anything but a human reading the console.
+    const bool isError = (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0;
+    if (isError) g_validationErrors.fetch_add(1, std::memory_order_relaxed);
+
+    std::cerr << (isError ? "[Vulkan Validation ERROR]: " : "[Vulkan Validation Layer]: ")
+              << pCallbackData->pMessage << std::endl;
+
+    // Still VK_FALSE: aborting the offending call would change engine behaviour
+    // under validation, and the whole value of the layer is that it observes
+    // without altering. The exit status carries the verdict instead.
     return VK_FALSE;
 }
 
@@ -194,6 +219,7 @@ void VulkanContext::setupDebugMessenger() {
     if (res != VK_SUCCESS) {
         std::cerr << "[VulkanContext] Warning: Could not create Vulkan Debug Messenger callback (VkResult: " << res << ")" << std::endl;
     } else {
+        g_validationActive.store(true, std::memory_order_relaxed);
         std::cout << "[VulkanContext] Vulkan Debug Messenger initialized successfully." << std::endl;
     }
 }

@@ -20,12 +20,13 @@
 #include "core/PhysicsSystem.hpp"
 #include "core/AnimationLibrary.hpp"
 #include "core/MaterialLibrary.hpp"
+#include "core/LaunchOptions.hpp"
 
 namespace Supersonic {
 
 class SupersonicApp {
 public:
-    SupersonicApp();
+    explicit SupersonicApp(const LaunchOptions& options = {});
     ~SupersonicApp();
 
     SupersonicApp(const SupersonicApp&) = delete;
@@ -35,6 +36,8 @@ public:
 
 private:
     void initECS();
+
+    LaunchOptions m_options;
 
     std::unique_ptr<Window> m_window;
     std::unique_ptr<VulkanContext> m_vulkanContext;

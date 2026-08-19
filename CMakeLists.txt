@@ -249,6 +249,33 @@ else()
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
+# Validation layers, decoupled from the build type.
+#
+# AUTO reproduces the old behaviour: on in Debug, off in Release. The reason it
+# is not simply left that way is the Linux CI job, which builds Release on
+# purpose because the runner's memory does not survive Debug across forty
+# translation units - so the one job that could run the layers structurally
+# could not. ON makes a Release build that validates; OFF makes a Debug build
+# that does not, which is the fast iteration case.
+set(SUPERSONIC_ENABLE_VALIDATION "AUTO" CACHE STRING
+    "Vulkan validation layers: ON, OFF, or AUTO (Debug only)")
+set_property(CACHE SUPERSONIC_ENABLE_VALIDATION PROPERTY STRINGS AUTO ON OFF)
+
+if (SUPERSONIC_ENABLE_VALIDATION STREQUAL "ON")
+    message(STATUS "Vulkan validation: ON (all configurations)")
+    target_compile_definitions(SupersonicCore PUBLIC SUPERSONIC_ENABLE_VALIDATION=1)
+elseif (SUPERSONIC_ENABLE_VALIDATION STREQUAL "OFF")
+    message(STATUS "Vulkan validation: OFF (all configurations)")
+    target_compile_definitions(SupersonicCore PUBLIC SUPERSONIC_ENABLE_VALIDATION=0)
+elseif (SUPERSONIC_ENABLE_VALIDATION STREQUAL "AUTO")
+    message(STATUS "Vulkan validation: AUTO (Debug only)")
+    # Define nothing; the header falls back to NDEBUG.
+else()
+    message(FATAL_ERROR
+        "SUPERSONIC_ENABLE_VALIDATION must be ON, OFF or AUTO, "
+        "not '${SUPERSONIC_ENABLE_VALIDATION}'")
+endif()
+
 # PUBLIC because these appear in the engine's own headers: vulkan.hpp in
 # Components.hpp, GLFW in Window.hpp, EnTT in every system signature, VMA in
 # the renderer headers and <thread> in JobSystem.hpp. A consumer that includes
