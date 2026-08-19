@@ -36,7 +36,19 @@ public:
         // layers on their own are just an array - the sampler will not do the
         // direction-to-face selection without this, which is the entire point
         // of using a cube for an omnidirectional shadow.
-        bool cubeCompatible = false
+        bool cubeCompatible = false,
+
+        // Allocate a full mip chain and sample through it.
+        //
+        // Every texture in the engine was created with mipLevels = 1, so a
+        // floor viewed at a glancing angle sampled full-resolution texels that
+        // fell far below one pixel each, and shimmered as the camera moved.
+        // MSAA does not help: it anti-aliases geometry edges, not texture
+        // minification.
+        //
+        // The image gains eTransferSrc as well as eTransferDst, because the
+        // chain is built by blitting each level from the one above it.
+        bool generateMipmaps = false
     );
     ~VulkanImage();
 
@@ -53,6 +65,7 @@ public:
     }
     uint32_t GetArrayLayers() const { return m_arrayLayers; }
     vk::Sampler GetSampler() const { return m_sampler; }
+    uint32_t GetMipLevels() const { return m_mipLevels; }
     uint32_t GetWidth() const { return m_width; }
     uint32_t GetHeight() const { return m_height; }
 
@@ -64,6 +77,25 @@ public:
         vk::Image image,
         vk::ImageLayout oldLayout,
         vk::ImageLayout newLayout
+    );
+
+    // Builds levels 1..n by successive linear blits and leaves EVERY level in
+    // eShaderReadOnlyOptimal, so this replaces the post-copy transition rather
+    // than following it.
+    //
+    // Returns false when the format cannot be linearly filtered, in which case
+    // it leaves the image with its levels transitioned but only level 0
+    // populated - blitting with eLinear against a format that does not support
+    // it is invalid usage, not merely lower quality. This is the same check
+    // ShadowMap already makes before choosing its depth format.
+    static bool GenerateMipmaps(
+        VulkanDevice& device,
+        vk::CommandPool commandPool,
+        vk::Image image,
+        vk::Format format,
+        uint32_t width,
+        uint32_t height,
+        uint32_t mipLevels
     );
 
     static void CopyBufferToImage(
@@ -87,6 +119,7 @@ private:
     vk::SampleCountFlagBits m_samples{vk::SampleCountFlagBits::e1};
     vk::Sampler m_sampler{nullptr};
 
+    uint32_t m_mipLevels{1};
     uint32_t m_width{0};
     uint32_t m_height{0};
     vk::Format m_format{vk::Format::eR8G8B8A8Srgb};

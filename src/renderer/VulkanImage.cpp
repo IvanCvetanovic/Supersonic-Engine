@@ -14,11 +14,21 @@ VulkanImage::VulkanImage(
     vk::ImageAspectFlags aspectFlags,
     uint32_t arrayLayers,
     vk::SampleCountFlagBits samples,
-    bool cubeCompatible)
+    bool cubeCompatible,
+    bool generateMipmaps)
     : m_deviceRef(device), m_allocator(device.GetAllocator()), m_width(width), m_height(height), m_format(format) {
 
     m_arrayLayers = arrayLayers == 0 ? 1 : arrayLayers;
     m_samples = samples;
+
+    // floor(log2(max(w, h))) + 1 levels, i.e. down to 1x1.
+    //
+    // Multisampled images are excluded outright: a mip chain on one is invalid,
+    // and such an image is resolved rather than sampled anyway.
+    if (generateMipmaps && m_samples == vk::SampleCountFlagBits::e1) {
+        uint32_t largest = width > height ? width : height;
+        while (largest > 1) { largest >>= 1; ++m_mipLevels; }
+    }
 
     // A cube is six faces, no more and no less. Asking for a cube with any
     // other layer count is a caller bug, and creating a plain array instead
@@ -39,11 +49,18 @@ VulkanImage::VulkanImage(
     imageInfo.extent.width = width;
     imageInfo.extent.height = height;
     imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = m_mipLevels;
     imageInfo.arrayLayers = m_arrayLayers;
     imageInfo.format = static_cast<VkFormat>(m_format);
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    // Building the chain blits level N-1 into level N, so the image is both a
+    // transfer source and a destination. Requested here rather than by the
+    // caller: forgetting it produces a validation error at blit time, a long
+    // way from the create call that caused it.
+    if (m_mipLevels > 1) {
+        usage |= vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
+    }
     imageInfo.usage = static_cast<VkImageUsageFlags>(usage);
     imageInfo.samples = static_cast<VkSampleCountFlagBits>(m_samples);
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -77,7 +94,7 @@ VulkanImage::VulkanImage(
     viewInfo.format = m_format;
     viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.levelCount = m_mipLevels;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = m_arrayLayers;
 
@@ -129,13 +146,21 @@ void VulkanImage::CreateSampler(vk::Filter filter, vk::SamplerAddressMode addres
     samplerInfo.addressModeU = addressMode;
     samplerInfo.addressModeV = addressMode;
     samplerInfo.addressModeW = addressMode;
-    samplerInfo.anisotropyEnable = VK_FALSE;
-    samplerInfo.maxAnisotropy = 1.0f;
+    // Both were hardcoded off. Anisotropy is the filtering that matters at a
+    // glancing angle, which is exactly where a mip chain alone goes blurry -
+    // the two are complementary, not alternatives.
+    const bool anisotropy = m_deviceRef.SupportsAnisotropy();
+    samplerInfo.anisotropyEnable = anisotropy ? VK_TRUE : VK_FALSE;
+    samplerInfo.maxAnisotropy = anisotropy ? m_deviceRef.MaxAnisotropy() : 1.0f;
     samplerInfo.borderColor = vk::BorderColor::eIntOpaqueBlack;
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
     samplerInfo.compareEnable = VK_FALSE;
     samplerInfo.compareOp = vk::CompareOp::eAlways;
     samplerInfo.mipmapMode = vk::SamplerMipmapMode::eLinear;
+    // maxLod defaults to 0, which pins sampling to the base level and makes a
+    // mip chain that exists but is never read.
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = static_cast<float>(m_mipLevels);
 
     m_sampler = m_deviceRef.GetDevice().createSampler(samplerInfo);
 }
@@ -166,7 +191,10 @@ void VulkanImage::TransitionLayout(
     barrier.image = image;
     barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
     barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
+    // VK_REMAINING_MIP_LEVELS: this helper is used on images with a chain now,
+    // and transitioning only level 0 would leave the rest in eUndefined - which
+    // a sampler reading them treats as containing anything at all.
+    barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
 
@@ -208,6 +236,127 @@ void VulkanImage::TransitionLayout(
 
     device.GetGraphicsQueue().waitIdle();
     device.GetDevice().freeCommandBuffers(commandPool, 1, &commandBuffer);
+}
+
+bool VulkanImage::GenerateMipmaps(
+    VulkanDevice& device,
+    vk::CommandPool commandPool,
+    vk::Image image,
+    vk::Format format,
+    uint32_t width,
+    uint32_t height,
+    uint32_t mipLevels) {
+
+    // Blitting with eLinear against a format whose optimal tiling does not
+    // support linear filtering is invalid usage, not a quality compromise. The
+    // caller is told so it can decide; the levels are still transitioned, so
+    // the image remains samplable with only level 0 populated rather than left
+    // in eUndefined.
+    const vk::FormatProperties properties =
+        device.GetPhysicalDevice().getFormatProperties(format);
+    const bool canFilter = static_cast<bool>(
+        properties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear);
+
+    vk::CommandBufferAllocateInfo allocInfo{};
+    allocInfo.level = vk::CommandBufferLevel::ePrimary;
+    allocInfo.commandPool = commandPool;
+    allocInfo.commandBufferCount = 1;
+    vk::CommandBuffer cmd = device.GetDevice().allocateCommandBuffers(allocInfo)[0];
+
+    vk::CommandBufferBeginInfo beginInfo{};
+    beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+    cmd.begin(beginInfo);
+
+    vk::ImageMemoryBarrier barrier{};
+    barrier.image = image;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.levelCount = 1;
+
+    // Every level arrives in eTransferDstOptimal, because the whole image was
+    // transitioned there before the buffer copy that filled level 0.
+    int32_t mipWidth = static_cast<int32_t>(width);
+    int32_t mipHeight = static_cast<int32_t>(height);
+
+    const uint32_t levels = canFilter ? mipLevels : 1;
+
+    for (uint32_t level = 1; level < levels; ++level) {
+        // Level-1 becomes a transfer source, and waits for the write that
+        // produced it - the buffer copy for level 0, the previous blit after.
+        barrier.subresourceRange.baseMipLevel = level - 1;
+        barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+        barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+        barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                            vk::PipelineStageFlagBits::eTransfer,
+                            vk::DependencyFlags(), 0, nullptr, 0, nullptr, 1, &barrier);
+
+        // Halve, but never below 1: a 512x8 texture reaches height 1 while its
+        // width is still 64, and a zero extent is an invalid blit.
+        const int32_t nextWidth = mipWidth > 1 ? mipWidth / 2 : 1;
+        const int32_t nextHeight = mipHeight > 1 ? mipHeight / 2 : 1;
+
+        vk::ImageBlit blit{};
+        blit.srcOffsets[0] = vk::Offset3D{0, 0, 0};
+        blit.srcOffsets[1] = vk::Offset3D{mipWidth, mipHeight, 1};
+        blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+        blit.srcSubresource.mipLevel = level - 1;
+        blit.srcSubresource.baseArrayLayer = 0;
+        blit.srcSubresource.layerCount = 1;
+        blit.dstOffsets[0] = vk::Offset3D{0, 0, 0};
+        blit.dstOffsets[1] = vk::Offset3D{nextWidth, nextHeight, 1};
+        blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+        blit.dstSubresource.mipLevel = level;
+        blit.dstSubresource.baseArrayLayer = 0;
+        blit.dstSubresource.layerCount = 1;
+
+        cmd.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
+                      image, vk::ImageLayout::eTransferDstOptimal,
+                      1, &blit, vk::Filter::eLinear);
+
+        // And straight to shader-read, since nothing else will touch it.
+        barrier.oldLayout = vk::ImageLayout::eTransferSrcOptimal;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                            vk::PipelineStageFlagBits::eFragmentShader,
+                            vk::DependencyFlags(), 0, nullptr, 0, nullptr, 1, &barrier);
+
+        mipWidth = nextWidth;
+        mipHeight = nextHeight;
+    }
+
+    // The last level was never a blit source, so it is still eTransferDst.
+    // When the format cannot be filtered this covers every level from 0 up,
+    // which is what leaves the image samplable rather than undefined.
+    barrier.subresourceRange.baseMipLevel = levels - 1;
+    barrier.subresourceRange.levelCount = canFilter ? 1 : VK_REMAINING_MIP_LEVELS;
+    barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+    barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+    barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                        vk::PipelineStageFlagBits::eFragmentShader,
+                        vk::DependencyFlags(), 0, nullptr, 0, nullptr, 1, &barrier);
+
+    cmd.end();
+
+    vk::SubmitInfo submitInfo{};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    const vk::Result submitRes = device.GetGraphicsQueue().submit(1, &submitInfo, nullptr);
+    if (submitRes != vk::Result::eSuccess) {
+        throw std::runtime_error("Failed to submit mipmap generation command buffer!");
+    }
+    device.GetGraphicsQueue().waitIdle();
+    device.GetDevice().freeCommandBuffers(commandPool, 1, &cmd);
+
+    return canFilter;
 }
 
 void VulkanImage::CopyBufferToImage(

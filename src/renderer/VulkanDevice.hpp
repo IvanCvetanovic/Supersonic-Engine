@@ -43,6 +43,19 @@ public:
     vk::Instance GetInstance() const { return m_instance; }
     vk::SurfaceKHR GetSurface() const { return m_surface; }
     vk::PhysicalDevice GetPhysicalDevice() const { return m_physicalDevice; }
+
+    // What the physical device reported, so callers can ask before using an
+    // optional capability rather than assuming it.
+    const vk::PhysicalDeviceFeatures& GetFeatures() const { return m_features; }
+
+    bool SupportsAnisotropy() const { return m_features.samplerAnisotropy == VK_TRUE; }
+
+    // Clamped to the device's limit. Requesting more than maxSamplerAnisotropy
+    // is invalid usage, not a request the driver quietly rounds down.
+    float MaxAnisotropy() const {
+        const float limit = m_physicalDevice.getProperties().limits.maxSamplerAnisotropy;
+        return limit < 16.0f ? limit : 16.0f;
+    }
     vk::Device GetDevice() const { return m_device; }
 
     // Highest sample count supported for BOTH colour and depth, capped at the
@@ -79,6 +92,7 @@ private:
     vk::Instance m_instance{nullptr};
     vk::SurfaceKHR m_surface{nullptr};
     vk::PhysicalDevice m_physicalDevice{nullptr};
+    vk::PhysicalDeviceFeatures m_features{};
     vk::Device m_device{nullptr};
 
     vk::Queue m_graphicsQueue{nullptr};

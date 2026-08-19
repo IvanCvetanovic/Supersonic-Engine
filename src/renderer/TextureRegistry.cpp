@@ -111,18 +111,39 @@ uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixe
     // SRGB for colour data so the hardware decodes to linear on read, which is
     // what the PBR maths expects. Normal maps and other data textures must pass
     // srgb=false or they get an unwanted transfer function applied.
+    const vk::Format format = srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+
+    // Mip chain requested here, where the size is known. Without it a floor at
+    // a glancing angle sampled full-resolution texels smaller than a pixel and
+    // shimmered as the camera moved - which 4x MSAA does nothing about,
+    // because it anti-aliases geometry edges rather than texture minification.
     texture.image = std::make_unique<VulkanImage>(
-        m_deviceRef, width, height,
-        srgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm);
+        m_deviceRef, width, height, format,
+        vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+        vk::ImageAspectFlagBits::eColor,
+        /*arrayLayers*/ 1, vk::SampleCountFlagBits::e1, /*cubeCompatible*/ false,
+        /*generateMipmaps*/ true);
+
+    // After the image, because the sampler's maxLod comes from its level count.
     texture.image->CreateSampler();
 
     VulkanImage::TransitionLayout(m_deviceRef, m_commandPool, texture.image->GetImage(),
                                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
     VulkanImage::CopyBufferToImage(m_deviceRef, m_commandPool, staging.GetBuffer(),
                                    texture.image->GetImage(), width, height);
-    VulkanImage::TransitionLayout(m_deviceRef, m_commandPool, texture.image->GetImage(),
-                                  vk::ImageLayout::eTransferDstOptimal,
-                                  vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    // GenerateMipmaps leaves every level in eShaderReadOnlyOptimal, so it
+    // REPLACES the transition that used to follow the copy rather than adding
+    // to it - transitioning again from eTransferDstOptimal would be a lie about
+    // the layout the levels are actually in.
+    const bool filtered = VulkanImage::GenerateMipmaps(
+        m_deviceRef, m_commandPool, texture.image->GetImage(), format, width, height,
+        texture.image->GetMipLevels());
+    if (!filtered) {
+        SUPERSONIC_LOG_WARN("TextureRegistry")
+            << key << ": this format cannot be linearly filtered on this device, "
+            << "so only the base level is populated";
+    }
 
     const auto id = static_cast<uint32_t>(m_textures.size());
     m_textures.push_back(std::move(texture));
@@ -159,8 +180,11 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb) {
                                    static_cast<uint32_t>(width), static_cast<uint32_t>(height), srgb);
     stbi_image_free(pixels);
 
+    const auto* uploaded = get(id);
+    const uint32_t mips = uploaded && uploaded->image ? uploaded->image->GetMipLevels() : 1;
     SUPERSONIC_LOG_INFO("TextureRegistry") << "Loaded " << path << " (" << width << "x" << height
-              << ", " << channels << " source channels, " << (srgb ? "sRGB" : "linear") << ")." << std::endl;
+              << ", " << channels << " source channels, " << (srgb ? "sRGB" : "linear")
+              << ", " << mips << " mip level(s))." << std::endl;
     return id;
 }
 

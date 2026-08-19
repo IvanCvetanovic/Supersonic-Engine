@@ -208,7 +208,22 @@ void VulkanDevice::createLogicalDevice() {
         queueCreateInfos.push_back(queueCreateInfo);
     }
 
+    // Nothing was ever enabled here. A zeroed PhysicalDeviceFeatures was passed
+    // straight to createDevice, so every optional capability was off - which is
+    // why every texture in the engine was sampled at mip 0 with no anisotropy.
+    // The engine paid for 4x MSAA and then discarded the filtering that matters
+    // more at a glancing angle: MSAA anti-aliases geometry edges, not texture
+    // minification, so a textured floor shimmered and no amount of MSAA fixed it.
+    //
+    // Only what is used is requested. Enabling a feature the engine does not
+    // exercise is not free - it can change driver behaviour and it fails device
+    // creation outright where unsupported - so depthClamp, fillModeNonSolid,
+    // multiDrawIndirect and textureCompressionBC stay off until something needs
+    // them. m_features records what the device offered, so a caller can ask.
+    m_features = m_physicalDevice.getFeatures();
+
     vk::PhysicalDeviceFeatures deviceFeatures{};
+    deviceFeatures.samplerAnisotropy = m_features.samplerAnisotropy;
 
     vk::DeviceCreateInfo createInfo{};
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
