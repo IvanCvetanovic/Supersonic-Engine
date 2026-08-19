@@ -1,4 +1,5 @@
 #include "core/SupersonicApp.hpp"
+#include "renderer/ScreenCapture.hpp"
 #include "core/Log.hpp"
 #include "core/Profiler.hpp"
 #include "core/Components.hpp"
@@ -518,6 +519,26 @@ void SupersonicApp::Run() {
         if (m_options.maxFrames > 0 && frame >= m_options.maxFrames) {
             SUPERSONIC_LOG_INFO("SupersonicApp") << "Rendered " << frame
                       << " frame(s) as requested; exiting." << std::endl;
+
+            // Captured here, after the last DrawFrame and before teardown, so
+            // the PNG is the frame that was actually presented rather than
+            // whatever survives shutdown.
+            if (!m_options.screenshotPath.empty()) {
+                std::string error;
+                const auto& offscreen = m_editorLayer->GetOffscreen();
+                const bool ok = ScreenCapture::WritePng(
+                    *m_vulkanDevice, m_renderer->GetCommandPool(),
+                    offscreen.GetPresentedImage(),
+                    offscreen.GetWidth(), offscreen.GetHeight(),
+                    m_options.screenshotPath, error);
+                if (ok) {
+                    SUPERSONIC_LOG_INFO("SupersonicApp")
+                        << "Wrote " << m_options.screenshotPath << " ("
+                        << offscreen.GetWidth() << "x" << offscreen.GetHeight() << ").";
+                } else {
+                    SUPERSONIC_LOG_ERROR("SupersonicApp") << "Screenshot failed: " << error;
+                }
+            }
 
             // Report where the frames went. Without this the profiler is
             // visible only through the editor's statistics panel, which a

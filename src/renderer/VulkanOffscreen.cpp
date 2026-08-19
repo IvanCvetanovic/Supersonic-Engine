@@ -321,4 +321,9 @@ void VulkanOffscreen::RecordPostProcess(vk::CommandBuffer commandBuffer) const {
     if (m_bloom) m_bloom->Record(commandBuffer);
 }
 
+
+vk::Image VulkanOffscreen::GetPresentedImage() const {
+    return m_bloom ? m_bloom->GetOutputImage() : vk::Image{};
+}
+
 } // namespace Supersonic

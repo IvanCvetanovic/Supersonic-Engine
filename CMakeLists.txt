@@ -234,6 +234,10 @@ set(VENDORED_SOURCES
     ${IMGUI_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/VmaImplementation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/TinyGltfImplementation.cpp
+    # Hosts STB_IMAGE_WRITE_IMPLEMENTATION, so it carries stb's warnings the way
+    # the two above carry VMA's and tinygltf's. The engine's own code in this
+    # file is small; the alternative is /W4 on somebody else's sprintf.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/ScreenCapture.cpp
 )
 
 # PRIVATE, not PUBLIC: the engine's own warning level is the engine's business.
@@ -337,6 +341,8 @@ set(SHADER_JOBS
     "shader.frag=frag.spv"
     "grid.vert=grid_vert.spv"
     "grid.frag=grid_frag.spv"
+    "sky.vert=sky_vert.spv"
+    "sky.frag=sky_frag.spv"
     "shadow.vert=shadow_vert.spv"
     "shadow.frag=shadow_frag.spv"
     "fullscreen.vert=fullscreen_vert.spv"

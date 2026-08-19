@@ -108,7 +108,27 @@ static void testHelpIsNotAnError() {
     CHECK(LaunchOptions::Usage() != nullptr);
 }
 
+static void testScreenshotPathIsRead() {
+    const auto o = parse({"--screenshot", "shots/frame.png"});
+    CHECK(o.ok);
+    CHECK(o.screenshotPath == "shots/frame.png");
+
+    // The same argv-overrun case as the other value-taking flags.
+    const auto bare = parse({"--screenshot"});
+    CHECK_MSG(!bare.ok, "--screenshot with no path must be rejected, not read past argv");
+
+    // And it composes, because a capture is only useful with a frame count and
+    // usually a chosen scene.
+    const auto combined = parse({"--frames", "5", "--scene", "a.scene",
+                                 "--screenshot", "out.png"});
+    CHECK(combined.ok);
+    CHECK_EQ(combined.maxFrames, 5);
+    CHECK(combined.scenePath == "a.scene");
+    CHECK(combined.screenshotPath == "out.png");
+}
+
 static void runTests() {
+    testScreenshotPathIsRead();
     testNoArgumentsIsTheInteractiveDefault();
     testFrameCountIsRead();
     testZeroFramesStillMeansRunForever();

@@ -69,6 +69,10 @@ public:
     // its pipelines from SPIR-V on every viewport resize.
     vk::PipelineCache GetPipelineCache() const;
 
+    // The renderer's transfer/graphics command pool, for one-off work like a
+    // screenshot readback.
+    vk::CommandPool GetCommandPool() const { return m_commandPool; }
+
     MeshRegistry& GetMeshRegistry() { return *m_meshRegistry; }
     TextureRegistry& GetTextureRegistry() { return *m_textureRegistry; }
 
@@ -128,6 +132,9 @@ private:
     // pipeline rather than dynamic state because blend and depthWrite are not
     // dynamic in core Vulkan 1.2 without EXT_extended_dynamic_state3.
     std::unique_ptr<VulkanPipeline> m_transparentPipeline;
+
+    // The sky, drawn at the far plane after opaque geometry.
+    std::unique_ptr<VulkanPipeline> m_skyPipeline;
     std::unique_ptr<VulkanPipeline> m_gridPipeline;
 
     // Depth-only pass from the primary directional light.

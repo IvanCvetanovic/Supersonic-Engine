@@ -45,6 +45,11 @@ public:
 
     // The tone-mapped, sRGB-encoded result. This is what the editor shows.
     vk::ImageView GetOutputView() const { return m_outputImage->GetImageView(); }
+
+    // The composited, tone-mapped, sRGB-encoded image - the one ImGui shows.
+    // Exposed for --screenshot, which must capture what was actually displayed
+    // rather than the linear HDR scene target behind it.
+    vk::Image GetOutputImage() const { return m_outputImage->GetImage(); }
     vk::Sampler GetOutputSampler() const { return m_outputSampler; }
 
     // Scene colour is floating point so highlights can exceed 1.0; the output is

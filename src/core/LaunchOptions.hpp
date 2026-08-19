@@ -20,6 +20,10 @@ struct LaunchOptions {
     // Empty means the manifest's startup scene, i.e. unchanged behaviour.
     std::string scenePath;
 
+    // Empty means no capture. Written after the last frame, so it pairs with
+    // --frames: the point is a picture CI can compare, not a live viewfinder.
+    std::string screenshotPath;
+
     // --help is a request, not a failure: it prints usage and exits zero.
     // Folding it into `ok` would make asking for help an error exit, which
     // breaks any script that checks the status.

@@ -324,6 +324,25 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/frag.spv",
         blendOptions);
 
+    // Sky. No vertex input - the triangle comes from gl_VertexIndex - and no
+    // depth write, because nothing is ever behind it. The depth TEST stays on:
+    // it is drawn at z = 1.0 with the existing lessOrEqual compare, so it fills
+    // only the pixels opaque geometry did not claim. Drawing it first instead
+    // would shade every pixel the scene then covers.
+    VulkanPipeline::Options skyOptions{};
+    skyOptions.cache = m_pipelineCache->Get();
+    skyOptions.samples = m_offscreenSamples;
+    skyOptions.useVertexInput = false;
+    skyOptions.depthWrite = false;
+    skyOptions.cullMode = vk::CullModeFlagBits::eNone;
+
+    m_skyPipeline = std::make_unique<VulkanPipeline>(
+        m_deviceRef.GetDevice(),
+        m_offscreenRenderPass,
+        "assets/shaders/sky_vert.spv",
+        "assets/shaders/sky_frag.spv",
+        skyOptions);
+
     // Infinite ground grid: a full-screen triangle pair with no vertex input,
     // alpha blended, writing depth so scene geometry occludes it.
     VulkanPipeline::Options gridOptions{};
@@ -1017,6 +1036,13 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
                          *m_meshRegistry, *m_textureRegistry,
                          cmd, m_descriptorSets[m_currentFrame],
                          cameraFrustum, glm::vec3(ubo.cameraPosition), m_renderStats);
+
+    // Sky before the grid and after the scene: after, so it only shades pixels
+    // nothing claimed; before, so the grid still blends over it at the horizon.
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_skyPipeline->GetPipeline());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_skyPipeline->GetLayout(),
+                           VulkanPipeline::kSceneSet, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
+    cmd.draw(3, 1, 0, 0);
 
     // Ground grid last so it blends over the scene it is depth-tested against.
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetPipeline());

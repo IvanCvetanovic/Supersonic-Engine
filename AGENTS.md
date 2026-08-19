@@ -92,6 +92,22 @@ root**, or shaders, scenes and audio will not resolve.
 Visual Studio's `VS_DEBUGGER_WORKING_DIRECTORY` is set to the project root, so
 pressing F5 works without any extra setup.
 
+### Running without a person watching
+
+```bash
+# Render 120 frames and exit. Non-zero on a validation error or a crash.
+./build/Debug/SupersonicEngine.exe --frames 120
+
+# Same, against a chosen scene, writing a PNG of the last frame.
+./build/Debug/SupersonicEngine.exe --frames 120     --scene assets/scenes/MainScene.scene --screenshot shot.png
+```
+
+`--frames` is what makes any automated check of the engine possible: the run
+exits by itself, and an ERROR-severity validation message makes it exit
+non-zero. `--screenshot` captures the composited image - the same one the
+viewport shows, already tone-mapped and encoded - so a rendering change can be
+looked at rather than only reasoned about.
+
 ### With validation layers, if the SDK is not installed system-wide
 
 ```powershell

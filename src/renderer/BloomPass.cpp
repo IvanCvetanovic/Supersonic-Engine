@@ -145,7 +145,13 @@ void BloomPass::createRenderPasses() {
 }
 
 void BloomPass::createImages() {
-    constexpr auto kUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+    // eTransferSrc so the composited result can be read back for --screenshot.
+    // Without it the image is display-only: the engine could render a frame and
+    // had no way to show anyone what it rendered, which made every visual
+    // change unverifiable except by a human looking at a window.
+    constexpr auto kUsage = vk::ImageUsageFlagBits::eColorAttachment
+                          | vk::ImageUsageFlagBits::eSampled
+                          | vk::ImageUsageFlagBits::eTransferSrc;
 
     m_brightImage = std::make_unique<VulkanImage>(m_deviceRef, m_halfWidth, m_halfHeight,
                                                   kHdrFormat, kUsage, vk::ImageAspectFlagBits::eColor);

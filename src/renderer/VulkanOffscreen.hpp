@@ -53,6 +53,9 @@ public:
     uint32_t GetHeight() const { return m_height; }
     ImTextureID GetTextureID() const { return m_textureID; }
 
+    // The composited image, for --screenshot. Null before the first resize.
+    vk::Image GetPresentedImage() const;
+
 private:
     void createRenderPass();
     void createResources();

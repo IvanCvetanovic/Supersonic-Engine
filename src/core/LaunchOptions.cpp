@@ -10,6 +10,7 @@ const char* LaunchOptions::Usage() {
     return "Usage: SupersonicEngine [options]\n"
            "  --frames <n>    render exactly n frames, then exit (0 = until closed)\n"
            "  --scene <path>  load this scene instead of the manifest's startup scene\n"
+           "  --screenshot <path>  write a PNG of the last frame and exit\n"
            "  --help          print this message\n";
 }
 
@@ -53,6 +54,9 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
             if (parsed < 0) return fail("--frames cannot be negative");
             if (parsed > 1000000) return fail("--frames is implausibly large: " + raw);
             options.maxFrames = static_cast<int>(parsed);
+        } else if (arg == "--screenshot") {
+            if (!value(options.screenshotPath)) return fail("--screenshot needs a path");
+            if (options.screenshotPath.empty()) return fail("--screenshot needs a path");
         } else if (arg == "--scene") {
             if (!value(options.scenePath)) return fail("--scene needs a path");
             if (options.scenePath.empty()) return fail("--scene needs a path");
