@@ -123,12 +123,19 @@ built-in scripts only.
 CMake compiles `assets/shaders/*.vert|frag` to SPIR-V automatically when a
 compiler is available. To do it by hand:
 
-```powershell
-.\compile_shaders.bat
+```bash
+cmake --build build --target Shaders
 ```
 
-The script reports failures rather than always printing success, and covers the
-grid shaders as well as the main pair.
+This replaces `compile_shaders.bat`, which is gone. The script was Windows-only
+and named its shaders in a list of its own, which had drifted to four of the
+ten the build actually declares — so running it regenerated `shader` and `grid`
+and silently left `shadow`, `fullscreen` and the three `bloom` blobs stale. The
+CMake target is generated from `SHADER_JOBS`, the same list CI reads, so it
+cannot fall behind the build in the first place.
+
+CI compiles every declared shader and compares the result byte for byte against
+the committed `.spv`, so a stale blob fails the build rather than shipping.
 
 ## Clean
 

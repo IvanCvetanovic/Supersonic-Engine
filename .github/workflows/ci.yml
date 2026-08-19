@@ -140,8 +140,9 @@ jobs:
           cache: true
 
       # The committed .spv blobs must actually correspond to the GLSL sources.
-      # compile_shaders.bat could never regenerate the grid shaders, so they
-      # could drift from their source indefinitely.
+      # The hand-run compile_shaders.bat named four of the ten declared
+      # shaders, so the rest could drift from their source indefinitely.
+      # It has been deleted in favour of the generated Shaders target.
       #
       # The pairs come from CMakeLists rather than a copy kept in step with it
       # by hand. There used to be a second step here whose whole job was to

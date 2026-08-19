@@ -45,7 +45,7 @@ code quietly contradicts.
 | | |
 |---|---|
 | **Physically based shading** | Cook–Torrance GGX with metallic / roughness / ambient-occlusion inputs, per-material |
-| **Lighting** | Up to 8 simultaneous lights, directional and point, with distance attenuation |
+| **Lighting** | Up to 8 simultaneous lights — directional, point and spot — with distance attenuation and a smooth cone falloff |
 | **Cascaded shadows** | Four 2048² D32 cascades in one array image, fitted to the camera by bounding sphere and snapped to the texel grid so edges do not crawl; per-cascade normal offset, 3×3 PCF, and a cross-fade across each split |
 | **Normal mapping** | Tangent-space, with glTF-convention `vec4` tangents (handedness in `w`) generated for procedural meshes too |
 | **Frustum culling** | Gribb–Hartmann plane extraction; the scene pass culls against the camera, the shadow pass against the light, so nothing off-screen pops its shadow in and out |
@@ -89,7 +89,8 @@ code quietly contradicts.
 | **Animator** | Clip, speed, loop and a scrubbable time slider — poses evaluate every frame, so scrubbing shows the result immediately |
 | **Time-travel rewind** | Scrub backwards through recorded simulation frames |
 | **Fly camera** | The viewport has its own camera, so framing a shot in the editor does not move the game's |
-| **Statistics** | Frame-time graph, entity count, draw/cull counts per pass, contact count, worker threads, script-host state |
+| **Statistics** | Per-frame CPU zone timings, a frame-time graph plotted from the raw delta so a hitch is actually visible, entity count, draw/cull counts per pass, contact count, worker threads, script-host state |
+| **Console** | Levelled, categorised engine log with substring filtering, mirrored to a file beside the binary |
 | **Interface** | Inter and Font Awesome embedded in the binary, an accent palette from the engine's own branding, image thumbnails in the browser, a floating viewport HUD, and DPI scaling from the monitor |
 | **Packaging** | One-click standalone build of the current scene |
 
@@ -117,6 +118,17 @@ support.
 Every third-party dependency is vendored under `third_party/`. There is no
 package manager step and nothing to fetch: GLFW, GLM, EnTT, ImGui, ImGuizmo,
 stb, tinygltf, VMA and the Vulkan headers are all in the tree.
+
+> **On Linux, that is not quite the whole story.** GLFW needs X11 development
+> headers to configure at all, and GLFW 3.4 defaults to building a Wayland
+> backend and hard-fails with `Failed to find wayland-scanner` unless the full
+> Wayland toolchain is present. ALSA's headers are what decide whether the
+> engine gets real audio or compiles its documented no-op. What CI installs:
+>
+> ```bash
+> sudo apt-get install -y libvulkan-dev libx11-dev libxrandr-dev >   libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev >   pkg-config libasound2-dev
+> cmake -S . -B build -DGLFW_BUILD_WAYLAND=OFF
+> ```
 
 > **On the SDK.** The engine builds and runs without it, falling back to the
 > vendored headers and the loader that ships with your driver. But without
@@ -266,14 +278,35 @@ comment on each one says which.
 
 ## Roadmap
 
-- [x] PBR, shadow mapping, normal mapping
-- [x] Transform hierarchy, prefabs, scene serialization
+Split into what is done and what is next, because a list on which every box is
+ticked has stopped being a roadmap. The README is already comfortable calling
+Android "not functional"; extending that register forward costs nothing.
+
+### Shipped
+
+- [x] PBR, normal mapping, cascaded shadow maps, point and spot shadows
+- [x] HDR pipeline with bloom, 4× MSAA
+- [x] Transform hierarchy, prefabs, scene and material serialization
 - [x] Play/Stop, undo/redo, time-travel rewind
 - [x] Frustum culling, persistent pipeline cache
-- [x] Entity-versus-entity collision with a broadphase
+- [x] Entity-versus-entity collision with a broadphase, and world queries
 - [x] Job system, applied where the work is provably independent
-- [x] Skeletal animation (glTF skins and animation channels)
-- [x] Cascaded shadow maps
+- [x] Skeletal animation with cross-fade blending
+- [x] In-game UI canvas, audio mixer, one-click packaging
+- [x] Headless `--frames` runs, a validation gate that fails the build, a CPU
+      profiler and a levelled log with an editor console
+
+### Next
+
+- [ ] Asset identity: assign a model or a clip from the editor instead of a
+      hardcoded path, and reload it when the file changes
+- [ ] More than one scene — a scene manager, and a way for a game to switch level
+- [ ] A script ABI that carries more than a transform: per-entity state, authored
+      parameters, spawn and destroy, forces, and collision callbacks
+- [ ] Image-based lighting and a skybox; transparency
+- [ ] An oriented-box narrowphase, so a rotated crate stops colliding as its
+      bounding box, then continuous collision and sleeping
+- [ ] Light culling, so the eight-light cap stops being a cap
 
 ---
 
