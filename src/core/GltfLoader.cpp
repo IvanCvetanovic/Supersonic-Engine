@@ -1,4 +1,5 @@
 #include "core/GltfLoader.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -149,7 +150,7 @@ void appendPrimitive(const tinygltf::Model& model,
     // renderer can draw, so they are skipped loudly rather than silently
     // reinterpreted as triangles.
     if (primitive.mode != TINYGLTF_MODE_TRIANGLES && primitive.mode != -1) {
-        std::cerr << "[GltfLoader] Skipping non-triangle primitive (mode "
+        SUPERSONIC_LOG_ERROR("GltfLoader") << "Skipping non-triangle primitive (mode "
                   << primitive.mode << ") in '" << nodeName << "'." << std::endl;
         return;
     }
@@ -169,7 +170,7 @@ void appendPrimitive(const tinygltf::Model& model,
     size_t posStride = 0;
     const auto* positions = accessorData<float>(model, posAccessor, posStride);
     if (!positions) {
-        std::cerr << "[GltfLoader] '" << nodeName << "' has an unreadable POSITION accessor." << std::endl;
+        SUPERSONIC_LOG_ERROR("GltfLoader") << "'" << nodeName << "' has an unreadable POSITION accessor." << std::endl;
         return;
     }
 
@@ -346,7 +347,7 @@ void appendPrimitive(const tinygltf::Model& model,
                 } else {
                     // Embedded/GLB image data: not written out to disk, so there
                     // is nothing for the path-based texture cache to open.
-                    std::cerr << "[GltfLoader] '" << nodeName
+                    SUPERSONIC_LOG_ERROR("GltfLoader") << "'" << nodeName
                               << "' uses an embedded image, which is not imported yet." << std::endl;
                 }
             }
@@ -441,7 +442,7 @@ Skeleton buildSkeleton(const tinygltf::Model& model, const tinygltf::Skin& skin,
     for (const int node : skin.joints) {
         if (node < 0 || static_cast<size_t>(node) >= model.nodes.size()) continue;
         if (jointNodes.size() >= jointLimit) {
-            std::cerr << "[GltfLoader] Skin '" << skin.name << "' has more than " << jointLimit
+            SUPERSONIC_LOG_ERROR("GltfLoader") << "Skin '" << skin.name << "' has more than " << jointLimit
                       << " joints; the rest are ignored." << std::endl;
             break;
         }
@@ -661,7 +662,7 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
         : loader.LoadASCIIFromFile(&model, &err, &warn, path);
 
     if (!warn.empty()) {
-        std::cerr << "[GltfLoader] " << path << ": " << warn << std::endl;
+        SUPERSONIC_LOG_WARN("GltfLoader") << path << ": " << warn << std::endl;
     }
     if (!loaded) {
         scene.error = err.empty() ? ("could not parse " + path) : err;
@@ -711,7 +712,7 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
     for (const auto& sub : scene.submeshes) triangles += sub.mesh.indices.size() / 3;
 
     scene.ok = true;
-    std::cout << "[GltfLoader] Loaded " << path << " (" << scene.submeshes.size()
+    SUPERSONIC_LOG_INFO("GltfLoader") << "Loaded " << path << " (" << scene.submeshes.size()
               << " primitives, " << triangles << " triangles)." << std::endl;
     return scene;
 }

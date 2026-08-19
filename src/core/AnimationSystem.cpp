@@ -1,4 +1,5 @@
 #include "core/AnimationSystem.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -346,7 +347,7 @@ void AnimationSystem::EvaluatePoses(entt::registry& registry, const AnimationLib
         const AnimationClip* clip = library.FindClip(skin.skeletonID, animator.clipName);
         if (!clip) {
             if (!animator.warnedMissing && !animator.clipName.empty()) {
-                std::cerr << "[AnimationSystem] No clip named '" << animator.clipName
+                SUPERSONIC_LOG_WARN("AnimationSystem") << "No clip named '" << animator.clipName
                           << "'; the mesh stays in bind pose." << std::endl;
                 animator.warnedMissing = true;
             }

@@ -1,4 +1,5 @@
 #include "core/TimeTravelDebugger.hpp"
+#include "core/Log.hpp"
 #include "imgui.h"
 
 #include <iostream>
@@ -103,9 +104,9 @@ void TimeTravelDebugger::RenderImGuiPanel(entt::registry& registry) {
 
     if (ImGui::Checkbox("Pause & Rewind Timeline", &s_isRewinding)) {
         if (s_isRewinding) {
-            std::cout << "[TimeTravelDebugger] Paused simulation, timeline scrubbing enabled." << std::endl;
+            SUPERSONIC_LOG_INFO("TimeTravelDebugger") << "Paused simulation, timeline scrubbing enabled." << std::endl;
         } else {
-            std::cout << "[TimeTravelDebugger] Resumed from frame " << s_currentFrameIndex
+            SUPERSONIC_LOG_INFO("TimeTravelDebugger") << "Resumed from frame " << s_currentFrameIndex
                       << "; discarding " << (s_history.size() - s_currentFrameIndex - 1)
                       << " superseded frames." << std::endl;
         }

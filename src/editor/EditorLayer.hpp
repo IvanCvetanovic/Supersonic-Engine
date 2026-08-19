@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 
+#include "imgui.h"
+
 #include "core/PlayMode.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanOffscreen.hpp"
@@ -148,6 +150,15 @@ private:
 
     // Rolling frame-time history for the statistics graph. A single number
     // jitters too much to read; the shape of the last two seconds does not.
+    // Console panel state. Info is on by default and warnings and errors are
+    // never off by default: a filter that hides errors until someone turns them
+    // on is a filter that hides errors.
+    bool m_consoleShowInfo{true};
+    bool m_consoleShowWarnings{true};
+    bool m_consoleShowErrors{true};
+    bool m_consoleAutoScroll{true};
+    ImGuiTextFilter m_consoleFilter;
+
     static constexpr int kFrameHistory = 120;
     float m_frameTimes[kFrameHistory]{};
     int m_frameTimeCursor{0};

@@ -1,4 +1,5 @@
 #include "core/SupersonicApp.hpp"
+#include "core/Log.hpp"
 #include "core/Profiler.hpp"
 #include "core/Components.hpp"
 #include "core/CameraSystem.hpp"
@@ -78,13 +79,13 @@ std::string scriptPluginPath() {
 
 SupersonicApp::SupersonicApp(const LaunchOptions& options)
     : m_options(options) {
-    std::cout << "[SupersonicApp] Initializing Engine Subsystems..." << std::endl;
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Initializing Engine Subsystems..." << std::endl;
 
     // Asset writes target these; create them before anything tries to save.
     std::error_code ec;
     std::filesystem::create_directories("assets/scenes", ec);
     if (ec) {
-        std::cerr << "[SupersonicApp] Could not create assets/scenes: " << ec.message() << std::endl;
+        SUPERSONIC_LOG_ERROR("SupersonicApp") << "Could not create assets/scenes: " << ec.message() << std::endl;
     }
 
     // Workers come up before anything that might dispatch to them: mesh
@@ -143,22 +144,22 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
         // the game's. A packaged game that opened it was the clearest symptom
         // that packaging shipped an editor.
         const auto loaded = SceneSerializer::Deserialize(m_registry, startupScene);
-        std::cout << "[SupersonicApp] " << loaded.message << std::endl;
+        SUPERSONIC_LOG_INFO("SupersonicApp") << loaded.message << std::endl;
         if (!loaded.ok) {
-            std::cerr << "[SupersonicApp] Falling back to the built-in scene." << std::endl;
+            SUPERSONIC_LOG_ERROR("SupersonicApp") << "Falling back to the built-in scene." << std::endl;
         }
 
         // Straight into Play: a game has no edit mode to be in, and without
         // this nothing would move, no script would run and no sound would play.
         const auto started = m_playMode.Play(m_registry);
         if (!started.ok) {
-            std::cerr << "[SupersonicApp] " << started.message << std::endl;
+            SUPERSONIC_LOG_ERROR("SupersonicApp") << started.message << std::endl;
         }
     }
 }
 
 SupersonicApp::~SupersonicApp() {
-    std::cout << "[SupersonicApp] Shutting down Engine Subsystems in reverse order..." << std::endl;
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Shutting down Engine Subsystems in reverse order..." << std::endl;
 
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
         m_vulkanDevice->GetDevice().waitIdle();
@@ -190,7 +191,7 @@ SupersonicApp::~SupersonicApp() {
 }
 
 void SupersonicApp::initECS() {
-    std::cout << "[SupersonicApp] Initializing EnTT 3D Entities, Components & Lighting..." << std::endl;
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Initializing EnTT 3D Entities, Components & Lighting..." << std::endl;
 
     // Tagged, so it does not show up in the hierarchy as an anonymous
     // "Entity 0" that can be deleted without realising it is the camera.
@@ -443,11 +444,11 @@ void SupersonicApp::initECS() {
     auto& buttonScript = m_registry.emplace<ScriptComponent>(hudButton);
     buttonScript.scriptName = "ClickCounterScript";
 
-    std::cout << "[SupersonicApp] Scene created." << std::endl;
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Scene created." << std::endl;
 }
 
 void SupersonicApp::Run() {
-    std::cout << "[SupersonicApp] Starting Main 3D Game Loop..." << std::endl;
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Starting Main 3D Game Loop..." << std::endl;
 
     double lastTime = glfwGetTime();
 
@@ -469,13 +470,19 @@ void SupersonicApp::Run() {
         }
 
         if (m_options.maxFrames > 0 && frame >= m_options.maxFrames) {
-            std::cout << "[SupersonicApp] Rendered " << frame
+            SUPERSONIC_LOG_INFO("SupersonicApp") << "Rendered " << frame
                       << " frame(s) as requested; exiting." << std::endl;
 
             // Report where the frames went. Without this the profiler is
             // visible only through the editor's statistics panel, which a
             // headless run has nobody to look at - and a measurement no script
             // can read is not one CI can act on.
+            //
+            // Plain stdout, not the log: this is what --frames was asked to
+            // produce, so it is program output rather than a diagnostic about
+            // producing it. Splitting a report across two streams - a heading
+            // through the log and its rows through cout - would also let the
+            // two interleave with anything else logging in between.
             std::cout << "[Profiler] Mean CPU cost per frame over "
                       << frame << " frame(s):" << std::endl;
             for (std::size_t i = 0; i < Profiler::kZoneCount; ++i) {
@@ -627,7 +634,7 @@ void SupersonicApp::Run() {
                               *renderCamera);
     }
 
-    std::cout << "[SupersonicApp] Window close requested. Waiting for GPU idle..." << std::endl;
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Window close requested. Waiting for GPU idle..." << std::endl;
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
         m_vulkanDevice->GetDevice().waitIdle();
     }

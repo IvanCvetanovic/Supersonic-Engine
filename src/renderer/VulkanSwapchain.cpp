@@ -1,4 +1,5 @@
 #include "renderer/VulkanSwapchain.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -63,11 +64,11 @@ vk::SurfaceFormatKHR VulkanSwapchain::chooseSwapSurfaceFormat(const std::vector<
 vk::PresentModeKHR VulkanSwapchain::chooseSwapPresentMode(const std::vector<vk::PresentModeKHR>& availablePresentModes) {
     for (const auto& availablePresentMode : availablePresentModes) {
         if (availablePresentMode == vk::PresentModeKHR::eMailbox) {
-            std::cout << "[VulkanSwapchain] Present Mode: Mailbox (Triple Buffering)" << std::endl;
+            SUPERSONIC_LOG_INFO("VulkanSwapchain") << "Present Mode: Mailbox (Triple Buffering)" << std::endl;
             return availablePresentMode;
         }
     }
-    std::cout << "[VulkanSwapchain] Present Mode: FIFO (V-Sync Fallback)" << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanSwapchain") << "Present Mode: FIFO (V-Sync Fallback)" << std::endl;
     return vk::PresentModeKHR::eFifo;
 }
 
@@ -145,7 +146,7 @@ void VulkanSwapchain::createSwapChain(Window& window) {
 
     m_swapChainImages = m_device.getSwapchainImagesKHR(m_swapChain);
 
-    std::cout << "[VulkanSwapchain] Swapchain created successfully with "
+    SUPERSONIC_LOG_INFO("VulkanSwapchain") << "Swapchain created successfully with "
               << m_swapChainImages.size() << " images ("
               << m_swapChainExtent.width << "x" << m_swapChainExtent.height << ")."
               << std::endl;
@@ -172,7 +173,7 @@ void VulkanSwapchain::createImageViews() {
         m_swapChainImageViews[i] = m_device.createImageView(createInfo);
     }
 
-    std::cout << "[VulkanSwapchain] Created " << m_swapChainImageViews.size()
+    SUPERSONIC_LOG_INFO("VulkanSwapchain") << "Created " << m_swapChainImageViews.size()
               << " Swapchain Image Views." << std::endl;
 }
 

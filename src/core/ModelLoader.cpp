@@ -1,4 +1,5 @@
 #include "core/ModelLoader.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -46,7 +47,7 @@ bool ModelLoader::GenerateSphere(float radius, uint32_t rings, uint32_t sectors,
     // iterations via (rings - 1) on an unsigned type, and rings == 1 made
     // R = 1/0 = inf, producing NaN positions.
     if (rings < 2 || sectors < 3 || radius <= 0.0f) {
-        std::cerr << "[ModelLoader] GenerateSphere requires radius > 0, rings >= 2, sectors >= 3 (got "
+        SUPERSONIC_LOG_ERROR("ModelLoader") << "GenerateSphere requires radius > 0, rings >= 2, sectors >= 3 (got "
                   << radius << ", " << rings << ", " << sectors << ")." << std::endl;
         return false;
     }
@@ -98,7 +99,7 @@ bool ModelLoader::GenerateCube(float size, MeshData& out) {
     out.clear();
 
     if (size <= 0.0f) {
-        std::cerr << "[ModelLoader] GenerateCube requires size > 0 (got " << size << ")." << std::endl;
+        SUPERSONIC_LOG_ERROR("ModelLoader") << "GenerateCube requires size > 0 (got " << size << ")." << std::endl;
         return false;
     }
 
@@ -156,7 +157,7 @@ bool ModelLoader::GeneratePlane(float width, float height, MeshData& out) {
     out.clear();
 
     if (width <= 0.0f || height <= 0.0f) {
-        std::cerr << "[ModelLoader] GeneratePlane requires positive extents (got "
+        SUPERSONIC_LOG_ERROR("ModelLoader") << "GeneratePlane requires positive extents (got "
                   << width << "x" << height << ")." << std::endl;
         return false;
     }
@@ -189,7 +190,7 @@ bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
 
     std::ifstream file(filepath);
     if (!file.is_open()) {
-        std::cerr << "[ModelLoader] Failed to open OBJ file: " << filepath << std::endl;
+        SUPERSONIC_LOG_ERROR("ModelLoader") << "Failed to open OBJ file: " << filepath << std::endl;
         return false;
     }
 
@@ -216,7 +217,7 @@ bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
             // indeterminate: the failed extraction does not zero them.
             glm::vec3 p{0.0f};
             if (!(ss >> p.x >> p.y >> p.z)) {
-                std::cerr << "[ModelLoader] " << filepath << ":" << lineNumber
+                SUPERSONIC_LOG_ERROR("ModelLoader") << filepath << ":" << lineNumber
                           << " malformed vertex, skipped." << std::endl;
                 continue;
             }
@@ -262,7 +263,7 @@ bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
 
                 const int pIdx = resolveObjIndex(vi, positions.size());
                 if (pIdx < 0 || static_cast<size_t>(pIdx) >= positions.size()) {
-                    std::cerr << "[ModelLoader] " << filepath << ":" << lineNumber
+                    SUPERSONIC_LOG_ERROR("ModelLoader") << filepath << ":" << lineNumber
                               << " face references out-of-range vertex " << vi << ", skipped." << std::endl;
                     face.clear();
                     break;
@@ -305,13 +306,13 @@ bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
         // Without face data there is no topology to build. The old code
         // fabricated a sequential index list over raw positions, which turned
         // any real model into unrelated disjoint triangles.
-        std::cerr << "[ModelLoader] " << filepath
+        SUPERSONIC_LOG_ERROR("ModelLoader") << filepath
                   << " contains no face (f) records; cannot build a mesh." << std::endl;
         return false;
     }
 
     if (out.empty()) {
-        std::cerr << "[ModelLoader] " << filepath << " produced no usable geometry." << std::endl;
+        SUPERSONIC_LOG_ERROR("ModelLoader") << filepath << " produced no usable geometry." << std::endl;
         return false;
     }
 
@@ -328,7 +329,7 @@ bool ModelLoader::LoadOBJ(const std::string& filepath, MeshData& out) {
 
     out.computeTangents();
     out.computeBounds();
-    std::cout << "[ModelLoader] Loaded " << filepath << " (" << out.vertices.size()
+    SUPERSONIC_LOG_INFO("ModelLoader") << "Loaded " << filepath << " (" << out.vertices.size()
               << " vertices, " << out.indices.size() / 3 << " triangles)." << std::endl;
     return true;
 }

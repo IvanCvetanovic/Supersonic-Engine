@@ -1,4 +1,5 @@
 #include "core/HotReloadEngine.hpp"
+#include "core/Log.hpp"
 #include "core/ScriptRegistry.hpp"
 #include "core/ScriptPluginApi.h"
 
@@ -74,7 +75,7 @@ void HotReloadEngine::WatchPlugin(const std::string& pluginPath) {
     std::error_code ec;
     if (!fs::exists(m_pluginPath, ec)) {
         m_status = "plugin not present (" + m_pluginPath + "); built-in scripts only";
-        std::cout << "[HotReload] " << m_status << "." << std::endl;
+        SUPERSONIC_LOG_INFO("HotReload") << m_status << "." << std::endl;
         return;
     }
 
@@ -106,7 +107,7 @@ void HotReloadEngine::Poll() {
         }
 
         if (!m_reloadPending) {
-            std::cout << "[HotReload] Detected change in " << m_pluginPath << "; reloading." << std::endl;
+            SUPERSONIC_LOG_INFO("HotReload") << "Detected change in " << m_pluginPath << "; reloading." << std::endl;
             m_reloadPending = true;
             m_reportedFailure = false;
         }
@@ -124,7 +125,7 @@ void HotReloadEngine::Poll() {
         m_reloadPending = false;
     } else if (!m_reportedFailure) {
         // Once per reload attempt, not once per frame.
-        std::cerr << "[HotReload] " << m_status << std::endl;
+        SUPERSONIC_LOG_ERROR("HotReload") << m_status << std::endl;
         m_reportedFailure = true;
     }
 }
@@ -160,7 +161,7 @@ bool HotReloadEngine::ReloadNow() {
     ++m_reloadCount;
     m_status = "loaded " + fs::path(m_pluginPath).filename().string() + " with " +
                std::to_string(ScriptRegistry::Get().PluginScriptCount()) + " script(s)";
-    std::cout << "[HotReload] " << m_status << " (reload #" << m_reloadCount << ")." << std::endl;
+    SUPERSONIC_LOG_INFO("HotReload") << m_status << " (reload #" << m_reloadCount << ")." << std::endl;
     return true;
 }
 

@@ -1,4 +1,5 @@
 #include "renderer/MeshRegistry.hpp"
+#include "core/Log.hpp"
 
 #include "core/ModelLoader.hpp"
 #include "core/TerrainGenerator.hpp"
@@ -20,7 +21,7 @@ MeshRegistry::MeshRegistry(VulkanDevice& device, vk::CommandPool commandPool)
     }
     m_cubeMesh = Upload("primitive:Cube", cube);
 
-    std::cout << "[MeshRegistry] Initialised with fallback cube mesh." << std::endl;
+    SUPERSONIC_LOG_INFO("MeshRegistry") << "Initialised with fallback cube mesh." << std::endl;
 }
 
 MeshRegistry::~MeshRegistry() {
@@ -33,7 +34,7 @@ uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data) {
     }
 
     if (data.empty()) {
-        std::cerr << "[MeshRegistry] Refusing to upload empty mesh '" << key << "'." << std::endl;
+        SUPERSONIC_LOG_ERROR("MeshRegistry") << "Refusing to upload empty mesh '" << key << "'." << std::endl;
         return m_cubeMesh;
     }
 
@@ -78,7 +79,7 @@ uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data) {
     m_meshes.push_back(std::move(mesh));
     m_lookup.emplace(key, id);
 
-    std::cout << "[MeshRegistry] Uploaded '" << key << "' (" << data.vertices.size()
+    SUPERSONIC_LOG_INFO("MeshRegistry") << "Uploaded '" << key << "' (" << data.vertices.size()
               << " vertices, " << data.indices.size() / 3 << " triangles)." << std::endl;
     return id;
 }
@@ -119,7 +120,7 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
 
                 for (const auto& submesh : scene.submeshes) {
                     if (submesh.skinIndex != mergeSkin) {
-                        std::cerr << "[MeshRegistry] Skipping '" << submesh.name << "' in " << filePath
+                        SUPERSONIC_LOG_ERROR("MeshRegistry") << "Skipping '" << submesh.name << "' in " << filePath
                                   << ": it belongs to skin " << submesh.skinIndex
                                   << " while the mesh is being built from skin " << mergeSkin << "."
                                   << std::endl;
@@ -136,7 +137,7 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
                 data.computeBounds();
                 ok = !data.empty();
             } else {
-                std::cerr << "[MeshRegistry] " << scene.error << std::endl;
+                SUPERSONIC_LOG_ERROR("MeshRegistry") << scene.error << std::endl;
             }
         } else {
             ok = ModelLoader::LoadOBJ(filePath, data);
@@ -150,7 +151,7 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
     } else if (primitiveType == "Terrain") {
         ok = TerrainGenerator::GenerateTerrainMesh(64, 64, 0.6f, data);
     } else {
-        std::cerr << "[MeshRegistry] Unknown primitive '" << primitiveType
+        SUPERSONIC_LOG_ERROR("MeshRegistry") << "Unknown primitive '" << primitiveType
                   << "', falling back to cube." << std::endl;
     }
 

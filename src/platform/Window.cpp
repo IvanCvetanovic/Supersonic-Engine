@@ -1,4 +1,5 @@
 #include "platform/Window.hpp"
+#include "core/Log.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -11,7 +12,7 @@ Window::Window(int width, int height, const std::string& title)
     // Installed before glfwInit so initialisation failures explain themselves.
     // Without it GLFW errors were silently discarded and surfaced much later.
     glfwSetErrorCallback([](int code, const char* description) {
-        std::cerr << "[GLFW] error " << code << ": " << (description ? description : "(no detail)") << std::endl;
+        SUPERSONIC_LOG_ERROR("GLFW") << "error " << code << ": " << (description ? description : "(no detail)") << std::endl;
     });
 
     if (!glfwInit()) {
@@ -37,7 +38,7 @@ Window::Window(int width, int height, const std::string& title)
     glfwSetWindowUserPointer(m_window, this);
     glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
 
-    std::cout << "[Window] GLFW Window created: " << m_width << "x" << m_height << " (\"" << m_title << "\")" << std::endl;
+    SUPERSONIC_LOG_INFO("Window") << "GLFW Window created: " << m_width << "x" << m_height << " (\"" << m_title << "\")" << std::endl;
 }
 
 Window::~Window() {
@@ -46,7 +47,7 @@ Window::~Window() {
         m_window = nullptr;
     }
     glfwTerminate();
-    std::cout << "[Window] GLFW Window destroyed." << std::endl;
+    SUPERSONIC_LOG_INFO("Window") << "GLFW Window destroyed." << std::endl;
 }
 
 void Window::framebufferResizeCallback(GLFWwindow* window, int width, int height) {

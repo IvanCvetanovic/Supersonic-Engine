@@ -1,4 +1,5 @@
 #include "renderer/VulkanRenderer.hpp"
+#include "core/Log.hpp"
 
 #include "core/AnimationSystem.hpp"
 #include "core/RenderSystem.hpp"
@@ -39,7 +40,7 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
 
     initImGui();
 
-    std::cout << "[VulkanRenderer] Renderer initialized (pipeline pending offscreen render pass)." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Renderer initialized (pipeline pending offscreen render pass)." << std::endl;
 }
 
 void VulkanRenderer::SetOffscreenRenderPass(vk::RenderPass pass, vk::SampleCountFlagBits samples) {
@@ -96,7 +97,7 @@ VulkanRenderer::~VulkanRenderer() {
     // that gets written out.
     m_pipelineCache.reset();
 
-    std::cout << "[VulkanRenderer] Subsystem resources destroyed cleanly." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Subsystem resources destroyed cleanly." << std::endl;
 }
 
 void VulkanRenderer::destroySyncObjects() {
@@ -155,7 +156,7 @@ void VulkanRenderer::RecreateSwapchain() {
     createSyncObjects();
 
     m_windowRef.ResetResizedFlag();
-    std::cout << "[VulkanRenderer] Swapchain recreated for window size (" << width << "x" << height << ")." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Swapchain recreated for window size (" << width << "x" << height << ")." << std::endl;
 }
 
 void VulkanRenderer::createRenderPass() {
@@ -195,7 +196,7 @@ void VulkanRenderer::createRenderPass() {
     renderPassInfo.pDependencies = &dependency;
 
     m_renderPass = m_deviceRef.GetDevice().createRenderPass(renderPassInfo);
-    std::cout << "[VulkanRenderer] Swapchain RenderPass (ImGui UI Pass) created." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Swapchain RenderPass (ImGui UI Pass) created." << std::endl;
 }
 
 void VulkanRenderer::createFramebuffers() {
@@ -216,7 +217,7 @@ void VulkanRenderer::createFramebuffers() {
         m_framebuffers[i] = m_deviceRef.GetDevice().createFramebuffer(framebufferInfo);
     }
 
-    std::cout << "[VulkanRenderer] Created " << m_framebuffers.size() << " Swapchain Framebuffers." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Created " << m_framebuffers.size() << " Swapchain Framebuffers." << std::endl;
 }
 
 void VulkanRenderer::createCommandPool() {
@@ -227,7 +228,7 @@ void VulkanRenderer::createCommandPool() {
     poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
 
     m_commandPool = m_deviceRef.GetDevice().createCommandPool(poolInfo);
-    std::cout << "[VulkanRenderer] CommandPool created successfully." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "CommandPool created successfully." << std::endl;
 }
 
 void VulkanRenderer::createCommandBuffers() {
@@ -237,7 +238,7 @@ void VulkanRenderer::createCommandBuffers() {
     allocInfo.commandBufferCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
     m_commandBuffers = m_deviceRef.GetDevice().allocateCommandBuffers(allocInfo);
-    std::cout << "[VulkanRenderer] Allocated " << m_commandBuffers.size() << " CommandBuffers." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Allocated " << m_commandBuffers.size() << " CommandBuffers." << std::endl;
 }
 
 void VulkanRenderer::createSyncObjects() {
@@ -267,7 +268,7 @@ void VulkanRenderer::createSyncObjects() {
         m_renderFinishedSemaphores[i] = device.createSemaphore(semaphoreInfo);
     }
 
-    std::cout << "[VulkanRenderer] Sync primitives created ("
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Sync primitives created ("
               << MAX_FRAMES_IN_FLIGHT << " frames in flight, " << imageCount << " images)." << std::endl;
 }
 
@@ -345,7 +346,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     // Persist whatever the driver just compiled, so the next launch starts warm.
     m_pipelineCache->Save();
 
-    std::cout << "[VulkanRenderer] Scene, grid and shadow pipelines created." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Scene, grid and shadow pipelines created." << std::endl;
 }
 
 void VulkanRenderer::createUniformBuffers() {
@@ -375,7 +376,7 @@ void VulkanRenderer::createUniformBuffers() {
             VMA_ALLOCATION_CREATE_MAPPED_BIT);
     }
 
-    std::cout << "[VulkanRenderer] Created " << m_uniformBuffers.size() << " VMA Uniform Buffers and "
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Created " << m_uniformBuffers.size() << " VMA Uniform Buffers and "
               << m_jointPaletteBuffers.size() << " joint palettes ("
               << kMaxPaletteMatrices << " matrices each)." << std::endl;
 }
@@ -408,7 +409,7 @@ void VulkanRenderer::createDescriptorPool() {
     poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
     m_descriptorPool = m_deviceRef.GetDevice().createDescriptorPool(poolInfo);
-    std::cout << "[VulkanRenderer] DescriptorPool created successfully." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "DescriptorPool created successfully." << std::endl;
 }
 
 void VulkanRenderer::createDescriptorSets() {
@@ -488,7 +489,7 @@ void VulkanRenderer::createDescriptorSets() {
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
 
-    std::cout << "[VulkanRenderer] Allocated and updated " << m_descriptorSets.size() << " scene DescriptorSets." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Allocated and updated " << m_descriptorSets.size() << " scene DescriptorSets." << std::endl;
 }
 
 glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo,
@@ -682,7 +683,7 @@ void VulkanRenderer::initImGui() {
 
     ImGui_ImplVulkan_Init(&initInfo);
 
-    std::cout << "[VulkanRenderer] ImGui Docking & Vulkan backend initialized successfully." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "ImGui Docking & Vulkan backend initialized successfully." << std::endl;
 }
 
 void VulkanRenderer::NewImGuiFrame() {

@@ -1,4 +1,5 @@
 #include "core/ScriptRegistry.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -12,14 +13,14 @@ ScriptRegistry& ScriptRegistry::Get() {
 
 void ScriptRegistry::Register(const std::string& name, SupersonicScriptUpdateFn update, Origin origin) {
     if (name.empty() || update == nullptr) {
-        std::cerr << "[ScriptRegistry] Refusing to register an unnamed or null script." << std::endl;
+        SUPERSONIC_LOG_ERROR("ScriptRegistry") << "Refusing to register an unnamed or null script." << std::endl;
         return;
     }
 
     const bool replacing = m_scripts.find(name) != m_scripts.end();
     m_scripts[name] = Entry{ update, origin };
 
-    std::cout << "[ScriptRegistry] " << (replacing ? "Replaced" : "Registered")
+    SUPERSONIC_LOG_INFO("ScriptRegistry") << (replacing ? "Replaced" : "Registered")
               << (origin == Origin::Plugin ? " plugin" : " built-in")
               << " script '" << name << "'." << std::endl;
 }
@@ -35,7 +36,7 @@ void ScriptRegistry::UnregisterPluginScripts() {
         }
     }
     if (removed > 0) {
-        std::cout << "[ScriptRegistry] Dropped " << removed << " plugin script(s)." << std::endl;
+        SUPERSONIC_LOG_INFO("ScriptRegistry") << "Dropped " << removed << " plugin script(s)." << std::endl;
     }
 }
 

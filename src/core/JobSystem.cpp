@@ -1,4 +1,5 @@
 #include "core/JobSystem.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <condition_variable>
@@ -67,9 +68,9 @@ bool JobSystem::tryRunOneJob() {
             job.task(JobArgs{i, job.groupIndex});
         }
     } catch (const std::exception& e) {
-        std::cerr << "[JobSystem] Job threw: " << e.what() << std::endl;
+        SUPERSONIC_LOG_ERROR("JobSystem") << "Job threw: " << e.what() << std::endl;
     } catch (...) {
-        std::cerr << "[JobSystem] Job threw a non-std exception." << std::endl;
+        SUPERSONIC_LOG_ERROR("JobSystem") << "Job threw a non-std exception." << std::endl;
     }
 
     p.pending.fetch_sub(1, std::memory_order_release);
@@ -107,7 +108,7 @@ void JobSystem::Initialize(unsigned int threadCount) {
         });
     }
 
-    std::cout << "[JobSystem] " << threadCount << " worker thread(s) started ("
+    SUPERSONIC_LOG_INFO("JobSystem") << threadCount << " worker thread(s) started ("
               << std::thread::hardware_concurrency() << " hardware threads reported)." << std::endl;
 }
 
@@ -130,7 +131,7 @@ void JobSystem::Shutdown() {
     }
     p.workers.clear();
 
-    std::cout << "[JobSystem] Workers joined." << std::endl;
+    SUPERSONIC_LOG_INFO("JobSystem") << "Workers joined." << std::endl;
 }
 
 void JobSystem::Execute(const std::function<void()>& task) {

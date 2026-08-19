@@ -1,4 +1,5 @@
 #include "renderer/ShadowMap.hpp"
+#include "core/Log.hpp"
 
 #include <array>
 #include <iostream>
@@ -29,7 +30,7 @@ ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution, uint32_t layerCo
         m_format = vk::Format::eD16Unorm;
     } else {
         m_format = m_deviceRef.FindDepthFormat();
-        std::cerr << "[ShadowMap] No sampleable depth-only format; falling back to "
+        SUPERSONIC_LOG_ERROR("ShadowMap") << "No sampleable depth-only format; falling back to "
                   << vk::to_string(m_format) << "." << std::endl;
     }
 
@@ -44,7 +45,7 @@ ShadowMap::ShadowMap(VulkanDevice& device, uint32_t resolution, uint32_t layerCo
     createResources();
     createFramebuffers();
 
-    std::cout << "[ShadowMap] Created " << m_layerCount << " x " << m_resolution << "x"
+    SUPERSONIC_LOG_INFO("ShadowMap") << "Created " << m_layerCount << " x " << m_resolution << "x"
               << m_resolution << " shadow map layer(s) (" << vk::to_string(m_format) << ", "
               << (m_filter == vk::Filter::eLinear ? "linear" : "nearest") << " filter)." << std::endl;
 }

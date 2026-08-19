@@ -1,4 +1,5 @@
 #include "editor/EditorFonts.hpp"
+#include "core/Log.hpp"
 #include "editor/EditorIcons.hpp"
 
 #include <algorithm>
@@ -78,13 +79,13 @@ void EditorFonts::Load(float dpiScale) {
         // A failed decode leaves ImGui with no font at all and the first draw
         // call asserts, so say which one rather than letting that happen
         // somewhere less obvious.
-        std::cerr << "[EditorFonts] A font failed to decode; falling back to the built-in face."
+        SUPERSONIC_LOG_ERROR("EditorFonts") << "A font failed to decode; falling back to the built-in face."
                   << std::endl;
         io.Fonts->AddFontDefault();
         return;
     }
 
-    std::cout << "[EditorFonts] Inter " << bodySize << "px + Font Awesome merged (DPI scale "
+    SUPERSONIC_LOG_INFO("EditorFonts") << "Inter " << bodySize << "px + Font Awesome merged (DPI scale "
               << g_scale << ")." << std::endl;
 }
 

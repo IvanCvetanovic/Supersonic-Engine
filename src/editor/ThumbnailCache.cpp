@@ -1,4 +1,5 @@
 #include "editor/ThumbnailCache.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -158,7 +159,7 @@ ImTextureID ThumbnailCache::Get(const std::filesystem::path& path) {
     try {
         entry.id = upload(scaled, dstW, dstH, entry);
     } catch (const std::exception& e) {
-        std::cerr << "[ThumbnailCache] Could not upload " << key << ": " << e.what() << std::endl;
+        SUPERSONIC_LOG_ERROR("ThumbnailCache") << "Could not upload " << key << ": " << e.what() << std::endl;
         entry.image.reset();
         entry.id = 0;
     }

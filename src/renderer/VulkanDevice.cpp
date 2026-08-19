@@ -1,4 +1,5 @@
 #include "renderer/VulkanDevice.hpp"
+#include "core/Log.hpp"
 
 #include <iostream>
 #include <set>
@@ -50,7 +51,7 @@ void VulkanDevice::createSurface(Window& window) {
     }
 
     m_surface = rawSurface;
-    std::cout << "[VulkanDevice] Vulkan Window Surface created successfully." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanDevice") << "Vulkan Window Surface created successfully." << std::endl;
 }
 
 void VulkanDevice::pickPhysicalDevice() {
@@ -83,7 +84,7 @@ void VulkanDevice::pickPhysicalDevice() {
     m_queueFamilyIndices = findQueueFamilies(m_physicalDevice);
 
     auto properties = m_physicalDevice.getProperties();
-    std::cout << "[VulkanDevice] Selected Physical GPU: " << properties.deviceName
+    SUPERSONIC_LOG_INFO("VulkanDevice") << "Selected Physical GPU: " << properties.deviceName
               << " (Type: " << (foundDiscreteGPU ? "Discrete GPU" : "Integrated/Other GPU") << ")"
               << std::endl;
 }
@@ -96,7 +97,7 @@ bool VulkanDevice::isDeviceSuitable(vk::PhysicalDevice device) {
     // fail inside VMA, so the device's own apiVersion has to be checked.
     const vk::PhysicalDeviceProperties properties = device.getProperties();
     if (properties.apiVersion < kRequiredApiVersion) {
-        std::cout << "[VulkanDevice] Skipping " << properties.deviceName
+        SUPERSONIC_LOG_INFO("VulkanDevice") << "Skipping " << properties.deviceName
                   << ": reports Vulkan "
                   << VK_API_VERSION_MAJOR(properties.apiVersion) << "."
                   << VK_API_VERSION_MINOR(properties.apiVersion)
@@ -217,7 +218,7 @@ void VulkanDevice::createLogicalDevice() {
     createInfo.ppEnabledExtensionNames = m_deviceExtensions.data();
 
     m_device = m_physicalDevice.createDevice(createInfo);
-    std::cout << "[VulkanDevice] Vulkan Logical Device created successfully." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanDevice") << "Vulkan Logical Device created successfully." << std::endl;
 
     m_graphicsQueue = m_device.getQueue(indices.graphicsFamily.value(), 0);
     m_presentQueue = m_device.getQueue(indices.presentFamily.value(), 0);
@@ -236,7 +237,7 @@ void VulkanDevice::initVMA() {
         throw std::runtime_error("Failed to initialize Vulkan Memory Allocator (VMA)! VkResult: " + std::to_string(static_cast<int>(result)));
     }
 
-    std::cout << "[VulkanDevice] VmaAllocator initialized successfully." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanDevice") << "VmaAllocator initialized successfully." << std::endl;
 }
 
 

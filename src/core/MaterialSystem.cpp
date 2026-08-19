@@ -1,4 +1,5 @@
 #include "core/MaterialSystem.hpp"
+#include "core/Log.hpp"
 
 #include <iostream>
 
@@ -14,7 +15,7 @@ void MaterialSystem::Sync(entt::registry& registry, MaterialLibrary& library) {
         const uint32_t id = library.Acquire(material.materialPath);
         if (id == MaterialLibrary::kInvalidMaterial) {
             if (!material.warnedMissingAsset) {
-                std::cerr << "[MaterialSystem] '" << material.materialPath
+                SUPERSONIC_LOG_ERROR("MaterialSystem") << "'" << material.materialPath
                           << "' could not be loaded; the entity keeps its own values."
                           << std::endl;
                 material.warnedMissingAsset = true;

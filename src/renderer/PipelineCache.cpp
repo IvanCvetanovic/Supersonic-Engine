@@ -1,4 +1,5 @@
 #include "renderer/PipelineCache.hpp"
+#include "core/Log.hpp"
 
 #include <cstring>
 #include <filesystem>
@@ -46,7 +47,7 @@ PipelineCache::PipelineCache(VulkanDevice& device, std::string path)
     }
 
     if (!blob.empty() && !headerMatchesThisDevice(blob)) {
-        std::cout << "[PipelineCache] Discarding " << m_path
+        SUPERSONIC_LOG_INFO("PipelineCache") << "Discarding " << m_path
                   << ": it was written by a different driver or device." << std::endl;
         blob.clear();
     }
@@ -59,9 +60,9 @@ PipelineCache::PipelineCache(VulkanDevice& device, std::string path)
     m_loadedBytes = blob.size();
 
     if (m_loadedBytes > 0) {
-        std::cout << "[PipelineCache] Reusing " << m_loadedBytes << " bytes from " << m_path << "." << std::endl;
+        SUPERSONIC_LOG_INFO("PipelineCache") << "Reusing " << m_loadedBytes << " bytes from " << m_path << "." << std::endl;
     } else {
-        std::cout << "[PipelineCache] Starting empty; pipelines will compile from SPIR-V this run." << std::endl;
+        SUPERSONIC_LOG_INFO("PipelineCache") << "Starting empty; pipelines will compile from SPIR-V this run." << std::endl;
     }
 }
 
@@ -94,7 +95,7 @@ void PipelineCache::Save() const {
     try {
         data = m_deviceRef.GetDevice().getPipelineCacheData(m_cache);
     } catch (const std::exception& e) {
-        std::cerr << "[PipelineCache] Could not read cache data back: " << e.what() << std::endl;
+        SUPERSONIC_LOG_ERROR("PipelineCache") << "Could not read cache data back: " << e.what() << std::endl;
         return;
     }
 
@@ -115,12 +116,12 @@ void PipelineCache::Save() const {
     {
         std::ofstream file(temp, std::ios::binary | std::ios::trunc);
         if (!file) {
-            std::cerr << "[PipelineCache] Could not open " << temp.string() << " for writing." << std::endl;
+            SUPERSONIC_LOG_ERROR("PipelineCache") << "Could not open " << temp.string() << " for writing." << std::endl;
             return;
         }
         file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
         if (!file) {
-            std::cerr << "[PipelineCache] Write to " << temp.string() << " failed." << std::endl;
+            SUPERSONIC_LOG_ERROR("PipelineCache") << "Write to " << temp.string() << " failed." << std::endl;
             return;
         }
     }
@@ -128,11 +129,11 @@ void PipelineCache::Save() const {
     std::filesystem::rename(temp, filePath, ec);
     if (ec) {
         std::filesystem::remove(temp, ec);
-        std::cerr << "[PipelineCache] Could not replace " << m_path << ": " << ec.message() << std::endl;
+        SUPERSONIC_LOG_ERROR("PipelineCache") << "Could not replace " << m_path << ": " << ec.message() << std::endl;
         return;
     }
 
-    std::cout << "[PipelineCache] Saved " << data.size() << " bytes to " << m_path << "." << std::endl;
+    SUPERSONIC_LOG_INFO("PipelineCache") << "Saved " << data.size() << " bytes to " << m_path << "." << std::endl;
 }
 
 } // namespace Supersonic

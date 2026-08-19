@@ -1,4 +1,5 @@
 #include "core/TerrainGenerator.hpp"
+#include "core/Log.hpp"
 #include "core/JobSystem.hpp"
 
 #include <cmath>
@@ -13,7 +14,7 @@ bool TerrainGenerator::GenerateTerrainMesh(uint32_t width, uint32_t height, floa
     // value of 0 wraps to ~4.29 billion and the generator allocates until it
     // throws bad_alloc.
     if (width < 2 || height < 2) {
-        std::cerr << "[TerrainGenerator] Requires width and height >= 2 (got "
+        SUPERSONIC_LOG_ERROR("TerrainGenerator") << "Requires width and height >= 2 (got "
                   << width << "x" << height << ")." << std::endl;
         return false;
     }
@@ -80,7 +81,7 @@ bool TerrainGenerator::GenerateTerrainMesh(uint32_t width, uint32_t height, floa
 
     out.computeTangents();
     out.computeBounds();
-    std::cout << "[TerrainGenerator] Generated terrain mesh (" << out.vertices.size()
+    SUPERSONIC_LOG_INFO("TerrainGenerator") << "Generated terrain mesh (" << out.vertices.size()
               << " vertices, " << out.indices.size() / 3 << " triangles)." << std::endl;
     return true;
 }

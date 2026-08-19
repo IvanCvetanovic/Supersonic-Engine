@@ -1,4 +1,5 @@
 #include "core/GameRuntime.hpp"
+#include "core/Log.hpp"
 
 #include "core/Json.hpp"
 #include "platform/ExecutablePath.hpp"
@@ -22,7 +23,7 @@ GameManifest Parse(const std::string& text) {
         // starting the editor instead would hide it behind a working-looking
         // window. Say so and carry on as the editor, which is the only thing
         // that can be done without a scene to load.
-        std::cerr << "[GameRuntime] game.manifest is not readable JSON: " << error << std::endl;
+        SUPERSONIC_LOG_ERROR("GameRuntime") << "game.manifest is not readable JSON: " << error << std::endl;
         return manifest;
     }
 
@@ -63,7 +64,7 @@ GameManifest Load() {
 
     GameManifest manifest = Parse(ss.str());
     if (manifest.isGame) {
-        std::cout << "[GameRuntime] Running as a packaged game: " << manifest.title
+        SUPERSONIC_LOG_INFO("GameRuntime") << "Running as a packaged game: " << manifest.title
                   << " (" << manifest.startupScene << ")." << std::endl;
     }
     return manifest;

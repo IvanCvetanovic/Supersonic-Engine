@@ -1,4 +1,5 @@
 #include "core/AudioEngine.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -61,20 +62,20 @@ AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
     HRESULT hr = XAudio2Create(&m_impl->xaudio, 0, XAUDIO2_DEFAULT_PROCESSOR);
     if (FAILED(hr)) {
         m_status = "XAudio2Create failed (hr=" + std::to_string(static_cast<long>(hr)) + ")";
-        std::cerr << "[AudioEngine] " << m_status << std::endl;
+        SUPERSONIC_LOG_ERROR("AudioEngine") << m_status << std::endl;
         return;
     }
 
     hr = m_impl->xaudio->CreateMasteringVoice(&m_impl->master);
     if (FAILED(hr)) {
         m_status = "CreateMasteringVoice failed (hr=" + std::to_string(static_cast<long>(hr)) + ")";
-        std::cerr << "[AudioEngine] " << m_status << std::endl;
+        SUPERSONIC_LOG_ERROR("AudioEngine") << m_status << std::endl;
         return;
     }
 
     m_available = true;
     m_status = "XAudio2 output device ready";
-    std::cout << "[AudioEngine] " << m_status << "." << std::endl;
+    SUPERSONIC_LOG_INFO("AudioEngine") << m_status << "." << std::endl;
 }
 
 AudioEngine::~AudioEngine() = default;
@@ -96,7 +97,7 @@ AudioEngine::VoiceId AudioEngine::Play(const std::string& path, bool loop, float
 
     IXAudio2SourceVoice* source = nullptr;
     if (FAILED(m_impl->xaudio->CreateSourceVoice(&source, &format))) {
-        std::cerr << "[AudioEngine] CreateSourceVoice failed for " << path << std::endl;
+        SUPERSONIC_LOG_ERROR("AudioEngine") << "CreateSourceVoice failed for " << path << std::endl;
         return kInvalidVoice;
     }
 
@@ -108,7 +109,7 @@ AudioEngine::VoiceId AudioEngine::Play(const std::string& path, bool loop, float
 
     if (FAILED(source->SubmitSourceBuffer(&buffer))) {
         source->DestroyVoice();
-        std::cerr << "[AudioEngine] SubmitSourceBuffer failed for " << path << std::endl;
+        SUPERSONIC_LOG_ERROR("AudioEngine") << "SubmitSourceBuffer failed for " << path << std::endl;
         return kInvalidVoice;
     }
 
@@ -216,7 +217,7 @@ struct AudioEngine::Impl {
                 // on a dead device would peg a core forever.
                 written = snd_pcm_recover(pcm, static_cast<int>(written), 1);
                 if (written < 0) {
-                    std::cerr << "[AudioEngine] ALSA write failed: "
+                    SUPERSONIC_LOG_ERROR("AudioEngine") << "ALSA write failed: "
                               << snd_strerror(static_cast<int>(written)) << std::endl;
                     break;
                 }
@@ -229,7 +230,7 @@ AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
     int err = snd_pcm_open(&m_impl->pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
     if (err < 0) {
         m_status = std::string("snd_pcm_open failed: ") + snd_strerror(err);
-        std::cout << "[AudioEngine] " << m_status << "." << std::endl;
+        SUPERSONIC_LOG_INFO("AudioEngine") << m_status << "." << std::endl;
         return;
     }
 
@@ -245,7 +246,7 @@ AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
                              100000);  /* 100 ms of latency to play with */
     if (err < 0) {
         m_status = std::string("snd_pcm_set_params failed: ") + snd_strerror(err);
-        std::cout << "[AudioEngine] " << m_status << "." << std::endl;
+        SUPERSONIC_LOG_INFO("AudioEngine") << m_status << "." << std::endl;
         snd_pcm_close(m_impl->pcm);
         m_impl->pcm = nullptr;
         return;
@@ -256,7 +257,7 @@ AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
 
     m_available = true;
     m_status = "ALSA output device ready";
-    std::cout << "[AudioEngine] " << m_status << "." << std::endl;
+    SUPERSONIC_LOG_INFO("AudioEngine") << m_status << "." << std::endl;
 }
 
 AudioEngine::~AudioEngine() {
@@ -307,7 +308,7 @@ struct AudioEngine::Impl {};
 
 AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
     m_status = "no audio backend compiled for this platform";
-    std::cout << "[AudioEngine] " << m_status << "." << std::endl;
+    SUPERSONIC_LOG_INFO("AudioEngine") << m_status << "." << std::endl;
 }
 
 AudioEngine::~AudioEngine() = default;
@@ -327,13 +328,13 @@ const AudioClip* AudioEngine::LoadClip(const std::string& path) {
     AudioClip clip;
     std::string error;
     if (!AudioClip::LoadWav(path, clip, error)) {
-        std::cerr << "[AudioEngine] " << error << std::endl;
+        SUPERSONIC_LOG_ERROR("AudioEngine") << error << std::endl;
         // Cache the failure so a missing file is not re-opened every frame.
         m_clips.emplace(path, AudioClip{});
         return nullptr;
     }
 
-    std::cout << "[AudioEngine] Loaded " << path << " ("
+    SUPERSONIC_LOG_INFO("AudioEngine") << "Loaded " << path << " ("
               << clip.channels << "ch, " << clip.sampleRate << " Hz, "
               << clip.bitsPerSample << "-bit, "
               << clip.durationSeconds() << "s)." << std::endl;

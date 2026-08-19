@@ -1,4 +1,5 @@
 #include "renderer/VulkanOffscreen.hpp"
+#include "core/Log.hpp"
 
 #include <array>
 #include <iostream>
@@ -19,7 +20,7 @@ VulkanOffscreen::VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t 
     createSamplerAndTextureID();
     createBloom();
 
-    std::cout << "[VulkanOffscreen] Created Offscreen Render Target (" << m_width << "x" << m_height
+    SUPERSONIC_LOG_INFO("VulkanOffscreen") << "Created Offscreen Render Target (" << m_width << "x" << m_height
               << ", " << static_cast<uint32_t>(m_samples) << "x MSAA)." << std::endl;
 }
 
@@ -84,7 +85,7 @@ bool VulkanOffscreen::ApplyPendingResize() {
     createSamplerAndTextureID();
     createBloom();
 
-    std::cout << "[VulkanOffscreen] Resized Offscreen Viewport Target (" << m_width << "x" << m_height << ")." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanOffscreen") << "Resized Offscreen Viewport Target (" << m_width << "x" << m_height << ")." << std::endl;
     return true;
 }
 

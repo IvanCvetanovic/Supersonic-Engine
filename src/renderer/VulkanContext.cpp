@@ -1,6 +1,7 @@
 // VMA_IMPLEMENTATION lives in VmaImplementation.cpp so its warnings can be
 // suppressed without suppressing warnings here.
 #include "renderer/VulkanContext.hpp"
+#include "core/Log.hpp"
 
 #include <stdexcept>
 #include <iostream>
@@ -38,8 +39,13 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     const bool isError = (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0;
     if (isError) g_validationErrors.fetch_add(1, std::memory_order_relaxed);
 
-    std::cerr << (isError ? "[Vulkan Validation ERROR]: " : "[Vulkan Validation Layer]: ")
-              << pCallbackData->pMessage << std::endl;
+    // Through the log, so the editor console shows validation output next
+    // to everything else rather than only in a terminal nobody has open.
+    if (isError) {
+        SUPERSONIC_LOG_ERROR("Validation") << pCallbackData->pMessage;
+    } else {
+        SUPERSONIC_LOG_WARN("Validation") << pCallbackData->pMessage;
+    }
 
     // Still VK_FALSE: aborting the offending call would change engine behaviour
     // under validation, and the whole value of the layer is that it observes
@@ -138,7 +144,7 @@ void VulkanContext::createInstance(const std::vector<const char*>& windowExtensi
         // startup log while ARCHITECTURE.md claimed validation was enabled on
         // all Debug builds. Two showstopper bugs survived six commits behind it,
         // so the consequence is now spelled out.
-        std::cerr <<
+        SUPERSONIC_LOG_WARN("VulkanContext") <<
             "\n"
             "================================================================\n"
             "  WARNING: VK_LAYER_KHRONOS_validation is NOT available.\n"
@@ -151,8 +157,7 @@ void VulkanContext::createInstance(const std::vector<const char*>& windowExtensi
             "  containing VkLayer_khronos_validation.json.\n"
             "\n"
             "  Continuing WITHOUT validation.\n"
-            "================================================================\n"
-            << std::endl;
+            "================================================================";
     }
 
     VkApplicationInfo appInfo{};
@@ -200,7 +205,7 @@ void VulkanContext::createInstance(const std::vector<const char*>& windowExtensi
     }
 
     m_instance = rawInstance;
-    std::cout << "[VulkanContext] Vulkan Instance created successfully." << std::endl;
+    SUPERSONIC_LOG_INFO("VulkanContext") << "Vulkan Instance created successfully." << std::endl;
 }
 
 void VulkanContext::setupDebugMessenger() {
@@ -217,10 +222,10 @@ void VulkanContext::setupDebugMessenger() {
 
     VkResult res = CreateDebugUtilsMessengerEXT(m_instance, &createInfo, nullptr, &m_debugMessenger);
     if (res != VK_SUCCESS) {
-        std::cerr << "[VulkanContext] Warning: Could not create Vulkan Debug Messenger callback (VkResult: " << res << ")" << std::endl;
+        SUPERSONIC_LOG_WARN("VulkanContext") << "Could not create Vulkan Debug Messenger callback (VkResult: " << res << ")" << std::endl;
     } else {
         g_validationActive.store(true, std::memory_order_relaxed);
-        std::cout << "[VulkanContext] Vulkan Debug Messenger initialized successfully." << std::endl;
+        SUPERSONIC_LOG_INFO("VulkanContext") << "Vulkan Debug Messenger initialized successfully." << std::endl;
     }
 }
 

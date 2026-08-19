@@ -1,4 +1,5 @@
 #include "renderer/TextureRegistry.hpp"
+#include "core/Log.hpp"
 #include "renderer/VulkanBuffer.hpp"
 
 #include <array>
@@ -54,7 +55,7 @@ TextureRegistry::TextureRegistry(VulkanDevice& device, vk::CommandPool commandPo
     }
     m_checkerTexture = UploadRGBA("builtin:checker", checker.data(), dim, dim, true);
 
-    std::cout << "[TextureRegistry] Initialised with built-in white, flat-normal and checker textures." << std::endl;
+    SUPERSONIC_LOG_INFO("TextureRegistry") << "Initialised with built-in white, flat-normal and checker textures." << std::endl;
 }
 
 TextureRegistry::~TextureRegistry() {
@@ -93,7 +94,7 @@ uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixe
     }
 
     if (!pixels || width == 0 || height == 0) {
-        std::cerr << "[TextureRegistry] Refusing to upload empty texture '" << key << "'." << std::endl;
+        SUPERSONIC_LOG_ERROR("TextureRegistry") << "Refusing to upload empty texture '" << key << "'." << std::endl;
         return m_checkerTexture;
     }
 
@@ -144,7 +145,7 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb) {
     stbi_uc* pixels = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
 
     if (!pixels || width <= 0 || height <= 0) {
-        std::cerr << "[TextureRegistry] Could not load '" << path << "': "
+        SUPERSONIC_LOG_ERROR("TextureRegistry") << "Could not load '" << path << "': "
                   << (stbi_failure_reason() ? stbi_failure_reason() : "unknown")
                   << " - using the " << (srgb ? "checker" : "flat-normal") << " fallback." << std::endl;
         if (pixels) stbi_image_free(pixels);
@@ -158,7 +159,7 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb) {
                                    static_cast<uint32_t>(width), static_cast<uint32_t>(height), srgb);
     stbi_image_free(pixels);
 
-    std::cout << "[TextureRegistry] Loaded " << path << " (" << width << "x" << height
+    SUPERSONIC_LOG_INFO("TextureRegistry") << "Loaded " << path << " (" << width << "x" << height
               << ", " << channels << " source channels, " << (srgb ? "sRGB" : "linear") << ")." << std::endl;
     return id;
 }
@@ -173,7 +174,7 @@ vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_
     }
 
     if (m_materialSets.size() >= kMaxMaterialSets) {
-        std::cerr << "[TextureRegistry] Material descriptor set pool exhausted; reusing the default." << std::endl;
+        SUPERSONIC_LOG_ERROR("TextureRegistry") << "Material descriptor set pool exhausted; reusing the default." << std::endl;
         const uint64_t fallbackKey = materialKey(m_whiteTexture, m_flatNormalTexture);
         if (auto it = m_materialSets.find(fallbackKey); it != m_materialSets.end()) return it->second;
         return nullptr;

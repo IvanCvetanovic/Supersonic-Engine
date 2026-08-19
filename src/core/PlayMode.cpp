@@ -1,4 +1,5 @@
 #include "core/PlayMode.hpp"
+#include "core/Log.hpp"
 #include "core/TimeTravelDebugger.hpp"
 
 #include <iostream>
@@ -26,21 +27,21 @@ SerializationResult PlayMode::Play(entt::registry& registry) {
     TimeTravelDebugger::Clear();
 
     m_state = State::Play;
-    std::cout << "[PlayMode] Entering play mode (scene snapshotted)." << std::endl;
+    SUPERSONIC_LOG_INFO("PlayMode") << "Entering play mode (scene snapshotted)." << std::endl;
     return { true, "Playing. Stop restores the scene as it was." };
 }
 
 void PlayMode::Pause() {
     if (m_state == State::Play) {
         m_state = State::Paused;
-        std::cout << "[PlayMode] Paused." << std::endl;
+        SUPERSONIC_LOG_INFO("PlayMode") << "Paused." << std::endl;
     }
 }
 
 void PlayMode::Resume() {
     if (m_state == State::Paused) {
         m_state = State::Play;
-        std::cout << "[PlayMode] Resumed." << std::endl;
+        SUPERSONIC_LOG_INFO("PlayMode") << "Resumed." << std::endl;
     }
 }
 
@@ -66,7 +67,7 @@ SerializationResult PlayMode::Stop(entt::registry& registry) {
     }
 
     m_snapshot.clear();
-    std::cout << "[PlayMode] Stopped; scene restored to its pre-play state." << std::endl;
+    SUPERSONIC_LOG_INFO("PlayMode") << "Stopped; scene restored to its pre-play state." << std::endl;
     return { true, "Stopped. Scene restored." };
 }
 

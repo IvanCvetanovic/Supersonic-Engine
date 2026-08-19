@@ -1,4 +1,5 @@
 #include "platform/AndroidNativeApp.hpp"
+#include "core/Log.hpp"
 
 #if defined(SUPERSONIC_PLATFORM_ANDROID)
 #include <iostream>
@@ -14,7 +15,7 @@ void AndroidNativeApp::InitAndroidApp(struct android_app* appState) {
     s_window = appState->window;
     s_initialized = (s_window != nullptr);
 
-    std::cout << "[AndroidNativeApp] Initialized Android ANativeWindow Vulkan Surface." << std::endl;
+    SUPERSONIC_LOG_INFO("AndroidNativeApp") << "Initialized Android ANativeWindow Vulkan Surface." << std::endl;
 }
 
 ANativeWindow* AndroidNativeApp::GetNativeWindow() {

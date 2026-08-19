@@ -1,4 +1,5 @@
 #include "editor/EditorLayer.hpp"
+#include "core/Log.hpp"
 #include "editor/EditorIcons.hpp"
 #include "editor/Theme.hpp"
 #include "core/MaterialSystem.hpp"
@@ -31,7 +32,7 @@ void EditorLayer::Init(VulkanDevice& device, uint32_t initialWidth, uint32_t ini
     m_offscreenPass = std::make_unique<VulkanOffscreen>(device, initialWidth, initialHeight);
     m_thumbnails = std::make_unique<ThumbnailCache>(device);
     m_contentBrowserPanel.SetThumbnails(m_thumbnails.get());
-    std::cout << "[EditorLayer] Dockable Editor Layer & Offscreen Viewport initialized." << std::endl;
+    SUPERSONIC_LOG_INFO("EditorLayer") << "Dockable Editor Layer & Offscreen Viewport initialized." << std::endl;
 }
 
 void EditorLayer::SetMaterialLibrary(MaterialLibrary* library) {
@@ -46,14 +47,18 @@ void EditorLayer::Shutdown() {
     m_contentBrowserPanel.SetThumbnails(nullptr);
     m_thumbnails.reset();
     m_offscreenPass.reset();
-    std::cout << "[EditorLayer] Editor Layer shutdown cleanly." << std::endl;
+    SUPERSONIC_LOG_INFO("EditorLayer") << "Editor Layer shutdown cleanly." << std::endl;
 }
 
 void EditorLayer::SetStatus(const std::string& message, bool isError) {
     m_statusMessage = message;
     m_statusIsError = isError;
     m_statusAge = 0.0f;
-    (isError ? std::cerr : std::cout) << "[Editor] " << message << std::endl;
+    if (isError) {
+        SUPERSONIC_LOG_ERROR("Editor") << message;
+    } else {
+        SUPERSONIC_LOG_INFO("Editor") << message;
+    }
 }
 
 void EditorLayer::SetScriptHostInfo(bool pluginLoaded, const std::string& status, uint32_t reloadCount) {
@@ -200,6 +205,7 @@ void EditorLayer::buildLayout(unsigned int dockspaceId, int preset) {
     ImGui::DockBuilderDockWindow("Time-Travel Rewind Debugger", bottom);
     ImGui::DockBuilderDockWindow("Engine Statistics", rightTop);
     ImGui::DockBuilderDockWindow("Camera Preview", rightBottom);
+    ImGui::DockBuilderDockWindow("Console", bottom);
 
     ImGui::DockBuilderFinish(dockspaceId);
 }
@@ -758,6 +764,67 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     ImGui::Separator();
     if (m_offscreenPass) {
         ImGui::Image(m_offscreenPass->GetTextureID(), ImVec2(240, 135));
+    }
+    ImGui::End();
+
+    // 7. Console
+    //
+    // The engine's diagnostics used to exist only on a terminal, which a
+    // packaged game does not have and an editor user is not looking at. Every
+    // message explaining why an entity will not move, why a surface is
+    // untextured or why an asset failed to load went somewhere nobody reads.
+    ImGui::Begin("Console");
+    {
+        ImGui::Checkbox("Info", &m_consoleShowInfo);
+        ImGui::SameLine();
+        ImGui::Checkbox("Warnings", &m_consoleShowWarnings);
+        ImGui::SameLine();
+        ImGui::Checkbox("Errors", &m_consoleShowErrors);
+        ImGui::SameLine();
+        ImGui::Checkbox("Scroll", &m_consoleAutoScroll);
+        ImGui::SameLine();
+        if (ImGui::Button("Clear")) Log::Clear();
+
+        ImGui::SameLine();
+        m_consoleFilter.Draw("##consolefilter", -1.0f);
+
+        ImGui::Separator();
+
+        const auto entries = Log::Snapshot();
+        if (const std::size_t dropped = Log::DroppedCount(); dropped > 0) {
+            // A console that has lost history says so, rather than quietly
+            // starting mid-story and looking complete.
+            ImGui::TextDisabled("%zu earlier message(s) dropped from the buffer.", dropped);
+        }
+
+        ImGui::BeginChild("##consolescroll", ImVec2(0, 0), false,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        for (const auto& entry : entries) {
+            const bool wanted =
+                (entry.level == Log::Level::Error   && m_consoleShowErrors)   ||
+                (entry.level == Log::Level::Warning && m_consoleShowWarnings) ||
+                (entry.level <= Log::Level::Info    && m_consoleShowInfo);
+            if (!wanted) continue;
+
+            // Match against category and message together, so "Vulkan" finds
+            // the subsystem and "texture" finds the thing that went wrong.
+            const std::string line = "[" + entry.category + "] " + entry.message;
+            if (!m_consoleFilter.PassFilter(line.c_str())) continue;
+
+            ImVec4 colour = Brand::TextDim;
+            if (entry.level == Log::Level::Error)        colour = ImVec4(1.0f, 0.45f, 0.40f, 1.0f);
+            else if (entry.level == Log::Level::Warning) colour = Brand::Amber;
+
+            ImGui::PushStyleColor(ImGuiCol_Text, colour);
+            ImGui::TextUnformatted(line.c_str());
+            ImGui::PopStyleColor();
+        }
+        // Only when already at the bottom, so scrolling back to read something
+        // is not yanked away by the next frame's log line.
+        if (m_consoleAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+            ImGui::SetScrollHereY(1.0f);
+        }
+        ImGui::EndChild();
     }
     ImGui::End();
 

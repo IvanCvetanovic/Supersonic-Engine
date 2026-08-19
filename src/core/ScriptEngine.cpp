@@ -1,4 +1,5 @@
 #include "core/ScriptEngine.hpp"
+#include "core/Log.hpp"
 
 #include <algorithm>
 #include "core/Input.hpp"
@@ -262,7 +263,7 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
         const auto* entry = scripts.Find(script.scriptName);
         if (!entry || !entry->update) {
             if (!script.warnedMissing) {
-                std::cerr << "[ScriptEngine] No script named '" << script.scriptName
+                SUPERSONIC_LOG_WARN("ScriptEngine") << "No script named '" << script.scriptName
                           << "' is registered; entity will not be driven." << std::endl;
                 script.warnedMissing = true;
             }

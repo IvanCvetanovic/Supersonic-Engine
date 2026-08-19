@@ -1,4 +1,5 @@
 #include "renderer/PointShadowMap.hpp"
+#include "core/Log.hpp"
 
 #include <array>
 #include <iostream>
@@ -24,14 +25,14 @@ PointShadowMap::PointShadowMap(VulkanDevice& device, uint32_t resolution)
         m_format = vk::Format::eD16Unorm;
     } else {
         m_format = m_deviceRef.FindDepthFormat();
-        std::cerr << "[PointShadowMap] No sampleable depth-only format; falling back to "
+        SUPERSONIC_LOG_ERROR("PointShadowMap") << "No sampleable depth-only format; falling back to "
                   << vk::to_string(m_format) << "." << std::endl;
     }
 
     createRenderPass();
     createResources();
 
-    std::cout << "[PointShadowMap] Created " << PointShadow::kMaxShadowCasters << " x "
+    SUPERSONIC_LOG_INFO("PointShadowMap") << "Created " << PointShadow::kMaxShadowCasters << " x "
               << m_resolution << "x" << m_resolution << " cube shadow map(s) ("
               << vk::to_string(m_format) << ")." << std::endl;
 }

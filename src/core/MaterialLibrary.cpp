@@ -1,4 +1,5 @@
 #include "core/MaterialLibrary.hpp"
+#include "core/Log.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -67,7 +68,7 @@ uint32_t MaterialLibrary::Acquire(const std::string& path) {
 
     std::ifstream file(path);
     if (!file) {
-        std::cerr << "[MaterialLibrary] Could not open " << path << "." << std::endl;
+        SUPERSONIC_LOG_ERROR("MaterialLibrary") << "Could not open " << path << "." << std::endl;
         // Cached as a miss so a broken reference is not retried every frame.
         const auto id = static_cast<uint32_t>(m_entries.size());
         m_entries.push_back(std::move(entry));
@@ -80,7 +81,7 @@ uint32_t MaterialLibrary::Acquire(const std::string& path) {
 
     std::string error;
     if (!Deserialize(buffer.str(), entry.asset, error)) {
-        std::cerr << "[MaterialLibrary] " << path << " is not a valid material: " << error << std::endl;
+        SUPERSONIC_LOG_ERROR("MaterialLibrary") << path << " is not a valid material: " << error << std::endl;
         const auto id = static_cast<uint32_t>(m_entries.size());
         m_entries.push_back(std::move(entry));
         m_lookup.emplace(path, id);
@@ -92,7 +93,7 @@ uint32_t MaterialLibrary::Acquire(const std::string& path) {
     m_entries.push_back(std::move(entry));
     m_lookup.emplace(path, id);
 
-    std::cout << "[MaterialLibrary] Loaded " << path << "." << std::endl;
+    SUPERSONIC_LOG_INFO("MaterialLibrary") << "Loaded " << path << "." << std::endl;
     return id;
 }
 
@@ -123,7 +124,7 @@ bool MaterialLibrary::Save(uint32_t id) const {
 
     std::ofstream file(entry.path, std::ios::trunc);
     if (!file) {
-        std::cerr << "[MaterialLibrary] Could not write " << entry.path << "." << std::endl;
+        SUPERSONIC_LOG_ERROR("MaterialLibrary") << "Could not write " << entry.path << "." << std::endl;
         return false;
     }
     file << Serialize(entry.asset);
@@ -154,7 +155,7 @@ uint32_t MaterialLibrary::Create(const std::string& path, const MaterialAsset& a
         m_entries[id].valid = false;
         return kInvalidMaterial;
     }
-    std::cout << "[MaterialLibrary] Created " << path << "." << std::endl;
+    SUPERSONIC_LOG_INFO("MaterialLibrary") << "Created " << path << "." << std::endl;
     return id;
 }
 

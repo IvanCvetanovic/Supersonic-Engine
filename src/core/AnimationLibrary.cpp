@@ -1,4 +1,5 @@
 #include "core/AnimationLibrary.hpp"
+#include "core/Log.hpp"
 
 #include <iostream>
 
@@ -22,7 +23,7 @@ uint32_t AnimationLibrary::Acquire(const std::string& filePath) {
     }
 
     if (scene.skeletons.size() > 1) {
-        std::cout << "[AnimationLibrary] " << filePath << " has " << scene.skeletons.size()
+        SUPERSONIC_LOG_INFO("AnimationLibrary") << filePath << " has " << scene.skeletons.size()
                   << " skins; only the first is used." << std::endl;
     }
 
@@ -34,7 +35,7 @@ uint32_t AnimationLibrary::Acquire(const std::string& filePath) {
     m_entries.push_back(std::move(entry));
     m_lookup.emplace(filePath, id);
 
-    std::cout << "[AnimationLibrary] Loaded rig from " << filePath << " ("
+    SUPERSONIC_LOG_INFO("AnimationLibrary") << "Loaded rig from " << filePath << " ("
               << m_entries[id].skeleton.joints.size() << " joints, "
               << m_entries[id].clips.size() << " clip(s))." << std::endl;
     return id;
