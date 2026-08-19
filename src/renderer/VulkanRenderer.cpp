@@ -767,6 +767,13 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         ubo.cascadeTexelWorld[static_cast<int>(i)] = cascades.texelWorldSize[i];
     }
 
+    // Clear the frame's counters FIRST. This assignment used to sit below the
+    // palette gather, so skinnedMatrices was written and then immediately
+    // zeroed by the reset - the statistics panel reported 0 skinned matrices
+    // for every frame the engine has ever rendered, including frames that
+    // uploaded a thousand.
+    m_renderStats = RenderSystem::Stats{};
+
     // Joint palettes for this frame. Must happen before recording, because the
     // per-draw push constant carries the offset this writes.
     const uint32_t paletteCount =
@@ -782,7 +789,6 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // view, so culling the depth pass against the camera would make shadows pop
     // in and out.
     const Frustum cameraFrustum = Frustum::FromMatrix(projMatrix * viewMatrix);
-    m_renderStats = RenderSystem::Stats{};
 
     m_uniformBuffers[m_currentFrame]->UploadData(&ubo, sizeof(ubo));
 

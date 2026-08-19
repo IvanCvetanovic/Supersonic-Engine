@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include "core/JobSystem.hpp"
+#include "core/Profiler.hpp"
 #include "core/Components.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/UISystem.hpp"
@@ -652,7 +653,13 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     // 5. Engine Statistics Panel
     ImGui::Begin("Engine Statistics");
     const float fps = io.Framerate;
-    const float frameTime = 1000.0f / (fps > 0.0f ? fps : 60.0f);
+
+    // io.DeltaTime, not 1000/io.Framerate. io.Framerate is ImGui's own mean
+    // over the last 60 frames, so feeding it to the graph plotted a smoothed
+    // series and then smoothed it again - a 100 ms stall arrived as a 1.7 ms
+    // bump, under a comment promising that hitches stayed visible. The raw
+    // per-frame delta is the only series that can contain one.
+    const float frameTime = io.DeltaTime * 1000.0f;
 
     // storage<entt::entity>().size() counts released entities too, because EnTT
     // uses swap_only deletion. free_list() is the live count.
@@ -685,6 +692,34 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     ImGui::Text("Active Entities: %u", entityCount);
     if (m_offscreenPass) {
         ImGui::Text("Viewport Res:    %ux%u", m_offscreenPass->GetWidth(), m_offscreenPass->GetHeight());
+    }
+
+    ImGui::Separator();
+    Theme::SectionLabel(ICON_FA_CLOCK "  CPU FRAME");
+    {
+        // Measured, not apportioned: these are the phases Run() executes in
+        // sequence, each bracketed where it is called. They do not sum to the
+        // frame time - present, the swap and the driver's own work are outside
+        // every zone - so the total is shown rather than implied.
+        double measured = 0.0;
+        for (std::size_t i = 0; i < Profiler::kZoneCount; ++i) {
+            measured += Profiler::Milliseconds(static_cast<ProfileZone>(i));
+        }
+
+        for (std::size_t i = 0; i < Profiler::kZoneCount; ++i) {
+            const auto zone = static_cast<ProfileZone>(i);
+            const double ms = Profiler::Milliseconds(zone);
+
+            // Zones that cost nothing this frame are dimmed rather than hidden:
+            // a row that vanishes is a row nobody notices coming back.
+            if (ms < 0.005) {
+                ImGui::TextDisabled("%-16s   --", Profiler::Name(zone));
+            } else {
+                ImGui::Text("%-16s %5.2f ms", Profiler::Name(zone), ms);
+            }
+        }
+        ImGui::Separator();
+        ImGui::Text("%-16s %5.2f ms", "Measured", measured);
     }
 
     ImGui::Separator();

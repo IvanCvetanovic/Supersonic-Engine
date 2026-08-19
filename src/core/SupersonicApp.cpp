@@ -1,4 +1,5 @@
 #include "core/SupersonicApp.hpp"
+#include "core/Profiler.hpp"
 #include "core/Components.hpp"
 #include "core/CameraSystem.hpp"
 #include "core/PhysicsSystem.hpp"
@@ -27,6 +28,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <iostream>
 #include <glm/glm.hpp>
@@ -454,14 +456,38 @@ void SupersonicApp::Run() {
     // window closes" without a special case, and --frames 1 renders exactly
     // one frame rather than two.
     long long frame = 0;
+    std::array<double, Profiler::kZoneCount> zoneTotals{};
 
     while (!m_window->ShouldClose()) {
+        // Fold the frame that just finished into the totals. This has to happen
+        // before the exit test, not after the increment, or the final frame is
+        // counted in the divisor and never added to the sum.
+        if (frame > 0) {
+            for (std::size_t i = 0; i < Profiler::kZoneCount; ++i) {
+                zoneTotals[i] += Profiler::Milliseconds(static_cast<ProfileZone>(i));
+            }
+        }
+
         if (m_options.maxFrames > 0 && frame >= m_options.maxFrames) {
             std::cout << "[SupersonicApp] Rendered " << frame
                       << " frame(s) as requested; exiting." << std::endl;
+
+            // Report where the frames went. Without this the profiler is
+            // visible only through the editor's statistics panel, which a
+            // headless run has nobody to look at - and a measurement no script
+            // can read is not one CI can act on.
+            std::cout << "[Profiler] Mean CPU cost per frame over "
+                      << frame << " frame(s):" << std::endl;
+            for (std::size_t i = 0; i < Profiler::kZoneCount; ++i) {
+                const double mean = zoneTotals[i] / static_cast<double>(frame);
+                if (mean < 0.005) continue;
+                std::cout << "  " << Profiler::Name(static_cast<ProfileZone>(i))
+                          << ": " << mean << " ms" << std::endl;
+            }
             break;
         }
         ++frame;
+        Profiler::BeginFrame();
 
         m_window->PollEvents();
 
@@ -517,6 +543,7 @@ void SupersonicApp::Run() {
             int steps = 0;
             m_contacts.clear();
             while (m_physicsAccumulator >= kFixedPhysicsStep && steps < kMaxPhysicsStepsPerFrame) {
+                SUPERSONIC_PROFILE(Physics);
                 PhysicsSystem::Update(m_registry, kFixedPhysicsStep, &m_stepContacts);
                 // Accumulated across the frame's steps, so the count the editor
                 // shows is the frame's contacts rather than the last step's.
@@ -528,10 +555,10 @@ void SupersonicApp::Run() {
                 m_physicsAccumulator = 0.0f;
             }
 
-            AudioSystem::Update(m_registry, *m_audioEngine, deltaTime);
-            ScriptEngine::Update(m_registry, deltaTime);
-            AnimationSystem::Advance(m_registry, *m_animationLibrary, deltaTime);
-            ParticleSystem::Update(m_registry, deltaTime);
+            { SUPERSONIC_PROFILE(Audio);     AudioSystem::Update(m_registry, *m_audioEngine, deltaTime); }
+            { SUPERSONIC_PROFILE(Scripts);   ScriptEngine::Update(m_registry, deltaTime); }
+            { SUPERSONIC_PROFILE(Animation); AnimationSystem::Advance(m_registry, *m_animationLibrary, deltaTime); }
+            { SUPERSONIC_PROFILE(Particles); ParticleSystem::Update(m_registry, deltaTime); }
             TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));
         }
         }
@@ -539,7 +566,7 @@ void SupersonicApp::Run() {
         // Resolve the parent/child graph before the editor runs, so the gizmo
         // and viewport picking operate on current world matrices rather than
         // last frame's.
-        TransformSystem::UpdateWorldTransforms(m_registry);
+        { SUPERSONIC_PROFILE(Transform); TransformSystem::UpdateWorldTransforms(m_registry); }
 
         // Editor UI runs after the systems and before rendering, so gizmo drags
         // and inspector edits appear in the same frame instead of one late.
@@ -550,13 +577,13 @@ void SupersonicApp::Run() {
         m_editorLayer->SetScriptHostInfo(m_hotReload->IsLoaded(),
                                          m_hotReload->GetStatus(),
                                          m_hotReload->GetReloadCount());
-        m_editorLayer->BuildUI(m_registry, *m_window);
-        ImGui::Render();
+        { SUPERSONIC_PROFILE(EditorUI);    m_editorLayer->BuildUI(m_registry, *m_window); }
+        { SUPERSONIC_PROFILE(ImGuiRender); ImGui::Render(); }
 
         // Again, because the editor may have moved, reparented or created
         // entities. Rendering reads world matrices, so they must reflect what
         // the user just did rather than lagging a frame behind it.
-        TransformSystem::UpdateWorldTransforms(m_registry);
+        { SUPERSONIC_PROFILE(Transform); TransformSystem::UpdateWorldTransforms(m_registry); }
 
         // Shared materials resolve onto their components before the renderer
         // reads them, so an edit to one asset shows on every entity using it in
@@ -565,9 +592,12 @@ void SupersonicApp::Run() {
 
         // Mesh and texture uploads submit their own transfers, so they happen
         // here rather than mid-recording.
-        RenderSystem::SyncResources(m_registry,
-                                    m_renderer->GetMeshRegistry(),
-                                    m_renderer->GetTextureRegistry());
+        {
+            SUPERSONIC_PROFILE(ResourceSync);
+            RenderSystem::SyncResources(m_registry,
+                                        m_renderer->GetMeshRegistry(),
+                                        m_renderer->GetTextureRegistry());
+        }
 
         // Poses are evaluated every frame regardless of play mode, so the
         // inspector can scrub an animation and see the result in the same frame.
@@ -576,8 +606,11 @@ void SupersonicApp::Run() {
         // After SyncResources, not before: SyncResources rewrites the render
         // bounds from the static mesh, and the pose bounds have to be the last
         // word or an animated character is culled against its bind pose.
-        AnimationSystem::SyncSkeletons(m_registry, *m_animationLibrary);
-        AnimationSystem::EvaluatePoses(m_registry, *m_animationLibrary);
+        {
+            SUPERSONIC_PROFILE(PoseEvaluation);
+            AnimationSystem::SyncSkeletons(m_registry, *m_animationLibrary);
+            AnimationSystem::EvaluatePoses(m_registry, *m_animationLibrary);
+        }
 
         // Whichever camera the viewport is showing - the same choice the
         // editor makes for picking and the gizmo, so all three agree.
