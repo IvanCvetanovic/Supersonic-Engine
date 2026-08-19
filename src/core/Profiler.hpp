@@ -30,6 +30,7 @@ enum class ProfileZone : std::size_t {
     ResourceSync,
     PoseEvaluation,
     RenderSubmit,
+    UndoCommit,
     Count,
 };
 
@@ -52,7 +53,7 @@ public:
         static constexpr const char* kNames[kZoneCount] = {
             "Physics", "Audio", "Scripts", "Animation", "Particles",
             "Transform", "Editor UI", "ImGui Render", "Resource Sync",
-            "Pose Evaluation", "Render Submit",
+            "Pose Evaluation", "Render Submit", "Undo Commit",
         };
         return kNames[static_cast<std::size_t>(zone)];
     }

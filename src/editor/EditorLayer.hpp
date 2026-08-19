@@ -160,6 +160,33 @@ private:
     // Console panel state. Info is on by default and warnings and errors are
     // never off by default: a filter that hides errors until someone turns them
     // on is a filter that hides errors.
+    // How many frames may pass between undo checks.
+    //
+    // EditHistory::CommitIfChanged serialises the whole scene to text and
+    // compares it, because there is no other way to notice an edit made through
+    // a registry.get<T>() reference - which is how this codebase mutates almost
+    // everything, and why EnTT's on_update sinks would never fire for it.
+    //
+    // Measured at 1.59 ms of a 2.64 ms editor frame on an eighteen-entity
+    // scene: the largest single cost in an idle editor, growing linearly with
+    // the scene. MainScene.scene is 549 bytes per entity, so a few thousand
+    // entities would be megabytes of float formatting at 60 Hz to answer "no".
+    //
+    // Throttled here rather than inside EditHistory, because "check whether the
+    // scene changed" is what that function means to every other caller and to
+    // its tests; making it sometimes not check would be a different function
+    // wearing the same name.
+    //
+    // Throttling rather than a dirty flag, deliberately. A flag has to be set
+    // at every mutation site - every inspector widget, the gizmo, the
+    // hierarchy, the content browser, prefab instantiation - and missing one
+    // gives a silently unrecordable edit. A throttle cannot miss anything: the
+    // worst case is a step recorded a few frames late, and two edits inside one
+    // window merging into a single step, which is what "call it when the edit
+    // has settled" already asked for.
+    static constexpr int kFramesBetweenUndoChecks = 8;
+    int m_framesSinceUndoCheck{kFramesBetweenUndoChecks};
+
     SceneManager m_sceneManager;
     bool m_showSaveAs{false};
 

@@ -921,7 +921,13 @@ void EditorLayer::handleUndoRedo(entt::registry& registry) {
     if (ImGui::IsAnyItemActive()) return;
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) return;
 
-    m_history.CommitIfChanged(registry);
+    {
+        SUPERSONIC_PROFILE(UndoCommit);
+        if (++m_framesSinceUndoCheck >= kFramesBetweenUndoChecks) {
+            m_framesSinceUndoCheck = 0;
+            m_history.CommitIfChanged(registry);
+        }
+    }
 }
 
 void EditorLayer::afterHistoryJump(entt::registry& registry, const std::string& what) {
