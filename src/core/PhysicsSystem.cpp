@@ -1,4 +1,5 @@
 #include "core/PhysicsSystem.hpp"
+#include "core/CollisionSAT.hpp"
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -56,8 +57,17 @@ struct Body {
 
     // World space.
     glm::vec3 centre{0.0f};
-    glm::vec3 halfExtent{0.5f}; // boxes
+    glm::vec3 halfExtent{0.5f}; // boxes: WORLD-AXIS-ALIGNED, for the broadphase
     float radius{0.5f};         // spheres
+
+    // The box in its own frame, which is what the narrowphase needs.
+    //
+    // halfExtent above is the world AABB - the enclosing box, not the box - and
+    // using it for collision is what made a rotated crate collide as the volume
+    // that contains it. It is still what the sweep-and-prune sorts on, because a
+    // broadphase wants the conservative bound.
+    glm::vec3 localHalfExtent{0.5f};
+    glm::mat3 axes{1.0f};
 
     glm::vec3 min{0.0f};
     glm::vec3 max{0.0f};
@@ -160,6 +170,15 @@ glm::mat3 worldInverseInertia(const glm::vec3& inverseLocal, const glm::mat3& or
         result += inverseLocal[axis] * glm::outerProduct(column, column);
     }
     return result;
+}
+
+// A body's box in its own frame, for the narrowphase.
+CollisionSAT::Obb obbOf(const Body& body) {
+    CollisionSAT::Obb obb;
+    obb.centre = body.centre;
+    obb.halfExtent = body.localHalfExtent;
+    obb.axes = body.axes;
+    return obb;
 }
 
 // Box against box, as world AABBs. The separating axis is the one of least
@@ -417,6 +436,17 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
         worldBounds(world, localHalfExtent, body.centre, body.halfExtent);
 
+        // The box's own frame. The columns of the world matrix carry rotation
+        // AND scale, so the length of each is that axis's scale - which has to
+        // come out into the half extent, or a scaled crate collides at its
+        // unscaled size.
+        for (int axis = 0; axis < 3; ++axis) {
+            const glm::vec3 column = glm::vec3(world[axis]);
+            const float length = glm::length(column);
+            body.axes[axis] = length > 1e-6f ? column / length : glm::vec3(axis == 0, axis == 1, axis == 2);
+            body.localHalfExtent[axis] = localHalfExtent[axis] * length;
+        }
+
         // The offset is in the collider's LOCAL space, so it goes through the
         // same world matrix the extents did - rotating the entity has to swing
         // the offset with it, or a door's collider stays on the wrong side.
@@ -496,15 +526,52 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         bool hit = false;
 
         if (a.shape == Shape::Box && b.shape == Shape::Box) {
-            hit = collideBoxBox(a, b, normal, penetration, point);
+            // SAT over fifteen axes, against the boxes' own frames rather than
+            // their world AABBs. The manifold can carry up to four points; the
+            // solver still resolves one, so the deepest is used - the extra
+            // points are what a warm-started multi-iteration solver will need,
+            // and generating them now keeps that change to the solver alone.
+            const CollisionSAT::Manifold manifold =
+                CollisionSAT::CollideObbObb(obbOf(a), obbOf(b));
+            if (manifold.colliding && manifold.pointCount > 0) {
+                hit = true;
+                normal = manifold.normal;
+
+                // The CENTROID of the manifold, with the DEEPEST penetration.
+                //
+                // Two different questions. How far to push is set by the worst
+                // point, or the deepest corner stays inside. Where to push is
+                // the centre of the touching region, because the solver still
+                // applies one impulse per pair: at a corner that impulse is a
+                // torque about the centre of mass, and a crate resting flat
+                // spins up out of nothing. Measured at 0.32 rad/s before this,
+                // against a test that allows 0.05.
+                //
+                // Averaging is what a four-point manifold would achieve anyway
+                // once the solver can apply all four with accumulated impulses.
+                // Until then this is the same answer arrived at more cheaply,
+                // and it is why the manifold's extra points are generated but
+                // not yet consumed.
+                glm::vec3 centroid(0.0f);
+                float deepest = 0.0f;
+                for (int i = 0; i < manifold.pointCount; ++i) {
+                    centroid += manifold.points[i].position;
+                    deepest = std::max(deepest, manifold.points[i].penetration);
+                }
+                penetration = deepest;
+                point = centroid / static_cast<float>(manifold.pointCount);
+            }
         } else if (a.shape == Shape::Sphere && b.shape == Shape::Sphere) {
             hit = collideSphereSphere(a, b, normal, penetration, point);
         } else if (a.shape == Shape::Box) {
-            hit = collideBoxSphere(a, b, normal, penetration, point);
+            // The box is a, so the normal already points from a toward b.
+            hit = CollisionSAT::CollideSphereObb(b.centre, b.radius, obbOf(a),
+                                                 normal, penetration, point);
         } else {
             // Sphere against box: solve it the other way round and flip, so
             // there is one implementation rather than two that can disagree.
-            hit = collideBoxSphere(b, a, normal, penetration, point);
+            hit = CollisionSAT::CollideSphereObb(a.centre, a.radius, obbOf(b),
+                                                 normal, penetration, point);
             normal = -normal;
         }
 
