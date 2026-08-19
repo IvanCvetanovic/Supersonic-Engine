@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-16%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-24%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
@@ -222,7 +222,7 @@ vendored dependencies.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Sixteen suites, each a plain executable with no test framework behind it —
+Twenty-four suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 | Suite | Covers |
@@ -243,6 +243,14 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
 | `test_audio` | WAV decoding, including the shipped clip |
 | `test_scripts` | Script registry and dispatch |
+| `test_blending` | Cross-fade between clips, blend weights, clip switching |
+| `test_spotlight` | Cone angles, the straight-down lookAt collapse, shadow frustum fit |
+| `test_pointshadow` | Cube-face view matrices, slot assignment, per-light indices |
+| `test_uicanvas` | Canvas layout, anchoring, rect resolution |
+| `test_uiinput` | UI hit testing, press and release routing |
+| `test_mixer` | Bus gain, listener-relative panning, distance attenuation |
+| `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths |
+| `test_launchoptions` | Argument parsing, missing values, malformed counts |
 
 Every suite is a regression test for a bug that actually happened. The header
 comment on each one says which.

@@ -59,13 +59,22 @@ cmake --build build --parallel
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Eleven suites: `test_transform`, `test_hierarchy`, `test_frustum`,
-`test_raycast`, `test_meshgen`, `test_gltf`, `test_serialize`, `test_undo`,
-`test_physics`, `test_audio`, `test_scripts`. They cover the maths conventions,
-transform parenting and play/stop snapshots, frustum plane extraction, viewport
-picking, mesh generation and OBJ parsing, glTF import, scene/prefab persistence,
-editor undo/redo, physics, the WAV decoder and the script registry. Disable with
-`-DSUPERSONIC_BUILD_TESTS=OFF`.
+Twenty-four suites. Rather than repeat the list here - the copy that used to
+live in this file had fallen thirteen entries behind - see the table in
+[README.md](README.md#testing), or read it from the build, which is where CI
+gets it:
+
+```bash
+grep -cE '^add_engine_test\([a-z_]+\)$' tests/CMakeLists.txt
+```
+
+They cover the maths conventions, transform parenting and play/stop snapshots,
+frustum and cascade fitting, viewport picking, mesh generation and OBJ parsing,
+glTF import and skinning, animation blending, scene and prefab persistence,
+material assets, editor undo/redo, physics, spot and point shadow setup, the UI
+canvas and its input routing, the audio mixer and WAV decoder, the job system,
+the script registry, packaged-game manifests and command-line parsing. Disable
+with `-DSUPERSONIC_BUILD_TESTS=OFF`.
 
 ## Run
 

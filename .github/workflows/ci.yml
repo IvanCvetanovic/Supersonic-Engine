@@ -59,9 +59,15 @@ jobs:
             libasound2-dev
 
       # Supplies glslc so the shader build step runs, and the validation layers.
+      # Pinned, not "latest". glslc's output is not guaranteed bit-stable
+      # across shaderc releases, and the step below compares the committed
+      # SPIR-V byte for byte - so an unpinned SDK would turn an upstream
+      # release into a red build with an empty diff. 1.4.357.0 is the version
+      # the committed blobs reproduce under.
       - name: Install Vulkan SDK
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
+          version: 1.4.357.0
           cache: true
 
       # GLFW 3.4 defaults GLFW_BUILD_WAYLAND=ON and hard-fails at configure with
@@ -122,9 +128,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned, not "latest". glslc's output is not guaranteed bit-stable
+      # across shaderc releases, and the step below compares the committed
+      # SPIR-V byte for byte - so an unpinned SDK would turn an upstream
+      # release into a red build with an empty diff. 1.4.357.0 is the version
+      # the committed blobs reproduce under.
       - name: Install Vulkan SDK
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
+          version: 1.4.357.0
           cache: true
 
       # The committed .spv blobs must actually correspond to the GLSL sources.
@@ -148,9 +160,21 @@ jobs:
             out="${job##*=}"
             echo "Compiling $src"
             glslc "assets/shaders/$src" -o "/tmp/$out"
+
+            # The comparison this step's own comment promised and never made.
+            # Compiling to /tmp and discarding it proved every shader builds
+            # and nothing whatsoever about whether the .spv the engine loads
+            # was built from the .frag next to it - which is exactly the drift
+            # CONTRIBUTING.md warns about and CMake prints a warning for.
+            if ! cmp -s "/tmp/$out" "assets/shaders/$out"; then
+              echo "::error file=assets/shaders/$out::committed SPIR-V does not match $src"
+              echo "  Rebuild the shaders and commit the result:"
+              echo "    cmake --build build --target Shaders"
+              exit 1
+            fi
           done <<< "$declared"
 
-          echo "All shaders compile cleanly."
+          echo "All shaders compile cleanly and match their committed SPIR-V."
 
       # The other direction: a shader sitting in assets/shaders that CMake never
       # compiles is a source the engine may well be loading a stale blob for.
@@ -167,3 +191,221 @@ jobs:
             exit 1
           fi
           echo "Every shader source is compiled by the build."
+
+  # ---------------------------------------------------------------------------
+  # Validation layers, under a software rasteriser.
+  #
+  # ARCHITECTURE.md records two showstopper bugs that survived six commits
+  # because validation was silently unavailable, and README.md has to make
+  # "validation clean before commit" a manual convention. It was manual because
+  # there was nothing to automate: main() took no arguments, so the engine could
+  # only be run by a human closing its window, and this workflow said as much -
+  # "a headless runner has no GPU, so the engine itself cannot be launched".
+  #
+  # It can now. --frames renders a fixed count and exits, an ERROR-severity
+  # validation message increments a counter, and main() returns EXIT_FAILURE if
+  # that counter is non-zero.
+  #
+  # continue-on-error until this has proven itself over a few runs: lavapipe
+  # must report an apiVersion of at least 1.2 for instance creation to succeed,
+  # and that is a property of whichever Mesa the runner image ships rather than
+  # something this file controls. Turn it off once the job has been green for a
+  # while. A gate nobody trusts gets ignored; a gate that fails for reasons its
+  # author cannot fix gets deleted, which is worse.
+  validation:
+    name: Validation layers (lavapipe)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies and a software Vulkan driver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxkbcommon-dev pkg-config \
+            libasound2-dev mesa-vulkan-drivers vulkan-tools xvfb
+
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.357.0
+          cache: true
+
+      # SUPERSONIC_ENABLE_VALIDATION=ON rather than simply building Debug.
+      # Validation used to be tied to NDEBUG, and this job builds Release for
+      # the same documented reason the Linux build job does: the runner's
+      # memory does not survive Debug's debug info across forty translation
+      # units. Tying the layers to the build type is exactly what stopped the
+      # one job that could have run them from being able to.
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGLFW_BUILD_WAYLAND=OFF \
+            -DSUPERSONIC_ENABLE_VALIDATION=ON
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Report the driver actually in use
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: xvfb-run -a vulkaninfo --summary || echo "vulkaninfo unavailable; continuing"
+
+      # From the project root: asset paths resolve against the working
+      # directory. A non-zero exit is either a validation error or a crash,
+      # and this job should fail on both.
+      - name: Run 120 frames under validation
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          VK_LAYER_VALIDATE_SYNC: "1"
+        run: xvfb-run -a ./build/SupersonicEngine --frames 120
+
+  # ---------------------------------------------------------------------------
+  # Sanitizers over the existing suites.
+  #
+  # Not speculative coverage: the suites already feed malformed input to the
+  # code most likely to run off the end of a buffer - a truncated WAV ("must be
+  # rejected, not read out of bounds"), malformed glTF, and a malformed scene
+  # through a hand-written JSON parser with no depth limit.
+  sanitizers:
+    name: ASan + UBSan (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxkbcommon-dev pkg-config libasound2-dev
+
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.357.0
+          cache: true
+
+      # RelWithDebInfo: the sanitizers need frame pointers and symbols to
+      # produce a readable report, and a -O0 build of this tree is what the OOM
+      # killer takes on this runner.
+      #
+      # No -fno-sanitize-recover: the vendored tinygltf and ImGui translation
+      # units are compiled here too, and aborting on the first unsigned
+      # overflow inside somebody else's parser would make this job a report
+      # about third-party code. Failures still surface through the test exit
+      # status and the log.
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DGLFW_BUILD_WAYLAND=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      # The suites only. The engine itself needs a device, and a driver's own
+      # allocations under ASan are somebody else's report.
+      - name: Test
+        env:
+          ASAN_OPTIONS: abort_on_error=1:detect_leaks=0
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build -C RelWithDebInfo --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # The build configurations the documentation advertises and nothing built.
+  # SUPERSONIC_BUILD_TESTS and SUPERSONIC_BUILD_SCRIPT_PLUGIN are documented
+  # knobs; an option no job ever sets to OFF compiles by accident until the day
+  # it does not.
+  options-off:
+    name: Configure with tests and plugin OFF
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxkbcommon-dev pkg-config libasound2-dev
+
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.357.0
+          cache: true
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGLFW_BUILD_WAYLAND=OFF \
+            -DSUPERSONIC_BUILD_TESTS=OFF \
+            -DSUPERSONIC_BUILD_SCRIPT_PLUGIN=OFF
+          cmake --build build --parallel 2
+
+  # ---------------------------------------------------------------------------
+  # Documentation that counts things must count them rather than remember them.
+  #
+  # AGENTS.md said eleven suites, CONTRIBUTING.md fourteen, README.md sixteen,
+  # and the build registered twenty-three - four numbers, three of them wrong,
+  # in a repository whose stated thesis is that its documentation does not
+  # quietly contradict its code. A number maintained by hand is a number that
+  # rots; this makes the build the only place the number lives.
+  doc-facts:
+    name: Documented counts match the build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Suite count
+        run: |
+          set -euo pipefail
+          # Anchored to a call with an argument: a bare count would also match
+          # the line that DEFINES add_engine_test, which is how a check like
+          # this reports one more suite than exists and is quietly disbelieved.
+          actual=$(grep -cE '^add_engine_test\([a-z_]+\)$' tests/CMakeLists.txt)
+          echo "tests/CMakeLists.txt registers $actual suites."
+          test "$actual" -gt 0
+
+          fail=0
+          for f in README.md AGENTS.md CONTRIBUTING.md ARCHITECTURE.md; do
+            test -f "$f" || continue
+            # Any "<number> suites" phrasing, digits or the words this project
+            # actually uses.
+            claimed=$(grep -oiE '\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty-one|twenty-two|twenty-three|twenty-four|twenty-five|[0-9]+)( green)? suites\b' "$f" || true)
+            while IFS= read -r phrase; do
+              test -n "$phrase" || continue
+              word=$(echo "$phrase" | sed -E 's/( green)? suites$//' | tr 'A-Z' 'a-z')
+              case "$word" in
+                eleven) n=11 ;; twelve) n=12 ;; thirteen) n=13 ;; fourteen) n=14 ;;
+                fifteen) n=15 ;; sixteen) n=16 ;; seventeen) n=17 ;; eighteen) n=18 ;;
+                nineteen) n=19 ;; twenty) n=20 ;; twenty-one) n=21 ;; twenty-two) n=22 ;;
+                twenty-three) n=23 ;; twenty-four) n=24 ;; twenty-five) n=25 ;;
+                *) n="$word" ;;
+              esac
+              if [ "$n" != "$actual" ]; then
+                echo "::error file=$f::claims \"$phrase\"; the build registers $actual"
+                fail=1
+              fi
+            done <<< "$claimed"
+          done
+
+          # The README badge is URL-encoded, so the prose check above cannot
+          # see it - and the badge is the first number anyone reads.
+          # sed, not a second grep -oE '[0-9]+': the URL-encoded space in
+          # "tests-24%20suites" is itself a number, so grep returns "24" and
+          # "20" and the check compares the wrong one.
+          badge=$(grep -oE 'tests-[0-9]+%20suites' README.md | cut -d- -f2 | cut -d'%' -f1)
+          if [ -n "$badge" ] && [ "$badge" != "$actual" ]; then
+            echo "::error file=README.md::the tests badge claims $badge suites; the build registers $actual"
+            fail=1
+          fi
+
+          exit $fail
