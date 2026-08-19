@@ -15,6 +15,9 @@
  * build into a clear log line instead of undefined behaviour.
  */
 
+/* offsetof, for the layout pins at the bottom of this file. */
+#include <stddef.h>
+
 #define SUPERSONIC_SCRIPT_API_VERSION 5
 
 #if defined(_WIN32)
@@ -133,6 +136,67 @@ typedef void (*SupersonicScriptPluginRegisterFn)(SupersonicScriptHost* host);
 
 #define SUPERSONIC_SCRIPT_PLUGIN_VERSION_SYMBOL  "SupersonicScriptPluginVersion"
 #define SUPERSONIC_SCRIPT_PLUGIN_REGISTER_SYMBOL "SupersonicScriptPluginRegister"
+
+/* ------------------------------------------------------------------------
+ * Layout pins.
+ *
+ * The instruction at the top of this file - bump the version on any change to
+ * the structs - was enforced by an integer comparison and nothing else. The
+ * engine checks that the plugin reports the same SUPERSONIC_SCRIPT_API_VERSION
+ * it was built with, which catches a plugin someone remembered to bump and is
+ * silent about the case that actually happens.
+ *
+ * That case is the normal hot-reload workflow. Rebuilding ONLY the plugin while
+ * the engine keeps running is the entire point of the feature, so editing a
+ * struct here and rebuilding the plugin target gives two matching version
+ * integers and two different memory layouts. position[3] is then copied in and
+ * back out, every frame, per scripted entity, through fields that are no longer
+ * where the other side believes they are.
+ *
+ * These pins make that a compile error in the plugin instead. Change a struct
+ * without bumping the version and the plugin stops building, which is the only
+ * moment anyone is in a position to notice.
+ *
+ * The sizes are expressed in sizeof(void*) rather than absolute bytes so a
+ * 32-bit target is not held to 64-bit numbers. They do assume a function
+ * pointer is the same width as a data pointer, which is true everywhere this
+ * engine builds; if that ever stops being true, this failing is the signal to
+ * look rather than something to widen.
+ */
+#ifdef __cplusplus
+#  define SUPERSONIC_ABI_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#  define SUPERSONIC_ABI_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+
+#if SUPERSONIC_SCRIPT_API_VERSION == 5
+
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptInput) == 5 * sizeof(void*),
+    "SupersonicScriptInput changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptPhysics) == 3 * sizeof(void*),
+    "SupersonicScriptPhysics changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptAnimation) == 3 * sizeof(void*),
+    "SupersonicScriptAnimation changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptUI) == 6 * sizeof(void*),
+    "SupersonicScriptUI changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptHost) == 3 * sizeof(void*),
+    "SupersonicScriptHost changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+
+/* The context is pinned member by member, not just by total size: reordering
+ * two float[3] fields leaves sizeof unchanged and swaps rotation with scale. */
+SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, deltaTime) == 0,  "context layout changed");
+SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, elapsed)   == 4,  "context layout changed");
+SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, position)  == 8,  "context layout changed");
+SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, rotation)  == 20, "context layout changed");
+SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, scale)     == 32, "context layout changed");
+SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, entityId)  == 44, "context layout changed");
+SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, input) == 48,
+    "context layout changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+SUPERSONIC_ABI_ASSERT(
+    sizeof(SupersonicScriptContext) == 48 + 4 * sizeof(void*),
+    "SupersonicScriptContext changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+
+#endif /* SUPERSONIC_SCRIPT_API_VERSION == 5 */
 
 #ifdef __cplusplus
 }

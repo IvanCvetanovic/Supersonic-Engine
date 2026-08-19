@@ -15,6 +15,13 @@ struct EntityStateSnapshot {
     glm::vec3 rotation{0.0f};
     glm::vec3 scale{1.0f};
     glm::vec3 velocity{0.0f};
+
+    // Angular velocity was added to RigidBodyComponent after this struct was
+    // written, and nothing brought it along - so rewinding stopped a body's
+    // fall and left it spinning at whatever rate the scrub ended on. The
+    // comment beside the linear capture promises rewinding "actually rewinds
+    // its motion"; spin is motion.
+    glm::vec3 angularVelocity{0.0f};
     bool hasRigidBody{false};
 };
 

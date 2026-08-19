@@ -53,6 +53,7 @@ void TimeTravelDebugger::RecordFrame(entt::registry& registry, float currentTime
         // moment the scrub ended.
         if (const auto* body = registry.try_get<RigidBodyComponent>(entity)) {
             state.velocity = body->velocity;
+            state.angularVelocity = body->angularVelocity;
             state.hasRigidBody = true;
         }
 
@@ -82,6 +83,7 @@ size_t TimeTravelDebugger::RestoreFrame(entt::registry& registry, size_t frameIn
         if (state.hasRigidBody) {
             if (auto* body = registry.try_get<RigidBodyComponent>(state.entity)) {
                 body->velocity = state.velocity;
+                body->angularVelocity = state.angularVelocity;
             }
         }
     }

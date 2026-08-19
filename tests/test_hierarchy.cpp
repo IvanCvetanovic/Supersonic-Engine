@@ -322,8 +322,46 @@ static void testStopClearsTheRewindFlag() {
     TimeTravelDebugger::SetRewinding(false);
 }
 
+static void testRewindRestoresSpinAsWellAsFall() {
+    // EntityStateSnapshot carried position, rotation, scale and linear
+    // velocity. angularVelocity was added to RigidBodyComponent afterwards and
+    // nothing brought it along, so rewinding stopped a body's fall and left it
+    // spinning at whatever rate the scrub happened to end on - while the
+    // comment beside the linear capture promised that rewinding "actually
+    // rewinds its motion".
+    TimeTravelDebugger::Clear();
+
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TagComponent>(entity, "Spinner");
+    registry.emplace<TransformComponent>(entity);
+
+    auto& body = registry.emplace<RigidBodyComponent>(entity);
+    body.velocity = glm::vec3(0.0f, -4.0f, 0.0f);
+    body.angularVelocity = glm::vec3(0.0f, 7.0f, 0.0f);
+
+    TimeTravelDebugger::RecordFrame(registry, 0.0f);
+    CHECK_EQ(TimeTravelDebugger::GetRecordedFrameCount(), size_t{1});
+
+    // Whatever the simulation would have done between then and now.
+    body.velocity = glm::vec3(3.0f, -19.0f, 1.0f);
+    body.angularVelocity = glm::vec3(2.0f, -11.0f, 5.0f);
+
+    CHECK_EQ(TimeTravelDebugger::RestoreFrame(registry, 0), size_t{1});
+
+    const auto& restored = registry.get<RigidBodyComponent>(entity);
+    CHECK_NEAR(restored.velocity.y, -4.0f);
+    CHECK_MSG(::test::nearly(restored.angularVelocity.y, 7.0f),
+              "rewinding must restore spin, not only fall");
+    CHECK_NEAR(restored.angularVelocity.x, 0.0f);
+    CHECK_NEAR(restored.angularVelocity.z, 0.0f);
+
+    TimeTravelDebugger::Clear();
+}
+
 static void runTests() {
     testStopClearsTheRewindFlag();
+    testRewindRestoresSpinAsWellAsFall();
     testChildInheritsParentTranslation();
     testChildInheritsParentScaleAndRotation();
     testGrandchildChains();
