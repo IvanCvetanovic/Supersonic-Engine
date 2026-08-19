@@ -43,7 +43,7 @@ float projectedRadius(const Obb& box, const glm::vec3& axis) {
 // point of SAT: one separating axis is proof, and the remaining tests are
 // wasted work.
 bool testAxis(const glm::vec3& axis, const Obb& a, const Obb& b, const glm::vec3& toB,
-              int index, float bias, AxisResult& best) {
+              int index, float bias, float margin, AxisResult& best) {
     const float lengthSquared = glm::dot(axis, axis);
     // A degenerate axis is not a separating axis, it is no axis at all.
     if (lengthSquared < kParallelEpsilon) return true;
@@ -52,7 +52,11 @@ bool testAxis(const glm::vec3& axis, const Obb& a, const Obb& b, const glm::vec3
     const float overlap = projectedRadius(a, unitAxis) + projectedRadius(b, unitAxis)
                         - std::fabs(glm::dot(toB, unitAxis));
 
-    if (overlap <= 0.0f) return false;   // separated: done
+    // Separated by more than the margin: proven apart, and the remaining
+    // axes are wasted work. With a zero margin this is the ordinary SAT
+    // early-out; with a positive one it lets a near miss through so the solver
+    // can stop a fast body before it crosses the gap.
+    if (overlap < -margin) return false;
 
     if (!best.valid || overlap * bias < best.overlap) {
         best.overlap = overlap * bias;
@@ -118,7 +122,7 @@ int clipAgainstPlane(const glm::vec3* input, int count, const glm::vec3& planeNo
 
 } // namespace
 
-Manifold CollideObbObb(const Obb& a, const Obb& b) {
+Manifold CollideObbObb(const Obb& a, const Obb& b, float speculativeMargin) {
     Manifold manifold;
 
     const glm::vec3 toB = b.centre - a.centre;
@@ -128,15 +132,15 @@ Manifold CollideObbObb(const Obb& a, const Obb& b) {
     // 3 faces of A, 3 of B, then the 9 edge-edge cross products. Face axes
     // carry a bias so a near-tie goes to a face, which is the stable answer.
     for (int i = 0; i < 3; ++i) {
-        if (!testAxis(a.axes[i], a, b, toB, i, 1.0f, best)) return manifold;
+        if (!testAxis(a.axes[i], a, b, toB, i, 1.0f, speculativeMargin, best)) return manifold;
     }
     for (int i = 0; i < 3; ++i) {
-        if (!testAxis(b.axes[i], a, b, toB, 3 + i, 1.0f, best)) return manifold;
+        if (!testAxis(b.axes[i], a, b, toB, 3 + i, 1.0f, speculativeMargin, best)) return manifold;
     }
     for (int i = 0; i < 3; ++i) {
         for (int j = 0; j < 3; ++j) {
             const glm::vec3 axis = glm::cross(a.axes[i], b.axes[j]);
-            if (!testAxis(axis, a, b, toB, 6 + i * 3 + j, kFaceBias, best)) return manifold;
+            if (!testAxis(axis, a, b, toB, 6 + i * 3 + j, kFaceBias, speculativeMargin, best)) return manifold;
         }
     }
 
@@ -166,6 +170,18 @@ Manifold CollideObbObb(const Obb& a, const Obb& b) {
     }
     if (glm::dot(normal, toB) < 0.0f) normal = -normal;
     manifold.normal = glm::normalize(normal);
+
+    // Apart, but close enough that something moving fast could cross the gap
+    // this step. There is no contact area to clip - the faces are not touching -
+    // so this is one point carrying the size of the gap as a negative
+    // penetration, which is exactly what the solver needs to know.
+    if (best.overlap < 0.0f) {
+        manifold.speculative = true;
+        manifold.pointCount = 1;
+        manifold.points[0].position = a.centre + toB * 0.5f;
+        manifold.points[0].penetration = best.overlap;
+        return manifold;
+    }
 
     // An edge-edge contact is a single point, and clipping faces for it would
     // invent an area that is not touching. The midpoint of the deepest overlap
@@ -246,7 +262,8 @@ Manifold CollideObbObb(const Obb& a, const Obb& b) {
 }
 
 bool CollideSphereObb(const glm::vec3& sphereCentre, float radius, const Obb& box,
-                      glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint) {
+                      glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
+                      float speculativeMargin) {
     // Into the box's frame, where the problem is a sphere against an AABB.
     const glm::vec3 relative = sphereCentre - box.centre;
     glm::vec3 local(glm::dot(relative, box.axes[0]),
@@ -257,7 +274,8 @@ bool CollideSphereObb(const glm::vec3& sphereCentre, float radius, const Obb& bo
     const glm::vec3 toSurface = local - clamped;
     const float distanceSquared = glm::dot(toSurface, toSurface);
 
-    if (distanceSquared > radius * radius) return false;
+    const float reach = radius + speculativeMargin;
+    if (distanceSquared > reach * reach) return false;
 
     if (distanceSquared > kParallelEpsilon) {
         // Outside: the normal is the direction from the closest surface point.

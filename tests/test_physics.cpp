@@ -385,10 +385,17 @@ static void testZeroAndNegativeDeltaAreIgnored() {
     CHECK_NEAR(transform.position.y, 10.0f);
 }
 
-static void testFixedStepDoesNotTunnel() {
+static void testFixedStepKeepsABodyOnTheGround() {
     // Supersonic::Run feeds this a fixed 1/60 step. Handing the integrator a raw
     // two-second delta (a title-bar drag on Win32) moved a body 39 units in one
     // frame, straight through the floor.
+    //
+    // This was called testFixedStepDoesNotTunnel, which it was not: it creates
+    // ONE entity, so Update returns before the narrowphase runs at all, and then
+    // asserts y >= 0 - which the world ground clamp guarantees at any speed
+    // whatsoever. It tested the integrator and the clamp, which is worth
+    // testing, under a name that claimed something it never checked. The real
+    // tunnelling test is below.
     entt::registry registry;
     const auto entity = registry.create();
     auto& transform = registry.emplace<TransformComponent>(entity);
@@ -396,11 +403,65 @@ static void testFixedStepDoesNotTunnel() {
     registry.emplace<RigidBodyComponent>(entity);
     registry.emplace<BoxColliderComponent>(entity);
 
-    // Two seconds of simulated time, delivered as fixed steps.
     stepFor(registry, 2.0f);
 
     CHECK_MSG(transform.position.y >= 0.0f, "a body must never end up below the ground plane");
     CHECK_MSG(transform.position.y < 3.0f, "and must not be launched into the air");
+}
+
+static void testAFastProjectileDoesNotPassThroughAThinWall() {
+    // The arithmetic that made this necessary: with discrete overlap testing at
+    // a 1/60 step, two bodies are only ever seen touching if they overlap on
+    // some frame, which needs v <= 120 * (halfA + halfB). A 0.1-radius
+    // projectile against a 0.2-thick wall is 24 m/s - slower than a thrown
+    // baseball. Above that the projectile is on one side at frame N and the
+    // other at frame N+1, and nothing in between ever happened.
+    entt::registry registry;
+
+    // A thin static wall in the x = 0 plane, well above the ground plane so the
+    // world clamp cannot be what stops anything.
+    const auto wall = registry.create();
+    auto& wallTransform = registry.emplace<TransformComponent>(wall);
+    wallTransform.position = glm::vec3(0.0f, 10.0f, 0.0f);
+    wallTransform.scale = glm::vec3(0.2f, 8.0f, 8.0f);
+    registry.emplace<BoxColliderComponent>(wall);
+
+    // A small, fast projectile aimed straight at it. Gravity is irrelevant over
+    // the few frames this takes; what matters is the 40 m/s, comfortably past
+    // the 24 m/s the discrete test could cope with.
+    const auto bullet = registry.create();
+    auto& bulletTransform = registry.emplace<TransformComponent>(bullet);
+    bulletTransform.position = glm::vec3(-2.0f, 10.0f, 0.0f);
+    auto& bulletBody = registry.emplace<RigidBodyComponent>(bullet);
+    bulletBody.velocity = glm::vec3(40.0f, 0.0f, 0.0f);
+    bulletBody.useGravity = false;
+    bulletBody.restitution = 0.0f;
+    auto& bulletCollider = registry.emplace<SphereColliderComponent>(bullet);
+    bulletCollider.radius = 0.1f;
+
+    // Long enough to cross the wall several times over if nothing stops it.
+    for (int i = 0; i < 30; ++i) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f);
+    }
+
+    const float x = registry.get<TransformComponent>(bullet).position.x;
+    CHECK_MSG(x < 0.0f,
+              "a 40 m/s projectile must not end up on the far side of a thin wall: x = " +
+                  std::to_string(x));
+
+    // And it must actually have been stopped rather than never having moved -
+    // a test that passes because the body sat still is not testing anything.
+    //
+    // Not "it moved forward": the wall carries no RigidBodyComponent, so it
+    // takes the default restitution, and the projectile bounces off it at
+    // around 8 m/s. The first version of this test asserted x > -2 and failed
+    // at -6.27, which was the physics being right and the assertion being
+    // wrong. What matters is that the velocity changed - the projectile met
+    // something - and that it is on the near side.
+    const glm::vec3 finalVelocity = registry.get<RigidBodyComponent>(bullet).velocity;
+    CHECK_MSG(finalVelocity.x < 39.0f,
+              "the projectile must have been stopped or deflected, not sailed through: vx = " +
+                  std::to_string(finalVelocity.x));
 }
 
 
@@ -959,7 +1020,8 @@ static void runTests() {
     testRisingBodyIsNotReflected();
     testColliderSizeAffectsRestHeight();
     testZeroAndNegativeDeltaAreIgnored();
-    testFixedStepDoesNotTunnel();
+    testFixedStepKeepsABodyOnTheGround();
+    testAFastProjectileDoesNotPassThroughAThinWall();
 
     testRestitutionTakesTheBouncierSurface();
     testRestitutionCannotGainEnergy();

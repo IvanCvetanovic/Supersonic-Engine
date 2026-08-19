@@ -51,6 +51,18 @@ inline constexpr int kMaxContactPoints = 4;
 struct Manifold {
     bool colliding{false};
 
+    // True when the boxes are APART but within the speculative margin.
+    //
+    // A separated pair is still worth reporting when something is moving fast
+    // enough to cross the gap inside one step. The solver can then remove just
+    // enough approach velocity for the body to land ON the surface instead of
+    // passing through it - which is what stops a projectile tunnelling without
+    // any swept test at all.
+    //
+    // When this is set, points[0].penetration is NEGATIVE and is the size of
+    // the gap.
+    bool speculative{false};
+
     // Points from a toward b, so b is pushed along +normal. Same convention as
     // the rest of the solver.
     glm::vec3 normal{0.0f, 1.0f, 0.0f};
@@ -68,13 +80,22 @@ struct Manifold {
     }
 };
 
-Manifold CollideObbObb(const Obb& a, const Obb& b);
+// `speculativeMargin` is how far apart the boxes may be and still produce a
+// contact. Zero gives ordinary touching-only collision, which is what every
+// caller that does not care about fast movement should pass.
+Manifold CollideObbObb(const Obb& a, const Obb& b, float speculativeMargin = 0.0f);
 
 // Sphere against an oriented box. The AABB version of this was already exact
 // for an axis-aligned box; this is the same idea with the query point taken
 // into the box's own frame first.
+// `speculativeMargin` behaves as it does for CollideObbObb: a gap up to that
+// size still reports a contact, with a NEGATIVE penetration. The sphere path
+// needs it as much as the box path does - a projectile is usually a sphere,
+// and giving only boxes speculative contacts fixes tunnelling for the shape
+// least likely to be doing the tunnelling.
 bool CollideSphereObb(const glm::vec3& sphereCentre, float radius, const Obb& box,
-                      glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint);
+                      glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
+                      float speculativeMargin = 0.0f);
 
 } // namespace CollisionSAT
 } // namespace Supersonic

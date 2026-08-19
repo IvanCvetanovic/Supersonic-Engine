@@ -69,6 +69,10 @@ struct Body {
     glm::vec3 localHalfExtent{0.5f};
     glm::mat3 axes{1.0f};
 
+    // Per-axis distance travelled this step, used to widen the broadphase bound
+    // and to decide how large a gap is worth reporting.
+    glm::vec3 sweep{0.0f};
+
     glm::vec3 min{0.0f};
     glm::vec3 max{0.0f};
 
@@ -481,11 +485,23 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                                 shape, body.halfExtent, body.radius),
             glm::mat3(1.0f));
 
+        // How far this body travels in one step. The broadphase bound is
+        // expanded by it so a pair that will meet during the step is found
+        // BEFORE they touch - a projectile crossing a wall between two frames is
+        // never a candidate pair otherwise, and nothing downstream gets a chance
+        // to stop it.
+        glm::vec3 sweep(0.0f);
+        if (const auto* rigid = registry.try_get<RigidBodyComponent>(entity);
+            rigid && body.inverseMass > 0.0f) {
+            sweep = glm::abs(rigid->velocity) * deltaTime;
+        }
+        body.sweep = sweep;
+
         Proxy proxy;
         proxy.entity = entity;
         proxy.index = bodies.size();
-        proxy.min = body.min;
-        proxy.max = body.max;
+        proxy.min = body.min - sweep;
+        proxy.max = body.max + sweep;
         proxy.inverseMass = body.inverseMass;
         proxy.isTrigger = isTrigger;
         proxy.layer = layer;
@@ -525,6 +541,17 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         glm::vec3 point = (a.centre + b.centre) * 0.5f;
         bool hit = false;
 
+        // A speculative contact is a pair that is APART but closing fast enough
+        // to meet inside this step. `penetration` is negative for one, and it
+        // must not be pushed apart or reported as an overlap - the bodies are
+        // not touching yet.
+        bool speculative = false;
+
+        // How far this pair can close during the step. Anything further apart
+        // than this cannot meet before the next step, so reporting it would only
+        // make the solver brake for something it will never reach.
+        const float pairMargin = glm::length(a.sweep) + glm::length(b.sweep);
+
         if (a.shape == Shape::Box && b.shape == Shape::Box) {
             // SAT over fifteen axes, against the boxes' own frames rather than
             // their world AABBs. The manifold can carry up to four points; the
@@ -532,7 +559,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // points are what a warm-started multi-iteration solver will need,
             // and generating them now keeps that change to the solver alone.
             const CollisionSAT::Manifold manifold =
-                CollisionSAT::CollideObbObb(obbOf(a), obbOf(b));
+                CollisionSAT::CollideObbObb(obbOf(a), obbOf(b), pairMargin);
             if (manifold.colliding && manifold.pointCount > 0) {
                 hit = true;
                 normal = manifold.normal;
@@ -553,32 +580,39 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 // and it is why the manifold's extra points are generated but
                 // not yet consumed.
                 glm::vec3 centroid(0.0f);
-                float deepest = 0.0f;
+                float deepest = manifold.points[0].penetration;
                 for (int i = 0; i < manifold.pointCount; ++i) {
                     centroid += manifold.points[i].position;
                     deepest = std::max(deepest, manifold.points[i].penetration);
                 }
                 penetration = deepest;
                 point = centroid / static_cast<float>(manifold.pointCount);
+                speculative = manifold.speculative;
             }
         } else if (a.shape == Shape::Sphere && b.shape == Shape::Sphere) {
             hit = collideSphereSphere(a, b, normal, penetration, point);
         } else if (a.shape == Shape::Box) {
             // The box is a, so the normal already points from a toward b.
             hit = CollisionSAT::CollideSphereObb(b.centre, b.radius, obbOf(a),
-                                                 normal, penetration, point);
+                                                 normal, penetration, point, pairMargin);
+            speculative = hit && penetration < 0.0f;
         } else {
             // Sphere against box: solve it the other way round and flip, so
             // there is one implementation rather than two that can disagree.
             hit = CollisionSAT::CollideSphereObb(a.centre, a.radius, obbOf(b),
-                                                 normal, penetration, point);
+                                                 normal, penetration, point, pairMargin);
+            speculative = hit && penetration < 0.0f;
             normal = -normal;
         }
 
         if (!hit) continue;
 
         const bool isTrigger = a.isTrigger || b.isTrigger;
-        if (outContacts) {
+
+        // Only real overlaps are reported. A speculative pair has not touched,
+        // so announcing it would fire a trigger volume for something that is
+        // still on its way and may yet be stopped by something else.
+        if (outContacts && !speculative) {
             outContacts->push_back(Contact{a.entity, b.entity, normal, penetration, isTrigger});
         }
 
@@ -595,7 +629,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
         // Positional correction, shared out by inverse mass so the heavier body
         // moves less and an immovable one does not move at all.
-        const float correctable = std::max(penetration - kSlop, 0.0f);
+        // Never for a speculative contact: there is nothing to push out of.
+        const float correctable = speculative ? 0.0f : std::max(penetration - kSlop, 0.0f);
         if (correctable > 0.0f) {
             const glm::vec3 push = normal * (correctable * kCorrection / inverseSum);
             transformA->position -= a.worldToLocal * (push * a.inverseMass);
@@ -631,12 +666,34 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         const glm::vec3 relative = velocityB - velocityA;
         const float alongNormal = glm::dot(relative, normal);
 
-        // Already separating: an impulse here would suck them back together.
-        if (alongNormal > 0.0f) continue;
+        // For a speculative contact the target is not "stop", it is "close the
+        // remaining gap and no more". The gap is -penetration, so approaching
+        // at gap/dt lands the body exactly on the surface this step; anything
+        // faster is what would carry it through.
+        //
+        // This is what prevents tunnelling without a swept test: the body is
+        // slowed on the frame BEFORE it would have passed through, and arrives
+        // as an ordinary contact on the next one.
+        const float allowedApproach = speculative ? (-penetration / deltaTime) : 0.0f;
+
+        // Already separating, or not closing fast enough to reach: an impulse
+        // here would drag them together or brake for nothing.
+        if (alongNormal + allowedApproach > 0.0f) continue;
 
         // Bounce dies out near rest, otherwise a settling box jitters forever.
         const float bounceA = rigidA ? rigidA->restitution : kRestitution;
         const float bounceB = rigidB ? rigidB->restitution : kRestitution;
+        // Restitution applies to a speculative contact too.
+        //
+        // The first attempt zeroed it, reasoning that bodies which have not
+        // touched should not bounce. But a falling ball is ALWAYS approaching
+        // fast enough to have a speculative contact before a touching one, so
+        // zeroing it there meant nothing ever bounced at all: two balls with
+        // restitution 0.1 and 0.9 both landed dead at exactly the same height.
+        //
+        // The bias below already accounts for the gap, so the two terms
+        // compose: the restitution term reverses the approach, the bias removes
+        // whatever of it the remaining gap cannot absorb.
         const float restitution = (std::abs(alongNormal) < kRestVelocity)
                                 ? 0.0f
                                 : combineRestitution(bounceA, bounceB);
@@ -649,7 +706,25 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         const float effectiveMass = inverseSum + glm::dot(angularA + angularB, normal);
         if (effectiveMass <= 1e-9f) continue;
 
-        const float impulse = -(1.0f + restitution) * alongNormal / effectiveMass;
+        // Expressed as a TARGET normal velocity rather than as a sum of terms.
+        //
+        // Adding the gap allowance to the restitution term makes the two fight:
+        // a ball with restitution 0.9 dropped onto the ground has a speculative
+        // contact before a touching one, the allowance cancels most of the
+        // bounce, and it lands almost dead - measured at 0.008 units of bounce
+        // against 0.05 the test asks for.
+        //
+        // As a target the two compose properly. The bounce says how fast the
+        // body should be leaving; the allowance says it may still approach at
+        // most fast enough to close the remaining gap this step. Taking the
+        // larger means restitution decides when there is a bounce, and the
+        // allowance only decides anything when there is not.
+        //
+        // For a touching contact the allowance is zero and this reduces exactly
+        // to the previous formula, which is why no existing behaviour moves.
+        const float bounceTarget = -restitution * alongNormal;
+        const float targetVelocity = std::max(bounceTarget, -allowedApproach);
+        const float impulse = (targetVelocity - alongNormal) / effectiveMass;
         const glm::vec3 impulseVector = normal * impulse;
 
         if (rigidA && a.inverseMass > 0.0f) {
