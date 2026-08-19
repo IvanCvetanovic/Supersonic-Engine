@@ -19,10 +19,11 @@
 #include <stddef.h>
 
 /* Version history. A plugin built against a different number is refused.
+ *   7 - added SupersonicScriptWorld: contacts, spawn/destroy, velocity.
  *   6 - added SupersonicScriptData: authored parameters and per-entity state.
  *   5 - added the UI block.
  */
-#define SUPERSONIC_SCRIPT_API_VERSION 6
+#define SUPERSONIC_SCRIPT_API_VERSION 7
 
 #if defined(_WIN32)
 #  define SUPERSONIC_SCRIPT_EXPORT __declspec(dllexport)
@@ -130,6 +131,49 @@ typedef struct SupersonicScriptData {
     void  (*setState)(void* opaque, unsigned int entity, const char* name, float value);
 } SupersonicScriptData;
 
+/* The world: what touched me, what I want to exist, and how I am moving.
+ *
+ * CONTACTS. PhysicsSystem has always produced these; nothing read them. They
+ * went to the editor as a count, so a trigger volume could not fire - the
+ * engine knew the player had entered it and threw the fact away.
+ *
+ * Queried rather than delivered by callback, deliberately. A second entry point
+ * into the plugin would have to be resolved, checked and re-resolved on every
+ * reload, and would fire at a different point in the frame from update(). A
+ * script asks during its own update instead, which needs no new symbol and
+ * cannot be half-swapped mid-reload.
+ *
+ * phase is 0 enter, 1 stay, 2 exit. Exit reports a zero normal, because the
+ * bodies are apart and any direction would be invented. The normal always
+ * points AWAY from the entity asking.
+ *
+ * SPAWN AND DESTROY are queued, not immediate. Both mutate the registry, and a
+ * script runs inside a view over that registry - creating an entity there
+ * invalidates the iteration the caller is in the middle of. They take effect at
+ * the frame boundary, so spawn() returns no id: the entity does not exist yet.
+ *
+ * VELOCITY is read and written directly, because the solver reads it at the
+ * start of the next step and nothing is iterating it. Note this is the one part
+ * of this block that a deterministic fixed-tick simulation should NOT use: a
+ * script pushing a body the sim also owns makes the outcome depend on the order
+ * the two ran in.
+ */
+typedef struct SupersonicScriptWorld {
+    void* opaque;
+
+    int  (*contactCount)(void* opaque, unsigned int entity);
+    int  (*contactAt)(void* opaque, unsigned int entity, int index,
+                      unsigned int* outOther, float outNormal[3],
+                      int* outPhase, int* outIsTrigger);
+
+    void (*spawnPrefab)(void* opaque, const char* prefabPath, const float position[3]);
+    void (*destroyEntity)(void* opaque, unsigned int entity);
+
+    void (*getVelocity)(void* opaque, unsigned int entity, float outVelocity[3]);
+    void (*setVelocity)(void* opaque, unsigned int entity, const float velocity[3]);
+    void (*addForce)(void* opaque, unsigned int entity, const float force[3]);
+} SupersonicScriptWorld;
+
 /* Per-entity state handed to a script each frame. The engine copies values in
  * before the call and copies them back out afterwards. */
 typedef struct SupersonicScriptContext {
@@ -146,6 +190,7 @@ typedef struct SupersonicScriptContext {
     const SupersonicScriptAnimation* animation;
     const SupersonicScriptUI* ui;
     const SupersonicScriptData* data;
+    const SupersonicScriptWorld* world;
 } SupersonicScriptContext;
 
 typedef void (*SupersonicScriptUpdateFn)(SupersonicScriptContext* context);
@@ -196,7 +241,7 @@ typedef void (*SupersonicScriptPluginRegisterFn)(SupersonicScriptHost* host);
 #  define SUPERSONIC_ABI_ASSERT(cond, msg) _Static_assert(cond, msg)
 #endif
 
-#if SUPERSONIC_SCRIPT_API_VERSION == 6
+#if SUPERSONIC_SCRIPT_API_VERSION == 7
 
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptInput) == 5 * sizeof(void*),
     "SupersonicScriptInput changed; bump SUPERSONIC_SCRIPT_API_VERSION");
@@ -208,6 +253,8 @@ SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptUI) == 6 * sizeof(void*),
     "SupersonicScriptUI changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptData) == 4 * sizeof(void*),
     "SupersonicScriptData changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptWorld) == 8 * sizeof(void*),
+    "SupersonicScriptWorld changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptHost) == 3 * sizeof(void*),
     "SupersonicScriptHost changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 
@@ -222,10 +269,10 @@ SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, entityId)  == 44, "conte
 SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, input) == 48,
     "context layout changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(
-    sizeof(SupersonicScriptContext) == 48 + 5 * sizeof(void*),
+    sizeof(SupersonicScriptContext) == 48 + 6 * sizeof(void*),
     "SupersonicScriptContext changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 
-#endif /* SUPERSONIC_SCRIPT_API_VERSION == 6 */
+#endif /* SUPERSONIC_SCRIPT_API_VERSION == 7 */
 
 #ifdef __cplusplus
 }

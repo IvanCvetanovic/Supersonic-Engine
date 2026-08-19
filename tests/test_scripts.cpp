@@ -135,7 +135,7 @@ static void testApiVersionIsPinned() {
     // The engine refuses to load a plugin whose version differs; if this
     // constant changes, every plugin must be rebuilt. Version 2 added the input
     // accessors, which is exactly the kind of change the check exists to catch.
-    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 6);
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 7);
 
     // Context layout is part of the ABI. Offsets rather than a total size: the
     // total moves with padding on a different platform, while an offset that

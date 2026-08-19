@@ -19,6 +19,7 @@
 #include "core/GameRuntime.hpp"
 #include "core/Components.hpp"
 #include "core/PhysicsSystem.hpp"
+#include "core/ContactTracker.hpp"
 #include "core/AnimationLibrary.hpp"
 #include "core/MaterialLibrary.hpp"
 #include "core/LaunchOptions.hpp"
@@ -38,6 +39,7 @@ public:
 private:
     void initECS();
 
+    ContactTracker m_contactTracker;
     AssetWatcher m_assetWatcher;
     LaunchOptions m_options;
 

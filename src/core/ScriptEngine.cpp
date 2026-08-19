@@ -1,4 +1,7 @@
 #include "core/ScriptEngine.hpp"
+#include "core/TransformSystem.hpp"
+#include "core/PrefabSerializer.hpp"
+#include "core/ContactTracker.hpp"
 #include "core/Log.hpp"
 
 #include <algorithm>
@@ -240,6 +243,126 @@ void scriptSetState(void* opaque, unsigned int entity, const char* name, float v
     }
 }
 
+// ---- The world block -----------------------------------------------------
+//
+// Contacts and the command queue live in the registry's context, the same place
+// AudioSystem keeps its engine pointer. That keeps ScriptEngine's own signature
+// unchanged, and means anything holding the registry can reach them - including
+// a game that links the library rather than driving the editor.
+
+ContactTracker* trackerFor(entt::registry& registry) {
+    auto* slot = registry.ctx().find<ContactTracker*>();
+    return slot ? *slot : nullptr;
+}
+
+ScriptEngine::PendingCommands& commandsFor(entt::registry& registry) {
+    if (auto* existing = registry.ctx().find<ScriptEngine::PendingCommands>()) {
+        return *existing;
+    }
+    return registry.ctx().emplace<ScriptEngine::PendingCommands>();
+}
+
+int scriptContactCount(void* opaque, unsigned int entity) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry) return 0;
+    auto* tracker = trackerFor(*registry);
+    if (!tracker) return 0;
+    return static_cast<int>(tracker->CountFor(static_cast<entt::entity>(entity)));
+}
+
+int scriptContactAt(void* opaque, unsigned int entity, int index,
+                    unsigned int* outOther, float outNormal[3],
+                    int* outPhase, int* outIsTrigger) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry || index < 0) return 0;
+
+    auto* tracker = trackerFor(*registry);
+    if (!tracker) return 0;
+
+    const auto* events = tracker->For(static_cast<entt::entity>(entity));
+    if (!events || static_cast<size_t>(index) >= events->size()) return 0;
+
+    const auto& event = (*events)[static_cast<size_t>(index)];
+    // Every out pointer is optional, matching raycast: a script that only wants
+    // to know WHO it touched should not have to declare three unused locals.
+    if (outOther) *outOther = static_cast<unsigned int>(entt::to_integral(event.other));
+    if (outNormal) {
+        outNormal[0] = event.normal.x;
+        outNormal[1] = event.normal.y;
+        outNormal[2] = event.normal.z;
+    }
+    if (outPhase) *outPhase = static_cast<int>(event.phase);
+    if (outIsTrigger) *outIsTrigger = event.isTrigger ? 1 : 0;
+    return 1;
+}
+
+void scriptSpawnPrefab(void* opaque, const char* prefabPath, const float position[3]) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry || !prefabPath) return;
+
+    ScriptEngine::PendingCommands& queue = commandsFor(*registry);
+
+    // Bounded. A script spawning every frame without meaning to would otherwise
+    // fill memory before anyone noticed, and the symptom would be an
+    // out-of-memory crash rather than a scene full of crates.
+    constexpr size_t kMaxSpawnsPerFrame = 256;
+    if (queue.spawns.size() >= kMaxSpawnsPerFrame) return;
+
+    ScriptEngine::PendingCommands::Spawn spawn;
+    spawn.prefabPath = prefabPath;
+    if (position) spawn.position = glm::vec3(position[0], position[1], position[2]);
+    queue.spawns.push_back(std::move(spawn));
+}
+
+void scriptDestroyEntity(void* opaque, unsigned int entity) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry) return;
+    const auto handle = static_cast<entt::entity>(entity);
+    if (!registry->valid(handle)) return;
+    commandsFor(*registry).destroys.push_back(handle);
+}
+
+void scriptGetVelocity(void* opaque, unsigned int entity, float outVelocity[3]) {
+    if (!outVelocity) return;
+    outVelocity[0] = outVelocity[1] = outVelocity[2] = 0.0f;
+
+    auto* registry = static_cast<entt::registry*>(opaque);
+    const auto handle = static_cast<entt::entity>(entity);
+    if (!registry || !registry->valid(handle)) return;
+
+    if (const auto* body = registry->try_get<RigidBodyComponent>(handle)) {
+        outVelocity[0] = body->velocity.x;
+        outVelocity[1] = body->velocity.y;
+        outVelocity[2] = body->velocity.z;
+    }
+}
+
+void scriptSetVelocity(void* opaque, unsigned int entity, const float velocity[3]) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    const auto handle = static_cast<entt::entity>(entity);
+    if (!registry || !registry->valid(handle) || !velocity) return;
+
+    if (auto* body = registry->try_get<RigidBodyComponent>(handle)) {
+        body->velocity = glm::vec3(velocity[0], velocity[1], velocity[2]);
+    }
+}
+
+void scriptAddForce(void* opaque, unsigned int entity, const float force[3]) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    const auto handle = static_cast<entt::entity>(entity);
+    if (!registry || !registry->valid(handle) || !force) return;
+
+    auto* body = registry->try_get<RigidBodyComponent>(handle);
+    if (!body) return;
+
+    // An impulse, not an accumulated force. There is no force accumulator on
+    // the body and the solver reads velocity directly, so anything else would
+    // misrepresent when it takes effect. Divided by mass, because a heavy thing
+    // moving less is the part callers actually expect.
+    const float inverseMass = body->mass > 0.0f ? 1.0f / body->mass : 0.0f;
+    body->velocity += glm::vec3(force[0], force[1], force[2]) * inverseMass;
+}
+
 const SupersonicScriptInput& scriptInput() {
     static const SupersonicScriptInput api{
         nullptr, scriptIsDown, scriptWasPressed, scriptWasReleased, scriptAxis
@@ -352,6 +475,13 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
 
         const SupersonicScriptData data{&registry, scriptParam, scriptGetState, scriptSetState};
         ctx.data = &data;
+
+        const SupersonicScriptWorld world{&registry,
+                                          scriptContactCount, scriptContactAt,
+                                          scriptSpawnPrefab, scriptDestroyEntity,
+                                          scriptGetVelocity, scriptSetVelocity,
+                                          scriptAddForce};
+        ctx.world = &world;
         // A transform-less entity is handed an identity one, so a script that
         // only touches the UI does not have to care.
         if (transform) {
@@ -381,6 +511,55 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
             transform->scale = glm::vec3(ctx.scale[0], ctx.scale[1], ctx.scale[2]);
         }
     }
+}
+
+
+void ScriptEngine::ApplyPendingCommands(entt::registry& registry, size_t* outSpawned,
+                                        size_t* outDestroyed) {
+    if (outSpawned) *outSpawned = 0;
+    if (outDestroyed) *outDestroyed = 0;
+
+    auto* queue = registry.ctx().find<PendingCommands>();
+    if (!queue || queue->Empty()) return;
+
+    // Moved out before anything is applied. Instantiating a prefab or
+    // destroying an entity runs engine code that can queue more commands, and
+    // appending to a vector while iterating it is how that becomes a dangling
+    // reference rather than an extra crate.
+    PendingCommands work = std::move(*queue);
+    queue->Clear();
+
+    size_t spawned = 0;
+    for (const auto& spawn : work.spawns) {
+        SerializationResult result{};
+        const entt::entity entity =
+            PrefabSerializer::InstantiatePrefab(registry, spawn.prefabPath, &result);
+        if (entity == entt::null) {
+            SUPERSONIC_LOG_WARN("ScriptEngine")
+                << "spawnPrefab failed for " << spawn.prefabPath << ": " << result.message;
+            continue;
+        }
+        if (auto* transform = registry.try_get<TransformComponent>(entity)) {
+            transform->position = spawn.position;
+        }
+        ++spawned;
+    }
+
+    size_t destroyed = 0;
+    for (const entt::entity entity : work.destroys) {
+        // Re-checked, because a script can queue the same entity twice and two
+        // scripts can destroy the same entity in one frame.
+        if (!registry.valid(entity)) continue;
+        // Children first, or they are left pointing at a released handle -
+        // and EnTT recycles handles, so a stale parent link does not dangle,
+        // it silently resolves to a different entity later.
+        TransformSystem::OnParentDestroyed(registry, entity);
+        registry.destroy(entity);
+        ++destroyed;
+    }
+
+    if (outSpawned) *outSpawned = spawned;
+    if (outDestroyed) *outDestroyed = destroyed;
 }
 
 } // namespace Supersonic

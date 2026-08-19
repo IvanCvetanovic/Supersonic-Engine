@@ -167,6 +167,11 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
         }
     });
 
+    // Published through the registry context, the way AudioSystem publishes its
+    // engine, so ScriptEngine can reach it without a wider signature and a game
+    // linking the library can reach it at all.
+    m_registry.ctx().insert_or_assign<ContactTracker*>(&m_contactTracker);
+
     initECS();
 
     // --scene wins over the manifest, and applies in the editor too: a smoke
@@ -624,7 +629,16 @@ void SupersonicApp::Run() {
             }
 
             { SUPERSONIC_PROFILE(Audio);     AudioSystem::Update(m_registry, *m_audioEngine, deltaTime); }
+            // Before the scripts, so "what did I touch" is answered about the
+            // step that just ran rather than the previous frame's.
+            m_contactTracker.Update(m_contacts);
+
             { SUPERSONIC_PROFILE(Scripts);   ScriptEngine::Update(m_registry, deltaTime); }
+
+            // After them, and outside the view they ran inside. Spawning or
+            // destroying during the script pass invalidates the iteration the
+            // pass is in the middle of.
+            ScriptEngine::ApplyPendingCommands(m_registry);
             { SUPERSONIC_PROFILE(Animation); AnimationSystem::Advance(m_registry, *m_animationLibrary, deltaTime); }
             { SUPERSONIC_PROFILE(Particles); ParticleSystem::Update(m_registry, deltaTime); }
             TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));
@@ -653,6 +667,20 @@ void SupersonicApp::Run() {
         // walking. This is the same reason the viewport resize is deferred to
         // the top of the frame.
         m_editorLayer->ApplyPendingSceneLoad(m_registry);
+
+        // A load replaces every entity, so last frame's pairs describe a scene
+        // that no longer exists: carrying them would report an Exit for handles
+        // that have been recycled into different entities. Clearing in edit mode
+        // generally is the same argument - nothing simulates there, so entering
+        // Play must start from no contacts rather than from whatever was
+        // touching when Stop was pressed.
+        if (m_playMode.IsEditing()) {
+            m_contactTracker.Clear();
+        }
+
+        // Re-published because a scene load clears the registry, and a stale
+        // context entry is worse than a missing one.
+        m_registry.ctx().insert_or_assign<ContactTracker*>(&m_contactTracker);
         { SUPERSONIC_PROFILE(ImGuiRender); ImGui::Render(); }
 
         // Again, because the editor may have moved, reparented or created
