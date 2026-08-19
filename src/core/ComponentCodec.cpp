@@ -310,7 +310,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("Transform")) {
         const auto& t = node["Transform"];
-        auto& transform = registry.emplace<TransformComponent>(entity);
+        auto& transform = registry.emplace_or_replace<TransformComponent>(entity);
         transform.position = readVec3(t["Position"], glm::vec3(0.0f));
         transform.rotation = readVec3(t["Rotation"], glm::vec3(0.0f));
         transform.scale = readVec3(t["Scale"], glm::vec3(1.0f));
@@ -318,13 +318,13 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("Mesh")) {
         const auto& m = node["Mesh"];
-        registry.emplace<MeshComponent>(entity,
+        registry.emplace_or_replace<MeshComponent>(entity,
             m["Primitive"].AsString("Cube"), m["Path"].AsString(""), 0u, 0u);
     }
 
     if (node.Has("Light")) {
         const auto& l = node["Light"];
-        auto& light = registry.emplace<LightComponent>(entity);
+        auto& light = registry.emplace_or_replace<LightComponent>(entity);
         light.type = static_cast<int>(l["Type"].AsNumber(0.0));
         light.direction = readVec3(l["Direction"], glm::vec3(0.6f, 1.0f, 0.5f));
         light.color = readVec3(l["Color"], glm::vec3(1.0f));
@@ -339,7 +339,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("Camera")) {
         const auto& c = node["Camera"];
-        auto& camera = registry.emplace<CameraComponent>(entity);
+        auto& camera = registry.emplace_or_replace<CameraComponent>(entity);
         camera.fov = c["FOV"].AsFloat(45.0f);
         camera.nearPlane = c["NearPlane"].AsFloat(0.1f);
         camera.farPlane = c["FarPlane"].AsFloat(100.0f);
@@ -356,7 +356,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("Material")) {
         const auto& m = node["Material"];
-        auto& material = registry.emplace<MaterialComponent>(entity);
+        auto& material = registry.emplace_or_replace<MaterialComponent>(entity);
         material.albedoColor = readVec4(m["Albedo"], glm::vec4(1.0f));
         material.albedoTexturePath = m["AlbedoTexture"].AsString("");
         material.normalTexturePath = m["NormalTexture"].AsString("");
@@ -368,7 +368,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("RigidBody")) {
         const auto& r = node["RigidBody"];
-        auto& body = registry.emplace<RigidBodyComponent>(entity);
+        auto& body = registry.emplace_or_replace<RigidBodyComponent>(entity);
         body.velocity = readVec3(r["Velocity"], glm::vec3(0.0f));
         body.mass = r["Mass"].AsFloat(1.0f);
         body.useGravity = r["UseGravity"].AsBool(true);
@@ -382,25 +382,25 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     }
 
     if (node.Has("BoxCollider")) {
-        auto& box = registry.emplace<BoxColliderComponent>(entity);
+        auto& box = registry.emplace_or_replace<BoxColliderComponent>(entity);
         box.size = readVec3(node["BoxCollider"]["Size"], glm::vec3(1.0f));
         box.isTrigger = node["BoxCollider"]["IsTrigger"].AsBool(false);
     }
 
     if (node.Has("SphereCollider")) {
-        auto& sphere = registry.emplace<SphereColliderComponent>(entity);
+        auto& sphere = registry.emplace_or_replace<SphereColliderComponent>(entity);
         sphere.radius = node["SphereCollider"]["Radius"].AsFloat(0.5f);
         sphere.isTrigger = node["SphereCollider"]["IsTrigger"].AsBool(false);
     }
 
     if (node.Has("AudioListener")) {
-        auto& listener = registry.emplace<AudioListenerComponent>(entity);
+        auto& listener = registry.emplace_or_replace<AudioListenerComponent>(entity);
         listener.isPrimary = node["AudioListener"]["IsPrimary"].AsBool(true);
     }
 
     if (node.Has("AudioSource")) {
         const auto& a = node["AudioSource"];
-        auto& audio = registry.emplace<AudioSourceComponent>(entity);
+        auto& audio = registry.emplace_or_replace<AudioSourceComponent>(entity);
         audio.soundFile = a["Clip"].AsString("assets/audio/ambient.wav");
         audio.volume = a["Volume"].AsFloat(0.8f);
         audio.pitch = a["Pitch"].AsFloat(1.0f);
@@ -412,7 +412,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("UIText")) {
         const auto& t = node["UIText"];
-        auto& text = registry.emplace<UITextComponent>(entity);
+        auto& text = registry.emplace_or_replace<UITextComponent>(entity);
         text.text = t["Text"].AsString("Score: 0");
         text.anchor = readAnchor(t["Anchor"], text.anchor);
         text.offset = readVec2(t["Offset"], text.offset);
@@ -424,7 +424,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("UIButton")) {
         const auto& b = node["UIButton"];
-        auto& button = registry.emplace<UIButtonComponent>(entity);
+        auto& button = registry.emplace_or_replace<UIButtonComponent>(entity);
         button.label = b["Label"].AsString("Play");
         button.anchor = readAnchor(b["Anchor"], button.anchor);
         button.offset = readVec2(b["Offset"], button.offset);
@@ -442,7 +442,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("UIPanel")) {
         const auto& p = node["UIPanel"];
-        auto& panel = registry.emplace<UIPanelComponent>(entity);
+        auto& panel = registry.emplace_or_replace<UIPanelComponent>(entity);
         panel.anchor = readAnchor(p["Anchor"], panel.anchor);
         panel.offset = readVec2(p["Offset"], panel.offset);
         panel.size = readVec2(p["Size"], panel.size);
@@ -456,12 +456,12 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("Script")) {
         const auto& s = node["Script"];
-        registry.emplace<ScriptComponent>(entity,
+        registry.emplace_or_replace<ScriptComponent>(entity,
             s["Name"].AsString("RotatorScript"), s["Enabled"].AsBool(true));
     }
 
     if (node.Has("ParticleEmitter")) {
-        auto& emitter = registry.emplace<ParticleEmitterComponent>(entity);
+        auto& emitter = registry.emplace_or_replace<ParticleEmitterComponent>(entity);
         const auto& e = node["ParticleEmitter"];
         // Older scenes wrote a bare `true` here. AsBool on an object returns
         // the fallback, so those still load - they just get the defaults,
@@ -479,7 +479,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("Animator")) {
         const auto& a = node["Animator"];
-        auto& animator = registry.emplace<AnimatorComponent>(entity);
+        auto& animator = registry.emplace_or_replace<AnimatorComponent>(entity);
         animator.clipName = a["Clip"].AsString("");
         animator.time = a["Time"].AsFloat(0.0f);
         animator.speed = a["Speed"].AsFloat(1.0f);
@@ -489,7 +489,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     }
 
     if (node["HasRenderable"].AsBool(false)) {
-        auto& renderable = registry.emplace<RenderableComponent>(entity);
+        auto& renderable = registry.emplace_or_replace<RenderableComponent>(entity);
         if (node.Has("Renderable")) {
             renderable.isVisible = node["Renderable"]["Visible"].AsBool(true);
             renderable.castsShadow = node["Renderable"]["CastsShadow"].AsBool(true);

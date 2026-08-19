@@ -8,6 +8,7 @@
 #include "core/Json.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/PrefabSerializer.hpp"
+#include "core/ComponentCodec.hpp"
 #include "core/Components.hpp"
 
 #include <cstdio>
@@ -559,7 +560,41 @@ static void testMissingPrefabReturnsNull() {
     CHECK(!result.ok);
 }
 
+static void testReadLayersOverAnEntityThatAlreadyHasComponents() {
+    // ComponentCodec::Read is documented as applying onto an EXISTING entity,
+    // leaving unmentioned components alone. Every branch used plain emplace,
+    // which is an ENTT_ASSERT in a debug build and undefined behaviour in a
+    // release one the moment the component is already there. It went unnoticed
+    // because the two callers that matter - loading a scene and instantiating a
+    // prefab - both start from a fresh entity.
+    entt::registry registry;
+    const auto entity = registry.create();
+
+    auto& existing = registry.emplace<TransformComponent>(entity);
+    existing.position = glm::vec3(9.0f, 9.0f, 9.0f);
+    registry.emplace<TagComponent>(entity, "Original");
+
+    Json::Value node;
+    std::string error;
+    CHECK(Json::Parse(R"({"Transform": {"Position": [1.0, 2.0, 3.0],
+                                        "Rotation": [0.0, 0.0, 0.0],
+                                        "Scale": [1.0, 1.0, 1.0]}})", node, error));
+
+    ComponentCodec::Read(registry, entity, node);
+
+    const auto& transform = registry.get<TransformComponent>(entity);
+    CHECK_MSG(::test::nearly(transform.position.x, 1.0f),
+              "Read must overwrite a component the entity already had");
+    CHECK_NEAR(transform.position.z, 3.0f);
+
+    // And must leave alone what the node did not mention.
+    CHECK_MSG(registry.all_of<TagComponent>(entity),
+              "a component the node does not describe must survive");
+    CHECK(registry.get<TagComponent>(entity).tag == "Original");
+}
+
 static void runTests() {
+    testReadLayersOverAnEntityThatAlreadyHasComponents();
     testJsonRoundTrip();
     testJsonRejectsGarbage();
     testTagEscaping();

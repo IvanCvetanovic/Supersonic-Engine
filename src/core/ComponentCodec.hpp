@@ -33,6 +33,13 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
 
 // Applies whatever the node describes onto an existing entity. Components the
 // node does not mention are left alone, so this can be layered over defaults.
+//
+// Layering is the documented contract, and every branch used plain emplace,
+// which asserts in a debug build when the component is already there and is
+// undefined behaviour in a release one. It survived because the two callers
+// that matter - loading a scene and instantiating a prefab - both start from a
+// fresh entity. Applying a prefab over an existing entity, which is what the
+// contract above promises, hit it immediately.
 void Read(entt::registry& registry, entt::entity entity, const Json::Value& node);
 
 } // namespace ComponentCodec
