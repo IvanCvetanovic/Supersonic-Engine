@@ -166,13 +166,36 @@ if (NOT ANDROID)
     list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/AndroidNativeApp\\.(cpp|hpp)$")
 endif()
 
-add_executable(SupersonicEngine ${ENGINE_SOURCES} ${IMGUI_SOURCES})
+# main.cpp belongs to the executable, not the library: linking a static library
+# that contains main() into a test would either collide with the test's own
+# main or, worse, silently win.
+list(REMOVE_ITEM ENGINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+
+# The engine builds as a LIBRARY plus a thin executable, rather than one
+# executable, for one reason: a test cannot link an executable. Every suite
+# under tests/ used to recompile the engine sources it needed - 53 duplicate
+# translation units across 23 targets - and no suite could reach the renderer
+# at all, because there was nothing to link against.
+#
+# STATIC rather than OBJECT is safe only while script registration stays
+# explicit. ScriptEngine.cpp registers its built-ins by calling Register(), so
+# the linker has no unreferenced-but-required objects to discard. The moment
+# anything self-registers from a file-scope initializer, that object gets
+# dropped from a target that never names it and the script silently vanishes -
+# switch to OBJECT if that day comes.
+add_library(SupersonicCore STATIC ${ENGINE_SOURCES} ${IMGUI_SOURCES})
+add_executable(SupersonicEngine ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
+target_link_libraries(SupersonicEngine PRIVATE SupersonicCore)
 
 # Keep the IDE tree mirroring the source tree instead of one flat blob.
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src PREFIX "src" FILES ${ENGINE_SOURCES})
 source_group("third_party/imgui" FILES ${IMGUI_SOURCES})
 
-target_include_directories(SupersonicEngine PRIVATE
+# PUBLIC throughout: every consumer - the executable and every test target -
+# must compile against exactly the same include paths and GLM configuration.
+# Expressing that through the link interface is what makes the ODR constraint
+# below a fact of the build graph instead of a comment someone has to obey.
+target_include_directories(SupersonicCore PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
@@ -186,7 +209,7 @@ target_include_directories(SupersonicEngine PRIVATE
 # GLM's configuration MUST be identical in every translation unit. Defining
 # these in headers is order-dependent and silently produces an ODR violation
 # where getProjectionMatrix() compiles differently per TU.
-target_compile_definitions(SupersonicEngine PRIVATE
+target_compile_definitions(SupersonicCore PUBLIC
     GLM_FORCE_RADIANS
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_ENABLE_EXPERIMENTAL
@@ -198,7 +221,7 @@ target_compile_definitions(SupersonicEngine PRIVATE
     # SDKs, which is exactly why this went unnoticed until a Linux CI runner
     # without libgl1-mesa-dev tried it.
     #
-    # PRIVATE on the target rather than in a header, because the vendored
+    # On the target rather than in a header, because the vendored
     # imgui_impl_glfw.cpp is compiled into this target and includes glfw3.h
     # itself.
     GLFW_INCLUDE_NONE
@@ -213,15 +236,24 @@ set(VENDORED_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core/TinyGltfImplementation.cpp
 )
 
+# PRIVATE, not PUBLIC: the engine's own warning level is the engine's business.
+# Pushing /W4 down the link interface would hold every test target - and anyone
+# who ever links this library - to it as well.
 if (MSVC)
+    target_compile_options(SupersonicCore PRIVATE /W4 /permissive-)
     target_compile_options(SupersonicEngine PRIVATE /W4 /permissive-)
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
 else()
+    target_compile_options(SupersonicCore PRIVATE -Wall -Wextra -Wpedantic)
     target_compile_options(SupersonicEngine PRIVATE -Wall -Wextra -Wpedantic)
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
-target_link_libraries(SupersonicEngine PRIVATE
+# PUBLIC because these appear in the engine's own headers: vulkan.hpp in
+# Components.hpp, GLFW in Window.hpp, EnTT in every system signature, VMA in
+# the renderer headers and <thread> in JobSystem.hpp. A consumer that includes
+# any of those needs the same include paths and the same link libraries.
+target_link_libraries(SupersonicCore PUBLIC
     Vulkan::Vulkan
     glfw
     EnTT::EnTT
@@ -236,16 +268,20 @@ target_link_libraries(SupersonicEngine PRIVATE
 # development headers are present and the engine falls back to the documented
 # no-op when they are not - a missing package must not fail the build for
 # someone who does not care about sound.
+# PRIVATE: the backend is an implementation detail of AudioEngine.cpp, which
+# lives inside the library. A static library still forwards these to whatever
+# links it, so the executable gets them without the link interface advertising
+# an XAudio2 dependency to every test target.
 if (WIN32)
-    target_link_libraries(SupersonicEngine PRIVATE xaudio2 ole32)
+    target_link_libraries(SupersonicCore PRIVATE xaudio2 ole32)
 elseif (UNIX AND NOT APPLE AND NOT ANDROID)
     find_path(ALSA_INCLUDE_DIR alsa/asoundlib.h)
     find_library(ALSA_LIBRARY NAMES asound)
     if (ALSA_INCLUDE_DIR AND ALSA_LIBRARY)
         message(STATUS "Audio backend: ALSA (${ALSA_LIBRARY})")
-        target_compile_definitions(SupersonicEngine PRIVATE SUPERSONIC_AUDIO_ALSA=1)
-        target_include_directories(SupersonicEngine PRIVATE ${ALSA_INCLUDE_DIR})
-        target_link_libraries(SupersonicEngine PRIVATE ${ALSA_LIBRARY})
+        target_compile_definitions(SupersonicCore PRIVATE SUPERSONIC_AUDIO_ALSA=1)
+        target_include_directories(SupersonicCore PRIVATE ${ALSA_INCLUDE_DIR})
+        target_link_libraries(SupersonicCore PRIVATE ${ALSA_LIBRARY})
     else()
         message(STATUS "Audio backend: none (install libasound2-dev for sound on Linux)")
     endif()
