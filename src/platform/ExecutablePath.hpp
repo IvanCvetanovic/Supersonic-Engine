@@ -20,4 +20,30 @@ std::filesystem::path ExecutablePath();
 // Directory containing the running binary. Empty if the path is unknown.
 std::filesystem::path ExecutableDirectory();
 
+// Makes the working directory the one every relative asset path is meant to be
+// relative to, and reports where that ended up.
+//
+// The engine had two anchors that did not agree. GameRuntime::Load finds
+// game.manifest relative to the EXECUTABLE, because a game is normally launched
+// from somewhere other than its own folder. Everything the manifest then names
+// - the startup scene, every shader, every texture and model and material and
+// audio path inside that scene - is opened relative to the WORKING DIRECTORY.
+//
+// The two coincide only while the working directory happens to be the game
+// folder. Start the same executable from anywhere else and it finds its
+// manifest, opens a window under the right title, and then dies during pipeline
+// creation on a .spv it cannot open - before initECS, before the scene is even
+// reached, so none of the other broken paths get far enough to be blamed.
+//
+// Whichever anchor wins, both have to use it. For a packaged game the
+// executable's directory wins, because that is the one that is true no matter
+// how the game was launched. For the editor the working directory is left
+// alone: it is launched from the project root on purpose, and the build tree is
+// not laid out like a packaged folder.
+bool AnchorAssetRootToExecutable();
+
+// Where relative asset paths resolve from. The working directory, named so that
+// code reads as though it means it.
+std::filesystem::path AssetRoot();
+
 } // namespace Supersonic

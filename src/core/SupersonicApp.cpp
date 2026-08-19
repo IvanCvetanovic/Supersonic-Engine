@@ -109,6 +109,25 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     // Read before the window exists, because it decides the title on it.
     m_manifest = GameRuntime::Load();
 
+    // A packaged game re-anchors to its own folder before anything opens a file
+    // by relative path. This has to happen BEFORE the renderer is built: the
+    // first thing to break otherwise is shader loading, which throws during
+    // pipeline creation with a message about a .spv - a long way from the
+    // launcher's working directory that actually caused it.
+    //
+    // The editor is deliberately left alone. It is launched from the project
+    // root on purpose, and a build tree is not laid out like a packaged folder.
+    if (m_manifest.isGame) {
+        if (AnchorAssetRootToExecutable()) {
+            SUPERSONIC_LOG_INFO("SupersonicApp")
+                << "Packaged game: assets resolve from " << AssetRoot().string();
+        } else {
+            SUPERSONIC_LOG_WARN("SupersonicApp")
+                << "Could not anchor the asset root to the executable's folder; "
+                << "relative paths will resolve from the working directory.";
+        }
+    }
+
     m_window = std::make_unique<Window>(1280, 720,
                                         m_manifest.isGame ? m_manifest.title : "Supersonic Engine");
 

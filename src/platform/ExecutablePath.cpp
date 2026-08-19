@@ -48,4 +48,20 @@ std::filesystem::path ExecutableDirectory() {
     return exe.empty() ? std::filesystem::path{} : exe.parent_path();
 }
 
+
+bool AnchorAssetRootToExecutable() {
+    const std::filesystem::path directory = ExecutableDirectory();
+    if (directory.empty()) return false;
+
+    std::error_code ec;
+    std::filesystem::current_path(directory, ec);
+    return !ec;
+}
+
+std::filesystem::path AssetRoot() {
+    std::error_code ec;
+    const std::filesystem::path here = std::filesystem::current_path(ec);
+    return ec ? std::filesystem::path{} : here;
+}
+
 } // namespace Supersonic
