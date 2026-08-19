@@ -92,11 +92,22 @@ bool VulkanOffscreen::ApplyPendingResize() {
 void VulkanOffscreen::createRenderPass() {
     // 1. Offscreen Color Attachment (Final layout = eShaderReadOnlyOptimal for ImGui sampling)
     //
-    // UNORM, not SRGB. shader.frag already encodes to sRGB itself; an SRGB
-    // attachment would encode a second time on store, and because ImGui samples
-    // this image and writes it to the swapchain without any colour conversion,
-    // nothing downstream cancels it. UNORM here means the shader's encoded
-    // value is stored and presented verbatim - one encode, as intended.
+    // kColorFormat is BloomPass::kHdrFormat - R16G16B16A16Sfloat. This target
+    // holds LINEAR, UNBOUNDED scene radiance, not a displayable image.
+    //
+    // This comment used to say "UNORM, not SRGB - shader.frag already encodes
+    // to sRGB itself", which described the chain before bloom existed and had
+    // been wrong ever since. It is worth correcting rather than deleting,
+    // because acting on it is silent: an 8-bit target clamps every value above
+    // 1.0, which is precisely the set of pixels the bright pass exists to find,
+    // so bloom stops working and no validation layer says a word.
+    //
+    // Tone mapping and the single sRGB encode both happen at the end of the
+    // chain, in bloom_composite.frag, which writes into BloomPass::kOutputFormat
+    // (R8G8B8A8Unorm). UNORM there, for the original reason: ImGui samples that
+    // image and blits it to the swapchain with no colour conversion, so an SRGB
+    // attachment would encode a second time and nothing downstream would cancel
+    // it. One encode, still - just no longer here.
     const bool multisampled = m_samples != vk::SampleCountFlagBits::e1;
 
     vk::AttachmentDescription colorAttachment{};
