@@ -23,6 +23,18 @@ constexpr float kRestVelocity = 0.1f;
 // anything is pushed apart, and only kCorrection of the remaining overlap is
 // removed per step: correcting to exactly zero makes resting stacks vibrate,
 // because floating-point error re-creates the overlap every step.
+// How many times the velocity solver revisits every contact.
+//
+// One pass resolves each contact as though it were the only one in the world,
+// so a box in a stack is pushed out of the box below it and straight into the
+// box above, and the stack sinks and shivers. Revisiting lets the contacts
+// reach an arrangement that satisfies all of them at once - which is the whole
+// reason a stack settles rather than merely stops.
+//
+// Eight is the usual default and is well past the point of visible improvement
+// here; the cost is eight cheap passes over a list that is already built.
+constexpr int kSolverIterations = 8;
+
 constexpr float kSlop = 0.005f;
 constexpr float kCorrection = 0.8f;
 
@@ -532,6 +544,37 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     if (pairs.empty()) return;
 
     // ---- Narrowphase and response ----
+    // One entry per contact POINT, not per pair.
+    //
+    // A face-to-face rest between two boxes is up to four points, and resolving
+    // it as one is what leaves a crate balanced on a single spot in its own
+    // footprint, free to rotate about it. The SAT narrowphase has been
+    // producing these points since it landed; this is the first thing to
+    // consume them.
+    struct Constraint {
+        size_t bodyA{0};
+        size_t bodyB{0};
+        glm::vec3 normal{0.0f, 1.0f, 0.0f};
+        glm::vec3 armA{0.0f};
+        glm::vec3 armB{0.0f};
+
+        // Computed once, from the velocities as they were BEFORE any impulse.
+        // Recomputing restitution per iteration feeds the solver its own output
+        // and a resting stack slowly climbs.
+        float targetVelocity{0.0f};
+        float normalMass{0.0f};
+
+        // Accumulated across iterations and clamped to stay non-negative, so
+        // the contact can only ever push. Without the accumulator, N iterations
+        // apply N full impulses and everything launches.
+        float normalImpulse{0.0f};
+        float tangentImpulse{0.0f};
+
+        float friction{0.0f};
+    };
+    std::vector<Constraint> constraints;
+    constraints.reserve(pairs.size() * 2);
+
     for (const auto& [pi, pj] : pairs) {
         Body& a = bodies[proxies[pi].index];
         Body& b = bodies[proxies[pj].index];
@@ -546,6 +589,11 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // must not be pushed apart or reported as an overlap - the bodies are
         // not touching yet.
         bool speculative = false;
+
+        // Where this pair touches. One entry for the shapes that produce a
+        // single point, up to four for a box face resting on a box face.
+        glm::vec3 manifoldPoints[CollisionSAT::kMaxContactPoints];
+        int manifoldCount = 0;
 
         // How far this pair can close during the step. Anything further apart
         // than this cannot meet before the next step, so reporting it would only
@@ -588,6 +636,15 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 penetration = deepest;
                 point = centroid / static_cast<float>(manifold.pointCount);
                 speculative = manifold.speculative;
+
+                // Every point becomes its own velocity constraint. The centroid
+                // above is still what the positional correction uses, because
+                // pushing out once per point would move the body four times as
+                // far as the overlap requires.
+                for (int i = 0; i < manifold.pointCount; ++i) {
+                    manifoldPoints[manifoldCount++] = manifold.points[i].position;
+                    if (manifoldCount >= CollisionSAT::kMaxContactPoints) break;
+                }
             }
         } else if (a.shape == Shape::Sphere && b.shape == Shape::Sphere) {
             hit = collideSphereSphere(a, b, normal, penetration, point);
@@ -648,132 +705,166 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         auto* rigidA = registry.try_get<RigidBodyComponent>(a.entity);
         auto* rigidB = registry.try_get<RigidBodyComponent>(b.entity);
 
-        // Where the contact is, relative to each centre of mass. This is the
-        // whole of the difference between a body that slides and one that
-        // turns: an impulse through the centre only pushes, the same impulse
-        // applied at arm's length also spins.
-        const glm::vec3 armA = point - a.centre;
-        const glm::vec3 armB = point - b.centre;
+        // Shapes other than box-box report one point; the box path filled the
+        // array above.
+        if (manifoldCount == 0) {
+            manifoldPoints[0] = point;
+            manifoldCount = 1;
+        }
 
-        const glm::vec3 spinA = (rigidA && a.inverseMass > 0.0f) ? rigidA->angularVelocity : glm::vec3(0.0f);
-        const glm::vec3 spinB = (rigidB && b.inverseMass > 0.0f) ? rigidB->angularVelocity : glm::vec3(0.0f);
-
-        const glm::vec3 velocityA = ((rigidA && a.inverseMass > 0.0f) ? rigidA->velocity : glm::vec3(0.0f))
-                                  + glm::cross(spinA, armA);
-        const glm::vec3 velocityB = ((rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f))
-                                  + glm::cross(spinB, armB);
-
-        const glm::vec3 relative = velocityB - velocityA;
-        const float alongNormal = glm::dot(relative, normal);
-
-        // For a speculative contact the target is not "stop", it is "close the
-        // remaining gap and no more". The gap is -penetration, so approaching
-        // at gap/dt lands the body exactly on the surface this step; anything
-        // faster is what would carry it through.
-        //
-        // This is what prevents tunnelling without a swept test: the body is
-        // slowed on the frame BEFORE it would have passed through, and arrives
-        // as an ordinary contact on the next one.
-        const float allowedApproach = speculative ? (-penetration / deltaTime) : 0.0f;
-
-        // Already separating, or not closing fast enough to reach: an impulse
-        // here would drag them together or brake for nothing.
-        if (alongNormal + allowedApproach > 0.0f) continue;
-
-        // Bounce dies out near rest, otherwise a settling box jitters forever.
         const float bounceA = rigidA ? rigidA->restitution : kRestitution;
         const float bounceB = rigidB ? rigidB->restitution : kRestitution;
-        // Restitution applies to a speculative contact too.
-        //
-        // The first attempt zeroed it, reasoning that bodies which have not
-        // touched should not bounce. But a falling ball is ALWAYS approaching
-        // fast enough to have a speculative contact before a touching one, so
-        // zeroing it there meant nothing ever bounced at all: two balls with
-        // restitution 0.1 and 0.9 both landed dead at exactly the same height.
-        //
-        // The bias below already accounts for the gap, so the two terms
-        // compose: the restitution term reverses the approach, the bias removes
-        // whatever of it the remaining gap cannot absorb.
-        const float restitution = (std::abs(alongNormal) < kRestVelocity)
-                                ? 0.0f
-                                : combineRestitution(bounceA, bounceB);
-
-        // Effective mass along the normal, including how hard each body is to
-        // turn about this contact. Using the linear term alone would apply an
-        // impulse far too large for a glancing hit near a corner.
-        const glm::vec3 angularA = glm::cross(a.inverseInertia * glm::cross(armA, normal), armA);
-        const glm::vec3 angularB = glm::cross(b.inverseInertia * glm::cross(armB, normal), armB);
-        const float effectiveMass = inverseSum + glm::dot(angularA + angularB, normal);
-        if (effectiveMass <= 1e-9f) continue;
-
-        // Expressed as a TARGET normal velocity rather than as a sum of terms.
-        //
-        // Adding the gap allowance to the restitution term makes the two fight:
-        // a ball with restitution 0.9 dropped onto the ground has a speculative
-        // contact before a touching one, the allowance cancels most of the
-        // bounce, and it lands almost dead - measured at 0.008 units of bounce
-        // against 0.05 the test asks for.
-        //
-        // As a target the two compose properly. The bounce says how fast the
-        // body should be leaving; the allowance says it may still approach at
-        // most fast enough to close the remaining gap this step. Taking the
-        // larger means restitution decides when there is a bounce, and the
-        // allowance only decides anything when there is not.
-        //
-        // For a touching contact the allowance is zero and this reduces exactly
-        // to the previous formula, which is why no existing behaviour moves.
-        const float bounceTarget = -restitution * alongNormal;
-        const float targetVelocity = std::max(bounceTarget, -allowedApproach);
-        const float impulse = (targetVelocity - alongNormal) / effectiveMass;
-        const glm::vec3 impulseVector = normal * impulse;
-
-        if (rigidA && a.inverseMass > 0.0f) {
-            rigidA->velocity -= impulseVector * a.inverseMass;
-            rigidA->angularVelocity -= a.inverseInertia * glm::cross(armA, impulseVector);
-        }
-        if (rigidB && b.inverseMass > 0.0f) {
-            rigidB->velocity += impulseVector * b.inverseMass;
-            rigidB->angularVelocity += b.inverseInertia * glm::cross(armB, impulseVector);
-        }
-
-        // Coulomb friction along the contact tangent, clamped to the normal
-        // impulse so it can slow sliding but never reverse it.
-        // Recomputed at the contact, spin included: friction on a rolling ball
-        // acts on the surface speed, which is zero when it rolls without
-        // slipping and is the entire reason a ball rolls instead of sliding.
-        const glm::vec3 postSpinA = (rigidA && a.inverseMass > 0.0f) ? rigidA->angularVelocity : glm::vec3(0.0f);
-        const glm::vec3 postSpinB = (rigidB && b.inverseMass > 0.0f) ? rigidB->angularVelocity : glm::vec3(0.0f);
-
-        const glm::vec3 postRelative =
-            (((rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f))
-                + glm::cross(postSpinB, armB)) -
-            (((rigidA && a.inverseMass > 0.0f) ? rigidA->velocity : glm::vec3(0.0f))
-                + glm::cross(postSpinA, armA));
-
-        glm::vec3 tangent = postRelative - normal * glm::dot(postRelative, normal);
-        const float tangentLength = glm::length(tangent);
-        if (tangentLength < 1e-5f) continue;
-        tangent /= tangentLength;
-
-        const glm::vec3 tangentialA = glm::cross(a.inverseInertia * glm::cross(armA, tangent), armA);
-        const glm::vec3 tangentialB = glm::cross(b.inverseInertia * glm::cross(armB, tangent), armB);
-        const float tangentMass = inverseSum + glm::dot(tangentialA + tangentialB, tangent);
-        if (tangentMass <= 1e-9f) continue;
-
-        float frictionImpulse = -glm::dot(postRelative, tangent) / tangentMass;
         const float gripA = rigidA ? rigidA->friction : kFriction;
         const float gripB = rigidB ? rigidB->friction : kFriction;
-        const float maxFriction = combineFriction(gripA, gripB) * std::abs(impulse);
-        frictionImpulse = std::clamp(frictionImpulse, -maxFriction, maxFriction);
+        const float grip = combineFriction(gripA, gripB);
 
-        const glm::vec3 frictionVector = tangent * frictionImpulse;
-        if (rigidA && a.inverseMass > 0.0f) {
-            rigidA->velocity -= frictionVector * a.inverseMass;
-            rigidA->angularVelocity -= a.inverseInertia * glm::cross(armA, frictionVector);
+        // A speculative pair is apart; the allowance is how fast it may still
+        // close without going through.
+        const float allowedApproach = speculative ? (-penetration / deltaTime) : 0.0f;
+
+        for (int pointIndex = 0; pointIndex < manifoldCount; ++pointIndex) {
+            Constraint constraint;
+            constraint.bodyA = proxies[pi].index;
+            constraint.bodyB = proxies[pj].index;
+            constraint.normal = normal;
+            constraint.armA = manifoldPoints[pointIndex] - a.centre;
+            constraint.armB = manifoldPoints[pointIndex] - b.centre;
+            constraint.friction = grip;
+
+            // Effective mass along the normal, including how hard each body is
+            // to turn about this contact. The linear term alone applies an
+            // impulse far too large for a glancing hit near a corner.
+            const glm::vec3 angularA =
+                glm::cross(a.inverseInertia * glm::cross(constraint.armA, normal), constraint.armA);
+            const glm::vec3 angularB =
+                glm::cross(b.inverseInertia * glm::cross(constraint.armB, normal), constraint.armB);
+            const float effectiveMass = inverseSum + glm::dot(angularA + angularB, normal);
+            if (effectiveMass <= 1e-9f) continue;
+            constraint.normalMass = effectiveMass;
+
+            // Restitution from the velocities as they are NOW, before any
+            // impulse. Recomputing it inside the iteration would feed the
+            // solver its own output, and a resting stack climbs.
+            const glm::vec3 spinA = (rigidA && a.inverseMass > 0.0f) ? rigidA->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 spinB = (rigidB && b.inverseMass > 0.0f) ? rigidB->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 velocityA =
+                ((rigidA && a.inverseMass > 0.0f) ? rigidA->velocity : glm::vec3(0.0f))
+                + glm::cross(spinA, constraint.armA);
+            const glm::vec3 velocityB =
+                ((rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f))
+                + glm::cross(spinB, constraint.armB);
+            const float alongNormal = glm::dot(velocityB - velocityA, normal);
+
+            // Bounce dies out near rest, or a settling box jitters forever.
+            const float restitution = (std::abs(alongNormal) < kRestVelocity)
+                                    ? 0.0f
+                                    : combineRestitution(bounceA, bounceB);
+
+            // The bounce says how fast the body should be leaving; the
+            // allowance says it may still approach fast enough to close the
+            // remaining gap. The larger wins, so restitution decides when there
+            // is a bounce and the allowance only decides anything when there is
+            // not.
+            constraint.targetVelocity = std::max(-restitution * alongNormal, -allowedApproach);
+
+            constraints.push_back(constraint);
         }
-        if (rigidB && b.inverseMass > 0.0f) {
-            rigidB->velocity += frictionVector * b.inverseMass;
-            rigidB->angularVelocity += b.inverseInertia * glm::cross(armB, frictionVector);
+    }
+
+    // ---- Velocity solve ----------------------------------------------------
+    //
+    // Sequential impulses. Each pass revisits every contact and applies only
+    // the CHANGE needed to satisfy it, with the total per contact accumulated
+    // and clamped so it can never pull. Without the accumulator, eight passes
+    // apply eight full impulses and the scene launches; without the passes,
+    // every contact is resolved as though it were alone and a stack sinks.
+    for (int iteration = 0; iteration < kSolverIterations; ++iteration) {
+        for (auto& constraint : constraints) {
+            Body& bodyA = bodies[constraint.bodyA];
+            Body& bodyB = bodies[constraint.bodyB];
+
+            auto* rigidA = registry.try_get<RigidBodyComponent>(bodyA.entity);
+            auto* rigidB = registry.try_get<RigidBodyComponent>(bodyB.entity);
+
+            const bool movableA = rigidA && bodyA.inverseMass > 0.0f;
+            const bool movableB = rigidB && bodyB.inverseMass > 0.0f;
+            if (!movableA && !movableB) continue;
+
+            const glm::vec3 spinA = movableA ? rigidA->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 spinB = movableB ? rigidB->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 velocityA =
+                (movableA ? rigidA->velocity : glm::vec3(0.0f)) + glm::cross(spinA, constraint.armA);
+            const glm::vec3 velocityB =
+                (movableB ? rigidB->velocity : glm::vec3(0.0f)) + glm::cross(spinB, constraint.armB);
+
+            const glm::vec3 relative = velocityB - velocityA;
+
+            // ---- Normal ----
+            const float alongNormal = glm::dot(relative, constraint.normal);
+            float lambda = (constraint.targetVelocity - alongNormal) / constraint.normalMass;
+
+            // Clamp the ACCUMULATED impulse, not this pass's change. A contact
+            // may pull during one pass as long as the total stays a push, which
+            // is what lets later passes correct earlier over-corrections.
+            const float previousNormal = constraint.normalImpulse;
+            constraint.normalImpulse = std::max(previousNormal + lambda, 0.0f);
+            lambda = constraint.normalImpulse - previousNormal;
+
+            const glm::vec3 normalImpulse = constraint.normal * lambda;
+            if (movableA) {
+                rigidA->velocity -= normalImpulse * bodyA.inverseMass;
+                rigidA->angularVelocity -= bodyA.inverseInertia * glm::cross(constraint.armA, normalImpulse);
+            }
+            if (movableB) {
+                rigidB->velocity += normalImpulse * bodyB.inverseMass;
+                rigidB->angularVelocity += bodyB.inverseInertia * glm::cross(constraint.armB, normalImpulse);
+            }
+
+            // ---- Friction ----
+            //
+            // Recomputed after the normal impulse and at the contact, spin
+            // included: friction acts on the SURFACE speed, which is zero for a
+            // ball rolling without slipping and is the entire reason a ball
+            // rolls rather than slides.
+            const glm::vec3 postSpinA = movableA ? rigidA->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 postSpinB = movableB ? rigidB->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 postRelative =
+                ((movableB ? rigidB->velocity : glm::vec3(0.0f)) + glm::cross(postSpinB, constraint.armB)) -
+                ((movableA ? rigidA->velocity : glm::vec3(0.0f)) + glm::cross(postSpinA, constraint.armA));
+
+            glm::vec3 tangent = postRelative - constraint.normal * glm::dot(postRelative, constraint.normal);
+            const float tangentLength = glm::length(tangent);
+            if (tangentLength < 1e-5f) continue;
+            tangent /= tangentLength;
+
+            const glm::vec3 tangentialA =
+                glm::cross(bodyA.inverseInertia * glm::cross(constraint.armA, tangent), constraint.armA);
+            const glm::vec3 tangentialB =
+                glm::cross(bodyB.inverseInertia * glm::cross(constraint.armB, tangent), constraint.armB);
+            const float tangentMass = bodyA.inverseMass + bodyB.inverseMass
+                                    + glm::dot(tangentialA + tangentialB, tangent);
+            if (tangentMass <= 1e-9f) continue;
+
+            float frictionLambda = -glm::dot(postRelative, tangent) / tangentMass;
+
+            // Clamped against the ACCUMULATED normal impulse, so friction can
+            // slow sliding but never reverse it, and never exceeds what the
+            // contact is actually being pressed together with.
+            const float maxFriction = constraint.friction * constraint.normalImpulse;
+            const float previousTangent = constraint.tangentImpulse;
+            constraint.tangentImpulse =
+                std::clamp(previousTangent + frictionLambda, -maxFriction, maxFriction);
+            frictionLambda = constraint.tangentImpulse - previousTangent;
+
+            const glm::vec3 frictionImpulse = tangent * frictionLambda;
+            if (movableA) {
+                rigidA->velocity -= frictionImpulse * bodyA.inverseMass;
+                rigidA->angularVelocity -= bodyA.inverseInertia * glm::cross(constraint.armA, frictionImpulse);
+            }
+            if (movableB) {
+                rigidB->velocity += frictionImpulse * bodyB.inverseMass;
+                rigidB->angularVelocity += bodyB.inverseInertia * glm::cross(constraint.armB, frictionImpulse);
+            }
         }
     }
 }

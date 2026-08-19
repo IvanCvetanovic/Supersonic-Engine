@@ -986,7 +986,56 @@ static void testRaycastRespectsItsLayerMask() {
     CHECK_MSG(rightLayer.hit, "and must hit the layer it did ask for");
 }
 
+static void testAStackOfBoxesSettlesInsteadOfSinking() {
+    // Nothing tested stacking, and until the solver iterated, nothing could
+    // have passed. A single pass resolves each contact as though it were the
+    // only one in the world: the middle box is pushed out of the box below it
+    // and straight into the box above, every step, so a stack sinks into itself
+    // and shivers rather than coming to rest.
+    entt::registry registry;
+
+    // A wide static floor well above the world ground plane, so it is this
+    // floor holding the stack up rather than the unconditional y = 0 clamp.
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(10.0f, 1.0f, 10.0f));
+
+    // Three unit boxes, each resting on the one below. Floor top is at y = 5.5.
+    std::vector<entt::entity> stack;
+    for (int i = 0; i < 3; ++i) {
+        stack.push_back(makeBox(registry, glm::vec3(0.0f, 6.0f + static_cast<float>(i), 0.0f)));
+    }
+
+    stepFor(registry, 3.0f);
+
+    // Every box must still be above the floor surface. A sinking stack ends
+    // with the bottom box inside the floor.
+    for (size_t i = 0; i < stack.size(); ++i) {
+        const float y = registry.get<TransformComponent>(stack[i]).position.y;
+        CHECK_MSG(y > 5.4f, "box " + std::to_string(i) +
+                                " sank into the floor: y = " + std::to_string(y));
+    }
+
+    // And they must still be in order, each above the last, rather than having
+    // interpenetrated into a heap.
+    for (size_t i = 1; i < stack.size(); ++i) {
+        const float below = registry.get<TransformComponent>(stack[i - 1]).position.y;
+        const float above = registry.get<TransformComponent>(stack[i]).position.y;
+        CHECK_MSG(above > below + 0.8f,
+                  "box " + std::to_string(i) + " must still be stacked on the one below: " +
+                      std::to_string(below) + " then " + std::to_string(above));
+    }
+
+    // Settled, not vibrating. This is what the accumulated impulse buys: with
+    // per-pass clamping the contacts converge instead of fighting.
+    for (size_t i = 0; i < stack.size(); ++i) {
+        const glm::vec3 velocity = registry.get<RigidBodyComponent>(stack[i]).velocity;
+        CHECK_MSG(glm::length(velocity) < 0.5f,
+                  "box " + std::to_string(i) + " must have settled: |v| = " +
+                      std::to_string(glm::length(velocity)));
+    }
+}
+
 static void runTests() {
+    testAStackOfBoxesSettlesInsteadOfSinking();
     testLayerMasksSuppressAPair();
     testFilteringNeedsBothSidesToAgree();
     testColliderCenterMovesTheCollider();
