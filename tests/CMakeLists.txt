@@ -36,6 +36,7 @@ endfunction()
 
 add_engine_test(test_transform)
 add_engine_test(test_launchoptions)
+add_engine_test(test_json)
 add_engine_test(test_raycast)
 add_engine_test(test_meshgen)
 add_engine_test(test_serialize)

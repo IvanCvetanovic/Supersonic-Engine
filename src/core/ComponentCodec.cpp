@@ -1,4 +1,7 @@
 #include "core/ComponentCodec.hpp"
+#include "core/Log.hpp"
+#include <limits>
+#include <cmath>
 
 #include "core/Components.hpp"
 
@@ -8,8 +11,36 @@ namespace Supersonic {
 
 namespace {
 
-void writeVec3(std::ostream& os, const glm::vec3& v) {
-    os << "[" << v.x << ", " << v.y << ", " << v.z << "]";
+// JSON has no way to spell inf or nan, and this codec's own reader rejects all
+// three - parseNumber scans digits, '.', 'e' and sign, so "inf" is not even a
+// number to it. A non-finite float therefore produced a file that could never
+// be read back: Serialize reported "Saved 18 entities", and from then on the
+// scene would not load, Play/Stop could not restore it, and undo popped the
+// snapshot and dropped it.
+//
+// Reachable without a hostile file. The inspector draws Position and Scale with
+// DragFloat's v_min and v_max both 0.0f, which tells ImGui not to clamp typed
+// input, so ctrl-clicking a field and typing 1e40 is enough.
+//
+// Substituting keeps the file loadable, which is the property worth protecting:
+// an entity in a strange place can be dragged back, a file that will not parse
+// cannot. inf becomes the largest finite float rather than zero so "very far
+// away" does not silently become "at the origin", and the caller is told.
+float jsonSafe(float v, const char* field) {
+    if (std::isfinite(v)) return v;
+    const float replacement = std::isnan(v)
+        ? 0.0f
+        : std::copysign(std::numeric_limits<float>::max(), v);
+    SUPERSONIC_LOG_WARN("ComponentCodec")
+        << field << " was " << (std::isnan(v) ? "nan" : "infinite")
+        << "; wrote " << replacement << " instead so the scene stays loadable";
+    return replacement;
+}
+
+
+void writeVec3(std::ostream& os, const glm::vec3& v, const char* field = "a vector") {
+    os << "[" << jsonSafe(v.x, field) << ", " << jsonSafe(v.y, field)
+       << ", " << jsonSafe(v.z, field) << "]";
 }
 
 glm::vec3 readVec3(const Json::Value& value, const glm::vec3& fallback) {

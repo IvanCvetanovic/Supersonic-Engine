@@ -159,7 +159,13 @@ void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float r
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    ImGui::DragFloat("##X", &values.x, 0.05f, 0.0f, 0.0f, "%.2f");
+    // v_min and v_max were both 0.0f, which tells ImGui the field is unbounded
+    // AND disables clamping of typed input - so ctrl-clicking and entering
+    // 1e40 stored an infinity, and a scene saved with one could never be read
+    // back. A generous finite bound keeps dragging unrestricted in practice
+    // while making a non-finite value impossible to author here.
+    constexpr float kLimit = 1.0e9f;
+    ImGui::DragFloat("##X", &values.x, 0.05f, -kLimit, kLimit, "%.2f");
     ImGui::PopItemWidth();
     ImGui::SameLine();
 
@@ -173,7 +179,7 @@ void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float r
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    ImGui::DragFloat("##Y", &values.y, 0.05f, 0.0f, 0.0f, "%.2f");
+    ImGui::DragFloat("##Y", &values.y, 0.05f, -kLimit, kLimit, "%.2f");
     ImGui::PopItemWidth();
     ImGui::SameLine();
 
@@ -187,7 +193,7 @@ void Theme::DrawVec3Control(const std::string& label, glm::vec3& values, float r
     ImGui::PopStyleColor(3);
 
     ImGui::SameLine();
-    ImGui::DragFloat("##Z", &values.z, 0.05f, 0.0f, 0.0f, "%.2f");
+    ImGui::DragFloat("##Z", &values.z, 0.05f, -kLimit, kLimit, "%.2f");
     ImGui::PopItemWidth();
 
     ImGui::PopStyleVar();

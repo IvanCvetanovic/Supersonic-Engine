@@ -123,10 +123,31 @@ class Parser {
 public:
     explicit Parser(const std::string& text) : m_text(text) {}
 
+    // Nesting deeper than this is refused rather than recursed into.
+    //
+    // parseValue, parseObject and parseArray are mutual recursion with no
+    // limit, so roughly two kilobytes of '[' was enough to exhaust the stack
+    // and take the process down *inside* Json::Parse - which is precisely what
+    // SceneSerializer's non-destructive design exists to survive. It reads the
+    // whole file, parses it, and only then touches the registry, so that a bad
+    // scene leaves the open one intact. A stack overflow during the parse
+    // defeats that by killing the process instead of returning false.
+    //
+    // The limit is enforced while parsing rather than checked afterwards,
+    // because Value's destructor recurses too: a tree deep enough to overflow
+    // on the way in would also overflow being freed.
+    static constexpr int kMaxDepth = 64;
+
     bool Parse(Value& out) {
         skipWhitespace();
         if (!parseValue(out)) return false;
         skipWhitespace();
+
+        // Trailing content is a malformed document, not a parsed one. Without
+        // this, "{...} garbage" returned the leading object and reported
+        // success, so a truncated-then-appended file loaded as though it were
+        // whole.
+        if (m_pos != m_text.size()) return fail("trailing content after the top-level value");
         return true;
     }
 
@@ -147,6 +168,11 @@ private:
     bool parseValue(Value& out) {
         skipWhitespace();
         if (m_pos >= m_text.size()) return fail("unexpected end of input");
+
+        // Every nested value goes through here, so this is the one place the
+        // depth has to be counted.
+        const DepthGuard guard(*this);
+        if (m_depth > kMaxDepth) return fail("nesting deeper than 64 levels");
 
         switch (m_text[m_pos]) {
             case '{': return parseObject(out);
@@ -187,7 +213,11 @@ private:
 
             Value value;
             if (!parseValue(value)) return false;
-            obj.emplace(std::move(key), std::move(value));
+            // insert_or_assign, not emplace: std::map::emplace keeps the
+            // FIRST value for a duplicate key and silently drops the second,
+            // so a hand-edited scene with a repeated key loaded as whichever
+            // copy happened to come first.
+            obj.insert_or_assign(std::move(key), std::move(value));
 
             skipWhitespace();
             if (m_pos >= m_text.size()) return fail("unterminated object");
@@ -286,8 +316,15 @@ private:
         return true;
     }
 
+    struct DepthGuard {
+        explicit DepthGuard(Parser& parser) : m_parser(parser) { ++m_parser.m_depth; }
+        ~DepthGuard() { --m_parser.m_depth; }
+        Parser& m_parser;
+    };
+
     const std::string& m_text;
     size_t m_pos{0};
+    int m_depth{0};
     std::string m_error;
 };
 
