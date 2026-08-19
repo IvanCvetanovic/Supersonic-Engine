@@ -294,4 +294,4 @@ static void runTests() {
     testEmptyClipIsRejected();
 }
 
-TEST_MAIN("test_mixer")
+TEST_MAIN("test_mixer", 190)

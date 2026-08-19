@@ -164,4 +164,4 @@ static void runTests() {
     testAnEmptySceneHasNoAmbientLight();
 }
 
-TEST_MAIN("test_transform")
+TEST_MAIN("test_transform", 22)

@@ -205,4 +205,4 @@ static void runTests() {
     testPickFollowsParenting();
 }
 
-TEST_MAIN("test_raycast")
+TEST_MAIN("test_raycast", 17)

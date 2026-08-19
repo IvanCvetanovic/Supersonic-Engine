@@ -403,4 +403,4 @@ static void runTests() {
     testFaceWindingAgreesWithNormals();
 }
 
-TEST_MAIN("test_meshgen")
+TEST_MAIN("test_meshgen", 180)

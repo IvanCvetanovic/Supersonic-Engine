@@ -437,4 +437,4 @@ static void runTests() {
     testSwitchingWithNoBlendStillRestartsTheClip();
 }
 
-TEST_MAIN("test_blending")
+TEST_MAIN("test_blending", 30)

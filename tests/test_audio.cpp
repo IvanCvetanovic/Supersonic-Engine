@@ -205,4 +205,4 @@ static void runTests() {
     testShippedAmbientClipIsUsable();
 }
 
-TEST_MAIN("test_audio")
+TEST_MAIN("test_audio", 12)

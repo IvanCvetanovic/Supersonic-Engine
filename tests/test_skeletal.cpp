@@ -464,4 +464,4 @@ static void runTests() {
     testMissingFileIsHandled();
 }
 
-TEST_MAIN("test_skeletal")
+TEST_MAIN("test_skeletal", 85)

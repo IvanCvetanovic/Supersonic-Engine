@@ -574,4 +574,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize")
+TEST_MAIN("test_serialize", 100)

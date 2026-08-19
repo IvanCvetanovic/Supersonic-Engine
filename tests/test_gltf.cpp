@@ -32,6 +32,7 @@ static void testLoadsModel() {
 
 static void testIndicesAreInRange() {
     const auto scene = GltfLoader::Load(kModel);
+    CHECK_MSG(scene.ok, scene.error);
     if (!scene.ok) return;
 
     for (const auto& sub : scene.submeshes) {
@@ -49,6 +50,7 @@ static void testNodeTransformsAreApplied() {
     // Baking the chain is the whole point - a loader that ignored node
     // transforms would return two identical unit cubes at the origin.
     const auto scene = GltfLoader::Load(kModel);
+    CHECK_MSG(scene.ok, scene.error);
     if (!scene.ok) return;
 
     const auto pedestal = std::find_if(scene.submeshes.begin(), scene.submeshes.end(),
@@ -79,6 +81,7 @@ static void testNodeTransformsAreApplied() {
 
 static void testNormalsSurviveNonUniformScale() {
     const auto scene = GltfLoader::Load(kModel);
+    CHECK_MSG(scene.ok, scene.error);
     if (!scene.ok) return;
 
     // Normals go through the inverse-transpose; using the matrix directly would
@@ -92,6 +95,7 @@ static void testNormalsSurviveNonUniformScale() {
 
 static void testMaterialsAreRead() {
     const auto scene = GltfLoader::Load(kModel);
+    CHECK_MSG(scene.ok, scene.error);
     if (!scene.ok) return;
 
     bool foundGold = false;
@@ -130,12 +134,14 @@ static void testGarbageFileFails() {
 }
 
 static void runTests() {
-    if (!modelAvailable()) {
-        std::printf("  note: %s not reachable from the test cwd; skipping model cases\n", kModel.c_str());
-        testMissingFileFails();
-        testGarbageFileFails();
-        return;
-    }
+    // The fixture is committed to the tree and CTest runs this suite from the
+    // project root, so it is always reachable. It used to be optional: a miss
+    // printed a note, ran two of seven cases and exited 0, which meant a broken
+    // glTF importer looked identical to a green run. If the file is gone, that
+    // is the failure - say so.
+    CHECK_MSG(modelAvailable(), kModel + " is missing; run this suite from the project root");
+    if (!modelAvailable()) return;
+
     testLoadsModel();
     testIndicesAreInRange();
     testNodeTransformsAreApplied();
@@ -145,4 +151,4 @@ static void runTests() {
     testGarbageFileFails();
 }
 
-TEST_MAIN("test_gltf")
+TEST_MAIN("test_gltf", 100)

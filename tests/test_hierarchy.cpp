@@ -339,4 +339,4 @@ static void runTests() {
     testStopWithoutPlayIsHarmless();
 }
 
-TEST_MAIN("test_hierarchy")
+TEST_MAIN("test_hierarchy", 36)

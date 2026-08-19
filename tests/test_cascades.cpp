@@ -274,4 +274,4 @@ static void runTests() {
     testShadowDistanceIsClampedToTheCamera();
 }
 
-TEST_MAIN("test_cascades")
+TEST_MAIN("test_cascades", 50)

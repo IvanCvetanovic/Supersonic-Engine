@@ -833,4 +833,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics")
+TEST_MAIN("test_physics", 56)

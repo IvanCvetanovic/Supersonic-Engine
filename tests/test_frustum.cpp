@@ -243,4 +243,4 @@ static void runTests() {
     testDegenerateMatrixDoesNotCullEverything();
 }
 
-TEST_MAIN("test_frustum")
+TEST_MAIN("test_frustum", 30)

@@ -210,4 +210,4 @@ static void runTests() {
     testDegenerateInputsDoNotProduceNaN();
 }
 
-TEST_MAIN("test_pointshadow")
+TEST_MAIN("test_pointshadow", 190)

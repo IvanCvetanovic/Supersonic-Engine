@@ -75,4 +75,4 @@ static void runTests() {
     testDefaultsFillIn();
 }
 
-TEST_MAIN("test_gameruntime")
+TEST_MAIN("test_gameruntime", 9)

@@ -333,4 +333,4 @@ static void runTests() {
     testAnInactivePointerDoesNothing();
 }
 
-TEST_MAIN("test_uicanvas")
+TEST_MAIN("test_uicanvas", 72)

@@ -28,8 +28,22 @@ inline bool nearly(float a, float b, float eps = 1e-4f) {
     return std::fabs(a - b) <= eps;
 }
 
-inline int summary(const char* suite) {
+// minChecks is the floor below which "no failures" stops meaning anything.
+//
+// g_checks was tracked and never used, so a suite that ran zero assertions
+// exited 0 and CTest reported it green. That is not hypothetical: test_gltf
+// skipped five of its seven cases when its fixture was not reachable from the
+// working directory, printed a note, and passed. The floor turns a suite that
+// quietly stopped testing into a red run, which is the only way anyone finds
+// out. It is set per suite well below the real count, so adding or removing a
+// handful of checks does not trip it - only a wholesale skip does.
+inline int summary(const char* suite, int minChecks) {
     std::printf("%s: %d checks, %d failures\n", suite, g_checks, g_failures);
+    if (g_checks < minChecks) {
+        std::printf("  FAIL %s ran %d checks, expected at least %d - the suite skipped work\n",
+                    suite, g_checks, minChecks);
+        return 1;
+    }
     return g_failures == 0 ? 0 : 1;
 }
 
@@ -65,5 +79,8 @@ inline int summary(const char* suite) {
             "got " + std::to_string(_checkA) + ", expected " + std::to_string(_checkB)); \
     } while (false)
 
-#define TEST_MAIN(suite) \
-    int main() { runTests(); return ::test::summary(suite); }
+// Two arguments, deliberately: every suite must state its floor. A default
+// would let a new suite be written without one, which is the case the floor
+// exists to catch.
+#define TEST_MAIN(suite, minChecks) \
+    int main() { runTests(); return ::test::summary(suite, minChecks); }

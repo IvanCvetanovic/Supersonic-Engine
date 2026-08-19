@@ -288,4 +288,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials")
+TEST_MAIN("test_materials", 35)

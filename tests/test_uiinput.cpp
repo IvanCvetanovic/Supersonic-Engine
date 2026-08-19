@@ -226,4 +226,4 @@ static void runTests() {
     testADegenerateGameRectIsIgnored();
 }
 
-TEST_MAIN("test_uiinput")
+TEST_MAIN("test_uiinput", 13)

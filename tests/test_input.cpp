@@ -286,4 +286,4 @@ static void runTests() {
     testOutOfRangeCodesAreRejected();
 }
 
-TEST_MAIN("test_input")
+TEST_MAIN("test_input", 30)

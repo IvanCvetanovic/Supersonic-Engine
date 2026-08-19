@@ -182,4 +182,4 @@ static void runTests() {
     testApiVersionIsPinned();
 }
 
-TEST_MAIN("test_scripts")
+TEST_MAIN("test_scripts", 21)

@@ -437,4 +437,4 @@ static void runTests() {
     testCommitBeforeResetSelfInitialises();
 }
 
-TEST_MAIN("test_undo")
+TEST_MAIN("test_undo", 75)

@@ -249,4 +249,4 @@ static void runTests() {
     testTheMapOrientationMatchesTheCascadeConvention();
 }
 
-TEST_MAIN("test_spotlight")
+TEST_MAIN("test_spotlight", 140)

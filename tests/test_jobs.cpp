@@ -215,4 +215,4 @@ static void runTests() {
     testInitializeIsIdempotentAndShutdownIsSafe();
 }
 
-TEST_MAIN("test_jobs")
+TEST_MAIN("test_jobs", 27)
