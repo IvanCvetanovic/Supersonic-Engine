@@ -786,7 +786,119 @@ static void testALongBoxIsHarderToTipAboutItsLongAxis() {
                   " vs long " + std::to_string(longSpin));
 }
 
+static void testLayerMasksSuppressAPair() {
+    // Without layers everything collides with everything, which is a design
+    // ceiling rather than a tuning problem: a bullet cannot ignore the thing
+    // that fired it and a camera boom cannot pass through the player.
+    entt::registry registry;
+
+    const auto a = registry.create();
+    registry.emplace<TransformComponent>(a).position = glm::vec3(0.0f, 5.0f, 0.0f);
+    registry.emplace<RigidBodyComponent>(a);
+    auto& boxA = registry.emplace<BoxColliderComponent>(a);
+    boxA.layer = 1u << 0;
+    boxA.collidesWith = 1u << 1;   // talks only to layer 1
+
+    const auto b = registry.create();
+    registry.emplace<TransformComponent>(b).position = glm::vec3(0.2f, 5.0f, 0.0f);
+    registry.emplace<RigidBodyComponent>(b);
+    auto& boxB = registry.emplace<BoxColliderComponent>(b);
+    boxB.layer = 1u << 2;          // NOT layer 1
+    boxB.collidesWith = 0xFFFFFFFFu;
+
+    // Deeply overlapping, so anything that tests them will report a contact.
+    std::vector<PhysicsSystem::Contact> contacts;
+    PhysicsSystem::Update(registry, 1.0f / 60.0f, &contacts);
+
+    CHECK_MSG(contacts.empty(),
+              "a pair whose masks do not agree must never reach the narrowphase");
+
+    // And the same pair DOES collide once both sides agree, so the test is
+    // measuring the mask rather than a geometry mistake.
+    boxA.collidesWith = 0xFFFFFFFFu;
+    contacts.clear();
+    PhysicsSystem::Update(registry, 1.0f / 60.0f, &contacts);
+    CHECK_MSG(!contacts.empty(), "with agreeing masks the same pair must collide");
+}
+
+static void testFilteringNeedsBothSidesToAgree() {
+    // One-way filtering would let A push B while B ignored A, which the solver
+    // resolves as a one-sided impulse - an object shoved by something it is not
+    // touching.
+    entt::registry registry;
+
+    const auto a = registry.create();
+    registry.emplace<TransformComponent>(a).position = glm::vec3(0.0f, 5.0f, 0.0f);
+    registry.emplace<RigidBodyComponent>(a);
+    auto& boxA = registry.emplace<BoxColliderComponent>(a);
+    boxA.layer = 1u << 0;
+    boxA.collidesWith = 0xFFFFFFFFu;   // A is willing
+
+    const auto b = registry.create();
+    registry.emplace<TransformComponent>(b).position = glm::vec3(0.2f, 5.0f, 0.0f);
+    registry.emplace<RigidBodyComponent>(b);
+    auto& boxB = registry.emplace<BoxColliderComponent>(b);
+    boxB.layer = 1u << 1;
+    boxB.collidesWith = 1u << 5;       // B is not
+
+    std::vector<PhysicsSystem::Contact> contacts;
+    PhysicsSystem::Update(registry, 1.0f / 60.0f, &contacts);
+    CHECK_MSG(contacts.empty(), "one unwilling side must suppress the pair");
+}
+
+static void testColliderCenterMovesTheCollider() {
+    // Without an offset a collider is nailed to the entity origin, so a
+    // character whose mesh pivots at the feet cannot have a body at its chest.
+    entt::registry registry;
+
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = glm::vec3(0.0f, 10.0f, 0.0f);
+    auto& box = registry.emplace<BoxColliderComponent>(entity);
+    box.size = glm::vec3(1.0f);
+
+    // A ray four units to the side misses a collider at the origin.
+    const glm::vec3 origin(4.0f, 10.0f, 0.0f);
+    const glm::vec3 towards(-1.0f, 0.0f, 0.0f);
+
+    const auto missed = PhysicsSystem::Raycast(registry, origin, towards, 2.0f);
+    CHECK_MSG(!missed.hit, "the ray must fall short of a collider at the origin");
+
+    // Offsetting the collider towards the ray brings it into reach, without the
+    // entity itself having moved.
+    box.center = glm::vec3(3.0f, 0.0f, 0.0f);
+    const auto found = PhysicsSystem::Raycast(registry, origin, towards, 2.0f);
+    CHECK_MSG(found.hit, "the offset must move the collider the query sees");
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.x, 0.0f);
+}
+
+static void testRaycastRespectsItsLayerMask() {
+    entt::registry registry;
+
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = glm::vec3(0.0f, 10.0f, 0.0f);
+    auto& box = registry.emplace<BoxColliderComponent>(entity);
+    box.layer = 1u << 3;
+
+    const glm::vec3 origin(4.0f, 10.0f, 0.0f);
+    const glm::vec3 towards(-1.0f, 0.0f, 0.0f);
+
+    const auto anyLayer = PhysicsSystem::Raycast(registry, origin, towards, 10.0f);
+    CHECK_MSG(anyLayer.hit, "the default mask must hit everything, as before");
+
+    const auto wrongLayer = PhysicsSystem::Raycast(registry, origin, towards, 10.0f,
+                                                   entt::null, false, 1u << 1);
+    CHECK_MSG(!wrongLayer.hit, "a ray must not hit a layer it did not ask for");
+
+    const auto rightLayer = PhysicsSystem::Raycast(registry, origin, towards, 10.0f,
+                                                   entt::null, false, 1u << 3);
+    CHECK_MSG(rightLayer.hit, "and must hit the layer it did ask for");
+}
+
 static void runTests() {
+    testLayerMasksSuppressAPair();
+    testFilteringNeedsBothSidesToAgree();
+    testColliderCenterMovesTheCollider();
+    testRaycastRespectsItsLayerMask();
     testSweepAndPruneFindsOverlappingPairs();
     testSweepAndPruneSkipsPairsSeparatedOffAxis();
     testSweepAndPruneIgnoresTwoStatics();

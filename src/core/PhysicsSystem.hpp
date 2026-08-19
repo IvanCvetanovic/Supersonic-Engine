@@ -43,6 +43,11 @@ public:
         glm::vec3 max{0.0f};
         float inverseMass{0.0f};
         bool isTrigger{false};
+
+        // Carried on the proxy so the broadphase can reject a pair before the
+        // narrowphase ever sees it, which is the whole point of a mask.
+        uint32_t layer{1u};
+        uint32_t collidesWith{0xFFFFFFFFu};
     };
 
     static void SweepAndPrune(std::vector<Proxy>& proxies,
@@ -74,19 +79,24 @@ public:
     static RayHit Raycast(entt::registry& registry, const glm::vec3& origin,
                           const glm::vec3& direction, float maxDistance = 1000.0f,
                           entt::entity ignore = entt::null,
-                          bool includeTriggers = false);
+                          bool includeTriggers = false,
+                          // Which layers this ray can hit. Defaults to all, so
+                          // every existing call behaves exactly as before.
+                          uint32_t layerMask = 0xFFFFFFFFu);
 
     // Every collider overlapping a sphere. Appends, so a caller can accumulate
     // across several queries without clearing between them.
     static void OverlapSphere(entt::registry& registry, const glm::vec3& centre, float radius,
                               std::vector<entt::entity>& outEntities,
                               entt::entity ignore = entt::null,
-                              bool includeTriggers = true);
+                              bool includeTriggers = true,
+                              uint32_t layerMask = 0xFFFFFFFFu);
 
     // Whether anything solid sits within `distance` below a point. The check
     // every character controller needs and nobody wants to write twice.
     static bool IsGrounded(entt::registry& registry, const glm::vec3& footPosition,
-                           float distance = 0.15f, entt::entity ignore = entt::null);
+                           float distance = 0.15f, entt::entity ignore = entt::null,
+                           uint32_t layerMask = 0xFFFFFFFFu);
 };
 
 } // namespace Supersonic

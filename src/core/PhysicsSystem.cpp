@@ -281,6 +281,11 @@ void PhysicsSystem::SweepAndPrune(std::vector<Proxy>& proxies,
             // Two immovable things can overlap all they like.
             if (a.inverseMass == 0.0f && b.inverseMass == 0.0f) continue;
 
+            // BOTH sides must agree. One-way filtering would let A push B while
+            // B ignored A, which the solver resolves as a one-sided impulse -
+            // an object that shoves things it is not touching.
+            if ((a.collidesWith & b.layer) == 0 || (b.collidesWith & a.layer) == 0) continue;
+
             if (a.max.y < b.min.y || b.max.y < a.min.y) continue;
             if (a.max.z < b.min.z || b.max.z < a.min.z) continue;
 
@@ -394,7 +399,9 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     std::vector<Proxy> proxies;
 
     const auto collect = [&](entt::entity entity, Shape shape,
-                             const glm::vec3& localHalfExtent, bool isTrigger) {
+                             const glm::vec3& localHalfExtent, bool isTrigger,
+                             const glm::vec3& localCenter, uint32_t layer,
+                             uint32_t collidesWith) {
         const auto* transform = registry.try_get<TransformComponent>(entity);
         if (!transform) return;
 
@@ -409,6 +416,14 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         body.worldToLocal = glm::inverse(glm::mat3(parentWorld));
 
         worldBounds(world, localHalfExtent, body.centre, body.halfExtent);
+
+        // The offset is in the collider's LOCAL space, so it goes through the
+        // same world matrix the extents did - rotating the entity has to swing
+        // the offset with it, or a door's collider stays on the wrong side.
+        // Direction only, hence the w = 0.
+        if (localCenter != glm::vec3(0.0f)) {
+            body.centre += glm::vec3(world * glm::vec4(localCenter, 0.0f));
+        }
 
         if (shape == Shape::Sphere) {
             // A sphere has one radius, so a non-uniform scale has to collapse to
@@ -443,6 +458,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         proxy.max = body.max;
         proxy.inverseMass = body.inverseMass;
         proxy.isTrigger = isTrigger;
+        proxy.layer = layer;
+        proxy.collidesWith = collidesWith;
 
         bodies.push_back(body);
         proxies.push_back(proxy);
@@ -450,14 +467,16 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
     for (auto entity : registry.view<BoxColliderComponent>()) {
         const auto& box = registry.get<BoxColliderComponent>(entity);
-        collect(entity, Shape::Box, box.size * 0.5f, box.isTrigger);
+        collect(entity, Shape::Box, box.size * 0.5f, box.isTrigger,
+                box.center, box.layer, box.collidesWith);
     }
     for (auto entity : registry.view<SphereColliderComponent>()) {
         // An entity carrying both colliders would otherwise be added twice and
         // then collide with itself.
         if (registry.all_of<BoxColliderComponent>(entity)) continue;
         const auto& sphere = registry.get<SphereColliderComponent>(entity);
-        collect(entity, Shape::Sphere, glm::vec3(sphere.radius), sphere.isTrigger);
+        collect(entity, Shape::Sphere, glm::vec3(sphere.radius), sphere.isTrigger,
+                sphere.center, sphere.layer, sphere.collidesWith);
     }
 
     if (bodies.size() < 2) return;
@@ -690,11 +709,16 @@ struct QueryShape {
     glm::vec3 centre{0.0f};
     glm::vec3 halfExtent{0.5f};
     float radius{0.5f};
+
+    // Queries filter on the same mask the solver does, so "what can a bullet
+    // hit" and "what does a bullet collide with" cannot disagree.
+    uint32_t layer{1u};
 };
 
 void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
     const auto collect = [&](entt::entity entity, bool sphere,
-                             const glm::vec3& localHalfExtent, bool isTrigger) {
+                             const glm::vec3& localHalfExtent, bool isTrigger,
+                             const glm::vec3& localCenter, uint32_t layer) {
         const auto* transform = registry.try_get<TransformComponent>(entity);
         if (!transform) return;
 
@@ -705,6 +729,10 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
 
         const glm::mat4 world = parentWorldMatrix(registry, entity) * transform->getModelMatrix();
         worldBounds(world, localHalfExtent, shape.centre, shape.halfExtent);
+        if (localCenter != glm::vec3(0.0f)) {
+            shape.centre += glm::vec3(world * glm::vec4(localCenter, 0.0f));
+        }
+        shape.layer = layer;
 
         if (sphere) {
             shape.radius = std::max({shape.halfExtent.x, shape.halfExtent.y, shape.halfExtent.z});
@@ -715,14 +743,15 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
 
     for (auto entity : registry.view<BoxColliderComponent>()) {
         const auto& box = registry.get<BoxColliderComponent>(entity);
-        collect(entity, false, box.size * 0.5f, box.isTrigger);
+        collect(entity, false, box.size * 0.5f, box.isTrigger, box.center, box.layer);
     }
     for (auto entity : registry.view<SphereColliderComponent>()) {
         // Matching the solver: an entity with both colliders is a box, and must
         // not be gathered twice or a query would report it against itself.
         if (registry.all_of<BoxColliderComponent>(entity)) continue;
         const auto& sphere = registry.get<SphereColliderComponent>(entity);
-        collect(entity, true, glm::vec3(sphere.radius), sphere.isTrigger);
+        collect(entity, true, glm::vec3(sphere.radius), sphere.isTrigger,
+                sphere.center, sphere.layer);
     }
 }
 
@@ -730,7 +759,8 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
 
 PhysicsSystem::RayHit PhysicsSystem::Raycast(entt::registry& registry, const glm::vec3& origin,
                                              const glm::vec3& direction, float maxDistance,
-                                             entt::entity ignore, bool includeTriggers) {
+                                             entt::entity ignore, bool includeTriggers,
+                                             uint32_t layerMask) {
     RayHit result;
 
     const float length = glm::length(direction);
@@ -746,6 +776,7 @@ PhysicsSystem::RayHit PhysicsSystem::Raycast(entt::registry& registry, const glm
     for (const QueryShape& shape : shapes) {
         if (shape.entity == ignore) continue;
         if (shape.isTrigger && !includeTriggers) continue;
+        if ((layerMask & shape.layer) == 0) continue;
 
         float distance = 0.0f;
         glm::vec3 normal(0.0f);
@@ -768,7 +799,7 @@ PhysicsSystem::RayHit PhysicsSystem::Raycast(entt::registry& registry, const glm
 
 void PhysicsSystem::OverlapSphere(entt::registry& registry, const glm::vec3& centre, float radius,
                                   std::vector<entt::entity>& outEntities, entt::entity ignore,
-                                  bool includeTriggers) {
+                                  bool includeTriggers, uint32_t layerMask) {
     if (radius <= 0.0f) return;
 
     std::vector<QueryShape> shapes;
@@ -777,6 +808,7 @@ void PhysicsSystem::OverlapSphere(entt::registry& registry, const glm::vec3& cen
     for (const QueryShape& shape : shapes) {
         if (shape.entity == ignore) continue;
         if (shape.isTrigger && !includeTriggers) continue;
+        if ((layerMask & shape.layer) == 0) continue;
 
         if (shape.isSphere) {
             const float reach = radius + shape.radius;
@@ -798,13 +830,13 @@ void PhysicsSystem::OverlapSphere(entt::registry& registry, const glm::vec3& cen
 }
 
 bool PhysicsSystem::IsGrounded(entt::registry& registry, const glm::vec3& footPosition,
-                               float distance, entt::entity ignore) {
+                               float distance, entt::entity ignore, uint32_t layerMask) {
     // The world ground plane counts, since the solver treats it as solid even
     // though no entity represents it.
     if (footPosition.y - distance <= 0.0f) return true;
 
     const RayHit hit = Raycast(registry, footPosition, glm::vec3(0.0f, -1.0f, 0.0f),
-                               distance, ignore, /*includeTriggers=*/false);
+                               distance, ignore, /*includeTriggers=*/false, layerMask);
     return hit.hit;
 }
 

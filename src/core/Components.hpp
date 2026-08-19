@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -323,14 +324,44 @@ struct RigidBodyComponent {
     bool freezeRotation{false};
 };
 
+// Collision layers.
+//
+// Without them everything collides with everything, which is not a tuning
+// problem but a design ceiling: a bullet cannot ignore the thing that fired it,
+// a camera boom cannot pass through the player, and a trigger volume meant for
+// the player fires on every crate that touches it.
+//
+// A bitmask pair rather than a matrix: `layer` is what this collider IS, and
+// `collidesWith` is what it will talk to. Both sides must agree before a pair
+// is tested, so making something invisible to a category is one edit rather
+// than one per counterpart.
+namespace CollisionLayer {
+inline constexpr uint32_t kDefault = 1u << 0;
+inline constexpr uint32_t kAll = 0xFFFFFFFFu;
+} // namespace CollisionLayer
+
 struct BoxColliderComponent {
     glm::vec3 size{1.0f, 1.0f, 1.0f};
+
+    // Offset from the entity's origin, in local space.
+    //
+    // Without this a collider is nailed to the origin of whatever it is
+    // attached to, so a character whose mesh has its pivot at the feet cannot
+    // have a body around its chest, and a door cannot have its collider on its
+    // hinge side. Every workaround involves an extra child entity.
+    glm::vec3 center{0.0f};
+
     bool isTrigger{false};
+    uint32_t layer{CollisionLayer::kDefault};
+    uint32_t collidesWith{CollisionLayer::kAll};
 };
 
 struct SphereColliderComponent {
     float radius{0.5f};
+    glm::vec3 center{0.0f};
     bool isTrigger{false};
+    uint32_t layer{CollisionLayer::kDefault};
+    uint32_t collidesWith{CollisionLayer::kAll};
 };
 
 struct AudioSourceComponent {

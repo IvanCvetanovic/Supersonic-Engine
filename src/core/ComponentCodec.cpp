@@ -166,7 +166,11 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
     if (const auto* box = registry.try_get<BoxColliderComponent>(entity)) {
         out << indent << "\"BoxCollider\": { \"Size\": ";
         writeVec3(out, box->size);
-        out << ", \"IsTrigger\": " << (box->isTrigger ? "true" : "false") << " },\n";
+        out << ", \"Center\": ";
+        writeVec3(out, box->center, "BoxCollider.center");
+        out << ", \"IsTrigger\": " << (box->isTrigger ? "true" : "false")
+            << ", \"Layer\": " << box->layer
+            << ", \"CollidesWith\": " << box->collidesWith << " },\n";
     }
 
     // Neither of these was written at all. A sphere collider therefore
@@ -174,7 +178,11 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
     // missing collider looks exactly like a body that was never given one.
     if (const auto* sphere = registry.try_get<SphereColliderComponent>(entity)) {
         out << indent << "\"SphereCollider\": { \"Radius\": " << sphere->radius
-             << ", \"IsTrigger\": " << (sphere->isTrigger ? "true" : "false") << " },\n";
+             << ", \"Center\": ";
+        writeVec3(out, sphere->center, "SphereCollider.center");
+        out << ", \"IsTrigger\": " << (sphere->isTrigger ? "true" : "false")
+            << ", \"Layer\": " << sphere->layer
+            << ", \"CollidesWith\": " << sphere->collidesWith << " },\n";
     }
 
     if (const auto* listener = registry.try_get<AudioListenerComponent>(entity)) {
@@ -394,13 +402,25 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     if (node.Has("BoxCollider")) {
         auto& box = registry.emplace_or_replace<BoxColliderComponent>(entity);
         box.size = readVec3(node["BoxCollider"]["Size"], glm::vec3(1.0f));
+        box.center = readVec3(node["BoxCollider"]["Center"], glm::vec3(0.0f));
         box.isTrigger = node["BoxCollider"]["IsTrigger"].AsBool(false);
+        // The defaults matter: a scene written before layers existed has
+        // neither key, and must keep colliding with everything.
+        box.layer = static_cast<uint32_t>(
+            node["BoxCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
+        box.collidesWith = static_cast<uint32_t>(
+            node["BoxCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
     if (node.Has("SphereCollider")) {
         auto& sphere = registry.emplace_or_replace<SphereColliderComponent>(entity);
         sphere.radius = node["SphereCollider"]["Radius"].AsFloat(0.5f);
+        sphere.center = readVec3(node["SphereCollider"]["Center"], glm::vec3(0.0f));
         sphere.isTrigger = node["SphereCollider"]["IsTrigger"].AsBool(false);
+        sphere.layer = static_cast<uint32_t>(
+            node["SphereCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
+        sphere.collidesWith = static_cast<uint32_t>(
+            node["SphereCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
     if (node.Has("AudioListener")) {

@@ -25,6 +25,58 @@ namespace Supersonic {
 
 namespace {
 
+// Eight named checkboxes rather than a hex field.
+//
+// A mask edited as a number is a mask nobody edits: working out that a bullet
+// which ignores its shooter needs 0xFFFFFFFD is the kind of arithmetic that
+// gets done once, wrongly, and then copied. Eight layers is enough for the
+// distinctions games actually make - player, enemy, terrain, trigger - and the
+// rest of the 32 stay reachable from code for anyone who needs them.
+void drawCollisionLayers(uint32_t& layer, uint32_t& collidesWith) {
+    if (!ImGui::TreeNode("Collision Layers")) return;
+
+    ImGui::TextDisabled("This collider is:");
+    for (int bit = 0; bit < 8; ++bit) {
+        const uint32_t flag = 1u << bit;
+        bool on = (layer & flag) != 0;
+        ImGui::PushID(bit);
+        if (ImGui::Checkbox("##layer", &on)) {
+            layer = on ? (layer | flag) : (layer & ~flag);
+        }
+        ImGui::PopID();
+        ImGui::SameLine();
+        ImGui::Text("%d", bit);
+        if (bit < 7) ImGui::SameLine();
+    }
+
+    ImGui::TextDisabled("and collides with:");
+    for (int bit = 0; bit < 8; ++bit) {
+        const uint32_t flag = 1u << bit;
+        bool on = (collidesWith & flag) != 0;
+        ImGui::PushID(100 + bit);
+        if (ImGui::Checkbox("##mask", &on)) {
+            collidesWith = on ? (collidesWith | flag) : (collidesWith & ~flag);
+        }
+        ImGui::PopID();
+        ImGui::SameLine();
+        ImGui::Text("%d", bit);
+        if (bit < 7) ImGui::SameLine();
+    }
+
+    // Both sides have to agree for a pair to be tested, so a collider that
+    // talks to nothing is almost always a mistake rather than an intention.
+    if (collidesWith == 0) {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f),
+                           "Collides with nothing - this collider is inert.");
+    }
+    ImGui::TreePop();
+}
+
+} // namespace
+
+
+namespace {
+
 // Accepts a dragged asset path on the widget just submitted.
 //
 // Returns true and fills `out` on a drop. The payload is a NUL-terminated path
@@ -302,7 +354,9 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             auto& box = registry.get<BoxColliderComponent>(entity);
 
             Theme::DrawVec3Control("Size", box.size, 1.0f);
+            Theme::DrawVec3Control("Center", box.center, 0.0f);
             ImGui::Checkbox("Is Trigger", &box.isTrigger);
+            drawCollisionLayers(box.layer, box.collidesWith);
         }
     }
 
@@ -316,7 +370,9 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Sphere Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& sphere = registry.get<SphereColliderComponent>(entity);
             ImGui::DragFloat("Radius", &sphere.radius, 0.01f, 0.01f, 100.0f);
+            Theme::DrawVec3Control("Center##sphere", sphere.center, 0.0f);
             ImGui::Checkbox("Is Trigger##sphere", &sphere.isTrigger);
+            drawCollisionLayers(sphere.layer, sphere.collidesWith);
         }
     }
 
