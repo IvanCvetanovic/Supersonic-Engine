@@ -1,4 +1,5 @@
 #include "renderer/TextureRegistry.hpp"
+#include <algorithm>
 #include "core/Log.hpp"
 #include "renderer/VulkanBuffer.hpp"
 
@@ -250,6 +251,92 @@ vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_
 
     m_materialSets.emplace(key, sets[0]);
     return sets[0];
+}
+
+
+bool TextureRegistry::Invalidate(const std::string& path) {
+    // The cache key carries the colour space, because the same file loaded as
+    // sRGB and as linear data are two different images. Both are dropped: the
+    // caller asked for that path to be re-read, not for one interpretation.
+    bool dropped = false;
+    std::vector<uint32_t> deadIds;
+
+    for (const bool srgb : { true, false }) {
+        const std::string key = (srgb ? "srgb:" : "data:") + path;
+        const auto it = m_lookup.find(key);
+        if (it == m_lookup.end()) continue;
+
+        const uint32_t id = it->second;
+        m_lookup.erase(it);
+        dropped = true;
+
+        // Never free the built-in fallbacks. Acquire hands these out when a
+        // file is missing, so several dead paths can share one id - freeing it
+        // would take the checkerboard away from everything still using it.
+        if (id == m_checkerTexture || id == m_whiteTexture || id == m_flatNormalTexture) {
+            continue;
+        }
+        if (id >= m_textures.size()) continue;
+
+        deadIds.push_back(id);
+        auto image = std::move(m_textures[id].image);
+        m_textures[id].width = 0;
+        m_textures[id].height = 0;
+        m_deviceRef.DeferDestroy(
+            [img = std::shared_ptr<VulkanImage>(std::move(image))]() mutable { img.reset(); });
+    }
+
+    // A descriptor set naming a destroyed image is the null-sampler class of
+    // bug that cost this project six commits, so every set mentioning a dead id
+    // goes too. They are rebuilt on demand by AcquireMaterialSet.
+    if (!deadIds.empty()) {
+        for (auto it = m_materialSets.begin(); it != m_materialSets.end();) {
+            const uint32_t albedo = static_cast<uint32_t>(it->first >> 32);
+            const uint32_t normal = static_cast<uint32_t>(it->first & 0xFFFFFFFFull);
+            const bool names =
+                std::find(deadIds.begin(), deadIds.end(), albedo) != deadIds.end() ||
+                std::find(deadIds.begin(), deadIds.end(), normal) != deadIds.end();
+            it = names ? m_materialSets.erase(it) : std::next(it);
+        }
+    }
+
+    if (dropped) {
+        SUPERSONIC_LOG_INFO("TextureRegistry") << "Invalidated '" << path
+            << "'; the next request will re-read it from disk." << std::endl;
+    }
+    return dropped;
+}
+
+bool TextureRegistry::ReplaceRGBA(uint32_t id, const uint8_t* pixels,
+                                  uint32_t width, uint32_t height, bool srgb) {
+    if (id >= m_textures.size() || !pixels || width == 0 || height == 0) return false;
+    if (id == m_checkerTexture || id == m_whiteTexture || id == m_flatNormalTexture) {
+        return false;  // shared fallbacks; replacing one changes every user
+    }
+
+    const std::string scratchKey = "__replace_scratch";
+    m_lookup.erase(scratchKey);
+    const uint32_t scratchId = UploadRGBA(scratchKey, pixels, width, height, srgb);
+    m_lookup.erase(scratchKey);
+    if (scratchId >= m_textures.size()) return false;
+
+    auto oldImage = std::move(m_textures[id].image);
+    m_textures[id].image = std::move(m_textures[scratchId].image);
+    m_textures[id].width = width;
+    m_textures[id].height = height;
+
+    // Descriptor sets naming this id keep working only if they are rewritten to
+    // the new image, so they are dropped and rebuilt rather than left pointing
+    // at the image about to be destroyed.
+    for (auto it = m_materialSets.begin(); it != m_materialSets.end();) {
+        const uint32_t albedo = static_cast<uint32_t>(it->first >> 32);
+        const uint32_t normal = static_cast<uint32_t>(it->first & 0xFFFFFFFFull);
+        it = (albedo == id || normal == id) ? m_materialSets.erase(it) : std::next(it);
+    }
+
+    m_deviceRef.DeferDestroy(
+        [img = std::shared_ptr<VulkanImage>(std::move(oldImage))]() mutable { img.reset(); });
+    return true;
 }
 
 } // namespace Supersonic

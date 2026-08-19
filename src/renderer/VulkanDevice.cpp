@@ -276,4 +276,40 @@ vk::SampleCountFlagBits VulkanDevice::GetMaxUsableSampleCount(vk::SampleCountFla
     return vk::SampleCountFlagBits::e1;
 }
 
+
+void VulkanDevice::DeferDestroy(std::function<void()> deleter) {
+    if (!deleter) return;
+    m_pendingDestroys.push_back({ m_frameNumber, std::move(deleter) });
+}
+
+void VulkanDevice::CollectGarbage(uint64_t completedFrame) {
+    // Stable partition rather than erase-in-loop: a deleter can, in principle,
+    // queue another destroy, and iterating a vector being appended to is how
+    // that turns into a dangling iterator.
+    std::vector<PendingDestroy> keep;
+    keep.reserve(m_pendingDestroys.size());
+
+    std::vector<PendingDestroy> run;
+    for (auto& pending : m_pendingDestroys) {
+        if (pending.frame <= completedFrame) {
+            run.push_back(std::move(pending));
+        } else {
+            keep.push_back(std::move(pending));
+        }
+    }
+    m_pendingDestroys = std::move(keep);
+
+    for (auto& pending : run) {
+        pending.deleter();
+    }
+}
+
+void VulkanDevice::FlushDeferredDestroys() {
+    std::vector<PendingDestroy> all = std::move(m_pendingDestroys);
+    m_pendingDestroys.clear();
+    for (auto& pending : all) {
+        pending.deleter();
+    }
+}
+
 } // namespace Supersonic

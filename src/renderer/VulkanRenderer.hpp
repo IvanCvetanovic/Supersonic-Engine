@@ -32,6 +32,10 @@ class VulkanRenderer {
 public:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
+    // Monotonic across the run, unlike m_currentFrame which cycles 0..N-1.
+    // Deferred destruction needs to compare frames that are far apart.
+    uint64_t m_absoluteFrame{0};
+
     VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window);
     ~VulkanRenderer();
 

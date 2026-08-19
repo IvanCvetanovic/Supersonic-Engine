@@ -45,6 +45,23 @@ public:
     // scene sharing materials does not allocate a set per entity.
     vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId);
 
+    // Drops a cached path so the next Acquire re-reads it from disk, and
+    // queues the old image for deferred destruction. This is what makes editing
+    // a texture and seeing the result possible without restarting - the
+    // registries cached failures deliberately, and had no way to un-cache a
+    // success or a failure.
+    //
+    // Any material descriptor set naming the old id is dropped with it, because
+    // a set still pointing at a destroyed image is exactly the null-sampler
+    // class of bug that cost this project six commits.
+    bool Invalidate(const std::string& path);
+
+    // Rewrites the pixels behind an existing id, keeping the id and every
+    // descriptor set that names it valid. Required for anything regenerated per
+    // frame; Invalidate-then-Acquire would leak an image per frame.
+    bool ReplaceRGBA(uint32_t id, const uint8_t* pixels,
+                     uint32_t width, uint32_t height, bool srgb = true);
+
     uint32_t GetCheckerTexture() const { return m_checkerTexture; }
     uint32_t GetWhiteTexture() const { return m_whiteTexture; }
 

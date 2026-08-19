@@ -170,4 +170,65 @@ const GpuMesh* MeshRegistry::Get(uint32_t id) const {
     return &m_meshes[id];
 }
 
+
+bool MeshRegistry::Invalidate(const std::string& key) {
+    const auto it = m_lookup.find(key);
+    if (it == m_lookup.end()) return false;
+
+    const uint32_t id = it->second;
+    m_lookup.erase(it);
+
+    if (id >= m_meshes.size()) return false;
+
+    // Ownership moves into the deleter, so the buffers outlive this call by
+    // however long the device says a submitted command buffer might still name
+    // them. Releasing here instead would free memory the GPU is reading.
+    auto vertexBuffer = std::move(m_meshes[id].vertexBuffer);
+    auto indexBuffer = std::move(m_meshes[id].indexBuffer);
+    m_meshes[id].indexCount = 0;
+
+    m_deviceRef.DeferDestroy(
+        [vb = std::shared_ptr<VulkanBuffer>(std::move(vertexBuffer)),
+         ib = std::shared_ptr<VulkanBuffer>(std::move(indexBuffer))]() mutable {
+            vb.reset();
+            ib.reset();
+        });
+
+    SUPERSONIC_LOG_INFO("MeshRegistry") << "Invalidated '" << key
+        << "'; the next request will re-upload it." << std::endl;
+    return true;
+}
+
+bool MeshRegistry::Replace(uint32_t id, const MeshData& data) {
+    if (id >= m_meshes.size()) return false;
+    if (data.vertices.empty() || data.indices.empty()) return false;
+
+    // Upload into a scratch key first, then move the new buffers over the old
+    // ones. Building in place would leave the id pointing at half a mesh if the
+    // upload threw partway through.
+    const std::string scratchKey = "__replace_scratch";
+    m_lookup.erase(scratchKey);
+    const uint32_t scratchId = Upload(scratchKey, data);
+    m_lookup.erase(scratchKey);
+    if (scratchId >= m_meshes.size()) return false;
+
+    auto oldVertex = std::move(m_meshes[id].vertexBuffer);
+    auto oldIndex = std::move(m_meshes[id].indexBuffer);
+
+    m_meshes[id].vertexBuffer = std::move(m_meshes[scratchId].vertexBuffer);
+    m_meshes[id].indexBuffer = std::move(m_meshes[scratchId].indexBuffer);
+    m_meshes[id].indexCount = m_meshes[scratchId].indexCount;
+    m_meshes[id].boundsMin = m_meshes[scratchId].boundsMin;
+    m_meshes[id].boundsMax = m_meshes[scratchId].boundsMax;
+    m_meshes[scratchId].indexCount = 0;
+
+    m_deviceRef.DeferDestroy(
+        [vb = std::shared_ptr<VulkanBuffer>(std::move(oldVertex)),
+         ib = std::shared_ptr<VulkanBuffer>(std::move(oldIndex))]() mutable {
+            vb.reset();
+            ib.reset();
+        });
+    return true;
+}
+
 } // namespace Supersonic

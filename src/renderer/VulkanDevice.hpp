@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <optional>
 #include <vector>
 #include <set>
@@ -48,6 +50,36 @@ public:
     // optional capability rather than assuming it.
     const vk::PhysicalDeviceFeatures& GetFeatures() const { return m_features; }
 
+    // ---- Deferred destruction -------------------------------------------
+    //
+    // A GPU resource cannot be destroyed the moment nothing in the scene refers
+    // to it: a command buffer submitted one or two frames ago may still name it,
+    // and the driver is still reading it. Destroying it there is a
+    // use-after-free that no validation layer necessarily catches, because the
+    // handle was legal when it was recorded.
+    //
+    // Both registries were write-once precisely so this problem never arose -
+    // nothing was ever freed, and they grew for the lifetime of the process.
+    // Anything that wants to reload a texture or drop a mission's terrain needs
+    // this first.
+    //
+    // Deleters run once the frame they were queued on is provably complete,
+    // which the renderer establishes by having waited on that frame's fence.
+    void DeferDestroy(std::function<void()> deleter);
+
+    // Called by the renderer once per frame with the number of the newest frame
+    // whose fence has been waited on. Everything queued at or before it is safe.
+    void CollectGarbage(uint64_t completedFrame);
+
+    void SetFrameNumber(uint64_t frame) { m_frameNumber = frame; }
+    uint64_t FrameNumber() const { return m_frameNumber; }
+
+    // Runs every pending deleter regardless of frame. Only safe after a
+    // waitIdle; used at shutdown.
+    void FlushDeferredDestroys();
+
+    size_t PendingDestroyCount() const { return m_pendingDestroys.size(); }
+
     bool SupportsAnisotropy() const { return m_features.samplerAnisotropy == VK_TRUE; }
 
     // Clamped to the device's limit. Requesting more than maxSamplerAnisotropy
@@ -93,6 +125,13 @@ private:
     vk::SurfaceKHR m_surface{nullptr};
     vk::PhysicalDevice m_physicalDevice{nullptr};
     vk::PhysicalDeviceFeatures m_features{};
+
+    struct PendingDestroy {
+        uint64_t frame{0};
+        std::function<void()> deleter;
+    };
+    std::vector<PendingDestroy> m_pendingDestroys;
+    uint64_t m_frameNumber{0};
     vk::Device m_device{nullptr};
 
     vk::Queue m_graphicsQueue{nullptr};

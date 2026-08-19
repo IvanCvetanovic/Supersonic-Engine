@@ -45,6 +45,25 @@ public:
     uint32_t Upload(const std::string& key, const MeshData& data);
 
     const GpuMesh* Get(uint32_t id) const;
+
+    // Drops the cache entry for a key and hands its buffers to the device's
+    // deferred-destroy queue, so the next Acquire re-reads the file.
+    //
+    // The id is NOT recycled. Reusing it would resolve a stale id held by some
+    // component to a completely different mesh, which is the same failure the
+    // scene serializer already avoids by writing parent links as array indices
+    // rather than raw entity handles. A dead slot costs a few dozen bytes;
+    // silently drawing the wrong geometry costs an afternoon.
+    //
+    // Returns false when the key was not cached.
+    bool Invalidate(const std::string& key);
+
+    // Replaces the geometry behind an EXISTING id, keeping the id valid.
+    //
+    // This is the one that matters for a mesh rebuilt every frame - fog, a
+    // dynamic terrain patch, a debug overlay. Invalidate-then-Acquire would
+    // allocate a new id per frame and grow the vector without bound.
+    bool Replace(uint32_t id, const MeshData& data);
     uint32_t GetCubeMesh() const { return m_cubeMesh; }
     size_t Size() const { return m_meshes.size(); }
 

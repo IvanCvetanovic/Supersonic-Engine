@@ -93,6 +93,11 @@ VulkanRenderer::~VulkanRenderer() {
 
     cleanupSwapchain();
 
+    // Anything still queued for deferred destruction, now that the device has
+    // been waited idle. Leaving these would leak - and worse, they hold lambdas
+    // capturing registries that are about to be destroyed.
+    m_deviceRef.FlushDeferredDestroys();
+
     // After the pipelines, so anything compiled during this run is in the blob
     // that gets written out.
     m_pipelineCache.reset();
@@ -714,6 +719,19 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     vk::Result waitResult = device.waitForFences(1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     if (waitResult != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to wait for Vulkan inFlightFence!");
+    }
+
+    // This wait is what makes deferred destruction safe, so the collection
+    // happens here rather than anywhere more convenient. The fence just waited
+    // on belongs to the frame MAX_FRAMES_IN_FLIGHT ago, so everything submitted
+    // at or before that frame number is provably finished with its resources.
+    //
+    // Queued destroys therefore survive at least two frames, which is exactly
+    // as long as a command buffer can still name a handle it recorded.
+    ++m_absoluteFrame;
+    m_deviceRef.SetFrameNumber(m_absoluteFrame);
+    if (m_absoluteFrame > MAX_FRAMES_IN_FLIGHT) {
+        m_deviceRef.CollectGarbage(m_absoluteFrame - MAX_FRAMES_IN_FLIGHT);
     }
 
     uint32_t imageIndex = 0;

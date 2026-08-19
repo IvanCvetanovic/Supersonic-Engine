@@ -496,6 +496,24 @@ void SupersonicApp::Run() {
         ++frame;
         Profiler::BeginFrame();
 
+        // Self-check for deferred destruction, only under --frames.
+        //
+        // Invalidating a live texture and a live mesh mid-run is the exact
+        // situation the deferred queue exists for: the image being dropped is
+        // still named by command buffers submitted on the previous two frames.
+        // Doing it here, under validation, is the only way to find out whether
+        // the queue actually holds them long enough - there is no way to test
+        // this without a device, so it rides on the headless smoke run.
+        if (m_options.maxFrames > 0 && frame == m_options.maxFrames / 2) {
+            const bool tex = m_renderer->GetTextureRegistry().Invalidate(
+                "assets/textures/uv_grid.png");
+            const bool mesh = m_renderer->GetMeshRegistry().Invalidate("primitive:Sphere");
+            SUPERSONIC_LOG_INFO("SelfCheck")
+                << "Mid-run invalidate: texture=" << (tex ? "dropped" : "absent")
+                << ", mesh=" << (mesh ? "dropped" : "absent")
+                << "; both will be re-acquired next frame.";
+        }
+
         m_window->PollEvents();
 
         const double currentTime = glfwGetTime();
