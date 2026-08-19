@@ -1,7 +1,6 @@
 #version 450
 
 // Must match SpotLight::kMaxShadowCasters.
-#define SPOT_SHADOW_CASTERS 2
 
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec3 fragColor;
@@ -13,27 +12,8 @@ layout(location = 5) in vec3 fragBitangent;
 layout(location = 0) out vec4 outColor;
 
 // Must match Engine::UniformBufferObject in renderer/VulkanPipeline.hpp.
-struct Light {
-    vec4 positionOrDirection;   // xyz, w = type (0 = directional, 1 = point, 2 = spot)
-    vec4 colorAndIntensity;     // rgb, a = intensity
-    vec4 attenuation;           // x = range, y = cube slot, z = cos inner, w = spot slot
-    vec4 spotDirection;         // xyz = aim, w = cos outer
-};
-
-// Set 0: per-frame scene data.
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    mat4 cascadeViewProj[4];
-    vec4 cascadeSplits;      // view-space far depth per cascade
-    vec4 cascadeTexelWorld;  // world size of one shadow texel per cascade
-    vec4 cameraPosition;
-    vec4 ambientColor;
-    vec4 ambientGround;
-    vec4 lightCount;
-    mat4 spotViewProj[SPOT_SHADOW_CASTERS];
-    Light lights[8];
-} ubo;
+#extension GL_GOOGLE_include_directive : require
+#include "scene_ubo.glsl"
 
 // One array image, sampled with a per-fragment layer. An array of separate
 // sampler2Ds would need a dynamically-uniform index, and the cascade choice
@@ -45,7 +25,6 @@ layout(set = 0, binding = 1) uniform sampler2DArray shadowMaps;
 // a cube ARRAY image, so no optional device feature is needed; indexing it by
 // the light loop's counter is dynamically uniform, which is what the rule
 // actually requires. Must match PointShadow::kMaxShadowCasters.
-#define POINT_SHADOW_CASTERS 2
 layout(set = 0, binding = 3) uniform samplerCube pointShadowMaps[POINT_SHADOW_CASTERS];
 
 // One layer per shadow-casting spot light. A 2D array rather than an array of

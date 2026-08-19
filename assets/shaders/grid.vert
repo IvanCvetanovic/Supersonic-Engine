@@ -6,23 +6,8 @@ layout(location = 2) out mat4 viewMat;
 layout(location = 6) out mat4 projMat;
 
 // Must match Engine::UniformBufferObject in renderer/VulkanPipeline.hpp.
-struct Light {
-    vec4 positionOrDirection;
-    vec4 colorAndIntensity;
-    vec4 attenuation;
-};
-
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-    mat4 cascadeViewProj[4];
-    vec4 cascadeSplits;      // view-space far depth per cascade
-    vec4 cascadeTexelWorld;  // world size of one shadow texel per cascade
-    vec4 cameraPosition;
-    vec4 ambientColor;
-    vec4 lightCount;
-    Light lights[8];
-} ubo;
+#extension GL_GOOGLE_include_directive : require
+#include "scene_ubo.glsl"
 
 vec3 gridPlane[6] = vec3[](
     vec3(-1.0, -1.0, 0.0), vec3( 1.0, -1.0, 0.0), vec3( 1.0,  1.0, 0.0),

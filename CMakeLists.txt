@@ -345,6 +345,10 @@ set(SHADER_JOBS
     "bloom_composite.frag=bloom_composite.spv"
 )
 
+# Headers shared between shaders. Not compiled themselves; every compiled
+# shader depends on all of them, which is coarse and correct - there are two.
+file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS "${SHADER_DIR}/*.glsl")
+
 if (GLSL_COMPILER)
     message(STATUS "Shader compiler: ${GLSL_COMPILER}")
     get_filename_component(_glslName "${GLSL_COMPILER}" NAME_WE)
@@ -366,7 +370,12 @@ if (GLSL_COMPILER)
         add_custom_command(
             OUTPUT "${_outPath}"
             COMMAND ${_cmd}
-            DEPENDS "${_srcPath}"
+            # SHADER_INCLUDES as well as the source: the scene UBO block is
+            # #included by three shaders, and depending only on the .vert/.frag
+            # would leave every one of them stale after an edit to the block
+            # they share - which is the failure mode extracting it was meant to
+            # remove, reintroduced one level down.
+            DEPENDS "${_srcPath}" ${SHADER_INCLUDES}
             COMMENT "Compiling ${_src} -> ${_out}"
             VERBATIM)
         list(APPEND SPIRV_OUTPUTS "${_outPath}")
