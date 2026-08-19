@@ -220,7 +220,7 @@ plugins/       Hot-reloadable C++ gameplay scripts
 platform/      Android and Apple target scaffolding
 tests/         Pure-logic regression suites
 docs/          Screenshots
-.github/       CI: builds on Windows and Linux, runs the suites, recompiles every shader
+.github/       CI: manual-dispatch only (Actions -> CI -> Run workflow)
 ```
 
 Roughly 13,900 lines of engine source across 49 translation units, excluding

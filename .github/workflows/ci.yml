@@ -3,10 +3,27 @@ name: CI
 # The engine did not compile for six commits because nothing ever built it.
 # This is the cheapest possible guard against that happening again.
 
+# ---------------------------------------------------------------------------
+# AUTOMATIC RUNS ARE OFF.
+#
+# Disabled on 2026-08-19 because this repository was close to its GitHub
+# Actions minutes allowance, not because anything here is wrong. The jobs are
+# intact and unchanged; only the triggers were removed.
+#
+# To run it: Actions -> CI -> "Run workflow". That still builds Windows and
+# Linux, runs the suites, recompiles and byte-compares every shader, runs the
+# sanitizer and validation legs, and checks the documented counts.
+#
+# To turn automatic runs back on, restore the two lines this replaced:
+#
+#   push:
+#     branches: ["**"]
+#   pull_request:
+#
+# Worth knowing before you do: minutes are only charged for PRIVATE
+# repositories. A public repo runs all of this for free.
+# ---------------------------------------------------------------------------
 on:
-  push:
-    branches: ["**"]
-  pull_request:
   workflow_dispatch:
 
 concurrency:

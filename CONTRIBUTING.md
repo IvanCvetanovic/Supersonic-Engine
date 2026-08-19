@@ -57,7 +57,8 @@ that a file be internally consistent than that it match a rule.
 ## Commits and pull requests
 
 Write the commit message for someone reading `git log` in a year: what changed,
-and what was wrong before. CI builds on Windows and Linux and runs the suites on
+and what was wrong before. CI is set to manual dispatch to conserve Actions minutes; run it from the
+Actions tab before opening a PR. It builds on Windows and Linux and runs the suites on
 both, so a pull request that goes red there will not be merged until it is
 green.
 
