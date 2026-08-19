@@ -150,6 +150,31 @@ void ClickCounterScript(SupersonicScriptContext* ctx) {
     }
 }
 
+// Demonstrates both halves of the data block.
+//
+// "speed" and "radius" are AUTHORED: set them per entity in the inspector and
+// two crates running this same script patrol differently. Before parameters,
+// that needed two scripts.
+//
+// "phase" is STATE, and the point of it is what happens when you rebuild this
+// plugin while the engine is running. It lives on the engine side, so the
+// entity keeps the angle it had reached - the crate carries on from where it
+// was instead of snapping back to zero. Storing it in a static here would both
+// dangle on unload and be shared by every entity using the script.
+void patrolScript(SupersonicScriptContext* ctx) {
+    if (!ctx || !ctx->data) return;
+
+    const float speed  = ctx->data->param(ctx->data->opaque, ctx->entityId, "speed", 1.0f);
+    const float radius = ctx->data->param(ctx->data->opaque, ctx->entityId, "radius", 2.0f);
+
+    float phase = ctx->data->getState(ctx->data->opaque, ctx->entityId, "phase", 0.0f);
+    phase += ctx->deltaTime * speed;
+    ctx->data->setState(ctx->data->opaque, ctx->entityId, "phase", phase);
+
+    ctx->position[0] += std::cos(phase) * radius * ctx->deltaTime * speed;
+    ctx->position[2] += std::sin(phase) * radius * ctx->deltaTime * speed;
+}
+
 } // namespace
 
 extern "C" {
@@ -170,6 +195,7 @@ SUPERSONIC_SCRIPT_EXPORT void SupersonicScriptPluginRegister(SupersonicScriptHos
     host->registerScript(host->opaque, "PlayerScript", &playerScript);
     host->registerScript(host->opaque, "AnimatedPlayerScript", &animatedPlayerScript);
     host->registerScript(host->opaque, "ClickCounterScript", &ClickCounterScript);
+    host->registerScript(host->opaque, "PatrolScript", &patrolScript);
 }
 
 } // extern "C"

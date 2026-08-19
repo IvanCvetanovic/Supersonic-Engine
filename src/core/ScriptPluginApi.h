@@ -18,7 +18,11 @@
 /* offsetof, for the layout pins at the bottom of this file. */
 #include <stddef.h>
 
-#define SUPERSONIC_SCRIPT_API_VERSION 5
+/* Version history. A plugin built against a different number is refused.
+ *   6 - added SupersonicScriptData: authored parameters and per-entity state.
+ *   5 - added the UI block.
+ */
+#define SUPERSONIC_SCRIPT_API_VERSION 6
 
 #if defined(_WIN32)
 #  define SUPERSONIC_SCRIPT_EXPORT __declspec(dllexport)
@@ -104,6 +108,28 @@ typedef struct SupersonicScriptUI {
     void (*setFill)(void* opaque, unsigned int entity, float fill);
 } SupersonicScriptUI;
 
+/* Authored parameters, and scratch that survives a reload.
+ *
+ * Both are ENGINE-owned storage. That is the whole point: the plugin is
+ * unloaded and reloaded while the process keeps running, so a counter the
+ * plugin allocated would dangle the moment the DLL is freed. Keeping it on this
+ * side means a script keeps its state across a rebuild, which is what makes hot
+ * reload feel like editing a running game rather than restarting one.
+ *
+ * Named, not indexed, matching how input actions are already passed. Adding a
+ * parameter therefore needs no ABI change and no engine recompile.
+ *
+ * param() reads what the inspector authored and is read-only - a script that
+ * could write its own configuration would fight the person editing it.
+ * getState/setState are the script's own scratch, and are not serialised.
+ */
+typedef struct SupersonicScriptData {
+    void* opaque;
+    float (*param)(void* opaque, unsigned int entity, const char* name, float fallback);
+    float (*getState)(void* opaque, unsigned int entity, const char* name, float fallback);
+    void  (*setState)(void* opaque, unsigned int entity, const char* name, float value);
+} SupersonicScriptData;
+
 /* Per-entity state handed to a script each frame. The engine copies values in
  * before the call and copies them back out afterwards. */
 typedef struct SupersonicScriptContext {
@@ -119,6 +145,7 @@ typedef struct SupersonicScriptContext {
     const SupersonicScriptPhysics* physics;
     const SupersonicScriptAnimation* animation;
     const SupersonicScriptUI* ui;
+    const SupersonicScriptData* data;
 } SupersonicScriptContext;
 
 typedef void (*SupersonicScriptUpdateFn)(SupersonicScriptContext* context);
@@ -169,7 +196,7 @@ typedef void (*SupersonicScriptPluginRegisterFn)(SupersonicScriptHost* host);
 #  define SUPERSONIC_ABI_ASSERT(cond, msg) _Static_assert(cond, msg)
 #endif
 
-#if SUPERSONIC_SCRIPT_API_VERSION == 5
+#if SUPERSONIC_SCRIPT_API_VERSION == 6
 
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptInput) == 5 * sizeof(void*),
     "SupersonicScriptInput changed; bump SUPERSONIC_SCRIPT_API_VERSION");
@@ -179,6 +206,8 @@ SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptAnimation) == 3 * sizeof(void*),
     "SupersonicScriptAnimation changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptUI) == 6 * sizeof(void*),
     "SupersonicScriptUI changed; bump SUPERSONIC_SCRIPT_API_VERSION");
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptData) == 4 * sizeof(void*),
+    "SupersonicScriptData changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptHost) == 3 * sizeof(void*),
     "SupersonicScriptHost changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 
@@ -193,10 +222,10 @@ SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, entityId)  == 44, "conte
 SUPERSONIC_ABI_ASSERT(offsetof(SupersonicScriptContext, input) == 48,
     "context layout changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(
-    sizeof(SupersonicScriptContext) == 48 + 4 * sizeof(void*),
+    sizeof(SupersonicScriptContext) == 48 + 5 * sizeof(void*),
     "SupersonicScriptContext changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 
-#endif /* SUPERSONIC_SCRIPT_API_VERSION == 5 */
+#endif /* SUPERSONIC_SCRIPT_API_VERSION == 6 */
 
 #ifdef __cplusplus
 }

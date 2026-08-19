@@ -181,6 +181,65 @@ void scriptUiSetFill(void* opaque, unsigned int entityId, float fill) {
     }
 }
 
+// ---- Authored parameters and per-entity scratch --------------------------
+//
+// A linear scan over a handful of named pairs, not a map. A script carries a
+// few parameters, the vector is contiguous, and the names are short - a hash
+// map would allocate per entity to save a comparison that costs nothing at this
+// size. If a script ever carries fifty of these, revisit it then and not now.
+float* findNamed(std::vector<std::pair<std::string, float>>& values, const char* name) {
+    if (!name) return nullptr;
+    for (auto& [key, value] : values) {
+        if (key == name) return &value;
+    }
+    return nullptr;
+}
+
+float scriptParam(void* opaque, unsigned int entity, const char* name, float fallback) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    const auto handle = static_cast<entt::entity>(entity);
+    if (!registry || !registry->valid(handle)) return fallback;
+
+    auto* script = registry->try_get<ScriptComponent>(handle);
+    if (!script) return fallback;
+
+    const float* found = findNamed(script->parameters, name);
+    return found ? *found : fallback;
+}
+
+float scriptGetState(void* opaque, unsigned int entity, const char* name, float fallback) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    const auto handle = static_cast<entt::entity>(entity);
+    if (!registry || !registry->valid(handle)) return fallback;
+
+    auto* script = registry->try_get<ScriptComponent>(handle);
+    if (!script) return fallback;
+
+    const float* found = findNamed(script->state, name);
+    return found ? *found : fallback;
+}
+
+void scriptSetState(void* opaque, unsigned int entity, const char* name, float value) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    const auto handle = static_cast<entt::entity>(entity);
+    if (!registry || !registry->valid(handle) || !name) return;
+
+    auto* script = registry->try_get<ScriptComponent>(handle);
+    if (!script) return;
+
+    if (float* found = findNamed(script->state, name)) {
+        *found = value;
+        return;
+    }
+    // Bounded, so a script writing a name built from a counter cannot grow this
+    // without limit - which is the shape of the bug that would only show up
+    // after an hour of play.
+    constexpr size_t kMaxStateEntries = 32;
+    if (script->state.size() < kMaxStateEntries) {
+        script->state.emplace_back(name, value);
+    }
+}
+
 const SupersonicScriptInput& scriptInput() {
     static const SupersonicScriptInput api{
         nullptr, scriptIsDown, scriptWasPressed, scriptWasReleased, scriptAxis
@@ -290,6 +349,9 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
         const SupersonicScriptUI ui{&registry, scriptUiWasClicked, scriptUiIsHovered,
                                     scriptUiSetText, scriptUiSetVisible, scriptUiSetFill};
         ctx.ui = &ui;
+
+        const SupersonicScriptData data{&registry, scriptParam, scriptGetState, scriptSetState};
+        ctx.data = &data;
         // A transform-less entity is handed an identity one, so a script that
         // only touches the UI does not have to care.
         if (transform) {

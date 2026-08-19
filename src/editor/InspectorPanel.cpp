@@ -390,6 +390,51 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             if (current < 0 && script.scriptName != "LightFlickerScript") {
                 ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f), "Not registered.");
             }
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Parameters");
+
+            // Authored per entity, so the same script can be two different
+            // things - a fast crate and a slow one - without being two scripts.
+            int removeAt = -1;
+            for (size_t i = 0; i < script.parameters.size(); ++i) {
+                ImGui::PushID(static_cast<int>(i));
+
+                char nameBuffer[64] = {};
+                const size_t n = std::min(script.parameters[i].first.size(),
+                                          sizeof(nameBuffer) - 1);
+                std::memcpy(nameBuffer, script.parameters[i].first.data(), n);
+
+                ImGui::SetNextItemWidth(130.0f);
+                if (ImGui::InputText("##name", nameBuffer, sizeof(nameBuffer))) {
+                    script.parameters[i].first = nameBuffer;
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(110.0f);
+                ImGui::DragFloat("##value", &script.parameters[i].second, 0.05f,
+                                 -1.0e9f, 1.0e9f, "%.3f");
+                ImGui::SameLine();
+                if (ImGui::SmallButton(ICON_FA_TRASH)) removeAt = static_cast<int>(i);
+
+                ImGui::PopID();
+            }
+            // Deferred, because erasing inside the loop invalidates the index
+            // the rest of the iteration is using.
+            if (removeAt >= 0) {
+                script.parameters.erase(script.parameters.begin() + removeAt);
+            }
+
+            if (ImGui::SmallButton(ICON_FA_PLUS "  Add Parameter")) {
+                script.parameters.emplace_back("speed", 1.0f);
+            }
+
+            if (!script.state.empty()) {
+                ImGui::Separator();
+                ImGui::TextDisabled("Runtime state (not saved)");
+                for (const auto& [name, value] : script.state) {
+                    ImGui::Text("  %-16s %.3f", name.c_str(), static_cast<double>(value));
+                }
+            }
             ImGui::TextDisabled("Elapsed: %.1fs", static_cast<double>(script.elapsed));
         }
     }

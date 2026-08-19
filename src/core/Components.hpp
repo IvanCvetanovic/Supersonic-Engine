@@ -426,6 +426,30 @@ struct ScriptComponent {
 
     // Rate-limits the "no such script" diagnostic to once per name change.
     bool warnedMissing{false};
+
+    // Values authored per entity in the inspector and read by the script.
+    //
+    // Without these a script is the same script everywhere it is used: two
+    // patrolling crates could not have different speeds without two scripts, or
+    // one script reading a component the ABI does not carry. Names rather than
+    // indices, matching how the ABI already passes input actions - adding a
+    // parameter then needs no ABI change and no recompile of the engine.
+    //
+    // Serialised, because they are authored data.
+    std::vector<std::pair<std::string, float>> parameters;
+
+    // Scratch the script owns between frames.
+    //
+    // Engine-side on purpose: the plugin is unloaded and reloaded while the
+    // process runs, so anything the plugin allocated would dangle. Living here
+    // means a script keeps its counters across a reload, which is most of what
+    // makes hot reload feel like editing a running game rather than restarting
+    // one.
+    //
+    // NOT serialised: this is where a script is, not what it was authored as.
+    // Writing it into the scene would make a save depend on how long the game
+    // had been running when it was taken.
+    std::vector<std::pair<std::string, float>> state;
 };
 
 struct Particle {

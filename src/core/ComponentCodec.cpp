@@ -254,7 +254,17 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
     if (const auto* script = registry.try_get<ScriptComponent>(entity)) {
         out << indent << "\"Script\": {\n";
         out << indent << "  \"Name\": \"" << Json::Escape(script->scriptName) << "\",\n";
-        out << indent << "  \"Enabled\": " << (script->isEnabled ? "true" : "false") << "\n";
+        out << indent << "  \"Enabled\": " << (script->isEnabled ? "true" : "false") << ",\n";
+        // Parameters are authored data and are saved. state is NOT: it is
+        // where a script has got to, not what it was set up as, and writing it
+        // would make a scene depend on how long the game had been running.
+        out << indent << "  \"Parameters\": {";
+        for (size_t i = 0; i < script->parameters.size(); ++i) {
+            if (i > 0) out << ",";
+            out << "\"" << Json::Escape(script->parameters[i].first)
+                << "\": " << script->parameters[i].second;
+        }
+        out << "}\n";
         out << indent << "},\n";
     }
 
@@ -456,8 +466,17 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
 
     if (node.Has("Script")) {
         const auto& s = node["Script"];
-        registry.emplace_or_replace<ScriptComponent>(entity,
+        auto& script = registry.emplace_or_replace<ScriptComponent>(entity,
             s["Name"].AsString("RotatorScript"), s["Enabled"].AsBool(true));
+
+        // Absent in scenes written before parameters existed, which is the
+        // ordinary case and needs no migration: a script with no authored
+        // parameters reads its own fallbacks, which is what it did before.
+        if (s.Has("Parameters") && s["Parameters"].IsObject()) {
+            for (const auto& [name, value] : s["Parameters"].AsObject()) {
+                script.parameters.emplace_back(name, value.AsFloat(0.0f));
+            }
+        }
     }
 
     if (node.Has("ParticleEmitter")) {
