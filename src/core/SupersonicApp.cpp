@@ -132,6 +132,22 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
 
     m_editorLayer->SetGameMode(m_manifest.isGame);
 
+    // Art hot reload. The plugin has been watched since hot reload shipped;
+    // textures and meshes could not be, because nothing could un-cache them.
+    m_assetWatcher.SetCallback([this](const std::string& path) {
+        bool reloaded = false;
+        if (m_renderer) {
+            reloaded |= m_renderer->GetTextureRegistry().Invalidate(path);
+            reloaded |= m_renderer->GetMeshRegistry().Invalidate("file:" + path);
+        }
+        if (reloaded) {
+            // RenderSystem re-resolves every renderable each frame, so dropping
+            // the cache entry is the whole reload - the next SyncResources
+            // re-reads the file and hands back a fresh id.
+            SUPERSONIC_LOG_INFO("AssetWatcher") << path << " changed on disk; reloading.";
+        }
+    });
+
     initECS();
 
     // --scene wins over the manifest, and applies in the editor too: a smoke
@@ -524,6 +540,14 @@ void SupersonicApp::Run() {
         // Swap in a rebuilt script plugin. Cheap: one stat unless it changed.
         m_hotReload->Poll();
 
+        // Same cadence and same reasoning as the plugin poll above: a stat per
+        // watched path, and only a changed write time costs anything.
+        m_assetWatcher.Poll();
+        if (m_options.maxFrames > 0 && frame == 2) {
+            SUPERSONIC_LOG_INFO("SelfCheck") << "Watching "
+                << m_assetWatcher.WatchedCount() << " asset path(s) for changes.";
+        }
+
         // Rebuild the offscreen target before anything else touches it.
         //
         // This has to happen before ImGui::NewFrame, not after ImGui::Render:
@@ -624,6 +648,18 @@ void SupersonicApp::Run() {
 
         // Mesh and texture uploads submit their own transfers, so they happen
         // here rather than mid-recording.
+        // Register whatever the scene currently names, so a path that arrives
+        // by drag-and-drop or by loading a scene starts being watched without
+        // anyone remembering to say so. Watch() returns immediately for a path
+        // it already knows, so this is a hash lookup per asset per frame.
+        for (auto [entity, mesh] : m_registry.view<MeshComponent>().each()) {
+            if (!mesh.filePath.empty()) m_assetWatcher.Watch(mesh.filePath);
+        }
+        for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
+            if (!material.albedoTexturePath.empty()) m_assetWatcher.Watch(material.albedoTexturePath);
+            if (!material.normalTexturePath.empty()) m_assetWatcher.Watch(material.normalTexturePath);
+        }
+
         {
             SUPERSONIC_PROFILE(ResourceSync);
             RenderSystem::SyncResources(m_registry,

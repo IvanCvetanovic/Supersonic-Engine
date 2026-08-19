@@ -14,6 +14,7 @@
 #include "editor/EditorLayer.hpp"
 #include "core/AudioEngine.hpp"
 #include "core/HotReloadEngine.hpp"
+#include "core/AssetWatcher.hpp"
 #include "core/PlayMode.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/Components.hpp"
@@ -37,6 +38,7 @@ public:
 private:
     void initECS();
 
+    AssetWatcher m_assetWatcher;
     LaunchOptions m_options;
 
     std::unique_ptr<Window> m_window;
