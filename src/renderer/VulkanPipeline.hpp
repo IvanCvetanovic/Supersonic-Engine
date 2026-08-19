@@ -71,18 +71,32 @@ struct UniformBufferObject {
     GpuLight lights[kMaxLights];
 };
 
-// 104 bytes, inside the 128-byte guaranteed minimum.
+// 120 bytes, inside the 128-byte guaranteed minimum.
 struct PushConstantData {
     glm::mat4 model;         // 0..63   (vertex)
     glm::vec4 albedoColor;   // 64..79  (fragment)
     glm::vec4 material;      // 80..95  x=roughness y=metallic z=ao (fragment)
 
+    // Light this surface emits regardless of what falls on it. rgb is added
+    // after shading; a is unused padding.
+    //
+    // Placed BEFORE the two ints rather than appended, because a vec4 needs
+    // 16-byte alignment: after them it would start at 112 and take the struct
+    // to exactly 128, which is the guaranteed minimum with nothing left. Here
+    // it lands at 96 and the whole block is 120.
+    //
+    // Deliberately allowed above 1.0. The scene target is floating point and
+    // the bright pass thresholds at 1.0, so an emissive material is the natural
+    // way to author something that glows - which is why it belongs here rather
+    // than being folded into albedo.
+    glm::vec4 emissive{0.0f};     // 96..111 (fragment)
+
     // Where this draw's joint matrices start in the frame's palette buffer.
     // The -1 default is load-bearing: the particle path builds these with
     // `PushConstantData push{}` and never touches these fields, and a zero would
     // make every particle skin itself against whatever is in palette slot 0.
-    int32_t skinPaletteBase{-1};  // 96..99  (vertex)
-    int32_t skinJointCount{0};    // 100..103 (vertex)
+    int32_t skinPaletteBase{-1};  // 112..115 (vertex)
+    int32_t skinJointCount{0};    // 116..119 (vertex)
 };
 
 // The depth pass has its own, because it needs a different second half: which

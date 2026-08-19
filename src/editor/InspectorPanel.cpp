@@ -299,6 +299,13 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
             // The blend state is per-material and the draw order depends on
             // it, so this is a rendering decision rather than a colour one.
+            ImGui::ColorEdit3("Emissive", glm::value_ptr(material.emissiveColor));
+            // Above 1 is the useful range: the scene target is floating point
+            // and bloom thresholds at 1.0, so a strength under one makes a
+            // surface pale rather than glowing.
+            ImGui::DragFloat("Emissive Strength", &material.emissiveStrength,
+                             0.05f, 0.0f, 50.0f, "%.2f");
+
             ImGui::Checkbox("Transparent", &material.transparent);
             if (material.transparent) {
                 ImGui::SameLine();

@@ -23,6 +23,7 @@ layout(push_constant) uniform PushConstants {
     mat4 model;
     vec4 albedoColor;
     vec4 material;
+    vec4 emissive;      // rgb added after shading, may exceed 1.0
     int skinPaletteBase;   // -1 = not skinned
     int skinJointCount;
 } push;

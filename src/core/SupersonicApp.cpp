@@ -594,6 +594,20 @@ void SupersonicApp::Run() {
             SUPERSONIC_LOG_INFO("SelfCheck")
                 << "Marked " << madeTransparent << " material(s) transparent; "
                 << "the blended pass draws from the next frame on.";
+
+            // And drive one material through the emissive path above 1.0, so
+            // the bright pass has something to find. Like the blend state, this
+            // is only reachable with a device.
+            size_t madeEmissive = 0;
+            for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
+                if (material.transparent) continue;
+                material.emissiveColor = glm::vec3(1.0f, 0.55f, 0.15f);
+                material.emissiveStrength = 4.0f;
+                ++madeEmissive;
+                break;
+            }
+            SUPERSONIC_LOG_INFO("SelfCheck")
+                << "Set " << madeEmissive << " material(s) emissive above 1.0.";
         }
 
         m_window->PollEvents();

@@ -144,6 +144,10 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         // The asset link, not just the values it resolves to. A scene that
         // stored only the resolved numbers would silently detach every
         // entity from its shared material the first time it was saved.
+        out << indent << "  \"Emissive\": ";
+        writeVec3(out, mat->emissiveColor, "MaterialComponent.emissiveColor");
+        out << ",\n";
+        out << indent << "  \"EmissiveStrength\": " << jsonSafe(mat->emissiveStrength, "emissiveStrength") << ",\n";
         out << indent << "  \"Transparent\": " << (mat->transparent ? "true" : "false") << ",\n";
         out << indent << "  \"Asset\": \"" << Json::Escape(mat->materialPath) << "\"\n";
         out << indent << "},\n";
@@ -386,6 +390,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // Absent in every scene written before the blended pass existed, and
         // false is what those scenes rendered as.
         material.transparent = m["Transparent"].AsBool(false);
+        material.emissiveColor = readVec3(m["Emissive"], glm::vec3(0.0f));
+        material.emissiveStrength = m["EmissiveStrength"].AsFloat(0.0f);
     }
 
     if (node.Has("RigidBody")) {

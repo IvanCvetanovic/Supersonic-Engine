@@ -19,6 +19,7 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
     if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
         push.albedoColor = material->albedoColor;
         push.material = glm::vec4(material->roughness, material->metallic, material->ao, 0.0f);
+        push.emissive = glm::vec4(material->emissiveColor * material->emissiveStrength, 0.0f);
     } else {
         push.albedoColor = glm::vec4(1.0f);
         push.material = glm::vec4(0.4f, 0.1f, 1.0f, 0.0f);

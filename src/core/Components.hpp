@@ -260,6 +260,13 @@ struct MaterialComponent {
     // What that cost is not polish. It is a construction site that cannot fade
     // in, a build-placement ghost that cannot be tinted, glass, water, foliage,
     // smoke, and every fade-out in any game built on this.
+    // Light this surface gives off on its own. Multiplied by emissiveStrength,
+    // which is what lets it exceed 1.0 and therefore trip the bloom threshold -
+    // a colour picker cannot express "brighter than white", so the intensity is
+    // a separate number rather than a fourth channel nobody can drag.
+    glm::vec3 emissiveColor{0.0f};
+    float emissiveStrength{0.0f};
+
     bool transparent{false};
 
     bool warnedMissingAsset{false};

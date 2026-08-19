@@ -47,6 +47,7 @@ layout(push_constant) uniform PushConstants {
     mat4 model;
     vec4 albedoColor;
     vec4 material;   // x = roughness, y = metallic, z = ao
+    vec4 emissive;      // rgb added after shading, may exceed 1.0
     int skinPaletteBase;
     int skinJointCount;
 } push;
@@ -423,5 +424,17 @@ void main() {
     // here would destroy exactly the above-white highlights bloom exists to
     // find. Both steps moved to bloom_composite.frag, which is now the only
     // place either happens.
+    // Emission, added after everything else and after ambient occlusion.
+    //
+    // A surface that emits light is not lit BY anything, so it must not be
+    // scaled by shadow, by attenuation or by AO - occluding a lamp's own glow
+    // because it sits in a corner is exactly the artefact that makes emissive
+    // materials look painted on rather than lit.
+    //
+    // Not clamped. Above 1.0 is the point: the target is floating point and the
+    // bright pass thresholds at 1.0, so an intensity above one is how a
+    // material is authored to actually glow rather than merely to be pale.
+    color += push.emissive.rgb;
+
     outColor = vec4(color, albedoTex.a * push.albedoColor.a);
 }
