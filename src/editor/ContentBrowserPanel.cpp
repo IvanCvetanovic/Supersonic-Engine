@@ -73,6 +73,12 @@ std::string ContentBrowserPanel::ConsumePrefabClick() {
     return clicked;
 }
 
+std::string ContentBrowserPanel::ConsumeSceneClick() {
+    std::string clicked;
+    clicked.swap(m_clickedScene);
+    return clicked;
+}
+
 // Creates assets/materials/Material_N.material, picking the first N that is
 // free so repeated clicks do not overwrite each other.
 std::string ContentBrowserPanel::createMaterial() {
@@ -209,6 +215,18 @@ std::string ContentBrowserPanel::OnImGuiRender() {
                     // scene is a bigger action than assigning a material to
                     // the thing you already picked, and a stray click through
                     // the browser should not spawn geometry.
+                    // Same gesture as a prefab, and for the same reason:
+                    // opening a scene discards unsaved work, so it should not
+                    // be one stray click away.
+                    if (path.extension() == ".scene") {
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Double-click to open this scene");
+                        }
+                        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {
+                            m_clickedScene = path.string();
+                        }
+                    }
+
                     if (path.extension() == ".prefab") {
                         if (ImGui::IsItemHovered()) {
                             ImGui::SetTooltip("Double-click to place in the scene");

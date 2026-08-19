@@ -31,7 +31,8 @@ bool copyTreeIfPresent(const fs::path& from, const fs::path& to, std::string& no
 
 } // namespace
 
-SerializationResult GamePackager::PackageStandaloneGame(const std::string& outputFolder) {
+SerializationResult GamePackager::PackageStandaloneGame(const std::string& outputFolder,
+                                                        const std::string& startupScene) {
     std::error_code ec;
 
     const fs::path exe = ExecutablePath();
@@ -92,7 +93,7 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
     manifest.isGame = true;
     manifest.title = out.filename().empty() ? std::string("Supersonic Game")
                                             : out.filename().string();
-    manifest.startupScene = "assets/scenes/MainScene.scene";
+    manifest.startupScene = startupScene;
 
     {
         std::ofstream file(out / GameRuntime::kManifestFilename);

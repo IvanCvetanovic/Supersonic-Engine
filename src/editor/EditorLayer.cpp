@@ -19,13 +19,13 @@
 #include "imgui_internal.h"
 #include "ImGuizmo.h"
 
+#include <cstring>
 #include <iostream>
 
 namespace Supersonic {
 
 namespace {
 constexpr float kStatusVisibleSeconds = 6.0f;
-constexpr const char* kScenePath = "assets/scenes/MainScene.scene";
 } // namespace
 
 void EditorLayer::Init(VulkanDevice& device, uint32_t initialWidth, uint32_t initialHeight) {
@@ -77,6 +77,25 @@ void EditorLayer::ApplyPendingResize() {
     m_offscreenPass->ApplyPendingResize();
 }
 
+
+void EditorLayer::ApplyPendingSceneLoad(entt::registry& registry) {
+    if (!m_sceneManager.HasPending()) return;
+
+    SerializationResult result{};
+    if (!m_sceneManager.ApplyPending(registry, result)) return;
+
+    SetStatus(result.message, !result.ok);
+    if (result.ok) {
+        // The selection is an entt::entity into a registry that no longer
+        // exists. EnTT recycles handles, so a stale one does not dangle - it
+        // resolves to a completely different entity in the new scene.
+        m_hierarchyPanel.SetSelectedEntity(entt::null);
+        // Reset, not Clear: its own comment says to call this after a load,
+        // because undoing past one makes no sense - the undo stack describes a
+        // scene that is no longer open.
+        m_history.Reset(registry);
+    }
+}
 
 void EditorLayer::drawViewportOverlay(const ImVec2& viewportPos, const ImVec2& viewportSize) {
     const float pad = 12.0f;
@@ -330,17 +349,24 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem(ICON_FA_FLOPPY "  Save Scene", "Ctrl+S")) {
-                const auto result = SceneSerializer::Serialize(registry, kScenePath);
+                const auto result = m_sceneManager.Save(registry);
                 SetStatus(result.message, !result.ok);
             }
-            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Open Scene", "Ctrl+O")) {
-                const auto result = SceneSerializer::Deserialize(registry, kScenePath);
-                SetStatus(result.message, !result.ok);
-                if (result.ok) m_hierarchyPanel.SetSelectedEntity(entt::null);
+            if (ImGui::MenuItem(ICON_FA_FLOPPY "  Save Scene As...")) {
+                m_showSaveAs = true;
+            }
+            if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN "  Reload Scene", "Ctrl+O")) {
+                // Deferred: this runs inside BuildUI, while panels are iterating
+                // views over the registry a load would clear and refill.
+                m_sceneManager.RequestLoad(m_sceneManager.CurrentPath());
+            }
+            if (ImGui::MenuItem(ICON_FA_PLUS "  New Scene")) {
+                m_sceneManager.RequestNew();
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Package Standalone Game")) {
-                const auto result = GamePackager::PackageStandaloneGame("dist/GameRelease");
+                const auto result = GamePackager::PackageStandaloneGame(
+                    "dist/GameRelease", m_sceneManager.CurrentPath());
                 SetStatus(result.message, !result.ok);
             }
             ImGui::Separator();
@@ -446,13 +472,11 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
     if (!io.WantTextInput && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-            const auto result = SceneSerializer::Serialize(registry, kScenePath);
+            const auto result = m_sceneManager.Save(registry);
             SetStatus(result.message, !result.ok);
         }
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) {
-            const auto result = SceneSerializer::Deserialize(registry, kScenePath);
-            SetStatus(result.message, !result.ok);
-            if (result.ok) m_hierarchyPanel.SetSelectedEntity(entt::null);
+            m_sceneManager.RequestLoad(m_sceneManager.CurrentPath());
         }
         // Gated on edit mode, matching the Edit menu. Undo replaces the whole
         // registry, so running it mid-play wiped the simulating scene - and
@@ -554,6 +578,10 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     }
 
     // Double-clicking a .prefab tile places it.
+    if (const std::string scene = m_contentBrowserPanel.ConsumeSceneClick(); !scene.empty()) {
+        m_sceneManager.RequestLoad(scene);
+    }
+
     if (const std::string prefab = m_contentBrowserPanel.ConsumePrefabClick(); !prefab.empty()) {
         SerializationResult result;
         const entt::entity placed = PrefabSerializer::InstantiatePrefab(registry, prefab, &result);
@@ -827,6 +855,38 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
         ImGui::EndChild();
     }
     ImGui::End();
+
+    // Save As. A modal rather than a menu field so the path is committed by an
+    // explicit press: typing into a live field would rename the open scene on
+    // every keystroke.
+    if (m_showSaveAs) {
+        ImGui::OpenPopup("Save Scene As");
+        m_showSaveAs = false;
+    }
+    if (ImGui::BeginPopupModal("Save Scene As", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static char pathBuffer[512] = {};
+        if (pathBuffer[0] == '\0') {
+            const std::string& current = m_sceneManager.CurrentPath();
+            const size_t n = std::min(current.size(), sizeof(pathBuffer) - 1);
+            std::memcpy(pathBuffer, current.data(), n);
+        }
+        ImGui::TextDisabled("Relative to the project root.");
+        ImGui::SetNextItemWidth(420.0f);
+        ImGui::InputText("##saveaspath", pathBuffer, sizeof(pathBuffer));
+
+        if (ImGui::Button("Save", ImVec2(120, 0))) {
+            const auto result = m_sceneManager.SaveAs(registry, pathBuffer);
+            SetStatus(result.message, !result.ok);
+            pathBuffer[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            pathBuffer[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     if (m_showDemoWindow) {
         ImGui::ShowDemoWindow(&m_showDemoWindow);

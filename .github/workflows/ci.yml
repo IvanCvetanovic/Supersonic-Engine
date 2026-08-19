@@ -380,7 +380,7 @@ jobs:
             test -f "$f" || continue
             # Any "<number> suites" phrasing, digits or the words this project
             # actually uses.
-            claimed=$(grep -oiE '\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|twenty-one|twenty-two|twenty-three|twenty-four|twenty-five|[0-9]+)( green)? suites\b' "$f" || true)
+            claimed=$(grep -oiE '(twenty-one|twenty-two|twenty-three|twenty-four|twenty-five|twenty-six|twenty-seven|twenty-eight|twenty-nine|thirty|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)( green)? suites\b' "$f" || true)
             while IFS= read -r phrase; do
               test -n "$phrase" || continue
               word=$(echo "$phrase" | sed -E 's/( green)? suites$//' | tr 'A-Z' 'a-z')
@@ -388,7 +388,9 @@ jobs:
                 eleven) n=11 ;; twelve) n=12 ;; thirteen) n=13 ;; fourteen) n=14 ;;
                 fifteen) n=15 ;; sixteen) n=16 ;; seventeen) n=17 ;; eighteen) n=18 ;;
                 nineteen) n=19 ;; twenty) n=20 ;; twenty-one) n=21 ;; twenty-two) n=22 ;;
-                twenty-three) n=23 ;; twenty-four) n=24 ;; twenty-five) n=25 ;;
+                twenty-three) n=23 ;; twenty-four) n=24 ;; twenty-five) n=25 ;; twenty-six) n=26 ;;
+                twenty-seven) n=27 ;; twenty-eight) n=28 ;;
+                twenty-nine) n=29 ;; thirty) n=30 ;;
                 *) n="$word" ;;
               esac
               if [ "$n" != "$actual" ]; then

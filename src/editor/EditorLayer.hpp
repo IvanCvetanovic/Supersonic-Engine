@@ -6,6 +6,7 @@
 #include "imgui.h"
 
 #include "core/PlayMode.hpp"
+#include "core/SceneManager.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanOffscreen.hpp"
 #include "editor/SceneHierarchyPanel.hpp"
@@ -55,6 +56,12 @@ public:
     // Applies any viewport resize requested during BuildUI. Call at the top of
     // the frame, before the renderer starts recording.
     void ApplyPendingResize();
+
+    // Performed by SupersonicApp between frames, NOT from inside BuildUI: a
+    // load clears and refills the registry, and BuildUI is running while
+    // panels iterate views over it.
+    void ApplyPendingSceneLoad(entt::registry& registry);
+    SceneManager& GetSceneManager() { return m_sceneManager; }
 
     VulkanOffscreen& GetOffscreen() { return *m_offscreenPass; }
     SceneHierarchyPanel& GetHierarchyPanel() { return m_hierarchyPanel; }
@@ -153,6 +160,9 @@ private:
     // Console panel state. Info is on by default and warnings and errors are
     // never off by default: a filter that hides errors until someone turns them
     // on is a filter that hides errors.
+    SceneManager m_sceneManager;
+    bool m_showSaveAs{false};
+
     bool m_consoleShowInfo{true};
     bool m_consoleShowWarnings{true};
     bool m_consoleShowErrors{true};

@@ -27,6 +27,11 @@ public:
     // which a file browser should know about.
     std::string ConsumePrefabClick();
 
+    // And for a double-clicked .scene. The browser cannot open it either: a
+    // load has to be deferred out of the UI build, which is the editor's
+    // business, not a file browser's.
+    std::string ConsumeSceneClick();
+
     // Returns a non-empty status message when something went wrong, so the
     // editor can show it rather than throwing out of the render loop.
     std::string OnImGuiRender();
@@ -40,6 +45,7 @@ private:
     MaterialLibrary* m_materials{nullptr};
     std::string m_clickedMaterial;
     std::string m_clickedPrefab;
+    std::string m_clickedScene;
 };
 
 } // namespace Supersonic

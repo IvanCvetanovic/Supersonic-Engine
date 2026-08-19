@@ -585,6 +585,13 @@ void SupersonicApp::Run() {
                                          m_hotReload->GetStatus(),
                                          m_hotReload->GetReloadCount());
         { SUPERSONIC_PROFILE(EditorUI);    m_editorLayer->BuildUI(m_registry, *m_window); }
+
+        // After BuildUI, not inside it. A queued scene load clears and refills
+        // the registry, and BuildUI runs while every panel is iterating views
+        // over it - performing the load there invalidates what the caller is
+        // walking. This is the same reason the viewport resize is deferred to
+        // the top of the frame.
+        m_editorLayer->ApplyPendingSceneLoad(m_registry);
         { SUPERSONIC_PROFILE(ImGuiRender); ImGui::Render(); }
 
         // Again, because the editor may have moved, reparented or created
