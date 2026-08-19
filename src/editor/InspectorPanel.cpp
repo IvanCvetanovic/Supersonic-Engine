@@ -1,4 +1,5 @@
 #include "editor/InspectorPanel.hpp"
+#include <string>
 
 #include "renderer/PointShadow.hpp"
 #include "renderer/SpotLight.hpp"
@@ -21,6 +22,27 @@
 #include <iostream>
 
 namespace Supersonic {
+
+namespace {
+
+// Accepts a dragged asset path on the widget just submitted.
+//
+// Returns true and fills `out` on a drop. The payload is a NUL-terminated path
+// that ImGui copied at drag time, so it stays valid here even though the string
+// it came from was rebuilt several frames ago.
+bool acceptAssetDrop(const char* payloadType, std::string& out) {
+    if (!ImGui::BeginDragDropTarget()) return false;
+
+    bool dropped = false;
+    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(payloadType)) {
+        out.assign(static_cast<const char*>(payload->Data));
+        dropped = true;
+    }
+    ImGui::EndDragDropTarget();
+    return dropped;
+}
+
+} // namespace
 
 void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity selectedEntity) {
     ImGui::Begin("Inspector");
@@ -133,8 +155,26 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 mesh.filePath.clear();
             }
 
-            if (!mesh.filePath.empty()) {
+            // The drop target is the whole row, not a button, so the gesture is
+            // "drag the model onto the mesh" rather than "find the small widget".
+            if (mesh.filePath.empty()) {
+                ImGui::TextDisabled("Source: <primitive>   (drop a model here)");
+            } else {
                 ImGui::TextDisabled("Source: %s", mesh.filePath.c_str());
+            }
+
+            std::string droppedMesh;
+            if (acceptAssetDrop("SUPERSONIC_MESH", droppedMesh)) {
+                // Clearing the primitive is what makes the file win: MeshRegistry
+                // keys on "file:" + path when there is one and "primitive:" + name
+                // otherwise, so leaving both set would keep drawing the cube.
+                mesh.filePath = droppedMesh;
+                mesh.primitiveType.clear();
+            }
+
+            if (!mesh.filePath.empty() && ImGui::SmallButton("Revert to primitive")) {
+                mesh.filePath.clear();
+                mesh.primitiveType = "Cube";
             }
         }
     }
@@ -173,12 +213,20 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 if (ImGui::InputText("Albedo Texture", assetAlbedo, sizeof(assetAlbedo))) {
                     asset->albedoTexturePath = assetAlbedo;
                 }
+                std::string droppedAlbedo;
+                if (acceptAssetDrop("SUPERSONIC_TEXTURE", droppedAlbedo)) {
+                    asset->albedoTexturePath = droppedAlbedo;
+                }
 
                 char assetNormal[512] = {};
                 const size_t normalLen = std::min(asset->normalTexturePath.size(), sizeof(assetNormal) - 1);
                 std::memcpy(assetNormal, asset->normalTexturePath.data(), normalLen);
                 if (ImGui::InputText("Normal Map", assetNormal, sizeof(assetNormal))) {
                     asset->normalTexturePath = assetNormal;
+                }
+                std::string droppedNormal;
+                if (acceptAssetDrop("SUPERSONIC_TEXTURE", droppedNormal)) {
+                    asset->normalTexturePath = droppedNormal;
                 }
 
                 if (ImGui::Button(ICON_FA_FLOPPY "  Save Asset")) {
@@ -285,7 +333,15 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::SliderFloat("Pitch", &audio.pitch, 0.5f, 2.0f);
             ImGui::DragFloat("Reference Distance", &audio.referenceDistance, 0.1f, 0.1f, 100.0f);
             ImGui::DragFloat("Max Distance", &audio.maxDistance, 0.5f, 1.0f, 500.0f);
-            ImGui::TextDisabled("Clip: %s", audio.soundFile.c_str());
+            if (audio.soundFile.empty()) {
+                ImGui::TextDisabled("Clip: <none>   (drop a .wav here)");
+            } else {
+                ImGui::TextDisabled("Clip: %s", audio.soundFile.c_str());
+            }
+            std::string droppedClip;
+            if (acceptAssetDrop("SUPERSONIC_AUDIO", droppedClip)) {
+                audio.soundFile = droppedClip;
+            }
             if (audio.failedToLoad) {
                 ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f), "Clip failed to load.");
                 if (ImGui::Button("Retry Load")) { audio.failedToLoad = false; }
@@ -574,6 +630,26 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
     }
 
     if (ImGui::BeginPopup("AddComponentPopup")) {
+        // Mesh, Material and Renderable were absent from this menu, so an
+        // entity made with Create Empty could never be made to draw - the three
+        // components that decide whether anything appears were the three the
+        // menu did not offer. "Renderable" is the one that actually gates the
+        // draw, so it says so rather than being named after its type.
+        if (!registry.all_of<MeshComponent>(entity) && ImGui::MenuItem("Mesh")) {
+            registry.emplace<MeshComponent>(entity).primitiveType = "Cube";
+        }
+
+        if (!registry.all_of<MaterialComponent>(entity) && ImGui::MenuItem("Material")) {
+            registry.emplace<MaterialComponent>(entity);
+        }
+
+        if (!registry.all_of<RenderableComponent>(entity) &&
+            ImGui::MenuItem("Renderable (draw this entity)")) {
+            registry.emplace<RenderableComponent>(entity);
+        }
+
+        ImGui::Separator();
+
         if (!registry.all_of<RigidBodyComponent>(entity) && ImGui::MenuItem("RigidBody Physics")) {
             registry.emplace<RigidBodyComponent>(entity);
             ImGui::CloseCurrentPopup();

@@ -14,6 +14,25 @@ namespace Supersonic {
 
 namespace {
 
+// Drag payload type for a file, by extension, or nullptr for a file nothing
+// accepts. Deriving both this and the icon from the extension keeps a tile that
+// LOOKS draggable and a tile that IS draggable the same set.
+//
+// The payload carries the path as bytes including its terminator, because ImGui
+// copies the payload and hands it back later - a pointer into a std::string
+// that has since been rebuilt would be a dangling read at drop time.
+const char* dragPayloadFor(const std::filesystem::path& path) {
+    const std::string ext = path.extension().string();
+    if (ext == ".gltf" || ext == ".glb" || ext == ".obj") return "SUPERSONIC_MESH";
+    if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+        ext == ".tga" || ext == ".bmp")                   return "SUPERSONIC_TEXTURE";
+    if (ext == ".wav")                                    return "SUPERSONIC_AUDIO";
+    if (ext == ".material")                               return "SUPERSONIC_MATERIAL";
+    if (ext == ".prefab")                                 return "SUPERSONIC_PREFAB";
+    if (ext == ".scene")                                  return "SUPERSONIC_SCENE";
+    return nullptr;
+}
+
 // Icon for a file, by extension. A grid of identical [FILE] tags tells the user
 // nothing; a shape per kind is legible at a glance.
 const char* iconForFile(const std::filesystem::path& path) {
@@ -152,6 +171,24 @@ std::string ContentBrowserPanel::OnImGuiRender() {
                                       ImVec2(thumbnailSize, thumbnailSize));
                     }
                     ImGui::PopStyleColor();
+
+                    // Drag source on the tile, so an asset can be assigned by
+                    // pointing at it. Before this the content browser reacted
+                    // to exactly two extensions and every other tile was inert:
+                    // a .gltf or a .wav could be seen and not used, while the
+                    // importer behind it worked and was reachable only from a
+                    // hardcoded C++ string.
+                    if (const char* payloadType = dragPayloadFor(path)) {
+                        if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                            const std::string payload = path.string();
+                            ImGui::SetDragDropPayload(payloadType, payload.c_str(),
+                                                      payload.size() + 1);
+                            // What the cursor carries, so a drag over a target
+                            // that will not take it is obvious before the drop.
+                            ImGui::TextUnformatted(filenameString.c_str());
+                            ImGui::EndDragDropSource();
+                        }
+                    }
 
                     // The image tile carries no label of its own, so it gets a
                     // caption; the glyph tile already has the name inside it.
