@@ -9,6 +9,7 @@
 #include "core/SceneSerializer.hpp"
 #include "core/PrefabSerializer.hpp"
 #include "core/ComponentCodec.hpp"
+#include "core/AssetVersion.hpp"
 #include "core/Components.hpp"
 
 #include <cstdio>
@@ -593,7 +594,91 @@ static void testReadLayersOverAnEntityThatAlreadyHasComponents() {
     CHECK(registry.get<TagComponent>(entity).tag == "Original");
 }
 
+namespace {
+// free_list(), not size(): EnTT's swap_only deletion leaves released handles in
+// the storage, so size() counts entities that no longer exist.
+size_t countEntities(entt::registry& registry) {
+    return static_cast<size_t>(registry.storage<entt::entity>().free_list());
+}
+} // namespace
+
+static void testUnversionedScenesStillLoad() {
+    // Every scene written before versioning existed has no Version key, which
+    // reads as 0. Those must keep loading: refusing them would make adding the
+    // field itself the breaking change it exists to prevent.
+    const std::string path = "test_unversioned_tmp.scene";
+    {
+        std::ofstream f(path);
+        f << R"({"Scene": "Old", "Entities": [
+                  {"Tag": "Cube",
+                   "Transform": {"Position": [4.0, 0.0, 0.0],
+                                 "Rotation": [0.0, 0.0, 0.0],
+                                 "Scale": [1.0, 1.0, 1.0]}}]})";
+    }
+
+    entt::registry registry;
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    std::remove(path.c_str());
+
+    CHECK_MSG(result.ok, "a scene with no Version must still load: " + result.message);
+    CHECK_EQ(countEntities(registry), size_t{1});
+}
+
+static void testAFutureSceneIsRefusedAndChangesNothing() {
+    // The case worth spending anything on. Loading a file from a newer build
+    // and silently dropping the fields this one does not know about is how a
+    // user loses work by opening a scene in the wrong build and saving it.
+    const std::string path = "test_future_tmp.scene";
+    {
+        std::ofstream f(path);
+        f << R"({"Version": 9999, "Scene": "FromTheFuture", "Entities": [{"Tag": "Ghost"}]})";
+    }
+
+    entt::registry registry;
+    const auto existing = registry.create();
+    registry.emplace<TagComponent>(existing, "AlreadyHere");
+
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    std::remove(path.c_str());
+
+    CHECK_MSG(!result.ok, "a newer format version must be refused");
+    CHECK_MSG(result.message.find("newer build") != std::string::npos,
+              "the message should say why: " + result.message);
+
+    // And, like a parse failure, it must leave the open scene alone.
+    CHECK_EQ(countEntities(registry), size_t{1});
+    CHECK(registry.get<TagComponent>(existing).tag == "AlreadyHere");
+}
+
+static void testSavedScenesCarryTheCurrentVersion() {
+    const std::string path = "test_version_roundtrip_tmp.scene";
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TagComponent>(entity, "Cube");
+    registry.emplace<TransformComponent>(entity);
+
+    CHECK(SceneSerializer::Serialize(registry, path).ok);
+
+    std::ifstream in(path);
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    in.close();
+
+    Json::Value root;
+    std::string error;
+    CHECK(Json::Parse(buffer.str(), root, error));
+    CHECK_EQ(static_cast<int>(root["Version"].AsNumber(0.0)), AssetVersion::kCurrent);
+
+    entt::registry reloaded;
+    CHECK(SceneSerializer::Deserialize(reloaded, path).ok);
+    std::remove(path.c_str());
+    CHECK_EQ(countEntities(reloaded), size_t{1});
+}
+
 static void runTests() {
+    testUnversionedScenesStillLoad();
+    testAFutureSceneIsRefusedAndChangesNothing();
+    testSavedScenesCarryTheCurrentVersion();
     testReadLayersOverAnEntityThatAlreadyHasComponents();
     testJsonRoundTrip();
     testJsonRejectsGarbage();

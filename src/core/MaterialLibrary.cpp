@@ -1,4 +1,5 @@
 #include "core/MaterialLibrary.hpp"
+#include "core/AssetVersion.hpp"
 #include "core/Log.hpp"
 
 #include <filesystem>
@@ -26,6 +27,7 @@ glm::vec4 readVec4(const Json::Value& value, const glm::vec4& fallback) {
 std::string MaterialLibrary::Serialize(const MaterialAsset& asset) {
     std::ostringstream out;
     out << "{\n";
+    out << "  \"Version\": " << AssetVersion::kCurrent << ",\n";
     out << "  \"Material\": \"" << Json::Escape(asset.name) << "\",\n";
     out << "  \"Albedo\": [" << asset.albedoColor.x << ", " << asset.albedoColor.y << ", "
         << asset.albedoColor.z << ", " << asset.albedoColor.w << "],\n";

@@ -1,4 +1,5 @@
 #include "core/PrefabSerializer.hpp"
+#include "core/AssetVersion.hpp"
 #include "core/ComponentCodec.hpp"
 #include "core/Components.hpp"
 #include "core/Json.hpp"
@@ -34,6 +35,7 @@ SerializationResult PrefabSerializer::SavePrefab(entt::registry& registry, entt:
     // prefab of a scripted, lit, animated entity used to come back as a bare
     // mesh, and nothing said so.
     file << "{\n";
+    file << "  \"Version\": " << AssetVersion::kCurrent << ",\n";
     ComponentCodec::Write(registry, entity, file, "  ");
     file << "}\n";
     file.flush();

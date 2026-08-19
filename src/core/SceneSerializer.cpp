@@ -1,4 +1,5 @@
 #include "core/SceneSerializer.hpp"
+#include "core/AssetVersion.hpp"
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 #include "core/ComponentCodec.hpp"
@@ -47,7 +48,8 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
         indexOf.emplace(entities[i], i);
     }
 
-    file << "{\n  \"Scene\": \"MainScene\",\n  \"Entities\": [\n";
+    file << "{\n  \"Version\": " << AssetVersion::kCurrent
+         << ",\n  \"Scene\": \"MainScene\",\n  \"Entities\": [\n";
 
     for (size_t i = 0; i < entities.size(); ++i) {
         const entt::entity entity = entities[i];
@@ -205,6 +207,14 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
     if (!root.IsObject() || !root["Entities"].IsArray()) {
         return { false, filepath + " is not a scene file (no Entities array); scene left untouched." };
     }
+
+    // Checked before the registry is touched, alongside the parse, and for the
+    // same reason: refusing has to leave the open scene exactly as it was.
+    const int version = AssetVersion::Read(root);
+    if (!AssetVersion::IsReadable(version)) {
+        return { false, AssetVersion::TooNewMessage(filepath, version) + " (scene left untouched)" };
+    }
+    AssetVersion::Migrate(root, version);
 
     return applyScene(registry, root["Entities"].AsArray(), filepath);
 }
