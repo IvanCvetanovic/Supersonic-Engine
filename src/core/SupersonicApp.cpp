@@ -209,7 +209,18 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     }
 }
 
+void SupersonicApp::PushLayer(std::unique_ptr<EngineLayer> layer) {
+    if (!layer) return;
+    SUPERSONIC_LOG_INFO("SupersonicApp") << "Attached layer '" << layer->Name() << "'.";
+    m_layers.Push(std::move(layer), m_registry);
+}
+
 SupersonicApp::~SupersonicApp() {
+    // First, and before the registry is destroyed: a layer holding entity
+    // handles can still use them in OnDetach, and one detached afterwards
+    // could not.
+    m_layers.Clear(&m_registry);
+
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Shutting down Engine Subsystems in reverse order..." << std::endl;
 
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
@@ -743,8 +754,21 @@ void SupersonicApp::Run() {
             int steps = 0;
             m_contacts.clear();
             while (m_physicsAccumulator >= kFixedPhysicsStep && steps < kMaxPhysicsStepsPerFrame) {
-                SUPERSONIC_PROFILE(Physics);
-                PhysicsSystem::Update(m_registry, kFixedPhysicsStep, &m_stepContacts);
+                {
+                    SUPERSONIC_PROFILE(Physics);
+                    PhysicsSystem::Update(m_registry, kFixedPhysicsStep, &m_stepContacts);
+                }
+
+                // A game's simulation, inside the same loop and on the same
+                // fixed step - so it ticks exactly as often as physics, at a
+                // rate that does not depend on how fast the last frame drew.
+                // AFTER physics, so a tick reads the positions this step just
+                // produced rather than the previous one's.
+                {
+                    SUPERSONIC_PROFILE(GameLayers);
+                    m_layers.FixedUpdate(m_registry, kFixedPhysicsStep);
+                }
+
                 // Accumulated across the frame's steps, so the count the editor
                 // shows is the frame's contacts rather than the last step's.
                 m_contacts.insert(m_contacts.end(), m_stepContacts.begin(), m_stepContacts.end());
@@ -768,6 +792,12 @@ void SupersonicApp::Run() {
             ScriptEngine::ApplyPendingCommands(m_registry);
             { SUPERSONIC_PROFILE(Animation); AnimationSystem::Advance(m_registry, *m_animationLibrary, deltaTime); }
             { SUPERSONIC_PROFILE(Particles); ParticleSystem::Update(m_registry, deltaTime); }
+
+            // The per-frame half, after the engine's own systems and before the
+            // world transforms are resolved below - so a layer that moves
+            // something has it rendered this frame rather than next.
+            { SUPERSONIC_PROFILE(GameLayers); m_layers.Update(m_registry, deltaTime); }
+
             TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));
         }
         }

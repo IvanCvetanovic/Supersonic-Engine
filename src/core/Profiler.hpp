@@ -43,6 +43,11 @@ enum class ProfileZone : std::size_t {
     ShadowRecord,
     SceneRecord,
 
+    // Everything a game pushed, both callbacks summed. Its own zone because a
+    // game's cost buried inside Physics or Scripts is a game whose author
+    // cannot tell whether the engine or their own code is the slow half.
+    GameLayers,
+
     UndoCommit,
     Count,
 };
@@ -68,7 +73,7 @@ public:
             "Transform", "Editor UI", "ImGui Render", "Resource Sync",
             "Pose Evaluation",
             "Frame Wait", "Frame Prepare", "Shadow Record", "Scene Record",
-            "Undo Commit",
+            "Game Layers", "Undo Commit",
         };
         return kNames[static_cast<std::size_t>(zone)];
     }

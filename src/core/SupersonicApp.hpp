@@ -20,6 +20,7 @@
 #include "core/Components.hpp"
 #include "core/PhysicsSystem.hpp"
 #include "core/ContactTracker.hpp"
+#include "core/LayerStack.hpp"
 #include "core/AnimationLibrary.hpp"
 #include "core/MaterialLibrary.hpp"
 #include "core/LaunchOptions.hpp"
@@ -35,6 +36,27 @@ public:
     SupersonicApp& operator=(const SupersonicApp&) = delete;
 
     void Run();
+
+    // ---- The seam a game lives in ----
+    //
+    // The registry was private and the frame was a closed sequence, so there
+    // was nowhere for anyone else's code to be. These are the whole of the
+    // opening: somewhere to put systems, and access to the world they operate
+    // on.
+    //
+    // Push before Run. A layer pushed after it starts is attached correctly,
+    // but the frame it lands in has already begun.
+    void PushLayer(std::unique_ptr<EngineLayer> layer);
+
+    // The scene. Handed out deliberately: an ECS whose registry is private is
+    // an ECS only its author can use, and every alternative - a wrapper
+    // re-exporting a chosen subset, a message queue, a component registration
+    // API - is a smaller EnTT that a game has to learn instead of the one it
+    // already knows.
+    entt::registry& Registry() { return m_registry; }
+
+    // How many layers are attached, for the editor and for tests.
+    std::size_t LayerCount() const { return m_layers.Size(); }
 
 private:
     void initECS();
@@ -69,6 +91,10 @@ private:
     GameManifest m_manifest;
 
     entt::registry m_registry;
+
+    // A game's own systems. Empty in the editor, which is why nothing else in
+    // this file changes shape when there is no game.
+    LayerStack m_layers;
 
     // Physics runs on a fixed step fed by this accumulator, so a stalled frame
     // cannot integrate a two-second delta in one go.
