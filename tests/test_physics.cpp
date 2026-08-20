@@ -1686,7 +1686,47 @@ static void testAnEntityWithTwoCollidersPicksOneShape() {
                               std::to_string(found));
 }
 
+
+static void testANudgedCapsuleOnItsSideSettlesInsteadOfRocking() {
+    // Held by one contact under its middle, a capsule lying along a floor is
+    // free to rock end over end about that point with nothing anywhere else to
+    // resist. Measured before the manifold gained its second point: still
+    // swinging at about a radian per second ten seconds after the nudge, with
+    // its rotation oscillating between 1.44 and 1.73 either side of flat.
+    //
+    // This is the same failure the box manifold exists to prevent, arriving
+    // again with a new shape - which is the argument for testing every shape
+    // against it rather than trusting that the fix generalised.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+
+    const auto entity = registry.create();
+    // Turned onto its side, tilted a quarter radian, and given a shove.
+    registry.emplace<TransformComponent>(entity, glm::vec3(0.0f, 6.1f, 0.0f),
+                                         glm::vec3(0.0f, 0.0f, glm::half_pi<float>() + 0.25f),
+                                         glm::vec3(1.0f));
+    auto& body = registry.emplace<RigidBodyComponent>(entity);
+    body.angularDamping = 0.0f;   // nothing bleeds the rocking off artificially
+    body.allowSleep = false;      // or it passes by freezing rather than settling
+    body.angularVelocity = glm::vec3(0.0f, 0.0f, -0.8f);
+    auto& collider = registry.emplace<CapsuleColliderComponent>(entity);
+    collider.radius = 0.4f;
+    collider.height = 2.0f;
+
+    stepFor(registry, 6.0f);
+
+    const float spin = glm::length(registry.get<RigidBodyComponent>(entity).angularVelocity);
+    CHECK_MSG(spin < 0.1f,
+              "a nudged capsule on its side must come to rest: |w| = " + std::to_string(spin));
+
+    // And come to rest FLAT, not stopped at whatever angle it happened to reach.
+    const float roll = registry.get<TransformComponent>(entity).rotation.z;
+    CHECK_MSG(std::fabs(roll - glm::half_pi<float>()) < 0.15f,
+              "and lie flat: rotation.z = " + std::to_string(roll));
+}
+
 static void runTests() {
+    testANudgedCapsuleOnItsSideSettlesInsteadOfRocking();
     testACapsuleRestsOnItsOwnBottom();
     testACapsuleShorterThanItsDiameterIsASphere();
     testACapsuleRidesAStepThatStopsABox();
@@ -1759,4 +1799,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics", 140)
+TEST_MAIN("test_physics", 142)

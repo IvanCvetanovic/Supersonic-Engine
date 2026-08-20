@@ -778,10 +778,30 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             glm::vec3 roundB(0.0f);
             capsuleEnds(round, roundA, roundB);
 
-            hit = CollisionSAT::CollideCapsuleObb(roundA, roundB, round.radius, obbOf(box),
-                                                  normal, penetration, point, pairMargin);
-            speculative = hit && penetration < 0.0f;
-            if (a.shape != Shape::Box) normal = -normal;
+            const CollisionSAT::Manifold manifold = CollisionSAT::CollideCapsuleObb(
+                roundA, roundB, round.radius, obbOf(box), pairMargin);
+
+            if (manifold.colliding && manifold.pointCount > 0) {
+                hit = true;
+                normal = manifold.normal;
+                speculative = manifold.speculative;
+
+                // Same split as box-box: the deepest point says how far to push,
+                // the centroid says where. A capsule lying along a surface is
+                // held by both its ends, and one impulse at the average of them
+                // is what stops it rocking about a single spot in between.
+                glm::vec3 centroid(0.0f);
+                float deepest = manifold.points[0].penetration;
+                for (int i = 0; i < manifold.pointCount; ++i) {
+                    centroid += manifold.points[i].position;
+                    deepest = std::max(deepest, manifold.points[i].penetration);
+                    manifoldPoints[manifoldCount++] = manifold.points[i].position;
+                }
+                penetration = deepest;
+                point = centroid / static_cast<float>(manifold.pointCount);
+
+                if (a.shape != Shape::Box) normal = -normal;
+            }
         } else {
             // Two round things. A sphere is a capsule with no length, so this is
             // sphere-sphere, capsule-sphere and capsule-capsule at once.

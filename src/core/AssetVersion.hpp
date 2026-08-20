@@ -35,7 +35,7 @@ namespace AssetVersion {
 // Bump when the on-disk shape changes in a way a reader must know about.
 // Adding an optional field does NOT need a bump: the per-field defaults
 // already cover that, and it is the only case they cover.
-inline constexpr int kCurrent = 1;
+inline constexpr int kCurrent = 2;
 
 // Absent means 0: everything written before this existed.
 inline int Read(const Json::Value& root) {
@@ -67,8 +67,26 @@ inline std::string TooNewMessage(const std::string& what, int version) {
 // those exist. A migration keyed on a version cannot fix a file that predates
 // versions unless it assumes every unversioned file is the oldest shape.
 inline void Migrate(Json::Value& root, int fromVersion) {
-    (void)root;
-    (void)fromVersion;
+    // 1 -> 2: the world ground plane became a per-scene setting, defaulting OFF.
+    //
+    // Every scene written before that was authored against an unconditional
+    // solid plane at y = 0, and leaning on it was a perfectly reasonable thing
+    // to do while the floor was free - a level needed a collider only under the
+    // parts you could fall off. Reading one of those with the new default turns
+    // it into everything falling out of the world, with no message, which is
+    // the sort of break this hook exists to stop.
+    //
+    // So a scene from before the switch gets the plane it was authored against,
+    // and a new one gets the default. Both are what their author meant.
+    //
+    // Only when the key is absent. A hand-edited file that predates the version
+    // bump but already says what it wants is taken at its word.
+    if (fromVersion < 2 && !root.Has("Physics")) {
+        Json::Object physics;
+        physics.insert_or_assign("GroundPlane", Json::Value(true));
+        physics.insert_or_assign("GroundPlaneY", Json::Value(0.0));
+        root.Set("Physics", Json::Value(std::move(physics)));
+    }
 }
 
 } // namespace AssetVersion

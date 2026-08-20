@@ -81,6 +81,23 @@ public:
         return m_type == Type::Bool ? m_bool : fallback;
     }
 
+    // The one mutator, and it exists for exactly one caller: a migration has to
+    // be able to add the key a newer reader expects to a document written
+    // before that key existed. Everything else here is built by the parser and
+    // read.
+    //
+    // Turning a non-object into an object rather than refusing: a migration
+    // running against a document that is the wrong shape has bigger problems
+    // than this, and silently doing nothing is the failure mode that would be
+    // discovered in whatever the migration was supposed to fix.
+    void Set(const std::string& key, Value value) {
+        if (m_type != Type::Object) {
+            m_type = Type::Object;
+            m_object.clear();
+        }
+        m_object.insert_or_assign(key, std::move(value));
+    }
+
 private:
     Type m_type{Type::Null};
     bool m_bool{false};

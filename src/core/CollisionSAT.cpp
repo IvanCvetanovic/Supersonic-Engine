@@ -405,9 +405,23 @@ bool CollideCapsuleCapsule(const glm::vec3& a0, const glm::vec3& a1, float radiu
     return true;
 }
 
-bool CollideCapsuleObb(const glm::vec3& a0, const glm::vec3& a1, float radius, const Obb& box,
-                       glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
-                       float speculativeMargin) {
+// How near to parallel with the surface the capsule's axis has to be before both
+// of its ends are treated as contacts.
+//
+// 0.5 is sixty degrees off the normal, which is where the second cap is close
+// enough to the surface to be worth testing. Both candidates still have to pass
+// the ordinary sphere test to be kept, so a capsule leaning at exactly this
+// angle is not given a contact it does not have - the threshold decides what to
+// LOOK for, not what to report.
+constexpr float kAxisAlongSurface = 0.5f;
+
+Manifold CollideCapsuleObb(const glm::vec3& a0, const glm::vec3& a1, float radius,
+                           const Obb& box, float speculativeMargin) {
+    Manifold manifold;
+
+    glm::vec3 outNormal(0.0f, 1.0f, 0.0f);
+    float outPenetration = 0.0f;
+    glm::vec3 outPoint(0.0f);
     // Into the box's frame, where the problem is a segment against an AABB.
     const auto toLocal = [&](const glm::vec3& world) {
         const glm::vec3 relative = world - box.centre;
@@ -441,8 +455,54 @@ bool CollideCapsuleObb(const glm::vec3& a0, const glm::vec3& a1, float radius, c
     // implementation rather than two that can disagree about which face a
     // corner belongs to.
     const glm::vec3 worldSegment = box.centre + box.axes * onSegment;
-    return CollideSphereObb(worldSegment, radius, box, outNormal, outPenetration, outPoint,
-                            speculativeMargin);
+    if (!CollideSphereObb(worldSegment, radius, box, outNormal, outPenetration, outPoint,
+                          speculativeMargin)) {
+        return manifold;
+    }
+
+    manifold.colliding = true;
+    manifold.normal = outNormal;
+    manifold.speculative = outPenetration < 0.0f;
+    manifold.pointCount = 1;
+    manifold.points[0].position = outPoint;
+    manifold.points[0].penetration = outPenetration;
+
+    // A capsule lying along the surface. One contact under its middle holds it
+    // up and leaves it free to rock end over end about that point, with nothing
+    // anywhere else to resist - which is the single-contact failure the box
+    // manifold exists to avoid, and it comes straight back with the new shape
+    // unless it is handled here too.
+    const glm::vec3 axis = a1 - a0;
+    const float axisLength = glm::length(axis);
+    if (axisLength <= kParallelEpsilon) return manifold;
+    if (std::fabs(glm::dot(axis / axisLength, manifold.normal)) >= kAxisAlongSurface) {
+        return manifold;
+    }
+
+    glm::vec3 firstNormal(0.0f), firstPoint(0.0f), secondNormal(0.0f), secondPoint(0.0f);
+    float firstDepth = 0.0f, secondDepth = 0.0f;
+    const bool firstHit =
+        CollideSphereObb(a0, radius, box, firstNormal, firstDepth, firstPoint, speculativeMargin);
+    const bool secondHit =
+        CollideSphereObb(a1, radius, box, secondNormal, secondDepth, secondPoint, speculativeMargin);
+
+    // Both ends, and both agreeing with the contact the middle found. A capsule
+    // wedged into a corner has two ends touching two different faces, and
+    // reporting those as one manifold would push it along the average of two
+    // normals - into neither surface and out of the corner sideways.
+    if (!firstHit || !secondHit) return manifold;
+    if (glm::dot(firstNormal, manifold.normal) < 0.9f) return manifold;
+    if (glm::dot(secondNormal, manifold.normal) < 0.9f) return manifold;
+
+    manifold.pointCount = 2;
+    manifold.points[0].position = firstPoint;
+    manifold.points[0].penetration = firstDepth;
+    manifold.points[1].position = secondPoint;
+    manifold.points[1].penetration = secondDepth;
+
+    // The pair is only apart if BOTH ends are.
+    manifold.speculative = firstDepth < 0.0f && secondDepth < 0.0f;
+    return manifold;
 }
 
 } // namespace Supersonic::CollisionSAT

@@ -501,8 +501,8 @@ collapses its three world half extents to the largest, so a non-uniformly scaled
 sphere still becomes the sphere that contains it, and a capsule collapses its two
 lateral scales the same way while keeping its own axis.
 
-There are three collider shapes and **two** pair tests, because a sphere is a
-capsule whose segment has no length. Writing sphere-against-sphere separately
+There are three collider shapes and **three** pair tests rather than six,
+because a sphere is a capsule whose segment has no length. Writing sphere-against-sphere separately
 would be a second implementation of the same arithmetic with its own edge cases,
 and it was: the old one had no speculative margin, so two fast spheres passed
 through each other while a sphere and a box did not.
@@ -561,6 +561,17 @@ corner belongs to.
 The tempting shortcut — testing only the capsule's two end spheres — is wrong for
 exactly the arrangement a bridge is: a capsule lying across a narrow pillar it
 does not touch at either end.
+
+A capsule against a box returns a **manifold**, for the same reason box-against-
+box does. A capsule lying ALONG a surface touches it in a line, and one contact
+under its middle leaves it free to rock end over end about that point with
+nothing anywhere else to resist: measured at about a radian per second still, ten
+seconds after a nudge. So when the axis is within sixty degrees of the surface,
+both ends are tested as well and kept if they hold up — both have to produce a
+contact of their own, and both normals have to agree with the one the middle
+found, or a capsule wedged into a corner would be pushed along the average of two
+faces, into neither and out of the corner sideways. A capsule standing on a cap,
+or leaning, still gets one point, because one is all it has.
 
 **Segments.** Two of the three things the segment arithmetic has to get right
 fail silently. Parallel segments give a zero denominator in the closed-form
@@ -684,6 +695,15 @@ should have fallen out of the world stopped dead on nothing. It did all of that
 invisibly, because there is no entity to select and nothing to see — the only way
 to find out it was there was to notice something not falling. The demo scene
 relied on it; it now has a real collider under the floor it was already drawing.
+
+Scenes written before the switch are **migrated**, not broken. Leaning on the
+plane was a perfectly reasonable thing to do while the floor was free — a level
+needed a collider only under the parts you could fall off — so reading one of
+those with the new default would drop everything in it out of the world with no
+message. `AssetVersion::Migrate` gives any scene below format version 2 the plane
+it was authored against, and leaves alone one that already says what it wants.
+That hook had been an empty placeholder since versioning landed; this is the
+first thing to use it, and the reason it was worth writing before it was needed.
 
 It is measured in **world** space, through the bottom of the body's collider
 bounds. Both halves of that sentence are bug fixes. Clamping the transform origin

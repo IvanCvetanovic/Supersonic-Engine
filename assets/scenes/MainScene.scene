@@ -1,5 +1,7 @@
 {
+  "Version": 2,
   "Scene": "MainScene",
+  "Physics": { "Gravity": [0, -9.81, 0], "GroundPlane": false, "GroundPlaneY": 0 },
   "Entities": [
     {
       "Tag": "Main Camera",

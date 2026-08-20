@@ -131,9 +131,15 @@ bool CollideCapsuleCapsule(const glm::vec3& a0, const glm::vec3& a1, float radiu
 
 // Capsule against an oriented box. The normal points from the BOX toward the
 // capsule, matching the a-to-b convention when the box is a.
-bool CollideCapsuleObb(const glm::vec3& a0, const glm::vec3& a1, float radius, const Obb& box,
-                       glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
-                       float speculativeMargin = 0.0f);
+//
+// Returns a manifold rather than one point for the same reason box-against-box
+// does: a capsule lying ALONG a surface touches it in a line, and holding it
+// with a single contact leaves it free to rock end over end about that point
+// forever, because there is nothing anywhere else to resist. One point when a
+// cap is what touches - a capsule standing upright, or leaning - and two when
+// the axis runs along the surface.
+Manifold CollideCapsuleObb(const glm::vec3& a0, const glm::vec3& a1, float radius,
+                           const Obb& box, float speculativeMargin = 0.0f);
 
 } // namespace CollisionSAT
 } // namespace Supersonic

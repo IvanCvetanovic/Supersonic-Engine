@@ -362,16 +362,46 @@ static void testACapsuleStandsOnTheTopOfABox() {
     // is at y = 1.0, so it is 0.2 deep.
     const auto floor = makeBox(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(5.0f, 1.0f, 5.0f));
 
-    glm::vec3 normal(0.0f);
-    float penetration = 0.0f;
-    glm::vec3 point(0.0f);
-
-    CHECK(CollideCapsuleObb(glm::vec3(0.0f, 1.2f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f), 0.4f,
-                            floor, normal, penetration, point));
-    CHECK_NEAR(penetration, 0.2f);
-    CHECK_MSG(normal.y > 0.99f,
+    const auto manifold = CollideCapsuleObb(glm::vec3(0.0f, 1.2f, 0.0f),
+                                            glm::vec3(0.0f, 2.0f, 0.0f), 0.4f, floor);
+    CHECK(manifold.colliding);
+    CHECK_NEAR(manifold.MaxPenetration(), 0.2f);
+    CHECK_MSG(manifold.normal.y > 0.99f,
               "standing on a floor must push the capsule straight up, not sideways");
-    CHECK_NEAR(point.y, 1.0f);
+    CHECK_NEAR(manifold.points[0].position.y, 1.0f);
+
+    // ONE point, because only the bottom cap is touching. A second contact under
+    // the head would resist a lean the capsule is entitled to have.
+    CHECK_EQ(manifold.pointCount, 1);
+}
+
+static void testACapsuleLyingOnASurfaceIsHeldAtBothEnds() {
+    // The failure the box manifold exists to prevent, arriving again with the
+    // new shape. A capsule lying along a floor touches it in a line; held by one
+    // contact under its middle it is free to rock end over end about that point,
+    // with nothing anywhere else to resist. Measured before this: still swinging
+    // at a radian per second ten seconds after a nudge.
+    const auto floor = makeBox(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(5.0f, 1.0f, 5.0f));
+
+    const auto manifold = CollideCapsuleObb(glm::vec3(-0.6f, 1.3f, 0.0f),
+                                            glm::vec3(0.6f, 1.3f, 0.0f), 0.4f, floor);
+    CHECK(manifold.colliding);
+    CHECK_EQ(manifold.pointCount, 2);
+    CHECK_MSG(manifold.normal.y > 0.99f, "it must still be pushed straight up");
+
+    // One under each end, not two in the same place - which would resist nothing.
+    const float spread = std::fabs(manifold.points[0].position.x -
+                                   manifold.points[1].position.x);
+    CHECK_MSG(spread > 1.0f,
+              "the two contacts must be at the ends: spread = " + std::to_string(spread));
+
+    // Half off the edge, and the overhanging end must not be reported as
+    // touching something that is not there.
+    const auto overhang = CollideCapsuleObb(glm::vec3(4.6f, 1.3f, 0.0f),
+                                            glm::vec3(6.4f, 1.3f, 0.0f), 0.4f, floor);
+    CHECK(overhang.colliding);
+    CHECK_MSG(overhang.pointCount == 1,
+              "an end hanging over the edge is not a contact");
 }
 
 static void testACapsuleOnASlopeGetsTheSlopesNormal() {
@@ -381,14 +411,11 @@ static void testACapsuleOnASlopeGetsTheSlopesNormal() {
     const float slope = glm::radians(30.0f);
     const auto ramp = makeBox(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(5.0f, 0.5f, 5.0f), slope);
 
-    glm::vec3 normal(0.0f);
-    float penetration = 0.0f;
-    glm::vec3 point(0.0f);
-
-    CHECK(CollideCapsuleObb(glm::vec3(0.0f, 0.6f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f), 0.3f,
-                            ramp, normal, penetration, point));
-    CHECK_MSG(normal.y < 0.95f, "a 30-degree ramp must produce a tilted normal");
-    CHECK_MSG(std::fabs(normal.x) > 0.1f, "and it must lean along the slope");
+    const auto manifold = CollideCapsuleObb(glm::vec3(0.0f, 0.6f, 0.0f),
+                                           glm::vec3(0.0f, 2.0f, 0.0f), 0.3f, ramp);
+    CHECK(manifold.colliding);
+    CHECK_MSG(manifold.normal.y < 0.95f, "a 30-degree ramp must produce a tilted normal");
+    CHECK_MSG(std::fabs(manifold.normal.x) > 0.1f, "and it must lean along the slope");
 }
 
 static void testACapsuleLyingAcrossABoxIsCaughtByItsMiddle() {
@@ -398,18 +425,19 @@ static void testACapsuleLyingAcrossABoxIsCaughtByItsMiddle() {
     // shortcut, and wrong for exactly the arrangement a bridge is.
     const auto pillar = makeBox(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.2f, 1.0f, 0.2f));
 
-    glm::vec3 normal(0.0f);
-    float penetration = 0.0f;
-    glm::vec3 point(0.0f);
+    const auto manifold = CollideCapsuleObb(glm::vec3(-3.0f, 1.2f, 0.0f),
+                                            glm::vec3(3.0f, 1.2f, 0.0f), 0.4f, pillar);
+    CHECK(manifold.colliding);
+    CHECK_MSG(manifold.normal.y > 0.99f, "it must be pushed up off the top of the pillar");
+    CHECK_NEAR(manifold.MaxPenetration(), 0.2f);
 
-    CHECK(CollideCapsuleObb(glm::vec3(-3.0f, 1.2f, 0.0f), glm::vec3(3.0f, 1.2f, 0.0f), 0.4f,
-                            pillar, normal, penetration, point));
-    CHECK_MSG(normal.y > 0.99f, "it must be pushed up off the top of the pillar");
-    CHECK_NEAR(penetration, 0.2f);
+    // One point, even though the axis lies along the surface: both ends are far
+    // out over nothing, so neither is a contact and only the middle is left.
+    CHECK_EQ(manifold.pointCount, 1);
 
     // Raised clear, it must not be reported at all.
-    CHECK_MSG(!CollideCapsuleObb(glm::vec3(-3.0f, 2.0f, 0.0f), glm::vec3(3.0f, 2.0f, 0.0f), 0.4f,
-                                 pillar, normal, penetration, point),
+    CHECK_MSG(!CollideCapsuleObb(glm::vec3(-3.0f, 2.0f, 0.0f), glm::vec3(3.0f, 2.0f, 0.0f),
+                                 0.4f, pillar).colliding,
               "clear of the pillar is not a contact");
 }
 
@@ -421,6 +449,7 @@ static void runTests() {
     testASphereIsACapsuleWithNoLength();
     testTwoCapsulesTouchAtTheirNearestApproach();
     testACapsuleStandsOnTheTopOfABox();
+    testACapsuleLyingOnASurfaceIsHeldAtBothEnds();
     testACapsuleOnASlopeGetsTheSlopesNormal();
     testACapsuleLyingAcrossABoxIsCaughtByItsMiddle();
     testSeparatedBoxesDoNotCollide();
@@ -434,4 +463,4 @@ static void runTests() {
     testTheRampThatCouldNotBeBuilt();
 }
 
-TEST_MAIN("test_sat", 70)
+TEST_MAIN("test_sat", 78)

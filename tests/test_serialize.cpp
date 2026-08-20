@@ -739,10 +739,13 @@ static void testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt() {
     stale.hasGroundPlane = true;
     registry.ctx().insert_or_assign<PhysicsSettings>(std::move(stale));
 
+    // Written at the CURRENT version deliberately. An older scene is migrated
+    // into keeping the ground plane it was authored against, which is the test
+    // below; this one is about a current scene that simply says nothing.
     const std::string path = "test_physics_plain_tmp.scene";
     {
         std::ofstream f(path);
-        f << R"({"Scene": "Plain", "Entities": [
+        f << R"({"Version": )" << AssetVersion::kCurrent << R"(, "Scene": "Plain", "Entities": [
                   {"Tag": "Cube",
                    "Transform": {"Position": [0.0, 0.0, 0.0],
                                  "Rotation": [0.0, 0.0, 0.0],
@@ -759,7 +762,77 @@ static void testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt() {
               "a scene that does not ask for a ground plane must not inherit one");
 }
 
+
+static void testAnOlderSceneKeepsTheGroundPlaneItWasAuthoredAgainst() {
+    // The world ground plane used to be unconditional, so a level needed a
+    // collider only under the parts you could fall off. Every scene written
+    // before the switch leans on that, and reading one with the new default
+    // would drop everything in it out of the world with no message.
+    //
+    // This is what AssetVersion::Migrate exists for, and until now it was an
+    // empty hook. The bar is not "the file still parses", it is "the scene still
+    // behaves as its author built it".
+    const std::string path = "test_old_scene_tmp.scene";
+    {
+        std::ofstream f(path);
+        f << R"({"Version": 1, "Scene": "Old", "Entities": [
+                  {"Tag": "Crate",
+                   "Transform": {"Position": [0.0, 4.0, 0.0],
+                                 "Rotation": [0.0, 0.0, 0.0],
+                                 "Scale": [1.0, 1.0, 1.0]}}]})";
+    }
+
+    entt::registry registry;
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    std::remove(path.c_str());
+
+    CHECK_MSG(result.ok, "an older scene must still load: " + result.message);
+    CHECK_MSG(registry.ctx().contains<PhysicsSettings>(),
+              "an older scene must come back with physics settings");
+    CHECK_MSG(registry.ctx().get<PhysicsSettings>().hasGroundPlane,
+              "a scene older than the switch must keep the ground plane it was "
+              "authored against");
+
+    // And an unversioned scene - everything written before versions existed -
+    // is older still, so it gets the same treatment.
+    const std::string ancient = "test_ancient_scene_tmp.scene";
+    {
+        std::ofstream f(ancient);
+        f << R"({"Scene": "Ancient", "Entities": []})";
+    }
+    entt::registry old;
+    const auto ancientResult = SceneSerializer::Deserialize(old, ancient);
+    std::remove(ancient.c_str());
+    CHECK_MSG(ancientResult.ok, "an unversioned scene must still load");
+    CHECK_MSG(old.ctx().get<PhysicsSettings>().hasGroundPlane,
+              "and must keep its ground plane too");
+}
+
+static void testAnOlderSceneThatSaysWhatItWantsIsTakenAtItsWord() {
+    // The migration fills a gap, it does not overrule. A file that predates the
+    // version bump but already carries the key was hand-edited to say something,
+    // and quietly replacing it would be the migration lying about the author's
+    // intent.
+    const std::string path = "test_old_explicit_tmp.scene";
+    {
+        std::ofstream f(path);
+        f << R"({"Version": 1, "Scene": "Old",
+                 "Physics": {"GroundPlane": false},
+                 "Entities": []})";
+    }
+
+    entt::registry registry;
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    std::remove(path.c_str());
+
+    CHECK_MSG(result.ok, "the scene must load: " + result.message);
+    CHECK_MSG(!registry.ctx().get<PhysicsSettings>().hasGroundPlane,
+              "a scene that says it wants no ground plane must not be given one");
+}
+
 static void runTests() {
+    testAnOlderSceneKeepsTheGroundPlaneItWasAuthoredAgainst();
+    testAnOlderSceneThatSaysWhatItWantsIsTakenAtItsWord();
     testWorldPhysicsSurvivesARoundTrip();
     testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
     testUnversionedScenesStillLoad();
@@ -780,4 +853,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 160)
+TEST_MAIN("test_serialize", 175)
