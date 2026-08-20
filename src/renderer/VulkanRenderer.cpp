@@ -7,8 +7,6 @@
 #include "core/Components.hpp"
 #include "core/EcsUtils.hpp"
 
-#include "editor/Theme.hpp"
-#include "editor/EditorFonts.hpp"
 
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
@@ -21,8 +19,10 @@
 
 namespace Supersonic {
 
-VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window)
-    : m_deviceRef(device), m_swapchainRef(swapchain), m_windowRef(window) {
+VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window,
+                               UiStyleCallback styleUi)
+    : m_deviceRef(device), m_swapchainRef(swapchain), m_windowRef(window),
+      m_styleUi(std::move(styleUi)) {
 
     createRenderPass();
     createFramebuffers();
@@ -710,8 +710,9 @@ void VulkanRenderer::initImGui() {
         if (xScale > 0.0f) dpiScale = xScale;
     }
 
-    EditorFonts::Load(dpiScale);
-    Theme::ApplyEngineDarkTheme(dpiScale);
+    // Whoever owns the UI decides how it looks. See UiStyleCallback for why
+    // this is a callback and why it has to happen exactly here.
+    if (m_styleUi) m_styleUi(dpiScale);
 
     // 3. Init ImGui GLFW and Vulkan Backends
     ImGui_ImplGlfw_InitForVulkan(m_windowRef.GetNativeWindow(), true);

@@ -20,6 +20,8 @@
 #include "core/GameRuntime.hpp"
 #include "core/SceneSerializer.hpp"
 #include "platform/ExecutablePath.hpp"
+#include "editor/Theme.hpp"
+#include "editor/EditorFonts.hpp"
 
 #include "imgui.h"
 
@@ -137,7 +139,15 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
 
     m_vulkanDevice = std::make_unique<VulkanDevice>(m_vulkanContext->GetInstance(), *m_window);
     m_swapchain = std::make_unique<VulkanSwapchain>(*m_vulkanDevice, *m_window);
-    m_renderer = std::make_unique<VulkanRenderer>(*m_vulkanDevice, *m_swapchain, *m_window);
+    // The editor's appearance, handed to the renderer rather than reached for
+    // by it. This is the only line in the engine that decides what the UI looks
+    // like, and it is in the application - which is where the editor is.
+    m_renderer = std::make_unique<VulkanRenderer>(
+        *m_vulkanDevice, *m_swapchain, *m_window,
+        [](float dpiScale) {
+            EditorFonts::Load(dpiScale);
+            Theme::ApplyEngineDarkTheme(dpiScale);
+        });
 
     // The editor's offscreen target registers a texture with the ImGui Vulkan
     // backend, so it must be created after the renderer has initialised it.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -37,7 +38,27 @@ public:
     // Deferred destruction needs to compare frames that are far apart.
     uint64_t m_absoluteFrame{0};
 
-    VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window);
+    // How the UI should look, applied at the one instant it can be.
+    //
+    // The renderer used to call EditorFonts::Load and Theme::ApplyEngineDarkTheme
+    // itself, which meant a Vulkan renderer that could not be compiled without
+    // the editor's fonts and colour scheme - a packaged game linked the editor's
+    // appearance in order to draw a triangle.
+    //
+    // It arrives as a callback rather than as data because of the timing, which
+    // is not negotiable: fonts must be added after the ImGui context exists and
+    // BEFORE the Vulkan backend is initialised. Adding one afterwards destroys
+    // and re-uploads a font texture the backend may already have recorded into
+    // an unsubmitted command buffer. The renderer is the only thing that knows
+    // when that moment is; it is not the thing that should know what a font is.
+    //
+    // The float is the monitor's DPI scale, which the renderer does know,
+    // having just asked GLFW which monitor the window landed on. Empty is
+    // valid and means ImGui's built-in style.
+    using UiStyleCallback = std::function<void(float dpiScale)>;
+
+    VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window,
+                   UiStyleCallback styleUi = {});
     ~VulkanRenderer();
 
     VulkanRenderer(const VulkanRenderer&) = delete;
@@ -101,6 +122,8 @@ private:
     void createDescriptorPool();
     void createDescriptorSets();
     void initImGui();
+
+    UiStyleCallback m_styleUi;
 
     // Fills the UBO from the scene's lights and returns the light-space matrix
     // used by both the shadow pass and the shadow lookup.
