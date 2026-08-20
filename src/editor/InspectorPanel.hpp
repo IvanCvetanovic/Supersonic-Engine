@@ -8,12 +8,16 @@
 namespace Supersonic {
 
 class MaterialLibrary;
+class BloomPass;
 
 class InspectorPanel {
 public:
     // Non-owning; null simply means the material section edits the entity's own
     // values, which is what it did before assets existed.
     void SetMaterialLibrary(MaterialLibrary* library) { m_materialLibrary = library; }
+
+    // Non-owning; null simply hides the bloom controls.
+    void SetBloom(BloomPass* bloom) { m_bloom = bloom; }
 
     InspectorPanel() = default;
 
@@ -31,6 +35,10 @@ public:
 
 private:
     MaterialLibrary* m_materialLibrary{nullptr};
+
+    // The post chain, so the world settings can include how it looks. Non-owning
+    // and null until the editor hands it over.
+    BloomPass* m_bloom{nullptr};
 
     void drawComponents(entt::registry& registry, entt::entity entity);
 

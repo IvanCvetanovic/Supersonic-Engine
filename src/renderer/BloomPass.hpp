@@ -57,13 +57,39 @@ public:
     static constexpr vk::Format kHdrFormat = vk::Format::eR16G16B16A16Sfloat;
     static constexpr vk::Format kOutputFormat = vk::Format::eR8G8B8A8Unorm;
 
-    // Tunables, deliberately constants rather than settings: one look, chosen.
-    static constexpr float kThreshold = 1.0f;
-    static constexpr float kSoftKnee = 0.5f;
-    static constexpr float kIntensity = 0.55f;
-    static constexpr float kExposure = 1.0f;
+    // The look, as values rather than as constants.
+    //
+    // These were compile-time constants with a comment calling that a choice -
+    // "one look, chosen". It is a defensible position for an engine with one
+    // scene and an indefensible one for an engine meant to host somebody's
+    // game: a night level and a bright exterior do not share a bloom
+    // threshold, and neither of them should require a rebuild.
+    //
+    // The shaders already took all four through push constants. Only the C++
+    // side was fixed, so this changes what feeds them and nothing else.
+    struct Settings {
+        // Where a highlight starts to bloom. The scene is HDR at this point, so
+        // 1.0 means "brighter than white".
+        float threshold{1.0f};
+
+        // How gradually it starts, so a surface drifting past the threshold
+        // fades in instead of popping.
+        float softKnee{0.5f};
+
+        // How much of the blurred image is added back.
+        float intensity{0.55f};
+
+        // Applied in the composite, before the tone map.
+        float exposure{1.0f};
+    };
+
+    void SetSettings(const Settings& settings) { m_settings = settings; }
+    const Settings& GetSettings() const { return m_settings; }
+    Settings& MutableSettings() { return m_settings; }
 
 private:
+    Settings m_settings{};
+
     // 16 bytes, well inside the guaranteed push constant range. Every stage in
     // the chain takes four floats and interprets them for itself.
     struct Params {

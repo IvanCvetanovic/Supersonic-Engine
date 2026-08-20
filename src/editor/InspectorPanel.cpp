@@ -1,5 +1,6 @@
 #include "editor/InspectorPanel.hpp"
 #include "core/PhysicsSettings.hpp"
+#include "renderer/BloomPass.hpp"
 #include <string>
 
 #include "renderer/PointShadow.hpp"
@@ -125,6 +126,20 @@ void InspectorPanel::drawWorldSettings(entt::registry& registry) {
                         "default: it has no friction, nothing can fall below it, "
                         "and there is nothing to select when it catches something "
                         "unexpectedly.");
+
+    if (!m_bloom) return;
+
+    ImGui::Spacing();
+    if (!ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) return;
+
+    auto& bloom = m_bloom->MutableSettings();
+    ImGui::DragFloat("Threshold", &bloom.threshold, 0.01f, 0.0f, 10.0f);
+    ImGui::DragFloat("Soft Knee", &bloom.softKnee, 0.01f, 0.0f, 1.0f);
+    ImGui::DragFloat("Intensity", &bloom.intensity, 0.01f, 0.0f, 4.0f);
+    ImGui::DragFloat("Exposure", &bloom.exposure, 0.01f, 0.01f, 8.0f);
+    ImGui::TextDisabled("The scene is HDR here, so a threshold of 1 means "
+                        "brighter than white. These were compile-time constants; "
+                        "a night level and a bright exterior do not share them.");
 }
 
 void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity selectedEntity) {

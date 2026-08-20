@@ -19,6 +19,10 @@ public:
     // either now happens - see BloomPass for why that order is required.
     static constexpr vk::Format kColorFormat = BloomPass::kHdrFormat;
 
+    // The post chain, so its look can be edited. Null before the target has
+    // been built, which is why every caller has to check.
+    BloomPass* GetBloom() { return m_bloom.get(); }
+
     VulkanOffscreen(VulkanDevice& device, uint32_t width, uint32_t height);
     ~VulkanOffscreen();
 

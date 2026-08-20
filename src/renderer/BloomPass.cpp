@@ -395,7 +395,7 @@ void BloomPass::Record(vk::CommandBuffer cmd) const {
 
     // 1. Threshold the scene into the half-resolution bright image.
     Params bright{};
-    bright.value = glm::vec4(kThreshold, kSoftKnee, 0.0f, 0.0f);
+    bright.value = glm::vec4(m_settings.threshold, m_settings.softKnee, 0.0f, 0.0f);
     recordPass(cmd, m_hdrPass, m_brightFramebuffer, m_halfWidth, m_halfHeight,
                m_brightPipeline, m_singlePipelineLayout, m_sceneSet, bright);
 
@@ -414,7 +414,7 @@ void BloomPass::Record(vk::CommandBuffer cmd) const {
 
     // 4. Add it back to the scene, tone map, encode.
     Params composite{};
-    composite.value = glm::vec4(kIntensity, kExposure, 0.0f, 0.0f);
+    composite.value = glm::vec4(m_settings.intensity, m_settings.exposure, 0.0f, 0.0f);
     recordPass(cmd, m_outputPass, m_outputFramebuffer, m_width, m_height,
                m_compositePipeline, m_doublePipelineLayout, m_compositeSet, composite);
 }
