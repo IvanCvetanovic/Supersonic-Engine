@@ -125,6 +125,15 @@ struct HierarchyComponent {
 // themselves, which is what makes parenting work everywhere at once.
 struct WorldTransformComponent {
     glm::mat4 matrix{1.0f};
+
+    // Which call to UpdateWorldTransforms last composed this matrix.
+    //
+    // Purely a cache marker, and the reason the resolve is memoised rather
+    // than merely iterative: a chain walk stops the moment it reaches an
+    // ancestor carrying the current stamp, instead of re-deriving that
+    // ancestor's matrix for every one of its descendants. Zero is what a fresh
+    // component holds and is never a live stamp.
+    uint32_t resolvedStamp{0};
 };
 
 struct TransformComponent {

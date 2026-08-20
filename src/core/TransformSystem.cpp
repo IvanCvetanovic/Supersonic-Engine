@@ -46,28 +46,57 @@ void decomposeToLocal(const glm::mat4& m, TransformComponent& out) {
 } // namespace
 
 void TransformSystem::UpdateWorldTransforms(entt::registry& registry) {
+    // One stamp per call, so "already composed" means "composed during THIS
+    // call" and nothing else. Never zero, because that is what a component
+    // freshly created below holds.
+    static uint32_t s_call = 0;
+    if (++s_call == 0) ++s_call;
+    const uint32_t stamp = s_call;
+
     // Every entity with a transform gets a world matrix, so downstream systems
-    // never have to ask whether one exists.
+    // never have to ask whether one exists. Done first and alone, because
+    // nothing after it may emplace: adding to a pool can move it, and the loops
+    // below hold references into one.
     for (auto entity : registry.view<TransformComponent>()) {
-        if (!registry.all_of<WorldTransformComponent>(entity)) {
-            registry.emplace<WorldTransformComponent>(entity);
-        }
+        (void)registry.get_or_emplace<WorldTransformComponent>(entity);
     }
 
-    // Iterative resolve with memoisation. A naive recursive walk per entity is
-    // O(depth) per node and revisits the same ancestors repeatedly; this touches
-    // each chain once and terminates on cycles rather than overflowing the stack.
-    auto view = registry.view<TransformComponent, WorldTransformComponent>();
+    // Entities with no parent at all, which in nearly every scene is nearly
+    // every entity. Their world matrix IS their local one - no chain to walk,
+    // no ancestors to look up, one matrix each.
+    //
+    // This used to go through the general path below: a vector cleared and
+    // pushed to, a hierarchy lookup, and a reverse iteration, all to compose a
+    // chain of length one.
+    for (auto entity : registry.view<TransformComponent>(entt::exclude<HierarchyComponent>)) {
+        auto& world = registry.get<WorldTransformComponent>(entity);
+        world.matrix = registry.get<TransformComponent>(entity).getModelMatrix();
+        world.resolvedStamp = stamp;
+    }
 
+    // Everything that is parented to something. The walk climbs until it finds
+    // an ancestor already composed this call and then composes back down,
+    // which is what the comment here used to claim and did not do: nothing was
+    // ever marked, so a chain of depth d re-derived every ancestor for each of
+    // its d nodes, and ten siblings under one parent built that parent's matrix
+    // ten times.
     std::vector<entt::entity> chain;
-    for (auto entity : view) {
-        chain.clear();
+    for (auto entity : registry.view<TransformComponent, HierarchyComponent>()) {
+        if (registry.get<WorldTransformComponent>(entity).resolvedStamp == stamp) continue;
 
-        // Walk up to the first ancestor that is already resolved this frame.
+        chain.clear();
         entt::entity current = entity;
         glm::mat4 base(1.0f);
 
         while (current != entt::null) {
+            // The memoisation. An ancestor carrying this call's stamp is
+            // finished; its matrix is the base to compose down from.
+            const auto& cached = registry.get<WorldTransformComponent>(current);
+            if (cached.resolvedStamp == stamp) {
+                base = cached.matrix;
+                break;
+            }
+
             chain.push_back(current);
 
             const auto* hierarchy = registry.try_get<HierarchyComponent>(current);
@@ -89,12 +118,17 @@ void TransformSystem::UpdateWorldTransforms(entt::registry& registry) {
             current = parent;
         }
 
-        // Compose from the topmost ancestor down.
+        // Compose from the topmost ancestor down, marking EVERY node on the way
+        // rather than only the one that was asked for. The partial composition
+        // at each step is that node's world matrix, so storing it is free - and
+        // it is what stops the next sibling climbing the same chain again.
         glm::mat4 world = base;
         for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
             world = world * registry.get<TransformComponent>(*it).getModelMatrix();
+            auto& cache = registry.get<WorldTransformComponent>(*it);
+            cache.matrix = world;
+            cache.resolvedStamp = stamp;
         }
-        registry.get<WorldTransformComponent>(entity).matrix = world;
     }
 }
 
