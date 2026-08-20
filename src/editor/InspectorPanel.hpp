@@ -34,6 +34,11 @@ private:
 
     void drawComponents(entt::registry& registry, entt::entity entity);
 
+    // Scene-level physics, drawn where the inspector would otherwise be
+    // empty: it belongs to no entity, so there is nothing to select to
+    // reach it.
+    void drawWorldSettings(entt::registry& registry);
+
     // Decomposes using TransformComponent::getModelMatrix's own Euler order,
     // rather than ImGuizmo's, which is a different convention.
     static void decomposeToTransform(const glm::mat4& model, TransformComponent& transform);

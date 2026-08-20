@@ -11,6 +11,7 @@
 #include "core/ComponentCodec.hpp"
 #include "core/AssetVersion.hpp"
 #include "core/Components.hpp"
+#include "core/PhysicsSettings.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -675,7 +676,76 @@ static void testSavedScenesCarryTheCurrentVersion() {
     CHECK_EQ(countEntities(reloaded), size_t{1});
 }
 
+
+static void testWorldPhysicsSurvivesARoundTrip() {
+    // Gravity and the ground plane belong to the scene, not to any entity, so
+    // they cannot go through ComponentCodec and are the one thing in the file a
+    // per-entity round trip would never notice going missing.
+    const std::string path = "test_physics_tmp.scene";
+
+    {
+        entt::registry registry;
+        PhysicsSettings settings;
+        settings.gravity = glm::vec3(0.0f, -1.62f, 0.0f); // the moon
+        settings.hasGroundPlane = true;
+        settings.groundPlaneY = -12.5f;
+        registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
+
+        const auto entity = registry.create();
+        registry.emplace<TagComponent>(entity, "Lander");
+        registry.emplace<TransformComponent>(entity);
+
+        CHECK_MSG(SceneSerializer::Serialize(registry, path).ok, "the scene must save");
+    }
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    std::remove(path.c_str());
+
+    CHECK_MSG(result.ok, "the scene must load: " + result.message);
+    CHECK_MSG(loaded.ctx().contains<PhysicsSettings>(),
+              "loading a scene must bring its physics settings with it");
+
+    const auto& settings = loaded.ctx().get<PhysicsSettings>();
+    CHECK_NEAR(settings.gravity.y, -1.62f);
+    CHECK_MSG(settings.hasGroundPlane, "the ground plane switch must survive");
+    CHECK_NEAR(settings.groundPlaneY, -12.5f);
+}
+
+static void testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt() {
+    // registry.clear() does not touch the context, so a scene loaded over
+    // another one would inherit the previous scene's gravity and keep a ground
+    // plane it never asked for. That is the kind of leak that shows up as one
+    // level behaving like the level before it.
+    entt::registry registry;
+    PhysicsSettings stale;
+    stale.gravity = glm::vec3(0.0f, -30.0f, 0.0f);
+    stale.hasGroundPlane = true;
+    registry.ctx().insert_or_assign<PhysicsSettings>(std::move(stale));
+
+    const std::string path = "test_physics_plain_tmp.scene";
+    {
+        std::ofstream f(path);
+        f << R"({"Scene": "Plain", "Entities": [
+                  {"Tag": "Cube",
+                   "Transform": {"Position": [0.0, 0.0, 0.0],
+                                 "Rotation": [0.0, 0.0, 0.0],
+                                 "Scale": [1.0, 1.0, 1.0]}}]})";
+    }
+
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    std::remove(path.c_str());
+    CHECK_MSG(result.ok, "the scene must load: " + result.message);
+
+    const auto& settings = registry.ctx().get<PhysicsSettings>();
+    CHECK_NEAR(settings.gravity.y, -9.81f);
+    CHECK_MSG(!settings.hasGroundPlane,
+              "a scene that does not ask for a ground plane must not inherit one");
+}
+
 static void runTests() {
+    testWorldPhysicsSurvivesARoundTrip();
+    testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
     testUnversionedScenesStillLoad();
     testAFutureSceneIsRefusedAndChangesNothing();
     testSavedScenesCarryTheCurrentVersion();
@@ -694,4 +764,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 100)
+TEST_MAIN("test_serialize", 160)

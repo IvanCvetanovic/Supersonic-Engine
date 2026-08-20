@@ -1,4 +1,5 @@
 #include "editor/InspectorPanel.hpp"
+#include "core/PhysicsSettings.hpp"
 #include <string>
 
 #include "renderer/PointShadow.hpp"
@@ -96,6 +97,36 @@ bool acceptAssetDrop(const char* payloadType, std::string& out) {
 
 } // namespace
 
+// Scene-level physics, shown where the inspector would otherwise be empty.
+//
+// It belongs to the scene rather than to any entity, so there is nothing to
+// select in order to reach it - which is exactly how the world ground plane
+// managed to be an unconditional invisible floor that nobody could find or turn
+// off. Anything without an entity to hold it needs somewhere to be seen.
+void InspectorPanel::drawWorldSettings(entt::registry& registry) {
+    // Materialised on first sight rather than on first edit, so what is shown
+    // is what will be saved.
+    auto& physics = registry.ctx().contains<PhysicsSettings>()
+                        ? registry.ctx().get<PhysicsSettings>()
+                        : registry.ctx().emplace<PhysicsSettings>();
+
+    if (!ImGui::CollapsingHeader("World Physics", ImGuiTreeNodeFlags_DefaultOpen)) return;
+
+    Theme::DrawVec3Control("Gravity", physics.gravity, -9.81f);
+    ImGui::TextDisabled("Metres per second squared. Per scene, not per body - a "
+                        "body opts out with Use Gravity.");
+
+    ImGui::Spacing();
+    ImGui::Checkbox("Ground Plane", &physics.hasGroundPlane);
+    if (physics.hasGroundPlane) {
+        ImGui::DragFloat("Height", &physics.groundPlaneY, 0.05f);
+    }
+    ImGui::TextDisabled("An invisible solid floor across the whole world. Off by "
+                        "default: it has no friction, nothing can fall below it, "
+                        "and there is nothing to select when it catches something "
+                        "unexpectedly.");
+}
+
 void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity selectedEntity) {
     ImGui::Begin("Inspector");
 
@@ -110,6 +141,10 @@ void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity select
     } else {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 20.0f);
         ImGui::TextDisabled("  Select an entity from the Scene Hierarchy to inspect.");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        drawWorldSettings(registry);
     }
 
     ImGui::End();

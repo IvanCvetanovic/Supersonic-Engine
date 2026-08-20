@@ -95,6 +95,7 @@
         "AO": 1,
         "Asset": "assets/materials/TiledFloor.material"
       },
+      "BoxCollider": { "Size": [1, 1, 1], "Center": [0, -0.5, 0], "IsTrigger": false, "Layer": 1, "CollidesWith": 4294967295 },
       "Renderable": { "Visible": true, "CastsShadow": false },
       "HasRenderable": true
     },

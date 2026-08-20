@@ -71,4 +71,5 @@ set_tests_properties(
     test_blending   # assets/models/bender.gltf
     test_skeletal   # assets/models/bender.gltf
     test_audio      # the shipped ambient clip
+    test_physics    # assets/scenes/MainScene.scene, to prove it has a floor
     PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")

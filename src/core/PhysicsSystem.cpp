@@ -1,5 +1,6 @@
 #include "core/PhysicsSystem.hpp"
 #include "core/CollisionSAT.hpp"
+#include "core/PhysicsSettings.hpp"
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
@@ -12,8 +13,6 @@ namespace Supersonic {
 
 namespace {
 
-constexpr float kGravity = -9.81f;
-constexpr float kGroundPlaneY = 0.0f;
 // Defaults for a body that has no RigidBodyComponent at all - a static
 // collider. A body that has one carries its own.
 constexpr float kRestitution = 0.3f;
@@ -360,6 +359,13 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     if (outContacts) outContacts->clear();
     if (deltaTime <= 0.0f) return;
 
+    // Gravity and the ground plane come from the scene, not from a constant in
+    // this file. A scene that has never heard of them gets the defaults, which
+    // is why nothing had to be changed to install them.
+    static const PhysicsSettings kDefaults;
+    const PhysicsSettings* stored = registry.ctx().find<PhysicsSettings>();
+    const PhysicsSettings& settings = stored ? *stored : kDefaults;
+
     // ---- Integrate, and resolve against the world ground plane ----
     auto dynamics = registry.view<TransformComponent, RigidBodyComponent>();
     for (auto entity : dynamics) {
@@ -423,7 +429,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         }
 
         if (rigidBody.useGravity) {
-            rigidBody.velocity.y += kGravity * deltaTime;
+            rigidBody.velocity += settings.gravity * deltaTime;
         }
 
         // Velocity is world space; position is relative to the parent. Without
@@ -466,14 +472,20 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
         transform.position += worldToLocal * (rigidBody.velocity * deltaTime);
 
-        // Resolve against the bottom of the collider, not the transform origin.
-        // Clamping the origin to y = 0 buried every body by half its height and
-        // made it impossible to rest anything below the world plane.
+        // The optional world ground plane. Off unless the scene asks for it,
+        // which is the whole of the change: it used to be unconditional, so
+        // nothing could fall below y = 0 whether or not the scene had a floor,
+        // and there was no switch.
+        if (!settings.hasGroundPlane) continue;
+
+        // Resolved against the bottom of the collider, not the transform
+        // origin. Clamping the origin buried every body by half its height and
+        // made it impossible to rest anything below the plane.
         //
         // Measured in WORLD space, through the collider's world bounds. Testing
-        // the local position against y = 0 puts the floor wherever the parent
-        // happens to be, so a body parented ten units up rested in mid-air and
-        // never fell at all.
+        // the local position puts the floor wherever the parent happens to be,
+        // so a body parented ten units up rested in mid-air and never fell at
+        // all.
         glm::vec3 localHalfExtent(0.5f);
         if (const auto* box = registry.try_get<BoxColliderComponent>(entity)) {
             localHalfExtent = box->size * 0.5f;
@@ -486,8 +498,9 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         worldBounds(parentWorld * transform.getModelMatrix(), localHalfExtent, centre, halfExtent);
 
         const float bottom = centre.y - halfExtent.y;
-        if (bottom < kGroundPlaneY) {
-            transform.position += worldToLocal * glm::vec3(0.0f, kGroundPlaneY - bottom, 0.0f);
+        if (bottom < settings.groundPlaneY) {
+            transform.position +=
+                worldToLocal * glm::vec3(0.0f, settings.groundPlaneY - bottom, 0.0f);
 
             // Only reflect when actually moving into the plane. Inverting
             // unconditionally re-launched bodies that were already rising.
@@ -1218,9 +1231,16 @@ void PhysicsSystem::OverlapSphere(entt::registry& registry, const glm::vec3& cen
 
 bool PhysicsSystem::IsGrounded(entt::registry& registry, const glm::vec3& footPosition,
                                float distance, entt::entity ignore, uint32_t layerMask) {
-    // The world ground plane counts, since the solver treats it as solid even
-    // though no entity represents it.
-    if (footPosition.y - distance <= 0.0f) return true;
+    // The world ground plane counts when the scene has one, since the solver
+    // treats it as solid even though no entity represents it. It must be asked
+    // about rather than assumed: reporting solid ground on a plane that is
+    // switched off is a character standing on nothing, and this check lives two
+    // hundred lines from the clamp it has to agree with.
+    if (const auto* settings = registry.ctx().find<PhysicsSettings>()) {
+        if (settings->hasGroundPlane && footPosition.y - distance <= settings->groundPlaneY) {
+            return true;
+        }
+    }
 
     const RayHit hit = Raycast(registry, footPosition, glm::vec3(0.0f, -1.0f, 0.0f),
                                distance, ignore, /*includeTriggers=*/false, layerMask);

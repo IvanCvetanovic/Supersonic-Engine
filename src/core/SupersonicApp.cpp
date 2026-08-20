@@ -308,7 +308,9 @@ void SupersonicApp::initECS() {
     spotLight.castsShadow = true;
 
     // Ground plane. Without a receiver there is nothing for the shadow map to
-    // fall on - the grid is a shader overlay, not geometry.
+    // fall on - the grid is a shader overlay, not geometry. It is also the
+    // scene's floor, now that there is no unconditional one: everything that
+    // falls in this scene falls onto a collider that exists.
     auto ground = m_registry.create();
     m_registry.emplace<TagComponent>(ground, "Ground");
     auto& groundTransform = m_registry.emplace<TransformComponent>(ground, glm::vec3(0.0f, 0.0f, 0.0f));
@@ -328,6 +330,14 @@ void SupersonicApp::initECS() {
     // onto other geometry must leave castsShadow on - front-face culling in the
     // shadow pass is what handles self-shadowing acne in general.
     groundRenderable.castsShadow = false;
+
+    // A slab UNDER the visible surface: the mesh is a flat plane with no
+    // thickness, and a collider with a zero half extent is a degenerate box the
+    // narrowphase cannot separate anything from. Half a unit down and half a
+    // unit thick puts its top face exactly on the plane, where the eye expects
+    // the floor to be, and leaves something solid behind it.
+    auto& groundCollider = m_registry.emplace<BoxColliderComponent>(ground);
+    groundCollider.center = glm::vec3(0.0f, -0.5f, 0.0f);
 
     auto mainCube = m_registry.create();
     m_registry.emplace<TagComponent>(mainCube, "Textured Cube");

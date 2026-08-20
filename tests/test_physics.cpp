@@ -11,8 +11,12 @@
 
 #include "TestHarness.hpp"
 #include "core/PhysicsSystem.hpp"
+#include "core/PhysicsSettings.hpp"
 #include "core/Components.hpp"
 #include "core/TransformSystem.hpp"
+#include "core/SceneSerializer.hpp"
+
+#include <filesystem>
 
 #include <cmath>
 #include <glm/gtc/quaternion.hpp>
@@ -27,6 +31,18 @@ static void stepFor(entt::registry& registry, float seconds, float step = 1.0f /
     for (float t = 0.0f; t < seconds; t += step) {
         PhysicsSystem::Update(registry, step);
     }
+}
+
+// The world ground plane is off unless a scene asks for it. Every test below
+// that is ABOUT the plane says so explicitly, which is the point: it used to be
+// there whether anything wanted it or not, and a test could not tell the
+// difference between a body resting on a floor and a body resting on the
+// integrator.
+static void enableGroundPlane(entt::registry& registry, float height = 0.0f) {
+    PhysicsSettings settings;
+    settings.hasGroundPlane = true;
+    settings.groundPlaneY = height;
+    registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
 }
 
 static entt::entity makeBox(entt::registry& registry, const glm::vec3& position,
@@ -312,6 +328,7 @@ static void testRestsOnColliderBottomNotOrigin() {
     // A unit cube scaled to 0.7 used to come to rest with its CENTRE at y = 0,
     // which buries it half-way through the floor it is supposedly resting on.
     entt::registry registry;
+    enableGroundPlane(registry);
     const auto entity = registry.create();
     auto& transform = registry.emplace<TransformComponent>(entity);
     transform.position = glm::vec3(0.0f, 4.0f, 0.0f);
@@ -328,6 +345,7 @@ static void testRestsOnColliderBottomNotOrigin() {
 
 static void testComesToRest() {
     entt::registry registry;
+    enableGroundPlane(registry);
     const auto entity = registry.create();
     auto& transform = registry.emplace<TransformComponent>(entity);
     transform.position = glm::vec3(0.0f, 5.0f, 0.0f);
@@ -345,6 +363,7 @@ static void testRisingBodyIsNotReflected() {
     // including frames where it was already moving upward, which re-launched
     // resting bodies.
     entt::registry registry;
+    enableGroundPlane(registry);
     const auto entity = registry.create();
     auto& transform = registry.emplace<TransformComponent>(entity);
     transform.position = glm::vec3(0.0f, 0.1f, 0.0f);
@@ -361,6 +380,7 @@ static void testRisingBodyIsNotReflected() {
 
 static void testColliderSizeAffectsRestHeight() {
     entt::registry registry;
+    enableGroundPlane(registry);
     const auto entity = registry.create();
     auto& transform = registry.emplace<TransformComponent>(entity);
     transform.position = glm::vec3(0.0f, 6.0f, 0.0f);
@@ -397,6 +417,7 @@ static void testFixedStepKeepsABodyOnTheGround() {
     // testing, under a name that claimed something it never checked. The real
     // tunnelling test is below.
     entt::registry registry;
+    enableGroundPlane(registry);
     const auto entity = registry.create();
     auto& transform = registry.emplace<TransformComponent>(entity);
     transform.position = glm::vec3(0.0f, 2.0f, 0.0f);
@@ -585,10 +606,18 @@ static void testGroundCheck() {
     CHECK_MSG(!PhysicsSystem::IsGrounded(registry, glm::vec3(0.0f, 6.0f, 0.0f), 0.2f),
               "six units up is not");
 
-    // The world ground plane counts even though no entity represents it.
+    // The world ground plane counts even though no entity represents it - but
+    // only when the scene has one. This check lives two hundred lines from the
+    // clamp it has to agree with, which is exactly the kind of pair that drifts.
     entt::registry empty;
+    CHECK_MSG(!PhysicsSystem::IsGrounded(empty, glm::vec3(0.0f, 0.05f, 0.0f), 0.2f),
+              "an empty scene has no ground to stand on");
+
+    enableGroundPlane(empty);
     CHECK_MSG(PhysicsSystem::IsGrounded(empty, glm::vec3(0.0f, 0.05f, 0.0f), 0.2f),
-              "the world plane counts as ground");
+              "the world plane counts as ground once the scene asks for one");
+    CHECK_MSG(!PhysicsSystem::IsGrounded(empty, glm::vec3(0.0f, 6.0f, 0.0f), 0.2f),
+              "and only near it");
 }
 
 // --- materials --------------------------------------------------------------
@@ -1352,7 +1381,131 @@ static void testInertiaFollowsTheBoxAndNotItsBoundingBox() {
                   " (ratio " + std::to_string(ratio) + ")");
 }
 
+
+// --- world settings ---------------------------------------------------------
+//
+// Gravity and the ground plane were file-static constants. The plane in
+// particular existed whether or not a scene had a floor, applied the body's own
+// restitution and no friction at all, and could not be turned off - so a pit was
+// not possible, a level built below the origin was unreachable, and there was no
+// entity to select to find out why.
+
+static void testThereIsNoGroundPlaneUnlessTheSceneAsksForOne() {
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(entity, glm::vec3(0.0f, 2.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(entity);
+    registry.emplace<BoxColliderComponent>(entity);
+
+    stepFor(registry, 2.0f);
+
+    CHECK_MSG(transform.position.y < -10.0f,
+              "a body over nothing must fall through where the plane used to be: y = " +
+                  std::to_string(transform.position.y));
+}
+
+static void testTheGroundPlaneCanSitSomewhereOtherThanZero() {
+    entt::registry registry;
+    enableGroundPlane(registry, -8.0f);
+
+    const auto entity = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(entity, glm::vec3(0.0f, 2.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(entity);
+    registry.emplace<BoxColliderComponent>(entity);
+
+    stepFor(registry, 6.0f);
+
+    // Measured against the bottom of the collider, so a unit cube rests with its
+    // origin half a unit above the plane.
+    CHECK_NEAR(transform.position.y, -7.5f);
+}
+
+static void testGravityIsAPropertyOfTheScene() {
+    // Sideways, and stronger than Earth's. A constant in the physics source
+    // meant a scene on the moon, underwater, or in a corridor with gravity
+    // pointing along a wall was an edit to the engine.
+    entt::registry registry;
+    PhysicsSettings settings;
+    settings.gravity = glm::vec3(20.0f, 0.0f, 0.0f);
+    registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
+
+    const auto entity = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(entity, glm::vec3(0.0f, 5.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(entity);
+
+    stepFor(registry, 1.0f);
+
+    CHECK_MSG(transform.position.x > 5.0f,
+              "the body must accelerate along the scene's gravity: x = " +
+                  std::to_string(transform.position.x));
+    CHECK_NEAR(transform.position.y, 5.0f);
+}
+
+static void testABodyCanOptOutOfTheScenesGravity() {
+    // The per-body switch has to still win, or turning gravity into a scene
+    // setting would quietly break every floating body in every scene.
+    entt::registry registry;
+    PhysicsSettings settings;
+    settings.gravity = glm::vec3(0.0f, -30.0f, 0.0f);
+    registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
+
+    const auto entity = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(entity, glm::vec3(0.0f, 5.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(entity).useGravity = false;
+
+    stepFor(registry, 1.0f);
+
+    CHECK_NEAR(transform.position.y, 5.0f);
+}
+
+
+static void testTheShippedSceneHasAFloorOfItsOwn() {
+    // The unconditional ground plane used to mean a scene could leave out its
+    // floor and still work. It cannot any more, and the scene that shipped
+    // relying on it is the one most likely to regress unnoticed: it is an asset
+    // rather than code, so nothing else in this suite ever looks at it.
+    const std::string path = "assets/scenes/MainScene.scene";
+    if (!std::filesystem::exists(path)) {
+        CHECK_MSG(false, "the shipped scene must be reachable from the test working "
+                         "directory (" + std::filesystem::current_path().string() + ")");
+        return;
+    }
+
+    entt::registry registry;
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    CHECK_MSG(result.ok, "the shipped scene must load: " + result.message);
+    if (!result.ok) return;
+
+    int bodies = 0;
+    for (auto entity : registry.view<RigidBodyComponent>()) {
+        (void)entity;
+        ++bodies;
+    }
+    // Otherwise the loop below is a check over nothing, which is how this kind
+    // of test quietly stops covering anything.
+    CHECK_MSG(bodies > 0, "the shipped scene must contain something that falls");
+
+    stepFor(registry, 5.0f);
+    TransformSystem::UpdateWorldTransforms(registry);
+
+    // Five seconds of free fall is a hundred and twenty units. Anything still
+    // within a few units of the origin landed on something.
+    for (auto entity : registry.view<RigidBodyComponent, TransformComponent>()) {
+        const auto* world = registry.try_get<WorldTransformComponent>(entity);
+        const float y = world ? world->matrix[3].y
+                              : registry.get<TransformComponent>(entity).position.y;
+        std::string name = "entity";
+        if (const auto* tag = registry.try_get<TagComponent>(entity)) name = tag->tag;
+        CHECK_MSG(y > -5.0f, name + " fell out of the shipped scene: y = " + std::to_string(y));
+    }
+}
+
 static void runTests() {
+    testTheShippedSceneHasAFloorOfItsOwn();
+    testThereIsNoGroundPlaneUnlessTheSceneAsksForOne();
+    testTheGroundPlaneCanSitSomewhereOtherThanZero();
+    testGravityIsAPropertyOfTheScene();
+    testABodyCanOptOutOfTheScenesGravity();
     testInertiaFollowsTheBoxAndNotItsBoundingBox();
     testASettledBodyFallsAsleep();
     testSleepChangesWhereThingsEndUpByNothing();
@@ -1414,4 +1567,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics", 110)
+TEST_MAIN("test_physics", 130)

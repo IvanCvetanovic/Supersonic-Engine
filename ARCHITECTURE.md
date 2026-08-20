@@ -409,7 +409,7 @@ for each non-kinematic RigidBodyComponent:
     gravity, linear damping, angular damping
     integrate rotation as a quaternion, write it back as Euler
     position += worldToLocal * (velocity * dt)
-    resolve against the world ground plane
+    resolve against the world ground plane, if the scene has one
 gather every collider into world-space bodies and proxies
 sweep and prune  ->  candidate pairs
 for each pair: narrowphase -> a manifold of up to four points
@@ -446,8 +446,8 @@ at once wanders off in a way that looks like the physics is broken.
 |---|---|---|
 | Fixed step | 1/60 s | one `PhysicsSystem::Update` |
 | Steps per frame | 5 max | past this, time is dropped |
-| Gravity | −9.81 on Y | per body, gated on `useGravity` |
-| Ground plane | y = 0 | unconditional; no entity represents it |
+| Gravity | −9.81 on Y | the **default**; per scene, and per body via `useGravity` |
+| Ground plane | off | the **default**; per scene, and no entity represents it |
 | Penetration slop | 0.005 | overlap left uncorrected |
 | Correction factor | 0.8 | fraction of the rest removed per step |
 | Rest velocity | 0.1 | below this, bounce is zeroed |
@@ -456,6 +456,15 @@ at once wanders off in a way that looks like the physics is broken.
 Slop and the 0.8 factor exist together: correcting overlap to exactly zero makes
 resting stacks vibrate, because floating-point error re-creates the overlap on
 the next step and the correction fires again forever.
+
+The first two are not constants. `PhysicsSettings`, held in the registry's
+**context** because there is exactly one per scene and no entity owns it, carries
+gravity as a vector and the ground plane as a switch and a height. `Update` reads
+it if it is there and uses these defaults if it is not, so a scene that has never
+heard of it behaves as the table says. It is written into the scene file next to
+the entity array and edited in the Inspector, which shows it where the panel
+would otherwise be empty — there is no entity to select in order to reach
+something the whole world shares.
 
 ### 7c. Broadphase: sweep and prune on one fixed axis
 
@@ -627,26 +636,41 @@ two spins now come out bit-identical, against a 16% difference before.
 colliders all produce a zero tensor, which falls out of the arithmetic as
 “infinitely hard to turn” without a branch at every use.
 
-### 7f. The world ground plane
+### 7f. The optional world ground plane
 
-There is an unconditional solid plane at y = 0. It is applied during integration,
-per non-kinematic rigid body, before any collider is gathered.
+A solid plane across the whole world at `groundPlaneY`, applied during
+integration, per non-kinematic rigid body, before any collider is gathered.
+
+**It is off unless the scene asks for it**, and that is a deliberate break with
+what came before. It used to be unconditional and there was no switch. Nothing
+could fall below y = 0 whether or not the scene had a floor, so a pit was not
+expressible, a level built below the origin was unreachable, and a body that
+should have fallen out of the world stopped dead on nothing. It did all of that
+invisibly, because there is no entity to select and nothing to see — the only way
+to find out it was there was to notice something not falling. The demo scene
+relied on it; it now has a real collider under the floor it was already drawing.
 
 It is measured in **world** space, through the bottom of the body's collider
 bounds. Both halves of that sentence are bug fixes. Clamping the transform origin
-to y = 0 buried every body by half its height and made it impossible to rest
-anything below the plane; testing the *local* position put the floor wherever the
-parent happened to be, so a body parented ten units up rested in mid-air and
-never fell at all. The reflection fires only when the body is actually moving
-into the plane — inverting unconditionally re-launched bodies that were already
-rising — and is zeroed below the rest velocity.
+buried every body by half its height and made it impossible to rest anything
+below the plane; testing the *local* position put the floor wherever the parent
+happened to be, so a body parented ten units up rested in mid-air and never fell
+at all. The reflection fires only when the body is actually moving into the plane
+— inverting unconditionally re-launched bodies that were already rising — and is
+zeroed below the rest velocity.
 
-The honest part: the plane exists whether or not the scene contains a floor,
-nothing can fall below it, and there is no switch to turn it off. It applies the
-body's own restitution and **no friction at all**, so a body sliding on the world
-plane keeps its horizontal speed indefinitely unless linear damping takes it. A
-rigid body with no collider is treated as a unit cube for this test, and at unit
-scale comes to rest with its origin at y = 0.5.
+What it is still good for: a prototype scene with no floor built yet, and a
+safety net under a level with holes in it. What it is still bad at, and why it is
+not the default: it applies the body's own restitution and **no friction at
+all**, so a body sliding on it keeps its horizontal speed indefinitely unless
+linear damping takes it, and it is not a collider, so it reports no contact, has
+no material, and no trigger or script ever hears about it. A rigid body with no
+collider is treated as a unit cube for this test, and at unit scale comes to rest
+with its origin half a unit above the plane.
+
+`PhysicsSystem::IsGrounded` asks the same setting before counting the plane as
+solid. The two live two hundred lines apart and have to agree, or a character
+stands on a floor that is switched off.
 
 ### 7g. Sleeping
 

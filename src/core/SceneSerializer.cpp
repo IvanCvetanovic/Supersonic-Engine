@@ -3,6 +3,7 @@
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 #include "core/ComponentCodec.hpp"
+#include "core/PhysicsSettings.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -49,7 +50,23 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
     }
 
     file << "{\n  \"Version\": " << AssetVersion::kCurrent
-         << ",\n  \"Scene\": \"MainScene\",\n  \"Entities\": [\n";
+         << ",\n  \"Scene\": \"MainScene\",\n";
+
+    // World-level physics, before the entities. It is scene state that no
+    // entity owns, so it cannot go through ComponentCodec, and a scene that
+    // did not write it reads back as the defaults.
+    {
+        static const PhysicsSettings kDefaults;
+        const PhysicsSettings* stored = registry.ctx().find<PhysicsSettings>();
+        const PhysicsSettings& physics = stored ? *stored : kDefaults;
+        file << "  \"Physics\": { \"Gravity\": ["
+             << physics.gravity.x << ", " << physics.gravity.y << ", "
+             << physics.gravity.z << "], \"GroundPlane\": "
+             << (physics.hasGroundPlane ? "true" : "false")
+             << ", \"GroundPlaneY\": " << physics.groundPlaneY << " },\n";
+    }
+
+    file << "  \"Entities\": [\n";
 
     for (size_t i = 0; i < entities.size(); ++i) {
         const entt::entity entity = entities[i];
@@ -99,6 +116,35 @@ bool validateSceneArray(const Json::Array& entities, std::string& error) {
         ++index;
     }
     return true;
+}
+
+// The world-level half, applied AFTER applyScene, because applyScene clears the
+// registry first.
+//
+// Always assigned, never merely read: registry.clear() leaves the context
+// untouched, so a scene loaded over another one would otherwise silently inherit
+// the previous scene's gravity and keep its ground plane.
+void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
+    PhysicsSettings physics;
+
+    if (root.Has("Physics")) {
+        const auto& node = root["Physics"];
+        if (node["Gravity"].IsArray()) {
+            const auto& g = node["Gravity"].AsArray();
+            if (g.size() == 3) {
+                physics.gravity = glm::vec3(static_cast<float>(g[0].AsNumber(0.0)),
+                                            static_cast<float>(g[1].AsNumber(-9.81)),
+                                            static_cast<float>(g[2].AsNumber(0.0)));
+            }
+        }
+        // The defaults matter: a scene written before this existed has neither
+        // key, and the plane it was authored against is now off. That is the
+        // intended break - a scene that wants the plane has to say so.
+        physics.hasGroundPlane = node["GroundPlane"].AsBool(false);
+        physics.groundPlaneY = node["GroundPlaneY"].AsFloat(0.0f);
+    }
+
+    registry.ctx().insert_or_assign<PhysicsSettings>(std::move(physics));
 }
 
 // One reader, shared by the on-disk load and the Play-mode restore.
@@ -157,7 +203,9 @@ SerializationResult SceneSerializer::DeserializeFromString(entt::registry& regis
     if (!root.IsObject() || !root["Entities"].IsArray()) {
         return { false, "snapshot has no Entities array" };
     }
-    return applyScene(registry, root["Entities"].AsArray(), "snapshot");
+    const SerializationResult result = applyScene(registry, root["Entities"].AsArray(), "snapshot");
+    if (result.ok) applyPhysicsSettings(registry, root);
+    return result;
 }
 
 SerializationResult SceneSerializer::Serialize(entt::registry& registry, const std::string& filepath) {
@@ -216,7 +264,9 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
     }
     AssetVersion::Migrate(root, version);
 
-    return applyScene(registry, root["Entities"].AsArray(), filepath);
+    const SerializationResult result = applyScene(registry, root["Entities"].AsArray(), filepath);
+    if (result.ok) applyPhysicsSettings(registry, root);
+    return result;
 }
 
 } // namespace Supersonic
