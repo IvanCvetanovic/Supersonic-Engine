@@ -20,6 +20,7 @@
 #include "core/SimulationClock.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/SceneSerializer.hpp"
+#include "core/PrefabSerializer.hpp"
 #include "platform/ExecutablePath.hpp"
 #include "editor/Theme.hpp"
 #include "editor/EditorFonts.hpp"
@@ -173,6 +174,32 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     // the editor's ground grid into a shipped game.
     m_renderer->SetEditorOverlaysVisible(!m_manifest.isGame);
 
+    // Prefabs, watched once at startup.
+    //
+    // Meshes and textures are watched from the components that name them, once
+    // per frame; a prefab is named by nobody - it is dragged in from the
+    // content browser - so there is no component to sweep. Scanned here
+    // instead. A prefab created DURING the session is not picked up, which is
+    // a smaller gap than the one it closes and is not worth a directory scan
+    // every frame to fix.
+    {
+        std::error_code prefabScanError;
+        const auto prefabRoot = std::filesystem::path("assets") / "prefabs";
+        if (std::filesystem::is_directory(prefabRoot, prefabScanError)) {
+            size_t watched = 0;
+            for (const auto& entry : std::filesystem::directory_iterator(prefabRoot, prefabScanError)) {
+                if (entry.is_regular_file(prefabScanError) && entry.path().extension() == ".prefab") {
+                    m_assetWatcher.Watch(entry.path().generic_string());
+                    ++watched;
+                }
+            }
+            if (watched > 0) {
+                SUPERSONIC_LOG_INFO("AssetWatcher")
+                    << "Watching " << watched << " prefab(s) for changes.";
+            }
+        }
+    }
+
     // Art hot reload. The plugin has been watched since hot reload shipped;
     // textures and meshes could not be, because nothing could un-cache them.
     m_assetWatcher.SetCallback([this](const std::string& path) {
@@ -181,6 +208,12 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
             reloaded |= m_renderer->GetTextureRegistry().Invalidate(path);
             reloaded |= m_renderer->GetMeshRegistry().Invalidate("file:" + path);
         }
+
+        // Prefabs are parsed once and kept, so a prefab edited on disk would
+        // otherwise keep spawning the version the editor first read. Cheap
+        // enough to do unconditionally: the cache is small and a path that is
+        // not a prefab simply is not in it.
+        PrefabSerializer::ClearCache();
         if (reloaded) {
             // RenderSystem re-resolves every renderable each frame, so dropping
             // the cache entry is the whole reload - the next SyncResources
