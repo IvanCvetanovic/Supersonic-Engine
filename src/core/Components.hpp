@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -143,12 +145,51 @@ struct TransformComponent {
     glm::vec3 rotation{0.0f, 0.0f, 0.0f}; // Euler angles in radians
     glm::vec3 scale{1.0f, 1.0f, 1.0f};
 
+    // T * Rx * Ry * Rz * S, written out.
+    //
+    // The hottest function in the engine: every entity, twice a frame, plus
+    // every physics step, every query and every gather. It used to be five
+    // chained 4x4 multiplies - a translate, three rotates and a scale - which
+    // is about three hundred and twenty multiply-adds to produce a matrix whose
+    // twelve meaningful entries take about thirty.
+    //
+    // The composition is unchanged and so is the Euler order. Rx*Ry*Rz
+    // multiplied out gives the rotation below; the scale multiplies each
+    // COLUMN, because it is applied on the right; the translation is the
+    // fourth column untouched by either. tests/test_transform.cpp checks every
+    // entry against the chained form it replaces, over a spread of angles,
+    // which is the only sane way to trust an expansion like this - the
+    // derivation is not the kind of thing to check by reading.
     glm::mat4 getModelMatrix() const {
-        glm::mat4 mat = glm::translate(glm::mat4(1.0f), position);
-        mat = glm::rotate(mat, rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
-        mat = glm::rotate(mat, rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
-        mat = glm::rotate(mat, rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
-        mat = glm::scale(mat, scale);
+        const float cx = std::cos(rotation.x), sx = std::sin(rotation.x);
+        const float cy = std::cos(rotation.y), sy = std::sin(rotation.y);
+        const float cz = std::cos(rotation.z), sz = std::sin(rotation.z);
+
+        glm::mat4 mat(1.0f);
+
+        // Column 0 - the rotated x axis, scaled.
+        mat[0][0] = (cy * cz) * scale.x;
+        mat[0][1] = (cx * sz + sx * sy * cz) * scale.x;
+        mat[0][2] = (sx * sz - cx * sy * cz) * scale.x;
+        mat[0][3] = 0.0f;
+
+        // Column 1 - the rotated y axis.
+        mat[1][0] = (-cy * sz) * scale.y;
+        mat[1][1] = (cx * cz - sx * sy * sz) * scale.y;
+        mat[1][2] = (sx * cz + cx * sy * sz) * scale.y;
+        mat[1][3] = 0.0f;
+
+        // Column 2 - the rotated z axis.
+        mat[2][0] = (sy) * scale.z;
+        mat[2][1] = (-sx * cy) * scale.z;
+        mat[2][2] = (cx * cy) * scale.z;
+        mat[2][3] = 0.0f;
+
+        mat[3][0] = position.x;
+        mat[3][1] = position.y;
+        mat[3][2] = position.z;
+        mat[3][3] = 1.0f;
+
         return mat;
     }
 };

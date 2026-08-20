@@ -7,6 +7,7 @@
 // If someone moves those defines back into a header, this test starts failing.
 
 #include "TestHarness.hpp"
+#include <glm/gtc/constants.hpp>
 #include "core/Components.hpp"
 #include "core/EcsUtils.hpp"
 
@@ -153,7 +154,84 @@ static void testAnEmptySceneHasNoAmbientLight() {
     CHECK(FindAmbientLight(registry) == entt::null);
 }
 
+
+// --- the model matrix -------------------------------------------------------
+
+// The definition, spelled the way it was written before it was multiplied out:
+// translate, then rotate about x, y and z in that order, then scale. This is
+// the reference the expansion is checked against, and it is here rather than in
+// the header precisely so that the two are independent - a bug copied into both
+// would be checked against itself.
+static glm::mat4 chainedModelMatrix(const TransformComponent& t) {
+    glm::mat4 mat = glm::translate(glm::mat4(1.0f), t.position);
+    mat = glm::rotate(mat, t.rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+    mat = glm::rotate(mat, t.rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+    mat = glm::rotate(mat, t.rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+    mat = glm::scale(mat, t.scale);
+    return mat;
+}
+
+static void testTheModelMatrixMatchesTheChainItReplaces() {
+    // getModelMatrix builds the product directly instead of through five 4x4
+    // multiplies. Multiplying Rx*Ry*Rz out by hand is exactly the kind of thing
+    // that is wrong in one entry and looks right in every screenshot until
+    // something is rotated about two axes at once - so every entry is compared,
+    // over a spread of angles that includes the signs and the poles.
+    const float angles[] = {
+        0.0f, 0.3f, -0.3f, 1.2f, -1.2f,
+        glm::half_pi<float>(), -glm::half_pi<float>(),
+        glm::pi<float>(), 2.7f, -2.7f, 5.9f,
+    };
+    const int count = static_cast<int>(sizeof(angles) / sizeof(angles[0]));
+
+    int compared = 0;
+    for (int i = 0; i < count; ++i) {
+        for (int j = 0; j < count; ++j) {
+            for (int k = 0; k < count; ++k) {
+                TransformComponent t;
+                t.position = glm::vec3(1.5f - static_cast<float>(i),
+                                       static_cast<float>(j) * 0.7f,
+                                       -4.0f + static_cast<float>(k));
+                t.rotation = glm::vec3(angles[i], angles[j], angles[k]);
+                // Non-uniform, and one of them negative: scale multiplies the
+                // columns, and getting that backwards is invisible while every
+                // scale is the same number.
+                t.scale = glm::vec3(0.5f + static_cast<float>(i) * 0.3f,
+                                    2.0f - static_cast<float>(j) * 0.1f,
+                                    (k % 2 == 0) ? 1.3f : -0.8f);
+
+                const glm::mat4 expected = chainedModelMatrix(t);
+                const glm::mat4 actual = t.getModelMatrix();
+
+                for (int c = 0; c < 4; ++c) {
+                    for (int r = 0; r < 4; ++r) {
+                        if (std::fabs(expected[c][r] - actual[c][r]) >= 1e-5f) {
+                            CHECK_MSG(false,
+                                      "entry [" + std::to_string(c) + "][" + std::to_string(r) +
+                                          "] differs at rotation (" + std::to_string(t.rotation.x) +
+                                          ", " + std::to_string(t.rotation.y) + ", " +
+                                          std::to_string(t.rotation.z) + "): expected " +
+                                          std::to_string(expected[c][r]) + " got " +
+                                          std::to_string(actual[c][r]));
+                            return;
+                        }
+                    }
+                }
+                ++compared;
+            }
+        }
+    }
+
+    // One check for the whole sweep, plus this: a loop that compared nothing
+    // would otherwise pass silently, which is the usual way a table-driven test
+    // stops testing.
+    CHECK_MSG(compared == count * count * count,
+              "the sweep must have compared every combination: " + std::to_string(compared));
+    CHECK_MSG(compared > 1000, "and there must be enough of them to mean something");
+}
+
 static void runTests() {
+    testTheModelMatrixMatchesTheChainItReplaces();
     testDepthRangeIsZeroToOne();
     testProjectionFlipsYForVulkan();
     testModelMatrixEulerOrder();
@@ -164,4 +242,4 @@ static void runTests() {
     testAnEmptySceneHasNoAmbientLight();
 }
 
-TEST_MAIN("test_transform", 22)
+TEST_MAIN("test_transform", 30)
