@@ -343,6 +343,33 @@ struct RigidBodyComponent {
     // without ever tipping over, and the alternative - an enormous inertia -
     // is a number nobody can pick correctly.
     bool freezeRotation{false};
+
+    // ---- Sleeping ----
+    //
+    // A body that has been still for long enough stops being simulated: no
+    // gravity, no integration, no impulses, and it stands in as immovable for
+    // whatever is still awake. Every settled crate in a level was costing a
+    // full solve per step to compute the same answer it computed last step, and
+    // in a scene made mostly of settled crates that is nearly all of the cost.
+    //
+    // Turn it off for a body that must keep responding to something the solver
+    // cannot see - a script reading its position every frame, say - though a
+    // script that WRITES velocity or position wakes it anyway.
+    bool allowSleep{true};
+
+    // Runtime state, deliberately not serialised. A scene loads with everything
+    // awake and settles again within kSleepTime; storing the flag would mean a
+    // scene could be saved with a body asleep in mid-air.
+    bool isSleeping{false};
+
+    // How long this body has been below the sleep thresholds.
+    float sleepTimer{0.0f};
+
+    // Where it was when it fell asleep, in the SAME space the transform stores
+    // (local to the parent). Compared each step so that moving a sleeping body
+    // - an editor gizmo, a script, a debugger scrub - wakes it instead of
+    // leaving it hanging wherever it was put.
+    glm::vec3 sleepPosition{0.0f};
 };
 
 // Collision layers.

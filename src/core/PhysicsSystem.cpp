@@ -42,6 +42,28 @@ constexpr float kCorrection = 0.8f;
 // stack of boxes never settles laterally.
 constexpr float kFriction = 0.4f;
 
+// ---- Sleeping ---------------------------------------------------------------
+//
+// Below both thresholds for kSleepTime and a body stops being simulated.
+//
+// The thresholds are well under kRestVelocity on purpose: a body that is merely
+// at the point where its bounce is being killed has not settled, and putting it
+// to sleep there would freeze it one step into whatever it was still doing. By
+// the time it is this slow it has already stopped.
+constexpr float kSleepLinearVelocity = 0.05f;
+constexpr float kSleepAngularVelocity = 0.05f;
+
+// Half a second. Long enough that nothing sleeps at the apex of a bounce - a
+// body thrown up is below the linear threshold for about ten milliseconds -
+// and short enough that a settled scene goes quiet while you are still looking
+// at it.
+constexpr float kSleepTime = 0.5f;
+
+// How far a sleeping body may be moved before it counts as having been moved by
+// something else. Nothing in the solver touches a sleeping body's transform, so
+// this only has to be above the noise of reading the value back.
+constexpr float kSleepWakeDistance = 1e-4f;
+
 // How two surfaces combine.
 //
 // Restitution takes the larger of the two: a superball dropped on concrete
@@ -155,6 +177,7 @@ float inverseMassOf(const RigidBodyComponent* rigidBody) {
 glm::vec3 inverseInertiaLocal(const RigidBodyComponent* rigidBody, Shape shape,
                               const glm::vec3& halfExtent, float radius) {
     if (!rigidBody || rigidBody->isKinematic || rigidBody->freezeRotation) return glm::vec3(0.0f);
+    if (rigidBody->isSleeping) return glm::vec3(0.0f);
     if (rigidBody->mass <= 0.0f) return glm::vec3(0.0f);
 
     const float mass = rigidBody->mass;
@@ -343,7 +366,61 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         auto& transform = dynamics.get<TransformComponent>(entity);
         auto& rigidBody = dynamics.get<RigidBodyComponent>(entity);
 
+        // Kinematic bodies are moved by whatever owns them and never sleep.
         if (rigidBody.isKinematic) continue;
+
+        if (rigidBody.isSleeping) {
+            // A sleeping body has EXACTLY zero velocity, because that is what
+            // was written when it went to sleep and nothing here has touched it
+            // since. Anything non-zero was therefore written from outside - a
+            // script, the inspector, the time-travel debugger - and is a request
+            // to start moving again.
+            const bool pushed = glm::dot(rigidBody.velocity, rigidBody.velocity) > 0.0f ||
+                                glm::dot(rigidBody.angularVelocity, rigidBody.angularVelocity) > 0.0f;
+
+            // Same argument for the transform: a sleeping body is not integrated,
+            // so if it is somewhere else it was put there. Without this an editor
+            // gizmo drags a settled crate into the air and it hangs.
+            const glm::vec3 drift = glm::abs(transform.position - rigidBody.sleepPosition);
+            const bool moved = drift.x > kSleepWakeDistance || drift.y > kSleepWakeDistance ||
+                               drift.z > kSleepWakeDistance;
+
+            if (!pushed && !moved) continue;
+
+            rigidBody.isSleeping = false;
+            rigidBody.sleepTimer = 0.0f;
+        }
+
+        // Whether it has been still long enough to stop simulating.
+        //
+        // Read BEFORE this step integrates, so the velocity being judged is the
+        // one the previous step's solve settled on - which is the whole question
+        // being asked. Done here rather than after the solve because Update
+        // returns early when there are fewer than two colliders, and a lone body
+        // resting on the floor is exactly the case that must still be able to
+        // sleep.
+        if (rigidBody.allowSleep) {
+            const bool still =
+                glm::dot(rigidBody.velocity, rigidBody.velocity) <
+                    kSleepLinearVelocity * kSleepLinearVelocity &&
+                glm::dot(rigidBody.angularVelocity, rigidBody.angularVelocity) <
+                    kSleepAngularVelocity * kSleepAngularVelocity;
+
+            if (!still) {
+                rigidBody.sleepTimer = 0.0f;
+            } else {
+                rigidBody.sleepTimer += deltaTime;
+                if (rigidBody.sleepTimer >= kSleepTime) {
+                    rigidBody.isSleeping = true;
+                    rigidBody.velocity = glm::vec3(0.0f);
+                    rigidBody.angularVelocity = glm::vec3(0.0f);
+                    rigidBody.sleepPosition = transform.position;
+                    continue;
+                }
+            }
+        } else {
+            rigidBody.sleepTimer = 0.0f;
+        }
 
         if (rigidBody.useGravity) {
             rigidBody.velocity.y += kGravity * deltaTime;
@@ -440,11 +517,20 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         const auto* transform = registry.try_get<TransformComponent>(entity);
         if (!transform) return;
 
+        const auto* rigid = registry.try_get<RigidBodyComponent>(entity);
+
         Body body;
         body.entity = entity;
         body.shape = shape;
         body.isTrigger = isTrigger;
-        body.inverseMass = inverseMassOf(registry.try_get<RigidBodyComponent>(entity));
+
+        // A sleeping body is immovable until something wakes it. Said once, here,
+        // rather than branched on at each use, so every part of the response -
+        // positional correction, the constraint list, the impulses - treats it
+        // as the static obstacle it is pretending to be with no further changes.
+        body.inverseMass = (rigid && rigid->isSleeping)
+                               ? 0.0f
+                               : inverseMassOf(rigid);
 
         const glm::mat4 parentWorld = parentWorldMatrix(registry, entity);
         const glm::mat4 world = parentWorld * transform->getModelMatrix();
@@ -493,8 +579,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         //
         // A sphere is isotropic, so this costs it nothing either way.
         body.inverseInertia = worldInverseInertia(
-            inverseInertiaLocal(registry.try_get<RigidBodyComponent>(entity),
-                                shape, body.halfExtent, body.radius),
+            inverseInertiaLocal(rigid, shape, body.halfExtent, body.radius),
             glm::mat3(1.0f));
 
         // How far this body travels in one step. The broadphase bound is
@@ -503,8 +588,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // never a candidate pair otherwise, and nothing downstream gets a chance
         // to stop it.
         glm::vec3 sweep(0.0f);
-        if (const auto* rigid = registry.try_get<RigidBodyComponent>(entity);
-            rigid && body.inverseMass > 0.0f) {
+        if (rigid && body.inverseMass > 0.0f) {
             sweep = glm::abs(rigid->velocity) * deltaTime;
         }
         body.sweep = sweep;
@@ -514,7 +598,13 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         proxy.index = bodies.size();
         proxy.min = body.min - sweep;
         proxy.max = body.max + sweep;
-        proxy.inverseMass = body.inverseMass;
+        // The TRUE mass, not the zeroed one above. The broadphase drops a pair
+        // where both sides are immovable, so handing it the pretence would stop
+        // a sleeping body's contacts being reported at all - every settled body
+        // would fire a spurious exit at whatever is watching the contact list,
+        // and a trigger volume would forget about anything that fell asleep
+        // inside it. Sleeping removes the response, not the report.
+        proxy.inverseMass = inverseMassOf(rigid);
         proxy.isTrigger = isTrigger;
         proxy.layer = layer;
         proxy.collidesWith = collidesWith;
@@ -574,6 +664,57 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     };
     std::vector<Constraint> constraints;
     constraints.reserve(pairs.size() * 2);
+
+    // Wakes `sleeper` if `other` is something that can disturb it, and does it
+    // IN PLACE, restoring the mass properties that were zeroed while it slept.
+    //
+    // In place because one step of latency is not a small difference here: the
+    // positional correction separates the pair on the step of the impact, so by
+    // the next step there is no contact left and the body that was hit never
+    // receives the impulse at all. A ball would bounce off a sleeping crate and
+    // leave it sitting exactly where it was.
+    const auto wake = [&](Body& sleeper, const Body& other) {
+        auto* rigid = registry.try_get<RigidBodyComponent>(sleeper.entity);
+        if (!rigid) return;
+
+        // Static level geometry wakes nothing. Resting on the floor is the
+        // reason to sleep, not a reason to stay awake.
+        const auto* otherRigid = registry.try_get<RigidBodyComponent>(other.entity);
+        if (!otherRigid) return;
+
+        if (otherRigid->isKinematic) {
+            // A kinematic body is moved by code the solver cannot see: there is
+            // no velocity to test and no way to know it is about to slide out
+            // from under whatever is standing on it. So nothing resting on one
+            // is allowed to sleep at all - the timer below is reset every step
+            // the contact lasts.
+        } else {
+            if (otherRigid->isSleeping) return;
+
+            // An awake but equally still neighbour must NOT count, or two crates
+            // settling side by side hold each other awake forever, which is the
+            // usual way a sleep implementation ends up never sleeping.
+            const bool moving =
+                glm::dot(otherRigid->velocity, otherRigid->velocity) >=
+                    kSleepLinearVelocity * kSleepLinearVelocity ||
+                glm::dot(otherRigid->angularVelocity, otherRigid->angularVelocity) >=
+                    kSleepAngularVelocity * kSleepAngularVelocity;
+            if (!moving) return;
+        }
+
+        rigid->sleepTimer = 0.0f;
+        if (!rigid->isSleeping) return;
+        rigid->isSleeping = false;
+
+        // The same expressions collect uses, world half extent included. Passing
+        // the local extent here instead would quietly give a woken body a
+        // different inertia from an identical one that never slept, and nothing
+        // would ever report it.
+        sleeper.inverseMass = inverseMassOf(rigid);
+        sleeper.inverseInertia = worldInverseInertia(
+            inverseInertiaLocal(rigid, sleeper.shape, sleeper.halfExtent, sleeper.radius),
+            glm::mat3(1.0f));
+    };
 
     for (const auto& [pi, pj] : pairs) {
         Body& a = bodies[proxies[pi].index];
@@ -676,6 +817,17 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // A trigger reports the overlap and lets the body pass through, which is
         // the entire point of marking a collider as one.
         if (isTrigger) continue;
+
+        // Before anything reads the masses, because waking restores them. A body
+        // woken here is dynamic for THIS step's solve.
+        //
+        // Accepted limitation: a body woken this way still has zero velocity
+        // while this step's pairs are being walked, so it does not itself wake
+        // ITS sleeping neighbours until the next step. A toppled stack therefore
+        // wakes one layer per step rather than all at once, which at 60Hz is not
+        // something anyone sees.
+        wake(a, b);
+        wake(b, a);
 
         const float inverseSum = a.inverseMass + b.inverseMass;
         if (inverseSum <= 0.0f) continue;

@@ -786,6 +786,12 @@ static void testSpinDoesNotAppearFromNothing() {
     body.angularDamping = 0.0f;
     body.velocity = glm::vec3(0.0f);
 
+    // Not allowed to sleep, deliberately. A sleeping body cannot spin up, so
+    // leaving this one eligible would let the check below pass by freezing
+    // rather than by being stable - which is the test measuring the feature
+    // that was added after it instead of the one it was written for.
+    body.allowSleep = false;
+
     std::vector<PhysicsSystem::Contact> contacts;
     bool touched = false;
     for (int i = 0; i < 180; ++i) {
@@ -1034,7 +1040,234 @@ static void testAStackOfBoxesSettlesInsteadOfSinking() {
     }
 }
 
+
+// --- sleeping ---------------------------------------------------------------
+//
+// Every settled crate in a level was costing a full integrate-and-solve per step
+// to compute the same answer it computed last step. A body that has been still
+// for half a second now stops being simulated and stands in as immovable for
+// whatever is still awake, until something touches it or moves it.
+
+static void testASettledBodyFallsAsleep() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f));
+
+    stepFor(registry, 3.0f);
+
+    const auto& body = registry.get<RigidBodyComponent>(crate);
+    CHECK_MSG(body.isSleeping, "a body resting on a floor must fall asleep");
+
+    // The payoff is that it then stops moving AT ALL, not merely slowly. A
+    // sleeping body is not integrated, so this is exact rather than a tolerance.
+    const glm::vec3 before = registry.get<TransformComponent>(crate).position;
+    stepFor(registry, 2.0f);
+    const glm::vec3 after = registry.get<TransformComponent>(crate).position;
+
+    CHECK_MSG(before == after,
+              "a sleeping body must not move by even a float: y went " +
+                  std::to_string(before.y) + " -> " + std::to_string(after.y));
+}
+
+static void testSleepChangesWhereThingsEndUpByNothing() {
+    // The check that makes "sleeping costs less and changes nothing" a claim
+    // rather than an assumption. The same scene twice, once allowed to sleep and
+    // once not: if sleeping freezes a body at a different equilibrium, or fires
+    // somewhere it should not have, the two runs disagree and nothing else in
+    // this file would notice.
+    const auto build = [](entt::registry& registry, bool allowSleep) {
+        makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+        std::vector<entt::entity> bodies;
+        bodies.push_back(makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f)));
+        bodies.push_back(makeBox(registry, glm::vec3(0.0f, 7.4f, 0.0f)));
+        bodies.push_back(makeSphere(registry, glm::vec3(3.0f, 6.5f, 0.0f)));
+        for (auto entity : bodies) {
+            registry.get<RigidBodyComponent>(entity).allowSleep = allowSleep;
+        }
+        return bodies;
+    };
+
+    entt::registry sleeping;
+    entt::registry awake;
+    const auto sleepingBodies = build(sleeping, true);
+    const auto awakeBodies = build(awake, false);
+
+    stepFor(sleeping, 3.0f);
+    stepFor(awake, 3.0f);
+
+    // Measured at exactly zero for all three bodies: a resting body reaches a
+    // true fixed point, where the distance it sinks under gravity in one step
+    // and the distance the positional correction pushes it back cancel to the
+    // same float. So a sleeping body is not frozen NEAR where an awake one
+    // hovers, it is frozen exactly there. The tolerance is left at 1e-4 rather
+    // than requiring bit equality only because a compiler that contracts the
+    // arithmetic differently could land on a two-step cycle instead of a fixed
+    // point; it is still fifty times tighter than the solver's resting slop.
+    for (size_t i = 0; i < sleepingBodies.size(); ++i) {
+        const glm::vec3 slept = sleeping.get<TransformComponent>(sleepingBodies[i]).position;
+        const glm::vec3 ran = awake.get<TransformComponent>(awakeBodies[i]).position;
+        const float drift = glm::length(slept - ran);
+        CHECK_MSG(drift < 1e-4f,
+                  "body " + std::to_string(i) + " ended up somewhere else when it slept: " +
+                      std::to_string(drift));
+    }
+
+    // And the run that was allowed to sleep must actually have slept, or the
+    // comparison above proves nothing at all.
+    bool anyAsleep = false;
+    for (auto entity : sleepingBodies) {
+        if (sleeping.get<RigidBodyComponent>(entity).isSleeping) anyAsleep = true;
+    }
+    CHECK_MSG(anyAsleep, "the sleeping run must have put something to sleep");
+}
+
+static void testSomethingLandingOnASleepingBodyWakesIt() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f));
+
+    stepFor(registry, 3.0f);
+    CHECK_MSG(registry.get<RigidBodyComponent>(crate).isSleeping,
+              "the crate must be asleep before anything is dropped on it");
+
+    const float restingY = registry.get<TransformComponent>(crate).position.y;
+
+    // Dropped from high enough to be moving well above the sleep threshold.
+    const auto dropped = makeBox(registry, glm::vec3(0.0f, 9.0f, 0.0f));
+    stepFor(registry, 1.5f);
+
+    CHECK_MSG(!registry.get<RigidBodyComponent>(crate).isSleeping ||
+                  registry.get<TransformComponent>(dropped).position.y > restingY + 0.8f,
+              "a sleeping body must wake up and carry what lands on it");
+
+    // The real question: did the impact transfer at all. A wake that arrives one
+    // step late leaves the pair already separated by the positional correction,
+    // and the crate never receives the impulse - it would sit at exactly the
+    // height it went to sleep at while the dropped box rests on top of it.
+    const float loadedY = registry.get<TransformComponent>(crate).position.y;
+    CHECK_MSG(loadedY < restingY - 1e-4f,
+              "the impact must actually reach the woken body: y stayed at " +
+                  std::to_string(loadedY));
+}
+
+static void testWritingVelocityWakesASleepingBody() {
+    // The path every script takes. SupersonicScriptWorld::setVelocity and
+    // addForce write RigidBodyComponent::velocity directly, so a sleeping body
+    // that ignored that write would make both of them silently do nothing.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f));
+
+    stepFor(registry, 3.0f);
+    CHECK_MSG(registry.get<RigidBodyComponent>(crate).isSleeping, "must be asleep first");
+
+    const float startX = registry.get<TransformComponent>(crate).position.x;
+    registry.get<RigidBodyComponent>(crate).velocity = glm::vec3(4.0f, 0.0f, 0.0f);
+    stepFor(registry, 0.5f);
+
+    CHECK_MSG(!registry.get<RigidBodyComponent>(crate).isSleeping,
+              "writing a velocity must wake the body");
+    const float movedX = registry.get<TransformComponent>(crate).position.x;
+    CHECK_MSG(movedX > startX + 0.5f,
+              "and it must actually move: x = " + std::to_string(movedX));
+}
+
+static void testMovingASleepingBodyWakesIt() {
+    // An editor gizmo, a script setting a position, the time-travel debugger
+    // scrubbing back. Without this the crate hangs wherever it was put.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f));
+
+    stepFor(registry, 3.0f);
+    CHECK_MSG(registry.get<RigidBodyComponent>(crate).isSleeping, "must be asleep first");
+
+    registry.get<TransformComponent>(crate).position.y += 4.0f;
+    stepFor(registry, 0.2f);
+
+    CHECK_MSG(!registry.get<RigidBodyComponent>(crate).isSleeping,
+              "a sleeping body that is moved must wake up");
+    CHECK_MSG(registry.get<RigidBodyComponent>(crate).velocity.y < -0.5f,
+              "and start falling again rather than hanging in the air");
+}
+
+static void testABodyOnAKinematicPlatformNeverSleeps() {
+    // A kinematic body is moved by code the solver cannot see: there is no
+    // velocity to read and no way to know it is about to slide out from under
+    // whatever is standing on it. So nothing resting on one is allowed to sleep,
+    // or a lift arrives at the top floor with its cargo left behind in the air.
+    entt::registry registry;
+
+    const auto platform = registry.create();
+    registry.emplace<TransformComponent>(platform, glm::vec3(0.0f, 5.0f, 0.0f),
+                                         glm::vec3(0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    registry.emplace<BoxColliderComponent>(platform);
+    registry.emplace<RigidBodyComponent>(platform).isKinematic = true;
+
+    const auto cargo = makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f));
+
+    stepFor(registry, 4.0f);
+
+    CHECK_MSG(!registry.get<RigidBodyComponent>(cargo).isSleeping,
+              "a body resting on a kinematic platform must stay awake");
+
+    // And the same body on an identical STATIC platform must sleep, or the check
+    // above passes for the wrong reason - because nothing ever sleeps.
+    entt::registry control;
+    makeStaticBox(control, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto resting = makeBox(control, glm::vec3(0.0f, 6.2f, 0.0f));
+    stepFor(control, 4.0f);
+    CHECK_MSG(control.get<RigidBodyComponent>(resting).isSleeping,
+              "the same body on a static floor must sleep");
+}
+
+static void testASleepingBodyStillReportsItsContacts() {
+    // Sleeping removes the RESPONSE, not the report. A trigger volume must not
+    // forget about something that fell asleep inside it, and anything diffing
+    // the contact list for enter/stay/exit would otherwise see every settled
+    // body exit the moment it went quiet.
+    entt::registry registry;
+    const auto floorEntity =
+        makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f));
+
+    stepFor(registry, 3.0f);
+    CHECK_MSG(registry.get<RigidBodyComponent>(crate).isSleeping, "must be asleep first");
+
+    std::vector<PhysicsSystem::Contact> contacts;
+    PhysicsSystem::Update(registry, 1.0f / 60.0f, &contacts);
+
+    bool reported = false;
+    for (const auto& contact : contacts) {
+        if ((contact.a == crate && contact.b == floorEntity) ||
+            (contact.a == floorEntity && contact.b == crate)) {
+            reported = true;
+        }
+    }
+    CHECK_MSG(reported, "a sleeping body must still report the contact holding it up");
+}
+
+static void testSleepCanBeTurnedOff() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 6.2f, 0.0f));
+    registry.get<RigidBodyComponent>(crate).allowSleep = false;
+
+    stepFor(registry, 4.0f);
+
+    CHECK_MSG(!registry.get<RigidBodyComponent>(crate).isSleeping,
+              "allowSleep = false must keep a body simulated");
+}
+
 static void runTests() {
+    testASettledBodyFallsAsleep();
+    testSleepChangesWhereThingsEndUpByNothing();
+    testSomethingLandingOnASleepingBodyWakesIt();
+    testWritingVelocityWakesASleepingBody();
+    testMovingASleepingBodyWakesIt();
+    testABodyOnAKinematicPlatformNeverSleeps();
+    testASleepingBodyStillReportsItsContacts();
+    testSleepCanBeTurnedOff();
     testAStackOfBoxesSettlesInsteadOfSinking();
     testLayerMasksSuppressAPair();
     testFilteringNeedsBothSidesToAgree();
@@ -1087,4 +1320,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics", 56)
+TEST_MAIN("test_physics", 110)

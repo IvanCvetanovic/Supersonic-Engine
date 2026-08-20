@@ -356,6 +356,14 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::Checkbox("Freeze Rotation", &rb.freezeRotation);
             ImGui::TextDisabled("Frozen bodies are pushed around but never tip over.");
             ImGui::Checkbox("Is Kinematic", &rb.isKinematic);
+
+            ImGui::Checkbox("Allow Sleep", &rb.allowSleep);
+            if (rb.isSleeping) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(asleep)");
+            }
+            ImGui::TextDisabled("A settled body stops being simulated until "
+                                "something touches or moves it.");
             ImGui::DragFloat("Mass", &rb.mass, 0.1f, 0.01f, 1000.0f);
             Theme::DrawVec3Control("Velocity", rb.velocity, 0.0f);
         }

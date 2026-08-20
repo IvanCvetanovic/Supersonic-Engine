@@ -164,6 +164,11 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"AngularVelocity\": "; writeVec3(out, body->angularVelocity); out << ",\n";
         out << indent << "  \"AngularDamping\": " << body->angularDamping << ",\n";
         out << indent << "  \"FreezeRotation\": " << (body->freezeRotation ? "true" : "false") << ",\n";
+        // Only the authored half. isSleeping, the timer and the position it
+        // slept at are re-derived within half a second of the scene loading,
+        // and writing them would let a scene be saved with a body asleep in
+        // mid-air - which would then never fall.
+        out << indent << "  \"AllowSleep\": " << (body->allowSleep ? "true" : "false") << ",\n";
         out << indent << "  \"IsKinematic\": " << (body->isKinematic ? "true" : "false") << "\n";
         out << indent << "},\n";
     }
@@ -407,6 +412,9 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         body.angularVelocity = readVec3(r["AngularVelocity"], glm::vec3(0.0f));
         body.angularDamping = r["AngularDamping"].AsFloat(0.05f);
         body.freezeRotation = r["FreezeRotation"].AsBool(false);
+        // A scene written before sleeping existed has no key and must keep
+        // being allowed to sleep, which is the default for a new body too.
+        body.allowSleep = r["AllowSleep"].AsBool(true);
     }
 
     if (node.Has("BoxCollider")) {

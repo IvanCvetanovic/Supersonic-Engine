@@ -404,14 +404,27 @@ to gameplay.
 
 ```
 for each non-kinematic RigidBodyComponent:
+    wake it if it was moved or given a velocity from outside
+    sleep it if it has been below the sleep thresholds for long enough
     gravity, linear damping, angular damping
     integrate rotation as a quaternion, write it back as Euler
     position += worldToLocal * (velocity * dt)
     resolve against the world ground plane
 gather every collider into world-space bodies and proxies
 sweep and prune  ->  candidate pairs
-for each pair: narrowphase, positional correction, normal impulse, friction
+for each pair: narrowphase -> a manifold of up to four points
+               wake either side if the other can disturb it
+               positional correction, once, at the centroid
+               one velocity constraint per contact point
+eight passes over every constraint: normal impulse, then friction
 ```
+
+Sleeping is decided during integration rather than after the solve, and the
+velocity it judges is therefore the one the *previous* step settled on. That is
+the right question to ask, and it is also the only place the decision can live:
+`Update` returns early when the scene holds fewer than two colliders, and a lone
+body resting on the world plane is exactly the case that has to be able to
+sleep.
 
 Velocity is world space; `TransformComponent::position` is local to the parent.
 Every write of a world-space displacement therefore goes through the inverse of
@@ -567,7 +580,70 @@ plane keeps its horizontal speed indefinitely unless linear damping takes it. A
 rigid body with no collider is treated as a unit cube for this test, and at unit
 scale comes to rest with its origin at y = 0.5.
 
-### 7g. Triggers
+### 7g. Sleeping
+
+A body that has stayed below `kSleepLinearVelocity` (0.05 m/s) and
+`kSleepAngularVelocity` (0.05 rad/s) for `kSleepTime` (half a second) stops being
+simulated: no gravity, no integration, no impulses. Its velocity and spin are
+zeroed, its position is recorded, and from then until something wakes it, it
+stands in as an immovable obstacle for whatever is still awake.
+
+The thresholds sit well under `kRestVelocity`, the speed at which bounce is
+killed, on purpose. A body that has only just stopped bouncing has not settled,
+and putting it to sleep there would freeze it one step into whatever it was still
+doing.
+
+**Sleeping removes the response, not the report.** The pair is still found and
+the contact still published. Handing the broadphase the pretence would have been
+cheaper — it drops a pair where both sides are immovable — but every settled body
+would then fire a spurious *exit* at anything diffing the contact list, and a
+trigger volume would forget about whatever fell asleep inside it. The saving is
+the integrate-and-solve, not the sweep.
+
+Four things wake a body, and the fourth is a rule about not sleeping at all:
+
+| Cause | How it is noticed |
+|---|---|
+| Something lands on it | the pair loop wakes either side when the other is a rigid body moving above the sleep thresholds |
+| A script writes its velocity | a sleeping body's velocity is *exactly* zero, so anything non-zero was written from outside — this is what keeps `setVelocity` and `addForce` working |
+| Anything moves it | its transform is compared against the position it slept at; without this an editor gizmo drags a settled crate into the air and it hangs there |
+| It is touching a kinematic body | it is never allowed to sleep in the first place |
+
+The kinematic rule is the conservative one. A kinematic body is moved by code the
+solver cannot see, so there is no velocity to read and no way to know it is about
+to slide out from under whatever is standing on it — a lift would arrive at the
+top floor with its cargo left behind in the air. Anything resting on one
+therefore has its sleep timer reset every step the contact lasts. A *static*
+collider, which is what an ordinary floor is, wakes nothing: resting on the floor
+is the reason to sleep, not a reason to stay awake.
+
+Waking happens **in place**, restoring the mass properties that were zeroed while
+the body slept, so the impulse that woke it lands on the same step. One step of
+latency is not a small difference here: the positional correction separates the
+pair on the step of the impact, so by the next step there is no contact left and
+the body that was hit never receives the impulse at all — a ball would bounce off
+a sleeping crate and leave it exactly where it was.
+
+Two bodies that are both merely still do **not** wake each other, or two crates
+settling side by side would hold each other awake forever, which is the usual way
+a sleeping implementation ends up never sleeping. The cost of that rule is one
+step of cascade latency: a body woken by an impact still has zero velocity while
+the rest of this step's pairs are walked, so a toppled stack wakes one layer per
+step.
+
+`allowSleep` on `RigidBodyComponent` opts a body out. It is the only part of this
+that is serialised — `isSleeping`, the timer and the recorded position are
+runtime state, re-derived within half a second of a scene loading. Writing them
+would allow a scene to be saved with a body asleep in mid-air, which would then
+never fall.
+
+Verified by running the same scene twice, once allowed to sleep and once not: all
+three bodies end at bit-identical positions. A resting body reaches a true fixed
+point, where the distance it sinks under gravity in one step and the distance the
+positional correction pushes it back cancel to the same float, so a sleeping body
+is not frozen *near* where an awake one hovers — it is frozen exactly there.
+
+### 7h. Triggers
 
 A collider with `isTrigger` set is detected and deliberately not resolved: the
 overlap is reported in the contact list and the body passes through, which is the
@@ -584,7 +660,7 @@ inspector checkbox:
   There is no `OnTriggerEnter`, no per-entity event and no enter/stay/exit
   distinction, so a script cannot currently learn that a trigger fired.
 
-### 7h. World queries
+### 7i. World queries
 
 `Raycast`, `OverlapSphere` and `IsGrounded` answer questions about the world
 against **colliders**, which is what physics means by solid. Gameplay previously
@@ -630,35 +706,41 @@ Every query rebuilds the whole shape list from the registry on each call. There
 is no acceleration structure and no cache, so a script that raycasts once per
 entity per frame walks every collider in the scene once per entity per frame.
 
-### 7i. Documented departures
+### 7j. Documented departures
 
 Listed rather than hidden, in the same spirit as the rest of this document.
 
-- **No continuous collision detection.** Positions are advanced by
-  `velocity * dt` and only then tested for overlap. The step length is therefore
-  a speed limit: anything travelling further in 1/60 s than the combined
-  thickness of itself and the collider it hits passes clean through, and nothing
-  is reported. A fast projectile wants a `Raycast` along its own motion, not a
-  collider. The world ground plane is the one exception, because it is a clamp on
-  position rather than a swept test.
-- **No sleeping, and no persistent broadphase.** The body and proxy lists are
-  rebuilt from the registry, the world bounds recomputed and the proxies
-  re-sorted every step, whether or not anything moved. Cost is proportional to
-  every collider in the scene, not to the part of it that is awake.
-- **One solver pass, no warm starting.** Each pair is visited exactly once per
-  step, in whatever order the sweep produced. A stack of boxes settles slowly and
-  imprecisely, because the impulse the bottom box needs in order to carry the
-  stack is discovered one contact at a time and thrown away at the end of the
-  step.
-- **One contact point per pair.** Box-box uses the centre of the overlapping
-  region, standing in for what is really a face or an edge, which is why a box
-  settling flat rocks slightly before it comes to rest. The point is at least on
-  the correct side of the centre of mass, which is what decides which way a crate
-  tips when it lands on the corner of something.
-- **No collider offset.** `BoxColliderComponent` carries a size and
-  `SphereColliderComponent` a radius; neither has a local position, so the shape
-  is centred on the transform origin and so is the centre of mass. A mesh
-  authored with its origin at its feet collides half buried.
+- **No swept collision detection.** Positions are still advanced by
+  `velocity * dt` and only then tested. What stops a fast body passing through a
+  thin one is *speculative contacts*: the broadphase bound is widened by the
+  distance each body travels this step, the narrowphase reports a pair that is
+  apart but within that margin with a **negative** penetration, and the solver
+  removes exactly the approach velocity the remaining gap cannot absorb, so the
+  body lands on the surface instead of crossing it. That is a velocity
+  constraint, not a swept test, and it is wrong in both directions. It removes
+  approach velocity along the contact normal as found at the *start* of the
+  step, so a body arriving at a glancing angle can be braked against the wrong
+  face of what it is approaching. And the margin is the distance the pair could
+  close in any direction, not the volume it actually sweeps, so two bodies
+  passing diagonally near each other are reported and slowed for a collision
+  that would never have happened.
+- **No persistent broadphase.** The body and proxy lists are rebuilt from the
+  registry, the world bounds recomputed and the proxies re-sorted every step,
+  whether or not anything moved. Sleeping removes the integrate-and-solve for a
+  settled body but deliberately not the sweep, so the cost of the broadphase is
+  still proportional to every collider in the scene rather than to the part of it
+  that is awake.
+- **No warm starting between steps.** The eight solver passes accumulate an
+  impulse per contact *within* a step, which is what lets a stack settle, but the
+  constraint list is rebuilt from scratch every step and the accumulated impulses
+  are thrown away with it. There is no contact cache and no matching of this
+  step's manifold points against the last one's, so a tall stack still starts
+  each step from zero and converges rather than resuming.
+- **Positional correction uses one point per pair.** The velocity solve gets
+  every manifold point; the correction gets the centroid, once, because pushing
+  out per point would move the body as many times as far as the overlap requires.
+  A pair that touches along a face is therefore separated along the average of
+  where it touches, not per corner.
 - **Kinematic bodies are not simulated.** Integration skips them and their
   inverse mass is zero, so nothing pushes them. What they do to what they touch
   is narrower than it sounds: their velocity and spin are excluded from the
