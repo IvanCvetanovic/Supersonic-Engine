@@ -709,6 +709,10 @@ static void testTheScenesLookSurvivesARoundTrip() {
         look.bloomSoftKnee = 0.125f;
         look.bloomIntensity = 1.5f;
         look.exposure = 0.4f;
+        look.fogDensity = 0.033f;
+        look.fogColor[0] = 0.9f;
+        look.fogColor[1] = 0.2f;
+        look.fogColor[2] = 0.1f;
         registry.ctx().insert_or_assign<RenderSettings>(std::move(look));
 
         const auto entity = registry.create();
@@ -730,6 +734,14 @@ static void testTheScenesLookSurvivesARoundTrip() {
     CHECK_NEAR(look.bloomSoftKnee, 0.125f);
     CHECK_NEAR(look.bloomIntensity, 1.5f);
     CHECK_NEAR(look.exposure, 0.4f);
+
+    // Fog too, colour included - a density that survives while its colour
+    // resets to the default is a scene that loads grey haze instead of the
+    // sunset it was authored with.
+    CHECK_NEAR(look.fogDensity, 0.033f);
+    CHECK_NEAR(look.fogColor[0], 0.9f);
+    CHECK_NEAR(look.fogColor[1], 0.2f);
+    CHECK_NEAR(look.fogColor[2], 0.1f);
 }
 
 static void testASceneWithNoLookGetsTheDefaultOne() {

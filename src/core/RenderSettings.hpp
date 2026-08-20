@@ -32,6 +32,18 @@ struct RenderSettings {
 
     // Applied in the composite, before the tone map.
     float exposure{1.0f};
+
+    // Distance fog. Density zero is no fog, which is the default and is why
+    // there is no separate enable flag - the shader's falloff is exactly 1.0
+    // at zero density, so "off" is the same arithmetic as "on" rather than a
+    // branch that can disagree with it.
+    //
+    // Density rather than a start and end distance: one number instead of two,
+    // no visible edge where a linear ramp would begin, and nothing to get
+    // backwards. A density of about 0.02 puts the horizon at roughly fifty
+    // units.
+    float fogDensity{0.0f};
+    float fogColor[3]{0.55f, 0.60f, 0.68f};
 };
 
 } // namespace Supersonic

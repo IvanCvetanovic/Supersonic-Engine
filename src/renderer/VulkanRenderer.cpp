@@ -1,5 +1,6 @@
 #include "renderer/VulkanRenderer.hpp"
 #include "core/Profiler.hpp"
+#include "core/RenderSettings.hpp"
 #include "core/Log.hpp"
 
 #include "core/AnimationSystem.hpp"
@@ -826,6 +827,15 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     ubo.cameraPosition = glm::vec4(cameraPosition, 1.0f);
     ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
     ubo.ambientGround = glm::vec4(0.10f, 0.09f, 0.08f, 1.0f);
+
+    // Fog comes from the scene, like gravity does. Absent means density zero,
+    // which the shader treats as no fog at all.
+    if (const auto* rendering = registry.ctx().find<RenderSettings>()) {
+        ubo.fogColorAndDensity = glm::vec4(rendering->fogColor[0], rendering->fogColor[1],
+                                           rendering->fogColor[2], rendering->fogDensity);
+    } else {
+        ubo.fogColorAndDensity = glm::vec4(0.0f);
+    }
     const glm::vec3 shadowDirection =
         gatherLights(registry, ubo, m_pointShadowCasters, m_spotShadowCasters);
 

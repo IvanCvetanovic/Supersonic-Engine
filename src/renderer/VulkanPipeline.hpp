@@ -68,6 +68,18 @@ struct UniformBufferObject {
     // so unlike a point light it is sampled exactly like a cascade: project,
     // compare.
     alignas(16) glm::mat4 spotViewProj[SpotLight::kMaxShadowCasters];
+
+    // rgb = fog colour, a = density. Appended AFTER the matrices and before the
+    // light array purely because appending anywhere earlier would shift every
+    // offset after it - and the one thing this block has already been wrong
+    // about is offsets.
+    //
+    // A density of zero is no fog, which is why there is no separate enable
+    // flag: the shader's exp2(-(d*density)^2) is exactly 1.0 at density 0, so
+    // the disabled path is the same arithmetic rather than a branch that can
+    // disagree with it.
+    alignas(16) glm::vec4 fogColorAndDensity{0.0f};
+
     GpuLight lights[kMaxLights];
 };
 

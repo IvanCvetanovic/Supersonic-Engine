@@ -436,5 +436,27 @@ void main() {
     // material is authored to actually glow rather than merely to be pale.
     color += push.emissive.rgb;
 
+    // Distance fog, applied last and in LINEAR space.
+    //
+    // Last because fog is what the air between the camera and the surface does
+    // to the light leaving it, so anything added afterwards - emission most
+    // obviously - would arrive at the eye undimmed by a kilometre of haze.
+    // Linear because this shader's output feeds the bloom chain and the tone
+    // map; fogging after the encode would blend two display-referred colours
+    // and produce a haze that is too dark in the midtones.
+    //
+    // exp2(-(d * density)^2) rather than a linear ramp between two distances:
+    // it needs one parameter instead of two, it never produces a visible edge
+    // where the ramp starts, and it is exactly 1.0 when density is 0 - so
+    // "no fog" is the same arithmetic rather than a branch that can disagree
+    // with it.
+    float fogDensity = ubo.fogColorAndDensity.a;
+    if (fogDensity > 0.0) {
+        float viewDistance = length(ubo.cameraPosition.xyz - fragWorldPos);
+        float f = viewDistance * fogDensity;
+        float visibility = clamp(exp2(-f * f), 0.0, 1.0);
+        color = mix(ubo.fogColorAndDensity.rgb, color, visibility);
+    }
+
     outColor = vec4(color, albedoTex.a * push.albedoColor.a);
 }

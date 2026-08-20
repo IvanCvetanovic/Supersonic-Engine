@@ -144,6 +144,13 @@ void InspectorPanel::drawWorldSettings(entt::registry& registry) {
     ImGui::TextDisabled("The scene is HDR here, so a threshold of 1 means "
                         "brighter than white. These were compile-time constants; "
                         "a night level and a bright exterior do not share them.");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Fog");
+    ImGui::DragFloat("Density", &rendering.fogDensity, 0.001f, 0.0f, 0.5f, "%.4f");
+    ImGui::ColorEdit3("Fog Colour", rendering.fogColor);
+    ImGui::TextDisabled("Zero density is no fog. Around 0.02 puts the horizon "
+                        "at roughly fifty units.");
 }
 
 void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity selectedEntity) {

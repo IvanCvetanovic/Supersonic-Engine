@@ -77,7 +77,11 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
              << rendering.bloomThreshold
              << ", \"BloomSoftKnee\": " << rendering.bloomSoftKnee
              << ", \"BloomIntensity\": " << rendering.bloomIntensity
-             << ", \"Exposure\": " << rendering.exposure << " },\n";
+             << ", \"Exposure\": " << rendering.exposure
+             << ", \"FogDensity\": " << rendering.fogDensity
+             << ", \"FogColor\": [" << rendering.fogColor[0] << ", "
+             << rendering.fogColor[1] << ", " << rendering.fogColor[2]
+             << "] },\n";
     }
 
     file << "  \"Entities\": [\n";
@@ -170,6 +174,15 @@ void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
         rendering.bloomSoftKnee = node["BloomSoftKnee"].AsFloat(rendering.bloomSoftKnee);
         rendering.bloomIntensity = node["BloomIntensity"].AsFloat(rendering.bloomIntensity);
         rendering.exposure = node["Exposure"].AsFloat(rendering.exposure);
+        rendering.fogDensity = node["FogDensity"].AsFloat(rendering.fogDensity);
+        if (node["FogColor"].IsArray()) {
+            const auto& c = node["FogColor"].AsArray();
+            if (c.size() == 3) {
+                for (int i = 0; i < 3; ++i) {
+                    rendering.fogColor[i] = c[static_cast<size_t>(i)].AsFloat(rendering.fogColor[i]);
+                }
+            }
+        }
     }
     registry.ctx().insert_or_assign<RenderSettings>(std::move(rendering));
 }

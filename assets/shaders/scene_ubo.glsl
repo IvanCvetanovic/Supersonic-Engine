@@ -45,6 +45,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 ambientGround;
     vec4 lightCount;
     mat4 spotViewProj[SPOT_SHADOW_CASTERS];
+    vec4 fogColorAndDensity;  // rgb = colour, a = density (0 = no fog)
     Light lights[MAX_LIGHTS];
 } ubo;
 
