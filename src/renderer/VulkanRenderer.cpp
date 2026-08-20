@@ -1,4 +1,5 @@
 #include "renderer/VulkanRenderer.hpp"
+#include "core/Profiler.hpp"
 #include "core/Log.hpp"
 
 #include "core/AnimationSystem.hpp"
@@ -759,6 +760,11 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         return;
     }
 
+    // Everything from here to the image fence below is the CPU waiting on the
+    // GPU, not doing work. Measured separately because a large number here means
+    // the frame has headroom and every CPU-side optimisation is chasing a wait.
+    Profiler::Scope waitZone(ProfileZone::FrameWait);
+
     vk::Result waitResult = device.waitForFences(1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     if (waitResult != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to wait for Vulkan inFlightFence!");
@@ -803,6 +809,11 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         }
     }
     m_imagesInFlight[imageIndex] = m_inFlightFences[m_currentFrame];
+    waitZone.Stop();
+
+    // Everything that has to be decided before a command can be recorded:
+    // lights gathered, cascades fitted, palettes uploaded, uniforms written.
+    Profiler::Scope prepareZone(ProfileZone::FramePrepare);
 
     // Update per-frame scene constants.
     UniformBufferObject ubo{};
@@ -864,6 +875,12 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
 
     vk::CommandBufferBeginInfo beginInfo{};
     cmd.begin(beginInfo);
+    prepareZone.Stop();
+
+    // Eighteen depth passes: four cascades, six faces for each point-light
+    // slot, and one for each spot slot. Every one of them walks the registry
+    // again, which is what this zone prices.
+    Profiler::Scope shadowZone(ProfileZone::ShadowRecord);
 
     // ---------------------------------------------------------------------
     // PASS 0: Shadow map (depth only, from the light)
@@ -995,6 +1012,12 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
 
         cmd.endRenderPass();
     }
+
+    shadowZone.Stop();
+
+    // The scene pass and everything after it: bloom, composite, the editor's
+    // UI, and the submit and present that close the frame.
+    Profiler::Scope sceneZone(ProfileZone::SceneRecord);
 
     // ---------------------------------------------------------------------
     // PASS 1: Offscreen 3D scene

@@ -29,7 +29,20 @@ enum class ProfileZone : std::size_t {
     ImGuiRender,
     ResourceSync,
     PoseEvaluation,
-    RenderSubmit,
+
+    // The four halves of DrawFrame, which partition it exactly.
+    //
+    // One zone for the whole of it said 6.08 ms and answered nothing, because
+    // most of that can be the CPU waiting on the GPU rather than doing
+    // anything: DrawFrame opens by waiting on the fence of the frame two ago,
+    // possibly waiting again on the image's own fence, and then acquiring -
+    // which blocks on presentation. Optimising recording against that number
+    // would be optimising against a wait.
+    FrameWait,
+    FramePrepare,
+    ShadowRecord,
+    SceneRecord,
+
     UndoCommit,
     Count,
 };
@@ -53,7 +66,9 @@ public:
         static constexpr const char* kNames[kZoneCount] = {
             "Physics", "Audio", "Scripts", "Animation", "Particles",
             "Transform", "Editor UI", "ImGui Render", "Resource Sync",
-            "Pose Evaluation", "Render Submit", "Undo Commit",
+            "Pose Evaluation",
+            "Frame Wait", "Frame Prepare", "Shadow Record", "Scene Record",
+            "Undo Commit",
         };
         return kNames[static_cast<std::size_t>(zone)];
     }
@@ -66,12 +81,27 @@ public:
         explicit Scope(ProfileZone zone)
             : m_zone(zone), m_start(std::chrono::steady_clock::now()) {}
 
-        ~Scope() {
+        // Ends the zone before the object dies.
+        //
+        // For a region that cannot be wrapped in braces because what it
+        // computes is used after it - which is most of a render function, where
+        // the command buffer and the frustum outlive the setup that built them.
+        // The alternative is hoisting half a dozen declarations out of the
+        // function body to make room for a brace, which is instrumentation
+        // rearranging the code it is supposed to be measuring.
+        //
+        // Idempotent, so the destructor after an explicit Stop does nothing and
+        // a zone is never counted twice.
+        void Stop() {
+            if (m_stopped) return;
+            m_stopped = true;
             const auto elapsed = std::chrono::steady_clock::now() - m_start;
             const double ms =
                 std::chrono::duration<double, std::milli>(elapsed).count();
             Accumulator()[static_cast<std::size_t>(m_zone)] += ms;
         }
+
+        ~Scope() { Stop(); }
 
         Scope(const Scope&) = delete;
         Scope& operator=(const Scope&) = delete;
@@ -79,6 +109,7 @@ public:
     private:
         ProfileZone m_zone;
         std::chrono::steady_clock::time_point m_start;
+        bool m_stopped{false};
     };
 
 private:

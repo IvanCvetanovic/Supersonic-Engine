@@ -514,16 +514,35 @@ void SupersonicApp::Run() {
     // window closes" without a special case, and --frames 1 renders exactly
     // one frame rather than two.
     long long frame = 0;
-    std::array<double, Profiler::kZoneCount> zoneTotals{};
+
+    // Every frame's sample, not a running sum.
+    //
+    // A mean is the wrong statistic for "where does the frame go". It is the
+    // one number a single contended frame can move arbitrarily far, and on a
+    // machine doing anything else at the time it does: the editor's UI zone was
+    // measured at 1.4 ms and at 16.5 ms across identical runs of the same
+    // binary, while the render zones beside it did not move. Deciding what to
+    // optimise from that is deciding from whatever else the machine was doing.
+    //
+    // The median is what the frame usually costs and the maximum is the worst
+    // one seen, which is the pair that answers both questions anyone asks of a
+    // profile. Kept only under --frames, where the count is bounded by
+    // construction.
+    std::vector<std::array<double, Profiler::kZoneCount>> zoneSamples;
+    if (m_options.maxFrames > 0) {
+        zoneSamples.reserve(static_cast<size_t>(m_options.maxFrames));
+    }
 
     while (!m_window->ShouldClose()) {
         // Fold the frame that just finished into the totals. This has to happen
         // before the exit test, not after the increment, or the final frame is
         // counted in the divisor and never added to the sum.
-        if (frame > 0) {
+        if (frame > 0 && m_options.maxFrames > 0) {
+            std::array<double, Profiler::kZoneCount> sample{};
             for (std::size_t i = 0; i < Profiler::kZoneCount; ++i) {
-                zoneTotals[i] += Profiler::Milliseconds(static_cast<ProfileZone>(i));
+                sample[i] = Profiler::Milliseconds(static_cast<ProfileZone>(i));
             }
+            zoneSamples.push_back(sample);
         }
 
         if (m_options.maxFrames > 0 && frame >= m_options.maxFrames) {
@@ -560,13 +579,39 @@ void SupersonicApp::Run() {
             // producing it. Splitting a report across two streams - a heading
             // through the log and its rows through cout - would also let the
             // two interleave with anything else logging in between.
-            std::cout << "[Profiler] Mean CPU cost per frame over "
-                      << frame << " frame(s):" << std::endl;
+            std::cout << "[Profiler] CPU cost per frame over "
+                      << zoneSamples.size() << " frame(s), median and worst:"
+                      << std::endl;
+
+            std::vector<double> column;
+            column.reserve(zoneSamples.size());
             for (std::size_t i = 0; i < Profiler::kZoneCount; ++i) {
-                const double mean = zoneTotals[i] / static_cast<double>(frame);
-                if (mean < 0.005) continue;
+                column.clear();
+                double worst = 0.0;
+                std::size_t worstFrame = 0;
+                for (std::size_t f = 0; f < zoneSamples.size(); ++f) {
+                    column.push_back(zoneSamples[f][i]);
+                    // WHICH frame, not only how bad. A twenty-millisecond
+                    // worst case on frame one is a scene loading; the same
+                    // number on frame four hundred is a stall in play, and the
+                    // two want completely different work.
+                    if (zoneSamples[f][i] > worst) {
+                        worst = zoneSamples[f][i];
+                        worstFrame = f + 1;
+                    }
+                }
+                if (column.empty()) continue;
+
+                // nth_element, not a full sort: the median is the only order
+                // statistic wanted and this runs once per zone at exit.
+                const std::size_t middle = column.size() / 2;
+                std::nth_element(column.begin(), column.begin() + middle, column.end());
+                const double median = column[middle];
+
+                if (median < 0.005 && worst < 0.05) continue;
                 std::cout << "  " << Profiler::Name(static_cast<ProfileZone>(i))
-                          << ": " << mean << " ms" << std::endl;
+                          << ": " << median << " ms (worst " << worst
+                          << " on frame " << worstFrame << ")" << std::endl;
             }
             break;
         }
@@ -802,6 +847,8 @@ void SupersonicApp::Run() {
             }
         }
 
+        // Timed from inside, in four parts. One zone around this call said
+        // 6.08 ms and could not say how much of it was work.
         m_renderer->DrawFrame(m_registry,
                               m_editorLayer->GetOffscreen(),
                               ImGui::GetDrawData(),
