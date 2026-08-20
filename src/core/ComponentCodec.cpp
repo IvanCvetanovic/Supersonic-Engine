@@ -1,4 +1,6 @@
 #include "core/ComponentCodec.hpp"
+#include <vector>
+#include <sstream>
 #include "core/Log.hpp"
 #include <limits>
 #include <cmath>
@@ -8,6 +10,28 @@
 #include <algorithm>
 
 namespace Supersonic {
+
+namespace ComponentCodec {
+namespace {
+
+struct RegisteredComponent {
+    std::string key;
+    ComponentWriter writer;
+    ComponentReader reader;
+};
+
+// A function-local static rather than a namespace-scope one: this lives in a
+// static library linked into several binaries, and a function-local static has
+// one definition however many translation units reach it. The same reason the
+// profiler's accumulator is shaped this way.
+std::vector<RegisteredComponent>& registeredComponents() {
+    static std::vector<RegisteredComponent> registry;
+    return registry;
+}
+
+} // namespace
+} // namespace ComponentCodec
+
 
 namespace {
 
@@ -338,10 +362,43 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
              << ", \"CastsShadow\": " << (renderable->castsShadow ? "true" : "false") << " },\n";
     }
 
+    // A game's own components, under one member of their own. Written before
+    // HasRenderable so the engine's last member keeps its no-trailing-comma
+    // contract untouched.
+    {
+        std::ostringstream members;
+        bool any = false;
+        for (const auto& extension : registeredComponents()) {
+            std::ostringstream value;
+            if (!extension.writer(registry, entity, value)) continue;
+            if (any) members << ",\n";
+            members << indent << "  \"" << Json::Escape(extension.key)
+                    << "\": " << value.str();
+            any = true;
+        }
+        if (any) {
+            out << indent << "\"Game\": {\n" << members.str()
+                << "\n" << indent << "},\n";
+        }
+    }
+
     out << indent << "\"HasRenderable\": " << (registry.all_of<RenderableComponent>(entity) ? "true" : "false") << "\n";
 }
 
 void Read(entt::registry& registry, entt::entity entity, const Json::Value& node) {
+    // A game's own components first, so anything the engine writes afterwards
+    // takes precedence on a key a game somehow shares - it cannot, being
+    // namespaced, but the ordering costs nothing and the invariant is worth
+    // being true by construction rather than by argument.
+    if (node.Has("Game")) {
+        const Json::Value& game = node["Game"];
+        for (const auto& extension : registeredComponents()) {
+            if (game.Has(extension.key)) {
+                extension.reader(registry, entity, game[extension.key]);
+            }
+        }
+    }
+
     if (node.Has("Tag")) {
         registry.emplace_or_replace<TagComponent>(entity, node["Tag"].AsString("Entity"));
     }
@@ -575,6 +632,26 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         }
     }
 }
+
+
+bool RegisterComponent(std::string key, ComponentWriter writer, ComponentReader reader) {
+    // A component with no name, no writer or no reader is a registration that
+    // would fail later and further away - at save time, or worse at load time
+    // against a file that has already been written.
+    if (key.empty() || !writer || !reader) return false;
+
+    for (const auto& existing : registeredComponents()) {
+        if (existing.key == key) return false;
+    }
+
+    registeredComponents().push_back(RegisteredComponent{std::move(key), std::move(writer),
+                                                         std::move(reader)});
+    return true;
+}
+
+void ClearRegisteredComponents() { registeredComponents().clear(); }
+
+std::size_t RegisteredComponentCount() { return registeredComponents().size(); }
 
 } // namespace ComponentCodec
 

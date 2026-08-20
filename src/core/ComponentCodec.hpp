@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <functional>
 #include <ostream>
 #include <string>
 
@@ -41,6 +43,47 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
 // fresh entity. Applying a prefab over an existing entity, which is what the
 // contract above promises, hit it immediately.
 void Read(entt::registry& registry, entt::entity entity, const Json::Value& node);
+
+// ---- A game's own components -------------------------------------------------
+//
+// The codec names eighteen engine components and could not be opened to
+// anything else. That is a hard limit on what can be built on this engine: a
+// mid-match save and a snapshot are made of a game's own component types, and
+// neither could be written by the thing that writes every other component.
+// A game's only options were to fork the codec or to keep a second serializer
+// beside it - and two writers over the same data always drift, which is the
+// argument this file was created to make.
+//
+// A registered component writes only its VALUE. The codec owns the key, the
+// indentation and the punctuation, so a game cannot produce a file that fails
+// to parse by forgetting a comma.
+//
+// Returns false when the entity does not have the component, in which case
+// nothing is written for it.
+using ComponentWriter =
+    std::function<bool(const entt::registry& registry, entt::entity entity, std::ostream& out)>;
+
+// Applies one previously written value back onto an entity.
+using ComponentReader =
+    std::function<void(entt::registry& registry, entt::entity entity, const Json::Value& value)>;
+
+// Registers a component type under `key`.
+//
+// Everything registered is written inside a single "Game" member rather than
+// beside the engine's own keys. That is not tidiness: it makes a collision
+// between a game's component name and an engine one impossible, now and for
+// every component the engine ever adds. A game that names something "Transform"
+// is unremarkable, and it must not be a scene-corrupting mistake.
+//
+// Returns false if the key is already registered. Registration is global rather
+// than per-registry, because it maps a TYPE to its format and a type does not
+// change meaning between two scenes.
+bool RegisterComponent(std::string key, ComponentWriter writer, ComponentReader reader);
+
+// Forgets every registered component. For tests, and for a game tearing down.
+void ClearRegisteredComponents();
+
+std::size_t RegisteredComponentCount();
 
 } // namespace ComponentCodec
 
