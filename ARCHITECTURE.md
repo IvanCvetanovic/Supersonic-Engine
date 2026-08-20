@@ -1119,6 +1119,141 @@ group that takes far longer than its neighbours is never redistributed. And
 `Execute`, the single-task entry point, has no call site in the engine at all —
 only `test_jobs` exercises it.
 
+### 8b. The seam a game lives in
+
+The engine was an application with an editor fused into it. `SupersonicApp`
+owned the registry privately and the frame was a closed sequence of calls to
+engine systems, so a game built on this had two options: edit
+`SupersonicApp.cpp`, or express its logic through the script plugin's C ABI —
+which is deliberately POD-only and is not where a simulation's own data
+structures belong.
+
+An **`EngineLayer`** is a peer rather than a subsystem. It gets the registry, it
+is called at two defined points in the frame, and the engine assumes nothing
+else about it.
+
+| | when | delta | for |
+|---|---|---|---|
+| `OnFixedUpdate` | inside the physics loop, after the step | always `kFixedPhysicsStep` | simulation, and anything that must be reproducible |
+| `OnUpdate` | after the engine's per-frame systems, before world transforms resolve | real elapsed time | interpolation, input, camera — anything keeping up with the display |
+
+The fixed callback runs *after* physics in the same step, so a tick reads the
+positions that step produced rather than the previous one's. The per-frame one
+runs *before* the transforms resolve, so a layer that moves something has it
+rendered this frame rather than next.
+
+`LayerStack` runs layers in push order and detaches them in reverse — the only
+safe order when they were pushed in dependency order. There are no priorities:
+a game that needs its systems sequenced pushes them in sequence, which it knows
+and the engine never could. The stack is walked by **index rather than by
+iterator**, because a layer may push another from inside its own tick and that
+reallocates the vector being walked; with an iterator the test for it hangs
+rather than fails, a dangling iterator being what it is.
+
+`SupersonicApp::Registry()` hands out the real registry. Deliberately: an ECS
+whose registry is private is an ECS only its author can use, and every
+alternative — a wrapper re-exporting a chosen subset, a message queue, a
+component registration API — is a smaller EnTT that a game has to learn instead
+of the one it already knows.
+
+Two couplings were cut alongside it. The renderer no longer includes
+`editor/Theme.hpp` or `editor/EditorFonts.hpp`; the UI style arrives as a
+callback the application supplies, because the renderer is the only thing that
+knows *when* fonts may be added — after the ImGui context exists and before the
+Vulkan backend initialises — and is not the thing that should know what a font
+is. And the editor's ground grid is drawn only when there is an editor: it sat
+at the end of the scene pass with nothing in front of it, so a packaged game
+opened on its own level with the grid and the origin axes drawn across it.
+
+Still fused: the scene target lives in `EditorLayer`, and the scene pipeline is
+built against its render pass. A game needs that target too — it is the HDR and
+bloom chain — so this is misplaced ownership rather than a missing feature.
+
+### 8c. Simulated time, and proving a run reproduces
+
+Nothing here had a notion of simulated time. Everything that needed a clock read
+the frame delta — the real, variable, machine-dependent time the last frame took
+to draw — and accumulated it. `ScriptComponent::elapsed` did exactly that and
+drove `std::sin` off the result, so every scripted motion in the engine was a
+function of how fast the display was keeping up.
+
+That was measured rather than suspected: three runs of one binary over one scene
+produced three different images. It is also what stopped the shadow-pass cache
+from being tested end to end — a rendered frame could not be compared against
+anything.
+
+**`SimulationClock`** is a tick counter in the registry's context, advanced once
+per fixed step. Its seconds are *derived* — `tick * fixedDelta`, computed fresh —
+rather than summed: a float added sixty times a second drifts, and drifts
+differently depending on where the sum started, which would put the problem back
+where it was found. There is a test that runs both for a hundred thousand ticks
+and shows the summed one has left.
+
+**`StateHash`** reduces the simulation to one number, so "it reproduces" stops
+being a claim nobody can check. A screenshot cannot do this job: it compares
+what was *drawn*, which is lossy and quantised to eight bits, so two runs that
+have already diverged can photograph identically. Three decisions in it are
+load-bearing:
+
+- Floats are compared **by their bytes**. A tolerance would be a decision about
+  how far two runs may drift before it counts — the exact question the test
+  exists to answer, so it cannot also be the test's parameter.
+- It is **order-independent**. EnTT iterates in an order that comes from how
+  components were added rather than from the state, and folding them in sequence
+  would report that as a divergence.
+- Each entity's contribution is **seeded by its own id**, so two crates swapping
+  positions is a different world even though the set of positions is unchanged.
+
+Sleep state is in the hash. A body asleep on one machine and awake on another
+has not diverged yet and will on the next thing that touches it.
+
+**`--fixed-step`** feeds the simulation a constant delta. The simulation was
+already deterministic given a tick count; what varied was how many ticks fit
+into a frame, because the accumulator is fed real time. Pinning the delta pins
+the tick count, and five runs of one scene then produce one image. Only the
+simulation is pinned — the profiler still measures real elapsed time per zone —
+and it stays opt-in, because a game that ignores how long a frame took plays in
+slow motion the moment it drops below its target rate.
+
+Not done: the game tick is still the physics step rather than an authored rate,
+there is no interpolation by overstep fraction, and the fixed-step loop still
+discards simulated time after five steps — which a game clock must not copy, or
+every mission timer runs slow under load.
+
+### 8d. Saving a game's own components
+
+`ComponentCodec` is the single reader and writer for an entity, and it named
+eighteen engine components and could not be opened to anything else. That is a
+hard limit on what can be built here: a mid-match save and a rollback snapshot
+are made of a game's own component types, and neither could be written by the
+thing that writes every other component. A game's options were to fork the codec
+or keep a second serializer beside it — and two writers over the same data always
+drift, which is the argument this file was created to make.
+
+A game registers a key, a writer and a reader. The writer emits only the
+**value**; the codec owns the key, the indentation and the punctuation, so a
+game cannot produce a file that fails to parse by forgetting a comma.
+
+Everything registered is written inside a single `"Game"` member rather than
+beside the engine's own keys. Not tidiness: it makes a collision between a
+game's component name and an engine one impossible, now and for every component
+the engine ever adds. A game naming something `Transform` is unremarkable and
+must not be a scene-corrupting mistake.
+
+Written **before** `HasRenderable`, which is the engine's last member and the
+only one emitted without a trailing comma — that contract is what lets the
+caller close the object.
+
+Registration is global rather than per-registry, because it maps a *type* to its
+format and a type does not mean two different things in two scenes.
+
+Prefabs are parsed once and cached by path. Every spawn used to open the file,
+read it and run the whole parser to produce a document identical to the last
+one. Saving a prefab drops it from the cache, a prefab that failed to parse is
+never cached — remembering a failure would make it stay broken until the editor
+restarts — and prefab files are watched from startup so an external edit
+invalidates them.
+
 ### 9. Game runtime and packaging
 
 #### The manifest
