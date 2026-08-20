@@ -1259,7 +1259,101 @@ static void testSleepCanBeTurnedOff() {
               "allowSleep = false must keep a body simulated");
 }
 
+
+static void testInertiaFollowsTheBoxAndNotItsBoundingBox() {
+    // Physics has to be rotation-invariant: turning a whole scene about the
+    // gravity axis must not change what happens in it. That is the cleanest
+    // statement of what a mass tensor is for, and it is exactly what a tensor
+    // taken from the world AABB gets wrong.
+    //
+    // A 5 x 1 x 1 plank turned 45 degrees about Y has a bounding box 4.24
+    // across, and the moment of inertia of that box about the axis the impact
+    // turns it around is 1.58 against the plank's own 2.17. The same object,
+    // described as a third easier to turn, decided purely by which way it
+    // happens to be facing. That was correct while box-box collided AS its
+    // bounding box; it stopped being correct the moment SAT started colliding
+    // the box itself, and nothing noticed because every other test in this file
+    // uses square bodies, where the two descriptions are identical.
+    //
+    // Struck by a falling sphere rather than dropped onto a block, and with
+    // gravity off on both. A drop compares two impacts that do not happen at
+    // the same instant - the two planks reach their blocks a fraction of a step
+    // apart and the difference in when swamps the difference in inertia. Here
+    // the striker is launched from a fixed distance at a fixed speed, so the
+    // impact is the same event in both runs and the only thing that differs is
+    // the tensor.
+    const float yawAngle = glm::quarter_pi<float>();
+
+    // Out near the end, where the angular term dominates the effective mass.
+    // Close to the centre the impulse is mostly linear and the tensor barely
+    // shows up at all - which is how the first version of this test managed to
+    // measure a one percent difference for a thirty percent error.
+    const float arm = 2.0f;
+
+    const auto run = [&](float yaw) {
+        entt::registry registry;
+        const float cosine = std::cos(yaw);
+        const float sine = std::sin(yaw);
+
+        // glm's rotation about +Y takes local +x to (cos, 0, -sin).
+        const auto turn = [&](const glm::vec3& v) {
+            return glm::vec3(v.x * cosine + v.z * sine, v.y, -v.x * sine + v.z * cosine);
+        };
+
+        const auto plank = registry.create();
+        registry.emplace<TransformComponent>(plank, glm::vec3(0.0f, 5.0f, 0.0f),
+                                             glm::vec3(0.0f, yaw, 0.0f),
+                                             glm::vec3(5.0f, 1.0f, 1.0f));
+        auto& plankBody = registry.emplace<RigidBodyComponent>(plank);
+        plankBody.angularDamping = 0.0f;
+        plankBody.useGravity = false;
+        registry.emplace<BoxColliderComponent>(plank);
+
+        const auto striker = registry.create();
+        registry.emplace<TransformComponent>(striker, turn(glm::vec3(arm, 0.0f, 0.0f)) +
+                                                          glm::vec3(0.0f, 5.9f, 0.0f));
+        auto& strikerBody = registry.emplace<RigidBodyComponent>(striker);
+        strikerBody.useGravity = false;
+        strikerBody.angularDamping = 0.0f;
+        strikerBody.velocity = glm::vec3(0.0f, -6.0f, 0.0f);
+        registry.emplace<SphereColliderComponent>(striker).radius = 0.25f;
+
+        // Stopped two steps after the impulse arrives. With no gravity and no
+        // angular damping the spin is then constant, and stopping keeps the
+        // spinning end from swinging back up into the striker and adding a
+        // second impact that is not part of the experiment.
+        int after = -1;
+        for (int i = 0; i < 120 && after < 2; ++i) {
+            PhysicsSystem::Update(registry, 1.0f / 60.0f);
+            const float spin = glm::length(registry.get<RigidBodyComponent>(plank).angularVelocity);
+            if (after >= 0) ++after;
+            else if (spin > 1e-6f) after = 0;
+        }
+        CHECK_MSG(after >= 0, "the striker must actually hit the plank");
+        return glm::length(registry.get<RigidBodyComponent>(plank).angularVelocity);
+    };
+
+    const float square = run(0.0f);
+    const float turned = run(yawAngle);
+
+    CHECK_MSG(square > 1e-3f, "the square plank must turn: got " + std::to_string(square));
+    CHECK_MSG(turned > 1e-3f, "the turned plank must turn: got " + std::to_string(turned));
+
+    // Measured at exactly 1.000000: the two spins come out bit-identical, which
+    // is what rotation invariance means when the tensor is right. The tolerance
+    // is left at a thousandth rather than requiring bit equality only because a
+    // compiler that contracts the arithmetic differently would not reproduce
+    // that exactly. Against 1.16 when the tensor is taken from the bounding box,
+    // which is the number this test exists to catch.
+    const float ratio = turned / square;
+    CHECK_MSG(ratio > 0.999f && ratio < 1.001f,
+              "turning the scene must not change the spin: square " +
+                  std::to_string(square) + " vs turned " + std::to_string(turned) +
+                  " (ratio " + std::to_string(ratio) + ")");
+}
+
 static void runTests() {
+    testInertiaFollowsTheBoxAndNotItsBoundingBox();
     testASettledBodyFallsAsleep();
     testSleepChangesWhereThingsEndUpByNothing();
     testSomethingLandingOnASleepingBodyWakesIt();

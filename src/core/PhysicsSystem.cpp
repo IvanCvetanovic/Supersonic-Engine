@@ -569,18 +569,20 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
         // From the same extents the collision uses, and in the same frame.
         //
-        // body.halfExtent is the WORLD-AXIS-ALIGNED extent - a rotated collider
-        // is enclosed by it, which is how collision treats it too. Taking the
-        // inertia of that box and then rotating it would describe neither the
-        // box nor its bounding box, and would disagree with the very contacts
-        // it is used to resolve. So: the mass properties of the collision
-        // shape, which for a rotated crate means the shape it actually
-        // collides as. Already world-aligned, so no rotation is applied.
+        // The tensor is built in the box's OWN axes and then rotated into the
+        // world by them, which is the pair of things that has to agree with the
+        // narrowphase. It did not used to: the tensor came from the world
+        // AABB with no rotation applied, which was right while box-box collided
+        // as its bounding box and became wrong the moment SAT started
+        // colliding the box itself. A crate rotated 45 degrees about Y has an
+        // AABB 1.41 times wider than it is, so it was roughly twice as hard to
+        // turn as the identical crate sitting square - the same object, two
+        // different masses, decided by which way it happened to be facing.
         //
         // A sphere is isotropic, so this costs it nothing either way.
         body.inverseInertia = worldInverseInertia(
-            inverseInertiaLocal(rigid, shape, body.halfExtent, body.radius),
-            glm::mat3(1.0f));
+            inverseInertiaLocal(rigid, shape, body.localHalfExtent, body.radius),
+            body.axes);
 
         // How far this body travels in one step. The broadphase bound is
         // expanded by it so a pair that will meet during the step is found
@@ -706,14 +708,14 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         if (!rigid->isSleeping) return;
         rigid->isSleeping = false;
 
-        // The same expressions collect uses, world half extent included. Passing
-        // the local extent here instead would quietly give a woken body a
-        // different inertia from an identical one that never slept, and nothing
-        // would ever report it.
+        // The same expressions collect uses, own-axes extent and orientation
+        // included. Passing the world AABB extent here instead would quietly
+        // give a woken body a different inertia from an identical one that
+        // never slept, and nothing would ever report it.
         sleeper.inverseMass = inverseMassOf(rigid);
         sleeper.inverseInertia = worldInverseInertia(
-            inverseInertiaLocal(rigid, sleeper.shape, sleeper.halfExtent, sleeper.radius),
-            glm::mat3(1.0f));
+            inverseInertiaLocal(rigid, sleeper.shape, sleeper.localHalfExtent, sleeper.radius),
+            sleeper.axes);
     };
 
     for (const auto& [pi, pj] : pairs) {

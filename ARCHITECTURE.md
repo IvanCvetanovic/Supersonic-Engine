@@ -478,36 +478,61 @@ The sort reorders the proxy vector in place, so a pair's indices refer to sorted
 positions. `Proxy::index` carries the way back to the body list, which would
 otherwise be a search.
 
-### 7d. Narrowphase, and what it approximates
+### 7d. Narrowphase
 
-Every collider is reduced at gather time to a world-space shape by
-`worldBounds`: the centre through the matrix, the extent through the absolute
-value of its basis. That is exact for translation and scale, and **conservative
-for rotation — a rotated box is replaced by the axis-aligned box that encloses
-it**. A sphere collapses its three world half extents to the largest, so a
-non-uniformly scaled sphere becomes the sphere that contains it.
+Every collider is reduced at gather time to **two** descriptions, because the two
+halves of the step want different things. `worldBounds` gives the world
+axis-aligned box — the centre through the matrix, the extent through the absolute
+value of its basis — and that is what the broadphase sorts and sweeps, because a
+broadphase wants a conservative bound that is cheap to compare. The narrowphase
+gets the box in its **own** frame: the three columns of the world matrix,
+normalised, as its axes, with the length of each column taken out into that
+axis's half extent, so a scaled crate collides at its scaled size. A sphere
+collapses its three world half extents to the largest, so a non-uniformly scaled
+sphere still becomes the sphere that contains it.
 
 | Pair | Test | Exactness |
 |---|---|---|
 | sphere / sphere | distance between centres against the sum of radii | exact |
-| box / sphere | closest point on the box, clamped per axis | exact against the box's world AABB; the sphere is never approximated as its own box, which would catch it on corners |
-| box / box | world AABB overlap, separated along the axis of least overlap | **approximate** — both boxes collide as their bounding boxes |
+| box / sphere | closest point on the box, taken in the box's own frame | exact |
+| box / box | separating axis theorem over fifteen axes, then Sutherland–Hodgman clipping of the incident face against the reference face | exact, and up to four contact points |
+
+The fifteen axes are the six face normals — three per box — and the nine
+cross products of one box's edge directions with the other's. The face axes alone
+find every overlap where a face is involved and miss the edge-on-edge case
+entirely, which is a plank resting on the corner of another plank passing through
+it.
+
+Three details in there are load-bearing, and each fails silently rather than
+loudly if it is wrong:
+
+- **Parallel axes.** The cross product of two parallel edge directions is the
+  zero vector, and normalising it is a NaN. Every comparison against a NaN is
+  false, so the axis reports *no overlap* and two axis-aligned boxes sitting
+  inside one another are declared not to be touching. Degenerate axes are
+  skipped instead, on a squared-length test against `kParallelEpsilon`; a
+  genuinely parallel pair is always covered by the face axes anyway.
+- **Near-ties between a face axis and an edge axis.** Two axes within
+  floating-point noise of each other flip between steps, and the contact normal
+  flips with them, which reads as a stack that shivers. An edge axis has to beat
+  the best face axis by `kFaceBias` (1.02) before it is taken.
+- **The clip.** Sutherland–Hodgman decides whether an edge crosses the plane by
+  comparing the *signs* of the two endpoint distances, not the sign of their
+  product: two distances small enough that their product underflows to zero lose
+  the crossing, and the clipped face comes out missing a corner.
 
 Sphere-against-box is solved by calling the box-against-sphere routine with the
 arguments swapped and negating the normal, so there is one implementation rather
 than two that can disagree.
 
-The cost of the box-box approximation is worth stating plainly, because it is
-visible in play: a crate rotated 45° about Y collides as a box roughly 1.41 times
-wider than it is, and a plank tilted on its end sweeps a volume far larger than
-the plank. Bodies stop short of surfaces and come to rest on nothing you can see.
-It over-reports rather than letting things pass through, which is the right
-direction to be wrong in, but it is wrong.
-
-Choosing the axis of least overlap is what makes a body landing on top of another
-get pushed up rather than sideways. The failure mode is the other half of the
-same rule: a body that has already sunk more than half way in separates along
-whichever axis is now shallowest, which need not be the one it arrived on.
+Both box paths take a **speculative margin**: how far apart the pair may be and
+still report a contact, with a negative penetration standing for the size of the
+gap. It is passed as the distance the two bodies travel this step, which is what
+lets the solver stop a fast body on the surface instead of letting it pass
+through. See the departures list for what that buys and what it does not.
+Sphere against sphere does **not** take one, so two fast spheres can still pass
+through each other; a projectile is far more often a sphere against level
+geometry, which is a box, and that path is covered.
 
 An entity carrying both a box and a sphere collider is treated as a box. The
 sphere pass skips it explicitly, in the solver and in the queries alike, or it
@@ -515,29 +540,67 @@ would be gathered twice and collide with itself.
 
 ### 7e. Response
 
-Each pair is resolved in three parts, in this order.
+Each pair produces a manifold; each manifold produces a positional correction and
+a list of velocity constraints; the constraints are then solved together.
 
-**Positional correction.** The overlap beyond the slop is shared out by inverse
-mass, so the heavier body moves less and an immovable one does not move at all.
-The cached centres of both bodies are then updated, because the pairs still to be
-resolved this step read them — without that, a body wedged between two others is
-pushed apart twice and travels twice as far as it should.
+**Positional correction**, once per pair, at the centroid of the manifold. The
+overlap beyond the slop is shared out by inverse mass, so the heavier body moves
+less and an immovable one does not move at all. The cached centres of both bodies
+are then updated, because the pairs still to be resolved this step read them —
+without that, a body wedged between two others is pushed apart twice and travels
+twice as far as it should. It is deliberately not applied per contact point:
+pushing out four times would move the body four times as far as the overlap
+requires. A speculative pair is skipped entirely, because there is nothing to
+push out of.
 
-**The normal impulse.** Relative velocity is measured at the contact point, spin
-included. Where the bodies are already separating the impulse is skipped, and so
-is the friction that would have followed it — the correction above has already
-been applied by then — because an impulse there sucks them back together. The
-effective mass includes the angular term for both bodies, not merely the sum of
-inverse masses; the linear term alone applies an impulse far too large for a
-glancing hit near a corner. Restitution is dropped to zero when the approach
-speed is below the rest threshold, otherwise a settling box jitters forever.
+**One velocity constraint per contact point.** A face resting on a face is up to
+four points, and resolving it as one is what leaves a crate balanced on a single
+spot inside its own footprint, free to rotate about it. Each constraint stores
+the arms from both centres, the effective mass along the normal — including the
+angular term for both bodies, because the linear term alone applies an impulse
+far too large for a glancing hit near a corner — and a target velocity, computed
+**once**, from the velocities as they are before any impulse:
 
-**Coulomb friction.** The tangent is recomputed from the relative velocity
-*after* the normal impulse, spin included — friction acts on the surface speed,
-which is zero for a ball rolling without slipping and is the entire reason a ball
-rolls instead of sliding. The tangential impulse is clamped to the combined
-friction times the magnitude of the normal impulse, so it can slow sliding but
-never reverse it.
+```
+restitution   = |approach| < kRestVelocity ? 0 : max(bounceA, bounceB)
+allowance     = speculative ? gap / dt : 0
+targetVelocity = max(-restitution * approach, -allowance)
+```
+
+Restitution is dropped near rest or a settling box jitters forever. The larger of
+the two terms wins, so restitution decides when there is a bounce and the
+allowance only decides anything when there is not — summing them instead makes
+them fight, and a ball that should have rebounded 0.05 units recovers 0.008.
+Computing restitution inside the iteration rather than once would feed the solver
+its own output, and a resting stack slowly climbs.
+
+**Eight passes over every constraint.** Each pass applies only the *change*
+needed to satisfy its contact, and the total per contact is accumulated and
+clamped so it can never pull:
+
+```
+lambda        = (targetVelocity - approach) / normalMass
+previous      = normalImpulse
+normalImpulse = max(previous + lambda, 0)
+lambda        = normalImpulse - previous
+```
+
+Clamping the accumulated impulse rather than each pass's change is the whole
+trick. A contact may pull during one pass as long as the total stays a push,
+which is what lets a later pass correct an earlier over-correction. Without the
+accumulator, eight passes apply eight full impulses and the scene launches;
+without the passes, every contact is resolved as though it were the only one in
+the world, so the box in the middle of a stack is pushed out of the box below it
+and straight into the box above, every step, and the stack sinks and shivers
+rather than settling.
+
+**Coulomb friction**, in the same pass, after the normal impulse. The tangent is
+recomputed from the relative velocity *after* that impulse and at the contact,
+spin included — friction acts on the surface speed, which is zero for a ball
+rolling without slipping and is the entire reason a ball rolls instead of
+sliding. The tangential impulse is clamped against the **accumulated** normal
+impulse, so it can slow sliding but never reverse it and never exceeds what the
+contact is actually being pressed together with.
 
 Both impulses are applied linearly and angularly, at the arm from each body's
 centre. That arm is the whole of the difference between a body that slides and
@@ -549,15 +612,20 @@ applied at a distance also spins.
 | Restitution | the larger of the two, clamped to 0.99 | a superball dropped on concrete has to bounce; the smaller or the average would let any dead surface kill every ball that touched it |
 | Friction | geometric mean, each side clamped to 4 | a zero on either side takes the result to zero, so ice stays slippery against anything; an average would let a rough floor grip a puck |
 
-Inertia is taken from the shape a body **collides** as, not the shape it was
-authored as: the tensor is built from the world-axis-aligned half extents with no
-rotation applied to it. A box about its centre and a solid sphere both have no
-products of inertia, so the local tensor stays three floats rather than a matrix.
-Taking that local tensor and rotating it would describe neither the box nor its
-bounding box, and would disagree with the very contacts it is used to resolve.
-`freezeRotation`, `isKinematic`, a non-positive mass and static colliders all
-produce a zero tensor, which falls out of the arithmetic as "infinitely hard to
-turn" without a branch at every use.
+Inertia is built in the body's **own** axes and rotated into the world by them.
+A box about its centre and a solid sphere both have no products of inertia, so
+the local tensor stays three floats rather than a matrix, and the rotation is
+`R I Rᵀ`. It has to be the same frame the narrowphase uses, or the same object
+has two different masses depending on which way it is facing: a 5 × 1 × 1 plank
+turned 45° about Y has a bounding box 4.24 across, whose moment about the axis an
+impact turns it around is 1.58 against the plank's own 2.17. Taking the tensor
+from the bounding box was right while box-box *collided* as its bounding box and
+became wrong the moment SAT started colliding the box itself. Tested by running
+the same impact twice with the whole scene turned 45° about the gravity axis: the
+two spins now come out bit-identical, against a 16% difference before.
+`freezeRotation`, `isKinematic`, a non-positive mass, a sleeping body and static
+colliders all produce a zero tensor, which falls out of the arithmetic as
+“infinitely hard to turn” without a branch at every use.
 
 ### 7f. The world ground plane
 
