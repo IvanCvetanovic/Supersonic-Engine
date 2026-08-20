@@ -11,6 +11,9 @@
 #include "core/TimeTravelDebugger.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/Components.hpp"
+#include "editor/SceneHierarchyPanel.hpp"
+
+#include <unordered_map>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -448,7 +451,121 @@ static void testASecondResolveInTheSameFrameSeesTheEdit() {
               "the parent itself must have moved: y = " + std::to_string(parentWorld.y));
 }
 
+
+// --- the hierarchy panel's index --------------------------------------------
+//
+// Drawing the tree used to answer "what are this row's children" by scanning
+// the whole HierarchyComponent pool, once per row - quadratic, and on two
+// thousand entities it was 2.9 ms of a 1.5 ms release frame. One pass builds
+// the answer for every row instead.
+//
+// Tested here rather than through the panel because the panel needs an ImGui
+// context, and because this is the part that can be WRONG rather than merely
+// slow: an entity misfiled by the index is not drawn as a root and is not
+// drawn by its parent either, which looks exactly like having been deleted.
+
+static void testEveryEntityIsEitherARootOrSomebodysChild() {
+    entt::registry registry;
+    std::unordered_map<entt::entity, std::vector<entt::entity>> children;
+    std::vector<entt::entity> roots;
+
+    const auto parent = registry.create();
+    registry.emplace<TransformComponent>(parent);
+
+    std::vector<entt::entity> kids;
+    for (int i = 0; i < 4; ++i) {
+        const auto child = registry.create();
+        registry.emplace<TransformComponent>(child);
+        registry.emplace<HierarchyComponent>(child, parent);
+        kids.push_back(child);
+    }
+    const auto loner = registry.create();
+    registry.emplace<TransformComponent>(loner);
+
+    SceneHierarchyPanel::BuildIndex(registry, children, roots);
+
+    CHECK_MSG(roots.size() == 2, "the parent and the loner are roots: got " +
+                                     std::to_string(roots.size()));
+    CHECK_MSG(children[parent].size() == 4,
+              "all four children must be filed under the parent: got " +
+                  std::to_string(children[parent].size()));
+
+    // Nothing may be lost and nothing may be counted twice - the two failures
+    // that look like a deleted entity and a duplicated one.
+    size_t seen = roots.size();
+    for (const auto& bucket : children) seen += bucket.second.size();
+    CHECK_MSG(seen == 6, "every entity appears exactly once: got " + std::to_string(seen));
+}
+
+static void testAChildOfADestroyedParentBecomesARoot() {
+    // Entity handles are recycled, so a child left pointing at a released one
+    // would later be filed under whatever took that slot - drawn inside a
+    // stranger's subtree. It has to come back as a root instead.
+    entt::registry registry;
+    std::unordered_map<entt::entity, std::vector<entt::entity>> children;
+    std::vector<entt::entity> roots;
+
+    const auto parent = registry.create();
+    registry.emplace<TransformComponent>(parent);
+    const auto child = registry.create();
+    registry.emplace<TransformComponent>(child);
+    registry.emplace<HierarchyComponent>(child, parent);
+
+    registry.destroy(parent);
+
+    SceneHierarchyPanel::BuildIndex(registry, children, roots);
+
+    CHECK_MSG(roots.size() == 1, "only the orphan is left: got " + std::to_string(roots.size()));
+    CHECK_MSG(!roots.empty() && roots[0] == child,
+              "an orphan must be drawn as a root, not hidden under a dead handle");
+
+    // A HierarchyComponent whose parent is explicitly null is the same case.
+    entt::registry detached;
+    const auto lone = detached.create();
+    detached.emplace<TransformComponent>(lone);
+    detached.emplace<HierarchyComponent>(lone, entt::null);
+
+    children.clear();
+    SceneHierarchyPanel::BuildIndex(detached, children, roots);
+    CHECK_MSG(roots.size() == 1 && roots[0] == lone,
+              "a null parent is a root, not a child of nothing");
+}
+
+static void testTheIndexIsRebuiltNotAppended() {
+    // The map is a member kept between frames so it stops allocating, which
+    // means a stale bucket is a child drawn twice - or a child still drawn
+    // under a parent it has since left.
+    entt::registry registry;
+    std::unordered_map<entt::entity, std::vector<entt::entity>> children;
+    std::vector<entt::entity> roots;
+
+    const auto first = registry.create();
+    registry.emplace<TransformComponent>(first);
+    const auto second = registry.create();
+    registry.emplace<TransformComponent>(second);
+    const auto child = registry.create();
+    registry.emplace<TransformComponent>(child);
+    registry.emplace<HierarchyComponent>(child, first);
+
+    SceneHierarchyPanel::BuildIndex(registry, children, roots);
+    CHECK(children[first].size() == 1);
+
+    // Reparented, then rebuilt into the SAME containers.
+    registry.get<HierarchyComponent>(child).parent = second;
+    SceneHierarchyPanel::BuildIndex(registry, children, roots);
+
+    CHECK_MSG(children[first].empty(),
+              "the old parent must not keep the child it lost: got " +
+                  std::to_string(children[first].size()));
+    CHECK_MSG(children[second].size() == 1, "the new parent must have it");
+    CHECK_MSG(roots.size() == 2, "and the roots must not accumulate: got " +
+                                     std::to_string(roots.size()));
+}
+
 static void runTests() {
+    testEveryEntityIsEitherARootOrSomebodysChild();
+    testAChildOfADestroyedParentBecomesARoot();
+    testTheIndexIsRebuiltNotAppended();
     testASharedAncestorResolvesTheSameForEveryDescendant();
     testASecondResolveInTheSameFrameSeesTheEdit();
     testStopClearsTheRewindFlag();
@@ -468,4 +585,4 @@ static void runTests() {
     testStopWithoutPlayIsHarmless();
 }
 
-TEST_MAIN("test_hierarchy", 74)
+TEST_MAIN("test_hierarchy", 84)

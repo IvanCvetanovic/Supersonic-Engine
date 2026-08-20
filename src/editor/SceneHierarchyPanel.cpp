@@ -3,6 +3,7 @@
 #include "core/Components.hpp"
 #include "core/TransformSystem.hpp"
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -15,21 +16,43 @@ constexpr const char* kDragPayload = "ENGINE_ENTITY";
 SceneHierarchyPanel::SceneHierarchyPanel(entt::registry& registry)
     : m_registry(&registry) {}
 
+void SceneHierarchyPanel::BuildIndex(
+    const entt::registry& registry,
+    std::unordered_map<entt::entity, std::vector<entt::entity>>& outChildren,
+    std::vector<entt::entity>& outRoots) {
+
+    // The buckets are kept and emptied rather than dropped, so a panel that
+    // runs every frame stops allocating after the first one.
+    for (auto& bucket : outChildren) bucket.second.clear();
+    outRoots.clear();
+
+    for (auto entity : registry.view<entt::entity>()) {
+        const auto* hierarchy = registry.try_get<HierarchyComponent>(entity);
+
+        // A parent that has been destroyed leaves its children pointing at a
+        // released handle. They are roots, not orphans hidden under something
+        // that no longer exists - and entity recycling means that handle may
+        // later belong to something else entirely, so `valid` is not optional.
+        const bool hasLiveParent = hierarchy && hierarchy->parent != entt::null &&
+                                   registry.valid(hierarchy->parent);
+        if (hasLiveParent) {
+            outChildren[hierarchy->parent].push_back(entity);
+        } else {
+            outRoots.push_back(entity);
+        }
+    }
+}
+
 void SceneHierarchyPanel::OnImGuiRender() {
     ImGui::Begin("Scene Hierarchy");
 
     if (m_registry) {
-        // Roots only; children are drawn by their parent, which is what turns
-        // this from a flat list into an actual tree.
-        std::vector<entt::entity> roots;
-        for (auto entity : m_registry->view<entt::entity>()) {
-            const auto* hierarchy = m_registry->try_get<HierarchyComponent>(entity);
-            const bool hasLiveParent = hierarchy && hierarchy->parent != entt::null &&
-                                       m_registry->valid(hierarchy->parent);
-            if (!hasLiveParent) roots.push_back(entity);
-        }
+        // One pass over the scene answers both questions: which entities are
+        // roots, and which entities each parent owns. The walk below then looks
+        // its children up instead of searching the whole pool for them.
+        BuildIndex(*m_registry, m_children, m_roots);
 
-        for (const auto entity : roots) {
+        for (const auto entity : m_roots) {
             drawEntityNode(entity);
         }
 
@@ -112,30 +135,40 @@ const char* iconForEntity(entt::registry& registry, entt::entity entity) {
 bool SceneHierarchyPanel::drawEntityNode(entt::entity entity) {
     if (!m_registry->valid(entity)) return false;
 
-    std::string label = "Entity " + std::to_string(static_cast<uint32_t>(entity));
+    // The name, without building a string to hold it.
+    //
+    // This used to compose "Entity N" for every row and then throw it away
+    // whenever a tag existed, then concatenate the icon onto the front - three
+    // heap allocations per row, per frame, to print two things ImGui is
+    // perfectly happy to be handed separately.
+    char fallback[32];
+    const char* name = nullptr;
     if (const auto* tag = m_registry->try_get<TagComponent>(entity)) {
-        if (!tag->tag.empty()) label = tag->tag;
+        if (!tag->tag.empty()) name = tag->tag.c_str();
+    }
+    if (!name) {
+        std::snprintf(fallback, sizeof(fallback), "Entity %u",
+                      static_cast<uint32_t>(entity));
+        name = fallback;
     }
 
-    std::vector<entt::entity> children;
-    for (auto candidate : m_registry->view<HierarchyComponent>()) {
-        if (m_registry->get<HierarchyComponent>(candidate).parent == entity) {
-            children.push_back(candidate);
-        }
-    }
+    // Looked up, not searched for. See m_children.
+    const auto childIt = m_children.find(entity);
+    const std::vector<entt::entity>* children =
+        (childIt != m_children.end() && !childIt->second.empty()) ? &childIt->second : nullptr;
 
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
     if (m_selectedEntity == entity) flags |= ImGuiTreeNodeFlags_Selected;
-    if (children.empty()) flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+    if (!children) flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 
     // An icon per row, picked from what the entity actually is. A list of
     // twelve identical text labels is far harder to scan than the same list
     // with a shape at the head of each line.
-    label = std::string(iconForEntity(*m_registry, entity)) + "  " + label;
+    const char* icon = iconForEntity(*m_registry, entity);
 
     const bool opened = ImGui::TreeNodeEx(
         reinterpret_cast<void*>(static_cast<uintptr_t>(static_cast<uint32_t>(entity))),
-        flags, "%s", label.c_str());
+        flags, "%s  %s", icon, name);
 
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         m_selectedEntity = entity;
@@ -144,7 +177,7 @@ bool SceneHierarchyPanel::drawEntityNode(entt::entity entity) {
     // Drag a row onto another to parent it there.
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
         ImGui::SetDragDropPayload(kDragPayload, &entity, sizeof(entt::entity));
-        ImGui::TextUnformatted(label.c_str());
+        ImGui::Text("%s  %s", icon, name);
         ImGui::EndDragDropSource();
     }
     if (ImGui::BeginDragDropTarget()) {
@@ -201,8 +234,12 @@ bool SceneHierarchyPanel::drawEntityNode(entt::entity entity) {
         ImGui::EndPopup();
     }
 
-    if (opened && !children.empty()) {
-        for (const auto child : children) {
+    if (opened && children) {
+        // Copied, because drawing a child can create or reparent an entity and
+        // that rehashes the map this vector lives in. The copy is only made for
+        // rows that are actually open, which in a large scene is a handful.
+        const std::vector<entt::entity> openChildren = *children;
+        for (const auto child : openChildren) {
             drawEntityNode(child);
         }
         ImGui::TreePop();
