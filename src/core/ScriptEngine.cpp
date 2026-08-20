@@ -1,4 +1,5 @@
 #include "core/ScriptEngine.hpp"
+#include "core/SimulationClock.hpp"
 #include "core/TransformSystem.hpp"
 #include "core/PrefabSerializer.hpp"
 #include "core/ContactTracker.hpp"
@@ -417,6 +418,13 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
     // has no transform by design, because it lives in screen space - so
     // "when this button is clicked, do something" could not be written at all.
     auto view = registry.view<ScriptComponent>();
+    // Read once for the pass. Absent - a registry nothing has stepped - reads
+    // as zero, which is what a simulation that has not started should say.
+    float simulatedSeconds = 0.0f;
+    if (const auto* clock = registry.ctx().find<SimulationClock>()) {
+        simulatedSeconds = clock->SecondsF();
+    }
+
     for (auto entity : view) {
         auto* transform = registry.try_get<TransformComponent>(entity);
         auto& script = view.get<ScriptComponent>(entity);
@@ -425,7 +433,22 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
 
         // Per-entity clock, so oscillators can be rewound and phase-offset from
         // one another. A single file-static made that impossible.
-        script.elapsed += deltaTime;
+        //
+        // Advanced by SIMULATED time, not by the frame delta. It used to
+        // accumulate the real time the last frame took to draw and then drive
+        // std::sin off the result, which made every scripted motion in the
+        // engine a function of the display's frame rate - the same scene run
+        // twice did not do the same thing, and three runs of one binary over
+        // one scene produced three different images.
+        //
+        // The offset is kept per entity so a script enabled mid-run starts from
+        // zero rather than from whatever the world's clock had reached, which
+        // is what "rewound and phase-offset" above was always about.
+        if (!script.clockStarted) {
+            script.clockStarted = true;
+            script.clockOrigin = simulatedSeconds;
+        }
+        script.elapsed = simulatedSeconds - script.clockOrigin;
 
         // LightFlicker needs a component the flat script ABI does not carry, so
         // it stays native. The ABI covers transform scripts by design.

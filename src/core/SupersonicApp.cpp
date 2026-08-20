@@ -17,6 +17,7 @@
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
 #include "core/TransformSystem.hpp"
+#include "core/SimulationClock.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/SceneSerializer.hpp"
 #include "platform/ExecutablePath.hpp"
@@ -764,6 +765,18 @@ void SupersonicApp::Run() {
             int steps = 0;
             m_contacts.clear();
             while (m_physicsAccumulator >= kFixedPhysicsStep && steps < kMaxPhysicsStepsPerFrame) {
+                // The simulation's own clock, advanced once per step and
+                // never from the frame delta. Everything that needs to know
+                // what time it is in the world reads this; anything reading a
+                // wall clock instead cannot be replayed.
+                {
+                    auto& clock = m_registry.ctx().contains<SimulationClock>()
+                                      ? m_registry.ctx().get<SimulationClock>()
+                                      : m_registry.ctx().emplace<SimulationClock>();
+                    clock.fixedDelta = kFixedPhysicsStep;
+                    ++clock.tick;
+                }
+
                 {
                     SUPERSONIC_PROFILE(Physics);
                     PhysicsSystem::Update(m_registry, kFixedPhysicsStep, &m_stepContacts);

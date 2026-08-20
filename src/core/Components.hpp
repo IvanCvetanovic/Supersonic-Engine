@@ -591,6 +591,13 @@ struct ScriptComponent {
     // Per-entity script state. A single file-static clock in ScriptEngine meant
     // oscillators could not be rewound or phase-offset from each other.
     float elapsed{0.0f};
+
+    // Where this script's clock started, in SIMULATED seconds. Kept so a script
+    // enabled part way through a run begins at zero rather than at whatever the
+    // world had reached - and so `elapsed` can be derived from the simulation
+    // clock rather than accumulated, which is what makes it reproducible.
+    float clockOrigin{0.0f};
+    bool clockStarted{false};
     glm::vec3 baseline{0.0f};
     float baseIntensity{0.0f};
     bool baselineCaptured{false};
