@@ -742,6 +742,9 @@ void VulkanRenderer::NewImGuiFrame() {
     ImGuizmo::BeginFrame();
 }
 
+// An unclaimed shadow slot draws nothing, and signs for nothing.
+static const std::vector<RenderSystem::ShadowCaster> kNoCasters;
+
 void VulkanRenderer::DrawFrame(entt::registry& registry,
                                VulkanOffscreen& offscreen,
                                ImDrawData* drawData,
@@ -878,6 +881,16 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // this frame's gather just assigned it.
     RenderSystem::GatherShadowCasters(registry, *m_meshRegistry, m_shadowCasters);
 
+    // What every pass signature starts from. The joint palette lives here
+    // rather than on the casters, and it has to be in: an animating character
+    // moves nothing the gather can see - same entity, same transform, same
+    // bounds - while its shadow changes every frame.
+    uint64_t shadowSeed = 1469598103934665603ull;
+    if (paletteCount > 0) {
+        shadowSeed = RenderSystem::MixSignature(shadowSeed, m_paletteScratch.data(),
+                                                sizeof(glm::mat4) * paletteCount);
+    }
+
     vk::CommandBufferBeginInfo beginInfo{};
     cmd.begin(beginInfo);
     prepareZone.Stop();
@@ -891,6 +904,16 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // PASS 0: Shadow map (depth only, from the light)
     // ---------------------------------------------------------------------
     for (uint32_t cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
+        // The cascades are fitted to the camera, so moving the camera changes
+        // all four transforms and re-records all four. That is not the cache
+        // failing, it is what a cascade is.
+        const uint64_t signature = RenderSystem::ShadowPassSignature(
+            m_shadowCasters, cascades.viewProj[cascade], cascades.frustum[cascade], shadowSeed);
+        if (!m_shadowCache.NeedsRender(cascade, signature)) {
+            ++m_renderStats.shadowPassesSkipped;
+            continue;
+        }
+
         vk::RenderPassBeginInfo shadowPassInfo{};
         shadowPassInfo.renderPass = m_shadowMap->GetRenderPass();
         shadowPassInfo.framebuffer = m_shadowMap->GetFramebuffer(cascade);
@@ -940,6 +963,24 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
             : std::array<glm::mat4, PointShadow::kFaceCount>{};
 
         for (uint32_t face = 0; face < PointShadow::kFaceCount; ++face) {
+            // An unclaimed slot has no transform of its own, so a zero matrix
+            // stands for "nothing here" - and the frustum of a zero matrix
+            // admits nothing, so its signature is the empty one. Two frames
+            // with the slot unclaimed therefore agree and the clear is not
+            // repeated; the frame a light LEAVES the slot does not, and clears
+            // away the shadow it was casting.
+            const glm::mat4 faceMatrix = caster ? faceViewProj[face] : glm::mat4(0.0f);
+            const uint64_t signature = RenderSystem::ShadowPassSignature(
+                caster ? m_shadowCasters : kNoCasters, faceMatrix,
+                Frustum::FromMatrix(faceMatrix), shadowSeed);
+
+            const std::size_t passIndex =
+                kShadowCascadeCount + slot * PointShadow::kFaceCount + face;
+            if (!m_shadowCache.NeedsRender(passIndex, signature)) {
+                ++m_renderStats.shadowPassesSkipped;
+                continue;
+            }
+
             vk::RenderPassBeginInfo facePass{};
             facePass.renderPass = m_pointShadowMap->GetRenderPass();
             facePass.framebuffer = m_pointShadowMap->GetFramebuffer(slot, face);
@@ -983,6 +1024,18 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         const SpotShadowCaster* spot = nullptr;
         for (const SpotShadowCaster& candidate : m_spotShadowCasters) {
             if (candidate.slot == slot) { spot = &candidate; break; }
+        }
+
+        const glm::mat4 spotMatrix = spot ? spot->viewProj : glm::mat4(0.0f);
+        const uint64_t signature = RenderSystem::ShadowPassSignature(
+            spot ? m_shadowCasters : kNoCasters, spotMatrix,
+            Frustum::FromMatrix(spotMatrix), shadowSeed);
+
+        const std::size_t passIndex = kShadowCascadeCount +
+            PointShadow::kMaxShadowCasters * PointShadow::kFaceCount + slot;
+        if (!m_shadowCache.NeedsRender(passIndex, signature)) {
+            ++m_renderStats.shadowPassesSkipped;
+            continue;
         }
 
         vk::RenderPassBeginInfo spotPass{};

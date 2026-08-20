@@ -103,6 +103,51 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
     }
 }
 
+uint64_t RenderSystem::MixSignature(uint64_t signature, const void* data, size_t bytes) {
+    const auto* bytesIn = static_cast<const unsigned char*>(data);
+    for (size_t i = 0; i < bytes; ++i) {
+        signature ^= bytesIn[i];
+        signature *= 1099511628211ull;
+    }
+    return signature;
+}
+
+uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& casters,
+                                           const glm::mat4& lightViewProj,
+                                           const Frustum& lightFrustum,
+                                           uint64_t seed) {
+    uint64_t signature = MixSignature(seed, &lightViewProj, sizeof(lightViewProj));
+
+    // Mixed in even when nothing is visible, so an empty pass and a pass whose
+    // casters all left are not confused with a pass that has not run.
+    uint32_t visible = 0;
+
+    for (const ShadowCaster& caster : casters) {
+        if (!lightFrustum.IntersectsAABB(caster.worldMin, caster.worldMax)) continue;
+        ++visible;
+
+        signature = MixSignature(signature, &caster.model, sizeof(caster.model));
+        signature = MixSignature(signature, &caster.worldMin, sizeof(caster.worldMin));
+        signature = MixSignature(signature, &caster.worldMax, sizeof(caster.worldMax));
+        signature = MixSignature(signature, &caster.meshID, sizeof(caster.meshID));
+        signature = MixSignature(signature, &caster.skinPaletteBase, sizeof(caster.skinPaletteBase));
+        signature = MixSignature(signature, &caster.skinJointCount, sizeof(caster.skinJointCount));
+
+        if (caster.mesh) {
+            // The buffer HANDLE, not only the id. MeshRegistry::Replace moves
+            // new buffers over an existing id, so a reloaded asset keeps its id
+            // and would otherwise leave a shadow of the geometry it replaced.
+            const VkBuffer buffer =
+                static_cast<VkBuffer>(caster.mesh->vertexBuffer->GetBuffer());
+            signature = MixSignature(signature, &buffer, sizeof(buffer));
+            signature = MixSignature(signature, &caster.mesh->indexCount,
+                                     sizeof(caster.mesh->indexCount));
+        }
+    }
+
+    return MixSignature(signature, &visible, sizeof(visible));
+}
+
 void RenderSystem::RenderDepthOnly(
     const std::vector<ShadowCaster>& casters,
     VulkanPipeline& pipeline,

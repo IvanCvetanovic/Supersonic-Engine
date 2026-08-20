@@ -13,6 +13,7 @@
 #include "renderer/VulkanImage.hpp"
 #include "renderer/VulkanOffscreen.hpp"
 #include "core/RenderSystem.hpp"
+#include "renderer/ShadowCache.hpp"
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
 #include "renderer/ShadowMap.hpp"
@@ -164,6 +165,10 @@ private:
     // entities every frame, and eighteen passes reading one vector should not
     // also mean one allocation per frame.
     std::vector<RenderSystem::ShadowCaster> m_shadowCasters;
+
+    // Which depth passes were recorded last frame and from what, so a pass
+    // whose inputs have not changed is not recorded again.
+    ShadowCache m_shadowCache;
     std::unique_ptr<VulkanPipeline> m_shadowPipeline;
 
     vk::CommandPool m_commandPool{nullptr};

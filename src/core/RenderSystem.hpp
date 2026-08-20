@@ -27,6 +27,10 @@ public:
 
         // Joint matrices uploaded this frame, across every skinned entity.
         uint32_t skinnedMatrices{0};
+
+        // Depth passes that were not recorded because their shadow map would
+        // have come out identical. Out of eighteen.
+        uint32_t shadowPassesSkipped{0};
     };
 
     // Draws every visible entity using its own MeshComponent geometry,
@@ -86,6 +90,37 @@ public:
     // renderer and never allocate again after the first frame.
     static void GatherShadowCasters(entt::registry& registry, MeshRegistry& meshes,
                                     std::vector<ShadowCaster>& out);
+
+    // Everything one depth pass would draw, reduced to a number.
+    //
+    // Two shadow maps rendered from the same signature are the same image, so a
+    // pass whose signature has not changed since it was last recorded can be
+    // skipped entirely - and eighteen render passes per frame is most of what
+    // the shadow half of a small scene costs.
+    //
+    // Culled first, deliberately. A signature over EVERY caster would be dirtied
+    // by anything moving anywhere in the level, which in a scene where anything
+    // moves means never skipping a pass. Taking only what survives this light's
+    // frustum means a crate moving at the far end of the level leaves the lamp
+    // over here alone. The cull is the cheap half of the pass, so paying for it
+    // twice on the frames that do render is a good trade against paying for the
+    // whole pass on the frames that need not.
+    //
+    // What goes into it is everything that can change the image: the light's
+    // transform, and per visible caster its world matrix, its bounds, its mesh,
+    // that mesh's buffer handle and index count - so an asset reloaded in place
+    // is a different signature - and its skinning offsets. The joint palette
+    // itself is mixed in by the caller, since it lives in the renderer.
+    static uint64_t ShadowPassSignature(const std::vector<ShadowCaster>& casters,
+                                        const glm::mat4& lightViewProj,
+                                        const Frustum& lightFrustum,
+                                        uint64_t seed);
+
+    // Mixes arbitrary bytes into a signature. FNV-1a: not a hash anyone should
+    // rely on for anything but change detection, which is all this is - a
+    // collision means a stale shadow, and at 64 bits that is not a risk worth
+    // a stronger hash.
+    static uint64_t MixSignature(uint64_t signature, const void* data, size_t bytes);
 
     // Shadow pass for one cascade, cube face or spot: same geometry, no
     // materials, no textures. Only positions matter, and the light's transform

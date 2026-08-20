@@ -290,6 +290,67 @@ avoids structurally instead: it takes its transform in a push constant, so
 `shadow.vert` never declares the UBO block at all and cannot fall out of step
 with the three other declarations of it — a mismatch nothing diagnoses.
 
+### 4d. Recording the depth passes, and not recording them
+
+A frame has **eighteen** depth passes: four cascades, six cube faces for each of
+two point-light slots, and one for each of two spot slots.
+
+Every one of them used to walk the registry from scratch — two component
+lookups per entity, a mesh-registry lookup, a `try_get` for the skin, and an
+eight-corner transform to build the world bounds — and all of that is identical
+in all eighteen, because the world bounds of a crate do not depend on which
+light is looking at it. `RenderSystem::GatherShadowCasters` builds the list once
+and the passes read it. The only per-pass work left in the loop is the frustum
+test, which is the part that genuinely varies.
+
+**And then most of them are not recorded at all.** A shadow map is a function of
+the light's transform and the casters it can see; rendered twice from the same
+inputs it is the same image twice. `ShadowPassSignature` reduces those inputs to
+a 64-bit value and `ShadowCache` remembers what each pass was last recorded
+from, so a pass whose signature has not changed is skipped. On the demo scene
+that is 0.45 ms down to **0.047 ms** per frame, and on five hundred settled
+casters 3.32 ms down to **0.40 ms**.
+
+Three decisions in that are worth the words:
+
+- **The signature is taken after culling, not over the whole scene.** A
+  signature over every caster is dirtied by anything moving anywhere in the
+  level, which in a scene where anything moves means never skipping a pass — a
+  cache that is perfectly correct and never hits. Per-frustum means a crate
+  moving at the far end of the level leaves the lamp over here alone. The cull
+  is the cheap half of a pass, so paying for it twice on the frames that do
+  record is a good trade against paying for the whole pass on the frames that
+  need not.
+- **A pass is always recorded the first time**, tracked by its own flag rather
+  than a reserved signature value. A shadow image is created in an undefined
+  layout and only reaches a readable one by being rendered through the pass, so
+  a slot that has never been recorded is not stale, it is unusable — and since
+  the cube maps are one descriptor array, one untouched slot invalidates all of
+  them. Skipping is safe only *after* that first record: the pass declares
+  `initialLayout = eUndefined`, so it discards what was there when it runs and
+  leaves the image readable when it ends, and not running it leaves both the
+  contents and the layout exactly as the last record left them.
+- **An unclaimed slot signs for an empty pass under a zero light matrix.** Two
+  frames with the slot unclaimed agree, so the clear is not repeated; the frame
+  a light *leaves* a slot does not agree, and clears away the shadow it was
+  casting.
+
+The cost when nothing can be skipped is real and worth stating: on the demo
+scene in play mode, where a scripted satellite moves every frame and keeps the
+cascades dirty, the shadow half of the frame goes from 0.45 ms to 0.52 ms — the
+signature is computed for every pass whether or not it saves one. The obvious
+refinement is for the signature pass to hand its culled list to the recording
+pass so the cull happens once rather than twice; it is not done.
+
+Tested away from the renderer, in `tests/test_shadowcache.cpp`, because the
+decision is the part that can be wrong and the recording is not: a cache that
+never invalidates renders a perfectly plausible frame that happens to be last
+frame's, and it looks entirely correct in a screenshot of a scene that is
+standing still. An end-to-end pixel comparison would also need play mode to be
+reproducible, and it is not — three runs of the same binary on the same scene
+give three different images, because the simulation clock is the wall-clock
+frame delta.
+
 ### 5. Colour pipeline
 
 There is exactly **one** sRGB encode in the chain. It used to happen at the end of
