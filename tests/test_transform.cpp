@@ -205,7 +205,13 @@ static void testTheModelMatrixMatchesTheChainItReplaces() {
 
                 for (int c = 0; c < 4; ++c) {
                     for (int r = 0; r < 4; ++r) {
-                        if (std::fabs(expected[c][r] - actual[c][r]) >= 1e-5f) {
+                        // NOT `fabs(...) >= 1e-5f`. Every comparison against a
+                        // NaN is false, so that spelling reads a NaN as a
+                        // match - and a function that returned all NaNs would
+                        // pass this sweep on its two bookkeeping assertions
+                        // alone. The harness's own CHECK_NEAR is `<= eps` for
+                        // the same reason.
+                        if (!(std::fabs(expected[c][r] - actual[c][r]) <= 1e-5f)) {
                             CHECK_MSG(false,
                                       "entry [" + std::to_string(c) + "][" + std::to_string(r) +
                                           "] differs at rotation (" + std::to_string(t.rotation.x) +

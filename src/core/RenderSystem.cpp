@@ -36,25 +36,95 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
 
 } // namespace
 
+uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
+                                         const MaterialComponent* material,
+                                         uint64_t meshGeneration,
+                                         uint64_t textureGeneration) {
+    uint64_t signature = MixSignature(1469598103934665603ull, &meshGeneration,
+                                      sizeof(meshGeneration));
+    signature = MixSignature(signature, &textureGeneration, sizeof(textureGeneration));
+
+    // A marker per field, so "no MeshComponent" cannot hash the same as one
+    // holding empty strings - they resolve to different meshes.
+    const unsigned char present = 1;
+    const unsigned char absent = 0;
+
+    if (mesh) {
+        signature = MixSignature(signature, &present, 1);
+        signature = MixSignature(signature, mesh->primitiveType.data(),
+                                 mesh->primitiveType.size());
+        signature = MixSignature(signature, &present, 1);
+        signature = MixSignature(signature, mesh->filePath.data(), mesh->filePath.size());
+    } else {
+        signature = MixSignature(signature, &absent, 1);
+    }
+
+    if (material) {
+        signature = MixSignature(signature, &present, 1);
+        signature = MixSignature(signature, material->albedoTexturePath.data(),
+                                 material->albedoTexturePath.size());
+        signature = MixSignature(signature, &present, 1);
+        signature = MixSignature(signature, material->normalTexturePath.data(),
+                                 material->normalTexturePath.size());
+    } else {
+        signature = MixSignature(signature, &absent, 1);
+    }
+
+    // Zero is what "never resolved" means on the component, so it must not be
+    // an answer. Folding it onto one rather than reserving a bit: the collision
+    // this introduces is between two inputs one of which hashes to zero, and
+    // costs a redundant re-resolve rather than a stale one.
+    return signature == 0 ? 1ull : signature;
+}
+
 void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes, TextureRegistry& textures) {
     // Uploads happen here, before recording starts, because both registries
     // submit transfer command buffers of their own.
-    for (auto entity : registry.view<RenderableComponent>()) {
-        auto& renderable = registry.get<RenderableComponent>(entity);
+    const uint64_t meshGeneration = meshes.Generation();
+    const uint64_t textureGeneration = textures.Generation();
 
-        if (const auto* mesh = registry.try_get<MeshComponent>(entity)) {
-            renderable.meshID = meshes.Acquire(mesh->primitiveType, mesh->filePath);
-        } else if (renderable.meshID == MeshRegistry::kInvalidMesh) {
-            renderable.meshID = meshes.GetCubeMesh();
+    auto view = registry.view<RenderableComponent>();
+    for (auto entity : view) {
+        auto& renderable = view.get<RenderableComponent>(entity);
+
+        const auto* meshComponent = registry.try_get<MeshComponent>(entity);
+        const auto* materialComponent = registry.try_get<MaterialComponent>(entity);
+
+        // Nothing that decides these ids has changed, so neither have they.
+        // Only the RESOLUTION is skipped - three hash-map lookups, each building
+        // its key by concatenating strings.
+        const uint64_t signature = ResourceSignature(meshComponent, materialComponent,
+                                                     meshGeneration, textureGeneration);
+        const bool resolve = signature != renderable.resourceSignature;
+
+        if (resolve) {
+            renderable.resourceSignature = signature;
+
+            if (const auto* mesh = meshComponent) {
+                renderable.meshID = meshes.Acquire(mesh->primitiveType, mesh->filePath);
+            } else if (renderable.meshID == MeshRegistry::kInvalidMesh) {
+                renderable.meshID = meshes.GetCubeMesh();
+            }
         }
 
+        // NOT gated, and the comment on SkinnedMeshComponent::bindBoundsMin is
+        // why: the pose bounds are a union against the bind box, and they are
+        // only safe from feeding back into themselves because this line resets
+        // them from the static mesh every frame. That comment says in as many
+        // words that the coupling "would break silently the moment that refresh
+        // was gated on anything". The first draft of this change gated it.
+        //
+        // It costs nothing to leave out of the skip. Get is a bounds check and
+        // an index into a vector; it is Acquire above that builds strings.
         if (const GpuMesh* gpuMesh = meshes.Get(renderable.meshID)) {
             renderable.localBoundsMin = gpuMesh->boundsMin;
             renderable.localBoundsMax = gpuMesh->boundsMax;
         }
 
+        if (!resolve) continue;
+
         // Both texture paths used to be fields nothing read.
-        if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
+        if (const auto* material = materialComponent) {
             renderable.albedoTextureID = material->albedoTexturePath.empty()
                                        ? textures.GetWhiteTexture()
                                        : textures.Acquire(material->albedoTexturePath, true);
@@ -86,7 +156,9 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
 
         ShadowCaster caster;
         caster.model = world.matrix;
-        caster.mesh = mesh;
+        caster.vertexBuffer = mesh->vertexBuffer->GetBuffer();
+        caster.indexBuffer = mesh->indexBuffer->GetBuffer();
+        caster.indexCount = mesh->indexCount;
         caster.meshID = renderable.meshID;
 
         // The eight-corner transform, done once for the frame instead of once
@@ -133,16 +205,12 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
         signature = MixSignature(signature, &caster.skinPaletteBase, sizeof(caster.skinPaletteBase));
         signature = MixSignature(signature, &caster.skinJointCount, sizeof(caster.skinJointCount));
 
-        if (caster.mesh) {
-            // The buffer HANDLE, not only the id. MeshRegistry::Replace moves
-            // new buffers over an existing id, so a reloaded asset keeps its id
-            // and would otherwise leave a shadow of the geometry it replaced.
-            const VkBuffer buffer =
-                static_cast<VkBuffer>(caster.mesh->vertexBuffer->GetBuffer());
-            signature = MixSignature(signature, &buffer, sizeof(buffer));
-            signature = MixSignature(signature, &caster.mesh->indexCount,
-                                     sizeof(caster.mesh->indexCount));
-        }
+        // The buffer HANDLE, not only the id. MeshRegistry::Replace moves new
+        // buffers over an existing id, so a reloaded asset keeps its id and
+        // would otherwise leave a shadow of the geometry it replaced.
+        const VkBuffer buffer = static_cast<VkBuffer>(caster.vertexBuffer);
+        signature = MixSignature(signature, &buffer, sizeof(buffer));
+        signature = MixSignature(signature, &caster.indexCount, sizeof(caster.indexCount));
     }
 
     return MixSignature(signature, &visible, sizeof(visible));
@@ -178,11 +246,10 @@ void RenderSystem::RenderDepthOnly(
         ++stats.shadowDrawn;
 
         if (caster.meshID != boundMesh) {
-            const vk::Buffer buffers[] = { caster.mesh->vertexBuffer->GetBuffer() };
+            const vk::Buffer buffers[] = { caster.vertexBuffer };
             const vk::DeviceSize offsets[] = { 0 };
             commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
-            commandBuffer.bindIndexBuffer(caster.mesh->indexBuffer->GetBuffer(), 0,
-                                          vk::IndexType::eUint32);
+            commandBuffer.bindIndexBuffer(caster.indexBuffer, 0, vk::IndexType::eUint32);
             boundMesh = caster.meshID;
         }
 
@@ -199,7 +266,7 @@ void RenderSystem::RenderDepthOnly(
             pipeline.GetLayout(), vk::ShaderStageFlagBits::eVertex,
             0, sizeof(ShadowPushConstantData), &push);
 
-        commandBuffer.drawIndexed(caster.mesh->indexCount, 1, 0, 0, 0);
+        commandBuffer.drawIndexed(caster.indexCount, 1, 0, 0, 0);
     }
 }
 

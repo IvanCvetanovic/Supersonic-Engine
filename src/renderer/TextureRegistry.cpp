@@ -301,6 +301,8 @@ bool TextureRegistry::Invalidate(const std::string& path) {
     }
 
     if (dropped) {
+        // Every cached path-to-id answer is now wrong.
+        ++m_generation;
         SUPERSONIC_LOG_INFO("TextureRegistry") << "Invalidated '" << path
             << "'; the next request will re-read it from disk." << std::endl;
     }
@@ -336,6 +338,9 @@ bool TextureRegistry::ReplaceRGBA(uint32_t id, const uint8_t* pixels,
 
     m_deviceRef.DeferDestroy(
         [img = std::shared_ptr<VulkanImage>(std::move(oldImage))]() mutable { img.reset(); });
+
+    // Same id, different image.
+    ++m_generation;
     return true;
 }
 

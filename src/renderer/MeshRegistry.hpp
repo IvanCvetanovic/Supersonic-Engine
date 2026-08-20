@@ -64,6 +64,16 @@ public:
     // dynamic terrain patch, a debug overlay. Invalidate-then-Acquire would
     // allocate a new id per frame and grow the vector without bound.
     bool Replace(uint32_t id, const MeshData& data);
+
+    // Bumped whenever an id stops meaning what it meant.
+    //
+    // Anything that caches "this path resolves to this id" has to be told when
+    // that stops being true, and there is no other signal: a hot reload leaves
+    // the component holding the path it always held. Mixing this counter into
+    // such a cache invalidates every entry at once, which is exactly the right
+    // blast radius for something that happens when a file is saved.
+    uint64_t Generation() const { return m_generation; }
+
     uint32_t GetCubeMesh() const { return m_cubeMesh; }
     size_t Size() const { return m_meshes.size(); }
 
@@ -73,6 +83,7 @@ private:
 
     std::vector<GpuMesh> m_meshes;
     std::unordered_map<std::string, uint32_t> m_lookup;
+    uint64_t m_generation{1};
     uint32_t m_cubeMesh{kInvalidMesh};
 };
 

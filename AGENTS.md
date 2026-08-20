@@ -59,7 +59,7 @@ cmake --build build --parallel
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Thirty suites. Rather than repeat the list here - the copy that used to
+Thirty-one suites. Rather than repeat the list here - the copy that used to
 live in this file had fallen thirteen entries behind - see the table in
 [README.md](README.md#testing), or read it from the build, which is where CI
 gets it:

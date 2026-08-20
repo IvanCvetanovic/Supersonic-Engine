@@ -32,10 +32,10 @@ RenderSystem::ShadowCaster makeCaster(const glm::vec3& position, uint32_t meshID
     caster.worldMin = position - glm::vec3(0.5f);
     caster.worldMax = position + glm::vec3(0.5f);
     caster.meshID = meshID;
-    // Null on purpose: the mesh contributes its buffer handle and index count
-    // when there is one, and there is no device here to make one with. Every
-    // other input is exercised.
-    caster.mesh = nullptr;
+    // Left default: the buffer handles and index count are part of the
+    // signature, and there is no device here to make real ones with. Every
+    // other input is exercised, and they are plain values now rather than a
+    // pointer that had to be null.
     return caster;
 }
 

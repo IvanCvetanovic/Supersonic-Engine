@@ -62,6 +62,16 @@ public:
     bool ReplaceRGBA(uint32_t id, const uint8_t* pixels,
                      uint32_t width, uint32_t height, bool srgb = true);
 
+
+    // Bumped whenever an id stops meaning what it meant.
+    //
+    // Anything that caches "this path resolves to this id" has to be told when
+    // that stops being true, and there is no other signal: a hot reload leaves
+    // the component holding the path it always held. Mixing this counter into
+    // such a cache invalidates every entry at once, which is exactly the right
+    // blast radius for something that happens when a file is saved.
+    uint64_t Generation() const { return m_generation; }
+
     uint32_t GetCheckerTexture() const { return m_checkerTexture; }
     uint32_t GetWhiteTexture() const { return m_whiteTexture; }
 
@@ -94,6 +104,7 @@ private:
     std::unordered_map<uint64_t, vk::DescriptorSet> m_materialSets;
 
     uint32_t m_whiteTexture{kInvalidTexture};
+    uint64_t m_generation{1};
     uint32_t m_checkerTexture{kInvalidTexture};
     uint32_t m_flatNormalTexture{kInvalidTexture};
 };

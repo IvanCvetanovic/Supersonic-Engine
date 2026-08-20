@@ -771,7 +771,13 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     ImGui::Separator();
     Theme::SectionLabel(ICON_FA_EYE "  CULLING");
     ImGui::Text("Scene:  %u drawn / %u culled", m_renderStats.drawn, m_renderStats.culled);
-    ImGui::Text("Shadow: %u drawn / %u culled", m_renderStats.shadowDrawn, m_renderStats.shadowCulled);
+    // The skipped count belongs beside the other two, not instead of them.
+    // Once depth passes started being skipped, a still scene showed
+    // "Shadow: 0 drawn / 0 culled" - which is what a broken shadow pass looks
+    // like, and there is no other signal that the pass ran at all.
+    ImGui::Text("Shadow: %u drawn / %u culled / %u of 18 passes skipped",
+                m_renderStats.shadowDrawn, m_renderStats.shadowCulled,
+                m_renderStats.shadowPassesSkipped);
 
     ImGui::Separator();
     Theme::SectionLabel(ICON_FA_CODE "  SCRIPT HOST");

@@ -397,17 +397,33 @@ jobs:
             test -f "$f" || continue
             # Any "<number> suites" phrasing, digits or the words this project
             # actually uses.
-            claimed=$(grep -oiE '(twenty-one|twenty-two|twenty-three|twenty-four|twenty-five|twenty-six|twenty-seven|twenty-eight|twenty-nine|thirty|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)( green)? suites\b' "$f" || true)
+            # Longest first. The alternation is ORDERED, so "thirty" ahead of
+            # "thirty-one" matches the first six letters of "thirty-one suites",
+            # fails on the space, and then finds "one suites" inside it - reporting
+            # a claim of one against a build that registers thirty-one. That is the
+            # same bug this check already had once, in the other direction.
+            claimed=$(grep -oiE '(twenty-one|twenty-two|twenty-three|twenty-four|twenty-five|twenty-six|twenty-seven|twenty-eight|twenty-nine|thirty-one|thirty-two|thirty-three|thirty-four|thirty-five|thirty-six|thirty-seven|thirty-eight|thirty-nine|forty-one|forty-two|forty-three|forty-four|forty-five|forty-six|forty-seven|forty-eight|forty-nine|twenty|thirty|forty|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+)( green)? suites\b' "$f" || true)
             while IFS= read -r phrase; do
               test -n "$phrase" || continue
               word=$(echo "$phrase" | sed -E 's/( green)? suites$//' | tr 'A-Z' 'a-z')
               case "$word" in
                 eleven) n=11 ;; twelve) n=12 ;; thirteen) n=13 ;; fourteen) n=14 ;;
                 fifteen) n=15 ;; sixteen) n=16 ;; seventeen) n=17 ;; eighteen) n=18 ;;
-                nineteen) n=19 ;; twenty) n=20 ;; twenty-one) n=21 ;; twenty-two) n=22 ;;
-                twenty-three) n=23 ;; twenty-four) n=24 ;; twenty-five) n=25 ;; twenty-six) n=26 ;;
-                twenty-seven) n=27 ;; twenty-eight) n=28 ;;
-                twenty-nine) n=29 ;; thirty) n=30 ;;
+                nineteen) n=19 ;; ten) n=10 ;;
+                one) n=1 ;; two) n=2 ;; three) n=3 ;; four) n=4 ;; five) n=5 ;;
+                six) n=6 ;; seven) n=7 ;; eight) n=8 ;; nine) n=9 ;;
+                twenty) n=20 ;;
+                twenty-one) n=21 ;; twenty-two) n=22 ;; twenty-three) n=23 ;;
+                twenty-four) n=24 ;; twenty-five) n=25 ;; twenty-six) n=26 ;;
+                twenty-seven) n=27 ;; twenty-eight) n=28 ;; twenty-nine) n=29 ;;
+                thirty) n=30 ;;
+                thirty-one) n=31 ;; thirty-two) n=32 ;; thirty-three) n=33 ;;
+                thirty-four) n=34 ;; thirty-five) n=35 ;; thirty-six) n=36 ;;
+                thirty-seven) n=37 ;; thirty-eight) n=38 ;; thirty-nine) n=39 ;;
+                forty) n=40 ;;
+                forty-one) n=41 ;; forty-two) n=42 ;; forty-three) n=43 ;;
+                forty-four) n=44 ;; forty-five) n=45 ;; forty-six) n=46 ;;
+                forty-seven) n=47 ;; forty-eight) n=48 ;; forty-nine) n=49 ;;
                 *) n="$word" ;;
               esac
               if [ "$n" != "$actual" ]; then

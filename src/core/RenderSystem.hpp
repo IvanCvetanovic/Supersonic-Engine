@@ -75,10 +75,22 @@ public:
         glm::vec3 worldMin{0.0f};
         glm::vec3 worldMax{0.0f};
 
-        // Resolved once. Safe to hold for the frame because the mesh registry
-        // is write-once and every upload has already happened by the time
-        // DrawFrame runs - SyncResources is called before it, deliberately.
-        const GpuMesh* mesh{nullptr};
+        // BY VALUE, not a GpuMesh*.
+        //
+        // This held a pointer, justified by the mesh registry being write-once.
+        // It is not: Replace moves new buffers over an existing id and
+        // Invalidate guts one, which is why the class keeps a generation
+        // counter. And Get returns a pointer INTO a std::vector that Upload
+        // push_backs onto, so one upload during a frame would dangle every
+        // pointer gathered before it.
+        //
+        // Nothing acquires a mesh inside DrawFrame today, so the pointer never
+        // actually dangled - but the only thing standing between that and a use
+        // after free was a call ordering, defended by a comment that was wrong
+        // about why. Three values weigh less than a pointer plus that argument.
+        vk::Buffer vertexBuffer{};
+        vk::Buffer indexBuffer{};
+        uint32_t indexCount{0};
         uint32_t meshID{0};
 
         uint32_t skinPaletteBase{0};
@@ -90,6 +102,18 @@ public:
     // renderer and never allocate again after the first frame.
     static void GatherShadowCasters(entt::registry& registry, MeshRegistry& meshes,
                                     std::vector<ShadowCaster>& out);
+
+    // What an entity's mesh and texture ids depend on, reduced to a number.
+    //
+    // Never zero, so a component that has never been resolved is distinguishable
+    // from one whose inputs happen to hash to nothing. Either component may be
+    // absent, and absent is a different answer from present-and-empty: an entity
+    // with no MeshComponent falls back to the cube, and one with an empty path
+    // asks the registry for the default primitive.
+    static uint64_t ResourceSignature(const MeshComponent* mesh,
+                                      const MaterialComponent* material,
+                                      uint64_t meshGeneration,
+                                      uint64_t textureGeneration);
 
     // Everything one depth pass would draw, reduced to a number.
     //

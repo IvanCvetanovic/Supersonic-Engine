@@ -176,6 +176,25 @@ bool MeshRegistry::Invalidate(const std::string& key) {
     if (it == m_lookup.end()) return false;
 
     const uint32_t id = it->second;
+
+    // Never free the built-in cube. Acquire hands it out when a model fails to
+    // load and caches the FILE key onto it, so several dead paths share one id
+    // with "primitive:Cube" - and freeing it through any of them would take the
+    // fallback away from everything still using it, for the rest of the
+    // session, with the lookup still cheerfully returning the gutted id.
+    //
+    // TextureRegistry::Invalidate has had this guard since it was written; this
+    // one did not. The key is still dropped, so the next request re-uploads
+    // under it rather than resolving to the cube for ever.
+    if (id == m_cubeMesh) {
+        m_lookup.erase(it);
+        ++m_generation;
+        SUPERSONIC_LOG_INFO("MeshRegistry") << "Dropped '" << key
+            << "', which was resolving to the built-in cube; the buffers stay."
+            << std::endl;
+        return true;
+    }
+
     m_lookup.erase(it);
 
     if (id >= m_meshes.size()) return false;
@@ -193,6 +212,11 @@ bool MeshRegistry::Invalidate(const std::string& key) {
             vb.reset();
             ib.reset();
         });
+
+    // Every cached path-to-id answer is now wrong: the next request for this
+    // key builds a new id, and anything still holding the old one is pointing
+    // at a slot with no buffers in it.
+    ++m_generation;
 
     SUPERSONIC_LOG_INFO("MeshRegistry") << "Invalidated '" << key
         << "'; the next request will re-upload it." << std::endl;
@@ -228,6 +252,11 @@ bool MeshRegistry::Replace(uint32_t id, const MeshData& data) {
             vb.reset();
             ib.reset();
         });
+
+    // The id is unchanged and the geometry behind it is not, which is the case
+    // a cache keyed on the id alone cannot see. Its BOUNDS may have changed
+    // too, and those are copied onto the renderable by SyncResources.
+    ++m_generation;
     return true;
 }
 

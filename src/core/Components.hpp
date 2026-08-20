@@ -330,6 +330,20 @@ struct MeshComponent {
 };
 
 struct RenderableComponent {
+    // What the ids below were last resolved from: the mesh and texture paths,
+    // and the registries' generation counters.
+    //
+    // Resolving them means three hash-map lookups, each of which builds its key
+    // by concatenating strings - a heap allocation per entity per lookup, every
+    // frame, to re-derive an answer that changes when someone edits a path and
+    // at no other time. At a thousand entities that was three thousand
+    // allocations a frame and five milliseconds.
+    //
+    // Zero means never resolved. That is a reserved value the signature is
+    // guaranteed not to produce rather than one it is merely unlikely to, so
+    // there is no flag beside it.
+    uint64_t resourceSignature{0};
+
     uint32_t meshID{0};
     uint32_t materialID{0};
 
