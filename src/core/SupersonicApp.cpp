@@ -708,7 +708,17 @@ void SupersonicApp::Run() {
         const double currentTime = glfwGetTime();
         const float rawDelta = static_cast<float>(currentTime - lastTime);
         lastTime = currentTime;
-        const float deltaTime = std::clamp(rawDelta, 0.0f, kMaxFrameDelta);
+
+        // A constant delta when asked for, so a run reproduces. See
+        // LaunchOptions::fixedDelta: the simulation is already deterministic
+        // given a tick count, and this is what pins the tick count.
+        //
+        // Only the SIMULATION is pinned. The profiler still measures real
+        // elapsed time per zone, so a fixed-step run still says truthfully how
+        // long the work took - it just always does the same amount of it.
+        const float deltaTime = m_options.fixedDelta > 0.0f
+                                    ? m_options.fixedDelta
+                                    : std::clamp(rawDelta, 0.0f, kMaxFrameDelta);
 
         // Swap in a rebuilt script plugin. Cheap: one stat unless it changed.
         m_hotReload->Poll();

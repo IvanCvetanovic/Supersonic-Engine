@@ -24,6 +24,20 @@ struct LaunchOptions {
     // --frames: the point is a picture CI can compare, not a live viewfinder.
     std::string screenshotPath;
 
+    // Feed the simulation a constant delta instead of the measured one.
+    //
+    // Zero means the real clock, which is the interactive default and what a
+    // player must have - a game that ignores how long a frame took plays in
+    // slow motion the moment it drops below its target rate.
+    //
+    // Non-zero makes a run REPRODUCIBLE. The simulation is already
+    // deterministic given a tick count; what varies between two runs of the
+    // same scene is how many ticks fit into a frame, because that comes from
+    // how fast the machine drew the last one. Pinning the delta pins the tick
+    // count, so N frames is always exactly the same N frames - which is what
+    // lets a rendered image be compared against anything at all.
+    float fixedDelta = 0.0f;
+
     // --help is a request, not a failure: it prints usage and exits zero.
     // Folding it into `ok` would make asking for help an error exit, which
     // breaks any script that checks the status.

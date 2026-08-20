@@ -9,6 +9,8 @@
 #include "TestHarness.hpp"
 #include "core/LaunchOptions.hpp"
 
+#include <cmath>
+
 #include <initializer_list>
 #include <string>
 #include <vector>
@@ -127,7 +129,59 @@ static void testScreenshotPathIsRead() {
     CHECK(combined.screenshotPath == "out.png");
 }
 
+
+// --- --fixed-step -----------------------------------------------------------
+//
+// The flag that makes a run reproduce. Its value is optional, which is the
+// awkward part of any hand-rolled parser: an optional value has to be
+// distinguished from the next flag without consuming it.
+
+static void testFixedStepDefaultsToSixtyHertz() {
+    const auto o = parse({"--fixed-step"});
+    CHECK(o.ok);
+    CHECK_MSG(std::fabs(o.fixedDelta - 1.0f / 60.0f) < 1e-9f,
+              "the bare flag means a sixtieth: got " + std::to_string(o.fixedDelta));
+}
+
+static void testFixedStepTakesAnExplicitStep() {
+    const auto o = parse({"--fixed-step", "0.02"});
+    CHECK(o.ok);
+    CHECK_MSG(std::fabs(o.fixedDelta - 0.02f) < 1e-6f,
+              "an explicit step must be read: got " + std::to_string(o.fixedDelta));
+}
+
+static void testFixedStepDoesNotSwallowTheNextFlag() {
+    // The case an optional value gets wrong. Consuming unconditionally turns
+    // this into a complaint about a step of "--frames", and the frame count is
+    // then lost as well.
+    const auto o = parse({"--fixed-step", "--frames", "60"});
+    CHECK_MSG(o.ok, "the next flag must not be eaten: " + o.error);
+    CHECK_MSG(std::fabs(o.fixedDelta - 1.0f / 60.0f) < 1e-9f, "the step defaults");
+    CHECK_MSG(o.maxFrames == 60, "and --frames still parses: got " +
+                                     std::to_string(o.maxFrames));
+}
+
+static void testFixedStepRejectsNonsense() {
+    CHECK_MSG(!parse({"--fixed-step", "0"}).ok, "a step of zero is not a step");
+    CHECK_MSG(!parse({"--fixed-step", "-0.01"}).ok, "nor a negative one");
+    CHECK_MSG(!parse({"--fixed-step", "5"}).ok,
+              "nor five seconds, which is a mistake rather than a choice");
+}
+
+static void testTheRealClockIsTheDefault() {
+    // A game that ignores how long a frame took plays in slow motion the moment
+    // it drops below its target rate, so this must stay opt-in.
+    const auto o = parse({"--frames", "10"});
+    CHECK(o.ok);
+    CHECK_MSG(o.fixedDelta == 0.0f, "without the flag the simulation follows the real clock");
+}
+
 static void runTests() {
+    testFixedStepDefaultsToSixtyHertz();
+    testFixedStepTakesAnExplicitStep();
+    testFixedStepDoesNotSwallowTheNextFlag();
+    testFixedStepRejectsNonsense();
+    testTheRealClockIsTheDefault();
     testScreenshotPathIsRead();
     testNoArgumentsIsTheInteractiveDefault();
     testFrameCountIsRead();
@@ -142,4 +196,4 @@ static void runTests() {
     testHelpIsNotAnError();
 }
 
-TEST_MAIN("test_launchoptions", 20)
+TEST_MAIN("test_launchoptions", 30)

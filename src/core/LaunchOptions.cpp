@@ -11,6 +11,9 @@ const char* LaunchOptions::Usage() {
            "  --frames <n>    render exactly n frames, then exit (0 = until closed)\n"
            "  --scene <path>  load this scene instead of the manifest's startup scene\n"
            "  --screenshot <path>  write a PNG of the last frame and exit\n"
+           "  --fixed-step [s]  simulate at a constant delta (default 1/60) so a\n"
+           "                    run reproduces exactly; without it the simulation\n"
+                    "                    follows the real clock\n"
            "  --help          print this message\n";
 }
 
@@ -57,6 +60,28 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
         } else if (arg == "--screenshot") {
             if (!value(options.screenshotPath)) return fail("--screenshot needs a path");
             if (options.screenshotPath.empty()) return fail("--screenshot needs a path");
+        } else if (arg == "--fixed-step") {
+            // The seconds are optional, so the common case is just the flag.
+            // Peeked rather than consumed: the next argument may be another
+            // option, and swallowing it would turn "--fixed-step --frames 60"
+            // into a parse error about a step of "--frames".
+            options.fixedDelta = 1.0f / 60.0f;
+            if (i + 1 < argc) {
+                const std::string next = argv[i + 1];
+                if (!next.empty() && next[0] != '-') {
+                    ++i;
+                    char* end = nullptr;
+                    const double parsed = std::strtod(next.c_str(), &end);
+                    if (end == next.c_str() || (end && *end != '\0')) {
+                        return fail("--fixed-step wants seconds, got '" + next + "'");
+                    }
+                    if (!(parsed > 0.0) || parsed > 1.0) {
+                        return fail("--fixed-step wants a step in (0, 1] seconds, got '" +
+                                    next + "'");
+                    }
+                    options.fixedDelta = static_cast<float>(parsed);
+                }
+            }
         } else if (arg == "--scene") {
             if (!value(options.scenePath)) return fail("--scene needs a path");
             if (options.scenePath.empty()) return fail("--scene needs a path");
