@@ -498,12 +498,19 @@ gets the box in its **own** frame: the three columns of the world matrix,
 normalised, as its axes, with the length of each column taken out into that
 axis's half extent, so a scaled crate collides at its scaled size. A sphere
 collapses its three world half extents to the largest, so a non-uniformly scaled
-sphere still becomes the sphere that contains it.
+sphere still becomes the sphere that contains it, and a capsule collapses its two
+lateral scales the same way while keeping its own axis.
+
+There are three collider shapes and **two** pair tests, because a sphere is a
+capsule whose segment has no length. Writing sphere-against-sphere separately
+would be a second implementation of the same arithmetic with its own edge cases,
+and it was: the old one had no speculative margin, so two fast spheres passed
+through each other while a sphere and a box did not.
 
 | Pair | Test | Exactness |
 |---|---|---|
-| sphere / sphere | distance between centres against the sum of radii | exact |
-| box / sphere | closest point on the box, taken in the box's own frame | exact |
+| round / round | nearest points between the two axis segments, against the sum of radii | exact; covers sphere/sphere, sphere/capsule and capsule/capsule |
+| box / round | nearest point between the segment and the box, then the round case against that | exact |
 | box / box | separating axis theorem over fifteen axes, then Sutherland–Hodgman clipping of the incident face against the reference face | exact, and up to four contact points |
 
 The fifteen axes are the six face normals — three per box — and the nine
@@ -534,18 +541,40 @@ Sphere-against-box is solved by calling the box-against-sphere routine with the
 arguments swapped and negating the normal, so there is one implementation rather
 than two that can disagree.
 
-Both box paths take a **speculative margin**: how far apart the pair may be and
-still report a contact, with a negative penetration standing for the size of the
-gap. It is passed as the distance the two bodies travel this step, which is what
-lets the solver stop a fast body on the surface instead of letting it pass
+Every pair test takes a **speculative margin**: how far apart the pair may be
+and still report a contact, with a negative penetration standing for the size of
+the gap. It is passed as the distance the two bodies travel this step, which is
+what lets the solver stop a fast body on the surface instead of letting it pass
 through. See the departures list for what that buys and what it does not.
-Sphere against sphere does **not** take one, so two fast spheres can still pass
-through each other; a projectile is far more often a sphere against level
-geometry, which is a box, and that path is covered.
 
-An entity carrying both a box and a sphere collider is treated as a box. The
-sphere pass skips it explicitly, in the solver and in the queries alike, or it
-would be gathered twice and collide with itself.
+**The capsule and the box.** Finding the nearest point between a segment and a
+box by solving for the segment parameter directly is a case analysis over six
+faces, twelve edges and eight corners, which is where a shape test of this kind
+usually goes wrong. Instead the segment is taken into the box's frame and the two
+sets are alternately projected onto each other — clamp a point onto the box, find
+the nearest point on the segment to that, clamp again. Each step can only reduce
+the distance between two convex sets, so it converges, and eight passes is well
+past where the answer stops changing. The result is then handed to the
+sphere-against-box test, so there is one piece of code deciding which face a
+corner belongs to.
+
+The tempting shortcut — testing only the capsule's two end spheres — is wrong for
+exactly the arrangement a bridge is: a capsule lying across a narrow pillar it
+does not touch at either end.
+
+**Segments.** Two of the three things the segment arithmetic has to get right
+fail silently. Parallel segments give a zero denominator in the closed-form
+solve, and dividing by it is the NaN that makes two parallel capsules lying
+against each other report no contact at all; there is no unique nearest pair
+then, so any point along the overlap will do. And clamping one segment's
+parameter to its own ends moves the nearest point on the *other* segment, so the
+first parameter has to be solved again against the clamped one — without that, a
+capsule resting past the end of another sits slightly inside it. Both branches of
+that second solve are tested, because one of them is always the one nobody tried.
+
+An entity carrying more than one collider is one shape: box, then capsule, then
+sphere. Each pass skips an entity a previous one claimed, in the solver and in
+the queries alike, or it would be gathered twice and collide with itself.
 
 ### 7e. Response
 
@@ -632,9 +661,15 @@ from the bounding box was right while box-box *collided* as its bounding box and
 became wrong the moment SAT started colliding the box itself. Tested by running
 the same impact twice with the whole scene turned 45° about the gravity axis: the
 two spins now come out bit-identical, against a 16% difference before.
-`freezeRotation`, `isKinematic`, a non-positive mass, a sleeping body and static
-colliders all produce a zero tensor, which falls out of the arithmetic as
-“infinitely hard to turn” without a branch at every use.
+A capsule is the one approximation left: its tensor is that of a solid cylinder
+of the same radius and total height, which puts the mass of the hemispherical
+caps slightly further from the axis than it really is, so a capsule is a few
+percent harder to tip end over end than it should be. Wrong in the stable
+direction, and next to nothing beside the fact that the shape exists mostly for
+characters, which usually freeze rotation anyway. `freezeRotation`,
+`isKinematic`, a non-positive mass, a sleeping body and static colliders all
+produce a zero tensor, which falls out of the arithmetic as “infinitely hard to
+turn” without a branch at every use.
 
 ### 7f. The optional world ground plane
 
@@ -766,9 +801,15 @@ because a character's visual mesh and its collider are routinely different sizes
 |---|---|---|
 | Iterates | entities with a world transform and a visible `RenderableComponent` | entities with a collider |
 | Shape | local-space AABB — the collider if there is one, otherwise the mesh bounds | world-space AABB, or a sphere |
-| Rotation | exact; the ray is transformed into local space | lost; a box is its world bounding box |
+| Rotation | exact; the ray is transformed into local space | lost; a box is its world bounding box, and so is a capsule |
 | Triggers | no distinction | skipped unless asked for |
 | For | editor picking | gameplay |
+
+The queries do not share the solver's narrowphase. A rotated box is queried as
+the box that holds it and so is a capsule, which over-reports: a ray can graze a
+capsule's shoulder and be told it hit. That is the right direction to be wrong in
+for "what am I looking at" and the wrong one for a bullet that has to be fair,
+and it is the same approximation the solver itself used before SAT landed.
 
 `Raycast` returns the nearest hit with point, normal and distance, and skips
 triggers by default because a bullet should not stop at a checkpoint volume. The

@@ -303,4 +303,146 @@ bool CollideSphereObb(const glm::vec3& sphereCentre, float radius, const Obb& bo
     return true;
 }
 
+glm::vec3 ClosestPointOnSegment(const glm::vec3& a, const glm::vec3& b, const glm::vec3& p) {
+    const glm::vec3 along = b - a;
+    const float lengthSquared = glm::dot(along, along);
+    // A degenerate segment is a point, which is what a sphere is.
+    if (lengthSquared < kParallelEpsilon) return a;
+
+    const float t = std::clamp(glm::dot(p - a, along) / lengthSquared, 0.0f, 1.0f);
+    return a + along * t;
+}
+
+void ClosestPointsBetweenSegments(const glm::vec3& a0, const glm::vec3& a1,
+                                  const glm::vec3& b0, const glm::vec3& b1,
+                                  glm::vec3& outA, glm::vec3& outB) {
+    const glm::vec3 dirA = a1 - a0;
+    const glm::vec3 dirB = b1 - b0;
+    const glm::vec3 between = a0 - b0;
+
+    const float lengthA = glm::dot(dirA, dirA);
+    const float lengthB = glm::dot(dirB, dirB);
+    const float projectB = glm::dot(dirB, between);
+
+    // Both degenerate: two spheres.
+    if (lengthA < kParallelEpsilon && lengthB < kParallelEpsilon) {
+        outA = a0;
+        outB = b0;
+        return;
+    }
+
+    float s = 0.0f;
+    float t = 0.0f;
+
+    if (lengthA < kParallelEpsilon) {
+        // A is a point; only B has a parameter to solve for.
+        t = std::clamp(projectB / lengthB, 0.0f, 1.0f);
+    } else {
+        const float projectA = glm::dot(dirA, between);
+        if (lengthB < kParallelEpsilon) {
+            s = std::clamp(-projectA / lengthA, 0.0f, 1.0f);
+        } else {
+            const float dot = glm::dot(dirA, dirB);
+            const float denominator = lengthA * lengthB - dot * dot;
+
+            // Zero when the segments are parallel, and dividing by it is the
+            // NaN that makes two parallel capsules report no contact at all.
+            // Any point is as near as any other then, so one end will do.
+            s = (denominator > kParallelEpsilon)
+                    ? std::clamp((dot * projectB - projectA * lengthB) / denominator, 0.0f, 1.0f)
+                    : 0.0f;
+
+            t = (dot * s + projectB) / lengthB;
+
+            // Clamping t can move the nearest point off A's own segment, so s
+            // is recomputed against the clamped t and clamped again. Without
+            // this second pass a capsule resting past the end of another sits
+            // slightly inside it.
+            if (t < 0.0f) {
+                t = 0.0f;
+                s = std::clamp(-projectA / lengthA, 0.0f, 1.0f);
+            } else if (t > 1.0f) {
+                t = 1.0f;
+                s = std::clamp((dot - projectA) / lengthA, 0.0f, 1.0f);
+            }
+        }
+    }
+
+    outA = a0 + dirA * s;
+    outB = b0 + dirB * t;
+}
+
+bool CollideCapsuleCapsule(const glm::vec3& a0, const glm::vec3& a1, float radiusA,
+                           const glm::vec3& b0, const glm::vec3& b1, float radiusB,
+                           glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
+                           float speculativeMargin) {
+    glm::vec3 nearestA(0.0f);
+    glm::vec3 nearestB(0.0f);
+    ClosestPointsBetweenSegments(a0, a1, b0, b1, nearestA, nearestB);
+
+    const glm::vec3 delta = nearestB - nearestA;
+    const float distanceSquared = glm::dot(delta, delta);
+    const float sum = radiusA + radiusB;
+    const float reach = sum + speculativeMargin;
+    if (distanceSquared > reach * reach) return false;
+
+    if (distanceSquared < kParallelEpsilon) {
+        // The two axes intersect. Any direction is as good as another; up keeps
+        // them from being launched sideways at enormous speed.
+        outNormal = glm::vec3(0.0f, 1.0f, 0.0f);
+        outPenetration = sum;
+        outPoint = nearestA;
+        return true;
+    }
+
+    const float distance = std::sqrt(distanceSquared);
+    outNormal = delta / distance;
+    // Negative when the pair is merely within the speculative margin, which is
+    // the same convention every other test here uses.
+    outPenetration = sum - distance;
+    // On the line between the two axes, between the two surfaces.
+    outPoint = nearestA + outNormal * (radiusA - outPenetration * 0.5f);
+    return true;
+}
+
+bool CollideCapsuleObb(const glm::vec3& a0, const glm::vec3& a1, float radius, const Obb& box,
+                       glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
+                       float speculativeMargin) {
+    // Into the box's frame, where the problem is a segment against an AABB.
+    const auto toLocal = [&](const glm::vec3& world) {
+        const glm::vec3 relative = world - box.centre;
+        return glm::vec3(glm::dot(relative, box.axes[0]),
+                         glm::dot(relative, box.axes[1]),
+                         glm::dot(relative, box.axes[2]));
+    };
+
+    const glm::vec3 localA = toLocal(a0);
+    const glm::vec3 localB = toLocal(a1);
+
+    // Alternating projection: clamp a point onto the box, find the nearest
+    // point on the segment to that, clamp again. Each step can only reduce the
+    // distance between the two convex sets, so it converges, and for a box
+    // against a segment it converges in a handful of steps. Eight is well past
+    // where the answer stops changing.
+    //
+    // The alternative - solving for the segment parameter directly - is a case
+    // analysis over the box's six faces, twelve edges and eight corners, which
+    // is where a shape test of this kind usually goes wrong.
+    glm::vec3 onBox = glm::clamp((localA + localB) * 0.5f, -box.halfExtent, box.halfExtent);
+    glm::vec3 onSegment = localA;
+    for (int i = 0; i < 8; ++i) {
+        onSegment = ClosestPointOnSegment(localA, localB, onBox);
+        const glm::vec3 next = glm::clamp(onSegment, -box.halfExtent, box.halfExtent);
+        if (next == onBox) break;
+        onBox = next;
+    }
+
+    // Back to world, and then it is a sphere against the box - one
+    // implementation rather than two that can disagree about which face a
+    // corner belongs to.
+    const glm::vec3 worldSegment = box.centre + box.axes * onSegment;
+    return CollideSphereObb(worldSegment, radius, box, outNormal, outPenetration, outPoint,
+                            speculativeMargin);
+}
+
 } // namespace Supersonic::CollisionSAT

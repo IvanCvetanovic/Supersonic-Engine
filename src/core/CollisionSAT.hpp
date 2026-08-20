@@ -97,5 +97,43 @@ bool CollideSphereObb(const glm::vec3& sphereCentre, float radius, const Obb& bo
                       glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
                       float speculativeMargin = 0.0f);
 
+// ---- Capsules ---------------------------------------------------------------
+//
+// A capsule is a segment with a radius: every point within `radius` of the line
+// between two endpoints. That is one definition covering three shapes, because a
+// segment of zero length is a sphere - which is why the sphere tests below are
+// not written twice.
+//
+// It is the shape a character wants. A box catches on every seam it walks over
+// and a sphere rolls off everything, and neither can be made to stop doing that
+// by tuning. A capsule slides up small steps and stands where it is put.
+
+// The point on segment [a, b] nearest to p. Clamped, so a point beyond either
+// end returns that end rather than a point on the infinite line.
+glm::vec3 ClosestPointOnSegment(const glm::vec3& a, const glm::vec3& b, const glm::vec3& p);
+
+// The nearest pair of points between two segments.
+//
+// Parallel segments have no unique answer - any point along the overlap is as
+// near as any other - so this returns one of them and callers must not depend on
+// which. That is what makes two parallel capsules lying against each other rest
+// on a single contact rather than along their length.
+void ClosestPointsBetweenSegments(const glm::vec3& a0, const glm::vec3& a1,
+                                  const glm::vec3& b0, const glm::vec3& b1,
+                                  glm::vec3& outA, glm::vec3& outB);
+
+// Capsule against capsule, and therefore sphere against sphere and capsule
+// against sphere: pass a zero-length segment for a sphere.
+bool CollideCapsuleCapsule(const glm::vec3& a0, const glm::vec3& a1, float radiusA,
+                           const glm::vec3& b0, const glm::vec3& b1, float radiusB,
+                           glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
+                           float speculativeMargin = 0.0f);
+
+// Capsule against an oriented box. The normal points from the BOX toward the
+// capsule, matching the a-to-b convention when the box is a.
+bool CollideCapsuleObb(const glm::vec3& a0, const glm::vec3& a1, float radius, const Obb& box,
+                       glm::vec3& outNormal, float& outPenetration, glm::vec3& outPoint,
+                       float speculativeMargin = 0.0f);
+
 } // namespace CollisionSAT
 } // namespace Supersonic

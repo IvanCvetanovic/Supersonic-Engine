@@ -82,7 +82,10 @@ float combineFriction(float a, float b) {
     return std::sqrt(clampedA * clampedB);
 }
 
-enum class Shape { Box, Sphere };
+// A sphere is a capsule whose segment has no length, which is why there is no
+// separate sphere test below: keeping them apart means two implementations that
+// can disagree about a case neither author thought of.
+enum class Shape { Box, Sphere, Capsule };
 
 struct Body {
     entt::entity entity{entt::null};
@@ -91,7 +94,11 @@ struct Body {
     // World space.
     glm::vec3 centre{0.0f};
     glm::vec3 halfExtent{0.5f}; // boxes: WORLD-AXIS-ALIGNED, for the broadphase
-    float radius{0.5f};         // spheres
+    float radius{0.5f};         // spheres and capsules
+
+    // Half the length of a capsule's straight section, along axes[1]. Zero for
+    // a sphere, which is the whole of the difference between the two.
+    float halfSegment{0.0f};
 
     // The box in its own frame, which is what the narrowphase needs.
     //
@@ -187,6 +194,24 @@ glm::vec3 inverseInertiaLocal(const RigidBodyComponent* rigidBody, Shape shape,
         return inertia > 1e-9f ? glm::vec3(1.0f / inertia) : glm::vec3(0.0f);
     }
 
+    if (shape == Shape::Capsule) {
+        // A solid cylinder of the same radius and total height, which is an
+        // approximation: it puts the mass of the hemispherical caps slightly
+        // further from the axis than it really is, so a capsule is a few
+        // percent harder to tip end over end than it should be. Wrong in the
+        // stable direction, and invisible next to the fact that the shape
+        // exists mostly for characters, which usually freeze rotation anyway.
+        //
+        // halfExtent.y is half the TOTAL height here, caps included.
+        const float halfHeight = std::max(halfExtent.y, radius);
+        const float full = halfHeight * 2.0f;
+        const float aboutAxis = 0.5f * mass * radius * radius;
+        const float acrossAxis = mass * (3.0f * radius * radius + full * full) / 12.0f;
+        return glm::vec3(acrossAxis > 1e-9f ? 1.0f / acrossAxis : 0.0f,
+                         aboutAxis > 1e-9f ? 1.0f / aboutAxis : 0.0f,
+                         acrossAxis > 1e-9f ? 1.0f / acrossAxis : 0.0f);
+    }
+
     // Solid box, from FULL extents: m/12 * (y^2 + z^2) about x, and so on.
     const glm::vec3 full = halfExtent * 2.0f;
     const glm::vec3 inertia(
@@ -219,101 +244,12 @@ CollisionSAT::Obb obbOf(const Body& body) {
     return obb;
 }
 
-// Box against box, as world AABBs. The separating axis is the one of least
-// overlap, which is what makes a body landing on top of another get pushed up
-// rather than sideways.
-bool collideBoxBox(const Body& a, const Body& b, glm::vec3& normal, float& penetration,
-                   glm::vec3& point) {
-    const glm::vec3 delta = b.centre - a.centre;
-    const glm::vec3 overlap = (a.halfExtent + b.halfExtent) - glm::abs(delta);
-
-    if (overlap.x <= 0.0f || overlap.y <= 0.0f || overlap.z <= 0.0f) return false;
-
-    // The middle of the overlapping region. A single point stands in for
-    // what is really a face or an edge, which is why a box settling flat
-    // still rocks slightly before it comes to rest - but it is on the right
-    // side of the centre of mass, which is what decides which way a crate
-    // tips when it lands on the corner of something.
-    const glm::vec3 overlapMin = glm::max(a.centre - a.halfExtent, b.centre - b.halfExtent);
-    const glm::vec3 overlapMax = glm::min(a.centre + a.halfExtent, b.centre + b.halfExtent);
-    point = (overlapMin + overlapMax) * 0.5f;
-
-    if (overlap.x <= overlap.y && overlap.x <= overlap.z) {
-        penetration = overlap.x;
-        normal = glm::vec3(delta.x < 0.0f ? -1.0f : 1.0f, 0.0f, 0.0f);
-    } else if (overlap.y <= overlap.z) {
-        penetration = overlap.y;
-        normal = glm::vec3(0.0f, delta.y < 0.0f ? -1.0f : 1.0f, 0.0f);
-    } else {
-        penetration = overlap.z;
-        normal = glm::vec3(0.0f, 0.0f, delta.z < 0.0f ? -1.0f : 1.0f);
-    }
-    return true;
-}
-
-bool collideSphereSphere(const Body& a, const Body& b, glm::vec3& normal, float& penetration,
-                         glm::vec3& point) {
-    const glm::vec3 delta = b.centre - a.centre;
-    const float sum = a.radius + b.radius;
-    const float distanceSquared = glm::dot(delta, delta);
-
-    if (distanceSquared >= sum * sum) return false;
-
-    const float distance = std::sqrt(distanceSquared);
-    if (distance < 1e-6f) {
-        // Concentric. Any axis is as good as another; up keeps them from being
-        // launched sideways at enormous speed.
-        normal = glm::vec3(0.0f, 1.0f, 0.0f);
-        penetration = sum;
-        point = a.centre;
-        return true;
-    }
-
-    normal = delta / distance;
-    penetration = sum - distance;
-    // On the line of centres, between the two surfaces.
-    point = a.centre + normal * (a.radius - penetration * 0.5f);
-    return true;
-}
-
-// Sphere against box, via the closest point on the box. Exact, unlike treating
-// the sphere as its own bounding box, which would let it catch on corners.
-bool collideBoxSphere(const Body& box, const Body& sphere, glm::vec3& normal, float& penetration,
-                      glm::vec3& point) {
-    const glm::vec3 boxMin = box.centre - box.halfExtent;
-    const glm::vec3 boxMax = box.centre + box.halfExtent;
-    const glm::vec3 closest = glm::clamp(sphere.centre, boxMin, boxMax);
-
-    const glm::vec3 delta = sphere.centre - closest;
-    const float distanceSquared = glm::dot(delta, delta);
-
-    if (distanceSquared > sphere.radius * sphere.radius) return false;
-
-    // The closest point on the box IS the contact, which is exact here
-    // rather than the approximation box-box has to make.
-    point = closest;
-
-    if (distanceSquared > 1e-12f) {
-        const float distance = std::sqrt(distanceSquared);
-        normal = delta / distance;
-        penetration = sphere.radius - distance;
-        return true;
-    }
-
-    // Centre is inside the box: push out along the nearest face.
-    const glm::vec3 toMin = sphere.centre - boxMin;
-    const glm::vec3 toMax = boxMax - sphere.centre;
-
-    float best = toMin.x;
-    normal = glm::vec3(-1.0f, 0.0f, 0.0f);
-    if (toMax.x < best) { best = toMax.x; normal = glm::vec3(1.0f, 0.0f, 0.0f); }
-    if (toMin.y < best) { best = toMin.y; normal = glm::vec3(0.0f, -1.0f, 0.0f); }
-    if (toMax.y < best) { best = toMax.y; normal = glm::vec3(0.0f, 1.0f, 0.0f); }
-    if (toMin.z < best) { best = toMin.z; normal = glm::vec3(0.0f, 0.0f, -1.0f); }
-    if (toMax.z < best) { best = toMax.z; normal = glm::vec3(0.0f, 0.0f, 1.0f); }
-
-    penetration = sphere.radius + best;
-    return true;
+// The two endpoints of a body's capsule axis. A sphere returns the same point
+// twice, which is exactly what makes it a capsule with no length.
+void capsuleEnds(const Body& body, glm::vec3& outA, glm::vec3& outB) {
+    const glm::vec3 half = body.axes[1] * body.halfSegment;
+    outA = body.centre - half;
+    outB = body.centre + half;
 }
 
 } // namespace
@@ -575,6 +511,26 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // one number; the largest keeps it conservative.
             body.radius = std::max({body.halfExtent.x, body.halfExtent.y, body.halfExtent.z});
             body.halfExtent = glm::vec3(body.radius);
+        } else if (shape == Shape::Capsule) {
+            // localHalfExtent arrives as (radius, height/2, radius), already
+            // through the per-axis scale by the loop above. A capsule has one
+            // radius, so the two lateral scales collapse to the larger.
+            body.radius = std::max(body.localHalfExtent.x, body.localHalfExtent.z);
+            const float halfHeight = std::max(body.localHalfExtent.y, body.radius);
+
+            // The straight section. A capsule shorter than twice its radius is a
+            // sphere, which falls out as a segment of zero length rather than
+            // needing to be rejected.
+            body.halfSegment = std::max(halfHeight - body.radius, 0.0f);
+
+            // The exact bound of a capsule, not the bound of the box that holds
+            // it: the two end spheres, swept along the axis. worldBounds gave
+            // the enclosing box's AABB, which for a capsule lying diagonally is
+            // noticeably larger than it needs to be.
+            body.halfExtent = glm::abs(body.axes[1]) * body.halfSegment + glm::vec3(body.radius);
+
+            // What the inertia is built from, in the capsule's own frame.
+            body.localHalfExtent = glm::vec3(body.radius, halfHeight, body.radius);
         }
 
         body.min = body.centre - body.halfExtent;
@@ -633,10 +589,18 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         collect(entity, Shape::Box, box.size * 0.5f, box.isTrigger,
                 box.center, box.layer, box.collidesWith);
     }
-    for (auto entity : registry.view<SphereColliderComponent>()) {
-        // An entity carrying both colliders would otherwise be added twice and
-        // then collide with itself.
+    for (auto entity : registry.view<CapsuleColliderComponent>()) {
         if (registry.all_of<BoxColliderComponent>(entity)) continue;
+        const auto& capsule = registry.get<CapsuleColliderComponent>(entity);
+        collect(entity, Shape::Capsule,
+                glm::vec3(capsule.radius, capsule.height * 0.5f, capsule.radius),
+                capsule.isTrigger, capsule.center, capsule.layer, capsule.collidesWith);
+    }
+    for (auto entity : registry.view<SphereColliderComponent>()) {
+        // An entity carrying more than one collider would otherwise be added
+        // twice and then collide with itself. Box wins, then capsule, then
+        // sphere - one order, stated once, and the queries below repeat it.
+        if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent>(entity)) continue;
         const auto& sphere = registry.get<SphereColliderComponent>(entity);
         collect(entity, Shape::Sphere, glm::vec3(sphere.radius), sphere.isTrigger,
                 sphere.center, sphere.layer, sphere.collidesWith);
@@ -802,20 +766,36 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                     if (manifoldCount >= CollisionSAT::kMaxContactPoints) break;
                 }
             }
-        } else if (a.shape == Shape::Sphere && b.shape == Shape::Sphere) {
-            hit = collideSphereSphere(a, b, normal, penetration, point);
-        } else if (a.shape == Shape::Box) {
-            // The box is a, so the normal already points from a toward b.
-            hit = CollisionSAT::CollideSphereObb(b.centre, b.radius, obbOf(a),
-                                                 normal, penetration, point, pairMargin);
+        } else if (a.shape == Shape::Box || b.shape == Shape::Box) {
+            // One box and one round thing. Solved with the box as the reference
+            // and the normal flipped when the box is b, so there is one
+            // implementation rather than two that can disagree about which face
+            // a corner belongs to.
+            const Body& box = (a.shape == Shape::Box) ? a : b;
+            const Body& round = (a.shape == Shape::Box) ? b : a;
+
+            glm::vec3 roundA(0.0f);
+            glm::vec3 roundB(0.0f);
+            capsuleEnds(round, roundA, roundB);
+
+            hit = CollisionSAT::CollideCapsuleObb(roundA, roundB, round.radius, obbOf(box),
+                                                  normal, penetration, point, pairMargin);
             speculative = hit && penetration < 0.0f;
+            if (a.shape != Shape::Box) normal = -normal;
         } else {
-            // Sphere against box: solve it the other way round and flip, so
-            // there is one implementation rather than two that can disagree.
-            hit = CollisionSAT::CollideSphereObb(a.centre, a.radius, obbOf(b),
-                                                 normal, penetration, point, pairMargin);
+            // Two round things. A sphere is a capsule with no length, so this is
+            // sphere-sphere, capsule-sphere and capsule-capsule at once.
+            glm::vec3 firstA(0.0f);
+            glm::vec3 firstB(0.0f);
+            glm::vec3 secondA(0.0f);
+            glm::vec3 secondB(0.0f);
+            capsuleEnds(a, firstA, firstB);
+            capsuleEnds(b, secondA, secondB);
+
+            hit = CollisionSAT::CollideCapsuleCapsule(firstA, firstB, a.radius,
+                                                      secondA, secondB, b.radius,
+                                                      normal, penetration, point, pairMargin);
             speculative = hit && penetration < 0.0f;
-            normal = -normal;
         }
 
         if (!hit) continue;
@@ -1145,10 +1125,21 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
         const auto& box = registry.get<BoxColliderComponent>(entity);
         collect(entity, false, box.size * 0.5f, box.isTrigger, box.center, box.layer);
     }
-    for (auto entity : registry.view<SphereColliderComponent>()) {
-        // Matching the solver: an entity with both colliders is a box, and must
-        // not be gathered twice or a query would report it against itself.
+    for (auto entity : registry.view<CapsuleColliderComponent>()) {
         if (registry.all_of<BoxColliderComponent>(entity)) continue;
+        const auto& capsule = registry.get<CapsuleColliderComponent>(entity);
+        // Queried as the box that holds it, which is what a rotated box already
+        // gets here. A ray can therefore hit a capsule slightly off its
+        // shoulder; it over-reports rather than missing, which is the right
+        // direction for "what am I looking at" and the wrong one for a bullet
+        // that has to be fair.
+        collect(entity, false, glm::vec3(capsule.radius, capsule.height * 0.5f, capsule.radius),
+                capsule.isTrigger, capsule.center, capsule.layer);
+    }
+    for (auto entity : registry.view<SphereColliderComponent>()) {
+        // Matching the solver, in the same order: an entity with more than one
+        // collider is gathered once, or a query would report it against itself.
+        if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent>(entity)) continue;
         const auto& sphere = registry.get<SphereColliderComponent>(entity);
         collect(entity, true, glm::vec3(sphere.radius), sphere.isTrigger,
                 sphere.center, sphere.layer);

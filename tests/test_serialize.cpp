@@ -328,6 +328,11 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
 
     registry.emplace<SphereColliderComponent>(entity).radius = 4.25f;
 
+    auto& capsule = registry.emplace<CapsuleColliderComponent>(entity);
+    capsule.radius = 0.35f;
+    capsule.height = 1.85f;
+    capsule.center = glm::vec3(0.0f, 0.9f, 0.0f);
+
     auto& hud = registry.emplace<UITextComponent>(entity);
     hud.text = "Ammo 12/30";
     hud.anchor = UIAnchor::BottomRight;
@@ -511,6 +516,17 @@ static void testPrefabRoundTripsEveryField() {
         const auto* sphere = registry.try_get<SphereColliderComponent>(clone);
         CHECK_MSG(sphere != nullptr, "prefab lost its SphereColliderComponent");
         if (sphere) CHECK_NEAR(sphere->radius, 4.25f);
+
+        const auto* capsule = registry.try_get<CapsuleColliderComponent>(clone);
+        CHECK_MSG(capsule != nullptr, "prefab lost its CapsuleColliderComponent");
+        if (capsule) {
+            CHECK_NEAR(capsule->radius, 0.35f);
+            // The one field a character controller is built around: a capsule
+            // that comes back the wrong height stands with its feet in the
+            // floor or hovers above it.
+            CHECK_NEAR(capsule->height, 1.85f);
+            CHECK_NEAR(capsule->center.y, 0.9f);
+        }
 
         const auto* hud = registry.try_get<UITextComponent>(clone);
         CHECK_MSG(hud != nullptr, "prefab lost its UITextComponent");

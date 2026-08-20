@@ -69,6 +69,17 @@ static entt::entity makeStaticBox(entt::registry& registry, const glm::vec3& pos
     return entity;
 }
 
+static entt::entity makeCapsule(entt::registry& registry, const glm::vec3& position,
+                               float radius = 0.4f, float height = 2.0f, float mass = 1.0f) {
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity, position);
+    registry.emplace<RigidBodyComponent>(entity).mass = mass;
+    auto& collider = registry.emplace<CapsuleColliderComponent>(entity);
+    collider.radius = radius;
+    collider.height = height;
+    return entity;
+}
+
 static entt::entity makeSphere(entt::registry& registry, const glm::vec3& position,
                                float radius = 0.5f, float mass = 1.0f) {
     const auto entity = registry.create();
@@ -1500,7 +1511,188 @@ static void testTheShippedSceneHasAFloorOfItsOwn() {
     }
 }
 
+
+// --- capsules ---------------------------------------------------------------
+//
+// The shape a character wants, and the reason it is worth a third collider: a
+// box catches on every seam it walks over and a sphere rolls off everything.
+
+static void testACapsuleRestsOnItsOwnBottom() {
+    entt::registry registry;
+    // Floor top at y = 5.5.
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+
+    // Radius 0.4, total height 2.0, so its lowest point is one unit below the
+    // origin and it must come to rest at 6.5 - not at 5.9, which is where it
+    // would sit if the height were being read as the straight section, and not
+    // at 5.9 either if the caps were being ignored.
+    const auto capsule = makeCapsule(registry, glm::vec3(0.0f, 8.0f, 0.0f));
+
+    stepFor(registry, 3.0f);
+
+    // Within the solver's resting slop of 6.5, not exactly on it: a body resting
+    // on a COLLIDER settles kSlop deep, which is what stops the correction
+    // firing forever against floating-point noise. The world ground plane is a
+    // hard clamp and lands exactly, which is why the older rest-height tests
+    // above can use CHECK_NEAR and this one cannot.
+    const float y = registry.get<TransformComponent>(capsule).position.y;
+    CHECK_MSG(std::fabs(y - 6.5f) < 0.02f,
+              "a capsule must rest one unit above the floor: y = " + std::to_string(y));
+}
+
+static void testACapsuleShorterThanItsDiameterIsASphere() {
+    // Not an error to be rejected: it falls out of the geometry as a segment of
+    // no length, which is exactly a sphere, and must rest at the radius.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+
+    const auto squat = makeCapsule(registry, glm::vec3(0.0f, 8.0f, 0.0f), 0.5f, 0.2f);
+
+    stepFor(registry, 3.0f);
+
+    const float y = registry.get<TransformComponent>(squat).position.y;
+    CHECK_MSG(std::fabs(y - 6.0f) < 0.02f,
+              "a squat capsule must rest at its radius: y = " + std::to_string(y));
+}
+
+static void testACapsuleRidesAStepThatStopsABox() {
+    // The claim the shape exists to make. Both are driven into a low step at a
+    // fixed speed, the way a character controller drives one, and both are
+    // frozen against rotation so neither can simply topple over it.
+    //
+    // A box meets the step's face square on: the contact normal is horizontal
+    // and the push is entirely backwards, so it stops dead. A capsule meets the
+    // step's top EDGE with its bottom cap, and the normal from a corner points
+    // up as well as back, so the same horizontal push lifts it.
+    const float speed = 3.0f;
+    const float stepHeight = 0.3f;
+
+    const auto run = [&](bool capsule) {
+        entt::registry registry;
+        // A wide floor with its top at y = 5.
+        makeStaticBox(registry, glm::vec3(0.0f, 4.5f, 0.0f), glm::vec3(40.0f, 1.0f, 40.0f));
+        // The step: everything from x = 0 onwards, raised by stepHeight. Its
+        // near face is therefore a wall at x = 0 and its top is at 5 + 0.3.
+        makeStaticBox(registry, glm::vec3(10.0f, 5.0f + stepHeight * 0.5f, 0.0f),
+                      glm::vec3(20.0f, stepHeight, 8.0f));
+
+        const entt::entity mover =
+            capsule ? makeCapsule(registry, glm::vec3(-1.0f, 6.0f, 0.0f), 0.4f, 2.0f)
+                    : makeBox(registry, glm::vec3(-1.0f, 6.0f, 0.0f), 1.0f,
+                              glm::vec3(0.8f, 2.0f, 0.8f));
+        auto& body = registry.get<RigidBodyComponent>(mover);
+        body.freezeRotation = true;
+        // Nothing to grip with, so what happens at the step is the normal and
+        // nothing else.
+        body.friction = 0.0f;
+
+        // Driven, not launched: the horizontal speed is reasserted every step,
+        // which is what a character controller does and what makes this a test
+        // of the contact rather than of momentum.
+        for (int i = 0; i < 180; ++i) {
+            registry.get<RigidBodyComponent>(mover).velocity.x = speed;
+            PhysicsSystem::Update(registry, 1.0f / 60.0f);
+        }
+        return registry.get<TransformComponent>(mover).position.x;
+    };
+
+    const float boxX = run(false);
+    const float capsuleX = run(true);
+
+    // The step is 0.3 tall against a capsule radius of 0.4, so the contact lands
+    // on the lower hemisphere and the normal has somewhere up to point. Raise it
+    // past the radius and the contact moves onto the straight section, where the
+    // normal is horizontal and the capsule is stopped like the box - which is
+    // the correct behaviour, not a limitation.
+    CHECK_MSG(boxX < 0.0f,
+              "the box must be stopped by the step's face: x = " + std::to_string(boxX));
+    CHECK_MSG(capsuleX > boxX + 0.5f,
+              "a capsule must get over a step a box is stopped by: box " +
+                  std::to_string(boxX) + " vs capsule " + std::to_string(capsuleX));
+}
+
+static void testACapsuleDoesNotSpinUpStandingStill() {
+    // The stability check the box has. A capsule resting on a floor is held by a
+    // single contact under its cap, so anything that leaks angular energy shows
+    // up here as a character slowly lying down.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+
+    const auto capsule = makeCapsule(registry, glm::vec3(0.0f, 6.6f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(capsule);
+    body.angularDamping = 0.0f;
+    body.allowSleep = false; // or it passes by freezing rather than by being stable
+
+    std::vector<PhysicsSystem::Contact> contacts;
+    bool touched = false;
+    for (int i = 0; i < 240; ++i) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f, &contacts);
+        if (!contacts.empty()) touched = true;
+    }
+    CHECK_MSG(touched, "the capsule must actually be resting on the floor");
+
+    const float spin = glm::length(registry.get<RigidBodyComponent>(capsule).angularVelocity);
+    CHECK_MSG(spin < 0.05f, "a standing capsule must not spin up: got " + std::to_string(spin));
+}
+
+static void testTwoCapsulesPushEachOtherApart() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+
+    const auto left = makeCapsule(registry, glm::vec3(-0.2f, 6.5f, 0.0f));
+    const auto right = makeCapsule(registry, glm::vec3(0.2f, 6.5f, 0.0f));
+    registry.get<RigidBodyComponent>(left).freezeRotation = true;
+    registry.get<RigidBodyComponent>(right).freezeRotation = true;
+
+    stepFor(registry, 2.0f);
+
+    const float gap = registry.get<TransformComponent>(right).position.x -
+                      registry.get<TransformComponent>(left).position.x;
+    CHECK_MSG(gap > 0.7f,
+              "two overlapping capsules must separate to about their diameter: gap = " +
+                  std::to_string(gap));
+}
+
+static void testAnEntityWithTwoCollidersPicksOneShape() {
+    // Box wins, then capsule, then sphere. Stated in the solver and repeated in
+    // the queries, and if the two disagree an entity is gathered twice and
+    // collides with itself - which reads as a body launching itself across the
+    // level for no reason.
+    entt::registry registry;
+
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity, glm::vec3(0.0f, 5.0f, 0.0f));
+    registry.emplace<RigidBodyComponent>(entity);
+    registry.emplace<BoxColliderComponent>(entity);
+    registry.emplace<CapsuleColliderComponent>(entity);
+    registry.emplace<SphereColliderComponent>(entity);
+
+    std::vector<PhysicsSystem::Contact> contacts;
+    PhysicsSystem::Update(registry, 1.0f / 60.0f, &contacts);
+
+    for (const auto& contact : contacts) {
+        CHECK_MSG(!(contact.a == entity && contact.b == entity),
+                  "an entity must never collide with itself");
+    }
+
+    // And a query must report it once, not three times.
+    std::vector<entt::entity> hits;
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(0.0f, 5.0f, 0.0f), 2.0f, hits);
+    int found = 0;
+    for (auto hit : hits) {
+        if (hit == entity) ++found;
+    }
+    CHECK_MSG(found == 1, "a query must report the entity exactly once, got " +
+                              std::to_string(found));
+}
+
 static void runTests() {
+    testACapsuleRestsOnItsOwnBottom();
+    testACapsuleShorterThanItsDiameterIsASphere();
+    testACapsuleRidesAStepThatStopsABox();
+    testACapsuleDoesNotSpinUpStandingStill();
+    testTwoCapsulesPushEachOtherApart();
+    testAnEntityWithTwoCollidersPicksOneShape();
     testTheShippedSceneHasAFloorOfItsOwn();
     testThereIsNoGroundPlaneUnlessTheSceneAsksForOne();
     testTheGroundPlaneCanSitSomewhereOtherThanZero();
@@ -1567,4 +1759,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics", 130)
+TEST_MAIN("test_physics", 140)

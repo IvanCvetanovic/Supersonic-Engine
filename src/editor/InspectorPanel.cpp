@@ -436,6 +436,26 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // 4c. CapsuleColliderComponent
+    if (registry.all_of<CapsuleColliderComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Capsule Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& capsule = registry.get<CapsuleColliderComponent>(entity);
+            ImGui::DragFloat("Radius##capsule", &capsule.radius, 0.01f, 0.01f, 100.0f);
+            ImGui::DragFloat("Height##capsule", &capsule.height, 0.01f, 0.01f, 100.0f);
+            // Total, caps included, because that is the number an author
+            // measures against a doorway. Said here because the alternative
+            // convention - the straight section only - is just as common and
+            // there is no way to tell them apart from the value.
+            ImGui::TextDisabled("Height is the TOTAL, caps included. Below twice "
+                                "the radius it is simply a sphere.");
+            Theme::DrawVec3Control("Center##capsule", capsule.center, 0.0f);
+            ImGui::Checkbox("Is Trigger##capsule", &capsule.isTrigger);
+            drawCollisionLayers(capsule.layer, capsule.collidesWith);
+        }
+    }
+
+    ImGui::Spacing();
+
     // 5. AudioSourceComponent
     if (registry.all_of<AudioSourceComponent>(entity)) {
         if (ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -819,6 +839,11 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
         if (!registry.all_of<SphereColliderComponent>(entity) && ImGui::MenuItem("Sphere Collider")) {
             registry.emplace<SphereColliderComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<CapsuleColliderComponent>(entity) &&
+            ImGui::MenuItem("Capsule Collider")) {
+            registry.emplace<CapsuleColliderComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<AudioSourceComponent>(entity) && ImGui::MenuItem("Audio Source")) {

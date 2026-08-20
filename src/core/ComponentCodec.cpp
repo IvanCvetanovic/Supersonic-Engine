@@ -195,6 +195,16 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
             << ", \"CollidesWith\": " << sphere->collidesWith << " },\n";
     }
 
+    if (const auto* capsule = registry.try_get<CapsuleColliderComponent>(entity)) {
+        out << indent << "\"CapsuleCollider\": { \"Radius\": " << capsule->radius
+             << ", \"Height\": " << capsule->height
+             << ", \"Center\": ";
+        writeVec3(out, capsule->center, "CapsuleCollider.center");
+        out << ", \"IsTrigger\": " << (capsule->isTrigger ? "true" : "false")
+            << ", \"Layer\": " << capsule->layer
+            << ", \"CollidesWith\": " << capsule->collidesWith << " },\n";
+    }
+
     if (const auto* listener = registry.try_get<AudioListenerComponent>(entity)) {
         out << indent << "\"AudioListener\": { \"IsPrimary\": "
              << (listener->isPrimary ? "true" : "false") << " },\n";
@@ -439,6 +449,18 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             node["SphereCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
         sphere.collidesWith = static_cast<uint32_t>(
             node["SphereCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
+    }
+
+    if (node.Has("CapsuleCollider")) {
+        auto& capsule = registry.emplace_or_replace<CapsuleColliderComponent>(entity);
+        capsule.radius = node["CapsuleCollider"]["Radius"].AsFloat(0.5f);
+        capsule.height = node["CapsuleCollider"]["Height"].AsFloat(2.0f);
+        capsule.center = readVec3(node["CapsuleCollider"]["Center"], glm::vec3(0.0f));
+        capsule.isTrigger = node["CapsuleCollider"]["IsTrigger"].AsBool(false);
+        capsule.layer = static_cast<uint32_t>(
+            node["CapsuleCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
+        capsule.collidesWith = static_cast<uint32_t>(
+            node["CapsuleCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
     if (node.Has("AudioListener")) {

@@ -200,7 +200,229 @@ static void testTheRampThatCouldNotBeBuilt() {
               "and it must lean along the slope");
 }
 
+
+// --- capsules ---------------------------------------------------------------
+//
+// A capsule is a segment with a radius, so all of this rests on the segment
+// arithmetic below it. Every one of these numbers is checkable by hand, which is
+// the reason this geometry lives outside PhysicsSystem at all.
+
+static void testClosestPointOnASegmentIsClamped() {
+    const glm::vec3 a(0.0f, 0.0f, 0.0f);
+    const glm::vec3 b(0.0f, 4.0f, 0.0f);
+
+    // Beside the middle.
+    const glm::vec3 middle = ClosestPointOnSegment(a, b, glm::vec3(3.0f, 2.0f, 0.0f));
+    CHECK_NEAR(middle.y, 2.0f);
+
+    // Past each end. Unclamped, this would run off along the infinite line, and
+    // a capsule would collide with things nowhere near it.
+    const glm::vec3 below = ClosestPointOnSegment(a, b, glm::vec3(0.0f, -10.0f, 0.0f));
+    CHECK_NEAR(below.y, 0.0f);
+    const glm::vec3 above = ClosestPointOnSegment(a, b, glm::vec3(0.0f, 99.0f, 0.0f));
+    CHECK_NEAR(above.y, 4.0f);
+
+    // A segment of no length is a point, which is what a sphere is.
+    const glm::vec3 degenerate = ClosestPointOnSegment(a, a, glm::vec3(5.0f, 5.0f, 5.0f));
+    CHECK_NEAR(degenerate.x, 0.0f);
+}
+
+static void testClosestPointsBetweenCrossedSegments() {
+    // Along x at y = 0, and along z at y = 2. They cross when seen from above,
+    // so the nearest points are directly above and below the origin.
+    glm::vec3 onFirst(0.0f);
+    glm::vec3 onSecond(0.0f);
+    ClosestPointsBetweenSegments(glm::vec3(-3.0f, 0.0f, 0.0f), glm::vec3(3.0f, 0.0f, 0.0f),
+                                 glm::vec3(0.0f, 2.0f, -3.0f), glm::vec3(0.0f, 2.0f, 3.0f),
+                                 onFirst, onSecond);
+
+    CHECK_NEAR(onFirst.x, 0.0f);
+    CHECK_NEAR(onFirst.y, 0.0f);
+    CHECK_NEAR(onSecond.y, 2.0f);
+    CHECK_NEAR(onSecond.z, 0.0f);
+}
+
+static void testParallelSegmentsDoNotProduceANaN() {
+    // Two parallel segments give a zero denominator in the closed-form solve,
+    // and dividing by it is a NaN. Every comparison against a NaN is false, so
+    // the pair reports no contact - two parallel capsules lying against each
+    // other pass straight through, which is most of them.
+    glm::vec3 onFirst(0.0f);
+    glm::vec3 onSecond(0.0f);
+    ClosestPointsBetweenSegments(glm::vec3(-2.0f, 0.0f, 0.0f), glm::vec3(2.0f, 0.0f, 0.0f),
+                                 glm::vec3(-2.0f, 1.0f, 0.0f), glm::vec3(2.0f, 1.0f, 0.0f),
+                                 onFirst, onSecond);
+
+    CHECK_MSG(onFirst == onFirst && onSecond == onSecond, "the answer must not be NaN");
+    // Any pair along the overlap is as near as any other; what must hold is the
+    // distance, which is the only part a caller may rely on.
+    CHECK_NEAR(glm::length(onSecond - onFirst), 1.0f);
+}
+
+static void testClampingOneParameterMovesTheOther() {
+    // The case the second solve exists for, and the one that is easy to write
+    // and never notice. Solve for the first parameter, use it to get the second,
+    // clamp the second to its segment - and the first is now wrong, because it
+    // was the answer to a question about a point that is no longer there. The
+    // symptom is a capsule resting past the end of another sitting slightly
+    // inside it.
+    //
+    // Skew and NOT perpendicular, which is what makes it discriminate: with
+    // perpendicular segments the recomputed parameter comes out the same and a
+    // test built on those passes either way. Here the diagonal segment runs from
+    // the origin to (1, 1, 0) and the short one sits off at x = 3, so the
+    // nearest point on the diagonal is its far END - and dropping the second
+    // solve leaves it at the origin instead.
+    glm::vec3 onFirst(0.0f);
+    glm::vec3 onSecond(0.0f);
+
+    ClosestPointsBetweenSegments(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f),
+                                 glm::vec3(3.0f, 0.0f, 1.0f), glm::vec3(4.0f, 0.0f, 1.0f),
+                                 onFirst, onSecond);
+    CHECK_NEAR(onFirst.x, 1.0f);
+    CHECK_NEAR(onFirst.y, 1.0f);
+    CHECK_NEAR(onSecond.x, 3.0f);
+
+    // And with the second segment pointing the other way, so the clamp lands on
+    // its far end rather than its near one. Both directions, because the two are
+    // separate branches and one of them is always the one nobody tried.
+    ClosestPointsBetweenSegments(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 1.0f, 0.0f),
+                                 glm::vec3(4.0f, 0.0f, 1.0f), glm::vec3(3.0f, 0.0f, 1.0f),
+                                 onFirst, onSecond);
+    CHECK_NEAR(onFirst.x, 1.0f);
+    CHECK_NEAR(onFirst.y, 1.0f);
+    CHECK_NEAR(onSecond.x, 3.0f);
+}
+
+static void testASphereIsACapsuleWithNoLength() {
+    // Not a tidiness argument. Sphere-against-sphere used to be its own routine,
+    // and a second implementation of the same test is a second set of edge cases
+    // to get wrong - and the sphere one had no speculative margin, so two fast
+    // spheres passed through each other while a sphere and a box did not.
+    glm::vec3 normal(0.0f);
+    float penetration = 0.0f;
+    glm::vec3 point(0.0f);
+
+    const glm::vec3 left(0.0f, 0.0f, 0.0f);
+    const glm::vec3 right(1.5f, 0.0f, 0.0f);
+
+    CHECK(CollideCapsuleCapsule(left, left, 1.0f, right, right, 1.0f,
+                                normal, penetration, point));
+    CHECK_NEAR(penetration, 0.5f);
+    CHECK_NEAR(normal.x, 1.0f);
+    // Half way into the overlap, measured from the first sphere's surface.
+    CHECK_NEAR(point.x, 0.75f);
+
+    // Apart, and beyond any margin.
+    const glm::vec3 far(5.0f, 0.0f, 0.0f);
+    CHECK_MSG(!CollideCapsuleCapsule(left, left, 1.0f, far, far, 1.0f,
+                                     normal, penetration, point),
+              "spheres five units apart must not collide");
+
+    // Apart, but closing fast enough to meet inside the step.
+    CHECK_MSG(CollideCapsuleCapsule(left, left, 1.0f, far, far, 1.0f,
+                                    normal, penetration, point, 4.0f),
+              "a speculative margin must reach it");
+    CHECK_MSG(penetration < 0.0f, "and report the gap as a negative penetration");
+    CHECK_NEAR(penetration, -3.0f);
+}
+
+static void testTwoCapsulesTouchAtTheirNearestApproach() {
+    // Upright, side by side, radius 0.5 each with their axes 0.8 apart: the
+    // radii sum to 1.0, so they overlap by 0.2 wherever their straight sections
+    // face each other.
+    glm::vec3 normal(0.0f);
+    float penetration = 0.0f;
+    glm::vec3 point(0.0f);
+
+    const glm::vec3 a0(0.0f, -1.0f, 0.0f);
+    const glm::vec3 a1(0.0f, 1.0f, 0.0f);
+    const glm::vec3 b0(0.8f, -1.0f, 0.0f);
+    const glm::vec3 b1(0.8f, 1.0f, 0.0f);
+
+    CHECK(CollideCapsuleCapsule(a0, a1, 0.5f, b0, b1, 0.5f, normal, penetration, point));
+    CHECK_NEAR(penetration, 0.2f);
+    CHECK_NEAR(normal.x, 1.0f);
+    CHECK_MSG(std::fabs(normal.y) < 1e-4f,
+              "two upright capsules must push each other sideways, not up");
+
+    // Half way into the overlap, measured from the first capsule's surface.
+    CHECK_NEAR(point.x, 0.4f);
+
+    // Moved apart, they must stop being a contact.
+    CHECK_MSG(!CollideCapsuleCapsule(a0, a1, 0.5f, glm::vec3(3.0f, -1.0f, 0.0f),
+                                     glm::vec3(3.0f, 1.0f, 0.0f), 0.5f,
+                                     normal, penetration, point),
+              "three units apart is not a contact");
+}
+
+static void testACapsuleStandsOnTheTopOfABox() {
+    // The whole reason the shape exists. Radius 0.4, straight section from
+    // y = 1.2 to y = 2.0, so its lowest point is at y = 0.8. The box's top face
+    // is at y = 1.0, so it is 0.2 deep.
+    const auto floor = makeBox(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(5.0f, 1.0f, 5.0f));
+
+    glm::vec3 normal(0.0f);
+    float penetration = 0.0f;
+    glm::vec3 point(0.0f);
+
+    CHECK(CollideCapsuleObb(glm::vec3(0.0f, 1.2f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f), 0.4f,
+                            floor, normal, penetration, point));
+    CHECK_NEAR(penetration, 0.2f);
+    CHECK_MSG(normal.y > 0.99f,
+              "standing on a floor must push the capsule straight up, not sideways");
+    CHECK_NEAR(point.y, 1.0f);
+}
+
+static void testACapsuleOnASlopeGetsTheSlopesNormal() {
+    // The same failure the ramp test at the bottom of this file describes, for
+    // the shape a character actually uses. Against the box's bounding box the
+    // normal would be a world axis and a character would stand level on a hill.
+    const float slope = glm::radians(30.0f);
+    const auto ramp = makeBox(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(5.0f, 0.5f, 5.0f), slope);
+
+    glm::vec3 normal(0.0f);
+    float penetration = 0.0f;
+    glm::vec3 point(0.0f);
+
+    CHECK(CollideCapsuleObb(glm::vec3(0.0f, 0.6f, 0.0f), glm::vec3(0.0f, 2.0f, 0.0f), 0.3f,
+                            ramp, normal, penetration, point));
+    CHECK_MSG(normal.y < 0.95f, "a 30-degree ramp must produce a tilted normal");
+    CHECK_MSG(std::fabs(normal.x) > 0.1f, "and it must lean along the slope");
+}
+
+static void testACapsuleLyingAcrossABoxIsCaughtByItsMiddle() {
+    // Horizontal, spanning a narrow pillar it does not touch at either end. The
+    // nearest point is somewhere along the straight section, which is the case
+    // that would be missed by testing only the two end spheres - the tempting
+    // shortcut, and wrong for exactly the arrangement a bridge is.
+    const auto pillar = makeBox(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.2f, 1.0f, 0.2f));
+
+    glm::vec3 normal(0.0f);
+    float penetration = 0.0f;
+    glm::vec3 point(0.0f);
+
+    CHECK(CollideCapsuleObb(glm::vec3(-3.0f, 1.2f, 0.0f), glm::vec3(3.0f, 1.2f, 0.0f), 0.4f,
+                            pillar, normal, penetration, point));
+    CHECK_MSG(normal.y > 0.99f, "it must be pushed up off the top of the pillar");
+    CHECK_NEAR(penetration, 0.2f);
+
+    // Raised clear, it must not be reported at all.
+    CHECK_MSG(!CollideCapsuleObb(glm::vec3(-3.0f, 2.0f, 0.0f), glm::vec3(3.0f, 2.0f, 0.0f), 0.4f,
+                                 pillar, normal, penetration, point),
+              "clear of the pillar is not a contact");
+}
+
 static void runTests() {
+    testClosestPointOnASegmentIsClamped();
+    testClosestPointsBetweenCrossedSegments();
+    testParallelSegmentsDoNotProduceANaN();
+    testClampingOneParameterMovesTheOther();
+    testASphereIsACapsuleWithNoLength();
+    testTwoCapsulesTouchAtTheirNearestApproach();
+    testACapsuleStandsOnTheTopOfABox();
+    testACapsuleOnASlopeGetsTheSlopesNormal();
+    testACapsuleLyingAcrossABoxIsCaughtByItsMiddle();
     testSeparatedBoxesDoNotCollide();
     testAxisAlignedOverlapMatchesTheOldAabbAnswer();
     testFaceContactProducesAManifoldNotAPoint();
@@ -212,4 +434,4 @@ static void runTests() {
     testTheRampThatCouldNotBeBuilt();
 }
 
-TEST_MAIN("test_sat", 25)
+TEST_MAIN("test_sat", 70)

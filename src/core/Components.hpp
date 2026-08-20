@@ -412,6 +412,34 @@ struct SphereColliderComponent {
     uint32_t collidesWith{CollisionLayer::kAll};
 };
 
+// A segment with a radius, standing along the entity's local Y.
+//
+// The shape a character wants, and the reason it is worth a third collider
+// rather than a tuned one of the first two. A box catches on every seam it walks
+// over, because the corner of a box meeting the corner of the floor tile in
+// front of it is a real collision and the solver is right to stop it. A sphere
+// solves that and rolls off everything instead. A capsule slides up small steps
+// and stands where it is put, and neither of the other two can be made to do
+// that by tuning.
+//
+// Also, and less obviously: a sphere of zero segment length IS a capsule, so
+// giving the solver capsules means sphere-versus-sphere and
+// sphere-versus-capsule stop being separate tests that can disagree.
+struct CapsuleColliderComponent {
+    float radius{0.5f};
+
+    // TOTAL height, caps included, so a capsule of height 2 and radius 0.5 is
+    // two units tall - the number an author measures against a doorway. The
+    // straight section is height - 2 * radius, and a height below twice the
+    // radius is simply a sphere rather than an error.
+    float height{2.0f};
+
+    glm::vec3 center{0.0f};
+    bool isTrigger{false};
+    uint32_t layer{CollisionLayer::kDefault};
+    uint32_t collidesWith{CollisionLayer::kAll};
+};
+
 struct AudioSourceComponent {
     std::string soundFile{"assets/audio/ambient.wav"};
     float volume{0.8f};
