@@ -158,6 +158,10 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
 
     m_editorLayer->SetGameMode(m_manifest.isGame);
 
+    // The same answer, given to the renderer. Without it the scene pass drew
+    // the editor's ground grid into a shipped game.
+    m_renderer->SetEditorOverlaysVisible(!m_manifest.isGame);
+
     // Art hot reload. The plugin has been watched since hot reload shipped;
     // textures and meshes could not be, because nothing could un-cache them.
     m_assetWatcher.SetCallback([this](const std::string& path) {

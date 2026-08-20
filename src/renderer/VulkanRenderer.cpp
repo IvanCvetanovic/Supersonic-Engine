@@ -1125,11 +1125,17 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
                            VulkanPipeline::kSceneSet, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
     cmd.draw(3, 1, 0, 0);
 
-    // Ground grid last so it blends over the scene it is depth-tested against.
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetPipeline());
-    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetLayout(),
-                           VulkanPipeline::kSceneSet, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
-    cmd.draw(6, 1, 0, 0);
+    // Ground grid last so it blends over the scene it is depth-tested against -
+    // and only where there is an editor to want one. It is a construction
+    // guide, not part of any level, and a shipped game drew it because the call
+    // sat here with nothing in front of it.
+    if (m_editorOverlays) {
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetPipeline());
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetLayout(),
+                               VulkanPipeline::kSceneSet, 1, &m_descriptorSets[m_currentFrame],
+                               0, nullptr);
+        cmd.draw(6, 1, 0, 0);
+    }
 
     cmd.endRenderPass();
 

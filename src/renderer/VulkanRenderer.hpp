@@ -65,6 +65,17 @@ public:
     // Last frame's culling counters, for the editor's statistics panel.
     const RenderSystem::Stats& GetRenderStats() const { return m_renderStats; }
 
+    // Whether to draw the parts of the scene pass that exist for an editor and
+    // for nothing else - today the infinite ground grid.
+    //
+    // A packaged game drew it. Not as an option anybody chose, but because the
+    // draw sat at the end of the scene pass with nothing in front of it: a
+    // shipped title opened on its own level with the editor's construction grid
+    // blended over the horizon. Set once at startup from the manifest, because
+    // that is when the answer is known and it never changes afterwards.
+    void SetEditorOverlaysVisible(bool visible) { m_editorOverlays = visible; }
+    bool EditorOverlaysVisible() const { return m_editorOverlays; }
+
     // The persistent, disk-backed, driver-UUID-validated pipeline cache. Handed
     // out so the editor's offscreen chain can use it too rather than compiling
     // its pipelines from SPIR-V on every viewport resize.
@@ -165,6 +176,9 @@ private:
     // entities every frame, and eighteen passes reading one vector should not
     // also mean one allocation per frame.
     std::vector<RenderSystem::ShadowCaster> m_shadowCasters;
+
+    // True in the editor, false in a packaged game. See SetEditorOverlaysVisible.
+    bool m_editorOverlays{true};
 
     // Which depth passes were recorded last frame and from what, so a pass
     // whose inputs have not changed is not recorded again.
