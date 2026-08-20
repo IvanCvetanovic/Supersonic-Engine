@@ -1,4 +1,6 @@
 #include "core/PrefabSerializer.hpp"
+
+#include <unordered_map>
 #include "core/AssetVersion.hpp"
 #include "core/ComponentCodec.hpp"
 #include "core/Components.hpp"
@@ -43,8 +45,40 @@ SerializationResult PrefabSerializer::SavePrefab(entt::registry& registry, entt:
     if (!file) {
         return { false, "Write to " + filepath + " failed." };
     }
+    // The file on disk has changed, so whatever was parsed from it is now the
+    // previous version. Without this, saving a prefab and immediately dragging
+    // it back into the scene gives you what it used to be.
+    ClearCache();
+
     return { true, "Saved prefab to " + filepath + "." };
 }
+
+namespace {
+
+// Prefabs that have already been read and parsed, by path.
+//
+// Every spawn used to open the file, read it into a string and run the whole
+// JSON parser over it. That is a syscall, an allocation of the file's contents
+// and a full parse to produce a document that is identical to the one produced
+// the last time - and a game that spawns units from a prefab does this at
+// whatever rate it spawns units. A parsed document is the thing worth keeping;
+// the file is not going to have changed between two spawns in the same frame.
+//
+// A function-local static for the same reason the others in this library are:
+// one definition however many translation units reach it.
+//
+// Holds the PARSED document rather than the text, because parsing is the
+// expensive half and holding the text would mean doing it again anyway.
+std::unordered_map<std::string, Json::Value>& prefabCache() {
+    static std::unordered_map<std::string, Json::Value> cache;
+    return cache;
+}
+
+} // namespace
+
+void PrefabSerializer::ClearCache() { prefabCache().clear(); }
+
+std::size_t PrefabSerializer::CachedPrefabCount() { return prefabCache().size(); }
 
 entt::entity PrefabSerializer::InstantiatePrefab(entt::registry& registry, const std::string& filepath,
                                                  SerializationResult* outResult) {
@@ -52,23 +86,36 @@ entt::entity PrefabSerializer::InstantiatePrefab(entt::registry& registry, const
         if (outResult) *outResult = { ok, message };
     };
 
-    // The original version never opened the file at all; it created a hardcoded
-    // cube and reported success even for a path that did not exist.
-    std::ifstream file(filepath);
-    if (!file.is_open()) {
-        report(false, "No prefab at " + filepath + ".");
-        return entt::null;
+    auto& cache = prefabCache();
+    auto cached = cache.find(filepath);
+
+    if (cached == cache.end()) {
+        // The original version never opened the file at all; it created a
+        // hardcoded cube and reported success even for a path that did not
+        // exist.
+        std::ifstream file(filepath);
+        if (!file.is_open()) {
+            report(false, "No prefab at " + filepath + ".");
+            return entt::null;
+        }
+
+        std::stringstream ss;
+        ss << file.rdbuf();
+
+        Json::Value parsed;
+        std::string error;
+        if (!Json::Parse(ss.str(), parsed, error) || !parsed.IsObject()) {
+            report(false, "Could not parse " + filepath + ": " + error);
+            return entt::null;
+        }
+
+        // Only a document that parsed is kept. Caching a failure would make a
+        // prefab that was broken once stay broken until the editor restarts,
+        // even after the file is fixed.
+        cached = cache.emplace(filepath, std::move(parsed)).first;
     }
 
-    std::stringstream ss;
-    ss << file.rdbuf();
-
-    Json::Value root;
-    std::string error;
-    if (!Json::Parse(ss.str(), root, error) || !root.IsObject()) {
-        report(false, "Could not parse " + filepath + ": " + error);
-        return entt::null;
-    }
+    const Json::Value& root = cached->second;
 
     const entt::entity entity = registry.create();
 

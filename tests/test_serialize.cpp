@@ -830,7 +830,116 @@ static void testAnOlderSceneThatSaysWhatItWantsIsTakenAtItsWord() {
               "a scene that says it wants no ground plane must not be given one");
 }
 
+
+static void testInstantiatingAPrefabTwiceParsesItOnce() {
+    // Every spawn used to open the file, read it into a string and run the
+    // whole JSON parser over it, to produce a document identical to the last
+    // one. A game that spawns units from a prefab does that at whatever rate it
+    // spawns units.
+    PrefabSerializer::ClearCache();
+    CHECK_EQ(PrefabSerializer::CachedPrefabCount(), size_t{0});
+
+    entt::registry registry;
+    const auto source = registry.create();
+    registry.emplace<TagComponent>(source, "Grunt");
+    registry.emplace<TransformComponent>(source, glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(PrefabSerializer::SavePrefab(registry, source, kPrefab).ok);
+
+    // Saving drops the cache, so this starts from nothing either way.
+    CHECK_EQ(PrefabSerializer::CachedPrefabCount(), size_t{0});
+
+    entt::registry target;
+    for (int i = 0; i < 25; ++i) {
+        const auto spawned = PrefabSerializer::InstantiatePrefab(target, kPrefab);
+        CHECK_MSG(spawned != entt::null, "spawn " + std::to_string(i) + " must succeed");
+    }
+
+    CHECK_MSG(PrefabSerializer::CachedPrefabCount() == 1,
+              "twenty-five spawns must parse one document: got " +
+                  std::to_string(PrefabSerializer::CachedPrefabCount()));
+
+    // And every one of them is a real, complete entity - a cache that handed
+    // back something emptier after the first would be worse than the parse.
+    int count = 0;
+    for (auto entity : target.view<TagComponent>()) {
+        CHECK(target.get<TagComponent>(entity).tag == "Grunt");
+        CHECK_NEAR(target.get<TransformComponent>(entity).position.y, 2.0f);
+        ++count;
+    }
+    CHECK_EQ(count, 25);
+
+    std::remove(kPrefab.c_str());
+    PrefabSerializer::ClearCache();
+}
+
+static void testSavingAPrefabInvalidatesWhatWasParsedFromIt() {
+    // Otherwise saving a prefab and dragging it straight back into the scene
+    // gives you the version it used to be, which is the kind of thing that
+    // reads as "the editor did not save my change".
+    PrefabSerializer::ClearCache();
+
+    entt::registry registry;
+    const auto source = registry.create();
+    registry.emplace<TagComponent>(source, "Before");
+    registry.emplace<TransformComponent>(source);
+    CHECK(PrefabSerializer::SavePrefab(registry, source, kPrefab).ok);
+
+    entt::registry target;
+    const auto first = PrefabSerializer::InstantiatePrefab(target, kPrefab);
+    CHECK(first != entt::null);
+    CHECK(target.get<TagComponent>(first).tag == "Before");
+
+    // Change it and save over the same path.
+    registry.get<TagComponent>(source).tag = "After";
+    CHECK(PrefabSerializer::SavePrefab(registry, source, kPrefab).ok);
+
+    const auto second = PrefabSerializer::InstantiatePrefab(target, kPrefab);
+    CHECK(second != entt::null);
+    CHECK_MSG(target.get<TagComponent>(second).tag == "After",
+              "the second spawn must be the saved version, not the cached one");
+
+    std::remove(kPrefab.c_str());
+    PrefabSerializer::ClearCache();
+}
+
+static void testABrokenPrefabIsNotCached() {
+    // Caching a failure would make a prefab that was broken once stay broken
+    // until the editor restarts, even after the file is fixed.
+    PrefabSerializer::ClearCache();
+
+    {
+        std::ofstream f(kPrefab);
+        f << "{ this is not json";
+    }
+
+    entt::registry target;
+    SerializationResult result;
+    CHECK_MSG(PrefabSerializer::InstantiatePrefab(target, kPrefab, &result) == entt::null,
+              "a malformed prefab must not instantiate");
+    CHECK(!result.ok);
+    CHECK_MSG(PrefabSerializer::CachedPrefabCount() == 0,
+              "and must not be remembered as if it had");
+
+    // Fixed on disk, and it works without anyone clearing anything.
+    {
+        entt::registry registry;
+        const auto source = registry.create();
+        registry.emplace<TagComponent>(source, "Fixed");
+        registry.emplace<TransformComponent>(source);
+        CHECK(PrefabSerializer::SavePrefab(registry, source, kPrefab).ok);
+    }
+    const auto repaired = PrefabSerializer::InstantiatePrefab(target, kPrefab);
+    CHECK_MSG(repaired != entt::null, "a repaired prefab must load");
+    CHECK(target.get<TagComponent>(repaired).tag == "Fixed");
+
+    std::remove(kPrefab.c_str());
+    PrefabSerializer::ClearCache();
+}
+
 static void runTests() {
+    testInstantiatingAPrefabTwiceParsesItOnce();
+    testSavingAPrefabInvalidatesWhatWasParsedFromIt();
+    testABrokenPrefabIsNotCached();
     testAnOlderSceneKeepsTheGroundPlaneItWasAuthoredAgainst();
     testAnOlderSceneThatSaysWhatItWantsIsTakenAtItsWord();
     testWorldPhysicsSurvivesARoundTrip();
@@ -853,4 +962,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 175)
+TEST_MAIN("test_serialize", 250)
