@@ -1611,13 +1611,6 @@ Listed rather than hidden.
   (`raycast`, `isGrounded`), animation control and the UI canvas — but every one
   of those is a fixed function-pointer block, so a script still cannot name a
   component the ABI did not anticipate.
-- **Lights are placed from `TransformComponent`, not `WorldTransformComponent`.**
-  `gatherLights` reads the local transform, so a light parented to something is
-  positioned by its offset within that parent rather than by where the parent
-  actually is. Everything else downstream — the scene pass, both shadow passes,
-  picking and the gizmo — reads the world matrix, which is what §3b says makes
-  parenting work everywhere at once. Lights are the exception, and a parented
-  lamp lights the wrong place.
 
 ## Platform support
 

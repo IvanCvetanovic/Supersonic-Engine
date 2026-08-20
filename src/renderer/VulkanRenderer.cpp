@@ -542,6 +542,20 @@ void VulkanRenderer::createDescriptorSets() {
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Allocated and updated " << m_descriptorSets.size() << " scene DescriptorSets." << std::endl;
 }
 
+namespace {
+
+glm::vec3 lightWorldPosition(const entt::registry& registry, entt::entity entity) {
+    if (const auto* world = registry.try_get<WorldTransformComponent>(entity)) {
+        return glm::vec3(world->matrix[3]);
+    }
+    if (const auto* local = registry.try_get<TransformComponent>(entity)) {
+        return local->position;
+    }
+    return glm::vec3(0.0f);
+}
+
+} // namespace
+
 glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo,
                                        std::vector<PointShadowCaster>& outCasters,
                                        std::vector<SpotShadowCaster>& outSpots) const {
@@ -560,6 +574,20 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         ubo.ambientGround = glm::vec4(source.ambientGround, 1.0f);
     }
 
+    // Where a light actually is.
+    //
+    // This read TransformComponent, which is LOCAL to the parent, so a lamp
+    // parented to anything was positioned by its offset within that parent
+    // rather than by where the parent had put it - a torch attached to a
+    // character lit the world origin while the character walked away from it.
+    //
+    // Everything else downstream already reads the world matrix: the scene
+    // pass, both shadow passes, picking and the gizmo. Lights were the single
+    // exception, and it was listed as a known departure rather than fixed.
+    //
+    // Falls back to the local transform when there is no world matrix yet,
+    // which is the same answer for an unparented light and the only answer
+    // available before the first resolve.
     // The first directional light is the shadow caster, and is deliberately
     // placed at index 0 because the shader only shadows lights[0].
     for (auto entity : registry.view<LightComponent>()) {
@@ -568,10 +596,7 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
 
         GpuLight gpu{};
         if (light.type == static_cast<int>(LightType::Spot)) {
-            glm::vec3 position(0.0f);
-            if (const auto* transform = registry.try_get<TransformComponent>(entity)) {
-                position = transform->position;
-            }
+            const glm::vec3 position = lightWorldPosition(registry, entity);
             // A spot needs a position AND an aim, so w = 2 tells the shader to
             // read spotDirection as well and apply the cone.
             gpu.positionOrDirection = glm::vec4(position, 2.0f);
@@ -599,10 +624,7 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
                 gpu.attenuation.w = static_cast<float>(slot);
             }
         } else if (light.type == static_cast<int>(LightType::Point)) {
-            glm::vec3 position(0.0f);
-            if (const auto* transform = registry.try_get<TransformComponent>(entity)) {
-                position = transform->position;
-            }
+            const glm::vec3 position = lightWorldPosition(registry, entity);
             gpu.positionOrDirection = glm::vec4(position, 1.0f);
 
             // First come, first served, up to the fixed number of cubes. A
