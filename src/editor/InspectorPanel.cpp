@@ -1,6 +1,6 @@
 #include "editor/InspectorPanel.hpp"
 #include "core/PhysicsSettings.hpp"
-#include "renderer/BloomPass.hpp"
+#include "core/RenderSettings.hpp"
 #include <string>
 
 #include "renderer/PointShadow.hpp"
@@ -127,16 +127,20 @@ void InspectorPanel::drawWorldSettings(entt::registry& registry) {
                         "and there is nothing to select when it catches something "
                         "unexpectedly.");
 
-    if (!m_bloom) return;
-
     ImGui::Spacing();
     if (!ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
-    auto& bloom = m_bloom->MutableSettings();
-    ImGui::DragFloat("Threshold", &bloom.threshold, 0.01f, 0.0f, 10.0f);
-    ImGui::DragFloat("Soft Knee", &bloom.softKnee, 0.01f, 0.0f, 1.0f);
-    ImGui::DragFloat("Intensity", &bloom.intensity, 0.01f, 0.0f, 4.0f);
-    ImGui::DragFloat("Exposure", &bloom.exposure, 0.01f, 0.01f, 8.0f);
+    // Edited in the SCENE, not on the renderer. That is what makes a tuned look
+    // survive a save, and what puts it inside undo, redo and the snapshot Play
+    // restores on Stop - all of which work by serialising the registry.
+    auto& rendering = registry.ctx().contains<RenderSettings>()
+                          ? registry.ctx().get<RenderSettings>()
+                          : registry.ctx().emplace<RenderSettings>();
+
+    ImGui::DragFloat("Threshold", &rendering.bloomThreshold, 0.01f, 0.0f, 10.0f);
+    ImGui::DragFloat("Soft Knee", &rendering.bloomSoftKnee, 0.01f, 0.0f, 1.0f);
+    ImGui::DragFloat("Intensity", &rendering.bloomIntensity, 0.01f, 0.0f, 4.0f);
+    ImGui::DragFloat("Exposure", &rendering.exposure, 0.01f, 0.01f, 8.0f);
     ImGui::TextDisabled("The scene is HDR here, so a threshold of 1 means "
                         "brighter than white. These were compile-time constants; "
                         "a night level and a bright exterior do not share them.");

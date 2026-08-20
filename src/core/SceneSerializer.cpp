@@ -4,6 +4,7 @@
 #include "core/Json.hpp"
 #include "core/ComponentCodec.hpp"
 #include "core/PhysicsSettings.hpp"
+#include "core/RenderSettings.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -64,6 +65,19 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
              << physics.gravity.z << "], \"GroundPlane\": "
              << (physics.hasGroundPlane ? "true" : "false")
              << ", \"GroundPlaneY\": " << physics.groundPlaneY << " },\n";
+    }
+
+    // Scene-level rendering, for the same reason as the physics block: it
+    // belongs to the scene and no entity owns it.
+    {
+        static const RenderSettings kRenderDefaults;
+        const RenderSettings* storedRender = registry.ctx().find<RenderSettings>();
+        const RenderSettings& rendering = storedRender ? *storedRender : kRenderDefaults;
+        file << "  \"Rendering\": { \"BloomThreshold\": "
+             << rendering.bloomThreshold
+             << ", \"BloomSoftKnee\": " << rendering.bloomSoftKnee
+             << ", \"BloomIntensity\": " << rendering.bloomIntensity
+             << ", \"Exposure\": " << rendering.exposure << " },\n";
     }
 
     file << "  \"Entities\": [\n";
@@ -145,6 +159,19 @@ void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
     }
 
     registry.ctx().insert_or_assign<PhysicsSettings>(std::move(physics));
+
+    // Same shape, same reasoning: always assigned so a scene loaded over
+    // another cannot inherit its look, and absent keys read as the defaults so
+    // every scene written before this block existed still loads.
+    RenderSettings rendering;
+    if (root.Has("Rendering")) {
+        const auto& node = root["Rendering"];
+        rendering.bloomThreshold = node["BloomThreshold"].AsFloat(rendering.bloomThreshold);
+        rendering.bloomSoftKnee = node["BloomSoftKnee"].AsFloat(rendering.bloomSoftKnee);
+        rendering.bloomIntensity = node["BloomIntensity"].AsFloat(rendering.bloomIntensity);
+        rendering.exposure = node["Exposure"].AsFloat(rendering.exposure);
+    }
+    registry.ctx().insert_or_assign<RenderSettings>(std::move(rendering));
 }
 
 // One reader, shared by the on-disk load and the Play-mode restore.

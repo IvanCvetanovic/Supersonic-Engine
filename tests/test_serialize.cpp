@@ -12,6 +12,7 @@
 #include "core/AssetVersion.hpp"
 #include "core/Components.hpp"
 #include "core/PhysicsSettings.hpp"
+#include "core/RenderSettings.hpp"
 
 #include <cstdio>
 #include <filesystem>
@@ -693,6 +694,66 @@ static void testSavedScenesCarryTheCurrentVersion() {
 }
 
 
+static void testTheScenesLookSurvivesARoundTrip() {
+    // Bloom lived on the BloomPass, which the scene file never sees, so a look
+    // tuned in the editor lasted until the next reload. Moving it into the
+    // registry also puts it inside undo, redo and the Play snapshot - all three
+    // work by serialising the registry, and none of them had to learn about
+    // bloom to get it.
+    const std::string path = "test_rendering_tmp.scene";
+
+    {
+        entt::registry registry;
+        RenderSettings look;
+        look.bloomThreshold = 2.75f;
+        look.bloomSoftKnee = 0.125f;
+        look.bloomIntensity = 1.5f;
+        look.exposure = 0.4f;
+        registry.ctx().insert_or_assign<RenderSettings>(std::move(look));
+
+        const auto entity = registry.create();
+        registry.emplace<TagComponent>(entity, "Lit");
+        registry.emplace<TransformComponent>(entity);
+
+        CHECK_MSG(SceneSerializer::Serialize(registry, path).ok, "the scene must save");
+    }
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    std::remove(path.c_str());
+
+    CHECK_MSG(result.ok, "and load: " + result.message);
+    CHECK_MSG(loaded.ctx().contains<RenderSettings>(), "with its look");
+
+    const auto& look = loaded.ctx().get<RenderSettings>();
+    CHECK_NEAR(look.bloomThreshold, 2.75f);
+    CHECK_NEAR(look.bloomSoftKnee, 0.125f);
+    CHECK_NEAR(look.bloomIntensity, 1.5f);
+    CHECK_NEAR(look.exposure, 0.4f);
+}
+
+static void testASceneWithNoLookGetsTheDefaultOne() {
+    // Every scene written before this block existed. They must load, and they
+    // must not inherit whatever the previously open scene was tuned to.
+    entt::registry registry;
+    RenderSettings stale;
+    stale.bloomThreshold = 9.0f;
+    registry.ctx().insert_or_assign<RenderSettings>(std::move(stale));
+
+    const std::string path = "test_nolook_tmp.scene";
+    {
+        std::ofstream f(path);
+        f << R"({"Version": )" << AssetVersion::kCurrent << R"(, "Scene": "Old", "Entities": []})";
+    }
+
+    const auto result = SceneSerializer::Deserialize(registry, path);
+    std::remove(path.c_str());
+    CHECK_MSG(result.ok, "must load: " + result.message);
+
+    CHECK_MSG(std::fabs(registry.ctx().get<RenderSettings>().bloomThreshold - 1.0f) < 1e-6f,
+              "a scene with no Rendering block must not keep the last one's look");
+}
+
 static void testWorldPhysicsSurvivesARoundTrip() {
     // Gravity and the ground plane belong to the scene, not to any entity, so
     // they cannot go through ComponentCodec and are the one thing in the file a
@@ -942,6 +1003,8 @@ static void runTests() {
     testABrokenPrefabIsNotCached();
     testAnOlderSceneKeepsTheGroundPlaneItWasAuthoredAgainst();
     testAnOlderSceneThatSaysWhatItWantsIsTakenAtItsWord();
+    testTheScenesLookSurvivesARoundTrip();
+    testASceneWithNoLookGetsTheDefaultOne();
     testWorldPhysicsSurvivesARoundTrip();
     testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
     testUnversionedScenesStillLoad();

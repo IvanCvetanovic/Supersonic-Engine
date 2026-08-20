@@ -18,6 +18,7 @@
 #include "core/EcsUtils.hpp"
 #include "core/TransformSystem.hpp"
 #include "core/SimulationClock.hpp"
+#include "core/RenderSettings.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/PrefabSerializer.hpp"
@@ -915,6 +916,22 @@ void SupersonicApp::Run() {
         // reads them, so an edit to one asset shows on every entity using it in
         // the same frame.
         MaterialSystem::Sync(m_registry, *m_materialLibrary);
+
+        // The scene's look, handed to the pass that applies it. Pushed every
+        // frame rather than on change: the offscreen target and its bloom pass
+        // are rebuilt whenever the viewport resizes, so a value written once
+        // would be lost the first time the panel edge is dragged.
+        if (auto* bloom = m_editorLayer->GetOffscreen().GetBloom()) {
+            const auto* rendering = m_registry.ctx().find<RenderSettings>();
+            BloomPass::Settings applied;
+            if (rendering) {
+                applied.threshold = rendering->bloomThreshold;
+                applied.softKnee = rendering->bloomSoftKnee;
+                applied.intensity = rendering->bloomIntensity;
+                applied.exposure = rendering->exposure;
+            }
+            bloom->SetSettings(applied);
+        }
 
         // Mesh and texture uploads submit their own transfers, so they happen
         // here rather than mid-recording.

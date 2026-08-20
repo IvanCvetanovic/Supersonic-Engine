@@ -534,10 +534,6 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
     m_hierarchyPanel.OnImGuiRender();
 
     entt::entity selectedEntity = m_hierarchyPanel.GetSelectedEntity();
-    // Handed over each frame rather than once: the offscreen target is rebuilt
-    // whenever the viewport is resized, and the bloom pass with it, so a pointer
-    // taken at startup would be dangling by the first drag of the panel edge.
-    m_inspectorPanel.SetBloom(m_offscreenPass ? m_offscreenPass->GetBloom() : nullptr);
     m_inspectorPanel.OnImGuiRender(registry, selectedEntity);
 
     if (const auto browserStatus = m_contentBrowserPanel.OnImGuiRender(); !browserStatus.empty()) {
