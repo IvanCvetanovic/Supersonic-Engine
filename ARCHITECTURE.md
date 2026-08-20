@@ -307,9 +307,30 @@ test, which is the part that genuinely varies.
 the light's transform and the casters it can see; rendered twice from the same
 inputs it is the same image twice. `ShadowPassSignature` reduces those inputs to
 a 64-bit value and `ShadowCache` remembers what each pass was last recorded
-from, so a pass whose signature has not changed is skipped. On the demo scene
-that is 0.45 ms down to **0.047 ms** per frame, and on five hundred settled
-casters 3.32 ms down to **0.40 ms**.
+from, so a pass whose signature has not changed is skipped.
+
+| | recording every pass | skipping unchanged passes |
+|---|---|---|
+| demo scene, release | 0.093 ms | **0.011 ms** |
+| 1000 casters, release | 0.50 ms | **0.25 ms** |
+| demo scene, debug | 0.45 ms | 0.047 ms |
+| 500 casters, debug | 3.32 ms | 0.40 ms |
+
+**Both rows, because only one of them is the truth about a shipped game.** A
+Debug build of this engine runs between three and two hundred times slower per
+zone than a Release one — EnTT's lookups and GLM's operators are entirely
+unoptimised — and the ratio is not uniform, so a Debug profile does not merely
+scale the frame, it *reorders* it. At a thousand entities Debug says the frame
+is 34 ms and that the editor's UI and the transform resolve dominate it;
+Release says the frame is 1.5 ms and that the two shadow-recording zones are
+the largest thing in it. Optimisations chosen from the first list would mostly
+have been aimed at work that does not exist in the second.
+
+This one survives the change of build — 0.24 ms out of a 1.5 ms release frame
+is a sixth of it — because command recording is the one thing an optimiser
+cannot remove. It is the zone with the smallest debug-to-release ratio in the
+engine, 2.6x against 80x for the transform resolve and 210x for resource
+syncing.
 
 Three decisions in that are worth the words:
 

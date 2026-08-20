@@ -579,9 +579,21 @@ void SupersonicApp::Run() {
             // producing it. Splitting a report across two streams - a heading
             // through the log and its rows through cout - would also let the
             // two interleave with anything else logging in between.
+            // The build configuration, because without it the numbers mean
+            // nothing. A Debug build of this engine is between three and two
+            // hundred times slower per zone than a Release one - EnTT's lookups
+            // and GLM's operators are entirely unoptimised - so a Debug profile
+            // ranks the frame in an order a shipped game never sees. Reporting
+            // a measurement without saying what was measured is the same defect
+            // as reporting a mean and calling it typical.
+#ifdef NDEBUG
+            const char* buildConfig = "release";
+#else
+            const char* buildConfig = "DEBUG - see ARCHITECTURE section 4d";
+#endif
             std::cout << "[Profiler] CPU cost per frame over "
-                      << zoneSamples.size() << " frame(s), median and worst:"
-                      << std::endl;
+                      << zoneSamples.size() << " frame(s), median and worst ("
+                      << buildConfig << "):" << std::endl;
 
             std::vector<double> column;
             column.reserve(zoneSamples.size());
