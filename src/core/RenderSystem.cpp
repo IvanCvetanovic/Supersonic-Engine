@@ -70,24 +70,9 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
     }
 }
 
-void RenderSystem::RenderDepthOnly(
-    entt::registry& registry,
-    VulkanPipeline& pipeline,
-    MeshRegistry& meshes,
-    vk::CommandBuffer commandBuffer,
-    vk::DescriptorSet sceneSet,
-    const glm::mat4& cascadeViewProj,
-    const Frustum& lightFrustum,
-    Stats& stats) {
-
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
-    // Bound for the joint palette at binding 2. The depth pass reads nothing
-    // else from set 0 - the cascade transform arrives premultiplied in the push
-    // constant - but a skinned draw cannot skin without it.
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
-                                     VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
-
-    uint32_t boundMesh = MeshRegistry::kInvalidMesh;
+void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& meshes,
+                                       std::vector<ShadowCaster>& out) {
+    out.clear();
 
     auto view = registry.view<WorldTransformComponent, RenderableComponent>();
     for (auto entity : view) {
@@ -99,41 +84,77 @@ void RenderSystem::RenderDepthOnly(
         const GpuMesh* mesh = meshes.Get(renderable.meshID);
         if (!mesh || mesh->indexCount == 0) continue;
 
+        ShadowCaster caster;
+        caster.model = world.matrix;
+        caster.mesh = mesh;
+        caster.meshID = renderable.meshID;
+
+        // The eight-corner transform, done once for the frame instead of once
+        // per pass. The bounds do not depend on which light is looking.
+        Frustum::TransformAABB(world.matrix, renderable.localBoundsMin,
+                               renderable.localBoundsMax, caster.worldMin, caster.worldMax);
+
+        if (const auto* skin = registry.try_get<SkinnedMeshComponent>(entity)) {
+            caster.skinPaletteBase = skin->paletteBase;
+            caster.skinJointCount = static_cast<int32_t>(skin->jointMatrices.size());
+        }
+
+        out.push_back(caster);
+    }
+}
+
+void RenderSystem::RenderDepthOnly(
+    const std::vector<ShadowCaster>& casters,
+    VulkanPipeline& pipeline,
+    vk::CommandBuffer commandBuffer,
+    vk::DescriptorSet sceneSet,
+    const glm::mat4& lightViewProj,
+    const Frustum& lightFrustum,
+    Stats& stats) {
+
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
+    // Bound for the joint palette at binding 2. The depth pass reads nothing
+    // else from set 0 - the light's transform arrives premultiplied in the push
+    // constant - but a skinned draw cannot skin without it.
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                     VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
+
+    uint32_t boundMesh = MeshRegistry::kInvalidMesh;
+
+    for (const ShadowCaster& caster : casters) {
         // Cull against the LIGHT's frustum here, not the camera's: an object
-        // behind the viewer can still cast a shadow into view.
-        glm::vec3 worldMin, worldMax;
-        Frustum::TransformAABB(world.matrix, renderable.localBoundsMin, renderable.localBoundsMax,
-                               worldMin, worldMax);
-        if (!lightFrustum.IntersectsAABB(worldMin, worldMax)) {
+        // behind the viewer can still cast a shadow into view. This is the only
+        // work in the loop that depends on which pass is running, which is why
+        // everything else was worth hoisting out of it.
+        if (!lightFrustum.IntersectsAABB(caster.worldMin, caster.worldMax)) {
             ++stats.shadowCulled;
             continue;
         }
         ++stats.shadowDrawn;
 
-        if (renderable.meshID != boundMesh) {
-            const vk::Buffer buffers[] = { mesh->vertexBuffer->GetBuffer() };
+        if (caster.meshID != boundMesh) {
+            const vk::Buffer buffers[] = { caster.mesh->vertexBuffer->GetBuffer() };
             const vk::DeviceSize offsets[] = { 0 };
             commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
-            commandBuffer.bindIndexBuffer(mesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
-            boundMesh = renderable.meshID;
+            commandBuffer.bindIndexBuffer(caster.mesh->indexBuffer->GetBuffer(), 0,
+                                          vk::IndexType::eUint32);
+            boundMesh = caster.meshID;
         }
 
-        // World matrix so a child follows its parent, plus this cascade's
+        // World matrix so a child follows its parent, plus this light's
         // transform - the depth pass has no other use for the scene UBO.
         // Premultiplied on the CPU: two matrices would be the whole 128-byte
         // push constant budget, leaving nothing for the skinning indices. The
         // per-vertex skin matrix still composes correctly on the right.
         ShadowPushConstantData push{};
-        push.viewProjModel = cascadeViewProj * world.matrix;
-        if (const auto* skin = registry.try_get<SkinnedMeshComponent>(entity)) {
-            push.skinPaletteBase = skin->paletteBase;
-            push.skinJointCount = static_cast<int32_t>(skin->jointMatrices.size());
-        }
+        push.viewProjModel = lightViewProj * caster.model;
+        push.skinPaletteBase = caster.skinPaletteBase;
+        push.skinJointCount = caster.skinJointCount;
         commandBuffer.pushConstants(
             pipeline.GetLayout(), vk::ShaderStageFlagBits::eVertex,
             0, sizeof(ShadowPushConstantData), &push);
 
-        commandBuffer.drawIndexed(mesh->indexCount, 1, 0, 0, 0);
+        commandBuffer.drawIndexed(caster.mesh->indexCount, 1, 0, 0, 0);
     }
 }
 

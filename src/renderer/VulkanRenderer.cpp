@@ -873,6 +873,11 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     vk::CommandBuffer cmd = m_commandBuffers[m_currentFrame];
     cmd.reset();
 
+    // Every depth pass below reads this instead of the registry. Gathered
+    // after the palettes, because a skinned caster carries the palette offset
+    // this frame's gather just assigned it.
+    RenderSystem::GatherShadowCasters(registry, *m_meshRegistry, m_shadowCasters);
+
     vk::CommandBufferBeginInfo beginInfo{};
     cmd.begin(beginInfo);
     prepareZone.Stop();
@@ -906,7 +911,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         cmd.setViewport(0, 1, &shadowViewport);
         cmd.setScissor(0, 1, &shadowScissor);
 
-        RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
+        RenderSystem::RenderDepthOnly(m_shadowCasters, *m_shadowPipeline,
                                       cmd, m_descriptorSets[m_currentFrame],
                                       cascades.viewProj[cascade],
                                       cascades.frustum[cascade], m_renderStats);
@@ -960,7 +965,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
             // A slot with no light draws nothing and keeps its clear, which
             // reads as "no occluder anywhere" and therefore as fully lit.
             if (caster) {
-                RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
+                RenderSystem::RenderDepthOnly(m_shadowCasters, *m_shadowPipeline,
                                               cmd, m_descriptorSets[m_currentFrame],
                                               faceViewProj[face],
                                               Frustum::FromMatrix(faceViewProj[face]),
@@ -1003,7 +1008,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         // One frustum, unlike the six a point light needs: a cone only ever
         // looks one way.
         if (spot) {
-            RenderSystem::RenderDepthOnly(registry, *m_shadowPipeline, *m_meshRegistry,
+            RenderSystem::RenderDepthOnly(m_shadowCasters, *m_shadowPipeline,
                                           cmd, m_descriptorSets[m_currentFrame],
                                           spot->viewProj,
                                           Frustum::FromMatrix(spot->viewProj),

@@ -158,6 +158,12 @@ private:
     // Reused between frames so the gather does not allocate every frame.
     std::vector<glm::mat4> m_paletteScratch;
     RenderSystem::Stats m_renderStats{};
+
+    // Rebuilt once per frame and read by all eighteen depth passes. A member
+    // rather than a local so the storage is reused: it is the same handful of
+    // entities every frame, and eighteen passes reading one vector should not
+    // also mean one allocation per frame.
+    std::vector<RenderSystem::ShadowCaster> m_shadowCasters;
     std::unique_ptr<VulkanPipeline> m_shadowPipeline;
 
     vk::CommandPool m_commandPool{nullptr};

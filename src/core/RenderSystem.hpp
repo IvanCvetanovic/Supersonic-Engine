@@ -51,16 +51,51 @@ public:
         Stats& stats
     );
 
-    // Shadow pass for one cascade: same geometry, no materials, no textures.
-    // Only positions matter, and the cascade's transform arrives in the push
-    // constant, so this binds no descriptor set at all.
+    // One entity, resolved down to what a depth pass actually needs.
+    //
+    // A frame runs EIGHTEEN depth passes - four cascades, six faces for each
+    // point-light slot, one for each spot slot - and every one of them used to
+    // walk the registry from scratch: two component lookups, a mesh-registry
+    // lookup, a try_get for the skin, and eight corner transforms to build the
+    // world bounds. All of that is identical in all eighteen. The only thing
+    // that differs between passes is which frustum the bounds are tested
+    // against.
+    //
+    // So it is gathered once and the passes read it. That is the difference
+    // between eighteen registry traversals per frame and one.
+    struct ShadowCaster {
+        glm::mat4 model{1.0f};
+
+        // WORLD bounds, already transformed. This is the eight-corner
+        // transform that was being redone per pass.
+        glm::vec3 worldMin{0.0f};
+        glm::vec3 worldMax{0.0f};
+
+        // Resolved once. Safe to hold for the frame because the mesh registry
+        // is write-once and every upload has already happened by the time
+        // DrawFrame runs - SyncResources is called before it, deliberately.
+        const GpuMesh* mesh{nullptr};
+        uint32_t meshID{0};
+
+        uint32_t skinPaletteBase{0};
+        int32_t skinJointCount{0};
+    };
+
+    // Everything visible that casts a shadow, in registry order. Clears `out`
+    // and refills it, so a caller can keep one vector for the life of the
+    // renderer and never allocate again after the first frame.
+    static void GatherShadowCasters(entt::registry& registry, MeshRegistry& meshes,
+                                    std::vector<ShadowCaster>& out);
+
+    // Shadow pass for one cascade, cube face or spot: same geometry, no
+    // materials, no textures. Only positions matter, and the light's transform
+    // arrives in the push constant, so this binds no descriptor set at all.
     static void RenderDepthOnly(
-        entt::registry& registry,
+        const std::vector<ShadowCaster>& casters,
         VulkanPipeline& pipeline,
-        MeshRegistry& meshes,
         vk::CommandBuffer commandBuffer,
         vk::DescriptorSet sceneSet,
-        const glm::mat4& cascadeViewProj,
+        const glm::mat4& lightViewProj,
         const Frustum& lightFrustum,
         Stats& stats
     );
