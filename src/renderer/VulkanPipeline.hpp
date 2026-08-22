@@ -87,7 +87,7 @@ struct UniformBufferObject {
 struct PushConstantData {
     glm::mat4 model;         // 0..63   (vertex)
     glm::vec4 albedoColor;   // 64..79  (fragment)
-    glm::vec4 material;      // 80..95  x=roughness y=metallic z=ao (fragment)
+    glm::vec4 material;      // 80..95  x=roughness y=metallic z=ao w=alphaCutoff (fragment)
 
     // Light this surface emits regardless of what falls on it. rgb is added
     // after shading; a is unused padding.

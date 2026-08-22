@@ -389,6 +389,18 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 ImGui::TextDisabled("(alpha from Albedo, drawn back to front)");
             }
 
+            // The other half of transparency, and the one foliage wants. Zero
+            // is off, so the slider bottoms out at "no cutout" rather than
+            // needing a checkbox beside it.
+            ImGui::SliderFloat("Alpha Cutoff", &material.alphaCutoff, 0.0f, 1.0f, "%.2f");
+            if (material.alphaCutoff > 0.0f) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(hard edge, stays opaque)");
+            } else {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(off)");
+            }
+
             // albedoTexturePath used to be a field nothing read.
             char texBuffer[512] = {};
             const size_t texLen = std::min(material.albedoTexturePath.size(), sizeof(texBuffer) - 1);

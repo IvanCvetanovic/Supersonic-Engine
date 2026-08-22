@@ -282,6 +282,28 @@ float spotShadowFactor(int slot, float NdotL) {
 
 void main() {
     vec4 albedoTex = texture(albedoMap, fragTexCoord);
+
+    // Alpha cutout, before anything is shaded.
+    //
+    // A leaf card, a chain-link fence, a grate: surfaces that are mostly holes.
+    // Without this they had to be marked transparent and go through the blended
+    // pass, where they sort against THEMSELVES - one leaf card in front of
+    // another composites in whichever order the sort happened to pick, and the
+    // result flickers as the camera moves. A hard edge is what they are asking
+    // for, and a discard is what draws one.
+    //
+    // Zero means no cutout, so the disabled path costs one compare rather than
+    // a shader variant - the same reason a fog density of zero is how fog is
+    // turned off. The test is against the SAME alpha the blend pass would have
+    // used, texture times factor, so a material reads the same either way.
+    //
+    // Early, because a discarded fragment should not pay for eight lights and
+    // eighteen shadow taps first.
+    float alphaCutoff = push.material.w;
+    if (alphaCutoff > 0.0 && albedoTex.a * push.albedoColor.a < alphaCutoff) {
+        discard;
+    }
+
     vec3 albedo = albedoTex.rgb * fragColor * push.albedoColor.rgb;
 
     float roughness = clamp(push.material.x, 0.02, 1.0);

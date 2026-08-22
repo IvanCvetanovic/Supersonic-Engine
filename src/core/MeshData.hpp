@@ -46,10 +46,11 @@ struct MeshMaterial {
     glm::vec3 emissiveColor{0.0f};
     float emissiveStrength{0.0f};
 
-    // From glTF alphaMode. BLEND becomes a transparent material; MASK does not,
-    // because there is no alpha-cutout path in the shader yet - see the
-    // transparency notes in ARCHITECTURE.
+    // From glTF alphaMode. BLEND becomes a transparent material; MASK becomes
+    // an alpha cutoff, which is what MASK actually asks for - a hard edge,
+    // rather than a place in a sorted blend it would fight with itself in.
     bool transparent{false};
+    float alphaCutoff{0.0f};
 };
 
 // CPU-side mesh, shared by every generator and loader.

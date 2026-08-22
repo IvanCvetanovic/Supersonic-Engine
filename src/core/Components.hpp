@@ -319,6 +319,26 @@ struct MaterialComponent {
 
     bool transparent{false};
 
+    // Discard any fragment whose alpha falls below this, and zero means do not.
+    //
+    // The other half of transparency, and the half most world content actually
+    // wants: a leaf card, a chain-link fence, a grate is mostly holes with hard
+    // edges, not a pane of glass. Without it those had to be marked
+    // `transparent` and pushed through the blended pass, where they sort
+    // against themselves - one leaf card in front of another composites in
+    // whichever order the distance sort picked, and the result flickers as the
+    // camera moves.
+    //
+    // A cutout surface stays OPAQUE: it writes depth, it needs no sorting, and
+    // it costs one compare in the shader. Setting both this and `transparent`
+    // is allowed and means what it says - blend what survives the cut - but it
+    // is not what foliage wants.
+    //
+    // Zero as the off switch rather than a separate bool, the same way a fog
+    // density of zero is how fog is turned off: the disabled path is then the
+    // same arithmetic rather than a branch that can disagree with it.
+    float alphaCutoff{0.0f};
+
     bool warnedMissingAsset{false};
 };
 

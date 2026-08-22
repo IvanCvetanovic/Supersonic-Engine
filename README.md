@@ -51,6 +51,7 @@ code quietly contradicts.
 | **Frustum culling** | Gribb–Hartmann plane extraction; the scene pass culls against the camera, the shadow pass against the light, so nothing off-screen pops its shadow in and out |
 | **HDR + bloom** | Floating-point scene target, luminance-thresholded bright pass with a soft knee, separable half-res blur, then tone map and sRGB encode — exactly one encode, at the end of the chain |
 | **Transparency** | A blended pass after the opaque one and after the sky, sorted back to front, with depth writes off — per-material, and particles ride the same pipeline |
+| **Alpha cutout** | A per-material alpha threshold discarded before shading, so foliage and grates keep a hard edge and stay opaque instead of sorting against themselves in the blend pass |
 | **Sky and fog** | A procedural gradient sky drawn as a fullscreen triangle where nothing else claimed the depth, and exponential-squared distance fog, both authored per scene |
 | **Emissive** | A per-material emissive colour and strength, driven above 1.0 to trip the bloom threshold |
 | **Texture sampling** | A generated mip chain and anisotropic filtering, both guarded on the device actually supporting them |
@@ -337,8 +338,9 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
 - [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
       is no cubemap path at all — no HDRI can be loaded — so metal and smooth
       dielectrics have nothing to reflect but a two-colour gradient
-- [ ] **Texture maps beyond albedo and normal**, and an alpha-cutout path, so
-      foliage stops having to go through the sorted blend
+- [ ] **Texture maps beyond albedo and normal.** Roughness, metallic and AO are
+      per-material constants, not maps, so no surface can be worn or wet in one
+      place and not another
 - [ ] **Light culling.** Eight is still a hard cap. Which eight is now chosen by
       relevance and logged, but lifting the cap needs a froxel grid
 - [ ] **Mouse capture and text input.** `GLFW_CURSOR` is never set, so a

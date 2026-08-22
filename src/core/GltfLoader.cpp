@@ -535,15 +535,15 @@ void appendPrimitive(const tinygltf::Model& model,
             }
         }
 
-        // MASK is deliberately not mapped to transparency. It wants a discard
-        // against alphaCutoff, and there is no cutout path in the shader;
-        // routing it through the blend pass would make foliage sort against
-        // itself, which looks worse than the hard edge it is asking for.
+        // BLEND sorts; MASK cuts. They are different requests and mapping the
+        // second onto the first is what makes foliage sort against itself.
         submesh.material.transparent = material.alphaMode == "BLEND";
         if (material.alphaMode == "MASK") {
-            SUPERSONIC_LOG_WARN("GltfLoader")
-                << "'" << nodeName << "' is alphaMode MASK, which needs an alpha-cutout "
-                << "path the shader does not have; importing it as opaque." << std::endl;
+            // The spec's default when the material omits it. A cutoff of zero
+            // would mean "no cutout" here, so a file asking for MASK with an
+            // explicit 0.0 gets the smallest cut that is still a cut.
+            const float cutoff = static_cast<float>(material.alphaCutoff);
+            submesh.material.alphaCutoff = cutoff > 0.0f ? cutoff : 0.5f;
         }
     }
 

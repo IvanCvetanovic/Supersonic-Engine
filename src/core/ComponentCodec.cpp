@@ -173,6 +173,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << ",\n";
         out << indent << "  \"EmissiveStrength\": " << jsonSafe(mat->emissiveStrength, "emissiveStrength") << ",\n";
         out << indent << "  \"Transparent\": " << (mat->transparent ? "true" : "false") << ",\n";
+        out << indent << "  \"AlphaCutoff\": " << jsonSafe(mat->alphaCutoff, "alphaCutoff") << ",\n";
         out << indent << "  \"Asset\": \"" << Json::Escape(mat->materialPath) << "\"\n";
         out << indent << "},\n";
     }
@@ -462,6 +463,9 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // Absent in every scene written before the blended pass existed, and
         // false is what those scenes rendered as.
         material.transparent = m["Transparent"].AsBool(false);
+        // Absent means zero means no cutout, so a scene written before this
+        // existed loads as the opaque material it was.
+        material.alphaCutoff = m["AlphaCutoff"].AsFloat(0.0f);
         material.emissiveColor = readVec3(m["Emissive"], glm::vec3(0.0f));
         material.emissiveStrength = m["EmissiveStrength"].AsFloat(0.0f);
     }

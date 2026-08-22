@@ -19,7 +19,10 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
 
     if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
         push.albedoColor = material->albedoColor;
-        push.material = glm::vec4(material->roughness, material->metallic, material->ao, 0.0f);
+        // w is the alpha cutoff. Zero is no cutout, which is also what every
+        // caller that builds a push constant by hand leaves it at.
+        push.material = glm::vec4(material->roughness, material->metallic, material->ao,
+                                  material->alphaCutoff);
         push.emissive = glm::vec4(material->emissiveColor * material->emissiveStrength, 0.0f);
     } else {
         push.albedoColor = glm::vec4(1.0f);

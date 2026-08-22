@@ -281,6 +281,7 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     material.albedoTexturePath = "assets/textures/turret.png";
     material.metallic = 0.75f;
     material.roughness = 0.25f;
+    material.alphaCutoff = 0.35f;
 
     auto& light = registry.emplace<LightComponent>(entity);
     light.type = 1;
@@ -434,6 +435,9 @@ static void testPrefabRoundTripsEveryField() {
         if (material) {
             CHECK_NEAR(material->metallic, 0.75f);
             CHECK(material->albedoTexturePath == "assets/textures/turret.png");
+            // A cutout that did not survive a save is a leaf card that turns
+            // back into a rectangle the next time the scene is opened.
+            CHECK_NEAR(material->alphaCutoff, 0.35f);
         }
 
         // Every one of these was dropped by the five-component writer.
@@ -1037,4 +1041,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 250)
+TEST_MAIN("test_serialize", 252)

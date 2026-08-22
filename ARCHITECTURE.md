@@ -461,12 +461,36 @@ leaves the depth buffer at the clear value, and a sky drawn after the whole
 scene at z = 1.0 with a lessOrEqual compare passes that test and paints over it.
 Transparency worked indoors and vanished against the horizon.
 
+**Cutout, which is the half most world content wants.** A leaf card, a
+chain-link fence, a grate is mostly holes with hard edges - not a pane of glass.
+`MaterialComponent::alphaCutoff` discards any fragment whose alpha falls below
+it, before anything is shaded, and a surface using it stays OPAQUE: it writes
+depth, it needs no sorting, and it costs one compare.
+
+Without it those surfaces had to be marked `transparent` and pushed through the
+blended pass, where they sort against THEMSELVES - one leaf card in front of
+another composites in whichever order the distance sort happened to pick, and
+the result flickers as the camera moves. That is not a quality difference; it is
+the wrong mechanism.
+
+Zero is the off switch rather than a separate flag or a shader variant, the same
+way a fog density of zero is how fog is turned off: the disabled path is then
+the same arithmetic rather than a branch that can disagree with it. The test is
+against the same alpha the blend pass would have used - texture times factor -
+so a material reads the same whichever route it takes. glTF `alphaMode: MASK`
+imports straight onto it, with the spec's 0.5 default when the file omits a
+cutoff.
+
 Two places the alpha still does not reach, neither of them fixed by the above:
 
 - **Shadows.** `GatherShadowCasters` filters on visibility and `castsShadow` and
-  never consults `MaterialComponent::transparent`, and `shadow.frag` has no
-  alpha test. A pane of glass and a cloud of fading particles both cast a
-  solid black shadow.
+  never consults `MaterialComponent::transparent` or `alphaCutoff`, and
+  `shadow.frag` has no alpha test. A pane of glass, a cloud of fading particles
+  and a leaf card all cast a solid black rectangle. The cutout case is the one
+  that shows worst, because the shape it casts is nothing like the shape drawn -
+  and it is the harder one to fix: the depth passes bind no material descriptor
+  set at all, deliberately, so giving them an alpha test means giving eighteen
+  passes a texture they currently do not need.
 - **Particles do not interleave with transparent meshes.** They are sorted among
   themselves and drawn after, because a particle is a different mesh with a
   different material set and merging the two lists would cost a rebind per draw

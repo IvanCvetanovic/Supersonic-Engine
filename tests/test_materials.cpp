@@ -289,6 +289,7 @@ static void testAnImportedMaterialReachesTheComponent() {
     imported.emissiveColor = glm::vec3(0.0f, 1.0f, 0.5f);
     imported.emissiveStrength = 4.0f;
     imported.transparent = true;
+    imported.alphaCutoff = 0.5f;
 
     MaterialComponent component;
     component.ao = 0.35f;   // authored, and not something glTF carries as a factor
@@ -303,6 +304,7 @@ static void testAnImportedMaterialReachesTheComponent() {
               "and the importer never filled it");
     CHECK(component.emissiveStrength == 4.0f);
     CHECK(component.transparent);
+    CHECK(component.alphaCutoff == 0.5f);
     CHECK_MSG(component.ao == 0.35f,
               "glTF carries occlusion as a texture, not a factor, so an authored "
               "ao must survive an import rather than being reset to a default");
@@ -347,6 +349,40 @@ static void testImportingDetachesFromASharedAsset() {
     CHECK(!component.warnedMissingAsset);
 }
 
+// glTF alphaMode MASK is a request for a hard edge, not for a place in the
+// sorted blend. Mapping it onto `transparent` is what makes foliage sort
+// against itself: one leaf card in front of another composites in whichever
+// order the distance sort picked, and it flickers as the camera moves.
+static void testMaskBecomesACutoffAndNotTransparency() {
+    MeshMaterial masked;
+    masked.present = true;
+    masked.alphaCutoff = 0.5f;
+    masked.transparent = false;
+
+    MaterialComponent component;
+    MaterialSystem::ApplyImportedMaterial(masked, component);
+
+    CHECK_MSG(component.alphaCutoff == 0.5f, "MASK must arrive as a cutoff");
+    CHECK_MSG(!component.transparent,
+              "a cutout surface stays opaque: it writes depth and needs no sorting");
+}
+
+// BLEND is the other request, and must not turn into a cutoff.
+static void testBlendStaysTransparentWithNoCutoff() {
+    MeshMaterial blended;
+    blended.present = true;
+    blended.transparent = true;
+    blended.alphaCutoff = 0.0f;
+
+    MaterialComponent component;
+    component.alphaCutoff = 0.9f;   // whatever was there before
+    MaterialSystem::ApplyImportedMaterial(blended, component);
+
+    CHECK(component.transparent);
+    CHECK_MSG(component.alphaCutoff == 0.0f,
+              "importing BLEND must clear a cutoff, not leave the old one behind");
+}
+
 static void runTests() {
     testTextRoundTrip();
     testGarbageIsRejected();
@@ -362,7 +398,9 @@ static void runTests() {
     testAnImportedMaterialReachesTheComponent();
     testAFileThatSaysNothingChangesNothing();
     testImportingDetachesFromASharedAsset();
+    testMaskBecomesACutoffAndNotTransparency();
+    testBlendStaysTransparentWithNoCutoff();
     cleanup();
 }
 
-TEST_MAIN("test_materials", 50)
+TEST_MAIN("test_materials", 55)

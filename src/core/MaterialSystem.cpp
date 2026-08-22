@@ -92,6 +92,7 @@ void MaterialSystem::ApplyImportedMaterial(const MeshMaterial& imported, Materia
     out.emissiveColor = imported.emissiveColor;
     out.emissiveStrength = imported.emissiveStrength;
     out.transparent = imported.transparent;
+    out.alphaCutoff = imported.alphaCutoff;
 
     // ao is deliberately left alone: glTF carries ambient occlusion as a
     // TEXTURE, not a factor, and there is no third texture binding to put it
