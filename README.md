@@ -223,7 +223,7 @@ assets/
 plugins/       Hot-reloadable C++ gameplay scripts
 platform/      Android and Apple target scaffolding
 tests/         Pure-logic regression suites
-docs/          Screenshots
+docs/          Screenshots, and the planning records under docs/planning/
 .github/       CI: manual-dispatch only (Actions -> CI -> Run workflow)
 ```
 
