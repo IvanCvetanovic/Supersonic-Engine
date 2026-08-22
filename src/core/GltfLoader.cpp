@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <cstdio>
 #include <iostream>
 #include <unordered_map>
 
@@ -99,9 +100,42 @@ std::string extractEmbeddedImage(const tinygltf::Model& model, int imageIndex,
         return {};
     }
 
+    // The stem alone is not a key. assets/models/enemies/character.glb and
+    // assets/models/npcs/character.glb share one, so the second would extract
+    // over the first - and with the freshness check below that is worse than
+    // last-write-wins: load the OLDER model second, find a cache file newer
+    // than its own source, reuse it, and render one model with the other's
+    // texture, silently. The within-file collision was designed against from
+    // the start; this is the across-file one.
+    //
+    // FNV-1a over the path AS ADDRESSED - relative to the asset root, with
+    // forward slashes - and deliberately NOT over the absolute path.
+    //
+    // This is not a detail. A material serialises the extracted texture's path,
+    // so that name has to come out the same on the machine that authored the
+    // scene and in the folder the game ships to. Hashing the canonical absolute
+    // path made it a function of where the project happened to sit: the editor
+    // wrote cache/gltf/model-81a8d58a-image0.png into the scene, the packaged
+    // copy of the same model extracted itself to ...-997b03a7-image0.png, and
+    // the game rendered the missing-texture checkerboard. Verified by packaging
+    // it and running the result, which is the only way that shows up.
+    //
+    // Not a hash anyone should rely on for anything but telling two asset paths
+    // apart, which is all this is.
+    const std::string key = fs::path(sourcePath).lexically_normal().generic_string();
+    uint64_t hash = 1469598103934665603ull;
+    for (const unsigned char c : key) {
+        hash ^= static_cast<uint64_t>(c);
+        hash *= 1099511628211ull;
+    }
+
+    char discriminator[17];
+    std::snprintf(discriminator, sizeof(discriminator), "%016llx",
+                  static_cast<unsigned long long>(hash));
+
     const std::string stem = fs::path(sourcePath).stem().string();
-    const fs::path outPath =
-        outDir / (stem + "-image" + std::to_string(imageIndex) + extension);
+    const fs::path outPath = outDir / (stem + "-" + std::string(discriminator, 8) +
+                                       "-image" + std::to_string(imageIndex) + extension);
 
     // Reuse an extraction that is at least as new as the model it came from.
     // Re-exporting the .glb makes it older and the bytes are written again, so

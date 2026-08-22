@@ -214,17 +214,109 @@ static void testEmbeddedImagesAreExtracted() {
 
 // Extracting twice must reuse rather than rewrite, and must land on the same
 // path both times - a cache that moved would break every scene referencing it.
-static void testExtractionIsStable() {
+//
+// The write time is what makes this a test of REUSE. Comparing only the two
+// returned paths would pass just as well against a loader that rewrote the file
+// on every single load, which is the soft pass this suite has been caught by
+// before.
+static void testExtractionIsReusedNotRewritten() {
     const std::string glb = "assets/models/embedded_textures.glb";
-    const auto first = GltfLoader::Load(glb);
-    const auto second = GltfLoader::Load(glb);
-    CHECK(first.ok && second.ok);
-    if (!first.ok || !second.ok) return;
-    if (first.submeshes.empty() || second.submeshes.empty()) return;
 
-    CHECK_MSG(first.submeshes[0].material.albedoTexturePath ==
-                  second.submeshes[0].material.albedoTexturePath,
+    const auto first = GltfLoader::Load(glb);
+    CHECK_MSG(first.ok, first.error);
+    if (!first.ok || first.submeshes.empty()) return;
+
+    const std::string extracted = first.submeshes[0].material.albedoTexturePath;
+    CHECK(!extracted.empty());
+    if (extracted.empty()) return;
+
+    std::error_code ec;
+    const auto writtenAt = std::filesystem::last_write_time(extracted, ec);
+    CHECK(!ec);
+
+    const auto second = GltfLoader::Load(glb);
+    CHECK_MSG(second.ok, second.error);
+    if (!second.ok || second.submeshes.empty()) return;
+
+    CHECK_MSG(second.submeshes[0].material.albedoTexturePath == extracted,
               "the extracted path must be stable across loads");
+
+    const auto stillWrittenAt = std::filesystem::last_write_time(extracted, ec);
+    CHECK(!ec);
+    CHECK_MSG(stillWrittenAt == writtenAt,
+              "a second load must reuse the extraction, not redo it");
+}
+
+// Two models with the same FILENAME in different folders must not extract over
+// each other. The stem alone is not a key, and combined with the freshness
+// check the failure is worse than last-write-wins: load the older model second,
+// find a cache file newer than its own source, reuse it, and render one model
+// with the other's texture with nothing logged.
+static void testTwoModelsNamedTheSameDoNotCollide() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    const fs::path root = fs::temp_directory_path() / "supersonic_gltf_collision";
+    fs::remove_all(root, ec);
+    const fs::path a = root / "enemies";
+    const fs::path b = root / "npcs";
+    fs::create_directories(a, ec);
+    fs::create_directories(b, ec);
+
+    // The same bytes under the same filename, in two directories.
+    fs::copy_file("assets/models/embedded_textures.glb", a / "character.glb",
+                  fs::copy_options::overwrite_existing, ec);
+    CHECK(!ec);
+    fs::copy_file("assets/models/embedded_textures.glb", b / "character.glb",
+                  fs::copy_options::overwrite_existing, ec);
+    CHECK(!ec);
+
+    const auto first = GltfLoader::Load((a / "character.glb").string());
+    const auto second = GltfLoader::Load((b / "character.glb").string());
+    CHECK_MSG(first.ok, first.error);
+    CHECK_MSG(second.ok, second.error);
+    if (first.submeshes.empty() || second.submeshes.empty()) { fs::remove_all(root, ec); return; }
+
+    const std::string pathA = first.submeshes[0].material.albedoTexturePath;
+    const std::string pathB = second.submeshes[0].material.albedoTexturePath;
+    CHECK(!pathA.empty() && !pathB.empty());
+    CHECK_MSG(pathA != pathB,
+              "two models sharing a filename must extract to different files: " + pathA);
+    CHECK(fs::exists(pathA) && fs::exists(pathB));
+
+    fs::remove(pathA, ec);
+    fs::remove(pathB, ec);
+    fs::remove(first.submeshes[0].material.normalTexturePath, ec);
+    fs::remove(second.submeshes[0].material.normalTexturePath, ec);
+    fs::remove_all(root, ec);
+}
+
+// The extracted name must be a function of the path AS ADDRESSED, not of where
+// the project happens to sit on this machine.
+//
+// A material serialises the extracted texture's path, so the name has to come
+// out identical on the machine that authored the scene and in the folder the
+// game ships to. An earlier draft hashed the canonical ABSOLUTE path: the
+// editor wrote one name into the scene, the packaged copy of the same model
+// extracted itself under another, and the game rendered the missing-texture
+// checkerboard. It passed every test in this file, and was only visible by
+// packaging the thing and running it.
+//
+// A literal, deliberately. Any machine-dependent input to the name makes this
+// fail on the next machine that runs it, which is exactly the alarm wanted.
+static void testTheExtractedNameIsPortable() {
+    const auto scene = GltfLoader::Load("assets/models/embedded_textures.glb");
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.submeshes.empty()) return;
+
+    const std::string expected = "cache/gltf/embedded_textures-01c42191-image0.png";
+    const std::string actual =
+        std::filesystem::path(scene.submeshes[0].material.albedoTexturePath)
+            .lexically_normal().generic_string();
+
+    CHECK_MSG(actual == expected,
+              "extracted name must not depend on this machine's directory layout; "
+              "got " + actual);
 }
 
 static void runTests() {
@@ -243,7 +335,9 @@ static void runTests() {
     testMaterialsAreRead();
     testTheRestOfTheMaterialIsReadToo();
     testEmbeddedImagesAreExtracted();
-    testExtractionIsStable();
+    testExtractionIsReusedNotRewritten();
+    testTwoModelsNamedTheSameDoNotCollide();
+    testTheExtractedNameIsPortable();
     testMissingFileFails();
     testGarbageFileFails();
 }

@@ -242,6 +242,39 @@ static void testScratchHotReloadCopiesAreNotShipped() {
     cleanup();
 }
 
+// Textures extracted out of a .glb live in cache/, not assets/, because they
+// are generated. But a scene that uses one serialises a cache/gltf/... path
+// into its material, and the packaged game looks for exactly that path beside
+// its own executable.
+//
+// It could regenerate them - the .glb ships and the mesh resolves first - but
+// only where the install directory is writable, which under Program Files it is
+// not. The failure there is permanent: TextureRegistry caches a failed load as
+// a checkerboard.
+static void testExtractedGlbTexturesAreShipped() {
+    cleanup();
+    const fs::path out = scratchRoot() / "WithCache";
+    std::error_code ec;
+
+    // The packager copies whatever is in cache/gltf relative to the working
+    // directory, which for a test run is the project root.
+    const fs::path cacheDir = fs::path("cache") / "gltf";
+    fs::create_directories(cacheDir, ec);
+    const fs::path probe = cacheDir / "supersonic_packaging_probe-image0.png";
+    { std::ofstream file(probe, std::ios::binary); file << "png-ish"; }
+
+    const auto result = GamePackager::PackageStandaloneGame(
+        out.string(), "assets/scenes/MainScene.scene");
+    CHECK_MSG(result.ok, result.message);
+
+    CHECK_MSG(fs::exists(out / "cache" / "gltf" / probe.filename()),
+              "a texture extracted from a .glb has to travel with the game that "
+              "serialised its path");
+
+    fs::remove(probe, ec);
+    cleanup();
+}
+
 static void runTests() {
     testTheManifestNamesTheSceneItWasGiven();
     testTheBinaryIsActuallyThere();
@@ -251,6 +284,7 @@ static void runTests() {
     testRuntimeLibrariesAreCopied();
     testAFailedRuntimeLibraryCopyIsNotASuccess();
     testScratchHotReloadCopiesAreNotShipped();
+    testExtractedGlbTexturesAreShipped();
 }
 
-TEST_MAIN("test_packaging", 22)
+TEST_MAIN("test_packaging", 24)

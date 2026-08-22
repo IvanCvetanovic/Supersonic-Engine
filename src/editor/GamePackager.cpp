@@ -101,6 +101,20 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
                                 out / "assets" / directory, note);
     }
 
+    // Textures extracted out of .glb files. These are not under assets/ - they
+    // are generated, so they live in the gitignored cache - but a scene that
+    // uses an embedded texture serialises a cache/gltf/... path into its
+    // material, and the game will look for exactly that path beside its own
+    // executable.
+    //
+    // The game can regenerate them: the .glb ships, and the mesh resolves
+    // before the texture does. But only if the install directory is WRITABLE,
+    // and a game installed under Program Files is not - at which point the
+    // extraction fails and TextureRegistry caches the failure as a
+    // checkerboard, permanently. Shipping them costs a few kilobytes and makes
+    // the packaged folder work without needing to write to itself.
+    ok &= copyTreeIfPresent(fs::path("cache") / "gltf", out / "cache" / "gltf", note);
+
     // The marker that stops the copied binary from starting the editor. Without
     // it the packaged folder was an editor that happened to have a game's
     // assets next to it.
