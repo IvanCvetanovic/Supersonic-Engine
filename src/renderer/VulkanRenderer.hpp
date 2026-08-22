@@ -182,6 +182,11 @@ private:
     // Rebuilt each frame by gatherLights, consumed by the cube shadow pass.
     mutable std::vector<PointShadowCaster> m_pointShadowCasters;
     mutable std::vector<SpotShadowCaster> m_spotShadowCasters;
+
+    // How many lights the scene had when the over-cap message was last logged,
+    // so it is said once per change rather than sixty times a second. Zero
+    // means the scene is within the cap and the next overflow should report.
+    mutable size_t m_lightCapReportedFor{0};
     std::unique_ptr<PipelineCache> m_pipelineCache;
 
     // Every skinned entity's joint matrices for the frame, back to back. The

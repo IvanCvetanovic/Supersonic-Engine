@@ -5,6 +5,7 @@
 
 #include "core/AnimationSystem.hpp"
 #include "core/RenderSystem.hpp"
+#include "core/LightSelection.hpp"
 #include "core/Components.hpp"
 #include "core/EcsUtils.hpp"
 
@@ -588,15 +589,36 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
     // Falls back to the local transform when there is no world matrix yet,
     // which is the same answer for an unparented light and the only answer
     // available before the first resolve.
+    // Which eight, when the scene has more than the UBO's fixed array holds.
+    // The rule and the reason both live in core/LightSelection.hpp, where a
+    // suite can reach them - this used to be an implicit consequence of the
+    // order EnTT happens to walk a pool in.
+    const std::vector<entt::entity> chosen =
+        SelectLights(registry, glm::vec3(ubo.cameraPosition), static_cast<size_t>(kMaxLights));
+
+    // Said once per change rather than once per frame. Silence is what made
+    // the old behaviour so hard to account for.
+    const size_t authored = registry.view<LightComponent>().size();
+    if (authored > static_cast<size_t>(kMaxLights)) {
+        if (m_lightCapReportedFor != authored) {
+            m_lightCapReportedFor = authored;
+            SUPERSONIC_LOG_WARN("VulkanRenderer")
+                << "Scene has " << authored << " lights and the shader takes " << kMaxLights
+                << "; keeping the " << kMaxLights << " most relevant to the camera." << std::endl;
+        }
+    } else {
+        m_lightCapReportedFor = 0;
+    }
+
     // The first directional light is the shadow caster, and is deliberately
     // placed at index 0 because the shader only shadows lights[0].
-    for (auto entity : registry.view<LightComponent>()) {
+    for (const auto entity : chosen) {
         if (count >= kMaxLights) break;
         const auto& light = registry.get<LightComponent>(entity);
 
         GpuLight gpu{};
         if (light.type == static_cast<int>(LightType::Spot)) {
-            const glm::vec3 position = lightWorldPosition(registry, entity);
+            const glm::vec3 position = LightWorldPosition(registry, entity);
             // A spot needs a position AND an aim, so w = 2 tells the shader to
             // read spotDirection as well and apply the cone.
             gpu.positionOrDirection = glm::vec4(position, 2.0f);
@@ -624,7 +646,7 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
                 gpu.attenuation.w = static_cast<float>(slot);
             }
         } else if (light.type == static_cast<int>(LightType::Point)) {
-            const glm::vec3 position = lightWorldPosition(registry, entity);
+            const glm::vec3 position = LightWorldPosition(registry, entity);
             gpu.positionOrDirection = glm::vec4(position, 1.0f);
 
             // First come, first served, up to the fixed number of cubes. A
