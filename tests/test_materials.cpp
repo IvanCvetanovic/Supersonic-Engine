@@ -273,6 +273,80 @@ static void testSaveWritesEdits() {
     cleanup();
 }
 
+// A glTF says what its surface looks like and the engine threw all of it away:
+// GltfLoader resolved the base colour, the factors and the texture path, and
+// MeshRegistry::Acquire copied the vertices and indices out of the submesh and
+// dropped the wrapper holding the rest. A model describing rough gold with a
+// texture on it arrived as untextured white plastic.
+static void testAnImportedMaterialReachesTheComponent() {
+    MeshMaterial imported;
+    imported.present = true;
+    imported.baseColor = glm::vec4(1.0f, 0.78f, 0.34f, 1.0f);
+    imported.roughness = 0.22f;
+    imported.metallic = 0.95f;
+    imported.albedoTexturePath = "assets/textures/uv_grid.png";
+    imported.normalTexturePath = "assets/textures/tiles_normal.png";
+    imported.emissiveColor = glm::vec3(0.0f, 1.0f, 0.5f);
+    imported.emissiveStrength = 4.0f;
+    imported.transparent = true;
+
+    MaterialComponent component;
+    component.ao = 0.35f;   // authored, and not something glTF carries as a factor
+    MaterialSystem::ApplyImportedMaterial(imported, component);
+
+    CHECK(component.albedoColor.r > 0.99f && component.albedoColor.g > 0.77f);
+    CHECK(component.roughness == 0.22f);
+    CHECK(component.metallic == 0.95f);
+    CHECK(component.albedoTexturePath == "assets/textures/uv_grid.png");
+    CHECK_MSG(component.normalTexturePath == "assets/textures/tiles_normal.png",
+              "the renderer has had a normal-map slot since normal mapping shipped, "
+              "and the importer never filled it");
+    CHECK(component.emissiveStrength == 4.0f);
+    CHECK(component.transparent);
+    CHECK_MSG(component.ao == 0.35f,
+              "glTF carries occlusion as a texture, not a factor, so an authored "
+              "ao must survive an import rather than being reset to a default");
+}
+
+// A file that names no material must not blank a material somebody authored.
+// This is the difference between "the file said white" and "the file said
+// nothing", and it is why MeshMaterial carries `present` at all - every
+// procedural primitive in the engine goes through the same path.
+static void testAFileThatSaysNothingChangesNothing() {
+    MaterialComponent component;
+    component.albedoColor = glm::vec4(0.2f, 0.4f, 0.9f, 1.0f);
+    component.roughness = 0.11f;
+    component.albedoTexturePath = "assets/textures/turret.png";
+    component.materialPath = "assets/materials/Turret.material";
+
+    MaterialSystem::ApplyImportedMaterial(MeshMaterial{}, component);
+
+    CHECK(component.albedoColor.b > 0.89f);
+    CHECK(component.roughness == 0.11f);
+    CHECK(component.albedoTexturePath == "assets/textures/turret.png");
+    CHECK_MSG(component.materialPath == "assets/materials/Turret.material",
+              "a cube must not detach an entity from its shared material");
+}
+
+// Importing describes THIS entity's surface, so a linked entity is detached
+// rather than having the shared asset silently rewritten underneath every other
+// entity using it.
+static void testImportingDetachesFromASharedAsset() {
+    MeshMaterial imported;
+    imported.present = true;
+    imported.baseColor = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+
+    MaterialComponent component;
+    component.materialPath = "assets/materials/Shared.material";
+    component.warnedMissingAsset = true;
+
+    MaterialSystem::ApplyImportedMaterial(imported, component);
+
+    CHECK_MSG(component.materialPath.empty(),
+              "an imported material is the entity's own, not a shared asset");
+    CHECK(!component.warnedMissingAsset);
+}
+
 static void runTests() {
     testTextRoundTrip();
     testGarbageIsRejected();
@@ -285,7 +359,10 @@ static void runTests() {
     testSceneKeepsTheLinkNotJustTheValues();
     testAssignSwitchesBetweenAssets();
     testSaveWritesEdits();
+    testAnImportedMaterialReachesTheComponent();
+    testAFileThatSaysNothingChangesNothing();
+    testImportingDetachesFromASharedAsset();
     cleanup();
 }
 
-TEST_MAIN("test_materials", 35)
+TEST_MAIN("test_materials", 50)

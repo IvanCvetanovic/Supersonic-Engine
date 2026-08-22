@@ -283,6 +283,14 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 // otherwise, so leaving both set would keep drawing the cube.
                 mesh.filePath = droppedMesh;
                 mesh.primitiveType.clear();
+
+                // Take the file's own material, once. The file is not parsed
+                // until the next resolve, so this is a request rather than a
+                // copy - see the comment on the flag. Without it, dropping in a
+                // model that describes rough gold with a texture on it produced
+                // untextured white plastic and left the user to retype, by
+                // hand, values the file had already stated.
+                mesh.importMaterialOnResolve = true;
             }
 
             if (!mesh.filePath.empty() && ImGui::SmallButton("Revert to primitive")) {

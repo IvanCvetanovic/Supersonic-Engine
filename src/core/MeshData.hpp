@@ -3,12 +3,54 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <string>
 #include <vector>
 
 #include "core/Components.hpp"
 #include "core/JobSystem.hpp"
 
 namespace Supersonic {
+
+// What an imported file says its surface looks like.
+//
+// A glTF carries this and the engine threw all of it away: GltfLoader resolved
+// the base colour, the metallic and roughness factors and the texture path, and
+// MeshRegistry::Acquire copied vertices and indices out of the submesh and
+// dropped the wrapper holding the rest. So a model imported from a file that
+// describes a rough gold surface with a texture on it arrived as untextured
+// white plastic, and the only way to get it back was to retype it by hand into
+// the inspector - against a file that had said all of it already.
+//
+// Deliberately NOT the same struct as MaterialComponent. This is what a FILE
+// said; the component is what the ENTITY is, which the user may have since
+// edited. The import populates the component once, when the mesh is assigned,
+// and never touches it again - so an authored value is never overwritten by a
+// reimport, and a scene that has been saved carries its own answer.
+struct MeshMaterial {
+    // False for procedural primitives and for a file whose primitive names no
+    // material at all, which is the difference between "the file said white"
+    // and "the file said nothing".
+    bool present{false};
+
+    glm::vec4 baseColor{1.0f};
+    float roughness{0.5f};
+    float metallic{0.0f};
+
+    // Resolved next to the source file, so the path-keyed texture cache can
+    // open them. Empty when the file names no texture, or names one this
+    // importer cannot reach - an image embedded in a .glb, which arrives as
+    // bytes rather than as a file on disk.
+    std::string albedoTexturePath;
+    std::string normalTexturePath;
+
+    glm::vec3 emissiveColor{0.0f};
+    float emissiveStrength{0.0f};
+
+    // From glTF alphaMode. BLEND becomes a transparent material; MASK does not,
+    // because there is no alpha-cutout path in the shader yet - see the
+    // transparency notes in ARCHITECTURE.
+    bool transparent{false};
+};
 
 // CPU-side mesh, shared by every generator and loader.
 //

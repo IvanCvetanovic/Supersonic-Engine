@@ -93,6 +93,7 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
     }
 
     MeshData data;
+    MeshMaterial material;
     bool ok = false;
 
     if (!filePath.empty()) {
@@ -118,6 +119,15 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
                     if (submesh.skinIndex >= 0) { mergeSkin = submesh.skinIndex; break; }
                 }
 
+                // Acquire merges every primitive into ONE mesh with one
+                // material slot, so a file describing several surfaces can only
+                // contribute one of them. The first wins, and the rest are
+                // reported rather than dropped in silence - a monument whose
+                // stone and gold are separate glTF materials arrives as stone,
+                // and it should be possible to find out why.
+                bool tookMaterial = false;
+                size_t distinctMaterials = 0;
+
                 for (const auto& submesh : scene.submeshes) {
                     if (submesh.skinIndex != mergeSkin) {
                         SUPERSONIC_LOG_ERROR("MeshRegistry") << "Skipping '" << submesh.name << "' in " << filePath
@@ -127,6 +137,14 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
                         continue;
                     }
 
+                    if (submesh.material.present) {
+                        ++distinctMaterials;
+                        if (!tookMaterial) {
+                            material = submesh.material;
+                            tookMaterial = true;
+                        }
+                    }
+
                     const auto vertexOffset = static_cast<uint32_t>(data.vertices.size());
                     data.vertices.insert(data.vertices.end(),
                                          submesh.mesh.vertices.begin(), submesh.mesh.vertices.end());
@@ -134,6 +152,13 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
                         data.indices.push_back(index + vertexOffset);
                     }
                 }
+                if (distinctMaterials > 1) {
+                    SUPERSONIC_LOG_WARN("MeshRegistry")
+                        << filePath << " describes " << distinctMaterials
+                        << " materials; the primitives are merged into one mesh, so only "
+                        << "the first is imported." << std::endl;
+                }
+
                 data.computeBounds();
                 ok = !data.empty();
             } else {
@@ -162,12 +187,22 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
         return m_cubeMesh;
     }
 
-    return Upload(key, data);
+    const uint32_t id = Upload(key, data);
+
+    // After Upload, because Upload is also the entry point for procedural
+    // geometry, which has no source file and therefore no material to carry.
+    if (id < m_meshes.size()) m_meshes[id].material = material;
+    return id;
 }
 
 const GpuMesh* MeshRegistry::Get(uint32_t id) const {
     if (id >= m_meshes.size()) return nullptr;
     return &m_meshes[id];
+}
+
+const MeshMaterial* MeshRegistry::GetMaterial(uint32_t id) const {
+    if (id >= m_meshes.size()) return nullptr;
+    return &m_meshes[id].material;
 }
 
 

@@ -81,4 +81,24 @@ bool MaterialSystem::Assign(entt::registry& registry, entt::entity entity,
     return true;
 }
 
+void MaterialSystem::ApplyImportedMaterial(const MeshMaterial& imported, MaterialComponent& out) {
+    if (!imported.present) return;
+
+    out.albedoColor = imported.baseColor;
+    out.roughness = imported.roughness;
+    out.metallic = imported.metallic;
+    out.albedoTexturePath = imported.albedoTexturePath;
+    out.normalTexturePath = imported.normalTexturePath;
+    out.emissiveColor = imported.emissiveColor;
+    out.emissiveStrength = imported.emissiveStrength;
+    out.transparent = imported.transparent;
+
+    // ao is deliberately left alone: glTF carries ambient occlusion as a
+    // TEXTURE, not a factor, and there is no third texture binding to put it
+    // in. Overwriting an authored ao with a default would lose information to
+    // no purpose.
+    out.materialPath.clear();
+    out.warnedMissingAsset = false;
+}
+
 } // namespace Supersonic

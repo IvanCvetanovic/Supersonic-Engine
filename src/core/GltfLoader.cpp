@@ -323,34 +323,90 @@ void appendPrimitive(const tinygltf::Model& model,
 
     if (submesh.mesh.indices.empty()) return;
 
-    // Material: base colour factor, and the base colour texture resolved to a
-    // path on disk that TextureRegistry can open.
+    // Material.
+    //
+    // Everything here used to be resolved and then thrown away one caller up -
+    // MeshRegistry copied the geometry out of the submesh and dropped the rest -
+    // so it was worth reading only the base colour. Now that it survives, the
+    // rest of what the format actually says is worth reading too: the normal
+    // map, the emissive term, and whether the surface is meant to blend.
     if (primitive.material >= 0 && primitive.material < static_cast<int>(model.materials.size())) {
         const tinygltf::Material& material = model.materials[static_cast<size_t>(primitive.material)];
         const auto& pbr = material.pbrMetallicRoughness;
 
+        submesh.material.present = true;
+
         if (pbr.baseColorFactor.size() == 4) {
-            submesh.baseColorFactor = glm::vec4(
+            submesh.material.baseColor = glm::vec4(
                 static_cast<float>(pbr.baseColorFactor[0]), static_cast<float>(pbr.baseColorFactor[1]),
                 static_cast<float>(pbr.baseColorFactor[2]), static_cast<float>(pbr.baseColorFactor[3]));
         }
-        submesh.roughness = static_cast<float>(pbr.roughnessFactor);
-        submesh.metallic = static_cast<float>(pbr.metallicFactor);
+        submesh.material.roughness = static_cast<float>(pbr.roughnessFactor);
+        submesh.material.metallic = static_cast<float>(pbr.metallicFactor);
 
-        if (pbr.baseColorTexture.index >= 0 &&
-            pbr.baseColorTexture.index < static_cast<int>(model.textures.size())) {
-            const tinygltf::Texture& tex = model.textures[static_cast<size_t>(pbr.baseColorTexture.index)];
-            if (tex.source >= 0 && tex.source < static_cast<int>(model.images.size())) {
-                const std::string& uri = model.images[static_cast<size_t>(tex.source)].uri;
-                if (!uri.empty()) {
-                    submesh.albedoTexturePath = (fs::path(baseDir) / uri).lexically_normal().string();
-                } else {
-                    // Embedded/GLB image data: not written out to disk, so there
-                    // is nothing for the path-based texture cache to open.
-                    SUPERSONIC_LOG_ERROR("GltfLoader") << "'" << nodeName
-                              << "' uses an embedded image, which is not imported yet." << std::endl;
-                }
+        // One resolver for both maps. It used to exist once, inline, for the
+        // base colour only - which is how the normal map came to be the thing
+        // the renderer had a descriptor slot for and the importer never filled.
+        const auto resolveTexture = [&](int textureIndex, const char* slot) -> std::string {
+            if (textureIndex < 0 || textureIndex >= static_cast<int>(model.textures.size())) {
+                return {};
             }
+            const tinygltf::Texture& tex = model.textures[static_cast<size_t>(textureIndex)];
+            if (tex.source < 0 || tex.source >= static_cast<int>(model.images.size())) return {};
+
+            const std::string& uri = model.images[static_cast<size_t>(tex.source)].uri;
+            if (uri.empty()) {
+                // Embedded or .glb image data: tinygltf has the decoded pixels,
+                // but the texture cache is keyed by path and opens files, so
+                // there is nothing here it can be handed. Reported once per
+                // slot rather than silently producing an untextured model.
+                SUPERSONIC_LOG_ERROR("GltfLoader")
+                    << "'" << nodeName << "' has an embedded " << slot
+                    << " image; embedded images are not imported yet, so this "
+                    << "surface arrives without one." << std::endl;
+                return {};
+            }
+            return (fs::path(baseDir) / uri).lexically_normal().string();
+        };
+
+        submesh.material.albedoTexturePath =
+            resolveTexture(pbr.baseColorTexture.index, "base colour");
+        submesh.material.normalTexturePath =
+            resolveTexture(material.normalTexture.index, "normal");
+
+        if (material.emissiveFactor.size() == 3) {
+            submesh.material.emissiveColor = glm::vec3(
+                static_cast<float>(material.emissiveFactor[0]),
+                static_cast<float>(material.emissiveFactor[1]),
+                static_cast<float>(material.emissiveFactor[2]));
+            // The engine splits emission into a colour and a strength, so a
+            // non-black factor means "emitting, at unit strength" unless
+            // KHR_materials_emissive_strength says otherwise below.
+            if (glm::dot(submesh.material.emissiveColor, submesh.material.emissiveColor) > 0.0f) {
+                submesh.material.emissiveStrength = 1.0f;
+            }
+        }
+
+        // The one extension worth honouring here: without it an emissive factor
+        // is clamped to 1.0 and can never trip the bloom threshold, which is
+        // the entire point of authoring one.
+        if (const auto it = material.extensions.find("KHR_materials_emissive_strength");
+            it != material.extensions.end() && it->second.Has("emissiveStrength")) {
+            const auto& value = it->second.Get("emissiveStrength");
+            if (value.IsNumber()) {
+                submesh.material.emissiveStrength = static_cast<float>(value.GetNumberAsDouble());
+            }
+        }
+
+        // MASK is deliberately not mapped to transparency. It wants a discard
+        // against alphaCutoff, and there is no cutout path in the shader;
+        // routing it through the blend pass would make foliage sort against
+        // itself, which looks worse than the hard edge it is asking for.
+        submesh.material.transparent = material.alphaMode == "BLEND";
+        if (material.alphaMode == "MASK") {
+            SUPERSONIC_LOG_WARN("GltfLoader")
+                << "'" << nodeName << "' is alphaMode MASK, which needs an alpha-cutout "
+                << "path the shader does not have; importing it as opaque." << std::endl;
         }
     }
 

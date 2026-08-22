@@ -317,6 +317,9 @@ Android "not functional"; extending that register forward costs nothing.
       serializer a game can extend with its own components
 - [x] Assign a mesh, a texture or an audio clip by dragging it from the content
       browser; meshes, textures and prefabs reload when the file changes
+- [x] glTF materials — base colour, metallic, roughness, the base-colour AND
+      normal maps, emissive with `KHR_materials_emissive_strength`, and
+      `alphaMode` — imported onto the entity when a model is assigned
 - [x] More than one scene, switchable at runtime by a layer or a script
 
 ### Next
@@ -327,10 +330,10 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
       file in Explorer silently breaks every scene, prefab and material pointing
       at it. Animation clips, audio and `.material` files are also still outside
       hot reload, and a clip is typed into a text box rather than picked
-- [ ] **Finish the glTF import.** Materials are parsed and then discarded on the
-      way into the mesh registry; normal, emissive, AO and alpha-mode are never
-      read; and `.glb` embedded textures are dropped, so the single-file format
-      arrives untextured
+- [ ] **Embedded glTF textures.** A `.glb` carries its images as bytes rather
+      than as files, and the texture cache is keyed by path, so the usual
+      single-file export still arrives untextured — reported now rather than
+      silent, but not imported. The rest of the material import is done
 - [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
       is no cubemap path at all — no HDRI can be loaded — so metal and smooth
       dielectrics have nothing to reflect but a two-colour gradient

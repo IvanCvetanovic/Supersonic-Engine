@@ -327,6 +327,22 @@ struct MeshComponent {
     std::string filePath;
     uint32_t vertexCount{0};
     uint32_t indexCount{0};
+
+    // Set when a user ASSIGNS a model, cleared as soon as the material behind
+    // it has been copied onto this entity's MaterialComponent. Runtime state,
+    // deliberately unpersisted - like AnimatorComponent::warnedMissing and the
+    // particle pool.
+    //
+    // It exists because the two halves happen a frame apart: the assignment is
+    // a drag in the inspector, and the file is not parsed until the next
+    // SyncResources, so there is nothing to copy at the moment of the drop.
+    //
+    // And it is a one-shot rather than a standing rule, which is the important
+    // part. Importing on every resolve would overwrite an edited material every
+    // time the asset hot-reloaded, and re-importing on scene load would undo
+    // every material anyone had ever tuned. A file's material is a starting
+    // point offered once, not an authority.
+    bool importMaterialOnResolve{false};
 };
 
 struct RenderableComponent {

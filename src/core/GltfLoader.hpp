@@ -20,10 +20,10 @@ public:
     struct Submesh {
         MeshData mesh;
         std::string name;
-        std::string albedoTexturePath;   // resolved next to the source file
-        glm::vec4 baseColorFactor{1.0f};
-        float roughness{0.5f};
-        float metallic{0.0f};
+        // What the file said this primitive's surface is. Carried through to
+        // the mesh registry, which used to copy the geometry out of here and
+        // drop everything else on the floor.
+        MeshMaterial material;
 
         // Index into Scene::skeletons, or -1 for a rigid primitive. A skinned
         // primitive is NOT baked into its node's world space: the inverse bind

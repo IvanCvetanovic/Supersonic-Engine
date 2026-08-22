@@ -4,6 +4,7 @@
 
 #include <limits>
 #include "core/TransformSystem.hpp"
+#include "core/MaterialSystem.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -87,7 +88,7 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
     for (auto entity : view) {
         auto& renderable = view.get<RenderableComponent>(entity);
 
-        const auto* meshComponent = registry.try_get<MeshComponent>(entity);
+        auto* meshComponent = registry.try_get<MeshComponent>(entity);
         const auto* materialComponent = registry.try_get<MaterialComponent>(entity);
 
         // Nothing that decides these ids has changed, so neither have they.
@@ -104,6 +105,30 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
                 renderable.meshID = meshes.Acquire(mesh->primitiveType, mesh->filePath);
             } else if (renderable.meshID == MeshRegistry::kInvalidMesh) {
                 renderable.meshID = meshes.GetCubeMesh();
+            }
+        }
+
+        // A model was assigned in the inspector and the file has now been
+        // parsed, so what it says about its own surface can be copied onto the
+        // entity. Exactly once, and only ever because someone asked: see the
+        // comment on the flag for why this is not a standing rule.
+        //
+        // Folded into this loop rather than given a walk of its own - a second
+        // pass over every entity every frame to service a flag set by a drag
+        // would cost more than the feature is worth.
+        if (meshComponent && meshComponent->importMaterialOnResolve) {
+            meshComponent->importMaterialOnResolve = false;
+
+            if (const MeshMaterial* imported = meshes.GetMaterial(renderable.meshID);
+                imported && imported->present) {
+                if (auto* material = registry.try_get<MaterialComponent>(entity)) {
+                    MaterialSystem::ApplyImportedMaterial(*imported, *material);
+
+                    // The ids above were resolved from the material this just
+                    // replaced. Zero is what "never resolved" means, so the
+                    // next frame re-reads the textures the file named.
+                    renderable.resourceSignature = 0;
+                }
             }
         }
 

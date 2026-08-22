@@ -19,6 +19,14 @@ struct GpuMesh {
     uint32_t indexCount{0};
     glm::vec3 boundsMin{-0.5f};
     glm::vec3 boundsMax{0.5f};
+
+    // What the source file said this surface looks like, or `present == false`
+    // for procedural geometry and for a file that named no material. Kept here
+    // because this is where the file was parsed: re-reading a 40 MB .glb to ask
+    // it what colour it is would be absurd, and the alternative - handing it to
+    // the entity during the load - would overwrite whatever the user had since
+    // authored, every time the asset hot-reloaded.
+    MeshMaterial material;
 };
 
 // Owns every mesh the scene can draw, keyed by the MeshComponent description.
@@ -45,6 +53,11 @@ public:
     uint32_t Upload(const std::string& key, const MeshData& data);
 
     const GpuMesh* Get(uint32_t id) const;
+
+    // What the file behind this id said its surface is. Null for an unknown id,
+    // and `present == false` when the geometry came from a generator or the
+    // file named no material.
+    const MeshMaterial* GetMaterial(uint32_t id) const;
 
     // Drops the cache entry for a key and hands its buffers to the device's
     // deferred-destroy queue, so the next Acquire re-reads the file.

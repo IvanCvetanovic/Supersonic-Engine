@@ -102,17 +102,46 @@ static void testMaterialsAreRead() {
     bool foundTextured = false;
 
     for (const auto& sub : scene.submeshes) {
-        if (sub.metallic > 0.9f && sub.roughness < 0.3f) foundGold = true;
-        if (!sub.albedoTexturePath.empty()) {
+        CHECK_MSG(sub.material.present,
+                  "every primitive in this file names a material");
+        if (sub.material.metallic > 0.9f && sub.material.roughness < 0.3f) foundGold = true;
+        if (!sub.material.albedoTexturePath.empty()) {
             foundTextured = true;
             // The URI is relative to the .gltf, and must be resolved against it.
-            CHECK_MSG(sub.albedoTexturePath.find("uv_grid") != std::string::npos,
+            CHECK_MSG(sub.material.albedoTexturePath.find("uv_grid") != std::string::npos,
                       "base colour texture URI should resolve to the referenced file");
         }
     }
 
     CHECK_MSG(foundGold, "the metallic material's factors must be read");
     CHECK_MSG(foundTextured, "the base colour texture reference must be resolved");
+}
+
+// The base colour was read for years and then discarded one caller up. These
+// are the fields that were never read at all, because nothing downstream could
+// have received them: the renderer has had a normal-map descriptor slot since
+// normal mapping shipped, and the importer never filled it.
+static void testTheRestOfTheMaterialIsReadToo() {
+    const auto scene = GltfLoader::Load(kModel);
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok) return;
+
+    bool foundStone = false;
+    for (const auto& sub : scene.submeshes) {
+        // The stone material carries a base colour factor that is not white,
+        // which is exactly the value that used to be parsed and thrown away.
+        if (sub.material.albedoTexturePath.empty()) continue;
+        foundStone = true;
+
+        CHECK_MSG(sub.material.baseColor.r < 0.99f && sub.material.baseColor.a > 0.99f,
+                  "the stone base colour factor is off-white and opaque");
+        CHECK_MSG(sub.material.roughness > 0.8f, "stone is rough");
+        CHECK_MSG(!sub.material.transparent,
+                  "no alphaMode means OPAQUE, which must not reach the blend pass");
+        CHECK_MSG(sub.material.emissiveStrength == 0.0f,
+                  "a material with no emissive factor does not glow");
+    }
+    CHECK(foundStone);
 }
 
 static void testMissingFileFails() {
@@ -147,6 +176,7 @@ static void runTests() {
     testNodeTransformsAreApplied();
     testNormalsSurviveNonUniformScale();
     testMaterialsAreRead();
+    testTheRestOfTheMaterialIsReadToo();
     testMissingFileFails();
     testGarbageFileFails();
 }
