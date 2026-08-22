@@ -3,6 +3,7 @@
 #include "core/TransformSystem.hpp"
 #include "core/PrefabSerializer.hpp"
 #include "core/ContactTracker.hpp"
+#include "core/SceneManager.hpp"
 #include "core/Log.hpp"
 
 #include <algorithm>
@@ -315,6 +316,23 @@ void scriptSpawnPrefab(void* opaque, const char* prefabPath, const float positio
     queue.spawns.push_back(std::move(spawn));
 }
 
+void scriptLoadScene(void* opaque, const char* scenePath) {
+    auto* registry = static_cast<entt::registry*>(opaque);
+    if (!registry || !scenePath || !*scenePath) return;
+
+    // Published by SupersonicApp, the way the contact tracker and the audio
+    // engine are. Absent means nobody is driving a frame loop - a test
+    // exercising scripts against a bare registry - and asking for a scene there
+    // is a no-op rather than a crash.
+    auto* slot = registry->ctx().find<SceneManager*>();
+    if (!slot || !*slot) return;
+
+    // Already deferred by the manager: RequestLoad records the wish and
+    // ApplyPending performs it after the frame's iteration has finished. So
+    // this needs no queue of its own, unlike spawn and destroy.
+    (*slot)->RequestLoad(scenePath);
+}
+
 void scriptDestroyEntity(void* opaque, unsigned int entity) {
     auto* registry = static_cast<entt::registry*>(opaque);
     if (!registry) return;
@@ -503,7 +521,7 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
                                           scriptContactCount, scriptContactAt,
                                           scriptSpawnPrefab, scriptDestroyEntity,
                                           scriptGetVelocity, scriptSetVelocity,
-                                          scriptAddForce};
+                                          scriptAddForce, scriptLoadScene};
         ctx.world = &world;
         // A transform-less entity is handed an identity one, so a script that
         // only touches the UI does not have to care.

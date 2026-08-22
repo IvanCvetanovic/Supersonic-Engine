@@ -60,8 +60,14 @@ public:
     // Performed by SupersonicApp between frames, NOT from inside BuildUI: a
     // load clears and refills the registry, and BuildUI is running while
     // panels iterate views over it.
-    void ApplyPendingSceneLoad(entt::registry& registry);
-    SceneManager& GetSceneManager() { return m_sceneManager; }
+    // The editor no longer decides when a scene load happens - the app does,
+    // because a layer or a script can ask for one and neither can see an
+    // editor. This is what the editor still has to do about it.
+    void OnSceneLoaded(entt::registry& registry, const SerializationResult& result);
+
+    // Borrowed, not owned. Set once at startup, the way the play mode and the
+    // material library are.
+    void SetSceneManager(SceneManager* manager) { m_sceneManager = manager; }
 
     VulkanOffscreen& GetOffscreen() { return *m_offscreenPass; }
     SceneHierarchyPanel& GetHierarchyPanel() { return m_hierarchyPanel; }
@@ -187,7 +193,7 @@ private:
     static constexpr int kFramesBetweenUndoChecks = 8;
     int m_framesSinceUndoCheck{kFramesBetweenUndoChecks};
 
-    SceneManager m_sceneManager;
+    SceneManager* m_sceneManager{nullptr};
     bool m_showSaveAs{false};
 
     bool m_consoleShowInfo{true};

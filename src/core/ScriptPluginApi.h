@@ -19,11 +19,12 @@
 #include <stddef.h>
 
 /* Version history. A plugin built against a different number is refused.
+ *   8 - added loadScene to SupersonicScriptWorld.
  *   7 - added SupersonicScriptWorld: contacts, spawn/destroy, velocity.
  *   6 - added SupersonicScriptData: authored parameters and per-entity state.
  *   5 - added the UI block.
  */
-#define SUPERSONIC_SCRIPT_API_VERSION 7
+#define SUPERSONIC_SCRIPT_API_VERSION 8
 
 #if defined(_WIN32)
 #  define SUPERSONIC_SCRIPT_EXPORT __declspec(dllexport)
@@ -172,6 +173,18 @@ typedef struct SupersonicScriptWorld {
     void (*getVelocity)(void* opaque, unsigned int entity, float outVelocity[3]);
     void (*setVelocity)(void* opaque, unsigned int entity, const float velocity[3]);
     void (*addForce)(void* opaque, unsigned int entity, const float force[3]);
+
+    /* Queue a scene load. Takes effect at the same frame boundary spawn and
+     * destroy do, and for a stronger version of the same reason: a load clears
+     * and refills the registry, and a script runs inside a view over it.
+     *
+     * The path is copied, not retained. A script may hand over a string that
+     * lives on its own stack.
+     *
+     * Returns nothing and reports nothing, because there is nothing useful to
+     * say yet: the file is not opened until the boundary. A load that fails
+     * leaves the current scene open and says so in the log. */
+    void (*loadScene)(void* opaque, const char* scenePath);
 } SupersonicScriptWorld;
 
 /* Per-entity state handed to a script each frame. The engine copies values in
@@ -241,7 +254,7 @@ typedef void (*SupersonicScriptPluginRegisterFn)(SupersonicScriptHost* host);
 #  define SUPERSONIC_ABI_ASSERT(cond, msg) _Static_assert(cond, msg)
 #endif
 
-#if SUPERSONIC_SCRIPT_API_VERSION == 7
+#if SUPERSONIC_SCRIPT_API_VERSION == 8
 
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptInput) == 5 * sizeof(void*),
     "SupersonicScriptInput changed; bump SUPERSONIC_SCRIPT_API_VERSION");
@@ -253,7 +266,7 @@ SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptUI) == 6 * sizeof(void*),
     "SupersonicScriptUI changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptData) == 4 * sizeof(void*),
     "SupersonicScriptData changed; bump SUPERSONIC_SCRIPT_API_VERSION");
-SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptWorld) == 8 * sizeof(void*),
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptWorld) == 9 * sizeof(void*),
     "SupersonicScriptWorld changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptHost) == 3 * sizeof(void*),
     "SupersonicScriptHost changed; bump SUPERSONIC_SCRIPT_API_VERSION");
@@ -272,7 +285,7 @@ SUPERSONIC_ABI_ASSERT(
     sizeof(SupersonicScriptContext) == 48 + 6 * sizeof(void*),
     "SupersonicScriptContext changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 
-#endif /* SUPERSONIC_SCRIPT_API_VERSION == 7 */
+#endif /* SUPERSONIC_SCRIPT_API_VERSION == 8 */
 
 #ifdef __cplusplus
 }

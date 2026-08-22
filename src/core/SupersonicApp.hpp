@@ -24,6 +24,7 @@
 #include "core/AnimationLibrary.hpp"
 #include "core/MaterialLibrary.hpp"
 #include "core/LaunchOptions.hpp"
+#include "core/SceneManager.hpp"
 
 namespace Supersonic {
 
@@ -61,9 +62,19 @@ public:
 private:
     void initECS();
 
+    void applyPendingSceneLoad();
+
     ContactTracker m_contactTracker;
     AssetWatcher m_assetWatcher;
     LaunchOptions m_options;
+
+    // Which scene is open. Owned here rather than by the editor, and published
+    // into the registry context as a pointer, because a scene switch is a GAME
+    // operation: a menu opening a level, a level loading the next one, a death
+    // restarting the current one. While the editor owned it, a packaged game
+    // was exactly one scene for the whole of its life - the manifest named a
+    // startup scene and nothing could ever ask for a different one.
+    SceneManager m_sceneManager;
 
     std::unique_ptr<Window> m_window;
     std::unique_ptr<VulkanContext> m_vulkanContext;

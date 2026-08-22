@@ -12,6 +12,8 @@
 
 #include <cstddef>
 #include "core/ScriptRegistry.hpp"
+#include "core/ScriptEngine.hpp"
+#include "core/SceneManager.hpp"
 
 #include <algorithm>
 #include <string>
@@ -34,6 +36,16 @@ void pluginA(SupersonicScriptContext* ctx) {
 }
 
 void pluginB(SupersonicScriptContext*) { ++g_pluginCalls; }
+
+// Asks the engine to change level, the way a trigger volume or a menu button
+// would. The path is a local on purpose: the ABI promises it is copied, not
+// retained, and a script handing over a stack string is the normal case.
+void sceneSwitcher(SupersonicScriptContext* ctx) {
+    char path[] = "assets/scenes/Level2.scene";
+    if (ctx->world && ctx->world->loadScene) {
+        ctx->world->loadScene(ctx->world->opaque, path);
+    }
+}
 
 bool contains(const std::vector<std::string>& names, const std::string& needle) {
     return std::find(names.begin(), names.end(), needle) != names.end();
@@ -135,7 +147,15 @@ static void testApiVersionIsPinned() {
     // The engine refuses to load a plugin whose version differs; if this
     // constant changes, every plugin must be rebuilt. Version 2 added the input
     // accessors, which is exactly the kind of change the check exists to catch.
-    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 7);
+    // Version 8 added loadScene to the world block - a widening, but a plugin
+    // built against 7 still has a world struct one pointer short, and the
+    // engine would read past the end of it.
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 8);
+
+    // The world block grew, so its size is pinned here too. This is the struct
+    // most likely to be widened next, and a plugin whose copy is shorter than
+    // the engine's is the exact failure the version gate exists to prevent.
+    CHECK_EQ(sizeof(SupersonicScriptWorld), 9 * sizeof(void*));
 
     // Context layout is part of the ABI. Offsets rather than a total size: the
     // total moves with padding on a different platform, while an offset that
@@ -254,6 +274,72 @@ static void testParametersRoundTripAndStateDoesNot() {
     CHECK_MSG(restored.state.empty(), "runtime state must not be serialised");
 }
 
+// A script could not change the level. SceneManager was a private member of
+// EditorLayer, EngineLayer is handed only the registry, and the ABI's world
+// block had no scene entry - so a packaged game was exactly one scene for the
+// whole of its life, whatever the manifest happened to name.
+//
+// Pinned here rather than in test_scenemanager because the property is that the
+// request survives the whole path: through the C ABI, out of a script running
+// inside a view over the registry, and into the deferred queue - WITHOUT the
+// load happening while that view is still being walked.
+static void testAScriptCanAskForAnotherScene() {
+    // Registered as a Plugin so UnregisterPluginScripts can take it back out
+    // again - there is deliberately no way to unregister a built-in.
+    ScriptRegistry::Get().Register("SceneSwitcher", sceneSwitcher,
+                                   ScriptRegistry::Origin::Plugin);
+
+    entt::registry registry;
+    SceneManager scenes;
+    registry.ctx().insert_or_assign<SceneManager*>(&scenes);
+
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity);
+    auto& script = registry.emplace<ScriptComponent>(entity);
+    script.scriptName = "SceneSwitcher";
+    script.isEnabled = true;
+
+    CHECK_MSG(!scenes.HasPending(), "nothing is queued before the script runs");
+
+    ScriptEngine::Update(registry, 1.0f / 60.0f);
+
+    CHECK_MSG(scenes.HasPending(), "loadScene must queue a load");
+    CHECK_MSG(registry.valid(entity),
+              "and must NOT have cleared the registry the script is running inside");
+
+    // The deferred half. Only now does anything happen to the scene, and this
+    // load fails because the file does not exist - which must leave the open
+    // scene alone rather than emptying it.
+    SerializationResult result{};
+    CHECK(scenes.ApplyPending(registry, result));
+    CHECK_MSG(!result.ok, "a scene that is not on disk cannot load");
+    CHECK_MSG(registry.valid(entity), "a failed load keeps the scene that was open");
+    CHECK(scenes.CurrentPath() == SceneManager::kDefaultScene);
+
+    ScriptRegistry::Get().UnregisterPluginScripts();
+}
+
+// Without a SceneManager published - a test, or any registry nobody is driving
+// a frame loop over - asking for a scene must do nothing rather than crash.
+static void testLoadSceneWithoutAManagerIsHarmless() {
+    // Registered as a Plugin so UnregisterPluginScripts can take it back out
+    // again - there is deliberately no way to unregister a built-in.
+    ScriptRegistry::Get().Register("SceneSwitcher", sceneSwitcher,
+                                   ScriptRegistry::Origin::Plugin);
+
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity);
+    auto& script = registry.emplace<ScriptComponent>(entity);
+    script.scriptName = "SceneSwitcher";
+    script.isEnabled = true;
+
+    ScriptEngine::Update(registry, 1.0f / 60.0f);
+    CHECK_MSG(registry.valid(entity), "no manager, no load, no crash");
+
+    ScriptRegistry::Get().UnregisterPluginScripts();
+}
+
 static void runTests() {
     testParametersAreAuthoredPerEntityAndStateSurvives();
     testParametersRoundTripAndStateDoesNot();
@@ -264,6 +350,8 @@ static void runTests() {
     testReRegistrationReplacesPointer();
     testNamesAreSorted();
     testApiVersionIsPinned();
+    testAScriptCanAskForAnotherScene();
+    testLoadSceneWithoutAManagerIsHarmless();
 }
 
-TEST_MAIN("test_scripts", 21)
+TEST_MAIN("test_scripts", 30)

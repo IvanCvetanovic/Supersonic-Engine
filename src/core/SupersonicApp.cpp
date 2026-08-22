@@ -170,6 +170,7 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
                                        m_editorLayer->GetOffscreen().GetSampleCount());
 
     m_editorLayer->SetGameMode(m_manifest.isGame);
+    m_editorLayer->SetSceneManager(&m_sceneManager);
 
     // The same answer, given to the renderer. Without it the scene pass drew
     // the editor's ground grid into a shipped game.
@@ -228,6 +229,14 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     // linking the library can reach it at all.
     m_registry.ctx().insert_or_assign<ContactTracker*>(&m_contactTracker);
 
+    // The same way, and for the same reason. A game switching level has to be
+    // able to say so from wherever its code lives - an EngineLayer, or a script
+    // through the plugin ABI - and neither of those has ever been able to see
+    // the editor. Published as a pointer rather than a value because clearing
+    // the registry is exactly what a scene load does, and the object doing it
+    // should not live inside the thing being cleared.
+    m_registry.ctx().insert_or_assign<SceneManager*>(&m_sceneManager);
+
     initECS();
 
     // --scene wins over the manifest, and applies in the editor too: a smoke
@@ -243,6 +252,10 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
         SUPERSONIC_LOG_INFO("SupersonicApp") << loaded.message << std::endl;
         if (!loaded.ok) {
             SUPERSONIC_LOG_ERROR("SupersonicApp") << "Falling back to the built-in scene." << std::endl;
+        } else {
+            // So the manager names the scene that is actually open. Otherwise
+            // Save would write it over the default scene's file.
+            m_sceneManager.AdoptLoaded(startupScene);
         }
 
         // Straight into Play: a game has no edit mode to be in, and without
@@ -251,6 +264,27 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
         if (!started.ok) {
             SUPERSONIC_LOG_ERROR("SupersonicApp") << started.message << std::endl;
         }
+    }
+}
+
+void SupersonicApp::applyPendingSceneLoad() {
+    if (!m_sceneManager.HasPending()) return;
+
+    SerializationResult result{};
+    if (!m_sceneManager.ApplyPending(m_registry, result)) return;
+
+    if (result.ok) {
+        SUPERSONIC_LOG_INFO("SupersonicApp") << result.message;
+    } else {
+        // A failed load leaves the previous scene open - Deserialize parses
+        // before it touches the registry - so this is a report, not a crash.
+        SUPERSONIC_LOG_ERROR("SupersonicApp") << result.message;
+    }
+
+    // The editor's reaction to a load it may not have asked for: its selection
+    // and its undo stack both describe a scene that is no longer open.
+    if (m_editorLayer) {
+        m_editorLayer->OnSceneLoaded(m_registry, result);
     }
 }
 
@@ -890,7 +924,12 @@ void SupersonicApp::Run() {
         // over it - performing the load there invalidates what the caller is
         // walking. This is the same reason the viewport resize is deferred to
         // the top of the frame.
-        m_editorLayer->ApplyPendingSceneLoad(m_registry);
+        //
+        // Driven here rather than by the editor because the request no longer
+        // has to come from one: a layer or a script can queue a load, and in a
+        // packaged game neither the menu nor the level that asked for it knows
+        // the editor exists.
+        applyPendingSceneLoad();
 
         // A load replaces every entity, so last frame's pairs describe a scene
         // that no longer exists: carrying them would report an Exit for handles

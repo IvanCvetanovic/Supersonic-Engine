@@ -172,6 +172,48 @@ static void testApplyPendingIsANoOpWhenNothingIsQueued() {
     CHECK_EQ(countEntities(registry), size_t{1});
 }
 
+// Startup deserializes the manifest's scene (or --scene) directly, before there
+// is a frame to defer into. Without AdoptLoaded the manager still named the
+// default scene, so Ctrl+S wrote the open level over MainScene.scene and
+// packaging shipped the wrong one.
+static void testAdoptLoadedNamesTheSceneStartupOpened() {
+    SceneManager scenes;
+    CHECK(scenes.CurrentPath() == SceneManager::kDefaultScene);
+
+    scenes.MarkDirty();
+    scenes.AdoptLoaded("assets/scenes/Level2.scene");
+
+    CHECK(scenes.CurrentPath() == "assets/scenes/Level2.scene");
+    CHECK_MSG(!scenes.IsDirty(), "a scene just loaded from disk has no unsaved changes");
+    CHECK_MSG(!scenes.HasPending(), "adopting must not leave a queued load behind");
+}
+
+// The manager is published into the registry context as a POINTER, and this is
+// the reason. A scene load clears the registry it is published in, so anything
+// stored there by value would be destroying itself halfway through its own
+// ApplyPending. entt::registry::clear() empties the component pools and the
+// entity list and deliberately does not touch the context - which is what lets
+// a script call loadScene twice.
+static void testThePublishedManagerSurvivesTheLoadItPerforms() {
+    entt::registry registry;
+    SceneManager scenes;
+    registry.ctx().insert_or_assign<SceneManager*>(&scenes);
+
+    makeTagged(registry, "Doomed");
+    CHECK_EQ(countEntities(registry), size_t{1});
+
+    registry.clear();
+
+    CHECK_EQ(countEntities(registry), size_t{0});
+    auto* slot = registry.ctx().find<SceneManager*>();
+    CHECK_MSG(slot != nullptr, "clearing a registry must not drop its context");
+    CHECK_MSG(slot && *slot == &scenes, "and must not swap what the context points at");
+
+    // And it still works, which is the property a second level change needs.
+    (*slot)->RequestLoad("assets/scenes/Level3.scene");
+    CHECK(scenes.HasPending());
+}
+
 static void runTests() {
     testStartsOnTheDefaultAndCleanly();
     testRequestLoadDoesNotTouchTheRegistryUntilApplied();
@@ -180,6 +222,8 @@ static void runTests() {
     testAFailedSaveLeavesTheSceneDirty();
     testNewSceneEmptiesAndResets();
     testApplyPendingIsANoOpWhenNothingIsQueued();
+    testAdoptLoadedNamesTheSceneStartupOpened();
+    testThePublishedManagerSurvivesTheLoadItPerforms();
 }
 
-TEST_MAIN("test_scenemanager", 25)
+TEST_MAIN("test_scenemanager", 33)

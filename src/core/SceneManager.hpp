@@ -35,6 +35,20 @@ public:
     // codebase, which mutates through registry.get<T>() references.
     void MarkDirty() { m_dirty = true; }
 
+    // Records a scene that something else opened, without going through the
+    // deferred path. Startup is the one place this is right: the app
+    // deserializes the manifest's scene (or --scene) directly, before there is
+    // a frame to defer into, and without this the manager would still be
+    // naming the default scene - so "Save" would write the open scene over
+    // MainScene.scene, and packaging would ship the wrong level.
+    void AdoptLoaded(const std::string& path) {
+        m_currentPath = path;
+        m_dirty = false;
+        m_pendingLoad = false;
+        m_pendingNew = false;
+        m_pendingPath.clear();
+    }
+
     SerializationResult Save(entt::registry& registry);
     SerializationResult SaveAs(entt::registry& registry, const std::string& path);
 
