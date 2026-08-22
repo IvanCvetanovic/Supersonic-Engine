@@ -251,7 +251,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_skeletal` | glTF skin import, joint reordering, all three interpolation modes, palette packing |
 | `test_raycast` | Viewport picking, slab intersection, depth ordering |
 | `test_meshgen` | Primitive generation, winding, tangents, OBJ parsing |
-| `test_gltf` | glTF import against a real asset in the tree |
+| `test_gltf` | glTF import against real assets in the tree, including a `.glb` with embedded textures |
 | `test_serialize` | JSON reader, scene and prefab round-trips |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
 | `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence |
@@ -321,6 +321,9 @@ Android "not functional"; extending that register forward costs nothing.
 - [x] glTF materials — base colour, metallic, roughness, the base-colour AND
       normal maps, emissive with `KHR_materials_emissive_strength`, and
       `alphaMode` — imported onto the entity when a model is assigned
+- [x] `.glb` support: a single-file export used to fail to load outright, over
+      a texture. Embedded images are extracted to `cache/` verbatim, so every
+      texture in the engine stays a path
 - [x] More than one scene, switchable at runtime by a layer or a script
 
 ### Next
@@ -331,10 +334,6 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
       file in Explorer silently breaks every scene, prefab and material pointing
       at it. Animation clips, audio and `.material` files are also still outside
       hot reload, and a clip is typed into a text box rather than picked
-- [ ] **Embedded glTF textures.** A `.glb` carries its images as bytes rather
-      than as files, and the texture cache is keyed by path, so the usual
-      single-file export still arrives untextured — reported now rather than
-      silent, but not imported. The rest of the material import is done
 - [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
       is no cubemap path at all — no HDRI can be loaded — so metal and smooth
       dielectrics have nothing to reflect but a two-colour gradient

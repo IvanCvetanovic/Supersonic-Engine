@@ -162,6 +162,71 @@ static void testGarbageFileFails() {
     CHECK_MSG(!scene.ok, "malformed JSON must be rejected, not partially imported");
 }
 
+// A .glb keeps its images as bytes in the binary chunk, and every texture in
+// this engine is a path: the registry opens files, hot reload watches files,
+// and MaterialComponent serialises a path. So the single-file export that most
+// exporters produce by default arrived with no textures at all.
+//
+// Extracted to cache/ now, verbatim - they are already encoded PNGs, and
+// tinygltf is built with TINYGLTF_NO_STB_IMAGE so it never decoded them.
+static void testEmbeddedImagesAreExtracted() {
+    const std::string glb = "assets/models/embedded_textures.glb";
+    const auto scene = GltfLoader::Load(glb);
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok) return;
+    CHECK_EQ(scene.submeshes.size(), size_t{1});
+    if (scene.submeshes.empty()) return;
+
+    const auto& material = scene.submeshes[0].material;
+    CHECK(material.present);
+
+    CHECK_MSG(!material.albedoTexturePath.empty(),
+              "an embedded base colour image must still produce a usable path");
+    CHECK_MSG(!material.normalTexturePath.empty(),
+              "and so must an embedded normal map");
+
+    CHECK_MSG(material.albedoTexturePath != material.normalTexturePath,
+              "two distinct images must not extract over each other, even when "
+              "they share one bufferView");
+
+    // The point of the path is that something can open it.
+    CHECK_MSG(std::filesystem::exists(material.albedoTexturePath),
+              "extracted: " + material.albedoTexturePath);
+    CHECK_MSG(std::filesystem::exists(material.normalTexturePath),
+              "extracted: " + material.normalTexturePath);
+
+    // Verbatim: the bytes on disk must be a PNG, not a re-encode of one.
+    std::ifstream file(material.albedoTexturePath, std::ios::binary);
+    CHECK(file.is_open());
+    unsigned char signature[8] = {0};
+    file.read(reinterpret_cast<char*>(signature), 8);
+    CHECK_MSG(signature[0] == 0x89 && signature[1] == 'P' &&
+              signature[2] == 'N' && signature[3] == 'G',
+              "the extracted file should be the PNG the .glb was carrying");
+
+    // The rest of the material must survive the same trip.
+    CHECK(material.metallic > 0.2f && material.metallic < 0.3f);
+    CHECK(material.roughness > 0.55f && material.roughness < 0.65f);
+    CHECK_MSG(material.emissiveStrength == 1.0f,
+              "an emissiveFactor with no strength extension means unit strength");
+    CHECK(material.emissiveColor.b > 0.7f);
+}
+
+// Extracting twice must reuse rather than rewrite, and must land on the same
+// path both times - a cache that moved would break every scene referencing it.
+static void testExtractionIsStable() {
+    const std::string glb = "assets/models/embedded_textures.glb";
+    const auto first = GltfLoader::Load(glb);
+    const auto second = GltfLoader::Load(glb);
+    CHECK(first.ok && second.ok);
+    if (!first.ok || !second.ok) return;
+    if (first.submeshes.empty() || second.submeshes.empty()) return;
+
+    CHECK_MSG(first.submeshes[0].material.albedoTexturePath ==
+                  second.submeshes[0].material.albedoTexturePath,
+              "the extracted path must be stable across loads");
+}
+
 static void runTests() {
     // The fixture is committed to the tree and CTest runs this suite from the
     // project root, so it is always reachable. It used to be optional: a miss
@@ -177,6 +242,8 @@ static void runTests() {
     testNormalsSurviveNonUniformScale();
     testMaterialsAreRead();
     testTheRestOfTheMaterialIsReadToo();
+    testEmbeddedImagesAreExtracted();
+    testExtractionIsStable();
     testMissingFileFails();
     testGarbageFileFails();
 }

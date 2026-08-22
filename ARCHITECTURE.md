@@ -473,6 +473,37 @@ Two places the alpha still does not reach, neither of them fixed by the above:
   at the point in the frame with the most draws in it. A particle behind a pane
   composites in the wrong order.
 
+**Images carried inside a model.** A `.glb` keeps its textures as bytes in the
+binary chunk rather than as files beside it, and every texture in this engine is
+a path: the registry opens files, hot reload watches files, and
+`MaterialComponent` serialises a path.
+
+That mismatch was worse than it looked. tinygltf is built with
+`TINYGLTF_NO_STB_IMAGE`, because it ships its own stb copy and `TextureRegistry`
+already defines `STB_IMAGE_IMPLEMENTATION` - and tinygltf treats a missing image
+decoder as a hard parse error the moment a file *carries* an image rather than
+naming one. So a `.glb` with a texture in it did not arrive untextured. It did
+not arrive at all: no meshes, no skins, no animations, refused over an image the
+importer never wanted decoded.
+
+Both halves are fixed by the same observation. The importer registers a no-op
+image loader that reports success, which is honest - it genuinely does not want
+the pixels - and `ParseImage` leaves `image.bufferView` intact regardless. The
+encoded bytes are then copied out of the buffer view verbatim into `cache/gltf/`
+and the resulting path is handed on like any other. Verbatim rather than decoded
+and re-encoded: they are already a PNG or a JPEG, and stb_image is going to
+decode them again on the way to the GPU, so a re-encode would spend time
+producing a worse copy of a file that already exists.
+
+Into `cache/` because it is where per-machine build artefacts already live and
+is already ignored by git. Extraction is skipped when the cached file is at
+least as new as the model, so re-exporting the `.glb` still reaches the texture.
+
+Base64 `data:` URIs are the remaining case and are reported rather than
+imported - the branch they used to fall into joined them onto the model's
+directory, producing a "texture path" several kilobytes long that could only
+ever fail to open.
+
 ### 6. Scripting & hot reload
 
 Scripts are looked up by name in `ScriptRegistry`. Built-ins and plugin scripts

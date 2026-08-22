@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <unordered_map>
 
@@ -27,6 +28,113 @@ namespace {
 // 8-bit, so 255 is the hard ceiling; 128 leaves headroom and keeps a single
 // rig's slice small enough that several fit in one frame's palette.
 constexpr uint32_t jointLimit = 128;
+
+// An image carried inside the file, written out beside the cache so the rest of
+// the engine can go on treating every texture as a path.
+//
+// A .glb keeps its images as bytes in the binary chunk, and the texture
+// registry opens files: it is keyed by path, it hot-reloads by watching a path,
+// and MaterialComponent serialises a path. So the usual single-file export -
+// which is what most exporters produce by default - arrived with no textures at
+// all, and the importer said so and moved on.
+//
+// The bytes are copied VERBATIM rather than decoded and re-encoded. They are
+// already a PNG or a JPEG, tinygltf is built with TINYGLTF_NO_STB_IMAGE and so
+// never decodes them, and stb_image is going to decode them again on the way to
+// the GPU regardless - so a decode here would cost time to produce a
+// byte-for-byte worse copy of a file that already exists.
+//
+// Into cache/ because that is where per-machine build artefacts already live
+// and it is already in .gitignore. Extracting next to the model would put
+// generated files in the user's asset folder, and extracting to a temp
+// directory would defeat the hot reload that watching a real path buys.
+std::string extractEmbeddedImage(const tinygltf::Model& model, int imageIndex,
+                                 const std::string& sourcePath, const char* slot) {
+    if (imageIndex < 0 || imageIndex >= static_cast<int>(model.images.size())) return {};
+    const tinygltf::Image& image = model.images[static_cast<size_t>(imageIndex)];
+
+    if (!image.uri.empty()) {
+        // A data: URI is embedded too, but base64 inside the JSON rather than
+        // bytes in the binary chunk. Not handled - and reported, because the
+        // path-joining branch this used to fall into produced a "texture path"
+        // several kilobytes long that could only ever fail to open.
+        if (image.uri.rfind("data:", 0) == 0) {
+            SUPERSONIC_LOG_ERROR("GltfLoader")
+                << "A " << slot << " image is a base64 data URI, which is not imported yet."
+                << std::endl;
+        }
+        return {};
+    }
+
+    if (image.bufferView < 0 || image.bufferView >= static_cast<int>(model.bufferViews.size())) {
+        return {};
+    }
+    const tinygltf::BufferView& view = model.bufferViews[static_cast<size_t>(image.bufferView)];
+    if (view.buffer < 0 || view.buffer >= static_cast<int>(model.buffers.size())) return {};
+
+    const tinygltf::Buffer& buffer = model.buffers[static_cast<size_t>(view.buffer)];
+    if (view.byteOffset + view.byteLength > buffer.data.size() || view.byteLength == 0) {
+        SUPERSONIC_LOG_ERROR("GltfLoader")
+            << "The " << slot << " image names bytes outside its buffer; skipping it."
+            << std::endl;
+        return {};
+    }
+
+    const char* extension = nullptr;
+    if (image.mimeType == "image/png") extension = ".png";
+    else if (image.mimeType == "image/jpeg") extension = ".jpg";
+    else {
+        SUPERSONIC_LOG_ERROR("GltfLoader")
+            << "The " << slot << " image is '" << image.mimeType
+            << "', which stb_image cannot open; skipping it." << std::endl;
+        return {};
+    }
+
+    std::error_code ec;
+    const fs::path outDir = fs::path("cache") / "gltf";
+    fs::create_directories(outDir, ec);
+    if (ec) {
+        SUPERSONIC_LOG_ERROR("GltfLoader")
+            << "Could not create " << outDir.string() << ": " << ec.message() << std::endl;
+        return {};
+    }
+
+    const std::string stem = fs::path(sourcePath).stem().string();
+    const fs::path outPath =
+        outDir / (stem + "-image" + std::to_string(imageIndex) + extension);
+
+    // Reuse an extraction that is at least as new as the model it came from.
+    // Re-exporting the .glb makes it older and the bytes are written again, so
+    // hot reload still reaches an embedded texture.
+    if (fs::exists(outPath, ec)) {
+        std::error_code srcEc, dstEc;
+        const auto sourceTime = fs::last_write_time(sourcePath, srcEc);
+        const auto cachedTime = fs::last_write_time(outPath, dstEc);
+        if (!srcEc && !dstEc && cachedTime >= sourceTime) {
+            return outPath.lexically_normal().string();
+        }
+    }
+
+    std::ofstream file(outPath, std::ios::binary);
+    if (!file.is_open()) {
+        SUPERSONIC_LOG_ERROR("GltfLoader")
+            << "Could not write " << outPath.string() << std::endl;
+        return {};
+    }
+    file.write(reinterpret_cast<const char*>(buffer.data.data() + view.byteOffset),
+               static_cast<std::streamsize>(view.byteLength));
+    if (!file) {
+        SUPERSONIC_LOG_ERROR("GltfLoader")
+            << "Failed writing " << outPath.string() << std::endl;
+        return {};
+    }
+    file.close();
+
+    SUPERSONIC_LOG_INFO("GltfLoader")
+        << "Extracted embedded " << slot << " image to " << outPath.string()
+        << " (" << view.byteLength << " bytes)." << std::endl;
+    return outPath.lexically_normal().string();
+}
 
 // Reads one scalar out of an accessor, normalising the component type.
 //
@@ -141,7 +249,7 @@ glm::mat4 nodeLocalMatrix(const tinygltf::Node& node) {
 void appendPrimitive(const tinygltf::Model& model,
                      const tinygltf::Primitive& primitive,
                      const glm::mat4& worldMatrix,
-                     const std::string& baseDir,
+                     const std::string& sourcePath,
                      const std::string& nodeName,
                      std::vector<GltfLoader::Submesh>& out,
                     int32_t skinIndex) {
@@ -355,18 +463,13 @@ void appendPrimitive(const tinygltf::Model& model,
             if (tex.source < 0 || tex.source >= static_cast<int>(model.images.size())) return {};
 
             const std::string& uri = model.images[static_cast<size_t>(tex.source)].uri;
-            if (uri.empty()) {
-                // Embedded or .glb image data: tinygltf has the decoded pixels,
-                // but the texture cache is keyed by path and opens files, so
-                // there is nothing here it can be handed. Reported once per
-                // slot rather than silently producing an untextured model.
-                SUPERSONIC_LOG_ERROR("GltfLoader")
-                    << "'" << nodeName << "' has an embedded " << slot
-                    << " image; embedded images are not imported yet, so this "
-                    << "surface arrives without one." << std::endl;
-                return {};
+            if (uri.empty() || uri.rfind("data:", 0) == 0) {
+                // Carried inside the file rather than beside it, which is what
+                // a .glb always does. Written out to the cache so the rest of
+                // the engine can go on treating a texture as a path.
+                return extractEmbeddedImage(model, tex.source, sourcePath, slot);
             }
-            return (fs::path(baseDir) / uri).lexically_normal().string();
+            return (fs::path(sourcePath).parent_path() / uri).lexically_normal().string();
         };
 
         submesh.material.albedoTexturePath =
@@ -662,7 +765,7 @@ std::vector<AnimationClip> buildClips(const tinygltf::Model& model,
 }
 
 void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& parentMatrix,
-               const std::string& baseDir, std::vector<GltfLoader::Submesh>& out,
+               const std::string& sourcePath, std::vector<GltfLoader::Submesh>& out,
                std::vector<bool>& visited) {
 
     if (nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size())) return;
@@ -686,12 +789,12 @@ void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& par
             // transform to be ignored. Baking it in transforms the mesh twice.
             const int32_t skin = static_cast<int32_t>(node.skin);
             const glm::mat4 primitiveMatrix = skin >= 0 ? glm::mat4(1.0f) : world;
-            appendPrimitive(model, primitive, primitiveMatrix, baseDir, name, out, skin);
+            appendPrimitive(model, primitive, primitiveMatrix, sourcePath, name, out, skin);
         }
     }
 
     for (const int child : node.children) {
-        visitNode(model, child, world, baseDir, out, visited);
+        visitNode(model, child, world, sourcePath, out, visited);
     }
 }
 
@@ -707,6 +810,20 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
 
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
+
+    // Built with TINYGLTF_NO_STB_IMAGE, so there is no decoder registered - and
+    // tinygltf treats that as a hard error the moment a file carries an image
+    // rather than naming one, which is every .glb. It refused to load the file
+    // AT ALL: no meshes, no skins, no animations, over a texture.
+    //
+    // A no-op that reports success is exactly right here, because this importer
+    // never wants the pixels. It copies the encoded bytes out of the buffer
+    // view verbatim, and ParseImage leaves image.bufferView intact whatever the
+    // callback does with them.
+    loader.SetImageLoader(
+        [](tinygltf::Image*, const int, std::string*, std::string*, int, int,
+           const unsigned char*, int, void*) { return true; },
+        nullptr);
     std::string err;
     std::string warn;
 
@@ -725,7 +842,7 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
         return scene;
     }
 
-    const std::string baseDir = fs::path(path).parent_path().string();
+
     std::vector<bool> visited(model.nodes.size(), false);
 
     // Skins first, because the node walk records a skin index per primitive and
@@ -746,16 +863,16 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
     // placed by its parent chain.
     if (model.defaultScene >= 0 && model.defaultScene < static_cast<int>(model.scenes.size())) {
         for (const int root : model.scenes[static_cast<size_t>(model.defaultScene)].nodes) {
-            visitNode(model, root, glm::mat4(1.0f), baseDir, scene.submeshes, visited);
+            visitNode(model, root, glm::mat4(1.0f), path, scene.submeshes, visited);
         }
     } else if (!model.scenes.empty()) {
         for (const int root : model.scenes[0].nodes) {
-            visitNode(model, root, glm::mat4(1.0f), baseDir, scene.submeshes, visited);
+            visitNode(model, root, glm::mat4(1.0f), path, scene.submeshes, visited);
         }
     } else {
         // No scene description at all: fall back to every node in the file.
         for (int i = 0; i < static_cast<int>(model.nodes.size()); ++i) {
-            visitNode(model, i, glm::mat4(1.0f), baseDir, scene.submeshes, visited);
+            visitNode(model, i, glm::mat4(1.0f), path, scene.submeshes, visited);
         }
     }
 
