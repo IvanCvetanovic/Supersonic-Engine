@@ -290,7 +290,15 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 // model that describes rough gold with a texture on it produced
                 // untextured white plastic and left the user to retype, by
                 // hand, values the file had already stated.
-                mesh.importMaterialOnResolve = true;
+                //
+                // Only asked for when something will answer. SyncResources
+                // walks RenderableComponent, so an entity without one is never
+                // resolved - "Add Component -> Mesh" adds a MeshComponent on
+                // its own, and on that entity the request would sit set for the
+                // life of the scene and quietly never happen.
+                if (registry.all_of<RenderableComponent>(entity)) {
+                    mesh.importMaterialOnResolve = true;
+                }
             }
 
             if (!mesh.filePath.empty() && ImGui::SmallButton("Revert to primitive")) {

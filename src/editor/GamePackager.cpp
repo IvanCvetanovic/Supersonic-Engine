@@ -84,8 +84,11 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
         }
     }
 
-    // Cleared because the directory_iterator above sets it at the end of the
-    // walk, and everything below tests it.
+    // Cleared because directory_iterator writes `ec` from its CONSTRUCTOR - if
+    // the executable's own directory cannot be enumerated, the range is empty
+    // and `ec` stays set with nothing having gone wrong for packaging. Every
+    // check below tests the same `ec`, so leaving it would fail the package for
+    // a directory listing it does not need.
     ec.clear();
 
     // Everything a scene can reference, not just shaders and scenes. A

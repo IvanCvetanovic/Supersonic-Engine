@@ -17,6 +17,7 @@
 
 #include "editor/GamePackager.hpp"
 #include "core/GameRuntime.hpp"
+#include "platform/ExecutablePath.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -162,12 +163,94 @@ static void testAnImpossibleDestinationFails() {
     cleanup();
 }
 
+// A runtime library that fails to copy used to call ec.clear() and carry on, so
+// a game missing the one plugin it cannot run without was announced as packaged
+// successfully. It is a partial package now, and it says which file.
+//
+// Deterministic rather than dependent on what happens to sit beside this
+// binary: it plants a probe library next to the executable so there is
+// certainly one to copy, then puts a DIRECTORY at the destination name, which
+// copy_file cannot overwrite. An earlier draft searched for an existing .dll
+// and returned early when it found none - which is exactly the soft pass the
+// TestHarness check floor exists to catch, and it passed vacuously here.
+static void testAFailedRuntimeLibraryCopyIsNotASuccess() {
+    cleanup();
+    const fs::path out = scratchRoot() / "Partial";
+    std::error_code ec;
+    fs::create_directories(out, ec);
+
+    const fs::path exeDir = fs::path(ExecutablePath()).parent_path();
+    const fs::path probe = exeDir / "supersonic_packaging_probe.dll";
+    { std::ofstream file(probe, std::ios::binary); file << "probe"; }
+
+    // The destination name is taken by something copy_file cannot write over.
+    fs::create_directories(out / probe.filename(), ec);
+
+    const auto result = GamePackager::PackageStandaloneGame(
+        out.string(), "assets/scenes/MainScene.scene");
+
+    CHECK_MSG(!result.ok, "a library that did not copy must not report a clean package");
+    CHECK_MSG(result.message.find(probe.filename().string()) != std::string::npos,
+              "and must name the file that failed: " + result.message);
+
+    fs::remove(probe, ec);
+    cleanup();
+}
+
+// The same probe, unobstructed, must land in the package - otherwise the test
+// above would pass just as well against a packager that copied nothing at all.
+static void testRuntimeLibrariesAreCopied() {
+    cleanup();
+    const fs::path out = scratchRoot() / "WithLibs";
+    std::error_code ec;
+
+    const fs::path exeDir = fs::path(ExecutablePath()).parent_path();
+    const fs::path probe = exeDir / "supersonic_packaging_probe.dll";
+    { std::ofstream file(probe, std::ios::binary); file << "probe"; }
+
+    const auto result = GamePackager::PackageStandaloneGame(
+        out.string(), "assets/scenes/MainScene.scene");
+
+    CHECK_MSG(result.ok, result.message);
+    CHECK_MSG(fs::exists(out / probe.filename()),
+              "a runtime library beside the binary belongs in the package");
+
+    fs::remove(probe, ec);
+    cleanup();
+}
+
+// Hot reload loads numbered copies of the script plugin, so a build tree fills
+// up with GameScripts.loaded1.dll and friends. Shipping those puts a stale copy
+// of the game's scripts in the release folder.
+static void testScratchHotReloadCopiesAreNotShipped() {
+    cleanup();
+    const fs::path out = scratchRoot() / "NoScratch";
+    std::error_code ec;
+
+    const fs::path exeDir = fs::path(ExecutablePath()).parent_path();
+    const fs::path scratch = exeDir / "supersonic_probe.loaded7.dll";
+    { std::ofstream file(scratch, std::ios::binary); file << "stale"; }
+
+    const auto result = GamePackager::PackageStandaloneGame(
+        out.string(), "assets/scenes/MainScene.scene");
+
+    CHECK_MSG(result.ok, result.message);
+    CHECK_MSG(!fs::exists(out / scratch.filename()),
+              "a hot-reload scratch copy must not be shipped");
+
+    fs::remove(scratch, ec);
+    cleanup();
+}
+
 static void runTests() {
     testTheManifestNamesTheSceneItWasGiven();
     testTheBinaryIsActuallyThere();
     testTheManifestRoundTripsThroughTheLoader();
     testPackagingIsRepeatable();
     testAnImpossibleDestinationFails();
+    testRuntimeLibrariesAreCopied();
+    testAFailedRuntimeLibraryCopyIsNotASuccess();
+    testScratchHotReloadCopiesAreNotShipped();
 }
 
-TEST_MAIN("test_packaging", 16)
+TEST_MAIN("test_packaging", 22)
