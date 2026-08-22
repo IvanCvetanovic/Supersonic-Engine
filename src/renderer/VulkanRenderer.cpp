@@ -1146,17 +1146,13 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     cmd.setViewport(0, 1, &offscreenViewport);
     cmd.setScissor(0, 1, &offscreenScissor);
 
-    RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline,
+    // The sky goes in with the scene rather than after it. It has to be drawn
+    // between the opaque and transparent passes, and only RenderSystem knows
+    // where the boundary is - see the note on Render.
+    RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline, m_skyPipeline.get(),
                          *m_meshRegistry, *m_textureRegistry,
                          cmd, m_descriptorSets[m_currentFrame],
                          cameraFrustum, glm::vec3(ubo.cameraPosition), m_renderStats);
-
-    // Sky before the grid and after the scene: after, so it only shades pixels
-    // nothing claimed; before, so the grid still blends over it at the horizon.
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_skyPipeline->GetPipeline());
-    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_skyPipeline->GetLayout(),
-                           VulkanPipeline::kSceneSet, 1, &m_descriptorSets[m_currentFrame], 0, nullptr);
-    cmd.draw(3, 1, 0, 0);
 
     // Ground grid last so it blends over the scene it is depth-tested against -
     // and only where there is an editor to want one. It is a construction

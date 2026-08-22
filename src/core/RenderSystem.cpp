@@ -300,6 +300,7 @@ void RenderSystem::Render(
     entt::registry& registry,
     VulkanPipeline& pipeline,
     VulkanPipeline& transparentPipeline,
+    VulkanPipeline* skyPipeline,
     MeshRegistry& meshes,
     TextureRegistry& textures,
     vk::CommandBuffer commandBuffer,
@@ -391,6 +392,28 @@ void RenderSystem::Render(
             0, sizeof(PushConstantData), &push);
 
         commandBuffer.drawIndexed(mesh->indexCount, 1, 0, 0, 0);
+    }
+
+    // ---- Sky -------------------------------------------------------------
+    //
+    // After the opaque pass so it only shades pixels nothing claimed, and
+    // before the transparent one so it cannot paint over a blended surface
+    // that deliberately left the depth buffer alone. A fullscreen triangle,
+    // needing no vertex input and no material set.
+    if (skyPipeline) {
+        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, skyPipeline->GetPipeline());
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, skyPipeline->GetLayout(),
+                                         VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
+        commandBuffer.draw(3, 1, 0, 0);
+
+        // Back to the opaque pipeline. The transparent pass below binds its own,
+        // but it is skipped entirely when nothing is transparent - and the
+        // particle block after it assumes the opaque pipeline is bound.
+        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
+                                         VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
+        boundMesh = MeshRegistry::kInvalidMesh;
+        boundMaterialSet = vk::DescriptorSet{};
     }
 
     // ---- Transparent pass ------------------------------------------------

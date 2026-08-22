@@ -42,10 +42,22 @@ public:
     // by material to avoid rebinding, and transparent draws must be ordered by
     // distance instead. Those are different orders and cannot both be had from
     // one traversal.
+    //
+    // The sky is drawn by this function rather than after it, and the reason is
+    // the transparent pass. A blended surface does not write depth, so a pane
+    // with nothing but sky behind it leaves the depth buffer at the clear value
+    // - and a sky drawn afterwards at z = 1.0 with a lessOrEqual compare passes
+    // that test and paints over the pane. Transparency worked indoors, where
+    // opaque geometry had claimed the depth, and vanished against the horizon.
+    //
+    // Drawn between the two passes rather than before both: the depth
+    // rejection that makes the sky nearly free still works, because the opaque
+    // pass has already run.
     static void Render(
         entt::registry& registry,
         VulkanPipeline& pipeline,
         VulkanPipeline& transparentPipeline,
+        VulkanPipeline* skyPipeline,
         MeshRegistry& meshes,
         TextureRegistry& textures,
         vk::CommandBuffer commandBuffer,
