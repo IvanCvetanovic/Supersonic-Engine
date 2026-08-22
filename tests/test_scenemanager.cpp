@@ -185,7 +185,15 @@ static void testAdoptLoadedNamesTheSceneStartupOpened() {
 
     CHECK(scenes.CurrentPath() == "assets/scenes/Level2.scene");
     CHECK_MSG(!scenes.IsDirty(), "a scene just loaded from disk has no unsaved changes");
-    CHECK_MSG(!scenes.HasPending(), "adopting must not leave a queued load behind");
+    CHECK_MSG(!scenes.HasPending(), "adopting does not invent a queued load");
+
+    // And it must not SWALLOW one either. Nothing queues a load this early
+    // today, but a method that silently discarded one would fail the moment
+    // something did - a layer asking for a level from OnAttach, say.
+    scenes.RequestLoad("assets/scenes/Level3.scene");
+    scenes.AdoptLoaded("assets/scenes/Level2.scene");
+    CHECK_MSG(scenes.HasPending(),
+              "recording which scene is open must not cancel a request to open another");
 }
 
 // The manager is published into the registry context as a POINTER, and this is

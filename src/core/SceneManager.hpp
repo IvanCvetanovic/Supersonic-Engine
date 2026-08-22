@@ -41,12 +41,16 @@ public:
     // a frame to defer into, and without this the manager would still be
     // naming the default scene - so "Save" would write the open scene over
     // MainScene.scene, and packaging would ship the wrong level.
+    //
+    // Deliberately does NOT clear a queued load. Nothing can have queued one
+    // this early, but the first draft cleared them anyway "because nothing can
+    // be pending", which would have turned a request made before the first
+    // frame into a silent no-op the moment that stopped being true. Recording
+    // which scene is open and discarding a request to open a different one are
+    // unrelated jobs, and only the first is this one.
     void AdoptLoaded(const std::string& path) {
         m_currentPath = path;
         m_dirty = false;
-        m_pendingLoad = false;
-        m_pendingNew = false;
-        m_pendingPath.clear();
     }
 
     SerializationResult Save(entt::registry& registry);

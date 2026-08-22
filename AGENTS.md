@@ -104,9 +104,14 @@ pressing F5 works without any extra setup.
 
 `--frames` is what makes any automated check of the engine possible: the run
 exits by itself, and an ERROR-severity validation message makes it exit
-non-zero. Note that passing `--scene` also enters Play, the way a packaged game
-does — so physics, scripts and particles actually run, rather than the check
-exercising only the half of the engine that draws. `--screenshot` captures the composited image - the same one the
+non-zero.
+
+Note that a plain `--frames` run sits in edit mode, so it exercises only the
+half of the engine that draws: no physics steps, no script runs, no particle
+moves. Passing `--scene` enters Play as well as loading the file, so a check
+that wants the simulation running has to pass one. That coupling is a side
+effect of the condition packaged games use rather than a designed flag, so do
+not rely on it without reading `SupersonicApp.cpp` first. `--screenshot` captures the composited image - the same one the
 viewport shows, already tone-mapped and encoded - so a rendering change can be
 looked at rather than only reasoned about.
 

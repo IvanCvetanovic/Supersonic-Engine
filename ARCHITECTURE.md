@@ -448,6 +448,31 @@ failure at creation — only a wrong picture:
   treated as 0.2 of linear light and the grid reads far brighter than it was
   drawn.
 
+**Transparency, and where its alpha stops mattering.** A material marked
+transparent is diverted out of the opaque walk and drawn afterwards, sorted back
+to front, through a pipeline with blending on and depth writes off. Particles
+ride the same pipeline — their emitters default to an end alpha of zero, so
+every one of them is authored to fade, and while they were on the opaque
+pipeline that alpha was computed, pushed and discarded by the blend state.
+
+The sky is drawn BETWEEN the opaque and transparent passes for the same reason.
+A blended surface writes no depth, so a pane with nothing but sky behind it
+leaves the depth buffer at the clear value, and a sky drawn after the whole
+scene at z = 1.0 with a lessOrEqual compare passes that test and paints over it.
+Transparency worked indoors and vanished against the horizon.
+
+Two places the alpha still does not reach, neither of them fixed by the above:
+
+- **Shadows.** `GatherShadowCasters` filters on visibility and `castsShadow` and
+  never consults `MaterialComponent::transparent`, and `shadow.frag` has no
+  alpha test. A pane of glass and a cloud of fading particles both cast a
+  solid black shadow.
+- **Particles do not interleave with transparent meshes.** They are sorted among
+  themselves and drawn after, because a particle is a different mesh with a
+  different material set and merging the two lists would cost a rebind per draw
+  at the point in the frame with the most draws in it. A particle behind a pane
+  composites in the wrong order.
+
 ### 6. Scripting & hot reload
 
 Scripts are looked up by name in `ScriptRegistry`. Built-ins and plugin scripts
