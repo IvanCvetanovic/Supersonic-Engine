@@ -53,6 +53,9 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
         return { false, "Failed to copy " + exe.filename().string() + ": " + ec.message() };
     }
 
+    std::string note;
+    bool ok = true;
+
     // Any runtime libraries sitting next to the executable.
     for (const auto& entry : fs::directory_iterator(exe.parent_path(), ec)) {
         if (ec) break;
@@ -67,14 +70,23 @@ SerializationResult GamePackager::PackageStandaloneGame(const std::string& outpu
         // scripts in the release folder.
         if (p.stem().string().find(".loaded") != std::string::npos) continue;
 
-        {
-            fs::copy_file(p, out / p.filename(), fs::copy_options::overwrite_existing, ec);
-            ec.clear();
+        std::error_code copyError;
+        fs::copy_file(p, out / p.filename(), fs::copy_options::overwrite_existing, copyError);
+        if (copyError) {
+            // Reported, not fatal, and no longer silent. This used to call
+            // ec.clear() and move on, so a game whose script plugin failed to
+            // copy - the one library it cannot run without - was announced as
+            // packaged successfully, and the folder crashed on launch for
+            // somebody else. A partial package is a result the caller can act
+            // on; a successful-looking one is not.
+            ok = false;
+            note += " (failed copying " + p.filename().string() + ": " + copyError.message() + ")";
         }
     }
 
-    std::string note;
-    bool ok = true;
+    // Cleared because the directory_iterator above sets it at the end of the
+    // walk, and everything below tests it.
+    ec.clear();
 
     // Everything a scene can reference, not just shaders and scenes. A
     // packaged game used to start with no textures, no models, no audio, no
