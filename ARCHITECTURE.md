@@ -152,15 +152,39 @@ nothing visible.
 
 | | Directional | Point | Spot |
 |---|---|---|---|
-| Placement | `direction`, pointing **toward** the light | `TransformComponent::position` | `TransformComponent::position`, `direction` for aim |
+| Placement | `direction`, pointing **toward** the light | world position | world position, `direction` for aim |
 | Shadow target | 4 layers of one 2048² array image | one 1024² cube per caster | one 1024² array layer per caster |
 | Casters | 1, and it must be `lights[0]` | `PointShadow::kMaxShadowCasters` (2) | `SpotLight::kMaxShadowCasters` (2) |
 | Lookup | pick a cascade by view depth, project, 3×3 PCF | sample by direction, 5 taps | project through `spotViewProj[slot]`, 3×3 PCF |
 | Slot index | implicit: index 0 | `attenuation.y`, or -1 | `attenuation.w`, or -1 |
 
-The placement row is precise about the component: `gatherLights` reads
-`TransformComponent`, the local transform, not `WorldTransformComponent`. That
-is a departure from §3b, written down here rather than smoothed over.
+Placement goes through `LightWorldPosition`, which reads
+`WorldTransformComponent` and falls back to the local `TransformComponent` only
+when the hierarchy has not been resolved yet — which is the same answer for an
+unparented light, and the only answer available before the first resolve.
+
+This was a departure until recently, and worth keeping in mind as a shape of
+bug rather than as a live one: `gatherLights` read the LOCAL transform, so a
+torch parented to a character lit the world origin while the character walked
+away from it. Everything else downstream — both shadow passes, picking, the
+gizmo — already read the world matrix. Lights were the single exception.
+
+**Which lights.** The array is fixed at `kMaxLights`, and a scene may hold more
+than that. `SelectLights` decides which ones are passed: directional first,
+since they light everything wherever they are and the shadow caster has to
+reach `lights[0]`; then local lights by distance to the EDGE of their range, so
+a floodlight reaching the shot beats a pinpoint lamp nearer the camera that
+illuminates nothing. Stable among equals, so a scene does not reshuffle which
+of its lights are lit between frames.
+
+That is a selection rule, not culling — nine lights in one room still drops one.
+What it replaced was worse than a rule: the loop took lights in registry order
+and stopped at the ninth, and EnTT walks a pool in reverse insertion order, so a
+scene kept the eight lights authored LAST. The sun is the first thing anyone
+places, so a level that grew a twelfth lamp lost its directional light and every
+shadow in the scene with it, silently. It is in `core/LightSelection.hpp` rather
+than in the renderer because it needs nothing from Vulkan, and the suites
+deliberately touch no Vulkan entry point.
 
 Ambient is a scene-wide hemispheric term — sky colour above the horizon, ground
 bounce below — and `FindAmbientLight` decides which light supplies it: the first
@@ -1165,6 +1189,29 @@ is. And the editor's ground grid is drawn only when there is an editor: it sat
 at the end of the scene pass with nothing in front of it, so a packaged game
 opened on its own level with the grid and the origin axes drawn across it.
 
+**Changing level.** `SceneManager` performs the load, and for a long time
+nothing outside the editor could reach it: it was a private member of
+`EditorLayer`, `EngineLayer` is handed only the registry, and the plugin ABI had
+no scene entry. A packaged game therefore opened whatever the manifest named
+and stayed there for the rest of its life — no menu to level, no level to level,
+no restart on death — against a class whose entire job is to perform exactly
+that transition.
+
+It is owned by `SupersonicApp` now and published into the registry context as
+`SceneManager*`, the same way `ContactTracker*` and `AudioEngine*` are, which is
+how anything holding the registry reaches a service it cannot otherwise see. A
+pointer rather than a value, because a scene load CLEARS the registry it would
+have been stored in; `entt::registry::clear()` empties the component pools and
+the entity list and leaves the context alone, and a test pins that, because a
+script calling `loadScene` twice depends on it.
+
+The load stays deferred, and the deferral is the whole design: `RequestLoad`
+records the wish and `ApplyPending` performs it after the frame's iteration has
+finished. A script runs inside a view over the registry, so a load performed
+where it was asked for would invalidate what the caller is walking. The editor
+keeps only what is genuinely its own — dropping a selection that names an entity
+in a scene that is gone, and resetting an undo stack that describes one.
+
 Still fused: the scene target lives in `EditorLayer`, and the scene pipeline is
 built against its render pass. A game needs that target too — it is the HDR and
 bloom chain — so this is misplaced ownership rather than a missing feature.
@@ -1607,10 +1654,13 @@ Listed rather than hidden.
   `ParticleSystem` no longer do — their state moved into components.
 - **`LightFlickerScript` is native, not a plugin script.** It needs
   `LightComponent`, and the script ABI carries no way to reach one. The ABI is
-  no longer "only a transform" — it also carries input, world queries
-  (`raycast`, `isGrounded`), animation control and the UI canvas — but every one
-  of those is a fixed function-pointer block, so a script still cannot name a
-  component the ABI did not anticipate.
+  a long way past "only a transform" now — at version 8 it carries input, world
+  queries (`raycast`, `isGrounded`), animation control, the UI canvas, authored
+  parameters and per-entity state, contacts, spawn and destroy, velocity and
+  force, and `loadScene` — but every one of those is a fixed function-pointer
+  block, so a script still cannot name a component the ABI did not anticipate.
+  Widening it is an ABI bump, and the layout pins in `ScriptPluginApi.h` are
+  what make that impossible to forget.
 
 ## Platform support
 

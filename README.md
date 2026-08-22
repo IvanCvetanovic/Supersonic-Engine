@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-34%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-35%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
@@ -45,11 +45,15 @@ code quietly contradicts.
 | | |
 |---|---|
 | **Physically based shading** | Cook–Torrance GGX with metallic / roughness / ambient-occlusion inputs, per-material |
-| **Lighting** | Up to 8 simultaneous lights — directional, point and spot — with distance attenuation and a smooth cone falloff |
+| **Lighting** | Up to 8 simultaneous lights — directional, point and spot — with distance attenuation and a smooth cone falloff. A scene may hold more; the eight passed to the shader are chosen by relevance to the camera, directional first, and the shortfall is logged |
 | **Cascaded shadows** | Four 2048² D32 cascades in one array image, fitted to the camera by bounding sphere and snapped to the texel grid so edges do not crawl; per-cascade normal offset, 3×3 PCF, and a cross-fade across each split |
 | **Normal mapping** | Tangent-space, with glTF-convention `vec4` tangents (handedness in `w`) generated for procedural meshes too |
 | **Frustum culling** | Gribb–Hartmann plane extraction; the scene pass culls against the camera, the shadow pass against the light, so nothing off-screen pops its shadow in and out |
 | **HDR + bloom** | Floating-point scene target, luminance-thresholded bright pass with a soft knee, separable half-res blur, then tone map and sRGB encode — exactly one encode, at the end of the chain |
+| **Transparency** | A blended pass after the opaque one and after the sky, sorted back to front, with depth writes off — per-material, and particles ride the same pipeline |
+| **Sky and fog** | A procedural gradient sky drawn as a fullscreen triangle where nothing else claimed the depth, and exponential-squared distance fog, both authored per scene |
+| **Emissive** | A per-material emissive colour and strength, driven above 1.0 to trip the bloom threshold |
+| **Texture sampling** | A generated mip chain and anisotropic filtering, both guarded on the device actually supporting them |
 | **Anti-aliasing** | 4× MSAA, resolved into the image the editor samples |
 | **Pipeline cache** | The driver's compiled pipelines persist to disk between runs, validated against vendor, device and driver UUID before reuse |
 | **Grid** | Procedural infinite ground grid, depth-tested and analytically anti-aliased |
@@ -223,8 +227,9 @@ docs/          Screenshots
 .github/       CI: manual-dispatch only (Actions -> CI -> Run workflow)
 ```
 
-Roughly 13,900 lines of engine source across 49 translation units, excluding
-vendored dependencies.
+Roughly 19,200 lines of engine source across 73 translation units, or 26,700
+lines counting headers — excluding vendored dependencies and the two
+translation units that exist only to compile VMA and tinygltf.
 
 ---
 
@@ -234,7 +239,7 @@ vendored dependencies.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Thirty-four suites, each a plain executable with no test framework behind it —
+Thirty-five suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 | Suite | Covers |
@@ -268,6 +273,12 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_assetwatcher` | Change detection, deleted and restored files, duplicate watches |
 | `test_contacts` | Enter/stay/exit diffing, pair ordering, normal direction, triggers |
 | `test_sat` | Oriented box collision, face manifolds, the ramp an AABB could not represent |
+| `test_lightselection` | Which lights survive the eight-light cap, and that the sun is not one of the casualties |
+| `test_shadowcache` | The signature that lets a depth pass be skipped, and what must dirty it |
+| `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped |
+| `test_determinism` | That one binary over one scene produces the same frames twice |
+| `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
+| `test_codecextension` | Serialising a game's own components alongside the engine's |
 
 Every suite is a regression test for a bug that actually happened. The header
 comment on each one says which.
@@ -290,28 +301,52 @@ Android "not functional"; extending that register forward costs nothing.
 ### Shipped
 
 - [x] PBR, normal mapping, cascaded shadow maps, point and spot shadows
-- [x] HDR pipeline with bloom, 4× MSAA
+- [x] HDR pipeline with bloom, 4× MSAA, a procedural sky and distance fog
+- [x] A sorted transparent pass, and emissive materials that drive the bloom
 - [x] Transform hierarchy, prefabs, scene and material serialization
 - [x] Play/Stop, undo/redo, time-travel rewind
 - [x] Frustum culling, persistent pipeline cache
-- [x] Entity-versus-entity collision with a broadphase, and world queries
+- [x] Oriented-box collision by SAT, speculative contacts, a batched solver and
+      sleeping — with world queries against colliders rather than render bounds
 - [x] Job system, applied where the work is provably independent
 - [x] Skeletal animation with cross-fade blending
 - [x] In-game UI canvas, audio mixer, one-click packaging
 - [x] Headless `--frames` runs, a validation gate that fails the build, a CPU
       profiler and a levelled log with an editor console
+- [x] A layer seam a game lives in, a simulation clock that reproduces, and a
+      serializer a game can extend with its own components
+- [x] Assign a mesh, a texture or an audio clip by dragging it from the content
+      browser; meshes, textures and prefabs reload when the file changes
+- [x] More than one scene, switchable at runtime by a layer or a script
 
 ### Next
 
-- [ ] Asset identity: assign a model or a clip from the editor instead of a
-      hardcoded path, and reload it when the file changes
-- [ ] More than one scene — a scene manager, and a way for a game to switch level
-- [ ] A script ABI that carries more than a transform: per-entity state, authored
-      parameters, spawn and destroy, forces, and collision callbacks
-- [ ] Image-based lighting and a skybox; transparency
-- [ ] An oriented-box narrowphase, so a rotated crate stops colliding as its
-      bounding box, then continuous collision and sleeping
-- [ ] Light culling, so the eight-light cap stops being a cap
+Ordered by what it costs against what it unblocks, not by how interesting it is.
+
+- [ ] **Asset identity.** Every reference is a raw relative path, so renaming a
+      file in Explorer silently breaks every scene, prefab and material pointing
+      at it. Animation clips, audio and `.material` files are also still outside
+      hot reload, and a clip is typed into a text box rather than picked
+- [ ] **Finish the glTF import.** Materials are parsed and then discarded on the
+      way into the mesh registry; normal, emissive, AO and alpha-mode are never
+      read; and `.glb` embedded textures are dropped, so the single-file format
+      arrives untextured
+- [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
+      is no cubemap path at all — no HDRI can be loaded — so metal and smooth
+      dielectrics have nothing to reflect but a two-colour gradient
+- [ ] **Texture maps beyond albedo and normal**, and an alpha-cutout path, so
+      foliage stops having to go through the sorted blend
+- [ ] **Light culling.** Eight is still a hard cap. Which eight is now chosen by
+      relevance and logged, but lifting the cap needs a froxel grid
+- [ ] **Mouse capture and text input.** `GLFW_CURSOR` is never set, so a
+      mouse-look game cannot ship, and nothing can accept a typed name
+- [ ] **Collision geometry beyond boxes, spheres and capsules**, and joints —
+      the procedurally generated terrain is currently scenery you fall through
+
+Deliberately not on this list, with the reasons written down in
+[ARCHITECTURE.md](ARCHITECTURE.md): swept CCD, a persistent broadphase, warm
+starting, a multi-threaded solver, and instancing — the last measured at 0.44 ms
+of a 1.7 ms shipped frame and rejected on that basis rather than on taste.
 
 ---
 

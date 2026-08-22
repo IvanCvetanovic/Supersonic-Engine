@@ -7,7 +7,7 @@ why it is like that".
 ## Before you start
 
 - **Build and run the tests first.** `ctest --test-dir build -C Debug` should be
-  thirty-four green suites before you change anything. If it is not, that is the
+  thirty-five green suites before you change anything. If it is not, that is the
   bug worth reporting.
 - **Install the Vulkan SDK.** Without the validation layers, invalid Vulkan
   usage does not produce an error — it produces an access violation, or nothing
@@ -37,9 +37,18 @@ project's own code never is.
   Without it, your GLSL edit is silently ignored and the committed blob is used
   instead. Commit the regenerated blobs alongside the source.
 - **The uniform buffer layout.** `UniformBufferObject` is declared in
-  `VulkanPipeline.hpp` and again in `shader.vert`, `shader.frag` and
-  `grid.vert`. All four move together, or the shaders read the buffer at the
-  wrong offsets — which produces wrong lighting, not an error.
+  `VulkanPipeline.hpp` and, on the GLSL side, in exactly one place:
+  `assets/shaders/scene_ubo.glsl`, which every shader that needs it includes.
+  Those two move together, or the shaders read the buffer at the wrong offsets
+  — which produces wrong lighting, not an error.
+
+  It used to be written out by hand in three shaders, and two of them had
+  already drifted: both declared `Light` as three `vec4` against the four C++
+  writes, which under std140 put `lights[]` at offset 464 with a 48-byte stride
+  where C++ writes 608 with 64. It was inert only by luck — the two that had
+  drifted read nothing but `view` and `proj`, which sit at offsets 0 and 64 and
+  are correct in every version of the block. A uniform block mismatch is not a
+  validation error. It is just wrong numbers.
 - **Frame ordering.** `SupersonicApp::Run` is commented where it is
   load-bearing. The offscreen target may only be recreated at the top of the
   frame, and world transforms are resolved twice on purpose.

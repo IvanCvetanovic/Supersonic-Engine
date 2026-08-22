@@ -59,7 +59,7 @@ cmake --build build --parallel
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Thirty-four suites. Rather than repeat the list here - the copy that used to
+Thirty-five suites. Rather than repeat the list here - the copy that used to
 live in this file had fallen thirteen entries behind - see the table in
 [README.md](README.md#testing), or read it from the build, which is where CI
 gets it:
@@ -104,7 +104,9 @@ pressing F5 works without any extra setup.
 
 `--frames` is what makes any automated check of the engine possible: the run
 exits by itself, and an ERROR-severity validation message makes it exit
-non-zero. `--screenshot` captures the composited image - the same one the
+non-zero. Note that passing `--scene` also enters Play, the way a packaged game
+does — so physics, scripts and particles actually run, rather than the check
+exercising only the half of the engine that draws. `--screenshot` captures the composited image - the same one the
 viewport shows, already tone-mapped and encoded - so a rendering change can be
 looked at rather than only reasoned about.
 
@@ -145,7 +147,7 @@ cmake --build build --target Shaders
 
 This replaces `compile_shaders.bat`, which is gone. The script was Windows-only
 and named its shaders in a list of its own, which had drifted to four of the
-ten the build actually declares — so running it regenerated `shader` and `grid`
+twelve the build actually declares — so running it regenerated `shader` and `grid`
 and silently left `shadow`, `fullscreen` and the three `bloom` blobs stale. The
 CMake target is generated from `SHADER_JOBS`, the same list CI reads, so it
 cannot fall behind the build in the first place.
