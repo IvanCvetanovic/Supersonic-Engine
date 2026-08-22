@@ -406,14 +406,9 @@ void RenderSystem::Render(
                                          VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
         commandBuffer.draw(3, 1, 0, 0);
 
-        // Back to the opaque pipeline. The transparent pass below binds its own,
-        // but it is skipped entirely when nothing is transparent - and the
-        // particle block after it assumes the opaque pipeline is bound.
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
-                                         VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
-        boundMesh = MeshRegistry::kInvalidMesh;
-        boundMaterialSet = vk::DescriptorSet{};
+        // Nothing is rebound here on purpose: both blocks below bind their own
+        // pipeline and reset the rebind-avoidance state, and the opaque pass
+        // above has already finished with it.
     }
 
     // ---- Transparent pass ------------------------------------------------
@@ -465,56 +460,91 @@ void RenderSystem::Render(
             commandBuffer.drawIndexed(draw.mesh->indexCount, 1, 0, 0, 0);
         }
 
-        // Back to the opaque pipeline, because the particle block below assumes
-        // it is bound.
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
-                                         VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
-        boundMesh = MeshRegistry::kInvalidMesh;
-        boundMaterialSet = vk::DescriptorSet{};
     }
 
-    // Particles. Drawn as small cubes reusing the scene pipeline, shrinking as
-    // they age. They were previously simulated into a pool nothing ever read.
+    // ---- Particles -------------------------------------------------------
+    //
+    // Small cubes, shrinking as they age, on the TRANSPARENT pipeline - which
+    // is what they always wanted. `ParticleEmitterComponent::endColor` defaults
+    // to an alpha of zero, so every emitter in the engine is authored to fade
+    // out; that alpha was computed, pushed, and then thrown away by an opaque
+    // pipeline with blending disabled. Particles vanished at full brightness
+    // instead of fading. The comment on MaterialComponent::transparent names
+    // particle alpha as a motivation for the blended pass - the pass landed and
+    // this caller was left behind on the opaque one.
+    //
+    // Sorted back to front among themselves, for the reason the meshes above
+    // are. They are deliberately NOT merged into that list: a particle is a
+    // different mesh with a different material set, so interleaving would cost
+    // a mesh-and-material rebind per draw at the point in the frame with the
+    // most draws in it. A particle behind a transparent pane therefore
+    // composites in the wrong order. That is the trade, written down rather
+    // than left to be discovered.
     const GpuMesh* particleMesh = meshes.Get(meshes.GetCubeMesh());
     if (!particleMesh || particleMesh->indexCount == 0) return;
 
-    bool particleMeshBound = false;
+    struct ParticleDraw {
+        glm::vec3 position{0.0f};
+        glm::vec4 color{1.0f};
+        float size{1.0f};
+        float distanceSquared{0.0f};
+    };
+    std::vector<ParticleDraw> particles;
+
     for (auto entity : registry.view<ParticleEmitterComponent>()) {
         const auto& emitter = registry.get<ParticleEmitterComponent>(entity);
 
         for (const auto& particle : emitter.particles) {
             if (!particle.active) continue;
 
-            if (!particleMeshBound) {
-                const vk::Buffer buffers[] = { particleMesh->vertexBuffer->GetBuffer() };
-                const vk::DeviceSize offsets[] = { 0 };
-                commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
-                commandBuffer.bindIndexBuffer(particleMesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
-
-                if (vk::DescriptorSet whiteSet = textures.AcquireMaterialSet(
-                        textures.GetWhiteTexture(), textures.GetFlatNormalTexture())) {
-                    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
-                                                     VulkanPipeline::kMaterialSet, 1, &whiteSet, 0, nullptr);
-                }
-                particleMeshBound = true;
-            }
-
             const float age = particle.maxLifetime > 0.0f ? particle.lifetime / particle.maxLifetime : 0.0f;
-            const float size = emitter.particleSize * glm::clamp(age, 0.15f, 1.0f);
+            const glm::vec3 toView = particle.position - viewPosition;
 
-            PushConstantData push{};
-            push.model = glm::scale(glm::translate(glm::mat4(1.0f), particle.position), glm::vec3(size));
-            push.albedoColor = particle.color;
-            push.material = glm::vec4(1.0f, 0.0f, 1.0f, 0.0f);
-
-            commandBuffer.pushConstants(
-                pipeline.GetLayout(),
-                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                0, sizeof(PushConstantData), &push);
-
-            commandBuffer.drawIndexed(particleMesh->indexCount, 1, 0, 0, 0);
+            particles.push_back(ParticleDraw{
+                particle.position,
+                particle.color,
+                emitter.particleSize * glm::clamp(age, 0.15f, 1.0f),
+                glm::dot(toView, toView)});
         }
+    }
+
+    if (particles.empty()) return;
+
+    std::sort(particles.begin(), particles.end(),
+              [](const ParticleDraw& lhs, const ParticleDraw& rhs) {
+                  return lhs.distanceSquared > rhs.distanceSquared;
+              });
+
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                               transparentPipeline.GetPipeline());
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                     transparentPipeline.GetLayout(),
+                                     VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
+
+    const vk::Buffer buffers[] = { particleMesh->vertexBuffer->GetBuffer() };
+    const vk::DeviceSize offsets[] = { 0 };
+    commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
+    commandBuffer.bindIndexBuffer(particleMesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
+
+    if (vk::DescriptorSet whiteSet = textures.AcquireMaterialSet(
+            textures.GetWhiteTexture(), textures.GetFlatNormalTexture())) {
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                         transparentPipeline.GetLayout(),
+                                         VulkanPipeline::kMaterialSet, 1, &whiteSet, 0, nullptr);
+    }
+
+    for (const auto& draw : particles) {
+        PushConstantData push{};
+        push.model = glm::scale(glm::translate(glm::mat4(1.0f), draw.position), glm::vec3(draw.size));
+        push.albedoColor = draw.color;
+        push.material = glm::vec4(1.0f, 0.0f, 1.0f, 0.0f);
+
+        commandBuffer.pushConstants(
+            transparentPipeline.GetLayout(),
+            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+            0, sizeof(PushConstantData), &push);
+
+        commandBuffer.drawIndexed(particleMesh->indexCount, 1, 0, 0, 0);
     }
 }
 
