@@ -70,7 +70,7 @@ code quietly contradicts.
 
 ### Simulation
 
-- **Input** — named actions and axes over keyboard, mouse and gamepad; any bound source satisfies an action, so a pad and a keyboard drive the same game without either knowing about the other
+- **Input** — named actions and axes over keyboard, mouse and gamepad; any bound source satisfies an action, so a pad and a keyboard drive the same game without either knowing about the other. The pointer can be **locked** for mouse-look: the editor takes it back between plays and losing the window always releases it, so a captured cursor cannot trap you
 - **Fixed-step physics** with an accumulator capped so a hitch costs fidelity rather than exploding the solver
 - **World queries** — raycast, sphere overlap and a ground check against *colliders* rather than render bounds, available to C++ and to hot-reloaded scripts
 - **Collision** — sort-and-sweep broadphase, exact sphere–sphere and sphere–box narrowphase, box–box by world AABB along the axis of least overlap; mass-weighted impulse response with Coulomb friction, slop-limited positional correction so stacks settle instead of vibrating, immovable collider-only obstacles, and non-resolving trigger volumes
@@ -329,6 +329,8 @@ Android "not functional"; extending that register forward costs nothing.
       a texture. Embedded images are extracted to `cache/` verbatim, so every
       texture in the engine stays a path
 - [x] More than one scene, switchable at runtime by a layer or a script
+- [x] Mouse capture: a script can lock the pointer, the camera looks without a
+      button held, and losing the window always gives it back
 
 ### Next
 
@@ -346,8 +348,9 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
       place and not another
 - [ ] **Light culling.** Eight is still a hard cap. Which eight is now chosen by
       relevance and logged, but lifting the cap needs a froxel grid
-- [ ] **Mouse capture and text input.** `GLFW_CURSOR` is never set, so a
-      mouse-look game cannot ship, and nothing can accept a typed name
+- [ ] **Text input.** Nothing can accept a typed name: the UI canvas has text,
+      panels and buttons but no field, and `RawInputState` is a polled snapshot
+      with nowhere for a character event to land
 - [ ] **Collision geometry beyond boxes, spheres and capsules**, and joints —
       the procedurally generated terrain is currently scenery you fall through
 

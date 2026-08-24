@@ -5,11 +5,42 @@
 #include <GLFW/glfw3.h>
 
 #include "platform/Window.hpp"
+#include "core/Log.hpp"
 
 namespace Supersonic {
 
 namespace {
 float g_pendingScroll = 0.0f;
+
+// What was last handed to GLFW. Compared rather than set every frame:
+// glfwSetInputMode is not free, and under GLFW_CURSOR_DISABLED re-setting the
+// same mode is not documented as a no-op on every platform.
+int g_appliedCursorMode = GLFW_CURSOR_NORMAL;
+bool g_appliedRawMotion = false;
+
+// The game's word for the mode, translated into GLFW's. This is the only place
+// that knows the two vocabularies disagree: GLFW_CURSOR_DISABLED is what
+// CursorMode::Locked means, while GLFW's own CURSOR_CAPTURED - which sounds
+// like it - only fences a visible pointer inside the window and is not what
+// anything here wants.
+int glfwCursorFor(CursorMode mode) {
+    switch (mode) {
+        case CursorMode::Hidden: return GLFW_CURSOR_HIDDEN;
+        case CursorMode::Locked: return GLFW_CURSOR_DISABLED;
+        case CursorMode::Normal: break;
+    }
+    return GLFW_CURSOR_NORMAL;
+}
+
+// This engine's word, not GLFW's, for a log line somebody has to read.
+const char* cursorModeName(int glfwMode) {
+    switch (glfwMode) {
+        case GLFW_CURSOR_HIDDEN:   return "hidden";
+        case GLFW_CURSOR_DISABLED: return "locked";
+        default:                   return "free";
+    }
+}
+
 
 // The key codes GLFW defines, built once. Anything absent here is a code GLFW
 // would reject rather than report as released.
@@ -51,6 +82,44 @@ static_assert(Pad::ButtonCount == GLFW_GAMEPAD_BUTTON_LAST + 1, "pad button coun
 static_assert(Pad::AxisCount == GLFW_GAMEPAD_AXIS_LAST + 1, "pad axis count must mirror GLFW");
 } // namespace
 
+void InputPolling::ApplyCursorMode(Window& window) {
+    GLFWwindow* native = window.GetNativeWindow();
+    if (!native) return;
+
+    // Reported rather than decided here: the arbitration between what a game
+    // asked for, what the host allows and whether the window even has focus is
+    // the part with a decision in it, and it lives in Input where it can be
+    // tested without a window.
+    Input::SetWindowFocused(glfwGetWindowAttrib(native, GLFW_FOCUSED) == GLFW_TRUE);
+
+    const int desired = glfwCursorFor(Input::EffectiveCursorMode());
+
+    if (desired != g_appliedCursorMode) {
+        glfwSetInputMode(native, GLFW_CURSOR, desired);
+        g_appliedCursorMode = desired;
+
+        // Logged because it is otherwise invisible and it is the first thing to
+        // check when a game "will not let go of the mouse" or "will not take
+        // it": the request, the veto and the window's focus all feed one
+        // decision, and only the outcome is observable from outside.
+        SUPERSONIC_LOG_INFO("Input")
+            << "Cursor " << cursorModeName(desired)
+            << " (asked for " << cursorModeName(glfwCursorFor(Input::RequestedCursorMode()))
+            << (Input::CursorCaptureSuppressed() ? ", host holds it" : "")
+            << (Input::WindowFocused() ? "" : ", window unfocused") << ")." << std::endl;
+    }
+
+    // Raw motion only means anything while the pointer is locked, and GLFW says
+    // so: it is ignored in every other mode. Unaccelerated, unscaled deltas are
+    // what a look should be made of - the desktop's pointer curve is tuned for
+    // hitting a menu item, not for aiming.
+    const bool wantRaw = desired == GLFW_CURSOR_DISABLED && glfwRawMouseMotionSupported();
+    if (wantRaw != g_appliedRawMotion) {
+        glfwSetInputMode(native, GLFW_RAW_MOUSE_MOTION, wantRaw ? GLFW_TRUE : GLFW_FALSE);
+        g_appliedRawMotion = wantRaw;
+    }
+}
+
 void InputPolling::AccumulateScroll(float delta) {
     g_pendingScroll += delta;
 }
@@ -59,6 +128,9 @@ void InputPolling::Poll(Window& window) {
     GLFWwindow* native = window.GetNativeWindow();
     if (!native) return;
 
+    // ApplyCursorMode has already run this frame, earlier than this, so the
+    // cursor position read below is in whatever coordinate space it left the
+    // window in - which is the frame Input::Update corrects its baseline on.
     RawInputState state{};
 
     // Only the codes GLFW actually defines. Its key range is sparse - nothing

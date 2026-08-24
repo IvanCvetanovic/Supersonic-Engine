@@ -21,6 +21,7 @@
 namespace {
 
 constexpr float kTau = 6.28318530718f;
+constexpr float kDegreesToRadians = 0.01745329252f;
 
 // A figure-eight orbit in the XZ plane.
 void orbitScript(SupersonicScriptContext* ctx) {
@@ -175,6 +176,49 @@ void patrolScript(SupersonicScriptContext* ctx) {
     ctx->position[2] += std::sin(phase) * radius * ctx->deltaTime * speed;
 }
 
+// Mouse-look, which is the thing a first-person game is made of and which no
+// script could write before.
+//
+// Two halves were missing and either one alone is useless. The pointer was
+// never captured, so a turn ran out of desk - or out of screen - part way
+// through; and the script context had no way to ask how far the mouse had
+// moved, only which of its buttons were down. So the engine could ship a game
+// that walks and cannot ship one that looks.
+//
+// Assign this to the entity holding the scene's primary camera.
+void mouseLookScript(SupersonicScriptContext* ctx) {
+    if (!ctx->input) return;
+
+    // Asked for every frame rather than once. It is a request, not a takeover:
+    // the editor holds the pointer back between plays and while its viewport is
+    // unfocused, and losing the window releases it - so the mode a script
+    // "already set" may not be the mode in force, and re-asking is how it comes
+    // back when play resumes. Setting the same mode twice costs nothing.
+    ctx->input->setCursorMode(ctx->input->opaque, SUPERSONIC_CURSOR_LOCKED);
+
+    // And then check, because asking does not make it so. With the pointer
+    // free, its motion is someone dragging a window or reaching for a menu, and
+    // turning the camera with it is how a game feels broken in the editor.
+    if (ctx->input->cursorMode(ctx->input->opaque) != SUPERSONIC_CURSOR_LOCKED) return;
+
+    float delta[2] = {0.0f, 0.0f};
+    ctx->input->mouseDelta(ctx->input->opaque, delta);
+
+    // Degrees per pixel. Not scaled by deltaTime: a mouse reports how far it
+    // moved, not how fast, so a frame that took twice as long already carries
+    // twice the movement and multiplying again would double-count it. This is
+    // the single most common bug in a first-person controller.
+    const float sensitivity = 0.12f;
+
+    ctx->rotation[1] -= delta[0] * sensitivity * kDegreesToRadians;
+
+    // Pitch, clamped just short of straight up and straight down. Past vertical
+    // the view rolls over and the horizon turns upside down.
+    const float pitch = ctx->rotation[0] - delta[1] * sensitivity * kDegreesToRadians;
+    const float limit = 89.0f * kDegreesToRadians;
+    ctx->rotation[0] = pitch < -limit ? -limit : (pitch > limit ? limit : pitch);
+}
+
 } // namespace
 
 extern "C" {
@@ -196,6 +240,7 @@ SUPERSONIC_SCRIPT_EXPORT void SupersonicScriptPluginRegister(SupersonicScriptHos
     host->registerScript(host->opaque, "AnimatedPlayerScript", &animatedPlayerScript);
     host->registerScript(host->opaque, "ClickCounterScript", &ClickCounterScript);
     host->registerScript(host->opaque, "PatrolScript", &patrolScript);
+    host->registerScript(host->opaque, "MouseLookScript", &mouseLookScript);
 }
 
 } // extern "C"

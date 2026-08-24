@@ -35,6 +35,16 @@ std::unordered_map<std::string, bool> g_actionPrevious;
 
 glm::vec2 g_mouseDelta{0.0f};
 
+CursorMode g_requestedCursor = CursorMode::Normal;
+bool g_cursorSuppressed = false;
+bool g_windowFocused = true;
+
+// What the last Update ran under. Locking or releasing the pointer moves it -
+// GLFW switches between screen coordinates and unbounded virtual ones, and puts
+// it back where it was on the way out - so the first frame under a new mode has
+// a previous position from the old coordinate space.
+CursorMode g_cursorAtLastUpdate = CursorMode::Normal;
+
 bool keyInRange(int key) { return key >= 0 && key <= Key::Last; }
 
 // Rescales the live region so a control leaving the deadzone starts at zero
@@ -77,6 +87,31 @@ void Input::ClearBindings() {
     g_current = RawInputState{};
     g_previous = RawInputState{};
     g_mouseDelta = glm::vec2(0.0f);
+
+    // The pointer too, even though it is not a binding. This is the only reset
+    // there is - LoadDefaultBindings goes through it, and so does every test -
+    // and a cursor mode left locked by whatever ran last is exactly the kind of
+    // state that makes a suite pass in one order and fail in another.
+    g_requestedCursor = CursorMode::Normal;
+    g_cursorSuppressed = false;
+    g_windowFocused = true;
+    g_cursorAtLastUpdate = CursorMode::Normal;
+}
+
+void Input::SetCursorMode(CursorMode mode) { g_requestedCursor = mode; }
+CursorMode Input::RequestedCursorMode() { return g_requestedCursor; }
+
+void Input::SuppressCursorCapture(bool suppressed) { g_cursorSuppressed = suppressed; }
+bool Input::CursorCaptureSuppressed() { return g_cursorSuppressed; }
+
+void Input::SetWindowFocused(bool focused) { g_windowFocused = focused; }
+bool Input::WindowFocused() { return g_windowFocused; }
+
+CursorMode Input::EffectiveCursorMode() {
+    // Either veto wins, and neither forgets the request: un-suppressing or
+    // coming back to the window restores exactly what the game last asked for.
+    if (g_cursorSuppressed || !g_windowFocused) return CursorMode::Normal;
+    return g_requestedCursor;
 }
 
 void Input::BindActionKey(const std::string& action, int key) {
@@ -162,6 +197,21 @@ void Input::Update(const RawInputState& state) {
     if (!g_hasPrevious) {
         g_previous = state;
         g_hasPrevious = true;
+    }
+
+    // Locking or releasing the pointer teleports it, and a teleport differenced
+    // against last frame is a delta of several hundred pixels: the frame a
+    // mouse-look game captures the mouse, the camera snaps to face somewhere
+    // else entirely. Corrected by moving the BASELINE rather than by zeroing
+    // the result, so the delta below stays one subtraction with no second path
+    // that could disagree with it.
+    //
+    // Deliberately not `g_hasPrevious = false`, which would do this and also
+    // swallow every key edge for a frame - and the frame a game locks the
+    // pointer is usually the frame someone pressed something to make it happen.
+    if (const CursorMode effective = EffectiveCursorMode(); effective != g_cursorAtLastUpdate) {
+        g_previous.mousePosition = g_current.mousePosition;
+        g_cursorAtLastUpdate = effective;
     }
 
     g_mouseDelta = g_current.mousePosition - g_previous.mousePosition;

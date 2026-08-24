@@ -773,6 +773,22 @@ void SupersonicApp::Run() {
 
         m_window->PollEvents();
 
+        // Who owns the pointer this frame, decided before anything reads it.
+        //
+        // The editor's veto, and it is not politeness. Under a locked pointer
+        // GLFW reports unbounded virtual coordinates, and ImGui's GLFW backend
+        // feeds those straight into io.MousePos without checking the mode - so
+        // every panel's hover test goes wrong at once. A captured mouse is
+        // therefore only allowed while a game is actually running and the
+        // viewport has focus; the rest of the time the request is held, not
+        // lost, and comes back the moment play resumes.
+        //
+        // A packaged game has no viewport to focus, and IsViewportFocused
+        // reports true for it, so this reduces to "while playing".
+        Input::SuppressCursorCapture(m_playMode.IsEditing() ||
+                                     !m_editorLayer->IsViewportFocused());
+        InputPolling::ApplyCursorMode(*m_window);
+
         const double currentTime = glfwGetTime();
         const float rawDelta = static_cast<float>(currentTime - lastTime);
         lastTime = currentTime;

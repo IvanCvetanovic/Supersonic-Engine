@@ -40,6 +40,34 @@ int scriptWasReleased(void*, const char* action) {
 float scriptAxis(void*, const char* axis) {
     return axis ? Input::GetAxis(axis) : 0.0f;
 }
+void scriptMouseDelta(void*, float outDelta[2]) {
+    if (!outDelta) return;
+    const glm::vec2 delta = Input::MouseDelta();
+    outDelta[0] = delta.x;
+    outDelta[1] = delta.y;
+}
+void scriptSetCursorMode(void*, int mode) {
+    // An unknown number is ignored rather than clamped. Clamping would turn a
+    // plugin built against a newer header into a silently different mode; doing
+    // nothing leaves the pointer as it was, which is the safe direction.
+    switch (mode) {
+        case SUPERSONIC_CURSOR_NORMAL: Input::SetCursorMode(CursorMode::Normal); break;
+        case SUPERSONIC_CURSOR_HIDDEN: Input::SetCursorMode(CursorMode::Hidden); break;
+        case SUPERSONIC_CURSOR_LOCKED: Input::SetCursorMode(CursorMode::Locked); break;
+        default: break;
+    }
+}
+int scriptCursorMode(void*) {
+    // The EFFECTIVE mode, not the request: a script asking "am I looking?"
+    // wants to know what the pointer is actually doing, and the editor may have
+    // taken it back since the request was made.
+    switch (Input::EffectiveCursorMode()) {
+        case CursorMode::Hidden: return SUPERSONIC_CURSOR_HIDDEN;
+        case CursorMode::Locked: return SUPERSONIC_CURSOR_LOCKED;
+        case CursorMode::Normal: break;
+    }
+    return SUPERSONIC_CURSOR_NORMAL;
+}
 
 
 // The engine side of SupersonicScriptPhysics. `opaque` is the registry the
@@ -384,7 +412,8 @@ void scriptAddForce(void* opaque, unsigned int entity, const float force[3]) {
 
 const SupersonicScriptInput& scriptInput() {
     static const SupersonicScriptInput api{
-        nullptr, scriptIsDown, scriptWasPressed, scriptWasReleased, scriptAxis
+        nullptr, scriptIsDown, scriptWasPressed, scriptWasReleased, scriptAxis,
+        scriptMouseDelta, scriptSetCursorMode, scriptCursorMode
     };
     return api;
 }

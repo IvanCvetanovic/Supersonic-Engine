@@ -268,6 +268,123 @@ static void testOutOfRangeCodesAreRejected() {
     CHECK_NEAR(Input::GetAxis("BadAxis"), 0.0f);
 }
 
+// --- who owns the pointer ---------------------------------------------------
+
+static void testTheCursorModeIsARequestUntilSomethingVetoesIt() {
+    Input::ClearBindings();
+    CHECK_MSG(Input::EffectiveCursorMode() == CursorMode::Normal,
+              "nothing has asked for anything yet");
+
+    Input::SetCursorMode(CursorMode::Locked);
+    CHECK_MSG(Input::EffectiveCursorMode() == CursorMode::Locked,
+              "a game that asks for a locked pointer and is not vetoed gets one");
+
+    // The editor's veto: between plays, or with the pointer somewhere other
+    // than the viewport, the editor needs a real pointer back.
+    Input::SuppressCursorCapture(true);
+    CHECK_MSG(Input::EffectiveCursorMode() == CursorMode::Normal,
+              "a suppressed capture is a normal pointer whatever the game asked for");
+    CHECK_MSG(Input::RequestedCursorMode() == CursorMode::Locked,
+              "and the request survives the veto, or resuming play could not restore it");
+
+    Input::SuppressCursorCapture(false);
+    CHECK_MSG(Input::EffectiveCursorMode() == CursorMode::Locked,
+              "lifting the veto restores what was asked for rather than losing it");
+}
+
+static void testLosingTheWindowIsAlwaysAWayOut() {
+    // The safety mechanism, not a nicety: a locked pointer is invisible and
+    // cannot leave the window, so a game that locks it and offers no release
+    // would trap whoever ran it. Alt-tab has to work.
+    Input::ClearBindings();
+    Input::SetCursorMode(CursorMode::Locked);
+
+    Input::SetWindowFocused(false);
+    CHECK_MSG(Input::EffectiveCursorMode() == CursorMode::Normal,
+              "an unfocused window gives the pointer back");
+
+    Input::SetWindowFocused(true);
+    CHECK_MSG(Input::EffectiveCursorMode() == CursorMode::Locked,
+              "and coming back re-captures, because the request was never dropped");
+
+    // Focus defaults to true, so a headless run - which reports focus to
+    // nobody - is not silently unable to capture.
+    Input::ClearBindings();
+    CHECK_MSG(Input::WindowFocused(), "focus defaults to present");
+}
+
+static void testCapturingTheMouseDoesNotSnapTheView() {
+    // The failure this exists for: locking the pointer teleports it - GLFW
+    // swaps screen coordinates for unbounded virtual ones - and a teleport
+    // differenced against last frame is a delta of several hundred pixels. The
+    // camera snaps to face somewhere else entirely on the frame you capture,
+    // once, which is exactly the kind of thing that gets blamed on the mouse.
+    Input::ClearBindings();
+
+    RawInputState at{};
+    at.mousePosition = glm::vec2(640.0f, 360.0f);
+    frame(at);
+    frame(at);
+    CHECK_NEAR(Input::MouseDelta().x, 0.0f);
+
+    Input::SetCursorMode(CursorMode::Locked);
+
+    // The polling layer applies the mode and THEN reads the position, so the
+    // first frame under the new mode already reports the new coordinate space.
+    RawInputState teleported{};
+    teleported.mousePosition = glm::vec2(-4211.0f, 90210.0f);
+    frame(teleported);
+    CHECK_MSG(Input::MouseDelta() == glm::vec2(0.0f),
+              "the frame the pointer is captured must report no movement at all");
+
+    // And the very next frame is ordinary again - the baseline moved, it was
+    // not suppressed.
+    RawInputState moved = teleported;
+    moved.mousePosition += glm::vec2(12.0f, -7.0f);
+    frame(moved);
+    CHECK_NEAR(Input::MouseDelta().x, 12.0f);
+    CHECK_NEAR(Input::MouseDelta().y, -7.0f);
+}
+
+static void testReleasingTheMouseDoesNotSnapEither() {
+    // The same teleport in the other direction: GLFW puts the pointer back
+    // where it was before the capture, which is just as far to jump.
+    Input::ClearBindings();
+    Input::SetCursorMode(CursorMode::Locked);
+
+    RawInputState virt{};
+    virt.mousePosition = glm::vec2(-4211.0f, 90210.0f);
+    frame(virt);
+    frame(virt);
+
+    Input::SetCursorMode(CursorMode::Normal);
+    RawInputState restored{};
+    restored.mousePosition = glm::vec2(640.0f, 360.0f);
+    frame(restored);
+    CHECK_MSG(Input::MouseDelta() == glm::vec2(0.0f),
+              "releasing the pointer must not report the trip back as a look");
+}
+
+static void testAVetoedCaptureAlsoRebasesTheDelta() {
+    // The veto changes the EFFECTIVE mode, which is what moves the pointer -
+    // so it has to rebase too. Keying the correction off the request alone
+    // would snap the view every time the editor took the mouse back.
+    Input::ClearBindings();
+    Input::SetCursorMode(CursorMode::Locked);
+
+    RawInputState virt{};
+    virt.mousePosition = glm::vec2(-900.0f, 4000.0f);
+    frame(virt);
+    frame(virt);
+
+    Input::SuppressCursorCapture(true);
+    RawInputState back{};
+    back.mousePosition = glm::vec2(200.0f, 200.0f);
+    frame(back);
+    CHECK_MSG(Input::MouseDelta() == glm::vec2(0.0f),
+              "the editor taking the pointer back must not read as a look");
+}
+
 static void runTests() {
     testActionRespondsToItsKey();
     testPressIsAnEdgeNotALevel();
@@ -284,6 +401,12 @@ static void runTests() {
     testDefaultBindingsCoverTheBasics();
     testRebindingAddsRatherThanReplaces();
     testOutOfRangeCodesAreRejected();
+
+    testTheCursorModeIsARequestUntilSomethingVetoesIt();
+    testLosingTheWindowIsAlwaysAWayOut();
+    testCapturingTheMouseDoesNotSnapTheView();
+    testReleasingTheMouseDoesNotSnapEither();
+    testAVetoedCaptureAlsoRebasesTheDelta();
 }
 
-TEST_MAIN("test_input", 30)
+TEST_MAIN("test_input", 50)

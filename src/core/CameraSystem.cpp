@@ -1,14 +1,12 @@
 #include "core/CameraSystem.hpp"
 #include "core/EcsUtils.hpp"
+#include "core/Input.hpp"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 
 namespace Supersonic {
 
 bool CameraSystem::s_looking = false;
-bool CameraSystem::s_firstMouse = true;
-double CameraSystem::s_lastX = 640.0;
-double CameraSystem::s_lastY = 360.0;
 
 void CameraSystem::Update(entt::registry& registry, Window& window, float deltaTime,
                           bool allowKeyboard, bool allowMouse) {
@@ -36,40 +34,47 @@ void CameraSystem::Update(entt::registry& registry, Window& window, float deltaT
         }
     }
 
-    ProcessMouseInput(registry, window, allowMouse);
+    ProcessMouseInput(registry, allowMouse);
 }
 
-void CameraSystem::ProcessMouseInput(entt::registry& registry, Window& window, bool allowMouse) {
-    GLFWwindow* nativeWin = window.GetNativeWindow();
-
-    // Latched: a look starts only when the pointer is over the viewport, but
-    // continues once started, because a turn is a long sweep that leaves the
-    // panel almost immediately.
-    const bool rightHeld = glfwGetMouseButton(nativeWin, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    if (!s_looking) {
-        if (!rightHeld || !allowMouse) return;
-        s_looking = true;
-        // Resetting here is what prevents a jump on the next drag.
-        s_firstMouse = true;
-    } else if (!rightHeld) {
+void CameraSystem::ProcessMouseInput(entt::registry& registry, bool allowMouse) {
+    // A locked pointer IS the look.
+    //
+    // Everything below this branch exists because the cursor is a shared,
+    // visible thing that has to be borrowed: hence a button to hold, a latch so
+    // the borrow survives the pointer leaving the panel, and a gate so it can
+    // only start over the viewport. A captured pointer is none of those - it is
+    // invisible, it cannot leave, and there is nothing else on screen competing
+    // for it. Keeping the button would mean a first-person game you steer by
+    // holding right-click, which is the thing this was supposed to fix.
+    if (Input::EffectiveCursorMode() == CursorMode::Locked) {
+        // The latch means nothing here, and leaving it set would carry a look
+        // into the frame after the pointer is released.
         s_looking = false;
-        return;
+    } else {
+        // Latched: a look starts only when the pointer is over the viewport, but
+        // continues once started, because a turn is a long sweep that leaves the
+        // panel almost immediately.
+        const bool rightHeld = Input::IsMouseButtonDown(MouseButton::Right);
+        if (!s_looking) {
+            if (!rightHeld || !allowMouse) return;
+            s_looking = true;
+        } else if (!rightHeld) {
+            s_looking = false;
+            return;
+        }
     }
 
-    double xpos = 0.0, ypos = 0.0;
-    glfwGetCursorPos(nativeWin, &xpos, &ypos);
-
-    if (s_firstMouse) {
-        s_lastX = xpos;
-        s_lastY = ypos;
-        s_firstMouse = false;
-    }
-
-    const float rawX = static_cast<float>(xpos - s_lastX);
-    const float rawY = static_cast<float>(s_lastY - ypos); // screen Y grows downward
-
-    s_lastX = xpos;
-    s_lastY = ypos;
+    // One delta for the frame, from the one place that reads the device.
+    //
+    // This used to keep its own last-position baseline, which is the same
+    // arithmetic until the pointer teleports - and locking or releasing it
+    // teleports it, by hundreds of pixels. A second baseline would have had to
+    // learn about cursor modes to survive that; reading the shared delta means
+    // it never has to.
+    const glm::vec2 delta = Input::MouseDelta();
+    const float rawX = delta.x;
+    const float rawY = -delta.y;   // screen Y grows downward
 
     const entt::entity primary = FindPrimaryCamera(registry);
     if (primary == entt::null) return;

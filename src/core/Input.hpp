@@ -82,6 +82,29 @@ struct RawInputState {
     float padAxes[Pad::AxisCount]{};
 };
 
+// What the pointer is doing, in the terms a game means them.
+//
+// Deliberately NOT GLFW's names, which are a trap in both directions: GLFW's
+// `CURSOR_DISABLED` is what everyone else calls locked, and its
+// `CURSOR_CAPTURED` only confines a still-VISIBLE pointer to the window. Mapping
+// one onto the other lives in InputPolling, which is the only file allowed to
+// know how GLFW spells anything.
+enum class CursorMode {
+    // Visible, and free to leave the window. What an editor wants.
+    Normal,
+
+    // Invisible over the window and otherwise unchanged - still bounded by the
+    // screen, still meaningful as a position. For a game drawing its own
+    // pointer.
+    Hidden,
+
+    // Invisible and held. The pointer stops having a position anyone should
+    // read: it cannot reach the screen edge, so `MouseDelta` keeps working
+    // through a turn that would otherwise have run out of desk. This is the one
+    // a mouse-look game wants, and the reason this enum exists.
+    Locked,
+};
+
 class Input {
 public:
     // Installs a default set of bindings: WASD/arrows and the left stick for
@@ -118,6 +141,44 @@ public:
     static glm::vec2 MouseDelta();
     static float Scroll();
     static bool IsGamepadConnected();
+
+    // ---- The pointer ------------------------------------------------------
+    //
+    // A REQUEST, not an action: this file cannot call GLFW and would not know
+    // whether a window exists. `InputPolling` reads the effective mode once a
+    // frame and applies it. Kept here anyway, rather than on the window,
+    // because a script has to be able to ask - and because the arbitration
+    // below is the part with a decision in it, which makes it the part worth
+    // testing without a device.
+
+    static void SetCursorMode(CursorMode mode);
+    static CursorMode RequestedCursorMode();
+
+    // The host's veto, for when something other than the game owns the mouse:
+    // the editor between plays, a viewport that is not focused, a window that
+    // is not focused at all. Suppressed means Normal no matter what the game
+    // asked for, and un-suppressing restores the request rather than losing it,
+    // so alt-tabbing away and back does not leave a game unable to look.
+    //
+    // A veto rather than the host calling SetCursorMode(Normal) itself: that
+    // would overwrite what the game asked for, and there would be nothing left
+    // to restore.
+    static void SuppressCursorCapture(bool suppressed);
+    static bool CursorCaptureSuppressed();
+
+    // Whether the window has focus, reported by the polling layer each frame.
+    //
+    // The second veto, and the one that is a safety mechanism rather than a
+    // policy: a locked pointer is invisible and cannot leave the window, so a
+    // game that locks it and offers no way out would trap whoever ran it.
+    // Alt-tab has to work. Defaults to true so a headless or test caller that
+    // never reports focus is not silently unable to capture.
+    static void SetWindowFocused(bool focused);
+    static bool WindowFocused();
+
+    // What should actually be applied to the window this frame: the request,
+    // unless either veto is in force.
+    static CursorMode EffectiveCursorMode();
 
     // Raw access, for the few places that legitimately want a specific key
     // rather than an action.

@@ -19,12 +19,23 @@
 #include <stddef.h>
 
 /* Version history. A plugin built against a different number is refused.
+ *   9 - added mouseDelta and the cursor mode to SupersonicScriptInput.
  *   8 - added loadScene to SupersonicScriptWorld.
  *   7 - added SupersonicScriptWorld: contacts, spawn/destroy, velocity.
  *   6 - added SupersonicScriptData: authored parameters and per-entity state.
  *   5 - added the UI block.
  */
-#define SUPERSONIC_SCRIPT_API_VERSION 8
+#define SUPERSONIC_SCRIPT_API_VERSION 9
+
+/* Cursor modes, matching Supersonic::CursorMode. Plain ints because everything
+ * across this boundary is POD, and named here so a plugin does not have to
+ * remember which number means which.
+ *
+ * LOCKED is the one a mouse-look game wants: the pointer is hidden and held, so
+ * it cannot reach the edge of the screen part-way through a turn. */
+#define SUPERSONIC_CURSOR_NORMAL 0
+#define SUPERSONIC_CURSOR_HIDDEN 1
+#define SUPERSONIC_CURSOR_LOCKED 2
 
 #if defined(_WIN32)
 #  define SUPERSONIC_SCRIPT_EXPORT __declspec(dllexport)
@@ -49,6 +60,29 @@ typedef struct SupersonicScriptInput {
     int   (*wasPressed)(void* opaque, const char* action);
     int   (*wasReleased)(void* opaque, const char* action);
     float (*axis)(void* opaque, const char* axis);
+
+    /* How far the mouse moved this frame, in pixels, y growing downward.
+     *
+     * Not an axis: an axis is bipolar and clamped to -1..1, which is right for
+     * a stick and wrong for a mouse, where the magnitude IS the movement and
+     * there is no maximum. Without this a script could read every button on the
+     * mouse and not one thing about where it went, so nothing a plugin could
+     * write was able to look around. */
+    void  (*mouseDelta)(void* opaque, float outDelta[2]);
+
+    /* Ask for the pointer to be hidden, held, or given back. One of the
+     * SUPERSONIC_CURSOR_* values above; anything else is ignored.
+     *
+     * A REQUEST. The editor takes the pointer back between plays and whenever
+     * its viewport is not focused, and losing the window releases it outright -
+     * otherwise a game that locked the pointer and offered no way out would trap
+     * whoever ran it. The request is remembered across all of that, so a script
+     * sets it once rather than fighting to hold it.
+     *
+     * cursorMode reports what is actually in force, which is what a script
+     * should test before treating mouseDelta as a look. */
+    void  (*setCursorMode)(void* opaque, int mode);
+    int   (*cursorMode)(void* opaque);
 } SupersonicScriptInput;
 
 /* World queries, so a script can ask what is in front of it or whether it is
@@ -254,9 +288,9 @@ typedef void (*SupersonicScriptPluginRegisterFn)(SupersonicScriptHost* host);
 #  define SUPERSONIC_ABI_ASSERT(cond, msg) _Static_assert(cond, msg)
 #endif
 
-#if SUPERSONIC_SCRIPT_API_VERSION == 8
+#if SUPERSONIC_SCRIPT_API_VERSION == 9
 
-SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptInput) == 5 * sizeof(void*),
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptInput) == 8 * sizeof(void*),
     "SupersonicScriptInput changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptPhysics) == 3 * sizeof(void*),
     "SupersonicScriptPhysics changed; bump SUPERSONIC_SCRIPT_API_VERSION");
@@ -285,7 +319,7 @@ SUPERSONIC_ABI_ASSERT(
     sizeof(SupersonicScriptContext) == 48 + 6 * sizeof(void*),
     "SupersonicScriptContext changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 
-#endif /* SUPERSONIC_SCRIPT_API_VERSION == 8 */
+#endif /* SUPERSONIC_SCRIPT_API_VERSION == 9 */
 
 #ifdef __cplusplus
 }

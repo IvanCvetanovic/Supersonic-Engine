@@ -597,6 +597,66 @@ crosses into a module that gets unloaded while the process keeps running.
 stays unlocked, debounces the write because linkers emit output in several
 passes, and unregisters the plugin's scripts *before* freeing the module.
 
+### 6b. Who owns the pointer
+
+`Input` is deliberately GLFW-free: it takes one `RawInputState` snapshot per
+frame and everything downstream queries that, which is what lets the mapping and
+the edge detection be tested with no window. `InputPolling` is the only input
+file that touches GLFW, and no test target links it.
+
+Capturing the mouse has to cross that line, so what crosses is a *decision*, not
+a call. `Input::SetCursorMode` records what the game asked for; two vetoes can
+override it; `EffectiveCursorMode` is the answer, and `InputPolling` applies it.
+All three inputs and the answer are ordinary statics with no device behind them,
+so the whole arbitration is a headless test.
+
+- **The host's veto.** Under a locked pointer GLFW reports unbounded virtual
+  coordinates, and ImGui's GLFW backend feeds `glfwGetCursorPos` straight into
+  `io.MousePos` without checking the mode — so every panel's hover test goes
+  wrong at once, including the viewport-hovered flag the cameras gate on. Capture
+  is therefore only allowed while a game is actually playing and the viewport has
+  focus. A packaged game reports both unconditionally, so there it reduces to
+  "while playing".
+- **Focus.** A locked pointer is invisible and cannot leave the window, so a game
+  that locks it and offers no release would trap whoever ran it. Losing the
+  window releases it outright. That is the guaranteed way out.
+
+Neither veto *overwrites* the request, which is why they are vetoes rather than
+the host calling `SetCursorMode(Normal)` itself: alt-tabbing away and back, or
+pausing and resuming, restores exactly what the game last asked for instead of
+leaving it unable to look.
+
+**The delta rebase is the part that actually bites.** Locking or releasing the
+pointer teleports it — GLFW swaps screen coordinates for unbounded virtual ones,
+and puts it back on the way out — and a teleport differenced against last frame
+is a delta of several hundred pixels. The camera snaps to face somewhere else
+entirely on the frame you capture, once, which reads as a broken mouse rather
+than as a bug. `Input::Update` corrects the *baseline* rather than zeroing the
+result, so the delta stays one subtraction with no second path to disagree with
+it, and it keys off the EFFECTIVE mode so a veto rebases too.
+
+`InputPolling::ApplyCursorMode` runs earlier in the frame than `Poll` — straight
+after `glfwPollEvents`, before ImGui's new frame — for two reasons: ImGui samples
+the cursor itself and would otherwise disagree with the engine for a frame, and
+the position `Poll` reads has to already be in the new coordinate space, because
+that is the frame `Update` rebases on.
+
+`CameraSystem` reads `Input::MouseDelta()` rather than keeping a second baseline
+of its own, which is how it inherits all of that. It also stops requiring the
+right button while the pointer is locked: the button, the latch and the
+hovered-gate all exist because a visible cursor is shared and has to be borrowed,
+and a captured one is none of those things. Keeping them would mean a
+first-person game steered by holding right-click. `EditorCamera` still polls GLFW
+directly and still requires the button, which is correct for an editor viewport
+where the pointer is genuinely shared.
+
+Scripts reach it through `SupersonicScriptInput` at ABI version 9: `mouseDelta`,
+`setCursorMode` and `cursorMode`. The delta is not an axis — an axis is bipolar
+and clamped to ±1, which is right for a stick and wrong for a mouse, where the
+magnitude is the movement and there is no maximum. `cursorMode` reports the
+effective mode, so a script tests whether it actually has the pointer before
+treating motion as a look.
+
 ### 7. Physics
 
 `PhysicsSystem` is stateless — static functions over the registry, like every
