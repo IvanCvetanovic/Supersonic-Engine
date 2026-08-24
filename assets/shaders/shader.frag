@@ -22,9 +22,14 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 1) uniform sampler2DArray shadowMaps;
 
 // One cube per point light that can cast. An array of cube samplers rather than
-// a cube ARRAY image, so no optional device feature is needed; indexing it by
-// the light loop's counter is dynamically uniform, which is what the rule
-// actually requires. Must match PointShadow::kMaxShadowCasters.
+// a cube ARRAY image, so no optional device feature is needed.
+//
+// It is sampled at CONSTANT indices in pointShadowFactor, with the slot only
+// selecting between the results. That used to be unnecessary: the slot came from
+// the light at the loop counter, so it was uniform across a quad. The loop walks
+// a per-froxel list now, two fragments of one quad can sit in different froxels,
+// and the index stopped being uniform - which this device has no feature enabled
+// to permit. Must match PointShadow::kMaxShadowCasters.
 layout(set = 0, binding = 3) uniform samplerCube pointShadowMaps[POINT_SHADOW_CASTERS];
 
 // One layer per shadow-casting spot light. A 2D array rather than an array of
@@ -227,9 +232,26 @@ float pointShadowFactor(int slot, vec3 fragToLight, float range, float NdotL) {
     );
     float radius = major * 0.006;
 
+    // Both cubes sampled at CONSTANT indices, and the slot only chooses between
+    // the results. That looks wasteful and is the correctness fix.
+    //
+    // `slot` comes out of a light this fragment found in its own froxel, and two
+    // fragments of the same quad can be in different froxels - so slot is no
+    // longer uniform across a quad, which is exactly what indexing a descriptor
+    // ARRAY with it requires. This device enables neither
+    // shaderSampledImageArrayNonUniformIndexing nor even the dynamic-indexing
+    // feature, so the old form was undefined behaviour that validated cleanly
+    // and rendered correctly on every desktop driver anyone would try it on.
+    //
+    // Cheap at two casters: every cube is written whether or not a light claimed
+    // it, so the unused sample is a read of a valid image. Anybody raising
+    // PointShadow::kMaxShadowCasters past a handful has to revisit this rather
+    // than lengthen the chain.
     float lit = 0.0;
     for (int tap = 0; tap < 5; ++tap) {
-        float closest = texture(pointShadowMaps[slot], fragToLight + offsets[tap] * radius).r;
+        vec3 dir = fragToLight + offsets[tap] * radius;
+        float closest = (slot == 0) ? texture(pointShadowMaps[0], dir).r
+                                    : texture(pointShadowMaps[1], dir).r;
         lit += (current - bias <= closest) ? 1.0 : 0.0;
     }
     return lit * 0.2;
@@ -361,10 +383,43 @@ void main() {
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
     vec3 Lo = vec3(0.0);
-    int count = min(int(ubo.lightCount.x), 8);
 
-    for (int i = 0; i < count; ++i) {
-        Light light = ubo.lights[i];
+    // Which lights this fragment pays for.
+    //
+    // It used to be all of them, up to a hard eight, and that eight was the cap
+    // the roadmap kept listing: nine lamps in one room meant one of them was
+    // dropped for the whole frame. Now the directionals - which reach
+    // everywhere, so clustering them would cost an index per froxel to say
+    // nothing - are the leading entries and always run, and everything local
+    // comes out of this fragment's own froxel.
+    //
+    // View-space depth from the world position and the view matrix's third row.
+    // A varying would save the three multiplies and cost a slot in every vertex
+    // shader that feeds this one, for a value only this loop wants.
+    float viewZ = -(ubo.view[0][2] * fragWorldPos.x +
+                    ubo.view[1][2] * fragWorldPos.y +
+                    ubo.view[2][2] * fragWorldPos.z +
+                    ubo.view[3][2]);
+
+    uint cluster = clusterIndexFor(gl_FragCoord.xy, viewZ);
+    uvec2 slice = clusterBuffer.clusters[cluster];
+
+    int directionalCount = int(ubo.lightCount.y);
+    int totalCount = int(ubo.lightCount.x);
+    int localCount = int(slice.y);
+
+    for (int slot = 0; slot < directionalCount + localCount; ++slot) {
+        // The directionals are a prefix of the light buffer; everything after
+        // them is looked up through this froxel's slice of the index list.
+        int index = slot < directionalCount
+                  ? slot
+                  : int(lightIndexBuffer.indices[slice.x + uint(slot - directionalCount)]);
+
+        // Cheap insurance against a stale or overflowing index list: an index
+        // past the end of the light buffer would read whatever follows it.
+        if (index < 0 || index >= totalCount) continue;
+
+        Light light = lightBuffer.lights[index];
 
         vec3 L;
         float attenuation = 1.0;
@@ -425,12 +480,14 @@ void main() {
         vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
         float NdotL = max(dot(N, L), 0.0);
 
-        // The first light is the one the cascades were rendered from. Point
-        // lights carry the index of their own cube, or -1 when they missed out
-        // on one, so a lamp shining through a wall is no longer the only
+        // The light at INDEX ZERO is the one the cascades were rendered from -
+        // the index into the light buffer, not the position in this loop, which
+        // are no longer the same thing now that the loop walks a froxel's slice.
+        // Point lights carry the index of their own cube, or -1 when they missed
+        // out on one, so a lamp shining through a wall is no longer the only
         // possible outcome.
         float shadow = 1.0;
-        if (i == 0 && light.positionOrDirection.w < 0.5) {
+        if (index == 0 && light.positionOrDirection.w < 0.5) {
             shadow = shadowFactor(fragWorldPos, N, NdotL);
         } else if (light.positionOrDirection.w > 1.5) {
             int spotSlot = int(light.attenuation.w);

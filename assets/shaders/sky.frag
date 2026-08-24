@@ -32,10 +32,10 @@ void main() {
     // gatherLights places it there because the cascade lookup is gated on
     // i == 0 - so this cannot disagree with the light casting the shadows.
     // positionOrDirection.w < 0.5 means directional.
-    if (int(ubo.lightCount.x) > 0 && ubo.lights[0].positionOrDirection.w < 0.5) {
+    if (int(ubo.lightCount.x) > 0 && lightBuffer.lights[0].positionOrDirection.w < 0.5) {
         // The stored vector points TOWARD the light, which is where the disc
         // belongs; using it unnegated would put the sun opposite the shadows.
-        const vec3 toSun = normalize(ubo.lights[0].positionOrDirection.xyz);
+        const vec3 toSun = normalize(lightBuffer.lights[0].positionOrDirection.xyz);
         const float cosAngle = max(dot(dir, toSun), 0.0);
 
         // Two terms: a small bright disc, and a wide dim halo. One power large
@@ -44,8 +44,8 @@ void main() {
         const float disc = pow(cosAngle, 2200.0);
         const float halo = pow(cosAngle, 24.0) * 0.18;
 
-        const vec3 sunColor = ubo.lights[0].colorAndIntensity.rgb
-                            * max(ubo.lights[0].colorAndIntensity.a, 0.0);
+        const vec3 sunColor = lightBuffer.lights[0].colorAndIntensity.rgb
+                            * max(lightBuffer.lights[0].colorAndIntensity.a, 0.0);
 
         // Above 1.0 on purpose: the target is floating point and the bright
         // pass thresholds at 1.0, so the sun is something bloom can find. That

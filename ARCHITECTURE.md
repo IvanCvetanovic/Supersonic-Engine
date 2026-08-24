@@ -137,9 +137,55 @@ rather than dropping the draw.
 
 ### 4c. Lighting and shadows
 
-The UBO carries up to **8 lights** (`kMaxLights`) with a count, and the fragment
-shader loops over them. The cap is fixed and small so the whole set fits in a
-plain uniform buffer, with no storage buffer and no bindless machinery.
+Lights live in a **storage buffer**, and a fragment loops only the ones that can
+reach it. The 8-light cap is gone; `kMaxLights` is 256 and now bounds how many
+lights may exist in a frame rather than how many may touch one pixel.
+
+**The froxel grid.** `core/ClusterGrid` cuts the view frustum into 16x9 screen
+tiles by 24 depth slices - 3456 froxels - and the CPU posts each local light
+into the ones its range sphere touches. Two more storage buffers carry the
+result: one (offset, count) pair per froxel, and the flat index list those pairs
+point into. The fragment finds its own froxel from `gl_FragCoord` and its
+view-space depth, and walks that slice.
+
+The slices are **exponential**, not uniform: a uniform division puts almost every
+froxel out where the frustum is enormous and nothing is standing, and crams the
+near field - where the lamps are - into the first one.
+
+**Directional lights are never clustered.** They are the leading entries of the
+light buffer, `lightCount.y` says how many, and every fragment loops them
+unconditionally. A light that reaches everywhere is in every froxel, and
+recording that would cost one index per cluster to say nothing. Keeping them as
+a prefix also preserves the rule the rest of the renderer depends on: the
+shadowed directional is at index 0, which is what `sky.frag` reads for its sun
+disc and what the cascade lookup is gated on.
+
+Two things this broke that a screenshot would not have shown:
+
+- **The cascade gate was on the LOOP COUNTER.** `if (i == 0)` meant "the
+  shadowed directional" only while the loop index and the light index were the
+  same thing. Walking a froxel's list, counter 0 is "the first light in THIS
+  tile", so the directional shadow would have been applied to whatever point
+  light happened to sort first, differently in each tile. It tests the light's
+  index now.
+- **`pointShadowMaps[slot]` stopped being dynamically uniform.** The slot comes
+  from a light found in this fragment's froxel, and two fragments of one quad
+  can be in different froxels. Indexing a descriptor array that way needs
+  `shaderSampledImageArrayNonUniformIndexing`, which this device does not
+  enable - it validated cleanly and rendered correctly anyway. Both cubes are
+  sampled at constant indices now and the slot only selects between the results,
+  which is free at two casters and also closes a pre-existing dynamic-indexing
+  gap.
+
+The screen-space half of the mapping has a **CPU twin**,
+`ClusterGrid::ClusterForFragment`, and the GLSL is a transliteration of it. That
+exists because the one bug this feature shipped with in draft - the row index
+mirrored about the horizon, since the projection flips Y for Vulkan while the
+grid numbers rows in view space - lived only in GLSL where no test could reach
+it, and was invisible in any scene whose lamps reach every froxel anyway.
+
+`LightSelection` still exists and is now a genuinely exceptional path: it decides
+which 256 survive rather than which 8.
 `positionOrDirection.w` carries the type — 0 directional, 1 point, 2 spot —
 compared against 0.5 and 1.5 in the shader because it arrives as a float inside
 a vec4.

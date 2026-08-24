@@ -20,9 +20,12 @@
 #ifndef SUPERSONIC_SCENE_UBO_GLSL
 #define SUPERSONIC_SCENE_UBO_GLSL
 
-// Must match VulkanPipeline.hpp's kMaxLights, ShadowCascades::kCascadeCount,
-// SpotLight::kMaxShadowCasters and PointShadow::kMaxShadowCasters.
-#define MAX_LIGHTS           8
+// Must match ShadowCascades::kCascadeCount, SpotLight::kMaxShadowCasters,
+// PointShadow::kMaxShadowCasters and ClusterGrid's grid dimensions.
+//
+// There is no MAX_LIGHTS any more, and that is the change: the lights live in
+// a storage buffer below, so their number is a runtime count rather than an
+// array size compiled into every shader that reads this block.
 #define SHADOW_CASCADES      4
 #define SPOT_SHADOW_CASTERS  2
 #define POINT_SHADOW_CASTERS 2
@@ -46,7 +49,80 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 lightCount;
     mat4 spotViewProj[SPOT_SHADOW_CASTERS];
     vec4 fogColorAndDensity;  // rgb = colour, a = density (0 = no fog)
-    Light lights[MAX_LIGHTS];
+    vec4 clusterParams;       // xy = render target size in pixels, z = near, w = far
 } ubo;
+
+// The froxel grid. Must match core/ClusterGrid.hpp.
+#define CLUSTER_TILES_X 16
+#define CLUSTER_TILES_Y 9
+#define CLUSTER_SLICES  24
+
+// Every light in the frame, DIRECTIONALS FIRST. ubo.lightCount.x is how many
+// there are and .y how many of the leading ones are directional.
+//
+// readonly and std430: std140 would round the struct's stride up and put every
+// light somewhere the C++ side did not write it, which is not a validation
+// error - it is just the wrong numbers, member by member, exactly the drift
+// this file was extracted to stop.
+layout(std430, set = 0, binding = 5) readonly buffer LightBuffer {
+    Light lights[];
+} lightBuffer;
+
+// One (offset, count) pair per froxel, in x + y*TILES_X + z*TILES_X*TILES_Y
+// order - the same order the fragment computes its own index in.
+layout(std430, set = 0, binding = 6) readonly buffer ClusterBuffer {
+    uvec2 clusters[];
+} clusterBuffer;
+
+// The flat list those pairs point into. Absolute indices into lights[].
+layout(std430, set = 0, binding = 7) readonly buffer LightIndexBuffer {
+    uint indices[];
+} lightIndexBuffer;
+
+// Which froxel a fragment is in.
+//
+// A TRANSLITERATION of ClusterGrid::ClusterForFragment, line for line, and it
+// is written that way on purpose: this is one of two descriptions of the same
+// mapping, and the other one is the only one a test can reach. Changing either
+// without the other is how the row index came to be mirrored about the horizon
+// in the first place.
+//
+// gl_FragCoord is in the pixels of the image being rasterised into, which is
+// the editor's offscreen target and not the window - so the size has to come
+// from the UBO rather than from anything the shader could guess.
+//
+// viewZ is positive distance in FRONT of the camera. The slice distribution is
+// exponential, matching ClusterGrid::SliceForDepth exactly: a uniform division
+// would put almost every froxel out where the frustum is enormous and nothing
+// is standing.
+uint clusterIndexFor(vec2 fragCoord, float viewZ) {
+    vec2 targetSize = max(ubo.clusterParams.xy, vec2(1.0));
+    vec2 tileSize = targetSize / vec2(float(CLUSTER_TILES_X), float(CLUSTER_TILES_Y));
+
+    // Y IS FLIPPED, and this is not a detail. The projection multiplies its
+    // second row by -1 for Vulkan, so view-space +Y - up - lands at
+    // gl_FragCoord.y = 0, the TOP of the image. The grid on the CPU numbers its
+    // rows in view space, bottom first, because that is the space the froxel
+    // bounds are computed in.
+    //
+    // Left unflipped, every light is looked up in the row mirrored about the
+    // horizon: a lamp lighting the floor lights the ceiling instead, and the
+    // scene still looks lit, which is what makes it hard to see.
+    vec2 gridCoord = vec2(fragCoord.x, targetSize.y - fragCoord.y);
+
+    uvec2 tile = uvec2(clamp(gridCoord / tileSize,
+                             vec2(0.0),
+                             vec2(float(CLUSTER_TILES_X - 1), float(CLUSTER_TILES_Y - 1))));
+
+    float nearPlane = max(ubo.clusterParams.z, 1e-4);
+    float farPlane = max(ubo.clusterParams.w, nearPlane * 1.0001);
+
+    float ratio = log(max(viewZ, nearPlane) / nearPlane) / log(farPlane / nearPlane);
+    uint slice = uint(clamp(ratio * float(CLUSTER_SLICES),
+                            0.0, float(CLUSTER_SLICES - 1)));
+
+    return tile.x + tile.y * uint(CLUSTER_TILES_X) +
+           slice * uint(CLUSTER_TILES_X) * uint(CLUSTER_TILES_Y);
+}
 
 #endif // SUPERSONIC_SCENE_UBO_GLSL

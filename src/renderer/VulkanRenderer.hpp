@@ -14,6 +14,7 @@
 #include "renderer/VulkanImage.hpp"
 #include "renderer/VulkanOffscreen.hpp"
 #include "core/RenderSystem.hpp"
+#include "core/ClusterGrid.hpp"
 #include "renderer/ShadowCache.hpp"
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
@@ -144,6 +145,7 @@ private:
     // fitted to. Point lights that win a cube are appended to outCasters, in
     // slot order.
     glm::vec3 gatherLights(entt::registry& registry, UniformBufferObject& ubo,
+                           std::vector<GpuLight>& outLights,
                            std::vector<PointShadowCaster>& outCasters,
                            std::vector<SpotShadowCaster>& outSpots) const;
 
@@ -194,6 +196,23 @@ private:
     // themselves: 128 joints is 8 KB against the 128-byte push constant budget.
     static constexpr uint32_t kMaxPaletteMatrices = 1024;
     std::vector<std::unique_ptr<VulkanBuffer>> m_jointPaletteBuffers;
+
+    // The clustered light data, one set per frame in flight: every light in
+    // the frame, the per-froxel (offset, count) table, and the flat index list
+    // that table points into. What used to be a fixed array of eight inside the
+    // uniform block.
+    std::vector<std::unique_ptr<VulkanBuffer>> m_lightBuffers;
+    std::vector<std::unique_ptr<VulkanBuffer>> m_clusterRangeBuffers;
+    std::vector<std::unique_ptr<VulkanBuffer>> m_lightIndexBuffers;
+
+    // Rebuilt every frame and kept between them so a scene full of lamps does
+    // not allocate three vectors per frame.
+    std::vector<GpuLight> m_lightScratch;
+    std::vector<ClusterGrid::LocalLight> m_localLightScratch;
+    std::vector<uint32_t> m_lightIndexScratch;
+
+    // Said once per change rather than once per frame, like the light cap.
+    uint32_t m_clusterOverflowReportedFor{0};
 
     // Reused between frames so the gather does not allocate every frame.
     std::vector<glm::mat4> m_paletteScratch;

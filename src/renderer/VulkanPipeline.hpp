@@ -15,9 +15,19 @@
 
 namespace Supersonic {
 
-// Maximum simultaneous lights. Kept small and fixed so the whole set fits in a
-// plain UBO with no storage buffer or bindless machinery.
-inline constexpr int kMaxLights = 8;
+// How many lights one frame may carry.
+//
+// This was EIGHT, and it was a cap on how many lights could touch one FRAGMENT,
+// because every fragment looped over every light in the scene and that loop had
+// to be bounded. It is now a cap on how many can exist in the frame at all: the
+// lights live in a storage buffer and the fragment only walks the ones the
+// froxel grid says can reach it, so the number here buys memory rather than
+// shading cost.
+//
+// Two hundred and fifty-six is a room with a great many lamps in it. A scene
+// past this still falls back on LightSelection to decide which ones survive,
+// which is now a genuinely exceptional path rather than the everyday one.
+inline constexpr int kMaxLights = 256;
 
 // std140 layout: every member is vec4-aligned so the C++ and GLSL views match.
 struct GpuLight {
@@ -80,7 +90,21 @@ struct UniformBufferObject {
     // disagree with it.
     alignas(16) glm::vec4 fogColorAndDensity{0.0f};
 
-    GpuLight lights[kMaxLights];
+    // What the fragment stage needs to find its own froxel: the size of the
+    // target it is rasterising into, and the camera's depth range.
+    //
+    // The render target rather than the window, because the scene draws into
+    // the editor's offscreen image and gl_FragCoord is in THAT image's pixels.
+    // Taking the window's size instead would shift every tile boundary by the
+    // ratio between them, which reads as the lighting sliding around the screen
+    // as the viewport is dragged.
+    alignas(16) glm::vec4 clusterParams{1.0f, 1.0f, 0.1f, 100.0f}; // xy = target size, z = near, w = far
+
+    // The light array USED to live here, a fixed eight of them. It is a storage
+    // buffer now (set 0, binding 5) so a scene may hold as many as it likes,
+    // and lightCount.y says how many of the leading entries are directional -
+    // those are never clustered, because a light that reaches everywhere is in
+    // every froxel and putting it in the grid would only cost memory to say so.
 };
 
 // 120 bytes, inside the 128-byte guaranteed minimum.

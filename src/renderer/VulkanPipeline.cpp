@@ -287,8 +287,27 @@ void VulkanPipeline::createDescriptorSetLayout() {
     spotShadowBinding.descriptorCount = 1;
     spotShadowBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
 
-    const std::array<vk::DescriptorSetLayoutBinding, 5> sceneBindings = {
-        uboBinding, shadowBinding, paletteBinding, pointShadowBinding, spotShadowBinding
+    // bindings 5, 6 and 7: the clustered light data.
+    //
+    // A storage buffer rather than more of the UBO, and that is the whole point
+    // of the change: a uniform block is a fixed array whose size is compiled
+    // into the shader, so eight was a number the renderer had to promise and a
+    // scene had to live within. These three are sized at capacity once and the
+    // frame writes as much of them as it needs.
+    //
+    // 5 is every light in the frame, directionals first. 6 is one (offset,
+    // count) pair per froxel. 7 is the flat index list those pairs point into.
+    std::array<vk::DescriptorSetLayoutBinding, 3> clusterBindings{};
+    for (uint32_t i = 0; i < clusterBindings.size(); ++i) {
+        clusterBindings[i].binding = 5 + i;
+        clusterBindings[i].descriptorType = vk::DescriptorType::eStorageBuffer;
+        clusterBindings[i].descriptorCount = 1;
+        clusterBindings[i].stageFlags = vk::ShaderStageFlagBits::eFragment;
+    }
+
+    const std::array<vk::DescriptorSetLayoutBinding, 8> sceneBindings = {
+        uboBinding, shadowBinding, paletteBinding, pointShadowBinding, spotShadowBinding,
+        clusterBindings[0], clusterBindings[1], clusterBindings[2]
     };
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};

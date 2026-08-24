@@ -6,6 +6,7 @@
 #include "core/AnimationSystem.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/LightSelection.hpp"
+#include "core/ClusterGrid.hpp"
 #include "core/Components.hpp"
 #include "core/EcsUtils.hpp"
 
@@ -87,6 +88,9 @@ VulkanRenderer::~VulkanRenderer() {
     m_textureRegistry.reset();
     m_uniformBuffers.clear();
     m_jointPaletteBuffers.clear();
+    m_lightBuffers.clear();
+    m_clusterRangeBuffers.clear();
+    m_lightIndexBuffers.clear();
     m_meshRegistry.reset();
     m_shadowPipeline.reset();
     m_shadowCutoutPipeline.reset();
@@ -458,9 +462,32 @@ void VulkanRenderer::createUniformBuffers() {
             VMA_ALLOCATION_CREATE_MAPPED_BIT);
     }
 
-    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Created " << m_uniformBuffers.size() << " VMA Uniform Buffers and "
+    // The three clustered-light buffers, one set per frame in flight and each
+    // sized at capacity for the same reason the palette is: a storage buffer
+    // descriptor has to be valid every frame whether or not the scene has
+    // anything in it.
+    m_lightBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    m_clusterRangeBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    m_lightIndexBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+
+    const auto makeStorage = [this](vk::DeviceSize bytes) {
+        return std::make_unique<VulkanBuffer>(
+            m_deviceRef.GetAllocator(), bytes,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            VMA_MEMORY_USAGE_CPU_TO_GPU,
+            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    };
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        m_lightBuffers[i] = makeStorage(sizeof(GpuLight) * kMaxLights);
+        m_clusterRangeBuffers[i] =
+            makeStorage(sizeof(uint32_t) * 2 * ClusterGrid::kClusterCount);
+        m_lightIndexBuffers[i] = makeStorage(sizeof(uint32_t) * ClusterGrid::kMaxLightIndices);
+    }
+
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Created " << m_uniformBuffers.size() << " VMA Uniform Buffers, "
               << m_jointPaletteBuffers.size() << " joint palettes ("
-              << kMaxPaletteMatrices << " matrices each)." << std::endl;
+              << kMaxPaletteMatrices << " matrices each) and "
+              << ClusterGrid::kClusterCount << " light clusters per frame." << std::endl;
 }
 
 void VulkanRenderer::createDescriptorPool() {
@@ -479,11 +506,13 @@ void VulkanRenderer::createDescriptorPool() {
     poolSizes[1].descriptorCount =
         static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * (2u + PointShadow::kMaxShadowCasters);
 
-    // The joint palette. Omitting this makes allocateDescriptorSets throw at
-    // startup, which presents as a launch failure rather than as a rendering
-    // bug - so it is worth being explicit that binding 2 needs its own size.
+    // FOUR storage buffers per frame: the joint palette at binding 2, and the
+    // three clustered-light buffers at 5, 6 and 7. Omitting any of them makes
+    // allocateDescriptorSets throw at startup, which presents as a launch
+    // failure rather than as a rendering bug - so the count is spelled out
+    // rather than left as a number somebody has to remember to bump.
     poolSizes[2].type = vk::DescriptorType::eStorageBuffer;
-    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 4u;
 
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
@@ -533,7 +562,7 @@ void VulkanRenderer::createDescriptorSets() {
         spotShadowInfo.imageView = m_spotShadowMap->GetImageView();
         spotShadowInfo.sampler = m_spotShadowMap->GetSampler();
 
-        std::array<vk::WriteDescriptorSet, 5> writes{};
+        std::array<vk::WriteDescriptorSet, 8> writes{};
 
         writes[0].dstSet = m_descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -568,6 +597,22 @@ void VulkanRenderer::createDescriptorSets() {
         writes[4].descriptorCount = 1;
         writes[4].pImageInfo = &spotShadowInfo;
 
+        const std::array<vk::DescriptorBufferInfo, 3> clusterInfos = {
+            vk::DescriptorBufferInfo{m_lightBuffers[i]->GetBuffer(), 0,
+                                     sizeof(GpuLight) * kMaxLights},
+            vk::DescriptorBufferInfo{m_clusterRangeBuffers[i]->GetBuffer(), 0,
+                                     sizeof(uint32_t) * 2 * ClusterGrid::kClusterCount},
+            vk::DescriptorBufferInfo{m_lightIndexBuffers[i]->GetBuffer(), 0,
+                                     sizeof(uint32_t) * ClusterGrid::kMaxLightIndices},
+        };
+        for (uint32_t b = 0; b < clusterInfos.size(); ++b) {
+            writes[5 + b].dstSet = m_descriptorSets[i];
+            writes[5 + b].dstBinding = 5 + b;
+            writes[5 + b].descriptorType = vk::DescriptorType::eStorageBuffer;
+            writes[5 + b].descriptorCount = 1;
+            writes[5 + b].pBufferInfo = &clusterInfos[b];
+        }
+
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
 
@@ -589,6 +634,7 @@ glm::vec3 lightWorldPosition(const entt::registry& registry, entt::entity entity
 } // namespace
 
 glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo,
+                                       std::vector<GpuLight>& outLights,
                                        std::vector<PointShadowCaster>& outCasters,
                                        std::vector<SpotShadowCaster>& outSpots) const {
     outCasters.clear();
@@ -700,10 +746,10 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
                 // Swap into slot 0 so the shadowed light is the one the shader
                 // applies the shadow factor to.
                 if (count != 0) {
-                    ubo.lights[count] = ubo.lights[0];
-                    ubo.lights[0] = gpu;
-                    ubo.lights[0].colorAndIntensity = glm::vec4(light.color, light.intensity);
-                    ubo.lights[0].attenuation = glm::vec4(light.range, -1.0f, 0.0f, 0.0f);
+                    outLights.push_back(outLights[0]);
+                    outLights[0] = gpu;
+                    outLights[0].colorAndIntensity = glm::vec4(light.color, light.intensity);
+                    outLights[0].attenuation = glm::vec4(light.range, -1.0f, 0.0f, 0.0f);
                     ++count;
                     continue;
                 }
@@ -716,7 +762,7 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         // overwriting the lot is exactly the bug that once made every point
         // light report cube slot 0.
         gpu.attenuation.x = light.range;
-        ubo.lights[count] = gpu;
+        outLights.push_back(gpu);
 
         ++count;
     }
@@ -724,16 +770,32 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
     if (count == 0) {
         // No lights authored: fall back to a single overhead key light so the
         // scene is not simply black.
-        ubo.lights[0].positionOrDirection = glm::vec4(glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f)), 0.0f);
-        ubo.lights[0].colorAndIntensity = glm::vec4(1.0f, 0.95f, 0.88f, 1.5f);
-        ubo.lights[0].attenuation = glm::vec4(25.0f, -1.0f, 0.0f, 0.0f);
+        GpuLight key{};
+        key.positionOrDirection = glm::vec4(glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f)), 0.0f);
+        key.colorAndIntensity = glm::vec4(1.0f, 0.95f, 0.88f, 1.5f);
+        key.attenuation = glm::vec4(25.0f, -1.0f, 0.0f, 0.0f);
+        outLights.push_back(key);
         ubo.ambientColor = glm::vec4(0.12f, 0.12f, 0.14f, 1.0f);
         ubo.ambientGround = glm::vec4(0.10f, 0.09f, 0.08f, 1.0f);
         shadowDirection = glm::normalize(glm::vec3(0.6f, 1.0f, 0.5f));
         count = 1;
     }
 
-    ubo.lightCount = glm::vec4(static_cast<float>(count), 0.0f, 0.0f, 0.0f);
+    // y is how many of the leading entries are DIRECTIONAL. Those are never
+    // clustered - a light that reaches everywhere is in every froxel, and
+    // recording that would cost one index per cluster to say nothing - so the
+    // fragment loops them unconditionally and takes the rest from its own
+    // cluster. SelectLights already sorts directionals first and the shadow
+    // swap above only moves one directional to the front, so the prefix holds
+    // without a second pass to establish it.
+    uint32_t directionalCount = 0;
+    while (directionalCount < outLights.size() &&
+           outLights[directionalCount].positionOrDirection.w < 0.5f) {
+        ++directionalCount;
+    }
+
+    ubo.lightCount = glm::vec4(static_cast<float>(count),
+                               static_cast<float>(directionalCount), 0.0f, 0.0f);
     return shadowDirection;
 }
 
@@ -911,8 +973,74 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     } else {
         ubo.fogColorAndDensity = glm::vec4(0.0f);
     }
+    m_lightScratch.clear();
     const glm::vec3 shadowDirection =
-        gatherLights(registry, ubo, m_pointShadowCasters, m_spotShadowCasters);
+        gatherLights(registry, ubo, m_lightScratch, m_pointShadowCasters, m_spotShadowCasters);
+
+    // ---- Cut the frustum up and post the lights into it ------------------
+    //
+    // The whole point of the exercise: a fragment should pay for the lights
+    // that can reach it, not for every light in the level. Done on the CPU
+    // rather than in a compute pass because this engine has no compute pipeline
+    // at all, and a few hundred lights against three and a half thousand
+    // froxels is work the job system's threads would finish before a dispatch
+    // had been recorded.
+    ubo.clusterParams = glm::vec4(static_cast<float>(offscreen.GetWidth()),
+                                  static_cast<float>(offscreen.GetHeight()),
+                                  camera.nearPlane, camera.farPlane);
+
+    const auto directionalCount = static_cast<uint32_t>(ubo.lightCount.y);
+
+    m_localLightScratch.clear();
+    for (size_t i = directionalCount; i < m_lightScratch.size(); ++i) {
+        const GpuLight& light = m_lightScratch[i];
+        ClusterGrid::LocalLight local;
+        // Into VIEW space, with z as positive distance in FRONT of the camera -
+        // which is the negated z of a right-handed view space, and the single
+        // easiest sign in this file to get backwards.
+        const glm::vec3 viewPosition =
+            glm::vec3(viewMatrix * glm::vec4(glm::vec3(light.positionOrDirection), 1.0f));
+        local.viewPosition = glm::vec3(viewPosition.x, viewPosition.y, -viewPosition.z);
+        // The range, which is already a hard cutoff in the shader - so a sphere
+        // of exactly that radius is not an approximation of the light's reach,
+        // it is its reach.
+        local.radius = light.attenuation.x;
+        m_localLightScratch.push_back(local);
+    }
+
+    const float tanHalfFovY = std::tan(glm::radians(camera.fov) * 0.5f);
+    const ClusterGrid::Assignment assignment = ClusterGrid::Assign(
+        m_localLightScratch, camera.nearPlane, camera.farPlane, tanHalfFovY,
+        std::max(camera.aspect, 0.0001f));
+
+    if (assignment.dropped > 0 && m_clusterOverflowReportedFor != assignment.dropped) {
+        m_clusterOverflowReportedFor = assignment.dropped;
+        SUPERSONIC_LOG_WARN("VulkanRenderer")
+            << "The froxel index list is full: " << assignment.dropped
+            << " light-cluster pairs were dropped, so part of the frame is missing light. "
+            << "Raise ClusterGrid::kMaxLightIndices." << std::endl;
+    }
+
+    // Indices are made ABSOLUTE here rather than in the shader. The assignment
+    // numbered the local lights from zero, because it was handed only those;
+    // the fragment indexes one array holding the directionals first.
+    m_lightIndexScratch.clear();
+    m_lightIndexScratch.reserve(assignment.indices.size());
+    for (const uint32_t local : assignment.indices) {
+        m_lightIndexScratch.push_back(local + directionalCount);
+    }
+
+    if (!m_lightScratch.empty()) {
+        m_lightBuffers[m_currentFrame]->UploadData(
+            m_lightScratch.data(), sizeof(GpuLight) * m_lightScratch.size());
+    }
+    m_clusterRangeBuffers[m_currentFrame]->UploadData(
+        assignment.clusters.data(),
+        sizeof(ClusterGrid::ClusterRange) * assignment.clusters.size());
+    if (!m_lightIndexScratch.empty()) {
+        m_lightIndexBuffers[m_currentFrame]->UploadData(
+            m_lightIndexScratch.data(), sizeof(uint32_t) * m_lightIndexScratch.size());
+    }
 
     // Cascades are fitted to the camera, so they need the same camera the scene
     // pass is about to use rather than a fixed box around the origin.
