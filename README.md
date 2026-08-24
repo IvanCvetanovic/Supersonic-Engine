@@ -51,7 +51,7 @@ code quietly contradicts.
 | **Frustum culling** | Gribb–Hartmann plane extraction; the scene pass culls against the camera, the shadow pass against the light, so nothing off-screen pops its shadow in and out |
 | **HDR + bloom** | Floating-point scene target, luminance-thresholded bright pass with a soft knee, separable half-res blur, then tone map and sRGB encode — exactly one encode, at the end of the chain |
 | **Transparency** | A blended pass after the opaque one and after the sky, sorted back to front, with depth writes off — per-material, and particles ride the same pipeline |
-| **Alpha cutout** | A per-material alpha threshold discarded before shading, so foliage and grates keep a hard edge and stay opaque instead of sorting against themselves in the blend pass |
+| **Alpha cutout** | A per-material alpha threshold discarded before shading, so foliage and grates keep a hard edge and stay opaque instead of sorting against themselves in the blend pass — and it reaches the shadow too: a leaf casts its holes, on a second depth pipeline that culls neither face, while a blended surface casts nothing rather than a rectangle |
 | **Sky and fog** | A procedural gradient sky drawn as a fullscreen triangle where nothing else claimed the depth, and exponential-squared distance fog, both authored per scene |
 | **Emissive** | A per-material emissive colour and strength, driven above 1.0 to trip the bloom threshold |
 | **Texture sampling** | A generated mip chain and anisotropic filtering, both guarded on the device actually supporting them |
@@ -305,6 +305,9 @@ Android "not functional"; extending that register forward costs nothing.
 - [x] PBR, normal mapping, cascaded shadow maps, point and spot shadows
 - [x] HDR pipeline with bloom, 4× MSAA, a procedural sky and distance fog
 - [x] A sorted transparent pass, and emissive materials that drive the bloom
+- [x] Shadows that know what a material is: a cut-out surface casts its own
+      silhouette rather than its bounding rectangle, and a blended one casts
+      nothing at all
 - [x] Transform hierarchy, prefabs, scene and material serialization
 - [x] Play/Stop, undo/redo, time-travel rewind
 - [x] Frustum culling, persistent pipeline cache

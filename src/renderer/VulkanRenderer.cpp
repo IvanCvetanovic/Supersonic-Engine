@@ -89,6 +89,7 @@ VulkanRenderer::~VulkanRenderer() {
     m_jointPaletteBuffers.clear();
     m_meshRegistry.reset();
     m_shadowPipeline.reset();
+    m_shadowCutoutPipeline.reset();
     m_shadowMap.reset();
 
     destroySyncObjects();
@@ -375,10 +376,16 @@ void VulkanRenderer::createGraphicsPipeline() {
     // The depth pass takes the cascade's transform in the push constant instead
     // of reading the scene UBO, so its range is a different size.
     shadowOptions.pushConstantSize = static_cast<uint32_t>(sizeof(ShadowPushConstantData));
-    // Vertex only: shadow.frag declares no push constant block, and pushing a
-    // vertex-only range against a pipeline that claims both stages is a
-    // validation error on every shadow draw.
-    shadowOptions.pushConstantStages = vk::ShaderStageFlagBits::eVertex;
+    // Both stages, and on BOTH depth pipelines even though shadow.frag reads
+    // nothing. vkCmdPushConstants requires the record-time mask to name every
+    // stage the range declares, so one mask for both pipelines means one push
+    // call in RenderDepthOnly rather than a mask that has to track which
+    // pipeline is bound - and a range that declares a stage its shader ignores
+    // is legal, while the two disagreeing is a validation error on every
+    // shadow draw. It also keeps the two layouts identically defined, so
+    // switching pipelines mid-pass does not disturb the bound scene set.
+    shadowOptions.pushConstantStages =
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
     // Retuned down. These constants were set against a fixed ~80-unit ortho
     // range; a cascade's depth range now spans the whole scene along the light
     // axis and can be several times that, which turns the same constants into
@@ -393,6 +400,30 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/shadow_vert.spv",
         "assets/shaders/shadow_frag.spv",
         shadowOptions);
+
+    // The same pass for surfaces that are mostly holes, differing in the two
+    // things a cut-out caster actually needs.
+    VulkanPipeline::Options cutoutOptions = shadowOptions;
+
+    // BOTH faces. Front-face culling is a good trade for a crate and a wrong
+    // one for a card: the cube's -Y face carries the +Y face's texture
+    // coordinates flipped in v (see ModelLoader::GenerateCube), so culling the
+    // face the light actually strikes leaves the far one casting, and the shape
+    // cast is the MIRROR of the shape drawn. That is worse than the solid
+    // rectangle it replaces, because it looks like it works. A single-sided
+    // quad lit from its front is not in the depth pass at all under eFront.
+    //
+    // The acne this used to buy is the normal offset's job now - the same
+    // reason the bias constants above were retuned down - and it is only spent
+    // on the handful of casters that opt in by having a cutoff.
+    cutoutOptions.cullMode = vk::CullModeFlagBits::eNone;
+
+    m_shadowCutoutPipeline = std::make_unique<VulkanPipeline>(
+        m_deviceRef.GetDevice(),
+        m_shadowMap->GetRenderPass(),
+        "assets/shaders/shadow_vert.spv",
+        "assets/shaders/shadow_cutout_frag.spv",
+        cutoutOptions);
 
     // Persist whatever the driver just compiled, so the next launch starts warm.
     m_pipelineCache->Save();
@@ -934,7 +965,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // Every depth pass below reads this instead of the registry. Gathered
     // after the palettes, because a skinned caster carries the palette offset
     // this frame's gather just assigned it.
-    RenderSystem::GatherShadowCasters(registry, *m_meshRegistry, m_shadowCasters);
+    RenderSystem::GatherShadowCasters(registry, *m_meshRegistry, *m_textureRegistry,
+                                      m_shadowCasters);
 
     // What every pass signature starts from. The joint palette lives here
     // rather than on the casters, and it has to be in: an animating character
@@ -990,6 +1022,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         cmd.setScissor(0, 1, &shadowScissor);
 
         RenderSystem::RenderDepthOnly(m_shadowCasters, *m_shadowPipeline,
+                                      *m_shadowCutoutPipeline,
                                       cmd, m_descriptorSets[m_currentFrame],
                                       cascades.viewProj[cascade],
                                       cascades.frustum[cascade], m_renderStats);
@@ -1062,6 +1095,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
             // reads as "no occluder anywhere" and therefore as fully lit.
             if (caster) {
                 RenderSystem::RenderDepthOnly(m_shadowCasters, *m_shadowPipeline,
+                                              *m_shadowCutoutPipeline,
                                               cmd, m_descriptorSets[m_currentFrame],
                                               faceViewProj[face],
                                               Frustum::FromMatrix(faceViewProj[face]),
@@ -1117,6 +1151,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         // looks one way.
         if (spot) {
             RenderSystem::RenderDepthOnly(m_shadowCasters, *m_shadowPipeline,
+                                          *m_shadowCutoutPipeline,
                                           cmd, m_descriptorSets[m_currentFrame],
                                           spot->viewProj,
                                           Frustum::FromMatrix(spot->viewProj),

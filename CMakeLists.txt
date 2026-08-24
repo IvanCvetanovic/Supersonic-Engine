@@ -345,6 +345,7 @@ set(SHADER_JOBS
     "sky.frag=sky_frag.spv"
     "shadow.vert=shadow_vert.spv"
     "shadow.frag=shadow_frag.spv"
+    "shadow_cutout.frag=shadow_cutout_frag.spv"
     "fullscreen.vert=fullscreen_vert.spv"
     "bloom_bright.frag=bloom_bright.spv"
     "bloom_blur.frag=bloom_blur.spv"

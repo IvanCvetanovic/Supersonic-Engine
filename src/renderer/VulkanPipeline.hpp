@@ -119,7 +119,7 @@ struct PushConstantData {
 // of step with the three other declarations of it, which is a mismatch nothing
 // diagnoses.
 //
-// 128 bytes exactly: the guaranteed minimum, and all of it.
+// 80 bytes, well inside the 128 every device guarantees.
 struct ShadowPushConstantData {
     // cascadeViewProj * model, premultiplied on the CPU.
     //
@@ -127,10 +127,20 @@ struct ShadowPushConstantData {
     // indices. Premultiplying is free here - the depth pass has no use for the
     // model matrix on its own - and matrix multiplication is associative, so
     // the per-vertex skin matrix still composes correctly on the right.
-    glm::mat4 viewProjModel;      // 0..63
-    int32_t skinPaletteBase{-1};  // 64..67
-    int32_t skinJointCount{0};    // 68..71
-    // 72 bytes total, and a multiple of 4 as vkCmdPushConstants requires.
+    glm::mat4 viewProjModel;      // 0..63   (vertex)
+    int32_t skinPaletteBase{-1};  // 64..67  (vertex)
+    int32_t skinJointCount{0};    // 68..71  (vertex)
+
+    // The cut, and the alpha being cut. Read only by shadow_cutout.frag, and
+    // only ever pushed with a cutoff above zero - the opaque depth pipeline
+    // has no fragment stage worth the name and never looks at either.
+    //
+    // Two named floats rather than a vec2: they are not a vector, they come
+    // from different fields of the material, and the scene pass keeps them
+    // apart too (push.material.w and push.albedoColor.a).
+    float alphaCutoff{0.0f};      // 72..75  (fragment)
+    float baseAlpha{1.0f};        // 76..79  (fragment)
+    // 80 bytes total, and a multiple of 4 as vkCmdPushConstants requires.
 };
 
 // Pipeline creation switches, at namespace scope rather than nested inside

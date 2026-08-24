@@ -39,6 +39,13 @@ RenderSystem::ShadowCaster makeCaster(const glm::vec3& position, uint32_t meshID
     return caster;
 }
 
+// A descriptor set handle that is merely DIFFERENT. Nothing here dereferences
+// it - the signature hashes the handle, exactly as it hashes the vertex buffer
+// handle - and there is no device to allocate a real one from.
+vk::DescriptorSet fakeDescriptorSet(uintptr_t value) {
+    return vk::DescriptorSet(reinterpret_cast<VkDescriptorSet>(value));
+}
+
 // A light looking down the -z axis from the origin, seeing roughly x,y in
 // [-4, 4] out to z = -50.
 glm::mat4 lightMatrix(const glm::vec3& eye) {
@@ -270,6 +277,117 @@ static void testTheSameInputsGiveTheSameSignature() {
               "an unchanged frame must produce an unchanged signature");
 }
 
+// --- what a cut-out caster puts into the signature --------------------------
+
+static void testTheCutoutInputsAreInTheSignature() {
+    // A leaf whose cutoff or whose texture changes casts a different SHAPE, and
+    // the gather sees nothing move: same entity, same transform, same bounds,
+    // same mesh. Miss any of these three and up to eighteen cached passes keep
+    // the silhouette the material used to have - and it looks entirely
+    // plausible, which is the failure this whole suite exists for.
+    const glm::mat4 light = lightMatrix(glm::vec3(0.0f, 0.0f, 10.0f));
+    std::vector<RenderSystem::ShadowCaster> casters{ makeCaster(glm::vec3(0.0f, 0.0f, 0.0f)) };
+    casters[0].alphaCutoff = 0.5f;
+    const uint64_t base = signatureOf(casters, light);
+
+    casters[0].alphaCutoff = 0.6f;
+    CHECK_MSG(base != signatureOf(casters, light),
+              "dragging the cutoff must dirty the passes that show it");
+
+    casters[0].alphaCutoff = 0.5f;
+    casters[0].baseAlpha = 0.9f;
+    CHECK_MSG(base != signatureOf(casters, light),
+              "and so must the material's alpha factor, which the test multiplies by");
+
+    casters[0].baseAlpha = 1.0f;
+    // A reloaded texture is the case the mesh path already learned: the id
+    // survives and the contents do not, so the id is not a statement about the
+    // pixels. TextureRegistry hands back a set it has never handed back before.
+    casters[0].materialSet = fakeDescriptorSet(0x1234);
+    CHECK_MSG(base != signatureOf(casters, light),
+              "a reloaded texture is a new descriptor set, and a new silhouette");
+}
+
+static void testACutoutTheLightCannotSeeChangesNothing() {
+    // The same control as the far crate above, for the fields this commit adds.
+    // The cut-out mixes have to live INSIDE the frustum cull; hoisted above it,
+    // every lamp in the level would re-record whenever anyone edited a material
+    // on the far side of the map, the cache would quietly stop saving anything,
+    // and no test would fail.
+    const glm::mat4 light = lightMatrix(glm::vec3(0.0f, 0.0f, 10.0f));
+    std::vector<RenderSystem::ShadowCaster> before{
+        makeCaster(glm::vec3(0.0f, 0.0f, 0.0f)),
+        makeCaster(glm::vec3(400.0f, 0.0f, 0.0f), 9),
+    };
+    before[1].alphaCutoff = 0.5f;
+    std::vector<RenderSystem::ShadowCaster> after = before;
+    after[1].alphaCutoff = 0.9f;
+    after[1].materialSet = fakeDescriptorSet(0x4321);
+
+    CHECK_MSG(signatureOf(before, light) == signatureOf(after, light),
+              "a leaf recut at the far end of the level must leave this lamp alone");
+
+    // The control on the control: worthless unless the far caster really was
+    // outside the frustum and the near one really was inside it.
+    const Frustum frustum = Frustum::FromMatrix(light);
+    CHECK_MSG(frustum.IntersectsAABB(before[0].worldMin, before[0].worldMax),
+              "the near caster must be visible for this test to mean anything");
+    CHECK_MSG(!frustum.IntersectsAABB(before[1].worldMin, before[1].worldMax),
+              "and the far one must not be");
+}
+
+// --- what each kind of material asks of the depth pass ----------------------
+
+static void testWhatEachKindOfMaterialCastsIntoTheDepthPass() {
+    // The decision itself, which GatherShadowCasters cannot be tested through:
+    // that walk needs a MeshRegistry holding real GPU buffers, and there is no
+    // device here. The policy is split out so it does not need one.
+    MaterialComponent opaque;
+    const RenderSystem::ShadowAlpha solid = RenderSystem::ShadowAlphaFor(&opaque);
+    CHECK_MSG(solid.casts, "an ordinary material casts");
+    CHECK_MSG(solid.cutoff == 0.0f,
+              "and casts solid, down the pipeline it has always used");
+
+    MaterialComponent leaf;
+    leaf.alphaCutoff = 0.5f;
+    leaf.albedoColor.a = 0.8f;
+    const RenderSystem::ShadowAlpha cut = RenderSystem::ShadowAlphaFor(&leaf);
+    CHECK_MSG(cut.casts && cut.cutoff == 0.5f, "a cutout material casts, cut to its own cutoff");
+    CHECK_NEAR(cut.baseAlpha, 0.8f);
+
+    MaterialComponent pane;
+    pane.transparent = true;
+    CHECK_MSG(!RenderSystem::ShadowAlphaFor(&pane).casts,
+              "a blended surface writes no depth for the camera and casts none for the light");
+
+    // Both flags together is documented as meaning something - blend what
+    // survives the cut - so the cut is what casts. Reading `transparent` first
+    // would overrule an authored cutoff and this is the assertion that says so.
+    MaterialComponent both;
+    both.transparent = true;
+    both.alphaCutoff = 0.25f;
+    const RenderSystem::ShadowAlpha survives = RenderSystem::ShadowAlphaFor(&both);
+    CHECK_MSG(survives.casts && survives.cutoff == 0.25f,
+              "a cutoff decides even on a material that is also blended");
+
+    // An entity with no material at all still casts: every procedural primitive
+    // in the engine goes through here.
+    CHECK_MSG(RenderSystem::ShadowAlphaFor(nullptr).casts, "no material means an opaque caster");
+}
+
+static void testAnOpaqueMaterialsAlphaNeverReachesTheDepthPass() {
+    // The other half of the conditional mix above, and the reason the signature
+    // can hash baseAlpha unconditionally without dirtying eighteen passes every
+    // time somebody nudges an opaque material's alpha: that number never gets
+    // onto the caster in the first place. An opaque surface occludes whatever
+    // its albedo alpha says, so a shadow that re-recorded for it would be
+    // re-recording for an image that cannot change.
+    MaterialComponent opaque;
+    opaque.albedoColor.a = 0.25f;
+    CHECK_MSG(RenderSystem::ShadowAlphaFor(&opaque).baseAlpha == 1.0f,
+              "an opaque caster's alpha factor is normalised, not carried");
+}
+
 static void runTests() {
     testAPassIsAlwaysRecordedTheFirstTime();
     testAChangedSignatureRecordsAgain();
@@ -283,7 +401,12 @@ static void runTests() {
     testAppearingAndDisappearingCastersChangeTheSignature();
     testTwoDifferentShapesTradingPlacesChangesTheSignature();
     testTheSkinningInputsAreInTheSignature();
+    testTheCutoutInputsAreInTheSignature();
+    testACutoutTheLightCannotSeeChangesNothing();
     testTheSameInputsGiveTheSameSignature();
+
+    testWhatEachKindOfMaterialCastsIntoTheDepthPass();
+    testAnOpaqueMaterialsAlphaNeverReachesTheDepthPass();
 }
 
-TEST_MAIN("test_shadowcache", 30)
+TEST_MAIN("test_shadowcache", 70)

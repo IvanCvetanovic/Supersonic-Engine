@@ -161,7 +161,9 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         static_assert(offsetof(PushConstantData, skinPaletteBase) == 112, "push constant layout shifted");
         static_assert(offsetof(PushConstantData, skinJointCount) == 116, "push constant layout shifted");
         static_assert(offsetof(ShadowPushConstantData, skinPaletteBase) == 64, "shadow push layout shifted");
-        static_assert(sizeof(ShadowPushConstantData) == 72, "shadow push layout shifted");
+        static_assert(offsetof(ShadowPushConstantData, alphaCutoff) == 72, "shadow push layout shifted");
+        static_assert(offsetof(ShadowPushConstantData, baseAlpha) == 76, "shadow push layout shifted");
+        static_assert(sizeof(ShadowPushConstantData) == 80, "shadow push layout shifted");
         static_assert(sizeof(ShadowPushConstantData) % 4 == 0, "push constant size must be a multiple of 4");
         static_assert(sizeof(PushConstantData) % 4 == 0, "push constant size must be a multiple of 4");
         if (options.pushConstantSize == 0 || options.pushConstantSize > 128) {

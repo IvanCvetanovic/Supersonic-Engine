@@ -481,21 +481,79 @@ so a material reads the same whichever route it takes. glTF `alphaMode: MASK`
 imports straight onto it, with the spec's 0.5 default when the file omits a
 cutoff.
 
-Two places the alpha still does not reach, neither of them fixed by the above:
+**Where that alpha reaches the light.** A depth pass records one bit per texel -
+blocked or not blocked - so the two halves of transparency get the only two
+answers that bit has.
 
-- **Shadows.** `GatherShadowCasters` filters on visibility and `castsShadow` and
-  never consults `MaterialComponent::transparent` or `alphaCutoff`, and
-  `shadow.frag` has no alpha test. A pane of glass, a cloud of fading particles
-  and a leaf card all cast a solid black rectangle. The cutout case is the one
-  that shows worst, because the shape it casts is nothing like the shape drawn -
-  and it is the harder one to fix: the depth passes bind no material descriptor
-  set at all, deliberately, so giving them an alpha test means giving eighteen
-  passes a texture they currently do not need.
-- **Particles do not interleave with transparent meshes.** They are sorted among
-  themselves and drawn after, because a particle is a different mesh with a
-  different material set and merging the two lists would cost a rebind per draw
-  at the point in the frame with the most draws in it. A particle behind a pane
-  composites in the wrong order.
+A surface with a **cutoff** occludes where its albedo is opaque enough, tested
+against the same `texture alpha x factor < cutoff` the scene pass makes. A
+**blended** surface that named no cutoff does not cast at all: `transparent`
+means exactly one thing in this renderer, the pipeline that turns depth writes
+off, and a surface declining to occlude in the camera's depth buffer has no
+business occluding in the light's. It cannot cast a partial shadow, so the
+choice was between nothing and the solid black rectangle it used to cast, and
+the rectangle is the one that is definitely wrong. Setting both is documented as
+meaning "blend what survives the cut", so the cut is read first and what
+survives it is what casts.
+
+Three things about how it is done, each of which was the alternative's problem:
+
+- **A second pipeline, not one compare in `shadow.frag`.** Elsewhere in this
+  engine a cutoff of zero is the off switch precisely so the disabled path is
+  the same arithmetic; here it cannot be. `discard` costs a pipeline its early
+  depth rejection on every draw, a fragment stage that samples set 1 makes that
+  set mandatory for every draw, and eighteen depth passes a frame is where a
+  crate would pay for a leaf. `GatherShadowCasters` returns its list
+  **partitioned** - solid casters first - so a pass switches pipeline once, and
+  in a scene with no cut-out surface never switches at all.
+- **The cut-out pipeline culls neither face.** Front-face culling pushes acne
+  onto faces the camera cannot see, which is a good trade for a closed solid and
+  a wrong one for a card: the cube's `-Y` face carries the `+Y` face's texture
+  coordinates flipped in v, so culling the face the light strikes leaves the far
+  one casting and the shape cast is the *mirror* of the shape drawn - worse than
+  the rectangle, because it looks like it works. Measured, not assumed: the same
+  card casts 1753 near-half against 1358 far-half pixels with `eNone` and 740
+  against 1298 with `eFront`. The bias constants are unchanged and `eNone` is
+  scoped to this pipeline, so no solid caster's acne moves - but a cut-out
+  caster's does, because the map now records its near face rather than its far
+  one and only the bias and the normal offset stand between that and
+  self-shadowing. Measured too, on the case that would show it: a 1.5-unit cube
+  at a cutoff low enough to discard nothing, so the cull mode is the only
+  variable, differs from the same cube drawn solid in 31 pixels of 293695, none
+  of them on its lit faces. That is the scale it has been checked at.
+- **The material set is resolved in the gather, not the pass.**
+  `AcquireMaterialSet` allocates, updates and can throw; the depth pass runs
+  eighteen times a frame with a render pass open. Once per frame outside every
+  pass, it is an ordinary call. A null set - the pool exhausted, already logged -
+  leaves the cutoff at zero and degrades to the old solid rectangle, which makes
+  "a positive cutoff has a set" true by construction.
+
+`ShadowPassSignature` mixes the cutoff, the alpha factor and the descriptor set
+**handle**, all inside the frustum cull. The handle rather than the texture id
+for the reason the vertex buffer handle is already there: a reload swaps the
+image under a stable id. Miss any of them and the cache serves a silhouette the
+material no longer has, which looks entirely plausible.
+
+All three depth call sites take the same pair of pipelines - four cascades, six
+cube faces per point-light slot, one per spot slot - and each was checked by
+toggling that light's shadow and looking at what changed, because clean
+validation only certifies the passes that actually ran.
+
+Two places the alpha still does not reach:
+
+- **Particles.** A particle is not an entity - it is a POD inside its emitter's
+  component vector, with no transform and no bounds - so it never enters the
+  gather and casts nothing, before this change or after it. Nor do particles
+  interleave with transparent meshes: they are sorted among themselves and drawn
+  after, because a particle is a different mesh with a different material set
+  and merging the two lists would cost a rebind per draw at the point in the
+  frame with the most draws in it. A particle behind a pane composites in the
+  wrong order.
+- **`RenderableComponent::castsShadow` has no inspector control.** It is
+  serialized and it is read, but every "Casts Shadow" checkbox in the editor
+  belongs to a light, so the per-entity override is reachable from a scene file
+  and not from the UI. That matters more now than it did: opting a blended
+  surface back into casting is a cutoff away, but opting a solid one out is not.
 
 **Images carried inside a model.** A `.glb` keeps its textures as bytes in the
 binary chunk rather than as files beside it, and every texture in this engine is

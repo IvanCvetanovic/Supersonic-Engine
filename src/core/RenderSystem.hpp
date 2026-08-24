@@ -107,12 +107,53 @@ public:
 
         uint32_t skinPaletteBase{0};
         int32_t skinJointCount{0};
+
+        // Above zero means this caster occludes only where its albedo is
+        // opaque enough, and it is drawn by the cut-out depth pipeline instead
+        // of the plain one. Zero - the overwhelmingly common case - means the
+        // depth pass never looks at a texture, exactly as before.
+        float alphaCutoff{0.0f};
+
+        // The material's own alpha factor, the second half of the same test
+        // the scene pass makes: texture alpha times factor, against the cutoff.
+        float baseAlpha{1.0f};
+
+        // The albedo this caster is cut against, resolved once for the frame.
+        //
+        // A HANDLE rather than the texture id, for the reason vertexBuffer
+        // above is one: TextureRegistry::ReplaceRGBA swaps the image under a
+        // stable id and drops every material set naming it, so the id alone
+        // would leave a leaf cut to the texture it replaced - and the shadow
+        // cache, which hashes this struct, would never notice.
+        //
+        // Null on an opaque caster, which is what alphaCutoff == 0 means.
+        vk::DescriptorSet materialSet{};
     };
 
-    // Everything visible that casts a shadow, in registry order. Clears `out`
-    // and refills it, so a caller can keep one vector for the life of the
-    // renderer and never allocate again after the first frame.
+    // What a material asks of the depth pass, reduced to the two numbers the
+    // pass can act on. Split out from the gather so the policy is testable
+    // without a device: the gather itself needs a MeshRegistry with real GPU
+    // buffers in it, and this does not.
+    //
+    // `casts` is false only for a blended surface that named no cutoff: it
+    // occludes nowhere, and never reaches the depth pass at all.
+    struct ShadowAlpha {
+        bool casts{true};
+        float cutoff{0.0f};
+        float baseAlpha{1.0f};
+    };
+    static ShadowAlpha ShadowAlphaFor(const MaterialComponent* material);
+
+    // Everything visible that casts a shadow. Clears `out` and refills it, so a
+    // caller can keep one vector for the life of the renderer and never
+    // allocate again after the first frame.
+    //
+    // PARTITIONED, not in registry order: every opaque caster first, then every
+    // cut-out one. The depth pass then switches pipeline once per pass instead
+    // of once per run of casters, and an opaque caster never pays for the
+    // cut-out pipeline's descriptor bind.
     static void GatherShadowCasters(entt::registry& registry, MeshRegistry& meshes,
+                                    TextureRegistry& textures,
                                     std::vector<ShadowCaster>& out);
 
     // What an entity's mesh and texture ids depend on, reduced to a number.
@@ -158,12 +199,19 @@ public:
     // a stronger hash.
     static uint64_t MixSignature(uint64_t signature, const void* data, size_t bytes);
 
-    // Shadow pass for one cascade, cube face or spot: same geometry, no
-    // materials, no textures. Only positions matter, and the light's transform
-    // arrives in the push constant, so this binds no descriptor set at all.
+    // Shadow pass for one cascade, cube face or spot.
+    //
+    // Two pipelines, because the casters want two different things. Almost all
+    // of them are solid: only positions matter, no material is bound, and the
+    // fragment stage writes nothing. The rest are cut-out, and occlude only
+    // where their albedo is opaque - those need the texture, the cutoff, and a
+    // cull mode that does not swap which face of a card is doing the casting.
+    //
+    // The list arrives partitioned, so this switches between the two once.
     static void RenderDepthOnly(
         const std::vector<ShadowCaster>& casters,
         VulkanPipeline& pipeline,
+        VulkanPipeline& cutoutPipeline,
         vk::CommandBuffer commandBuffer,
         vk::DescriptorSet sceneSet,
         const glm::mat4& lightViewProj,

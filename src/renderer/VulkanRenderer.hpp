@@ -213,6 +213,12 @@ private:
     ShadowCache m_shadowCache;
     std::unique_ptr<VulkanPipeline> m_shadowPipeline;
 
+    // The same depth pass for casters that occlude only where their albedo is
+    // opaque. Separate because it needs a fragment stage that discards and a
+    // cull mode that keeps both faces - neither of which a crate should pay
+    // for, and eighteen depth passes a frame is where paying shows.
+    std::unique_ptr<VulkanPipeline> m_shadowCutoutPipeline;
+
     vk::CommandPool m_commandPool{nullptr};
     std::vector<vk::CommandBuffer> m_commandBuffers;
 

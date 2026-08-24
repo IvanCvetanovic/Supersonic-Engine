@@ -23,7 +23,18 @@ layout(push_constant) uniform PushConstants {
     mat4 viewProjModel;
     int skinPaletteBase;
     int skinJointCount;
+    // Read by shadow_cutout.frag, not here. The block is declared whole in both
+    // stages because a push constant range is one range across both, and two
+    // declarations that disagree about its tail is a mismatch nothing catches.
+    float alphaCutoff;
+    float baseAlpha;
 } push;
+
+// For the cut-out depth pipeline, which samples albedo to decide whether a
+// fragment is there at all. shadow.frag ignores it, and an unconsumed vertex
+// output is legal - the same latitude that lets this stage declare vertex
+// attributes it does not read.
+layout(location = 0) out vec2 fragTexCoord;
 
 // This frame's joint matrices for every skinned entity, back to back. std430
 // spelled out so the mat4 array stride is 64 bytes and matches
@@ -60,4 +71,5 @@ void main() {
     // says a word, because unconsumed vertex attributes are perfectly legal.
     mat4 skin = skinMatrix(push.skinPaletteBase, push.skinJointCount, inJointIndices, inJointWeights);
     gl_Position = push.viewProjModel * skin * vec4(inPosition, 1.0);
+    fragTexCoord = inTexCoord;
 }

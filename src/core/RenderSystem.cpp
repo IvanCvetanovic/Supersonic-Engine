@@ -168,7 +168,38 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
     }
 }
 
+RenderSystem::ShadowAlpha RenderSystem::ShadowAlphaFor(const MaterialComponent* material) {
+    ShadowAlpha alpha{};
+    if (!material) return alpha;
+
+    // A cutoff decides, whether or not the surface is also blended. The two are
+    // documented as meaning something together - blend what survives the cut -
+    // and what survives the cut is exactly what should cast. Reading
+    // `transparent` first would quietly overrule an authored cutoff.
+    if (material->alphaCutoff > 0.0f) {
+        alpha.cutoff = material->alphaCutoff;
+        alpha.baseAlpha = material->albedoColor.a;
+        return alpha;
+    }
+
+    // Blended, and with nothing said about where it stops. It does not cast.
+    //
+    // `transparent` has exactly one meaning in this renderer - the blended
+    // pipeline, which turns depth writes OFF - and a surface that declines to
+    // occlude in the camera's depth buffer has no business occluding in the
+    // light's. It cannot cast a partial shadow either: a shadow map records
+    // "blocked" or "not blocked" and has no third answer, so the choice is
+    // between nothing and a solid black rectangle, and the rectangle is the one
+    // that is definitely wrong.
+    //
+    // Not silently final: a pane that should cast where it is solid says so
+    // with a cutoff, which is the line above.
+    alpha.casts = !material->transparent;
+    return alpha;
+}
+
 void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& meshes,
+                                       TextureRegistry& textures,
                                        std::vector<ShadowCaster>& out) {
     out.clear();
 
@@ -178,6 +209,11 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
         const auto& renderable = view.get<RenderableComponent>(entity);
 
         if (!renderable.isVisible || !renderable.castsShadow) continue;
+
+        // Before the mesh lookup and the eight-corner transform, so a pane of
+        // glass costs one try_get rather than the whole caster.
+        const ShadowAlpha alpha = ShadowAlphaFor(registry.try_get<MaterialComponent>(entity));
+        if (!alpha.casts) continue;
 
         const GpuMesh* mesh = meshes.Get(renderable.meshID);
         if (!mesh || mesh->indexCount == 0) continue;
@@ -199,8 +235,39 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
             caster.skinJointCount = static_cast<int32_t>(skin->jointMatrices.size());
         }
 
+        if (alpha.cutoff > 0.0f) {
+            // Resolved HERE rather than in the depth pass, and that is not a
+            // convenience. AcquireMaterialSet allocates, updates and can throw;
+            // the depth pass runs eighteen times a frame with a render pass
+            // open, and throwing out of the middle of one is not a failure this
+            // engine could report. Once per frame, outside every render pass,
+            // it is an ordinary call.
+            //
+            // A null set means the registry's pool is exhausted, which it has
+            // already logged. Leaving the cutoff at zero degrades to the solid
+            // rectangle this commit replaces, which beats a draw with nothing
+            // bound at set 1 - and it makes "a positive cutoff has a set" true
+            // by construction, so the depth pass needs no second check.
+            if (const vk::DescriptorSet set =
+                    textures.AcquireMaterialSet(renderable.albedoTextureID,
+                                                renderable.normalTextureID)) {
+                caster.alphaCutoff = alpha.cutoff;
+                caster.baseAlpha = alpha.baseAlpha;
+                caster.materialSet = set;
+            }
+        }
+
         out.push_back(caster);
     }
+
+    // Solid casters first. The depth pass then changes pipeline once instead of
+    // once per run of casters, and never at all in a scene with no cut-out
+    // surface in it. Not stable: the order within each half reaches nothing but
+    // the mesh-rebind batching and the pass signature, and both only need it to
+    // be the SAME order every frame, which it is for a given input.
+    std::partition(out.begin(), out.end(), [](const ShadowCaster& caster) {
+        return caster.alphaCutoff <= 0.0f;
+    });
 }
 
 uint64_t RenderSystem::MixSignature(uint64_t signature, const void* data, size_t bytes) {
@@ -239,6 +306,20 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
         const VkBuffer buffer = static_cast<VkBuffer>(caster.vertexBuffer);
         signature = MixSignature(signature, &buffer, sizeof(buffer));
         signature = MixSignature(signature, &caster.indexCount, sizeof(caster.indexCount));
+
+        // What the cut is made against. Miss any of these three and the cache
+        // serves a shadow map recorded before the material changed: edit a
+        // leaf's cutoff and up to eighteen passes keep the silhouette it used
+        // to have, looking entirely plausible. Nothing diagnoses that.
+        //
+        // The descriptor SET, for the same reason the vertex buffer handle is
+        // here rather than the mesh id: ReplaceRGBA swaps an image under a
+        // stable texture id and rebuilds the set, so the id alone is not a
+        // statement about the pixels.
+        signature = MixSignature(signature, &caster.alphaCutoff, sizeof(caster.alphaCutoff));
+        signature = MixSignature(signature, &caster.baseAlpha, sizeof(caster.baseAlpha));
+        const VkDescriptorSet materialSet = static_cast<VkDescriptorSet>(caster.materialSet);
+        signature = MixSignature(signature, &materialSet, sizeof(materialSet));
     }
 
     return MixSignature(signature, &visible, sizeof(visible));
@@ -247,6 +328,7 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
 void RenderSystem::RenderDepthOnly(
     const std::vector<ShadowCaster>& casters,
     VulkanPipeline& pipeline,
+    VulkanPipeline& cutoutPipeline,
     vk::CommandBuffer commandBuffer,
     vk::DescriptorSet sceneSet,
     const glm::mat4& lightViewProj,
@@ -262,6 +344,11 @@ void RenderSystem::RenderDepthOnly(
 
     uint32_t boundMesh = MeshRegistry::kInvalidMesh;
 
+    // The casters arrive partitioned - solid first - so this flips at most once
+    // per pass, and stays false entirely in a scene with no cut-out surfaces.
+    bool onCutoutPipeline = false;
+    vk::DescriptorSet boundMaterialSet{};
+
     for (const ShadowCaster& caster : casters) {
         // Cull against the LIGHT's frustum here, not the camera's: an object
         // behind the viewer can still cast a shadow into view. This is the only
@@ -273,12 +360,31 @@ void RenderSystem::RenderDepthOnly(
         }
         ++stats.shadowDrawn;
 
+        // Crossing from the solid run into the cut-out one. The two pipeline
+        // layouts are identically defined - same set layouts, same push range -
+        // so set 0 survives the switch and is not rebound.
+        VulkanPipeline& active = caster.alphaCutoff > 0.0f ? cutoutPipeline : pipeline;
+        if ((caster.alphaCutoff > 0.0f) != onCutoutPipeline) {
+            onCutoutPipeline = caster.alphaCutoff > 0.0f;
+            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, active.GetPipeline());
+        }
+
         if (caster.meshID != boundMesh) {
             const vk::Buffer buffers[] = { caster.vertexBuffer };
             const vk::DeviceSize offsets[] = { 0 };
             commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
             commandBuffer.bindIndexBuffer(caster.indexBuffer, 0, vk::IndexType::eUint32);
             boundMesh = caster.meshID;
+        }
+
+        // Tracked separately from the mesh: two entities can share one mesh and
+        // cut against different textures, and keying this off meshID would give
+        // the second one the first one's holes.
+        if (caster.materialSet && caster.materialSet != boundMaterialSet) {
+            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, active.GetLayout(),
+                                             VulkanPipeline::kMaterialSet, 1,
+                                             &caster.materialSet, 0, nullptr);
+            boundMaterialSet = caster.materialSet;
         }
 
         // World matrix so a child follows its parent, plus this light's
@@ -290,8 +396,16 @@ void RenderSystem::RenderDepthOnly(
         push.viewProjModel = lightViewProj * caster.model;
         push.skinPaletteBase = caster.skinPaletteBase;
         push.skinJointCount = caster.skinJointCount;
+        push.alphaCutoff = caster.alphaCutoff;
+        push.baseAlpha = caster.baseAlpha;
+        // Both stages, because the range declares both, and vkCmdPushConstants
+        // requires the mask given here to name every stage the range does.
+        // Pushing a vertex-only range against a layout claiming two is a
+        // validation error on every shadow draw - the comment beside
+        // pushConstantStages in the renderer records that being learned once.
         commandBuffer.pushConstants(
-            pipeline.GetLayout(), vk::ShaderStageFlagBits::eVertex,
+            active.GetLayout(),
+            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
             0, sizeof(ShadowPushConstantData), &push);
 
         commandBuffer.drawIndexed(caster.indexCount, 1, 0, 0, 0);
