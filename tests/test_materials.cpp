@@ -398,6 +398,7 @@ static void testAPackedMapSurvivesTheAssetRoundTrip() {
     asset.albedoTexturePath = "assets/textures/steel.png";
     asset.normalTexturePath = "assets/textures/steel_normal.png";
     asset.ormTexturePath = "assets/textures/steel_orm.png";
+    asset.occlusionStrength = 0.0f;
 
     MaterialAsset restored;
     std::string error;
@@ -405,6 +406,9 @@ static void testAPackedMapSurvivesTheAssetRoundTrip() {
               error);
     CHECK_MSG(restored.ormTexturePath == "assets/textures/steel_orm.png",
               restored.ormTexturePath);
+    CHECK_MSG(restored.occlusionStrength == 0.0f,
+              "the strength decides whether red is occlusion, and zero is the "
+              "value a default-on-absent bug hands back as one");
 
     // And a file written before the field existed reads as no map, which is
     // the surface it always was rather than a checkerboard.
@@ -412,6 +416,7 @@ static void testAPackedMapSurvivesTheAssetRoundTrip() {
     CHECK_MSG(MaterialLibrary::Deserialize(
                   "{\"Material\": \"Old\", \"Roughness\": 0.3}", old, error), error);
     CHECK_MSG(old.ormTexturePath.empty(), "an absent packed map is no map");
+    CHECK_NEAR(old.occlusionStrength, 1.0f);
     CHECK_NEAR(old.roughness, 0.3f);
 }
 

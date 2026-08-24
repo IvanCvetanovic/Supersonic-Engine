@@ -77,6 +77,9 @@ static void testSceneRoundTrip() {
     material.roughness = 0.25f;
     material.metallic = 0.75f;
     material.ormTexturePath = "assets/textures/worn_orm.png";
+    // ZERO on purpose: it is the load-bearing value and it is also what a
+    // "default when absent" bug hands back as 1.0, so it discriminates.
+    material.occlusionStrength = 0.0f;
     source.emplace<RenderableComponent>(cube);
 
     const auto light = source.create();
@@ -133,6 +136,11 @@ static void testSceneRoundTrip() {
             // constants it authored and none of the variation on top.
             if (mat) CHECK_MSG(mat->ormTexturePath == "assets/textures/worn_orm.png",
                                mat->ormTexturePath);
+            // And the number that decides whether the map's red channel is
+            // occlusion at all. A reload that quietly restored the 1.0 default
+            // would put the black-surface bug back on every glTF-imported
+            // material the importer had set this to zero on.
+            if (mat) CHECK_NEAR(mat->occlusionStrength, 0.0f);
 
             CHECK(loaded.all_of<RenderableComponent>(entity));
         } else if (tag->tag == "Sun") {
