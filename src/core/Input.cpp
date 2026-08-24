@@ -98,15 +98,18 @@ void Input::ClearBindings() {
     g_previous = RawInputState{};
     g_mouseDelta = glm::vec2(0.0f);
 
-    // The pointer too, even though it is not a binding. This is the only reset
-    // there is - LoadDefaultBindings goes through it, and so does every test -
-    // and a cursor mode left locked by whatever ran last is exactly the kind of
-    // state that makes a suite pass in one order and fail in another.
-    g_requestedCursor = CursorMode::Normal;
-    g_cursorSuppressed = false;
-    g_windowFocused = true;
-    g_cursorAtLastUpdate = CursorMode::Normal;
-    g_textCaptureActive = false;
+    // The pointer and the keyboard are NOT reset here, and the first version of
+    // this did reset them.
+    //
+    // It looked harmless because LoadDefaultBindings is the only caller and it
+    // runs once at startup. It stops being harmless the day a settings screen
+    // rebinds the controls: reloading the defaults mid-game would silently
+    // release a locked pointer and hand the keyboard back, in the middle of a
+    // first-person game, from a function whose name says it clears bindings.
+    //
+    // Who owns the mouse is not a binding. A test that needs it back where it
+    // started says so with the ordinary setters, which are public precisely
+    // because a game sets them too.
 }
 
 const unsigned int* Input::TypedCharacters() { return g_current.textCharacters; }

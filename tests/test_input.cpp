@@ -23,6 +23,26 @@ static void frame(const RawInputState& state) {
     Input::Update(state);
 }
 
+// Back to a clean slate, bindings AND devices.
+//
+// ClearBindings deliberately no longer touches who owns the mouse and the
+// keyboard - those are not bindings, and resetting them there would mean a
+// settings screen reloading the defaults released a locked pointer mid-game.
+// So a suite that leaves the pointer locked has to put it back itself, through
+// the same public setters a game uses.
+static void reset() {
+    Input::ClearBindings();
+    Input::SetCursorMode(CursorMode::Normal);
+    Input::SuppressCursorCapture(false);
+    Input::SetWindowFocused(true);
+    Input::SetTextCaptureActive(false);
+
+    // Two frames of nothing, so the cursor-mode rebase and the edge detection
+    // both settle before the next case starts feeding real input.
+    frame(RawInputState{});
+    frame(RawInputState{});
+}
+
 static RawInputState withKey(int key) {
     RawInputState state{};
     state.keys[key] = true;
@@ -30,7 +50,7 @@ static RawInputState withKey(int key) {
 }
 
 static void testActionRespondsToItsKey() {
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Jump", Key::Space);
 
     frame(RawInputState{});
@@ -44,7 +64,7 @@ static void testActionRespondsToItsKey() {
 static void testPressIsAnEdgeNotALevel() {
     // The failure this guards: a jump that fires every frame the button is held
     // rather than once when it goes down.
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Jump", Key::Space);
 
     frame(RawInputState{});
@@ -68,7 +88,7 @@ static void testKeyHeldAtStartupIsNotAPress() {
     // With no previous frame to compare against, every key already down when
     // the window opens would otherwise report as pressed on frame one - which
     // fires every bound action the moment the game starts.
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Fire", Key::F);
 
     frame(withKey(Key::F));
@@ -77,7 +97,7 @@ static void testKeyHeldAtStartupIsNotAPress() {
 }
 
 static void testAnySourceSatisfiesAnAction() {
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Fire", Key::F);
     Input::BindActionMouseButton("Fire", MouseButton::Left);
     Input::BindActionPadButton("Fire", Pad::RightBumper);
@@ -101,7 +121,7 @@ static void testAnySourceSatisfiesAnAction() {
 
 static void testDisconnectedPadIsIgnored() {
     // Stale button bytes in a disconnected pad's state must not drive anything.
-    Input::ClearBindings();
+    reset();
     Input::BindActionPadButton("Fire", Pad::A);
 
     RawInputState state{};
@@ -113,7 +133,7 @@ static void testDisconnectedPadIsIgnored() {
 }
 
 static void testKeyAxisIsBipolar() {
-    Input::ClearBindings();
+    reset();
     Input::BindAxisKeys("MoveX", Key::D, Key::A);
 
     frame(withKey(Key::D));
@@ -133,7 +153,7 @@ static void testKeyAxisIsBipolar() {
 static void testStickDeadzone() {
     // A resting stick reads slightly off centre and drifts as it ages. Without
     // a deadzone the player walks across the level with nobody touching it.
-    Input::ClearBindings();
+    reset();
     Input::BindAxisPad("MoveX", Pad::LeftX);
 
     RawInputState resting{};
@@ -152,7 +172,7 @@ static void testStickDeadzone() {
 static void testDeadzoneRescalesRatherThanClipping() {
     // Just past the deadzone must start near zero, not jump to the deadzone
     // value - otherwise the control snaps into motion instead of easing in.
-    Input::ClearBindings();
+    reset();
     Input::BindAxisPad("MoveX", Pad::LeftX);
 
     RawInputState state{};
@@ -168,7 +188,7 @@ static void testDeadzoneRescalesRatherThanClipping() {
 static void testPadAxisCanBeInverted() {
     // GLFW reports stick up as negative, so the default bindings invert Y. A
     // scale that did not apply would move the player the wrong way.
-    Input::ClearBindings();
+    reset();
     Input::BindAxisPad("MoveY", Pad::LeftY, -1.0f);
 
     RawInputState state{};
@@ -180,7 +200,7 @@ static void testPadAxisCanBeInverted() {
 }
 
 static void testStrongestSourceWinsRatherThanSumming() {
-    Input::ClearBindings();
+    reset();
     Input::BindAxisKeys("MoveX", Key::D, Key::A);
     Input::BindAxisPad("MoveX", Pad::LeftX);
 
@@ -196,7 +216,7 @@ static void testStrongestSourceWinsRatherThanSumming() {
 }
 
 static void testUnknownNamesAreInertNotFatal() {
-    Input::ClearBindings();
+    reset();
     frame(RawInputState{});
 
     CHECK_MSG(!Input::IsDown("NoSuchAction"), "an unbound action is simply never down");
@@ -205,7 +225,7 @@ static void testUnknownNamesAreInertNotFatal() {
 }
 
 static void testMouseDeltaIsPerFrame() {
-    Input::ClearBindings();
+    reset();
 
     RawInputState first{};
     first.mousePosition = glm::vec2(100.0f, 100.0f);
@@ -243,7 +263,7 @@ static void testDefaultBindingsCoverTheBasics() {
 }
 
 static void testRebindingAddsRatherThanReplaces() {
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Fire", Key::F);
     Input::BindActionKey("Fire", Key::Enter);
 
@@ -256,7 +276,7 @@ static void testRebindingAddsRatherThanReplaces() {
 }
 
 static void testOutOfRangeCodesAreRejected() {
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Bad", 99999);
     Input::BindActionKey("Bad", -5);
     Input::BindActionPadButton("Bad", 400);
@@ -271,7 +291,7 @@ static void testOutOfRangeCodesAreRejected() {
 // --- who owns the pointer ---------------------------------------------------
 
 static void testTheCursorModeIsARequestUntilSomethingVetoesIt() {
-    Input::ClearBindings();
+    reset();
     CHECK_MSG(Input::EffectiveCursorMode() == CursorMode::Normal,
               "nothing has asked for anything yet");
 
@@ -296,7 +316,7 @@ static void testLosingTheWindowIsAlwaysAWayOut() {
     // The safety mechanism, not a nicety: a locked pointer is invisible and
     // cannot leave the window, so a game that locks it and offers no release
     // would trap whoever ran it. Alt-tab has to work.
-    Input::ClearBindings();
+    reset();
     Input::SetCursorMode(CursorMode::Locked);
 
     Input::SetWindowFocused(false);
@@ -309,7 +329,7 @@ static void testLosingTheWindowIsAlwaysAWayOut() {
 
     // Focus defaults to true, so a headless run - which reports focus to
     // nobody - is not silently unable to capture.
-    Input::ClearBindings();
+    reset();
     CHECK_MSG(Input::WindowFocused(), "focus defaults to present");
 }
 
@@ -319,7 +339,7 @@ static void testCapturingTheMouseDoesNotSnapTheView() {
     // differenced against last frame is a delta of several hundred pixels. The
     // camera snaps to face somewhere else entirely on the frame you capture,
     // once, which is exactly the kind of thing that gets blamed on the mouse.
-    Input::ClearBindings();
+    reset();
 
     RawInputState at{};
     at.mousePosition = glm::vec2(640.0f, 360.0f);
@@ -349,7 +369,7 @@ static void testCapturingTheMouseDoesNotSnapTheView() {
 static void testReleasingTheMouseDoesNotSnapEither() {
     // The same teleport in the other direction: GLFW puts the pointer back
     // where it was before the capture, which is just as far to jump.
-    Input::ClearBindings();
+    reset();
     Input::SetCursorMode(CursorMode::Locked);
 
     RawInputState virt{};
@@ -369,7 +389,7 @@ static void testAVetoedCaptureAlsoRebasesTheDelta() {
     // The veto changes the EFFECTIVE mode, which is what moves the pointer -
     // so it has to rebase too. Keying the correction off the request alone
     // would snap the view every time the editor took the mouse back.
-    Input::ClearBindings();
+    reset();
     Input::SetCursorMode(CursorMode::Locked);
 
     RawInputState virt{};
@@ -388,7 +408,7 @@ static void testAVetoedCaptureAlsoRebasesTheDelta() {
 // --- typing, and who the keyboard belongs to --------------------------------
 
 static void testTypedCharactersArriveAndDoNotLinger() {
-    Input::ClearBindings();
+    reset();
 
     RawInputState typed{};
     typed.textCharacters[0] = 'H';
@@ -412,7 +432,7 @@ static void testTypingDoesNotAlsoWalkThePlayer() {
     // ImGui's own widgets, so a field drawn by the engine's UI canvas is
     // invisible to it. Without a veto of our own, typing a name would spell it
     // and walk the character across the level at the same time.
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Fire", Key::F);
     Input::BindAxisKeys("MoveX", Key::D, Key::A);
 
@@ -441,7 +461,7 @@ static void testAPadStillDrivesTheGameWhileANameIsTyped() {
     // Only KEY sources are taken away. Nobody types with a thumbstick, and a
     // controller player should not have their game stop because a name box on
     // screen took focus.
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Fire", Key::F);
     Input::BindActionPadButton("Fire", Pad::A);
     Input::BindActionMouseButton("Fire", MouseButton::Left);
@@ -467,7 +487,7 @@ static void testTakingTheKeyboardIsAnEdgeLikeAnyOther() {
     // an edge that did not fire would leave a game tracking movement by edges
     // convinced the player was still walking, with the run animation stuck
     // mid-stride for as long as the name took to type.
-    Input::ClearBindings();
+    reset();
     Input::BindActionKey("Walk", Key::W);
 
     RawInputState held{};

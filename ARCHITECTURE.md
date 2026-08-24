@@ -539,21 +539,22 @@ cube faces per point-light slot, one per spot slot - and each was checked by
 toggling that light's shadow and looking at what changed, because clean
 validation only certifies the passes that actually ran.
 
-Two places the alpha still does not reach:
+One place the alpha still does not reach is **particles**. A particle is not an
+entity - it is a POD inside its emitter's component vector, with no transform and
+no bounds - so it never enters the gather and casts nothing, before this change
+or after it. Nor do particles interleave with transparent meshes: they are sorted
+among themselves and drawn after, because a particle is a different mesh with a
+different material set and merging the two lists would cost a rebind per draw at
+the point in the frame with the most draws in it. A particle behind a pane
+composites in the wrong order.
 
-- **Particles.** A particle is not an entity - it is a POD inside its emitter's
-  component vector, with no transform and no bounds - so it never enters the
-  gather and casts nothing, before this change or after it. Nor do particles
-  interleave with transparent meshes: they are sorted among themselves and drawn
-  after, because a particle is a different mesh with a different material set
-  and merging the two lists would cost a rebind per draw at the point in the
-  frame with the most draws in it. A particle behind a pane composites in the
-  wrong order.
-- **`RenderableComponent::castsShadow` has no inspector control.** It is
-  serialized and it is read, but every "Casts Shadow" checkbox in the editor
-  belongs to a light, so the per-entity override is reachable from a scene file
-  and not from the UI. That matters more now than it did: opting a blended
-  surface back into casting is a cutoff away, but opting a solid one out is not.
+The per-entity override, `RenderableComponent::castsShadow`, is authored beside
+`isVisible` in the inspector's Renderable section. Both were serialized and read
+from the day they existed and neither had a control, because every "Casts Shadow"
+checkbox in the editor belongs to a LIGHT - so the override was reachable only by
+editing a scene file by hand. That matters once a material decides what it casts:
+a blended surface opts back in with a cutoff, and a solid one had no way to opt
+out at all.
 
 **Images carried inside a model.** A `.glb` keeps its textures as bytes in the
 binary chunk rather than as files beside it, and every texture in this engine is

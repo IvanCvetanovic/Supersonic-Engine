@@ -308,6 +308,32 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
     }
 
+    // RenderableComponent
+    //
+    // Both flags have been serialized and read since the day they existed, and
+    // neither had a control anywhere: every "Casts Shadow" checkbox in this
+    // panel belongs to a LIGHT, so an author could only reach these by editing
+    // the scene file by hand. That mattered more once a material could decide
+    // what it casts - a blended surface opts back in with a cutoff, but a solid
+    // one had no way to opt out at all.
+    if (registry.all_of<RenderableComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Renderable", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& renderable = registry.get<RenderableComponent>(entity);
+
+            ImGui::Checkbox("Visible##renderable", &renderable.isVisible);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Hidden here means not drawn AND not casting.");
+            }
+
+            ImGui::SameLine();
+            ImGui::Checkbox("Casts Shadow##renderable", &renderable.castsShadow);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("A receiver-only surface - a floor, a backdrop - costs\n"
+                                  "nothing to leave out of the eighteen depth passes.");
+            }
+        }
+    }
+
     ImGui::Spacing();
 
     // 2c. MaterialComponent - reaches the GPU via push constants.
