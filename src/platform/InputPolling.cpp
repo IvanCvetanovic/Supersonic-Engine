@@ -12,6 +12,11 @@ namespace Supersonic {
 namespace {
 float g_pendingScroll = 0.0f;
 
+// Characters since the last Poll. GLFW hands them over one at a time from a
+// callback, and the snapshot wants them all together.
+unsigned int g_pendingCharacters[Text::kMaxCharacters]{};
+int g_pendingCharacterCount = 0;
+
 // What was last handed to GLFW. Compared rather than set every frame:
 // glfwSetInputMode is not free, and under GLFW_CURSOR_DISABLED re-setting the
 // same mode is not documented as a no-op on every platform.
@@ -124,6 +129,39 @@ void InputPolling::AccumulateScroll(float delta) {
     g_pendingScroll += delta;
 }
 
+void InputPolling::AccumulateCharacter(unsigned int codepoint) {
+    // Full when a frame has run long enough to collect thirty-two keystrokes,
+    // which typing does not do. Dropping the newest keeps what was typed in
+    // order; a ring buffer would keep the count and reorder the name.
+    if (g_pendingCharacterCount >= Text::kMaxCharacters) return;
+    g_pendingCharacters[g_pendingCharacterCount++] = codepoint;
+}
+
+void InputPolling::InstallCallbacks(Window& window) {
+    GLFWwindow* native = window.GetNativeWindow();
+    if (!native) return;
+
+    // GLFW returns whatever was installed before. Non-null here means something
+    // else - ImGui - already owns it, and this call has just taken it away:
+    // every text box in the editor would stop accepting characters, and the
+    // mouse wheel would stop scrolling panels, with nothing to connect the
+    // symptom to the cause. Ordering cannot be enforced at compile time, so it
+    // is reported at run time instead.
+    const auto previousChar = glfwSetCharCallback(native, [](GLFWwindow*, unsigned int codepoint) {
+        InputPolling::AccumulateCharacter(codepoint);
+    });
+    const auto previousScroll = glfwSetScrollCallback(native, [](GLFWwindow*, double, double y) {
+        InputPolling::AccumulateScroll(static_cast<float>(y));
+    });
+
+    if (previousChar || previousScroll) {
+        SUPERSONIC_LOG_ERROR("Input")
+            << "Input callbacks were installed after something else claimed them; "
+               "that something else will stop receiving events. InstallCallbacks "
+               "must run before the ImGui backend is initialised." << std::endl;
+    }
+}
+
 void InputPolling::Poll(Window& window) {
     GLFWwindow* native = window.GetNativeWindow();
     if (!native) return;
@@ -152,6 +190,15 @@ void InputPolling::Poll(Window& window) {
 
     state.scroll = g_pendingScroll;
     g_pendingScroll = 0.0f;
+
+    // Drained, not copied: the accumulators belong to the callbacks and the
+    // snapshot belongs to the frame, and a character delivered twice is a
+    // letter typed twice.
+    state.textCharacterCount = g_pendingCharacterCount;
+    for (int i = 0; i < g_pendingCharacterCount; ++i) {
+        state.textCharacters[i] = g_pendingCharacters[i];
+    }
+    g_pendingCharacterCount = 0;
 
     // The first gamepad only. Split-screen would want the rest, and the
     // snapshot has room for it, but a single pad is what one player needs.

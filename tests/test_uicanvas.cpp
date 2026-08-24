@@ -308,6 +308,156 @@ static void testContainsIncludesTheEdges() {
     CHECK(!UICanvas::Contains(rect, glm::vec2(rect.max.x + 0.5f, rect.max.y)));
 }
 
+// --- typing -----------------------------------------------------------------
+//
+// A name box looks like the simplest widget there is and is the one place in
+// the UI where UTF-8 has to be got right: every edit is a splice into a
+// std::string, and a splice made in the middle of a character produces a value
+// the font will not draw and the script ABI must not hand to a plugin.
+
+namespace {
+
+UICanvas::UIKeyboard typed(const unsigned int* characters, int count) {
+    UICanvas::UIKeyboard keyboard;
+    keyboard.characters = characters;
+    keyboard.characterCount = count;
+    return keyboard;
+}
+
+// Applies one frame and returns the new state, so a case reads as a sequence of
+// keystrokes rather than as bookkeeping.
+UICanvas::UITextEditState apply(UICanvas::UITextEditState state, std::string& value,
+                                int maxLength, const UICanvas::UIKeyboard& keyboard) {
+    return UICanvas::EditText(state, value, maxLength, keyboard);
+}
+
+} // namespace
+
+static void testTypingInsertsAtTheCaret() {
+    std::string value = "Ivan";
+    UICanvas::UITextEditState state{};
+    state.caret = 2;
+
+    const unsigned int characters[] = { 'X' };
+    state = apply(state, value, 0, typed(characters, 1));
+
+    CHECK_MSG(value == "IvXan", value);
+    CHECK_EQ(state.caret, 3);
+}
+
+static void testBackspaceRemovesAWholeCharacterNotAByte() {
+    // The failure this exists for: erasing one byte of a two-byte letter leaves
+    // a lone continuation byte, which is not valid UTF-8. The box then draws a
+    // replacement glyph nobody typed, and getText hands the plugin a broken
+    // string with no way to know.
+    std::string value = "caf\xC3\xA9";        // "café", six bytes, four characters
+    CHECK_EQ(value.size(), size_t{5});
+
+    UICanvas::UITextEditState state{};
+    state.caret = static_cast<int>(value.size());
+
+    UICanvas::UIKeyboard keyboard;
+    keyboard.backspace = true;
+    state = apply(state, value, 0, keyboard);
+
+    CHECK_MSG(value == "caf", value);
+    CHECK_MSG(state.caret == 3, "and the caret follows it, still on a boundary");
+}
+
+static void testMaxLengthCountsCharactersNotBytes() {
+    // A field authored to hold three that took three plain letters but only one
+    // accented one would be a bug report, not a design: the author counted what
+    // they can see.
+    std::string value;
+    UICanvas::UITextEditState state{};
+
+    const unsigned int accented[] = { 0x00E9u, 0x00E9u, 0x00E9u, 0x00E9u };  // é é é é
+    state = apply(state, value, 3, typed(accented, 4));
+
+    CHECK_MSG(value == "\xC3\xA9\xC3\xA9\xC3\xA9",
+              "three characters, even though they are six bytes");
+    CHECK_MSG(value.size() == size_t{6}, "and the fourth was refused, not truncated");
+    CHECK_EQ(state.caret, 6);
+}
+
+static void testTheCaretMovesByCharacters() {
+    std::string value = "\xC3\xA9""x";        // "éx": two characters, three bytes
+    UICanvas::UITextEditState state{};
+    state.caret = 0;
+
+    UICanvas::UIKeyboard right;
+    right.caretRight = true;
+    state = apply(state, value, 0, right);
+    CHECK_MSG(state.caret == 2, "one arrow press steps over the WHOLE two-byte letter");
+
+    UICanvas::UIKeyboard left;
+    left.caretLeft = true;
+    state = apply(state, value, 0, left);
+    CHECK_EQ(state.caret, 0);
+
+    UICanvas::UIKeyboard end;
+    end.caretEnd = true;
+    state = apply(state, value, 0, end);
+    CHECK_EQ(state.caret, 3);
+}
+
+static void testControlCodesAreNotCharacters() {
+    // GLFW's character callback does not deliver these, but the ABI's setText
+    // and a future paste path can, and a tab or a newline inside a one-line box
+    // draws as a hole.
+    std::string value;
+    UICanvas::UITextEditState state{};
+
+    const unsigned int characters[] = { '\n', '\t', 0x7Fu, 0xD800u, 0x110000u, 'A' };
+    state = apply(state, value, 0, typed(characters, 6));
+
+    CHECK_MSG(value == "A", "only the one that is a character survives");
+}
+
+static void testAnInactiveKeyboardChangesNothing() {
+    // Something else has the keyboard - an ImGui box in the inspector. The
+    // field keeps its focus and its caret and simply hears nothing, because
+    // losing what was typed so far would be worse than not accepting more.
+    std::string value = "Iva";
+    UICanvas::UITextEditState state{};
+    state.caret = 3;
+
+    const unsigned int characters[] = { 'n' };
+    UICanvas::UIKeyboard keyboard = typed(characters, 1);
+    keyboard.backspace = true;
+    keyboard.submit = true;
+    keyboard.active = false;
+
+    state = apply(state, value, 0, keyboard);
+    CHECK_MSG(value == "Iva", "nothing typed and nothing erased");
+    CHECK_EQ(state.caret, 3);
+    CHECK_MSG(!state.submitted, "and no submit, or a menu would answer itself");
+}
+
+static void testEnterAndEscapeAreOneFrameFlags() {
+    std::string value = "Ivan";
+    UICanvas::UITextEditState state{};
+    state.caret = 4;
+
+    UICanvas::UIKeyboard enter;
+    enter.submit = true;
+    state = apply(state, value, 0, enter);
+    CHECK_MSG(state.submitted, "Enter reports a submit");
+    CHECK_MSG(value == "Ivan", "and does not touch the value");
+
+    // Carried into a frame where nothing was pressed, a submit would be
+    // answered again every frame until the next keystroke.
+    state = apply(state, value, 0, UICanvas::UIKeyboard{});
+    CHECK_MSG(!state.submitted, "exactly one frame, like a button's click");
+
+    UICanvas::UIKeyboard escape;
+    escape.cancel = true;
+    state = apply(state, value, 0, escape);
+    CHECK_MSG(state.cancelled, "Escape reports a cancel");
+    CHECK_MSG(value == "Ivan",
+              "and leaves the text alone - a mistyped key must not be unrecoverable");
+}
+
 static void runTests() {
     testScaleIsOneAtTheReferenceHeight();
     testScaleSurvivesADegenerateScreen();
@@ -331,6 +481,14 @@ static void runTests() {
     testDraggingBackOnStillClicks();
     testDraggingOntoAButtonWhileHeldDoesNotPressIt();
     testAnInactivePointerDoesNothing();
+
+    testTypingInsertsAtTheCaret();
+    testBackspaceRemovesAWholeCharacterNotAByte();
+    testMaxLengthCountsCharactersNotBytes();
+    testTheCaretMovesByCharacters();
+    testControlCodesAreNotCharacters();
+    testAnInactiveKeyboardChangesNothing();
+    testEnterAndEscapeAreOneFrameFlags();
 }
 
 TEST_MAIN("test_uicanvas", 72)

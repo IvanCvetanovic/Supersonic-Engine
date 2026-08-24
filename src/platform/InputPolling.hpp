@@ -29,9 +29,21 @@ public:
     // losing focus is the guaranteed way out of a locked pointer.
     static void ApplyCursorMode(Window& window);
 
-    // GLFW delivers scroll through a callback rather than as pollable state, so
-    // the window forwards it here and it is consumed by the next Poll.
+    // Registers the callbacks for the input GLFW does not let you poll.
+    //
+    // Must run BEFORE ImGui's GLFW backend is initialised. That backend keeps
+    // whatever callback it displaces and calls it first on every event, so
+    // installed before it both get everything; installed after it, ours
+    // silently REPLACES ImGui's and every text box in the editor stops
+    // accepting characters, with nothing anywhere reporting why. There is no
+    // way to make that a compile error, so this logs one if it finds a callback
+    // already installed.
+    static void InstallCallbacks(Window& window);
+
+    // Scroll and characters arrive by callback rather than as pollable state,
+    // accumulate here, and are drained into the snapshot by the next Poll.
     static void AccumulateScroll(float delta);
+    static void AccumulateCharacter(unsigned int codepoint);
 };
 
 } // namespace Supersonic

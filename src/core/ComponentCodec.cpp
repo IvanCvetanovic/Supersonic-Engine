@@ -288,6 +288,42 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* field = registry.try_get<UITextFieldComponent>(entity)) {
+        // focused, submitted and the caret are absent for the same reason the
+        // button's press flags are: a field saved mid-edit would come back
+        // focused with a caret in the middle of a name nobody is typing, and a
+        // restored `submitted` would answer a question never asked.
+        //
+        // The TEXT is kept, because it is the answer - a scene that authored a
+        // default in the box should come back with it.
+        out << indent << "\"UITextField\": {\n";
+        out << indent << "  \"Text\": \"" << Json::Escape(field->text) << "\",\n";
+        out << indent << "  \"Placeholder\": \"" << Json::Escape(field->placeholder) << "\",\n";
+        out << indent << "  \"Anchor\": " << static_cast<int>(field->anchor) << ",\n";
+        out << indent << "  \"Offset\": [" << field->offset.x << ", " << field->offset.y << "],\n";
+        out << indent << "  \"Size\": [" << field->size.x << ", " << field->size.y << "],\n";
+        out << indent << "  \"FontSize\": " << field->fontSize << ",\n";
+        out << indent << "  \"CornerRadius\": " << field->cornerRadius << ",\n";
+        out << indent << "  \"MaxLength\": " << field->maxLength << ",\n";
+        out << indent << "  \"Color\": [" << field->color.x << ", " << field->color.y << ", "
+             << field->color.z << ", " << field->color.w << "],\n";
+        out << indent << "  \"FocusColor\": [" << field->focusColor.x << ", " << field->focusColor.y << ", "
+             << field->focusColor.z << ", " << field->focusColor.w << "],\n";
+        out << indent << "  \"BorderColor\": [" << field->borderColor.x << ", " << field->borderColor.y << ", "
+             << field->borderColor.z << ", " << field->borderColor.w << "],\n";
+        out << indent << "  \"FocusBorderColor\": [" << field->focusBorderColor.x << ", "
+             << field->focusBorderColor.y << ", " << field->focusBorderColor.z << ", "
+             << field->focusBorderColor.w << "],\n";
+        out << indent << "  \"TextColor\": [" << field->textColor.x << ", " << field->textColor.y << ", "
+             << field->textColor.z << ", " << field->textColor.w << "],\n";
+        out << indent << "  \"PlaceholderColor\": [" << field->placeholderColor.x << ", "
+             << field->placeholderColor.y << ", " << field->placeholderColor.z << ", "
+             << field->placeholderColor.w << "],\n";
+        out << indent << "  \"Enabled\": " << (field->enabled ? "true" : "false") << ",\n";
+        out << indent << "  \"Visible\": " << (field->visible ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
     if (const auto* panel = registry.try_get<UIPanelComponent>(entity)) {
         out << indent << "\"UIPanel\": {\n";
         out << indent << "  \"Anchor\": " << static_cast<int>(panel->anchor) << ",\n";
@@ -569,6 +605,32 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         button.textColor = readVec4(b["TextColor"], button.textColor);
         button.enabled = b["Enabled"].AsBool(true);
         button.visible = b["Visible"].AsBool(true);
+    }
+
+    if (node.Has("UITextField")) {
+        const auto& f = node["UITextField"];
+        auto& field = registry.emplace_or_replace<UITextFieldComponent>(entity);
+        field.text = f["Text"].AsString("");
+        field.placeholder = f["Placeholder"].AsString("Enter your name");
+        field.anchor = readAnchor(f["Anchor"], field.anchor);
+        field.offset = readVec2(f["Offset"], field.offset);
+        field.size = readVec2(f["Size"], field.size);
+        field.fontSize = f["FontSize"].AsFloat(26.0f);
+        field.cornerRadius = f["CornerRadius"].AsFloat(8.0f);
+        field.maxLength = static_cast<int>(f["MaxLength"].AsFloat(24.0f));
+        field.color = readVec4(f["Color"], field.color);
+        field.focusColor = readVec4(f["FocusColor"], field.focusColor);
+        field.borderColor = readVec4(f["BorderColor"], field.borderColor);
+        field.focusBorderColor = readVec4(f["FocusBorderColor"], field.focusBorderColor);
+        field.textColor = readVec4(f["TextColor"], field.textColor);
+        field.placeholderColor = readVec4(f["PlaceholderColor"], field.placeholderColor);
+        field.enabled = f["Enabled"].AsBool(true);
+        field.visible = f["Visible"].AsBool(true);
+
+        // The caret follows the text rather than being restored: a scene that
+        // authored a default in the box should open with the caret after it,
+        // which is where someone about to edit it would want to start.
+        field.caret = static_cast<int>(field.text.size());
     }
 
     if (node.Has("UIPanel")) {

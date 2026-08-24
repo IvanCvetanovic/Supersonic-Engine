@@ -19,13 +19,14 @@
 #include <stddef.h>
 
 /* Version history. A plugin built against a different number is refused.
+ *  10 - added getText and wasSubmitted to SupersonicScriptUI.
  *   9 - added mouseDelta and the cursor mode to SupersonicScriptInput.
  *   8 - added loadScene to SupersonicScriptWorld.
  *   7 - added SupersonicScriptWorld: contacts, spawn/destroy, velocity.
  *   6 - added SupersonicScriptData: authored parameters and per-entity state.
  *   5 - added the UI block.
  */
-#define SUPERSONIC_SCRIPT_API_VERSION 9
+#define SUPERSONIC_SCRIPT_API_VERSION 10
 
 /* Cursor modes, matching Supersonic::CursorMode. Plain ints because everything
  * across this boundary is POD, and named here so a plugin does not have to
@@ -142,6 +143,27 @@ typedef struct SupersonicScriptUI {
     void (*setText)(void* opaque, unsigned int entity, const char* text);
     void (*setVisible)(void* opaque, unsigned int entity, int visible);
     void (*setFill)(void* opaque, unsigned int entity, float fill);
+
+    /* Reads what somebody typed into a text field, into a buffer the CALLER
+     * owns - nothing engine-side may be pointed at across this boundary, and a
+     * std::string certainly may not.
+     *
+     * Copies as much as fits and always NUL-terminates. If the value is longer
+     * than the buffer it is cut on a CHARACTER boundary, never through the
+     * middle of one: a truncation that split a multi-byte letter would hand the
+     * plugin bytes that are not valid UTF-8, and the plugin has no way to know.
+     *
+     * Returns the number of bytes written, not counting the terminator. */
+    int (*getText)(void* opaque, unsigned int entity, char* out, int capacity);
+
+    /* Enter was pressed in that field this frame. True for exactly one frame,
+     * like wasClicked.
+     *
+     * Its own entry rather than riding wasClicked, even though both mean "the
+     * player is done with this element": a plugin author reading the header has
+     * no way to guess that a field reports a submit as a click, and saying what
+     * it does is the header's whole job. */
+    int (*wasSubmitted)(void* opaque, unsigned int entity);
 } SupersonicScriptUI;
 
 /* Authored parameters, and scratch that survives a reload.
@@ -288,7 +310,7 @@ typedef void (*SupersonicScriptPluginRegisterFn)(SupersonicScriptHost* host);
 #  define SUPERSONIC_ABI_ASSERT(cond, msg) _Static_assert(cond, msg)
 #endif
 
-#if SUPERSONIC_SCRIPT_API_VERSION == 9
+#if SUPERSONIC_SCRIPT_API_VERSION == 10
 
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptInput) == 8 * sizeof(void*),
     "SupersonicScriptInput changed; bump SUPERSONIC_SCRIPT_API_VERSION");
@@ -296,7 +318,7 @@ SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptPhysics) == 3 * sizeof(void*),
     "SupersonicScriptPhysics changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptAnimation) == 3 * sizeof(void*),
     "SupersonicScriptAnimation changed; bump SUPERSONIC_SCRIPT_API_VERSION");
-SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptUI) == 6 * sizeof(void*),
+SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptUI) == 8 * sizeof(void*),
     "SupersonicScriptUI changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 SUPERSONIC_ABI_ASSERT(sizeof(SupersonicScriptData) == 4 * sizeof(void*),
     "SupersonicScriptData changed; bump SUPERSONIC_SCRIPT_API_VERSION");
@@ -319,7 +341,7 @@ SUPERSONIC_ABI_ASSERT(
     sizeof(SupersonicScriptContext) == 48 + 6 * sizeof(void*),
     "SupersonicScriptContext changed; bump SUPERSONIC_SCRIPT_API_VERSION");
 
-#endif /* SUPERSONIC_SCRIPT_API_VERSION == 9 */
+#endif /* SUPERSONIC_SCRIPT_API_VERSION == 10 */
 
 #ifdef __cplusplus
 }

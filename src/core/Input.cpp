@@ -45,6 +45,9 @@ bool g_windowFocused = true;
 // a previous position from the old coordinate space.
 CursorMode g_cursorAtLastUpdate = CursorMode::Normal;
 
+bool g_textCaptureActive = false;
+
+
 bool keyInRange(int key) { return key >= 0 && key <= Key::Last; }
 
 // Rescales the live region so a control leaving the deadzone starts at zero
@@ -60,8 +63,15 @@ float applyDeadzone(float value) {
 bool evaluateBinding(const ActionBindingStorage& binding, const RawInputState& state) {
     // Any source satisfies the action, which is what lets a keyboard and a
     // gamepad drive the same game without either knowing about the other.
-    for (const int key : binding.keys) {
-        if (keyInRange(key) && state.keys[key]) return true;
+    //
+    // Unless something is being typed into: then the keys belong to whatever is
+    // accepting the name, and the same letters would otherwise walk the player
+    // across the level while they spell it. The pad and the mouse below are not
+    // gated, because nobody types with a thumbstick.
+    if (!g_textCaptureActive) {
+        for (const int key : binding.keys) {
+            if (keyInRange(key) && state.keys[key]) return true;
+        }
     }
     for (const int button : binding.mouseButtons) {
         if (button >= 0 && button < MouseButton::Count && state.mouseButtons[button]) return true;
@@ -96,7 +106,14 @@ void Input::ClearBindings() {
     g_cursorSuppressed = false;
     g_windowFocused = true;
     g_cursorAtLastUpdate = CursorMode::Normal;
+    g_textCaptureActive = false;
 }
+
+const unsigned int* Input::TypedCharacters() { return g_current.textCharacters; }
+int Input::TypedCharacterCount() { return g_current.textCharacterCount; }
+
+void Input::SetTextCaptureActive(bool active) { g_textCaptureActive = active; }
+bool Input::TextCaptureActive() { return g_textCaptureActive; }
 
 void Input::SetCursorMode(CursorMode mode) { g_requestedCursor = mode; }
 CursorMode Input::RequestedCursorMode() { return g_requestedCursor; }
@@ -228,6 +245,18 @@ void Input::Update(const RawInputState& state) {
         // key already held at startup firing its action on frame one.
         g_actionPrevious.try_emplace(name, down);
     }
+
+    // Nothing special happens when the keyboard changes hands, and that is the
+    // decision rather than the omission.
+    //
+    // The first draft suppressed the edges either side of it, reasoning that a
+    // release nobody performed is not a release. But the LEVEL changes - every
+    // key-driven action reads false the moment the veto goes up - and an edge
+    // that does not fire when the level changes is worse than one that fires
+    // without a finger behind it: a game tracking movement by edges would still
+    // believe the player was walking, and the run animation would stay stuck
+    // mid-stride for as long as the name took to type. The edge and the level
+    // agreeing is the property worth keeping.
 }
 
 bool Input::IsDown(const std::string& action) {
@@ -254,9 +283,13 @@ float Input::GetAxis(const std::string& axis) {
     if (it == g_axes.end()) return 0.0f;
     const AxisBindingStorage& binding = it->second;
 
+    // Gated for the same reason the action bindings are: while a name is being
+    // typed, A and D are letters.
     float keyboard = 0.0f;
-    if (keyInRange(binding.positiveKey) && g_current.keys[binding.positiveKey]) keyboard += 1.0f;
-    if (keyInRange(binding.negativeKey) && g_current.keys[binding.negativeKey]) keyboard -= 1.0f;
+    if (!g_textCaptureActive) {
+        if (keyInRange(binding.positiveKey) && g_current.keys[binding.positiveKey]) keyboard += 1.0f;
+        if (keyInRange(binding.negativeKey) && g_current.keys[binding.negativeKey]) keyboard -= 1.0f;
+    }
 
     float pad = 0.0f;
     if (g_current.padConnected && binding.padAxis >= 0 && binding.padAxis < Pad::AxisCount) {

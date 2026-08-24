@@ -150,16 +150,19 @@ static void testApiVersionIsPinned() {
     // Version 8 added loadScene to the world block - a widening, but a plugin
     // built against 7 still has a world struct one pointer short, and the
     // engine would read past the end of it. Version 9 widened the INPUT block
-    // the same way, with the mouse delta and the cursor mode.
-    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 9);
+    // the same way, with the mouse delta and the cursor mode, and version 10
+    // the UI block, with reading a text field and hearing it submitted.
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 10);
 
     // The world block grew, so its size is pinned here too. This is the struct
     // most likely to be widened next, and a plugin whose copy is shorter than
     // the engine's is the exact failure the version gate exists to prevent.
     CHECK_EQ(sizeof(SupersonicScriptWorld), 9 * sizeof(void*));
 
-    // And the input block, for the same reason and now for the same history.
+    // And the input and UI blocks, for the same reason and now for the same
+    // history.
     CHECK_EQ(sizeof(SupersonicScriptInput), 8 * sizeof(void*));
+    CHECK_EQ(sizeof(SupersonicScriptUI), 8 * sizeof(void*));
 
     // Context layout is part of the ABI. Offsets rather than a total size: the
     // total moves with padding on a different platform, while an offset that

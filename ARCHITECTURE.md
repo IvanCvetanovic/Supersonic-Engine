@@ -650,12 +650,91 @@ first-person game steered by holding right-click. `EditorCamera` still polls GLF
 directly and still requires the button, which is correct for an editor viewport
 where the pointer is genuinely shared.
 
-Scripts reach it through `SupersonicScriptInput` at ABI version 9: `mouseDelta`,
-`setCursorMode` and `cursorMode`. The delta is not an axis — an axis is bipolar
-and clamped to ±1, which is right for a stick and wrong for a mouse, where the
-magnitude is the movement and there is no maximum. `cursorMode` reports the
-effective mode, so a script tests whether it actually has the pointer before
-treating motion as a look.
+Scripts reach it through `SupersonicScriptInput`: `mouseDelta`, `setCursorMode`
+and `cursorMode`. The delta is not an axis — an axis is bipolar and clamped to
+±1, which is right for a stick and wrong for a mouse, where the magnitude is the
+movement and there is no maximum. `cursorMode` reports the effective mode, so a
+script tests whether it actually has the pointer before treating motion as a
+look.
+
+### 6c. Who owns the keyboard
+
+The same shape one layer up, and the same reason it needs one. Text cannot be
+polled: shift, dead keys, Caps Lock and the layout all sit between a key going
+down and a character existing, and none of it is recoverable from an array of
+booleans. GLFW delivers characters through a callback, so `InputPolling`
+accumulates them and drains them into `RawInputState` — after which they are an
+ordinary field a test fills in by hand, exactly like every other.
+
+`InputPolling::InstallCallbacks` runs **before** the renderer, because the
+renderer initialises ImGui's GLFW backend and that backend keeps whatever
+callback it displaces and calls it first. Installed before it, both get every
+event. Installed after, ours silently replaces ImGui's and every text box in the
+editor stops accepting characters, with nothing reporting why — so the function
+checks GLFW's return value and logs if it landed second. Nothing else can catch
+that ordering. Registering the character callback also installed the scroll one,
+which had been declared, documented and never registered: `AccumulateScroll` had
+no callers at all, so `Input::Scroll()` had returned zero since the day it was
+written. Both are one line in the same function now. That much is readable from
+the code; that a wheel event actually arrives is not something a headless run
+can show, and `Input::Scroll()` still has no consumer in the engine.
+
+**`Input::SetTextCaptureActive` is the keyboard's veto**, and ImGui's own
+`io.WantTextInput` is not enough on its own: it knows about ImGui's widgets and
+a field drawn by this canvas is invisible to it, so typing a name would also
+walk the player forward and trip every editor shortcut on the way. While raised,
+key-derived sources contribute nothing to actions and axes. Pad and mouse sources
+are untouched — nobody types with a thumbstick, and `Fire` is bound to the same
+mouse button that clicks the field — and the raw `IsKeyDown`/`WasKeyPressed`
+queries stay truthful, because the Escape hatch out of a locked cursor depends
+on them working while a field has focus.
+
+Taking the keyboard away fires the ordinary edges, and that is a decision. The
+first draft suppressed them, reasoning that a release nobody performed is not a
+release; but the *level* changes, and an edge that does not fire when the level
+does is worse — a game tracking movement by edges would still believe the player
+was walking, with the run animation stuck mid-stride for as long as the name
+took to type.
+
+The flag is **assigned every frame** from `AnyTextFieldFocused`, in
+`SupersonicApp`, rather than raised by `UIInput` and cleared elsewhere. A clear
+that was ever missed — a collapsed panel, a render path that skipped the HUD —
+would suppress every key forever with nothing on screen to explain it. Here
+there is no clear to miss, and `UIInput` stays free of global state as well as
+free of a window.
+
+**Focus is the first decision in `UIInput` that is about the scene** rather than
+about one element. A button resolves entity by entity because the answer depends
+only on where the pointer is; focus cannot, because exactly one field may hold
+it — so one pass decides and a second applies. A press *edge* decides outright:
+on a field it takes focus, anywhere else (another field, a button, empty screen)
+it gives it up. Absent a press, focus is kept, because typing does not involve
+the mouse and losing a half-typed name to a drifting pointer would make the
+widget unusable. A press from a pointer with no position — the cursor is locked,
+so this is the player firing — decides nothing.
+
+`UICanvas::EditText` is the rule itself, and it is where UTF-8 has to be right:
+every edit is a splice into a `std::string`, and one made inside a character
+produces a value the font will not draw and the ABI must not hand to a plugin.
+Backspace removes a whole codepoint, the caret moves by codepoints, and
+`maxLength` counts **characters** — a field authored to hold 24 that took 24
+plain letters but 12 accented ones would be a bug report, not a design. Bytes
+are real in exactly one other place, `getText`'s copy-out buffer, which truncates
+on a character boundary; conflating the two limits is the mistake.
+
+One honest gap: characters are applied before the edit keys within a frame, so
+typing a letter and pressing Backspace inside the same 16 ms erases what was
+before the letter and keeps it. That is the price of not carrying a merged,
+ordered event queue — the only thing such a queue would buy over polling is the
+OS repeat delay for Backspace, which ImGui already knows.
+
+**None of this can be seen in a headless screenshot, and that is not new.**
+`--screenshot` captures the offscreen 3D target, while the whole HUD is drawn
+into an ImGui draw list that composites in the ImGui pass — so no button, label
+or panel has ever appeared in one either. What a screenshot cannot reach, the
+tests do: the rule in `test_uicanvas`, the arbitration in `test_uiinput`, the
+round trip in `test_serialize`. What neither reaches is the character callback
+itself and the caret blinking, and those want a person and a keyboard.
 
 ### 7. Physics
 

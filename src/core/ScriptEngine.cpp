@@ -176,8 +176,16 @@ int scriptUiIsHovered(void* opaque, unsigned int entityId) {
     const auto entity = uiEntity(opaque, entityId, registry);
     if (entity == entt::null) return 0;
 
-    const auto* button = registry->try_get<UIButtonComponent>(entity);
-    return (button && button->hovered) ? 1 : 0;
+    // Whichever kind of element it is, for the same reason setText takes both:
+    // a caller should not have to know what it is holding to ask whether the
+    // pointer is over it.
+    if (const auto* button = registry->try_get<UIButtonComponent>(entity)) {
+        if (button->hovered) return 1;
+    }
+    if (const auto* field = registry->try_get<UITextFieldComponent>(entity)) {
+        if (field->hovered) return 1;
+    }
+    return 0;
 }
 
 void scriptUiSetText(void* opaque, unsigned int entityId, const char* text) {
@@ -189,6 +197,52 @@ void scriptUiSetText(void* opaque, unsigned int entityId, const char* text) {
     // which kind of element it is holding to change what it says.
     if (auto* label = registry->try_get<UITextComponent>(entity)) label->text = text;
     if (auto* button = registry->try_get<UIButtonComponent>(entity)) button->label = text;
+    if (auto* field = registry->try_get<UITextFieldComponent>(entity)) {
+        field->text = text;
+        // The caret indexes the string that was just replaced. Left alone it
+        // could point into the middle of a character, or past the end.
+        field->caret = static_cast<int>(field->text.size());
+    }
+}
+
+int scriptUiGetText(void* opaque, unsigned int entityId, char* out, int capacity) {
+    if (!out || capacity <= 0) return 0;
+    out[0] = '\0';
+
+    entt::registry* registry = nullptr;
+    const auto entity = uiEntity(opaque, entityId, registry);
+    if (entity == entt::null) return 0;
+
+    const auto* field = registry->try_get<UITextFieldComponent>(entity);
+    if (!field) return 0;
+
+    // Bytes here, unlike the field's own maxLength, which counts characters.
+    // Two different limits: one is what the author said the name may be, the
+    // other is how big a buffer the plugin happened to bring.
+    int length = static_cast<int>(field->text.size());
+    if (length > capacity - 1) {
+        length = capacity - 1;
+        // Backed onto a character boundary. Cutting through a multi-byte letter
+        // would hand the plugin bytes that are not valid UTF-8, with no way for
+        // it to know - so the engine gives back one character less instead.
+        while (length > 0 &&
+               (static_cast<unsigned char>(field->text[static_cast<size_t>(length)]) & 0xC0u) == 0x80u) {
+            --length;
+        }
+    }
+
+    for (int i = 0; i < length; ++i) out[i] = field->text[static_cast<size_t>(i)];
+    out[length] = '\0';
+    return length;
+}
+
+int scriptUiWasSubmitted(void* opaque, unsigned int entityId) {
+    entt::registry* registry = nullptr;
+    const auto entity = uiEntity(opaque, entityId, registry);
+    if (entity == entt::null) return 0;
+
+    const auto* field = registry->try_get<UITextFieldComponent>(entity);
+    return (field && field->submitted) ? 1 : 0;
 }
 
 void scriptUiSetVisible(void* opaque, unsigned int entityId, int visible) {
@@ -540,7 +594,8 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
         ctx.animation = &animation;
 
         const SupersonicScriptUI ui{&registry, scriptUiWasClicked, scriptUiIsHovered,
-                                    scriptUiSetText, scriptUiSetVisible, scriptUiSetFill};
+                                    scriptUiSetText, scriptUiSetVisible, scriptUiSetFill,
+                                    scriptUiGetText, scriptUiWasSubmitted};
         ctx.ui = &ui;
 
         const SupersonicScriptData data{&registry, scriptParam, scriptGetState, scriptSetState};

@@ -385,6 +385,113 @@ static void testAVetoedCaptureAlsoRebasesTheDelta() {
               "the editor taking the pointer back must not read as a look");
 }
 
+// --- typing, and who the keyboard belongs to --------------------------------
+
+static void testTypedCharactersArriveAndDoNotLinger() {
+    Input::ClearBindings();
+
+    RawInputState typed{};
+    typed.textCharacters[0] = 'H';
+    typed.textCharacters[1] = 0x00E9;   // e-acute, to prove this is not ASCII
+    typed.textCharacterCount = 2;
+    frame(typed);
+
+    CHECK_EQ(Input::TypedCharacterCount(), 2);
+    CHECK_MSG(Input::TypedCharacters()[0] == 'H', "in the order they were typed");
+    CHECK_MSG(Input::TypedCharacters()[1] == 0x00E9u,
+              "and as codepoints, not bytes - GLFW hands over UTF-32");
+
+    // A frame with no typing must not repeat the last one, or a held key would
+    // spell its letter forever.
+    frame(RawInputState{});
+    CHECK_EQ(Input::TypedCharacterCount(), 0);
+}
+
+static void testTypingDoesNotAlsoWalkThePlayer() {
+    // The failure this exists for: ImGui's io.WantTextInput only knows about
+    // ImGui's own widgets, so a field drawn by the engine's UI canvas is
+    // invisible to it. Without a veto of our own, typing a name would spell it
+    // and walk the character across the level at the same time.
+    Input::ClearBindings();
+    Input::BindActionKey("Fire", Key::F);
+    Input::BindAxisKeys("MoveX", Key::D, Key::A);
+
+    RawInputState pressing{};
+    pressing.keys[Key::F] = true;
+    pressing.keys[Key::D] = true;
+    frame(pressing);
+    CHECK_MSG(Input::IsDown("Fire"), "the game has the keyboard to begin with");
+    CHECK_NEAR(Input::GetAxis("MoveX"), 1.0f);
+
+    Input::SetTextCaptureActive(true);
+    frame(pressing);
+    CHECK_MSG(!Input::IsDown("Fire"), "a bound key is a letter while something is being typed into");
+    CHECK_NEAR(Input::GetAxis("MoveX"), 0.0f);
+
+    // But the raw queries stay truthful: the field itself has to read Backspace
+    // through something, and so does the host's Escape hatch.
+    CHECK_MSG(Input::IsKeyDown(Key::D), "the key really is down and must still say so");
+
+    Input::SetTextCaptureActive(false);
+    frame(pressing);
+    CHECK_MSG(Input::IsDown("Fire"), "and it comes back when the field is done with it");
+}
+
+static void testAPadStillDrivesTheGameWhileANameIsTyped() {
+    // Only KEY sources are taken away. Nobody types with a thumbstick, and a
+    // controller player should not have their game stop because a name box on
+    // screen took focus.
+    Input::ClearBindings();
+    Input::BindActionKey("Fire", Key::F);
+    Input::BindActionPadButton("Fire", Pad::A);
+    Input::BindActionMouseButton("Fire", MouseButton::Left);
+
+    Input::SetTextCaptureActive(true);
+
+    RawInputState pad{};
+    pad.padConnected = true;
+    pad.padButtons[Pad::A] = true;
+    frame(pad);
+    CHECK_MSG(Input::IsDown("Fire"), "the gamepad keeps working while a name is typed");
+
+    RawInputState mouse{};
+    mouse.mouseButtons[MouseButton::Left] = true;
+    frame(mouse);
+    CHECK_MSG(Input::IsDown("Fire"), "and so does the mouse");
+}
+
+static void testTakingTheKeyboardIsAnEdgeLikeAnyOther() {
+    // The first draft of this suppressed both edges, reasoning that a release
+    // nobody performed is not a release. That is the wrong invariant to keep.
+    // The LEVEL changes - the action reads false the moment the veto is up - so
+    // an edge that did not fire would leave a game tracking movement by edges
+    // convinced the player was still walking, with the run animation stuck
+    // mid-stride for as long as the name took to type.
+    Input::ClearBindings();
+    Input::BindActionKey("Walk", Key::W);
+
+    RawInputState held{};
+    held.keys[Key::W] = true;
+    frame(held);
+    frame(held);
+    CHECK_MSG(Input::IsDown("Walk") && !Input::WasPressed("Walk"), "held, and past its press edge");
+
+    Input::SetTextCaptureActive(true);
+    frame(held);
+    CHECK_MSG(!Input::IsDown("Walk"), "the action goes quiet, because W is now a letter");
+    CHECK_MSG(Input::WasReleased("Walk"),
+              "and says so exactly once, so a walk animation can stop");
+
+    frame(held);
+    CHECK_MSG(!Input::WasReleased("Walk"), "once, not every frame the name is being typed");
+
+    Input::SetTextCaptureActive(false);
+    frame(held);
+    CHECK_MSG(Input::IsDown("Walk"), "the action comes back with the keyboard");
+    CHECK_MSG(Input::WasPressed("Walk"),
+              "and reports the press, because the key really is still down");
+}
+
 static void runTests() {
     testActionRespondsToItsKey();
     testPressIsAnEdgeNotALevel();
@@ -407,6 +514,11 @@ static void runTests() {
     testCapturingTheMouseDoesNotSnapTheView();
     testReleasingTheMouseDoesNotSnapEither();
     testAVetoedCaptureAlsoRebasesTheDelta();
+
+    testTypedCharactersArriveAndDoNotLinger();
+    testTypingDoesNotAlsoWalkThePlayer();
+    testAPadStillDrivesTheGameWhileANameIsTyped();
+    testTakingTheKeyboardIsAnEdgeLikeAnyOther();
 }
 
 TEST_MAIN("test_input", 50)

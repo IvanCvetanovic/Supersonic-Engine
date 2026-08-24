@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include <glm/glm.hpp>
 
@@ -112,6 +113,67 @@ struct UIButtonState {
 // Advances one button. `previous` is that button's state last frame.
 UIButtonState UpdateButton(const UIButtonState& previous, const UIRect& rect,
                            const UIPointer& pointer);
+
+// ---------------------------------------------------------------------------
+// Typing
+//
+// The other half of "the HUD could be drawn but not touched": it could be read
+// but not written to. A game could show a score and could not ask for a name.
+// ---------------------------------------------------------------------------
+
+// The keyboard for one frame, assembled by the caller.
+//
+// Characters and edit keys arrive from different places on purpose. A character
+// is what the OS decided the keystroke MEANS - after shift, after the layout,
+// after a dead key - and only a character callback knows it. Backspace is not a
+// character and has to repeat while held, and the only thing here that knows
+// the OS repeat delay is ImGui. Merging them into one ordered event queue was
+// the first design and it bought exactly that ordering, at the price of a
+// second GLFW callback and a discriminated union; see EditText for the one case
+// where not having it shows.
+struct UIKeyboard {
+    // Not owned, and valid only for this frame.
+    const unsigned int* characters{nullptr};
+    int characterCount{0};
+
+    bool backspace{false};
+    bool deleteForward{false};
+    bool caretLeft{false};
+    bool caretRight{false};
+    bool caretHome{false};
+    bool caretEnd{false};
+
+    bool submit{false};   // Enter
+    bool cancel{false};   // Escape
+
+    // False when something else owns the keyboard - an ImGui text box, or an
+    // editor that is not playing. Nothing is typed and nothing takes focus, but
+    // focus already held is KEPT: moving the mouse off the viewport must not
+    // lose half a typed name.
+    bool active{true};
+};
+
+// Where the caret is, and what the field was asked to do this frame.
+struct UITextEditState {
+    // A BYTE index into the value, always on a UTF-8 lead byte. Bytes rather
+    // than characters because every edit is a splice into a std::string, and a
+    // character index would have to be converted at every one of them.
+    int caret{0};
+
+    // True for exactly one frame, like a button's `clicked`.
+    bool submitted{false};
+    bool cancelled{false};
+};
+
+// Applies one frame of typing to `value`, in place.
+//
+// maxLength counts CHARACTERS, not bytes, and zero or less means no limit. A
+// field authored to hold 24 that took 24 plain letters but only 12 accented
+// ones would be a bug report rather than a design - the author counted what
+// they can see. Bytes matter in exactly one other place, the fixed buffer the
+// script ABI copies into, and conflating the two limits is the mistake.
+UITextEditState EditText(const UITextEditState& previous, std::string& value,
+                         int maxLength, const UIKeyboard& keyboard);
 
 } // namespace UICanvas
 

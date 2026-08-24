@@ -92,6 +92,157 @@ UIButtonState UpdateButton(const UIButtonState& previous, const UIRect& rect,
     return state;
 }
 
+namespace {
+
+// A byte that continues a character rather than starting one. Every edit here
+// steps over these, because a caret between two of them is inside a character
+// and every splice made there produces a string that is not valid UTF-8 - which
+// the font will not draw and the script ABI must not hand to a plugin.
+bool isContinuation(unsigned char byte) { return (byte & 0xC0u) == 0x80u; }
+
+int snapToLeadByte(const std::string& value, int index) {
+    const int size = static_cast<int>(value.size());
+    if (index <= 0) return 0;
+    if (index >= size) return size;
+    while (index > 0 && isContinuation(static_cast<unsigned char>(value[static_cast<size_t>(index)]))) {
+        --index;
+    }
+    return index;
+}
+
+int nextCharacter(const std::string& value, int index) {
+    const int size = static_cast<int>(value.size());
+    if (index >= size) return size;
+    ++index;
+    while (index < size && isContinuation(static_cast<unsigned char>(value[static_cast<size_t>(index)]))) {
+        ++index;
+    }
+    return index;
+}
+
+// How many CHARACTERS the string holds, which is what an author counts and is
+// not the same as how many bytes it takes.
+int characterCount(const std::string& value) {
+    int count = 0;
+    for (const char byte : value) {
+        if (!isContinuation(static_cast<unsigned char>(byte))) ++count;
+    }
+    return count;
+}
+
+int previousCharacter(const std::string& value, int index) {
+    if (index <= 0) return 0;
+    --index;
+    while (index > 0 && isContinuation(static_cast<unsigned char>(value[static_cast<size_t>(index)]))) {
+        --index;
+    }
+    return index;
+}
+
+// UTF-8 for one codepoint, appended. Returns how many bytes it took, or 0 for
+// something that is not a character worth having in a name: a control code, a
+// surrogate half - which is not a codepoint at all, only half of an encoding
+// GLFW does not use - or anything past the top of Unicode.
+int encodeUtf8(unsigned int codepoint, char out[4]) {
+    if (codepoint < 0x20u || codepoint == 0x7Fu) return 0;
+    if (codepoint >= 0xD800u && codepoint <= 0xDFFFu) return 0;
+    if (codepoint > 0x10FFFFu) return 0;
+
+    if (codepoint < 0x80u) {
+        out[0] = static_cast<char>(codepoint);
+        return 1;
+    }
+    if (codepoint < 0x800u) {
+        out[0] = static_cast<char>(0xC0u | (codepoint >> 6));
+        out[1] = static_cast<char>(0x80u | (codepoint & 0x3Fu));
+        return 2;
+    }
+    if (codepoint < 0x10000u) {
+        out[0] = static_cast<char>(0xE0u | (codepoint >> 12));
+        out[1] = static_cast<char>(0x80u | ((codepoint >> 6) & 0x3Fu));
+        out[2] = static_cast<char>(0x80u | (codepoint & 0x3Fu));
+        return 3;
+    }
+    out[0] = static_cast<char>(0xF0u | (codepoint >> 18));
+    out[1] = static_cast<char>(0x80u | ((codepoint >> 12) & 0x3Fu));
+    out[2] = static_cast<char>(0x80u | ((codepoint >> 6) & 0x3Fu));
+    out[3] = static_cast<char>(0x80u | (codepoint & 0x3Fu));
+    return 4;
+}
+
+} // namespace
+
+UITextEditState EditText(const UITextEditState& previous, std::string& value,
+                         int maxLength, const UIKeyboard& keyboard) {
+    UITextEditState state{};
+
+    // submitted and cancelled are one-frame flags and are deliberately not
+    // carried over, for the same reason a button's `clicked` is not: a submit
+    // that stayed true would be acted on every frame until the next keystroke.
+    state.caret = snapToLeadByte(value, previous.caret);
+
+    // Something else owns the keyboard. The caret is still snapped above -
+    // the value may have been changed by a script since - but nothing is typed
+    // and nothing is submitted.
+    if (!keyboard.active) return state;
+
+    // Characters first, then the edit keys.
+    //
+    // Within one frame that ordering is arbitrary and it is the one place not
+    // having a merged event queue shows: type 'x' and press Backspace inside
+    // the same frame and the backspace erases what was before the 'x' and keeps
+    // the 'x', rather than erasing it. Unreachable at typing speed and sixty
+    // frames a second, reachable during a hitch, and cheap to live with next to
+    // a second GLFW callback and a discriminated union.
+    // Counted once and kept up to date, rather than walked per character: a
+    // field is short and this loop is short, but recounting inside it makes the
+    // cost quadratic in the length of a name for no reason.
+    int length = maxLength > 0 ? characterCount(value) : 0;
+
+    for (int i = 0; i < keyboard.characterCount && keyboard.characters; ++i) {
+        char encoded[4];
+        const int bytes = encodeUtf8(keyboard.characters[i], encoded);
+        if (bytes == 0) continue;
+
+        // Characters, because that is what the author counted. Whole ones -
+        // there is no such thing as most of a character, and a value cut
+        // through the middle of one is a string the font will not draw and the
+        // script ABI must not hand to a plugin.
+        if (maxLength > 0 && length >= maxLength) continue;
+
+        value.insert(static_cast<size_t>(state.caret), encoded, static_cast<size_t>(bytes));
+        state.caret += bytes;
+        ++length;
+    }
+
+    if (keyboard.backspace && state.caret > 0) {
+        const int from = previousCharacter(value, state.caret);
+        value.erase(static_cast<size_t>(from), static_cast<size_t>(state.caret - from));
+        state.caret = from;
+    }
+
+    if (keyboard.deleteForward && state.caret < static_cast<int>(value.size())) {
+        const int to = nextCharacter(value, state.caret);
+        value.erase(static_cast<size_t>(state.caret), static_cast<size_t>(to - state.caret));
+    }
+
+    // The caret moves by CHARACTERS, not bytes: an arrow key that stepped one
+    // byte would land inside a two-byte letter and the next edit would split it.
+    if (keyboard.caretLeft)  state.caret = previousCharacter(value, state.caret);
+    if (keyboard.caretRight) state.caret = nextCharacter(value, state.caret);
+    if (keyboard.caretHome)  state.caret = 0;
+    if (keyboard.caretEnd)   state.caret = static_cast<int>(value.size());
+
+    state.submitted = keyboard.submit;
+    state.cancelled = keyboard.cancel;
+
+    // A last clamp, because a script may have replaced the value underneath a
+    // focused field between frames - setText is reachable from the plugin ABI -
+    // and every index above was computed against the string as it was.
+    state.caret = snapToLeadByte(value, state.caret);
+    return state;
+}
+
 } // namespace UICanvas
 
 } // namespace Supersonic

@@ -26,7 +26,8 @@ namespace UISystem {
 // to have a click target that does not match what is on screen is to compute
 // it twice.
 void Render(entt::registry& registry, const UIRect& gameRect,
-            const UICanvas::UIPointer& pointer);
+            const UICanvas::UIPointer& pointer,
+            const UICanvas::UIKeyboard& keyboard);
 
 } // namespace UISystem
 

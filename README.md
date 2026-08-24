@@ -75,6 +75,7 @@ code quietly contradicts.
 - **World queries** — raycast, sphere overlap and a ground check against *colliders* rather than render bounds, available to C++ and to hot-reloaded scripts
 - **Collision** — sort-and-sweep broadphase, exact sphere–sphere and sphere–box narrowphase, box–box by world AABB along the axis of least overlap; mass-weighted impulse response with Coulomb friction, slop-limited positional correction so stacks settle instead of vibrating, immovable collider-only obstacles, and non-resolving trigger volumes
 - **3D audio** on XAudio2 with a from-scratch WAV decoder, inverse-distance attenuation and listener-relative panning
+- **In-game UI** — text, panels, buttons and a text field, anchored so a HUD authored at one resolution survives every other; a script reads what was typed and hears it submitted
 - **Particle systems** with per-emitter pools, so two emitters cannot starve each other
 - **Job system** — a worker pool with a counter fence, used where the work is genuinely independent: terrain generation, per-vertex tangent bases and particle integration. Command recording, the transform hierarchy, scripts and collision response stay on the main thread on purpose, and the code says why
 - **Skeletal animation** — glTF skins and animation channels with LINEAR, STEP and CUBICSPLINE interpolation; joints are reordered parent-before-child at load so a pose is one forward pass, the joint palette lives in a storage buffer indexed per draw, the shadow pass skins from the same palette, and the render bounds follow the pose so an animated character is not culled against its bind box
@@ -331,6 +332,8 @@ Android "not functional"; extending that register forward costs nothing.
 - [x] More than one scene, switchable at runtime by a layer or a script
 - [x] Mouse capture: a script can lock the pointer, the camera looks without a
       button held, and losing the window always gives it back
+- [x] Text input: a HUD text field a game can author, type into and read back,
+      with the keyboard taken from the game while it has focus
 
 ### Next
 
@@ -348,9 +351,6 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
       place and not another
 - [ ] **Light culling.** Eight is still a hard cap. Which eight is now chosen by
       relevance and logged, but lifting the cap needs a froxel grid
-- [ ] **Text input.** Nothing can accept a typed name: the UI canvas has text,
-      panels and buttons but no field, and `RawInputState` is a polled snapshot
-      with nowhere for a character event to land
 - [ ] **Collision geometry beyond boxes, spheres and capsules**, and joints —
       the procedurally generated terrain is currently scenery you fall through
 

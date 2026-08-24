@@ -219,6 +219,38 @@ void mouseLookScript(SupersonicScriptContext* ctx) {
     ctx->rotation[0] = pitch < -limit ? -limit : (pitch > limit ? limit : pitch);
 }
 
+// Reads a name out of a text field and greets whoever typed it.
+//
+// The UI was one-way in both directions and this is the second one closing: a
+// button could be pressed and nothing could find out (fixed when the UI block
+// arrived), and a question could be drawn and never answered - there was
+// nothing on the canvas that could accept a typed name at all.
+//
+// Assign it to the entity that HAS the field. It reads its own entity, so the
+// same script serves as many name boxes as a screen has.
+void nameEntryScript(SupersonicScriptContext* ctx) {
+    if (!ctx->ui) return;
+
+    // Only when Enter was pressed. Reading every frame would work and would
+    // also mean a half-typed name is a name: "Iva" is not what anybody meant.
+    if (!ctx->ui->wasSubmitted(ctx->ui->opaque, ctx->entityId)) return;
+
+    // A stack buffer the ENGINE copies into. Nothing engine-side may be pointed
+    // at across this boundary - it would dangle the moment the plugin reloads -
+    // and getText cuts on a character boundary if the name is longer than this,
+    // so what arrives is always valid UTF-8 even when it is not all of it.
+    char name[64];
+    const int length = ctx->ui->getText(ctx->ui->opaque, ctx->entityId, name, sizeof(name));
+    if (length <= 0) return;
+
+    std::printf("[NameEntry] Hello, %s\n", name);
+
+    // Hide the box now it has been answered. A game would move to the next
+    // screen here; hiding it also hands the keyboard back, because a hidden
+    // field cannot hold focus.
+    ctx->ui->setVisible(ctx->ui->opaque, ctx->entityId, 0);
+}
+
 } // namespace
 
 extern "C" {
@@ -241,6 +273,7 @@ SUPERSONIC_SCRIPT_EXPORT void SupersonicScriptPluginRegister(SupersonicScriptHos
     host->registerScript(host->opaque, "ClickCounterScript", &ClickCounterScript);
     host->registerScript(host->opaque, "PatrolScript", &patrolScript);
     host->registerScript(host->opaque, "MouseLookScript", &mouseLookScript);
+    host->registerScript(host->opaque, "NameEntryScript", &nameEntryScript);
 }
 
 } // extern "C"

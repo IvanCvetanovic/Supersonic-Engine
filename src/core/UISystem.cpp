@@ -20,7 +20,8 @@ ImVec2 toVec(const glm::vec2& v) { return ImVec2(v.x, v.y); }
 } // namespace
 
 void Render(entt::registry& registry, const UIRect& gameRect,
-            const UICanvas::UIPointer& pointer) {
+            const UICanvas::UIPointer& pointer,
+            const UICanvas::UIKeyboard& keyboard) {
     const glm::vec2 screenSize = gameRect.size();
     if (screenSize.x < 1.0f || screenSize.y < 1.0f) return;
 
@@ -39,7 +40,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 
     // Before drawing, so a button drawn this frame reflects the pointer this
     // frame rather than lagging it by one.
-    UIInput::Update(registry, gameRect, pointer);
+    UIInput::Update(registry, gameRect, pointer, keyboard);
 
     // Panels first, then text, so a label always reads on top of its backdrop
     // regardless of the order the entities happen to be in.
@@ -106,6 +107,65 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 
                 draw->AddText(font, size, origin, toColor(textColor), button.label.c_str());
             }
+        }
+    }
+
+    // Fields between the buttons and the loose text, so a field's own contents
+    // read over its box and under nothing.
+    for (auto [entity, field] : registry.view<UITextFieldComponent>().each()) {
+        if (!field.visible) continue;
+
+        const UIRect rect = UICanvas::Place(field.anchor, field.offset * scale,
+                                            field.size * scale, gameRect);
+
+        const bool live = field.focused && field.enabled;
+        draw->AddRectFilled(toVec(rect.min), toVec(rect.max),
+                            toColor(live ? field.focusColor : field.color),
+                            field.cornerRadius * scale);
+        draw->AddRect(toVec(rect.min), toVec(rect.max),
+                      toColor(live ? field.focusBorderColor : field.borderColor),
+                      field.cornerRadius * scale, 0, live ? 2.0f * scale : 1.0f * scale);
+
+        const float size = field.fontSize * scale;
+        if (size < 1.0f) continue;
+
+        // The placeholder only while there is nothing to show. Dimmed, and
+        // never once a character has been typed, or a name would read as a
+        // suggestion.
+        const bool empty = field.text.empty();
+        const std::string& shown = empty ? field.placeholder : field.text;
+
+        const float padding = 10.0f * scale;
+        const ImVec2 measured = font->CalcTextSizeA(size, FLT_MAX, 0.0f, shown.c_str());
+        const float baseline = (rect.min.y + rect.max.y) * 0.5f - measured.y * 0.5f;
+        const ImVec2 origin(rect.min.x + padding, baseline);
+
+        if (!shown.empty()) {
+            draw->PushClipRect(ImVec2(rect.min.x + padding * 0.5f, rect.min.y),
+                               ImVec2(rect.max.x - padding * 0.5f, rect.max.y), true);
+            draw->AddText(font, size, origin,
+                          toColor(empty ? field.placeholderColor : field.textColor),
+                          shown.c_str());
+            draw->PopClipRect();
+        }
+
+        if (!live) continue;
+
+        // The caret, measured by asking the font how wide the text BEFORE it
+        // is. Deriving it from a character count would put it in the wrong
+        // place the moment a name contains a wide letter or an accent.
+        const std::string before = field.text.substr(
+            0, static_cast<size_t>(std::max(0, field.caret)));
+        const float caretX = origin.x +
+            font->CalcTextSizeA(size, FLT_MAX, 0.0f, before.c_str()).x;
+
+        // Blinking on the wall clock rather than on a frame counter, so it
+        // keeps time when the frame rate does not - and it stays lit for the
+        // longer half of the cycle, which is what makes a caret easy to find.
+        if (std::fmod(ImGui::GetTime(), 1.06) < 0.66) {
+            draw->AddLine(ImVec2(caretX, rect.min.y + padding),
+                          ImVec2(caretX, rect.max.y - padding),
+                          toColor(field.textColor), std::max(1.0f, scale));
         }
     }
 

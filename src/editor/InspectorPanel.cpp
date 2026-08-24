@@ -854,6 +854,53 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
     }
 
+    // UITextFieldComponent
+    if (registry.all_of<UITextFieldComponent>(entity)) {
+        if (ImGui::CollapsingHeader("HUD Text Field", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& field = registry.get<UITextFieldComponent>(entity);
+
+            char buffer[256];
+            std::snprintf(buffer, sizeof(buffer), "%s", field.text.c_str());
+            if (ImGui::InputText("Text##field", buffer, sizeof(buffer))) {
+                field.text = buffer;
+                // The caret is a byte offset into the string that just changed
+                // underneath it. Left alone it could point into the middle of a
+                // character, or past the end.
+                field.caret = static_cast<int>(field.text.size());
+            }
+
+            std::snprintf(buffer, sizeof(buffer), "%s", field.placeholder.c_str());
+            if (ImGui::InputText("Placeholder", buffer, sizeof(buffer))) {
+                field.placeholder = buffer;
+            }
+
+            drawAnchorCombo("Anchor##field", field.anchor);
+            ImGui::DragFloat2("Offset##field", glm::value_ptr(field.offset), 1.0f, -4000.0f, 4000.0f);
+            ImGui::DragFloat2("Size##field", glm::value_ptr(field.size), 1.0f, 8.0f, 4000.0f);
+            ImGui::DragFloat("Font Size##field", &field.fontSize, 0.5f, 4.0f, 300.0f);
+            ImGui::DragFloat("Corner Radius##field", &field.cornerRadius, 0.5f, 0.0f, 64.0f);
+            ImGui::DragInt("Max Length", &field.maxLength, 1.0f, 0, 512);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Characters, not bytes. 0 means no limit.");
+            }
+
+            ImGui::ColorEdit4("Background##field", glm::value_ptr(field.color));
+            ImGui::ColorEdit4("Focused", glm::value_ptr(field.focusColor));
+            ImGui::ColorEdit4("Border", glm::value_ptr(field.borderColor));
+            ImGui::ColorEdit4("Focus Border", glm::value_ptr(field.focusBorderColor));
+            ImGui::ColorEdit4("Text Color##field", glm::value_ptr(field.textColor));
+            ImGui::ColorEdit4("Placeholder Color", glm::value_ptr(field.placeholderColor));
+
+            ImGui::Checkbox("Enabled##field", &field.enabled);
+            ImGui::SameLine();
+            ImGui::Checkbox("Visible##field", &field.visible);
+
+            ImGui::TextDisabled("%s", field.focused ? "focused - typing goes here"
+                                                    : "not focused");
+            ImGui::TextDisabled("Scripts read it through ctx->ui->getText.");
+        }
+    }
+
     ImGui::Spacing();
 
     // Dynamic "Add Component" Dropdown Button
@@ -945,6 +992,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
         if (!registry.all_of<UIButtonComponent>(entity) && ImGui::MenuItem("HUD Button")) {
             registry.emplace<UIButtonComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<UITextFieldComponent>(entity) && ImGui::MenuItem("HUD Text Field")) {
+            registry.emplace<UITextFieldComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

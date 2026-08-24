@@ -65,6 +65,15 @@ constexpr int LeftTrigger = 4, RightTrigger = 5;
 constexpr int AxisCount = 6;
 } // namespace Pad
 
+namespace Text {
+// How many characters one frame can carry.
+//
+// A cap, not a queue. Typing produces a handful per frame and a frame that
+// takes two seconds - a level load - drops what will not fit, which is the
+// right trade for a name box and the wrong one the day a paste path is added.
+constexpr int kMaxCharacters = 32;
+} // namespace Text
+
 // One frame of raw device state, filled by the polling layer.
 //
 // A plain snapshot rather than a set of callbacks: edge detection needs the
@@ -80,6 +89,18 @@ struct RawInputState {
     bool padConnected{false};
     bool padButtons[Pad::ButtonCount]{};
     float padAxes[Pad::AxisCount]{};
+
+    // What was TYPED this frame, as Unicode codepoints in the order they
+    // arrived. Almost always empty.
+    //
+    // The one part of this snapshot that is not polled, because text cannot be:
+    // shift, dead keys, Caps Lock and the keyboard layout all sit between a key
+    // going down and a character existing, and none of that is recoverable from
+    // an array of booleans. GLFW delivers characters through a callback, so the
+    // polling layer accumulates them and drains them into here - after which
+    // they are an ordinary field a test fills in by hand.
+    unsigned int textCharacters[Text::kMaxCharacters]{};
+    int textCharacterCount{0};
 };
 
 // What the pointer is doing, in the terms a game means them.
@@ -188,6 +209,28 @@ public:
     // What should actually be applied to the window this frame: the request,
     // unless either veto is in force.
     static CursorMode EffectiveCursorMode();
+
+    // ---- Typing -----------------------------------------------------------
+
+    // The characters typed this frame, valid until the next Update. Empty on
+    // almost every frame.
+    static const unsigned int* TypedCharacters();
+    static int TypedCharacterCount();
+
+    // Something is accepting a typed name, so the keyboard is not the game's.
+    //
+    // The mirror of the cursor veto, and needed for the same reason at the
+    // other end: ImGui's own io.WantTextInput only knows about ImGui's widgets,
+    // so a field drawn by the engine's UI canvas is invisible to it and typing
+    // "Walter" would also walk the player forward and trip every editor
+    // shortcut on the way.
+    //
+    // While raised, KEY-derived sources contribute nothing to actions and axes.
+    // Pad and mouse sources are untouched - nobody types with a thumbstick -
+    // and the raw IsKeyDown/WasKeyPressed queries stay truthful, because the
+    // field itself has to read Backspace through something.
+    static void SetTextCaptureActive(bool active);
+    static bool TextCaptureActive();
 
     // Raw access, for the few places that legitimately want a specific key
     // rather than an action.

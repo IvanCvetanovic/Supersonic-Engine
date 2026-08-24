@@ -12,6 +12,7 @@
 #include "core/AnimationSystem.hpp"
 #include "core/MaterialSystem.hpp"
 #include "core/Input.hpp"
+#include "core/UIInput.hpp"
 #include "platform/InputPolling.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
@@ -136,6 +137,14 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
 
     m_window = std::make_unique<Window>(1280, 720,
                                         m_manifest.isGame ? m_manifest.title : "Supersonic Engine");
+
+    // Before the renderer, because the renderer initialises ImGui's GLFW
+    // backend and that backend chains to whatever it finds already installed.
+    // Installed after it instead, these would replace ImGui's own and every
+    // text box in the editor would stop accepting characters. There is no
+    // compile-time guard for the ordering; InstallCallbacks logs if it lands
+    // second.
+    InputPolling::InstallCallbacks(*m_window);
 
     auto requiredExtensions = m_window->GetRequiredExtensions();
     m_vulkanContext = std::make_unique<VulkanContext>(requiredExtensions);
@@ -796,7 +805,14 @@ void SupersonicApp::Run() {
         // Not in a shipped game: there Escape belongs to whatever the game
         // wants it for, and losing the window is still the guaranteed way out.
         if (!m_manifest.isGame) {
-            if (Input::WasKeyPressed(Key::Escape)) m_escapeReleasedCursor = true;
+            // Not while a name is being typed: Escape abandons a focused field,
+            // and the field consumes it a frame before this sees it. Without
+            // the guard, backing out of a text box would also drop the editor
+            // out of mouse-look. The raw key query is deliberately not gated by
+            // the text veto, precisely so this check still works.
+            if (!Input::TextCaptureActive() && Input::WasKeyPressed(Key::Escape)) {
+                m_escapeReleasedCursor = true;
+            }
             if (m_editorLayer->IsViewportHovered() &&
                 Input::IsMouseButtonDown(MouseButton::Left)) {
                 m_escapeReleasedCursor = false;
@@ -805,6 +821,19 @@ void SupersonicApp::Run() {
 
         Input::SuppressCursorCapture(m_escapeReleasedCursor || m_playMode.IsEditing() ||
                                      !m_editorLayer->IsViewportFocused());
+
+        // Who has the keyboard, decided the same way and in the same place.
+        //
+        // An assignment every frame rather than a flag something raises and
+        // something else clears: a clear that is ever missed - a panel
+        // collapsed, a render path that skips the HUD - would suppress every
+        // key forever with nothing on screen to explain it. Here there is no
+        // clear to miss.
+        //
+        // Read from the components rather than pushed by UIInput, so that file
+        // stays free of global state as well as free of a window, and the focus
+        // rules can be tested without resetting anything.
+        Input::SetTextCaptureActive(UIInput::AnyTextFieldFocused(m_registry));
         InputPolling::ApplyCursorMode(*m_window);
 
         const double currentTime = glfwGetTime();
@@ -861,8 +890,16 @@ void SupersonicApp::Run() {
             m_editorLayer->GetEditorCamera().Update(*m_window, deltaTime,
                                                     m_editorLayer->IsViewportHovered());
         } else {
+            // Both gates, because they cover different things and this camera
+            // polls the keyboard straight from GLFW, where neither Input's veto
+            // nor ImGui's callbacks can reach it. io.WantTextInput knows about
+            // ImGui's own widgets; TextCaptureActive knows about the HUD's, and
+            // a packaged game has only the second kind - so without it, typing a
+            // name into a field flies the camera forward, unconditionally, in
+            // exactly the shipped game this was built for.
             CameraSystem::Update(m_registry, *m_window, deltaTime,
-                                 m_editorLayer->IsViewportFocused() && !io.WantTextInput,
+                                 m_editorLayer->IsViewportFocused() && !io.WantTextInput &&
+                                     !Input::TextCaptureActive(),
                                  m_editorLayer->IsViewportHovered());
         }
 

@@ -356,6 +356,20 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     menuButton.fontSize = 26.0f;
     menuButton.enabled = false;
 
+    auto& nameBox = registry.emplace<UITextFieldComponent>(entity);
+    nameBox.text = "Ivan";
+    nameBox.placeholder = "Who is playing?";
+    nameBox.anchor = UIAnchor::BottomCenter;
+    nameBox.size = glm::vec2(420.0f, 52.0f);
+    nameBox.fontSize = 30.0f;
+    nameBox.maxLength = 12;
+    nameBox.enabled = false;
+    // Runtime state, set here on purpose: the round trip must NOT bring it
+    // back. A field saved mid-edit would come back focused, with a caret in
+    // the middle of a name nobody is typing.
+    nameBox.focused = true;
+    nameBox.submitted = true;
+
     auto& emitter = registry.emplace<ParticleEmitterComponent>(entity);
     emitter.maxParticles = 512u;
     emitter.emitRate = 33.0f;
@@ -561,6 +575,26 @@ static void testPrefabRoundTripsEveryField() {
             // Interaction state is derived; a clone must not arrive pressed.
             CHECK_MSG(!menu->pressed && !menu->clicked,
                       "a clone must not inherit a press that was in flight");
+        }
+
+        const auto* nameBox = registry.try_get<UITextFieldComponent>(clone);
+        CHECK_MSG(nameBox != nullptr, "prefab lost its UITextFieldComponent");
+        if (nameBox) {
+            CHECK_MSG(nameBox->text == "Ivan", nameBox->text);
+            CHECK_MSG(nameBox->placeholder == "Who is playing?", nameBox->placeholder);
+            CHECK(nameBox->anchor == UIAnchor::BottomCenter);
+            CHECK_NEAR(nameBox->size.x, 420.0f);
+            CHECK_EQ(nameBox->maxLength, 12);
+            CHECK_MSG(!nameBox->enabled, "a disabled field must come back disabled");
+
+            // Derived state, and the reason it is not in the format: a field
+            // that came back focused would hold the keyboard the moment the
+            // scene loaded, and a restored submit would answer a question
+            // nobody asked.
+            CHECK_MSG(!nameBox->focused && !nameBox->submitted,
+                      "a clone must not arrive focused or already answered");
+            CHECK_MSG(nameBox->caret == 4,
+                      "the caret follows the text it came back with, not a saved index");
         }
 
         const auto* emitter = registry.try_get<ParticleEmitterComponent>(clone);

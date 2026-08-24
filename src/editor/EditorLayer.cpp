@@ -257,6 +257,39 @@ UICanvas::UIPointer uiPointer(bool active) {
     return pointer;
 }
 
+// The keyboard for one frame, from two sources.
+//
+// Characters come from the ENGINE's snapshot, not from io.InputQueueCharacters,
+// and not only for layering: ImWchar is 16 bits in this build, so ImGui's queue
+// cannot carry a codepoint above the basic plane, while GLFW hands us UTF-32.
+//
+// The edit keys come from ImGui, because ImGui is the only thing here that
+// knows the operating system's key repeat delay and rate - and holding
+// Backspace has to erase more than one character. That split is why no key
+// callback is needed.
+UICanvas::UIKeyboard uiKeyboard(bool active) {
+    const ImGuiIO& io = ImGui::GetIO();
+
+    UICanvas::UIKeyboard keyboard;
+    keyboard.characters = Input::TypedCharacters();
+    keyboard.characterCount = Input::TypedCharacterCount();
+
+    keyboard.backspace     = ImGui::IsKeyPressed(ImGuiKey_Backspace, true);
+    keyboard.deleteForward = ImGui::IsKeyPressed(ImGuiKey_Delete, true);
+    keyboard.caretLeft     = ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true);
+    keyboard.caretRight    = ImGui::IsKeyPressed(ImGuiKey_RightArrow, true);
+    keyboard.caretHome     = ImGui::IsKeyPressed(ImGuiKey_Home, false);
+    keyboard.caretEnd      = ImGui::IsKeyPressed(ImGuiKey_End, false);
+    keyboard.submit        = ImGui::IsKeyPressed(ImGuiKey_Enter, false);
+    keyboard.cancel        = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+
+    // An ImGui widget already has the keyboard. Both it and a HUD field are fed
+    // by the same GLFW callback, so without this, renaming an entity in the
+    // inspector would also type into whatever field the scene happens to have.
+    keyboard.active = active && !io.WantTextInput;
+    return keyboard;
+}
+
 } // namespace
 
 void EditorLayer::buildGameView(entt::registry& registry) {
@@ -314,7 +347,7 @@ void EditorLayer::buildGameView(entt::registry& registry) {
         UISystem::Render(registry,
                          UIRect{ glm::vec2(origin.x, origin.y),
                                  glm::vec2(origin.x + size.x, origin.y + size.y) },
-                         uiPointer(true));
+                         uiPointer(true), uiKeyboard(true));
     }
 
     ImGui::End();
@@ -471,11 +504,18 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
     drawStatusBar();
 
-    // Hotkeys. Suppressed whenever ImGui is routing keys to a widget, so typing
-    // "Rock" into a text field no longer switches gizmo modes or wipes the scene.
+    // Hotkeys. Suppressed whenever anything is routing keys to a text box, so
+    // typing "Rock" into one no longer switches gizmo modes or wipes the scene.
+    //
+    // Two flags because there are two kinds of text box. io.WantTextInput
+    // covers ImGui's own - the inspector's name field, the content browser's
+    // filter. TextCaptureActive covers the HUD's, which ImGui has never heard
+    // of: without it, typing an R or an S into a field the GAME drew would
+    // still re-bind the gizmo and save the scene.
     const bool editing = !m_playMode || m_playMode->IsEditing();
 
-    if (!io.WantTextInput && !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+    if (!io.WantTextInput && !Input::TextCaptureActive() &&
+        !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
             const auto result = m_sceneManager->Save(registry);
             SetStatus(result.message, !result.ok);
@@ -660,7 +700,10 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
                          UIRect{ glm::vec2(viewportPos.x, viewportPos.y),
                                  glm::vec2(viewportPos.x + viewportPanelSize.x,
                                            viewportPos.y + viewportPanelSize.y) },
-                         uiPointer(uiOwnsPointer));
+                         uiPointer(uiOwnsPointer),
+                         // FOCUS, not hover: moving the pointer off the viewport
+                         // while typing must not lose half a name.
+                         uiKeyboard(m_viewportFocused));
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
             const ImVec2 mousePos = ImGui::GetMousePos();

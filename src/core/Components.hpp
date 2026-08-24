@@ -782,4 +782,55 @@ struct UIButtonComponent {
     bool clicked{false};
 };
 
+// A field: somewhere a player can type their name.
+//
+// The canvas could be read and not written to. It had text, panels and buttons,
+// so a game could show a score and offer a menu, and could not ask a single
+// question - which is why "nothing can accept a typed name" was a roadmap item
+// rather than a missing widget.
+//
+// Built like the button, one component rather than a panel plus a label, for
+// the same reason: a field is one thing to whoever is authoring the screen.
+struct UITextFieldComponent {
+    std::string text;
+
+    // Shown, dimmed, while the field is empty. A blank box does not say what
+    // it wants.
+    std::string placeholder{"Enter your name"};
+
+    UIAnchor anchor{UIAnchor::Center};
+    glm::vec2 offset{0.0f, 0.0f};
+    glm::vec2 size{360.0f, 56.0f};
+
+    float fontSize{26.0f};
+    float cornerRadius{8.0f};
+
+    // CHARACTERS, not bytes, because that is what the author counting them can
+    // see. Zero means no limit.
+    int maxLength{24};
+
+    glm::vec4 color{0.10f, 0.11f, 0.14f, 0.96f};
+    glm::vec4 focusColor{0.13f, 0.15f, 0.20f, 0.98f};
+    glm::vec4 borderColor{0.30f, 0.33f, 0.40f, 1.0f};
+    glm::vec4 focusBorderColor{1.0f, 0.48f, 0.24f, 1.0f};
+    glm::vec4 textColor{0.94f, 0.95f, 0.97f, 1.0f};
+    glm::vec4 placeholderColor{0.55f, 0.58f, 0.64f, 1.0f};
+
+    bool visible{true};
+    bool enabled{true};
+
+    // Runtime, and absent from the scene format for the same reason a button's
+    // press flags are: a field saved mid-edit would come back focused, with a
+    // caret in the middle of a name nobody is typing, and a `submitted` restored
+    // from a Play snapshot would answer a question that was never asked.
+    bool hovered{false};
+    bool focused{false};
+
+    // True for exactly one frame, when Enter was pressed while focused.
+    bool submitted{false};
+
+    // Byte offset of the caret into `text`, always on a character boundary.
+    int caret{0};
+};
+
 } // namespace Supersonic
