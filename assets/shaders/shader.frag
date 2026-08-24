@@ -143,7 +143,7 @@ float sampleCascade(int layer, vec3 worldPos, vec3 N, float NdotL) {
 }
 
 float shadowFactor(vec3 worldPos, vec3 N, float NdotL) {
-    float viewDepth = -(ubo.view * vec4(worldPos, 1.0)).z;
+    float viewDepth = viewDepthOf(worldPos);
 
     int layer = selectCascade(viewDepth);
     if (layer >= 4) return 1.0;   // past the shadow distance
@@ -393,13 +393,10 @@ void main() {
     // nothing - are the leading entries and always run, and everything local
     // comes out of this fragment's own froxel.
     //
-    // View-space depth from the world position and the view matrix's third row.
-    // A varying would save the three multiplies and cost a slot in every vertex
-    // shader that feeds this one, for a value only this loop wants.
-    float viewZ = -(ubo.view[0][2] * fragWorldPos.x +
-                    ubo.view[1][2] * fragWorldPos.y +
-                    ubo.view[2][2] * fragWorldPos.z +
-                    ubo.view[3][2]);
+    // The same depth the cascade lookup uses, from the same function. A varying
+    // would save the multiply and cost a slot in every vertex shader that feeds
+    // this one, for a value only these two places want.
+    float viewZ = viewDepthOf(fragWorldPos);
 
     uint cluster = clusterIndexFor(gl_FragCoord.xy, viewZ);
     uvec2 slice = clusterBuffer.clusters[cluster];

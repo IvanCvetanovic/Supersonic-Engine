@@ -79,6 +79,17 @@ layout(std430, set = 0, binding = 7) readonly buffer LightIndexBuffer {
     uint indices[];
 } lightIndexBuffer;
 
+// How far in FRONT of the camera a world position is.
+//
+// One definition, because there were briefly two: the cascade lookup wrote
+// -(ubo.view * vec4(p,1)).z and the light loop wrote out the same dot product by
+// hand against the view matrix's third row. Identical arithmetic, two
+// expressions, one shader - which is the drift this header was extracted to
+// stop, and it had reappeared inside a single file.
+float viewDepthOf(vec3 worldPos) {
+    return -(ubo.view * vec4(worldPos, 1.0)).z;
+}
+
 // Which froxel a fragment is in.
 //
 // A TRANSLITERATION of ClusterGrid::ClusterForFragment, line for line, and it

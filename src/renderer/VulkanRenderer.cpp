@@ -794,6 +794,25 @@ glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferOb
         ++directionalCount;
     }
 
+    // Checked, not assumed. The prefix holds because of what two OTHER functions
+    // do - SelectLights sorts directionals first, and the shadow swap above only
+    // ever moves one directional to the front - and nothing at this seam would
+    // notice if either changed.
+    //
+    // A directional landing after a local would be clustered as though it were a
+    // point light: its "position" is a direction vector, its radius is its
+    // range, and the froxels it lands in have nothing to do with where it
+    // shines. The scene would light wrongly and quietly.
+    for (size_t i = directionalCount; i < outLights.size(); ++i) {
+        if (outLights[i].positionOrDirection.w < 0.5f) {
+            SUPERSONIC_LOG_ERROR("VulkanRenderer")
+                << "A directional light is at index " << i << ", past the " << directionalCount
+                << " the froxel grid treats as the unclustered prefix. It will be clustered as "
+                << "if it had a position and will not light the scene correctly." << std::endl;
+            break;
+        }
+    }
+
     ubo.lightCount = glm::vec4(static_cast<float>(count),
                                static_cast<float>(directionalCount), 0.0f, 0.0f);
     return shadowDirection;
