@@ -162,6 +162,9 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
              << mat->albedoColor.z << ", " << mat->albedoColor.w << "],\n";
         out << indent << "  \"AlbedoTexture\": \"" << Json::Escape(mat->albedoTexturePath) << "\",\n";
         out << indent << "  \"NormalTexture\": \"" << Json::Escape(mat->normalTexturePath) << "\",\n";
+        out << indent << "  \"OrmTexture\": \"" << Json::Escape(mat->ormTexturePath) << "\",\n";
+        out << indent << "  \"OcclusionStrength\": "
+            << jsonSafe(mat->occlusionStrength, "occlusionStrength") << ",\n";
         out << indent << "  \"Roughness\": " << mat->roughness << ",\n";
         out << indent << "  \"Metallic\": " << mat->metallic << ",\n";
         out << indent << "  \"AO\": " << mat->ao << ",\n";
@@ -492,6 +495,10 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         material.albedoColor = readVec4(m["Albedo"], glm::vec4(1.0f));
         material.albedoTexturePath = m["AlbedoTexture"].AsString("");
         material.normalTexturePath = m["NormalTexture"].AsString("");
+        // Absent from every scene written before packed maps existed, which
+        // reads as no map and so as exactly the surface it was.
+        material.ormTexturePath = m["OrmTexture"].AsString("");
+        material.occlusionStrength = m["OcclusionStrength"].AsFloat(1.0f);
         material.roughness = m["Roughness"].AsFloat(0.4f);
         material.metallic = m["Metallic"].AsFloat(0.1f);
         material.ao = m["AO"].AsFloat(1.0f);

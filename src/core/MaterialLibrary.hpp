@@ -23,6 +23,10 @@ struct MaterialAsset {
     float ao{1.0f};
     std::string albedoTexturePath;
     std::string normalTexturePath;
+
+    // Occlusion, roughness and metallic packed as glTF packs them: R, G, B.
+    std::string ormTexturePath;
+    float occlusionStrength{1.0f};
 };
 
 // Loads, caches and writes .material assets.

@@ -319,6 +319,51 @@ static void testTheExtractedNameIsPortable() {
               "got " + actual);
 }
 
+// The packed-map decision, tested without a file on disk.
+//
+// This is the one place in the importer where believing the format costs you a
+// black surface. glTF says of a metallic-roughness texture that "the red and
+// alpha channels are not specified and their values are ignored" - so an
+// exporter may write zero there, and an engine that reads red as occlusion
+// renders a perfectly valid file pitch black wherever no light directly
+// reaches it, with nothing anywhere to say why.
+static void testWhatTheRedChannelIsAllowedToMean() {
+    using Choice = GltfLoader::PackedMap;
+
+    // Both slots, one image: the arrangement almost every exporter writes, and
+    // the only one where red really is occlusion.
+    const Choice both = GltfLoader::ChoosePackedMap("orm.png", "orm.png", 1.0f);
+    CHECK_MSG(both.path == "orm.png", both.path);
+    CHECK_NEAR(both.occlusionStrength, 1.0f);
+
+    // And the file's own strength is honoured rather than assumed.
+    CHECK_NEAR(GltfLoader::ChoosePackedMap("orm.png", "orm.png", 0.4f).occlusionStrength, 0.4f);
+
+    // Metallic-roughness alone. The map is taken for its green and blue, and
+    // the red channel is refused - this is the case that renders black.
+    const Choice mrOnly = GltfLoader::ChoosePackedMap("mr.png", "", 1.0f);
+    CHECK_MSG(mrOnly.path == "mr.png", "the roughness and metallic channels are still wanted");
+    CHECK_MSG(mrOnly.occlusionStrength == 0.0f,
+              "red is undefined in a metallic-roughness image and must not be believed");
+
+    // Two different images. One packed slot cannot hold both, so occlusion is
+    // dropped rather than read out of a channel that does not carry it.
+    const Choice split = GltfLoader::ChoosePackedMap("mr.png", "ao.png", 1.0f);
+    CHECK_MSG(split.path == "mr.png", split.path);
+    CHECK_MSG(split.occlusionStrength == 0.0f, "a strength of zero is how red is ignored");
+
+    // Occlusion alone is not imported at all. An AO bake is greyscale, so its
+    // green and blue would drive roughness and metallic too, and every crevice
+    // would come out smoother and less dielectric than the surface around it.
+    const Choice aoOnly = GltfLoader::ChoosePackedMap("", "ao.png", 1.0f);
+    CHECK_MSG(aoOnly.path.empty(),
+              "a greyscale occlusion bake would drive roughness and metallic as well");
+
+    const Choice neither = GltfLoader::ChoosePackedMap("", "", 1.0f);
+    CHECK_MSG(neither.path.empty(), "no map is no map");
+    CHECK_MSG(neither.occlusionStrength == 0.0f, "and nothing to believe in it");
+}
+
 static void runTests() {
     // The fixture is committed to the tree and CTest runs this suite from the
     // project root, so it is always reachable. It used to be optional: a miss
@@ -340,6 +385,7 @@ static void runTests() {
     testTheExtractedNameIsPortable();
     testMissingFileFails();
     testGarbageFileFails();
+    testWhatTheRedChannelIsAllowedToMean();
 }
 
-TEST_MAIN("test_gltf", 100)
+TEST_MAIN("test_gltf", 105)

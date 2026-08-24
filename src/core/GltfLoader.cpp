@@ -23,6 +23,33 @@ namespace fs = std::filesystem;
 
 namespace Supersonic {
 
+GltfLoader::PackedMap GltfLoader::ChoosePackedMap(const std::string& metallicRoughnessPath,
+                                                  const std::string& occlusionPath,
+                                                  float gltfOcclusionStrength) {
+    PackedMap packed{};
+
+    if (!metallicRoughnessPath.empty()) {
+        packed.path = metallicRoughnessPath;
+
+        // The red channel is occlusion only when an occlusion texture vouched
+        // for it, and vouching means naming the SAME image. Otherwise red is
+        // whatever the exporter happened to leave there - legally anything,
+        // routinely zero - and believing it turns the ambient term off for the
+        // whole surface.
+        if (occlusionPath == metallicRoughnessPath) {
+            packed.occlusionStrength = gltfOcclusionStrength;
+        }
+        return packed;
+    }
+
+    // Occlusion on its own cannot be packed here, and taking it anyway would be
+    // worse than taking nothing: an AO bake is greyscale, so its green and blue
+    // would drive roughness and metallic too, and every crevice would come out
+    // smoother and less dielectric than the surface around it. On metal that is
+    // not a subtle wrongness. The material keeps its constants instead.
+    return packed;
+}
+
 namespace {
 
 // Matches the palette slice a single draw can address. Vertex::jointIndices is
@@ -511,6 +538,45 @@ void appendPrimitive(const tinygltf::Model& model,
         submesh.material.normalTexturePath =
             resolveTexture(material.normalTexture.index, "normal");
 
+        // glTF keeps occlusion and metallic-roughness as two SLOTS and expects
+        // them packed into one image: occlusion in R, roughness in G, metallic
+        // in B. Almost every exporter points both slots at that same image,
+        // which is the arrangement this engine's single packed binding is for.
+        //
+        // Compared as RESOLVED PATHS, not as texture indices. Two texture
+        // entries can name one image and differ only in their sampler, and the
+        // question here is whether the same PIXELS carry both.
+        const std::string metallicRoughnessPath =
+            resolveTexture(pbr.metallicRoughnessTexture.index, "metallic-roughness");
+        const std::string occlusionPath =
+            resolveTexture(material.occlusionTexture.index, "occlusion");
+
+        const GltfLoader::PackedMap packed = GltfLoader::ChoosePackedMap(
+            metallicRoughnessPath, occlusionPath,
+            static_cast<float>(material.occlusionTexture.strength));
+        submesh.material.ormTexturePath = packed.path;
+        submesh.material.occlusionStrength = packed.occlusionStrength;
+
+        // Said out loud in the two cases where something the file asked for is
+        // not going to happen. The decision itself is in ChoosePackedMap, which
+        // has no opinion about logging and can therefore be tested.
+        if (!metallicRoughnessPath.empty() && !occlusionPath.empty() &&
+            occlusionPath != metallicRoughnessPath) {
+            SUPERSONIC_LOG_WARN("GltfLoader")
+                << sourcePath << ": material '" << material.name
+                << "' puts occlusion in a different image from metallic-roughness. "
+                << "This engine packs all three channels into one map, so the "
+                << "metallic-roughness image is used and the occlusion is dropped "
+                << "rather than read out of a channel that does not hold it.";
+        } else if (metallicRoughnessPath.empty() && !occlusionPath.empty()) {
+            SUPERSONIC_LOG_WARN("GltfLoader")
+                << sourcePath << ": material '" << material.name
+                << "' has an occlusion texture but no metallic-roughness one. "
+                << "This engine packs all three into a single map, and a greyscale "
+                << "occlusion image would drive roughness and metallic as well, so "
+                << "it is not imported; the material keeps its constants.";
+        }
+
         if (material.emissiveFactor.size() == 3) {
             submesh.material.emissiveColor = glm::vec3(
                 static_cast<float>(material.emissiveFactor[0]),
@@ -833,6 +899,7 @@ void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& par
 }
 
 } // namespace
+
 
 GltfLoader::Scene GltfLoader::Load(const std::string& path) {
     Scene scene;

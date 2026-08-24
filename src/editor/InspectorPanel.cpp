@@ -384,6 +384,17 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                     asset->normalTexturePath = droppedNormal;
                 }
 
+                char assetOrm[512] = {};
+                const size_t ormLen = std::min(asset->ormTexturePath.size(), sizeof(assetOrm) - 1);
+                std::memcpy(assetOrm, asset->ormTexturePath.data(), ormLen);
+                if (ImGui::InputText("ORM Map", assetOrm, sizeof(assetOrm))) {
+                    asset->ormTexturePath = assetOrm;
+                }
+                std::string droppedOrm;
+                if (acceptAssetDrop("SUPERSONIC_TEXTURE", droppedOrm)) {
+                    asset->ormTexturePath = droppedOrm;
+                }
+
                 if (ImGui::Button(ICON_FA_FLOPPY "  Save Asset")) {
                     m_materialLibrary->Save(m_materialLibrary->Acquire(material.materialPath));
                 }
@@ -446,6 +457,37 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             }
             if (material.normalTexturePath.empty()) {
                 ImGui::TextDisabled("Empty = flat normal; lighting uses the mesh normals.");
+            }
+
+            char ormBuffer[512] = {};
+            const size_t ormLen = std::min(material.ormTexturePath.size(), sizeof(ormBuffer) - 1);
+            std::memcpy(ormBuffer, material.ormTexturePath.data(), ormLen);
+            if (ImGui::InputText("ORM Map", ormBuffer, sizeof(ormBuffer))) {
+                material.ormTexturePath = ormBuffer;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Occlusion in red, roughness in green, metallic in blue -\n"
+                                  "the way glTF packs them. Each channel MULTIPLIES the\n"
+                                  "slider above it, so the sliders stay master controls.");
+            }
+            if (material.ormTexturePath.empty()) {
+                ImGui::TextDisabled("Empty = the three sliders above, uniformly.");
+            } else {
+                // Only worth showing when there IS a map, because it decides
+                // how much of that map's red channel to believe.
+                ImGui::SliderFloat("Occlusion Strength", &material.occlusionStrength,
+                                   0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How much of the RED channel is really occlusion.\n"
+                        "glTF leaves red undefined in a metallic-roughness image, so\n"
+                        "the importer sets this to 0 unless an occlusion texture\n"
+                        "vouched for it. Zero means the channel is ignored entirely.");
+                }
+                if (material.occlusionStrength <= 0.0f) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(red ignored)");
+                }
             }
             }
         }

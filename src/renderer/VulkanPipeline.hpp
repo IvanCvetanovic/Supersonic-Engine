@@ -90,7 +90,10 @@ struct PushConstantData {
     glm::vec4 material;      // 80..95  x=roughness y=metallic z=ao w=alphaCutoff (fragment)
 
     // Light this surface emits regardless of what falls on it. rgb is added
-    // after shading; a is unused padding.
+    // after shading; W CARRIES THE OCCLUSION STRENGTH, which has nothing to do
+    // with emission and everything to do with there being a spare float here.
+    // The alternative was a fifth vec4 and eight more bytes of a 128-byte
+    // budget, for one number that is 1.0 on almost every material.
     //
     // Placed BEFORE the two ints rather than appended, because a vec4 needs
     // 16-byte alignment: after them it would start at 112 and take the struct
@@ -214,6 +217,16 @@ public:
 
     static constexpr uint32_t kSceneSet = 0;
     static constexpr uint32_t kMaterialSet = 1;
+
+    // How many samplers a material set holds: albedo, normal, and the packed
+    // occlusion/roughness/metallic map.
+    //
+    // Public because TextureRegistry sizes its descriptor pool from it. That
+    // used to be a literal 2 in each of the two files, which is the shape of
+    // mistake that does not fail: a pool sized for two bindings while the
+    // layout declares three simply runs out of sets a third early, hundreds of
+    // materials later, in a scene nobody was testing.
+    static constexpr uint32_t kMaterialBindingCount = 3;
 
 private:
     void createDescriptorSetLayout();

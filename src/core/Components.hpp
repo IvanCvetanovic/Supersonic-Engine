@@ -288,6 +288,35 @@ struct MaterialComponent {
     std::string albedoTexturePath;
     std::string normalTexturePath;
 
+    // Occlusion, roughness and metallic, packed into one image the way glTF
+    // packs them: R is ambient occlusion, G roughness, B metallic.
+    //
+    // One map rather than three because that is what an exporter writes and
+    // what a material author paints - and because three bindings would be three
+    // samplers and three descriptors for data that is one byte each. The
+    // channels MULTIPLY the constants above rather than replacing them, so a
+    // material can be authored rough overall and worn smooth in places, and a
+    // material with no map here reads exactly as it did before it existed.
+    //
+    // Sampled as data, never as colour: these are numbers, and an sRGB decode
+    // would bend every one of them.
+    std::string ormTexturePath;
+
+    // How much of the map's RED channel is believed, 0 to 1.
+    //
+    // Not decoration: glTF says of a metallic-roughness texture that "the red
+    // and alpha channels are not specified and their values are ignored", and
+    // exporters do write zero there. Read as occlusion, that zeroes the ambient
+    // term for the whole surface - a valid file rendering pitch black wherever
+    // no light directly reaches it.
+    //
+    // So the importer says whether the red channel came from an occlusion
+    // texture or is just whatever was left in the image, and this is where it
+    // says it. glTF's own formula, 1 + strength * (sampled - 1), makes zero
+    // mean "ignore it" as the SAME arithmetic rather than a branch, the way a
+    // fog density or an alpha cutoff of zero already does here.
+    float occlusionStrength{1.0f};
+
     // When set, the fields above are driven by a shared .material asset and
     // MaterialSystem overwrites them every frame. Empty means the entity owns
     // its own values, which is how every material worked before assets existed.
@@ -384,10 +413,15 @@ struct RenderableComponent {
     uint32_t materialID{0};
 
     // Resolved from MaterialComponent's texture paths by
-    // RenderSystem::SyncResources. Default to the built-in white albedo and
-    // flat normal, so an untextured material needs no special case.
+    // RenderSystem::SyncResources. Default to the built-in white albedo, flat
+    // normal and neutral ORM, so an untextured material needs no special case.
+    //
+    // The literals match the order TextureRegistry uploads its built-ins in,
+    // which is fragile and is why SyncResources overwrites all three from the
+    // registry on the first resolve rather than trusting them.
     uint32_t albedoTextureID{0};
     uint32_t normalTextureID{1};
+    uint32_t ormTextureID{2};
 
     bool isVisible{true};
     bool castsShadow{true};

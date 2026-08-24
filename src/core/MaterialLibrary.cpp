@@ -35,7 +35,9 @@ std::string MaterialLibrary::Serialize(const MaterialAsset& asset) {
     out << "  \"Metallic\": " << asset.metallic << ",\n";
     out << "  \"AO\": " << asset.ao << ",\n";
     out << "  \"AlbedoTexture\": \"" << Json::Escape(asset.albedoTexturePath) << "\",\n";
-    out << "  \"NormalTexture\": \"" << Json::Escape(asset.normalTexturePath) << "\"\n";
+    out << "  \"NormalTexture\": \"" << Json::Escape(asset.normalTexturePath) << "\",\n";
+    out << "  \"OrmTexture\": \"" << Json::Escape(asset.ormTexturePath) << "\",\n";
+    out << "  \"OcclusionStrength\": " << asset.occlusionStrength << "\n";
     out << "}\n";
     return out.str();
 }
@@ -55,6 +57,10 @@ bool MaterialLibrary::Deserialize(const std::string& text, MaterialAsset& out, s
     out.ao = root["AO"].AsFloat(1.0f);
     out.albedoTexturePath = root["AlbedoTexture"].AsString("");
     out.normalTexturePath = root["NormalTexture"].AsString("");
+    // Absent from every .material written before packed maps existed, which
+    // reads as no map and therefore as exactly the surface it always was.
+    out.ormTexturePath = root["OrmTexture"].AsString("");
+    out.occlusionStrength = root["OcclusionStrength"].AsFloat(1.0f);
     return true;
 }
 

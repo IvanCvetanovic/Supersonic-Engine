@@ -43,6 +43,16 @@ struct MeshMaterial {
     std::string albedoTexturePath;
     std::string normalTexturePath;
 
+    // glTF splits these across two texture slots and this engine packs them
+    // into one, because that is how an exporter writes them: occlusion in R,
+    // roughness in G, metallic in B, usually all in the same image.
+    std::string ormTexturePath;
+
+    // Zero when the packed map's red channel is not occlusion - which is the
+    // ordinary case for a glTF that has a metallic-roughness texture and no
+    // occlusion texture, where the red channel is explicitly undefined.
+    float occlusionStrength{1.0f};
+
     glm::vec3 emissiveColor{0.0f};
     float emissiveStrength{0.0f};
 

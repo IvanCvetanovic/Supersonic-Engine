@@ -297,10 +297,16 @@ void VulkanPipeline::createDescriptorSetLayout() {
     m_sceneSetLayout = m_device.createDescriptorSetLayout(sceneInfo);
 
     // ---- Set 1: per-material ----
-    // binding 0: albedo, binding 1: tangent-space normal map. Rebound per draw,
-    // which is what lets each entity carry its own maps rather than sharing one
-    // global sampler.
-    std::array<vk::DescriptorSetLayoutBinding, 2> materialBindings{};
+    // binding 0: albedo, binding 1: tangent-space normal map, binding 2: the
+    // packed occlusion/roughness/metallic map. Rebound per draw, which is what
+    // lets each entity carry its own maps rather than sharing one global
+    // sampler.
+    //
+    // The count is read from the array by everything below it, and
+    // TextureRegistry sizes its pool from kMaterialBindingCount for the same
+    // reason: a pool sized for two while the layout declares three does not
+    // fail, it quietly runs out of sets a third early.
+    std::array<vk::DescriptorSetLayoutBinding, kMaterialBindingCount> materialBindings{};
     for (uint32_t i = 0; i < materialBindings.size(); ++i) {
         materialBindings[i].binding = i;
         materialBindings[i].descriptorType = vk::DescriptorType::eCombinedImageSampler;

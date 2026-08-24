@@ -76,6 +76,7 @@ static void testSceneRoundTrip() {
     auto& material = source.emplace<MaterialComponent>(cube);
     material.roughness = 0.25f;
     material.metallic = 0.75f;
+    material.ormTexturePath = "assets/textures/worn_orm.png";
     source.emplace<RenderableComponent>(cube);
 
     const auto light = source.create();
@@ -127,6 +128,11 @@ static void testSceneRoundTrip() {
             const auto* mat = loaded.try_get<MaterialComponent>(entity);
             CHECK(mat != nullptr);
             if (mat) CHECK_NEAR(mat->metallic, 0.75f);
+            // The newest texture slot, and the one a writer is likeliest to
+            // have been forgotten in: a scene would then reload with the
+            // constants it authored and none of the variation on top.
+            if (mat) CHECK_MSG(mat->ormTexturePath == "assets/textures/worn_orm.png",
+                               mat->ormTexturePath);
 
             CHECK(loaded.all_of<RenderableComponent>(entity));
         } else if (tag->tag == "Sun") {

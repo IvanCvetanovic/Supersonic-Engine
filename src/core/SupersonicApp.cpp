@@ -1055,6 +1055,12 @@ void SupersonicApp::Run() {
         for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
             if (!material.albedoTexturePath.empty()) m_assetWatcher.Watch(material.albedoTexturePath);
             if (!material.normalTexturePath.empty()) m_assetWatcher.Watch(material.normalTexturePath);
+            // Every texture a material names, or editing that one and saving it
+            // does nothing at all: the watcher never fires, so Invalidate never
+            // runs, so the registry's generation never moves, so the resource
+            // signature never changes and SyncResources never re-acquires it.
+            // The whole chain is silent from the first missing line.
+            if (!material.ormTexturePath.empty()) m_assetWatcher.Watch(material.ormTexturePath);
         }
 
         {

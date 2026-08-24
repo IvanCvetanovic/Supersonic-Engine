@@ -38,6 +38,14 @@ layout(set = 1, binding = 0) uniform sampler2D albedoMap;
 // Tangent-space normal map. Materials without one sample a 1x1 flat
 // (0.5, 0.5, 1.0) texture, so no branch is needed here.
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
+// Occlusion, roughness and metallic packed into one image, in the channels
+// glTF packs them into: R is ambient occlusion, G roughness, B metallic.
+//
+// One map rather than three: that is what an exporter writes, what an author
+// paints, and it is one sampler and one descriptor rather than three for data
+// that is a byte each. Materials without one sample a 1x1 white DATA texture,
+// so the multiply below is a no-op and no branch is needed here either.
+layout(set = 1, binding = 2) uniform sampler2D ormMap;
 
 // Must match Engine::PushConstantData.
 // A push constant block must be declared identically in every stage of a
@@ -306,9 +314,36 @@ void main() {
 
     vec3 albedo = albedoTex.rgb * fragColor * push.albedoColor.rgb;
 
-    float roughness = clamp(push.material.x, 0.02, 1.0);
-    float metallic  = clamp(push.material.y, 0.0, 1.0);
-    float ao        = clamp(push.material.z, 0.0, 1.0);
+    // The map MULTIPLIES the material's constants rather than replacing them.
+    //
+    // Replacing would make the two ways of authoring a surface exclusive: a
+    // material would either be uniformly rough or entirely at the mercy of a
+    // texture, with no way to take a map and dial the whole thing smoother.
+    // Multiplying makes the constant a master control over the map, and makes
+    // the no-map case exactly the old arithmetic - the neutral texture is 1 in
+    // every channel, so nothing shifts for a material that has never heard of
+    // this binding.
+    //
+    // The floor on roughness stays where it was and stays LAST, after the
+    // multiply: a GGX lobe at zero roughness is a division by zero, and a map
+    // is now a second way to arrive there.
+    vec3 orm = texture(ormMap, fragTexCoord).rgb;
+
+    float roughness = clamp(push.material.x * orm.g, 0.02, 1.0);
+    float metallic  = clamp(push.material.y * orm.b, 0.0, 1.0);
+
+    // Occlusion, gated by how much of the red channel is actually occlusion.
+    //
+    // glTF says of a metallic-roughness texture that "the red and alpha
+    // channels are not specified and their values are ignored", and exporters
+    // write zero there. Believed, that zeroes the ambient term for the whole
+    // surface - a valid file rendering pitch black wherever no light directly
+    // reaches it. The importer reports whether an occlusion texture vouched for
+    // the red channel, and this is glTF's own formula for spending that: at
+    // strength 0 it is exactly 1.0, so ignoring the channel is the SAME
+    // arithmetic rather than a branch that can disagree with it.
+    float occlusion = 1.0 + push.emissive.w * (orm.r - 1.0);
+    float ao        = clamp(push.material.z * occlusion, 0.0, 1.0);
 
     // Re-orthonormalise the interpolated basis: interpolation across a
     // triangle does not preserve orthogonality, and a skewed basis tilts the

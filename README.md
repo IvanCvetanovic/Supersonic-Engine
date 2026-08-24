@@ -44,7 +44,7 @@ code quietly contradicts.
 
 | | |
 |---|---|
-| **Physically based shading** | Cook–Torrance GGX with metallic / roughness / ambient-occlusion inputs, per-material |
+| **Physically based shading** | Cook–Torrance GGX with metallic / roughness / ambient-occlusion inputs, per-material — as constants, as a packed ORM map in glTF's channel order, or both, since the map multiplies the constants |
 | **Lighting** | Up to 8 simultaneous lights — directional, point and spot — with distance attenuation and a smooth cone falloff. A scene may hold more; the eight passed to the shader are chosen by relevance to the camera, directional first, and the shortfall is logged |
 | **Cascaded shadows** | Four 2048² D32 cascades in one array image, fitted to the camera by bounding sphere and snapped to the texel grid so edges do not crawl; per-cascade normal offset, 3×3 PCF, and a cross-fade across each split |
 | **Normal mapping** | Tangent-space, with glTF-convention `vec4` tangents (handedness in `w`) generated for procedural meshes too |
@@ -334,6 +334,9 @@ Android "not functional"; extending that register forward costs nothing.
       button held, and losing the window always gives it back
 - [x] Text input: a HUD text field a game can author, type into and read back,
       with the keyboard taken from the game while it has focus
+- [x] Roughness, metallic and ambient occlusion as a packed map, in the channels
+      glTF packs them into, multiplying the per-material constants rather than
+      replacing them
 
 ### Next
 
@@ -346,9 +349,6 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
 - [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
       is no cubemap path at all — no HDRI can be loaded — so metal and smooth
       dielectrics have nothing to reflect but a two-colour gradient
-- [ ] **Texture maps beyond albedo and normal.** Roughness, metallic and AO are
-      per-material constants, not maps, so no surface can be worn or wet in one
-      place and not another
 - [ ] **Light culling.** Eight is still a hard cap. Which eight is now chosen by
       relevance and logged, but lifting the cap needs a froxel grid
 - [ ] **Collision geometry beyond boxes, spheres and capsules**, and joints —

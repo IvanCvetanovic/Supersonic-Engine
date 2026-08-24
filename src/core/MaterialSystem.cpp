@@ -36,6 +36,8 @@ void MaterialSystem::Sync(entt::registry& registry, MaterialLibrary& library) {
         material.ao = asset->ao;
         material.albedoTexturePath = asset->albedoTexturePath;
         material.normalTexturePath = asset->normalTexturePath;
+        material.ormTexturePath = asset->ormTexturePath;
+        material.occlusionStrength = asset->occlusionStrength;
     }
 }
 
@@ -54,6 +56,8 @@ void MaterialSystem::MakeUnique(entt::registry& registry, entt::entity entity,
         material->ao = asset->ao;
         material->albedoTexturePath = asset->albedoTexturePath;
         material->normalTexturePath = asset->normalTexturePath;
+        material->ormTexturePath = asset->ormTexturePath;
+        material->occlusionStrength = asset->occlusionStrength;
     }
     material->materialPath.clear();
     material->warnedMissingAsset = false;
@@ -77,6 +81,8 @@ bool MaterialSystem::Assign(entt::registry& registry, entt::entity entity,
         material.ao = asset->ao;
         material.albedoTexturePath = asset->albedoTexturePath;
         material.normalTexturePath = asset->normalTexturePath;
+        material.ormTexturePath = asset->ormTexturePath;
+        material.occlusionStrength = asset->occlusionStrength;
     }
     return true;
 }
@@ -94,10 +100,15 @@ void MaterialSystem::ApplyImportedMaterial(const MeshMaterial& imported, Materia
     out.transparent = imported.transparent;
     out.alphaCutoff = imported.alphaCutoff;
 
-    // ao is deliberately left alone: glTF carries ambient occlusion as a
-    // TEXTURE, not a factor, and there is no third texture binding to put it
-    // in. Overwriting an authored ao with a default would lose information to
-    // no purpose.
+    out.ormTexturePath = imported.ormTexturePath;
+    out.occlusionStrength = imported.occlusionStrength;
+
+    // The ao FACTOR is still deliberately left alone, and the reason has
+    // changed shape rather than gone away. glTF carries ambient occlusion as a
+    // texture and never as a factor, so the file has nothing to say about this
+    // number - and it is now a master control over the map that was just
+    // imported, so overwriting an authored value would darken a surface the
+    // author had already balanced.
     out.materialPath.clear();
     out.warnedMissingAsset = false;
 }

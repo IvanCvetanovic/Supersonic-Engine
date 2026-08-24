@@ -284,7 +284,7 @@ through the later branch, and a second directional light is lit but never
 shadowed. One shadowed directional light is the limit.
 
 **Descriptor sets.** Set 0 is per-frame and has five bindings; set 1 is
-per-material and has two, rebound per draw.
+per-material and has three, rebound per draw.
 
 | Set 0 | Contents | Stages |
 |---|---|---|
@@ -303,8 +303,64 @@ required, and the slot they are indexed with is read out of the light block
 rather than computed per fragment. The spots are a single descriptor over a
 layered image, because a spot is sampled exactly like a cascade.
 
-Set 1 is albedo and a tangent-space normal map. A single set is what previously
-forced every object to sample one globally bound texture.
+Set 1 is albedo, a tangent-space normal map, and one packed map holding
+occlusion, roughness and metallic in R, G and B - the channels glTF packs them
+into. A single set is what previously forced every object to sample one
+globally bound texture.
+
+One packed map rather than three separate ones, because that is what an
+exporter writes and what an author paints, and because three bindings would
+be three samplers and three descriptors for data that is one byte each. Its
+channels **multiply** the per-material constants rather than replacing them:
+replacing would make the two ways of authoring a surface exclusive - either
+uniformly rough, or entirely at a texture's mercy with no way to dial the
+whole thing smoother - while multiplying makes the constant a master control
+and makes the no-map case exactly the arithmetic that was there before. It is
+also what the glTF specification says the factors mean.
+
+A material with no map samples a 1x1 white **data** texture, so the multiply
+is a no-op and the fragment stage needs no branch. Its own built-in rather
+than the white albedo, which is uploaded sRGB: white survives that decode
+either way, so reusing it would have worked right up until somebody changed
+the neutral to anything other than white.
+
+
+**The red channel is the trap.** glTF says of a metallic-roughness texture that
+"the red and alpha channels are not specified and their values are ignored" -
+so red is legally anything, and exporters write zero. Read as occlusion, that
+zeroes the ambient term for the whole surface: a valid file rendering pitch
+black wherever no light directly reaches it, with nothing to say why. So
+`MaterialComponent::occlusionStrength` says how much of red to believe, using
+glTF's own formula `1 + strength * (sampled - 1)` - exactly 1.0 at strength 0,
+so ignoring the channel is the same arithmetic rather than a branch. It travels
+in `PushConstantData::emissive.w`, which was documented padding.
+
+`GltfLoader::ChoosePackedMap` makes the decision and is split out of the import
+so it can be tested without a file: the strength is the file's own only when an
+occlusion texture named the SAME image, compared as resolved paths rather than
+texture indices, because two texture entries can name one image through
+different samplers. An occlusion texture with no metallic-roughness one is not
+imported at all - an AO bake is greyscale, so its green and blue would drive
+roughness and metallic too, and every crevice would come out smoother and less
+dielectric than the surface around it.
+
+Every built-in fallback is protected from `Invalidate` and `ReplaceRGBA` by one
+predicate rather than a hand-written list, because `Acquire` caches a failed
+load under the real path's key: invalidating that path would otherwise reach in
+and destroy a texture every material in the scene is sharing. And the fallback
+is a parameter rather than something derived from the `srgb` bool, which now
+separates three kinds of texture and could only ever answer two - deriving it
+handed a broken ORM path the flat normal, which as packed ORM reads as half
+occlusion, half roughness and fully metallic.
+The binding count is one constant, `VulkanPipeline::kMaterialBindingCount`,
+read by both the layout and `TextureRegistry`'s descriptor pool. It used to be
+a literal `2` in each, which is the shape of mistake that does not fail: a
+pool sized for two bindings while the layout declares three does not error, it
+quietly runs out of sets a third early, hundreds of materials into a scene
+nobody was testing. The set cache is keyed on the whole triple of texture ids,
+ordered rather than hashed - three 32-bit ids do not pack into a 64-bit key,
+and a hash collision would render one material with another's maps and say
+nothing about it.
 
 Three values are duplicated into `shader.frag` by hand, each with a comment
 naming the C++ constant it must match: `POINT_SHADOW_CASTERS`,
@@ -412,7 +468,7 @@ composite adds the bloom back, applies Reinhard and encodes once.
 | Stage | Format | Why |
 |---|---|---|
 | Colour textures | `R8G8B8A8Srgb` | decoded to linear on read, which is what the PBR maths expects |
-| Data textures (normal maps) | `R8G8B8A8Unorm` | a normal map stores directions; a transfer function would corrupt them |
+| Data textures (normal and packed ORM maps) | `R8G8B8A8Unorm` | a normal map stores directions and an ORM map stores three numbers the shader multiplies straight into roughness, metallic and occlusion; a transfer function would bend all of them |
 | Offscreen scene colour and its MSAA resolve | `R16G16B16A16Sfloat` | linear HDR, so highlights can exceed 1.0 and the bright pass has something to select |
 | Bloom bright and blur, half resolution | `R16G16B16A16Sfloat` | still linear; half resolution because a blur is low-frequency and full resolution costs four times the bandwidth for an image nobody can tell apart |
 | Bloom composite output, full resolution | `R8G8B8A8Unorm` | tone-mapped and encoded here; an SRGB target would encode a second time |

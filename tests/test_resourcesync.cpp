@@ -29,10 +29,12 @@ MeshComponent mesh(const std::string& primitive, const std::string& path = {}) {
     return component;
 }
 
-MaterialComponent material(const std::string& albedo, const std::string& normal = {}) {
+MaterialComponent material(const std::string& albedo, const std::string& normal = {},
+                          const std::string& orm = {}) {
     MaterialComponent component;
     component.albedoTexturePath = albedo;
     component.normalTexturePath = normal;
+    component.ormTexturePath = orm;
     return component;
 }
 
@@ -150,12 +152,37 @@ static void testTheSignatureIsNeverZero() {
     CHECK(sig(nullptr, nullptr, 0, 0) != 0);
 }
 
+static void testThePackedMapIsInTheSignatureToo() {
+    // Every path that SELECTS a texture has to be in here, or the resolve is
+    // skipped and the entity keeps sampling the map it used to have. The
+    // occlusion/roughness/metallic path was the third to arrive and is the
+    // one most easily forgotten, because a wrong answer looks like a
+    // slightly differently shaded surface rather than like a bug.
+    const MeshComponent m = mesh("Cube");
+
+    const MaterialComponent none = material("albedo.png", "normal.png");
+    const MaterialComponent packed = material("albedo.png", "normal.png", "orm.png");
+    CHECK_MSG(sig(&m, &none) != sig(&m, &packed),
+              "gaining a packed map must re-resolve the entity");
+
+    const MaterialComponent other = material("albedo.png", "normal.png", "worn.png");
+    CHECK_MSG(sig(&m, &packed) != sig(&m, &other),
+              "and so must swapping it for a different one");
+
+    // The control: the same three paths must still agree with themselves,
+    // or the signature is simply noisy and nothing is ever skipped.
+    const MaterialComponent again = material("albedo.png", "normal.png", "orm.png");
+    CHECK_MSG(sig(&m, &packed) == sig(&m, &again),
+              "an unchanged material must keep its signature");
+}
+
 static void runTests() {
     testTheSameInputsGiveTheSameSignature();
     testEveryPathThatSelectsAResourceIsInTheSignature();
     testAnAbsentComponentIsNotAnEmptyOne();
     testAReloadedAssetChangesTheSignature();
     testTheSignatureIsNeverZero();
+    testThePackedMapIsInTheSignatureToo();
 }
 
-TEST_MAIN("test_resourcesync", 16)
+TEST_MAIN("test_resourcesync", 19)

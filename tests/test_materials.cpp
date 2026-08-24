@@ -286,6 +286,7 @@ static void testAnImportedMaterialReachesTheComponent() {
     imported.metallic = 0.95f;
     imported.albedoTexturePath = "assets/textures/uv_grid.png";
     imported.normalTexturePath = "assets/textures/tiles_normal.png";
+    imported.ormTexturePath = "assets/textures/rust_orm.png";
     imported.emissiveColor = glm::vec3(0.0f, 1.0f, 0.5f);
     imported.emissiveStrength = 4.0f;
     imported.transparent = true;
@@ -302,6 +303,10 @@ static void testAnImportedMaterialReachesTheComponent() {
     CHECK_MSG(component.normalTexturePath == "assets/textures/tiles_normal.png",
               "the renderer has had a normal-map slot since normal mapping shipped, "
               "and the importer never filled it");
+
+    CHECK_MSG(component.ormTexturePath == "assets/textures/rust_orm.png",
+              "and the packed occlusion/roughness/metallic map must arrive too - "
+              "a glTF that says a surface is worn in places said so in a texture");
     CHECK(component.emissiveStrength == 4.0f);
     CHECK(component.transparent);
     CHECK(component.alphaCutoff == 0.5f);
@@ -383,6 +388,33 @@ static void testBlendStaysTransparentWithNoCutoff() {
               "importing BLEND must clear a cutoff, not leave the old one behind");
 }
 
+// Nothing about a material asset may be lost by a save and a reload, and the
+// packed map is the newest field - the one a writer is most likely to have
+// been forgotten in while the reader was updated, which round-trips as a
+// silent reset to no map.
+static void testAPackedMapSurvivesTheAssetRoundTrip() {
+    MaterialAsset asset;
+    asset.name = "Worn Steel";
+    asset.albedoTexturePath = "assets/textures/steel.png";
+    asset.normalTexturePath = "assets/textures/steel_normal.png";
+    asset.ormTexturePath = "assets/textures/steel_orm.png";
+
+    MaterialAsset restored;
+    std::string error;
+    CHECK_MSG(MaterialLibrary::Deserialize(MaterialLibrary::Serialize(asset), restored, error),
+              error);
+    CHECK_MSG(restored.ormTexturePath == "assets/textures/steel_orm.png",
+              restored.ormTexturePath);
+
+    // And a file written before the field existed reads as no map, which is
+    // the surface it always was rather than a checkerboard.
+    MaterialAsset old;
+    CHECK_MSG(MaterialLibrary::Deserialize(
+                  "{\"Material\": \"Old\", \"Roughness\": 0.3}", old, error), error);
+    CHECK_MSG(old.ormTexturePath.empty(), "an absent packed map is no map");
+    CHECK_NEAR(old.roughness, 0.3f);
+}
+
 static void runTests() {
     testTextRoundTrip();
     testGarbageIsRejected();
@@ -400,7 +432,8 @@ static void runTests() {
     testImportingDetachesFromASharedAsset();
     testMaskBecomesACutoffAndNotTransparency();
     testBlendStaysTransparentWithNoCutoff();
+    testAPackedMapSurvivesTheAssetRoundTrip();
     cleanup();
 }
 
-TEST_MAIN("test_materials", 55)
+TEST_MAIN("test_materials", 60)

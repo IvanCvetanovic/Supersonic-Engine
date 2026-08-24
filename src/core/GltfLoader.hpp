@@ -45,6 +45,27 @@ public:
 
     // Handles both .gltf (with external or embedded buffers) and binary .glb.
     static Scene Load(const std::string& path);
+
+    // Which image becomes the packed occlusion/roughness/metallic map, and how
+    // much of its red channel is really occlusion.
+    //
+    // Split out of the import so the decision can be tested without a file on
+    // disk, because the decision is where the damage is. glTF says of a
+    // metallic-roughness texture that "the red and alpha channels are not
+    // specified and their values are ignored" - exporters write zero there, and
+    // an engine that reads it as occlusion renders a valid file pitch black
+    // wherever no light directly reaches it.
+    struct PackedMap {
+        std::string path;              // empty means the material keeps its constants
+        float occlusionStrength{0.0f}; // zero means the red channel is ignored
+    };
+
+    // Both paths are already resolved, so two texture entries naming one image
+    // through different samplers compare equal - which is the question that
+    // matters: do the same PIXELS carry both.
+    static PackedMap ChoosePackedMap(const std::string& metallicRoughnessPath,
+                                     const std::string& occlusionPath,
+                                     float gltfOcclusionStrength);
 };
 
 } // namespace Supersonic

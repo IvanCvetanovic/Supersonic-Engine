@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <array>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -10,6 +12,7 @@
 
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanImage.hpp"
+#include "renderer/VulkanPipeline.hpp"
 
 namespace Supersonic {
 
@@ -29,13 +32,20 @@ public:
     TextureRegistry(const TextureRegistry&) = delete;
     TextureRegistry& operator=(const TextureRegistry&) = delete;
 
-    // Loads from disk on first request; afterwards returns the cached id.
-    // Falls back to the checkerboard when a file is missing or undecodable, and
-    // caches that failure so a broken path is not reopened every frame.
+    // Loads from disk on first request; afterwards returns the cached id, and
+    // caches a failure too so a broken path is not reopened every frame.
     //
-    // srgb=false is required for data textures: a normal map stores directions,
-    // not colour, and applying a transfer function to it corrupts the vectors.
-    uint32_t Acquire(const std::string& path, bool srgb = true);
+    // srgb=false is required for data textures: a normal map stores directions
+    // and an ORM map stores three numbers, and a transfer function bends both.
+    //
+    // `fallback` is what a missing or undecodable file resolves to, and it is a
+    // parameter rather than something derived from `srgb` because that bool now
+    // separates three kinds of texture and can only answer two. Deriving it
+    // handed a broken ORM path the FLAT NORMAL - (128,128,255), which as packed
+    // occlusion/roughness/metallic reads as half occlusion, half roughness and
+    // fully metallic - a darker, shinier, solid-metal surface arriving from a
+    // typo, under a log line that said "flat-normal fallback" about an ORM map.
+    uint32_t Acquire(const std::string& path, bool srgb, uint32_t fallback);
 
     // Uploads raw RGBA8 pixels under an explicit cache key.
     uint32_t UploadRGBA(const std::string& key, const uint8_t* pixels,
@@ -43,7 +53,7 @@ public:
 
     // Descriptor set binding both maps for one material, cached per pair so a
     // scene sharing materials does not allocate a set per entity.
-    vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId);
+    vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId, uint32_t ormId);
 
     // Drops a cached path so the next Acquire re-reads it from disk, and
     // queues the old image for deferred destruction. This is what makes editing
@@ -79,6 +89,11 @@ public:
     // normal map sample this, so the shader needs no branch.
     uint32_t GetFlatNormalTexture() const { return m_flatNormalTexture; }
 
+    // 1x1 white uploaded as DATA: the neutral occlusion/roughness/metallic map.
+    // The shader multiplies the material's constants by it, so a material with
+    // no map shades exactly as it did before the binding existed.
+    uint32_t GetNeutralOrmTexture() const { return m_neutralOrmTexture; }
+
     size_t Size() const { return m_textures.size(); }
     size_t MaterialSetCount() const { return m_materialSets.size(); }
 
@@ -90,6 +105,10 @@ private:
     };
 
     void createDescriptorPool();
+    // One of the shared fallbacks. Never freed and never rewritten: Acquire
+    // hands them out for missing files, so many paths resolve to one id.
+    bool isBuiltIn(uint32_t id) const;
+
     const Texture* get(uint32_t id) const;
 
     VulkanDevice& m_deviceRef;
@@ -100,13 +119,18 @@ private:
     std::vector<Texture> m_textures;
     std::unordered_map<std::string, uint32_t> m_lookup;
 
-    // Keyed by (albedo << 32) | normal.
-    std::unordered_map<uint64_t, vk::DescriptorSet> m_materialSets;
+    // Keyed by the ids of every binding, in binding order. Ordered rather than
+    // hashed: three 32-bit ids do not pack into a 64-bit key, and a hash
+    // collision here would render one material with another's maps and say
+    // nothing about it.
+    std::map<std::array<uint32_t, VulkanPipeline::kMaterialBindingCount>,
+             vk::DescriptorSet> m_materialSets;
 
     uint32_t m_whiteTexture{kInvalidTexture};
     uint64_t m_generation{1};
     uint32_t m_checkerTexture{kInvalidTexture};
     uint32_t m_flatNormalTexture{kInvalidTexture};
+    uint32_t m_neutralOrmTexture{kInvalidTexture};
 };
 
 } // namespace Supersonic

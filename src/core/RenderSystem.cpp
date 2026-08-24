@@ -23,10 +23,14 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
         // caller that builds a push constant by hand leaves it at.
         push.material = glm::vec4(material->roughness, material->metallic, material->ao,
                                   material->alphaCutoff);
-        push.emissive = glm::vec4(material->emissiveColor * material->emissiveStrength, 0.0f);
+        push.emissive = glm::vec4(material->emissiveColor * material->emissiveStrength,
+                                  material->occlusionStrength);
     } else {
         push.albedoColor = glm::vec4(1.0f);
         push.material = glm::vec4(0.4f, 0.1f, 1.0f, 0.0f);
+        // No material means no map either, and the neutral map's red is 1 -
+        // so a strength of 1 over it still resolves to no occlusion at all.
+        push.emissive = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     }
 
     // Both passes go through this one function, so the shadow pass skins with
@@ -70,6 +74,9 @@ uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
         signature = MixSignature(signature, &present, 1);
         signature = MixSignature(signature, material->normalTexturePath.data(),
                                  material->normalTexturePath.size());
+        signature = MixSignature(signature, &present, 1);
+        signature = MixSignature(signature, material->ormTexturePath.data(),
+                                 material->ormTexturePath.size());
     } else {
         signature = MixSignature(signature, &absent, 1);
     }
@@ -155,15 +162,26 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
         if (const auto* material = materialComponent) {
             renderable.albedoTextureID = material->albedoTexturePath.empty()
                                        ? textures.GetWhiteTexture()
-                                       : textures.Acquire(material->albedoTexturePath, true);
+                                       : textures.Acquire(material->albedoTexturePath, true,
+                                                          textures.GetCheckerTexture());
             // srgb=false: a normal map holds directions, not colour, so it must
             // not be gamma-decoded on read.
             renderable.normalTextureID = material->normalTexturePath.empty()
                                        ? textures.GetFlatNormalTexture()
-                                       : textures.Acquire(material->normalTexturePath, false);
+                                       : textures.Acquire(material->normalTexturePath, false,
+                                                          textures.GetFlatNormalTexture());
+            // srgb=false for the same reason as the normal map, and it matters
+            // more here: these are three numbers per texel the shader
+            // multiplies straight into roughness, metallic and occlusion, so a
+            // transfer function applied on read bends all three at once.
+            renderable.ormTextureID = material->ormTexturePath.empty()
+                                    ? textures.GetNeutralOrmTexture()
+                                    : textures.Acquire(material->ormTexturePath, false,
+                                                       textures.GetNeutralOrmTexture());
         } else {
             renderable.albedoTextureID = textures.GetWhiteTexture();
             renderable.normalTextureID = textures.GetFlatNormalTexture();
+            renderable.ormTextureID = textures.GetNeutralOrmTexture();
         }
     }
 }
@@ -250,7 +268,8 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
             // by construction, so the depth pass needs no second check.
             if (const vk::DescriptorSet set =
                     textures.AcquireMaterialSet(renderable.albedoTextureID,
-                                                renderable.normalTextureID)) {
+                                                renderable.normalTextureID,
+                                                renderable.ormTextureID)) {
                 caster.alphaCutoff = alpha.cutoff;
                 caster.baseAlpha = alpha.baseAlpha;
                 caster.materialSet = set;
@@ -461,6 +480,10 @@ void RenderSystem::Render(
         glm::mat4 matrix{1.0f};
         uint32_t albedoTextureID{0};
         uint32_t normalTextureID{0};
+        // Matches RenderableComponent's default, which is the neutral ORM and
+        // not id 0 - that one is the sRGB white ALBEDO. Unreachable, because
+        // the single construction site sets it, and wrong on the day it is not.
+        uint32_t ormTextureID{2};
         float distanceSquared{0.0f};
     };
     std::vector<TransparentDraw> transparent;
@@ -504,6 +527,7 @@ void RenderSystem::Render(
             transparent.push_back(TransparentDraw{
                 entity, mesh, world.matrix,
                 renderable.albedoTextureID, renderable.normalTextureID,
+                renderable.ormTextureID,
                 glm::dot(toView, toView)});
             continue;
         }
@@ -516,10 +540,12 @@ void RenderSystem::Render(
             boundMesh = renderable.meshID;
         }
 
-        // One set per (albedo, normal) pair, cached, so entities sharing a
+        // One set per combination of maps, cached, so entities sharing a
         // material do not rebind.
         if (vk::DescriptorSet materialSet =
-                textures.AcquireMaterialSet(renderable.albedoTextureID, renderable.normalTextureID);
+                textures.AcquireMaterialSet(renderable.albedoTextureID,
+                                            renderable.normalTextureID,
+                                            renderable.ormTextureID);
             materialSet && materialSet != boundMaterialSet) {
             commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
                                              VulkanPipeline::kMaterialSet, 1, &materialSet, 0, nullptr);
@@ -584,7 +610,8 @@ void RenderSystem::Render(
                                           vk::IndexType::eUint32);
 
             if (vk::DescriptorSet materialSet =
-                    textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID);
+                    textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID,
+                                                draw.ormTextureID);
                 materialSet && materialSet != boundMaterialSet) {
                 commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                                  transparentPipeline.GetLayout(),
@@ -669,7 +696,8 @@ void RenderSystem::Render(
     commandBuffer.bindIndexBuffer(particleMesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
 
     if (vk::DescriptorSet whiteSet = textures.AcquireMaterialSet(
-            textures.GetWhiteTexture(), textures.GetFlatNormalTexture())) {
+            textures.GetWhiteTexture(), textures.GetFlatNormalTexture(),
+            textures.GetNeutralOrmTexture())) {
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                          transparentPipeline.GetLayout(),
                                          VulkanPipeline::kMaterialSet, 1, &whiteSet, 0, nullptr);

@@ -19,9 +19,15 @@ namespace {
 // Generous, but each set is tiny and the pool is allocated once.
 constexpr uint32_t kMaxMaterialSets = 512;
 
-uint64_t materialKey(uint32_t albedo, uint32_t normal) {
-    return (static_cast<uint64_t>(albedo) << 32) | static_cast<uint64_t>(normal);
-}
+// The ids a material set is built from, in binding order.
+//
+// This used to be two ids packed into one uint64_t, which stopped working the
+// moment there were three. Squeezing three into 64 bits would mean 21 bits each
+// and a silent wrong answer the day an id passed two million; hashing them
+// would mean a collision rendering one material with another's maps, with
+// nothing to say so. An ordered key over at most 512 entries costs a handful of
+// comparisons and cannot be wrong.
+using MaterialKey = std::array<uint32_t, VulkanPipeline::kMaterialBindingCount>;
 } // namespace
 
 TextureRegistry::TextureRegistry(VulkanDevice& device, vk::CommandPool commandPool,
@@ -40,6 +46,20 @@ TextureRegistry::TextureRegistry(VulkanDevice& device, vk::CommandPool commandPo
     // because a normal map holds directions and must not be gamma-decoded.
     const std::array<uint8_t, 4> flatNormal = { 128, 128, 255, 255 };
     m_flatNormalTexture = UploadRGBA("builtin:flatnormal", flatNormal.data(), 1, 1, false);
+
+    // 1x1 white, as data rather than as colour: the neutral occlusion /
+    // roughness / metallic map. Every channel is 1, and the shader MULTIPLIES
+    // the material's constants by it, so a material with no map shades exactly
+    // as it did before this binding existed.
+    //
+    // Its own texture rather than reusing the white albedo, and the reason is
+    // one character of the key: that one is uploaded srgb, so the hardware
+    // applies a transfer function on read. White survives it - 255 decodes to
+    // 1.0 either way - so this would have worked, right up until somebody
+    // changed the neutral to anything other than white and spent an afternoon
+    // on why a roughness of 0.5 was arriving as 0.21.
+    const std::array<uint8_t, 4> neutralOrm = { 255, 255, 255, 255 };
+    m_neutralOrmTexture = UploadRGBA("builtin:neutralorm", neutralOrm.data(), 1, 1, false);
 
     // The old hardcoded checkerboard, kept as the missing-texture marker.
     constexpr uint32_t dim = 64;
@@ -72,8 +92,10 @@ TextureRegistry::~TextureRegistry() {
 void TextureRegistry::createDescriptorPool() {
     vk::DescriptorPoolSize poolSize{};
     poolSize.type = vk::DescriptorType::eCombinedImageSampler;
-    // Two bindings per material set: albedo and normal.
-    poolSize.descriptorCount = kMaxMaterialSets * 2;
+    // Read from the layout's own count rather than repeated here. A pool sized
+    // for two bindings while the layout declares three does not fail: it simply
+    // runs out of sets a third early, hundreds of materials into a scene.
+    poolSize.descriptorCount = kMaxMaterialSets * VulkanPipeline::kMaterialBindingCount;
 
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.maxSets = kMaxMaterialSets;
@@ -81,6 +103,11 @@ void TextureRegistry::createDescriptorPool() {
     poolInfo.pPoolSizes = &poolSize;
 
     m_descriptorPool = m_deviceRef.GetDevice().createDescriptorPool(poolInfo);
+}
+
+bool TextureRegistry::isBuiltIn(uint32_t id) const {
+    return id == m_checkerTexture || id == m_whiteTexture ||
+           id == m_flatNormalTexture || id == m_neutralOrmTexture;
 }
 
 const TextureRegistry::Texture* TextureRegistry::get(uint32_t id) const {
@@ -152,8 +179,8 @@ uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixe
     return id;
 }
 
-uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb) {
-    if (path.empty()) return srgb ? m_whiteTexture : m_flatNormalTexture;
+uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb, uint32_t fallback) {
+    if (path.empty()) return fallback;
 
     const std::string key = (srgb ? "srgb:" : "data:") + path;
     if (auto it = m_lookup.find(key); it != m_lookup.end()) {
@@ -169,10 +196,14 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb) {
     if (!pixels || width <= 0 || height <= 0) {
         SUPERSONIC_LOG_ERROR("TextureRegistry") << "Could not load '" << path << "': "
                   << (stbi_failure_reason() ? stbi_failure_reason() : "unknown")
-                  << " - using the " << (srgb ? "checker" : "flat-normal") << " fallback." << std::endl;
+                  << " - using the caller's fallback texture." << std::endl;
         if (pixels) stbi_image_free(pixels);
         // Cache the failure against this key so it is not retried every frame.
-        const uint32_t fallback = srgb ? m_checkerTexture : m_flatNormalTexture;
+        //
+        // Which is why every built-in has to be protected from Invalidate: this
+        // line puts a BUILT-IN id under a real file's key, so invalidating that
+        // file would otherwise reach in and destroy a texture every material in
+        // the scene is sharing.
         m_lookup.emplace(key, fallback);
         return fallback;
     }
@@ -189,18 +220,24 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb) {
     return id;
 }
 
-vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_t normalId) {
+vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_t normalId,
+                                                      uint32_t ormId) {
+    // Each slot falls back to its OWN neutral, not to a shared one. A missing
+    // albedo is a mistake worth seeing, so it gets the checkerboard; a missing
+    // normal or ORM map is the ordinary case - most materials have neither -
+    // so they get values that multiply out to no change at all.
     if (albedoId >= m_textures.size()) albedoId = m_checkerTexture;
     if (normalId >= m_textures.size()) normalId = m_flatNormalTexture;
+    if (ormId >= m_textures.size()) ormId = m_neutralOrmTexture;
 
-    const uint64_t key = materialKey(albedoId, normalId);
+    const MaterialKey key{albedoId, normalId, ormId};
     if (auto it = m_materialSets.find(key); it != m_materialSets.end()) {
         return it->second;
     }
 
     if (m_materialSets.size() >= kMaxMaterialSets) {
         SUPERSONIC_LOG_ERROR("TextureRegistry") << "Material descriptor set pool exhausted; reusing the default." << std::endl;
-        const uint64_t fallbackKey = materialKey(m_whiteTexture, m_flatNormalTexture);
+        const MaterialKey fallbackKey{m_whiteTexture, m_flatNormalTexture, m_neutralOrmTexture};
         if (auto it = m_materialSets.find(fallbackKey); it != m_materialSets.end()) return it->second;
         return nullptr;
     }
@@ -215,29 +252,27 @@ vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_
         throw std::runtime_error("TextureRegistry ran out of descriptor sets!");
     }
 
-    const Texture* albedo = get(albedoId);
-    const Texture* normal = get(normalId);
-    if (!albedo || !normal || !albedo->image || !normal->image) {
-        throw std::runtime_error("Material references a texture that does not exist!");
-    }
+    // Written binding by binding from the key itself, so adding a fourth map
+    // means adding it to the key and to the layout and nowhere else. The
+    // previous shape named each texture in a local and would have needed a
+    // third of everything, in three places, all of them easy to half-do.
+    std::array<vk::DescriptorImageInfo, VulkanPipeline::kMaterialBindingCount> images{};
+    for (uint32_t i = 0; i < VulkanPipeline::kMaterialBindingCount; ++i) {
+        const Texture* texture = get(key[i]);
+        if (!texture || !texture->image) {
+            throw std::runtime_error("Material references a texture that does not exist!");
+        }
+        images[i].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        images[i].imageView = texture->image->GetImageView();
+        images[i].sampler = texture->image->GetSampler();
 
-    std::array<vk::DescriptorImageInfo, 2> images{};
-    images[0].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    images[0].imageView = albedo->image->GetImageView();
-    images[0].sampler = albedo->image->GetSampler();
-
-    images[1].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-    images[1].imageView = normal->image->GetImageView();
-    images[1].sampler = normal->image->GetSampler();
-
-    for (const auto& info : images) {
-        if (!info.sampler || !info.imageView) {
+        if (!images[i].sampler || !images[i].imageView) {
             throw std::runtime_error("Texture is missing a sampler or image view!");
         }
     }
 
-    std::array<vk::WriteDescriptorSet, 2> writes{};
-    for (uint32_t i = 0; i < 2; ++i) {
+    std::array<vk::WriteDescriptorSet, VulkanPipeline::kMaterialBindingCount> writes{};
+    for (uint32_t i = 0; i < VulkanPipeline::kMaterialBindingCount; ++i) {
         writes[i].dstSet = sets[0];
         writes[i].dstBinding = i;
         writes[i].dstArrayElement = 0;
@@ -270,12 +305,17 @@ bool TextureRegistry::Invalidate(const std::string& path) {
         m_lookup.erase(it);
         dropped = true;
 
-        // Never free the built-in fallbacks. Acquire hands these out when a
-        // file is missing, so several dead paths can share one id - freeing it
-        // would take the checkerboard away from everything still using it.
-        if (id == m_checkerTexture || id == m_whiteTexture || id == m_flatNormalTexture) {
-            continue;
-        }
+        // Never free a built-in. Acquire hands these out when a file is
+        // missing and caches the failure under the real path's key, so a
+        // dead path resolves to a shared id - freeing it would take the
+        // checkerboard, or the neutral ORM map, away from everything else
+        // still using it.
+        //
+        // Every built-in, listed once. Adding one and forgetting this is a
+        // destroyed image still bound in live descriptor sets, which is the
+        // null-sampler class of bug this file's comments already carry the
+        // scars of.
+        if (isBuiltIn(id)) continue;
         if (id >= m_textures.size()) continue;
 
         deadIds.push_back(id);
@@ -291,11 +331,14 @@ bool TextureRegistry::Invalidate(const std::string& path) {
     // goes too. They are rebuilt on demand by AcquireMaterialSet.
     if (!deadIds.empty()) {
         for (auto it = m_materialSets.begin(); it != m_materialSets.end();) {
-            const uint32_t albedo = static_cast<uint32_t>(it->first >> 32);
-            const uint32_t normal = static_cast<uint32_t>(it->first & 0xFFFFFFFFull);
-            const bool names =
-                std::find(deadIds.begin(), deadIds.end(), albedo) != deadIds.end() ||
-                std::find(deadIds.begin(), deadIds.end(), normal) != deadIds.end();
+            // Every binding, not two named ones. The key is the whole triple
+            // now, so asking "does this set mention a dead id" is a search over
+            // it rather than a pair of comparisons somebody has to remember to
+            // extend the next time a map is added.
+            const bool names = std::any_of(
+                it->first.begin(), it->first.end(), [&deadIds](uint32_t id) {
+                    return std::find(deadIds.begin(), deadIds.end(), id) != deadIds.end();
+                });
             it = names ? m_materialSets.erase(it) : std::next(it);
         }
     }
@@ -312,7 +355,7 @@ bool TextureRegistry::Invalidate(const std::string& path) {
 bool TextureRegistry::ReplaceRGBA(uint32_t id, const uint8_t* pixels,
                                   uint32_t width, uint32_t height, bool srgb) {
     if (id >= m_textures.size() || !pixels || width == 0 || height == 0) return false;
-    if (id == m_checkerTexture || id == m_whiteTexture || id == m_flatNormalTexture) {
+    if (isBuiltIn(id)) {
         return false;  // shared fallbacks; replacing one changes every user
     }
 
@@ -331,9 +374,8 @@ bool TextureRegistry::ReplaceRGBA(uint32_t id, const uint8_t* pixels,
     // the new image, so they are dropped and rebuilt rather than left pointing
     // at the image about to be destroyed.
     for (auto it = m_materialSets.begin(); it != m_materialSets.end();) {
-        const uint32_t albedo = static_cast<uint32_t>(it->first >> 32);
-        const uint32_t normal = static_cast<uint32_t>(it->first & 0xFFFFFFFFull);
-        it = (albedo == id || normal == id) ? m_materialSets.erase(it) : std::next(it);
+        const bool names = std::find(it->first.begin(), it->first.end(), id) != it->first.end();
+        it = names ? m_materialSets.erase(it) : std::next(it);
     }
 
     m_deviceRef.DeferDestroy(
