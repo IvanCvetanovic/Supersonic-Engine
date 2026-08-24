@@ -112,6 +112,20 @@ bool CollideSphereObb(const glm::vec3& sphereCentre, float radius, const Obb& bo
 // end returns that end rather than a point on the infinite line.
 glm::vec3 ClosestPointOnSegment(const glm::vec3& a, const glm::vec3& b, const glm::vec3& p);
 
+// The point on triangle (a, b, c) nearest to p.
+//
+// Here rather than in the heightfield that wants it, because it is the same
+// kind of thing as the two segment queries above - pure geometry with no
+// registry, no components and no frame - and because the next shape that needs
+// a triangle should find one rather than write a second.
+//
+// A degenerate triangle - two coincident corners, or three collinear ones -
+// collapses to the nearest point on its longest edge rather than dividing by a
+// zero area. A heightfield with two neighbouring vertices at the same place is
+// not an error; it is a flat spot.
+glm::vec3 ClosestPointOnTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
+                                 const glm::vec3& p);
+
 // The nearest pair of points between two segments.
 //
 // Parallel segments have no unique answer - any point along the overlap is as

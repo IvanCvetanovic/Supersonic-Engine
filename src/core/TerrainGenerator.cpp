@@ -1,9 +1,12 @@
 #include "core/TerrainGenerator.hpp"
 #include "core/Log.hpp"
+#include "core/Heightfield.hpp"
 #include "core/JobSystem.hpp"
 
 #include <cmath>
 #include <iostream>
+#include <utility>
+#include <vector>
 
 namespace Supersonic {
 
@@ -36,7 +39,7 @@ bool TerrainGenerator::GenerateTerrainMesh(uint32_t width, uint32_t height, floa
 
         const float fx = static_cast<float>(x) - halfW;
         const float fz = static_cast<float>(z) - halfH;
-        const float fy = (std::sin(fx * 0.2f) + std::cos(fz * 0.2f)) * heightScale;
+        const float fy = SampleHeight(fx, fz, heightScale);
 
         Vertex vertex{};
         vertex.pos = glm::vec3(fx, fy, fz);
@@ -83,6 +86,46 @@ bool TerrainGenerator::GenerateTerrainMesh(uint32_t width, uint32_t height, floa
     out.computeBounds();
     SUPERSONIC_LOG_INFO("TerrainGenerator") << "Generated terrain mesh (" << out.vertices.size()
               << " vertices, " << out.indices.size() / 3 << " triangles)." << std::endl;
+    return true;
+}
+
+float TerrainGenerator::SampleHeight(float x, float z, float heightScale) {
+    // The one place this expression exists. Moved here unchanged - same
+    // operands, same order, same float literals - so the mesh above still
+    // produces the vertices it always did and the heightfield below produces
+    // exactly those, rather than a second surface that agrees to five decimal
+    // places and diverges the first time anyone tunes the frequency.
+    return (std::sin(x * 0.2f) + std::cos(z * 0.2f)) * heightScale;
+}
+
+bool TerrainGenerator::GenerateHeightfield(uint32_t width, uint32_t height, float heightScale,
+                                           float thickness, Heightfield& out) {
+    if (width < 2 || height < 2) {
+        SUPERSONIC_LOG_ERROR("TerrainGenerator") << "Heightfield requires width and height >= 2 (got "
+                  << width << "x" << height << ")." << std::endl;
+        return false;
+    }
+
+    const float halfW = static_cast<float>(width) * 0.5f;
+    const float halfH = static_cast<float>(height) * 0.5f;
+
+    // Serial, unlike the mesh. A 512 x 512 collider is a quarter of a million
+    // sines built ONCE per distinct terrain - the physics step looks it up
+    // rather than rebuilding it - so the job system would cost more in
+    // dispatch than it saves, and a serial loop is one fewer thing that has to
+    // produce identical results on every machine for the determinism suite.
+    std::vector<float> heights(static_cast<size_t>(width) * static_cast<size_t>(height));
+    for (uint32_t z = 0; z < height; ++z) {
+        for (uint32_t x = 0; x < width; ++x) {
+            heights[static_cast<size_t>(z) * width + x] = SampleHeight(
+                static_cast<float>(x) - halfW, static_cast<float>(z) - halfH, heightScale);
+        }
+    }
+
+    if (!out.Build(width, height, thickness, std::move(heights))) return false;
+
+    SUPERSONIC_LOG_INFO("TerrainGenerator") << "Generated terrain heightfield (" << width << "x"
+              << height << " vertices, " << thickness << " thick)." << std::endl;
     return true;
 }
 

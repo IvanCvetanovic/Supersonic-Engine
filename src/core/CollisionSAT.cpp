@@ -313,6 +313,63 @@ glm::vec3 ClosestPointOnSegment(const glm::vec3& a, const glm::vec3& b, const gl
     return a + along * t;
 }
 
+glm::vec3 ClosestPointOnTriangle(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c,
+                                 const glm::vec3& p) {
+    // Ericson's Voronoi-region walk. Seven regions - three vertices, three
+    // edges, one face - each identified by the signs of a handful of dot
+    // products, and each returning the answer directly rather than taking the
+    // nearest of several candidates. That matters here because the caller runs
+    // this against every triangle a shape's bounds overlap, twice per cell.
+    const glm::vec3 ab = b - a;
+    const glm::vec3 ac = c - a;
+    const glm::vec3 ap = p - a;
+
+    const float d1 = glm::dot(ab, ap);
+    const float d2 = glm::dot(ac, ap);
+    if (d1 <= 0.0f && d2 <= 0.0f) return a;   // vertex region A
+
+    const glm::vec3 bp = p - b;
+    const float d3 = glm::dot(ab, bp);
+    const float d4 = glm::dot(ac, bp);
+    if (d3 >= 0.0f && d4 <= d3) return b;     // vertex region B
+
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+        const float denominator = d1 - d3;
+        // Zero here is two coincident corners, which is the flat spot the
+        // header mentions rather than a triangle to reject.
+        if (std::fabs(denominator) < kParallelEpsilon) return a;
+        return a + ab * (d1 / denominator);   // edge region AB
+    }
+
+    const glm::vec3 cp = p - c;
+    const float d5 = glm::dot(ab, cp);
+    const float d6 = glm::dot(ac, cp);
+    if (d6 >= 0.0f && d5 <= d6) return c;     // vertex region C
+
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+        const float denominator = d2 - d6;
+        if (std::fabs(denominator) < kParallelEpsilon) return a;
+        return a + ac * (d2 / denominator);   // edge region AC
+    }
+
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) {
+        const float denominator = (d4 - d3) + (d5 - d6);
+        if (std::fabs(denominator) < kParallelEpsilon) return b;
+        return b + (c - b) * ((d4 - d3) / denominator);   // edge region BC
+    }
+
+    // Face region. va + vb + vc is twice the area and is non-zero here: every
+    // collinear case was caught by one of the edge regions above.
+    const float denominator = va + vb + vc;
+    if (std::fabs(denominator) < kParallelEpsilon) return a;
+    const float v = vb / denominator;
+    const float w = vc / denominator;
+    return a + ab * v + ac * w;
+}
+
 void ClosestPointsBetweenSegments(const glm::vec3& a0, const glm::vec3& a1,
                                   const glm::vec3& b0, const glm::vec3& b1,
                                   glm::vec3& outA, glm::vec3& outB) {
