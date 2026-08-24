@@ -8,6 +8,18 @@ class Heightfield;
 
 class TerrainGenerator {
 public:
+    // What the "Terrain" mesh primitive IS, in one place.
+    //
+    // MeshRegistry generated a 64 x 64 grid at 0.6 and
+    // HeightfieldColliderComponent defaulted to the same three numbers written
+    // out again. A collider that agrees with the mesh by coincidence stops
+    // agreeing the first time either is tuned, and the symptom - a character
+    // walking half a unit above the ground, or sunk into it - gets blamed on
+    // the solver.
+    static constexpr uint32_t kPrimitiveWidth = 64;
+    static constexpr uint32_t kPrimitiveDepth = 64;
+    static constexpr float kPrimitiveHeightScale = 0.6f;
+
     // width/height are vertex counts per axis, so both must be at least 2 to
     // produce a single quad. Returns false rather than looping on underflow.
     static bool GenerateTerrainMesh(uint32_t width, uint32_t height, float heightScale, MeshData& out);

@@ -18,6 +18,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include "core/TerrainGenerator.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -578,6 +580,51 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // 4d. HeightfieldColliderComponent
+    if (registry.all_of<HeightfieldColliderComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Heightfield Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& terrain = registry.get<HeightfieldColliderComponent>(entity);
+
+            int width = static_cast<int>(terrain.width);
+            int depth = static_cast<int>(terrain.depth);
+            if (ImGui::DragInt("Width##heightfield", &width, 1.0f, 2, 1024)) {
+                terrain.width = static_cast<uint32_t>(std::max(width, 2));
+            }
+            if (ImGui::DragInt("Depth##heightfield", &depth, 1.0f, 2, 1024)) {
+                terrain.depth = static_cast<uint32_t>(std::max(depth, 2));
+            }
+            ImGui::DragFloat("Height Scale##heightfield", &terrain.heightScale, 0.01f, 0.0f, 50.0f);
+            ImGui::DragFloat("Thickness##heightfield", &terrain.thickness, 0.05f, 0.0f, 200.0f);
+
+            // Said here because nothing at runtime can say it: a collider built
+            // from different numbers than the mesh is a surface somewhere the
+            // terrain is not, and it looks exactly like a solver bug.
+            ImGui::TextDisabled("Must match the Terrain mesh: %u x %u at %.2f.",
+                                TerrainGenerator::kPrimitiveWidth,
+                                TerrainGenerator::kPrimitiveDepth,
+                                static_cast<double>(TerrainGenerator::kPrimitiveHeightScale));
+            const bool matches = terrain.width == TerrainGenerator::kPrimitiveWidth &&
+                                 terrain.depth == TerrainGenerator::kPrimitiveDepth &&
+                                 terrain.heightScale == TerrainGenerator::kPrimitiveHeightScale;
+            if (!matches) {
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                   "This does not match the Terrain primitive.");
+                if (ImGui::Button("Match the mesh##heightfield")) {
+                    terrain.width = TerrainGenerator::kPrimitiveWidth;
+                    terrain.depth = TerrainGenerator::kPrimitiveDepth;
+                    terrain.heightScale = TerrainGenerator::kPrimitiveHeightScale;
+                }
+            }
+
+            ImGui::TextDisabled("Thickness is how far the solid reaches BELOW the "
+                                "surface, which is how a buried body gets out.");
+            ImGui::Checkbox("Is Trigger##heightfield", &terrain.isTrigger);
+            drawCollisionLayers(terrain.layer, terrain.collidesWith);
+        }
+    }
+
+    ImGui::Spacing();
+
     // 5. AudioSourceComponent
     if (registry.all_of<AudioSourceComponent>(entity)) {
         if (ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1013,6 +1060,11 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (!registry.all_of<CapsuleColliderComponent>(entity) &&
             ImGui::MenuItem("Capsule Collider")) {
             registry.emplace<CapsuleColliderComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<HeightfieldColliderComponent>(entity) &&
+            ImGui::MenuItem("Heightfield Collider")) {
+            registry.emplace<HeightfieldColliderComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<AudioSourceComponent>(entity) && ImGui::MenuItem("Audio Source")) {

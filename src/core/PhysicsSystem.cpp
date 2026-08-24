@@ -1,5 +1,7 @@
 #include "core/PhysicsSystem.hpp"
 #include "core/CollisionSAT.hpp"
+#include "core/Heightfield.hpp"
+#include "core/HeightfieldCache.hpp"
 #include "core/PhysicsSettings.hpp"
 
 #include <glm/gtc/quaternion.hpp>
@@ -8,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace Supersonic {
 
@@ -85,7 +88,12 @@ float combineFriction(float a, float b) {
 // A sphere is a capsule whose segment has no length, which is why there is no
 // separate sphere test below: keeping them apart means two implementations that
 // can disagree about a case neither author thought of.
-enum class Shape { Box, Sphere, Capsule };
+//
+// Heightfield is the odd one out and stays that way on purpose: it is always
+// immovable, it is the only shape whose collision lives outside CollisionSAT,
+// and it is a SURFACE rather than a volume. Folding it in with the others would
+// mean every one of those three facts becoming a branch somewhere.
+enum class Shape { Box, Sphere, Capsule, Heightfield };
 
 struct Body {
     entt::entity entity{entt::null};
@@ -99,6 +107,24 @@ struct Body {
     // Half the length of a capsule's straight section, along axes[1]. Zero for
     // a sphere, which is the whole of the difference between the two.
     float halfSegment{0.0f};
+
+    // ---- Heightfields only ----
+    //
+    // The grid itself, owned by the registry's HeightfieldCache and valid for
+    // as long as the step is.
+    const Heightfield* field{nullptr};
+
+    // The entity's world ORIGIN, which for a heightfield is not `centre`: the
+    // grid is not centred on it, so `centre` carries the offset to the middle
+    // of the bounds and this carries the point the local space is measured
+    // from.
+    glm::vec3 fieldOrigin{0.0f};
+
+    // One number, because a heightfield's local space has to stay a heightfield
+    // - a non-uniform scale would turn a sphere queried against it into an
+    // ellipsoid. The largest axis wins, which is the same choice a sphere
+    // collider already makes and errs by over-reporting.
+    float fieldScale{1.0f};
 
     // The box in its own frame, which is what the narrowphase needs.
     //
@@ -423,15 +449,31 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // so a body parented ten units up rested in mid-air and never fell at
         // all.
         glm::vec3 localHalfExtent(0.5f);
+        bool isSphere = false;
         if (const auto* box = registry.try_get<BoxColliderComponent>(entity)) {
             localHalfExtent = box->size * 0.5f;
         } else if (const auto* sphere = registry.try_get<SphereColliderComponent>(entity)) {
             localHalfExtent = glm::vec3(sphere->radius);
+            isSphere = true;
         }
+
+        const glm::mat4 world = parentWorld * transform.getModelMatrix();
 
         glm::vec3 centre(0.0f);
         glm::vec3 halfExtent(0.5f);
-        worldBounds(parentWorld * transform.getModelMatrix(), localHalfExtent, centre, halfExtent);
+        worldBounds(world, localHalfExtent, centre, halfExtent);
+
+        // A sphere's size comes from the SCALE, not from the bounding box of a
+        // rotated transform - the same argument as the collector below, and the
+        // same bug: a ball that had been turned at all rested above the plane by
+        // the size of the box that contains it rather than by its own radius,
+        // which for a general orientation is up to 1.73 times too high.
+        if (isSphere) {
+            const glm::mat3 basis(world);
+            const float scale = std::max({glm::length(basis[0]), glm::length(basis[1]),
+                                          glm::length(basis[2])});
+            halfExtent = glm::vec3(localHalfExtent.x * scale);
+        }
 
         const float bottom = centre.y - halfExtent.y;
         if (bottom < settings.groundPlaneY) {
@@ -507,9 +549,29 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         }
 
         if (shape == Shape::Sphere) {
-            // A sphere has one radius, so a non-uniform scale has to collapse to
-            // one number; the largest keeps it conservative.
-            body.radius = std::max({body.halfExtent.x, body.halfExtent.y, body.halfExtent.z});
+            // From the SCALE, not from the world AABB.
+            //
+            // A sphere is the same shape whichever way it is turned. The
+            // bounding box of a rotated transform is not: worldBounds sums the
+            // three scaled axes' contributions to each world axis, which for a
+            // rotation of 45 degrees about one axis is 1.41 times the radius and
+            // for a general orientation up to 1.73.
+            //
+            // Read from there, a ROLLING ball grew as it rolled. Slowly,
+            // invisibly, and without limit: every step the orientation changed,
+            // the "radius" went up by a fraction of a millimetre, the contact
+            // pushed the ball that much higher, and the ball ended up hovering
+            // further and further above whatever it was rolling on. It never
+            // showed because until terrain arrived nothing in the suite rolled -
+            // a ball dropped straight onto a box does not turn, and its
+            // orientation stays exactly identity.
+            //
+            // localHalfExtent already carries the per-axis scale and nothing
+            // else, which is where a radius has to come from. A non-uniform
+            // scale still has to collapse to one number; the largest keeps it
+            // conservative, as before.
+            body.radius = std::max({body.localHalfExtent.x, body.localHalfExtent.y,
+                                    body.localHalfExtent.z});
             body.halfExtent = glm::vec3(body.radius);
         } else if (shape == Shape::Capsule) {
             // localHalfExtent arrives as (radius, height/2, radius), already
@@ -599,11 +661,81 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     for (auto entity : registry.view<SphereColliderComponent>()) {
         // An entity carrying more than one collider would otherwise be added
         // twice and then collide with itself. Box wins, then capsule, then
-        // sphere - one order, stated once, and the queries below repeat it.
+        // sphere, then heightfield - one order, stated once, and the queries
+        // below repeat it.
         if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent>(entity)) continue;
         const auto& sphere = registry.get<SphereColliderComponent>(entity);
         collect(entity, Shape::Sphere, glm::vec3(sphere.radius), sphere.isTrigger,
                 sphere.center, sphere.layer, sphere.collidesWith);
+    }
+
+    // Terrain. Gathered on its own rather than through `collect`, because
+    // almost nothing it needs is what `collect` computes: the grid's bounds are
+    // not centred on the entity, its mass is zero whatever the scene says, and
+    // the narrowphase wants the grid's frame rather than an oriented box.
+    for (auto entity : registry.view<HeightfieldColliderComponent>()) {
+        if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent,
+                            SphereColliderComponent>(entity)) continue;
+
+        const auto* transform = registry.try_get<TransformComponent>(entity);
+        if (!transform) continue;
+
+        const auto& terrain = registry.get<HeightfieldColliderComponent>(entity);
+        const Heightfield* field = HeightfieldCache::For(registry).Get(terrain);
+        if (!field) continue;
+
+        const glm::mat4 parentWorld = parentWorldMatrix(registry, entity);
+        const glm::mat4 world = parentWorld * transform->getModelMatrix();
+
+        Body body;
+        body.entity = entity;
+        body.shape = Shape::Heightfield;
+        body.isTrigger = terrain.isTrigger;
+        body.field = field;
+        body.fieldOrigin = glm::vec3(world[3]);
+        body.worldToLocal = glm::inverse(glm::mat3(parentWorld));
+
+        // Immovable whatever else is on the entity. A RigidBodyComponent
+        // attached to terrain would otherwise make the ground fall, and nothing
+        // about that reads as a mistake in an inspector.
+        body.inverseMass = 0.0f;
+        body.inverseInertia = glm::mat3(0.0f);
+
+        float largestScale = 0.0f;
+        for (int axis = 0; axis < 3; ++axis) {
+            const glm::vec3 column = glm::vec3(world[axis]);
+            const float length = glm::length(column);
+            body.axes[axis] = length > 1e-6f ? column / length
+                                             : glm::vec3(axis == 0, axis == 1, axis == 2);
+            largestScale = std::max(largestScale, length);
+        }
+        body.fieldScale = largestScale > 1e-6f ? largestScale : 1.0f;
+
+        // The grid's local bounds are NOT centred on the origin - a 64-wide
+        // field spans -32 to +31 - so the offset to the middle of them goes
+        // through the world matrix exactly the way a box collider's `center`
+        // does. Skip it and the broadphase bound sits half a cell off, which
+        // loses the pair at one edge of the terrain and invents one at the other.
+        const glm::vec3 localMin = field->LocalMin();
+        const glm::vec3 localMax = field->LocalMax();
+        worldBounds(world, (localMax - localMin) * 0.5f, body.centre, body.halfExtent);
+        body.centre += glm::vec3(world * glm::vec4((localMin + localMax) * 0.5f, 0.0f));
+
+        body.min = body.centre - body.halfExtent;
+        body.max = body.centre + body.halfExtent;
+
+        Proxy proxy;
+        proxy.entity = entity;
+        proxy.index = bodies.size();
+        proxy.min = body.min;
+        proxy.max = body.max;
+        proxy.inverseMass = 0.0f;
+        proxy.isTrigger = terrain.isTrigger;
+        proxy.layer = terrain.layer;
+        proxy.collidesWith = terrain.collidesWith;
+
+        bodies.push_back(body);
+        proxies.push_back(proxy);
     }
 
     if (bodies.size() < 2) return;
@@ -715,12 +847,91 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         glm::vec3 manifoldPoints[CollisionSAT::kMaxContactPoints];
         int manifoldCount = 0;
 
+        // One normal per POINT, which only terrain needs. Two boxes touching
+        // face to face really do share a normal, and so do a capsule's two ends
+        // resting on one flat surface; a capsule lying across a ridge does not,
+        // and holding both its ends to the ridge's average would push each of
+        // them into the ground on its own side.
+        glm::vec3 manifoldNormals[CollisionSAT::kMaxContactPoints];
+        bool perPointNormals = false;
+
         // How far this pair can close during the step. Anything further apart
         // than this cannot meet before the next step, so reporting it would only
         // make the solver brake for something it will never reach.
         const float pairMargin = glm::length(a.sweep) + glm::length(b.sweep);
 
-        if (a.shape == Shape::Box && b.shape == Shape::Box) {
+        if (a.shape == Shape::Heightfield || b.shape == Shape::Heightfield) {
+            // Two of them never collide: both are immovable surfaces, so there
+            // is nothing a contact between them could do to either.
+            if (a.shape == Shape::Heightfield && b.shape == Shape::Heightfield) continue;
+
+            const Body& terrain = (a.shape == Shape::Heightfield) ? a : b;
+            const Body& shape = (a.shape == Shape::Heightfield) ? b : a;
+            if (!terrain.field) continue;
+
+            // Into the grid's own space, where a cell is one unit across and
+            // the surface is the function Heightfield knows how to answer for.
+            // The axes are orthonormal, so the transpose is the inverse.
+            const glm::mat3 intoField = glm::transpose(terrain.axes);
+            const float scale = terrain.fieldScale;
+            const float inverseScale = 1.0f / scale;
+            const auto toField = [&](const glm::vec3& position) {
+                return intoField * (position - terrain.fieldOrigin) * inverseScale;
+            };
+
+            Heightfield::Manifold local;
+            if (shape.shape == Shape::Box) {
+                CollisionSAT::Obb box;
+                box.centre = toField(shape.centre);
+                box.halfExtent = shape.localHalfExtent * inverseScale;
+                box.axes = intoField * shape.axes;
+                local = terrain.field->CollideObb(box, pairMargin * inverseScale);
+            } else {
+                // A sphere is a capsule with no length, exactly as everywhere
+                // else here, so this is both round shapes at once.
+                glm::vec3 endA(0.0f);
+                glm::vec3 endB(0.0f);
+                capsuleEnds(shape, endA, endB);
+                local = terrain.field->CollideCapsule(toField(endA), toField(endB),
+                                                      shape.radius * inverseScale,
+                                                      pairMargin * inverseScale);
+            }
+
+            if (local.count > 0) {
+                hit = true;
+                speculative = local.speculative;
+                perPointNormals = true;
+
+                // The contact normal comes out of the SURFACE toward the shape,
+                // which is a-toward-b when the terrain is a and the reverse
+                // when it is b.
+                const float facing = (a.shape == Shape::Heightfield) ? 1.0f : -1.0f;
+
+                glm::vec3 centroid(0.0f);
+                float deepest = -std::numeric_limits<float>::max();
+                for (int i = 0; i < local.count &&
+                                manifoldCount < CollisionSAT::kMaxContactPoints; ++i) {
+                    const glm::vec3 worldPoint =
+                        terrain.fieldOrigin + terrain.axes * (local.points[i].position * scale);
+
+                    manifoldNormals[manifoldCount] = terrain.axes * local.points[i].normal * facing;
+                    manifoldPoints[manifoldCount] = worldPoint;
+                    ++manifoldCount;
+
+                    centroid += worldPoint;
+
+                    // Same split as box-box: the deepest point says how far to
+                    // push and along what, the centroid says where.
+                    const float depth = local.points[i].penetration * scale;
+                    if (depth > deepest) {
+                        deepest = depth;
+                        normal = manifoldNormals[manifoldCount - 1];
+                    }
+                }
+                penetration = deepest;
+                point = centroid / static_cast<float>(manifoldCount);
+            }
+        } else if (a.shape == Shape::Box && b.shape == Shape::Box) {
             // SAT over fifteen axes, against the boxes' own frames rather than
             // their world AABBs. The manifold can carry up to four points; the
             // solver still resolves one, so the deepest is used - the extra
@@ -879,6 +1090,11 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             manifoldCount = 1;
         }
 
+        // Every path but terrain's produces one normal for the whole manifold.
+        if (!perPointNormals) {
+            for (int i = 0; i < manifoldCount; ++i) manifoldNormals[i] = normal;
+        }
+
         const float bounceA = rigidA ? rigidA->restitution : kRestitution;
         const float bounceB = rigidB ? rigidB->restitution : kRestitution;
         const float gripA = rigidA ? rigidA->friction : kFriction;
@@ -893,7 +1109,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             Constraint constraint;
             constraint.bodyA = proxies[pi].index;
             constraint.bodyB = proxies[pj].index;
-            constraint.normal = normal;
+            constraint.normal = manifoldNormals[pointIndex];
             constraint.armA = manifoldPoints[pointIndex] - a.centre;
             constraint.armB = manifoldPoints[pointIndex] - b.centre;
             constraint.friction = grip;
@@ -901,11 +1117,12 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // Effective mass along the normal, including how hard each body is
             // to turn about this contact. The linear term alone applies an
             // impulse far too large for a glancing hit near a corner.
-            const glm::vec3 angularA =
-                glm::cross(a.inverseInertia * glm::cross(constraint.armA, normal), constraint.armA);
-            const glm::vec3 angularB =
-                glm::cross(b.inverseInertia * glm::cross(constraint.armB, normal), constraint.armB);
-            const float effectiveMass = inverseSum + glm::dot(angularA + angularB, normal);
+            const glm::vec3 angularA = glm::cross(
+                a.inverseInertia * glm::cross(constraint.armA, constraint.normal), constraint.armA);
+            const glm::vec3 angularB = glm::cross(
+                b.inverseInertia * glm::cross(constraint.armB, constraint.normal), constraint.armB);
+            const float effectiveMass =
+                inverseSum + glm::dot(angularA + angularB, constraint.normal);
             if (effectiveMass <= 1e-9f) continue;
             constraint.normalMass = effectiveMass;
 
@@ -920,7 +1137,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             const glm::vec3 velocityB =
                 ((rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f))
                 + glm::cross(spinB, constraint.armB);
-            const float alongNormal = glm::dot(velocityB - velocityA, normal);
+            const float alongNormal = glm::dot(velocityB - velocityA, constraint.normal);
 
             // Bounce dies out near rest, or a settling box jitters forever.
             const float restitution = (std::abs(alongNormal) < kRestVelocity)
@@ -1103,8 +1320,14 @@ bool rayHitsSphere(const glm::vec3& origin, const glm::vec3& direction,
 
 // The world-space shape of one collider, shared by every query.
 struct QueryShape {
+    // This was a bool called isSphere, which was fine while there were two
+    // answers. Terrain is a third and cannot be either: its bounding box is the
+    // box the hills fit inside, and answering a query with that would report
+    // solid ground for anything anywhere above the landscape.
+    enum class Kind { Box, Sphere, Heightfield };
+
     entt::entity entity{entt::null};
-    bool isSphere{false};
+    Kind kind{Kind::Box};
     bool isTrigger{false};
     glm::vec3 centre{0.0f};
     glm::vec3 halfExtent{0.5f};
@@ -1113,10 +1336,47 @@ struct QueryShape {
     // Queries filter on the same mask the solver does, so "what can a bullet
     // hit" and "what does a bullet collide with" cannot disagree.
     uint32_t layer{1u};
+
+    // Terrain only: the grid, and the frame a query has to be taken into.
+    const Heightfield* field{nullptr};
+    glm::vec3 fieldOrigin{0.0f};
+    glm::mat3 fieldAxes{1.0f};
+    float fieldScale{1.0f};
 };
 
+// A ray against terrain, marched over the grid's cells in its own space.
+//
+// The alternative - the bounding box, which is what a box collider gets here
+// and is right for it - is not an approximation of a landscape, it is the sky
+// above it. PhysicsSystem::IsGrounded fires a ray downwards, so a
+// bounding-box answer is a character reporting that it is standing on the
+// ground while it falls past a mountain.
+bool rayHitsHeightfield(const QueryShape& shape, const glm::vec3& origin, const glm::vec3& ray,
+                        float maxDistance, float& outDistance, glm::vec3& outNormal) {
+    if (!shape.field || maxDistance <= 0.0f) return false;
+
+    const glm::mat3 intoField = glm::transpose(shape.fieldAxes);
+    const float inverseScale = 1.0f / shape.fieldScale;
+
+    const glm::vec3 localOrigin = intoField * (origin - shape.fieldOrigin) * inverseScale;
+    // Rotation only, so the direction stays unit length and what comes back is
+    // a distance in the grid's units.
+    const glm::vec3 localRay = intoField * ray;
+
+    float localDistance = 0.0f;
+    glm::vec3 localNormal(0.0f, 1.0f, 0.0f);
+    if (!shape.field->Raycast(localOrigin, localRay, maxDistance * inverseScale,
+                              localDistance, localNormal)) {
+        return false;
+    }
+
+    outDistance = localDistance * shape.fieldScale;
+    outNormal = shape.fieldAxes * localNormal;
+    return true;
+}
+
 void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
-    const auto collect = [&](entt::entity entity, bool sphere,
+    const auto collect = [&](entt::entity entity, QueryShape::Kind kind,
                              const glm::vec3& localHalfExtent, bool isTrigger,
                              const glm::vec3& localCenter, uint32_t layer) {
         const auto* transform = registry.try_get<TransformComponent>(entity);
@@ -1124,7 +1384,7 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
 
         QueryShape shape;
         shape.entity = entity;
-        shape.isSphere = sphere;
+        shape.kind = kind;
         shape.isTrigger = isTrigger;
 
         const glm::mat4 world = parentWorldMatrix(registry, entity) * transform->getModelMatrix();
@@ -1134,7 +1394,7 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
         }
         shape.layer = layer;
 
-        if (sphere) {
+        if (kind == QueryShape::Kind::Sphere) {
             shape.radius = std::max({shape.halfExtent.x, shape.halfExtent.y, shape.halfExtent.z});
             shape.halfExtent = glm::vec3(shape.radius);
         }
@@ -1143,7 +1403,8 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
 
     for (auto entity : registry.view<BoxColliderComponent>()) {
         const auto& box = registry.get<BoxColliderComponent>(entity);
-        collect(entity, false, box.size * 0.5f, box.isTrigger, box.center, box.layer);
+        collect(entity, QueryShape::Kind::Box, box.size * 0.5f, box.isTrigger, box.center,
+                box.layer);
     }
     for (auto entity : registry.view<CapsuleColliderComponent>()) {
         if (registry.all_of<BoxColliderComponent>(entity)) continue;
@@ -1153,7 +1414,8 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
         // shoulder; it over-reports rather than missing, which is the right
         // direction for "what am I looking at" and the wrong one for a bullet
         // that has to be fair.
-        collect(entity, false, glm::vec3(capsule.radius, capsule.height * 0.5f, capsule.radius),
+        collect(entity, QueryShape::Kind::Box,
+                glm::vec3(capsule.radius, capsule.height * 0.5f, capsule.radius),
                 capsule.isTrigger, capsule.center, capsule.layer);
     }
     for (auto entity : registry.view<SphereColliderComponent>()) {
@@ -1161,8 +1423,50 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
         // collider is gathered once, or a query would report it against itself.
         if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent>(entity)) continue;
         const auto& sphere = registry.get<SphereColliderComponent>(entity);
-        collect(entity, true, glm::vec3(sphere.radius), sphere.isTrigger,
+        collect(entity, QueryShape::Kind::Sphere, glm::vec3(sphere.radius), sphere.isTrigger,
                 sphere.center, sphere.layer);
+    }
+
+    // Terrain last, which is the order the solver gathers in.
+    for (auto entity : registry.view<HeightfieldColliderComponent>()) {
+        if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent,
+                            SphereColliderComponent>(entity)) continue;
+
+        const auto* transform = registry.try_get<TransformComponent>(entity);
+        if (!transform) continue;
+
+        const auto& terrain = registry.get<HeightfieldColliderComponent>(entity);
+        const Heightfield* field = HeightfieldCache::For(registry).Get(terrain);
+        if (!field) continue;
+
+        const glm::mat4 world = parentWorldMatrix(registry, entity) * transform->getModelMatrix();
+
+        QueryShape shape;
+        shape.entity = entity;
+        shape.kind = QueryShape::Kind::Heightfield;
+        shape.isTrigger = terrain.isTrigger;
+        shape.layer = terrain.layer;
+        shape.field = field;
+        shape.fieldOrigin = glm::vec3(world[3]);
+
+        float largestScale = 0.0f;
+        for (int axis = 0; axis < 3; ++axis) {
+            const glm::vec3 column = glm::vec3(world[axis]);
+            const float length = glm::length(column);
+            shape.fieldAxes[axis] = length > 1e-6f ? column / length
+                                                   : glm::vec3(axis == 0, axis == 1, axis == 2);
+            largestScale = std::max(largestScale, length);
+        }
+        shape.fieldScale = largestScale > 1e-6f ? largestScale : 1.0f;
+
+        // The bounds are filled in anyway, because they are what anything else
+        // reading this list - an editor gizmo, a debug draw - expects to find.
+        const glm::vec3 localMin = field->LocalMin();
+        const glm::vec3 localMax = field->LocalMax();
+        worldBounds(world, (localMax - localMin) * 0.5f, shape.centre, shape.halfExtent);
+        shape.centre += glm::vec3(world * glm::vec4((localMin + localMax) * 0.5f, 0.0f));
+
+        out.push_back(shape);
     }
 }
 
@@ -1191,10 +1495,19 @@ PhysicsSystem::RayHit PhysicsSystem::Raycast(entt::registry& registry, const glm
 
         float distance = 0.0f;
         glm::vec3 normal(0.0f);
-        const bool hit = shape.isSphere
-            ? rayHitsSphere(origin, ray, shape.centre, shape.radius, nearest, distance, normal)
-            : rayHitsAabb(origin, ray, shape.centre - shape.halfExtent,
-                          shape.centre + shape.halfExtent, nearest, distance, normal);
+        bool hit = false;
+        switch (shape.kind) {
+        case QueryShape::Kind::Sphere:
+            hit = rayHitsSphere(origin, ray, shape.centre, shape.radius, nearest, distance, normal);
+            break;
+        case QueryShape::Kind::Heightfield:
+            hit = rayHitsHeightfield(shape, origin, ray, nearest, distance, normal);
+            break;
+        case QueryShape::Kind::Box:
+            hit = rayHitsAabb(origin, ray, shape.centre - shape.halfExtent,
+                              shape.centre + shape.halfExtent, nearest, distance, normal);
+            break;
+        }
 
         if (!hit || distance > nearest) continue;
 
@@ -1221,9 +1534,22 @@ void PhysicsSystem::OverlapSphere(entt::registry& registry, const glm::vec3& cen
         if (shape.isTrigger && !includeTriggers) continue;
         if ((layerMask & shape.layer) == 0) continue;
 
-        if (shape.isSphere) {
+        if (shape.kind == QueryShape::Kind::Sphere) {
             const float reach = radius + shape.radius;
             if (glm::dot(shape.centre - centre, shape.centre - centre) <= reach * reach) {
+                outEntities.push_back(shape.entity);
+            }
+            continue;
+        }
+
+        if (shape.kind == QueryShape::Kind::Heightfield) {
+            // Against the SURFACE, for the same reason the ray is: an overlap
+            // against a landscape's bounding box reports the whole sky above it.
+            if (!shape.field) continue;
+            const glm::mat3 intoField = glm::transpose(shape.fieldAxes);
+            const float inverseScale = 1.0f / shape.fieldScale;
+            const glm::vec3 local = intoField * (centre - shape.fieldOrigin) * inverseScale;
+            if (shape.field->CollideSphere(local, radius * inverseScale).count > 0) {
                 outEntities.push_back(shape.entity);
             }
             continue;

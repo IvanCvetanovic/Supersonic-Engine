@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "core/Components.hpp"
+#include "core/TerrainGenerator.hpp"
 
 #include <algorithm>
 
@@ -231,6 +232,16 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << ", \"IsTrigger\": " << (capsule->isTrigger ? "true" : "false")
             << ", \"Layer\": " << capsule->layer
             << ", \"CollidesWith\": " << capsule->collidesWith << " },\n";
+    }
+
+    if (const auto* terrain = registry.try_get<HeightfieldColliderComponent>(entity)) {
+        out << indent << "\"HeightfieldCollider\": { \"Width\": " << terrain->width
+            << ", \"Depth\": " << terrain->depth
+            << ", \"HeightScale\": " << terrain->heightScale
+            << ", \"Thickness\": " << terrain->thickness
+            << ", \"IsTrigger\": " << (terrain->isTrigger ? "true" : "false")
+            << ", \"Layer\": " << terrain->layer
+            << ", \"CollidesWith\": " << terrain->collidesWith << " },\n";
     }
 
     if (const auto* listener = registry.try_get<AudioListenerComponent>(entity)) {
@@ -565,6 +576,25 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             node["CapsuleCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
         capsule.collidesWith = static_cast<uint32_t>(
             node["CapsuleCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
+    }
+
+    if (node.Has("HeightfieldCollider")) {
+        auto& terrain = registry.emplace_or_replace<HeightfieldColliderComponent>(entity);
+        // The defaults are TerrainGenerator::kPrimitive*, so a scene file that
+        // only says the collider exists gets one that matches the "Terrain"
+        // mesh primitive rather than a 0 x 0 grid that silently has no surface.
+        terrain.width = static_cast<uint32_t>(
+            node["HeightfieldCollider"]["Width"].AsNumber(TerrainGenerator::kPrimitiveWidth));
+        terrain.depth = static_cast<uint32_t>(
+            node["HeightfieldCollider"]["Depth"].AsNumber(TerrainGenerator::kPrimitiveDepth));
+        terrain.heightScale = node["HeightfieldCollider"]["HeightScale"].AsFloat(
+            TerrainGenerator::kPrimitiveHeightScale);
+        terrain.thickness = node["HeightfieldCollider"]["Thickness"].AsFloat(4.0f);
+        terrain.isTrigger = node["HeightfieldCollider"]["IsTrigger"].AsBool(false);
+        terrain.layer = static_cast<uint32_t>(
+            node["HeightfieldCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
+        terrain.collidesWith = static_cast<uint32_t>(
+            node["HeightfieldCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
     if (node.Has("AudioListener")) {

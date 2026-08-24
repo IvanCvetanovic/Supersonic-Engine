@@ -14,6 +14,9 @@
 #include "core/PhysicsSettings.hpp"
 #include "core/Components.hpp"
 #include "core/TransformSystem.hpp"
+#include "core/Heightfield.hpp"
+#include "core/HeightfieldCache.hpp"
+#include "core/TerrainGenerator.hpp"
 #include "core/SceneSerializer.hpp"
 
 #include <filesystem>
@@ -102,6 +105,286 @@ static PhysicsSystem::Proxy makeProxy(uint32_t id, size_t index,
     proxy.max = max;
     proxy.inverseMass = inverseMass;
     return proxy;
+}
+
+// ---- Terrain ---------------------------------------------------------------
+//
+// The README named this gap for a long time: the procedurally generated terrain
+// was scenery you fell through. Heightfield's own suite proves the geometry;
+// what these prove is that the solver and the queries can reach it - a surface
+// that is solid to the narrowphase and invisible to IsGrounded is worse than
+// one you fall through, because a character controller then reports that it is
+// standing on ground while it drops past a mountain.
+
+static entt::entity makeTerrain(entt::registry& registry,
+                                const glm::vec3& position = glm::vec3(0.0f),
+                                float scale = 1.0f) {
+    const auto entity = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(entity);
+    transform.position = position;
+    transform.scale = glm::vec3(scale);
+    registry.emplace<HeightfieldColliderComponent>(entity);
+    return entity;
+}
+
+// The surface the collider describes, asked of the same grid the solver uses.
+// Not the analytic sine: the collider is two flat triangles per cell, and
+// inside a cell those differ from the smooth surface by a real amount.
+static float terrainHeightAt(entt::registry& registry, entt::entity terrain,
+                             float worldX, float worldZ) {
+    const auto& collider = registry.get<HeightfieldColliderComponent>(terrain);
+    const auto& transform = registry.get<TransformComponent>(terrain);
+    const Heightfield* field = HeightfieldCache::For(registry).Get(collider);
+    if (!field) return 0.0f;
+
+    const float scale = transform.scale.x;
+    float height = 0.0f;
+    if (!field->HeightAt((worldX - transform.position.x) / scale,
+                         (worldZ - transform.position.z) / scale, height)) {
+        return 0.0f;
+    }
+    return transform.position.y + height * scale;
+}
+
+// The bottom of a bowl in the standard terrain, which is where a ball can
+// actually come to rest.
+//
+// h = 0.6 * (sin(0.2x) + cos(0.2z)), so both terms are at their minimum when
+// 0.2x = -pi/2 and 0.2z = pi. Anywhere else on this surface is a slope, and a
+// ball on a slope is still moving when the test looks at it - which is correct
+// behaviour and useless as an expected value.
+static constexpr float kBasinX = -7.853982f;
+static constexpr float kBasinZ = 15.707963f;
+
+static void testASphereIsTheSameSizeWhicheverWayItIsTurned() {
+    // Found by the terrain tests, and nothing to do with terrain: a sphere is
+    // rotation-invariant and the solver did not agree. Its radius came from the
+    // world bounding box, whose half extent for a rotated transform is the sum
+    // of the three axes' contributions - 1.41 times the radius at 45 degrees
+    // about one axis, up to 1.73 in general.
+    //
+    // Nothing caught it because until something rolled, nothing rotated: a ball
+    // dropped straight onto a box lands with its orientation still exactly
+    // identity. Put one on a hill and it rolls, its orientation changes every
+    // step, and the ball grows as it goes - hovering a little higher above the
+    // ground each step, without limit.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f), glm::vec3(10.0f, 1.0f, 10.0f));
+
+    const auto upright = makeSphere(registry, glm::vec3(-2.0f, 3.0f, 0.0f), 0.5f);
+    const auto turned = makeSphere(registry, glm::vec3(2.0f, 3.0f, 0.0f), 0.5f);
+    registry.get<TransformComponent>(turned).rotation = glm::vec3(0.7f, 0.5f, 0.9f);
+
+    stepFor(registry, 3.0f);
+
+    const float restA = registry.get<TransformComponent>(upright).position.y;
+    const float restB = registry.get<TransformComponent>(turned).position.y;
+    CHECK_MSG(test::nearly(restA, 1.0f, 0.02f), "the upright ball rests on top of the platform");
+    CHECK_MSG(test::nearly(restA, restB, 1e-3f), "and turning one must not change its size");
+}
+
+static void testABallLandsOnTheTerrainInsteadOfFallingThroughIt() {
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry);
+
+    const float x = kBasinX;
+    const float z = kBasinZ;
+    const float surface = terrainHeightAt(registry, terrain, x, z);
+
+    const auto ball = makeSphere(registry, glm::vec3(x, surface + 2.0f, z), 0.5f);
+    stepFor(registry, 6.0f);
+
+    const auto& transform = registry.get<TransformComponent>(ball);
+    CHECK_MSG(transform.position.y > surface - 0.5f,
+              "the ball must end up on the terrain, not somewhere under it");
+
+    // Measured where it ACTUALLY IS: even in a bowl it rolls a little on the
+    // way down, and the invariant being tested is that it is on the ground,
+    // not that it is on one particular square metre of it.
+    const float under = terrainHeightAt(registry, terrain, transform.position.x,
+                                        transform.position.z);
+    // kSlop is the overlap the solver deliberately leaves; anything more than a
+    // few times that is resting on the wrong thing.
+    CHECK_MSG(test::nearly(transform.position.y, under + 0.5f, 0.05f),
+              "and resting exactly one radius above the surface beneath it");
+    CHECK_MSG(glm::length(registry.get<RigidBodyComponent>(ball).velocity) < 0.5f,
+              "and it has come to rest rather than still sliding through");
+}
+
+static void testABallOnASlopeRollsDownhill() {
+    // The reason the contact normal has to be the hill's rather than +Y, and
+    // the failure the SAT narrowphase was written to fix in the shape that
+    // replaced it: a ball held up along +Y rests in the air on a slope and
+    // never moves.
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry);
+
+    // dh/dx = 0.12 * cos(0.2x), which at x = 2.5 is +0.105: the ground climbs
+    // towards +x, so downhill is -x. dh/dz there is small enough not to decide
+    // anything.
+    const float x = 2.5f;
+    const float z = -3.5f;
+    const float surface = terrainHeightAt(registry, terrain, x, z);
+
+    // Placed ON the surface rather than dropped, so this is about the normal
+    // rather than about a bounce.
+    const auto ball = makeSphere(registry, glm::vec3(x, surface + 0.5f, z), 0.5f);
+    stepFor(registry, 1.0f);
+
+    const auto& transform = registry.get<TransformComponent>(ball);
+    CHECK_MSG(transform.position.x < x - 0.1f, "a ball on a slope rolls down it");
+    CHECK_MSG(transform.position.y < surface + 0.5f,
+              "and downhill is also downwards");
+}
+
+static void testWithoutTheColliderItStillFallsThrough() {
+    // The control, and the whole of what the README described. Without it the
+    // test above could pass because the ball stopped for some other reason -
+    // the world ground plane, a sleep threshold, an integrator that ran out of
+    // steps - rather than because the terrain is solid.
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry);
+    registry.remove<HeightfieldColliderComponent>(terrain);
+    registry.emplace<TagComponent>(terrain, "scenery");
+
+    // Something else with a collider, so the step does not return early for
+    // having fewer than two bodies.
+    makeStaticBox(registry, glm::vec3(50.0f, 0.0f, 50.0f));
+
+    const auto ball = makeSphere(registry, glm::vec3(2.5f, 6.0f, -3.5f), 0.5f);
+    stepFor(registry, 3.0f);
+
+    CHECK_MSG(registry.get<TransformComponent>(ball).position.y < -10.0f,
+              "with no collider the terrain is scenery and the ball goes through it");
+}
+
+static void testTerrainThatHasBeenMovedAndScaledStillHoldsThings() {
+    // The frame conversion, which is the part of the wiring that has nothing to
+    // do with the geometry: the shape goes into the grid's space, the contact
+    // comes back out of it, and a missed scale is a surface at the right shape
+    // and the wrong size.
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry, glm::vec3(10.0f, 3.0f, -4.0f), 2.0f);
+
+    // The same bowl, in the terrain's own coordinates, taken out to where the
+    // transform has put it.
+    const float x = 10.0f + 2.0f * kBasinX;
+    const float z = -4.0f + 2.0f * kBasinZ;
+    const float surface = terrainHeightAt(registry, terrain, x, z);
+    CHECK_MSG(surface > 3.0f - 2.5f && surface < 3.0f,
+              "the moved terrain has to be where the transform put it");
+
+    const auto ball = makeSphere(registry, glm::vec3(x, surface + 2.0f, z), 0.5f);
+    stepFor(registry, 6.0f);
+
+    const auto& resting = registry.get<TransformComponent>(ball);
+    const float under = terrainHeightAt(registry, terrain, resting.position.x, resting.position.z);
+    CHECK_MSG(test::nearly(resting.position.y, under + 0.5f, 0.06f),
+              "a terrain moved and scaled still holds a ball one radius above its surface");
+    CHECK_MSG(resting.position.y > 0.5f,
+              "and it is up where the transform put the terrain, not down at the origin");
+}
+
+static void testABuriedBodyIsPushedBackOutOfTheGround() {
+    // Placed inside the hill, which is what a spawn point, a gizmo drag or a
+    // script does sooner or later. With a one-sided surface there is no way out
+    // and the body stays there forever.
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry);
+
+    const float x = -1.5f;
+    const float z = 4.5f;
+    const float surface = terrainHeightAt(registry, terrain, x, z);
+
+    const auto ball = makeSphere(registry, glm::vec3(x, surface - 1.0f, z), 0.5f);
+    registry.get<RigidBodyComponent>(ball).useGravity = false;
+    stepFor(registry, 2.0f);
+
+    CHECK_MSG(registry.get<TransformComponent>(ball).position.y > surface,
+              "a body under the terrain has to come back up through the top of it");
+}
+
+static void testTheGroundCheckSeesTerrain() {
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry);
+
+    const float x = 5.5f;
+    const float z = 5.5f;
+    const float surface = terrainHeightAt(registry, terrain, x, z);
+
+    CHECK_MSG(PhysicsSystem::IsGrounded(registry, glm::vec3(x, surface + 0.05f, z), 0.15f),
+              "standing on the terrain is standing on the ground");
+    CHECK_MSG(!PhysicsSystem::IsGrounded(registry, glm::vec3(x, surface + 5.0f, z), 0.15f),
+              "and five units above it is not");
+}
+
+static void testARayStopsAtTheSurfaceAndNotAtTheBoundingBox() {
+    // THE query that tells a real heightfield from one answered with its
+    // bounds. The terrain's box reaches its highest hill everywhere, so a
+    // bounding-box answer stops the ray at that height above every valley -
+    // which is a character standing on thin air over the whole map.
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry);
+
+    // A low point: sin(0.2x) and cos(0.2z) both near their minimum.
+    const float x = -7.5f;
+    const float z = 15.5f;
+    const float surface = terrainHeightAt(registry, terrain, x, z);
+
+    const float from = 20.0f;
+    const auto hit = PhysicsSystem::Raycast(registry, glm::vec3(x, from, z),
+                                            glm::vec3(0.0f, -1.0f, 0.0f), 100.0f);
+    CHECK(hit.hit);
+    CHECK_MSG(hit.entity == terrain, "and it must be the terrain it hit");
+    CHECK_MSG(test::nearly(hit.distance, from - surface, 0.01f),
+              "the ray stops at the surface");
+    CHECK_MSG(test::nearly(hit.point.y, surface, 0.01f), "at the surface's height");
+
+    // The bounding box would have stopped it at the tallest hill in the field,
+    // which is a different answer - and this is the check that says so rather
+    // than assuming it.
+    const float tallest = TerrainGenerator::kPrimitiveHeightScale * 2.0f;
+    CHECK_MSG(tallest - surface > 0.5f, "the valley has to be well below the peaks");
+    CHECK_MSG(hit.distance > from - tallest + 0.5f, "and the ray must reach past them");
+
+    // Nothing below the ray at all, off the side of the grid.
+    const auto miss = PhysicsSystem::Raycast(registry, glm::vec3(500.0f, from, z),
+                                             glm::vec3(0.0f, -1.0f, 0.0f), 100.0f);
+    CHECK(!miss.hit);
+}
+
+static void testOverlapSphereSeesTerrain() {
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry);
+    const float surface = terrainHeightAt(registry, terrain, 1.5f, 1.5f);
+
+    std::vector<entt::entity> touching;
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(1.5f, surface + 0.2f, 1.5f), 0.5f, touching);
+    CHECK_MSG(touching.size() == 1 && touching[0] == terrain,
+              "a sphere resting on the ground overlaps it");
+
+    touching.clear();
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(1.5f, surface + 20.0f, 1.5f), 0.5f, touching);
+    CHECK_MSG(touching.empty(), "and one twenty units up does not");
+}
+
+static void testTerrainNeverMovesEvenWithARigidBodyOnIt() {
+    // A RigidBodyComponent on terrain would otherwise make the ground fall, and
+    // nothing about that reads as a mistake in an inspector.
+    entt::registry registry;
+    const auto terrain = makeTerrain(registry);
+    registry.emplace<RigidBodyComponent>(terrain).mass = 1.0f;
+
+    makeSphere(registry, glm::vec3(0.5f, 4.0f, 0.5f), 0.5f);
+    const glm::vec3 before = registry.get<TransformComponent>(terrain).position;
+    stepFor(registry, 1.0f);
+    const glm::vec3 after = registry.get<TransformComponent>(terrain).position;
+
+    // The rigid body still integrates - it is a body with gravity - but nothing
+    // the collider does may push it, and nothing may rest ON a surface that is
+    // being pushed around by what is resting on it.
+    CHECK_MSG(after.x == before.x && after.z == before.z,
+              "terrain must not be shoved sideways by whatever lands on it");
 }
 
 static void testSweepAndPruneFindsOverlappingPairs() {
@@ -1784,6 +2067,17 @@ static void runTests() {
     testFixedStepKeepsABodyOnTheGround();
     testAFastProjectileDoesNotPassThroughAThinWall();
 
+    testASphereIsTheSameSizeWhicheverWayItIsTurned();
+    testABallLandsOnTheTerrainInsteadOfFallingThroughIt();
+    testABallOnASlopeRollsDownhill();
+    testWithoutTheColliderItStillFallsThrough();
+    testTerrainThatHasBeenMovedAndScaledStillHoldsThings();
+    testABuriedBodyIsPushedBackOutOfTheGround();
+    testTheGroundCheckSeesTerrain();
+    testARayStopsAtTheSurfaceAndNotAtTheBoundingBox();
+    testOverlapSphereSeesTerrain();
+    testTerrainNeverMovesEvenWithARigidBodyOnIt();
+
     testRestitutionTakesTheBouncierSurface();
     testRestitutionCannotGainEnergy();
     testFrictionIsZeroIfEitherSurfaceIsIce();
@@ -1799,4 +2093,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics", 142)
+TEST_MAIN("test_physics", 160)

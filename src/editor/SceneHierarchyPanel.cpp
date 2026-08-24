@@ -274,7 +274,11 @@ void SceneHierarchyPanel::drawCreateMenu() {
     if (ImGui::MenuItem("Create Sphere")) spawn("Sphere", "Sphere", glm::vec3(0.0f, 0.5f, 0.0f));
     if (ImGui::MenuItem("Create Plane"))  spawn("Plane", "Plane", glm::vec3(0.0f), glm::vec3(10.0f, 1.0f, 10.0f));
     if (ImGui::MenuItem("Create 3D Terrain")) {
-        spawn("Procedural Terrain", "Terrain", glm::vec3(0.0f, -2.0f, 0.0f));
+        const auto entity = spawn("Procedural Terrain", "Terrain", glm::vec3(0.0f, -2.0f, 0.0f));
+        // Solid on creation, not as a second step somebody has to know about.
+        // The defaults describe the same grid the "Terrain" mesh primitive
+        // generates, so the collider and the hills are the same surface.
+        registry.emplace<HeightfieldColliderComponent>(entity);
     }
 
     if (ImGui::MenuItem("Create Physics Cube")) {

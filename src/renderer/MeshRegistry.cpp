@@ -174,7 +174,10 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
     } else if (primitiveType == "Plane") {
         ok = ModelLoader::GeneratePlane(1.0f, 1.0f, data);
     } else if (primitiveType == "Terrain") {
-        ok = TerrainGenerator::GenerateTerrainMesh(64, 64, 0.6f, data);
+        ok = TerrainGenerator::GenerateTerrainMesh(TerrainGenerator::kPrimitiveWidth,
+                                                   TerrainGenerator::kPrimitiveDepth,
+                                                   TerrainGenerator::kPrimitiveHeightScale,
+                                                   data);
     } else {
         SUPERSONIC_LOG_ERROR("MeshRegistry") << "Unknown primitive '" << primitiveType
                   << "', falling back to cube." << std::endl;

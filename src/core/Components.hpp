@@ -574,6 +574,46 @@ struct CapsuleColliderComponent {
     uint32_t collidesWith{CollisionLayer::kAll};
 };
 
+// The terrain, as something you can stand on.
+//
+// The gap this closes was in the README for a long time: the procedurally
+// generated terrain was scenery you fell through. It is not a box and it is not
+// a sphere, and approximating it with a stack of either takes thousands.
+//
+// Described by the SAME three numbers the "Terrain" mesh primitive is, and
+// deliberately not by a stored grid of heights. Both sides resolve through
+// TerrainGenerator::SampleHeight, so the collider is the surface you can see by
+// construction rather than by a scene file staying in step with it - and a
+// scene file holding four thousand floats would be unreadable and would go
+// stale the first time anyone tuned the terrain anyway.
+//
+// The consequence, stated so nobody has to discover it: these must match the
+// mesh's. The defaults are what MeshRegistry generates for the "Terrain"
+// primitive, and TerrainGenerator::kPrimitive* is the one place both read.
+struct HeightfieldColliderComponent {
+    // VERTEX counts per axis, so a 64 x 64 field has 63 x 63 cells.
+    uint32_t width{64};
+    uint32_t depth{64};
+    float heightScale{0.6f};
+
+    // How far the solid extends BELOW the surface.
+    //
+    // Not cosmetic. A body that has ended up under the terrain - spawned there,
+    // dragged there by a gizmo, put there by a script - has to be pushed out of
+    // the top, and without a bottom there is no way to say when it has left.
+    // Past this depth it is through and falls, which is a better answer than
+    // being shot up through the whole hill.
+    float thickness{4.0f};
+
+    // No `center` offset, unlike the other three colliders. A heightfield's
+    // position is the entity's transform and nothing else: the grid is centred
+    // the way the mesh is, and an offset here would put the collider somewhere
+    // the mesh is not.
+    bool isTrigger{false};
+    uint32_t layer{CollisionLayer::kDefault};
+    uint32_t collidesWith{CollisionLayer::kAll};
+};
+
 struct AudioSourceComponent {
     std::string soundFile{"assets/audio/ambient.wav"};
     float volume{0.8f};

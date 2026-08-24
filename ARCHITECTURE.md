@@ -983,11 +983,23 @@ broadphase wants a conservative bound that is cheap to compare. The narrowphase
 gets the box in its **own** frame: the three columns of the world matrix,
 normalised, as its axes, with the length of each column taken out into that
 axis's half extent, so a scaled crate collides at its scaled size. A sphere
-collapses its three world half extents to the largest, so a non-uniformly scaled
-sphere still becomes the sphere that contains it, and a capsule collapses its two
-lateral scales the same way while keeping its own axis.
+collapses its three **scaled** half extents to the largest, so a non-uniformly
+scaled sphere still becomes the sphere that contains it, and a capsule collapses
+its two lateral scales the same way while keeping its own axis.
 
-There are three collider shapes and **three** pair tests rather than six,
+The word *scaled* there is load-bearing and used not to be. A sphere's radius was
+read from the world axis-aligned box, which for a rotated transform is not the
+sphere: `worldBounds` sums the three scaled axes' contributions to each world
+axis, giving 1.41 times the radius at forty-five degrees about one axis and up to
+1.73 in general. A sphere is the same shape whichever way it is turned, so the
+radius has to come from the scale alone. Nothing caught it for as long as nothing
+rolled — a ball dropped straight onto a box lands with its orientation still
+exactly identity — and the failure needs rotation that keeps changing: put a ball
+on a hill and it grows a fraction of a millimetre every step, hovering higher and
+higher above the ground, without limit. The world ground plane read the same
+bound and had the same bug.
+
+There are four collider shapes and **four** pair tests rather than ten,
 because a sphere is a capsule whose segment has no length. Writing sphere-against-sphere separately
 would be a second implementation of the same arithmetic with its own edge cases,
 and it was: the old one had no speculative margin, so two fast spheres passed
@@ -998,6 +1010,7 @@ through each other while a sphere and a box did not.
 | round / round | nearest points between the two axis segments, against the sum of radii | exact; covers sphere/sphere, sphere/capsule and capsule/capsule |
 | box / round | nearest point between the segment and the box, then the round case against that | exact |
 | box / box | separating axis theorem over fifteen axes, then Sutherland–Hodgman clipping of the incident face against the reference face | exact, and up to four contact points |
+| heightfield / anything | nearest point on each cell triangle the shape's bounds overlap, with a face-versus-edge rule per query point | exact for the surface; see below for what a box and a capsule each approximate |
 
 The fifteen axes are the six face normals — three per box — and the nine
 cross products of one box's edge directions with the other's. The face axes alone
@@ -1058,6 +1071,67 @@ contact of their own, and both normals have to agree with the one the middle
 found, or a capsule wedged into a corner would be pushed along the average of two
 faces, into neither and out of the corner sideways. A capsule standing on a cap,
 or leaning, still gets one point, because one is all it has.
+
+**The heightfield.** Terrain is not a box and approximating it with a stack of
+them takes thousands, each of which the broadphase has to sort every step. It is
+worth a shape of its own because it is a **function**: `y = h(x, z)`, no
+overhangs, so for any point there is exactly one cell beneath it, no triangle is
+ever hidden behind another, and the cells a shape can touch are an index range
+rather than a search. A general triangle-mesh collider has to build an
+acceleration structure to reach the same answer.
+
+What the function does *not* give away is the seam problem, and the obvious loop
+gets it wrong on **flat** ground. A sphere over one triangle is also within reach
+of its neighbour, whose nearest point is the shared edge — so the neighbour
+reports a second contact whose normal leans sideways out of a surface that is not
+bent at all, and a ball rolling across a field is shoved at every cell boundary
+it crosses. Every mesh collider in existence carries a pile of internal-edge
+filtering to undo this.
+
+A heightfield does not need any of it, because it can tell the two cases apart
+directly. A contact is a **face** contact when the nearest point is the
+perpendicular foot and an **edge** contact otherwise. An edge contact is only
+ever real where the surface creases upwards — the crest of a ridge, the rim of
+the grid — and in exactly those places there is no face contact to be had. So per
+query point: if it has a face contact, its edge contacts are the artefact and are
+dropped; if it has none, they are the only thing holding it up and are kept. Per
+*point*, not per manifold, because a capsule with one cap on flat ground and the
+other on a ridge needs both kinds at once.
+
+Two more rules earn their place:
+
+- **Duplicates.** A sphere sitting exactly over a grid vertex is nearest to that
+  one point on all six triangles that meet there. Contacts within a hundredth of
+  a millimetre are merged, or the solver gets six copies of one contact and six
+  times the impulse — so a body would bounce harder landing on a seam than a
+  hand's width to either side of it, which is a physical difference between two
+  places that are geometrically identical.
+- **Thickness.** The solid extends a stated distance *below* the surface. A body
+  that has ended up under the terrain — spawned there, dragged there by a gizmo,
+  put there by a script — is pushed straight up out of the top rather than
+  sideways by whichever cell it happens to be nearest, and past that depth it is
+  through and falls. Without a bottom the surface is one-sided, which is the
+  failure mode of every thin collider.
+
+A capsule is its two end spheres, which is what the capsule-against-box path
+already documents doing and is right for the shape's purpose: a character stands
+on its lower cap. The limitation is stated rather than solved — a capsule lying
+horizontally across a ridge that touches neither end rests on nothing.
+
+A box is its eight corners against the surface **and** the surface's vertices
+against the box. Corners alone is the usual shortcut and it is wrong in a way
+that is easy to miss: a crate wider than a cell straddling a bump has none of its
+corners under the ground and the bump straight through its floor.
+
+The collider and the visible mesh are the same surface *by construction*, not by
+agreement: `TerrainGenerator::SampleHeight` is the one expression both go
+through, and the suite asserts that every one of the 4096 collider vertices
+equals the mesh vertex bit for bit. A tolerance there would hide exactly the
+drift the shared function exists to stop. The queries — `Raycast`,
+`OverlapSphere`, `IsGrounded` — march the grid rather than testing its bounding
+box, which is not a detail: the bounds of a landscape are the sky above it, so a
+bounding-box answer is a character reporting that it is standing on the ground
+while it falls past a mountain.
 
 **Segments.** Two of the three things the segment arithmetic has to get right
 fail silently. Parallel segments give a zero denominator in the closed-form

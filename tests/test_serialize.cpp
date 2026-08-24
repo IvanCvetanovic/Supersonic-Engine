@@ -349,6 +349,12 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     capsule.height = 1.85f;
     capsule.center = glm::vec3(0.0f, 0.9f, 0.0f);
 
+    auto& terrain = registry.emplace<HeightfieldColliderComponent>(entity);
+    terrain.width = 33;
+    terrain.depth = 17;
+    terrain.heightScale = 1.75f;
+    terrain.thickness = 9.5f;
+
     auto& hud = registry.emplace<UITextComponent>(entity);
     hud.text = "Ammo 12/30";
     hud.anchor = UIAnchor::BottomRight;
@@ -559,6 +565,18 @@ static void testPrefabRoundTripsEveryField() {
             // floor or hovers above it.
             CHECK_NEAR(capsule->height, 1.85f);
             CHECK_NEAR(capsule->center.y, 0.9f);
+        }
+
+        const auto* terrain = registry.try_get<HeightfieldColliderComponent>(clone);
+        CHECK_MSG(terrain != nullptr, "prefab lost its HeightfieldColliderComponent");
+        if (terrain) {
+            // All four, because a heightfield that comes back with the wrong
+            // dimensions is not a smaller version of the same hill - it is a
+            // different landscape, and the mesh beside it is unchanged.
+            CHECK_EQ(terrain->width, 33u);
+            CHECK_EQ(terrain->depth, 17u);
+            CHECK_NEAR(terrain->heightScale, 1.75f);
+            CHECK_NEAR(terrain->thickness, 9.5f);
         }
 
         const auto* hud = registry.try_get<UITextComponent>(clone);
@@ -1089,4 +1107,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 252)
+TEST_MAIN("test_serialize", 256)
