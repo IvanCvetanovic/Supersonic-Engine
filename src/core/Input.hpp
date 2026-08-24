@@ -108,7 +108,16 @@ enum class CursorMode {
 class Input {
 public:
     // Installs a default set of bindings: WASD/arrows and the left stick for
-    // movement, mouse and right stick for look, Space/A to jump, and so on.
+    // movement, the arrow keys and the right stick for look, Space/A to jump,
+    // and so on.
+    //
+    // The mouse is NOT bound to the look axes, and that is not an omission. An
+    // axis is bipolar and clamped to -1..1, which is what a stick reports and
+    // exactly what a mouse does not: a mouse reports how far it moved, the
+    // magnitude IS the movement, and there is no maximum to clamp to. Mouse
+    // look reads MouseDelta below - or the script ABI's mouseDelta - and this
+    // comment used to claim otherwise, which is the wrong thing to believe
+    // while writing a first-person controller.
     static void LoadDefaultBindings();
 
     // Binds an additional source to an action. Any bound source being down

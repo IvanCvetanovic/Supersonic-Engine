@@ -8,6 +8,7 @@
 #include "core/JobSystem.hpp"
 #include "core/Profiler.hpp"
 #include "core/Components.hpp"
+#include "core/Input.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/UISystem.hpp"
 #include "core/PrefabSerializer.hpp"
@@ -243,7 +244,16 @@ UICanvas::UIPointer uiPointer(bool active) {
     // rather than remembered, so it cannot fall out of step with the frame.
     pointer.wasDown = pointer.down ? !ImGui::IsMouseClicked(ImGuiMouseButton_Left)
                                    : ImGui::IsMouseReleased(ImGuiMouseButton_Left);
-    pointer.active = active;
+    // A locked pointer is not anywhere.
+    //
+    // io.MousePos above comes from glfwGetCursorPos, and under GLFW_CURSOR_
+    // DISABLED that reports unbounded VIRTUAL coordinates - ImGui's backend
+    // passes them through without checking the mode. A HUD hit-tested against
+    // them hovers and fires buttons at random under a cursor nobody can see,
+    // and a shipped game hands this `true` unconditionally because nothing else
+    // on screen competes for the pointer. There being no pointer at all is the
+    // case that assumption missed.
+    pointer.active = active && Input::EffectiveCursorMode() != CursorMode::Locked;
     return pointer;
 }
 

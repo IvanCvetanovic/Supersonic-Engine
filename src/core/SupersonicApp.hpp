@@ -107,6 +107,12 @@ private:
     // this file changes shape when there is no game.
     LayerStack m_layers;
 
+    // Escape was pressed while a game held the pointer, so the editor has it
+    // back until the viewport is clicked again. Latched rather than momentary:
+    // a game asks for the lock every frame, so a one-frame release would be
+    // swallowed before anyone could move the mouse. Editor only.
+    bool m_escapeReleasedCursor{false};
+
     // Physics runs on a fixed step fed by this accumulator, so a stalled frame
     // cannot integrate a two-second delta in one go.
     float m_physicsAccumulator{0.0f};

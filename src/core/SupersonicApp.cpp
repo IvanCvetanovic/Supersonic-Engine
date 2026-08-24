@@ -785,7 +785,25 @@ void SupersonicApp::Run() {
         //
         // A packaged game has no viewport to focus, and IsViewportFocused
         // reports true for it, so this reduces to "while playing".
-        Input::SuppressCursorCapture(m_playMode.IsEditing() ||
+        //
+        // Escape gives it back too, and only in the EDITOR. Getting out of a
+        // captured game there otherwise means clicking Stop, which needs the
+        // pointer you do not have - escapable by alt-tabbing, which is a poor
+        // answer to "put the editor back". Latched until the viewport is
+        // clicked again, because a game re-asks for the lock every frame and a
+        // one-frame release would be swallowed instantly.
+        //
+        // Not in a shipped game: there Escape belongs to whatever the game
+        // wants it for, and losing the window is still the guaranteed way out.
+        if (!m_manifest.isGame) {
+            if (Input::WasKeyPressed(Key::Escape)) m_escapeReleasedCursor = true;
+            if (m_editorLayer->IsViewportHovered() &&
+                Input::IsMouseButtonDown(MouseButton::Left)) {
+                m_escapeReleasedCursor = false;
+            }
+        }
+
+        Input::SuppressCursorCapture(m_escapeReleasedCursor || m_playMode.IsEditing() ||
                                      !m_editorLayer->IsViewportFocused());
         InputPolling::ApplyCursorMode(*m_window);
 
