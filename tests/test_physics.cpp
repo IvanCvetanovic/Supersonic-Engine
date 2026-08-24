@@ -181,6 +181,29 @@ static void testASphereIsTheSameSizeWhicheverWayItIsTurned() {
     const float restB = registry.get<TransformComponent>(turned).position.y;
     CHECK_MSG(test::nearly(restA, 1.0f, 0.02f), "the upright ball rests on top of the platform");
     CHECK_MSG(test::nearly(restA, restB, 1e-3f), "and turning one must not change its size");
+
+    // The QUERIES have to agree, and they are a separate code path that the
+    // check above cannot reach: gatherShapes builds its own shape list, and it
+    // read the same bounding box. A ray fired at each ball from the same height
+    // has to travel the same distance.
+    const auto hitA = PhysicsSystem::Raycast(registry, glm::vec3(-2.0f, 5.0f, 0.0f),
+                                             glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+    const auto hitB = PhysicsSystem::Raycast(registry, glm::vec3(2.0f, 5.0f, 0.0f),
+                                             glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+    CHECK(hitA.hit && hitB.hit);
+    CHECK_MSG(hitA.entity == upright && hitB.entity == turned,
+              "each ray has to reach its own ball before the platform under it");
+    CHECK_MSG(test::nearly(hitA.distance, hitB.distance, 2e-3f),
+              "and a query must not see a turned ball as a bigger one");
+
+    // Same for the overlap query, which reads shape.radius directly.
+    std::vector<entt::entity> nearUpright;
+    std::vector<entt::entity> nearTurned;
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(-2.0f, restA + 0.62f, 0.0f), 0.1f, nearUpright);
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(2.0f, restB + 0.62f, 0.0f), 0.1f, nearTurned);
+    CHECK_MSG(nearUpright.empty(),
+              "a probe above the upright ball touches nothing, since 0.62 is past its radius");
+    CHECK_MSG(nearTurned.empty(), "and the turned ball is exactly the same size");
 }
 
 static void testABallLandsOnTheTerrainInsteadOfFallingThroughIt() {

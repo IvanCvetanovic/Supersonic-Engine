@@ -996,8 +996,15 @@ radius has to come from the scale alone. Nothing caught it for as long as nothin
 rolled — a ball dropped straight onto a box lands with its orientation still
 exactly identity — and the failure needs rotation that keeps changing: put a ball
 on a hill and it grows a fraction of a millimetre every step, hovering higher and
-higher above the ground, without limit. The world ground plane read the same
-bound and had the same bug.
+higher above the ground, without limit.
+
+Three places read that bound and all three had it: the narrowphase gather, the
+world ground plane, and the shape list the queries are built from. The last is
+worth naming separately, because the box path beside it uses its world AABB
+**deliberately** and says so - a query over-reports rather than misses, which is
+the right direction for "what am I looking at". A sphere's rotation-dependence is
+not conservatism of that kind. It is the same object being a different size
+depending on which way it happens to be facing.
 
 There are four collider shapes and **four** pair tests rather than ten,
 because a sphere is a capsule whose segment has no length. Writing sphere-against-sphere separately

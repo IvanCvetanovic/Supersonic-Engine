@@ -47,6 +47,13 @@ const Heightfield* HeightfieldCache::Get(const HeightfieldColliderComponent& col
     return &field;
 }
 
+void HeightfieldCache::Trim() {
+    // Everything, rather than one entry at a time. These are cheap to rebuild
+    // and there is no sensible recency order among four terrains, so the
+    // simplest rule that cannot grow without bound is the right one.
+    if (m_fields.size() >= kMaxFields) m_fields.clear();
+}
+
 HeightfieldCache& HeightfieldCache::For(entt::registry& registry) {
     if (auto* existing = registry.ctx().find<HeightfieldCache>()) return *existing;
     return registry.ctx().emplace<HeightfieldCache>();

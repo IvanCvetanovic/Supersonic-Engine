@@ -673,6 +673,10 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     // almost nothing it needs is what `collect` computes: the grid's bounds are
     // not centred on the entity, its mass is zero whatever the scene says, and
     // the narrowphase wants the grid's frame rather than an oriented box.
+    // Before the loop, never inside it: Trim frees every grid the cache holds,
+    // and the bodies below keep pointers into them for the rest of the step.
+    HeightfieldCache::For(registry).Trim();
+
     for (auto entity : registry.view<HeightfieldColliderComponent>()) {
         if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent,
                             SphereColliderComponent>(entity)) continue;
@@ -1395,7 +1399,19 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
         shape.layer = layer;
 
         if (kind == QueryShape::Kind::Sphere) {
-            shape.radius = std::max({shape.halfExtent.x, shape.halfExtent.y, shape.halfExtent.z});
+            // From the SCALE, the third and last place that had to be told.
+            //
+            // The box path above uses its world AABB deliberately and the
+            // comment on the capsule says so: a query over-reports rather than
+            // missing, which is the right direction for "what am I looking at".
+            // A sphere is different in kind. Its rotation-dependence is not
+            // conservatism, it is the same object being a different size
+            // depending on which way it happens to be facing - so a rolling
+            // ball's raycast radius swells and shrinks as it turns.
+            const glm::mat3 basis(world);
+            const float scale = std::max({glm::length(basis[0]), glm::length(basis[1]),
+                                          glm::length(basis[2])});
+            shape.radius = localHalfExtent.x * scale;
             shape.halfExtent = glm::vec3(shape.radius);
         }
         out.push_back(shape);
@@ -1428,6 +1444,11 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
     }
 
     // Terrain last, which is the order the solver gathers in.
+    //
+    // Same rule as the solver's gather: trimmed before the loop, because the
+    // shapes below hold pointers into the cache for as long as the query runs.
+    HeightfieldCache::For(registry).Trim();
+
     for (auto entity : registry.view<HeightfieldColliderComponent>()) {
         if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent,
                             SphereColliderComponent>(entity)) continue;

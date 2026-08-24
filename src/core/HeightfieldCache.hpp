@@ -30,13 +30,35 @@ public:
     // key, so a broken collider costs one rejected build rather than one per
     // step forever.
     //
-    // The returned pointer stays valid for the life of the cache: std::map
-    // leaves its values where it put them, however many terrains are added
-    // afterwards.
+    // The returned pointer stays valid until the next Trim: std::map leaves
+    // its values where it put them, so every later Get in the same step - and
+    // there is one per terrain entity - leaves earlier answers exactly where
+    // they were.
     const Heightfield* Get(const HeightfieldColliderComponent& collider);
+
+    // Drops everything once the map has grown past the cap.
+    //
+    // Called at the TOP of a step, before any pointer has been handed out, and
+    // that is the whole of why it is a separate method rather than a check
+    // inside Get. Clearing invalidates every pointer the map has ever returned;
+    // doing it part way through a gather would leave the terrains collected so
+    // far pointing at freed grids, which is a crash that needs more than
+    // thirty-two distinct terrains in one scene to reproduce and would
+    // therefore never be seen until it was.
+    void Trim();
 
     // The registry's cache, created on first use.
     static HeightfieldCache& For(entt::registry& registry);
+
+    // How many distinct descriptors are kept before Trim drops the lot.
+    //
+    // Not a memory budget - it is the inspector. Dragging the Height Scale
+    // slider writes a new float every frame it moves, and each distinct value
+    // is a distinct descriptor, so a few seconds of dragging is hundreds of
+    // permanent 16 KB grids and the 4096 sines each of them costs. The cap is
+    // far above any real scene: a level built from distinct terrain tiles has a
+    // handful, not thirty-two.
+    static constexpr size_t kMaxFields = 32;
 
 private:
     struct Key {
