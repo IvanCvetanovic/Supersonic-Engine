@@ -134,6 +134,15 @@ private:
     // written while a command buffer using it is still running, which is why
     // this waits for the device first.
     void updateEnvironmentDescriptors();
+
+    // Gives the scene's reflection probes descriptor slots, loads what they
+    // name, and tells every renderable which slot lights it.
+    //
+    // Runs from the per-frame uniform update, which is AFTER every system has
+    // had its turn - including the pose pass, which is the last thing to write
+    // a renderable's bounds. Choosing a probe from bounds that a later system
+    // is going to rewrite is a frame-late answer that looks like a flicker.
+    void syncProbes(entt::registry& registry);
     void initImGui();
 
     UiStyleCallback m_styleUi;

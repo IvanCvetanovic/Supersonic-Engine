@@ -362,6 +362,11 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     joint.useLimit = true;
     joint.minAngle = -0.75f;
     joint.maxAngle = 1.25f;
+    auto& probe = registry.emplace<ReflectionProbeComponent>(entity);
+    probe.halfExtent = glm::vec3(3.5f, 1.25f, 8.0f);
+    probe.hdriPath = "assets/env/room.hdr";
+    probe.intensity = 2.25f;
+
     joint.useSpring = true;
     joint.springFrequency = 3.25f;
     joint.springDamping = 0.65f;
@@ -848,6 +853,12 @@ static void testPrefabRoundTripsEveryField() {
             CHECK(joint->useLimit);
             CHECK_NEAR(joint->minAngle, -0.75f);
             CHECK_NEAR(joint->maxAngle, 1.25f);
+            const auto* probeBack = registry.try_get<ReflectionProbeComponent>(clone);
+            CHECK_MSG(probeBack != nullptr, "the probe must survive a round trip");
+            CHECK_NEAR(probeBack ? probeBack->halfExtent.z : 0.0f, 8.0f);
+            CHECK_MSG(probeBack && probeBack->hdriPath == "assets/env/room.hdr",
+                      "and so must the environment it names");
+            CHECK_NEAR(probeBack ? probeBack->intensity : 0.0f, 2.25f);
             CHECK(joint->useSpring);
             CHECK_NEAR(joint->springFrequency, 3.25f);
             CHECK_NEAR(joint->springDamping, 0.65f);
@@ -1414,4 +1425,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 299)
+TEST_MAIN("test_serialize", 303)

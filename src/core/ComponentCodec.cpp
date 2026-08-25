@@ -356,6 +356,17 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* probe = registry.try_get<ReflectionProbeComponent>(entity)) {
+        // resolvedSlot is runtime state owned by the renderer - which
+        // descriptor this probe happened to be given - and is not persisted.
+        out << indent << "\"ReflectionProbe\": {\n";
+        out << indent << "  \"HalfExtent\": [" << probe->halfExtent.x << ", "
+            << probe->halfExtent.y << ", " << probe->halfExtent.z << "],\n";
+        out << indent << "  \"Hdri\": \"" << Json::Escape(probe->hdriPath) << "\",\n";
+        out << indent << "  \"Intensity\": " << probe->intensity << "\n";
+        out << indent << "},\n";
+    }
+
     if (const auto* text = registry.try_get<UITextComponent>(entity)) {
         out << indent << "\"UIText\": {\n";
         out << indent << "  \"Text\": \"" << Json::Escape(text->text) << "\",\n";
@@ -746,6 +757,14 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     if (node.Has("AudioListener")) {
         auto& listener = registry.emplace_or_replace<AudioListenerComponent>(entity);
         listener.isPrimary = node["AudioListener"]["IsPrimary"].AsBool(true);
+    }
+
+    if (node.Has("ReflectionProbe")) {
+        const auto& p = node["ReflectionProbe"];
+        auto& probe = registry.emplace_or_replace<ReflectionProbeComponent>(entity);
+        probe.halfExtent = readVec3(p["HalfExtent"], glm::vec3(5.0f));
+        probe.hdriPath = p["Hdri"].AsString("");
+        probe.intensity = p["Intensity"].AsFloat(1.0f);
     }
 
     if (node.Has("AudioSource")) {

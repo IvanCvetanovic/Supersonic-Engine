@@ -484,6 +484,12 @@ struct RenderableComponent {
     // geometry actually drawn instead of assuming a unit cube.
     glm::vec3 localBoundsMin{-0.5f};
     glm::vec3 localBoundsMax{0.5f};
+
+    // Which bound environment lights this object, resolved once per frame from
+    // the scene's reflection probes. Zero is the scene-wide environment, which
+    // is what everything gets when there are no probes - so a scene without
+    // them behaves exactly as it did.
+    int32_t probeSlot{0};
 };
 
 struct TagComponent {
@@ -943,6 +949,34 @@ struct SkinnedMeshComponent {
     bool bindBoundsCaptured{false};
 
     bool valid() const { return skeletonID != 0xFFFFFFFFu && !jointMatrices.empty(); }
+};
+
+// A local environment, for objects inside a box.
+//
+// There was one environment for a whole scene, so a room and the outdoors it
+// opens onto lit identically - the interior reflected the sky it could not see.
+//
+// A BOX rather than a sphere with a falloff, and a hard choice rather than a
+// blend between two. Both are deliberate and both are about the push constant:
+// it is 120 of a guaranteed 128 bytes, so there are exactly two 4-byte slots
+// left. One holds an index. Blending needs a second index and a weight, which
+// means bit-packing, and it doubles the cube fetches per fragment. The index is
+// already per-object, so blending remains open rather than being designed out.
+//
+// Position comes from the entity's TransformComponent, like everything else.
+struct ReflectionProbeComponent {
+    // Half the box's size, in world units, about the entity's position.
+    glm::vec3 halfExtent{5.0f};
+
+    // The environment objects inside the box light from. Empty means the probe
+    // is authored but does nothing, which is a state worth being able to reach
+    // while placing one.
+    std::string hdriPath;
+    float intensity{1.0f};
+
+    // Filled in by the renderer, which owns the slots. Not serialised: it is
+    // whichever descriptor the probe happened to be given this run.
+    int32_t resolvedSlot{-1};
 };
 
 struct ScriptComponent {

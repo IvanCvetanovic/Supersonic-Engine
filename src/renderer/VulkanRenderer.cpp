@@ -533,6 +533,33 @@ void VulkanRenderer::createDescriptorPool() {
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "DescriptorPool created successfully." << std::endl;
 }
 
+namespace {
+
+glm::vec3 probeWorldPosition(const entt::registry& registry, entt::entity entity) {
+    if (const auto* world = registry.try_get<WorldTransformComponent>(entity)) {
+        return glm::vec3(world->matrix[3]);
+    }
+    return registry.get<TransformComponent>(entity).position;
+}
+
+// The middle of what this object actually occupies, in world space.
+//
+// Its BOUNDS rather than its origin: a long wall whose pivot is at one end
+// belongs to the room its body is in, not to whatever is behind that corner.
+glm::vec3 renderableCentre(const entt::registry& registry, entt::entity entity,
+                           const RenderableComponent& renderable) {
+    const glm::vec3 local = (renderable.localBoundsMin + renderable.localBoundsMax) * 0.5f;
+    if (const auto* world = registry.try_get<WorldTransformComponent>(entity)) {
+        return glm::vec3(world->matrix * glm::vec4(local, 1.0f));
+    }
+    if (const auto* transform = registry.try_get<TransformComponent>(entity)) {
+        return glm::vec3(transform->getModelMatrix() * glm::vec4(local, 1.0f));
+    }
+    return local;
+}
+
+} // namespace
+
 void VulkanRenderer::updateEnvironmentDescriptors() {
     if (!m_environments[0] || m_descriptorSets.empty()) return;
 
@@ -568,6 +595,78 @@ void VulkanRenderer::updateEnvironmentDescriptors() {
         writes[1].pImageInfo = prefilteredInfo.data();
 
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
+    }
+}
+
+void VulkanRenderer::syncProbes(entt::registry& registry) {
+    // Slot 0 is the scene-wide environment and is never a probe.
+    uint32_t nextSlot = 1;
+
+    // Deterministic, because two probes and one free slot has to resolve the
+    // same way every frame or the object between them flickers. entt's view
+    // order is stable within a run, which is enough: the answer only has to be
+    // consistent, not meaningful.
+    auto probes = registry.view<ReflectionProbeComponent, TransformComponent>();
+    for (auto entity : probes) {
+        auto& probe = registry.get<ReflectionProbeComponent>(entity);
+
+        if (nextSlot >= VulkanPipeline::kMaxEnvironmentProbes || probe.hdriPath.empty()) {
+            // Over the cap, or authored but naming nothing. Either way the
+            // objects inside it fall back to the scene-wide environment rather
+            // than to a slot holding somebody else's room.
+            probe.resolvedSlot = -1;
+            continue;
+        }
+
+        const uint32_t slot = nextSlot++;
+        probe.resolvedSlot = static_cast<int32_t>(slot);
+
+        if (probe.hdriPath != m_environmentPaths[slot] ||
+            probe.intensity != m_environmentIntensities[slot]) {
+            m_environmentPaths[slot] = probe.hdriPath;
+            m_environmentIntensities[slot] = probe.intensity;
+            m_environmentHasMap[slot] =
+                m_environments[slot]->Load(m_environmentPaths[slot],
+                                           m_environmentIntensities[slot]);
+            updateEnvironmentDescriptors();
+        }
+    }
+
+    // Any slot no probe claimed this frame goes back to being nothing, or a
+    // deleted probe would go on lighting whatever it used to.
+    for (uint32_t slot = nextSlot; slot < VulkanPipeline::kMaxEnvironmentProbes; ++slot) {
+        if (!m_environmentHasMap[slot] && m_environmentPaths[slot].empty()) continue;
+        m_environmentPaths[slot].clear();
+        m_environmentIntensities[slot] = 1.0f;
+        m_environments[slot]->LoadConstant(glm::vec3(0.0f));
+        m_environmentHasMap[slot] = false;
+        updateEnvironmentDescriptors();
+    }
+
+    // And now every object picks one.
+    for (auto entity : registry.view<RenderableComponent>()) {
+        auto& renderable = registry.get<RenderableComponent>(entity);
+        renderable.probeSlot = 0;
+
+        const glm::vec3 centre = renderableCentre(registry, entity, renderable);
+
+        for (auto probeEntity : probes) {
+            const auto& probe = registry.get<ReflectionProbeComponent>(probeEntity);
+            if (probe.resolvedSlot < 0 || !m_environmentHasMap[probe.resolvedSlot]) continue;
+
+            const glm::vec3 origin = probeWorldPosition(registry, probeEntity);
+            const glm::vec3 offset = glm::abs(centre - origin);
+            const glm::vec3 extent = glm::abs(probe.halfExtent);
+            if (offset.x <= extent.x && offset.y <= extent.y && offset.z <= extent.z) {
+                // The FIRST containing probe wins, not the nearest. With two
+                // slots there is at most one overlap to resolve and "first" is
+                // stable; a nearest-centre rule would swap the answer as an
+                // object crosses the midpoint between two probes, which is a
+                // visible pop in the middle of a room rather than at its door.
+                renderable.probeSlot = probe.resolvedSlot;
+                break;
+            }
+        }
     }
 }
 
@@ -1103,6 +1202,12 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
             // memory that has just been freed.
             updateEnvironmentDescriptors();
         }
+
+        // After slot 0, and after every system has run - including the pose
+        // pass, which is the last thing to write a renderable's bounds. Choosing
+        // a probe from bounds something else is about to rewrite is a frame-late
+        // answer that reads as a flicker.
+        syncProbes(registry);
     }
 
     // z is a BITMASK, one bit per slot, not a count: a count cannot say that

@@ -1069,6 +1069,36 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // 8a. ReflectionProbeComponent
+    if (registry.all_of<ReflectionProbeComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Reflection Probe", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& probe = registry.get<ReflectionProbeComponent>(entity);
+
+            ImGui::DragFloat3("Half Extent##probe", glm::value_ptr(probe.halfExtent), 0.1f,
+                              0.0f, 500.0f);
+            ImGui::TextDisabled("A box about this entity. Objects whose centre is inside "
+                                "light from this probe instead of the scene.");
+
+            char hdri[512] = {};
+            const size_t length = std::min(probe.hdriPath.size(), sizeof(hdri) - 1);
+            std::memcpy(hdri, probe.hdriPath.data(), length);
+            if (ImGui::InputText("HDRI##probe", hdri, sizeof(hdri))) probe.hdriPath = hdri;
+
+            ImGui::DragFloat("Intensity##probe", &probe.intensity, 0.05f, 0.0f, 20.0f);
+
+            // What the renderer actually did with it, which is the only way to
+            // see that a probe is over the slot cap rather than merely subtle.
+            if (probe.resolvedSlot < 0) {
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                   "Not bound: no HDRI, or more probes than slots.");
+            } else {
+                ImGui::TextDisabled("Bound to slot %d.", probe.resolvedSlot);
+            }
+        }
+    }
+
+    ImGui::Spacing();
+
     // 8b. AnimatorComponent
     if (registry.all_of<AnimatorComponent>(entity)) {
         if (ImGui::CollapsingHeader("Animator", ImGuiTreeNodeFlags_DefaultOpen)) {

@@ -17,6 +17,13 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
     PushConstantData push{};
     push.model = model;
 
+    // Which environment lights this draw. Resolved once per frame by the
+    // renderer; zero - the scene-wide environment - when nothing resolved it,
+    // which is also what PushConstantData defaults to.
+    if (const auto* renderable = registry.try_get<RenderableComponent>(entity)) {
+        push.probeIndex = renderable->probeSlot;
+    }
+
     if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
         push.albedoColor = material->albedoColor;
         // w is the alpha cutoff. Zero is no cutout, which is also what every
