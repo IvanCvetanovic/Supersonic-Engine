@@ -103,11 +103,33 @@ code quietly contradicts.
 
 ### Platforms
 
-Developed and tested on **Windows** with MSVC. The build system carries target
-configurations for **Linux**, **macOS** and **iOS** (MoltenVK) and **Android**
-(NDK / NativeActivity); those targets configure and compile but are not yet
-soak-tested, and are honestly labelled as such rather than claimed as shipping
-support.
+Developed and tested on **Windows** with MSVC. **Linux** and **macOS** (MoltenVK)
+build from the same tree.
+
+**Android and iOS do not work, and the scripts under `platform/` do not change
+that.** This section used to say those targets "configure and compile but are not
+yet soak-tested". That was wrong in the worst direction — it read as *nearly
+there* when neither gets past CMake configure:
+
+- GLFW is added unconditionally (`CMakeLists.txt:136`) and has no Android
+  backend. `GLFW_BUILD_X11` defaults ON for any UNIX-not-APPLE
+  (`third_party/glfw-3.4/CMakeLists.txt:37`), and the NDK toolchain sets
+  `UNIX=1` — so `find_package(X11 REQUIRED)` fires against a sysroot with no X11
+  and the configure dies before a line of engine code is compiled.
+- `AndroidManifest.xml:21` expects a NativeActivity to `dlopen`
+  `libSupersonicEngine.so`. CMake produces a static library and an *executable*
+  (`CMakeLists.txt:186-187`), and there is no `android_main` or
+  `ANativeActivity_onCreate` anywhere in the tree.
+- `src/platform/AndroidNativeApp.cpp` has zero callers and is filtered OUT of
+  every non-Android build (`CMakeLists.txt:166`).
+- Audio is routed to the documented no-op on Android (`CMakeLists.txt:308`), so
+  a port that booted would be silent.
+- There is no touch input of any kind. `RawInputState` (`src/core/Input.hpp`) is
+  keys, mouse buttons, one cursor, scroll and one gamepad.
+
+[ARCHITECTURE.md](ARCHITECTURE.md) has said **"Not functional"** for both all
+along, and so does the header of `platform/android/build_android.sh`. This file
+was the one disagreeing with them.
 
 ---
 
