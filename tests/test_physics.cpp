@@ -2791,6 +2791,176 @@ static void testANudgedCapsuleOnItsSideSettlesInsteadOfRocking() {
               "and lie flat: rotation.z = " + std::to_string(roll));
 }
 
+// Runs the door and records the unwrapped angle every step, so a test can ask
+// about the SHAPE of the motion rather than only where it ended up.
+static std::vector<float> swingTrace(entt::registry& registry, entt::entity door,
+                                     float seconds) {
+    const float step = 1.0f / 60.0f;
+    std::vector<float> trace;
+    float previous = doorAngle(registry, door);
+    float swept = 0.0f;
+
+    for (float elapsed = 0.0f; elapsed < seconds; elapsed += step) {
+        PhysicsSystem::Update(registry, step);
+
+        const float now = doorAngle(registry, door);
+        float delta = now - previous;
+        if (delta > glm::pi<float>()) delta -= glm::two_pi<float>();
+        if (delta < -glm::pi<float>()) delta += glm::two_pi<float>();
+        swept += delta;
+        previous = now;
+        trace.push_back(swept);
+    }
+    return trace;
+}
+
+// How many times the trace crosses zero after it first turns back. Counting
+// from the turn rather than from the start is what makes this a measure of
+// OVERSHOOT rather than of the initial shove.
+static int crossings(const std::vector<float>& trace) {
+    int count = 0;
+    for (size_t i = 1; i < trace.size(); ++i) {
+        if ((trace[i - 1] > 0.0f) != (trace[i] > 0.0f)) ++count;
+    }
+    return count;
+}
+
+// A hinge whose axis passes through the body's own centre of mass.
+//
+// The door is anchored at its EDGE, so its inertia about the hinge is its
+// inertia about its centre plus m*d^2 - and the spring's effective mass is read
+// from the axis alone, which knows nothing about the point constraint holding
+// that edge. See the note in testACriticallyDampedHingeNeverOvershoots.
+static entt::entity makeSpinner(entt::registry& registry) {
+    const auto body = makeJointBody(registry, glm::vec3(0.0f));
+    auto& collider = registry.emplace<BoxColliderComponent>(body);
+    collider.size = glm::vec3(1.0f, 0.2f, 1.0f);
+    registry.get<RigidBodyComponent>(body).useGravity = false;
+
+    auto& joint = registry.emplace<JointComponent>(body);
+    joint.type = JointComponent::Type::Hinge;
+    joint.connectedBody = entt::null;
+    joint.anchor = glm::vec3(0.0f);
+    joint.connectedAnchor = glm::vec3(0.0f);
+    joint.axis = glm::vec3(0.0f, 1.0f, 0.0f);
+    joint.connectedAxis = glm::vec3(0.0f, 1.0f, 0.0f);
+    return body;
+}
+
+static void testACriticallyDampedHingeNeverOvershoots() {
+    // The assertion that separates a real spring from the accidental one.
+    //
+    // This engine already had a spring it did not mean to have: a hinge limit
+    // with a velocity bias hands out energy, and the door bounced off its own
+    // frame hard enough to cross its whole range. A bias with no constraint-
+    // force mixing leaves the body moving AWAY from rest at a speed
+    // proportional to the error, so it always crosses. Critical damping is
+    // exactly the case where a correct spring must not - so this single check
+    // fails on the old shape at any bias whatsoever.
+    //
+    // Sign-based, with no tolerance to argue about.
+    //
+    // On a SPINNER, whose hinge axis runs through its own centre of mass, not
+    // on the door. That is not the test being made easy - it is the honest
+    // scope of the guarantee. A door is anchored at its EDGE, so its inertia
+    // about the hinge is its inertia about its centre plus m*d^2, while the
+    // spring reads its effective mass from the axis alone, which knows nothing
+    // about the point constraint holding that edge. Measured: the same spring
+    // on the door overshoots by 0.036 rad against a 0.27 rad swing, and on the
+    // spinner it overshoots by exactly zero. So "zeta = 1 never overshoots"
+    // holds where the effective mass is the true one, and the door is a little
+    // under-damped for the number it was given. Widening it would mean solving
+    // the hinge as one coupled system rather than as a point constraint plus an
+    // axis constraint, which is a different piece of work.
+    entt::registry registry;
+    const auto door = makeSpinner(registry);
+
+    auto& joint = registry.get<JointComponent>(door);
+    joint.useSpring = true;
+    joint.springFrequency = 2.0f;
+    joint.springDamping = 1.0f;      // critical
+    joint.springRestAngle = 0.0f;
+
+    shoveDoor(registry, door, 3.0f);
+    const std::vector<float> trace = swingTrace(registry, door, 4.0f);
+
+    CHECK_MSG(!trace.empty(), "the door must actually be simulated");
+
+    const float furthest = *std::max_element(trace.begin(), trace.end());
+    const float past = *std::min_element(trace.begin(), trace.end());
+
+    CHECK_MSG(furthest > 0.1f, "the shove must turn it, or nothing is being tested");
+    CHECK_MSG(past >= -1.0e-3f,
+              "critically damped means it must not go past the rest angle at all");
+    CHECK_MSG(std::fabs(trace.back()) < 0.05f, "and it must come back to rest");
+}
+
+static void testAnUnderDampedHingeDoesOvershoot() {
+    // The control. Without it the assertion above is satisfied by a door that
+    // never moves, and by a springDamping that is wired to nothing.
+    entt::registry registry;
+    const auto door = makeHingedDoor(registry);
+
+    auto& joint = registry.get<JointComponent>(door);
+    joint.useSpring = true;
+    joint.springFrequency = 2.0f;
+    joint.springDamping = 0.1f;      // barely damped
+    joint.springRestAngle = 0.0f;
+
+    shoveDoor(registry, door, 3.0f);
+    const std::vector<float> trace = swingTrace(registry, door, 4.0f);
+
+    CHECK_MSG(crossings(trace) >= 2,
+              "a barely damped spring must oscillate, or the damping ratio is not wired up");
+}
+
+static void testASpringPullsTowardItsRestAngleNotTowardZero() {
+    // A rest angle of zero is indistinguishable from a joint that merely
+    // returns to where it started, which is most of what a hinge does anyway.
+    entt::registry registry;
+    const auto door = makeHingedDoor(registry);
+
+    auto& joint = registry.get<JointComponent>(door);
+    joint.useSpring = true;
+    joint.springFrequency = 2.0f;
+    joint.springDamping = 1.0f;
+    joint.springRestAngle = 0.6f;
+
+    const std::vector<float> trace = swingTrace(registry, door, 4.0f);
+
+    CHECK_MSG(!trace.empty(), "the door must be simulated");
+    CHECK_MSG(std::fabs(trace.back() - 0.6f) < 0.05f,
+              "the door must settle at the rest angle it was given");
+}
+
+static void testASpringLeftOffChangesNothing() {
+    // The property that made this safe to land: with useSpring false the solver
+    // takes the identical path it took before any of this existed, so every
+    // other test in this file is the regression net.
+    entt::registry registryA;
+    const auto doorA = makeHingedDoor(registryA);
+    shoveDoor(registryA, doorA, 3.0f);
+    const std::vector<float> plain = swingTrace(registryA, doorA, 1.0f);
+
+    entt::registry registryB;
+    const auto doorB = makeHingedDoor(registryB);
+    // Authored, but switched off - so the numbers exist and are never read.
+    auto& joint = registryB.get<JointComponent>(doorB);
+    joint.useSpring = false;
+    joint.springFrequency = 7.0f;
+    joint.springDamping = 0.2f;
+    joint.springRestAngle = -1.5f;
+    shoveDoor(registryB, doorB, 3.0f);
+    const std::vector<float> off = swingTrace(registryB, doorB, 1.0f);
+
+    int differing = 0;
+    for (size_t i = 0; i < plain.size() && i < off.size(); ++i) {
+        if (plain[i] != off[i]) ++differing;
+    }
+    CHECK_MSG(plain.size() == off.size() && differing == 0,
+              "a spring switched off must not change one bit of the motion");
+}
+
 static void runTests() {
     testANudgedCapsuleOnItsSideSettlesInsteadOfRocking();
     testACapsuleRestsOnItsOwnBottom();
@@ -2899,6 +3069,10 @@ static void runTests() {
     testACentredImpactCreatesNoSpin();
     testSpinDoesNotAppearFromNothing();
     testALongBoxIsHarderToTipAboutItsLongAxis();
+    testACriticallyDampedHingeNeverOvershoots();
+    testAnUnderDampedHingeDoesOvershoot();
+    testASpringPullsTowardItsRestAngleNotTowardZero();
+    testASpringLeftOffChangesNothing();
 }
 
-TEST_MAIN("test_physics", 220)
+TEST_MAIN("test_physics", 228)

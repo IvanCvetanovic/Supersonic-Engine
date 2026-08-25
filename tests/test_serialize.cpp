@@ -362,6 +362,10 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     joint.useLimit = true;
     joint.minAngle = -0.75f;
     joint.maxAngle = 1.25f;
+    joint.useSpring = true;
+    joint.springFrequency = 3.25f;
+    joint.springDamping = 0.65f;
+    joint.springRestAngle = -0.4f;
     joint.useMotor = true;
     joint.motorSpeed = -3.5f;
     joint.maxMotorTorque = 42.0f;
@@ -844,6 +848,10 @@ static void testPrefabRoundTripsEveryField() {
             CHECK(joint->useLimit);
             CHECK_NEAR(joint->minAngle, -0.75f);
             CHECK_NEAR(joint->maxAngle, 1.25f);
+            CHECK(joint->useSpring);
+            CHECK_NEAR(joint->springFrequency, 3.25f);
+            CHECK_NEAR(joint->springDamping, 0.65f);
+            CHECK_NEAR(joint->springRestAngle, -0.4f);
             CHECK(joint->useMotor);
             CHECK_NEAR(joint->motorSpeed, -3.5f);
             CHECK_NEAR(joint->maxMotorTorque, 42.0f);
@@ -1406,4 +1414,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 295)
+TEST_MAIN("test_serialize", 299)

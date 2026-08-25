@@ -1602,6 +1602,47 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // a motor that pulls the other way.
             constraint.maxMotorImpulse = std::max(authored.maxMotorTorque, 0.0f) * deltaTime;
 
+            // The soft constraint, turned from what an author can reason about -
+            // a frequency and a damping ratio - into the three numbers the
+            // solver multiplies by. The step is in here, which is why this is
+            // computed on this side rather than in Joints.
+            //
+            //   a1 = 2*zeta + h*omega        a2 = h*omega*a1        a3 = 1/(1+a2)
+            //
+            // This is constraint-force mixing written so gamma never has to be
+            // materialised: 1/(K + gamma) reduces to m_eff * a2 * a3 and
+            // gamma/(K + gamma) reduces to a3, so the solver needs a scale on
+            // the mass and a scale on the accumulated impulse and nothing else.
+            //
+            // Both scales are mass-free, which is the point of authoring
+            // (frequency, ratio): the same pair behaves the same on a light
+            // door and a heavy one.
+            constraint.useSpring = authored.useSpring;
+            constraint.springRestAngle = authored.springRestAngle;
+            {
+                const float omega = 6.2831853f * std::max(authored.springFrequency, 0.0f);
+                const float zeta = std::max(authored.springDamping, 0.0f);
+                const float a1 = 2.0f * zeta + deltaTime * omega;
+
+                if (omega > 0.0f && a1 > 0.0f) {
+                    const float a2 = deltaTime * omega * a1;
+                    const float a3 = 1.0f / (1.0f + a2);
+                    constraint.springBiasRate = omega / a1;
+                    constraint.springMassScale = a2 * a3;
+                    constraint.springImpulseScale = a3;
+                } else {
+                    // Zero frequency means RIGID, not absent: these are the
+                    // values that make solveSpring's expression reduce to
+                    // -Cdot / mass exactly. A spring authored at 0 Hz holds the
+                    // angle it is at, which is the honest reading of "infinitely
+                    // stiff" and keeps the collapse to the existing float path
+                    // something a test can assert.
+                    constraint.springBiasRate = 0.0f;
+                    constraint.springMassScale = 1.0f;
+                    constraint.springImpulseScale = 0.0f;
+                }
+            }
+
             runtime.stiffness = std::clamp(authored.stiffness, 0.0f, 1.0f);
             // The angular half is corrected through the velocity solver rather
             // than by moving anything, so its share of the error arrives as a

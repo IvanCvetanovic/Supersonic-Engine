@@ -116,6 +116,21 @@ struct Constraint {
     // maxMotorImpulse is a torque already multiplied by the step, because the
     // caller is the only thing that knows the step. Without a cap a motor is
     // infinitely strong and shoves whatever is in the way through a wall.
+    // A hinge that pulls toward an angle instead of holding one.
+    //
+    // Authored as a FREQUENCY in hertz and a damping RATIO, not as a stiffness
+    // and a damping coefficient, because the pair below is mass-independent:
+    // "3 Hz, critically damped" behaves the same on a garden gate and on a bank
+    // vault door. A stiffness that felt right on one would throw the other.
+    //
+    // Zero frequency is off. The scales derived from it in PhysicsSystem then
+    // make solveSpring's expression collapse to exactly the rigid one, which is
+    // deliberate - see the note there.
+    bool useSpring{false};
+    float springFrequency{0.0f};
+    float springDamping{1.0f};
+    float springRestAngle{0.0f};
+
     bool useMotor{false};
     float motorSpeed{0.0f};
     float maxMotorImpulse{0.0f};
@@ -142,6 +157,20 @@ struct Constraint {
     glm::vec2 angularImpulse{0.0f};
     glm::vec3 lockImpulse{0.0f};
     float motorImpulse{0.0f};
+    float springImpulse{0.0f};
+
+    // Derived from frequency, damping and the STEP, so they belong to whoever
+    // owns the step. PhysicsSystem fills them; nothing else should.
+    //
+    // This is constraint-force mixing, and the form matters. The softness
+    // divides the impulse rather than scaling the bias up, which is the whole
+    // difference between a spring and the accidental one this engine already
+    // had: a hinge limit with a velocity bias hands out energy and the door
+    // bounces off its own frame. Here springImpulseScale bleeds the accumulated
+    // impulse away instead, so the constraint can only ever remove energy.
+    float springBiasRate{0.0f};
+    float springMassScale{1.0f};
+    float springImpulseScale{0.0f};
     float limitImpulse{0.0f};
 
     // Everything the joint actually applied this step, kept apart because a

@@ -293,6 +293,12 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
             << ", \"UseLimit\": " << (joint->useLimit ? "true" : "false")
             << ", \"MinAngle\": " << jsonSafe(joint->minAngle, "Joint.minAngle")
             << ", \"MaxAngle\": " << jsonSafe(joint->maxAngle, "Joint.maxAngle")
+            << ", \"UseSpring\": " << (joint->useSpring ? "true" : "false")
+            << ", \"SpringFrequency\": "
+            << jsonSafe(joint->springFrequency, "Joint.springFrequency")
+            << ", \"SpringDamping\": " << jsonSafe(joint->springDamping, "Joint.springDamping")
+            << ", \"SpringRestAngle\": "
+            << jsonSafe(joint->springRestAngle, "Joint.springRestAngle")
             << ", \"UseMotor\": " << (joint->useMotor ? "true" : "false")
             << ", \"MotorSpeed\": " << jsonSafe(joint->motorSpeed, "Joint.motorSpeed")
             << ", \"MaxMotorTorque\": "
@@ -686,6 +692,14 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         joint.useLimit = node["Joint"]["UseLimit"].AsBool(false);
         joint.minAngle = node["Joint"]["MinAngle"].AsFloat(-1.5707963f);
         joint.maxAngle = node["Joint"]["MaxAngle"].AsFloat(1.5707963f);
+        joint.useSpring = node["Joint"]["UseSpring"].AsBool(false);
+        joint.springFrequency = node["Joint"]["SpringFrequency"].AsFloat(0.0f);
+        // Defaulting to critical rather than to zero: a scene written before
+        // springs existed that somehow has one switched on should not read back
+        // as an undamped oscillator.
+        joint.springDamping = node["Joint"]["SpringDamping"].AsFloat(1.0f);
+        joint.springRestAngle = node["Joint"]["SpringRestAngle"].AsFloat(0.0f);
+
         joint.useMotor = node["Joint"]["UseMotor"].AsBool(false);
         joint.motorSpeed = node["Joint"]["MotorSpeed"].AsFloat(0.0f);
         joint.maxMotorTorque = node["Joint"]["MaxMotorTorque"].AsFloat(10.0f);

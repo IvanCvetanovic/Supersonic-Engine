@@ -237,6 +237,44 @@ void solveMotor(Constraint& joint, Body& a, Body& b) {
     applyAxisImpulse(joint, a, b, joint.axisA, lambda);
 }
 
+// A soft constraint pulling the hinge toward springRestAngle.
+//
+// The arithmetic is the standard soft-constraint form and every term earns its
+// place:
+//
+//   lambda = -massScale * (Cdot + C * biasRate) / K  -  impulseScale * Lambda
+//
+// where K is the inverse effective mass this file calls `mass`, C is the angle
+// error and Cdot the relative speed about the axis. The last term is the one
+// that makes it a spring rather than an energy source: it bleeds the ACCUMULATED
+// impulse, so the constraint relaxes instead of insisting, and the softer it is
+// the more it relaxes.
+//
+// With the scales at their rigid defaults - biasRate 0, massScale 1,
+// impulseScale 0 - this is exactly `-Cdot / mass`, the same expression
+// solveMotor uses against a zero target. That is not a coincidence to be
+// admired, it is the reason a joint with no spring takes the identical float
+// path it took before any of this existed.
+void solveSpring(Constraint& joint, Body& a, Body& b) {
+    if (!joint.useSpring) return;
+
+    const float mass = axisMass(a, b, joint.axisA);
+    if (mass < kEpsilon) return;
+
+    const float error = HingeAngle(joint) - joint.springRestAngle;
+    const float rate = axisSpeed(a, b, joint.axisA);
+
+    // No clamp. A spring is not a motor: its strength is what the frequency
+    // says, and capping it would make the authored frequency a lie at exactly
+    // the amplitudes where somebody would notice.
+    const float lambda =
+        -joint.springMassScale * (rate + error * joint.springBiasRate) / mass -
+        joint.springImpulseScale * joint.springImpulse;
+
+    joint.springImpulse += lambda;
+    applyAxisImpulse(joint, a, b, joint.axisA, lambda);
+}
+
 void solveLimit(Constraint& joint, Body& a, Body& b) {
     if (!joint.useLimit) return;
 
@@ -367,7 +405,11 @@ void SolveVelocity(Constraint& joint, Body& a, Body& b) {
         // Then the motor, then the stop - in that order, so a motor driving
         // into a limit is overruled by the limit rather than fighting it to a
         // draw. A door held shut by a stop is not a door being driven open.
+        solveSpring(joint, a, b);
         solveMotor(joint, a, b);
+        // The stop LAST, after everything that can drive the hinge, so that a
+        // spring pulling toward a rest angle outside the limits still ends the
+        // pass inside them.
         solveLimit(joint, a, b);
         break;
     case Type::Weld:

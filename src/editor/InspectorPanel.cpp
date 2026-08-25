@@ -818,6 +818,20 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                     }
                 }
 
+                ImGui::Checkbox("Spring##joint", &joint.useSpring);
+                if (joint.useSpring) {
+                    ImGui::DragFloat("Frequency (Hz)##joint", &joint.springFrequency, 0.05f,
+                                     0.0f, 30.0f);
+                    ImGui::DragFloat("Damping Ratio##joint", &joint.springDamping, 0.01f,
+                                     0.0f, 4.0f);
+                    ImGui::DragFloat("Rest Angle##joint", &joint.springRestAngle, 0.01f,
+                                     -3.14159f, 3.14159f);
+                    ImGui::TextDisabled("1.0 damping returns to rest as fast as it can "
+                                        "without going past. Below 1 it oscillates.");
+                    ImGui::TextDisabled("A frequency and a ratio rather than a stiffness, "
+                                        "so the same pair suits a light door and a heavy one.");
+                }
+
                 ImGui::Checkbox("Motor##joint", &joint.useMotor);
                 if (joint.useMotor) {
                     ImGui::DragFloat("Speed (rad/s)##joint", &joint.motorSpeed, 0.05f,

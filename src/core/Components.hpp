@@ -721,6 +721,22 @@ struct JointComponent {
     // maxMotorTorque is what stops a motor being infinitely strong: without a
     // cap it drives whatever is in the way straight through a wall instead of
     // stalling against it.
+    // A hinge that pulls toward an angle rather than holding one.
+    //
+    // Authored as a frequency in hertz and a damping RATIO because that pair is
+    // mass-independent: "3 Hz, critically damped" behaves the same on a garden
+    // gate and on a vault door, where a stiffness that suited one would throw
+    // the other across the room.
+    //
+    // A damping ratio of 1 is critically damped - it returns to rest as fast as
+    // it can without ever going past. Below 1 it overshoots and oscillates,
+    // above 1 it crawls. A pure damper with no spring is a motor with a target
+    // speed of zero, which already exists.
+    bool useSpring{false};
+    float springFrequency{0.0f};
+    float springDamping{1.0f};
+    float springRestAngle{0.0f};
+
     bool useMotor{false};
     float motorSpeed{0.0f};
     float maxMotorTorque{10.0f};
