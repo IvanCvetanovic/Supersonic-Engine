@@ -251,13 +251,13 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_hierarchy` | Parenting, world-transform caching, play/stop snapshots |
 | `test_frustum` | Plane extraction, AABB transforms, the zero-to-one near-plane convention |
 | `test_cascades` | Split distribution, slice fitting, texel snapping, depth range |
-| `test_skeletal` | glTF skin import, joint reordering, all three interpolation modes, palette packing |
+| `test_skeletal` | glTF skin import, joint reordering, all three interpolation modes, palette packing, and re-reading a re-exported rig |
 | `test_raycast` | Viewport picking, slab intersection, depth ordering |
 | `test_meshgen` | Primitive generation, winding, tangents, OBJ parsing |
 | `test_gltf` | glTF import against real assets in the tree, including a `.glb` with embedded textures |
 | `test_serialize` | JSON reader, scene and prefab round-trips |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
-| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence |
+| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, and not reading our own save back |
 | `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
@@ -265,8 +265,8 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, limits, motors, welds, and every degenerate case |
 | `test_convexhull` | Hull building and collision: Euler's formula, convexity, a cube's six faces, the vertex cap, and agreement with the box path |
 | `test_environmentmap` | IBL on the CPU: the cube face mapping, a constant sky irradiating to itself, both prefilter endpoints, and the Radiance decoder |
-| `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, and which route a reference resolved by |
-| `test_audio` | WAV decoding, including the shipped clip |
+| `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, which route a reference resolved by, and re-pointing a scene that is already open |
+| `test_audio` | WAV decoding including the shipped clip, and reloading a clip without freeing what is playing it |
 | `test_scripts` | Script registry and dispatch |
 | `test_blending` | Cross-fade between clips, blend weights, clip switching |
 | `test_spotlight` | Cone angles, the straight-down lookAt collapse, shadow frustum fit |
@@ -278,7 +278,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_launchoptions` | Argument parsing, missing values, malformed counts |
 | `test_json` | Depth limit, trailing content, duplicate keys, malformed input |
 | `test_scenemanager` | Deferred loads, Save As, failed-save and failed-load behaviour |
-| `test_assetwatcher` | Change detection, deleted and restored files, duplicate watches |
+| `test_assetwatcher` | Change detection, deleted and restored files, duplicate watches, and a write the engine made itself |
 | `test_contacts` | Enter/stay/exit diffing, pair ordering, normal direction, triggers |
 | `test_sat` | Oriented box collision, face manifolds, the ramp an AABB could not represent |
 | `test_lightselection` | Which lights survive the eight-light cap, and that the sun is not one of the casualties |
@@ -300,6 +300,67 @@ comment on each one says which.
   touches the renderer
 
 ---
+
+## Hot reload, and the asset that cannot be dropped
+
+Textures and meshes have re-read themselves since the watcher landed.
+Materials, rigs and sounds did not: all three cache by path, all three answer
+from the cache without stat-ing anything, and none had any way to be told the
+file underneath had moved on. Editing a `.material` in a text editor did nothing
+until a restart, and an animator re-exporting a character saw whatever skeleton
+happened to be on disk when the editor started.
+
+Three of the four re-read **in place, keeping their id**. An id is an index into
+the library's vector and every component in the scene is holding one, so minting
+a fresh entry leaves them all rendering the values from before the edit — the
+same bug, quieter.
+
+Four things were not obvious:
+
+| | |
+|---|---|
+| **A cached miss has to be repairable** | Both libraries deliberately remember a file that failed to load, so a broken reference is not retried every frame. That means fixing the file on disk — the way anyone would expect to clear it — otherwise achieves nothing for the rest of the session. |
+| **A rig needs a generation, not just an id** | A reload replaces contents without changing the index, so the joint palette and the captured bind-pose bounds go on describing the previous export. The joint-count resize hides it whenever the count matches, which for a re-export is almost always. |
+| **The engine reads its own writes** | The inspector edits a material in place and saves it. The mtime moves, the next poll fires, and the reload puts the file back over the values still being dragged — which looks harmless, because it reads back what was just written, until the frame where the slider has moved on. |
+| **Audio cannot be dropped at all** | A voice reads the clip's sample buffer directly. XAudio2 is handed `clip->pcm.data()` and reads it from its own thread; the software mixer keeps a `const AudioClip*` whose contract is written down as "the clip must outlive the voice". |
+
+So audio stops the voices, **then** drops the clip, **then** clears the handles
+the components hold. Each other order is wrong in its own way: dropping first is
+the use-after-free, and clearing the handles first loses the ids needed to stop
+those voices, which then play the old sound until the scene closes.
+
+The part that is easy to get wrong is *which* voices. Asking the components
+which of them name this file is the obvious answer and it is incorrect —
+`Update` starts a voice and then never looks at `soundFile` again, so pointing a
+looping source at a different file leaves the old voice running on the old clip.
+That voice, whose component no longer names this path at all, is exactly the one
+reading the memory about to be freed. `AudioEngine` records what each voice is
+actually playing and answers the question itself.
+
+**A rename now reaches the scene that is open.** Identity has survived a rename
+since asset identity landed, but only through the file: a loaded component holds
+a path and nothing else, because the guid that would resolve it was spent when
+the scene was read. Import now reports where each adopted identity came *from* —
+recorded during adoption, since Import clears its path index before adopting and
+no diff of the result can reconstruct the old path afterwards — and the editor
+rewrites the open scene to match. The old path comes from the sidecar's own
+**name**: a `.meta` stores a guid and a hash and never a path, because the path
+is the one thing about an asset that is allowed to change. Reading `entry.path`
+gives an empty string, which matches nothing, which re-points nothing — the
+whole feature doing nothing at all while every part of it appears to run. That
+is what the test caught, on the first version of this.
+
+Matching is on the whole path, never the file name. A project is full of a
+`floor.png` per folder, and a rewrite that matches too eagerly is worse than one
+that does nothing: it points an object at somebody else's texture and the scene
+still renders, so nothing says which object went wrong. Cached materials are
+re-pointed too — `MaterialSystem::Sync` copies a shared asset's texture paths
+onto every component using it every frame, so rewriting only the components puts
+the stale paths straight back within one frame.
+
+**Open:** changing `soundFile` on a *looping* source still does nothing until
+Playing is toggled, because `Update` only ever starts a voice. That is a separate
+defect, found while writing the above and left alone.
 
 ## Image-based lighting
 
@@ -437,6 +498,8 @@ Android "not functional"; extending that register forward costs nothing.
 - [x] Shadows that know what a material is: a cut-out surface casts its own
       silhouette rather than its bounding rectangle, and a blended one casts
       nothing at all
+- [x] Hot reload for every asset a scene names — textures, meshes, materials,
+      rigs and sounds — and a rename followed into the scene already open
 - [x] Transform hierarchy, prefabs, scene and material serialization
 - [x] Play/Stop, undo/redo, time-travel rewind
 - [x] Frustum culling, persistent pipeline cache
@@ -483,12 +546,6 @@ Android "not functional"; extending that register forward costs nothing.
 
 Ordered by what it costs against what it unblocks, not by how interesting it is.
 
-- [ ] **The rest of the asset pipeline.** Identity is done — a reference
-      survives a rename — but animation clips, audio and `.material` files are
-      still outside hot reload, so editing one means restarting; a clip is typed
-      into a text box rather than picked; and a rename made while the editor is
-      RUNNING is only noticed at the next import, because nothing re-points the
-      live scene
 - [ ] **A sky that matches the environment, and probes.** An HDRI now lights
       the scene, but the procedural sky behind it is still analytic — so a
       loaded environment is not what you see when you look up. And there is one

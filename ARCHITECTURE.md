@@ -135,6 +135,55 @@ Both registries cache failures so a missing or broken asset is not reopened
 every frame, and both fall back to something visible (unit cube, checkerboard)
 rather than dropping the draw.
 
+`AssetWatcher` stats every path a scene names, once per frame, and invalidates
+whatever cached it. Deliberately a poll: a few dozen paths is one stat each, and
+this engine already pays that without anyone noticing. A real
+`FindFirstChangeNotification`/inotify layer is worth writing when the count
+reaches the hundreds.
+
+Three rules hold across every cache it drives.
+
+**Re-read in place, keeping the id.** Ids are indices into the library's vector
+and every component in the scene holds one, so pushing a new entry on reload
+leaves them all reading the values from before the edit.
+
+**Keep what was loaded when the new read fails.** A save is not atomic and a
+poll can land mid-write, so a file that no longer parses leaves the previous
+values alone. Blanking them would turn every object using a material white for a
+frame — and let the editor write that blank back.
+
+**A cached miss must be repairable.** A file that failed to load is remembered as
+a miss so it is not retried every frame, which means fixing it on disk has to be
+what clears it, or it stays broken for the session.
+
+Two caches do not fit that shape.
+
+A **rig** carries a `generation` as well as an id, because a reload replaces its
+contents without changing the index — so anything derived from it, the joint
+palette and the captured bind-pose bounds, goes on describing the previous
+export. `SyncSkeletons` compares both. The joint-count resize alone hides the
+problem whenever the count happens to match, which for a re-export is almost
+always.
+
+An **audio clip** cannot be dropped at all while it is playing. A voice reads its
+sample buffer directly — XAudio2 is handed `clip->pcm.data()` and reads it from
+its own thread, and the software mixer keeps a `const AudioClip*` whose contract
+is "the clip must outlive the voice". So `AudioSystem::ReloadClip` stops the
+voices, then drops the clip, then clears the handles the components hold; every
+other order is either the use-after-free or a voice that can no longer be
+stopped. Which voices to stop is answered by `AudioEngine`, which records what
+each one is playing: `Update` never looks at `soundFile` again after starting a
+voice, so a looping source pointed at another file leaves the old voice running
+on the old clip — precisely the voice a component-side search would miss.
+
+Writes made by the engine itself are acknowledged rather than fired. The
+inspector edits a material in place and saves it, so without
+`AssetWatcher::Acknowledge` the next poll reads the file back over the values
+still being dragged. `MaterialLibrary` holds the watcher so `Save` cannot forget.
+
+Callbacks fire after the poll's scan, not during it, because a callback is
+allowed to watch and forget paths — which mutates the map the scan is walking.
+
 ### 4c. Lighting and shadows
 
 Lights live in a **storage buffer**, and a fragment loops only the ones that can
