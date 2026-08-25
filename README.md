@@ -499,8 +499,32 @@ straight resample is not an approximation, it is the integral's closed form, and
 it is what paid for doubling the resolution now that a background rather than a
 small bright smear is reading it.
 
-**Open:** there is still one environment per scene, so a room and the outdoors it
-opens onto light identically. That is what reflection probes exist to fix.
+**And more than one of them.** A `ReflectionProbeComponent` is a box; an object
+whose bounds centre falls inside it lights from the environment that probe
+names rather than from the scene's. Two are bound at once, which is what "a room
+and the outdoors" needs.
+
+Two device features decided the shape of it, and neither is enabled here. A
+cubemap ARRAY needs `imageCubeArray`, so the probes are an array of separate
+sampler descriptors instead — the idiom binding 3 already uses for the
+point-shadow cubes. And indexing a sampler array by a push constant needs
+`shaderSampledImageArrayDynamicIndexing`, so the shader picks between the slots
+at LITERAL indices and lets the comparison choose between the results, which is
+the shape `pointShadowFactor` already had to take after this engine got caught
+by exactly that. A `static_assert` guards the count, because a comment would not
+have stopped anyone raising it.
+
+The fixture is built so it cannot pass by accident: the scene names no
+environment of its own and only the probe names one, so outside the box is the
+analytic hemisphere and inside is the probe's HDRI. Two mirror spheres, one in
+and one out, and the runs differ only in whether the probe names a file —
+**10,490 pixels differ inside it and 0 outside**. The zero is the claim.
+
+The first version of that fixture removed the probe *entity* rather than
+blanking its path, and the control came back 474 instead of 0: changing the
+entity count changes which two entities the headless self-check mutates at frame
+N/2. The fixture was wrong, not the feature — and a control that was merely
+small would have hidden it.
 
 ## Asset identity
 
@@ -576,6 +600,8 @@ Android "not functional"; extending that register forward costs nothing.
 - [x] Shadows that know what a material is: a cut-out surface casts its own
       silhouette rather than its bounding rectangle, and a blended one casts
       nothing at all
+- [x] Reflection probes: more than one environment in a scene, so a room and
+      the outdoors it opens onto no longer light identically
 - [x] Concave collision: a collider is the convex pieces a shape decomposes
       into, so a doughnut has a hole in it, and a hull on terrain lands on the
       hill rather than on a box around it
@@ -630,14 +656,16 @@ Android "not functional"; extending that register forward costs nothing.
 
 Ordered by what it costs against what it unblocks, not by how interesting it is.
 
-- [ ] **Reflection probes.** There is one environment for the whole scene, so
-      a room and the outdoors it opens onto light identically. The design is
-      settled — bindings 8 and 9 keep their numbers and take a descriptorCount
-      of N rather than 1, which is the idiom binding 3 already uses for the
-      point-shadow cubes, and needs no optional device feature and no change to
-      `EnvironmentProbe` at all. What is left is the authoring: a component with
-      a volume, a per-object choice of which probe applies, and the two spare
-      4-byte slots in the 120-byte push constant to carry the index
+Nothing. The list is empty for the first time.
+
+What would go on it next is a matter of taste rather than of gaps, and two
+honest limits inside features that work are written down where the code is: a
+hinge spring's "critically damped never overshoots" holds where the effective
+mass is the true one, and a door anchored at its edge is a little under-damped
+for the number it was given; and convex decomposition splits on axis-aligned
+planes only, so a shape whose natural cut is diagonal gets a worse
+decomposition than it could — which is measurable, because the collider reports
+how much solid it invents that the mesh does not.
 
 Deliberately not on this list, with the reasons written down in
 [ARCHITECTURE.md](ARCHITECTURE.md): swept CCD, a persistent broadphase, warm
