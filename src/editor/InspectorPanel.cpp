@@ -8,6 +8,7 @@
 
 #include <cstdio>
 #include "editor/EditorIcons.hpp"
+#include "core/AnimationLibrary.hpp"
 #include "core/MaterialSystem.hpp"
 #include "editor/Theme.hpp"
 #include "core/ScriptRegistry.hpp"
@@ -1036,11 +1037,64 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Animator", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& animator = registry.get<AnimatorComponent>(entity);
 
-            char clipBuffer[64];
-            std::snprintf(clipBuffer, sizeof(clipBuffer), "%s", animator.clipName.c_str());
-            if (ImGui::InputText("Clip", clipBuffer, sizeof(clipBuffer))) {
-                animator.clipName = clipBuffer;
-                animator.warnedMissing = false;
+            // The clip used to be typed. An exporter decides what a clip is
+            // called, so getting it right meant opening the .gltf in a text
+            // editor - and a name that is one character out is indistinguishable
+            // from a name that is right, because both leave the mesh in bind
+            // pose.
+            const auto* skin = registry.try_get<SkinnedMeshComponent>(entity);
+            const std::vector<AnimationClip>* clips =
+                (m_animationLibrary && skin) ? m_animationLibrary->GetClips(skin->skeletonID)
+                                             : nullptr;
+
+            if (clips && !clips->empty()) {
+                // The preview names what is SET, not what resolves, so a name
+                // that matches nothing stays on screen rather than being quietly
+                // shown as the clip that would actually play.
+                const char* preview =
+                    animator.clipName.empty() ? "(first clip)" : animator.clipName.c_str();
+
+                if (ImGui::BeginCombo("Clip", preview)) {
+                    if (ImGui::Selectable("(first clip)", animator.clipName.empty())) {
+                        animator.clipName.clear();
+                        animator.warnedMissing = false;
+                    }
+                    for (const auto& clip : *clips) {
+                        const bool selected = animator.clipName == clip.name;
+                        if (ImGui::Selectable(clip.name.c_str(), selected)) {
+                            animator.clipName = clip.name;
+                            animator.warnedMissing = false;
+                        }
+                        if (selected) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                // A combo writes only when something is chosen, which is what
+                // keeps a name the rig does not have. Snapping an unmatched name
+                // to the first clip would be scene data loss on load - the rig
+                // is resolved a frame or two after the scene is read, and the
+                // panel does not know the difference between "wrong" and "not
+                // resolved yet".
+                if (!animator.clipName.empty() &&
+                    !m_animationLibrary->FindClip(skin->skeletonID, animator.clipName)) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1.0f),
+                                       "'%s' is not a clip in this rig - it is kept, not played.",
+                                       animator.clipName.c_str());
+                }
+            } else {
+                // No rig resolved yet, so there is nothing to pick from. The
+                // text box stays, because naming a clip BEFORE the rig arrives
+                // is the only way to set one on an entity whose mesh has not
+                // loaded - and removing it would make that impossible rather
+                // than merely awkward.
+                char clipBuffer[64];
+                std::snprintf(clipBuffer, sizeof(clipBuffer), "%s", animator.clipName.c_str());
+                if (ImGui::InputText("Clip", clipBuffer, sizeof(clipBuffer))) {
+                    animator.clipName = clipBuffer;
+                    animator.warnedMissing = false;
+                }
+                ImGui::TextDisabled("No rig loaded, so there is nothing to pick from yet.");
             }
             ImGui::TextDisabled("Empty plays the file's first clip.");
 

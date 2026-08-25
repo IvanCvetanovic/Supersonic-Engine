@@ -1023,6 +1023,7 @@ void SupersonicApp::Run() {
         // and inspector edits appear in the same frame instead of one late.
         m_editorLayer->SetPlayMode(&m_playMode);
         m_editorLayer->SetMaterialLibrary(m_materialLibrary.get());
+        m_editorLayer->SetAnimationLibrary(m_animationLibrary.get());
         m_editorLayer->SetRenderStats(m_renderer->GetRenderStats());
         m_editorLayer->SetContacts(m_contacts);
         m_editorLayer->SetScriptHostInfo(m_hotReload->IsLoaded(),

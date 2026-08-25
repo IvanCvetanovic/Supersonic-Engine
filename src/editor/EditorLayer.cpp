@@ -43,6 +43,10 @@ void EditorLayer::SetMaterialLibrary(MaterialLibrary* library) {
     m_contentBrowserPanel.SetMaterialLibrary(library);
 }
 
+void EditorLayer::SetAnimationLibrary(AnimationLibrary* library) {
+    m_inspectorPanel.SetAnimationLibrary(library);
+}
+
 void EditorLayer::Shutdown() {
     // Before the offscreen target, and both before ImGui_ImplVulkan_Shutdown:
     // each holds ImGui descriptor sets that have to be handed back first.

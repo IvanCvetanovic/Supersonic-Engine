@@ -96,6 +96,7 @@ public:
     // Shared material assets, for the inspector's editor and the browser's
     // create/assign actions. Non-owning.
     void SetMaterialLibrary(MaterialLibrary* library);
+    void SetAnimationLibrary(AnimationLibrary* library);
 
     // Last frame's culling counters, shown in the statistics panel.
     void SetRenderStats(const RenderSystem::Stats& stats) { m_renderStats = stats; }

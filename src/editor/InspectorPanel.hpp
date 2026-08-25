@@ -7,6 +7,7 @@
 
 namespace Supersonic {
 
+class AnimationLibrary;
 class MaterialLibrary;
 
 class InspectorPanel {
@@ -14,6 +15,10 @@ public:
     // Non-owning; null simply means the material section edits the entity's own
     // values, which is what it did before assets existed.
     void SetMaterialLibrary(MaterialLibrary* library) { m_materialLibrary = library; }
+
+    // So the animator can offer the clips a rig actually has, instead of asking
+    // someone to type a name and spell it the same way the exporter did.
+    void SetAnimationLibrary(AnimationLibrary* library) { m_animationLibrary = library; }
 
     InspectorPanel() = default;
 
@@ -31,6 +36,7 @@ public:
 
 private:
     MaterialLibrary* m_materialLibrary{nullptr};
+    AnimationLibrary* m_animationLibrary{nullptr};
 
     void drawComponents(entt::registry& registry, entt::entity entity);
 
