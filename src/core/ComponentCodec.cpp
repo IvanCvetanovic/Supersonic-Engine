@@ -305,6 +305,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
             << jsonSafe(joint->maxMotorTorque, "Joint.maxMotorTorque")
             << ", \"BreakForce\": " << jsonSafe(joint->breakForce, "Joint.breakForce")
             << ", \"BreakTorque\": " << jsonSafe(joint->breakTorque, "Joint.breakTorque")
+            << ", \"SolveOrder\": " << joint->solveOrder
             << ", \"Stiffness\": " << joint->stiffness
             << ", \"Enabled\": " << (joint->enabled ? "true" : "false") << " },\n";
         // `broken` is deliberately not written. A scene that reloaded with its
@@ -692,6 +693,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         joint.useLimit = node["Joint"]["UseLimit"].AsBool(false);
         joint.minAngle = node["Joint"]["MinAngle"].AsFloat(-1.5707963f);
         joint.maxAngle = node["Joint"]["MaxAngle"].AsFloat(1.5707963f);
+        joint.solveOrder = static_cast<int32_t>(node["Joint"]["SolveOrder"].AsFloat(0.0f));
         joint.useSpring = node["Joint"]["UseSpring"].AsBool(false);
         joint.springFrequency = node["Joint"]["SpringFrequency"].AsFloat(0.0f);
         // Defaulting to critical rather than to zero: a scene written before

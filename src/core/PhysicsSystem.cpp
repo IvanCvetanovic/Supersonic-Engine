@@ -1526,6 +1526,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         entt::entity owner{entt::null};
         float breakForce{0.0f};
         float breakTorque{0.0f};
+        int32_t solveOrder{0};
     };
 
     std::vector<JointRuntime> joints;
@@ -1721,9 +1722,25 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             runtime.breakForce = std::max(authored.breakForce, 0.0f);
             runtime.breakTorque = std::max(authored.breakTorque, 0.0f);
 
+            runtime.solveOrder = authored.solveOrder;
             joints.push_back(runtime);
         }
     }
+
+    // The order the author asked for, applied ONCE and before both sweeps.
+    //
+    // Both loops below are Gauss-Seidel over this vector, so the order is the
+    // answer, not a detail of it. Sorting between them would let the position
+    // sweep and the velocity sweep disagree, which is worse than either order
+    // on its own.
+    //
+    // Stable, so joints that share a solveOrder keep the order the entity pool
+    // gave them - which is what makes every scene written before this field
+    // existed solve exactly as it did.
+    std::stable_sort(joints.begin(), joints.end(),
+                     [](const JointRuntime& left, const JointRuntime& right) {
+                         return left.solveOrder < right.solveOrder;
+                     });
 
     // The positional half, exactly where a contact's happens and for the same
     // reason: positions are integrated BEFORE this solve, so a velocity change

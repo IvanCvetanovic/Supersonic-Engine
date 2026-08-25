@@ -862,6 +862,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 }
             }
 
+            ImGui::DragInt("Solve Order##joint", &joint.solveOrder, 0.1f, -100, 100);
+            ImGui::TextDisabled("Lower solves first. A chain converges far faster "
+                                "root to tip than tip to root.");
+
             ImGui::DragFloat("Break Force##joint", &joint.breakForce, 1.0f, 0.0f, 100000.0f);
             ImGui::DragFloat("Break Torque##joint", &joint.breakTorque, 1.0f, 0.0f, 100000.0f);
             ImGui::TextDisabled("Zero on either means it cannot be broken that way.");

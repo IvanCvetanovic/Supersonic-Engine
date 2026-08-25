@@ -767,6 +767,21 @@ struct JointComponent {
     // error re-creates the error immediately.
     float stiffness{0.8f};
 
+    // Which joints the solver reaches first. Lower solves earlier.
+    //
+    // The solve is Gauss-Seidel: joint i reads the velocities joint i-1 just
+    // wrote, so order already decides the answer - it was simply whatever order
+    // the entity pool happened to be in, which is reverse creation order
+    // mutated by every destroy. A long articulated chain converges far faster
+    // solved root to tip than tip to root, and had no way to say so.
+    //
+    // A priority, deliberately, and not a dependency graph. Cycles are ordinary
+    // here - a ragdoll closed at the hips, a bridge tied at both ends, a crate
+    // both welded and hinged - and a topological sort has no answer for one,
+    // while a sort key always terminates. The sort is stable, so ties keep the
+    // order they had and a scene that never sets this solves exactly as before.
+    int32_t solveOrder{0};
+
     bool enabled{true};
 };
 

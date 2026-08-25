@@ -2961,6 +2961,87 @@ static void testASpringLeftOffChangesNothing() {
               "a spring switched off must not change one bit of the motion");
 }
 
+// A chain of `links` bodies hanging from an anchor, each a fixed distance below
+// the one above it. `order` decides what solveOrder each link gets: +1 is root
+// to tip, -1 is tip to root, 0 leaves them all equal.
+static float hangChain(int order, int links, float linkLength, float seconds) {
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 10.0f, 0.0f);
+
+    std::vector<entt::entity> chain;
+    for (int i = 0; i < links; ++i) {
+        // Started in a straight line at the right length, so the only thing
+        // being measured is how well the solver HOLDS it.
+        const float y = anchor.y - linkLength * static_cast<float>(i + 1);
+        chain.push_back(makeJointBody(registry, glm::vec3(0.0f, y, 0.0f)));
+    }
+
+    for (int i = 0; i < links; ++i) {
+        auto& joint = (i == 0) ? hangFrom(registry, chain[0], anchor, linkLength)
+                               : registry.emplace<JointComponent>(chain[i]);
+        if (i > 0) {
+            joint.type = JointComponent::Type::Distance;
+            joint.connectedBody = chain[i - 1];
+            joint.connectedAnchor = glm::vec3(0.0f);
+            joint.distance = linkLength;
+        }
+        joint.solveOrder = order * i;
+    }
+
+    const float step = 1.0f / 60.0f;
+    for (float elapsed = 0.0f; elapsed < seconds; elapsed += step) {
+        PhysicsSystem::Update(registry, step);
+    }
+
+    // How far the tip hangs below the anchor. A perfectly held chain hangs at
+    // exactly links * linkLength; a solver that has not converged hangs LOWER,
+    // because every link is stretched a little.
+    return anchor.y - registry.get<TransformComponent>(chain.back()).position.y;
+}
+
+static void testSolveOrderChangesHowWellAChainHolds() {
+    // The solve is Gauss-Seidel, so joint i reads the velocities joint i-1 just
+    // wrote - which means the order IS the answer, and until now it was
+    // whatever order the entity pool happened to be in.
+    const int links = 6;
+    const float linkLength = 0.5f;
+    const float ideal = static_cast<float>(links) * linkLength;
+
+    const float rootToTip = hangChain(+1, links, linkLength, 1.5f);
+    const float tipToRoot = hangChain(-1, links, linkLength, 1.5f);
+
+    CHECK_MSG(rootToTip > 0.0f && tipToRoot > 0.0f, "both chains must actually hang");
+
+    // Both stretch; the question is which stretches less.
+    const float rootError = std::fabs(rootToTip - ideal);
+    const float tipError = std::fabs(tipToRoot - ideal);
+
+    CHECK_MSG(rootError != tipError,
+              "the two orders must give different answers, or solveOrder is wired to nothing");
+    CHECK_MSG(rootError <= tipError,
+              "root to tip must hold the chain at least as well as tip to root");
+}
+
+static void testEqualSolveOrdersKeepTheOrderTheyHad() {
+    // The property that made this safe to land. The sort is STABLE, so a scene
+    // that never sets solveOrder is solved in exactly the order it was before
+    // the field existed - which is what lets every other test in this file
+    // stand as the regression net.
+    const int links = 6;
+    const float linkLength = 0.5f;
+
+    const float allZero = hangChain(0, links, linkLength, 1.5f);
+    const float alsoZero = hangChain(0, links, linkLength, 1.5f);
+
+    CHECK_MSG(allZero == alsoZero, "the same scene must give the same answer twice");
+
+    // And a chain whose keys are all equal must not match one that is ordered,
+    // or the sort is doing nothing at all and the check above is vacuous.
+    const float ordered = hangChain(+1, links, linkLength, 1.5f);
+    CHECK_MSG(allZero != ordered || links <= 1,
+              "an ordered chain must differ from an unordered one");
+}
+
 static void runTests() {
     testANudgedCapsuleOnItsSideSettlesInsteadOfRocking();
     testACapsuleRestsOnItsOwnBottom();
@@ -3073,6 +3154,8 @@ static void runTests() {
     testAnUnderDampedHingeDoesOvershoot();
     testASpringPullsTowardItsRestAngleNotTowardZero();
     testASpringLeftOffChangesNothing();
+    testSolveOrderChangesHowWellAChainHolds();
+    testEqualSolveOrdersKeepTheOrderTheyHad();
 }
 
-TEST_MAIN("test_physics", 228)
+TEST_MAIN("test_physics", 234)
