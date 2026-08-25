@@ -234,6 +234,14 @@ AssetDatabase::ImportResult AssetDatabase::Import(const std::string& root) {
     // have been adopted by is no longer un-identified.
     struct Orphan {
         std::string metaPath;
+
+        // Where the asset USED to be, taken from the sidecar's own name rather
+        // than from inside it: a .meta stores a guid and a hash, never a path,
+        // because the path is the one thing about an asset that is allowed to
+        // change. It is the name of the file that is not there any more, which
+        // is exactly the reference a scene still open is holding.
+        std::string assetPath;
+
         Entry entry;
     };
     std::vector<Orphan> orphans;
@@ -246,6 +254,7 @@ AssetDatabase::ImportResult AssetDatabase::Import(const std::string& root) {
 
         Orphan orphan;
         orphan.metaPath = path;
+        orphan.assetPath = NormalisePath(path.substr(0, path.size() - 5));
         if (!ReadMeta(path, orphan.entry)) continue;
         if (orphan.entry.contentHash == 0) continue;
         orphans.push_back(std::move(orphan));
@@ -274,6 +283,10 @@ AssetDatabase::ImportResult AssetDatabase::Import(const std::string& root) {
 
         claimed[match] = true;
         Entry entry = orphans[match].entry;
+
+        // This is the only moment both halves of the move exist at once.
+        const std::string from = orphans[match].assetPath;
+
         entry.path = path;
         entry.contentHash = hash;
         if (!WriteMeta(MetaPathFor(path), entry)) continue;
@@ -284,6 +297,11 @@ AssetDatabase::ImportResult AssetDatabase::Import(const std::string& root) {
 
         Remember(entry);
         ++result.adopted;
+        // Recorded even when `from` is empty - a sidecar written by an older
+        // version may not carry a path - because the count and the list must
+        // agree, and a move with nothing to rewrite is skipped by the caller
+        // rather than dropped silently here.
+        result.moved.push_back(Move{entry.guid, from, path});
         SUPERSONIC_LOG_INFO("AssetDatabase")
             << "Adopted " << entry.guid.substr(0, 8) << " from " << orphans[match].metaPath
             << " for " << path << " (same contents)." << std::endl;

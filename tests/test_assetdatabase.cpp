@@ -12,7 +12,12 @@
 // right, which proves nothing at all.
 
 #include "core/AssetDatabase.hpp"
+#include "core/AssetRepointer.hpp"
+#include "core/Components.hpp"
+#include "core/MaterialLibrary.hpp"
 #include "TestHarness.hpp"
+
+#include <entt/entt.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -256,6 +261,100 @@ void testARenamedAssetIsFoundAgainByItsContents() {
     CHECK_EQ(reimported.stats().unresolved, size_t{0});
 }
 
+void testAnOpenSceneFollowsARename() {
+    // The half that was missing. Identity has survived a rename since asset
+    // identity landed - but only through the FILE. A loaded component holds a
+    // path and nothing else; the guid that would resolve it was spent when the
+    // scene was read. So the editor that was open while somebody renamed a
+    // texture in Explorer went on naming a file that is not there, showing a
+    // checkerboard, until the scene was saved and read back.
+    const fs::path root = freshRoot();
+    const std::string before = write(root / "textures" / "floor_tiles.png", "the same pixels");
+
+    // The shared asset, created before the import so it gets an identity too.
+    // Its copy of the texture path is the one MaterialSystem::Sync writes onto
+    // every component using it, every frame.
+    MaterialLibrary materials;
+    MaterialAsset shared;
+    shared.albedoTexturePath = before;
+    const uint32_t id = materials.Create((root / "shared.material").generic_string(), shared);
+    CHECK_MSG(id != MaterialLibrary::kInvalidMaterial, "the shared material must be created");
+
+    AssetDatabase database;
+    database.Import(root.generic_string());
+    const std::string guid = database.GuidForPath(before);
+    CHECK_EQ(guid.size(), size_t{32});
+
+    // The scene, open, holding the path the way a component does.
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<MaterialComponent>(entity).albedoTexturePath = before;
+
+    std::error_code ec;
+    fs::rename(root / "textures" / "floor_tiles.png", root / "textures" / "stone_tiles.png", ec);
+    CHECK_MSG(!ec, "the fixture has to actually rename the file");
+    const std::string after =
+        AssetDatabase::NormalisePath((root / "textures" / "stone_tiles.png").generic_string());
+
+    AssetDatabase reimported;
+    const auto imported = reimported.Import(root.generic_string());
+    CHECK_EQ(imported.adopted, size_t{1});
+
+    // The pair is the thing. Import clears its path index BEFORE adopting, so
+    // the old path is gone by the time the new one is known - recording the
+    // move during adoption is the only moment both halves exist at once, and
+    // without them there is no way to know which references to rewrite.
+    CHECK_EQ(imported.moved.size(), size_t{1});
+    CHECK_MSG(!imported.moved.empty() && imported.moved[0].from == before,
+              "the import must say where the identity came from");
+    CHECK_MSG(!imported.moved.empty() && imported.moved[0].to == after,
+              "and where it went");
+
+    const RepointResult repointed = RepointAssets(registry, &materials, imported.moved);
+
+    CHECK_MSG(registry.get<MaterialComponent>(entity).albedoTexturePath == after,
+              "the open scene must name the file where it is now");
+    CHECK_MSG(materials.Get(id) && materials.Get(id)->albedoTexturePath == after,
+              "and so must the cached asset, or Sync copies the stale path back next frame");
+    CHECK_EQ(repointed.componentFields, size_t{1});
+    CHECK_EQ(repointed.materialFields, size_t{1});
+
+    // And it is the SAME identity throughout, which is what makes this a
+    // re-point rather than a fresh reference that happens to work.
+    CHECK_MSG(reimported.GuidForPath(after) == guid,
+              "adoption must carry the identity across, not mint a new one");
+}
+
+void testRepointingMatchesTheWholePathNotJustTheName() {
+    // A rewrite that matches too eagerly is worse than one that does nothing:
+    // it silently points an object at somebody else's texture, and the scene
+    // still renders, so nothing ever says which object went wrong.
+    //
+    // The tempting shortcut is to compare file NAMES, because that is what a
+    // rename changes. Projects are full of a floor.png per folder.
+    entt::registry registry;
+
+    const auto renamed = registry.create();
+    registry.emplace<MaterialComponent>(renamed).albedoTexturePath = "assets/textures/floor.png";
+
+    const auto sameName = registry.create();
+    registry.emplace<MaterialComponent>(sameName).albedoTexturePath = "assets/props/floor.png";
+
+    std::vector<AssetDatabase::Move> moves;
+    moves.push_back(AssetDatabase::Move{"abc", "assets/textures/floor.png",
+                                        "assets/textures/stone.png"});
+
+    const RepointResult repointed = RepointAssets(registry, nullptr, moves);
+
+    CHECK_EQ(repointed.componentFields, size_t{1});
+    CHECK_MSG(registry.get<MaterialComponent>(renamed).albedoTexturePath ==
+                  "assets/textures/stone.png",
+              "the file that moved must follow");
+    CHECK_MSG(registry.get<MaterialComponent>(sameName).albedoTexturePath ==
+                  "assets/props/floor.png",
+              "a different file with the same name must be left alone");
+}
+
 void testAdoptionHappensBeforeMinting() {
     // The ordering IS the feature. Mint first and the renamed file has a brand
     // new identity by the time adoption looks, so there is nothing left to
@@ -409,6 +508,8 @@ void runTests() {
     testEditingAFileKeepsItsIdentityAndRefreshesItsHash();
 
     testARenamedAssetIsFoundAgainByItsContents();
+    testAnOpenSceneFollowsARename();
+    testRepointingMatchesTheWholePathNotJustTheName();
     testAdoptionHappensBeforeMinting();
     testARenamedAndEditedAssetIsALimitationNotABug();
 
@@ -423,4 +524,4 @@ void runTests() {
 
 } // namespace
 
-TEST_MAIN("test_assetdatabase", 60)
+TEST_MAIN("test_assetdatabase", 75)

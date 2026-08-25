@@ -135,6 +135,31 @@ uint32_t MaterialLibrary::Acquire(const std::string& path) {
     return id;
 }
 
+size_t MaterialLibrary::Repoint(const std::string& from, const std::string& to) {
+    if (from.empty() || to.empty() || from == to) return 0;
+
+    size_t changed = 0;
+    for (Entry& entry : m_entries) {
+        if (!entry.valid) continue;
+        for (std::string* field : {&entry.asset.albedoTexturePath,
+                                   &entry.asset.normalTexturePath,
+                                   &entry.asset.ormTexturePath}) {
+            if (*field == from) {
+                *field = to;
+                ++changed;
+            }
+        }
+    }
+
+    // Deliberately NOT the entry's own path. A .material that was itself
+    // renamed keeps its cache key, so re-keying m_lookup here would leave the
+    // entry reachable under a path no component names any more while the
+    // component - re-pointed to the new path - misses the cache and loads a
+    // second copy of the same asset. The component's path is what matters, and
+    // the miss that follows re-reads the file, which is correct.
+    return changed;
+}
+
 bool MaterialLibrary::Reload(const std::string& path) {
     const auto it = m_lookup.find(path);
     if (it == m_lookup.end()) return false;

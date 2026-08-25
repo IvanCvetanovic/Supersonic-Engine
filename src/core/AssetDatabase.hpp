@@ -57,11 +57,25 @@ public:
 
     // ---- Writing identities ------------------------------------------------
 
+    // Where one identity moved to. Recorded DURING adoption because it cannot
+    // be recovered afterwards: Import clears the path index before adopting, so
+    // by the time the new path is known the old one is gone, and no diff of the
+    // result can reconstruct it. Without the pair, a live scene cannot be told
+    // which of its references to rewrite.
+    struct Move {
+        std::string guid;
+        std::string from;
+        std::string to;
+    };
+
     struct ImportResult {
         size_t minted{0};          // new identities written
         size_t adopted{0};         // identities recovered from an orphaned .meta
         size_t refreshed{0};       // content hash brought up to date
         bool ok{false};
+
+        // One per adoption, in the order they were adopted.
+        std::vector<Move> moved;
     };
 
     // Mints identities for anything that has none and WRITES the sidecars.

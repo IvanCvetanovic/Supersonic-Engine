@@ -1,5 +1,6 @@
 #include "editor/EditorLayer.hpp"
 #include "core/AssetDatabase.hpp"
+#include "core/AssetRepointer.hpp"
 #include "core/Log.hpp"
 #include "editor/EditorIcons.hpp"
 #include "editor/Theme.hpp"
@@ -417,10 +418,29 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
                 if (!result.ok) {
                     SetStatus("Import Assets: no 'assets' folder here.", true);
                 } else {
-                    SetStatus("Imported assets: " + std::to_string(result.minted) +
-                                  " new, " + std::to_string(result.adopted) +
-                                  " recovered from a rename. Save the scene to stamp "
-                                  "the identities into it.",
+                    // The scene that is already OPEN. Identity has survived a
+                    // rename since asset identity landed, but only through the
+                    // file: a component holds a path, the guid that would
+                    // resolve it was spent at load time, so the running editor
+                    // went on naming a file that is not there any more.
+                    //
+                    // Not undoable, on purpose. The old path does not exist -
+                    // undoing this would restore a broken reference, which is
+                    // not a state anybody wants back. It marks the scene dirty
+                    // instead, because the change is real and has to be saved
+                    // to survive.
+                    const RepointResult repointed =
+                        RepointAssets(registry, m_materialLibrary, result.moved);
+                    if (repointed.Total() > 0 && m_sceneManager) m_sceneManager->MarkDirty();
+
+                    std::string message = "Imported assets: " + std::to_string(result.minted) +
+                                          " new, " + std::to_string(result.adopted) +
+                                          " recovered from a rename";
+                    if (repointed.Total() > 0) {
+                        message += ", " + std::to_string(repointed.Total()) +
+                                   " reference(s) in this scene re-pointed";
+                    }
+                    SetStatus(message + ". Save the scene to stamp the identities into it.",
                               false);
                 }
             }

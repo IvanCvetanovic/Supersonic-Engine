@@ -52,6 +52,15 @@ public:
     // that cannot be read is cached as a miss, so it is not retried every frame.
     uint32_t Acquire(const std::string& path);
 
+    // Rewrites cached texture references that name `from` so they name `to`,
+    // and returns how many changed.
+    //
+    // In memory only: the .material on disk keeps the old path, and does not
+    // need not to, because it also stores the identity - so the next load
+    // resolves the reference to wherever the file is now. Rewriting the file
+    // here would mean writing to disk from something the user asked to READ.
+    size_t Repoint(const std::string& from, const std::string& to);
+
     // Re-reads a cached asset from disk, KEEPING ITS ID.
     //
     // Not Acquire again: an id is an index into m_entries, and every
