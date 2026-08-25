@@ -21,6 +21,25 @@ layout(location = 0) out vec4 outColor;
 void main() {
     const vec3 dir = normalize(fragViewRay);
 
+    // A loaded environment IS the sky. Reflections have come from the cubemap
+    // since image-based lighting landed, while the background stayed the
+    // analytic gradient below - so a chrome sphere showed a room and the space
+    // behind it showed a two-colour ramp, which is the same disagreement this
+    // pass was written to end, one layer further up.
+    //
+    // Level 0 of the prefiltered chain, which is roughness zero, which is the
+    // environment itself. Nothing else is needed: the cube is already bound to
+    // this set, because scene_ubo.glsl declares it and the sky pass binds the
+    // scene set.
+    //
+    // The whole procedural sky goes, sun included. An HDRI has its own sun in
+    // it, and drawing another one over the top would light the scene from one
+    // and show the other.
+    if (ubo.environmentParams.x > 0.5) {
+        outColor = vec4(textureLod(prefilteredMap, dir, 0.0).rgb, 1.0);
+        return;
+    }
+
     // The same mapping hemisphere() uses, so the horizon sits where the shading
     // thinks it does.
     const float up = dir.y * 0.5 + 0.5;

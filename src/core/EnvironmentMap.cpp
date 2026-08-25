@@ -435,6 +435,21 @@ bool Prefilter(const Cubemap& source, uint32_t baseSize, uint32_t levels,
                     const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(size);
                     const glm::vec3 normal = Cubemap::FaceToDirection(face, u, v);
 
+                    if (roughness == 0.0f) {
+                        // Not an approximation of the loop below - it is what
+                        // the loop converges to, exactly. At zero roughness the
+                        // GGX lobe is a delta: importanceSampleGgx returns the
+                        // normal for every sample, so the reflected direction is
+                        // the normal for every sample, and a weighted average of
+                        // one value is that value. The loop was spending 128
+                        // samples to arrive back where it started.
+                        //
+                        // This is the level the SKY reads, so it is also the
+                        // level whose cost decides how large the chain can be.
+                        mip.At(face, x, y) = source.Sample(normal);
+                        continue;
+                    }
+
                     // The usual approximation: the view direction is the normal,
                     // so the reflection is too. It is what makes a single
                     // prefiltered map serve every viewing angle, and the cost is

@@ -217,6 +217,57 @@ void testTheSharpestLevelIsTheEnvironmentItself() {
     CHECK_MSG(wrong == 0, "the sharpest level is the environment, unchanged");
 }
 
+void testTheSharpestLevelIsExactlyAResample() {
+    // Stronger than the case above, and it is what makes the sky affordable.
+    //
+    // At roughness zero the GGX lobe is a delta: importanceSampleGgx returns
+    // the normal for every sample, the reflected direction is the normal for
+    // every sample, and a weighted average of one value is that value. So the
+    // level the sky reads is not an approximation of the environment - it IS
+    // the environment, and computing it with 128 samples per texel was paying
+    // to arrive back where it started.
+    //
+    // A checker rather than a constant, because a constant survives any weights
+    // at all and would pass against a blur.
+    Cubemap source;
+    CHECK(source.Create(16));
+    for (uint32_t face = 0; face < Cubemap::kFaceCount; ++face) {
+        for (uint32_t y = 0; y < 16; ++y) {
+            for (uint32_t x = 0; x < 16; ++x) {
+                const bool light = ((x / 2) + (y / 2)) % 2 == 0;
+                source.At(face, x, y) =
+                    light ? glm::vec3(1.0f, 0.75f, 0.5f) : glm::vec3(0.0f, 0.125f, 0.25f);
+            }
+        }
+    }
+
+    std::vector<Cubemap> levels;
+    CHECK(EnvironmentMap::Prefilter(source, 16, 5, levels));
+
+    int wrong = 0;
+    for (uint32_t face = 0; face < Cubemap::kFaceCount; ++face) {
+        for (uint32_t y = 0; y < 16; ++y) {
+            for (uint32_t x = 0; x < 16; ++x) {
+                if (!nearlyVec(levels.front().At(face, x, y), source.At(face, x, y), 1e-5f)) {
+                    ++wrong;
+                }
+            }
+        }
+    }
+    CHECK_MSG(wrong == 0, "level zero must equal the source texel for texel, not merely resemble it");
+
+    // And the level after it must NOT, or the assertion above is satisfied by a
+    // chain that never blurs anything.
+    int same = 0;
+    for (uint32_t face = 0; face < Cubemap::kFaceCount; ++face) {
+        if (nearlyVec(levels[1].Sample(kAxes[face]), levels.front().Sample(kAxes[face]), 1e-5f)) {
+            ++same;
+        }
+    }
+    CHECK_MSG(same < static_cast<int>(Cubemap::kFaceCount),
+              "roughness above zero must still integrate");
+}
+
 void testEveryLevelOfAConstantEnvironmentIsThatConstant() {
     // The other endpoint, and it holds at every roughness rather than only at
     // one: however the lobe is spread, an average of one colour is that colour.
@@ -422,6 +473,8 @@ void runTests() {
     testIrradianceIsBrighterFacingTheBrightSide();
 
     testTheSharpestLevelIsTheEnvironmentItself();
+
+    testTheSharpestLevelIsExactlyAResample();
     testEveryLevelOfAConstantEnvironmentIsThatConstant();
     testTheChainGetsSmallerAndBlurrier();
 
@@ -436,4 +489,4 @@ void runTests() {
 
 } // namespace
 
-TEST_MAIN("test_environmentmap", 50)
+TEST_MAIN("test_environmentmap", 54)

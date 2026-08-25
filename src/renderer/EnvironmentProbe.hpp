@@ -33,7 +33,15 @@ public:
     // The sharpest specular level, and how many roughness steps there are. Five
     // levels means the roughest is a 8x8 face, which is as blurred as a
     // reflection ever needs to be.
-    static constexpr uint32_t kPrefilteredSize = 128;
+    // 256 rather than 128 because this is now what the SKY samples, not only
+    // what a reflection does. A reflection is a small bright smear and forgives
+    // a soft source; a background fills the screen and does not.
+    //
+    // Affordable because level 0 stopped integrating: it is a straight resample
+    // now, so quadrupling its texel count costs less than the 128 samples per
+    // texel it used to pay. The blurry levels grew 4x and they are the small
+    // ones. Storage is 6 faces x (256^2 + 128^2 + ... ) x 8 bytes, about 4 MB.
+    static constexpr uint32_t kPrefilteredSize = 256;
     static constexpr uint32_t kPrefilteredLevels = 5;
 
     EnvironmentProbe(VulkanDevice& device, vk::CommandPool commandPool);
