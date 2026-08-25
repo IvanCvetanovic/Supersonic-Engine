@@ -38,6 +38,22 @@ public:
     void Forget(const std::string& path);
     void Clear();
 
+    // Records a path's CURRENT write time without firing, so a write the ENGINE
+    // made itself is not read back as a change.
+    //
+    // Every reload so far has been someone editing a file in another program,
+    // where firing is the whole point. Materials break that: the inspector
+    // edits the asset in place and saves it, so the mtime moves and the next
+    // poll reloads the file over the values still being dragged. The reload
+    // reads back what was just written, so it looks harmless - until the frame
+    // between the save and the poll, where it discards that frame's edit and
+    // the slider jumps backwards under the cursor.
+    //
+    // So: every engine-side write calls this immediately afterwards. Watching a
+    // path this way is safe even if it was not watched before, which is what
+    // makes it usable straight after Create().
+    void Acknowledge(const std::string& path);
+
     // Stats every watched path and fires the callback for each one whose write
     // time moved. Returns how many fired.
     //

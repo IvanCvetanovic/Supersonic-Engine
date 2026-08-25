@@ -218,11 +218,41 @@ void AnimationSystem::SyncSkeletons(entt::registry& registry, AnimationLibrary& 
         }
 
         auto& skin = registry.get_or_emplace<SkinnedMeshComponent>(entity);
-        if (skin.skeletonID != skeletonID) {
+
+        // The generation is half of the comparison, not decoration. A hot
+        // reload replaces a rig's contents in place, so the id is unchanged and
+        // an id-only test misses it entirely. The resize below catches a rig
+        // whose joint COUNT changed and nothing else - re-export the same
+        // skeleton with a corrected bind pose and every derived value here
+        // silently keeps describing the old one.
+        const uint32_t generation = library.GenerationOf(skeletonID);
+        if (skin.skeletonID != skeletonID || skin.skeletonGeneration != generation) {
+            const bool sameRigReloaded = skin.skeletonID == skeletonID;
+
             skin.skeletonID = skeletonID;
+            skin.skeletonGeneration = generation;
             skin.jointMatrices.clear();
-            // A different mesh has different bind bounds.
+            // A different mesh has different bind bounds - and so does the same
+            // mesh re-exported, which is exactly what a generation bump means.
             skin.bindBoundsCaptured = false;
+
+            if (sameRigReloaded) {
+                // A cross-fade is derived from a change of clipName and names
+                // a clip by string. A re-export can rename or delete that clip,
+                // which would leave the blend reading a clip that no longer
+                // exists for as long as it had left to run.
+                auto& animator = registry.get<AnimatorComponent>(entity);
+                if (!animator.blendFromClip.empty() &&
+                    !library.FindClip(skeletonID, animator.blendFromClip)) {
+                    animator.blendFromClip.clear();
+                    animator.blendRemaining = 0.0f;
+                    animator.blendTotal = 0.0f;
+                }
+                // So the "no such clip" diagnostic is allowed to speak again:
+                // the set of clips just changed, and whether the current name
+                // still resolves is a different question than it was.
+                animator.warnedMissing = false;
+            }
         }
 
         const Skeleton* skeleton = library.GetSkeleton(skeletonID);

@@ -22,6 +22,7 @@
 #include <glm/gtc/epsilon.hpp>
 
 #include <cmath>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -443,6 +444,138 @@ static void testMissingFileIsHandled() {
               "an invalid id must not index the entry list");
 }
 
+// --- Hot reloading a rig ----------------------------------------------------
+//
+// A rig is re-exported constantly while a character is being made, and the
+// library cached the first parse for the life of the session - so the animator
+// saved, alt-tabbed, and saw the skeleton from ten minutes ago.
+//
+// The fixtures name their buffer by a RELATIVE uri, so a copy has to bring the
+// .bin along or the loader reads a rig with no data and every case below turns
+// into "the file did not load", which passes for the wrong reason.
+
+static const std::string kReloadDir = "test_animreload_tmp";
+static const std::string kReloadRig = kReloadDir + "/rig.gltf";
+
+static void installRig(const std::string& gltf, const std::string& bin) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(kReloadDir, ec);
+    fs::copy_file(gltf, kReloadRig, fs::copy_options::overwrite_existing, ec);
+    fs::copy_file(bin, kReloadDir + "/" + fs::path(bin).filename().string(),
+                  fs::copy_options::overwrite_existing, ec);
+}
+
+static void clearReloadDir() {
+    std::error_code ec;
+    std::filesystem::remove_all(kReloadDir, ec);
+}
+
+static void testReloadKeepsTheIdAndBumpsTheGeneration() {
+    clearReloadDir();
+    installRig(kFixture, "assets/models/bender.bin");
+
+    AnimationLibrary library;
+    const uint32_t id = library.Acquire(kReloadRig);
+    CHECK_MSG(id != AnimationLibrary::kInvalidSkeleton, "the copied rig must load");
+    const uint32_t before = library.GenerationOf(id);
+
+    // Re-exported. Same rig, same file name - which is the whole point: an id
+    // cannot tell this apart from nothing having happened.
+    installRig(kFixture, "assets/models/bender.bin");
+    CHECK_MSG(library.Reload(kReloadRig), "a valid rig must reload");
+
+    // Every SkinnedMeshComponent in the scene is holding this number.
+    CHECK_EQ(library.Acquire(kReloadRig), id);
+    CHECK_MSG(library.GenerationOf(id) > before,
+              "the generation must move, or nothing derived from the rig rebuilds");
+
+    clearReloadDir();
+}
+
+static void testReloadingARiglessFileClearsTheCachedMiss() {
+    // The headline case. A mesh exported without its skin is cached as a miss
+    // so it is not re-parsed every frame; adding the skin and exporting again
+    // then does nothing at all until the editor restarts.
+    clearReloadDir();
+    installRig("assets/models/monument.gltf", "assets/models/monument.bin");
+
+    AnimationLibrary library;
+    CHECK_EQ(library.Acquire(kReloadRig), AnimationLibrary::kInvalidSkeleton);
+
+    installRig(kFixture, "assets/models/bender.bin");
+    CHECK_MSG(library.Reload(kReloadRig), "a file that has gained a rig must reload");
+
+    const uint32_t id = library.Acquire(kReloadRig);
+    CHECK_MSG(id != AnimationLibrary::kInvalidSkeleton, "the rig must now resolve");
+    CHECK_MSG(library.FindClip(id, "Bend") != nullptr, "and its clips must be there");
+
+    clearReloadDir();
+}
+
+static void testAReloadThatLosesTheRigKeepsTheOldOne() {
+    // A .glb caught half-written parses as a file with no skin. Dropping the
+    // rig there would put the character into bind pose and leave it there,
+    // because the next poll sees a file that has stopped changing.
+    clearReloadDir();
+    installRig(kFixture, "assets/models/bender.bin");
+
+    AnimationLibrary library;
+    const uint32_t id = library.Acquire(kReloadRig);
+    const size_t joints = library.GetSkeleton(id) ? library.GetSkeleton(id)->joints.size() : 0;
+    CHECK_MSG(joints > 0, "the rig must have joints to begin with");
+
+    installRig("assets/models/monument.gltf", "assets/models/monument.bin");
+    CHECK_MSG(!library.Reload(kReloadRig), "losing the skin must report failure");
+    CHECK_EQ(library.GetSkeleton(id) ? library.GetSkeleton(id)->joints.size() : 0, joints);
+    CHECK_MSG(library.FindClip(id, "Bend") != nullptr, "and the clips must survive too");
+
+    clearReloadDir();
+}
+
+static void testReloadingARigNobodyAcquiredDoesNothing() {
+    // Reload is driven by a watcher that also reports textures, meshes and
+    // materials, so it is handed paths of every kind.
+    AnimationLibrary library;
+    CHECK_MSG(!library.Reload(kFixture), "reloading an unknown path must be a no-op");
+    CHECK_EQ(library.Size(), size_t{0});
+}
+
+static void testAReloadedRigRebuildsWhatWasDerivedFromIt() {
+    clearReloadDir();
+    installRig(kFixture, "assets/models/bender.bin");
+
+    AnimationLibrary library;
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TagComponent>(entity, "Bender");
+    registry.emplace<TransformComponent>(entity);
+    registry.emplace<MeshComponent>(entity).filePath = kReloadRig;
+    registry.emplace<AnimatorComponent>(entity);
+
+    AnimationSystem::SyncSkeletons(registry, library);
+    auto& skin = registry.get<SkinnedMeshComponent>(entity);
+    const uint32_t idBefore = skin.skeletonID;
+
+    // Captured once and then trusted, which is what makes it dangerous: the
+    // bind box belongs to the rig that was loaded when it was captured.
+    skin.bindBoundsCaptured = true;
+
+    installRig(kFixture, "assets/models/bender.bin");
+    CHECK_MSG(library.Reload(kReloadRig), "the rig must reload");
+
+    AnimationSystem::SyncSkeletons(registry, library);
+    auto& after = registry.get<SkinnedMeshComponent>(entity);
+
+    CHECK_EQ(after.skeletonID, idBefore);
+    CHECK_MSG(!after.bindBoundsCaptured,
+              "a re-exported rig must invalidate the bind bounds, which the id alone cannot say");
+    CHECK_MSG(after.skeletonGeneration == library.GenerationOf(after.skeletonID),
+              "the resolved rig must record the generation it was built from");
+
+    clearReloadDir();
+}
+
 static void runTests() {
     testVertexLayoutIsWhatThePipelineDeclares();
     testFixtureLoads();
@@ -462,6 +595,12 @@ static void runTests() {
     testPoseBoundsDoNotAccumulate();
     testPaletteGatherPacksAndBoundsCheck();
     testMissingFileIsHandled();
+    testReloadKeepsTheIdAndBumpsTheGeneration();
+    testReloadingARiglessFileClearsTheCachedMiss();
+    testAReloadThatLosesTheRigKeepsTheOldOne();
+    testReloadingARigNobodyAcquiredDoesNothing();
+    testAReloadedRigRebuildsWhatWasDerivedFromIt();
+    clearReloadDir();
 }
 
-TEST_MAIN("test_skeletal", 85)
+TEST_MAIN("test_skeletal", 100)

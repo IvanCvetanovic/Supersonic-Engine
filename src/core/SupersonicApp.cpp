@@ -106,6 +106,11 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     m_audioEngine = std::make_unique<AudioEngine>();
     m_animationLibrary = std::make_unique<AnimationLibrary>();
     m_materialLibrary = std::make_unique<MaterialLibrary>();
+
+    // So saving a material from the inspector does not read itself back as an
+    // edit somebody else made. Both outlive each other here: the watcher is a
+    // member by value and the library is reset explicitly in Shutdown.
+    m_materialLibrary->SetWatcher(&m_assetWatcher);
     // Stops voices when their entity goes away; sources loop by default.
     AudioSystem::Attach(m_registry, *m_audioEngine);
 
@@ -220,6 +225,20 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
             reloaded |= m_renderer->GetTextureRegistry().Invalidate(path);
             reloaded |= m_renderer->GetMeshRegistry().Invalidate("file:" + path);
         }
+
+        // Materials re-read in place, keeping their id. MaterialSystem::Sync
+        // copies the asset onto every component that names it EVERY frame, so
+        // re-reading the asset is the whole reload - there is nothing else to
+        // notify, and an entity picks the change up on the next frame whether
+        // or not it was visible when the file changed.
+        if (m_materialLibrary) reloaded |= m_materialLibrary->Reload(path);
+
+        // Rigs and clips live in the same .gltf/.glb as the mesh, which is
+        // already watched - so this path was already arriving here every time
+        // an animator re-exported, and being used to invalidate the GPU mesh
+        // and nothing else. The skeleton and the clips parsed the first time
+        // the file was seen were kept for the life of the session.
+        if (m_animationLibrary) reloaded |= m_animationLibrary->Reload(path);
 
         // Prefabs are parsed once and kept, so a prefab edited on disk would
         // otherwise keep spawning the version the editor first read. Cheap
@@ -1082,6 +1101,13 @@ void SupersonicApp::Run() {
             // signature never changes and SyncResources never re-acquires it.
             // The whole chain is silent from the first missing line.
             if (!material.ormTexturePath.empty()) m_assetWatcher.Watch(material.ormTexturePath);
+
+            // And the shared asset itself. The three paths above are the
+            // RESOLVED ones Sync copied out of it, so without this line editing
+            // a .material in a text editor changes nothing until a restart -
+            // and worse, editing it to name a DIFFERENT texture leaves the old
+            // texture watched and the new one not.
+            if (!material.materialPath.empty()) m_assetWatcher.Watch(material.materialPath);
         }
 
         {

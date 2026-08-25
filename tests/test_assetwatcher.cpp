@@ -153,6 +153,104 @@ static void testAMissingPathIsHarmless() {
     CHECK_MSG(watcher.WatchedCount() == size_t{1}, "an empty path is not watched at all");
 }
 
+static void testAnAcknowledgedWriteDoesNotFire() {
+    // The engine writes assets too. The inspector edits a .material in place
+    // and saves it, so without this the next poll reads the file back over the
+    // values still being dragged - which looks harmless, because it reads back
+    // what was just written, right up to the frame where the slider has moved
+    // on and the reload discards that frame's edit.
+    const std::string path = "test_watch_ack_tmp.txt";
+    write(path, "original");
+
+    AssetWatcher watcher;
+    int fired = 0;
+    watcher.SetCallback([&](const std::string&) { ++fired; });
+    watcher.Watch(path);
+    CHECK_EQ(watcher.Poll(), size_t{0});
+
+    letTheClockMove();
+    write(path, "written by the engine");
+    watcher.Acknowledge(path);
+
+    CHECK_MSG(watcher.Poll() == size_t{0}, "an acknowledged write must not fire");
+    CHECK_EQ(fired, 0);
+
+    // And the watcher is not deafened: the NEXT change, made by somebody else,
+    // still fires. Acknowledging must adopt one write, not stop watching.
+    letTheClockMove();
+    write(path, "edited in another program");
+
+    CHECK_MSG(watcher.Poll() == size_t{1}, "acknowledging must not stop later changes firing");
+    CHECK_EQ(fired, 1);
+
+    std::remove(path.c_str());
+}
+
+static void testAcknowledgingAnUnwatchedPathStartsWatchingIt() {
+    // Create() writes a file that nothing was watching yet, and the natural
+    // thing to write at the call site is Acknowledge. Making that mean "watch
+    // from here" removes the ordering trap where a Watch/Acknowledge pair in
+    // the wrong order fires once on the file it just made.
+    const std::string path = "test_watch_ack_new_tmp.txt";
+    write(path, "fresh");
+
+    AssetWatcher watcher;
+    int fired = 0;
+    watcher.SetCallback([&](const std::string&) { ++fired; });
+
+    watcher.Acknowledge(path);
+    CHECK_EQ(watcher.WatchedCount(), size_t{1});
+    CHECK_EQ(watcher.Poll(), size_t{0});
+    CHECK_EQ(fired, 0);
+
+    std::remove(path.c_str());
+}
+
+static void testACallbackMayWatchMorePaths() {
+    // Reloading an asset reads the assets it names - a .material names three
+    // textures - so a callback watching something new is ordinary, not exotic.
+    //
+    // Firing from inside the scan made that undefined: watching and forgetting
+    // both mutate the map the loop is walking, and an insert that tips the load
+    // factor rehashes it while an erase frees the node the iterator is on.
+    //
+    // What this test pins is the CONTRACT, not the crash. The old code passes
+    // it: MSVC's unordered_map happens to survive both, so no assertion this
+    // file could make would go red on the version that fires mid-scan. The
+    // reason to collect first is that the standard says those iterators are
+    // invalidated, and the implementations that act on it are the ones nobody
+    // here runs. What is checked below is what re-pointing will depend on -
+    // that after a callback swaps a path, the watch set is exactly what it
+    // asked for.
+    const std::string path = "test_watch_reentrant_tmp.txt";
+    write(path, "original");
+
+    AssetWatcher watcher;
+    int fired = 0;
+    watcher.SetCallback([&](const std::string& changed) {
+        ++fired;
+        // Exactly the shape re-pointing needs: an asset moved, so stop watching
+        // where it was and start watching where it is. Both halves mutate the
+        // map the scan is walking.
+        watcher.Forget(changed);
+        for (int i = 0; i < 64; ++i) {
+            watcher.Watch("test_watch_reentrant_extra_" + std::to_string(i) + ".txt");
+        }
+    });
+    watcher.Watch(path);
+    CHECK_EQ(watcher.Poll(), size_t{0});
+
+    letTheClockMove();
+    write(path, "edited");
+
+    CHECK_MSG(watcher.Poll() == size_t{1}, "the edit must still be reported");
+    CHECK_EQ(fired, 1);
+    CHECK_MSG(watcher.WatchedCount() == size_t{64},
+              "the callback's watches must stick and its forget must take effect");
+
+    std::remove(path.c_str());
+}
+
 static void runTests() {
     testAnUnchangedFileNeverFires();
     testAChangedFileFiresOnceWithItsPath();
@@ -160,6 +258,9 @@ static void runTests() {
     testARestoredFileFiresAgain();
     testWatchingTheSamePathTwiceIsOneEntry();
     testAMissingPathIsHarmless();
+    testAnAcknowledgedWriteDoesNotFire();
+    testAcknowledgingAnUnwatchedPathStartsWatchingIt();
+    testACallbackMayWatchMorePaths();
 }
 
-TEST_MAIN("test_assetwatcher", 20)
+TEST_MAIN("test_assetwatcher", 32)

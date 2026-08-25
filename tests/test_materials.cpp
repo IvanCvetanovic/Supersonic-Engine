@@ -11,15 +11,18 @@
 // path that is retried every frame turns one typo into a per-frame disk hit.
 
 #include "TestHarness.hpp"
+#include "core/AssetWatcher.hpp"
 #include "core/Components.hpp"
 #include "core/MaterialLibrary.hpp"
 #include "core/MaterialSystem.hpp"
 #include "core/SceneSerializer.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 using namespace Supersonic;
 
@@ -420,6 +423,126 @@ static void testAPackedMapSurvivesTheAssetRoundTrip() {
     CHECK_NEAR(old.roughness, 0.3f);
 }
 
+// Writes raw text, so a test can put something on disk that the library did
+// not produce - including something that does not parse.
+static void writeRaw(const std::string& path, const std::string& text) {
+    std::filesystem::create_directories(kDir);
+    std::ofstream file(path, std::ios::trunc);
+    file << text;
+}
+
+// Filesystem write times are coarse, so a test that depends on a file looking
+// CHANGED has to outlive one tick. See test_assetwatcher for the same helper.
+static void letTheClockMove() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+}
+
+static void testReloadKeepsTheIdAndPicksUpTheNewValues() {
+    cleanup();
+    MaterialLibrary library;
+    library.Create(kPathA, makeAsset("Original", 0.3f));
+
+    const uint32_t id = library.Acquire(kPathA);
+    CHECK_MSG(id != MaterialLibrary::kInvalidMaterial, "the material must load to begin with");
+
+    // Edited by something outside the engine - a text editor, or another tool.
+    writeRaw(kPathA, MaterialLibrary::Serialize(makeAsset("Edited", 0.87f)));
+    CHECK_MSG(library.Reload(kPathA), "a valid material must reload");
+
+    // The id is the load-bearing part. Every MaterialComponent in the scene is
+    // holding this number; if a reload minted a new one they would all keep
+    // rendering the values from before the edit.
+    CHECK_EQ(library.Acquire(kPathA), id);
+
+    const MaterialAsset* asset = library.Get(id);
+    CHECK_MSG(asset != nullptr && asset->name == "Edited", "the reload must replace the name");
+    CHECK_NEAR(asset ? asset->roughness : 0.0f, 0.87f);
+    cleanup();
+}
+
+static void testReloadingAPathNobodyAcquiredDoesNothing() {
+    cleanup();
+    MaterialLibrary library;
+    writeRaw(kPathB, MaterialLibrary::Serialize(makeAsset("Unreferenced", 0.5f)));
+
+    // Reload is driven by a file watcher that also watches textures and meshes,
+    // so it is handed paths of every kind. Minting an entry for one nothing
+    // asked for would grow the library for the life of the session.
+    CHECK_MSG(!library.Reload(kPathB), "reloading an unknown path must be a no-op");
+    CHECK_EQ(library.Size(), size_t{0});
+    cleanup();
+}
+
+static void testABrokenFileKeepsTheValuesAlreadyLoaded() {
+    cleanup();
+    MaterialLibrary library;
+    library.Create(kPathA, makeAsset("Good", 0.42f));
+    const uint32_t id = library.Acquire(kPathA);
+
+    // A save is not atomic. A poll landing between the truncate and the write
+    // reads an empty file, and blanking the asset there would turn every object
+    // using it white - and then let the editor write that blank back.
+    writeRaw(kPathA, "{ this is not json");
+    CHECK_MSG(!library.Reload(kPathA), "an unparseable file must report failure");
+
+    const MaterialAsset* asset = library.Get(id);
+    CHECK_MSG(asset != nullptr, "a failed reload must not invalidate a loaded material");
+    CHECK_NEAR(asset ? asset->roughness : 0.0f, 0.42f);
+    cleanup();
+}
+
+static void testFixingABrokenMaterialClearsTheCachedMiss() {
+    cleanup();
+    MaterialLibrary library;
+    writeRaw(kPathA, "not a material at all");
+
+    // Cached as a miss, so the broken reference is not re-read every frame.
+    CHECK_EQ(library.Acquire(kPathA), MaterialLibrary::kInvalidMaterial);
+
+    // Fixing the file on disk is exactly how someone expects to clear that, so
+    // the reload has to promote the miss rather than only refresh a hit.
+    writeRaw(kPathA, MaterialLibrary::Serialize(makeAsset("Fixed", 0.61f)));
+    CHECK_MSG(library.Reload(kPathA), "fixing the file must clear the cached miss");
+
+    const uint32_t id = library.Acquire(kPathA);
+    CHECK_MSG(id != MaterialLibrary::kInvalidMaterial, "the material must now resolve");
+    CHECK_NEAR(library.Get(id) ? library.Get(id)->roughness : 0.0f, 0.61f);
+    cleanup();
+}
+
+static void testSavingFromTheEditorDoesNotFireTheWatcher() {
+    cleanup();
+    AssetWatcher watcher;
+    int fired = 0;
+    watcher.SetCallback([&](const std::string&) { ++fired; });
+
+    MaterialLibrary library;
+    library.SetWatcher(&watcher);
+    library.Create(kPathA, makeAsset("Tuned", 0.3f));
+
+    const uint32_t id = library.Acquire(kPathA);
+    watcher.Watch(kPathA);
+    CHECK_EQ(watcher.Poll(), size_t{0});
+
+    // The inspector edits the shared asset in place and presses Save. Without
+    // the acknowledgement the next poll reads the file back over the values
+    // still being dragged: harmless while they match, wrong on the first frame
+    // where the slider has moved on.
+    letTheClockMove();
+    if (MaterialAsset* asset = library.Get(id)) asset->roughness = 0.9f;
+    library.Save(id);
+
+    CHECK_MSG(watcher.Poll() == size_t{0}, "the engine must not read its own write back");
+    CHECK_EQ(fired, 0);
+
+    // And it is still watching: an edit made ELSEWHERE still fires.
+    letTheClockMove();
+    writeRaw(kPathA, MaterialLibrary::Serialize(makeAsset("External", 0.11f)));
+    CHECK_MSG(watcher.Poll() == size_t{1}, "an edit from outside must still fire");
+
+    cleanup();
+}
+
 static void runTests() {
     testTextRoundTrip();
     testGarbageIsRejected();
@@ -438,7 +561,12 @@ static void runTests() {
     testMaskBecomesACutoffAndNotTransparency();
     testBlendStaysTransparentWithNoCutoff();
     testAPackedMapSurvivesTheAssetRoundTrip();
+    testReloadKeepsTheIdAndPicksUpTheNewValues();
+    testReloadingAPathNobodyAcquiredDoesNothing();
+    testABrokenFileKeepsTheValuesAlreadyLoaded();
+    testFixingABrokenMaterialClearsTheCachedMiss();
+    testSavingFromTheEditorDoesNotFireTheWatcher();
     cleanup();
 }
 
-TEST_MAIN("test_materials", 60)
+TEST_MAIN("test_materials", 78)

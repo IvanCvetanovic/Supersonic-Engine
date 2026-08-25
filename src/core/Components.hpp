@@ -883,6 +883,14 @@ struct AnimatorComponent {
 struct SkinnedMeshComponent {
     uint32_t skeletonID{0xFFFFFFFFu};
 
+    // Which version of that rig this was built from.
+    //
+    // A hot reload replaces a rig's contents in place, so the id does not
+    // change and everything derived below - the joint palette, the bind bounds -
+    // would go on describing the rig from before the export. A joint count that
+    // happened to stay the same made that invisible.
+    uint32_t skeletonGeneration{0};
+
     // World-space-free joint matrices: model space, excluding the entity's own
     // world transform, because the vertex shader already applies that.
     std::vector<glm::mat4> jointMatrices;

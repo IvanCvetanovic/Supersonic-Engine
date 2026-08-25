@@ -1,5 +1,6 @@
 #include "core/MaterialLibrary.hpp"
 #include "core/AssetDatabase.hpp"
+#include "core/AssetWatcher.hpp"
 #include "core/AssetVersion.hpp"
 #include "core/Log.hpp"
 
@@ -134,6 +135,38 @@ uint32_t MaterialLibrary::Acquire(const std::string& path) {
     return id;
 }
 
+bool MaterialLibrary::Reload(const std::string& path) {
+    const auto it = m_lookup.find(path);
+    if (it == m_lookup.end()) return false;
+    const uint32_t id = it->second;
+
+    std::ifstream file(path);
+    if (!file) return false;
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+
+    // Into a temporary, so a parse that fails half way through does not leave
+    // the live asset holding the fields it managed to read before it gave up.
+    MaterialAsset parsed;
+    std::string error;
+    if (!Deserialize(buffer.str(), parsed, error)) {
+        SUPERSONIC_LOG_ERROR("MaterialLibrary")
+            << path << " changed but no longer parses (" << error
+            << "); keeping the values already loaded." << std::endl;
+        return false;
+    }
+
+    m_entries[id].asset = std::move(parsed);
+    // Promoted, not just refreshed: a path that failed to load is cached as a
+    // miss so it is not retried every frame, and fixing the file on disk is
+    // precisely how someone expects to clear that.
+    m_entries[id].valid = true;
+
+    SUPERSONIC_LOG_INFO("MaterialLibrary") << "Reloaded " << path << "." << std::endl;
+    return true;
+}
+
 MaterialAsset* MaterialLibrary::Get(uint32_t id) {
     if (id >= m_entries.size() || !m_entries[id].valid) return nullptr;
     return &m_entries[id].asset;
@@ -165,7 +198,16 @@ bool MaterialLibrary::Save(uint32_t id) const {
         return false;
     }
     file << Serialize(entry.asset);
-    return static_cast<bool>(file);
+    if (!file) return false;
+
+    // Before returning, and after the stream is known good. The file is still
+    // open here, so close it first: on Windows the write time is not settled
+    // until the handle is released, and acknowledging early records the time
+    // from BEFORE the flush - which the next poll then sees as a change, which
+    // is the exact loop this is here to prevent.
+    file.close();
+    if (m_watcher) m_watcher->Acknowledge(entry.path);
+    return true;
 }
 
 uint32_t MaterialLibrary::Create(const std::string& path, const MaterialAsset& asset) {
