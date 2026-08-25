@@ -5,6 +5,7 @@
 
 #include <entt/entt.hpp>
 
+#include "core/ConvexDecomposition.hpp"
 #include "core/ConvexHull.hpp"
 
 namespace Supersonic {
@@ -35,13 +36,16 @@ public:
     // The returned pointer stays valid until the next Trim: std::map leaves its
     // values where it put them, so every later Get in the same step leaves
     // earlier answers exactly where they were.
-    const ConvexHull* Get(const std::string& primitive, const std::string& path);
+    // A DECOMPOSITION, not a hull. A shape that is already convex comes back as
+    // one piece equal to its hull, so the common case is unchanged in
+    // everything but the type.
+    const ConvexDecomposition* Get(const std::string& primitive, const std::string& path);
 
     // Resolves the collider against the entity's own mesh when it names no
     // source of its own, which is what an author wants nine times in ten: the
     // collider is the shape you can see.
-    const ConvexHull* Get(entt::registry& registry, entt::entity entity,
-                          const ConvexHullColliderComponent& collider);
+    const ConvexDecomposition* Get(entt::registry& registry, entt::entity entity,
+                                   const ConvexHullColliderComponent& collider);
 
     // Drops every hull built from one file, so the next step rebuilds it.
     // Returns how many went. A path that built nothing is still worth dropping:
@@ -88,7 +92,7 @@ private:
     // pointer survives every later insertion. A key whose build failed holds an
     // INVALID hull, which is the cached failure with nothing extra to represent
     // it.
-    std::map<Key, ConvexHull> m_hulls;
+    std::map<Key, ConvexDecomposition> m_hulls;
 };
 
 } // namespace Supersonic

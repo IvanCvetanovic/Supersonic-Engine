@@ -24,13 +24,22 @@ bool endsWith(const std::string& text, const std::string& suffix) {
 // and skin weights say nothing about where that is. A glTF's submeshes are all
 // merged, because one asset is one collider - a rock with two materials is
 // still one rock.
+//
+// The INDICES come too, now that a collider can be several hulls: a
+// decomposition splits triangles, and a bag of positions has no triangles in
+// it. Each submesh's indices are shifted by the positions already taken, so the
+// merged mesh is one index space.
 bool loadPoints(const std::string& primitive, const std::string& path,
-                std::vector<glm::vec3>& out) {
+                std::vector<glm::vec3>& out, std::vector<uint32_t>& outIndices) {
     out.clear();
+    outIndices.clear();
 
-    const auto take = [&out](const MeshData& mesh) {
+    const auto take = [&out, &outIndices](const MeshData& mesh) {
+        const auto base = static_cast<uint32_t>(out.size());
         out.reserve(out.size() + mesh.vertices.size());
         for (const Vertex& vertex : mesh.vertices) out.push_back(vertex.pos);
+        outIndices.reserve(outIndices.size() + mesh.indices.size());
+        for (uint32_t index : mesh.indices) outIndices.push_back(base + index);
     };
 
     if (!path.empty()) {
@@ -78,7 +87,8 @@ bool loadPoints(const std::string& primitive, const std::string& path,
 
 } // namespace
 
-const ConvexHull* ConvexHullCache::Get(const std::string& primitive, const std::string& path) {
+const ConvexDecomposition* ConvexHullCache::Get(const std::string& primitive,
+                                                const std::string& path) {
     Key key{primitive, path};
 
     const auto existing = m_hulls.find(key);
@@ -88,12 +98,13 @@ const ConvexHull* ConvexHullCache::Get(const std::string& primitive, const std::
         return existing->second.valid() ? &existing->second : nullptr;
     }
 
-    ConvexHull& hull = m_hulls[key];
+    ConvexDecomposition& decomposition = m_hulls[key];
 
     std::vector<glm::vec3> points;
-    if (!loadPoints(primitive, path, points)) return nullptr;
+    std::vector<uint32_t> indices;
+    if (!loadPoints(primitive, path, points, indices)) return nullptr;
 
-    if (!hull.Build(points)) {
+    if (!decomposition.Build(points, indices)) {
         SUPERSONIC_LOG_ERROR("ConvexHullCache")
             << (path.empty() ? primitive : path)
             << " does not describe a solid: a hull needs four points that are not all in "
@@ -101,19 +112,29 @@ const ConvexHull* ConvexHullCache::Get(const std::string& primitive, const std::
         return nullptr;
     }
 
+    size_t vertices = 0;
+    float residual = 0.0f;
+    for (const ConvexHull& piece : decomposition.pieces()) {
+        vertices += piece.vertices().size();
+        residual += piece.residual();
+    }
+
     SUPERSONIC_LOG_INFO("ConvexHullCache")
-        << "Hull of " << (path.empty() ? primitive : path) << ": " << hull.vertices().size()
-        << " vertices, " << hull.faces().size() << " faces"
-        << (hull.residual() > 0.0f
-                ? ", " + std::to_string(hull.residual()) + " outside the vertex cap"
-                : std::string())
+        << "Collider for " << (path.empty() ? primitive : path) << ": "
+        << decomposition.pieces().size() << " hull(s), " << vertices << " vertices"
+        // The number worth showing: how much SOLID the collider has that the
+        // mesh does not. It is exactly what an object will catch on that the
+        // model would have let through, and it is zero for a convex shape.
+        << ", " << decomposition.invented() << " invented volume"
+        << (residual > 0.0f ? ", " + std::to_string(residual) + " outside the vertex cap"
+                            : std::string())
         << "." << std::endl;
 
-    return &hull;
+    return &decomposition;
 }
 
-const ConvexHull* ConvexHullCache::Get(entt::registry& registry, entt::entity entity,
-                                       const ConvexHullColliderComponent& collider) {
+const ConvexDecomposition* ConvexHullCache::Get(entt::registry& registry, entt::entity entity,
+                                                const ConvexHullColliderComponent& collider) {
     if (!collider.sourcePath.empty() || !collider.sourcePrimitive.empty()) {
         return Get(collider.sourcePrimitive, collider.sourcePath);
     }

@@ -653,15 +653,34 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             }
             ImGui::TextDisabled("Drop a model here to use a simpler shape than the mesh.");
 
-            if (const ConvexHull* built =
+            if (const ConvexDecomposition* built =
                     ConvexHullCache::For(registry).Get(registry, entity, hull)) {
-                ImGui::Text("%zu vertices, %zu faces", built->vertices().size(),
-                            built->faces().size());
-                if (built->residual() > 0.0f) {
+                size_t vertices = 0;
+                size_t faces = 0;
+                float residual = 0.0f;
+                for (const ConvexHull& piece : built->pieces()) {
+                    vertices += piece.vertices().size();
+                    faces += piece.faces().size();
+                    residual += piece.residual();
+                }
+                ImGui::Text("%zu piece(s), %zu vertices, %zu faces", built->pieces().size(),
+                            vertices, faces);
+
+                // The number worth reading: how much SOLID the collider has
+                // that the mesh does not. It is what an object will catch on
+                // that the model would have let through, and it is zero for a
+                // shape that was already convex.
+                if (built->meshVolume() > 0.0f) {
+                    const float fraction = built->invented() / built->meshVolume();
+                    ImGui::TextDisabled("Invents %.3f units of solid (%.1f%% of the mesh).",
+                                        static_cast<double>(built->invented()),
+                                        static_cast<double>(fraction * 100.0f));
+                }
+                if (residual > 0.0f) {
                     ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                                        "%.3f units of the mesh sit outside the hull "
                                        "(the vertex cap bit).",
-                                       static_cast<double>(built->residual()));
+                                       static_cast<double>(residual));
                 }
             } else {
                 ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f),

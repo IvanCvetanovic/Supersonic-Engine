@@ -133,7 +133,7 @@ struct Body {
     // The hull itself, owned by the registry's ConvexHullCache, and the basis
     // that places it. The basis carries SCALE as well as rotation, which for a
     // hull is exact rather than an approximation - see the component.
-    const ConvexHull* hull{nullptr};
+    const ConvexDecomposition* pieces{nullptr};
     glm::mat3 hullBasis{1.0f};
 
     // ---- Heightfields only ----
@@ -771,7 +771,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         if (!transform) continue;
 
         const auto& authored = registry.get<ConvexHullColliderComponent>(entity);
-        const ConvexHull* hull = ConvexHullCache::For(registry).Get(registry, entity, authored);
+        const ConvexDecomposition* hull =
+            ConvexHullCache::For(registry).Get(registry, entity, authored);
         if (!hull) continue;
 
         const auto* rigid = registry.try_get<RigidBodyComponent>(entity);
@@ -783,7 +784,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         body.entity = entity;
         body.shape = Shape::Hull;
         body.isTrigger = authored.isTrigger;
-        body.hull = hull;
+        body.pieces = hull;
         body.hullBasis = glm::mat3(world);
         body.worldToLocal = glm::inverse(glm::mat3(parentWorld));
         body.inverseMass = (rigid && rigid->isSleeping) ? 0.0f : inverseMassOf(rigid);
@@ -1043,63 +1044,115 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             const Body& hullBody = hullIsA ? a : b;
             const Body& other = hullIsA ? b : a;
 
-            CollisionHull::Instance hullInstance;
-            if (!CollisionHull::MakeInstance(*hullBody.hull, glm::vec3(hullBody.centre) -
-                                                 hullBody.hullBasis *
-                                                     ((hullBody.hull->boundsMin() +
-                                                       hullBody.hull->boundsMax()) * 0.5f),
-                                             hullBody.hullBasis, hullInstance)) {
-                continue;
-            }
+            // A collider is a DECOMPOSITION now, so it can be several convex
+            // pieces. Each is tested on its own and every contact is kept with
+            // its own normal - which needs nothing new from the solver, because
+            // terrain already needed per-point normals and has had them since
+            // heightfield collision landed.
+            //
+            // Keeping them all rather than only the deepest piece is the
+            // difference between a chair that rests on its seat AND its legs and
+            // one that rocks between them a step at a time.
+            //
+            // Every piece shares one hull-local origin: the body centre is the
+            // centre of the WHOLE decomposition bounds, so subtracting each
+            // piece's own centroid instead would stack them on top of each
+            // other.
+            const glm::vec3 wholeCentroid =
+                (hullBody.pieces->boundsMin() + hullBody.pieces->boundsMax()) * 0.5f;
+            const glm::vec3 hullOrigin =
+                glm::vec3(hullBody.centre) - hullBody.hullBasis * wholeCentroid;
 
-            CollisionSAT::Manifold manifold;
-            bool normalPointsFromHull = true;
+            glm::vec3 centroidSum(0.0f);
+            int totalPoints = 0;
+            float deepest = -std::numeric_limits<float>::max();
+            glm::vec3 deepestNormal(0.0f);
+            bool anySpeculative = false;
 
-            if (other.shape == Shape::Hull) {
-                CollisionHull::Instance otherInstance;
-                if (!CollisionHull::MakeInstance(
-                        *other.hull,
-                        glm::vec3(other.centre) -
-                            other.hullBasis *
-                                ((other.hull->boundsMin() + other.hull->boundsMax()) * 0.5f),
-                        other.hullBasis, otherInstance)) {
-                    continue;
-                }
-                manifold = CollisionHull::CollideHullHull(hullInstance, otherInstance, pairMargin);
-            } else if (other.shape == Shape::Box) {
-                manifold = CollisionHull::CollideHullHull(
-                    hullInstance, CollisionHull::InstanceFromObb(obbOf(other)), pairMargin);
-            } else {
-                glm::vec3 endA(0.0f);
-                glm::vec3 endB(0.0f);
-                capsuleEnds(other, endA, endB);
-                manifold = CollisionHull::CollideCapsuleHull(endA, endB, other.radius,
-                                                             hullInstance, pairMargin);
-                // That one reports from the HULL toward the round shape, which
-                // is what the two hull paths above already do.
-                normalPointsFromHull = true;
-            }
-
-            if (manifold.colliding && manifold.pointCount > 0) {
-                hit = true;
-                normal = manifold.normal;
-                speculative = manifold.speculative;
-
-                // From a toward b: the manifold speaks from the hull, so it is
-                // already right when the hull is a and reversed when it is b.
-                if (!hullIsA || !normalPointsFromHull) normal = -normal;
-
-                glm::vec3 centroid(0.0f);
-                float deepest = manifold.points[0].penetration;
+            const auto keep = [&](const CollisionSAT::Manifold& manifold,
+                                  const glm::vec3& pieceNormal) {
+                anySpeculative = anySpeculative || manifold.speculative;
                 for (int i = 0; i < manifold.pointCount; ++i) {
-                    centroid += manifold.points[i].position;
-                    deepest = std::max(deepest, manifold.points[i].penetration);
+                    centroidSum += manifold.points[i].position;
+                    ++totalPoints;
+                    if (manifold.points[i].penetration > deepest) {
+                        deepest = manifold.points[i].penetration;
+                        deepestNormal = pieceNormal;
+                    }
                     if (manifoldCount < CollisionSAT::kMaxContactPoints) {
-                        manifoldPoints[manifoldCount++] = manifold.points[i].position;
+                        manifoldPoints[manifoldCount] = manifold.points[i].position;
+                        manifoldNormals[manifoldCount] = pieceNormal;
+                        ++manifoldCount;
                     }
                 }
+            };
+
+            for (const ConvexHull& piece : hullBody.pieces->pieces()) {
+                CollisionHull::Instance hullInstance;
+                if (!CollisionHull::MakeInstance(piece, hullOrigin, hullBody.hullBasis,
+                                                 hullInstance)) {
+                    continue;
+                }
+
+                if (other.shape == Shape::Hull) {
+                    // Both sides can be several pieces, so the inner loop is the
+                    // other body's. Quadratic in the piece counts, which is what
+                    // the cap in ConvexDecomposition bounds.
+                    const glm::vec3 otherCentroid =
+                        (other.pieces->boundsMin() + other.pieces->boundsMax()) * 0.5f;
+                    const glm::vec3 otherOrigin =
+                        glm::vec3(other.centre) - other.hullBasis * otherCentroid;
+
+                    for (const ConvexHull& otherPiece : other.pieces->pieces()) {
+                        CollisionHull::Instance otherInstance;
+                        if (!CollisionHull::MakeInstance(otherPiece, otherOrigin, other.hullBasis,
+                                                         otherInstance)) {
+                            continue;
+                        }
+                        const CollisionSAT::Manifold pairManifold =
+                            CollisionHull::CollideHullHull(hullInstance, otherInstance, pairMargin);
+                        if (!pairManifold.colliding || pairManifold.pointCount == 0) continue;
+
+                        // From a toward b: the manifold speaks from the first
+                        // hull, so it is already right when the hull is a.
+                        keep(pairManifold, hullIsA ? pairManifold.normal : -pairManifold.normal);
+                    }
+                    continue;
+                }
+
+                CollisionSAT::Manifold manifold;
+                bool normalPointsFromHull = true;
+
+                if (other.shape == Shape::Box) {
+                    manifold = CollisionHull::CollideHullHull(
+                        hullInstance, CollisionHull::InstanceFromObb(obbOf(other)), pairMargin);
+                } else {
+                    glm::vec3 endA(0.0f);
+                    glm::vec3 endB(0.0f);
+                    capsuleEnds(other, endA, endB);
+                    manifold = CollisionHull::CollideCapsuleHull(endA, endB, other.radius,
+                                                                 hullInstance, pairMargin);
+                    // That one reports from the HULL toward the round shape,
+                    // which is what the hull-hull path above already does.
+                    normalPointsFromHull = true;
+                }
+
+                if (!manifold.colliding || manifold.pointCount == 0) continue;
+
+                glm::vec3 pieceNormal = manifold.normal;
+                if (!hullIsA || !normalPointsFromHull) pieceNormal = -pieceNormal;
+                keep(manifold, pieceNormal);
+            }
+
+            if (totalPoints > 0) {
+                hit = true;
+                // One normal per contact, filled above, because two pieces of
+                // the same collider can face different ways.
+                perPointNormals = true;
+                normal = deepestNormal;
                 penetration = deepest;
-                point = centroid / static_cast<float>(manifold.pointCount);
+                speculative = anySpeculative;
+                point = centroidSum / static_cast<float>(totalPoints);
             }
         } else if (a.shape == Shape::Heightfield || b.shape == Shape::Heightfield) {
             // Two of them never collide: both are immovable surfaces, so there
@@ -1138,15 +1191,30 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 const glm::vec3 worldOrigin =
                     glm::vec3(shape.centre) -
                     shape.hullBasis *
-                        ((shape.hull->boundsMin() + shape.hull->boundsMax()) * 0.5f);
+                        ((shape.pieces->boundsMin() + shape.pieces->boundsMax()) * 0.5f);
 
-                CollisionHull::Instance instance;
-                if (!CollisionHull::MakeInstance(*shape.hull, toField(worldOrigin),
-                                                 intoField * shape.hullBasis * inverseScale,
-                                                 instance)) {
-                    continue;
+                // Every piece against the surface, merged into one manifold.
+                // Manifold::Add already keeps the deepest points, so a collider
+                // in several parts is held by the parts that are actually
+                // touching rather than by whichever was tested first.
+                for (const ConvexHull& piece : shape.pieces->pieces()) {
+                    CollisionHull::Instance instance;
+                    if (!CollisionHull::MakeInstance(piece, toField(worldOrigin),
+                                                     intoField * shape.hullBasis * inverseScale,
+                                                     instance)) {
+                        continue;
+                    }
+                    const Heightfield::Manifold pieceManifold =
+                        terrain.field->CollideHull(instance, pairMargin * inverseScale);
+                    for (uint32_t i = 0; i < pieceManifold.count; ++i) {
+                        local.Add(pieceManifold.points[i]);
+                    }
+                    // Speculative only while NOTHING is really touching: one
+                    // piece in contact makes the whole collider in contact.
+                    if (local.count == 0 || !pieceManifold.speculative) {
+                        local.speculative = local.speculative && pieceManifold.speculative;
+                    }
                 }
-                local = terrain.field->CollideHull(instance, pairMargin * inverseScale);
             } else if (shape.shape == Shape::Box) {
                 CollisionSAT::Obb box;
                 box.centre = toField(shape.centre);
