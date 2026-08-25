@@ -549,8 +549,8 @@ void testInvalidateDropsOnlyTheHullsBuiltFromThatFile() {
     // not - and nothing on screen says which of the two is lying.
     ConvexHullCache cache;
 
-    const ConvexHull* fromFile = cache.Get("", "assets/models/monument.gltf");
-    const ConvexHull* fromPrimitive = cache.Get("Cube", "");
+    const ConvexDecomposition* fromFile = cache.Get("", "assets/models/monument.gltf");
+    const ConvexDecomposition* fromPrimitive = cache.Get("Cube", "");
     CHECK_MSG(fromFile != nullptr, "the fixture must build a hull");
     CHECK_MSG(fromPrimitive != nullptr, "a primitive must build one too");
     CHECK_EQ(cache.size(), size_t{2});
