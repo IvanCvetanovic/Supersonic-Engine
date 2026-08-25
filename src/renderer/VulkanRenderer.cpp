@@ -501,16 +501,18 @@ void VulkanRenderer::createDescriptorPool() {
     poolSizes[0].type = vk::DescriptorType::eUniformBuffer;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
-    // One shadow map sampler per frame in flight. Material textures live in the
-    // TextureRegistry's own pool.
+    // Every combined image sampler the scene layout declares, per frame in
+    // flight. Material textures live in the TextureRegistry's own pool.
     //
-    // Plus the point-light cubes, which are a second binding of the same type:
-    // a pool size counts DESCRIPTORS, not bindings, so leaving these out makes
-    // allocation fail at startup with a message about the pool being out of
-    // memory rather than about the array nobody counted.
+    // Taken from the layout's own constant rather than counted again here. This
+    // number was wrong: image-based lighting added bindings 8 and 9 and this
+    // expression went on budgeting for the bindings that came before them, so
+    // the pool was short by two per set. A pool size counts DESCRIPTORS, not
+    // bindings, and a driver that hands you the allocation anyway is not the
+    // same thing as being allowed to ask for it.
     poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
     poolSizes[1].descriptorCount =
-        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * (2u + PointShadow::kMaxShadowCasters);
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * VulkanPipeline::kSamplersPerSceneSet;
 
     // FOUR storage buffers per frame: the joint palette at binding 2, and the
     // three clustered-light buffers at 5, 6 and 7. Omitting any of them makes

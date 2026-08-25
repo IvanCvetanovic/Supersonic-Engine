@@ -246,6 +246,23 @@ public:
     vk::DescriptorSetLayout GetSceneSetLayout() const { return m_sceneSetLayout; }
     vk::DescriptorSetLayout GetMaterialSetLayout() const { return m_materialSetLayout; }
 
+    // How many combined image samplers ONE scene set consumes, so the pool that
+    // feeds it can be sized from the same number the layout is built from.
+    //
+    // Spelled out here rather than counted again in the pool, because it has
+    // already been wrong once: image-based lighting added bindings 8 and 9 and
+    // the pool went on budgeting for the bindings that existed before them. A
+    // pool size counts DESCRIPTORS, not bindings, and being short by two is a
+    // spec violation that a lenient driver hands you anyway - so it works on
+    // the machine it was written on and fails on somebody else's.
+    //
+    //   binding 1  shadowMaps          1
+    //   binding 3  pointShadowMaps     PointShadow::kMaxShadowCasters
+    //   binding 4  spotShadowMaps      1
+    //   binding 8  irradianceMap       1
+    //   binding 9  prefilteredMap      1
+    static constexpr uint32_t kSamplersPerSceneSet = 4u + PointShadow::kMaxShadowCasters;
+
     static constexpr uint32_t kSceneSet = 0;
     static constexpr uint32_t kMaterialSet = 1;
 
