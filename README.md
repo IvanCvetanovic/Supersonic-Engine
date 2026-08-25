@@ -419,9 +419,11 @@ re-pointed too — `MaterialSystem::Sync` copies a shared asset's texture paths
 onto every component using it every frame, so rewriting only the components puts
 the stale paths straight back within one frame.
 
-**Open:** changing `soundFile` on a *looping* source still does nothing until
-Playing is toggled, because `Update` only ever starts a voice. That is a separate
-defect, found while writing the above and left alone.
+That last point turned out to be a defect of its own and is now fixed: `Update`
+started a voice and never looked at `soundFile` again, so changing the file on a
+*looping* source did nothing at all until somebody toggled Playing. The question
+is asked of the engine, which records what each voice is reading, rather than of
+the component, which records only what it asks for.
 
 ## Image-based lighting
 
@@ -481,9 +483,24 @@ over-range value is clamped to the largest finite half rather than to infinity,
 because an infinity in a colour becomes a NaN the first time the ambient
 occlusion term multiplies it by zero.
 
-**Open:** the procedural sky is still analytic, so a loaded environment is not
-what you see when you look up; and there is one environment per scene, which is
-what reflection probes exist to fix.
+**The sky is the environment too.** Reflections came from the cubemap while the
+background stayed the analytic ramp, so a chrome sphere showed a room and the
+space behind it showed a gradient. The sky pass already computed a world-space
+view ray and already binds the cubes, so it samples level 0 of the prefiltered
+chain — which is roughness zero, which is the environment itself. The whole
+procedural sky goes when one is loaded, sun included: a photographed sky has its
+own sun in it, and drawing another over the top would light the scene from one
+and show the other.
+
+That level stopped being expensive at the same time. The prefilter spent 128 GGX
+samples per texel on it, where the lobe is a delta and every sample lands on the
+same direction — it was paying to arrive back where it started. Making it a
+straight resample is not an approximation, it is the integral's closed form, and
+it is what paid for doubling the resolution now that a background rather than a
+small bright smear is reading it.
+
+**Open:** there is still one environment per scene, so a room and the outdoors it
+opens onto light identically. That is what reflection probes exist to fix.
 
 ## Asset identity
 
