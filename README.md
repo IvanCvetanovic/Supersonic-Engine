@@ -263,7 +263,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
 | `test_heightfield` | Terrain collision: the grid against the mesh vertex for vertex, seams, ridge crests, grooves, buried recovery, and the cell march a ray does |
 | `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, limits, motors, welds, and every degenerate case |
-| `test_convexhull` | Hull building and collision: Euler's formula, convexity, a cube's six faces, the vertex cap, and agreement with the box path |
+| `test_convexhull` | Hull building and collision: Euler's formula, convexity, a cube's six faces, the vertex cap, agreement with the box path, and dropping only the hulls built from an edited file |
 | `test_environmentmap` | IBL on the CPU: the cube face mapping, a constant sky irradiating to itself, both prefilter endpoints, and the Radiance decoder |
 | `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, which route a reference resolved by, and re-pointing a scene that is already open |
 | `test_audio` | WAV decoding including the shipped clip, and reloading a clip without freeing what is playing it |
@@ -315,7 +315,7 @@ the library's vector and every component in the scene is holding one, so minting
 a fresh entry leaves them all rendering the values from before the edit — the
 same bug, quieter.
 
-Four things were not obvious:
+Five things were not obvious:
 
 | | |
 |---|---|
@@ -323,6 +323,7 @@ Four things were not obvious:
 | **A rig needs a generation, not just an id** | A reload replaces contents without changing the index, so the joint palette and the captured bind-pose bounds go on describing the previous export. The joint-count resize hides it whenever the count matches, which for a re-export is almost always. |
 | **The engine reads its own writes** | The inspector edits a material in place and saves it. The mtime moves, the next poll fires, and the reload puts the file back over the values still being dragged — which looks harmless, because it reads back what was just written, until the frame where the slider has moved on. |
 | **Audio cannot be dropped at all** | A voice reads the clip's sample buffer directly. XAudio2 is handed `clip->pcm.data()` and reads it from its own thread; the software mixer keeps a `const AudioClip*` whose contract is written down as "the clip must outlive the voice". |
+| **The collision shape counts as an asset** | Re-uploading an edited mesh moves what you *see*. The hull built from it is a separate cache, so leaving it alone means the object looks edited and behaves as though it is not — and nothing on screen says which of the two is lying. |
 
 So audio stops the voices, **then** drops the clip, **then** clears the handles
 the components hold. Each other order is wrong in its own way: dropping first is
@@ -499,7 +500,8 @@ Android "not functional"; extending that register forward costs nothing.
       silhouette rather than its bounding rectangle, and a blended one casts
       nothing at all
 - [x] Hot reload for every asset a scene names — textures, meshes, materials,
-      rigs and sounds — and a rename followed into the scene already open
+      rigs, sounds and the collision hulls built from them — and a rename
+      followed into the scene already open
 - [x] Transform hierarchy, prefabs, scene and material serialization
 - [x] Play/Stop, undo/redo, time-travel rewind
 - [x] Frustum culling, persistent pipeline cache

@@ -543,6 +543,27 @@ static void testSavingFromTheEditorDoesNotFireTheWatcher() {
     cleanup();
 }
 
+static void testRenamingTheMaterialItselfKeepsItsIdAndItsEdits() {
+    // A .material is an asset with an identity of its own, so it can be the
+    // thing that gets renamed. The component naming it is re-pointed in the
+    // same pass, so without re-keying the cache it misses, pushes a SECOND
+    // entry for the same file, and reads it back from disk - silently throwing
+    // away an edit made in the inspector and not yet saved.
+    cleanup();
+    MaterialLibrary library;
+    library.Create(kPathA, makeAsset("Shared", 0.33f));
+    const uint32_t id = library.Acquire(kPathA);
+
+    if (MaterialAsset* asset = library.Get(id)) asset->roughness = 0.91f;
+
+    CHECK_EQ(library.Repoint(kPathA, kPathB), size_t{1});
+    CHECK_EQ(library.Acquire(kPathB), id);
+    CHECK_MSG(library.PathOf(id) == kPathB, "the entry must know where it lives now");
+    CHECK_NEAR(library.Get(id) ? library.Get(id)->roughness : 0.0f, 0.91f);
+    CHECK_MSG(library.Size() == size_t{1}, "and there must not be a second copy of it");
+    cleanup();
+}
+
 static void runTests() {
     testTextRoundTrip();
     testGarbageIsRejected();
@@ -566,7 +587,8 @@ static void runTests() {
     testABrokenFileKeepsTheValuesAlreadyLoaded();
     testFixingABrokenMaterialClearsTheCachedMiss();
     testSavingFromTheEditorDoesNotFireTheWatcher();
+    testRenamingTheMaterialItselfKeepsItsIdAndItsEdits();
     cleanup();
 }
 
-TEST_MAIN("test_materials", 78)
+TEST_MAIN("test_materials", 83)

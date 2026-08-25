@@ -156,6 +156,10 @@ frame — and let the editor write that blank back.
 a miss so it is not retried every frame, which means fixing it on disk has to be
 what clears it, or it stays broken for the session.
 
+`ConvexHullCache` is invalidated by the same callback, which is easy to forget
+because a hull is not a file: it is built from one. Re-uploading an edited mesh
+moves what you see and leaves what you hit where it was.
+
 Two caches do not fit that shape.
 
 A **rig** carries a `generation` as well as an id, because a reload replaces its

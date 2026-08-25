@@ -28,7 +28,9 @@ class MaterialLibrary;
 // at once, so it hands them over and this rewrites what matches.
 struct RepointResult {
     size_t componentFields{0};   // fields on live components
-    size_t materialFields{0};    // texture references inside cached .material assets
+    size_t materialFields{0};    // references inside cached .material assets - the
+                                 // three texture paths, and the asset's own path
+                                 // when the .material is what moved
     size_t environmentFields{0}; // the scene's HDRI
 
     size_t Total() const { return componentFields + materialFields + environmentFields; }

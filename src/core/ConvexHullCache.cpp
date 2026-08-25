@@ -125,6 +125,21 @@ const ConvexHull* ConvexHullCache::Get(entt::registry& registry, entt::entity en
     return Get(mesh->primitiveType, mesh->filePath);
 }
 
+size_t ConvexHullCache::Invalidate(const std::string& path) {
+    if (path.empty()) return 0;
+
+    size_t dropped = 0;
+    for (auto it = m_hulls.begin(); it != m_hulls.end();) {
+        if (it->first.path == path) {
+            it = m_hulls.erase(it);
+            ++dropped;
+        } else {
+            ++it;
+        }
+    }
+    return dropped;
+}
+
 void ConvexHullCache::Trim() {
     if (m_hulls.size() >= kMaxHulls) m_hulls.clear();
 }

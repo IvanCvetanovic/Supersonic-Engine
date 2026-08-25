@@ -3,6 +3,7 @@
 #include "core/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "core/Profiler.hpp"
+#include "core/ConvexHullCache.hpp"
 #include "core/Components.hpp"
 #include "core/CameraSystem.hpp"
 #include "core/PhysicsSystem.hpp"
@@ -246,6 +247,13 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
         if (m_audioEngine) {
             reloaded |= AudioSystem::ReloadClip(m_registry, *m_audioEngine, path) > 0;
         }
+
+        // And the COLLISION shape built from that model. Re-uploading the mesh
+        // moves what you see and leaves what you hit where it was, which is the
+        // worst way for this to be half-done: the object looks edited and
+        // behaves as though it is not, and nothing says which of the two is
+        // lying.
+        reloaded |= ConvexHullCache::For(m_registry).Invalidate(path) > 0;
 
         // Prefabs are parsed once and kept, so a prefab edited on disk would
         // otherwise keep spawning the version the editor first read. Cheap
@@ -1122,6 +1130,13 @@ void SupersonicApp::Run() {
         // for exactly the same reason a material did.
         for (auto [entity, source] : m_registry.view<AudioSourceComponent>().each()) {
             if (!source.soundFile.empty()) m_assetWatcher.Watch(source.soundFile);
+        }
+
+        // A hull collider that names its own source. When it names none it is
+        // built from the entity's own mesh, which the loop above already
+        // watches - so only this case was outside everything.
+        for (auto [entity, hull] : m_registry.view<ConvexHullColliderComponent>().each()) {
+            if (!hull.sourcePath.empty()) m_assetWatcher.Watch(hull.sourcePath);
         }
 
         {

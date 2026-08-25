@@ -84,6 +84,7 @@ set_tests_properties(
     test_blending   # assets/models/bender.gltf
     test_skeletal   # assets/models/bender.gltf
     test_audio      # the shipped ambient clip
+    test_convexhull # assets/models/monument.gltf, for the hull cache
     test_physics    # assets/scenes/MainScene.scene, to prove it has a floor
     test_packaging  # copies assets/, and now checks the .meta files come too
     PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")

@@ -16,6 +16,7 @@
 
 #include "core/CollisionHull.hpp"
 #include "core/ConvexHull.hpp"
+#include "core/ConvexHullCache.hpp"
 #include "TestHarness.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -542,8 +543,32 @@ void testCollidingAgainstNothingIsNotACrash() {
               "a hull with no thickness has no outside to be on");
 }
 
+void testInvalidateDropsOnlyTheHullsBuiltFromThatFile() {
+    // Re-uploading an edited mesh moves what you SEE. Without this the hull
+    // stays as it was, so the object looks edited and behaves as though it is
+    // not - and nothing on screen says which of the two is lying.
+    ConvexHullCache cache;
+
+    const ConvexHull* fromFile = cache.Get("", "assets/models/monument.gltf");
+    const ConvexHull* fromPrimitive = cache.Get("Cube", "");
+    CHECK_MSG(fromFile != nullptr, "the fixture must build a hull");
+    CHECK_MSG(fromPrimitive != nullptr, "a primitive must build one too");
+    CHECK_EQ(cache.size(), size_t{2});
+
+    CHECK_EQ(cache.Invalidate("assets/models/monument.gltf"), size_t{1});
+    CHECK_EQ(cache.size(), size_t{1});
+    CHECK_MSG(cache.Get("Cube", "") != nullptr,
+              "a hull from somewhere else must not be dropped with it");
+
+    // The watcher reports textures, meshes, materials and sounds, so this is
+    // handed paths of every kind and most of them are nothing to do with hulls.
+    CHECK_EQ(cache.Invalidate("assets/textures/floor_tiles.png"), size_t{0});
+    CHECK_EQ(cache.Invalidate(""), size_t{0});
+}
+
 void runTests() {
     testTooFewPointsIsNotAHull();
+    testInvalidateDropsOnlyTheHullsBuiltFromThatFile();
     testCollinearPointsAreNotASolid();
     testCoplanarPointsAreNotASolid();
     testCoincidentPointsAreOnePoint();
@@ -571,4 +596,4 @@ void runTests() {
 
 } // namespace
 
-TEST_MAIN("test_convexhull", 85)
+TEST_MAIN("test_convexhull", 92)

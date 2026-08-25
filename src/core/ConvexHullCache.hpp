@@ -43,6 +43,18 @@ public:
     const ConvexHull* Get(entt::registry& registry, entt::entity entity,
                           const ConvexHullColliderComponent& collider);
 
+    // Drops every hull built from one file, so the next step rebuilds it.
+    // Returns how many went. A path that built nothing is still worth dropping:
+    // failures are cached, so a model that could not be read stays a cached
+    // failure until somebody fixes it - and fixing it is exactly the event this
+    // reacts to.
+    //
+    // Safe from the asset-watcher callback for the reason Trim is safe at the
+    // top of a step: both invalidate every pointer Get has handed out, and both
+    // run between steps rather than part way through a gather. The poll is at
+    // SupersonicApp.cpp:906 and the fixed step begins at :963.
+    size_t Invalidate(const std::string& path);
+
     // Drops everything once the map has grown past the cap.
     //
     // Called at the TOP of a step, before any pointer has been handed out, for

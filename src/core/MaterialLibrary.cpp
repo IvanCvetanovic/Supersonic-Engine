@@ -151,12 +151,31 @@ size_t MaterialLibrary::Repoint(const std::string& from, const std::string& to) 
         }
     }
 
-    // Deliberately NOT the entry's own path. A .material that was itself
-    // renamed keeps its cache key, so re-keying m_lookup here would leave the
-    // entry reachable under a path no component names any more while the
-    // component - re-pointed to the new path - misses the cache and loads a
-    // second copy of the same asset. The component's path is what matters, and
-    // the miss that follows re-reads the file, which is correct.
+    // And the entry's OWN path, when the file that moved is the .material.
+    //
+    // Re-keyed rather than left alone. The component naming this asset is
+    // re-pointed in the same pass, so without this it misses the cache, pushes
+    // a SECOND entry with a second id for the same file, and the first sits in
+    // m_entries for the rest of the session holding a path nothing names. Worse
+    // than the leak: the fresh entry is read from disk, so an edit made in the
+    // inspector and not yet saved is silently discarded by a rename.
+    //
+    // The id survives, which is the same invariant a reload keeps and for the
+    // same reason - every MaterialComponent in the scene is holding one.
+    if (const auto it = m_lookup.find(from); it != m_lookup.end()) {
+        // Unless something is already cached there. Two entries cannot share a
+        // key, and the one already at `to` describes the file that is actually
+        // there - so it wins, and the stale entry is simply left unreachable
+        // rather than overwriting a good one.
+        if (m_lookup.find(to) == m_lookup.end()) {
+            const uint32_t id = it->second;
+            m_entries[id].path = to;
+            m_lookup.erase(it);
+            m_lookup.emplace(to, id);
+            ++changed;
+        }
+    }
+
     return changed;
 }
 
