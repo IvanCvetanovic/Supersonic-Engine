@@ -102,7 +102,15 @@ public:
         size_t unresolved{0};
     };
     const Stats& stats() const { return m_stats; }
-    void ResetStats() { m_stats = Stats{}; }
+    void ResetStats() { m_stats = Stats{}; m_firstUnresolved.clear(); }
+
+    // Says once what Resolve deliberately did not say twenty times.
+    //
+    // Called at the END of a scene load, with ResetStats at the start, so the
+    // count is per load and is still there to be read afterwards. Reporting and
+    // clearing in one step would make the counter unreadable by the caller -
+    // and by a test, which is the only thing that can prove the count is right.
+    void ReportUnresolved();
 
     size_t size() const { return m_byGuid.size(); }
     void Clear();
@@ -155,6 +163,10 @@ private:
     std::map<std::string, Entry> m_byGuid;
     std::map<std::string, std::string> m_guidByPath;
     Stats m_stats;
+
+    // The first identity that resolved to nothing since the last report, so the
+    // one line printed can name something concrete.
+    std::string m_firstUnresolved;
 };
 
 } // namespace Supersonic

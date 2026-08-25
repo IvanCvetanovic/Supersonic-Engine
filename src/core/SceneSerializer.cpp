@@ -2,6 +2,7 @@
 #include "core/AssetVersion.hpp"
 #include "core/Components.hpp"
 #include "core/Json.hpp"
+#include "core/AssetDatabase.hpp"
 #include "core/ComponentCodec.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/RenderSettings.hpp"
@@ -220,6 +221,10 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
         return { false, source + " is structurally invalid: " + error + " (scene left untouched)." };
     }
 
+    // Per LOAD, so the count below belongs to this scene and not to whatever
+    // was read before it.
+    AssetDatabase::Instance().ResetStats();
+
     registry.clear();
 
     // Created up front so a Parent reference resolves even when the parent
@@ -260,6 +265,10 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
             }
         }
     }
+
+    // Everything the scene asked for that no asset answers to, in one line
+    // rather than one per reference.
+    AssetDatabase::Instance().ReportUnresolved();
 
     return { true, "Loaded " + std::to_string(cursor) + " entities from " + source + "." };
 }

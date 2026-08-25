@@ -398,6 +398,9 @@ Android "not functional"; extending that register forward costs nothing.
       button held, and losing the window always gives it back
 - [x] Text input: a HUD text field a game can author, type into and read back,
       with the keyboard taken from the game while it has focus
+- [x] Asset identity: a `.meta` beside each asset, an identity written next to
+      every saved reference, and a rename recovered by matching contents, so
+      renaming a texture in Explorer no longer breaks the scenes that name it
 - [x] Roughness, metallic and ambient occlusion as a packed map, in the channels
       glTF packs them into, multiplying the per-material constants rather than
       replacing them

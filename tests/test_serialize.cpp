@@ -478,7 +478,12 @@ static void testASceneFollowsARenamedTexture() {
         file << "the same pixels either way";
     }
 
+    // The database is process-wide, so a case that leaves entries behind
+    // changes what every later case in this binary resolves. Cleared at both
+    // ends deliberately rather than left to the order the suite happens to run
+    // in.
     auto& database = AssetDatabase::Instance();
+    database.Clear();
     const auto imported = database.Import(root.generic_string());
     CHECK(imported.ok);
     CHECK_EQ(imported.minted, size_t{1});
@@ -534,9 +539,23 @@ static void testASceneFollowsARenamedTexture() {
 
     // BY IDENTITY. Without this the test would also pass if the fallback path
     // happened to be right, which is exactly the case it exists to rule out.
+    //
+    // The counters are reset by the load itself, so these belong to this scene
+    // and nothing before it.
     CHECK_MSG(database.stats().byGuid >= 1,
               "and it got there by identity rather than by the saved path");
     CHECK_EQ(database.stats().unresolved, size_t{0});
+
+    // The other half of the same claim: an identity nothing answers to is
+    // COUNTED. Without this, "unresolved == 0" above says nothing, because a
+    // counter that never moves is always zero.
+    database.Clear();
+    entt::registry orphaned;
+    CHECK(SceneSerializer::Deserialize(orphaned, scenePath).ok);
+    CHECK_MSG(database.stats().unresolved == 1,
+              "with the database emptied, the scene's identity resolves to nothing "
+              "and that is recorded rather than passed over");
+    CHECK_MSG(database.stats().byGuid == 0, "and it is not counted as a hit");
 
     std::remove(scenePath.c_str());
     fs::remove_all(root, ec);

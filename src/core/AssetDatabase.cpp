@@ -159,6 +159,7 @@ void AssetDatabase::Clear() {
     m_byGuid.clear();
     m_guidByPath.clear();
     m_stats = Stats{};
+    m_firstUnresolved.clear();
 }
 
 AssetDatabase::ScanResult AssetDatabase::Scan(const std::string& root) {
@@ -323,15 +324,16 @@ std::string AssetDatabase::Resolve(const std::string& guid, const std::string& p
             return it->second.path;
         }
 
-        // A reference that carries an identity nothing answers to. Loud,
-        // because the alternative is the old broken behaviour wearing this
-        // feature's clothes: the path below may well work today and the next
-        // rename will take it out with nothing to say why.
+        // A reference that carries an identity nothing answers to.
+        //
+        // Counted always, logged ONCE. MainScene alone has eighteen texture
+        // references, so a project whose sidecars went missing would print
+        // twenty-odd identical lines per load and every one again on each
+        // Reload Scene - and a signal that arrives twenty times is one nobody
+        // reads. The first is named in full and the rest are in the count, which
+        // ReportUnresolved prints when the load is over.
         ++m_stats.unresolved;
-        SUPERSONIC_LOG_WARN("AssetDatabase")
-            << "No asset carries identity " << guid << "; falling back to the saved path '"
-            << path << "'. Its .meta may have been lost, or the assets folder was never "
-            << "imported." << std::endl;
+        if (m_firstUnresolved.empty()) m_firstUnresolved = guid;
         return path;
     }
 
@@ -347,6 +349,17 @@ std::string AssetDatabase::GuidForPath(const std::string& path) const {
 const std::string* AssetDatabase::PathForGuid(const std::string& guid) const {
     const auto it = m_byGuid.find(guid);
     return it == m_byGuid.end() ? nullptr : &it->second.path;
+}
+
+void AssetDatabase::ReportUnresolved() {
+    if (m_stats.unresolved == 0) return;
+
+    SUPERSONIC_LOG_WARN("AssetDatabase")
+        << m_stats.unresolved << " reference(s) carry an identity no asset answers to - "
+        << "the first was " << m_firstUnresolved << ". Each fell back to the path it was "
+        << "saved with, which may work today and will not survive the next rename. A .meta "
+        << "was probably lost; --import-assets can recover it if the file is still there."
+        << std::endl;
 }
 
 AssetDatabase& AssetDatabase::Instance() {

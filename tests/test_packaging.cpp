@@ -275,8 +275,55 @@ static void testExtractedGlbTexturesAreShipped() {
     cleanup();
 }
 
+// A packaged game that ships assets WITHOUT their sidecars resolves every
+// reference by path, which is the behaviour asset identity exists to replace -
+// and it would do it silently, in somebody else's build, which is this feature's
+// signature failure. Worse, running --import-assets in that tree would mint
+// fresh identities that disagree with the project's.
+//
+// Nothing filters them out today: the assets tree is copied wholesale, and the
+// extension list further up this file gates the RUNTIME LIBRARIES next to the
+// executable, not this. That is exactly the sort of thing that stops being true
+// without anyone noticing, so it is asserted rather than reasoned about.
+static void testAPackagedGameShipsAssetIdentities() {
+    cleanup();
+    const fs::path out = scratchRoot() / "GameRelease";
+
+    const auto result = GamePackager::PackageStandaloneGame(
+        out.string(), "assets/scenes/MainScene.scene");
+    CHECK_MSG(result.ok, result.message);
+
+    size_t sidecars = 0;
+    std::error_code ec;
+    const fs::path textures = out / "assets" / "textures";
+    if (fs::is_directory(textures, ec)) {
+        for (const auto& entry : fs::directory_iterator(textures, ec)) {
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".meta") ++sidecars;
+        }
+    }
+
+    // The project has three textures, each with an identity. If the source tree
+    // has not been imported there is nothing to ship and nothing to assert, so
+    // the check is on the RATIO rather than a bare count.
+    size_t sourceSidecars = 0;
+    if (fs::is_directory("assets/textures", ec)) {
+        for (const auto& entry : fs::directory_iterator("assets/textures", ec)) {
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".meta") ++sourceSidecars;
+        }
+    }
+
+    CHECK_MSG(sidecars == sourceSidecars,
+              "every .meta in the source tree has to reach the packaged one, or a "
+              "shipped build resolves nothing by identity");
+    CHECK_MSG(sourceSidecars > 0,
+              "and the project itself must have identities, or this proves nothing");
+
+    cleanup();
+}
+
 static void runTests() {
     testTheManifestNamesTheSceneItWasGiven();
+    testAPackagedGameShipsAssetIdentities();
     testTheBinaryIsActuallyThere();
     testTheManifestRoundTripsThroughTheLoader();
     testPackagingIsRepeatable();
@@ -287,4 +334,4 @@ static void runTests() {
     testExtractedGlbTexturesAreShipped();
 }
 
-TEST_MAIN("test_packaging", 24)
+TEST_MAIN("test_packaging", 27)
