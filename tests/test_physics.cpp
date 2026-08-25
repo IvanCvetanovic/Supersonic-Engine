@@ -493,10 +493,20 @@ static void testAPendulumActuallySwings() {
     stepFor(registry, 0.5f);
 
     const glm::vec3 swung = registry.get<TransformComponent>(bob).position;
-    CHECK_MSG(swung.y < 4.9f, "a bob released level with its anchor falls");
-    CHECK_MSG(swung.x < 1.9f, "and swings inwards rather than dropping straight down");
-    CHECK_MSG(std::fabs(glm::length(swung - anchor) - 2.0f) < 5.0e-2f,
-              "on a rope that is still the length it was");
+    const glm::vec3 velocity = registry.get<RigidBodyComponent>(bob).velocity;
+
+    CHECK_MSG(std::fabs(glm::length(swung - anchor) - 2.0f) < 5.0e-3f,
+              "the rope is still exactly the length it was");
+    CHECK_MSG(swung.y < 4.5f && swung.x < 1.8f, "and the bob has moved along it");
+
+    // THE assertion, and the one that says "swing" rather than "fell and was
+    // caught": a body on a rod of fixed length has no velocity ALONG the rod,
+    // only across it. A bob that free-falls and is then yanked back has a large
+    // radial component every time the line goes taut.
+    const glm::vec3 radial = glm::normalize(swung - anchor);
+    CHECK_MSG(std::fabs(glm::dot(velocity, radial)) < 5.0e-2f,
+              "and none of its speed is along the rope");
+    CHECK_MSG(glm::length(velocity) > 3.0f, "while it is moving briskly across it");
 }
 
 static void testAJointCannotCreateMomentum() {
@@ -643,7 +653,17 @@ static void testAHingeTurnsAboutItsAxisAndNothingElse() {
                                       glm::vec4(joint.anchor, 1.0f));
     CHECK_MSG(glm::length(hinge) < 5.0e-2f, "and the hinge edge stays where it was pinned");
 
-    CHECK_MSG(std::fabs(transform.rotation.y) > 0.1f, "while the door has actually swung");
+    // "And nothing else", stated as the thing it means. A door given a shove of
+    // (1, 3, 1) is left turning about Y ALONE - the other two components are
+    // what the axis constraint exists to remove, and asserting merely that the
+    // door has some Y rotation would pass with the joint switched off, because
+    // the shove it was given integrates on its own for a step or two.
+    //
+    // Measured with the joint off: (1.000, 3.000, 1.000). With it on: (0, 0.75, 0).
+    const glm::vec3 spin = registry.get<RigidBodyComponent>(door).angularVelocity;
+    CHECK_MSG(std::fabs(spin.x) < 2.0e-2f && std::fabs(spin.z) < 2.0e-2f,
+              "the two degrees of freedom that are not the axis are gone");
+    CHECK_MSG(std::fabs(spin.y) > 0.3f, "and the one that is has been left alone");
 }
 
 static void testABrokenOrDisabledJointIsIgnored() {

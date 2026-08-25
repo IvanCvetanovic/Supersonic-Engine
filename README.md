@@ -354,13 +354,18 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
 - [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
       is no cubemap path at all — no HDRI can be loaded — so metal and smooth
       dielectrics have nothing to reflect but a two-colour gradient
-- [ ] **Convex hull colliders**, and the parts of joints that are not the
-      constraint itself. Terrain is a heightfield and joints hold — point,
-      distance and hinge — but an arbitrary convex hull is still not a shape the
-      narrowphase can take, and a hinge has no **limit** (a door that stops at
-      ninety degrees), no motor and no breaking force. A weld between two
-      dynamic bodies is also missing; parenting is not the same thing, because a
-      parented child integrates in its parent's space
+- [ ] **Convex hull colliders.** Terrain is a heightfield now, but the
+      narrowphase still takes only a box, a sphere, a capsule and a heightfield.
+      Anything else has to be approximated by a group of those, and the shape
+      that would close it — an arbitrary convex hull, built by quickhull and
+      collided by the SAT that already exists — is a piece of work in its own
+      right
+- [ ] **What a joint cannot do yet.** Point, distance and hinge constraints
+      hold, but a hinge has no **limit** (a door that stops at ninety degrees),
+      no motor, and no breaking force, so anything that has to stop somewhere
+      needs a script watching it. A weld between two dynamic bodies is missing
+      too; parenting is not the same thing, because a parented child integrates
+      in its parent's space and inherits that motion on top of its own
 
 Deliberately not on this list, with the reasons written down in
 [ARCHITECTURE.md](ARCHITECTURE.md): swept CCD, a persistent broadphase, warm

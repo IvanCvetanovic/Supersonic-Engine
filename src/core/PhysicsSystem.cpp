@@ -1394,6 +1394,11 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 // Where the bodies ACTUALLY are now. The pass above may have
                 // moved either of them, and on the first pass this is what the
                 // list was built with anyway.
+                //
+                // The ARMS are not re-derived and do not need to be: they are
+                // offsets from each centre and depend on the body's rotation,
+                // which nothing in this sweep changes. Anything that adds an
+                // angular positional correction has to refresh them here.
                 if (joint.a.transform) {
                     joint.a.state.position = glm::vec3(
                         (joint.a.parentWorld * joint.a.transform->getModelMatrix())[3]);

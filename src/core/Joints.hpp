@@ -107,6 +107,12 @@ glm::vec3 Separation(const Constraint& joint, const Body& a, const Body& b);
 
 // One pass of the velocity solver over one joint, mutating both bodies.
 //
+// A `type` outside the enum does nothing at all rather than falling into one of
+// the three: the switch is exhaustive over the enumerators, so a value that is
+// none of them matches no case. That is the safe direction - a joint nobody can
+// name holds nothing - and it is written down here because it is otherwise
+// invisible.
+//
 // Called once per solver iteration, interleaved with the contact constraints,
 // because a body held by a joint AND resting on the ground has to satisfy both
 // at once - solving them in separate loops lets each undo the other.
