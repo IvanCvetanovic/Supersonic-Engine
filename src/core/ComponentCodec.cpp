@@ -234,6 +234,30 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
             << ", \"CollidesWith\": " << capsule->collidesWith << " },\n";
     }
 
+    if (const auto* joint = registry.try_get<JointComponent>(entity)) {
+        // connectedBody is NOT here. An entt handle carries a version and is
+        // recycled, so persisting one reattaches to whatever occupies that slot
+        // next time - which is why SceneSerializer writes parent links as an
+        // index into its own entity array, and why it writes this one too.
+        //
+        // The consequence, and it is the right one: a PREFAB carrying a joint
+        // keeps its shape and loses its other end, because the entity it was
+        // pointing at is not part of the prefab.
+        out << indent << "\"Joint\": { \"Type\": " << static_cast<uint32_t>(joint->type)
+            << ", \"Anchor\": ";
+        writeVec3(out, joint->anchor, "Joint.anchor");
+        out << ", \"ConnectedAnchor\": ";
+        writeVec3(out, joint->connectedAnchor, "Joint.connectedAnchor");
+        out << ", \"Axis\": ";
+        writeVec3(out, joint->axis, "Joint.axis");
+        out << ", \"ConnectedAxis\": ";
+        writeVec3(out, joint->connectedAxis, "Joint.connectedAxis");
+        out << ", \"Distance\": " << joint->distance
+            << ", \"Rope\": " << (joint->rope ? "true" : "false")
+            << ", \"Stiffness\": " << joint->stiffness
+            << ", \"Enabled\": " << (joint->enabled ? "true" : "false") << " },\n";
+    }
+
     if (const auto* terrain = registry.try_get<HeightfieldColliderComponent>(entity)) {
         out << indent << "\"HeightfieldCollider\": { \"Width\": " << terrain->width
             << ", \"Depth\": " << terrain->depth
@@ -576,6 +600,29 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             node["CapsuleCollider"]["Layer"].AsNumber(CollisionLayer::kDefault));
         capsule.collidesWith = static_cast<uint32_t>(
             node["CapsuleCollider"]["CollidesWith"].AsNumber(CollisionLayer::kAll));
+    }
+
+    if (node.Has("Joint")) {
+        auto& joint = registry.emplace_or_replace<JointComponent>(entity);
+        const auto type = static_cast<uint32_t>(node["Joint"]["Type"].AsNumber(0.0));
+        // Clamped rather than cast blindly: a scene from a later build naming a
+        // joint type this one has never heard of should be a point joint, not a
+        // switch that falls through to whatever the enum happens to hold.
+        joint.type = (type == 1) ? JointComponent::Type::Distance
+                   : (type == 2) ? JointComponent::Type::Hinge
+                                 : JointComponent::Type::Point;
+        joint.anchor = readVec3(node["Joint"]["Anchor"], glm::vec3(0.0f));
+        joint.connectedAnchor = readVec3(node["Joint"]["ConnectedAnchor"], glm::vec3(0.0f));
+        joint.axis = readVec3(node["Joint"]["Axis"], glm::vec3(0.0f, 1.0f, 0.0f));
+        joint.connectedAxis =
+            readVec3(node["Joint"]["ConnectedAxis"], glm::vec3(0.0f, 1.0f, 0.0f));
+        joint.distance = node["Joint"]["Distance"].AsFloat(2.0f);
+        joint.rope = node["Joint"]["Rope"].AsBool(false);
+        joint.stiffness = node["Joint"]["Stiffness"].AsFloat(0.8f);
+        joint.enabled = node["Joint"]["Enabled"].AsBool(true);
+        // connectedBody stays null here and is filled in by SceneSerializer,
+        // which is the only thing that knows what an index into its entity
+        // array means.
     }
 
     if (node.Has("HeightfieldCollider")) {

@@ -349,6 +349,16 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     capsule.height = 1.85f;
     capsule.center = glm::vec3(0.0f, 0.9f, 0.0f);
 
+    auto& joint = registry.emplace<JointComponent>(entity);
+    joint.type = JointComponent::Type::Hinge;
+    joint.anchor = glm::vec3(-0.5f, 0.25f, 0.0f);
+    joint.connectedAnchor = glm::vec3(1.5f, 0.0f, -2.0f);
+    joint.axis = glm::vec3(0.0f, 0.0f, 1.0f);
+    joint.connectedAxis = glm::vec3(0.0f, 0.0f, -1.0f);
+    joint.distance = 3.25f;
+    joint.rope = true;
+    joint.stiffness = 0.45f;
+
     auto& terrain = registry.emplace<HeightfieldColliderComponent>(entity);
     terrain.width = 33;
     terrain.depth = 17;
@@ -442,6 +452,95 @@ static void testPrefabCarriesEverythingASceneDoes() {
 }
 
 // And the values have to survive, not just the keys.
+static void testAJointsOtherEndSurvivesASceneRoundTrip() {
+    // The half ComponentCodec deliberately does not carry. A handle is recycled
+    // and carries a version, so the scene writes the other end as an INDEX into
+    // its own entity array - the same thing it already does for parent links,
+    // and for the same reason: persisting the handle reattaches the rope to
+    // whatever occupies that slot next time, which is a lamp.
+    const std::string path = "test_joint_scene_tmp.scene";
+
+    entt::entity savedAnchor = entt::null;
+    entt::entity savedBob = entt::null;
+    {
+        entt::registry registry;
+        savedAnchor = registry.create();
+        registry.emplace<TagComponent>(savedAnchor, "Anchor");
+        registry.emplace<TransformComponent>(savedAnchor, glm::vec3(0.0f, 6.0f, 0.0f));
+
+        // A decoy in between, so an off-by-one in the index resolves to the
+        // wrong entity rather than happening to be right.
+        const auto decoy = registry.create();
+        registry.emplace<TagComponent>(decoy, "Decoy");
+        registry.emplace<TransformComponent>(decoy, glm::vec3(9.0f, 9.0f, 9.0f));
+
+        savedBob = registry.create();
+        registry.emplace<TagComponent>(savedBob, "Bob");
+        registry.emplace<TransformComponent>(savedBob, glm::vec3(0.0f, 4.0f, 0.0f));
+        auto& joint = registry.emplace<JointComponent>(savedBob);
+        joint.type = JointComponent::Type::Distance;
+        joint.connectedBody = savedAnchor;
+        joint.distance = 2.0f;
+
+        CHECK(SceneSerializer::Serialize(registry, path).ok);
+    }
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    CHECK_MSG(result.ok, result.message);
+
+    entt::entity bob = entt::null;
+    entt::entity anchor = entt::null;
+    for (auto entity : loaded.view<TagComponent>()) {
+        const auto& tag = loaded.get<TagComponent>(entity).tag;
+        if (tag == "Bob") bob = entity;
+        if (tag == "Anchor") anchor = entity;
+    }
+    CHECK(bob != entt::null && anchor != entt::null);
+
+    const auto* joint = bob != entt::null ? loaded.try_get<JointComponent>(bob) : nullptr;
+    CHECK_MSG(joint != nullptr, "the bob kept its joint");
+    if (joint) {
+        CHECK_MSG(joint->connectedBody == anchor,
+                  "and the joint still points at the anchor rather than the decoy");
+        CHECK_NEAR(joint->distance, 2.0f);
+    }
+
+    std::remove(path.c_str());
+}
+
+static void testAWorldAnchoredJointWritesNoReference() {
+    // The absence of the key IS the meaning: no connected body means the joint
+    // is tied to a point in the world, which is what a pendulum is.
+    const std::string path = "test_joint_world_tmp.scene";
+    {
+        entt::registry registry;
+        const auto bob = registry.create();
+        registry.emplace<TagComponent>(bob, "Bob");
+        registry.emplace<TransformComponent>(bob, glm::vec3(0.0f, 4.0f, 0.0f));
+        auto& joint = registry.emplace<JointComponent>(bob);
+        joint.type = JointComponent::Type::Distance;
+        joint.connectedBody = entt::null;
+        joint.connectedAnchor = glm::vec3(0.0f, 6.0f, 0.0f);
+        CHECK(SceneSerializer::Serialize(registry, path).ok);
+    }
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::Deserialize(loaded, path).ok);
+
+    int found = 0;
+    for (auto entity : loaded.view<JointComponent>()) {
+        const auto& joint = loaded.get<JointComponent>(entity);
+        CHECK_MSG(joint.connectedBody == entt::null,
+                  "a world-anchored joint must not come back pointing at an entity");
+        CHECK_NEAR(joint.connectedAnchor.y, 6.0f);
+        ++found;
+    }
+    CHECK_EQ(found, 1);
+
+    std::remove(path.c_str());
+}
+
 static void testPrefabRoundTripsEveryField() {
     entt::registry registry;
     const auto entity = makeFullyLoadedEntity(registry);
@@ -565,6 +664,28 @@ static void testPrefabRoundTripsEveryField() {
             // floor or hovers above it.
             CHECK_NEAR(capsule->height, 1.85f);
             CHECK_NEAR(capsule->center.y, 0.9f);
+        }
+
+        const auto* joint = registry.try_get<JointComponent>(clone);
+        CHECK_MSG(joint != nullptr, "prefab lost its JointComponent");
+        if (joint) {
+            CHECK_MSG(joint->type == JointComponent::Type::Hinge,
+                      "a hinge that comes back as a point joint lets the door flop");
+            CHECK_NEAR(joint->anchor.x, -0.5f);
+            CHECK_NEAR(joint->connectedAnchor.z, -2.0f);
+            // Two axes, not one: a hinge whose ends agree by construction
+            // measures nothing, so both have to survive independently.
+            CHECK_NEAR(joint->axis.z, 1.0f);
+            CHECK_NEAR(joint->connectedAxis.z, -1.0f);
+            CHECK_NEAR(joint->distance, 3.25f);
+            CHECK(joint->rope);
+            CHECK_NEAR(joint->stiffness, 0.45f);
+
+            // Deliberately NOT preserved. An entt handle carries a version and
+            // is recycled, so a prefab cannot carry a reference to a scene
+            // entity - the scene file writes that as an index instead.
+            CHECK_MSG(joint->connectedBody == entt::null,
+                      "a prefab keeps the joint's shape and loses its other end");
         }
 
         const auto* terrain = registry.try_get<HeightfieldColliderComponent>(clone);
@@ -1104,7 +1225,9 @@ static void runTests() {
     testPrefabRoundTrip();
     testPrefabCarriesEverythingASceneDoes();
     testPrefabRoundTripsEveryField();
+    testAJointsOtherEndSurvivesASceneRoundTrip();
+    testAWorldAnchoredJointWritesNoReference();
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 256)
+TEST_MAIN("test_serialize", 270)

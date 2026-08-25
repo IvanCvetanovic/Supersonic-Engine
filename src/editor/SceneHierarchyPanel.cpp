@@ -281,6 +281,23 @@ void SceneHierarchyPanel::drawCreateMenu() {
         registry.emplace<HeightfieldColliderComponent>(entity);
     }
 
+    if (ImGui::MenuItem("Create Pendulum")) {
+        // Two entities, because that is what the shape of the feature is: a
+        // body, and a point in the world it is tied to. The joint lives on the
+        // body and needs nothing else in the scene to exist.
+        const auto entity = spawn("Pendulum", "Sphere", glm::vec3(2.0f, 4.0f, 0.0f),
+                                  glm::vec3(0.5f));
+        auto& body = registry.emplace<RigidBodyComponent>(entity);
+        body.allowSleep = false;
+        registry.emplace<SphereColliderComponent>(entity).radius = 0.25f;
+
+        auto& joint = registry.emplace<JointComponent>(entity);
+        joint.type = JointComponent::Type::Distance;
+        joint.connectedBody = entt::null;
+        joint.connectedAnchor = glm::vec3(0.0f, 6.0f, 0.0f);
+        joint.distance = glm::length(joint.connectedAnchor - glm::vec3(2.0f, 4.0f, 0.0f));
+    }
+
     if (ImGui::MenuItem("Create Physics Cube")) {
         const auto entity = spawn("Physics Cube", "Cube", glm::vec3(0.0f, 5.0f, 0.0f));
         registry.emplace<RigidBodyComponent>(entity);

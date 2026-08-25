@@ -625,6 +625,87 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // 4e. JointComponent
+    if (registry.all_of<JointComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Joint", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& joint = registry.get<JointComponent>(entity);
+
+            static const char* kTypes[] = { "Point", "Distance", "Hinge" };
+            int type = static_cast<int>(joint.type);
+            if (ImGui::Combo("Type##joint", &type, kTypes, IM_ARRAYSIZE(kTypes))) {
+                joint.type = static_cast<JointComponent::Type>(
+                    std::clamp(type, 0, IM_ARRAYSIZE(kTypes) - 1));
+            }
+
+            ImGui::Checkbox("Enabled##joint", &joint.enabled);
+
+            // The other end, chosen from what is in the scene. Typed in, an
+            // entity handle is a number with a version in it and nothing an
+            // author could reasonably guess.
+            const bool toWorld = joint.connectedBody == entt::null ||
+                                 !registry.valid(joint.connectedBody);
+            std::string current = toWorld ? "<world>" : "<unnamed>";
+            if (!toWorld) {
+                if (const auto* tag = registry.try_get<TagComponent>(joint.connectedBody)) {
+                    current = tag->tag;
+                }
+            }
+            if (ImGui::BeginCombo("Connected##joint", current.c_str())) {
+                if (ImGui::Selectable("<world>", toWorld)) joint.connectedBody = entt::null;
+                for (auto other : registry.view<TransformComponent>()) {
+                    // Itself is not an option: a joint to itself has no two
+                    // bodies to hold apart and the solver skips it.
+                    if (other == entity) continue;
+                    const auto* tag = registry.try_get<TagComponent>(other);
+                    const std::string label =
+                        (tag ? tag->tag : std::string("Entity")) + "##joint" +
+                        std::to_string(static_cast<uint32_t>(other));
+                    if (ImGui::Selectable(label.c_str(), other == joint.connectedBody)) {
+                        joint.connectedBody = other;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            Theme::DrawVec3Control("Anchor##joint", joint.anchor, 0.0f);
+            Theme::DrawVec3Control(toWorld ? "World Point##joint" : "Other Anchor##joint",
+                                   joint.connectedAnchor, 0.0f);
+            ImGui::TextDisabled(toWorld
+                ? "With no connected body the second anchor is a point in the WORLD."
+                : "Both anchors are local to their own entity.");
+
+            if (joint.type == JointComponent::Type::Distance) {
+                ImGui::DragFloat("Distance##joint", &joint.distance, 0.01f, 0.0f, 1000.0f);
+                if (ImGui::Button("Set from current##joint")) {
+                    const auto* here = registry.try_get<TransformComponent>(entity);
+                    glm::vec3 target = joint.connectedAnchor;
+                    if (!toWorld) {
+                        if (const auto* there =
+                                registry.try_get<TransformComponent>(joint.connectedBody)) {
+                            target = there->position + joint.connectedAnchor;
+                        }
+                    }
+                    if (here) joint.distance = glm::length(target - (here->position + joint.anchor));
+                }
+                ImGui::Checkbox("Rope##joint", &joint.rope);
+                ImGui::TextDisabled("A rope resists stretching only, so a chain can fold.");
+            }
+
+            if (joint.type == JointComponent::Type::Hinge) {
+                Theme::DrawVec3Control("Axis##joint", joint.axis, 0.0f);
+                Theme::DrawVec3Control("Other Axis##joint", joint.connectedAxis, 0.0f);
+                ImGui::TextDisabled("The same axis seen from each end. Two bodies that "
+                                    "start aligned want the same numbers in both.");
+            }
+
+            ImGui::SliderFloat("Stiffness##joint", &joint.stiffness, 0.0f, 1.0f);
+            ImGui::TextDisabled("How much of the joint's error to take out per step. "
+                                "Below about 0.3 it visibly sags.");
+        }
+    }
+
+    ImGui::Spacing();
+
     // 5. AudioSourceComponent
     if (registry.all_of<AudioSourceComponent>(entity)) {
         if (ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1060,6 +1141,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (!registry.all_of<CapsuleColliderComponent>(entity) &&
             ImGui::MenuItem("Capsule Collider")) {
             registry.emplace<CapsuleColliderComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<JointComponent>(entity) && ImGui::MenuItem("Joint")) {
+            registry.emplace<JointComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<HeightfieldColliderComponent>(entity) &&

@@ -902,7 +902,10 @@ for each pair: narrowphase -> a manifold of up to four points
                wake either side if the other can disturb it
                positional correction, once, at the centroid
                one velocity constraint per contact point
-eight passes over every constraint: normal impulse, then friction
+build the joint list, including bodies that have no collider at all
+four sweeps of joint positional correction, re-reading as it goes
+eight passes over every constraint: normal impulse, then friction,
+                                    then every joint
 ```
 
 Sleeping is decided during integration rather than after the solve, and the
@@ -1249,7 +1252,102 @@ characters, which usually freeze rotation anyway. `freezeRotation`,
 produce a zero tensor, which falls out of the arithmetic as “infinitely hard to
 turn” without a branch at every use.
 
-### 7f. The optional world ground plane
+### 7f. Joints
+
+A constraint holding one body to another, or to a fixed point in the world.
+Before this nothing did, so a door, a rope bridge, a ragdoll limb and a
+suspension arm all had to be faked by a script writing transforms — which is not
+a physical object, it is a body that ignores everything it touches.
+
+Three types, from two primitives:
+
+| Type | What it removes | What it is for |
+|---|---|---|
+| Point | three linear degrees of freedom: the two anchors must coincide | a ragdoll shoulder, a pendulum free to spin as it swings |
+| Distance | **one**: the anchors must stay a given distance apart | a rope, a chain link, a pendulum that swings |
+| Hinge | Point, plus the two rotational degrees of freedom that are not the axis | a door, a wheel, a lid |
+
+The one degree of freedom is what makes Distance a different thing from Point
+rather than a weaker one. Everything perpendicular to the line is left
+completely alone, and that is what lets a pendulum swing instead of hanging
+rigid wherever it was put. A `rope` resists stretching *only*, so the two ends
+may drift together freely and are caught when the line goes taut; without that
+every chain is a set of rigid rods and a hanging one cannot fold.
+
+**The arithmetic lives in `core/Joints`**, for the reason `CollisionSAT` does:
+this is the part where a sign error is a pendulum that gains energy until it
+flies apart, and the only practical way to trust a three-by-three effective mass
+is to call it with hand-checkable numbers. It has no registry, no components and
+no frame — the caller does every lookup and hands over world-space vectors.
+
+The effective mass is `(imA + imB)·I − skew(rA)·IinvA·skew(rA) −
+skew(rB)·IinvB·skew(rB)`. The two skew terms are what make an anchor on the
+**edge** of a body different from one at its centre; drop them and the joint
+drags the body bodily without ever turning it, so a door swings by sliding.
+
+**Both halves, like a contact.** A joint gets a velocity constraint *and* a
+direct positional correction, because positions are integrated **before** the
+solve — so a velocity change alone can never take out the error the current step
+introduced, only the previous one's. Corrected by velocity alone with a
+Baumgarte bias `β`, a body hanging under gravity settles at `g·dt²/β`, which at
+60Hz with `β = 0.2` is **1.4 cm** below where it belongs: not drift, a steady
+state. Moving the bodies as well brings that to `g·dt²(1−k)/k`, about 0.7 mm at
+`k = 0.8`.
+
+The position pass sweeps the list **four times**, re-reading each body's
+transform at the top of every joint rather than trusting the copy taken when the
+list was built. That is the difference between a Jacobi sweep and a Gauss-Seidel
+one, and on a chain it is the difference between a rope that hangs at its length
+and one that does not: link five has to see where link four has just been *put*.
+Measured on a five-link rope at 60Hz, one pass left every link stretched by
+three to five per cent; four brings it under half of one.
+
+The angular half of a hinge is *not* corrected positionally. Writing a rotation
+back means going through the transform's Euler triple, and there is nothing
+pulling a hinge out of alignment the way gravity pulls a rope down every single
+step — so it gets a bias term in the velocity solve and that is enough.
+
+**Solved inside the same iteration as the contacts**, not in a loop of its own. A
+body hanging from a rope *and* resting on the ground has to satisfy both at
+once; solved apart, each undoes the other and the body walks a little further
+out of place every step it is held by two things.
+
+Four things that are load-bearing and fail quietly:
+
+- **The other end is written as an index.** An `entt::entity` carries a version
+  and is recycled, so persisting the handle reattaches the joint to whatever
+  occupies that slot next time the scene loads. `SceneSerializer` writes it the
+  way it already writes parent links; `ComponentCodec` carries everything else.
+  The consequence is deliberate: a **prefab** with a joint keeps its shape and
+  loses its other end, because the entity it pointed at is not part of the
+  prefab.
+- **A hinge needs an axis at each end.** One axis, taken through both bodies,
+  compares the door to itself and measures nothing — so it would let it flop in
+  any direction while looking exactly like a working hinge.
+- **The perpendicular basis picks its reference by the axis's smallest
+  component.** A fixed reference gives a zero-length cross product whenever the
+  axis is parallel to it, and a hinge about world Y — a door — is the most
+  ordinary thing anyone will build.
+- **Waking travels across a joint.** A body hanging from something that has just
+  been knocked has to wake, or half a chain hangs frozen in mid-air while the
+  rest of it swings. An awake but equally *still* neighbour must not count, or
+  two settled links hold each other awake forever — the same trap the contact
+  path documents.
+
+Two early returns had to go for any of this to run: a pendulum is one collider
+on a static anchor, and a bob on a rope may have no collider at all, so “fewer
+than two bodies” and “no pairs touching” are ordinary states for a scene that
+still has constraints to solve.
+
+**Open, and named rather than implied:** limits (a door that stops at ninety
+degrees), motors, a breaking force, and a weld between two dynamic bodies.
+Parenting is not a weld — a parented child integrates in its parent's space and
+inherits that motion on top of its own. One joint per entity, which is what the
+ECS gives and is also the right shape for a rope of N links or a ragdoll bone
+held to its parent; a mechanism that genuinely needs two constraints on one body
+needs a second entity.
+
+### 7g. The optional world ground plane
 
 A solid plane across the whole world at `groundPlaneY`, applied during
 integration, per non-kinematic rigid body, before any collider is gathered.
@@ -1294,7 +1392,7 @@ with its origin half a unit above the plane.
 solid. The two live two hundred lines apart and have to agree, or a character
 stands on a floor that is switched off.
 
-### 7g. Sleeping
+### 7h. Sleeping
 
 A body that has stayed below `kSleepLinearVelocity` (0.05 m/s) and
 `kSleepAngularVelocity` (0.05 rad/s) for `kSleepTime` (half a second) stops being
@@ -1357,7 +1455,7 @@ point, where the distance it sinks under gravity in one step and the distance th
 positional correction pushes it back cancel to the same float, so a sleeping body
 is not frozen *near* where an awake one hovers — it is frozen exactly there.
 
-### 7h. Triggers
+### 7i. Triggers
 
 A collider with `isTrigger` set is detected and deliberately not resolved: the
 overlap is reported in the contact list and the body passes through, which is the
@@ -1374,7 +1472,7 @@ inspector checkbox:
   There is no `OnTriggerEnter`, no per-entity event and no enter/stay/exit
   distinction, so a script cannot currently learn that a trigger fired.
 
-### 7i. World queries
+### 7j. World queries
 
 `Raycast`, `OverlapSphere` and `IsGrounded` answer questions about the world
 against **colliders**, which is what physics means by solid. Gameplay previously
@@ -1426,7 +1524,7 @@ Every query rebuilds the whole shape list from the registry on each call. There
 is no acceleration structure and no cache, so a script that raycasts once per
 entity per frame walks every collider in the scene once per entity per frame.
 
-### 7j. Documented departures
+### 7k. Documented departures
 
 Listed rather than hidden, in the same spirit as the rest of this document.
 

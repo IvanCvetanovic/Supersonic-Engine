@@ -574,6 +574,89 @@ struct CapsuleColliderComponent {
     uint32_t collidesWith{CollisionLayer::kAll};
 };
 
+// A constraint holding this body to another, or to a point in the world.
+//
+// The gap this closes was named in the README: nothing held one body to
+// another, so a door, a rope bridge, a ragdoll limb and a suspension arm all
+// had to be faked by a script writing transforms - which is not a physical
+// object, it is a body that ignores everything it touches.
+//
+// ONE joint per entity, which is what EnTT gives and is also the right shape
+// for the things people build: a rope of N links is N entities each held to the
+// one before it, and a ragdoll is a bone held to its parent. A mechanism that
+// genuinely needs two constraints on one body needs a second entity, and that
+// is a limitation rather than a design.
+//
+// Deliberately NOT here, and open: limits (a door that stops at ninety
+// degrees), motors, and a breaking force.
+struct JointComponent {
+    // A weld is missing on purpose. Two dynamic bodies rigidly fixed together
+    // is a real constraint and this does not implement it; parenting is not the
+    // same thing, because a parented child integrates in its parent's space and
+    // inherits that motion on top of its own.
+    enum class Type : uint32_t {
+        // The two anchors must coincide, and nothing rotational is constrained:
+        // a ragdoll shoulder, a pendulum free to spin as it swings.
+        Point = 0,
+
+        // The two anchors must stay `distance` apart. Everything perpendicular
+        // to the line is left alone, which is what lets a pendulum swing rather
+        // than hang rigid.
+        Distance = 1,
+
+        // Point, plus the two rotational degrees of freedom that are not the
+        // axis. A door, a wheel, a lid.
+        Hinge = 2,
+    };
+
+    Type type{Type::Point};
+
+    // The other end. `entt::null` anchors this body to a fixed point in the
+    // WORLD at `connectedAnchor` - which is what a pendulum, a swinging sign
+    // and the end posts of a rope bridge all need, and which would otherwise
+    // require an invisible immovable entity per joint.
+    entt::entity connectedBody{entt::null};
+
+    // Local to this entity.
+    glm::vec3 anchor{0.0f};
+
+    // Local to the other entity, or WORLD space when there is no other entity.
+    glm::vec3 connectedAnchor{0.0f};
+
+    // Distance only.
+    float distance{2.0f};
+
+    // A rope resists STRETCHING and nothing else, so the two ends may drift
+    // together freely and are caught only when the line goes taut. Without it
+    // every chain is a set of rigid rods and a hanging one cannot fold.
+    bool rope{false};
+
+    // Hinge only, local to this entity. Normalised when it is used, so an
+    // author may type (0, 2, 0).
+    glm::vec3 axis{0.0f, 1.0f, 0.0f};
+
+    // The SAME axis, seen from the other end: local to the connected entity, or
+    // WORLD space when there is none - the rule connectedAnchor follows.
+    //
+    // A second field rather than reusing `axis`, because a hinge constrains one
+    // body's axis to the OTHER body's, and a joint whose two axes are the same
+    // vector by construction measures nothing at all: it would compare the door
+    // to itself and let it flop in any direction. Two bodies that start aligned
+    // want the same numbers in both; two that do not, do not.
+    glm::vec3 connectedAxis{0.0f, 1.0f, 0.0f};
+
+    // How much of the joint's current error to take out per step, 0 to 1.
+    //
+    // Not "stiffness" in the spring sense - there is no spring here, the
+    // constraint is exact. This is the same knob the contact solver's
+    // positional correction has, and for the same reason: pulling all the way
+    // to zero every step makes a loaded joint vibrate, because floating-point
+    // error re-creates the error immediately.
+    float stiffness{0.8f};
+
+    bool enabled{true};
+};
+
 // The terrain, as something you can stand on.
 //
 // The gap this closes was in the README for a long time: the procedurally

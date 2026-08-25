@@ -74,6 +74,7 @@ code quietly contradicts.
 - **Fixed-step physics** with an accumulator capped so a hitch costs fidelity rather than exploding the solver
 - **World queries** — raycast, sphere overlap and a ground check against *colliders* rather than render bounds, available to C++ and to hot-reloaded scripts
 - **Collision** — sort-and-sweep broadphase; a narrowphase of four shapes and four pair tests, because a sphere is a capsule whose segment has no length: nearest points between segments for the round pairs, segment-against-box for a capsule or sphere against a crate, the separating axis theorem over fifteen axes with Sutherland–Hodgman clipping for box against box, and a heightfield for terrain — which is a function rather than a triangle soup, so the cells a shape can touch are an index range and the seams need no internal-edge filtering. Mass-weighted impulse response with Coulomb friction, slop-limited positional correction so stacks settle instead of vibrating, speculative contacts so a fast body lands on a wall rather than through it, immovable collider-only obstacles, and non-resolving trigger volumes
+- **Joints** — point, distance and hinge constraints between two bodies or between a body and a fixed point in the world, solved in the same iteration as the contacts so a body held by a rope *and* resting on the floor satisfies both at once. A rope resists stretching only, so a chain can fold; the position pass sweeps four times re-reading as it goes, which is what makes a five-link rope hang at its length rather than half a per cent longer
 - **3D audio** on XAudio2 with a from-scratch WAV decoder, inverse-distance attenuation and listener-relative panning
 - **In-game UI** — text, panels, buttons and a text field, anchored so a HUD authored at one resolution survives every other; a script reads what was typed and hears it submitted
 - **Particle systems** with per-emitter pools, so two emitters cannot starve each other
@@ -261,6 +262,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
 | `test_heightfield` | Terrain collision: the grid against the mesh vertex for vertex, seams, ridge crests, grooves, buried recovery, and the cell march a ray does |
+| `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, and every degenerate case |
 | `test_audio` | WAV decoding, including the shipped clip |
 | `test_scripts` | Script registry and dispatch |
 | `test_blending` | Cross-fade between clips, blend weights, clip switching |
@@ -352,12 +354,13 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
 - [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
       is no cubemap path at all — no HDRI can be loaded — so metal and smooth
       dielectrics have nothing to reflect but a two-colour gradient
-- [ ] **Joints.** Nothing constrains one body to another: no hinge, no
-      ball-and-socket, no distance constraint. A door, a rope bridge, a ragdoll
-      and a suspension arm all need the same machinery and none of it exists.
-      Collision geometry beyond boxes, spheres and capsules is now half done —
-      terrain is a heightfield collider and is solid — but an arbitrary convex
-      hull still is not a shape the narrowphase can take
+- [ ] **Convex hull colliders**, and the parts of joints that are not the
+      constraint itself. Terrain is a heightfield and joints hold — point,
+      distance and hinge — but an arbitrary convex hull is still not a shape the
+      narrowphase can take, and a hinge has no **limit** (a door that stops at
+      ninety degrees), no motor and no breaking force. A weld between two
+      dynamic bodies is also missing; parenting is not the same thing, because a
+      parented child integrates in its parent's space
 
 Deliberately not on this list, with the reasons written down in
 [ARCHITECTURE.md](ARCHITECTURE.md): swept CCD, a persistent broadphase, warm

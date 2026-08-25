@@ -410,6 +410,312 @@ static void testTerrainNeverMovesEvenWithARigidBodyOnIt() {
               "terrain must not be shoved sideways by whatever lands on it");
 }
 
+// ---- Joints ----------------------------------------------------------------
+//
+// test_joints proves the arithmetic. These prove the solver can reach it, and
+// they are where the two things that are NOT arithmetic get checked: that a
+// scene with no contacts at all still gets solved, and that the steady-state
+// error of a loaded joint is bounded rather than merely small on the step
+// somebody happened to look at.
+
+// A body a joint can hold, with the two defaults that quietly corrupt a joint
+// test turned off.
+//
+// angularDamping bleeds angular momentum every step, so a conservation check
+// against a spinning body is measuring the damping. allowSleep freezes a
+// settling chain part way through, so a test that runs long enough to settle
+// measures whenever the sleep timer happened to expire.
+static entt::entity makeJointBody(entt::registry& registry, const glm::vec3& position,
+                                  float mass = 1.0f) {
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity, position);
+    auto& body = registry.emplace<RigidBodyComponent>(entity);
+    body.mass = mass;
+    body.angularDamping = 0.0f;
+    body.allowSleep = false;
+    return entity;
+}
+
+static JointComponent& hangFrom(entt::registry& registry, entt::entity entity,
+                                const glm::vec3& worldAnchor, float distance) {
+    auto& joint = registry.emplace<JointComponent>(entity);
+    joint.type = JointComponent::Type::Distance;
+    joint.connectedBody = entt::null;
+    joint.connectedAnchor = worldAnchor;
+    joint.distance = distance;
+    return joint;
+}
+
+static float ropeLength(entt::registry& registry, entt::entity bob, const glm::vec3& anchor) {
+    return glm::length(registry.get<TransformComponent>(bob).position - anchor);
+}
+
+static void testAPendulumHangsAtTheLengthItWasGiven() {
+    // A scene with ONE collider-less body and no contacts whatever. Before
+    // joints, Update returned before it got anywhere near a solve - twice: once
+    // for having fewer than two bodies and once for having no pairs.
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 5.0f, 0.0f);
+    const auto bob = makeJointBody(registry, glm::vec3(0.0f, 4.0f, 0.0f));
+    hangFrom(registry, bob, anchor, 2.0f);
+
+    stepFor(registry, 1.0f);
+    const float early = std::fabs(ropeLength(registry, bob, anchor) - 2.0f);
+
+    stepFor(registry, 9.0f);
+    const float late = std::fabs(ropeLength(registry, bob, anchor) - 2.0f);
+
+    // Positions are integrated BEFORE the solve, so a joint can never take out
+    // the error the step it was made in - only the previous step's. Under
+    // gravity that settles at g*dt^2*(1-k)/k, which at 60Hz with k = 0.8 is
+    // about 0.7mm. The number below is that with room to spare; asserting an
+    // exact length would be asserting something the scheme cannot deliver.
+    CHECK_MSG(early < 3.0e-3f, "a hanging body settles within a millimetre of its rope length");
+
+    // The one that actually catches an unstable joint. A joint that is slowly
+    // stretching passes any single-sample check taken early enough.
+    CHECK_MSG(late <= early + 1.0e-4f, "and it is no worse nine seconds later");
+
+    CHECK_MSG(registry.get<TransformComponent>(bob).position.y < anchor.y,
+              "it hangs below the anchor rather than being flung above it");
+}
+
+static void testAPendulumActuallySwings() {
+    // The difference between a Distance joint and a Point joint, in the solver:
+    // everything perpendicular to the rope is left alone, so a bob released to
+    // one side falls in an arc. Constrain all three and it hangs rigid wherever
+    // it was put.
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 5.0f, 0.0f);
+    const auto bob = makeJointBody(registry, glm::vec3(2.0f, 5.0f, 0.0f));
+    hangFrom(registry, bob, anchor, 2.0f);
+
+    stepFor(registry, 0.5f);
+
+    const glm::vec3 swung = registry.get<TransformComponent>(bob).position;
+    CHECK_MSG(swung.y < 4.9f, "a bob released level with its anchor falls");
+    CHECK_MSG(swung.x < 1.9f, "and swings inwards rather than dropping straight down");
+    CHECK_MSG(std::fabs(glm::length(swung - anchor) - 2.0f) < 5.0e-2f,
+              "on a rope that is still the length it was");
+}
+
+static void testAJointCannotCreateMomentum() {
+    // The conservation law, through the whole solver rather than the constraint
+    // alone: two bodies floating in nothing, joined, one of them moving. Whatever
+    // the joint does with the momentum it cannot make any.
+    //
+    // Linear only. angularDamping is off above, but linearDamping defaults to
+    // zero anyway - and linear momentum is the quantity a joint impulse can
+    // actually get wrong, because it is the one that has to be equal and
+    // opposite.
+    entt::registry registry;
+    const auto a = makeJointBody(registry, glm::vec3(-1.0f, 0.0f, 0.0f), 2.0f);
+    const auto b = makeJointBody(registry, glm::vec3(1.0f, 0.0f, 0.0f), 5.0f);
+    registry.get<RigidBodyComponent>(a).useGravity = false;
+    registry.get<RigidBodyComponent>(b).useGravity = false;
+    registry.get<RigidBodyComponent>(a).velocity = glm::vec3(1.5f, 0.0f, 0.0f);
+
+    auto& joint = registry.emplace<JointComponent>(a);
+    joint.type = JointComponent::Type::Distance;
+    joint.connectedBody = b;
+    joint.distance = 2.0f;
+
+    const glm::vec3 before = registry.get<RigidBodyComponent>(a).velocity * 2.0f +
+                             registry.get<RigidBodyComponent>(b).velocity * 5.0f;
+    stepFor(registry, 3.0f);
+    const glm::vec3 after = registry.get<RigidBodyComponent>(a).velocity * 2.0f +
+                            registry.get<RigidBodyComponent>(b).velocity * 5.0f;
+
+    CHECK_MSG(glm::length(after - before) < 1.0e-3f,
+              "the total momentum of a joined pair is the total it started with");
+    CHECK_MSG(std::isfinite(after.x) && std::isfinite(after.y) && std::isfinite(after.z),
+              "and it is still a number");
+}
+
+static void testTheAnchorEndOfAJointNeverMoves() {
+    entt::registry registry;
+    const auto post = registry.create();
+    registry.emplace<TransformComponent>(post, glm::vec3(0.0f, 5.0f, 0.0f));
+    registry.emplace<BoxColliderComponent>(post);   // static: no rigid body
+
+    const auto bob = makeJointBody(registry, glm::vec3(0.0f, 2.0f, 0.0f));
+    auto& joint = registry.emplace<JointComponent>(bob);
+    joint.type = JointComponent::Type::Distance;
+    joint.connectedBody = post;
+    joint.distance = 2.0f;
+
+    stepFor(registry, 2.0f);
+
+    CHECK_MSG(test::nearly(registry.get<TransformComponent>(post).position.y, 5.0f, 1e-5f),
+              "a post is not dragged down by what hangs off it");
+    CHECK_MSG(std::fabs(ropeLength(registry, bob, glm::vec3(0.0f, 5.0f, 0.0f)) - 2.0f) < 3.0e-3f,
+              "and the thing hanging off it hangs at the right length");
+}
+
+static void testARopeLetsThingsFallButNotStretch() {
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 5.0f, 0.0f);
+
+    // Started well INSIDE the rope's length: a rod would shove it out to two
+    // units, a rope has to let it fall until the line goes taut.
+    const auto bob = makeJointBody(registry, glm::vec3(0.0f, 4.6f, 0.0f));
+    auto& joint = hangFrom(registry, bob, anchor, 2.0f);
+    joint.rope = true;
+
+    stepFor(registry, 0.1f);
+    CHECK_MSG(ropeLength(registry, bob, anchor) > 0.4f,
+              "a slack rope does not push its load away from the anchor");
+
+    stepFor(registry, 4.0f);
+    const float length = ropeLength(registry, bob, anchor);
+    CHECK_MSG(length < 2.0f + 3.0e-3f, "and it catches the load when the line goes taut");
+    CHECK_MSG(length > 1.9f, "having let it fall the whole way first");
+}
+
+static void testAChainOfRopesHangs() {
+    // Five links, each held to the one above it, the top one to a point in the
+    // world. Nothing here has a collider, so this is also the case where every
+    // body in the scene is one the collision gather has never heard of.
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 6.0f, 0.0f);
+
+    std::vector<entt::entity> links;
+    for (int i = 0; i < 5; ++i) {
+        links.push_back(makeJointBody(registry, glm::vec3(0.0f, 6.0f - static_cast<float>(i), 0.0f)));
+    }
+
+    hangFrom(registry, links[0], anchor, 1.0f);
+    for (size_t i = 1; i < links.size(); ++i) {
+        auto& joint = registry.emplace<JointComponent>(links[i]);
+        joint.type = JointComponent::Type::Distance;
+        joint.connectedBody = links[i - 1];
+        joint.distance = 1.0f;
+    }
+
+    stepFor(registry, 8.0f);
+
+    int wrong = 0;
+    glm::vec3 above = anchor;
+    for (size_t i = 0; i < links.size(); ++i) {
+        const glm::vec3 here = registry.get<TransformComponent>(links[i]).position;
+        if (std::fabs(glm::length(here - above) - 1.0f) > 2.0e-2f) ++wrong;
+        above = here;
+    }
+    CHECK_MSG(wrong == 0, "every link of a settled chain is one unit from the one above it");
+
+    // The whole chain hangs straight down from the anchor, five links long.
+    const glm::vec3 bottom = registry.get<TransformComponent>(links.back()).position;
+    CHECK_MSG(std::fabs(bottom.y - 1.0f) < 5.0e-2f, "so the bottom of it is five units down");
+    CHECK_MSG(std::fabs(bottom.x) < 5.0e-2f && std::fabs(bottom.z) < 5.0e-2f,
+              "and directly below where it is hung from");
+}
+
+static void testAHingeTurnsAboutItsAxisAndNothingElse() {
+    // A door: hinged to the world along Y, at the edge of its own collider,
+    // and shoved in a direction that would tip it over if the two rotational
+    // degrees of freedom that are not the axis were left free.
+    entt::registry registry;
+    const auto door = makeJointBody(registry, glm::vec3(0.5f, 0.0f, 0.0f));
+    auto& collider = registry.emplace<BoxColliderComponent>(door);
+    collider.size = glm::vec3(1.0f, 2.0f, 0.1f);
+    registry.get<RigidBodyComponent>(door).useGravity = false;
+
+    auto& joint = registry.emplace<JointComponent>(door);
+    joint.type = JointComponent::Type::Hinge;
+    joint.connectedBody = entt::null;
+    joint.anchor = glm::vec3(-0.5f, 0.0f, 0.0f);         // the hinge edge, in the door
+    joint.connectedAnchor = glm::vec3(0.0f, 0.0f, 0.0f); // where that edge is in the world
+    joint.axis = glm::vec3(0.0f, 1.0f, 0.0f);
+    joint.connectedAxis = glm::vec3(0.0f, 1.0f, 0.0f);
+
+    // A shove that is mostly a swing but has a tip in it.
+    registry.get<RigidBodyComponent>(door).angularVelocity = glm::vec3(1.0f, 3.0f, 1.0f);
+    stepFor(registry, 1.0f);
+
+    const auto& transform = registry.get<TransformComponent>(door);
+    const glm::mat3 basis(transform.getModelMatrix());
+    const glm::vec3 doorAxis = glm::normalize(basis[1]);
+    CHECK_MSG(glm::dot(doorAxis, glm::vec3(0.0f, 1.0f, 0.0f)) > 0.99f,
+              "a hinge holds its axis; a door does not tip out of its frame");
+
+    // The hinge edge itself stays on the hinge, wherever the door has swung to.
+    const glm::vec3 hinge = glm::vec3(transform.getModelMatrix() *
+                                      glm::vec4(joint.anchor, 1.0f));
+    CHECK_MSG(glm::length(hinge) < 5.0e-2f, "and the hinge edge stays where it was pinned");
+
+    CHECK_MSG(std::fabs(transform.rotation.y) > 0.1f, "while the door has actually swung");
+}
+
+static void testABrokenOrDisabledJointIsIgnored() {
+    // A scene outlives the things it references: a joint pointing at an entity
+    // that has been destroyed must be skipped, not crashed on.
+    entt::registry registry;
+    const auto gone = makeJointBody(registry, glm::vec3(0.0f, 5.0f, 0.0f));
+    const auto bob = makeJointBody(registry, glm::vec3(0.0f, 3.0f, 0.0f));
+
+    auto& joint = registry.emplace<JointComponent>(bob);
+    joint.type = JointComponent::Type::Distance;
+    joint.connectedBody = gone;
+    joint.distance = 2.0f;
+
+    registry.destroy(gone);
+    stepFor(registry, 1.0f);
+    CHECK_MSG(registry.get<TransformComponent>(bob).position.y < 2.0f,
+              "with nothing left to hang from, it falls");
+
+    // A joint to ITSELF has no two bodies to hold apart and every matrix it
+    // builds is singular.
+    entt::registry selfish;
+    const auto lonely = makeJointBody(selfish, glm::vec3(0.0f, 3.0f, 0.0f));
+    auto& loop = selfish.emplace<JointComponent>(lonely);
+    loop.type = JointComponent::Type::Point;
+    loop.connectedBody = lonely;
+    stepFor(selfish, 1.0f);
+    const float fell = selfish.get<TransformComponent>(lonely).position.y;
+    CHECK_MSG(std::isfinite(fell) && fell < 3.0f, "a joint to itself does nothing at all");
+
+    // Switched off is switched off.
+    entt::registry off;
+    const glm::vec3 anchor(0.0f, 5.0f, 0.0f);
+    const auto ignored = makeJointBody(off, glm::vec3(0.0f, 4.0f, 0.0f));
+    hangFrom(off, ignored, anchor, 2.0f).enabled = false;
+    stepFor(off, 2.0f);
+    CHECK_MSG(ropeLength(off, ignored, anchor) > 5.0f,
+              "a disabled joint holds nothing");
+}
+
+static void testAJointAndTheGroundAgreeWithEachOther() {
+    // Held by two things at once, which is the case a separate solve loop gets
+    // wrong: the joint pulls the body one way, the contact pushes it the other,
+    // and solved apart each undoes the other and the body walks.
+    entt::registry registry;
+    enableGroundPlane(registry, 0.0f);
+
+    const auto bob = makeJointBody(registry, glm::vec3(0.0f, 1.0f, 0.0f));
+    auto& collider = registry.emplace<SphereColliderComponent>(bob);
+    collider.radius = 0.5f;
+    // A rope far longer than the drop, so the floor is what holds it up and the
+    // joint has to be content with that.
+    hangFrom(registry, bob, glm::vec3(0.0f, 5.0f, 0.0f), 8.0f).rope = true;
+
+    stepFor(registry, 3.0f);
+    const float resting = registry.get<TransformComponent>(bob).position.y;
+    CHECK_MSG(test::nearly(resting, 0.5f, 2.0e-2f),
+              "a body on the floor with a slack rope rests on the floor");
+
+    // Now a rope too SHORT to reach the floor: the joint wins and the body
+    // hangs above it.
+    entt::registry taut;
+    enableGroundPlane(taut, 0.0f);
+    const auto hung = makeJointBody(taut, glm::vec3(0.0f, 4.0f, 0.0f));
+    taut.emplace<SphereColliderComponent>(hung).radius = 0.5f;
+    hangFrom(taut, hung, glm::vec3(0.0f, 5.0f, 0.0f), 2.0f).rope = true;
+
+    stepFor(taut, 3.0f);
+    CHECK_MSG(test::nearly(taut.get<TransformComponent>(hung).position.y, 3.0f, 2.0e-2f),
+              "and one on a rope too short to reach hangs above it");
+}
+
 static void testSweepAndPruneFindsOverlappingPairs() {
     std::vector<PhysicsSystem::Proxy> proxies;
     proxies.push_back(makeProxy(1, 0, glm::vec3(0.0f), glm::vec3(1.0f), 1.0f));
@@ -2090,6 +2396,16 @@ static void runTests() {
     testFixedStepKeepsABodyOnTheGround();
     testAFastProjectileDoesNotPassThroughAThinWall();
 
+    testAPendulumHangsAtTheLengthItWasGiven();
+    testAPendulumActuallySwings();
+    testAJointCannotCreateMomentum();
+    testTheAnchorEndOfAJointNeverMoves();
+    testARopeLetsThingsFallButNotStretch();
+    testAChainOfRopesHangs();
+    testAHingeTurnsAboutItsAxisAndNothingElse();
+    testABrokenOrDisabledJointIsIgnored();
+    testAJointAndTheGroundAgreeWithEachOther();
+
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();
     testABallOnASlopeRollsDownhill();
@@ -2116,4 +2432,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics", 160)
+TEST_MAIN("test_physics", 180)

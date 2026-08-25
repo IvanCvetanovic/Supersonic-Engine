@@ -98,6 +98,22 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
             }
         }
 
+        // The other end of a joint, as an index for exactly the reason a parent
+        // link is one: a handle carries a version and is recycled, so writing
+        // it down reattaches the joint to whatever occupies that slot next time
+        // the scene is loaded - which would be a rope tied to a lamp.
+        //
+        // A joint with no connected body is anchored to a point in the WORLD
+        // and needs nothing written; that is what the absence of this key means
+        // on the way back in.
+        if (const auto* joint = registry.try_get<JointComponent>(entity)) {
+            if (joint->connectedBody != entt::null) {
+                if (const auto it = indexOf.find(joint->connectedBody); it != indexOf.end()) {
+                    file << "      \"JointConnectedBody\": " << it->second << ",\n";
+                }
+            }
+        }
+
         ComponentCodec::Write(registry, entity, file, "      ");
 
         file << "    }" << (i + 1 < entities.size() ? "," : "") << "\n";
@@ -128,6 +144,15 @@ bool validateSceneArray(const Json::Array& entities, std::string& error) {
             if (raw < 0.0 || static_cast<size_t>(raw) >= objectCount) {
                 error = "entity " + std::to_string(index) +
                         " has an out-of-range Parent index (" + std::to_string(raw) + ")";
+                return false;
+            }
+        }
+        if (node.Has("JointConnectedBody")) {
+            const double raw = node["JointConnectedBody"].AsNumber(-1.0);
+            if (raw < 0.0 || static_cast<size_t>(raw) >= objectCount) {
+                error = "entity " + std::to_string(index) +
+                        " has an out-of-range JointConnectedBody index (" +
+                        std::to_string(raw) + ")";
                 return false;
             }
         }
@@ -221,6 +246,19 @@ SerializationResult applyScene(entt::registry& registry, const Json::Array& enti
         // Tag included: the codec owns every component, so there is exactly
         // one place that knows how an entity is written and read.
         ComponentCodec::Read(registry, entity, node);
+
+        // After the read, because the component has to exist before its other
+        // end can be filled in. `created` is populated up front, so a joint may
+        // point forwards in the array as well as backwards.
+        if (node.Has("JointConnectedBody")) {
+            if (auto* joint = registry.try_get<JointComponent>(entity)) {
+                const auto index = static_cast<size_t>(
+                    node["JointConnectedBody"].AsNumber(-1.0));
+                if (index < created.size() && created[index] != entity) {
+                    joint->connectedBody = created[index];
+                }
+            }
+        }
     }
 
     return { true, "Loaded " + std::to_string(cursor) + " entities from " + source + "." };

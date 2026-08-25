@@ -2,6 +2,7 @@
 #include "core/CollisionSAT.hpp"
 #include "core/Heightfield.hpp"
 #include "core/HeightfieldCache.hpp"
+#include "core/Joints.hpp"
 #include "core/PhysicsSettings.hpp"
 
 #include <glm/gtc/quaternion.hpp>
@@ -11,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 
 namespace Supersonic {
 
@@ -36,6 +38,21 @@ constexpr float kRestVelocity = 0.1f;
 // Eight is the usual default and is well past the point of visible improvement
 // here; the cost is eight cheap passes over a list that is already built.
 constexpr int kSolverIterations = 8;
+
+// How many times the joint position pass sweeps the list.
+//
+// One is enough for a single joint and nowhere near enough for a CHAIN. Each
+// link carries the weight of everything below it, so the errors are coupled:
+// correcting every link once, from the positions they all had at the start,
+// is a Jacobi sweep and it converges about as slowly as one. Measured on a
+// five-link rope at 60Hz, one pass left every link stretched by three to five
+// per cent - a rope visibly longer than it was built - and four passes,
+// re-reading where each body has just been PUT, brings it under half a per
+// cent.
+//
+// Four rather than eight because the returns fall off a cliff after three and
+// the pass is not free: it re-derives a world matrix per body per sweep.
+constexpr int kJointPositionIterations = 4;
 
 constexpr float kSlop = 0.005f;
 constexpr float kCorrection = 0.8f;
@@ -327,6 +344,52 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     static const PhysicsSettings kDefaults;
     const PhysicsSettings* stored = registry.ctx().find<PhysicsSettings>();
     const PhysicsSettings& settings = stored ? *stored : kDefaults;
+
+    // ---- Joints reach across sleep ----
+    //
+    // Before anything else, so a body woken here is integrated AND gathered
+    // this step rather than one behind. A chain whose top link is knocked has
+    // to wake all the way down, or half of it hangs frozen in mid-air while the
+    // rest swings.
+    //
+    // The same accepted limitation the contact solver documents: waking travels
+    // one link per step, because a body woken here is still motionless while
+    // the rest of this loop runs and so does not itself wake its neighbour
+    // until the next one. At 60Hz nobody sees a chain wake from the top down.
+    {
+        // An awake but equally STILL neighbour must not count, exactly as it
+        // must not for a contact: two settled links either side of a joint
+        // would otherwise hold each other awake forever, which is the usual way
+        // a sleep implementation ends up never sleeping at all.
+        const auto stirring = [](const RigidBodyComponent* rigid) {
+            if (!rigid) return false;
+            if (rigid->isKinematic) return true;   // moved by code the solver cannot see
+            if (rigid->isSleeping) return false;
+            return glm::dot(rigid->velocity, rigid->velocity) >=
+                       kSleepLinearVelocity * kSleepLinearVelocity ||
+                   glm::dot(rigid->angularVelocity, rigid->angularVelocity) >=
+                       kSleepAngularVelocity * kSleepAngularVelocity;
+        };
+
+        for (auto entity : registry.view<JointComponent>()) {
+            const auto& joint = registry.get<JointComponent>(entity);
+            if (!joint.enabled) continue;
+            if (joint.connectedBody == entt::null) continue;   // the world never stirs
+            if (!registry.valid(joint.connectedBody)) continue;
+
+            auto* here = registry.try_get<RigidBodyComponent>(entity);
+            auto* there = registry.try_get<RigidBodyComponent>(joint.connectedBody);
+
+            if (here && here->isSleeping && stirring(there)) {
+                here->isSleeping = false;
+                here->sleepTimer = 0.0f;
+            }
+            if (there && there->isSleeping && stirring(here)) {
+                there->isSleeping = false;
+                there->sleepTimer = 0.0f;
+            }
+        }
+    }
 
     // ---- Integrate, and resolve against the world ground plane ----
     auto dynamics = registry.view<TransformComponent, RigidBodyComponent>();
@@ -742,11 +805,15 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         proxies.push_back(proxy);
     }
 
-    if (bodies.size() < 2) return;
-
+    // NOT an early return any more, and this is the change joints needed.
+    //
+    // A pendulum is one collider on a static anchor, and a bob on a rope may
+    // have no collider at all - so both "fewer than two bodies" and "no pairs
+    // touching" are ordinary states for a scene that still has constraints to
+    // solve. The loops below do nothing when the lists are empty, and there is
+    // one combined return further down once both are built.
     std::vector<std::pair<size_t, size_t>> pairs;
-    SweepAndPrune(proxies, pairs);
-    if (pairs.empty()) return;
+    if (bodies.size() >= 2) SweepAndPrune(proxies, pairs);
 
     // ---- Narrowphase and response ----
     // One entry per contact POINT, not per pair.
@@ -1159,6 +1226,207 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         }
     }
 
+    // ---- Joints -------------------------------------------------------------
+    //
+    // Built after the contacts, because the contact correction has already
+    // moved bodies this step and a joint has to measure where things ACTUALLY
+    // are rather than where they were when the step began.
+    //
+    // A joint end may be an entity with no collider at all - an anchor, a bob
+    // on a rope - so this cannot simply index into `bodies`. Where the entity
+    // IS in there, its mass properties are taken from there rather than worked
+    // out again: two different answers for one body's inertia is exactly the
+    // kind of drift this engine keeps stamping out.
+    struct JointEnd {
+        TransformComponent* transform{nullptr};
+        RigidBodyComponent* rigid{nullptr};
+        glm::mat3 worldToLocal{1.0f};
+        glm::mat3 basis{1.0f};        // world rotation AND scale
+
+        // Kept so the position sweep can re-derive where the body is after
+        // another joint has moved it, without re-walking the hierarchy.
+        glm::mat4 parentWorld{1.0f};
+
+        Joints::Body state;
+        bool usable{false};
+    };
+
+    struct JointRuntime {
+        Joints::Constraint constraint;
+        JointEnd a;
+        JointEnd b;
+        float stiffness{0.8f};
+    };
+
+    std::vector<JointRuntime> joints;
+
+    {
+        std::unordered_map<entt::entity, size_t> byEntity;
+        byEntity.reserve(bodies.size());
+        for (size_t i = 0; i < bodies.size(); ++i) byEntity.emplace(bodies[i].entity, i);
+
+        const auto makeEnd = [&](entt::entity entity) {
+            JointEnd end;
+            if (entity == entt::null || !registry.valid(entity)) return end;
+
+            auto* transform = registry.try_get<TransformComponent>(entity);
+            if (!transform) return end;
+
+            end.transform = transform;
+            end.rigid = registry.try_get<RigidBodyComponent>(entity);
+
+            end.parentWorld = parentWorldMatrix(registry, entity);
+            const glm::mat4 world = end.parentWorld * transform->getModelMatrix();
+            end.worldToLocal = glm::inverse(glm::mat3(end.parentWorld));
+            end.basis = glm::mat3(world);
+            end.state.position = glm::vec3(world[3]);
+
+            const auto found = byEntity.find(entity);
+            if (found != byEntity.end()) {
+                end.state.inverseMass = bodies[found->second].inverseMass;
+                end.state.inverseInertia = bodies[found->second].inverseInertia;
+            } else {
+                end.state.inverseMass = (end.rigid && end.rigid->isSleeping)
+                                            ? 0.0f
+                                            : inverseMassOf(end.rigid);
+                // No collider means no extent, and no extent means no lever for
+                // a torque to act on. Zero inverse inertia is the convention the
+                // contact solver already uses for anything that must not turn.
+                end.state.inverseInertia = glm::mat3(0.0f);
+            }
+
+            end.usable = true;
+            return end;
+        };
+
+        for (auto entity : registry.view<JointComponent>()) {
+            const auto& authored = registry.get<JointComponent>(entity);
+            if (!authored.enabled) continue;
+
+            // A joint to itself has no two bodies to hold apart, and every
+            // effective mass it produces is singular.
+            if (authored.connectedBody == entity) continue;
+
+            JointRuntime runtime;
+            runtime.a = makeEnd(entity);
+            if (!runtime.a.usable) continue;
+
+            if (authored.connectedBody == entt::null) {
+                // Anchored to a fixed point in the WORLD. The far end is an
+                // immovable body sitting exactly on it, which is what makes a
+                // pendulum one entity rather than two.
+                runtime.b.state.position = authored.connectedAnchor;
+                runtime.b.usable = true;
+            } else {
+                runtime.b = makeEnd(authored.connectedBody);
+                // A joint pointing at an entity that has been destroyed, or one
+                // that never had a transform, is ignored rather than crashed
+                // on: a scene outlives the things it references.
+                if (!runtime.b.usable) continue;
+            }
+
+            // Neither end can be moved, so the joint can never do anything and
+            // every matrix it builds is singular.
+            if (runtime.a.state.inverseMass <= 0.0f && runtime.b.state.inverseMass <= 0.0f &&
+                glm::determinant(runtime.a.state.inverseInertia) == 0.0f &&
+                glm::determinant(runtime.b.state.inverseInertia) == 0.0f) {
+                continue;
+            }
+
+            Joints::Constraint& constraint = runtime.constraint;
+            switch (authored.type) {
+            case JointComponent::Type::Distance: constraint.type = Joints::Type::Distance; break;
+            case JointComponent::Type::Hinge:    constraint.type = Joints::Type::Hinge; break;
+            case JointComponent::Type::Point:    constraint.type = Joints::Type::Point; break;
+            }
+
+            // Through the full basis, scale included: an anchor is a point ON
+            // the object, so scaling the object has to move it. Direction only,
+            // hence no translation - the arm is an offset from the centre.
+            constraint.armA = runtime.a.basis * authored.anchor;
+            constraint.armB = (authored.connectedBody == entt::null)
+                                  ? glm::vec3(0.0f)
+                                  : runtime.b.basis * authored.connectedAnchor;
+
+            constraint.distance = std::max(authored.distance, 0.0f);
+            constraint.rope = authored.rope;
+
+            const glm::vec3 axis = runtime.a.basis * authored.axis;
+            const float axisLength = glm::length(axis);
+            // An axis of zero length has no hinge in it. Straight up is the
+            // only answer that leaves a door hanging the way it was built.
+            constraint.axisA = axisLength > 1e-6f ? axis / axisLength : glm::vec3(0.0f, 1.0f, 0.0f);
+
+            // The other end's axis, in world space. For a world anchor it is
+            // already there; for a body it comes out through that body's basis,
+            // so the two turn independently and the constraint is the
+            // difference between them.
+            const glm::vec3 other = (authored.connectedBody == entt::null)
+                                        ? authored.connectedAxis
+                                        : runtime.b.basis * authored.connectedAxis;
+            const float otherLength = glm::length(other);
+            constraint.axisB = otherLength > 1e-6f ? other / otherLength : constraint.axisA;
+
+            runtime.stiffness = std::clamp(authored.stiffness, 0.0f, 1.0f);
+            // The angular half is corrected through the velocity solver rather
+            // than by moving anything, so its share of the error arrives as a
+            // rate. See JointComponent for why the two halves differ.
+            constraint.angularBias = runtime.stiffness / deltaTime;
+
+            joints.push_back(runtime);
+        }
+    }
+
+    // The positional half, exactly where a contact's happens and for the same
+    // reason: positions are integrated BEFORE this solve, so a velocity change
+    // alone cannot take out the error this step introduced, and a hanging body
+    // would settle a centimetre below where it belongs.
+    //
+    // Swept several times, and re-reading the transform at the top of each
+    // joint rather than trusting the copy taken when the list was built. That
+    // is the difference between a Jacobi sweep and a Gauss-Seidel one, and on a
+    // chain it is the difference between a rope that hangs at its length and
+    // one that hangs three per cent longer: link five has to see where link
+    // four has just been put, not where it was at the start of the step.
+    if (!joints.empty()) {
+        for (int pass = 0; pass < kJointPositionIterations; ++pass) {
+            for (JointRuntime& joint : joints) {
+                // Where the bodies ACTUALLY are now. The pass above may have
+                // moved either of them, and on the first pass this is what the
+                // list was built with anyway.
+                if (joint.a.transform) {
+                    joint.a.state.position = glm::vec3(
+                        (joint.a.parentWorld * joint.a.transform->getModelMatrix())[3]);
+                }
+                if (joint.b.transform) {
+                    joint.b.state.position = glm::vec3(
+                        (joint.b.parentWorld * joint.b.transform->getModelMatrix())[3]);
+                }
+
+                glm::vec3 shiftA(0.0f);
+                glm::vec3 shiftB(0.0f);
+                if (!Joints::SolvePosition(joint.constraint, joint.a.state, joint.b.state,
+                                           joint.stiffness, shiftA, shiftB)) {
+                    continue;
+                }
+
+                // Velocity is world space; position is relative to the parent.
+                // Without the conversion a parented body is corrected along its
+                // parent's axes instead of the world's.
+                if (joint.a.transform) {
+                    joint.a.transform->position += joint.a.worldToLocal * shiftA;
+                    joint.a.state.position += shiftA;
+                }
+                if (joint.b.transform) {
+                    joint.b.transform->position += joint.b.worldToLocal * shiftB;
+                    joint.b.state.position += shiftB;
+                }
+            }
+        }
+    }
+
+    if (constraints.empty() && joints.empty()) return;
+
     // ---- Velocity solve ----------------------------------------------------
     //
     // Sequential impulses. Each pass revisits every contact and applies only
@@ -1252,6 +1520,44 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             if (movableB) {
                 rigidB->velocity += frictionImpulse * bodyB.inverseMass;
                 rigidB->angularVelocity += bodyB.inverseInertia * glm::cross(constraint.armB, frictionImpulse);
+            }
+        }
+
+        // Joints, INSIDE the same iteration as the contacts rather than in a
+        // loop of their own. A body hanging from a rope and resting on the
+        // ground has to satisfy both at once; solving them separately lets each
+        // undo the other, and the body walks a little further out of place
+        // every step it is held by two things.
+        for (JointRuntime& joint : joints) {
+            Joints::Body a = joint.a.state;
+            Joints::Body b = joint.b.state;
+
+            // The live velocities, because the contact pass just above may have
+            // changed them. Read and written per pass rather than kept in the
+            // Joints::Body, so there is one place a velocity lives and it is
+            // the component - the same rule the contact solver follows.
+            if (joint.a.rigid) {
+                a.velocity = joint.a.rigid->velocity;
+                a.angularVelocity = joint.a.rigid->angularVelocity;
+            }
+            if (joint.b.rigid) {
+                b.velocity = joint.b.rigid->velocity;
+                b.angularVelocity = joint.b.rigid->angularVelocity;
+            }
+
+            Joints::SolveVelocity(joint.constraint, a, b);
+
+            // Only what can move gets written back. A static anchor's state was
+            // built with a zero inverse mass, so the solver never gave it any
+            // velocity to begin with - but a kinematic body has one that
+            // something else owns, and writing to it would take it over.
+            if (joint.a.rigid && a.inverseMass > 0.0f) {
+                joint.a.rigid->velocity = a.velocity;
+                joint.a.rigid->angularVelocity = a.angularVelocity;
+            }
+            if (joint.b.rigid && b.inverseMass > 0.0f) {
+                joint.b.rigid->velocity = b.velocity;
+                joint.b.rigid->angularVelocity = b.angularVelocity;
             }
         }
     }
