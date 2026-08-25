@@ -44,6 +44,13 @@ public:
     void SetVoiceParameters(VoiceId voice, float volume, float pitch, float pan);
     bool IsVoicePlaying(VoiceId voice) const;
 
+    // What a voice is actually reading, or empty for one that is not playing.
+    //
+    // Not the same question as "what does its source name", and the difference
+    // is the whole reason this map exists: a component's soundFile can be
+    // changed while its voice goes on reading the file it was started from.
+    const std::string& PathOf(VoiceId voice) const;
+
     // Stops every voice reading this clip and returns their ids, so whoever is
     // holding those handles can forget them.
     //
@@ -82,6 +89,7 @@ private:
     // started a voice may since have been pointed at a different file - its
     // soundFile is not evidence of what the voice is actually reading.
     std::unordered_map<VoiceId, std::string> m_voicePaths;
+    std::string m_noPath;
 
     bool m_available{false};
     std::string m_status{"not initialised"};

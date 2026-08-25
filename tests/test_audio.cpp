@@ -301,6 +301,49 @@ static void testAVoiceIsFoundByWhatItPlaysNotByWhatItsSourceNamesNow() {
     std::remove(path.c_str());
 }
 
+static void testALoopingSourceFollowsAChangedSoundFile() {
+    // Update STARTS a voice and then never looks at soundFile again, so
+    // changing the file on a looping source did nothing at all - not an error,
+    // not silence, just the old sound continuing - until somebody toggled
+    // Playing off and on. A non-looping source hid it, because its voice ends
+    // and the next one reads the new name.
+    const std::string first = "test_audio_swap_a_tmp.wav";
+    const std::string second = "test_audio_swap_b_tmp.wav";
+    writeWav(first, 22050, false);
+    writeWav(second, 4410, false);
+
+    AudioEngine engine;
+    entt::registry registry;
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity);
+    auto& source = registry.emplace<AudioSourceComponent>(entity);
+    source.soundFile = first;
+    source.loop = true;
+    source.isPlaying = true;
+
+    AudioSystem::Update(registry, engine, 0.016f);
+
+    if (registry.get<AudioSourceComponent>(entity).voice != AudioEngine::kInvalidVoice) {
+        CHECK_MSG(engine.PathOf(registry.get<AudioSourceComponent>(entity).voice) == first,
+                  "the voice must start on the file the source names");
+
+        registry.get<AudioSourceComponent>(entity).soundFile = second;
+        AudioSystem::Update(registry, engine, 0.016f);
+
+        CHECK_MSG(engine.PathOf(registry.get<AudioSourceComponent>(entity).voice) == second,
+                  "and must follow when that name changes, with no toggle of Playing");
+    }
+
+    // Device-free, and load-bearing: if a handle nothing started named some
+    // file, the comparison above would differ every frame and restart the
+    // voice every frame for the whole run.
+    CHECK_MSG(engine.PathOf(AudioEngine::kInvalidVoice).empty(),
+              "a handle nothing started must name no file");
+
+    std::remove(first.c_str());
+    std::remove(second.c_str());
+}
+
 static void runTests() {
     testLoadsValidWav();
     testSkipsUnknownChunks();
@@ -314,6 +357,7 @@ static void runTests() {
     testReloadClipLetsASourceThatGaveUpTryAgain();
     testReloadClipStopsTheVoiceReadingTheOldSamples();
     testAVoiceIsFoundByWhatItPlaysNotByWhatItsSourceNamesNow();
+    testALoopingSourceFollowsAChangedSoundFile();
 }
 
-TEST_MAIN("test_audio", 18)
+TEST_MAIN("test_audio", 19)

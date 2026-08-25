@@ -109,9 +109,22 @@ void AudioSystem::Update(entt::registry& registry, AudioEngine& audio, float del
             continue;
         }
 
-        // Start (or restart a finished non-looping voice).
+        // Start, restart a finished non-looping voice, or replace one that is
+        // reading the wrong file.
+        //
+        // That last case used to be missing, and it was invisible in the only
+        // way that matters: this function STARTS a voice and then never looks
+        // at soundFile again, so changing the file on a LOOPING source did
+        // nothing at all - not an error, not a fallback, just the old sound
+        // continuing - until somebody toggled Playing off and on. A non-looping
+        // source hid it, because the voice ends and the next one reads the new
+        // name.
+        //
+        // Asked of the ENGINE, which records what each voice is reading,
+        // rather than of the component, which only records what it asks for.
         const bool needsVoice = source.voice == AudioEngine::kInvalidVoice ||
-                                (!source.loop && !audio.IsVoicePlaying(source.voice));
+                                (!source.loop && !audio.IsVoicePlaying(source.voice)) ||
+                                audio.PathOf(source.voice) != source.soundFile;
         if (needsVoice) {
             if (source.voice != AudioEngine::kInvalidVoice) {
                 audio.Stop(source.voice);

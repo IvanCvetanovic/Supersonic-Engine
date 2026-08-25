@@ -333,6 +333,11 @@ void AudioEngine::Stop(VoiceId voice) {
     m_voicePaths.erase(voice);
 }
 
+const std::string& AudioEngine::PathOf(VoiceId voice) const {
+    const auto it = m_voicePaths.find(voice);
+    return it == m_voicePaths.end() ? m_noPath : it->second;
+}
+
 std::vector<AudioEngine::VoiceId> AudioEngine::StopVoicesUsing(const std::string& path) {
     std::vector<VoiceId> stopped;
     for (const auto& [voice, playing] : m_voicePaths) {
