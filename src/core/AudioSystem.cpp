@@ -42,6 +42,43 @@ void AudioSystem::Detach(entt::registry& registry) {
     registry.ctx().erase<AudioEngine*>();
 }
 
+size_t AudioSystem::ReloadClip(entt::registry& registry, AudioEngine& audio,
+                               const std::string& path) {
+    // The engine's own record of what each voice is reading, not the
+    // components'. A source whose soundFile was pointed somewhere else while a
+    // LOOPING voice was running still has that voice playing the old clip -
+    // Update only starts a voice, it never notices the file name changing
+    // underneath one - so asking the components which of them use this path
+    // would miss exactly the voice that is reading the memory about to be
+    // freed.
+    const std::vector<AudioEngine::VoiceId> stopped = audio.StopVoicesUsing(path);
+
+    // Only now is nothing reading the samples.
+    audio.UnloadClip(path);
+
+    size_t interrupted = 0;
+    for (auto entity : registry.view<AudioSourceComponent>()) {
+        auto& source = registry.get<AudioSourceComponent>(entity);
+
+        if (source.voice != AudioEngine::kInvalidVoice &&
+            std::find(stopped.begin(), stopped.end(), source.voice) != stopped.end()) {
+            // Handles are never reused, so a stale one is not dangerous - it is
+            // WORSE than dangerous, it is quiet. A looping source holding one
+            // never satisfies needsVoice, so it would simply never be heard
+            // again and nothing would say why.
+            source.voice = AudioEngine::kInvalidVoice;
+            ++interrupted;
+        }
+
+        // A source that gave up on a file that would not load has to be allowed
+        // to try again. Somebody fixing that file is precisely the event this
+        // is reacting to, and without this the retry never happens.
+        if (source.soundFile == path) source.failedToLoad = false;
+    }
+
+    return interrupted;
+}
+
 void AudioSystem::Update(entt::registry& registry, AudioEngine& audio, float deltaTime) {
     (void)deltaTime;
 

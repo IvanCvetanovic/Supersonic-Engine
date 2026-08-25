@@ -240,6 +240,13 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
         // the file was seen were kept for the life of the session.
         if (m_animationLibrary) reloaded |= m_animationLibrary->Reload(path);
 
+        // Audio is the one that cannot simply drop a cache entry: a voice reads
+        // the clip's samples from an audio thread, so the clip has to stop
+        // being played before it stops existing.
+        if (m_audioEngine) {
+            reloaded |= AudioSystem::ReloadClip(m_registry, *m_audioEngine, path) > 0;
+        }
+
         // Prefabs are parsed once and kept, so a prefab edited on disk would
         // otherwise keep spawning the version the editor first read. Cheap
         // enough to do unconditionally: the cache is small and a path that is
@@ -1109,6 +1116,12 @@ void SupersonicApp::Run() {
             // and worse, editing it to name a DIFFERENT texture leaves the old
             // texture watched and the new one not.
             if (!material.materialPath.empty()) m_assetWatcher.Watch(material.materialPath);
+        }
+
+        // And the sounds. Iterating on a footstep meant restarting the editor
+        // for exactly the same reason a material did.
+        for (auto [entity, source] : m_registry.view<AudioSourceComponent>().each()) {
+            if (!source.soundFile.empty()) m_assetWatcher.Watch(source.soundFile);
         }
 
         {

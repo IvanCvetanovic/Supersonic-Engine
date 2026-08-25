@@ -2,6 +2,8 @@
 
 #include <entt/entt.hpp>
 
+#include <string>
+
 #include "core/AudioEngine.hpp"
 
 namespace Supersonic {
@@ -19,6 +21,17 @@ public:
     // used to be discarded with (void)attenuatedVolume, so nothing could ever
     // be heard.
     static void Update(entt::registry& registry, AudioEngine& audio, float deltaTime);
+
+    // Re-reads a .wav that changed on disk, and restarts whatever was playing
+    // it. Returns how many sources were interrupted.
+    //
+    // The order inside is the whole thing and it is not negotiable: stop the
+    // voices, THEN drop the clip, THEN clear the handles the components are
+    // holding. Dropping first frees a sample buffer an audio thread is reading;
+    // clearing the handles first loses the ids needed to stop those voices, and
+    // they would play the old sound until the scene closed.
+    static size_t ReloadClip(entt::registry& registry, AudioEngine& audio,
+                             const std::string& path);
 };
 
 } // namespace Supersonic

@@ -80,7 +80,7 @@ AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
 
 AudioEngine::~AudioEngine() = default;
 
-AudioEngine::VoiceId AudioEngine::Play(const std::string& path, bool loop, float volume, float pitch) {
+AudioEngine::VoiceId AudioEngine::playImpl(const std::string& path, bool loop, float volume, float pitch) {
     if (!m_available) return kInvalidVoice;
 
     const AudioClip* clip = LoadClip(path);
@@ -126,7 +126,7 @@ AudioEngine::VoiceId AudioEngine::Play(const std::string& path, bool loop, float
     return id;
 }
 
-void AudioEngine::Stop(VoiceId voice) {
+void AudioEngine::stopImpl(VoiceId voice) {
     if (!m_available) return;
     auto it = m_impl->voices.find(voice);
     if (it == m_impl->voices.end()) return;
@@ -272,7 +272,7 @@ AudioEngine::~AudioEngine() {
     }
 }
 
-AudioEngine::VoiceId AudioEngine::Play(const std::string& path, bool loop, float volume, float pitch) {
+AudioEngine::VoiceId AudioEngine::playImpl(const std::string& path, bool loop, float volume, float pitch) {
     if (!m_available) return kInvalidVoice;
 
     const AudioClip* clip = LoadClip(path);
@@ -284,7 +284,7 @@ AudioEngine::VoiceId AudioEngine::Play(const std::string& path, bool loop, float
     return m_impl->mixer.Add(*clip, loop, volume, pitch);
 }
 
-void AudioEngine::Stop(VoiceId voice) {
+void AudioEngine::stopImpl(VoiceId voice) {
     if (!m_available) return;
     m_impl->mixer.Remove(voice);
 }
@@ -313,12 +313,39 @@ AudioEngine::AudioEngine() : m_impl(std::make_unique<Impl>()) {
 
 AudioEngine::~AudioEngine() = default;
 
-AudioEngine::VoiceId AudioEngine::Play(const std::string&, bool, float, float) { return kInvalidVoice; }
-void AudioEngine::Stop(VoiceId) {}
+AudioEngine::VoiceId AudioEngine::playImpl(const std::string&, bool, float, float) { return kInvalidVoice; }
+void AudioEngine::stopImpl(VoiceId) {}
 void AudioEngine::SetVoiceParameters(VoiceId, float, float, float) {}
 bool AudioEngine::IsVoicePlaying(VoiceId) const { return false; }
 
 #endif
+
+// --- Shared across every backend ---------------------------------------------
+
+AudioEngine::VoiceId AudioEngine::Play(const std::string& path, bool loop, float volume, float pitch) {
+    const VoiceId id = playImpl(path, loop, volume, pitch);
+    if (id != kInvalidVoice) m_voicePaths.emplace(id, path);
+    return id;
+}
+
+void AudioEngine::Stop(VoiceId voice) {
+    stopImpl(voice);
+    m_voicePaths.erase(voice);
+}
+
+std::vector<AudioEngine::VoiceId> AudioEngine::StopVoicesUsing(const std::string& path) {
+    std::vector<VoiceId> stopped;
+    for (const auto& [voice, playing] : m_voicePaths) {
+        if (playing == path) stopped.push_back(voice);
+    }
+    // Collected first: Stop erases from the map being read.
+    for (const VoiceId voice : stopped) Stop(voice);
+    return stopped;
+}
+
+bool AudioEngine::UnloadClip(const std::string& path) {
+    return m_clips.erase(path) > 0;
+}
 
 const AudioClip* AudioEngine::LoadClip(const std::string& path) {
     if (auto it = m_clips.find(path); it != m_clips.end()) {

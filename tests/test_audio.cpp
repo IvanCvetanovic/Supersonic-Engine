@@ -6,6 +6,11 @@
 // audio device as garbage.
 
 #include "TestHarness.hpp"
+#include "core/AudioEngine.hpp"
+#include "core/AudioSystem.hpp"
+#include "core/Components.hpp"
+
+#include <entt/entt.hpp>
 #include "core/AudioClip.hpp"
 
 #include <cstdio>
@@ -194,6 +199,108 @@ static void testShippedAmbientClipIsUsable() {
     }
 }
 
+// --- Hot reloading a clip ---------------------------------------------------
+//
+// The dangerous one. A voice reads the clip's sample buffer directly, from an
+// audio thread, so "drop the cache entry and let it reload" - which is what
+// textures, meshes, materials and rigs all do - is a use-after-free here.
+
+static void testUnloadClipMakesTheNextLoadReadDiskAgain() {
+    const std::string path = "test_audio_reload_tmp.wav";
+    writeWav(path, 22050, false);
+
+    AudioEngine engine;
+    const AudioClip* first = engine.LoadClip(path);
+    CHECK_MSG(first != nullptr && first->valid(), "the clip must load");
+    const size_t firstBytes = first ? first->pcm.size() : 0;
+
+    // Edited on disk. Without unloading, the cache answers and the new file is
+    // never opened - which is the bug, and it has to be visible here or the
+    // test below proves nothing.
+    writeWav(path, 1000, false);
+    const AudioClip* cached = engine.LoadClip(path);
+    CHECK_EQ(cached ? cached->pcm.size() : 0, firstBytes);
+
+    CHECK_MSG(engine.UnloadClip(path), "unloading a cached clip must report that it was there");
+
+    const AudioClip* reloaded = engine.LoadClip(path);
+    CHECK_MSG(reloaded && reloaded->pcm.size() == 1000 * 2,
+              "after unloading, the next load must read the file that is there now");
+
+    std::remove(path.c_str());
+}
+
+static void testReloadClipLetsASourceThatGaveUpTryAgain() {
+    // A source that could not load its file stops trying, or a typo costs a
+    // disk hit every frame for the rest of the session. Somebody fixing the
+    // file is exactly the event that has to undo that.
+    const std::string path = "test_audio_retry_tmp.wav";
+
+    AudioEngine engine;
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& source = registry.emplace<AudioSourceComponent>(entity);
+    source.soundFile = path;
+    source.failedToLoad = true;
+
+    writeWav(path, 4410, false);
+    const size_t interrupted = AudioSystem::ReloadClip(registry, engine, path);
+
+    CHECK_EQ(interrupted, size_t{0});
+    CHECK_MSG(!registry.get<AudioSourceComponent>(entity).failedToLoad,
+              "a fixed file must let the source try again");
+
+    std::remove(path.c_str());
+}
+
+static void testReloadClipStopsTheVoiceReadingTheOldSamples() {
+    // Needs a real output device, so the three checks inside are not counted in
+    // this suite's floor. Without one, Play returns kInvalidVoice and there is
+    // no voice to be dangling - which is the honest answer, not a skipped test.
+    const std::string path = "test_audio_voice_tmp.wav";
+    writeWav(path, 22050, false);
+
+    AudioEngine engine;
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& source = registry.emplace<AudioSourceComponent>(entity);
+    source.soundFile = path;
+    source.voice = engine.Play(path, true, 1.0f, 1.0f);
+
+    if (source.voice != AudioEngine::kInvalidVoice) {
+        const size_t interrupted = AudioSystem::ReloadClip(registry, engine, path);
+
+        CHECK_EQ(interrupted, size_t{1});
+        CHECK_MSG(registry.get<AudioSourceComponent>(entity).voice == AudioEngine::kInvalidVoice,
+                  "the handle must be cleared, or a looping source never restarts and goes silent");
+        CHECK_MSG(!engine.IsVoicePlaying(AudioEngine::kInvalidVoice),
+                  "and the stopped voice must really be gone");
+    }
+
+    std::remove(path.c_str());
+}
+
+static void testAVoiceIsFoundByWhatItPlaysNotByWhatItsSourceNamesNow() {
+    // The trap. Update starts a voice and never looks at soundFile again, so
+    // pointing a LOOPING source at another file leaves the old voice running.
+    // Asking the components which of them use this path would miss it - and
+    // that voice is the one reading the memory about to be freed.
+    const std::string path = "test_audio_moved_tmp.wav";
+    writeWav(path, 22050, false);
+
+    AudioEngine engine;
+    const AudioEngine::VoiceId voice = engine.Play(path, true, 1.0f, 1.0f);
+
+    if (voice != AudioEngine::kInvalidVoice) {
+        const auto stopped = engine.StopVoicesUsing(path);
+        CHECK_MSG(stopped.size() == 1 && stopped[0] == voice,
+                  "the engine must find a voice by the clip it is reading");
+        CHECK_MSG(engine.StopVoicesUsing(path).empty(), "and stopping it must be idempotent");
+    }
+
+    std::remove(path.c_str());
+}
+
 static void runTests() {
     testLoadsValidWav();
     testSkipsUnknownChunks();
@@ -203,6 +310,10 @@ static void runTests() {
     testRejectsMissingDataChunk();
     testMissingFileFails();
     testShippedAmbientClipIsUsable();
+    testUnloadClipMakesTheNextLoadReadDiskAgain();
+    testReloadClipLetsASourceThatGaveUpTryAgain();
+    testReloadClipStopsTheVoiceReadingTheOldSamples();
+    testAVoiceIsFoundByWhatItPlaysNotByWhatItsSourceNamesNow();
 }
 
-TEST_MAIN("test_audio", 12)
+TEST_MAIN("test_audio", 18)
