@@ -1451,6 +1451,47 @@ there is nowhere to store a rest orientation and holding what they have is what
 welding two things *means*. With the relative angular velocity driven to zero
 every step there is no systematic drift, only the float error of the integration.
 
+A **spring** pulls a hinge toward a rest angle, authored as a frequency in hertz
+and a damping ratio rather than as a stiffness and a damping coefficient. That
+pair is mass-independent, so the same numbers behave the same on a garden gate
+and on a vault door.
+
+The thing it had to avoid is a mistake this engine already made once: a hinge
+limit with a velocity bias is a spring that hands out energy, and the door
+bounced off its own frame. The difference is where the softness enters. A bias
+alone leaves the body moving *away* from rest at a speed proportional to the
+error, so it always crosses. Constraint-force mixing divides the impulse and
+bleeds the accumulated one, so the constraint relaxes rather than insisting, and
+can only ever remove energy. The three numbers the solver multiplies by are
+derived on the physics side, because the step is in them:
+
+    a1 = 2*zeta + h*omega    a2 = h*omega*a1    a3 = 1/(1 + a2)
+
+written so gamma is never materialised: `1/(K + gamma)` reduces to
+`m_eff * a2 * a3` and `gamma/(K + gamma)` reduces to `a3`. At zero frequency the
+guards give (0, 1, 0) and the whole expression collapses to `-Cdot/mass` — the
+same expression the motor uses against a zero target — so a joint with no spring
+takes the identical float path it took before springs existed.
+
+The guarantee "critically damped never overshoots" holds where the effective
+mass is the true one. A door anchored at its **edge** has inertia about the
+hinge of `I_cm + m*d^2`, while the spring reads its mass from the axis alone,
+which knows nothing about the point constraint holding that edge: measured, the
+same spring overshoots 0.036 rad on the door and exactly zero on a body whose
+axis runs through its centre of mass. Widening it means solving the hinge as one
+coupled system rather than as a point constraint plus an axis constraint.
+
+**Solve order** is an authored integer, low first. Both sweeps are Gauss-Seidel
+over one vector, so joint *i* reads what joint *i-1* just wrote — the order was
+always the answer, it was simply whatever order the entity pool happened to be
+in. A long articulated chain converges far faster root to tip. It is a priority
+and deliberately not a dependency graph: cycles are ordinary here (a ragdoll
+closed at the hips, a bridge tied at both ends) and a topological sort has no
+answer for one, while a sort key always terminates. The sort is stable and runs
+once before both sweeps, so joints that share a key keep the order they had —
+which is what makes every scene written before the field existed solve as it
+did — and the position sweep and the velocity sweep cannot disagree.
+
 ### 7g. Convex hulls
 
 The last shape the narrowphase was missing. A ramp with a bevel, a rock, a

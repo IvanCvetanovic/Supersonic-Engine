@@ -264,6 +264,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_heightfield` | Terrain collision: the grid against the mesh vertex for vertex, seams, ridge crests, grooves, buried recovery, and the cell march a ray does |
 | `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, limits, motors, welds, and every degenerate case |
 | `test_convexhull` | Hull building and collision: Euler's formula, convexity, a cube's six faces, the vertex cap, agreement with the box path, and dropping only the hulls built from an edited file |
+| `test_decomposition` | Concave collision: watertightness, the L's volume against its hull's, that the pieces cover the mesh and invent nothing, and that the notch stays empty |
 | `test_environmentmap` | IBL on the CPU: the cube face mapping, a constant sky irradiating to itself, both prefilter endpoints, and the Radiance decoder |
 | `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, which route a reference resolved by, and re-pointing a scene that is already open |
 | `test_audio` | WAV decoding including the shipped clip, and reloading a clip without freeing what is playing it |
@@ -300,6 +301,65 @@ comment on each one says which.
   touches the renderer
 
 ---
+
+## Concave collision, and why the method was chosen for its oracle
+
+A hull is convex by definition, so a doughnut collided as a disc and a chair as
+the block it sits in. A collider is now a **decomposition** — one shape as the
+several convex pieces that make it up.
+
+The hard part of a decomposition is not writing one. It is knowing whether the
+one you wrote is right, and the usual answer is to look at it. So the method was
+picked for what it makes checkable: splitting a closed mesh by an axis-aligned
+plane and clipping the triangles leaves the two halves separated by that plane,
+so the pieces are interior-disjoint and **their volumes add**. Two exact bounds
+follow, and they are the entire justification for a BSP over the voxel method
+that would give prettier pieces:
+
+| | |
+|---|---|
+| sum of the pieces ≥ the mesh | nothing was dropped — no hole to fall through |
+| sum of the pieces ≤ the convex hull | nothing invented that one hull did not already have |
+
+On the L fixture both are met *exactly*, against figures derived by hand from
+the shape rather than read off the code: the L has volume 3, its convex hull 3.5
+by the shoelace formula over the pentagon that drops the reflex corner, and the
+split at x = 1 gives a 1×2 slab and a 1×1 cube summing to 3 with nothing
+invented. And the feature stated as a single point in space: **(1.3, 1.3) in the
+L's plan is inside the single hull and outside every piece.** That is the hole.
+
+Two things had to be corrected while writing it, and both were found by the
+tests rather than reasoned around afterwards.
+
+**The split criterion cannot use the halves' own mesh volume.** Clipping leaves
+each half open where the cut passed through — the walls are there, the cap over
+the cut is not — and the divergence theorem hands an open surface a number that
+looks like a volume and is not one. The criterion is hull volume alone, which
+needs no cap.
+
+**The L fixture was not watertight on the first try.** Cutting its face into two
+rectangles shares only *part* of an edge, which is a T-junction: geometrically
+closed, topologically not. That is what `IsClosed` is for — a concavity measured
+on an open mesh is a number with no meaning, and it still looks like a number.
+
+The narrowphase keeps every piece's contacts rather than the deepest piece's,
+each with its own normal, which needs nothing new from the solver: terrain has
+had per-point normals since heightfield collision landed. Keeping all of them is
+the difference between a chair that rests on its seat *and* its legs and one that
+rocks between them a step at a time.
+
+A shape that was already convex comes back as exactly one piece equal to its own
+hull — asserted differentially against `ConvexHull::Build` — so every existing
+collider behaves as it did.
+
+**A hull on terrain** used to collide as the oriented box containing it, so a
+wedge on a hill rested on a corner of something nobody could see.
+`Heightfield::CollideHull` is not a fourth contact model: `CollideObb` *is* that
+function specialised to a cube, since its eight corners are the cube hull's
+eight vertices and its least-exit-axis is what `ClosestPointOnHull` computes for
+a point inside any convex shape. So a cube hull placed where a box is must
+produce the same manifold contact for contact, across five arrangements — and
+does.
 
 ## Hot reload, and the asset that cannot be dropped
 
@@ -499,6 +559,11 @@ Android "not functional"; extending that register forward costs nothing.
 - [x] Shadows that know what a material is: a cut-out surface casts its own
       silhouette rather than its bounding rectangle, and a blended one casts
       nothing at all
+- [x] Concave collision: a collider is the convex pieces a shape decomposes
+      into, so a doughnut has a hole in it, and a hull on terrain lands on the
+      hill rather than on a box around it
+- [x] Joints with limits, motors, breaking, welds, springs authored as a
+      frequency and a damping ratio, and an author-controlled solve order
 - [x] Hot reload for every asset a scene names — textures, meshes, materials,
       rigs, sounds and the collision hulls built from them — and a rename
       followed into the scene already open
@@ -548,20 +613,14 @@ Android "not functional"; extending that register forward costs nothing.
 
 Ordered by what it costs against what it unblocks, not by how interesting it is.
 
-- [ ] **A sky that matches the environment, and probes.** An HDRI now lights
-      the scene, but the procedural sky behind it is still analytic — so a
-      loaded environment is not what you see when you look up. And there is one
-      environment for the whole scene: a room and the outdoors it opens onto
-      light identically, which is what reflection probes exist to fix
-- [ ] **Concave collision.** A hull is convex, so a doughnut collides as a
-      disc and a chair as the block it sits in. Closing it means decomposing a
-      shape into several hulls automatically, which is a different piece of work
-      with a different failure mode. A hull against TERRAIN also collides as its
-      bounding box, so a wedge on a hill floats by the gap between the two
-- [ ] **Joint sequencing and soft constraints.** Limits, motors, breaking and
-      welds all work, but a joint still has no spring or damper - everything is
-      rigid or nothing - and there is no way to say that one joint should be
-      solved before another, which a long articulated chain wants
+- [ ] **Reflection probes.** There is one environment for the whole scene, so
+      a room and the outdoors it opens onto light identically. The design is
+      settled — bindings 8 and 9 keep their numbers and take a descriptorCount
+      of N rather than 1, which is the idiom binding 3 already uses for the
+      point-shadow cubes, and needs no optional device feature and no change to
+      `EnvironmentProbe` at all. What is left is the authoring: a component with
+      a volume, a per-object choice of which probe applies, and the two spare
+      4-byte slots in the 120-byte push constant to carry the index
 
 Deliberately not on this list, with the reasons written down in
 [ARCHITECTURE.md](ARCHITECTURE.md): swept CCD, a persistent broadphase, warm
