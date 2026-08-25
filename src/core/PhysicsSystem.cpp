@@ -1122,29 +1122,31 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
             Heightfield::Manifold local;
             if (shape.shape == Shape::Hull) {
-                // A hull against terrain collides as the BOX that contains it,
-                // and this is the one approximation in the hull path rather
-                // than an oversight.
+                // Every vertex of the hull against the surface, and every vertex
+                // of the surface against the hull - the same two halves the box
+                // path runs, with the corners read from the hull instead of
+                // counted out.
                 //
-                // The heightfield's contact model is written around a point and
-                // a radius - a sphere, a capsule's caps, a box's corners - and
-                // a hull is none of those. Doing it properly means testing every
-                // hull vertex against the surface AND every surface vertex
-                // against the hull, which is a fifth pair test's worth of work
-                // for the case of a rock lying on a hill.
+                // This used to collide as the BOX containing the hull, so a
+                // wedge on a hill rested on a corner of something nobody could
+                // see and floated by the gap between the two.
                 //
-                // The cost of the approximation is that a wedge rests on its
-                // bounding box, so it floats by the gap between the two. It does
-                // not fall through, which is the failure that would matter.
-                CollisionSAT::Obb box;
-                box.centre = shape.centre;
-                box.halfExtent = shape.localHalfExtent;
-                box.axes = shape.axes;
-                local = terrain.field->CollideObb(
-                    CollisionSAT::Obb{toField(box.centre),
-                                      box.halfExtent * inverseScale,
-                                      intoField * box.axes},
-                    pairMargin * inverseScale);
+                // Into the grid's space like every other shape here. A hull's
+                // basis carries rotation and scale together, so the field
+                // transform composes onto it rather than needing a case of its
+                // own - which is exactly why the basis was built that way.
+                const glm::vec3 worldOrigin =
+                    glm::vec3(shape.centre) -
+                    shape.hullBasis *
+                        ((shape.hull->boundsMin() + shape.hull->boundsMax()) * 0.5f);
+
+                CollisionHull::Instance instance;
+                if (!CollisionHull::MakeInstance(*shape.hull, toField(worldOrigin),
+                                                 intoField * shape.hullBasis * inverseScale,
+                                                 instance)) {
+                    continue;
+                }
+                local = terrain.field->CollideHull(instance, pairMargin * inverseScale);
             } else if (shape.shape == Shape::Box) {
                 CollisionSAT::Obb box;
                 box.centre = toField(shape.centre);

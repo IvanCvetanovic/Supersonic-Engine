@@ -510,6 +510,82 @@ Heightfield::Manifold Heightfield::CollideObb(const CollisionSAT::Obb& box,
     return manifold;
 }
 
+Heightfield::Manifold Heightfield::CollideHull(const CollisionHull::Instance& hull,
+                                              float speculativeMargin) const {
+    Manifold manifold;
+    if (!valid() || !hull.hull || !hull.hull->valid()) return manifold;
+
+    const std::vector<glm::vec3>& vertices = hull.hull->vertices();
+
+    // ---- The hull's vertices against the surface ----
+    //
+    // As spheres of no radius, exactly as the box passes its eight corners. The
+    // whole contact model - the inside-the-solid branch, the front-side test,
+    // the face-versus-edge rule - is CollectSphere's and is not re-derived here.
+    glm::vec3 low(std::numeric_limits<float>::max());
+    glm::vec3 high(std::numeric_limits<float>::lowest());
+
+    for (const glm::vec3& local : vertices) {
+        const glm::vec3 world = hull.origin + hull.basis * local;
+        CollectSphere(world, 0.0f, speculativeMargin, manifold);
+
+        // The hull's world AABB is the AABB of its transformed vertices, and
+        // this loop is already visiting every one of them.
+        low = glm::min(low, world);
+        high = glm::max(high, world);
+    }
+
+    // ---- The surface's vertices against the hull ----
+    //
+    // The dual, and not optional for the same reason it is not optional for a
+    // box: a hull wider than a cell straddling a bump has no vertex under the
+    // ground and the bump straight through its underside.
+    const glm::vec2 minGrid = ToGrid(low.x, low.z);
+    const glm::vec2 maxGrid = ToGrid(high.x, high.z);
+
+    const int lastVertexX = static_cast<int>(m_width) - 1;
+    const int lastVertexZ = static_cast<int>(m_depth) - 1;
+    const int minX = std::max(static_cast<int>(std::ceil(minGrid.x)), 0);
+    const int maxX = std::min(static_cast<int>(std::floor(maxGrid.x)), lastVertexX);
+    const int minZ = std::max(static_cast<int>(std::ceil(minGrid.y)), 0);
+    const int maxZ = std::min(static_cast<int>(std::floor(maxGrid.y)), lastVertexZ);
+
+    for (int z = minZ; z <= maxZ; ++z) {
+        for (int x = minX; x <= maxX; ++x) {
+            const glm::vec3 vertex = VertexAt(static_cast<uint32_t>(x), static_cast<uint32_t>(z));
+
+            // Y first, and before the hull test rather than inside it. On a
+            // hill almost every vertex of the xz footprint is far above or far
+            // below the hull, and ClosestPointOnHull walks every face.
+            if (vertex.y < low.y || vertex.y > high.y) continue;
+
+            bool inside = false;
+            const glm::vec3 exit = CollisionHull::ClosestPointOnHull(hull, vertex, inside);
+            if (!inside) continue;
+
+            const glm::vec3 delta = exit - vertex;
+            const float depth = glm::length(delta);
+
+            // A vertex exactly on the surface separates nothing and has no
+            // direction to be separated along. The box path drops the same case
+            // with its strict `remaining <= 0` test.
+            if (depth <= 1.0e-6f) continue;
+
+            Contact contact;
+            contact.position = vertex;
+            // The vertex leaves along `delta`, so the HULL is pushed the other
+            // way - the manifold's normal is what the hull moves along, which
+            // is the convention CollideObb uses for a box.
+            contact.normal = -delta / depth;
+            contact.penetration = depth;
+            manifold.Add(contact);
+        }
+    }
+
+    finalise(manifold);
+    return manifold;
+}
+
 bool Heightfield::Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance,
                           float& outDistance, glm::vec3& outNormal) const {
     if (!valid() || maxDistance <= 0.0f) return false;

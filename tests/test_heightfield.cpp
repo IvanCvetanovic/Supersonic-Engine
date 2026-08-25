@@ -9,11 +9,13 @@
 //
 // Vulkan-free by construction: Heightfield knows about glm and nothing else.
 
+#include "core/CollisionHull.hpp"
 #include "core/Heightfield.hpp"
 #include "core/MeshData.hpp"
 #include "core/TerrainGenerator.hpp"
 #include "TestHarness.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -545,6 +547,173 @@ void testClosestPointOnTriangle() {
     CHECK_NEAR(collapsed.y, 0.0f);
 }
 
+// --- a convex hull on terrain --------------------------------------------
+//
+// A hull used to collide with terrain as its world bounding box, so a wedge on
+// a hill floated on the corner of a box nobody could see.
+//
+// The check that matters is differential rather than invented. CollideObb IS
+// this algorithm specialised to a cube - its eight corners are the cube hull's
+// eight vertices, and its least-exit-axis is what ClosestPointOnHull computes
+// for a point inside any convex shape - so a cube hull placed exactly where a
+// box is must produce the SAME manifold, contact for contact.
+
+std::vector<Heightfield::Contact> sortedContacts(const Heightfield::Manifold& manifold) {
+    std::vector<Heightfield::Contact> out(manifold.points,
+                                          manifold.points + manifold.count);
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
+        if (a.position.x != b.position.x) return a.position.x < b.position.x;
+        if (a.position.z != b.position.z) return a.position.z < b.position.z;
+        return a.position.y < b.position.y;
+    });
+    return out;
+}
+
+CollisionSAT::Obb makeBox(const glm::vec3& centre, const glm::vec3& halfExtent,
+                          float yaw = 0.0f) {
+    CollisionSAT::Obb box;
+    box.centre = centre;
+    box.halfExtent = halfExtent;
+    const float c = std::cos(yaw);
+    const float s = std::sin(yaw);
+    box.axes = glm::mat3(glm::vec3(c, 0.0f, s), glm::vec3(0.0f, 1.0f, 0.0f),
+                         glm::vec3(-s, 0.0f, c));
+    return box;
+}
+
+void testACubeHullOnTerrainIsTheBoxPath() {
+    // Five arrangements, chosen so each exercises a different half: resting
+    // flat, sunk in, straddling a ridge (which only the DUAL can report),
+    // rotated, and clear of the ground inside the speculative margin.
+    const Heightfield flat = flatField(8, 8, 0.0f);
+    const Heightfield ridge = fieldFromColumns(8, {0.0f, 0.0f, 0.0f, 1.2f, 1.2f, 0.0f, 0.0f, 0.0f});
+
+    struct Case {
+        const Heightfield* field;
+        CollisionSAT::Obb box;
+        float margin;
+        const char* what;
+    };
+    const Case cases[] = {
+        { &flat,  makeBox(glm::vec3(0.0f, 0.45f, 0.0f), glm::vec3(0.5f)),        0.0f, "resting" },
+        { &flat,  makeBox(glm::vec3(0.0f, 0.20f, 0.0f), glm::vec3(0.5f)),        0.0f, "sunk in" },
+        { &ridge, makeBox(glm::vec3(0.0f, 0.90f, 0.0f), glm::vec3(2.0f, 0.4f, 1.0f)), 0.0f, "straddling" },
+        { &flat,  makeBox(glm::vec3(0.3f, 0.35f, -0.2f), glm::vec3(0.6f, 0.5f, 0.4f), 0.7f), 0.0f, "rotated" },
+        { &flat,  makeBox(glm::vec3(0.0f, 0.90f, 0.0f), glm::vec3(0.5f)),        0.6f, "speculative" },
+    };
+
+    int mismatched = 0;
+    int compared = 0;
+    for (const Case& c : cases) {
+        const Heightfield::Manifold boxManifold = c.field->CollideObb(c.box, c.margin);
+
+        CollisionHull::Instance hull = CollisionHull::InstanceFromObb(c.box);
+        CHECK_MSG(hull.hull != nullptr, "the cube instance must build");
+        const Heightfield::Manifold hullManifold = c.field->CollideHull(hull, c.margin);
+
+        if (boxManifold.count != hullManifold.count ||
+            boxManifold.speculative != hullManifold.speculative) {
+            ++mismatched;
+            continue;
+        }
+
+        const auto a = sortedContacts(boxManifold);
+        const auto b = sortedContacts(hullManifold);
+        for (size_t i = 0; i < a.size(); ++i) {
+            ++compared;
+            if (!nearlyVec(a[i].position, b[i].position, 1e-4f) ||
+                !nearlyVec(a[i].normal, b[i].normal, 1e-4f) ||
+                !test::nearly(a[i].penetration, b[i].penetration, 1e-4f)) {
+                ++mismatched;
+            }
+        }
+    }
+
+    CHECK_MSG(mismatched == 0, "a cube hull must collide with terrain exactly as a box does");
+    CHECK_MSG(compared >= 8, "the arrangements must actually produce contacts to compare");
+}
+
+void testTheDualIsWhatCatchesARidge() {
+    // The half that is easy to leave out. A hull wider than a cell straddling a
+    // bump has no VERTEX under the ground - the bump comes up through its
+    // underside between them - so vertices alone report nothing at all.
+    const Heightfield ridge = fieldFromColumns(8, {0.0f, 0.0f, 0.0f, 1.2f, 1.2f, 0.0f, 0.0f, 0.0f});
+
+    // A slab spanning the ridge, its underside above the flat ground and just
+    // below the crest.
+    //
+    // JUST below, and that is not fussiness. The rule is least-exit, inherited
+    // from the box path: a terrain vertex is pushed out through whichever face
+    // of the hull it is nearest to leaving through. Sink the slab far enough
+    // and the crest is nearer its TOP, at which point the correct answer by
+    // that rule is to push the slab DOWN - which is the documented shortcut a
+    // box has always had here, not a new bug. The slab has to be positioned so
+    // that its underside really is the nearest face, or the test asserts
+    // something the algorithm never claimed.
+    const CollisionSAT::Obb box = makeBox(glm::vec3(0.0f, 1.5f, 0.0f), glm::vec3(2.0f, 0.4f, 1.0f));
+    CollisionHull::Instance hull = CollisionHull::InstanceFromObb(box);
+
+    const Heightfield::Manifold manifold = ridge.CollideHull(hull, 0.0f);
+    CHECK_MSG(manifold.count > 0, "the ridge must be reported through the slab's underside");
+
+    int pushedUp = 0;
+    for (uint32_t i = 0; i < manifold.count; ++i) {
+        if (manifold.points[i].normal.y > 0.5f) ++pushedUp;
+    }
+    CHECK_MSG(pushedUp > 0, "and the slab must be pushed UP off it, not sideways");
+}
+
+void testAHullClearOfTheGroundReportsNothing() {
+    const Heightfield flat = flatField(8, 8, 0.0f);
+    const CollisionSAT::Obb box = makeBox(glm::vec3(0.0f, 4.0f, 0.0f), glm::vec3(0.5f));
+    CollisionHull::Instance hull = CollisionHull::InstanceFromObb(box);
+
+    const Heightfield::Manifold manifold = flat.CollideHull(hull, 0.0f);
+    CHECK_EQ(manifold.count, uint32_t{0});
+}
+
+void testAPointedHullFitsWhereItsBoundingBoxCannot() {
+    // The gap this closes, stated as a number rather than as a picture.
+    //
+    // A hull used to collide as the oriented box containing it. A shape that
+    // comes to a point therefore rested on that box's flat underside, so it
+    // floated above ground its apex would have gone into - and the README called
+    // it "a wedge on a hill floats by the gap between the two".
+    //
+    // A notch one cell wide, with the floor a full unit below the shoulders.
+    const Heightfield groove =
+        fieldFromColumns(8, {1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f});
+
+    // Grid column 3 is world x = 3 - 8/2 = -1, so the notch floor is there.
+    // A tetrahedron with its apex pointing DOWN into it, and nothing touching:
+    // the apex is a quarter unit above the floor, and every other vertex is
+    // well above the shoulders.
+    ConvexHull tetra;
+    CHECK_MSG(tetra.Build({glm::vec3(-1.0f, 0.25f, 0.0f), glm::vec3(-1.7f, 1.15f, -0.7f),
+                           glm::vec3(-0.3f, 1.15f, -0.7f), glm::vec3(-1.0f, 1.15f, 0.7f)}),
+              "the tetrahedron must build");
+
+    CollisionHull::Instance instance;
+    CHECK_MSG(CollisionHull::MakeInstance(tetra, glm::vec3(0.0f), glm::mat3(1.0f), instance),
+              "and place");
+
+    const Heightfield::Manifold hullManifold = groove.CollideHull(instance, 0.0f);
+    CHECK_MSG(hullManifold.count == 0,
+              "nothing is touching, so the hull must report nothing");
+
+    // The same shape through the path it used to take. Its bounding box has a
+    // flat underside spanning the whole notch, and the shoulders come up
+    // through it.
+    CollisionSAT::Obb box;
+    box.centre = (tetra.boundsMin() + tetra.boundsMax()) * 0.5f;
+    box.halfExtent = (tetra.boundsMax() - tetra.boundsMin()) * 0.5f;
+    box.axes = glm::mat3(1.0f);
+
+    const Heightfield::Manifold boxManifold = groove.CollideObb(box, 0.0f);
+    CHECK_MSG(boxManifold.count > 0,
+              "the bounding box must collide here, or this fixture proves nothing");
+}
+
 void runTests() {
     testBuildRejectsWhatCannotBeACell();
     testTheGridIsCentredTheWayTheMeshIs();
@@ -570,8 +739,12 @@ void runTests() {
     testAShallowRayCannotStepOverARidge();
 
     testClosestPointOnTriangle();
+    testACubeHullOnTerrainIsTheBoxPath();
+    testTheDualIsWhatCatchesARidge();
+    testAHullClearOfTheGroundReportsNothing();
+    testAPointedHullFitsWhereItsBoundingBoxCannot();
 }
 
 } // namespace
 
-TEST_MAIN("test_heightfield", 60)
+TEST_MAIN("test_heightfield", 70)

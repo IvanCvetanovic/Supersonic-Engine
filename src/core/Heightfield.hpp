@@ -5,6 +5,8 @@
 
 #include <glm/glm.hpp>
 
+#include "core/CollisionHull.hpp"
+
 #include "core/CollisionSAT.hpp"
 
 namespace Supersonic {
@@ -132,6 +134,21 @@ public:
     // corners and the bump passes through its underside. The second half is the
     // dual test and costs a point-in-box check per vertex of the footprint.
     Manifold CollideObb(const CollisionSAT::Obb& box, float speculativeMargin = 0.0f) const;
+
+    // A convex hull against the surface, and the surface's vertices against
+    // the hull. The same two halves as CollideObb, for the same reasons.
+    //
+    // Not a fourth contact model. CollideObb IS this function specialised to a
+    // cube: its eight corners are the cube hull's eight vertices, and its
+    // least-exit-axis is what ClosestPointOnHull computes for a point inside
+    // any convex shape. Run a cube hull through here and it executes the same
+    // arithmetic and must produce the same manifold, which is what makes that
+    // comparison a test rather than a gesture.
+    //
+    // Until this existed a hull on terrain collided as its world bounding box,
+    // so a wedge on a hill floated on the corner of a box nobody could see.
+    Manifold CollideHull(const CollisionHull::Instance& hull,
+                         float speculativeMargin = 0.0f) const;
 
     // Nearest surface hit along a local-space ray. `direction` must be unit
     // length. The march is over CELLS rather than a fixed step, so a ray that
