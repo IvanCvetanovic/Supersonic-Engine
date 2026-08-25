@@ -18,6 +18,7 @@ directory and that section disagree, that section is right.
 | [2026-08-19-findings.md](2026-08-19-findings.md) | 19 Aug 2026 | A consolidated audit of the engine — correctness defects, architectural debt, missing capability, infrastructure — with the six workstreams it was sorted into |
 | [2026-08-19-two-games.md](2026-08-19-two-games.md) | 19 Aug 2026 | Whether this engine could host two real games that already exist, read from their source. The reasoning behind Phases 8–14 |
 | [2026-08-19-plan.md](2026-08-19-plan.md) | 19 Aug 2026 | The execution plan: Phases 0–14, their ordering constraints, and a status block written as the work ran |
+| [2026-08-25-wolf-brigade-port.md](2026-08-25-wolf-brigade-port.md) | 25 Aug 2026 | What it would take to port the Godot game Wolf Brigade to this engine, read from both trees. Phased, costed, and led by the finding that the game has no art yet |
 | [2026-08-22-gap-audit.md](2026-08-22-gap-audit.md) | 22 Aug 2026 | A verification pass over the whole engine asking what is left, with every claim tied to a file and line |
 
 ## What the two-games document changed
