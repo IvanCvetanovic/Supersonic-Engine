@@ -36,7 +36,11 @@ void main() {
     // it, and drawing another one over the top would light the scene from one
     // and show the other.
     if (ubo.environmentParams.x > 0.5) {
-        outColor = vec4(textureLod(prefilteredMap, dir, 0.0).rgb, 1.0);
+        // Slot 0, always: the sky is the scene-wide environment, and a probe
+        // is a local override for objects, not for the background. This is why
+        // environmentParams.x still means what it always meant - slot 0 holds a
+        // real map - rather than being repurposed as a per-slot flag.
+        outColor = vec4(textureLod(prefilteredMaps[0], dir, 0.0).rgb, 1.0);
         return;
     }
 

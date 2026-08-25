@@ -63,6 +63,7 @@ layout(push_constant) uniform PushConstants {
     vec4 emissive;      // rgb added after shading, may exceed 1.0
     int skinPaletteBase;
     int skinJointCount;
+    int probeIndex;
 } push;
 
 const float PI = 3.14159265359;
@@ -511,9 +512,25 @@ void main() {
     // expression untouched: a scene that names no environment has to render
     // exactly as it did before any of this existed, to the last bit, or the
     // feature cannot be landed without re-checking every scene in the project.
-    bool hasEnvironment = ubo.environmentParams.x > 0.5;
+    // Which slot, and whether that slot holds anything.
+    //
+    // environmentParams.z is a BITMASK, one bit per slot, rather than a count -
+    // a count cannot say that slot 1 is loaded and slot 0 is not, which is
+    // exactly the case a scene with a probe and no global environment produces.
+    //
+    // Selected at LITERAL indices. A sampler array indexed by a push constant
+    // needs shaderSampledImageArrayDynamicIndexing, which this device does not
+    // enable; pointShadowFactor already learned that the hard way and takes the
+    // same shape. It costs one extra cube fetch per fragment and is correct on
+    // every driver rather than on the ones that happen to be lenient.
+    uint probeMask = uint(ubo.environmentParams.z);
+    int probe = clamp(push.probeIndex, 0, MAX_ENV_PROBES - 1);
+    bool hasEnvironment = (probeMask & (1u << uint(probe))) != 0u;
 
-    vec3 irradiance = hasEnvironment ? texture(irradianceMap, N).rgb : hemisphere(N);
+    vec3 irradiance = hasEnvironment
+        ? ((probe == 0) ? texture(irradianceMaps[0], N).rgb
+                        : texture(irradianceMaps[1], N).rgb)
+        : hemisphere(N);
 
     // Metals have no diffuse response at all. The old term multiplied ambient
     // by albedo unconditionally, so a mirror picked up a flat wash of ambient
@@ -535,7 +552,8 @@ void main() {
     // rather than per fragment.
     float maxLevel = max(ubo.environmentParams.y - 1.0, 0.0);
     vec3 reflected = hasEnvironment
-        ? textureLod(prefilteredMap, R, roughness * maxLevel).rgb
+        ? ((probe == 0) ? textureLod(prefilteredMaps[0], R, roughness * maxLevel).rgb
+                        : textureLod(prefilteredMaps[1], R, roughness * maxLevel).rgb)
         : hemisphere(R);
 
     vec3 ambientSpecular = reflected * (F0 * envBRDF.x + envBRDF.y);

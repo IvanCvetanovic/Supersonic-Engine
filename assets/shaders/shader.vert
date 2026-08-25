@@ -26,6 +26,7 @@ layout(push_constant) uniform PushConstants {
     vec4 emissive;      // rgb added after shading, may exceed 1.0
     int skinPaletteBase;   // -1 = not skinned
     int skinJointCount;
+    int probeIndex;        // which environment lights this draw
 } push;
 
 // This frame's joint matrices for every skinned entity, back to back. std430

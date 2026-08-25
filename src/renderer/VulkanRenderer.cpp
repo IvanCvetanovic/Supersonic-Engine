@@ -43,7 +43,9 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     // Before the descriptor sets, because they bind it. It starts as a black
     // cube the shader is told to ignore, so a scene that names no environment
     // is unaffected by any of this.
-    m_environment = std::make_unique<EnvironmentProbe>(m_deviceRef, m_commandPool);
+    for (auto& environment : m_environments) {
+        environment = std::make_unique<EnvironmentProbe>(m_deviceRef, m_commandPool);
+    }
 
     createUniformBuffers();
     createDescriptorPool();
@@ -532,7 +534,7 @@ void VulkanRenderer::createDescriptorPool() {
 }
 
 void VulkanRenderer::updateEnvironmentDescriptors() {
-    if (!m_environment || m_descriptorSets.empty()) return;
+    if (!m_environments[0] || m_descriptorSets.empty()) return;
 
     // A descriptor set may be rewritten as often as you like, and may NOT be
     // rewritten while a command buffer that uses it is still executing. The
@@ -540,8 +542,15 @@ void VulkanRenderer::updateEnvironmentDescriptors() {
     // costs nothing anyone can measure.
     m_deviceRef.GetDevice().waitIdle();
 
-    const vk::DescriptorImageInfo irradianceInfo = m_environment->IrradianceInfo();
-    const vk::DescriptorImageInfo prefilteredInfo = m_environment->PrefilteredInfo();
+    // EVERY slot, whether it holds a real map or a black one. A binding
+    // declared with descriptorCount N and written with fewer leaves the rest
+    // undefined, and the shader is allowed to read them.
+    std::array<vk::DescriptorImageInfo, VulkanPipeline::kMaxEnvironmentProbes> irradianceInfo{};
+    std::array<vk::DescriptorImageInfo, VulkanPipeline::kMaxEnvironmentProbes> prefilteredInfo{};
+    for (size_t i = 0; i < m_environments.size(); ++i) {
+        irradianceInfo[i] = m_environments[i]->IrradianceInfo();
+        prefilteredInfo[i] = m_environments[i]->PrefilteredInfo();
+    }
 
     for (auto& set : m_descriptorSets) {
         std::array<vk::WriteDescriptorSet, 2> writes{};
@@ -549,14 +558,14 @@ void VulkanRenderer::updateEnvironmentDescriptors() {
         writes[0].dstSet = set;
         writes[0].dstBinding = 8;
         writes[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        writes[0].descriptorCount = 1;
-        writes[0].pImageInfo = &irradianceInfo;
+        writes[0].descriptorCount = VulkanPipeline::kMaxEnvironmentProbes;
+        writes[0].pImageInfo = irradianceInfo.data();
 
         writes[1].dstSet = set;
         writes[1].dstBinding = 9;
         writes[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &prefilteredInfo;
+        writes[1].descriptorCount = VulkanPipeline::kMaxEnvironmentProbes;
+        writes[1].pImageInfo = prefilteredInfo.data();
 
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
@@ -601,8 +610,14 @@ void VulkanRenderer::createDescriptorSets() {
         spotShadowInfo.imageView = m_spotShadowMap->GetImageView();
         spotShadowInfo.sampler = m_spotShadowMap->GetSampler();
 
-        const vk::DescriptorImageInfo irradianceInfo = m_environment->IrradianceInfo();
-        const vk::DescriptorImageInfo prefilteredInfo = m_environment->PrefilteredInfo();
+        std::array<vk::DescriptorImageInfo, VulkanPipeline::kMaxEnvironmentProbes>
+            irradianceInfo{};
+        std::array<vk::DescriptorImageInfo, VulkanPipeline::kMaxEnvironmentProbes>
+            prefilteredInfo{};
+        for (size_t slot = 0; slot < m_environments.size(); ++slot) {
+            irradianceInfo[slot] = m_environments[slot]->IrradianceInfo();
+            prefilteredInfo[slot] = m_environments[slot]->PrefilteredInfo();
+        }
 
         std::array<vk::WriteDescriptorSet, 10> writes{};
 
@@ -658,14 +673,14 @@ void VulkanRenderer::createDescriptorSets() {
         writes[8].dstSet = m_descriptorSets[i];
         writes[8].dstBinding = 8;
         writes[8].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        writes[8].descriptorCount = 1;
-        writes[8].pImageInfo = &irradianceInfo;
+        writes[8].descriptorCount = VulkanPipeline::kMaxEnvironmentProbes;
+        writes[8].pImageInfo = irradianceInfo.data();
 
         writes[9].dstSet = m_descriptorSets[i];
         writes[9].dstBinding = 9;
         writes[9].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        writes[9].descriptorCount = 1;
-        writes[9].pImageInfo = &prefilteredInfo;
+        writes[9].descriptorCount = VulkanPipeline::kMaxEnvironmentProbes;
+        writes[9].pImageInfo = prefilteredInfo.data();
 
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
@@ -1066,19 +1081,22 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         const EnvironmentSettings* stored = registry.ctx().find<EnvironmentSettings>();
         const EnvironmentSettings& settings = stored ? *stored : kDefaults;
 
-        if (settings.hdriPath != m_environmentPath ||
-            settings.intensity != m_environmentIntensity) {
-            m_environmentPath = settings.hdriPath;
-            m_environmentIntensity = settings.intensity;
+        // Slot 0 is the scene-wide environment and reads EnvironmentSettings
+        // exactly as it always did. The probe slots above it are filled from
+        // the scene's ReflectionProbeComponents.
+        if (settings.hdriPath != m_environmentPaths[0] ||
+            settings.intensity != m_environmentIntensities[0]) {
+            m_environmentPaths[0] = settings.hdriPath;
+            m_environmentIntensities[0] = settings.intensity;
 
-            if (m_environmentPath.empty()) {
+            if (m_environmentPaths[0].empty()) {
                 // Back to the analytic hemisphere. The black cube stays bound;
-                // the flag below is what turns it off.
-                m_environment->LoadConstant(glm::vec3(0.0f));
-                m_environmentHasMap = false;
+                // the mask below is what turns it off.
+                m_environments[0]->LoadConstant(glm::vec3(0.0f));
+                m_environmentHasMap[0] = false;
             } else {
-                m_environmentHasMap =
-                    m_environment->Load(m_environmentPath, m_environmentIntensity);
+                m_environmentHasMap[0] =
+                    m_environments[0]->Load(m_environmentPaths[0], m_environmentIntensities[0]);
             }
             // The descriptors name the OLD images otherwise: loading replaces
             // both cube images, and a descriptor written last frame points at
@@ -1087,9 +1105,21 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         }
     }
 
+    // z is a BITMASK, one bit per slot, not a count: a count cannot say that
+    // slot 1 holds a map and slot 0 does not, which is exactly what a scene with
+    // a probe and no scene-wide environment looks like.
+    //
+    // x still means what it always meant - slot 0 holds a real map - because
+    // sky.frag reads it and the sky is the scene-wide environment, not a probe.
+    uint32_t probeMask = 0;
+    for (size_t slot = 0; slot < m_environmentHasMap.size(); ++slot) {
+        if (m_environmentHasMap[slot]) probeMask |= (1u << slot);
+    }
+
     ubo.environmentParams = glm::vec4(
-        m_environmentHasMap ? 1.0f : 0.0f,
-        static_cast<float>(EnvironmentProbe::kPrefilteredLevels), 0.0f, 0.0f);
+        m_environmentHasMap[0] ? 1.0f : 0.0f,
+        static_cast<float>(EnvironmentProbe::kPrefilteredLevels),
+        static_cast<float>(probeMask), 0.0f);
 
     ubo.clusterParams = glm::vec4(static_cast<float>(offscreen.GetWidth()),
                                   static_cast<float>(offscreen.GetHeight()),

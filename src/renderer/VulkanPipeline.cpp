@@ -156,7 +156,9 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         // Pinned rather than assumed: these are the std430 push-constant offsets
         // the shaders declare, and GLM_FORCE_ALIGNED_GENTYPES would shift every
         // one of them without a word.
-        static_assert(sizeof(PushConstantData) == 120, "push constant layout shifted");
+        static_assert(sizeof(PushConstantData) == 124, "push constant layout shifted");
+        static_assert(offsetof(PushConstantData, probeIndex) == 120,
+                      "probeIndex must sit in the four bytes after skinJointCount");
         static_assert(offsetof(PushConstantData, emissive) == 96, "push constant layout shifted");
         static_assert(offsetof(PushConstantData, skinPaletteBase) == 112, "push constant layout shifted");
         static_assert(offsetof(PushConstantData, skinJointCount) == 116, "push constant layout shifted");
@@ -316,7 +318,7 @@ void VulkanPipeline::createDescriptorSetLayout() {
     for (uint32_t i = 0; i < environmentBindings.size(); ++i) {
         environmentBindings[i].binding = 8 + i;
         environmentBindings[i].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-        environmentBindings[i].descriptorCount = 1;
+        environmentBindings[i].descriptorCount = kMaxEnvironmentProbes;
         environmentBindings[i].stageFlags = vk::ShaderStageFlagBits::eFragment;
     }
 

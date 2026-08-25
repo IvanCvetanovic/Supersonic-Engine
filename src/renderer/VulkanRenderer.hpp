@@ -193,14 +193,19 @@ private:
     // The scene's surroundings, as the two cubemaps a shader lights from.
     // Always present so its descriptor slots are always written; whether the
     // shader looks at them is a flag in the scene block.
-    std::unique_ptr<EnvironmentProbe> m_environment;
+    // Slot 0 is the scene-wide environment; the rest are probes. Every slot
+    // always holds a valid probe object, because every slot is always written
+    // into the descriptor set - reading a descriptor nobody wrote is undefined
+    // even inside a branch the shader never takes.
+    std::array<std::unique_ptr<EnvironmentProbe>, VulkanPipeline::kMaxEnvironmentProbes>
+        m_environments;
 
     // What the probe was last asked for, so a scene that names the same HDRI
     // every frame is not reconvolved every frame - that integral is the
     // expensive part of the whole feature.
-    std::string m_environmentPath;
-    float m_environmentIntensity{1.0f};
-    bool m_environmentHasMap{false};
+    std::array<std::string, VulkanPipeline::kMaxEnvironmentProbes> m_environmentPaths;
+    std::array<float, VulkanPipeline::kMaxEnvironmentProbes> m_environmentIntensities{};
+    std::array<bool, VulkanPipeline::kMaxEnvironmentProbes> m_environmentHasMap{};
 
     // One array image, a layer per shadow-casting spot light.
     std::unique_ptr<ShadowMap> m_spotShadowMap;

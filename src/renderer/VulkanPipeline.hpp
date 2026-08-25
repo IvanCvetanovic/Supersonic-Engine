@@ -143,6 +143,16 @@ struct PushConstantData {
     // make every particle skin itself against whatever is in palette slot 0.
     int32_t skinPaletteBase{-1};  // 112..115 (vertex)
     int32_t skinJointCount{0};    // 116..119 (vertex)
+
+    // Which bound environment lights this draw.
+    //
+    // Defaults to 0, NOT to -1 like skinPaletteBase above, and the difference
+    // matters. Slot 0 is the scene-wide environment, so a draw that never sets
+    // this - the particle path builds `PushConstantData push{}` and touches
+    // nothing else - gets the environment it would have got before probes
+    // existed. A -1 default would silently drop every such draw back to the
+    // analytic hemisphere, which looks like a descriptor bug and is not one.
+    int32_t probeIndex{0};        // 120..123 (fragment)
 };
 
 // The depth pass has its own, because it needs a different second half: which
@@ -246,6 +256,21 @@ public:
     vk::DescriptorSetLayout GetSceneSetLayout() const { return m_sceneSetLayout; }
     vk::DescriptorSetLayout GetMaterialSetLayout() const { return m_materialSetLayout; }
 
+    // How many environments can be bound at once.
+    //
+    // TWO, and the shader is written for exactly two. A sampler ARRAY indexed by
+    // a push constant needs shaderSampledImageArrayDynamicIndexing, which this
+    // device does not enable - so shader.frag picks between the slots at LITERAL
+    // indices and lets the selection choose between the results, which is the
+    // same shape pointShadowFactor already uses and for the same reason. Raising
+    // this without rewriting that unroll is undefined behaviour that validates
+    // cleanly and renders correctly on every desktop driver anyone would try.
+    static constexpr uint32_t kMaxEnvironmentProbes = 2;
+    static_assert(kMaxEnvironmentProbes == 2,
+                  "shader.frag unrolls the probe selection at literal indices because "
+                  "shaderSampledImageArrayDynamicIndexing is not enabled - raising this "
+                  "means rewriting that unroll or enabling the feature");
+
     // How many combined image samplers ONE scene set consumes, so the pool that
     // feeds it can be sized from the same number the layout is built from.
     //
@@ -261,7 +286,8 @@ public:
     //   binding 4  spotShadowMaps      1
     //   binding 8  irradianceMap       1
     //   binding 9  prefilteredMap      1
-    static constexpr uint32_t kSamplersPerSceneSet = 4u + PointShadow::kMaxShadowCasters;
+    static constexpr uint32_t kSamplersPerSceneSet =
+        2u + PointShadow::kMaxShadowCasters + 2u * kMaxEnvironmentProbes;
 
     static constexpr uint32_t kSceneSet = 0;
     static constexpr uint32_t kMaterialSet = 1;

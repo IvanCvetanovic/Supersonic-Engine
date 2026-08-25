@@ -87,8 +87,14 @@ layout(std430, set = 0, binding = 7) readonly buffer LightIndexBuffer {
 // Both are always bound. Reading a descriptor nobody wrote is undefined even
 // inside a branch that is never taken, so a scene with no environment binds a
 // one-colour cube and ubo.environmentParams.x says to ignore it.
-layout(set = 0, binding = 8) uniform samplerCube irradianceMap;
-layout(set = 0, binding = 9) uniform samplerCube prefilteredMap;
+// Two, matching VulkanPipeline::kMaxEnvironmentProbes. Declared as arrays of
+// separate sampler descriptors rather than as a cube ARRAY image, so no optional
+// device feature is needed - the same choice binding 3 makes for the point
+// shadow cubes.
+#define MAX_ENV_PROBES 2
+
+layout(set = 0, binding = 8) uniform samplerCube irradianceMaps[MAX_ENV_PROBES];
+layout(set = 0, binding = 9) uniform samplerCube prefilteredMaps[MAX_ENV_PROBES];
 
 // How far in FRONT of the camera a world position is.
 //

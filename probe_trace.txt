@@ -1,0 +1,17 @@
+creating probe
+creating probe
+probes done
+uniform buffers done
+descriptor pool done
+imgui done
+SetOffscreenRenderPass
+enter createGraphicsPipeline
+pipeline 1
+pipeline 2
+pipeline 3
+pipeline 4
+pipeline 5
+pipeline 6
+allocating scene sets
+allocated scene sets
+wrote scene sets
