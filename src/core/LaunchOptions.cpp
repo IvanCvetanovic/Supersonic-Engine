@@ -14,6 +14,8 @@ const char* LaunchOptions::Usage() {
            "  --fixed-step [s]  simulate at a constant delta (default 1/60) so a\n"
            "                    run reproduces exactly; without it the simulation\n"
                     "                    follows the real clock\n"
+           "  --import-assets give every asset under assets/ a stable identity,\n"
+           "                  writing a .meta beside each, then exit\n"
            "  --help          print this message\n";
 }
 
@@ -57,6 +59,8 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
             if (parsed < 0) return fail("--frames cannot be negative");
             if (parsed > 1000000) return fail("--frames is implausibly large: " + raw);
             options.maxFrames = static_cast<int>(parsed);
+        } else if (arg == "--import-assets") {
+            options.importAssets = true;
         } else if (arg == "--screenshot") {
             if (!value(options.screenshotPath)) return fail("--screenshot needs a path");
             if (options.screenshotPath.empty()) return fail("--screenshot needs a path");

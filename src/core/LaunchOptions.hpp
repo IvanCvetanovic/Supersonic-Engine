@@ -38,6 +38,16 @@ struct LaunchOptions {
     // lets a rendered image be compared against anything at all.
     float fixedDelta = 0.0f;
 
+    // Mint an identity for every asset that has none, write the sidecars, and
+    // exit without opening a window.
+    //
+    // A command rather than something the engine does on startup, and that is
+    // the whole point: minting is the only part of asset identity that WRITES,
+    // so it happens when somebody asks for it. A load path that minted as a
+    // side effect would have the test suite creating sidecars in the project's
+    // assets folder the first time anyone ran it.
+    bool importAssets = false;
+
     // --help is a request, not a failure: it prints usage and exits zero.
     // Folding it into `ok` would make asking for help an error exit, which
     // breaks any script that checks the status.

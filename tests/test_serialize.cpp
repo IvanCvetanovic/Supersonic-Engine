@@ -6,6 +6,7 @@
 
 #include "TestHarness.hpp"
 #include "core/Json.hpp"
+#include "core/AssetDatabase.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/PrefabSerializer.hpp"
 #include "core/ComponentCodec.hpp"
@@ -452,6 +453,134 @@ static void testPrefabCarriesEverythingASceneDoes() {
 }
 
 // And the values have to survive, not just the keys.
+// ---- Asset identity, through the serialiser --------------------------------
+//
+// test_assetdatabase proves the identities. This proves the thing the README
+// actually described: somebody renames a texture in Explorer, and the scene
+// that referenced it still finds it.
+
+static std::string readWholeFile(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return {};
+    return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+}
+
+static void testASceneFollowsARenamedTexture() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "supersonic_scene_identity_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "textures", ec);
+
+    const fs::path before = root / "textures" / "floor_tiles.png";
+    {
+        std::ofstream file(before, std::ios::binary);
+        file << "the same pixels either way";
+    }
+
+    auto& database = AssetDatabase::Instance();
+    const auto imported = database.Import(root.generic_string());
+    CHECK(imported.ok);
+    CHECK_EQ(imported.minted, size_t{1});
+
+    const std::string beforePath = AssetDatabase::NormalisePath(before.generic_string());
+    const std::string guid = database.GuidForPath(beforePath);
+    CHECK_EQ(guid.size(), size_t{32});
+
+    // A scene that names it.
+    const std::string scenePath = "test_identity_scene_tmp.scene";
+    {
+        entt::registry registry;
+        const auto entity = registry.create();
+        registry.emplace<TagComponent>(entity, "Floor");
+        registry.emplace<TransformComponent>(entity);
+        auto& material = registry.emplace<MaterialComponent>(entity);
+        material.albedoTexturePath = beforePath;
+        CHECK(SceneSerializer::Serialize(registry, scenePath).ok);
+    }
+
+    // The identity goes in the FILE, next to the path. Both, because the path
+    // is what makes the file readable and is the migration story for every
+    // scene written before any of this existed.
+    const std::string written = readWholeFile(scenePath);
+    CHECK_MSG(written.find(guid) != std::string::npos,
+              "the saved scene carries the texture's identity");
+    CHECK_MSG(written.find("floor_tiles.png") != std::string::npos,
+              "and still says which file that was, in words");
+
+    // The rename, and the re-import that carries the identity across.
+    const fs::path after = root / "textures" / "stone_tiles.png";
+    fs::rename(before, after, ec);
+    CHECK_MSG(!ec, "the fixture has to actually rename the file");
+
+    const auto reimported = database.Import(root.generic_string());
+    CHECK_EQ(reimported.adopted, size_t{1});
+
+    // And now the whole point.
+    const std::string afterPath = AssetDatabase::NormalisePath(after.generic_string());
+    database.ResetStats();
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::Deserialize(loaded, scenePath).ok);
+
+    int checked = 0;
+    for (auto entity : loaded.view<MaterialComponent>()) {
+        const auto& material = loaded.get<MaterialComponent>(entity);
+        CHECK_MSG(material.albedoTexturePath == afterPath,
+                  "a scene saved before the rename finds the texture at its new name");
+        ++checked;
+    }
+    CHECK_EQ(checked, 1);
+
+    // BY IDENTITY. Without this the test would also pass if the fallback path
+    // happened to be right, which is exactly the case it exists to rule out.
+    CHECK_MSG(database.stats().byGuid >= 1,
+              "and it got there by identity rather than by the saved path");
+    CHECK_EQ(database.stats().unresolved, size_t{0});
+
+    std::remove(scenePath.c_str());
+    fs::remove_all(root, ec);
+    database.Clear();
+}
+
+static void testAnUnimportedProjectSerialisesExactlyAsItAlwaysDid() {
+    // The migration story, and the reason nothing had to be converted: with no
+    // identities anywhere, the writer emits the same file it always emitted and
+    // the reader resolves every reference by its path.
+    AssetDatabase::Instance().Clear();
+
+    const std::string path = "test_no_identity_tmp.scene";
+    {
+        entt::registry registry;
+        const auto entity = registry.create();
+        registry.emplace<TagComponent>(entity, "Thing");
+        registry.emplace<TransformComponent>(entity);
+        auto& material = registry.emplace<MaterialComponent>(entity);
+        material.albedoTexturePath = "assets/textures/uv_grid.png";
+        CHECK(SceneSerializer::Serialize(registry, path).ok);
+    }
+
+    const std::string written = readWholeFile(path);
+    CHECK_MSG(written.find("AlbedoTextureGuid") == std::string::npos,
+              "an un-imported project writes no identities at all");
+
+    AssetDatabase::Instance().ResetStats();
+    entt::registry loaded;
+    CHECK(SceneSerializer::Deserialize(loaded, path).ok);
+
+    int checked = 0;
+    for (auto entity : loaded.view<MaterialComponent>()) {
+        CHECK(loaded.get<MaterialComponent>(entity).albedoTexturePath ==
+              "assets/textures/uv_grid.png");
+        ++checked;
+    }
+    CHECK_EQ(checked, 1);
+    CHECK_MSG(AssetDatabase::Instance().stats().byPath >= 1, "resolved by path, as before");
+    CHECK_EQ(AssetDatabase::Instance().stats().unresolved, size_t{0});
+
+    std::remove(path.c_str());
+}
+
 static void testAJointsOtherEndSurvivesASceneRoundTrip() {
     // The half ComponentCodec deliberately does not carry. A handle is recycled
     // and carries a version, so the scene writes the other end as an INDEX into
@@ -1225,9 +1354,11 @@ static void runTests() {
     testPrefabRoundTrip();
     testPrefabCarriesEverythingASceneDoes();
     testPrefabRoundTripsEveryField();
+    testASceneFollowsARenamedTexture();
+    testAnUnimportedProjectSerialisesExactlyAsItAlwaysDid();
     testAJointsOtherEndSurvivesASceneRoundTrip();
     testAWorldAnchoredJointWritesNoReference();
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 270)
+TEST_MAIN("test_serialize", 285)

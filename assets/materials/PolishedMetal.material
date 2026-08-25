@@ -1,9 +1,12 @@
 {
+  "Version": 2,
   "Material": "PolishedMetal",
   "Albedo": [0.82, 0.84, 0.88, 1],
   "Roughness": 0.18,
   "Metallic": 0.9,
   "AO": 1,
   "AlbedoTexture": "",
-  "NormalTexture": ""
+  "NormalTexture": "",
+  "OrmTexture": "",
+  "OcclusionStrength": 1
 }

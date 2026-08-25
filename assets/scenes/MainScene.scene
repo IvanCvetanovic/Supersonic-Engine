@@ -2,6 +2,7 @@
   "Version": 2,
   "Scene": "MainScene",
   "Physics": { "Gravity": [0, -9.81, 0], "GroundPlane": false, "GroundPlaneY": 0 },
+  "Rendering": { "BloomThreshold": 1, "BloomSoftKnee": 0.5, "BloomIntensity": 0.55, "Exposure": 1, "FogDensity": 0, "FogColor": [0.55, 0.6, 0.68] },
   "Entities": [
     {
       "Tag": "Main Camera",
@@ -35,8 +36,11 @@
         "Direction": [0.452265, 0.822301, 0.345366],
         "Color": [1, 0.96, 0.88],
         "Ambient": [0.05, 0.055, 0.07],
+        "AmbientGround": [0.1, 0.09, 0.08],
         "Intensity": 1.6,
         "Range": 25,
+        "InnerAngle": 0.35,
+        "OuterAngle": 0.52,
         "CastsShadow": true
       },
       "HasRenderable": false
@@ -53,8 +57,11 @@
         "Direction": [0.6, 1, 0.5],
         "Color": [1, 0.55, 0.25],
         "Ambient": [0.12, 0.12, 0.14],
+        "AmbientGround": [0.1, 0.09, 0.08],
         "Intensity": 2.2,
         "Range": 14,
+        "InnerAngle": 0.35,
+        "OuterAngle": 0.52,
         "CastsShadow": true
       },
       "HasRenderable": false
@@ -71,8 +78,11 @@
         "Direction": [0.6, 1, 0.5],
         "Color": [0.3, 0.55, 1],
         "Ambient": [0.12, 0.12, 0.14],
+        "AmbientGround": [0.1, 0.09, 0.08],
         "Intensity": 2.2,
         "Range": 14,
+        "InnerAngle": 0.35,
+        "OuterAngle": 0.52,
         "CastsShadow": true
       },
       "HasRenderable": false
@@ -91,11 +101,20 @@
       "Material": {
         "Albedo": [1, 1, 1, 1],
         "AlbedoTexture": "assets/textures/floor_tiles.png",
+        "AlbedoTextureGuid": "320e51673e6f8a91c3d06bca0efebea9",
         "NormalTexture": "assets/textures/tiles_normal.png",
+        "NormalTextureGuid": "7e56bc09147250985d6a0e1624caacee",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.65,
         "Metallic": 0.05,
         "AO": 1,
-        "Asset": "assets/materials/TiledFloor.material"
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
+        "Asset": "assets/materials/TiledFloor.material",
+        "AssetGuid": "083faf927389156960b458882481ad94"
       },
       "BoxCollider": { "Size": [1, 1, 1], "Center": [0, -0.5, 0], "IsTrigger": false, "Layer": 1, "CollidesWith": 4294967295 },
       "Renderable": { "Visible": true, "CastsShadow": false },
@@ -115,15 +134,24 @@
       "Material": {
         "Albedo": [1, 1, 1, 1],
         "AlbedoTexture": "assets/textures/uv_grid.png",
+        "AlbedoTextureGuid": "239e87cb7045b349edfbc46b8f882006",
         "NormalTexture": "assets/textures/tiles_normal.png",
+        "NormalTextureGuid": "7e56bc09147250985d6a0e1624caacee",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.45,
         "Metallic": 0.1,
         "AO": 1,
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
         "Asset": ""
       },
       "Script": {
         "Name": "RotatorScript",
-        "Enabled": true
+        "Enabled": true,
+        "Parameters": {}
       },
       "Renderable": { "Visible": true, "CastsShadow": true },
       "HasRenderable": true
@@ -144,9 +172,15 @@
         "Albedo": [1, 0.45, 0.25, 1],
         "AlbedoTexture": "",
         "NormalTexture": "",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.35,
         "Metallic": 0.1,
         "AO": 1,
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
         "Asset": ""
       },
       "Renderable": { "Visible": true, "CastsShadow": true },
@@ -167,9 +201,15 @@
         "Albedo": [1, 1, 1, 1],
         "AlbedoTexture": "",
         "NormalTexture": "",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.18,
         "Metallic": 0.9,
         "AO": 1,
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
         "Asset": ""
       },
       "Renderable": { "Visible": true, "CastsShadow": true },
@@ -184,15 +224,23 @@
       },
       "Mesh": {
         "Primitive": "",
-        "Path": "assets/models/monument.gltf"
+        "Path": "assets/models/monument.gltf",
+        "PathGuid": "60e1713b483dbd26133ff1c07f9b4ace"
       },
       "Material": {
         "Albedo": [1, 1, 1, 1],
         "AlbedoTexture": "assets/textures/uv_grid.png",
+        "AlbedoTextureGuid": "239e87cb7045b349edfbc46b8f882006",
         "NormalTexture": "",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.55,
         "Metallic": 0.1,
         "AO": 1,
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
         "Asset": ""
       },
       "Renderable": { "Visible": true, "CastsShadow": true },
@@ -212,19 +260,33 @@
       "Material": {
         "Albedo": [1, 1, 1, 1],
         "AlbedoTexture": "assets/textures/uv_grid.png",
+        "AlbedoTextureGuid": "239e87cb7045b349edfbc46b8f882006",
         "NormalTexture": "",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.4,
         "Metallic": 0.1,
         "AO": 1,
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
         "Asset": ""
       },
       "RigidBody": {
         "Velocity": [0, 0, 0],
         "Mass": 1,
         "UseGravity": true,
+        "Restitution": 0.3,
+        "Friction": 0.4,
+        "LinearDamping": 0,
+        "AngularVelocity": [0, 0, 0],
+        "AngularDamping": 0.05,
+        "FreezeRotation": false,
+        "AllowSleep": true,
         "IsKinematic": false
       },
-      "BoxCollider": { "Size": [1, 1, 1], "IsTrigger": false },
+      "BoxCollider": { "Size": [1, 1, 1], "Center": [0, 0, 0], "IsTrigger": false, "Layer": 1, "CollidesWith": 4294967295 },
       "Renderable": { "Visible": true, "CastsShadow": true },
       "HasRenderable": true
     },
@@ -243,12 +305,18 @@
         "Albedo": [0.55, 0.57, 0.62, 1],
         "AlbedoTexture": "",
         "NormalTexture": "",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.7,
         "Metallic": 0.1,
         "AO": 1,
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
         "Asset": ""
       },
-      "BoxCollider": { "Size": [1, 1, 1], "IsTrigger": false },
+      "BoxCollider": { "Size": [1, 1, 1], "Center": [0, 0, 0], "IsTrigger": false, "Layer": 1, "CollidesWith": 4294967295 },
       "Renderable": { "Visible": true, "CastsShadow": true },
       "HasRenderable": true
     },
@@ -267,18 +335,31 @@
         "Albedo": [0.85, 0.35, 0.2, 1],
         "AlbedoTexture": "",
         "NormalTexture": "",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.4,
         "Metallic": 0.2,
         "AO": 1,
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
         "Asset": ""
       },
       "RigidBody": {
         "Velocity": [0, 0, 0],
         "Mass": 2,
         "UseGravity": true,
+        "Restitution": 0.3,
+        "Friction": 0.4,
+        "LinearDamping": 0,
+        "AngularVelocity": [0, 0, 0],
+        "AngularDamping": 0.05,
+        "FreezeRotation": false,
+        "AllowSleep": true,
         "IsKinematic": false
       },
-      "SphereCollider": { "Radius": 0.5, "IsTrigger": false },
+      "SphereCollider": { "Radius": 0.5, "Center": [0, 0, 0], "IsTrigger": false, "Layer": 1, "CollidesWith": 4294967295 },
       "Renderable": { "Visible": true, "CastsShadow": true },
       "HasRenderable": true
     },
@@ -291,15 +372,22 @@
       },
       "Mesh": {
         "Primitive": "",
-        "Path": "assets/models/bender.gltf"
+        "Path": "assets/models/bender.gltf",
+        "PathGuid": "26d4479c1bbd20f53cc74d3b03e13eb1"
       },
       "Material": {
         "Albedo": [0.85, 0.55, 0.25, 1],
         "AlbedoTexture": "",
         "NormalTexture": "",
+        "OrmTexture": "",
+        "OcclusionStrength": 1,
         "Roughness": 0.45,
         "Metallic": 0.1,
         "AO": 1,
+        "Emissive": [0, 0, 0],
+        "EmissiveStrength": 0,
+        "Transparent": false,
+        "AlphaCutoff": 0,
         "Asset": ""
       },
       "Animator": {
@@ -340,6 +428,7 @@
       },
       "AudioSource": {
         "Clip": "assets/audio/ambient.wav",
+        "ClipGuid": "b941ef157b3311a03a0f40998157a4a8",
         "Volume": 0.35,
         "Pitch": 1,
         "Playing": true,

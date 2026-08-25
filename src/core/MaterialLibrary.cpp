@@ -1,4 +1,5 @@
 #include "core/MaterialLibrary.hpp"
+#include "core/AssetDatabase.hpp"
 #include "core/AssetVersion.hpp"
 #include "core/Log.hpp"
 
@@ -12,6 +13,31 @@
 namespace fs = std::filesystem;
 
 namespace Supersonic {
+
+namespace {
+
+// A texture reference in a `.material`, written as its identity AND the path it
+// had when it was saved - exactly what ComponentCodec writes into a scene, and
+// resolved the same way. See AssetDatabase for why it is both rather than
+// either.
+void writeTextureRef(std::ostringstream& out, const char* key, const std::string& path) {
+    out << "  \"" << key << "\": \"" << Json::Escape(path) << "\",\n";
+
+    const std::string guid = AssetDatabase::Instance().GuidForPath(path);
+    if (!guid.empty()) {
+        out << "  \"" << key << "Guid\": \"" << guid << "\",\n";
+    }
+}
+
+std::string readTextureRef(const Json::Value& root, const std::string& key) {
+    const std::string path = root[key].AsString("");
+    const std::string guid = root[key + "Guid"].AsString("");
+    if (path.empty() && guid.empty()) return path;
+    return AssetDatabase::Instance().Resolve(guid, path);
+}
+
+} // namespace
+
 
 namespace {
 
@@ -34,9 +60,12 @@ std::string MaterialLibrary::Serialize(const MaterialAsset& asset) {
     out << "  \"Roughness\": " << asset.roughness << ",\n";
     out << "  \"Metallic\": " << asset.metallic << ",\n";
     out << "  \"AO\": " << asset.ao << ",\n";
-    out << "  \"AlbedoTexture\": \"" << Json::Escape(asset.albedoTexturePath) << "\",\n";
-    out << "  \"NormalTexture\": \"" << Json::Escape(asset.normalTexturePath) << "\",\n";
-    out << "  \"OrmTexture\": \"" << Json::Escape(asset.ormTexturePath) << "\",\n";
+    // The same identity-and-path pair a scene writes, for the same reason: a
+    // `.material` names three textures, and renaming one of them used to break
+    // every entity sharing that material rather than only the scene it was in.
+    writeTextureRef(out, "AlbedoTexture", asset.albedoTexturePath);
+    writeTextureRef(out, "NormalTexture", asset.normalTexturePath);
+    writeTextureRef(out, "OrmTexture", asset.ormTexturePath);
     out << "  \"OcclusionStrength\": " << asset.occlusionStrength << "\n";
     out << "}\n";
     return out.str();
@@ -55,11 +84,11 @@ bool MaterialLibrary::Deserialize(const std::string& text, MaterialAsset& out, s
     out.roughness = root["Roughness"].AsFloat(0.4f);
     out.metallic = root["Metallic"].AsFloat(0.1f);
     out.ao = root["AO"].AsFloat(1.0f);
-    out.albedoTexturePath = root["AlbedoTexture"].AsString("");
-    out.normalTexturePath = root["NormalTexture"].AsString("");
+    out.albedoTexturePath = readTextureRef(root, "AlbedoTexture");
+    out.normalTexturePath = readTextureRef(root, "NormalTexture");
     // Absent from every .material written before packed maps existed, which
     // reads as no map and therefore as exactly the surface it always was.
-    out.ormTexturePath = root["OrmTexture"].AsString("");
+    out.ormTexturePath = readTextureRef(root, "OrmTexture");
     out.occlusionStrength = root["OcclusionStrength"].AsFloat(1.0f);
     return true;
 }

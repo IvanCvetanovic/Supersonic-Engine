@@ -1,5 +1,6 @@
 #include "core/SupersonicApp.hpp"
 #include "renderer/ScreenCapture.hpp"
+#include "core/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "core/Profiler.hpp"
 #include "core/Components.hpp"
@@ -245,6 +246,26 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     // the registry is exactly what a scene load does, and the object doing it
     // should not live inside the thing being cleared.
     m_registry.ctx().insert_or_assign<SceneManager*>(&m_sceneManager);
+
+    // Asset identities, before the first scene is read.
+    //
+    // A SCAN, not an import: this reads the sidecars that are already there and
+    // writes nothing. A project that has never been imported scans to nothing,
+    // every reference resolves by its path exactly as it always did, and the
+    // only difference is a count. `--import-assets` is what mints.
+    {
+        const auto scanned = AssetDatabase::Instance().Scan("assets");
+        if (scanned.ok) {
+            SUPERSONIC_LOG_INFO("AssetDatabase")
+                << "Assets: " << scanned.identified << " with an identity, "
+                << scanned.unidentified << " without"
+                << (scanned.orphaned > 0
+                        ? ", " + std::to_string(scanned.orphaned) +
+                              " orphaned sidecar(s) - run --import-assets to recover them"
+                        : std::string())
+                << "." << std::endl;
+        }
+    }
 
     initECS();
 

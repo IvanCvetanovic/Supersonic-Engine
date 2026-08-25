@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "core/Components.hpp"
+#include "core/AssetDatabase.hpp"
 #include "core/TerrainGenerator.hpp"
 
 #include <algorithm>
@@ -14,6 +15,41 @@ namespace Supersonic {
 
 namespace ComponentCodec {
 namespace {
+
+// Every asset reference is written as a PAIR: the identity, and the path it had
+// when it was saved.
+//
+// Both, not either. The identity is what survives a rename, and the path is
+// what a person reading the file needs in order to know what the entry is - a
+// scene full of thirty-two hex characters and nothing else is unreadable and
+// unmergeable. The path is also the migration story: every scene written before
+// identities existed has one and no identity, and goes on working.
+//
+// Empty identities are not written at all, so a project that has never been
+// imported produces exactly the file it always did.
+void writeAssetRef(std::ostream& out, const std::string& indent, const std::string& key,
+                   const std::string& path, const char* trailing) {
+    out << indent << "  \"" << key << "\": \"" << Json::Escape(path) << "\"";
+
+    const std::string guid = AssetDatabase::Instance().GuidForPath(path);
+    if (!guid.empty()) {
+        out << ",\n" << indent << "  \"" << key << "Guid\": \"" << guid << "\"";
+    }
+    out << trailing;
+}
+
+// Where that reference points NOW.
+//
+// The identity wins when it resolves. When it does not, the saved path is used
+// and the database counts it - see AssetDatabase::Resolve for why that has to
+// be loud rather than quietly correct-looking.
+std::string readAssetRef(const Json::Value& node, const std::string& key,
+                         const std::string& fallback = "") {
+    const std::string path = node[key].AsString(fallback);
+    const std::string guid = node[key + "Guid"].AsString("");
+    if (path.empty() && guid.empty()) return path;
+    return AssetDatabase::Instance().Resolve(guid, path);
+}
 
 struct RegisteredComponent {
     std::string key;
@@ -122,7 +158,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
     if (const auto* mesh = registry.try_get<MeshComponent>(entity)) {
         out << indent << "\"Mesh\": {\n";
         out << indent << "  \"Primitive\": \"" << Json::Escape(mesh->primitiveType) << "\",\n";
-        out << indent << "  \"Path\": \"" << Json::Escape(mesh->filePath) << "\"\n";
+        writeAssetRef(out, indent, "Path", mesh->filePath, "\n");
         out << indent << "},\n";
     }
 
@@ -161,9 +197,9 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "\"Material\": {\n";
         out << indent << "  \"Albedo\": [" << mat->albedoColor.x << ", " << mat->albedoColor.y << ", "
              << mat->albedoColor.z << ", " << mat->albedoColor.w << "],\n";
-        out << indent << "  \"AlbedoTexture\": \"" << Json::Escape(mat->albedoTexturePath) << "\",\n";
-        out << indent << "  \"NormalTexture\": \"" << Json::Escape(mat->normalTexturePath) << "\",\n";
-        out << indent << "  \"OrmTexture\": \"" << Json::Escape(mat->ormTexturePath) << "\",\n";
+        writeAssetRef(out, indent, "AlbedoTexture", mat->albedoTexturePath, ",\n");
+        writeAssetRef(out, indent, "NormalTexture", mat->normalTexturePath, ",\n");
+        writeAssetRef(out, indent, "OrmTexture", mat->ormTexturePath, ",\n");
         out << indent << "  \"OcclusionStrength\": "
             << jsonSafe(mat->occlusionStrength, "occlusionStrength") << ",\n";
         out << indent << "  \"Roughness\": " << mat->roughness << ",\n";
@@ -178,7 +214,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"EmissiveStrength\": " << jsonSafe(mat->emissiveStrength, "emissiveStrength") << ",\n";
         out << indent << "  \"Transparent\": " << (mat->transparent ? "true" : "false") << ",\n";
         out << indent << "  \"AlphaCutoff\": " << jsonSafe(mat->alphaCutoff, "alphaCutoff") << ",\n";
-        out << indent << "  \"Asset\": \"" << Json::Escape(mat->materialPath) << "\"\n";
+        writeAssetRef(out, indent, "Asset", mat->materialPath, "\n");
         out << indent << "},\n";
     }
 
@@ -277,7 +313,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         // voice/failedToLoad are runtime state owned by AudioSystem and are
         // deliberately not persisted.
         out << indent << "\"AudioSource\": {\n";
-        out << indent << "  \"Clip\": \"" << Json::Escape(audio->soundFile) << "\",\n";
+        writeAssetRef(out, indent, "Clip", audio->soundFile, ",\n");
         out << indent << "  \"Volume\": " << audio->volume << ",\n";
         out << indent << "  \"Pitch\": " << audio->pitch << ",\n";
         out << indent << "  \"Playing\": " << (audio->isPlaying ? "true" : "false") << ",\n";
@@ -489,7 +525,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     if (node.Has("Mesh")) {
         const auto& m = node["Mesh"];
         registry.emplace_or_replace<MeshComponent>(entity,
-            m["Primitive"].AsString("Cube"), m["Path"].AsString(""), 0u, 0u);
+            m["Primitive"].AsString("Cube"), readAssetRef(m, "Path"), 0u, 0u);
     }
 
     if (node.Has("Light")) {
@@ -528,16 +564,16 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         const auto& m = node["Material"];
         auto& material = registry.emplace_or_replace<MaterialComponent>(entity);
         material.albedoColor = readVec4(m["Albedo"], glm::vec4(1.0f));
-        material.albedoTexturePath = m["AlbedoTexture"].AsString("");
-        material.normalTexturePath = m["NormalTexture"].AsString("");
+        material.albedoTexturePath = readAssetRef(m, "AlbedoTexture");
+        material.normalTexturePath = readAssetRef(m, "NormalTexture");
         // Absent from every scene written before packed maps existed, which
         // reads as no map and so as exactly the surface it was.
-        material.ormTexturePath = m["OrmTexture"].AsString("");
+        material.ormTexturePath = readAssetRef(m, "OrmTexture");
         material.occlusionStrength = m["OcclusionStrength"].AsFloat(1.0f);
         material.roughness = m["Roughness"].AsFloat(0.4f);
         material.metallic = m["Metallic"].AsFloat(0.1f);
         material.ao = m["AO"].AsFloat(1.0f);
-        material.materialPath = m["Asset"].AsString("");
+        material.materialPath = readAssetRef(m, "Asset");
         // Absent in every scene written before the blended pass existed, and
         // false is what those scenes rendered as.
         material.transparent = m["Transparent"].AsBool(false);
@@ -652,7 +688,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     if (node.Has("AudioSource")) {
         const auto& a = node["AudioSource"];
         auto& audio = registry.emplace_or_replace<AudioSourceComponent>(entity);
-        audio.soundFile = a["Clip"].AsString("assets/audio/ambient.wav");
+        audio.soundFile = readAssetRef(a, "Clip", "assets/audio/ambient.wav");
         audio.volume = a["Volume"].AsFloat(0.8f);
         audio.pitch = a["Pitch"].AsFloat(1.0f);
         audio.isPlaying = a["Playing"].AsBool(true);

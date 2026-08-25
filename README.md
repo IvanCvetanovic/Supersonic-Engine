@@ -263,6 +263,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
 | `test_heightfield` | Terrain collision: the grid against the mesh vertex for vertex, seams, ridge crests, grooves, buried recovery, and the cell march a ray does |
 | `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, and every degenerate case |
+| `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, and which route a reference resolved by |
 | `test_audio` | WAV decoding, including the shipped clip |
 | `test_scripts` | Script registry and dispatch |
 | `test_blending` | Cross-fade between clips, blend weights, clip switching |
@@ -298,13 +299,73 @@ comment on each one says which.
 
 ---
 
+## Asset identity
+
+Every asset reference used to be a raw relative path, so renaming a file in
+Explorer broke every scene, prefab and material pointing at it. **Silently** is
+the whole problem: the texture is gone, the fallback checkerboard appears, and
+nothing says which of forty references used to work.
+
+Each asset gets a `.meta` sidecar beside it — `floor_tiles.png.meta` — holding a
+32-character identity and a content hash. That is the one place it can live and
+still be copied by a packager that copies directory trees, moved by a person who
+moves the asset, and diffed by git.
+
+A saved reference carries **both** the identity and the path:
+
+```json
+"AlbedoTexture": "assets/textures/floor_tiles.png",
+"AlbedoTextureGuid": "320e51673e6f8a91c3d06bca0efebea9",
+```
+
+Both, not either. The identity is what survives a rename; the path is what makes
+the file readable and mergeable, and it is the migration story — every scene
+written before identities existed has a path and no identity, and goes on
+working unchanged.
+
+**Renaming is recovered by content.** Explorer has never heard of a `.meta`, so
+a rename leaves the sidecar behind under the old name and the asset arrives with
+no identity at all. `--import-assets` matches orphaned sidecars against
+un-identified files by their contents and carries the identity across. The
+ordering is the feature: mint first and every renamed file gets a brand new
+identity, adoption finds nothing left to adopt, and the headline case silently
+does nothing while every counter still reads like success.
+
+**Scanning creates nothing.** A scan runs from load paths and from tests, and
+one that minted as a side effect would have the test suite writing sidecars into
+your assets folder the first time you ran it. `Scan` reads; `--import-assets`
+writes.
+
+**A fallback is counted, not hidden.** When a reference carries an identity
+nothing answers to, the saved path is used *and* the database counts it and logs
+a warning — because a fallback that looks like success is worse than no feature:
+it is the old broken behaviour wearing the new one's clothes. Every test asserts
+which route a reference resolved by, since one that only checks the answer also
+passes when the fallback happened to be right.
+
+```
+SupersonicEngine --import-assets
+```
+
+mints identities, then re-writes the `.material` and `.scene` files that
+reference them so they carry the identities too. A scene is written to a string,
+read back, and written again; it is only committed when the two strings are
+identical — a fixed point, which is a far stronger statement than "the same
+number of entities came back".
+
+**Not done, and separable:** a rename made while the editor is running is only
+picked up at the next import — nothing re-points a live scene. Prefabs
+deliberately keep only the shape of a reference and not its target, because a
+prefab cannot name an entity in a scene it is not part of.
+
+
 ## Roadmap
 
 Split into what is done and what is next, because a list on which every box is
 ticked has stopped being a roadmap. The README is already comfortable calling
 Android "not functional"; extending that register forward costs nothing.
 
-### Shipped
+## Shipped
 
 - [x] PBR, normal mapping, cascaded shadow maps, point and spot shadows
 - [x] HDR pipeline with bloom, 4× MSAA, a procedural sky and distance fog
@@ -347,10 +408,12 @@ Android "not functional"; extending that register forward costs nothing.
 
 Ordered by what it costs against what it unblocks, not by how interesting it is.
 
-- [ ] **Asset identity.** Every reference is a raw relative path, so renaming a
-      file in Explorer silently breaks every scene, prefab and material pointing
-      at it. Animation clips, audio and `.material` files are also still outside
-      hot reload, and a clip is typed into a text box rather than picked
+- [ ] **The rest of the asset pipeline.** Identity is done — a reference
+      survives a rename — but animation clips, audio and `.material` files are
+      still outside hot reload, so editing one means restarting; a clip is typed
+      into a text box rather than picked; and a rename made while the editor is
+      RUNNING is only noticed at the next import, because nothing re-points the
+      live scene
 - [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
       is no cubemap path at all — no HDRI can be loaded — so metal and smooth
       dielectrics have nothing to reflect but a two-colour gradient

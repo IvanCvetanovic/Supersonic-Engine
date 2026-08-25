@@ -1,4 +1,5 @@
 #include "editor/EditorLayer.hpp"
+#include "core/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "editor/EditorIcons.hpp"
 #include "editor/Theme.hpp"
@@ -400,6 +401,24 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             }
             if (ImGui::MenuItem(ICON_FA_PLUS "  New Scene")) {
                 m_sceneManager->RequestNew();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Import Assets")) {
+                // Mints an identity for anything under assets/ that has none,
+                // and recovers the identity of anything that was renamed
+                // outside the editor by matching it on contents. The only part
+                // of asset identity that writes, which is why it is a menu item
+                // rather than something that happens on load.
+                const auto result = AssetDatabase::Instance().Import("assets");
+                if (!result.ok) {
+                    SetStatus("Import Assets: no 'assets' folder here.", true);
+                } else {
+                    SetStatus("Imported assets: " + std::to_string(result.minted) +
+                                  " new, " + std::to_string(result.adopted) +
+                                  " recovered from a rename. Save the scene to stamp "
+                                  "the identities into it.",
+                              false);
+                }
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Package Standalone Game")) {
