@@ -3,6 +3,13 @@
 > **Plan, 25 August 2026.** Written against `D:/The-Wolf-Brigade` at its current
 > state and Supersonic at `47473fa`. Every claim below was read out of one of
 > those two trees; where a number is a guess it says so.
+>
+> **Amended the same day** after a deeper read of the game finished. The
+> conclusion did not move, but two numbers did: the peak drawable count was
+> wrong by an order of magnitude (I counted entities, not the CanvasItems each
+> one is made of), and endless mode turns out to be unbounded by data. Three
+> requirements were missing entirely — a tint that can brighten past 1.0,
+> immediate-mode shapes, and how much of the screen is world-space UI.
 
 ## The finding that should decide the schedule
 
@@ -45,13 +52,13 @@ content.
 |---|---|
 | GDScript | 76 files, ~8,150 lines (~4,500 under `scripts/`) |
 | Godot coupling | ~14% of lines in the ten largest scripts touch nodes, signals, tweens or groups. The other ~86% is logic. |
-| Peak entities | Waves of 8–12 (`data/waves.json`), endless growing by 2 per wave. Tens, not thousands. |
+| Peak drawables | **~350–400**, not the tens I first wrote. A unit is 5 CanvasItems and a building 7, so a busy campaign frame is roughly 40–60 units (200–300 quads) + ~8 buildings (56) + 12 resource nodes + ≤15 projectiles + ≤64 pooled damage labels. Endless mode is **unbounded by data** — enemies gain 8% HP per wave and accumulate, so the ceiling is the player's kill rate, not a number in a file. |
 | Data | All gameplay numbers already live in `data/*.json` — the port reads the same files. |
 
-The peak entity count is the happiest number here. Supersonic submits one draw
-and one push constant per entity with no instancing and no sort
-(`src/core/RenderSystem.cpp`), which would be a problem at HUSK's ~5,000 and is
-irrelevant at Wolf Brigade's few dozen.
+Supersonic submits one draw and one push constant per entity with no instancing
+and no sort (`src/core/RenderSystem.cpp`). At 400 quads that is fine. At a long
+endless run it is worth measuring rather than assuming — which is one more
+reason Phase 0 exists.
 
 ---
 
@@ -89,6 +96,13 @@ The engine renders one way: perspective, PBR. The game needs neither.
 | Quad primitive with a pivot | engine feature | hours |
 | Explicit draw order | engine **assumption change** | ~2–3 days |
 
+The game is a **strictly 1D lane**: every unit sits at the same ground row and
+only x ever changes (`unit.gd:313`, `:280-281`). The camera has no zoom at all —
+`Camera2D.zoom` is read as a divisor and never assigned, so it is (1,1) for the
+whole game. It pans along x within a 6000-wide world showing 1920 at a time, and
+shakes through `offset` so the shake never fights the pan clamp. That makes the
+camera work smaller than a general 2D camera would be.
+
 **Orthographic.** `CameraComponent::getProjectionMatrix()` hardcodes
 `glm::perspective` with no mode field; `grep -i ortho` over `src/` finds only
 the shadow frustum. Add a mode enum and an `orthoSize`, branch to `glm::ortho`
@@ -108,9 +122,32 @@ its own child order as the draw order. Supersonic iterates the registry
 is not an ordering at all. This needs a sort key on the renderable and a sorted
 opaque pass, which is a change to how the renderer decides what to draw when.
 
+### Three things the first draft of this plan missed
+
+**A tint that can brighten.** The hit flash sets `modulate = Color(2.4, 2.4,
+2.4, a)` and tweens it back to 1.0 (`juice.gd:18`) — it relies on a per-object
+multiplier **above 1.0** pushing the colour toward white. So the flat-colour path
+needs a tint multiplier and an alpha, not a flat colour. Cheap if designed in
+now, annoying to retrofit. The scene target is already floating point, so values
+above 1 survive to the tone mapper.
+
+**Immediate-mode shapes.** Two overlays are drawn rather than composed:
+`order_marker.gd:30-33` is `draw_arc(centre, r, 0, TAU, 40, colour, 3.0, true)`
+plus `draw_circle`, and `marquee.gd:19-23` is a filled `draw_rect` plus a 2px
+outline. Supersonic has no line or arc primitive. Small — a debug-draw path with
+lines and a filled quad covers both — but it is not zero and nothing else in the
+engine wants it.
+
+**Tweens are load-bearing for the look.** Death, depletion, the attack squash and
+the hit flash are all SceneTree tweens on `modulate` and `scale`, several with
+`set_parallel` and `tween_callback(queue_free)`. The port brings its own
+interpolation (Phase 3), but the *renderable* has to expose per-object tint and
+scale for it to drive.
+
 **Done when:** a unit renders as ring-behind-body-behind-bar-behind-label in
-that order, at a fixed screen size independent of window size, and a scene with
-no orthographic camera renders byte-identically to before.
+that order, at a fixed screen size independent of window size; a hit flash
+brightens toward white and returns; and a scene with no orthographic camera
+renders byte-identically to before.
 
 ---
 
@@ -130,8 +167,12 @@ units against a 1080-high reference. That is most of Godot's
 - **Containers.** `VBoxContainer`, `HBoxContainer`, `CenterContainer`,
   `ScrollContainer` — 16 uses across the scenes. Supersonic places elements at
   an anchor plus an offset; nothing stacks, flows, or measures children.
-- **World-space UI.** The HP bar and the unit label are world-space children of
-  the unit. There is no "label at a 3D position" in the engine.
+- **World-space UI, and it is most of the entity.** Of a unit's five drawables,
+  three are world-space UI: the HP bar (two quads) and a Label. A building has a
+  progress bar on top of that. Pooled floating damage numbers are world-space
+  Labels too, soft-capped at 64 (`fx.json:8`). There is no "label at a world
+  position" in the engine at all, and this is not a garnish — it is the majority
+  of what is on screen.
 - **`aspect=expand`.** The HUD scales by height; the game view's aspect handling
   has no equivalent.
 
