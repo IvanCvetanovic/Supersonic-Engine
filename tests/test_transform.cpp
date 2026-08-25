@@ -7,11 +7,15 @@
 // If someone moves those defines back into a header, this test starts failing.
 
 #include "TestHarness.hpp"
+
+#include <algorithm>
+#include <cmath>
 #include <glm/gtc/constants.hpp>
 #include "core/Components.hpp"
 #include "core/EcsUtils.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 using namespace Supersonic;
 
@@ -236,6 +240,133 @@ static void testTheModelMatrixMatchesTheChainItReplaces() {
     CHECK_MSG(compared > 1000, "and there must be enough of them to mean something");
 }
 
+// ---- The Euler convention the transform actually uses ----------------------
+//
+// Found by a hinged door that exploded. The physics integrator turned
+// `rotation` into a quaternion with glm::quat(vec3), applied the step's spin,
+// and wrote the result back with glm::eulerAngles - and glm::quat(vec3)
+// composes the three angles in the OPPOSITE ORDER from getModelMatrix. For any
+// orientation with more than one non-zero angle it is a different rotation.
+//
+// Both halves of that round trip used the same wrong convention, so it was
+// self-consistent and every test passed. What was wrong was the relationship to
+// the matrix that renders and collides the body: the spin was applied about the
+// wrong axes. A body turning about ONE axis has one non-zero angle and the two
+// conventions agree exactly there, which is why nothing caught it for so long.
+
+static void testTheTwoEulerConventionsAreNotTheSame() {
+    // Pinned deliberately, so that nobody "simplifies" EulerFromRotation back
+    // into glm::quat and reintroduces this. If GLM ever changes to match, this
+    // is the test that says so rather than a door that explodes.
+    const glm::vec3 euler(0.5f, 0.7f, 0.3f);
+
+    TransformComponent transform;
+    transform.rotation = euler;
+
+    const glm::mat3 fromTransform = transform.getRotationMatrix();
+    const glm::mat3 fromGlmQuat = glm::mat3_cast(glm::quat(euler));
+
+    float worst = 0.0f;
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) {
+            worst = std::max(worst, std::fabs(fromTransform[column][row] -
+                                              fromGlmQuat[column][row]));
+        }
+    }
+    CHECK_MSG(worst > 0.1f,
+              "glm::quat(vec3) is NOT this engine's Euler convention, and treating it "
+              "as though it were is what made a hinged door explode");
+}
+
+static void testEulerSurvivesTheRoundTripThroughAMatrix() {
+    // What the integrator now does every step for every turning body: take the
+    // orientation out as a matrix, and put it back as a triple.
+    const float samples[7] = {-2.9f, -1.1f, -0.3f, 0.0f, 0.4f, 1.2f, 3.0f};
+
+    int mismatches = 0;
+    int checked = 0;
+    for (const float x : samples) {
+        for (const float y : samples) {
+            for (const float z : samples) {
+                // Past a quarter turn in Y the triple is no longer unique - the
+                // pole swaps which of x and z carries the turn - so the ROTATION
+                // is what has to come back, not the three numbers.
+                TransformComponent original;
+                original.rotation = glm::vec3(x, y, z);
+                const glm::mat3 before = original.getRotationMatrix();
+
+                TransformComponent restored;
+                restored.rotation = TransformComponent::EulerFromRotation(before);
+                const glm::mat3 after = restored.getRotationMatrix();
+
+                ++checked;
+                for (int column = 0; column < 3; ++column) {
+                    for (int row = 0; row < 3; ++row) {
+                        if (!test::nearly(before[column][row], after[column][row], 1e-4f)) {
+                            ++mismatches;
+                            column = 3;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    CHECK_EQ(checked, 343);
+    CHECK_MSG(mismatches == 0,
+              "every orientation has to come back as the same orientation");
+}
+
+static void testTheGimbalPoleIsAnAnswerRatherThanANaN() {
+    // sy at exactly one: cy is zero, x and z stop being separable, and the
+    // ratios the general case divides by are both zero over zero. An
+    // unguarded atan2 there is a NaN that spreads into the transform and never
+    // comes out.
+    for (const float pole : {1.5707963f, -1.5707963f}) {
+        TransformComponent original;
+        original.rotation = glm::vec3(0.6f, pole, 0.0f);
+        const glm::mat3 before = original.getRotationMatrix();
+
+        const glm::vec3 recovered = TransformComponent::EulerFromRotation(before);
+        CHECK(std::isfinite(recovered.x) && std::isfinite(recovered.y) &&
+              std::isfinite(recovered.z));
+
+        TransformComponent restored;
+        restored.rotation = recovered;
+        const glm::mat3 after = restored.getRotationMatrix();
+
+        int wrong = 0;
+        for (int column = 0; column < 3; ++column) {
+            for (int row = 0; row < 3; ++row) {
+                if (!test::nearly(before[column][row], after[column][row], 1e-3f)) ++wrong;
+            }
+        }
+        CHECK_MSG(wrong == 0, "and the orientation at the pole still comes back");
+    }
+}
+
+static void testTheRotationMatrixIsTheModelMatrixWithoutItsScale() {
+    // One definition. getRotationMatrix asks getModelMatrix for an unscaled
+    // copy rather than writing the nine entries again, and this is what says
+    // the two have not drifted apart.
+    TransformComponent transform;
+    transform.rotation = glm::vec3(0.3f, -0.8f, 1.1f);
+    transform.scale = glm::vec3(2.0f, 0.5f, 3.0f);
+    transform.position = glm::vec3(4.0f, -1.0f, 2.0f);
+
+    const glm::mat3 scaled(transform.getModelMatrix());
+    const glm::mat3 rotation = transform.getRotationMatrix();
+
+    int wrong = 0;
+    for (int column = 0; column < 3; ++column) {
+        const float scale = transform.scale[column];
+        for (int row = 0; row < 3; ++row) {
+            if (!test::nearly(scaled[column][row], rotation[column][row] * scale, 1e-4f)) ++wrong;
+        }
+    }
+    CHECK_MSG(wrong == 0, "the model matrix is the rotation with the scale on its columns");
+}
+
 static void runTests() {
     testTheModelMatrixMatchesTheChainItReplaces();
     testDepthRangeIsZeroToOne();
@@ -246,6 +377,11 @@ static void runTests() {
     testANonCastingDirectionalStillBeatsAPointLight();
     testAPointLightOnlySceneStillHasAmbient();
     testAnEmptySceneHasNoAmbientLight();
+
+    testTheTwoEulerConventionsAreNotTheSame();
+    testEulerSurvivesTheRoundTripThroughAMatrix();
+    testTheGimbalPoleIsAnAnswerRatherThanANaN();
+    testTheRotationMatrixIsTheModelMatrixWithoutItsScale();
 }
 
-TEST_MAIN("test_transform", 30)
+TEST_MAIN("test_transform", 36)

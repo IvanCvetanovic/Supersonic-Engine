@@ -290,8 +290,19 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         writeVec3(out, joint->connectedAxis, "Joint.connectedAxis");
         out << ", \"Distance\": " << joint->distance
             << ", \"Rope\": " << (joint->rope ? "true" : "false")
+            << ", \"UseLimit\": " << (joint->useLimit ? "true" : "false")
+            << ", \"MinAngle\": " << jsonSafe(joint->minAngle, "Joint.minAngle")
+            << ", \"MaxAngle\": " << jsonSafe(joint->maxAngle, "Joint.maxAngle")
+            << ", \"UseMotor\": " << (joint->useMotor ? "true" : "false")
+            << ", \"MotorSpeed\": " << jsonSafe(joint->motorSpeed, "Joint.motorSpeed")
+            << ", \"MaxMotorTorque\": "
+            << jsonSafe(joint->maxMotorTorque, "Joint.maxMotorTorque")
+            << ", \"BreakForce\": " << jsonSafe(joint->breakForce, "Joint.breakForce")
+            << ", \"BreakTorque\": " << jsonSafe(joint->breakTorque, "Joint.breakTorque")
             << ", \"Stiffness\": " << joint->stiffness
             << ", \"Enabled\": " << (joint->enabled ? "true" : "false") << " },\n";
+        // `broken` is deliberately not written. A scene that reloaded with its
+        // joints already snapped would be a level you could only play once.
     }
 
     if (const auto* terrain = registry.try_get<HeightfieldColliderComponent>(entity)) {
@@ -646,6 +657,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // switch that falls through to whatever the enum happens to hold.
         joint.type = (type == 1) ? JointComponent::Type::Distance
                    : (type == 2) ? JointComponent::Type::Hinge
+                   : (type == 3) ? JointComponent::Type::Weld
                                  : JointComponent::Type::Point;
         joint.anchor = readVec3(node["Joint"]["Anchor"], glm::vec3(0.0f));
         joint.connectedAnchor = readVec3(node["Joint"]["ConnectedAnchor"], glm::vec3(0.0f));
@@ -654,6 +666,16 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             readVec3(node["Joint"]["ConnectedAxis"], glm::vec3(0.0f, 1.0f, 0.0f));
         joint.distance = node["Joint"]["Distance"].AsFloat(2.0f);
         joint.rope = node["Joint"]["Rope"].AsBool(false);
+        // Absent from every scene written before limits existed, which reads
+        // as a hinge that swings freely - exactly what those scenes had.
+        joint.useLimit = node["Joint"]["UseLimit"].AsBool(false);
+        joint.minAngle = node["Joint"]["MinAngle"].AsFloat(-1.5707963f);
+        joint.maxAngle = node["Joint"]["MaxAngle"].AsFloat(1.5707963f);
+        joint.useMotor = node["Joint"]["UseMotor"].AsBool(false);
+        joint.motorSpeed = node["Joint"]["MotorSpeed"].AsFloat(0.0f);
+        joint.maxMotorTorque = node["Joint"]["MaxMotorTorque"].AsFloat(10.0f);
+        joint.breakForce = node["Joint"]["BreakForce"].AsFloat(0.0f);
+        joint.breakTorque = node["Joint"]["BreakTorque"].AsFloat(0.0f);
         joint.stiffness = node["Joint"]["Stiffness"].AsFloat(0.8f);
         joint.enabled = node["Joint"]["Enabled"].AsBool(true);
         // connectedBody stays null here and is filled in by SceneSerializer,

@@ -3,6 +3,7 @@
 #include "core/Heightfield.hpp"
 #include "core/HeightfieldCache.hpp"
 #include "core/Joints.hpp"
+#include "core/Log.hpp"
 #include "core/PhysicsSettings.hpp"
 
 #include <glm/gtc/quaternion.hpp>
@@ -478,7 +479,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                     std::pow(std::max(0.0f, 1.0f - rigidBody.angularDamping), deltaTime);
             }
 
-            // Integrated as a quaternion and written back as Euler angles.
+            // Integrated as a rotation MATRIX and written back as Euler
+            // angles.
             //
             // Adding the angular velocity to the Euler triple directly is only
             // correct for spin about one axis at a time: Euler rates are not
@@ -486,12 +488,25 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // would wander off in a way that looks like the physics is broken.
             // The transform stores Euler because that is what an inspector can
             // sensibly edit, so the conversion happens here, once per step.
+            //
+            // Through the transform's OWN matrix, not through glm::quat(vec3).
+            // That constructor composes the three angles in the opposite order
+            // from getModelMatrix, so for any orientation with more than one
+            // non-zero angle it is a different rotation - 0.33 out on a matrix
+            // entry for (0.5, 0.7, 0.3). Both halves of the old round trip used
+            // it, so it was self-consistent and every test passed, while the
+            // spin was applied about the wrong axes relative to the matrix that
+            // renders and collides the body. A body turning about ONE axis has
+            // one non-zero angle and the two conventions agree exactly there,
+            // which is why nothing caught it until a hinged door swung past
+            // ninety degrees and picked up a second.
             const float speed = glm::length(rigidBody.angularVelocity);
             if (speed > 1e-6f) {
-                const glm::quat current(transform.rotation);
-                const glm::quat spin =
-                    glm::angleAxis(speed * deltaTime, rigidBody.angularVelocity / speed);
-                transform.rotation = glm::eulerAngles(glm::normalize(spin * current));
+                // The spin is in WORLD space, so it multiplies on the left.
+                const glm::mat3 spin = glm::mat3_cast(
+                    glm::angleAxis(speed * deltaTime, rigidBody.angularVelocity / speed));
+                transform.rotation =
+                    TransformComponent::EulerFromRotation(spin * transform.getRotationMatrix());
             }
         }
 
@@ -1256,6 +1271,12 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         JointEnd a;
         JointEnd b;
         float stiffness{0.8f};
+
+        // Carried so the break check after the solve knows what to compare
+        // against and what to mark.
+        entt::entity owner{entt::null};
+        float breakForce{0.0f};
+        float breakTorque{0.0f};
     };
 
     std::vector<JointRuntime> joints;
@@ -1302,6 +1323,10 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         for (auto entity : registry.view<JointComponent>()) {
             const auto& authored = registry.get<JointComponent>(entity);
             if (!authored.enabled) continue;
+            // A joint that has already let go stays let go until something
+            // clears the flag - a script, the inspector, or reloading the
+            // scene, which does not carry it.
+            if (authored.broken) continue;
 
             // A joint to itself has no two bodies to hold apart, and every
             // effective mass it produces is singular.
@@ -1337,6 +1362,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             switch (authored.type) {
             case JointComponent::Type::Distance: constraint.type = Joints::Type::Distance; break;
             case JointComponent::Type::Hinge:    constraint.type = Joints::Type::Hinge; break;
+            case JointComponent::Type::Weld:     constraint.type = Joints::Type::Weld; break;
             case JointComponent::Type::Point:    constraint.type = Joints::Type::Point; break;
             }
 
@@ -1367,11 +1393,43 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             const float otherLength = glm::length(other);
             constraint.axisB = otherLength > 1e-6f ? other / otherLength : constraint.axisA;
 
+            // The reference directions the hinge angle is measured between.
+            //
+            // Derived from each end's LOCAL axis and then taken into the world,
+            // so each rotates with its own body. Deriving them from the world
+            // axes instead would give directions that wander as the solver
+            // nudges the axes, and the angle - and with it the limit - would
+            // wander too.
+            constraint.referenceA =
+                glm::normalize(runtime.a.basis * Joints::PerpendicularTo(authored.axis));
+            const glm::vec3 localReferenceB = Joints::PerpendicularTo(authored.connectedAxis);
+            constraint.referenceB =
+                (authored.connectedBody == entt::null)
+                    ? localReferenceB
+                    : glm::normalize(runtime.b.basis * localReferenceB);
+
+            constraint.useLimit = authored.useLimit;
+            // Ordered, so a min above a max is an empty range that traps the
+            // door between two stops rather than a range that means nothing.
+            constraint.minAngle = std::min(authored.minAngle, authored.maxAngle);
+            constraint.maxAngle = std::max(authored.minAngle, authored.maxAngle);
+
+            constraint.useMotor = authored.useMotor;
+            constraint.motorSpeed = authored.motorSpeed;
+            // A torque becomes an impulse here, because the step is something
+            // only this side knows. Negative is treated as zero rather than as
+            // a motor that pulls the other way.
+            constraint.maxMotorImpulse = std::max(authored.maxMotorTorque, 0.0f) * deltaTime;
+
             runtime.stiffness = std::clamp(authored.stiffness, 0.0f, 1.0f);
             // The angular half is corrected through the velocity solver rather
             // than by moving anything, so its share of the error arrives as a
             // rate. See JointComponent for why the two halves differ.
             constraint.angularBias = runtime.stiffness / deltaTime;
+
+            runtime.owner = entity;
+            runtime.breakForce = std::max(authored.breakForce, 0.0f);
+            runtime.breakTorque = std::max(authored.breakTorque, 0.0f);
 
             joints.push_back(runtime);
         }
@@ -1388,6 +1446,25 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     // chain it is the difference between a rope that hangs at its length and
     // one that hangs three per cent longer: link five has to see where link
     // four has just been put, not where it was at the start of the step.
+    // Turns one end of a joint about a world axis, writing the result back
+    // through the transform's OWN Euler convention, and returns the rotation it
+    // applied so the caller can carry the joint's cached directions with it.
+    //
+    // World-space, so the spin multiplies on the LEFT - and, like the rotation
+    // integrator it mirrors, it writes a world rotation into a parent-local
+    // triple. For an unparented body those are the same thing; for a parented
+    // one it is the same approximation the integrator has always made, and
+    // fixing it belongs there rather than here.
+    const auto turnBack = [](JointEnd& end, const glm::vec3& axis, float radians) {
+        if (!end.transform || std::fabs(radians) < 1.0e-6f) return glm::mat3(1.0f);
+
+        const glm::mat3 spin = glm::mat3_cast(glm::angleAxis(radians, axis));
+        end.transform->rotation =
+            TransformComponent::EulerFromRotation(spin * end.transform->getRotationMatrix());
+        end.basis = spin * end.basis;
+        return spin;
+    };
+
     if (!joints.empty()) {
         for (int pass = 0; pass < kJointPositionIterations; ++pass) {
             for (JointRuntime& joint : joints) {
@@ -1406,6 +1483,42 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 if (joint.b.transform) {
                     joint.b.state.position = glm::vec3(
                         (joint.b.parentWorld * joint.b.transform->getModelMatrix())[3]);
+                }
+
+                // A hinge past one of its stops is turned back, which is the
+                // angular twin of the shift below. It only became writable once
+                // EulerFromRotation existed: putting a rotation back into a
+                // transform means going through its Euler triple, and until
+                // that could be done in the convention getModelMatrix reads,
+                // doing it would have corrupted the orientation.
+                //
+                // Split by how hard each end is to turn ABOUT THE AXIS, so a
+                // door hinged to the world takes all of it and a hinge between
+                // two crates shares it the way their inertias say.
+                const float overshoot = Joints::LimitOvershoot(joint.constraint);
+                if (std::fabs(overshoot) > 1.0e-5f) {
+                    const glm::vec3 axis = joint.constraint.axisA;
+                    const float aboutA = glm::dot(axis, joint.a.state.inverseInertia * axis);
+                    const float aboutB = glm::dot(axis, joint.b.state.inverseInertia * axis);
+                    const float total = aboutA + aboutB;
+
+                    if (total > 1e-9f) {
+                        const float corrected = overshoot * joint.stiffness;
+
+                        // The joint's cached directions have to travel with the
+                        // bodies, or the next pass measures the angle from
+                        // where they used to be and corrects the same overshoot
+                        // four times over.
+                        const glm::mat3 spunA =
+                            turnBack(joint.a, axis, corrected * (aboutA / total));
+                        joint.constraint.referenceA = spunA * joint.constraint.referenceA;
+                        joint.constraint.axisA = spunA * joint.constraint.axisA;
+
+                        const glm::mat3 spunB =
+                            turnBack(joint.b, axis, -corrected * (aboutB / total));
+                        joint.constraint.referenceB = spunB * joint.constraint.referenceB;
+                        joint.constraint.axisB = spunB * joint.constraint.axisB;
+                    }
                 }
 
                 glm::vec3 shiftA(0.0f);
@@ -1565,6 +1678,39 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 joint.b.rigid->angularVelocity = b.angularVelocity;
             }
         }
+    }
+
+    // ---- What broke ---------------------------------------------------------
+    //
+    // After every pass, not inside them: the impulse a joint applied is the
+    // TOTAL over the step, and checking part way through would break a joint on
+    // the first iteration's over-correction that the seventh was about to undo.
+    //
+    // Impulse back to force by dividing by the step, so the threshold an author
+    // types is a force and stays the same number whatever the step is. Compared
+    // separately from the torque, because they are not the same quantity: a
+    // rope snapping under load and a hinge shearing off its frame are different
+    // failures and adding their magnitudes would compare metres per second to
+    // radians per second.
+    for (const JointRuntime& joint : joints) {
+        if (joint.breakForce <= 0.0f && joint.breakTorque <= 0.0f) continue;
+        if (!registry.valid(joint.owner)) continue;
+
+        auto* authored = registry.try_get<JointComponent>(joint.owner);
+        if (!authored || authored->broken) continue;
+
+        const float force = glm::length(joint.constraint.appliedLinear) / deltaTime;
+        const float torque = glm::length(joint.constraint.appliedAngular) / deltaTime;
+
+        const bool tore = joint.breakForce > 0.0f && force > joint.breakForce;
+        const bool sheared = joint.breakTorque > 0.0f && torque > joint.breakTorque;
+        if (!tore && !sheared) continue;
+
+        authored->broken = true;
+        SUPERSONIC_LOG_INFO("PhysicsSystem")
+            << "A joint let go: " << (tore ? "pulled at " : "twisted at ")
+            << (tore ? force : torque) << " against a limit of "
+            << (tore ? joint.breakForce : joint.breakTorque) << "." << std::endl;
     }
 }
 

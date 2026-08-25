@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 
 #include <array>
@@ -192,6 +193,58 @@ struct TransformComponent {
 
         return mat;
     }
+
+    // The rotation alone, with the scale divided out.
+    //
+    // Built by asking getModelMatrix for an unscaled copy rather than by
+    // writing the nine entries again. They would start identical and drift the
+    // first time either was touched, and the symptom - a body that renders one
+    // way and spins another - is the exact bug this pair of functions exists to
+    // fix.
+    glm::mat3 getRotationMatrix() const {
+        TransformComponent unscaled = *this;
+        unscaled.scale = glm::vec3(1.0f);
+        return glm::mat3(unscaled.getModelMatrix());
+    }
+
+    // The Euler triple that getModelMatrix would turn back into `rotation`.
+    //
+    // This exists because glm::quat(vec3) is NOT the same convention: it
+    // composes the three angles in the opposite order, so for any orientation
+    // with more than one non-zero angle it is a DIFFERENT rotation. Measured at
+    // 0.33 on a matrix entry for (0.5, 0.7, 0.3), which is not a rounding
+    // difference - it is a different orientation entirely.
+    //
+    // The physics integrator used it to turn `rotation` into a quaternion,
+    // apply the step's spin, and write the result back. Both halves used the
+    // same wrong convention, so the round trip was self-consistent and every
+    // test passed - but the spin was applied about the wrong axes relative to
+    // the matrix that renders and collides the body. Nothing caught it because
+    // a body turning about ONE axis has one non-zero angle, and the two
+    // conventions agree exactly there; a hinged door swinging past ninety
+    // degrees picks up a second, and the error compounds until the body
+    // explodes.
+    //
+    // Inverted from the entries getModelMatrix writes: sy is [2][0], and the
+    // other two come out of ratios that cancel cy.
+    static glm::vec3 EulerFromRotation(const glm::mat3& rotation) {
+        const float sy = std::clamp(rotation[2][0], -1.0f, 1.0f);
+        const float y = std::asin(sy);
+
+        // Gimbal lock: cy is zero, so x and z stop being separable - every
+        // (x, z) with the same sum describes the same orientation. Pinning z
+        // at zero and putting the whole turn into x is the standard choice and
+        // the only one that is continuous as the pole is approached.
+        if (std::fabs(sy) > 0.99999f) {
+            const float xz = std::atan2(rotation[0][1], rotation[1][1]);
+            return glm::vec3(sy > 0.0f ? xz : -xz, y, 0.0f);
+        }
+
+        return glm::vec3(std::atan2(-rotation[2][1], rotation[2][2]),
+                         y,
+                         std::atan2(-rotation[1][0], rotation[0][0]));
+    }
+
 };
 
 struct CameraComponent {
@@ -587,13 +640,7 @@ struct CapsuleColliderComponent {
 // genuinely needs two constraints on one body needs a second entity, and that
 // is a limitation rather than a design.
 //
-// Deliberately NOT here, and open: limits (a door that stops at ninety
-// degrees), motors, and a breaking force.
 struct JointComponent {
-    // A weld is missing on purpose. Two dynamic bodies rigidly fixed together
-    // is a real constraint and this does not implement it; parenting is not the
-    // same thing, because a parented child integrates in its parent's space and
-    // inherits that motion on top of its own.
     enum class Type : uint32_t {
         // The two anchors must coincide, and nothing rotational is constrained:
         // a ragdoll shoulder, a pendulum free to spin as it swings.
@@ -607,6 +654,15 @@ struct JointComponent {
         // Point, plus the two rotational degrees of freedom that are not the
         // axis. A door, a wheel, a lid.
         Hinge = 2,
+
+        // Point, plus ALL THREE rotational degrees of freedom: two bodies
+        // rigidly fixed to each other.
+        //
+        // Not the same as parenting, which is what people reach for instead. A
+        // parented child integrates in its parent's space and inherits that
+        // motion on top of its own, so it is CARRIED rather than held - it
+        // never pushes back, and the pair has no shared response to being hit.
+        Weld = 3,
     };
 
     Type type{Type::Point};
@@ -644,6 +700,47 @@ struct JointComponent {
     // to itself and let it flop in any direction. Two bodies that start aligned
     // want the same numbers in both; two that do not, do not.
     glm::vec3 connectedAxis{0.0f, 1.0f, 0.0f};
+
+    // ---- Hinge only ------------------------------------------------------
+
+    // How far it may turn, in radians, measured as THIS entity relative to the
+    // connected one - which for a door hinged to the world is the door's own
+    // angle, because the world is the other end and does not move.
+    //
+    // Zero is where the two ends' reference directions coincide, which is an
+    // arbitrary configuration rather than a meaningful one. That is why the
+    // inspector shows the live angle and offers to set the limits around it:
+    // these are authored by looking at the number, not by predicting it.
+    bool useLimit{false};
+    float minAngle{-1.5707963f};   // -90 degrees
+    float maxAngle{1.5707963f};
+
+    // Drive the joint at a speed rather than let it swing. A powered hinge is
+    // a wheel, a winch, a lift, a turret.
+    //
+    // maxMotorTorque is what stops a motor being infinitely strong: without a
+    // cap it drives whatever is in the way straight through a wall instead of
+    // stalling against it.
+    bool useMotor{false};
+    float motorSpeed{0.0f};
+    float maxMotorTorque{10.0f};
+
+    // ---- Breaking --------------------------------------------------------
+
+    // What the joint can take before it lets go. Zero means unbreakable, which
+    // is the default and what every joint written before this did.
+    //
+    // Two numbers rather than one, because a force and a torque are not the
+    // same quantity: a rope that snaps under load and a hinge that shears off
+    // its frame are different failures, and adding their magnitudes together
+    // would compare metres per second to radians per second.
+    float breakForce{0.0f};
+    float breakTorque{0.0f};
+
+    // Set by the solver when either threshold is passed, and NOT serialised: a
+    // scene that reloaded with its joints already broken would be a level that
+    // could only be played once.
+    bool broken{false};
 
     // How much of the joint's current error to take out per step, 0 to 1.
     //

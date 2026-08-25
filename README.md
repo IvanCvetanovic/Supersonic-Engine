@@ -262,7 +262,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
 | `test_heightfield` | Terrain collision: the grid against the mesh vertex for vertex, seams, ridge crests, grooves, buried recovery, and the cell march a ray does |
-| `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, and every degenerate case |
+| `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, limits, motors, welds, and every degenerate case |
 | `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, and which route a reference resolved by |
 | `test_audio` | WAV decoding, including the shipped clip |
 | `test_scripts` | Script registry and dispatch |
@@ -398,6 +398,9 @@ Android "not functional"; extending that register forward costs nothing.
       button held, and losing the window always gives it back
 - [x] Text input: a HUD text field a game can author, type into and read back,
       with the keyboard taken from the game while it has focus
+- [x] Hinge limits, motors, breaking forces and welds — a door that stops at
+      ninety degrees, a powered wheel, a rope that snaps under load, and two
+      dynamic bodies rigidly fixed together
 - [x] Asset identity: a `.meta` beside each asset, an identity written next to
       every saved reference, and a rename recovered by matching contents, so
       renaming a texture in Explorer no longer breaks the scenes that name it
@@ -426,12 +429,10 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
       that would close it — an arbitrary convex hull, built by quickhull and
       collided by the SAT that already exists — is a piece of work in its own
       right
-- [ ] **What a joint cannot do yet.** Point, distance and hinge constraints
-      hold, but a hinge has no **limit** (a door that stops at ninety degrees),
-      no motor, and no breaking force, so anything that has to stop somewhere
-      needs a script watching it. A weld between two dynamic bodies is missing
-      too; parenting is not the same thing, because a parented child integrates
-      in its parent's space and inherits that motion on top of its own
+- [ ] **Joint sequencing and soft constraints.** Limits, motors, breaking and
+      welds all work, but a joint still has no spring or damper - everything is
+      rigid or nothing - and there is no way to say that one joint should be
+      solved before another, which a long articulated chain wants
 
 Deliberately not on this list, with the reasons written down in
 [ARCHITECTURE.md](ARCHITECTURE.md): swept CCD, a persistent broadphase, warm

@@ -359,6 +359,15 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     joint.distance = 3.25f;
     joint.rope = true;
     joint.stiffness = 0.45f;
+    joint.useLimit = true;
+    joint.minAngle = -0.75f;
+    joint.maxAngle = 1.25f;
+    joint.useMotor = true;
+    joint.motorSpeed = -3.5f;
+    joint.maxMotorTorque = 42.0f;
+    joint.breakForce = 250.0f;
+    joint.breakTorque = 17.5f;
+    joint.broken = true;
 
     auto& terrain = registry.emplace<HeightfieldColliderComponent>(entity);
     terrain.width = 33;
@@ -828,6 +837,23 @@ static void testPrefabRoundTripsEveryField() {
             CHECK_NEAR(joint->distance, 3.25f);
             CHECK(joint->rope);
             CHECK_NEAR(joint->stiffness, 0.45f);
+
+            // A hinge that comes back without its stops is a door that swings
+            // through its own frame; one without its motor is a lift that does
+            // not move.
+            CHECK(joint->useLimit);
+            CHECK_NEAR(joint->minAngle, -0.75f);
+            CHECK_NEAR(joint->maxAngle, 1.25f);
+            CHECK(joint->useMotor);
+            CHECK_NEAR(joint->motorSpeed, -3.5f);
+            CHECK_NEAR(joint->maxMotorTorque, 42.0f);
+            CHECK_NEAR(joint->breakForce, 250.0f);
+            CHECK_NEAR(joint->breakTorque, 17.5f);
+
+            // `broken` is deliberately NOT carried, and the fixture sets it to
+            // prove that. A level whose joints reloaded already snapped is a
+            // level you could only play once.
+            CHECK_MSG(!joint->broken, "a joint that had let go comes back mended");
 
             // Deliberately NOT preserved. An entt handle carries a version and
             // is recycled, so a prefab cannot carry a reference to a scene
@@ -1380,4 +1406,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 285)
+TEST_MAIN("test_serialize", 295)

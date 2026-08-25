@@ -21,6 +21,7 @@
 
 #include <filesystem>
 
+#include <algorithm>
 #include <cmath>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/constants.hpp>
@@ -734,6 +735,305 @@ static void testAJointAndTheGroundAgreeWithEachOther() {
     stepFor(taut, 3.0f);
     CHECK_MSG(test::nearly(taut.get<TransformComponent>(hung).position.y, 3.0f, 2.0e-2f),
               "and one on a rope too short to reach hangs above it");
+}
+
+// A door hinged to the world along Y at the edge of its own collider, which is
+// what every case below starts from.
+static entt::entity makeHingedDoor(entt::registry& registry) {
+    const auto door = makeJointBody(registry, glm::vec3(0.5f, 0.0f, 0.0f));
+    auto& collider = registry.emplace<BoxColliderComponent>(door);
+    collider.size = glm::vec3(1.0f, 2.0f, 0.1f);
+    registry.get<RigidBodyComponent>(door).useGravity = false;
+
+    auto& joint = registry.emplace<JointComponent>(door);
+    joint.type = JointComponent::Type::Hinge;
+    joint.connectedBody = entt::null;
+    joint.anchor = glm::vec3(-0.5f, 0.0f, 0.0f);
+    joint.connectedAnchor = glm::vec3(0.0f);
+    joint.axis = glm::vec3(0.0f, 1.0f, 0.0f);
+    joint.connectedAxis = glm::vec3(0.0f, 1.0f, 0.0f);
+    return door;
+}
+
+// How far the door has swung, in radians, measured from where it started.
+//
+// NOT transform.rotation.y. The transform stores Euler angles and the solver
+// writes them back through glm::eulerAngles, whose Y component is confined to a
+// quarter turn either side - so a door that has genuinely opened three radians
+// comes back as a different triple entirely, and an assertion on that number
+// fails for a door that is doing exactly the right thing.
+//
+// The door's own +X starts along world +X. A rotation of theta about +Y takes
+// it to (cos theta, 0, -sin theta), which inverts without a gimbal anywhere.
+static float doorAngle(entt::registry& registry, entt::entity door) {
+    const glm::mat3 basis(registry.get<TransformComponent>(door).getModelMatrix());
+    const glm::vec3 facing = glm::normalize(basis[0]);
+    return std::atan2(-facing.z, facing.x);
+}
+
+// A shove that turns the door about its hinge rather than about its middle.
+//
+// A body given nothing but angular velocity is spinning about its CENTRE, so
+// its hinge corner is being dragged in a circle - and the joint's first act is
+// to stop that, which takes most of the spin with it. Pairing the spin with the
+// linear velocity that keeps the hinge still is what "pushing a door" means.
+static void shoveDoor(entt::registry& registry, entt::entity door, float radiansPerSecond) {
+    const auto& joint = registry.get<JointComponent>(door);
+    const glm::vec3 spin(0.0f, radiansPerSecond, 0.0f);
+    auto& body = registry.get<RigidBodyComponent>(door);
+    body.angularVelocity = spin;
+    body.velocity = -glm::cross(spin, joint.anchor);
+}
+
+// How far the door turned in total, UNWRAPPED.
+//
+// doorAngle comes out of an atan2 and so lives in [-pi, pi]: a door that goes
+// right round reads as having jumped backwards, and an assertion on the final
+// value cannot tell "opened ninety degrees" from "opened four hundred and
+// fifty". Accumulating the per-step change and unwrapping each one gives the
+// total turn, which is what every question below is actually about.
+static float swingDoor(entt::registry& registry, entt::entity door, float seconds) {
+    const float step = 1.0f / 60.0f;
+    float previous = doorAngle(registry, door);
+    float swept = 0.0f;
+
+    for (float elapsed = 0.0f; elapsed < seconds; elapsed += step) {
+        PhysicsSystem::Update(registry, step);
+
+        const float now = doorAngle(registry, door);
+        float delta = now - previous;
+        if (delta > glm::pi<float>()) delta -= glm::two_pi<float>();
+        if (delta < -glm::pi<float>()) delta += glm::two_pi<float>();
+        swept += delta;
+        previous = now;
+    }
+    return swept;
+}
+
+static void testAHingeStopsWhereItsLimitSaysTo() {
+    // The thing a script had to watch for before this existed: a door that
+    // opens ninety degrees and no further.
+    entt::registry registry;
+    const auto door = makeHingedDoor(registry);
+
+    auto& joint = registry.get<JointComponent>(door);
+    joint.useLimit = true;
+    joint.minAngle = 0.0f;
+    joint.maxAngle = glm::radians(90.0f);
+
+    // Shoved hard enough that nothing but the stop could hold it.
+    shoveDoor(registry, door, 6.0f);
+    const float swept = swingDoor(registry, door, 2.0f);
+
+    CHECK_MSG(swept < glm::radians(90.0f) + 0.08f,
+              "a door with a stop at ninety degrees does not go past ninety degrees");
+    CHECK_MSG(swept > glm::radians(80.0f),
+              "and it swung all the way to the stop rather than bouncing back off it");
+}
+
+static void testWithoutTheLimitTheSameDoorKeepsGoing() {
+    // The control. Without it the case above would also pass if the door had
+    // simply been too slow to reach the stop, or if something else had absorbed
+    // the shove.
+    entt::registry registry;
+    const auto door = makeHingedDoor(registry);
+    shoveDoor(registry, door, 6.0f);
+    const float swept = swingDoor(registry, door, 2.0f);
+
+    const auto& body = registry.get<RigidBodyComponent>(door);
+    // Round and round: without a stop the same shove takes it through several
+    // complete turns, which is the thing a limit makes impossible.
+    CHECK_MSG(swept > glm::two_pi<float>(),
+              "with no stop the same shove takes the door right round, more than once");
+    CHECK_MSG(body.angularVelocity.y > 3.0f, "and it is still going");
+}
+
+static void testAMotorDrivesAHingeAndItsCapHoldsItBack() {
+    entt::registry registry;
+    const auto door = makeHingedDoor(registry);
+
+    auto& joint = registry.get<JointComponent>(door);
+    joint.useMotor = true;
+    joint.motorSpeed = 2.0f;
+    joint.maxMotorTorque = 500.0f;
+
+    const float swept = swingDoor(registry, door, 1.5f);
+    CHECK_MSG(test::nearly(registry.get<RigidBodyComponent>(door).angularVelocity.y, 2.0f, 0.1f),
+              "a motor with torque to spare reaches the speed it was asked for");
+    CHECK_MSG(swept > 2.0f, "and the door has actually gone round");
+
+    // A motor with almost no torque cannot. Without the cap it would be
+    // infinitely strong and would drive whatever is in the way through a wall.
+    entt::registry weak;
+    const auto stalled = makeHingedDoor(weak);
+    auto& weakJoint = weak.get<JointComponent>(stalled);
+    weakJoint.useMotor = true;
+    weakJoint.motorSpeed = 20.0f;
+    weakJoint.maxMotorTorque = 0.02f;
+
+    stepFor(weak, 1.0f);
+    CHECK_MSG(weak.get<RigidBodyComponent>(stalled).angularVelocity.y < 10.0f,
+              "and one without the torque for it does not");
+}
+
+static void testAMotorDrivingIntoAStopIsHeldByTheStop() {
+    // The reason the limit is solved AFTER the motor: a door being driven into
+    // its own stop has to stay at the stop, not fight it to a draw somewhere
+    // past it.
+    entt::registry registry;
+    const auto door = makeHingedDoor(registry);
+
+    auto& joint = registry.get<JointComponent>(door);
+    joint.useLimit = true;
+    joint.minAngle = 0.0f;
+    joint.maxAngle = glm::radians(60.0f);
+    joint.useMotor = true;
+    joint.motorSpeed = 8.0f;
+    joint.maxMotorTorque = 200.0f;
+
+    const float swept = swingDoor(registry, door, 3.0f);
+
+    CHECK_MSG(swept < glm::radians(60.0f) + 0.1f,
+              "a motor cannot drive a door past its own stop");
+    CHECK_MSG(swept > glm::radians(50.0f), "but it does drive it all the way up to it");
+}
+
+static void testARopeSnapsUnderTooMuchLoad() {
+    // A breaking force, which is the difference between a rope bridge and a
+    // rope bridge you can cut.
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 6.0f, 0.0f);
+    const auto bob = makeJointBody(registry, glm::vec3(0.0f, 4.0f, 0.0f), 50.0f);
+
+    auto& joint = hangFrom(registry, bob, anchor, 2.0f);
+    // A fifty-kilo weight under gravity pulls with about 490 newtons.
+    joint.breakForce = 100.0f;
+
+    stepFor(registry, 1.0f);
+
+    CHECK_MSG(registry.get<JointComponent>(bob).broken,
+              "a rope rated for a hundred newtons does not hold five hundred");
+    CHECK_MSG(registry.get<TransformComponent>(bob).position.y < 3.0f,
+              "and what it was holding falls");
+}
+
+static void testAStrongEnoughRopeHolds() {
+    // The control, and the thing that says the break threshold is a threshold
+    // rather than a switch that is always on.
+    entt::registry registry;
+    const glm::vec3 anchor(0.0f, 6.0f, 0.0f);
+    const auto bob = makeJointBody(registry, glm::vec3(0.0f, 4.0f, 0.0f), 50.0f);
+
+    auto& joint = hangFrom(registry, bob, anchor, 2.0f);
+    joint.breakForce = 5000.0f;
+
+    stepFor(registry, 2.0f);
+
+    CHECK_MSG(!registry.get<JointComponent>(bob).broken, "a rope rated well above the load holds");
+    CHECK_MSG(std::fabs(ropeLength(registry, bob, anchor) - 2.0f) < 3.0e-3f,
+              "and holds at its length");
+
+    // Zero means unbreakable, which is what every joint written before this
+    // did and what they have to go on doing.
+    entt::registry unbreakable;
+    const auto heavy = makeJointBody(unbreakable, glm::vec3(0.0f, 4.0f, 0.0f), 5000.0f);
+    hangFrom(unbreakable, heavy, anchor, 2.0f);
+    stepFor(unbreakable, 2.0f);
+    CHECK_MSG(!unbreakable.get<JointComponent>(heavy).broken,
+              "a joint with no rating cannot break however hard it is pulled");
+}
+
+static void testAWeldCarriesABodyThatParentingWouldNot() {
+    // Two DYNAMIC bodies rigidly fixed together. Parenting is what people reach
+    // for and it is not the same: a parented child is carried, never pushes
+    // back, and the pair has no shared response to being hit.
+    entt::registry registry;
+    const auto a = makeJointBody(registry, glm::vec3(0.0f), 1.0f);
+    const auto b = makeJointBody(registry, glm::vec3(1.0f, 0.0f, 0.0f), 1.0f);
+    registry.get<RigidBodyComponent>(a).useGravity = false;
+    registry.get<RigidBodyComponent>(b).useGravity = false;
+
+    auto& joint = registry.emplace<JointComponent>(a);
+    joint.type = JointComponent::Type::Weld;
+    joint.connectedBody = b;
+    joint.anchor = glm::vec3(0.5f, 0.0f, 0.0f);
+    joint.connectedAnchor = glm::vec3(-0.5f, 0.0f, 0.0f);
+
+    // One of them is shoved; both have to end up moving, and together.
+    registry.get<RigidBodyComponent>(a).velocity = glm::vec3(0.0f, 0.0f, 2.0f);
+    stepFor(registry, 1.0f);
+
+    const glm::vec3 velocityA = registry.get<RigidBodyComponent>(a).velocity;
+    const glm::vec3 velocityB = registry.get<RigidBodyComponent>(b).velocity;
+    CHECK_MSG(glm::length(velocityB) > 0.5f, "the far body was carried along");
+    CHECK_MSG(glm::length(velocityA - velocityB) < 0.3f, "and the pair moves as one");
+
+    // The gap between them is the gap they started with.
+    const float gap = glm::length(registry.get<TransformComponent>(b).position -
+                                  registry.get<TransformComponent>(a).position);
+    CHECK_MSG(std::fabs(gap - 1.0f) < 0.05f, "held at the distance it was welded at");
+}
+
+static void testABodySpinningAboutADiagonalAxisEndsWhereTheMathsSays() {
+    // The bug a hinged door found by exploding.
+    //
+    // The integrator read the transform's Euler triple with glm::quat(vec3),
+    // which composes the three angles in the OPPOSITE ORDER from
+    // getModelMatrix - so it applied each step's spin about the wrong axes
+    // relative to the matrix that renders and collides the body. Both halves of
+    // the round trip used the same wrong convention, so it was self-consistent
+    // and every existing test passed.
+    //
+    // It needs TWO things to show: a starting orientation that is not
+    // axis-aligned, and a spin axis that is not either. A single-axis triple is
+    // identical in both conventions, and every rotation test in this suite
+    // spins about one axis from rest.
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(entity);
+    transform.rotation = glm::vec3(0.4f, 0.6f, -0.2f);
+
+    auto& body = registry.emplace<RigidBodyComponent>(entity);
+    body.useGravity = false;
+    body.angularDamping = 0.0f;
+    body.allowSleep = false;
+
+    const glm::vec3 axis = glm::normalize(glm::vec3(1.0f, 2.0f, -0.5f));
+    const float speed = 3.0f;
+    body.angularVelocity = axis * speed;
+
+    const glm::mat3 before = transform.getRotationMatrix();
+
+    const int steps = 30;
+    const float step = 1.0f / 60.0f;
+    for (int i = 0; i < steps; ++i) PhysicsSystem::Update(registry, step);
+
+    // The same spin, applied the same number of times, in WORLD space - which
+    // is what an angular velocity means.
+    glm::mat3 expected = before;
+    const glm::mat3 spin = glm::mat3_cast(glm::angleAxis(speed * step, axis));
+    for (int i = 0; i < steps; ++i) expected = spin * expected;
+
+    const glm::mat3 actual = registry.get<TransformComponent>(entity).getRotationMatrix();
+
+    float worst = 0.0f;
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) {
+            worst = std::max(worst, std::fabs(expected[column][row] - actual[column][row]));
+        }
+    }
+    CHECK_MSG(worst < 1e-3f,
+              "a body's orientation after spinning is the spin applied to where it was");
+
+    // And it really did turn, so the check above is not comparing two copies of
+    // the starting orientation.
+    float moved = 0.0f;
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) {
+            moved = std::max(moved, std::fabs(before[column][row] - actual[column][row]));
+        }
+    }
+    CHECK_MSG(moved > 0.5f, "and it turned a long way while doing it");
 }
 
 static void testSweepAndPruneFindsOverlappingPairs() {
@@ -2425,6 +2725,13 @@ static void runTests() {
     testAHingeTurnsAboutItsAxisAndNothingElse();
     testABrokenOrDisabledJointIsIgnored();
     testAJointAndTheGroundAgreeWithEachOther();
+    testAHingeStopsWhereItsLimitSaysTo();
+    testWithoutTheLimitTheSameDoorKeepsGoing();
+    testAMotorDrivesAHingeAndItsCapHoldsItBack();
+    testAMotorDrivingIntoAStopIsHeldByTheStop();
+    testARopeSnapsUnderTooMuchLoad();
+    testAStrongEnoughRopeHolds();
+    testAWeldCarriesABodyThatParentingWouldNot();
 
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();
@@ -2444,6 +2751,7 @@ static void runTests() {
     testDampingSlowsABodyWithNothingTouchingIt();
 
     testAngularVelocityTurnsTheTransform();
+    testABodySpinningAboutADiagonalAxisEndsWhereTheMathsSays();
     testFrozenRotationNeverTurns();
     testAngularDampingSlowsSpin();
     testAnOffCentreImpactCreatesSpin();
@@ -2452,4 +2760,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics", 180)
+TEST_MAIN("test_physics", 210)

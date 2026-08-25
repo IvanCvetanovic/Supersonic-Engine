@@ -18,6 +18,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include "core/Joints.hpp"
 #include "core/TerrainGenerator.hpp"
 
 #include <algorithm>
@@ -36,6 +37,41 @@ namespace {
 // gets done once, wrongly, and then copied. Eight layers is enough for the
 // distinctions games actually make - player, enemy, terrain, trigger - and the
 // rest of the 32 stay reachable from code for anyone who needs them.
+// The hinge angle an author needs to see, worked out the way the SOLVER works
+// it out.
+//
+// Building the same two reference directions and asking Joints::HingeAngle,
+// rather than deriving the angle here, because two answers to one question is
+// how the number in the inspector ends up disagreeing with the stop the door
+// actually hits.
+float hingeAngleOf(entt::registry& registry, entt::entity entity, const JointComponent& joint) {
+    const auto worldOf = [&](entt::entity target) {
+        if (const auto* world = registry.try_get<WorldTransformComponent>(target)) {
+            return glm::mat3(world->matrix);
+        }
+        if (const auto* local = registry.try_get<TransformComponent>(target)) {
+            return glm::mat3(local->getModelMatrix());
+        }
+        return glm::mat3(1.0f);
+    };
+
+    Joints::Constraint probe;
+
+    const glm::mat3 basisA = worldOf(entity);
+    const glm::vec3 axis = basisA * joint.axis;
+    const float length = glm::length(axis);
+    probe.axisA = length > 1e-6f ? axis / length : glm::vec3(0.0f, 1.0f, 0.0f);
+    probe.referenceA = glm::normalize(basisA * Joints::PerpendicularTo(joint.axis));
+
+    const glm::vec3 localReferenceB = Joints::PerpendicularTo(joint.connectedAxis);
+    const bool toWorld = joint.connectedBody == entt::null ||
+                         !registry.valid(joint.connectedBody);
+    probe.referenceB = toWorld ? localReferenceB
+                               : glm::normalize(worldOf(joint.connectedBody) * localReferenceB);
+
+    return Joints::HingeAngle(probe);
+}
+
 void drawCollisionLayers(uint32_t& layer, uint32_t& collidesWith) {
     if (!ImGui::TreeNode("Collision Layers")) return;
 
@@ -630,7 +666,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Joint", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& joint = registry.get<JointComponent>(entity);
 
-            static const char* kTypes[] = { "Point", "Distance", "Hinge" };
+            static const char* kTypes[] = { "Point", "Distance", "Hinge", "Weld" };
             int type = static_cast<int>(joint.type);
             if (ImGui::Combo("Type##joint", &type, kTypes, IM_ARRAYSIZE(kTypes))) {
                 joint.type = static_cast<JointComponent::Type>(
@@ -696,6 +732,49 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 Theme::DrawVec3Control("Other Axis##joint", joint.connectedAxis, 0.0f);
                 ImGui::TextDisabled("The same axis seen from each end. Two bodies that "
                                     "start aligned want the same numbers in both.");
+
+                // The LIVE angle, which is the only way limits can sensibly be
+                // authored: zero is where the two ends' reference directions
+                // coincide, and that is an arbitrary configuration rather than
+                // one anybody could predict. Read the number, then set the
+                // stops around it.
+                const float live = hingeAngleOf(registry, entity, joint);
+                ImGui::Text("Current angle: %.1f deg", static_cast<double>(glm::degrees(live)));
+
+                ImGui::Checkbox("Limit##joint", &joint.useLimit);
+                if (joint.useLimit) {
+                    float minDegrees = glm::degrees(joint.minAngle);
+                    float maxDegrees = glm::degrees(joint.maxAngle);
+                    if (ImGui::DragFloat("Min##jointlimit", &minDegrees, 1.0f, -180.0f, 180.0f)) {
+                        joint.minAngle = glm::radians(minDegrees);
+                    }
+                    if (ImGui::DragFloat("Max##jointlimit", &maxDegrees, 1.0f, -180.0f, 180.0f)) {
+                        joint.maxAngle = glm::radians(maxDegrees);
+                    }
+                    if (ImGui::Button("Stops around current##joint")) {
+                        joint.minAngle = live - glm::radians(45.0f);
+                        joint.maxAngle = live + glm::radians(45.0f);
+                    }
+                }
+
+                ImGui::Checkbox("Motor##joint", &joint.useMotor);
+                if (joint.useMotor) {
+                    ImGui::DragFloat("Speed (rad/s)##joint", &joint.motorSpeed, 0.05f,
+                                     -50.0f, 50.0f);
+                    ImGui::DragFloat("Max Torque##joint", &joint.maxMotorTorque, 0.1f,
+                                     0.0f, 10000.0f);
+                    ImGui::TextDisabled("Without a torque cap a motor is infinitely strong "
+                                        "and drives whatever is in the way through a wall.");
+                }
+            }
+
+            ImGui::DragFloat("Break Force##joint", &joint.breakForce, 1.0f, 0.0f, 100000.0f);
+            ImGui::DragFloat("Break Torque##joint", &joint.breakTorque, 1.0f, 0.0f, 100000.0f);
+            ImGui::TextDisabled("Zero on either means it cannot be broken that way.");
+            if (joint.broken) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "This joint has let go.");
+                ImGui::SameLine();
+                if (ImGui::Button("Mend##joint")) joint.broken = false;
             }
 
             ImGui::SliderFloat("Stiffness##joint", &joint.stiffness, 0.0f, 1.0f);

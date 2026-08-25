@@ -429,6 +429,244 @@ void testCoincidentAnchorsAreNotANaN() {
     CHECK(!Joints::SolvePosition(joint, a, b, 1.0f, shiftA, shiftB));
 }
 
+// --- the hinge angle a limit and a motor are stated against ----------------
+
+static Joints::Constraint hingeAbout(const glm::vec3& axis) {
+    Joints::Constraint joint;
+    joint.type = Joints::Type::Hinge;
+    joint.axisA = glm::normalize(axis);
+    joint.axisB = joint.axisA;
+    joint.referenceA = Joints::PerpendicularTo(joint.axisA);
+    joint.referenceB = joint.referenceA;
+    joint.angularBias = 0.2f * 60.0f;
+    return joint;
+}
+
+// Turns A's reference by `radians` about the axis, which is what the body
+// turning does to it.
+static void turnA(Joints::Constraint& joint, float radians) {
+    const glm::vec3 axis = joint.axisA;
+    const glm::vec3 reference = Joints::PerpendicularTo(axis);
+    joint.referenceA = reference * std::cos(radians) +
+                       glm::cross(axis, reference) * std::sin(radians);
+}
+
+void testTheHingeAngleIsZeroWhereTheEndsAgree() {
+    const glm::vec3 axes[3] = {glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f),
+                               glm::vec3(0.0f, 0.0f, 1.0f)};
+    for (const glm::vec3& axis : axes) {
+        Joints::Constraint joint = hingeAbout(axis);
+        CHECK_MSG(test::nearly(Joints::HingeAngle(joint), 0.0f, 1e-5f),
+                  "two ends pointing the same way is the zero of the angle");
+
+        // A relative to B, and POSITIVE about the axis by the right-hand rule -
+        // which for a door hinged to the world reads as the door's own angle,
+        // because the world is B and never moves.
+        turnA(joint, 0.7f);
+        CHECK_MSG(test::nearly(Joints::HingeAngle(joint), 0.7f, 1e-4f),
+                  "turning this end positively reads as a positive angle");
+
+        turnA(joint, -1.2f);
+        CHECK_MSG(test::nearly(Joints::HingeAngle(joint), -1.2f, 1e-4f), "and back the other way");
+    }
+}
+
+void testAPerpendicularIsAlwaysFound() {
+    // The reference is picked by the axis's smallest component. A fixed one
+    // collapses whenever the axis is parallel to it, and the angle of a hinge
+    // whose reference is zero-length is a NaN that leaves the limit stuck on.
+    const glm::vec3 axes[6] = {
+        glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), glm::vec3(0, 0, 1),
+        glm::vec3(-1, 0, 0), glm::vec3(0, -1, 0), glm::normalize(glm::vec3(1, 1, 1))};
+    for (const glm::vec3& axis : axes) {
+        const glm::vec3 perpendicular = Joints::PerpendicularTo(axis);
+        CHECK(finiteVec(perpendicular));
+        CHECK_MSG(test::nearly(glm::length(perpendicular), 1.0f, 1e-5f), "unit length");
+        CHECK_MSG(test::nearly(glm::dot(perpendicular, axis), 0.0f, 1e-5f),
+                  "and actually perpendicular");
+    }
+}
+
+// --- limits -----------------------------------------------------------------
+
+void testALimitDoesNothingInsideItsRange() {
+    // The difference between a hinge that STOPS at ninety degrees and one
+    // welded at ninety degrees: away from both stops it is not a constraint at
+    // all, and a door swinging freely must be left alone.
+    Joints::Body frame = immovable(glm::vec3(0.0f));
+    Joints::Body door = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+    door.angularVelocity = glm::vec3(0.0f, 2.0f, 0.0f);
+
+    Joints::Constraint joint = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    joint.armA = glm::vec3(-1.0f, 0.0f, 0.0f);
+
+    // Moving so the HINGE POINT is already still, because a hinge solves its
+    // point constraint first and a door spinning about its centre is dragging
+    // that point in a circle. Without this the point constraint would take the
+    // spin out and the limit would be credited with it.
+    door.velocity = -glm::cross(door.angularVelocity, joint.armA);
+
+    joint.useLimit = true;
+    joint.minAngle = -1.0f;
+    joint.maxAngle = 1.0f;
+    turnA(joint, 0.2f);   // well inside
+
+    Joints::SolveVelocity(joint, door, frame);
+    CHECK_MSG(test::nearly(door.angularVelocity.y, 2.0f, 1e-4f),
+              "a door between its stops keeps swinging");
+    CHECK_EQ(joint.limitImpulse, 0.0f);
+}
+
+void testALimitCatchesADoorAtItsStop() {
+    Joints::Body frame = immovable(glm::vec3(0.0f));
+    Joints::Body door = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+    door.angularVelocity = glm::vec3(0.0f, 3.0f, 0.0f);   // driving into the stop
+
+    Joints::Constraint joint = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    joint.armA = glm::vec3(-1.0f, 0.0f, 0.0f);
+    joint.useLimit = true;
+    joint.minAngle = -1.0f;
+    joint.maxAngle = 1.0f;
+    turnA(joint, 1.05f);   // just past the far stop
+
+    for (int pass = 0; pass < 8; ++pass) Joints::SolveVelocity(joint, door, frame);
+
+    CHECK_MSG(door.angularVelocity.y <= 0.0f,
+              "a door past its stop is not still opening");
+    CHECK_MSG(joint.limitImpulse > 0.0f, "and the stop is what did it");
+    CHECK(finiteVec(door.angularVelocity));
+}
+
+void testAStopPushesBackAndNeverPulls() {
+    // An inequality. A stop may shove the door back into range and may never
+    // hold it against the stop - that would be a weld, not a limit.
+    Joints::Body frame = immovable(glm::vec3(0.0f));
+    Joints::Body door = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+    door.angularVelocity = glm::vec3(0.0f, -2.0f, 0.0f);   // ALREADY leaving
+
+    Joints::Constraint joint = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    joint.armA = glm::vec3(-1.0f, 0.0f, 0.0f);
+    joint.useLimit = true;
+    joint.minAngle = -1.0f;
+    joint.maxAngle = 1.0f;
+    turnA(joint, 1.05f);
+
+    for (int pass = 0; pass < 8; ++pass) Joints::SolveVelocity(joint, door, frame);
+
+    CHECK_MSG(door.angularVelocity.y <= 0.0f,
+              "a door already swinging off its stop is not dragged back onto it");
+    CHECK_MSG(joint.limitImpulse >= 0.0f, "the accumulated stop impulse never goes negative");
+}
+
+// --- motors -----------------------------------------------------------------
+
+void testAMotorDrivesTheJointToItsSpeed() {
+    Joints::Body frame = immovable(glm::vec3(0.0f));
+    Joints::Body wheel = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+
+    Joints::Constraint joint = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    joint.armA = glm::vec3(-1.0f, 0.0f, 0.0f);
+    joint.useMotor = true;
+    joint.motorSpeed = 4.0f;
+    joint.maxMotorImpulse = 1000.0f;   // effectively uncapped
+
+    for (int pass = 0; pass < 8; ++pass) Joints::SolveVelocity(joint, wheel, frame);
+
+    CHECK_MSG(test::nearly(wheel.angularVelocity.y, 4.0f, 1e-2f),
+              "an uncapped motor reaches the speed it was asked for");
+
+    // And the other way, because a motor that only ever drives one direction is
+    // a sign error nobody notices until they need a door to close.
+    Joints::Body other = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+    Joints::Constraint reverse = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    reverse.armA = glm::vec3(-1.0f, 0.0f, 0.0f);
+    reverse.useMotor = true;
+    reverse.motorSpeed = -4.0f;
+    reverse.maxMotorImpulse = 1000.0f;
+    for (int pass = 0; pass < 8; ++pass) Joints::SolveVelocity(reverse, other, frame);
+    CHECK_MSG(test::nearly(other.angularVelocity.y, -4.0f, 1e-2f), "and the other way");
+}
+
+void testAMotorsTorqueCapIsWhatStopsItGoingThroughWalls() {
+    Joints::Body frame = immovable(glm::vec3(0.0f));
+    Joints::Body wheel = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+
+    Joints::Constraint joint = hingeAbout(glm::vec3(0.0f, 1.0f, 0.0f));
+    joint.armA = glm::vec3(-1.0f, 0.0f, 0.0f);
+    joint.useMotor = true;
+    joint.motorSpeed = 50.0f;
+    joint.maxMotorImpulse = 0.05f;
+
+    for (int pass = 0; pass < 8; ++pass) Joints::SolveVelocity(joint, wheel, frame);
+
+    CHECK_MSG(std::fabs(joint.motorImpulse) <= 0.05f + 1e-6f,
+              "a capped motor never applies more than its cap");
+    CHECK_MSG(wheel.angularVelocity.y < 50.0f,
+              "so it does not reach a speed it has no torque for");
+    CHECK_MSG(wheel.angularVelocity.y > 0.0f, "but it does turn");
+}
+
+// --- welds ------------------------------------------------------------------
+
+void testAWeldHoldsBothBodiesStillRelativeToEachOther() {
+    Joints::Body a = freeBody(glm::vec3(0.0f), 1.0f, 0.5f);
+    Joints::Body b = freeBody(glm::vec3(1.0f, 0.0f, 0.0f), 1.0f, 0.5f);
+    a.angularVelocity = glm::vec3(1.0f, -2.0f, 0.5f);
+    b.angularVelocity = glm::vec3(0.0f, 0.0f, 0.0f);
+    b.velocity = glm::vec3(0.0f, 3.0f, 0.0f);
+
+    Joints::Constraint joint;
+    joint.type = Joints::Type::Weld;
+    joint.armA = glm::vec3(0.5f, 0.0f, 0.0f);
+    joint.armB = glm::vec3(-0.5f, 0.0f, 0.0f);
+
+    const glm::vec3 momentumBefore = momentumOf(a) + momentumOf(b);
+    for (int pass = 0; pass < 8; ++pass) Joints::SolveVelocity(joint, a, b);
+
+    CHECK_MSG(nearlyVec(b.angularVelocity - a.angularVelocity, glm::vec3(0.0f), 1e-3f),
+              "a weld leaves no relative spin at all - that is the whole of it");
+
+    const glm::vec3 atA = a.velocity + glm::cross(a.angularVelocity, joint.armA);
+    const glm::vec3 atB = b.velocity + glm::cross(b.angularVelocity, joint.armB);
+    CHECK_MSG(nearlyVec(atA, atB, 1e-3f), "and the anchors move together");
+
+    CHECK_MSG(nearlyVec(momentumBefore, momentumOf(a) + momentumOf(b), 1e-3f),
+              "while creating no momentum, exactly as every other joint");
+}
+
+void testAWeldBetweenTwoUnturnableBodiesIsNotANaN() {
+    Joints::Body a = immovable(glm::vec3(0.0f));
+    Joints::Body b = immovable(glm::vec3(1.0f, 0.0f, 0.0f));
+
+    Joints::Constraint joint;
+    joint.type = Joints::Type::Weld;
+    Joints::SolveVelocity(joint, a, b);
+
+    CHECK(finiteVec(a.angularVelocity) && finiteVec(b.angularVelocity));
+    CHECK(nearlyVec(a.angularVelocity, glm::vec3(0.0f)));
+}
+
+// --- what a joint applied, which is what breaks it --------------------------
+
+void testAJointRecordsWhatItApplied() {
+    // The break check divides these by the step to get a force and a torque, so
+    // they have to be the TOTAL over the step and they have to be kept apart:
+    // a rope snapping under load and a hinge shearing off its frame are
+    // different failures.
+    Joints::Body anchor = immovable(glm::vec3(0.0f, 5.0f, 0.0f));
+    Joints::Body bob = freeBody(glm::vec3(0.0f, 3.0f, 0.0f), 1.0f);
+    bob.velocity = glm::vec3(0.0f, -10.0f, 0.0f);
+
+    Joints::Constraint joint = distanceJoint(2.0f);
+    CHECK(nearlyVec(joint.appliedLinear, glm::vec3(0.0f)));
+
+    Joints::SolveVelocity(joint, anchor, bob);
+    CHECK_MSG(glm::length(joint.appliedLinear) > 1.0f,
+              "catching a body falling at ten metres a second takes a real impulse");
+    CHECK_MSG(nearlyVec(joint.appliedAngular, glm::vec3(0.0f)),
+              "and a straight pull applies no torque at all");
+}
+
 void runTests() {
     testMomentumIsConserved();
     testTheAnchorsStopMovingRelativeToEachOther();
@@ -448,8 +686,19 @@ void runTests() {
     testPositionCorrectionLeavesASlackRopeAlone();
     testTwoImmovableBodiesCostNothing();
     testCoincidentAnchorsAreNotANaN();
+
+    testTheHingeAngleIsZeroWhereTheEndsAgree();
+    testAPerpendicularIsAlwaysFound();
+    testALimitDoesNothingInsideItsRange();
+    testALimitCatchesADoorAtItsStop();
+    testAStopPushesBackAndNeverPulls();
+    testAMotorDrivesTheJointToItsSpeed();
+    testAMotorsTorqueCapIsWhatStopsItGoingThroughWalls();
+    testAWeldHoldsBothBodiesStillRelativeToEachOther();
+    testAWeldBetweenTwoUnturnableBodiesIsNotANaN();
+    testAJointRecordsWhatItApplied();
 }
 
 } // namespace
 
-TEST_MAIN("test_joints", 40)
+TEST_MAIN("test_joints", 80)

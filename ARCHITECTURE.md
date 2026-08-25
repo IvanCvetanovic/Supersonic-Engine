@@ -1347,7 +1347,79 @@ ECS gives and is also the right shape for a rope of N links or a ragdoll bone
 held to its parent; a mechanism that genuinely needs two constraints on one body
 needs a second entity.
 
-### 7g. The optional world ground plane
+**Limits, motors and breaking.** A hinge angle is measured between two
+reference directions, one per body, each derived from that body's own axis by
+`PerpendicularTo` and rotating with it. Deriving them from the *world* axes
+instead would give directions that wander as the solver nudges the axes, and the
+angle — and with it the limit — would wander too. Zero is where the two
+coincide, which is an arbitrary configuration rather than a meaningful one, so
+the inspector shows the live angle and offers to set the stops around it: these
+are authored by reading the number, not by predicting it.
+
+The stop is an **inequality with no velocity bias**, and that is the whole of its
+design. A bias asks the solver to reach a return *speed*, and the body keeps that
+speed once it is back in range because nothing takes it away again — so the stop
+hands out energy. At the full rate a door arriving at six radians a second
+crossed its entire range and slammed into the opposite stop; softened to half a
+radian a second it still drifted forty-five degrees back off a ninety degree
+stop. So the velocity half removes only the speed going *into* the stop, and the
+overshoot — bounded by one step's travel — is walked out by **rotating** the body
+in the position pass, exactly as the linear half of every joint is walked out by
+moving it. Measured: a door shoved at six radians a second now rests at 89.95
+degrees with 0.05 left in it.
+
+That rotation only became writable once `TransformComponent::EulerFromRotation`
+existed. See below.
+
+The motor is a target speed about the axis with a **capped** impulse. Without the
+cap it is infinitely strong and drives whatever is in the way through a wall
+rather than stalling against it. The limit is solved *after* the motor, so a
+motor driving into its own stop is overruled by the stop rather than fighting it
+to a draw.
+
+Breaking compares the impulse a joint applied over the whole step, divided by the
+step, against a **force** and a **torque** separately — they are not the same
+quantity, and adding their magnitudes would compare metres per second to radians
+per second. Checked after every pass rather than inside them, because the first
+iteration's over-correction is one the seventh is about to undo. `broken` is
+runtime state and is deliberately not serialised: a level whose joints reloaded
+already snapped is a level you could only play once.
+
+A **weld** is a point constraint plus all three rotational degrees of freedom,
+held by velocity alone: it keeps the relative orientation the two bodies had when
+it started acting rather than driving them to one it was told about, because
+there is nowhere to store a rest orientation and holding what they have is what
+welding two things *means*. With the relative angular velocity driven to zero
+every step there is no systematic drift, only the float error of the integration.
+
+### 7g. The Euler convention, and the bug that hid in it
+
+A hinged door exploded, and the cause was not the hinge.
+
+The rotation integrator turned the transform's Euler triple into a quaternion
+with `glm::quat(vec3)`, applied the step's spin, and wrote the result back with
+`glm::eulerAngles`. **`glm::quat(vec3)` composes the three angles in the opposite
+order from `getModelMatrix`.** For any orientation with more than one non-zero
+angle it is a different rotation — measured at 0.33 on a matrix entry for
+`(0.5, 0.7, 0.3)`, which is not a rounding difference.
+
+Both halves of that round trip used the same wrong convention, so it was
+self-consistent and every test passed. What was wrong was its relationship to the
+matrix that renders and collides the body: the spin was applied about the wrong
+axes. A body turning about **one** axis has one non-zero angle and the two
+conventions agree exactly there — which is why nothing caught it. Every rotation
+test in the suite spins about a single axis from rest. A door swinging past
+ninety degrees picks up a second angle, and the error compounds until the body
+reaches two hundred and eighty radians a second.
+
+`TransformComponent::EulerFromRotation` inverts the matrix `getModelMatrix`
+actually writes, and `getRotationMatrix` asks `getModelMatrix` for an unscaled
+copy rather than writing the nine entries a second time. The gimbal pole — where
+`cy` is zero and the two outer angles stop being separable — pins one at zero and
+puts the whole turn in the other, which is the only choice that stays continuous
+as the pole is approached.
+
+### 7h. The optional world ground plane
 
 A solid plane across the whole world at `groundPlaneY`, applied during
 integration, per non-kinematic rigid body, before any collider is gathered.
@@ -1392,7 +1464,7 @@ with its origin half a unit above the plane.
 solid. The two live two hundred lines apart and have to agree, or a character
 stands on a floor that is switched off.
 
-### 7h. Sleeping
+### 7i. Sleeping
 
 A body that has stayed below `kSleepLinearVelocity` (0.05 m/s) and
 `kSleepAngularVelocity` (0.05 rad/s) for `kSleepTime` (half a second) stops being
@@ -1455,7 +1527,7 @@ point, where the distance it sinks under gravity in one step and the distance th
 positional correction pushes it back cancel to the same float, so a sleeping body
 is not frozen *near* where an awake one hovers — it is frozen exactly there.
 
-### 7i. Triggers
+### 7j. Triggers
 
 A collider with `isTrigger` set is detected and deliberately not resolved: the
 overlap is reported in the contact list and the body passes through, which is the
@@ -1472,7 +1544,7 @@ inspector checkbox:
   There is no `OnTriggerEnter`, no per-entity event and no enter/stay/exit
   distinction, so a script cannot currently learn that a trigger fired.
 
-### 7j. World queries
+### 7k. World queries
 
 `Raycast`, `OverlapSphere` and `IsGrounded` answer questions about the world
 against **colliders**, which is what physics means by solid. Gameplay previously
@@ -1524,7 +1596,7 @@ Every query rebuilds the whole shape list from the registry on each call. There
 is no acceleration structure and no cache, so a script that raycasts once per
 entity per frame walks every collider in the scene once per entity per frame.
 
-### 7k. Documented departures
+### 7l. Documented departures
 
 Listed rather than hidden, in the same spirit as the rest of this document.
 

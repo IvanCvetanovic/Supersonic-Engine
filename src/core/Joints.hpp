@@ -51,6 +51,15 @@ enum class Type {
     // Point, plus the two rotational degrees of freedom that are not the hinge
     // axis. A door, a wheel, a lid.
     Hinge,
+
+    // Point, plus ALL THREE rotational degrees of freedom: two bodies rigidly
+    // fixed to each other.
+    //
+    // Not the same as parenting, which is the thing people reach for instead. A
+    // parented child integrates in its parent's space and inherits that motion
+    // on top of its own, so it is carried rather than held - it does not push
+    // back, and the pair has no shared response to being hit.
+    Weld,
 };
 
 // One joint, fully resolved into world space.
@@ -79,9 +88,40 @@ struct Constraint {
     glm::vec3 axisA{0.0f, 1.0f, 0.0f};
     glm::vec3 axisB{0.0f, 1.0f, 0.0f};
 
+    // A reference direction perpendicular to each axis, world space and unit
+    // length, each rotating with its own body.
+    //
+    // The angle between them about the axis IS the hinge angle, and it is the
+    // only thing a limit or a motor can be stated against. Derived from the
+    // axis by PerpendicularTo, which is deterministic, so a body's reference
+    // is the same direction every step rather than one that wanders as the
+    // solver nudges the axis.
+    glm::vec3 referenceA{1.0f, 0.0f, 0.0f};
+    glm::vec3 referenceB{1.0f, 0.0f, 0.0f};
+
+    // Hinge only: how far the joint may turn, in radians, measured as A
+    // relative to B - which for a door hinged to the world is the door's own
+    // angle, because the world is B and does not move.
+    //
+    // Zero is where the two reference directions coincide. That is an arbitrary
+    // configuration rather than a meaningful one, which is why the inspector
+    // shows the live angle: limits are authored by looking at the number, not
+    // by predicting it.
+    bool useLimit{false};
+    float minAngle{0.0f};
+    float maxAngle{0.0f};
+
+    // Hinge only: drive the joint at a speed rather than let it swing.
+    //
+    // maxMotorImpulse is a torque already multiplied by the step, because the
+    // caller is the only thing that knows the step. Without a cap a motor is
+    // infinitely strong and shoves whatever is in the way through a wall.
+    bool useMotor{false};
+    float motorSpeed{0.0f};
+    float maxMotorImpulse{0.0f};
+
     // Hinge only: how much of the CURRENT misalignment to ask the velocity
-    // solver to remove, per second. Already divided by the step, because the
-    // caller is the only thing that knows the step.
+    // solver to remove, per second. Already divided by the step.
     //
     // The linear half of every joint is corrected by moving the bodies instead,
     // exactly as a contact is - see SolvePosition. The angular half is not,
@@ -93,13 +133,45 @@ struct Constraint {
     // Accumulated across the iterations of ONE step, and reset between steps by
     // the caller rebuilding the list.
     //
-    // The rope is why these exist. An inequality constraint has to clamp its
-    // TOTAL impulse rather than each pass's change, or a later pass cannot undo
-    // an earlier over-correction and a slack rope shoves instead of hanging.
+    // The rope and the limit are why these exist. An inequality constraint has
+    // to clamp its TOTAL impulse rather than each pass's change, or a later
+    // pass cannot undo an earlier over-correction and a slack rope shoves
+    // instead of hanging.
     glm::vec3 linearImpulse{0.0f};
     float scalarImpulse{0.0f};
     glm::vec2 angularImpulse{0.0f};
+    glm::vec3 lockImpulse{0.0f};
+    float motorImpulse{0.0f};
+    float limitImpulse{0.0f};
+
+    // Everything the joint actually applied this step, kept apart because a
+    // force and a torque are not the same quantity and a joint that breaks
+    // under load has to be told which one broke it.
+    glm::vec3 appliedLinear{0.0f};
+    glm::vec3 appliedAngular{0.0f};
 };
+
+// A unit vector perpendicular to `axis`.
+//
+// Deterministic: the reference is chosen by the axis's SMALLEST component, so
+// the same axis always gives the same perpendicular. A hinge angle measured
+// against a perpendicular that wandered would drift with it, and the limit
+// would move.
+glm::vec3 PerpendicularTo(const glm::vec3& axis);
+
+// The hinge angle in radians: A relative to B, about axisA, zero where the two
+// reference directions coincide.
+float HingeAngle(const Constraint& joint);
+
+// How far A has to turn about the axis, in radians, to bring the hinge back
+// inside its limits. Zero when it is already inside, or when there is no limit.
+//
+// The POSITION half of a stop. The velocity half removes only the speed going
+// into it, because a velocity bias asks for a return SPEED and the body keeps
+// that speed once it is back in range - which is a door that bounces off its
+// own frame. This is the same split the linear half of every joint uses, and it
+// is what makes a stop absorb rather than rebound.
+float LimitOvershoot(const Constraint& joint);
 
 // The vector from A's anchor to B's, which is the error a Point joint drives to
 // zero and the line a Distance joint measures along.
@@ -108,7 +180,7 @@ glm::vec3 Separation(const Constraint& joint, const Body& a, const Body& b);
 // One pass of the velocity solver over one joint, mutating both bodies.
 //
 // A `type` outside the enum does nothing at all rather than falling into one of
-// the three: the switch is exhaustive over the enumerators, so a value that is
+// the four: the switch is exhaustive over the enumerators, so a value that is
 // none of them matches no case. That is the safe direction - a joint nobody can
 // name holds nothing - and it is written down here because it is otherwise
 // invisible.
