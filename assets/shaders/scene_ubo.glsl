@@ -50,6 +50,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 spotViewProj[SPOT_SHADOW_CASTERS];
     vec4 fogColorAndDensity;  // rgb = colour, a = density (0 = no fog)
     vec4 clusterParams;       // xy = render target size in pixels, z = near, w = far
+    vec4 environmentParams;   // x = 1 when a cubemap is bound, y = prefiltered mip count
 } ubo;
 
 // The froxel grid. Must match core/ClusterGrid.hpp.
@@ -78,6 +79,16 @@ layout(std430, set = 0, binding = 6) readonly buffer ClusterBuffer {
 layout(std430, set = 0, binding = 7) readonly buffer LightIndexBuffer {
     uint indices[];
 } lightIndexBuffer;
+
+// The environment, as the two things lighting from one actually needs: what a
+// diffuse surface facing a direction receives, and what a mirror facing it
+// reflects at each roughness.
+//
+// Both are always bound. Reading a descriptor nobody wrote is undefined even
+// inside a branch that is never taken, so a scene with no environment binds a
+// one-colour cube and ubo.environmentParams.x says to ignore it.
+layout(set = 0, binding = 8) uniform samplerCube irradianceMap;
+layout(set = 0, binding = 9) uniform samplerCube prefilteredMap;
 
 // How far in FRONT of the camera a world position is.
 //

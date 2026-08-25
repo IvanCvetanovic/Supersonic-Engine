@@ -100,6 +100,13 @@ struct UniformBufferObject {
     // as the viewport is dragged.
     alignas(16) glm::vec4 clusterParams{1.0f, 1.0f, 0.1f, 100.0f}; // xy = target size, z = near, w = far
 
+    // x is 1 when an environment map is bound and 0 when the shader should use
+    // the analytic hemisphere instead; y is how many roughness levels the
+    // prefiltered chain has, which the shader needs to turn a roughness into a
+    // mip. A vec4 rather than two floats because a uniform block pads to
+    // sixteen bytes either way.
+    alignas(16) glm::vec4 environmentParams{0.0f, 1.0f, 0.0f, 0.0f};
+
     // The light array USED to live here, a fixed eight of them. It is a storage
     // buffer now (set 0, binding 5) so a scene may hold as many as it likes,
     // and lightCount.y says how many of the leading entries are directional -

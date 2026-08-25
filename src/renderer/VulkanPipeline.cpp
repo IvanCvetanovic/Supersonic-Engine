@@ -305,9 +305,25 @@ void VulkanPipeline::createDescriptorSetLayout() {
         clusterBindings[i].stageFlags = vk::ShaderStageFlagBits::eFragment;
     }
 
-    const std::array<vk::DescriptorSetLayoutBinding, 8> sceneBindings = {
+    // The environment, as the two maps a shader needs to light from one: the
+    // diffuse irradiance, and the specular chain indexed by roughness.
+    //
+    // Both are ALWAYS bound. A descriptor slot that is never written is
+    // undefined to read even inside a branch the shader does not take, so a
+    // scene with no environment binds a one-colour cube the shader is told to
+    // ignore rather than leaving the slots empty.
+    std::array<vk::DescriptorSetLayoutBinding, 2> environmentBindings{};
+    for (uint32_t i = 0; i < environmentBindings.size(); ++i) {
+        environmentBindings[i].binding = 8 + i;
+        environmentBindings[i].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        environmentBindings[i].descriptorCount = 1;
+        environmentBindings[i].stageFlags = vk::ShaderStageFlagBits::eFragment;
+    }
+
+    const std::array<vk::DescriptorSetLayoutBinding, 10> sceneBindings = {
         uboBinding, shadowBinding, paletteBinding, pointShadowBinding, spotShadowBinding,
-        clusterBindings[0], clusterBindings[1], clusterBindings[2]
+        clusterBindings[0], clusterBindings[1], clusterBindings[2],
+        environmentBindings[0], environmentBindings[1]
     };
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};

@@ -4,6 +4,8 @@
 #include "core/Json.hpp"
 #include "core/AssetDatabase.hpp"
 #include "core/ComponentCodec.hpp"
+#include "core/AssetDatabase.hpp"
+#include "core/EnvironmentSettings.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/RenderSettings.hpp"
 
@@ -66,6 +68,27 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
              << physics.gravity.z << "], \"GroundPlane\": "
              << (physics.hasGroundPlane ? "true" : "false")
              << ", \"GroundPlaneY\": " << physics.groundPlaneY << " },\n";
+    }
+
+    // The surroundings, for the same reason: there is one sky, so making it a
+    // component would mean deciding what two of them meant.
+    //
+    // The HDRI is an asset reference like any other, so it carries its identity
+    // beside its path - a renamed environment would otherwise fall silently
+    // back to the analytic hemisphere, which looks like somebody turned the
+    // lighting off.
+    {
+        static const EnvironmentSettings kEnvironmentDefaults;
+        const EnvironmentSettings* storedEnvironment =
+            registry.ctx().find<EnvironmentSettings>();
+        const EnvironmentSettings& environment =
+            storedEnvironment ? *storedEnvironment : kEnvironmentDefaults;
+
+        file << "  \"Environment\": { \"Hdri\": \"" << Json::Escape(environment.hdriPath)
+             << "\"";
+        const std::string guid = AssetDatabase::Instance().GuidForPath(environment.hdriPath);
+        if (!guid.empty()) file << ", \"HdriGuid\": \"" << guid << "\"";
+        file << ", \"Intensity\": " << environment.intensity << " },\n";
     }
 
     // Scene-level rendering, for the same reason as the physics block: it
@@ -168,6 +191,21 @@ bool validateSceneArray(const Json::Array& entities, std::string& error) {
 // Always assigned, never merely read: registry.clear() leaves the context
 // untouched, so a scene loaded over another one would otherwise silently inherit
 // the previous scene's gravity and keep its ground plane.
+void applyEnvironmentSettings(entt::registry& registry, const Json::Value& root) {
+    EnvironmentSettings environment;
+    if (root.Has("Environment")) {
+        const auto& node = root["Environment"];
+        const std::string path = node["Hdri"].AsString("");
+        const std::string guid = node["HdriGuid"].AsString("");
+        environment.hdriPath =
+            (path.empty() && guid.empty()) ? path : AssetDatabase::Instance().Resolve(guid, path);
+        environment.intensity = node["Intensity"].AsFloat(1.0f);
+    }
+    // Absent from every scene written before this existed, which reads as the
+    // analytic hemisphere - exactly what those scenes had.
+    registry.ctx().insert_or_assign<EnvironmentSettings>(std::move(environment));
+}
+
 void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
     PhysicsSettings physics;
 
@@ -292,6 +330,7 @@ SerializationResult SceneSerializer::DeserializeFromString(entt::registry& regis
     }
     const SerializationResult result = applyScene(registry, root["Entities"].AsArray(), "snapshot");
     if (result.ok) applyPhysicsSettings(registry, root);
+    if (result.ok) applyEnvironmentSettings(registry, root);
     return result;
 }
 
@@ -353,6 +392,7 @@ SerializationResult SceneSerializer::Deserialize(entt::registry& registry, const
 
     const SerializationResult result = applyScene(registry, root["Entities"].AsArray(), filepath);
     if (result.ok) applyPhysicsSettings(registry, root);
+    if (result.ok) applyEnvironmentSettings(registry, root);
     return result;
 }
 

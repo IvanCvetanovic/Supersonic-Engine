@@ -1,6 +1,7 @@
 #include "renderer/VulkanRenderer.hpp"
 #include "core/Profiler.hpp"
 #include "core/RenderSettings.hpp"
+#include "core/EnvironmentSettings.hpp"
 #include "core/Log.hpp"
 
 #include "core/AnimationSystem.hpp"
@@ -38,6 +39,11 @@ VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain,
     m_pointShadowMap = std::make_unique<PointShadowMap>(m_deviceRef);
     m_spotShadowMap = std::make_unique<ShadowMap>(m_deviceRef, 1024,
                                                  SpotLight::kMaxShadowCasters);
+
+    // Before the descriptor sets, because they bind it. It starts as a black
+    // cube the shader is told to ignore, so a scene that names no environment
+    // is unaffected by any of this.
+    m_environment = std::make_unique<EnvironmentProbe>(m_deviceRef, m_commandPool);
 
     createUniformBuffers();
     createDescriptorPool();
@@ -523,6 +529,37 @@ void VulkanRenderer::createDescriptorPool() {
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "DescriptorPool created successfully." << std::endl;
 }
 
+void VulkanRenderer::updateEnvironmentDescriptors() {
+    if (!m_environment || m_descriptorSets.empty()) return;
+
+    // A descriptor set may be rewritten as often as you like, and may NOT be
+    // rewritten while a command buffer that uses it is still executing. The
+    // environment changes when a scene is loaded, so paying a full idle for it
+    // costs nothing anyone can measure.
+    m_deviceRef.GetDevice().waitIdle();
+
+    const vk::DescriptorImageInfo irradianceInfo = m_environment->IrradianceInfo();
+    const vk::DescriptorImageInfo prefilteredInfo = m_environment->PrefilteredInfo();
+
+    for (auto& set : m_descriptorSets) {
+        std::array<vk::WriteDescriptorSet, 2> writes{};
+
+        writes[0].dstSet = set;
+        writes[0].dstBinding = 8;
+        writes[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        writes[0].descriptorCount = 1;
+        writes[0].pImageInfo = &irradianceInfo;
+
+        writes[1].dstSet = set;
+        writes[1].dstBinding = 9;
+        writes[1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &prefilteredInfo;
+
+        m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
+    }
+}
+
 void VulkanRenderer::createDescriptorSets() {
     const std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, m_pipeline->GetSceneSetLayout());
 
@@ -562,7 +599,10 @@ void VulkanRenderer::createDescriptorSets() {
         spotShadowInfo.imageView = m_spotShadowMap->GetImageView();
         spotShadowInfo.sampler = m_spotShadowMap->GetSampler();
 
-        std::array<vk::WriteDescriptorSet, 8> writes{};
+        const vk::DescriptorImageInfo irradianceInfo = m_environment->IrradianceInfo();
+        const vk::DescriptorImageInfo prefilteredInfo = m_environment->PrefilteredInfo();
+
+        std::array<vk::WriteDescriptorSet, 10> writes{};
 
         writes[0].dstSet = m_descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -612,6 +652,18 @@ void VulkanRenderer::createDescriptorSets() {
             writes[5 + b].descriptorCount = 1;
             writes[5 + b].pBufferInfo = &clusterInfos[b];
         }
+
+        writes[8].dstSet = m_descriptorSets[i];
+        writes[8].dstBinding = 8;
+        writes[8].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        writes[8].descriptorCount = 1;
+        writes[8].pImageInfo = &irradianceInfo;
+
+        writes[9].dstSet = m_descriptorSets[i];
+        writes[9].dstBinding = 9;
+        writes[9].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+        writes[9].descriptorCount = 1;
+        writes[9].pImageInfo = &prefilteredInfo;
 
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
@@ -1004,6 +1056,39 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // at all, and a few hundred lights against three and a half thousand
     // froxels is work the job system's threads would finish before a dispatch
     // had been recorded.
+    // What the scene asked for, loaded once rather than per frame: the
+    // convolution behind it is seconds of work, and a scene names the same file
+    // every frame it is open.
+    {
+        static const EnvironmentSettings kDefaults;
+        const EnvironmentSettings* stored = registry.ctx().find<EnvironmentSettings>();
+        const EnvironmentSettings& settings = stored ? *stored : kDefaults;
+
+        if (settings.hdriPath != m_environmentPath ||
+            settings.intensity != m_environmentIntensity) {
+            m_environmentPath = settings.hdriPath;
+            m_environmentIntensity = settings.intensity;
+
+            if (m_environmentPath.empty()) {
+                // Back to the analytic hemisphere. The black cube stays bound;
+                // the flag below is what turns it off.
+                m_environment->LoadConstant(glm::vec3(0.0f));
+                m_environmentHasMap = false;
+            } else {
+                m_environmentHasMap =
+                    m_environment->Load(m_environmentPath, m_environmentIntensity);
+            }
+            // The descriptors name the OLD images otherwise: loading replaces
+            // both cube images, and a descriptor written last frame points at
+            // memory that has just been freed.
+            updateEnvironmentDescriptors();
+        }
+    }
+
+    ubo.environmentParams = glm::vec4(
+        m_environmentHasMap ? 1.0f : 0.0f,
+        static_cast<float>(EnvironmentProbe::kPrefilteredLevels), 0.0f, 0.0f);
+
     ubo.clusterParams = glm::vec4(static_cast<float>(offscreen.GetWidth()),
                                   static_cast<float>(offscreen.GetHeight()),
                                   camera.nearPlane, camera.farPlane);

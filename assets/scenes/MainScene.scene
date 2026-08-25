@@ -2,6 +2,7 @@
   "Version": 2,
   "Scene": "MainScene",
   "Physics": { "Gravity": [0, -9.81, 0], "GroundPlane": false, "GroundPlaneY": 0 },
+  "Environment": { "Hdri": "", "Intensity": 1 },
   "Rendering": { "BloomThreshold": 1, "BloomSoftKnee": 0.5, "BloomIntensity": 0.55, "Exposure": 1, "FogDensity": 0, "FogColor": [0.55, 0.6, 0.68] },
   "Entities": [
     {

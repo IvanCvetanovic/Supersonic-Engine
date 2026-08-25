@@ -19,6 +19,7 @@
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
 #include "renderer/ShadowMap.hpp"
+#include "renderer/EnvironmentProbe.hpp"
 #include "renderer/PointShadowMap.hpp"
 #include "renderer/SpotLight.hpp"
 #include "renderer/PipelineCache.hpp"
@@ -122,6 +123,17 @@ private:
     void createUniformBuffers();
     void createDescriptorPool();
     void createDescriptorSets();
+
+    // Rewrites ONLY the two environment bindings on the sets that already
+    // exist.
+    //
+    // Not createDescriptorSets again: the pool is sized for exactly one set per
+    // frame in flight, so allocating a second round exhausts it - the first
+    // scene that named an HDRI died on ErrorOutOfPoolMemory before it drew
+    // anything. A descriptor set can be written repeatedly; it just cannot be
+    // written while a command buffer using it is still running, which is why
+    // this waits for the device first.
+    void updateEnvironmentDescriptors();
     void initImGui();
 
     UiStyleCallback m_styleUi;
@@ -177,6 +189,18 @@ private:
     // Depth-only pass from the primary directional light.
     std::unique_ptr<ShadowMap> m_shadowMap;
     std::unique_ptr<PointShadowMap> m_pointShadowMap;
+
+    // The scene's surroundings, as the two cubemaps a shader lights from.
+    // Always present so its descriptor slots are always written; whether the
+    // shader looks at them is a flag in the scene block.
+    std::unique_ptr<EnvironmentProbe> m_environment;
+
+    // What the probe was last asked for, so a scene that names the same HDRI
+    // every frame is not reconvolved every frame - that integral is the
+    // expensive part of the whole feature.
+    std::string m_environmentPath;
+    float m_environmentIntensity{1.0f};
+    bool m_environmentHasMap{false};
 
     // One array image, a layer per shadow-casting spot light.
     std::unique_ptr<ShadowMap> m_spotShadowMap;

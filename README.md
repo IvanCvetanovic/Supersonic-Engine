@@ -264,6 +264,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_heightfield` | Terrain collision: the grid against the mesh vertex for vertex, seams, ridge crests, grooves, buried recovery, and the cell march a ray does |
 | `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, limits, motors, welds, and every degenerate case |
 | `test_convexhull` | Hull building and collision: Euler's formula, convexity, a cube's six faces, the vertex cap, and agreement with the box path |
+| `test_environmentmap` | IBL on the CPU: the cube face mapping, a constant sky irradiating to itself, both prefilter endpoints, and the Radiance decoder |
 | `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, and which route a reference resolved by |
 | `test_audio` | WAV decoding, including the shipped clip |
 | `test_scripts` | Script registry and dispatch |
@@ -299,6 +300,68 @@ comment on each one says which.
   touches the renderer
 
 ---
+
+## Image-based lighting
+
+The environment used to be two colours mixed by height, so a metal surface
+reflected a gradient and a sky brighter than white could not exist. A Radiance
+`.hdr` is now convolved into two cubemaps — the diffuse irradiance a surface
+facing each direction receives, and a specular chain indexed by roughness — and
+the shader samples both.
+
+**This was deferred three times**, on the grounds that its natural check is
+"does it look plausible", which this project rejects as evidence. That turned
+out to be the wrong question. IBL is four pieces and three of them have exact
+oracles:
+
+| piece | how it fails | the oracle |
+|---|---|---|
+| the cube face mapping | a reflection that comes from the wrong direction, invisibly | a direction turned into a face and back is the direction it was |
+| the irradiance integral | a botched solid angle, or a normalisation off by π | the cosine integral over a hemisphere, over π, is **one** — so a constant sky irradiates to that constant |
+| the prefiltered chain | energy spread where it should not be | roughness 0 is the environment itself; every roughness of a constant sky is that constant |
+| the shader combining them | no CPU oracle exists | see below |
+
+The fourth is checked **differentially**, against code already trusted rather
+than against a number somebody wrote down: with the scene's sky and ground
+ambient set to one colour, and an environment map of that same colour, the two
+paths must produce the same image. They produce the *same bytes* — 0 of 293,695
+pixels differ. That single result exercises the `.hdr` decode, the
+equirectangular projection, both convolutions, the half-float conversion, the
+cube upload, the descriptor bindings and the shader, end to end.
+
+And the other direction: a real HDRI with a sun sixty times white changes
+184,884 of 248,395 scene pixels while leaving the procedural sky — which IBL
+does not touch — identical in all 45,300 of its own. The zero there is the
+control that says the two runs are otherwise the same run.
+
+Three things are load-bearing:
+
+- **A scene that names no environment renders byte-for-byte as it did before
+  any of this existed.** The shader branches to the original expression, and
+  the check is the same one: a render of MainScene after this landed is
+  identical to one from before it. That is what made the change safe to land
+  without re-checking every scene in the project.
+- **Both cube samplers are always bound.** Reading a descriptor nobody wrote is
+  undefined even inside a branch the shader never takes, so a scene with no
+  environment binds a one-texel black cube and a flag in the scene block says to
+  ignore it.
+- **Loading rewrites the two bindings rather than reallocating the sets.** The
+  descriptor pool holds exactly one set per frame in flight, so allocating a
+  second round exhausts it — the first scene that named an HDRI died on
+  `ErrorOutOfPoolMemory` before it drew anything.
+
+The format is Radiance `.hdr`, both encodings. Six PNG faces would have avoided
+the parser and cannot hold a value above one, which is most of the point: a sun
+is thousands, and clamping it throws away exactly the range that makes a
+reflection look like light. Storage is `R16G16B16A16_SFLOAT`, the only HDR
+format whose linear filtering every Vulkan implementation must support — and an
+over-range value is clamped to the largest finite half rather than to infinity,
+because an infinity in a colour becomes a NaN the first time the ambient
+occlusion term multiplies it by zero.
+
+**Open:** the procedural sky is still analytic, so a loaded environment is not
+what you see when you look up; and there is one environment per scene, which is
+what reflection probes exist to fix.
 
 ## Asset identity
 
@@ -399,6 +462,9 @@ Android "not functional"; extending that register forward costs nothing.
       button held, and losing the window always gives it back
 - [x] Text input: a HUD text field a game can author, type into and read back,
       with the keyboard taken from the game while it has focus
+- [x] Image-based lighting: a Radiance `.hdr` convolved into diffuse
+      irradiance and a roughness-indexed specular chain, so metal reflects the
+      room rather than a two-colour gradient
 - [x] Convex hull colliders, built from the mesh you can see, with a
       non-uniform scale that is exact rather than approximated
 - [x] Hinge limits, motors, breaking forces and welds — a door that stops at
@@ -423,9 +489,11 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
       into a text box rather than picked; and a rename made while the editor is
       RUNNING is only noticed at the next import, because nothing re-points the
       live scene
-- [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
-      is no cubemap path at all — no HDRI can be loaded — so metal and smooth
-      dielectrics have nothing to reflect but a two-colour gradient
+- [ ] **A sky that matches the environment, and probes.** An HDRI now lights
+      the scene, but the procedural sky behind it is still analytic — so a
+      loaded environment is not what you see when you look up. And there is one
+      environment for the whole scene: a room and the outdoors it opens onto
+      light identically, which is what reflection probes exist to fix
 - [ ] **Concave collision.** A hull is convex, so a doughnut collides as a
       disc and a chair as the block it sits in. Closing it means decomposing a
       shape into several hulls automatically, which is a different piece of work

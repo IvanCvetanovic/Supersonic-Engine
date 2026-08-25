@@ -15,7 +15,8 @@ VulkanImage::VulkanImage(
     uint32_t arrayLayers,
     vk::SampleCountFlagBits samples,
     bool cubeCompatible,
-    bool generateMipmaps)
+    bool generateMipmaps,
+    uint32_t explicitMipLevels)
     : m_deviceRef(device), m_allocator(device.GetAllocator()), m_width(width), m_height(height), m_format(format) {
 
     m_arrayLayers = arrayLayers == 0 ? 1 : arrayLayers;
@@ -28,6 +29,13 @@ VulkanImage::VulkanImage(
     if (generateMipmaps && m_samples == vk::SampleCountFlagBits::e1) {
         uint32_t largest = width > height ? width : height;
         while (largest > 1) { largest >>= 1; ++m_mipLevels; }
+    }
+
+    // A count the caller decided beats one worked out here, because a computed
+    // chain - each level its own integral rather than a filter of the one above
+    // - has as many levels as the caller chose to compute and no more.
+    if (explicitMipLevels > 0 && m_samples == vk::SampleCountFlagBits::e1) {
+        m_mipLevels = explicitMipLevels;
     }
 
     // A cube is six faces, no more and no less. Asking for a cube with any
@@ -357,6 +365,75 @@ bool VulkanImage::GenerateMipmaps(
     device.GetDevice().freeCommandBuffers(commandPool, 1, &cmd);
 
     return canFilter;
+}
+
+void VulkanImage::UploadLayeredImage(
+    VulkanDevice& device,
+    vk::CommandPool commandPool,
+    vk::Buffer staging,
+    vk::Image image,
+    uint32_t layerCount,
+    uint32_t mipLevels,
+    const std::vector<vk::BufferImageCopy>& regions) {
+
+    if (regions.empty()) return;
+
+    vk::CommandBufferAllocateInfo allocInfo{};
+    allocInfo.level = vk::CommandBufferLevel::ePrimary;
+    allocInfo.commandPool = commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    vk::CommandBuffer commandBuffer = device.GetDevice().allocateCommandBuffers(allocInfo)[0];
+
+    vk::CommandBufferBeginInfo beginInfo{};
+    beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
+    commandBuffer.begin(beginInfo);
+
+    vk::ImageMemoryBarrier barrier{};
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = mipLevels;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    // EVERY layer, not one. A cube face left in eUndefined is one a sampler
+    // reads as containing anything at all, and the face that gets it is
+    // whichever the light happens to come from.
+    barrier.subresourceRange.layerCount = layerCount;
+
+    barrier.oldLayout = vk::ImageLayout::eUndefined;
+    barrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
+    barrier.srcAccessMask = vk::AccessFlagBits::eNone;
+    barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                                  vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlags(), 0,
+                                  nullptr, 0, nullptr, 1, &barrier);
+
+    commandBuffer.copyBufferToImage(staging, image, vk::ImageLayout::eTransferDstOptimal,
+                                    static_cast<uint32_t>(regions.size()), regions.data());
+
+    barrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
+    barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+    barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                  vk::PipelineStageFlagBits::eFragmentShader,
+                                  vk::DependencyFlags(), 0, nullptr, 0, nullptr, 1, &barrier);
+
+    commandBuffer.end();
+
+    vk::SubmitInfo submitInfo{};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    const vk::Result submitted = device.GetGraphicsQueue().submit(1, &submitInfo, nullptr);
+    if (submitted != vk::Result::eSuccess) {
+        throw std::runtime_error("Failed to submit a layered image upload!");
+    }
+
+    device.GetGraphicsQueue().waitIdle();
+    device.GetDevice().freeCommandBuffers(commandPool, 1, &commandBuffer);
 }
 
 void VulkanImage::CopyBufferToImage(

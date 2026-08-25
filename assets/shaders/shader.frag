@@ -505,7 +505,15 @@ void main() {
     // Ambient, hemispherically. A flat term lit the underside of everything
     // exactly as brightly as its top, which is the single most obvious way a
     // render reads as untextured plastic - nothing outdoors is lit like that.
-    vec3 irradiance = hemisphere(N);
+    // The environment, or the two-colour hemisphere it replaces.
+    //
+    // A branch rather than a blend, and the fallback path is the ORIGINAL
+    // expression untouched: a scene that names no environment has to render
+    // exactly as it did before any of this existed, to the last bit, or the
+    // feature cannot be landed without re-checking every scene in the project.
+    bool hasEnvironment = ubo.environmentParams.x > 0.5;
+
+    vec3 irradiance = hasEnvironment ? texture(irradianceMap, N).rgb : hemisphere(N);
 
     // Metals have no diffuse response at all. The old term multiplied ambient
     // by albedo unconditionally, so a mirror picked up a flat wash of ambient
@@ -522,7 +530,15 @@ void main() {
     // scale to not be worth a lookup texture and a descriptor binding.
     vec3 R = reflect(-V, N);
     vec2 envBRDF = EnvBRDFApprox(roughness, max(dot(N, V), 0.0));
-    vec3 ambientSpecular = hemisphere(R) * (F0 * envBRDF.x + envBRDF.y);
+    // Rougher surfaces read a blurrier level of the prefiltered chain, which is
+    // the whole reason it is a chain: one integral per roughness, computed once
+    // rather than per fragment.
+    float maxLevel = max(ubo.environmentParams.y - 1.0, 0.0);
+    vec3 reflected = hasEnvironment
+        ? textureLod(prefilteredMap, R, roughness * maxLevel).rgb
+        : hemisphere(R);
+
+    vec3 ambientSpecular = reflected * (F0 * envBRDF.x + envBRDF.y);
 
     vec3 ambient = (ambientDiffuse + ambientSpecular) * ao;
     vec3 color = ambient + Lo;

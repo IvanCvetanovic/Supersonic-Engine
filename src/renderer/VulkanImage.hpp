@@ -48,7 +48,17 @@ public:
         //
         // The image gains eTransferSrc as well as eTransferDst, because the
         // chain is built by blitting each level from the one above it.
-        bool generateMipmaps = false
+        bool generateMipmaps = false,
+
+        // A mip count the CALLER decides, for a chain that is computed rather
+        // than filtered.
+        //
+        // generateMipmaps builds each level by blitting the one above it, which
+        // is right for a texture and wrong for a prefiltered environment: there
+        // each level is its own integral over a different roughness, not a box
+        // filter of the sharper one. Zero keeps the existing behaviour, so
+        // every caller that had none is unchanged.
+        uint32_t explicitMipLevels = 0
     );
     ~VulkanImage();
 
@@ -96,6 +106,28 @@ public:
         uint32_t width,
         uint32_t height,
         uint32_t mipLevels
+    );
+
+    // Fills every layer and every mip of an image from one staging buffer, in
+    // one command buffer.
+    //
+    // The two helpers below take neither a layer nor a level - they were
+    // written for a single 2D texture, and CopyBufferToImage hardcodes layer
+    // zero. A cubemap is six layers with a mip chain that is COMPUTED rather
+    // than blitted (each roughness is its own integral, not a box filter of the
+    // one above), so it needs both, and generalising the existing pair would
+    // change code that four other callers depend on.
+    //
+    // Transitions the whole image in and out, so the caller hands over an image
+    // in eUndefined and gets one in eShaderReadOnlyOptimal.
+    static void UploadLayeredImage(
+        VulkanDevice& device,
+        vk::CommandPool commandPool,
+        vk::Buffer staging,
+        vk::Image image,
+        uint32_t layerCount,
+        uint32_t mipLevels,
+        const std::vector<vk::BufferImageCopy>& regions
     );
 
     static void CopyBufferToImage(
