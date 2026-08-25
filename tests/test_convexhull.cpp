@@ -377,6 +377,47 @@ void testAFaceContactIsAPatchAndNotAPoint() {
     CHECK_NEAR(hit.MaxPenetration(), 0.1f);
 }
 
+void testTheReferenceFaceIsTheOneFacingTheOtherShape() {
+    // A hull has TWO faces for every axis - the top and the bottom of a slab
+    // both answer to Y - and the axis search flips a normal to point from one
+    // shape toward the other, so the face that won the axis may be the one
+    // facing away.
+    //
+    // Trusting it put the reference plane at the BOTTOM of a slab: every
+    // clipped point measured a metre behind it, all of them were dropped, and a
+    // crate fell through a floor the SAT had correctly reported it was standing
+    // on. The pair of hulls has to be UNEVEN for it to show - a centred unit
+    // cube against another has its faces in an order that happens to be right.
+    ConvexHull cube;
+    CHECK(cube.Build(cubeCorners(0.5f)));
+
+    glm::mat3 slabBasis(1.0f);
+    slabBasis[0] = glm::vec3(6.0f, 0.0f, 0.0f);
+    slabBasis[2] = glm::vec3(0.0f, 0.0f, 6.0f);
+
+    CollisionHull::Instance slab;
+    CHECK(CollisionHull::MakeInstance(cube, glm::vec3(0.0f), slabBasis, slab));
+
+    CollisionHull::Instance crate;
+    CHECK(CollisionHull::MakeInstance(cube, glm::vec3(0.0f, 0.9f, 0.0f), glm::mat3(1.0f), crate));
+
+    // BOTH orders. The broadphase sorts its proxies, so which of the two is A
+    // is not something the narrowphase gets to choose - and the bug only
+    // appeared in one of them.
+    const CollisionSAT::Manifold upward = CollisionHull::CollideHullHull(slab, crate);
+    CHECK(upward.colliding);
+    CHECK_MSG(upward.pointCount == 4,
+              "a crate on a slab is a four-point face contact, not an empty manifold");
+    CHECK(nearlyVec(upward.normal, glm::vec3(0.0f, 1.0f, 0.0f)));
+    CHECK_NEAR(upward.MaxPenetration(), 0.1f);
+
+    const CollisionSAT::Manifold downward = CollisionHull::CollideHullHull(crate, slab);
+    CHECK(downward.colliding);
+    CHECK_MSG(downward.pointCount == 4, "and the same pair the other way round");
+    CHECK(nearlyVec(downward.normal, glm::vec3(0.0f, -1.0f, 0.0f)));
+    CHECK_NEAR(downward.MaxPenetration(), 0.1f);
+}
+
 void testAWedgeRestsOnItsSlope() {
     // The shape hulls exist for. A ramp is one convex solid and was three or
     // four boxes that never quite fit.
@@ -517,6 +558,7 @@ void runTests() {
 
     testAHullOfACubeCollidesLikeABox();
     testAFaceContactIsAPatchAndNotAPoint();
+    testTheReferenceFaceIsTheOneFacingTheOtherShape();
     testAWedgeRestsOnItsSlope();
     testAHullSquashedOnOneAxisCollidesAsWhatItLooksLike();
     testACapsuleLyingOnAFaceIsHeldAtBothEnds();
@@ -529,4 +571,4 @@ void runTests() {
 
 } // namespace
 
-TEST_MAIN("test_convexhull", 80)
+TEST_MAIN("test_convexhull", 85)

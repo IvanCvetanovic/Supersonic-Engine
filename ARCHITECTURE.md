@@ -1009,7 +1009,13 @@ the right direction for "what am I looking at". A sphere's rotation-dependence i
 not conservatism of that kind. It is the same object being a different size
 depending on which way it happens to be facing.
 
-There are four collider shapes and **four** pair tests rather than ten,
+There are five collider shapes. A convex hull has its own section below and
+its own file, because the box path here is written around three axes and four
+corners per face and none of that generalises; an oriented box, however, IS the
+unit cube hull with its extents on the basis, so box-against-hull is the hull
+path rather than a fifth pair test.
+
+Among the other four there are **four** pair tests rather than ten,
 because a sphere is a capsule whose segment has no length. Writing sphere-against-sphere separately
 would be a second implementation of the same arithmetic with its own edge cases,
 and it was: the old one had no speculative margin, so two fast spheres passed
@@ -1392,7 +1398,74 @@ there is nowhere to store a rest orientation and holding what they have is what
 welding two things *means*. With the relative angular velocity driven to zero
 every step there is no systematic drift, only the float error of the integration.
 
-### 7g. The Euler convention, and the bug that hid in it
+### 7g. Convex hulls
+
+The last shape the narrowphase was missing. A ramp with a bevel, a rock, a
+wedge, a wing — each is one convex solid, and each had to be approximated by
+three or four boxes that never quite fit.
+
+`ConvexHull` builds one from a point cloud by incremental hull: a seed
+tetrahedron of four points that actually enclose a volume, then the point
+farthest outside the current hull, repeatedly, removing every face it can see
+and rebuilding from the horizon. Farthest-first is not an optimisation — it is
+what gives the vertex cap a meaning, because stopping early leaves a hull whose
+worst error is the distance of the next point it would have taken, reported as
+`residual`.
+
+**Coplanar triangles are merged into polygons**, and that is not cosmetic. SAT
+clips an incident face against a reference face, so a triangular reference face
+on the flat side of a crate gives a contact patch a third of the size it should
+be and the crate rocks on the sliver. A cube comes back as six quads.
+
+**The cap is a cap on cost.** Hull-against-hull tests every face normal of both
+plus the cross product of every **edge pair**, so the cost is quadratic in the
+edge count: two three-hundred-edge hulls would be ninety thousand axes. Sixty-
+four vertices bounds it, and hulls are meant to be collision shapes rather than
+render meshes.
+
+There is no closed form to check a hull against, the way the heightfield has a
+surface both sides can be asked for. So the suite uses two other things:
+**structural invariants** that hold for every convex polyhedron and nothing else
+— Euler's `V − E + F = 2`, and every vertex behind every face plane — and a
+**differential** check that a hull built from a cube's eight corners collides
+exactly the way the already-trusted box path does, across five arrangements.
+
+Three things are load-bearing:
+
+- **The reference face is chosen from the normal, not from the axis search.** A
+  hull has two faces for every axis — the top and the bottom of a slab both
+  answer to Y — and the search flips a normal to point from one shape toward the
+  other, so the face that won may be the one facing away. Trusting its index put
+  the reference plane at the *bottom* of a floor: every clipped point measured a
+  metre behind it, all were dropped, and a crate fell through a slab the SAT had
+  correctly reported it was standing on. It appeared in only one of the two pair
+  orders, and the broadphase sorts its proxies, so which shape is `a` is not
+  something the narrowphase gets to choose.
+- **Plane normals go through the inverse transpose.** A hull is the only
+  collider for which a non-uniform scale is exact — a sphere collapses its three
+  extents to one radius, a capsule its two, but a linear transform of a convex
+  set is still convex. Using the basis for a normal is right only while the
+  scale is uniform, and the failure is a face whose normal no longer points out
+  of it.
+- **An oriented box IS the unit cube hull** with its half extents on the basis,
+  so box-against-hull is the hull path rather than a fifth pair test with its
+  own bugs.
+
+The hull is built from the asset, because the CPU-side vertices are gone by the
+time physics wants them: `MeshRegistry` uploads a mesh and keeps only the buffers
+and the bounds, and it is renderer-side besides. `ConvexHullCache` loads it
+through the same `ModelLoader` and `GltfLoader` entry points, with the primitive
+sizes pinned in `ModelLoader` so the collider and the mesh cannot drift apart —
+keyed by asset, trimmed at the top of a step, the same discipline as
+`HeightfieldCache`.
+
+**Named rather than implied:** a hull is *convex*, so a doughnut collides as a
+disc. And a hull against a **heightfield** collides as the box that contains it,
+because the heightfield's contact model is written around a point and a radius
+and a hull is neither — so a wedge on a hill floats by the gap between itself and
+its bounds. It does not fall through, which is the failure that would matter.
+
+### 7h. The Euler convention, and the bug that hid in it
 
 A hinged door exploded, and the cause was not the hinge.
 
@@ -1419,7 +1492,7 @@ copy rather than writing the nine entries a second time. The gimbal pole — whe
 puts the whole turn in the other, which is the only choice that stays continuous
 as the pole is approached.
 
-### 7h. The optional world ground plane
+### 7i. The optional world ground plane
 
 A solid plane across the whole world at `groundPlaneY`, applied during
 integration, per non-kinematic rigid body, before any collider is gathered.
@@ -1464,7 +1537,7 @@ with its origin half a unit above the plane.
 solid. The two live two hundred lines apart and have to agree, or a character
 stands on a floor that is switched off.
 
-### 7i. Sleeping
+### 7j. Sleeping
 
 A body that has stayed below `kSleepLinearVelocity` (0.05 m/s) and
 `kSleepAngularVelocity` (0.05 rad/s) for `kSleepTime` (half a second) stops being
@@ -1527,7 +1600,7 @@ point, where the distance it sinks under gravity in one step and the distance th
 positional correction pushes it back cancel to the same float, so a sleeping body
 is not frozen *near* where an awake one hovers — it is frozen exactly there.
 
-### 7j. Triggers
+### 7k. Triggers
 
 A collider with `isTrigger` set is detected and deliberately not resolved: the
 overlap is reported in the contact list and the body passes through, which is the
@@ -1544,7 +1617,7 @@ inspector checkbox:
   There is no `OnTriggerEnter`, no per-entity event and no enter/stay/exit
   distinction, so a script cannot currently learn that a trigger fired.
 
-### 7k. World queries
+### 7l. World queries
 
 `Raycast`, `OverlapSphere` and `IsGrounded` answer questions about the world
 against **colliders**, which is what physics means by solid. Gameplay previously
@@ -1596,7 +1669,7 @@ Every query rebuilds the whole shape list from the registry on each call. There
 is no acceleration structure and no cache, so a script that raycasts once per
 entity per frame walks every collider in the scene once per entity per frame.
 
-### 7l. Documented departures
+### 7m. Documented departures
 
 Listed rather than hidden, in the same spirit as the rest of this document.
 

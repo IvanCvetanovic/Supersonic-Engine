@@ -168,11 +168,12 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
             ok = ModelLoader::LoadOBJ(filePath, data);
         }
     } else if (primitiveType == "Cube") {
-        ok = ModelLoader::GenerateCube(1.0f, data);
+        ok = ModelLoader::GenerateCube(ModelLoader::kCubeSize, data);
     } else if (primitiveType == "Sphere") {
-        ok = ModelLoader::GenerateSphere(0.5f, 32, 32, data);
+        ok = ModelLoader::GenerateSphere(ModelLoader::kSphereRadius, ModelLoader::kSphereRings,
+                                         ModelLoader::kSphereSectors, data);
     } else if (primitiveType == "Plane") {
-        ok = ModelLoader::GeneratePlane(1.0f, 1.0f, data);
+        ok = ModelLoader::GeneratePlane(ModelLoader::kPlaneWidth, ModelLoader::kPlaneHeight, data);
     } else if (primitiveType == "Terrain") {
         ok = TerrainGenerator::GenerateTerrainMesh(TerrainGenerator::kPrimitiveWidth,
                                                    TerrainGenerator::kPrimitiveDepth,

@@ -1036,6 +1036,140 @@ static void testABodySpinningAboutADiagonalAxisEndsWhereTheMathsSays() {
     CHECK_MSG(moved > 0.5f, "and it turned a long way while doing it");
 }
 
+// ---- Convex hulls -----------------------------------------------------------
+//
+// test_convexhull proves the geometry and that it agrees with the box path.
+// These prove the solver can reach it, and that the SIZE of a hull collider
+// comes from the asset rather than from a number on the component - which is
+// the one thing about it that is unlike every other collider here.
+
+static entt::entity makeHullBody(entt::registry& registry, const glm::vec3& position,
+                                 const char* primitive, float mass = 1.0f,
+                                 const glm::vec3& scale = glm::vec3(1.0f)) {
+    const auto entity = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(entity);
+    transform.position = position;
+    transform.scale = scale;
+    registry.emplace<MeshComponent>(entity, std::string(primitive), std::string(), 0u, 0u);
+    registry.emplace<ConvexHullColliderComponent>(entity);
+    if (mass > 0.0f) {
+        auto& body = registry.emplace<RigidBodyComponent>(entity);
+        body.mass = mass;
+        body.allowSleep = false;
+    }
+    return entity;
+}
+
+static void testAHullColliderTakesItsShapeFromTheMesh() {
+    // The whole point of the default: no size is typed anywhere, and the
+    // collider is nevertheless the right size, because it is built from the
+    // mesh the entity is drawn with.
+    entt::registry registry;
+
+    // A static cube hull as the floor, and a cube hull dropped onto it.
+    makeHullBody(registry, glm::vec3(0.0f, 0.0f, 0.0f), "Cube", 0.0f, glm::vec3(6.0f, 1.0f, 6.0f));
+    const auto crate = makeHullBody(registry, glm::vec3(0.0f, 3.0f, 0.0f), "Cube");
+
+    stepFor(registry, 3.0f);
+
+    // The floor's top is at 0.5, the crate's half height is 0.5, so it rests at
+    // 1.0 - and nobody typed 0.5 anywhere.
+    CHECK_MSG(test::nearly(registry.get<TransformComponent>(crate).position.y, 1.0f, 0.03f),
+              "a hull collider is the size of the mesh, with no extent authored anywhere");
+}
+
+static void testAHullFollowsANonUniformScaleExactly() {
+    // The one collider for which this is exact. A sphere collapses its three
+    // extents to one radius and a capsule its two; a linear transform of a
+    // convex set is still convex, so a hull is the shape it is drawn as.
+    entt::registry registry;
+    makeHullBody(registry, glm::vec3(0.0f), "Cube", 0.0f, glm::vec3(6.0f, 1.0f, 6.0f));
+
+    // A quarter as tall as it is wide. Its half height is 0.125, so it should
+    // rest at 0.5 + 0.125.
+    const auto slab = makeHullBody(registry, glm::vec3(0.0f, 3.0f, 0.0f), "Cube", 1.0f,
+                                   glm::vec3(1.0f, 0.25f, 1.0f));
+    stepFor(registry, 3.0f);
+
+    CHECK_MSG(test::nearly(registry.get<TransformComponent>(slab).position.y, 0.625f, 0.03f),
+              "a squashed hull rests at its squashed height, not at the height of the "
+              "cube it was made from");
+}
+
+static void testAHullAndASphereMeet() {
+    entt::registry registry;
+    makeHullBody(registry, glm::vec3(0.0f), "Cube", 0.0f, glm::vec3(6.0f, 1.0f, 6.0f));
+
+    const auto ball = makeSphere(registry, glm::vec3(0.0f, 3.0f, 0.0f), 0.5f);
+    registry.get<RigidBodyComponent>(ball).allowSleep = false;
+    stepFor(registry, 3.0f);
+
+    CHECK_MSG(test::nearly(registry.get<TransformComponent>(ball).position.y, 1.0f, 0.03f),
+              "a ball rests on a hull the way it rests on a box");
+}
+
+static void testAHullAndABoxMeet() {
+    // Box-against-hull goes through the hull path, because an oriented box IS
+    // the unit cube hull with its extents on the basis.
+    entt::registry registry;
+    makeHullBody(registry, glm::vec3(0.0f), "Cube", 0.0f, glm::vec3(6.0f, 1.0f, 6.0f));
+
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 3.0f, 0.0f));
+    registry.get<RigidBodyComponent>(crate).allowSleep = false;
+    stepFor(registry, 3.0f);
+
+    CHECK_MSG(test::nearly(registry.get<TransformComponent>(crate).position.y, 1.0f, 0.03f),
+              "and a crate does too");
+}
+
+static void testAHullThatIsNotASolidCollidesWithNothing() {
+    // A plane is flat, so its hull is not a volume. The collider has to do
+    // nothing rather than crash or hold something up on a shape with no inside.
+    entt::registry registry;
+    enableGroundPlane(registry, -20.0f);
+
+    makeHullBody(registry, glm::vec3(0.0f), "Plane", 0.0f, glm::vec3(6.0f, 1.0f, 6.0f));
+    const auto ball = makeSphere(registry, glm::vec3(0.0f, 3.0f, 0.0f), 0.5f);
+    registry.get<RigidBodyComponent>(ball).allowSleep = false;
+
+    stepFor(registry, 2.0f);
+    CHECK_MSG(registry.get<TransformComponent>(ball).position.y < 0.0f,
+              "a flat hull is not a solid and holds nothing up");
+
+    // And an entity with the component but no mesh at all.
+    entt::registry bare;
+    const auto nothing = bare.create();
+    bare.emplace<TransformComponent>(nothing, glm::vec3(0.0f));
+    bare.emplace<ConvexHullColliderComponent>(nothing);
+    bare.emplace<BoxColliderComponent>(bare.create());   // so the step has work to do
+    stepFor(bare, 0.5f);
+    CHECK_MSG(bare.valid(nothing), "and an entity with no mesh is simply skipped");
+}
+
+static void testAHullRestsOnTerrain() {
+    // Named rather than implied: a hull against a HEIGHTFIELD collides as the
+    // box that contains it, because the heightfield's contact model is written
+    // around a point and a radius and a hull is neither. The cost is that a
+    // wedge floats by the gap between itself and its bounds; it does not fall
+    // through, which is the failure that would matter.
+    entt::registry registry;
+    const auto terrain = registry.create();
+    registry.emplace<TransformComponent>(terrain, glm::vec3(0.0f));
+    registry.emplace<HeightfieldColliderComponent>(terrain);
+
+    const float x = kBasinX;
+    const float z = kBasinZ;
+    const float surface = terrainHeightAt(registry, terrain, x, z);
+
+    const auto crate = makeHullBody(registry, glm::vec3(x, surface + 3.0f, z), "Cube");
+    stepFor(registry, 4.0f);
+
+    const float resting = registry.get<TransformComponent>(crate).position.y;
+    CHECK_MSG(resting > surface,
+              "a hull does not fall through terrain, which is the failure that matters");
+    CHECK_MSG(resting < surface + 1.0f, "and it settles onto it rather than hovering");
+}
+
 static void testSweepAndPruneFindsOverlappingPairs() {
     std::vector<PhysicsSystem::Proxy> proxies;
     proxies.push_back(makeProxy(1, 0, glm::vec3(0.0f), glm::vec3(1.0f), 1.0f));
@@ -2733,6 +2867,13 @@ static void runTests() {
     testAStrongEnoughRopeHolds();
     testAWeldCarriesABodyThatParentingWouldNot();
 
+    testAHullColliderTakesItsShapeFromTheMesh();
+    testAHullFollowsANonUniformScaleExactly();
+    testAHullAndASphereMeet();
+    testAHullAndABoxMeet();
+    testAHullThatIsNotASolidCollidesWithNothing();
+    testAHullRestsOnTerrain();
+
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();
     testABallOnASlopeRollsDownhill();
@@ -2760,4 +2901,4 @@ static void runTests() {
     testALongBoxIsHarderToTipAboutItsLongAxis();
 }
 
-TEST_MAIN("test_physics", 210)
+TEST_MAIN("test_physics", 220)

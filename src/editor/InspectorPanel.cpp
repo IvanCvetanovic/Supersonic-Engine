@@ -18,6 +18,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 
+#include "core/ConvexHullCache.hpp"
 #include "core/Joints.hpp"
 #include "core/TerrainGenerator.hpp"
 
@@ -611,6 +612,65 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             Theme::DrawVec3Control("Center##capsule", capsule.center, 0.0f);
             ImGui::Checkbox("Is Trigger##capsule", &capsule.isTrigger);
             drawCollisionLayers(capsule.layer, capsule.collidesWith);
+        }
+    }
+
+    ImGui::Spacing();
+
+    // 4c-ii. ConvexHullColliderComponent
+    if (registry.all_of<ConvexHullColliderComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Convex Hull Collider", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& hull = registry.get<ConvexHullColliderComponent>(entity);
+
+            const bool followsMesh = hull.sourcePath.empty() && hull.sourcePrimitive.empty();
+            if (followsMesh) {
+                const auto* mesh = registry.try_get<MeshComponent>(entity);
+                ImGui::TextDisabled("Source: this entity's mesh (%s)",
+                                    mesh ? (mesh->filePath.empty() ? mesh->primitiveType.c_str()
+                                                                   : mesh->filePath.c_str())
+                                         : "none");
+                ImGui::TextDisabled("The collider is the shape you can see, and follows it.");
+                if (!mesh) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                       "No mesh on this entity, so there is nothing to be "
+                                       "the hull of.");
+                }
+            } else {
+                ImGui::TextDisabled("Source: %s", hull.sourcePath.empty()
+                                                      ? hull.sourcePrimitive.c_str()
+                                                      : hull.sourcePath.c_str());
+                if (ImGui::Button("Follow the mesh##hull")) {
+                    hull.sourcePath.clear();
+                    hull.sourcePrimitive.clear();
+                }
+            }
+
+            std::string dropped;
+            if (acceptAssetDrop("SUPERSONIC_MODEL", dropped)) {
+                hull.sourcePath = dropped;
+                hull.sourcePrimitive.clear();
+            }
+            ImGui::TextDisabled("Drop a model here to use a simpler shape than the mesh.");
+
+            if (const ConvexHull* built =
+                    ConvexHullCache::For(registry).Get(registry, entity, hull)) {
+                ImGui::Text("%zu vertices, %zu faces", built->vertices().size(),
+                            built->faces().size());
+                if (built->residual() > 0.0f) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                       "%.3f units of the mesh sit outside the hull "
+                                       "(the vertex cap bit).",
+                                       static_cast<double>(built->residual()));
+                }
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f),
+                                   "This source is not a solid, so the collider does nothing. "
+                                   "A hull needs four points that are not all in one plane.");
+            }
+
+            ImGui::TextDisabled("A hull is CONVEX: a doughnut collides as a disc.");
+            ImGui::Checkbox("Is Trigger##hull", &hull.isTrigger);
+            drawCollisionLayers(hull.layer, hull.collidesWith);
         }
     }
 
@@ -1220,6 +1280,11 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (!registry.all_of<CapsuleColliderComponent>(entity) &&
             ImGui::MenuItem("Capsule Collider")) {
             registry.emplace<CapsuleColliderComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<ConvexHullColliderComponent>(entity) &&
+            ImGui::MenuItem("Convex Hull Collider")) {
+            registry.emplace<ConvexHullColliderComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<JointComponent>(entity) && ImGui::MenuItem("Joint")) {

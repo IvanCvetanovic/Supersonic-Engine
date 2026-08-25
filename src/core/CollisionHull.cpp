@@ -299,9 +299,22 @@ CollisionSAT::Manifold CollideHullHull(const Instance& a, const Instance& b,
     // The reference normal points from the reference hull toward the other one.
     const glm::vec3 referenceNormal = referenceIsA ? manifold.normal : -manifold.normal;
 
+    // The reference face is chosen HERE, from the normal, rather than taken
+    // from whichever face won the axis search.
+    //
+    // A hull has two faces for every axis - the top and the bottom of a slab
+    // both answer to Y - and measureAxis flips a normal to point from a toward
+    // b, so the face that won may be the one facing the other way. Trusting its
+    // index put the reference plane at the BOTTOM of the floor: every clipped
+    // point measured a metre behind it, all of them were dropped, and a crate
+    // fell through a slab the SAT had correctly reported it was standing on.
+    //
+    // Most-aligned is the mirror of how the incident face is picked, and cannot
+    // pick the wrong side.
     glm::vec3 referenceFace[kClipCapacity];
     int referenceCount = 0;
-    gatherFace(reference, best.face, referenceFace, referenceCount);
+    gatherFace(reference, mostAntiParallelFace(reference, -referenceNormal), referenceFace,
+               referenceCount);
     if (referenceCount < 3) return manifold;
 
     const uint32_t incidentIndex = mostAntiParallelFace(incident, referenceNormal);

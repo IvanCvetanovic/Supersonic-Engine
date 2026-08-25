@@ -1,6 +1,8 @@
 #include "core/PhysicsSystem.hpp"
 #include "core/CollisionSAT.hpp"
 #include "core/Heightfield.hpp"
+#include "core/CollisionHull.hpp"
+#include "core/ConvexHullCache.hpp"
 #include "core/HeightfieldCache.hpp"
 #include "core/Joints.hpp"
 #include "core/Log.hpp"
@@ -111,7 +113,7 @@ float combineFriction(float a, float b) {
 // immovable, it is the only shape whose collision lives outside CollisionSAT,
 // and it is a SURFACE rather than a volume. Folding it in with the others would
 // mean every one of those three facts becoming a branch somewhere.
-enum class Shape { Box, Sphere, Capsule, Heightfield };
+enum class Shape { Box, Sphere, Capsule, Heightfield, Hull };
 
 struct Body {
     entt::entity entity{entt::null};
@@ -125,6 +127,14 @@ struct Body {
     // Half the length of a capsule's straight section, along axes[1]. Zero for
     // a sphere, which is the whole of the difference between the two.
     float halfSegment{0.0f};
+
+    // ---- Hulls only ----
+    //
+    // The hull itself, owned by the registry's ConvexHullCache, and the basis
+    // that places it. The basis carries SCALE as well as rotation, which for a
+    // hull is exact rather than an approximation - see the component.
+    const ConvexHull* hull{nullptr};
+    glm::mat3 hullBasis{1.0f};
 
     // ---- Heightfields only ----
     //
@@ -747,6 +757,82 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 sphere.center, sphere.layer, sphere.collidesWith);
     }
 
+    // Hulls. Gathered on their own because the collider's SIZE is the asset's,
+    // not a number on the component: everything else here is described by an
+    // extent somebody typed, and a hull is described by the mesh.
+    ConvexHullCache::For(registry).Trim();
+    for (auto entity : registry.view<ConvexHullColliderComponent>()) {
+        if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent,
+                            SphereColliderComponent, HeightfieldColliderComponent>(entity)) {
+            continue;
+        }
+
+        const auto* transform = registry.try_get<TransformComponent>(entity);
+        if (!transform) continue;
+
+        const auto& authored = registry.get<ConvexHullColliderComponent>(entity);
+        const ConvexHull* hull = ConvexHullCache::For(registry).Get(registry, entity, authored);
+        if (!hull) continue;
+
+        const auto* rigid = registry.try_get<RigidBodyComponent>(entity);
+
+        const glm::mat4 parentWorld = parentWorldMatrix(registry, entity);
+        const glm::mat4 world = parentWorld * transform->getModelMatrix();
+
+        Body body;
+        body.entity = entity;
+        body.shape = Shape::Hull;
+        body.isTrigger = authored.isTrigger;
+        body.hull = hull;
+        body.hullBasis = glm::mat3(world);
+        body.worldToLocal = glm::inverse(glm::mat3(parentWorld));
+        body.inverseMass = (rigid && rigid->isSleeping) ? 0.0f : inverseMassOf(rigid);
+
+        // The hull's own origin is wherever the asset had it, which is not
+        // necessarily its middle - so the bounds go through the world matrix
+        // the way a box collider's `center` offset does, or the broadphase bound
+        // sits off to one side of the shape it is meant to hold.
+        const glm::vec3 localMin = hull->boundsMin();
+        const glm::vec3 localMax = hull->boundsMax();
+        worldBounds(world, (localMax - localMin) * 0.5f, body.centre, body.halfExtent);
+        body.centre += glm::vec3(world * glm::vec4((localMin + localMax) * 0.5f, 0.0f));
+
+        // The inertia of the box that contains it, which over-estimates how
+        // hard a hull is to turn by however much the hull is smaller than its
+        // bounds. Wrong in the stable direction, and the alternative - the real
+        // tensor of a polyhedron - is an integral over its tetrahedra that
+        // nothing else here would use.
+        for (int axis = 0; axis < 3; ++axis) {
+            const glm::vec3 column = glm::vec3(world[axis]);
+            const float length = glm::length(column);
+            body.axes[axis] = length > 1e-6f ? column / length
+                                             : glm::vec3(axis == 0, axis == 1, axis == 2);
+            body.localHalfExtent[axis] = (localMax[axis] - localMin[axis]) * 0.5f * length;
+        }
+        body.inverseInertia = worldInverseInertia(
+            inverseInertiaLocal(rigid, Shape::Box, body.localHalfExtent, body.radius), body.axes);
+
+        glm::vec3 sweep(0.0f);
+        if (rigid && body.inverseMass > 0.0f) sweep = glm::abs(rigid->velocity) * deltaTime;
+        body.sweep = sweep;
+
+        body.min = body.centre - body.halfExtent;
+        body.max = body.centre + body.halfExtent;
+
+        Proxy proxy;
+        proxy.entity = entity;
+        proxy.index = bodies.size();
+        proxy.min = body.min - sweep;
+        proxy.max = body.max + sweep;
+        proxy.inverseMass = inverseMassOf(rigid);
+        proxy.isTrigger = authored.isTrigger;
+        proxy.layer = authored.layer;
+        proxy.collidesWith = authored.collidesWith;
+
+        bodies.push_back(body);
+        proxies.push_back(proxy);
+    }
+
     // Terrain. Gathered on its own rather than through `collect`, because
     // almost nothing it needs is what `collect` computes: the grid's bounds are
     // not centred on the entity, its mass is zero whatever the scene says, and
@@ -946,7 +1032,76 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // make the solver brake for something it will never reach.
         const float pairMargin = glm::length(a.sweep) + glm::length(b.sweep);
 
-        if (a.shape == Shape::Heightfield || b.shape == Shape::Heightfield) {
+        if ((a.shape == Shape::Hull || b.shape == Shape::Hull) &&
+            a.shape != Shape::Heightfield && b.shape != Shape::Heightfield) {
+            // A hull against anything that is not terrain.
+            //
+            // An oriented box IS the unit cube hull with its half extents on the
+            // basis, so box-against-hull goes through the hull path rather than
+            // being a fifth pair test with its own bugs.
+            const bool hullIsA = a.shape == Shape::Hull;
+            const Body& hullBody = hullIsA ? a : b;
+            const Body& other = hullIsA ? b : a;
+
+            CollisionHull::Instance hullInstance;
+            if (!CollisionHull::MakeInstance(*hullBody.hull, glm::vec3(hullBody.centre) -
+                                                 hullBody.hullBasis *
+                                                     ((hullBody.hull->boundsMin() +
+                                                       hullBody.hull->boundsMax()) * 0.5f),
+                                             hullBody.hullBasis, hullInstance)) {
+                continue;
+            }
+
+            CollisionSAT::Manifold manifold;
+            bool normalPointsFromHull = true;
+
+            if (other.shape == Shape::Hull) {
+                CollisionHull::Instance otherInstance;
+                if (!CollisionHull::MakeInstance(
+                        *other.hull,
+                        glm::vec3(other.centre) -
+                            other.hullBasis *
+                                ((other.hull->boundsMin() + other.hull->boundsMax()) * 0.5f),
+                        other.hullBasis, otherInstance)) {
+                    continue;
+                }
+                manifold = CollisionHull::CollideHullHull(hullInstance, otherInstance, pairMargin);
+            } else if (other.shape == Shape::Box) {
+                manifold = CollisionHull::CollideHullHull(
+                    hullInstance, CollisionHull::InstanceFromObb(obbOf(other)), pairMargin);
+            } else {
+                glm::vec3 endA(0.0f);
+                glm::vec3 endB(0.0f);
+                capsuleEnds(other, endA, endB);
+                manifold = CollisionHull::CollideCapsuleHull(endA, endB, other.radius,
+                                                             hullInstance, pairMargin);
+                // That one reports from the HULL toward the round shape, which
+                // is what the two hull paths above already do.
+                normalPointsFromHull = true;
+            }
+
+            if (manifold.colliding && manifold.pointCount > 0) {
+                hit = true;
+                normal = manifold.normal;
+                speculative = manifold.speculative;
+
+                // From a toward b: the manifold speaks from the hull, so it is
+                // already right when the hull is a and reversed when it is b.
+                if (!hullIsA || !normalPointsFromHull) normal = -normal;
+
+                glm::vec3 centroid(0.0f);
+                float deepest = manifold.points[0].penetration;
+                for (int i = 0; i < manifold.pointCount; ++i) {
+                    centroid += manifold.points[i].position;
+                    deepest = std::max(deepest, manifold.points[i].penetration);
+                    if (manifoldCount < CollisionSAT::kMaxContactPoints) {
+                        manifoldPoints[manifoldCount++] = manifold.points[i].position;
+                    }
+                }
+                penetration = deepest;
+                point = centroid / static_cast<float>(manifold.pointCount);
+            }
+        } else if (a.shape == Shape::Heightfield || b.shape == Shape::Heightfield) {
             // Two of them never collide: both are immovable surfaces, so there
             // is nothing a contact between them could do to either.
             if (a.shape == Shape::Heightfield && b.shape == Shape::Heightfield) continue;
@@ -966,7 +1121,31 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             };
 
             Heightfield::Manifold local;
-            if (shape.shape == Shape::Box) {
+            if (shape.shape == Shape::Hull) {
+                // A hull against terrain collides as the BOX that contains it,
+                // and this is the one approximation in the hull path rather
+                // than an oversight.
+                //
+                // The heightfield's contact model is written around a point and
+                // a radius - a sphere, a capsule's caps, a box's corners - and
+                // a hull is none of those. Doing it properly means testing every
+                // hull vertex against the surface AND every surface vertex
+                // against the hull, which is a fifth pair test's worth of work
+                // for the case of a rock lying on a hill.
+                //
+                // The cost of the approximation is that a wedge rests on its
+                // bounding box, so it floats by the gap between the two. It does
+                // not fall through, which is the failure that would matter.
+                CollisionSAT::Obb box;
+                box.centre = shape.centre;
+                box.halfExtent = shape.localHalfExtent;
+                box.axes = shape.axes;
+                local = terrain.field->CollideObb(
+                    CollisionSAT::Obb{toField(box.centre),
+                                      box.halfExtent * inverseScale,
+                                      intoField * box.axes},
+                    pairMargin * inverseScale);
+            } else if (shape.shape == Shape::Box) {
                 CollisionSAT::Obb box;
                 box.centre = toField(shape.centre);
                 box.halfExtent = shape.localHalfExtent * inverseScale;

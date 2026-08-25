@@ -754,6 +754,38 @@ struct JointComponent {
     bool enabled{true};
 };
 
+// The shape you can see, as something you can hit.
+//
+// The last collider the narrowphase was missing. It took a box, a sphere, a
+// capsule and a heightfield, so a ramp with a bevel, a rock, a wedge or a wing
+// had to be approximated by a group of those - each one convex solid built from
+// three or four boxes that never quite fit.
+//
+// The hull is the CONVEX hull of the asset's vertices, which is exact for
+// anything convex and an over-estimate for anything else: a doughnut collides
+// as a disc and a chair as the block it sits in. Concave collision means
+// decomposing the shape into several hulls, which is a different feature with a
+// different failure mode.
+//
+// Unlike every other collider here, a NON-UNIFORM scale is exact: a sphere has
+// to collapse its three extents to one radius and a capsule its two, but a
+// linear transform of a convex set is still convex, so a hull is simply the
+// shape it is drawn as.
+struct ConvexHullColliderComponent {
+    // Where the points come from. BOTH empty means the entity's own
+    // MeshComponent, which is what an author wants nine times in ten: the
+    // collider is the shape you can see, and it follows when the mesh changes.
+    //
+    // Naming a source separately is for the case that matters at scale - a
+    // detailed model with a simple collision proxy beside it.
+    std::string sourcePath;
+    std::string sourcePrimitive;
+
+    bool isTrigger{false};
+    uint32_t layer{CollisionLayer::kDefault};
+    uint32_t collidesWith{CollisionLayer::kAll};
+};
+
 // The terrain, as something you can stand on.
 //
 // The gap this closes was in the README for a long time: the procedurally

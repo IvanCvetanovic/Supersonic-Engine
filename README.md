@@ -263,6 +263,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
 | `test_heightfield` | Terrain collision: the grid against the mesh vertex for vertex, seams, ridge crests, grooves, buried recovery, and the cell march a ray does |
 | `test_joints` | Constraint arithmetic: momentum conservation, the rod/rope difference, off-centre anchors, the hinge axis, limits, motors, welds, and every degenerate case |
+| `test_convexhull` | Hull building and collision: Euler's formula, convexity, a cube's six faces, the vertex cap, and agreement with the box path |
 | `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, and which route a reference resolved by |
 | `test_audio` | WAV decoding, including the shipped clip |
 | `test_scripts` | Script registry and dispatch |
@@ -398,6 +399,8 @@ Android "not functional"; extending that register forward costs nothing.
       button held, and losing the window always gives it back
 - [x] Text input: a HUD text field a game can author, type into and read back,
       with the keyboard taken from the game while it has focus
+- [x] Convex hull colliders, built from the mesh you can see, with a
+      non-uniform scale that is exact rather than approximated
 - [x] Hinge limits, motors, breaking forces and welds — a door that stops at
       ninety degrees, a powered wheel, a rope that snaps under load, and two
       dynamic bodies rigidly fixed together
@@ -423,12 +426,11 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
 - [ ] **Image-based lighting.** The environment is an analytic hemisphere. There
       is no cubemap path at all — no HDRI can be loaded — so metal and smooth
       dielectrics have nothing to reflect but a two-colour gradient
-- [ ] **Convex hull colliders.** Terrain is a heightfield now, but the
-      narrowphase still takes only a box, a sphere, a capsule and a heightfield.
-      Anything else has to be approximated by a group of those, and the shape
-      that would close it — an arbitrary convex hull, built by quickhull and
-      collided by the SAT that already exists — is a piece of work in its own
-      right
+- [ ] **Concave collision.** A hull is convex, so a doughnut collides as a
+      disc and a chair as the block it sits in. Closing it means decomposing a
+      shape into several hulls automatically, which is a different piece of work
+      with a different failure mode. A hull against TERRAIN also collides as its
+      bounding box, so a wedge on a hill floats by the gap between the two
 - [ ] **Joint sequencing and soft constraints.** Limits, motors, breaking and
       welds all work, but a joint still has no spring or damper - everything is
       rigid or nothing - and there is no way to say that one joint should be

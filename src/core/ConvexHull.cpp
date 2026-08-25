@@ -102,9 +102,10 @@ bool findSeed(const std::vector<glm::vec3>& points, uint32_t seed[4]) {
 
     // Farthest from the LINE. Collinear points all give zero here, which is the
     // "a hull of a straight line" case.
-    uint32_t third = points.size();
+    const auto count = static_cast<uint32_t>(points.size());
+    uint32_t third = count;
     float bestDistance = kPlaneEpsilon;
-    for (uint32_t i = 0; i < points.size(); ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
         if (i == low || i == high) continue;
         const glm::vec3 offset = points[i] - points[low];
         const float distance = glm::length(offset - direction * glm::dot(offset, direction));
@@ -113,15 +114,15 @@ bool findSeed(const std::vector<glm::vec3>& points, uint32_t seed[4]) {
             third = i;
         }
     }
-    if (third == points.size()) return false;
+    if (third == count) return false;
 
     // Farthest from the PLANE. Coplanar points all give zero, which is "a hull
     // of a flat sheet" - a real thing to ask for and not a solid.
     const glm::vec3 normal =
         glm::normalize(glm::cross(points[high] - points[low], points[third] - points[low]));
-    uint32_t fourth = points.size();
+    uint32_t fourth = count;
     bestDistance = kPlaneEpsilon;
-    for (uint32_t i = 0; i < points.size(); ++i) {
+    for (uint32_t i = 0; i < count; ++i) {
         if (i == low || i == high || i == third) continue;
         const float distance = std::fabs(glm::dot(normal, points[i] - points[low]));
         if (distance > bestDistance) {
@@ -129,7 +130,7 @@ bool findSeed(const std::vector<glm::vec3>& points, uint32_t seed[4]) {
             fourth = i;
         }
     }
-    if (fourth == points.size()) return false;
+    if (fourth == count) return false;
 
     seed[0] = low;
     seed[1] = high;
@@ -188,10 +189,10 @@ bool ConvexHull::Build(const std::vector<glm::vec3>& points) {
     // of the next point that would have been added, which is exactly what
     // `residual` reports.
     while (used.size() < kMaxVertices) {
-        uint32_t farthest = cloud.size();
+        auto farthest = static_cast<uint32_t>(cloud.size());
         float worst = kPlaneEpsilon;
 
-        for (uint32_t i = 0; i < cloud.size(); ++i) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(cloud.size()); ++i) {
             if (used.count(i) != 0) continue;
             float outside = 0.0f;
             for (const Triangle& triangle : triangles) {
@@ -202,7 +203,7 @@ bool ConvexHull::Build(const std::vector<glm::vec3>& points) {
                 farthest = i;
             }
         }
-        if (farthest == cloud.size()) break;   // everything is inside
+        if (farthest == static_cast<uint32_t>(cloud.size())) break;   // everything is inside
 
         const glm::vec3 apex = cloud[farthest];
 
@@ -249,7 +250,7 @@ bool ConvexHull::Build(const std::vector<glm::vec3>& points) {
     if (triangles.size() < 4) return false;
 
     // What the cap cost, if it cost anything.
-    for (uint32_t i = 0; i < cloud.size(); ++i) {
+    for (uint32_t i = 0; i < static_cast<uint32_t>(cloud.size()); ++i) {
         float outside = 0.0f;
         for (const Triangle& triangle : triangles) {
             outside = std::max(outside, glm::dot(triangle.normal, cloud[i]) - triangle.offset);

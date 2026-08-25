@@ -305,6 +305,21 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         // joints already snapped would be a level you could only play once.
     }
 
+    if (const auto* hull = registry.try_get<ConvexHullColliderComponent>(entity)) {
+        // The source is an ASSET reference like any other, so it carries its
+        // identity beside its path - see AssetDatabase. A collider whose source
+        // was renamed would otherwise fall back to a shape it can no longer
+        // find, and a rock you can walk through is not an obvious symptom of a
+        // rename.
+        out << indent << "\"ConvexHullCollider\": {\n";
+        writeAssetRef(out, indent, "Source", hull->sourcePath, ",\n");
+        out << indent << "  \"Primitive\": \"" << Json::Escape(hull->sourcePrimitive) << "\",\n"
+            << indent << "  \"IsTrigger\": " << (hull->isTrigger ? "true" : "false") << ",\n"
+            << indent << "  \"Layer\": " << hull->layer << ",\n"
+            << indent << "  \"CollidesWith\": " << hull->collidesWith << "\n"
+            << indent << "},\n";
+    }
+
     if (const auto* terrain = registry.try_get<HeightfieldColliderComponent>(entity)) {
         out << indent << "\"HeightfieldCollider\": { \"Width\": " << terrain->width
             << ", \"Depth\": " << terrain->depth
@@ -681,6 +696,16 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // connectedBody stays null here and is filled in by SceneSerializer,
         // which is the only thing that knows what an index into its entity
         // array means.
+    }
+
+    if (node.Has("ConvexHullCollider")) {
+        const auto& h = node["ConvexHullCollider"];
+        auto& hull = registry.emplace_or_replace<ConvexHullColliderComponent>(entity);
+        hull.sourcePath = readAssetRef(h, "Source");
+        hull.sourcePrimitive = h["Primitive"].AsString("");
+        hull.isTrigger = h["IsTrigger"].AsBool(false);
+        hull.layer = static_cast<uint32_t>(h["Layer"].AsNumber(CollisionLayer::kDefault));
+        hull.collidesWith = static_cast<uint32_t>(h["CollidesWith"].AsNumber(CollisionLayer::kAll));
     }
 
     if (node.Has("HeightfieldCollider")) {
