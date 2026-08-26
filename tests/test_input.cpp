@@ -756,6 +756,37 @@ static void testTheMouseIsContactZeroForAsLongAsItIsHeld() {
     CHECK_NEAR(contact.position.x, 62.0f);
 }
 
+static void testTheHostOwningThePointerMeansNoContacts() {
+    // Layers only update in play mode, so an editor gizmo drag reaches nothing
+    // today. That is a fact about SupersonicApp, not about this file, and the
+    // failure it would cause is nasty enough to guard here: a drag across an
+    // inspector field WHILE PLAYING is a marquee the player never drew.
+    //
+    // The mouse already has this veto. Contacts are a second thing derived from
+    // the mouse and would otherwise be the one path around it.
+    reset();
+    Input::SuppressCursorCapture(true);
+
+    RawInputState held;
+    held.mousePosition = glm::vec2(400.0f, 300.0f);
+    held.mouseButtons[MouseButton::Left] = true;
+    Input::SynthesiseMouseContact(held);
+    frame(held);
+    CHECK_EQ(Input::ContactCount(), 0);
+
+    // And the moment the host gives it back, without needing a fresh press:
+    // the finger begins now, which is the only honest answer - nothing saw the
+    // press that started it.
+    Input::SuppressCursorCapture(false);
+    Input::SynthesiseMouseContact(held);
+    frame(held);
+    Contact contact;
+    CHECK(Input::TryGetContact(0, contact));
+    CHECK(contact.phase == ContactPhase::Began);
+
+    Input::SuppressCursorCapture(false);
+}
+
 static void runTests() {
     testActionRespondsToItsKey();
     testPressIsAnEdgeNotALevel();
@@ -795,6 +826,7 @@ static void runTests() {
     testACountLargerThanTheFilledSlotsProducesNoPhantomFinger();
     testACountBeyondTheArrayIsClampedRatherThanReadPast();
     testTheMouseIsContactZeroForAsLongAsItIsHeld();
+    testTheHostOwningThePointerMeansNoContacts();
 }
 
-TEST_MAIN("test_input", 88)
+TEST_MAIN("test_input", 92)

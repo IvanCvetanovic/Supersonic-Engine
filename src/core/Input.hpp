@@ -140,6 +140,10 @@ struct RawInputState {
     // A count of zero is the desktop case and must stay indistinguishable from
     // this field not existing: nothing above changes meaning, and a caller that
     // never fills these in gets exactly the engine it had.
+    //
+    // Unlike `textCharacters`, which the polling layer DRAINS into each frame,
+    // these are compared against the previous frame's - so this snapshot is
+    // kept, not consumed. They are closer to `keys` than to typing.
     RawContact contacts[Touch::kMaxContacts]{};
     int contactCount{0};
 };
@@ -334,6 +338,14 @@ public:
     // the window would make every gesture begin the moment the mouse entered
     // it. Overwrites whatever was in slot 0, so a platform that reports real
     // contacts must not call this.
+    //
+    // Silent while CursorCaptureSuppressed() is raised, which is the same veto
+    // the cursor mode obeys and is here for the same reason: while the host
+    // owns the pointer - the editor between plays, a viewport that is not
+    // focused, a player who pressed Escape - a drag across an inspector field
+    // is not a gesture anybody made. The mouse has that veto already; contacts
+    // are a second thing derived from the mouse and would otherwise be the one
+    // path around it.
     static void SynthesiseMouseContact(RawInputState& state);
 
     static int ContactCount();

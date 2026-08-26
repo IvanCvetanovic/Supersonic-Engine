@@ -442,6 +442,16 @@ finger a delta from somewhere (3), letting an empty slot become a phantom finger
 at the origin (1), trusting a count larger than the array (1), and counting a
 hover as a touch (3).
 
+**Contacts obey the host's veto, and had to be made to.** `SuppressCursorCapture`
+exists so the mouse stops being the game's while the editor owns it - between
+plays, on an unfocused viewport, after the player presses Escape. Contacts are a
+second thing derived from the same mouse and were the one path around it: a drag
+across an inspector field *while playing* would have arrived as a marquee the
+player never drew. Layer updates are gated on play mode, so an edit-mode gizmo
+drag reaches nothing today - but that is a fact about `SupersonicApp`, not about
+the input layer, and it is the wrong thing to depend on. Removing the veto fails
+two cases.
+
 **`UIPointer` did not get a `source`.** The plan asked for one. Nothing in
 `UIInput` or `UISystem` would branch on it today, so it would be a field nobody
 reads that later reads as done — the same failure the 2.5 row above was

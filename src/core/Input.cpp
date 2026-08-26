@@ -179,7 +179,7 @@ void Input::ClearBindings() {
 }
 
 void Input::SynthesiseMouseContact(RawInputState& state) {
-    if (state.mouseButtons[MouseButton::Left]) {
+    if (state.mouseButtons[MouseButton::Left] && !CursorCaptureSuppressed()) {
         state.contacts[0].id = 0;
         state.contacts[0].position = state.mousePosition;
         state.contactCount = 1;
