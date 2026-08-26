@@ -7,6 +7,7 @@
 // checked here rather than by eye.
 
 #include "TestHarness.hpp"
+#include "core/Components.hpp"
 #include "core/UICanvas.hpp"
 
 #include <string>
@@ -458,6 +459,116 @@ static void testEnterAndEscapeAreOneFrameFlags() {
               "and leaves the text alone - a mistyped key must not be unrecoverable");
 }
 
+// --- projecting a world point onto the screen -----------------------------
+//
+// World-space labels - a name plate over a unit, a floating damage number -
+// had no expression at all, and three of a Wolf Brigade unit's five drawables
+// are world-space UI. The arithmetic is small and every part of it has a sign
+// that can be wrong in a way that still produces a plausible picture, so it is
+// checked against a camera whose answers are known by construction.
+
+static CameraComponent projectionCamera(bool orthographic) {
+    CameraComponent cam;
+    cam.aspect = 1.0f;
+    cam.nearPlane = 0.1f;
+    cam.farPlane = 100.0f;
+    cam.position = glm::vec3(0.0f, 0.0f, 5.0f);
+    cam.yaw = -90.0f;
+    cam.pitch = 0.0f;
+    if (orthographic) {
+        cam.projection = CameraComponent::Projection::Orthographic;
+        cam.orthoHeight = 10.0f;
+    }
+    cam.updateCameraVectors();
+    return cam;
+}
+
+static glm::mat4 viewProjOf(const CameraComponent& cam) {
+    return cam.getProjectionMatrix() * cam.getViewMatrix();
+}
+
+static void testTheCentreOfTheWorldLandsInTheCentreOfTheScreen() {
+    const CameraComponent cam = projectionCamera(false);
+    const UIRect screen{glm::vec2(0.0f, 0.0f), glm::vec2(800.0f, 600.0f)};
+
+    glm::vec3 out(0.0f);
+    CHECK_MSG(UICanvas::ProjectToScreen(viewProjOf(cam), glm::vec3(0.0f), screen, out),
+              "a point straight ahead must project");
+    CHECK_NEAR(out.x, 400.0f);
+    CHECK_NEAR(out.y, 300.0f);
+}
+
+static void testUpInTheWorldIsUpOnTheScreen() {
+    // The one that is easy to get backwards and impossible to unsee once it is.
+    // Vulkan clip space has +Y DOWN and the projection already negates its Y
+    // row for that, so ProjectToScreen must NOT flip again - which is the same
+    // double-negation that mirrored picking about the horizontal centreline.
+    const CameraComponent cam = projectionCamera(false);
+    const UIRect screen{glm::vec2(0.0f, 0.0f), glm::vec2(800.0f, 600.0f)};
+
+    glm::vec3 above(0.0f);
+    glm::vec3 below(0.0f);
+    CHECK(UICanvas::ProjectToScreen(viewProjOf(cam), glm::vec3(0.0f, 1.0f, 0.0f), screen, above));
+    CHECK(UICanvas::ProjectToScreen(viewProjOf(cam), glm::vec3(0.0f, -1.0f, 0.0f), screen, below));
+
+    CHECK_MSG(above.y < below.y,
+              "a point higher in the world must land higher on the screen, meaning a SMALLER row");
+    CHECK_NEAR(above.x, 400.0f);
+}
+
+static void testAPointBehindTheCameraIsRefused() {
+    // It still HAS coordinates, and they are the mirrored ones in front. A
+    // caller that ignores the result draws a name plate for a unit that is off
+    // behind its shoulder.
+    const CameraComponent cam = projectionCamera(false);
+    const UIRect screen{glm::vec2(0.0f, 0.0f), glm::vec2(800.0f, 600.0f)};
+
+    glm::vec3 out(0.0f);
+    CHECK_MSG(!UICanvas::ProjectToScreen(viewProjOf(cam), glm::vec3(0.0f, 0.0f, 20.0f), screen, out),
+              "a point behind the camera must be refused, not placed");
+
+    // And the control: the same point in FRONT is accepted, so the refusal is
+    // about direction rather than about the function never working.
+    CHECK_MSG(UICanvas::ProjectToScreen(viewProjOf(cam), glm::vec3(0.0f, 0.0f, -20.0f), screen, out),
+              "a point in front must still project");
+}
+
+static void testOrthographicProjectsTooAndSpansTheAuthoredHeight() {
+    // Orthographic keeps w at 1, so the behind-the-camera test cannot be a
+    // w check alone - it has to look at depth as well, or a label behind an
+    // orthographic camera is placed happily.
+    const CameraComponent cam = projectionCamera(true);
+    const UIRect screen{glm::vec2(0.0f, 0.0f), glm::vec2(800.0f, 600.0f)};
+    const glm::mat4 vp = viewProjOf(cam);
+
+    glm::vec3 top(0.0f);
+    glm::vec3 bottom(0.0f);
+    CHECK(UICanvas::ProjectToScreen(vp, glm::vec3(0.0f, 5.0f, 0.0f), screen, top));
+    CHECK(UICanvas::ProjectToScreen(vp, glm::vec3(0.0f, -5.0f, 0.0f), screen, bottom));
+
+    // orthoHeight is 10, so plus and minus five are exactly the top and bottom
+    // edges of an 800x600 screen.
+    CHECK_NEAR(top.y, 0.0f);
+    CHECK_NEAR(bottom.y, 600.0f);
+
+    glm::vec3 behind(0.0f);
+    CHECK_MSG(!UICanvas::ProjectToScreen(vp, glm::vec3(0.0f, 0.0f, 20.0f), screen, behind),
+              "an orthographic camera must refuse what is behind it too, where w cannot say so");
+}
+
+static void testTheScreenRectIsAnOffsetNotAnAssumption() {
+    // The HUD is drawn against the viewport panel in the editor, which does not
+    // start at the window origin. A projection that assumed (0,0) would put
+    // every label up and left by the dock width.
+    const CameraComponent cam = projectionCamera(false);
+    const UIRect offset{glm::vec2(100.0f, 50.0f), glm::vec2(900.0f, 650.0f)};
+
+    glm::vec3 out(0.0f);
+    CHECK(UICanvas::ProjectToScreen(viewProjOf(cam), glm::vec3(0.0f), offset, out));
+    CHECK_NEAR(out.x, 500.0f);
+    CHECK_NEAR(out.y, 350.0f);
+}
+
 static void runTests() {
     testScaleIsOneAtTheReferenceHeight();
     testScaleSurvivesADegenerateScreen();
@@ -489,6 +600,11 @@ static void runTests() {
     testControlCodesAreNotCharacters();
     testAnInactiveKeyboardChangesNothing();
     testEnterAndEscapeAreOneFrameFlags();
+    testTheCentreOfTheWorldLandsInTheCentreOfTheScreen();
+    testUpInTheWorldIsUpOnTheScreen();
+    testAPointBehindTheCameraIsRefused();
+    testOrthographicProjectsTooAndSpansTheAuthoredHeight();
+    testTheScreenRectIsAnOffsetNotAnAssumption();
 }
 
-TEST_MAIN("test_uicanvas", 72)
+TEST_MAIN("test_uicanvas", 88)

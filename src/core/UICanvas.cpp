@@ -25,6 +25,30 @@ float ScaleFor(const glm::vec2& screenSize) {
     return screenSize.y / kReferenceHeight;
 }
 
+bool ProjectToScreen(const glm::mat4& viewProj, const glm::vec3& world, const UIRect& screen,
+                     glm::vec3& outScreen) {
+    const glm::vec4 clip = viewProj * glm::vec4(world, 1.0f);
+
+    // Perspective puts everything behind the eye at w <= 0; orthographic keeps
+    // w at 1 and expresses the same thing as a depth outside 0..1. Both are
+    // checked, because the engine now has both projections and a label must not
+    // depend on which one the camera happens to be using.
+    if (clip.w <= 0.0f) return false;
+
+    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    if (ndc.z < 0.0f || ndc.z > 1.0f) return false;
+
+    // NDC x and y are already in the convention the screen uses: the projection
+    // negates its Y row for Vulkan, so +Y in clip space points DOWN, the same
+    // way pixel rows count. No second flip here - doing it in both places is
+    // how picking was mirrored about the horizontal centreline for a while.
+    const glm::vec2 size = screen.size();
+    outScreen.x = screen.min.x + (ndc.x * 0.5f + 0.5f) * size.x;
+    outScreen.y = screen.min.y + (ndc.y * 0.5f + 0.5f) * size.y;
+    outScreen.z = ndc.z;
+    return true;
+}
+
 UIRect Place(UIAnchor anchor, const glm::vec2& offset, const glm::vec2& size,
              const UIRect& screen) {
     const glm::vec2 screenSize = screen.size();

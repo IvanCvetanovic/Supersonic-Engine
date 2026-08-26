@@ -25,9 +25,14 @@ namespace UISystem {
 // two must agree on the rectangle each element occupies - and the surest way
 // to have a click target that does not match what is on screen is to compute
 // it twice.
+// `viewProj` is the camera the viewport is SHOWING, so a world-space label
+// lands on the object it names. It must be the same camera the scene was drawn
+// with; passing a different one puts every name plate somewhere plausible and
+// wrong, which is the hardest kind of wrong to notice.
 void Render(entt::registry& registry, const UIRect& gameRect,
             const UICanvas::UIPointer& pointer,
-            const UICanvas::UIKeyboard& keyboard);
+            const UICanvas::UIKeyboard& keyboard,
+            const glm::mat4& viewProj);
 
 } // namespace UISystem
 

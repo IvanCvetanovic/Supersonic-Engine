@@ -350,10 +350,23 @@ void EditorLayer::buildGameView(entt::registry& registry) {
 
         // The HUD, over the game and nothing else. Nothing else is on screen
         // to take the pointer, so it is always the game's.
+        // The camera the viewport is SHOWING, chosen exactly as SupersonicApp
+        // chooses it - editor camera while editing, the scene's primary camera
+        // otherwise. A world-space label placed through a different camera than
+        // the one that drew the frame lands somewhere plausible and wrong.
+        const CameraComponent* uiCamera = &m_editorCamera.Get();
+        if (m_playMode && !m_playMode->IsEditing()) {
+            if (const auto camEntity = FindPrimaryCamera(registry); camEntity != entt::null) {
+                uiCamera = &registry.get<CameraComponent>(camEntity);
+            }
+        }
+        const glm::mat4 uiViewProj =
+            uiCamera->getProjectionMatrix() * uiCamera->getViewMatrix();
+
         UISystem::Render(registry,
                          UIRect{ glm::vec2(origin.x, origin.y),
                                  glm::vec2(origin.x + size.x, origin.y + size.y) },
-                         uiPointer(true), uiKeyboard(true));
+                         uiPointer(true), uiKeyboard(true), uiViewProj);
     }
 
     ImGui::End();
@@ -739,6 +752,18 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
         // overlap the viewport would press a button the user cannot see.
         const bool uiOwnsPointer = m_viewportHovered && !ImGuizmo::IsUsing();
 
+        // Same camera choice as the game-mode path above, and for the same
+        // reason: a world-space label has to be projected through whatever
+        // camera drew the frame it is being drawn over.
+        const CameraComponent* uiCamera = &m_editorCamera.Get();
+        if (m_playMode && !m_playMode->IsEditing()) {
+            if (const auto camEntity = FindPrimaryCamera(registry); camEntity != entt::null) {
+                uiCamera = &registry.get<CameraComponent>(camEntity);
+            }
+        }
+        const glm::mat4 uiViewProj =
+            uiCamera->getProjectionMatrix() * uiCamera->getViewMatrix();
+
         UISystem::Render(registry,
                          UIRect{ glm::vec2(viewportPos.x, viewportPos.y),
                                  glm::vec2(viewportPos.x + viewportPanelSize.x,
@@ -746,7 +771,8 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
                          uiPointer(uiOwnsPointer),
                          // FOCUS, not hover: moving the pointer off the viewport
                          // while typing must not lose half a name.
-                         uiKeyboard(m_viewportFocused));
+                         uiKeyboard(m_viewportFocused),
+                         uiViewProj);
 
         if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
             const ImVec2 mousePos = ImGui::GetMousePos();

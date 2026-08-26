@@ -1135,6 +1135,25 @@ struct UITextComponent {
     UIAnchor anchor{UIAnchor::TopLeft};
     glm::vec2 offset{24.0f, 24.0f};
 
+    // Follow a point in the WORLD instead of an edge of the screen.
+    //
+    // A name plate over a unit, a damage number where the hit landed, a build
+    // prompt above a foundation - none of those are anchored to a corner, and
+    // there was no way to express them at all. With this set, the entity's own
+    // world position is projected through the camera and `offset` is measured
+    // from THAT, in the same authored units, with the text centred horizontally
+    // on it rather than hung off an anchor.
+    //
+    // The entity therefore needs a transform, and normally is a child of the
+    // thing it labels - so it follows for free through the hierarchy rather
+    // than by anybody copying a position each frame.
+    //
+    // Culled when the point is behind the camera or outside the depth range,
+    // which matters more than it sounds: without that check a label behind the
+    // viewer projects to a mirrored position in front of it and reads as a
+    // second unit that is not there.
+    bool worldSpace{false};
+
     // In authored units at the reference height, like every other UI size, so
     // text keeps its proportion of the screen rather than shrinking to nothing
     // on a large display.

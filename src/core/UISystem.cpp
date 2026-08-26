@@ -17,11 +17,29 @@ ImU32 toColor(const glm::vec4& color) {
 
 ImVec2 toVec(const glm::vec2& v) { return ImVec2(v.x, v.y); }
 
+// Where a UI entity sits in the world.
+//
+// The resolved world transform when there is one, so a label parented to a unit
+// follows it through the hierarchy rather than through anybody copying a
+// position every frame. Falls back to the local transform for an entity the
+// transform pass has not reached yet - a label created this frame, which is
+// exactly what a floating damage number is.
+glm::vec3 worldPositionOf(const entt::registry& registry, entt::entity entity) {
+    if (const auto* world = registry.try_get<WorldTransformComponent>(entity)) {
+        return glm::vec3(world->matrix[3]);
+    }
+    if (const auto* local = registry.try_get<TransformComponent>(entity)) {
+        return local->position;
+    }
+    return glm::vec3(0.0f);
+}
+
 } // namespace
 
 void Render(entt::registry& registry, const UIRect& gameRect,
             const UICanvas::UIPointer& pointer,
-            const UICanvas::UIKeyboard& keyboard) {
+            const UICanvas::UIKeyboard& keyboard,
+            const glm::mat4& viewProj) {
     const glm::vec2 screenSize = gameRect.size();
     if (screenSize.x < 1.0f || screenSize.y < 1.0f) return;
 
@@ -178,8 +196,27 @@ void Render(entt::registry& registry, const UIRect& gameRect,
         // Measured before placing: a right-anchored label has to know its own
         // width to put its right edge where it belongs.
         const ImVec2 measured = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.text.c_str());
-        const UIRect rect = UICanvas::PlaceMeasured(text.anchor, text.offset * scale,
-                                                    glm::vec2(measured.x, measured.y), gameRect);
+
+        UIRect rect;
+        if (text.worldSpace) {
+            glm::vec3 screen(0.0f);
+            if (!UICanvas::ProjectToScreen(viewProj, worldPositionOf(registry, entity), gameRect,
+                                           screen)) {
+                // Behind the camera, or outside the depth range. Drawn anyway,
+                // a label behind the viewer lands mirrored in front of it.
+                continue;
+            }
+
+            // Centred horizontally on the point and offset from it, which is
+            // what a name plate over a unit means. The anchor is unused here -
+            // there is no screen edge to hang from.
+            rect.min = glm::vec2(screen.x - measured.x * 0.5f, screen.y - measured.y * 0.5f) +
+                       text.offset * scale;
+            rect.max = rect.min + glm::vec2(measured.x, measured.y);
+        } else {
+            rect = UICanvas::PlaceMeasured(text.anchor, text.offset * scale,
+                                           glm::vec2(measured.x, measured.y), gameRect);
+        }
 
         if (text.shadow) {
             // Offset by a fraction of the size rather than a fixed pixel, so

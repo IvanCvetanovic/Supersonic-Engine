@@ -47,6 +47,22 @@ inline constexpr float kReferenceHeight = 1080.0f;
 // Multiplier taking authored units to pixels on a screen of this size.
 float ScaleFor(const glm::vec2& screenSize);
 
+// Where a world point lands on the screen, or false when it does not.
+//
+// Returns false for a point behind the camera or outside the depth range, and
+// that is the whole reason it returns a bool rather than a position: a point
+// behind the viewer still has coordinates, and they are the MIRRORED ones in
+// front of it. A caller that ignores the check draws a name plate for a unit
+// that is off behind its shoulder.
+//
+// `outScreen` is x and y in pixels within `screen`, and z as depth in 0..1 -
+// which a caller can sort on when two labels overlap.
+//
+// Pure arithmetic and no Vulkan, so a test can check the corners of a known
+// frustum land on the corners of a known rectangle without a device.
+bool ProjectToScreen(const glm::mat4& viewProj, const glm::vec3& world, const UIRect& screen,
+                     glm::vec3& outScreen);
+
 // Places an element of `size` authored units at `offset` from its anchor.
 //
 // The offset always runs *inward* from the anchored edge, so the same offset of
