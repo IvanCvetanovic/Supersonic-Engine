@@ -49,6 +49,21 @@ add_engine_test(test_convexhull)
 add_engine_test(test_decomposition)
 add_engine_test(test_draworder)
 add_engine_test(test_uilayer)
+
+# The ported game, verified against the original.
+#
+# Links WolfBrigadeSim on top of SupersonicCore. Each of these reproduces the
+# numbers one of `tools/verify_*.gd` prints when run against the Godot project
+# at D:/The-Wolf-Brigade - the command is recorded in the suite itself, and the
+# numbers are constants here rather than something ctest goes and asks Godot
+# for. That binary is Steam-installed on another volume and will not exist on a
+# build machine.
+function(add_port_test name)
+    add_engine_test(${name})
+    target_link_libraries(${name} PRIVATE WolfBrigadeSim)
+endfunction()
+
+add_port_test(test_wb_gestures)
 add_engine_test(test_environmentmap)
 add_engine_test(test_assetdatabase)
 add_engine_test(test_serialize)

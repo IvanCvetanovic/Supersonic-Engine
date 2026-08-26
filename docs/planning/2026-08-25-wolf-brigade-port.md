@@ -498,9 +498,30 @@ two cases.
 reads that later reads as done — the same failure the 2.5 row above was
 corrected for. It goes in when something asks the question.
 
-**Still open:** the gesture machine itself (~90 lines, port-side), and the
-script ABI, which exposes `mouseDelta` and not contacts. The port is a C++
-layer rather than scripts, so nothing needs it yet.
+**The gesture machine is now ported** — `games/wolfbrigade/sim/GestureMachine`,
+verified against `tools/verify_touch.gd` section A. Every case that harness
+asserts is asserted here at the same coordinates, because a case that
+discriminates in GDScript at 5.4 px of jitter and a 70 px drag is only known to
+discriminate at those numbers.
+
+Two differences from the GDScript, both forced. Godot pushes
+`InputEventScreenTouch`/`ScreenDrag`; this engine polls contacts once a frame —
+and the correspondence is exact, which is what the contact work above was for: a
+press is a `Began`, a drag is a `Moved` carrying its own delta, a lift is an
+`Ended`. And everything stays in SCREEN space, where the GDScript converts taps
+and the committed box through the viewport's canvas transform: doing that here
+would drag a camera into the one file whose value is being testable without one,
+so the caller converts.
+
+Five mutations, all caught: making the hold test strictly greater (1 failure),
+the drag threshold at-least (1), the pan un-negated (2), letting a second finger
+steal the gesture (3), and leaving the finger latched through a placement-mode
+change (2). The two comparison operators are worth the two cases on their own —
+the GDScript uses `>` on distance and `>=` on time, and swapping either changes
+which gesture a borderline drag becomes.
+
+**Still open:** the script ABI, which exposes `mouseDelta` and not contacts. The
+port is a C++ layer rather than scripts, so nothing needs it yet.
 
 > **Correction, later the same day.** This section originally said the machine
 > could not be written because the game "is not in this repository". It is not

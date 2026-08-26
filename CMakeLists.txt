@@ -417,6 +417,14 @@ endif()
 #
 # Off by default: these link the engine the way anyone else would, and are not
 # part of building it. Turn one on with -DSUPERSONIC_BUILD_WOLFBRIGADE=ON.
+# The ported SIMULATION is not gated, and the executable is.
+#
+# The port is verified by C++ tests that reproduce the numbers the original's
+# headless harnesses print, so the simulation has to be built whenever the tests
+# are. It is pure logic - no renderer, no window - and costs a handful of
+# translation units.
+add_subdirectory(games/wolfbrigade/sim)
+
 option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike" OFF)
 if (SUPERSONIC_BUILD_WOLFBRIGADE)
     add_subdirectory(games/wolfbrigade)
