@@ -84,6 +84,17 @@ struct EventBus {
     Signal<const glm::vec2&> moveOrdered;
     Signal<const glm::vec2&> attackOrdered;
 
+    // Building lifecycle. A raw pointer rather than a handle, because the thing
+    // that owns the buildings is the thing listening - and it is the only one
+    // that can outlive them.
+    Signal<class Building*> buildingCompleted;
+    Signal<class Building*> buildingDestroyed;
+
+    // A building finished training something; whoever owns the world spawns it
+    // at the point given. The building deliberately does NOT create the unit
+    // itself - it has no way to, and should not learn one.
+    Signal<const std::string&, const glm::vec2&> unitTrained;
+
     // Wave and win/lose flow. The rest of the lifecycle signals - units,
     // buildings, selection - arrive with the slices that emit them.
     Signal<int> waveStarted;

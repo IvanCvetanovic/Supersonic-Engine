@@ -418,6 +418,7 @@ re-derive them written beside them.
 | gesture machine | `verify_touch` A | Every case that harness asserts, at its own coordinates. Five mutations caught, including both comparison operators — the GDScript uses `>` on distance and `>=` on time. |
 | data + validator | `verify_data` | The ten key counts the original prints (`world -> 11 keys`, `units -> 5`, …), 0 cross-reference issues, and **nine deliberate typos** — one per check — each caught. Six mutations caught. |
 | wave director | `verify_waves` | **The first slice the oracle actually constrains.** 30 raiders, 1 brute, 31 across five waves, reaching wave 5 — the output of 300 steps through the schedule, the difficulty scaling and the spawn interval, and not derivable by reading. Matched on the first run. Plus victory only on a cleared field, defeat on the Town Hall, and the empty-final-wave soft-lock the original wrote its own case against. Eight mutations, all caught. |
+| buildings | `verify_buildings` | **two bolts pooled** from a tower in three seconds, plus construction, training queues, footprints and the deposit-point rule. Thirteen mutations; **four survived** the shipped data and needed authored fixtures — one of which had to be SEARCHED for. |
 | combat | `verify_combat` | **soldier 36/60, Town Hall 934/1000** — and the second one is the first number in the whole port that DISAGREED. Plus the lane index, orders beating instincts, and the arrow pool. Nine mutations, all caught after two blind spots were closed. |
 | worker economy | `verify_economy` 2, 2b + `verify_units` FSM | **tree 79/100, banked +20, carried 1** — 140 steps of 0.2s between a tree at 1300 and a deposit at 1000, matched exactly, for both resources. Plus the FSM (spawns idle at 30 hp, a move order strips the y, arrival releases the order) and the flee reflex. Twelve mutations; **four survived the first pass** and needed cases the original's own harness cannot see. |
 | economy state | `verify_economy` 1, 2c, 3 | Extraction clamps (200 → 170 → 0), spending is atomic, and `resources_changed` carries the new TOTAL. Difficulty scales the opening balance to the numbers the presets imply — 450 on Easy, 240 on Hard — and owned meta lands flat on top of it, not through it. Six mutations, all caught. Sections 2 and 2b, the worker gather/deliver loop, wait for `unit.gd`. |
@@ -450,6 +451,27 @@ discrimination cases counted totals, and replacing `buildings.json` to break one
 cost also removed two buildings that an upgrade elsewhere referenced. That is
 collateral from the fixture rather than the check under test, and a total makes
 the file brittle in a way that reads as the validator misbehaving.
+
+### A mutation that had to be hunted for
+
+The buildings slice reset the training remainder to zero rather than carrying
+it, matching the original. Four mutations survived the first pass and three
+were the usual thing — behaviour the shipped data cannot reach, needing an
+authored fixture: a building with no build time that nobody pre-placed, a tower
+that reloads faster than it thinks, and a building with an attack RANGE but no
+damage (a Town Hall has neither, so removing the guard changes nothing).
+
+The fourth was different. **Carrying the remainder is almost never observable.**
+The overshoot at the end of a unit is under one step, so carrying it can only
+buy back a whole step once enough have piled up — and at most step sizes the
+accumulation error eats it first. Three archers at 7.0s and a step of 0.6 finish
+on identical steps either way; so do 0.7 and 0.9. It took a search over step
+sizes to find that **four units at 3.0s stepped by 0.05** is where the two
+answers separate, and by then they are three steps apart.
+
+That is the honest shape of the choice: not a bug that shows up in a fight, a
+slow drift that shows up in a long queue. Worth pinning precisely because
+nothing else would ever notice.
 
 ### GDScript's `float` is 64-bit, and that changed the answer
 
