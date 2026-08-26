@@ -43,4 +43,45 @@ UnitStats UnitStats::FromJson(const std::string& unitId, const Supersonic::Json:
     return stats;
 }
 
+namespace {
+
+// The upgradable fields, and which ones are whole numbers.
+//
+// Integer fields TRUNCATE the delta the way GDScript's `int + float` does not -
+// there, `damage` would quietly become a float and the difference would show up
+// as a raider taking 8.4 damage. Here the type is fixed, so the rounding is
+// explicit and stated once.
+bool applyInt(int& target, double delta) {
+    target += static_cast<int>(delta);
+    return true;
+}
+
+} // namespace
+
+bool UnitStats::ApplyDelta(const std::string& field, double delta) {
+    if (field == "max_hp") return applyInt(maxHp, delta);
+    if (field == "damage") return applyInt(damage, delta);
+    if (field == "carry_capacity") return applyInt(carryCapacity, delta);
+
+    if (field == "attacks_per_sec") { attacksPerSec += static_cast<float>(delta); return true; }
+    if (field == "attack_range") { attackRange += static_cast<float>(delta); return true; }
+    if (field == "aggro_range") { aggroRange += static_cast<float>(delta); return true; }
+    if (field == "move_speed") { moveSpeed += static_cast<float>(delta); return true; }
+    if (field == "projectile_speed") { projectileSpeed += static_cast<float>(delta); return true; }
+    if (field == "gather_rate") { gatherRate += static_cast<float>(delta); return true; }
+    if (field == "gather_range") { gatherRange += static_cast<float>(delta); return true; }
+    if (field == "deposit_range") { depositRange += static_cast<float>(delta); return true; }
+    if (field == "train_time") { trainTime += static_cast<float>(delta); return true; }
+
+    // Not a field a unit has. The original push_warnings here; this says so to
+    // the caller, which is what lets the shipped data be checked at startup
+    // instead of hoped about.
+    return false;
+}
+
+bool UnitStats::HasField(const std::string& field) {
+    UnitStats probe;
+    return probe.ApplyDelta(field, 0.0);
+}
+
 } // namespace WolfBrigade

@@ -419,6 +419,7 @@ re-derive them written beside them.
 | data + validator | `verify_data` | The ten key counts the original prints (`world -> 11 keys`, `units -> 5`, …), 0 cross-reference issues, and **nine deliberate typos** — one per check — each caught. Six mutations caught. |
 | wave director | `verify_waves` | **The first slice the oracle actually constrains.** 30 raiders, 1 brute, 31 across five waves, reaching wave 5 — the output of 300 steps through the schedule, the difficulty scaling and the spawn interval, and not derivable by reading. Matched on the first run. Plus victory only on a cleared field, defeat on the Town Hall, and the empty-final-wave soft-lock the original wrote its own case against. Eight mutations, all caught. |
 | buildings | `verify_buildings` | **two bolts pooled** from a tower in three seconds, plus construction, training queues, footprints and the deposit-point rule. Thirteen mutations; **four survived** the shipped data and needed authored fixtures — one of which had to be SEARCHED for. |
+| upgrades + meta | `verify_upgrades`, `verify_meta` | More computed numbers than any other pair: soldier damage 8→12, Town Hall 1000→1500, three Armory levels at exactly 40+80+120, a wave-3 loss worth 30 renown, a stacked gather rate of 1.8. **Eight mutations, all caught on the first pass** — the first slice where none survived. |
 | worker builds | `verify_buildings` 2, 6 | The unit's BUILDING state, which closes the seam between the two halves: a worker sent to a site finishes it, and **any idle worker resumes an abandoned one**. Four mutations, all caught. |
 | combat | `verify_combat` | **soldier 36/60, Town Hall 934/1000** — and the second one is the first number in the whole port that DISAGREED. Plus the lane index, orders beating instincts, and the arrow pool. Nine mutations, all caught after two blind spots were closed. |
 | worker economy | `verify_economy` 2, 2b + `verify_units` FSM | **tree 79/100, banked +20, carried 1** — 140 steps of 0.2s between a tree at 1300 and a deposit at 1000, matched exactly, for both resources. Plus the FSM (spawns idle at 30 hp, a move order strips the y, arrival releases the order) and the flee reflex. Twelve mutations; **four survived the first pass** and needed cases the original's own harness cannot see. |
@@ -452,6 +453,25 @@ discrimination cases counted totals, and replacing `buildings.json` to break one
 cost also removed two buildings that an upgrade elsewhere referenced. That is
 collateral from the fixture rather than the check under test, and a total makes
 the file brittle in a way that reads as the validator misbehaving.
+
+### C++ has no reflection, and that turned out to be an improvement
+
+GDScript applies an upgrade with `stats.set(field, stats.get(field) + delta)` and
+`push_warning`s at RUN TIME when the field does not exist. C++ cannot do the
+first, so `UnitStats::ApplyDelta` and `BuildingStats::ApplyDelta` write the
+mapping out by hand: an `if` chain from field name to member, returning `false`
+for anything nobody has.
+
+That is worse in one way — adding a field means remembering to add it there —
+and better in two. An effect naming a field nobody has is *reported* rather than
+silently doing nothing. And the set of upgradable fields becomes something a
+test can enumerate, so `test_wb_progression` checks **every effect field in
+upgrades.json and meta.json against the entity it targets, at build time**. The
+original can only find the same typo by someone reading a warning in a log.
+
+Worth noting where the boundary is: `DataValidator` already cross-references
+effect *targets* (is "soldier" a unit?) but has never checked field *names* (is
+"damge" a stat?). This closes that, from the other side.
 
 **What the oracle proves, and what it does not.** Four slices running, surviving
 mutations have needed authored fixtures because the shipped data cannot reach

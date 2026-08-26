@@ -68,6 +68,25 @@ struct UnitStats {
     // a weak unit rather than a crash - which is what lets a designer add a
     // unit and fill it in over an afternoon.
     static UnitStats FromJson(const std::string& unitId, const Supersonic::Json::Value& row);
+
+    // Adds an upgrade's delta to the field named by the data.
+    //
+    // GDScript does this with reflection - `stats.set(field, stats.get(field) +
+    // delta)` - and C++ has none, so the mapping is written out. That is worse
+    // in one way and better in two: adding a field to this struct means
+    // remembering to add it here, but an effect naming a field nobody has
+    // returns FALSE instead of silently doing nothing, and the set of upgradable
+    // fields becomes something a test can enumerate.
+    //
+    // Flat additive, like every effect in this game - in-run research and
+    // persistent meta both land here, and because they only ever add, the order
+    // they are applied in does not matter.
+    bool ApplyDelta(const std::string& field, double delta);
+
+    // Whether a field can be upgraded at all. Lets the data check itself: every
+    // effect field in upgrades.json and meta.json must be one of these, and a
+    // typo is a balance change nobody made.
+    static bool HasField(const std::string& field);
 };
 
 } // namespace WolfBrigade

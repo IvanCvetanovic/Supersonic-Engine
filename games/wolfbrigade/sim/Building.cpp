@@ -216,38 +216,35 @@ bool Building::Rect::Contains(const glm::vec2& point) const {
     return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
 }
 
-bool Building::ApplyUpgradeEffect(const std::string& field, double delta) {
-    if (field == "max_hp") {
-        const int raise = static_cast<int>(delta);
-        m_stats.maxHp += raise;
-
-        // The current total rises with the cap. Reinforcing a wall that has
-        // been chewed on heals it as well as toughening it, which is what the
-        // upgrade is for - and a version that only raised the cap would leave
-        // the player's Town Hall at the same hit points on a longer bar.
-        m_hp += raise;
-        return true;
-    }
-    if (field == "damage") {
-        m_stats.damage += static_cast<int>(delta);
-        return true;
-    }
-    if (field == "attack_range") {
-        m_stats.attackRange += delta;
-        return true;
-    }
-    if (field == "attacks_per_sec") {
-        m_stats.attacksPerSec += delta;
-        return true;
-    }
-    if (field == "build_time") {
-        m_stats.buildTime += delta;
-        return true;
-    }
-
-    // A field this building does not have. Reported rather than swallowed: an
-    // upgrade that silently does nothing is a balance change nobody made.
+bool BuildingStats::ApplyDelta(const std::string& field, double delta) {
+    if (field == "max_hp") { maxHp += static_cast<int>(delta); return true; }
+    if (field == "damage") { damage += static_cast<int>(delta); return true; }
+    if (field == "attack_range") { attackRange += delta; return true; }
+    if (field == "attacks_per_sec") { attacksPerSec += delta; return true; }
+    if (field == "projectile_speed") { projectileSpeed += delta; return true; }
+    if (field == "build_time") { buildTime += delta; return true; }
+    if (field == "spawn_offset") { spawnOffset += delta; return true; }
     return false;
+}
+
+bool BuildingStats::HasField(const std::string& field) {
+    BuildingStats probe;
+    return probe.ApplyDelta(field, 0.0);
+}
+
+bool Building::ApplyUpgradeEffect(const std::string& field, double delta) {
+    if (!m_stats.ApplyDelta(field, delta)) {
+        // A field this building does not have. Reported rather than swallowed:
+        // an upgrade that silently does nothing is a balance change nobody made.
+        return false;
+    }
+
+    // The current total rises with the cap. Reinforcing a wall that has been
+    // chewed on heals it as well as toughening it, which is what the upgrade is
+    // for - and a version that only raised the cap would leave the player's
+    // Town Hall at the same hit points behind a longer bar.
+    if (field == "max_hp") m_hp += static_cast<int>(delta);
+    return true;
 }
 
 } // namespace WolfBrigade

@@ -57,6 +57,12 @@ struct BuildingStats {
     std::string color{"#3b6fa0"};
 
     static BuildingStats FromJson(const std::string& id, const Supersonic::Json::Value& row);
+
+    // The same explicit field mapping the units have, and for the same reason.
+    // Building::ApplyUpgradeEffect goes through this and then fixes up the
+    // current hit points, which a raw stat change cannot do.
+    bool ApplyDelta(const std::string& field, double delta);
+    static bool HasField(const std::string& field);
 };
 
 // One building, from `scripts/entities/building.gd`.
