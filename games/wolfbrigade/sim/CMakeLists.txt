@@ -20,6 +20,7 @@ add_library(WolfBrigadeSim STATIC
     GameState.cpp
     GestureMachine.cpp
     ResourceNode.cpp
+    Unit.cpp
     UnitStats.cpp
     WaveDirector.cpp
 )

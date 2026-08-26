@@ -418,6 +418,7 @@ re-derive them written beside them.
 | gesture machine | `verify_touch` A | Every case that harness asserts, at its own coordinates. Five mutations caught, including both comparison operators — the GDScript uses `>` on distance and `>=` on time. |
 | data + validator | `verify_data` | The ten key counts the original prints (`world -> 11 keys`, `units -> 5`, …), 0 cross-reference issues, and **nine deliberate typos** — one per check — each caught. Six mutations caught. |
 | wave director | `verify_waves` | **The first slice the oracle actually constrains.** 30 raiders, 1 brute, 31 across five waves, reaching wave 5 — the output of 300 steps through the schedule, the difficulty scaling and the spawn interval, and not derivable by reading. Matched on the first run. Plus victory only on a cleared field, defeat on the Town Hall, and the empty-final-wave soft-lock the original wrote its own case against. Eight mutations, all caught. |
+| worker economy | `verify_economy` 2, 2b + `verify_units` FSM | **tree 79/100, banked +20, carried 1** — 140 steps of 0.2s between a tree at 1300 and a deposit at 1000, matched exactly, for both resources. Plus the FSM (spawns idle at 30 hp, a move order strips the y, arrival releases the order) and the flee reflex. Twelve mutations; **four survived the first pass** and needed cases the original's own harness cannot see. |
 | economy state | `verify_economy` 1, 2c, 3 | Extraction clamps (200 → 170 → 0), spending is atomic, and `resources_changed` carries the new TOTAL. Difficulty scales the opening balance to the numbers the presets imply — 450 on Easy, 240 on Hard — and owned meta lands flat on top of it, not through it. Six mutations, all caught. Sections 2 and 2b, the worker gather/deliver loop, wait for `unit.gd`. |
 
 **A fixture that could not fail, caught by its own mutation.** `ScaleWaveCount`
@@ -448,6 +449,19 @@ discrimination cases counted totals, and replacing `buildings.json` to break one
 cost also removed two buildings that an upgrade elsewhere referenced. That is
 collateral from the fixture rather than the check under test, and a total makes
 the file brittle in a way that reads as the validator misbehaving.
+
+**The harness's own dt hid three bugs.** `verify_economy` steps at 0.2s and the
+worker gathers at 1.0/sec, so a step never asks for more than one unit of wood —
+and three mutations survived because of it: charging the gather accumulator for
+what was ASKED rather than what came out, gathering past the carry capacity, and
+leaving a tree only on the thinking tick rather than the moment it runs dry. All
+three are invisible at that dt and all three are real. They needed a five-second
+step, where the asked-for amount and the available amount can disagree, and a
+60Hz one, where a tick is twelve steps away.
+
+That is the general lesson: **reproducing the oracle's numbers is necessary and
+not sufficient.** The harness proves the port agrees with the original on the
+path the harness walks. Mutation testing is what finds the paths it does not.
 
 **Everything before the waves slice was structural.** Gestures asserted state
 transitions read out of the GDScript; data asserted key counts; economy asserted
