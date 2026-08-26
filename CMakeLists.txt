@@ -411,6 +411,17 @@ endif()
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Games built on the engine
+# ---------------------------------------------------------------------------
+#
+# Off by default: these link the engine the way anyone else would, and are not
+# part of building it. Turn one on with -DSUPERSONIC_BUILD_WOLFBRIGADE=ON.
+option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike" OFF)
+if (SUPERSONIC_BUILD_WOLFBRIGADE)
+    add_subdirectory(games/wolfbrigade)
+endif()
+
 option(SUPERSONIC_BUILD_TESTS "Build engine unit tests" ON)
 if (SUPERSONIC_BUILD_TESTS)
     enable_testing()

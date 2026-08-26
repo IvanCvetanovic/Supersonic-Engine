@@ -56,9 +56,8 @@ content.
 | Data | All gameplay numbers already live in `data/*.json` — the port reads the same files. |
 
 Supersonic submits one draw and one push constant per entity with no instancing
-and no sort (`src/core/RenderSystem.cpp`). At 400 quads that is fine. At a long
-endless run it is worth measuring rather than assuming — which is one more
-reason Phase 0 exists.
+and no sort (`src/core/RenderSystem.cpp`). **Phase 0 measured it** — see below.
+A busy campaign frame is free; endless has a ceiling around 800 units.
 
 ---
 
@@ -82,6 +81,57 @@ seam.
 
 If Phase 0 goes badly, stop and re-plan. It is deliberately cheap enough to
 throw away.
+
+### Phase 0 result — DONE, 26 August 2026
+
+`games/wolfbrigade/`, built with `-DSUPERSONIC_BUILD_WOLFBRIGADE=ON`. A separate
+executable linking `SupersonicCore`, pushing one `EngineLayer`. **Nothing had
+ever called `SupersonicApp::PushLayer` before this** — the seam was argued for in
+`EngineLayer.hpp` and never used, which is not the same as working. It works: the
+layer clears the registry, builds its own camera, light, ground and lane, and the
+engine renders it.
+
+The lane reads. Each unit is five drawables in `unit.tscn`'s own order —
+SelectionRing, Body, HPBar/Bg, HPBar/Fill, Label — and at a glance you can tell
+the units apart, see the health fills differ, and watch the two sides converge.
+
+**The measurement, Release, 900 frames, `--fixed-step`, deltas against a
+5-drawable baseline so startup cancels:**
+
+| drawables | ms/frame | cost of the drawables |
+|---|---|---|
+| 5 | 4.00 | baseline |
+| 400 | 4.16 | **+0.16 ms** |
+| 2,000 | 7.75 | +3.75 ms |
+| 4,000 | 12.37 | +8.37 ms |
+| 8,000 | 22.15 | +18.14 ms |
+
+About **0.002 ms per drawable**, near-linear with a slight upward trend. Read off
+that table:
+
+- **A busy campaign frame — the plan's 350–400 — costs 0.16 ms.** The worry was
+  unfounded at campaign scale. One draw and one push constant per entity is
+  simply not the problem here that it would be for HUSK.
+- **The endless ceiling is roughly 3,000–4,000 drawables, or 600–800 units**,
+  where the lane alone eats half a 60 Hz budget. Past that, instancing or a
+  culling pass stops being optional. Since endless has no data-driven cap, that
+  is a real design limit rather than a theoretical one — and it is now a number
+  rather than a worry.
+
+These figures include the editor UI, which a shipped game would not run, so they
+are pessimistic.
+
+**Three things the spike exposed that reading could not:**
+
+1. **The editor grid draws over the game.** Expected — it is disabled by the
+   `isGame` manifest — but it means every screenshot until packaging has a grid
+   through it.
+2. **Depth ordering only works because the quads are not coplanar.** The spike
+   nudges each layer 0.01 toward the camera. That is the shortcut item 1.4
+   exists to replace, and the spike makes it visible rather than pretending.
+3. **The perspective curve is obvious.** A 60-unit lane bends away at the edges
+   in a way a `Camera2D` never would, which is item 1.1 earning its place at the
+   top of Phase 1.
 
 ---
 
