@@ -1275,6 +1275,48 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // UIShapeComponent
+    if (registry.all_of<UIShapeComponent>(entity)) {
+        if (ImGui::CollapsingHeader("HUD Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& shape = registry.get<UIShapeComponent>(entity);
+
+            const char* kinds[] = { "Ring", "Disc", "Line" };
+            int kind = static_cast<int>(shape.kind);
+            if (ImGui::Combo("Kind", &kind, kinds, IM_ARRAYSIZE(kinds))) {
+                shape.kind = static_cast<UIShapeComponent::Kind>(kind);
+            }
+
+            ImGui::Checkbox("World Space##shape", &shape.worldSpace);
+            if (shape.worldSpace) {
+                ImGui::TextDisabled("Drawn where this entity is, projected through the");
+                ImGui::TextDisabled("camera. Needs a transform; parent it to what it marks.");
+            } else {
+                drawAnchorCombo("Anchor##shape", shape.anchor);
+            }
+            ImGui::DragFloat2("Offset##shape", glm::value_ptr(shape.offset), 1.0f, -4000.0f, 4000.0f);
+
+            if (shape.kind == UIShapeComponent::Kind::Line) {
+                ImGui::DragFloat3("Endpoint", glm::value_ptr(shape.endpoint), 0.05f);
+                ImGui::TextDisabled("A world position when world space, otherwise an offset");
+                ImGui::TextDisabled("in authored units from the start.");
+            } else {
+                ImGui::DragFloat("Radius", &shape.radius, 0.5f, 0.5f, 2000.0f);
+                ImGui::DragInt("Segments", &shape.segments, 0.5f, 3, 256);
+            }
+
+            if (shape.kind != UIShapeComponent::Kind::Disc) {
+                ImGui::DragFloat("Thickness", &shape.thickness, 0.1f, 0.1f, 64.0f);
+            }
+
+            ImGui::ColorEdit4("Color##shape", glm::value_ptr(shape.color));
+            ImGui::TextDisabled("Sizes are authored units at 1080, like font size - so a");
+            ImGui::TextDisabled("marker keeps its share of the screen at any resolution.");
+            ImGui::Checkbox("Visible##shape", &shape.visible);
+        }
+    }
+
+    ImGui::Spacing();
+
     // UIStackComponent
     if (registry.all_of<UIStackComponent>(entity)) {
         if (ImGui::CollapsingHeader("HUD Stack", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1499,6 +1541,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
         if (!registry.all_of<UITextFieldComponent>(entity) && ImGui::MenuItem("HUD Text Field")) {
             registry.emplace<UITextFieldComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<UIShapeComponent>(entity) && ImGui::MenuItem("HUD Shape")) {
+            registry.emplace<UIShapeComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<UIStackComponent>(entity) && ImGui::MenuItem("HUD Stack")) {

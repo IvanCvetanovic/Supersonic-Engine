@@ -21,8 +21,8 @@ ImVec2 toVec(const glm::vec2& v) { return ImVec2(v.x, v.y); }
 //
 // The same field a stack uses to order its children, because it is the same
 // question at a different scope: where does this sit relative to the things
-// beside it. Within one layer the type order below still holds - panels, then
-// buttons, then fields, then text - so a label still reads on top of its own
+// beside it. Within one layer the type order below still holds - shapes,
+// panels, buttons, fields, text - so a label still reads on top of its own
 // backdrop.
 int32_t layerOf(const entt::registry& registry, entt::entity entity) {
     if (const auto* ordering = registry.try_get<UIOrderComponent>(entity)) return ordering->order;
@@ -37,7 +37,7 @@ int32_t layerOf(const entt::registry& registry, entt::entity entity) {
 // which reads as the menu being broken rather than as a z-order question.
 //
 // Returns a single zero when nothing is ranked, so the common scene runs the
-// four loops once and pays nothing for a feature it is not using.
+// draw loops once and pays nothing for a feature it is not using.
 std::vector<int32_t> layersPresent(const entt::registry& registry) {
     std::vector<int32_t> layers;
     for (auto [entity, ordering] : registry.view<UIOrderComponent>().each()) {
@@ -195,9 +195,73 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     UIInput::Update(registry, gameRect, pointer, keyboard, stacked);
 
     // Once per layer, low to high, so a pause menu covers the HUD it is drawn
-    // over. Within a layer: panels first, then text, so a label always reads on
-    // top of its backdrop regardless of the order the entities happen to be in.
+    // over. Within a layer: shapes, then panels, then text, so a label always
+    // reads on top of its backdrop regardless of the order the entities happen
+    // to be in, and a selection marker stays under the HUD it is not part of.
     for (const int32_t layer : layersPresent(registry)) {
+    for (auto [entity, shape] : registry.view<UIShapeComponent>().each()) {
+        if (!shape.visible) continue;
+        if (layerOf(registry, entity) != layer) continue;
+
+        // The anchor point, in pixels. Everything below is measured from here.
+        glm::vec2 origin(0.0f);
+        if (shape.worldSpace) {
+            glm::vec3 projected(0.0f);
+            if (!UICanvas::ProjectToScreen(viewProj, worldPositionOf(registry, entity), gameRect,
+                                           projected)) {
+                // Behind the camera or outside the depth range. Drawn anyway, a
+                // marker behind the viewer lands mirrored in front of it and
+                // reads as a selection nobody made.
+                continue;
+            }
+            origin = glm::vec2(projected) + shape.offset * scale;
+        } else {
+            // Placed as a zero-sized rectangle: an anchor with no extent is a
+            // point, which is what a circle centre and a line start are.
+            origin = UICanvas::Place(shape.anchor, shape.offset * scale, glm::vec2(0.0f),
+                                     gameRect).min;
+        }
+
+        const ImU32 color = toColor(shape.color);
+
+        // At least one pixel. A marker that rounds down to nothing on a small
+        // window is indistinguishable from one that was never drawn at all.
+        const float thickness = std::max(1.0f, shape.thickness * scale);
+
+        // ImGui reads 0 as "pick a segment count for me", which for a marker
+        // that is meant to look hand-drawn at 40 segments is not the same
+        // picture. Clamped rather than passed through.
+        const int segments = std::max(3, static_cast<int>(shape.segments));
+
+        switch (shape.kind) {
+        case UIShapeComponent::Kind::Ring:
+            draw->AddCircle(toVec(origin), std::max(1.0f, shape.radius * scale), color,
+                            segments, thickness);
+            break;
+        case UIShapeComponent::Kind::Disc:
+            draw->AddCircleFilled(toVec(origin), std::max(1.0f, shape.radius * scale), color,
+                                  segments);
+            break;
+        case UIShapeComponent::Kind::Line: {
+            glm::vec2 tip(0.0f);  // not "far": windows.h has a macro for that
+            if (shape.worldSpace) {
+                glm::vec3 projected(0.0f);
+                // Culled on the FAR end too, and separately: half a line, from
+                // a real start to a point mirrored behind the viewer, is worse
+                // than no line - it points somewhere nothing is.
+                if (!UICanvas::ProjectToScreen(viewProj, shape.endpoint, gameRect, projected)) {
+                    continue;
+                }
+                tip = glm::vec2(projected) + shape.offset * scale;
+            } else {
+                tip = origin + glm::vec2(shape.endpoint) * scale;
+            }
+            draw->AddLine(toVec(origin), toVec(tip), color, thickness);
+            break;
+        }
+        }
+    }
+
     for (auto [entity, panel] : registry.view<UIPanelComponent>().each()) {
         if (!panel.visible) continue;
         if (layerOf(registry, entity) != layer) continue;

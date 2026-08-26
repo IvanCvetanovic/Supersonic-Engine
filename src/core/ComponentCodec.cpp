@@ -464,6 +464,23 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* shape = registry.try_get<UIShapeComponent>(entity)) {
+        out << indent << "\"UIShape\": {\n";
+        out << indent << "  \"Kind\": " << static_cast<int>(shape->kind) << ",\n";
+        out << indent << "  \"WorldSpace\": " << (shape->worldSpace ? "true" : "false") << ",\n";
+        out << indent << "  \"Anchor\": " << static_cast<int>(shape->anchor) << ",\n";
+        out << indent << "  \"Offset\": [" << shape->offset.x << ", " << shape->offset.y << "],\n";
+        out << indent << "  \"Radius\": " << shape->radius << ",\n";
+        out << indent << "  \"Endpoint\": [" << shape->endpoint.x << ", " << shape->endpoint.y
+             << ", " << shape->endpoint.z << "],\n";
+        out << indent << "  \"Thickness\": " << shape->thickness << ",\n";
+        out << indent << "  \"Segments\": " << shape->segments << ",\n";
+        out << indent << "  \"Color\": [" << shape->color.x << ", " << shape->color.y << ", "
+             << shape->color.z << ", " << shape->color.w << "],\n";
+        out << indent << "  \"Visible\": " << (shape->visible ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
     if (const auto* stack = registry.try_get<UIStackComponent>(entity)) {
         out << indent << "\"UIStack\": {\n";
         out << indent << "  \"Horizontal\": " << (stack->horizontal ? "true" : "false") << ",\n";
@@ -881,6 +898,28 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         panel.drawTrack = p["DrawTrack"].AsBool(false);
         panel.trackColor = readVec4(p["TrackColor"], panel.trackColor);
         panel.visible = p["Visible"].AsBool(true);
+    }
+
+    if (node.Has("UIShape")) {
+        const auto& sh = node["UIShape"];
+        auto& shape = registry.emplace_or_replace<UIShapeComponent>(entity);
+
+        // Clamped rather than trusted. An out-of-range kind read straight into
+        // the enum is a switch that falls through to nothing, which draws an
+        // empty marker and looks like the entity was never reached.
+        const int kind = static_cast<int>(sh["Kind"].AsFloat(0.0f));
+        shape.kind = (kind >= 0 && kind <= 2) ? static_cast<UIShapeComponent::Kind>(kind)
+                                              : UIShapeComponent::Kind::Ring;
+
+        shape.worldSpace = sh["WorldSpace"].AsBool(true);
+        shape.anchor = readAnchor(sh["Anchor"], shape.anchor);
+        shape.offset = readVec2(sh["Offset"], shape.offset);
+        shape.radius = sh["Radius"].AsFloat(24.0f);
+        shape.endpoint = readVec3(sh["Endpoint"], shape.endpoint);
+        shape.thickness = sh["Thickness"].AsFloat(3.0f);
+        shape.segments = static_cast<int32_t>(sh["Segments"].AsFloat(40.0f));
+        shape.color = readVec4(sh["Color"], shape.color);
+        shape.visible = sh["Visible"].AsBool(true);
     }
 
     if (node.Has("UIStack")) {

@@ -1129,6 +1129,71 @@ struct ParticleEmitterComponent {
 // one it was authored at.
 // ---------------------------------------------------------------------------
 
+// A ring, a disc or a line - the shapes that are drawn rather than composed.
+//
+// Some overlays are not made of rectangles and text. A selection marker is a
+// circle around a unit; an order line runs from the unit to where it was sent.
+// Godot draws those in _draw() with draw_arc and draw_line, and this engine had
+// no way to say either: the 3D pipeline hardcodes triangle topology, so nothing
+// draws a line in the world at all.
+//
+// ImGui's draw list already has AddCircle, AddCircleFilled and AddLine, and
+// AddCircle takes the same arguments Godot's draw_arc does, segment count and
+// all. What was missing was never the shape - it was a way to put one where a
+// point in the WORLD is. So that is what this adds, on the same path the HUD
+// already draws through, which is also why it composites with the HUD instead
+// of fighting it.
+//
+// Sizes are in authored units at the reference height, like fontSize and
+// everything else here, NOT in world units. A marker therefore keeps its
+// proportion of the screen rather than growing as the camera closes in. For a
+// 2D game with a fixed camera zoom - which is the case this exists for - those
+// are the same thing, and where they are not, a marker that stays legible is
+// the more useful of the two.
+struct UIShapeComponent {
+    enum class Kind : uint8_t {
+        Ring,   // draw_arc(centre, r, 0, TAU, segments, colour, width)
+        Disc,   // draw_circle
+        Line,   // draw_line, from this entity to `endpoint`
+    };
+
+    Kind kind{Kind::Ring};
+
+    // Follow a point in the world instead of an edge of the screen, and read
+    // exactly as UITextComponent::worldSpace does - including the cull when the
+    // point is behind the camera, without which a marker behind the viewer
+    // lands mirrored in front of it and reads as a selection nobody made.
+    //
+    // Defaulted ON, unlike text: a screen-space rectangle is already a
+    // UIPanelComponent, so a shape that is not following something in the world
+    // is the unusual one.
+    bool worldSpace{true};
+
+    UIAnchor anchor{UIAnchor::TopLeft};
+    glm::vec2 offset{0.0f, 0.0f};
+
+    // Ring and Disc.
+    float radius{24.0f};
+
+    // Line only: the far end. A world position when worldSpace, and otherwise
+    // an offset in authored units from the start, using x and y - measured the
+    // same way the start is, so the two ends never mean different things.
+    glm::vec3 endpoint{0.0f, 0.0f, 0.0f};
+
+    // Outline width for a Ring or a Line, in authored units, and never allowed
+    // to round down to nothing: a marker that disappears on a small window is
+    // indistinguishable from one that was never drawn.
+    float thickness{3.0f};
+
+    // How many straight edges a circle is made of. Godot's order marker asks
+    // for 40, and ImGui takes the same number in the same place.
+    int32_t segments{40};
+
+    glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
+
+    bool visible{true};
+};
+
 // Lays its CHILDREN out in a row or a column instead of each one placing itself.
 //
 // Every UI element in this engine positions itself from an anchor and an

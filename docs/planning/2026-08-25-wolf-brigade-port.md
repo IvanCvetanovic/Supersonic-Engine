@@ -218,7 +218,7 @@ renders byte-identically to before.
 | 1.4 draw order | ✅ | The spike's quads were staggered 0.01 in z so depth would order them. They are now coplanar with the key alone deciding, and the frame is **0 of 293,695 pixels different** from the staggered version. Disabling the sort changes 5,334. |
 | 1.5 tint above 1.0 | ✅ | Free: `albedoColor` is unclamped on the unlit path, so a value above one blooms. |
 | 1.7 per-object scale | ✅ | **Already existed** — per-entity, in the model matrix, and exposed to scripts. Deleted from the list rather than built. |
-| 1.6 immediate shapes | ~ | Screen space already exists via ImGui; only a world-space line is missing. See above. |
+| 1.6 immediate shapes | ✅ | `UIShapeComponent` — ring, disc, line — drawn through the same ImGui draw list as the HUD, at a **projected world position**. What was missing was never the shape: ImGui's `AddCircle` takes Godot's `draw_arc` arguments verbatim, segment count included. It was the world position. Proved in a running frame: a marker's vertices average to within 2 px of where `ProjectToScreen` says the point is, **with the same component in screen space as the control** — it moves to its anchor, hundreds of pixels away. Behind the camera it draws nothing; dropping that cull puts a mirrored marker in front of the viewer, on a unit that is not there. |
 | 1.8 lane camera | — | Port-side, and the spike already pans. |
 
 **Three things learned that no amount of reading would have given:**
@@ -290,8 +290,8 @@ nothing more.
 | 2.1 stack containers | ✅ | `UICanvas::LayoutStack` plus `UIStackComponent`. One bool for the axis, because `HBoxContainer` and `VBoxContainer` differ by one axis. Spacing goes *between*, not after: three items have two gaps, and a stack that trails one is half a gap off centre and looks like nothing is wrong. |
 | 2.2 centring | ✅ | The stack's own anchor, which is `CenterContainer`: the **block** is centred, not each child on the same point. The test is written against that mistake — anchoring each child independently puts them all on top of one another, which reads as the layout having done nothing. |
 | 2.3 one layout, two readers | ✅ | `UICanvas::StackedRects`, computed once per frame and handed to both the input pass and the draw pass. Each used to call `Place()` for itself, which is safe only while both compute the same answer — and the moment a container decides a position, "compute it twice" becomes "compute it twice from different information". |
-| 2.4 world-space labels | ✅ | `UITextComponent::worldSpace` + `UICanvas::ProjectToScreen`. Projected through the camera that actually drew the frame, not the editor camera, or a label lands somewhere plausible and wrong. |
-| 2.5 world-space bars | ✅ | **Not built as UI.** In an orthographic 2D view an HP bar is a quad: Phase 1's unlit quad primitive, parented to the unit, scaled by HP, ordered by `sortKey`. Building a second world-space path through the UI system would have been a parallel renderer for rectangles. |
+| 2.4 world-space labels | ✅ | `UITextComponent::worldSpace` + `UICanvas::ProjectToScreen`, projected through the camera that actually drew the frame rather than the editor camera. Verified **in a running frame**, not only as a projection function: the glyph vertices straddle the projected point, measured as two edge gaps rather than a mean because glyph shapes move a mean by several pixels and hanging the label off the point instead of centring it moves it by half the string — which are the same size. |
+| 2.5 world-space bars | ~ | **Decided, not demonstrated.** In an orthographic 2D view an HP bar is a quad rather than a UI element: Phase 1's unlit quad, parented to the unit, scaled by HP, ordered by `sortKey`. Every piece of that exists and is tested; nothing has yet driven a bar's width from a health value in a running frame. Building a second world-space path through the UI system for rectangles would have been a parallel renderer, so this stays the plan — but it is a plan, and the row above it is a measurement. |
 | 2.7 aspect handling | ✅ | **Already satisfied.** `orthoHeight` with an aspect-derived width *is* `aspect=expand`, and `kReferenceHeight = 1080.0f` with `ScaleFor()` already gave the HUD resolution-independent authored units. Deleted from the list rather than built. |
 | 2.8 layer/overlay stacking | ✅ | See below — it was two features, not one. |
 | 2.6 pooled damage numbers | — | Port-side, and now expressible: a world-space label, pooled by the game, soft-capped at 64. |
@@ -338,6 +338,14 @@ written expecting the two panels to come out in the order they were created and
 got the reverse. That is not a bug to work around — it is the reason
 `UIOrderComponent` exists rather than the order being read off the scene — but
 it is worth knowing before writing an assertion that depends on it.
+
+**The order marker closed Phase 1.** Item 1.6 was the last one open, and it
+landed here rather than in Phase 1 because it is the same machinery: a shape
+that follows a point in the world is a label that follows a point in the world
+with `AddCircle` instead of `AddText`. Sizes are in authored units at the
+reference height, like `fontSize`, so a marker keeps its share of the screen
+rather than growing as the camera closes in — for a game whose `Camera2D.zoom`
+is read as a divisor and never assigned, those are the same thing.
 
 **Still open for Phase 2:** the scroll container (2.9), and the port-side
 pooling (2.6). The **done when** condition — the pause menu and the HUD

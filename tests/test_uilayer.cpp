@@ -21,6 +21,7 @@
 #include <entt/entt.hpp>
 #include <imgui.h>
 
+#include <cmath>
 #include <string>
 
 using namespace Supersonic;
@@ -222,12 +223,223 @@ void testEveryElementIsStillDrawnExactlyOnce() {
     CHECK_EQ(layered.countOverlay, unlayered.countOverlay);
 }
 
+// --- world space ------------------------------------------------------------
+//
+// A marker over a unit and a name plate over its head are not anchored to a
+// corner of the screen; they are anchored to a place in the world. That the
+// projection is right is UICanvas's business and is tested there. What is
+// tested here is the other half, which no unit test reaches: that a running
+// frame actually PUTS the thing at the projected point rather than at the
+// anchor it is no longer using.
+
+constexpr ImU32 kMarker = IM_COL32(255, 0, 255, 255);
+
+// A camera looking down -Z from five units back, so the origin projects to the
+// centre of the screen and everything below can be worked out by hand.
+Supersonic::CameraComponent lookingAtTheOrigin() {
+    Supersonic::CameraComponent cam;
+    cam.aspect = 1920.0f / 1080.0f;
+    cam.nearPlane = 0.1f;
+    cam.farPlane = 100.0f;
+    cam.position = glm::vec3(0.0f, 0.0f, 5.0f);
+    cam.yaw = -90.0f;
+    cam.pitch = 0.0f;
+    cam.updateCameraVectors();
+    return cam;
+}
+
+// The centre of everything drawn in one colour, and how many vertices it took.
+struct Blob {
+    glm::vec2 centre{0.0f};
+    // The extent as well, because "is it centred on the point" is a question
+    // about the two edges and cannot be answered by a mean: glyph shapes pull
+    // the mean around by several pixels, and a label hung off the point rather
+    // than centred on it moves it by half the string. Those are the same size.
+    glm::vec2 min{0.0f};
+    glm::vec2 max{0.0f};
+    int vertices{0};
+};
+
+Blob blobOf(entt::registry& registry, const glm::mat4& viewProj, ImU32 wanted) {
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(1920.0f, 1080.0f));
+    ImGui::Begin("game", nullptr, ImGuiWindowFlags_NoDecoration);
+
+    UICanvas::UIPointer pointer;
+    pointer.position = glm::vec2(-4000.0f, -4000.0f);
+    UICanvas::UIKeyboard keyboard;
+    UISystem::Render(registry, UIRect{glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f)},
+                     pointer, keyboard, viewProj);
+
+    ImGui::End();
+    ImGui::Render();
+
+    Blob blob;
+    glm::vec2 sum(0.0f);
+    const ImDrawData* data = ImGui::GetDrawData();
+    for (int list = 0; data != nullptr && list < data->CmdListsCount; ++list) {
+        const ImDrawList* commands = data->CmdLists[list];
+        for (int v = 0; v < commands->VtxBuffer.Size; ++v) {
+            if (commands->VtxBuffer[v].col != wanted) continue;
+            const glm::vec2 at(commands->VtxBuffer[v].pos.x, commands->VtxBuffer[v].pos.y);
+            if (blob.vertices == 0) {
+                blob.min = at;
+                blob.max = at;
+            } else {
+                blob.min = glm::min(blob.min, at);
+                blob.max = glm::max(blob.max, at);
+            }
+            sum += at;
+            ++blob.vertices;
+        }
+    }
+    if (blob.vertices > 0) blob.centre = sum / static_cast<float>(blob.vertices);
+    return blob;
+}
+
+entt::entity addDiscAt(entt::registry& registry, const glm::vec3& world) {
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = world;
+    auto& shape = registry.emplace<UIShapeComponent>(entity);
+    shape.kind = UIShapeComponent::Kind::Disc;
+    shape.radius = 30.0f;
+    shape.color = toVec4(kMarker);
+    return entity;
+}
+
+void testAWorldSpaceMarkerIsDrawnWhereTheCameraPutsIt() {
+    HeadlessImGui imgui;
+    entt::registry registry;
+    const Supersonic::CameraComponent cam = lookingAtTheOrigin();
+    const glm::mat4 viewProj = cam.getProjectionMatrix() * cam.getViewMatrix();
+
+    // A point up and to the right of the origin, so "the centre of the screen"
+    // is not the answer by accident.
+    const glm::vec3 world(1.5f, 0.75f, 0.0f);
+    addDiscAt(registry, world);
+
+    glm::vec3 expected(0.0f);
+    CHECK_MSG(UICanvas::ProjectToScreen(viewProj, world,
+                                        UIRect{glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f)},
+                                        expected),
+              "the fixture point must be in front of the camera");
+
+    const Blob blob = blobOf(registry, viewProj, kMarker);
+    CHECK_MSG(blob.vertices > 0, "the marker must be drawn at all");
+    if (blob.vertices == 0) return;
+
+    // A filled circle's vertices average to its centre. Loose by a pixel,
+    // because ImGui's fan has a centre vertex that pulls the mean very
+    // slightly - the question is whether it is at the projected point or at a
+    // screen corner, and those are hundreds of pixels apart.
+    CHECK_MSG(std::fabs(blob.centre.x - expected.x) < 2.0f,
+              "the marker must sit where the point projects in x");
+    CHECK_MSG(std::fabs(blob.centre.y - expected.y) < 2.0f,
+              "and in y");
+    CHECK_MSG(expected.x > 1000.0f && expected.y < 540.0f,
+              "and the fixture must be off-centre, or this proves nothing");
+}
+
+void testTheSameMarkerInScreenSpaceIgnoresTheCameraEntirely() {
+    // The control. Same component, same colour, same radius - only worldSpace
+    // is different, and the answer must move to the anchor.
+    HeadlessImGui imgui;
+    entt::registry registry;
+    const Supersonic::CameraComponent cam = lookingAtTheOrigin();
+    const glm::mat4 viewProj = cam.getProjectionMatrix() * cam.getViewMatrix();
+
+    const auto entity = addDiscAt(registry, glm::vec3(1.5f, 0.75f, 0.0f));
+    auto& shape = registry.get<UIShapeComponent>(entity);
+    shape.worldSpace = false;
+    shape.anchor = UIAnchor::TopLeft;
+    shape.offset = glm::vec2(100.0f, 60.0f);
+
+    const Blob blob = blobOf(registry, viewProj, kMarker);
+    CHECK_MSG(blob.vertices > 0, "a screen-space marker must still be drawn");
+    if (blob.vertices == 0) return;
+
+    CHECK_MSG(std::fabs(blob.centre.x - 100.0f) < 2.0f, "it must sit at its anchor in x");
+    CHECK_MSG(std::fabs(blob.centre.y - 60.0f) < 2.0f, "and in y");
+}
+
+void testAMarkerBehindTheCameraIsNotDrawnAtAll() {
+    // Without the cull it projects to a MIRRORED position in front of the
+    // viewer, which reads as a selection nobody made, on a unit that is not
+    // there. Absent is the right answer, not "somewhere harmless".
+    HeadlessImGui imgui;
+    entt::registry registry;
+    const Supersonic::CameraComponent cam = lookingAtTheOrigin();
+    const glm::mat4 viewProj = cam.getProjectionMatrix() * cam.getViewMatrix();
+
+    addDiscAt(registry, glm::vec3(1.5f, 0.75f, 20.0f)); // behind the eye at z=5
+
+    const Blob blob = blobOf(registry, viewProj, kMarker);
+    CHECK_EQ(blob.vertices, 0);
+}
+
+void testAWorldSpaceLabelIsDrawnWhereTheCameraPutsIt() {
+    // 2.4 of the port plan, in a running frame rather than as a projection
+    // function with tests. A name plate is centred on the point rather than
+    // hung off it, so its glyph vertices straddle the projected x.
+    HeadlessImGui imgui;
+    entt::registry registry;
+    const Supersonic::CameraComponent cam = lookingAtTheOrigin();
+    const glm::mat4 viewProj = cam.getProjectionMatrix() * cam.getViewMatrix();
+
+    const glm::vec3 world(-1.5f, 0.5f, 0.0f);
+    const auto entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = world;
+    auto& text = registry.emplace<UITextComponent>(entity);
+    text.text = "Wolf";
+    text.worldSpace = true;
+    // Zeroed, and it does not default to zero: UITextComponent::offset is
+    // {24,24} for a screen-anchored label, and 24 pixels is a third of this
+    // string. A name plate would set it deliberately to sit above a head.
+    text.offset = glm::vec2(0.0f, 0.0f);
+    text.shadow = false;  // one colour, so the blob is only the glyphs
+    text.color = toVec4(kMarker);
+
+    glm::vec3 expected(0.0f);
+    CHECK(UICanvas::ProjectToScreen(viewProj, world,
+                                    UIRect{glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f)},
+                                    expected));
+
+    const Blob blob = blobOf(registry, viewProj, kMarker);
+    CHECK_MSG(blob.vertices > 0, "the label must actually reach the draw list");
+    if (blob.vertices == 0) return;
+
+    // The two edges, not the mean. A label hung off the point instead of
+    // centred on it puts the point ON its left edge, so the left gap collapses
+    // to nothing while the right one grows to the whole string - and a mean
+    // moves by exactly as much as glyph shapes move it anyway.
+    const float leftGap = expected.x - blob.min.x;
+    const float rightGap = blob.max.x - expected.x;
+    const float width = blob.max.x - blob.min.x;
+    CHECK_MSG(width > 20.0f, "the label must have some width to be centred at all");
+    CHECK_MSG(std::fabs(leftGap - rightGap) < width * 0.25f,
+              "the projected point must fall in the middle of the label, not at its edge");
+
+    const float topGap = expected.y - blob.min.y;
+    const float bottomGap = blob.max.y - expected.y;
+    const float height = blob.max.y - blob.min.y;
+    CHECK_MSG(std::fabs(topGap - bottomGap) < height * 0.6f,
+              "and near the middle vertically - glyphs sit high in their line box");
+
+    CHECK_MSG(expected.x < 800.0f, "and the fixture must be left of centre");
+}
+
 } // namespace
 
 static void runTests() {
     testAnUnlayeredHudDrawsPanelsThenButtons();
     testALayeredOverlayDrawsOverEverythingBelowIt();
     testEveryElementIsStillDrawnExactlyOnce();
+
+    testAWorldSpaceMarkerIsDrawnWhereTheCameraPutsIt();
+    testTheSameMarkerInScreenSpaceIgnoresTheCameraEntirely();
+    testAMarkerBehindTheCameraIsNotDrawnAtAll();
+    testAWorldSpaceLabelIsDrawnWhereTheCameraPutsIt();
 }
 
-TEST_MAIN("test_uilayer", 8)
+TEST_MAIN("test_uilayer", 21)

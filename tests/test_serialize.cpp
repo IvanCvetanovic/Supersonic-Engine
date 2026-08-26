@@ -1466,6 +1466,89 @@ static void testAStackAndItsRankingSurviveARoundTrip() {
     if (zero != nullptr) CHECK_EQ(zero->order, 0);
 }
 
+static void testAShapeSurvivesARoundTripIncludingItsKind() {
+    // The kind is an enum written as an integer, which is the field most worth
+    // a test: a ring that comes back as a disc is a solid blob where an outline
+    // was, and nothing about the file says anything went wrong.
+    const std::string path = "test_uishape_tmp.scene";
+
+    {
+        entt::registry registry;
+        const auto entity = registry.create();
+        registry.emplace<TagComponent>(entity, "OrderMarker");
+        registry.emplace<TransformComponent>(entity);
+        auto& shape = registry.emplace<UIShapeComponent>(entity);
+        shape.kind = UIShapeComponent::Kind::Line;
+        shape.worldSpace = false;
+        shape.anchor = UIAnchor::BottomLeft;
+        shape.offset = glm::vec2(11.0f, -7.0f);
+        shape.radius = 55.5f;
+        shape.endpoint = glm::vec3(3.0f, -4.0f, 5.0f);
+        shape.thickness = 2.5f;
+        shape.segments = 64;
+        shape.color = glm::vec4(0.25f, 0.5f, 0.75f, 0.5f);
+        shape.visible = false;
+
+        CHECK_MSG(SceneSerializer::Serialize(registry, path).ok, "the scene must save");
+    }
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    std::remove(path.c_str());
+    CHECK_MSG(result.ok, "the scene must load: " + result.message);
+
+    entt::entity marker = entt::null;
+    for (auto [entity, tag] : loaded.view<TagComponent>().each()) {
+        if (tag.tag == "OrderMarker") marker = entity;
+    }
+    CHECK_MSG(marker != entt::null, "the marker must survive");
+    if (marker == entt::null) return;
+
+    const auto* shape = loaded.try_get<UIShapeComponent>(marker);
+    CHECK_MSG(shape != nullptr, "the scene lost its UIShapeComponent");
+    if (shape == nullptr) return;
+
+    CHECK(shape->kind == UIShapeComponent::Kind::Line);
+    CHECK_MSG(!shape->worldSpace, "a screen-space shape must load screen-space");
+    CHECK(shape->anchor == UIAnchor::BottomLeft);
+    CHECK_NEAR(shape->offset.x, 11.0f);
+    CHECK_NEAR(shape->offset.y, -7.0f);
+    CHECK_NEAR(shape->radius, 55.5f);
+    CHECK_NEAR(shape->endpoint.x, 3.0f);
+    CHECK_NEAR(shape->endpoint.z, 5.0f);
+    CHECK_NEAR(shape->thickness, 2.5f);
+    CHECK_EQ(shape->segments, 64);
+    CHECK_NEAR(shape->color.w, 0.5f);
+    CHECK_MSG(!shape->visible, "a hidden shape must load hidden");
+}
+
+static void testAShapeWithAKindFromTheFutureLoadsAsARing() {
+    // A number nobody has a case for switches to nothing and draws an empty
+    // marker, which looks exactly like the entity never being reached. Reading
+    // it as a ring is wrong in a way somebody can see.
+    const std::string path = "test_uishape_future_tmp.scene";
+    {
+        std::ofstream out(path);
+        out << R"({ "Version": 2, "Entities": [
+            { "Tag": "Marker", "UIShape": { "Kind": 97 } }
+        ] })";
+    }
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    std::remove(path.c_str());
+    CHECK_MSG(result.ok, "the scene must still load: " + result.message);
+
+    entt::entity marker = entt::null;
+    for (auto [entity, shape] : loaded.view<UIShapeComponent>().each()) {
+        (void)shape;
+        marker = entity;
+    }
+    CHECK_MSG(marker != entt::null, "the shape must still be created");
+    if (marker == entt::null) return;
+    CHECK(loaded.get<UIShapeComponent>(marker).kind == UIShapeComponent::Kind::Ring);
+}
+
 static void runTests() {
     testInstantiatingAPrefabTwiceParsesItOnce();
     testSavingAPrefabInvalidatesWhatWasParsedFromIt();
@@ -1476,6 +1559,8 @@ static void runTests() {
     testASceneWithNoLookGetsTheDefaultOne();
     testWorldPhysicsSurvivesARoundTrip();
     testAStackAndItsRankingSurviveARoundTrip();
+    testAShapeSurvivesARoundTripIncludingItsKind();
+    testAShapeWithAKindFromTheFutureLoadsAsARing();
     testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
     testUnversionedScenesStillLoad();
     testAFutureSceneIsRefusedAndChangesNothing();
@@ -1499,4 +1584,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 318)
+TEST_MAIN("test_serialize", 334)
