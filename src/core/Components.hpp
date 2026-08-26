@@ -534,6 +534,27 @@ struct RenderableComponent {
     // is what everything gets when there are no probes - so a scene without
     // them behaves exactly as it did.
     int32_t probeSlot{0};
+
+    // Draw order among surfaces the depth buffer cannot separate.
+    //
+    // The renderer submits opaque geometry in whatever order the registry hands
+    // it over and lets depth decide the rest, which is correct for solids and
+    // decides NOTHING for coplanar quads - a 2D game is made of those, and
+    // Godot orders them by child index. This is that index.
+    //
+    // Ascending: a higher key is submitted later, and the depth compare is
+    // lessOrEqual, so at EQUAL depth the later fragment replaces the earlier
+    // one and the higher key ends up on top.
+    //
+    // The limit, stated rather than discovered: it decides TIES. It cannot pull
+    // a surface in front of geometry that is genuinely nearer, because the
+    // depth test still runs. For flat quads sharing a plane that is the whole
+    // problem; for anything else it is not a layering system.
+    //
+    // Zero is "no opinion", which is what every scene on disk holds - and when
+    // every key is zero the sort is skipped entirely rather than performed and
+    // found to be a no-op.
+    int32_t sortKey{0};
 };
 
 struct TagComponent {

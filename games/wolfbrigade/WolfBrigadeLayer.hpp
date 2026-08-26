@@ -72,8 +72,12 @@ private:
         float health{1.0f};
     };
 
+    // `layer` is the draw order, exactly as unit.tscn's child order is: higher
+    // is drawn on top. Every quad sits on the SAME plane, so the key is the
+    // only thing separating them.
     entt::entity makeQuad(entt::registry& registry, const char* tag, const glm::vec3& position,
-                          const glm::vec3& size, const glm::vec3& colour, bool unlit = true);
+                          const glm::vec3& size, const glm::vec3& colour, int32_t layer,
+                          bool unlit = true);
 
     std::vector<Unit> m_units;
     int m_requested{0};

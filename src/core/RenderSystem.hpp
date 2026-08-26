@@ -79,6 +79,46 @@ public:
     //
     // So it is gathered once and the passes read it. That is the difference
     // between eighteen registry traversals per frame and one.
+    // One opaque draw, gathered before any of them is recorded.
+    //
+    // The opaque pass used to record each draw the instant it found it, so its
+    // order WAS the registry's and there was no moment at which an order could
+    // be chosen. Gathering first is what makes sortKey possible; the transparent
+    // pass has always worked this way, because a back-to-front sort needs the
+    // same thing.
+    struct OpaqueDraw {
+        glm::mat4 matrix{1.0f};
+
+        // BY VALUE, for the reason spelled out on ShadowCaster below: Get
+        // returns a pointer INTO a vector that Upload push_backs onto, so one
+        // upload mid-frame would dangle every pointer gathered before it.
+        vk::Buffer vertexBuffer{};
+        vk::Buffer indexBuffer{};
+
+        entt::entity entity{entt::null};
+        uint32_t indexCount{0};
+        uint32_t meshID{0};
+        uint32_t albedoTextureID{0};
+        uint32_t normalTextureID{0};
+        uint32_t ormTextureID{0};
+        int32_t sortKey{0};
+    };
+
+    // Orders a gathered opaque list by sortKey, ascending and STABLY.
+    //
+    // Returns whether it reordered anything. False means every key was equal,
+    // the list was left untouched, and the caller records exactly the sequence
+    // it gathered - which is what makes a scene that sets no key render as it
+    // always did, rather than as whatever std::sort felt like.
+    //
+    // Stable, so equal keys keep gather order. That order is the registry's and
+    // is not a contract, but it is TODAY's, and preserving it is the difference
+    // between "no scene changed" and "no scene changed much".
+    //
+    // Static and pure so a test can reach it with no device, no registry and no
+    // mesh registry - the same reason ShadowAlphaFor is exposed.
+    static bool SortOpaqueDraws(std::vector<OpaqueDraw>& draws);
+
     struct ShadowCaster {
         glm::mat4 model{1.0f};
 

@@ -520,7 +520,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
 
     if (const auto* renderable = registry.try_get<RenderableComponent>(entity)) {
         out << indent << "\"Renderable\": { \"Visible\": " << (renderable->isVisible ? "true" : "false")
-             << ", \"CastsShadow\": " << (renderable->castsShadow ? "true" : "false") << " },\n";
+             << ", \"CastsShadow\": " << (renderable->castsShadow ? "true" : "false")
+             << ", \"SortKey\": " << renderable->sortKey << " },\n";
     }
 
     // A game's own components, under one member of their own. Written before
@@ -911,6 +912,10 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         if (node.Has("Renderable")) {
             renderable.isVisible = node["Renderable"]["Visible"].AsBool(true);
             renderable.castsShadow = node["Renderable"]["CastsShadow"].AsBool(true);
+            // Zero is "no opinion", which is what every scene written before
+            // draw order existed holds - and what makes the sort a no-op for them.
+            renderable.sortKey = static_cast<int32_t>(
+                node["Renderable"]["SortKey"].AsFloat(0.0f));
         }
     }
 }

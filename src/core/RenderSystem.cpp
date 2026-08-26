@@ -465,6 +465,30 @@ bool RenderSystem::ComputeSceneBounds(entt::registry& registry, MeshRegistry& me
     return any;
 }
 
+bool RenderSystem::SortOpaqueDraws(std::vector<OpaqueDraw>& draws) {
+    // The early out is the feature, not an optimisation.
+    //
+    // Every scene on disk holds no opinion about draw order, and for those the
+    // list must be recorded in exactly the sequence the registry produced it -
+    // not in whatever sequence a stable sort of all-equal keys happens to
+    // produce, which would be the same today and is not a promise the standard
+    // makes about a list this code did not build.
+    bool anyKey = false;
+    for (const OpaqueDraw& draw : draws) {
+        if (draw.sortKey != 0) {
+            anyKey = true;
+            break;
+        }
+    }
+    if (!anyKey) return false;
+
+    std::stable_sort(draws.begin(), draws.end(),
+                     [](const OpaqueDraw& left, const OpaqueDraw& right) {
+                         return left.sortKey < right.sortKey;
+                     });
+    return true;
+}
+
 void RenderSystem::Render(
     entt::registry& registry,
     VulkanPipeline& pipeline,
@@ -507,6 +531,8 @@ void RenderSystem::Render(
     uint32_t boundMesh = MeshRegistry::kInvalidMesh;
     vk::DescriptorSet boundMaterialSet{};
 
+    std::vector<OpaqueDraw> opaque;
+
     auto view = registry.view<WorldTransformComponent, RenderableComponent>();
     for (auto entity : view) {
         const auto& world = view.get<WorldTransformComponent>(entity);
@@ -540,20 +566,47 @@ void RenderSystem::Render(
             continue;
         }
 
-        if (renderable.meshID != boundMesh) {
-            const vk::Buffer buffers[] = { mesh->vertexBuffer->GetBuffer() };
+        // Gathered, not recorded. An order cannot be chosen for draws that
+        // have already been submitted.
+        opaque.push_back(OpaqueDraw{
+            world.matrix,
+            mesh->vertexBuffer->GetBuffer(),
+            mesh->indexBuffer->GetBuffer(),
+            entity,
+            mesh->indexCount,
+            renderable.meshID,
+            renderable.albedoTextureID,
+            renderable.normalTextureID,
+            renderable.ormTextureID,
+            renderable.sortKey});
+    }
+
+    // Only when somebody has an opinion. With every key equal this returns
+    // false having touched nothing, and the loop below records exactly the
+    // sequence the view produced - which is what it recorded before this
+    // existed.
+    SortOpaqueDraws(opaque);
+
+    for (const OpaqueDraw& draw : opaque) {
+        if (draw.meshID != boundMesh) {
+            const vk::Buffer buffers[] = { draw.vertexBuffer };
             const vk::DeviceSize offsets[] = { 0 };
             commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
-            commandBuffer.bindIndexBuffer(mesh->indexBuffer->GetBuffer(), 0, vk::IndexType::eUint32);
-            boundMesh = renderable.meshID;
+            commandBuffer.bindIndexBuffer(draw.indexBuffer, 0, vk::IndexType::eUint32);
+            boundMesh = draw.meshID;
         }
 
         // One set per combination of maps, cached, so entities sharing a
         // material do not rebind.
+        //
+        // Note the interaction with sorting: run-length grouping by mesh and
+        // material survives only while equal keys keep their gather order, which
+        // is why the sort is stable. A key per entity would destroy it, exactly
+        // as distance ordering destroyed it for the transparent pass.
         if (vk::DescriptorSet materialSet =
-                textures.AcquireMaterialSet(renderable.albedoTextureID,
-                                            renderable.normalTextureID,
-                                            renderable.ormTextureID);
+                textures.AcquireMaterialSet(draw.albedoTextureID,
+                                            draw.normalTextureID,
+                                            draw.ormTextureID);
             materialSet && materialSet != boundMaterialSet) {
             commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
                                              VulkanPipeline::kMaterialSet, 1, &materialSet, 0, nullptr);
@@ -561,13 +614,13 @@ void RenderSystem::Render(
         }
 
         // World matrix, so a child follows its parent.
-        const PushConstantData push = buildPushConstants(registry, entity, world.matrix);
+        const PushConstantData push = buildPushConstants(registry, draw.entity, draw.matrix);
         commandBuffer.pushConstants(
             pipeline.GetLayout(),
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
             0, sizeof(PushConstantData), &push);
 
-        commandBuffer.drawIndexed(mesh->indexCount, 1, 0, 0, 0);
+        commandBuffer.drawIndexed(draw.indexCount, 1, 0, 0, 0);
     }
 
     // ---- Sky -------------------------------------------------------------

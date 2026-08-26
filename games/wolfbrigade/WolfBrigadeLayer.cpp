@@ -33,12 +33,18 @@ constexpr float kBarHeight = 0.06f;
 // measured.
 constexpr float kQuadDepth = 0.02f;
 
-// Each layer of a unit is nudged toward the camera so the depth buffer orders
-// them. That is the shortcut this spike exists to expose rather than to solve:
-// Godot orders by child index and the engine has no ordering at all for
-// coplanar quads, so ring-behind-body only works here because they are NOT
-// coplanar. Item 1.4 is the real fix.
-constexpr float kLayerStep = 0.01f;
+// Everything is on ONE plane now.
+//
+// Phase 0 nudged each layer 0.01 toward the camera so the depth buffer would
+// order them, and said in this comment that it was a shortcut. Item 1.4 removed
+// the need for it: RenderableComponent::sortKey orders coplanar surfaces the
+// way Godot's child index does, so the z-stagger is gone and the ordering is
+// authored rather than smuggled in through geometry.
+//
+// This matters beyond tidiness. The stagger meant a "flat" 2D scene was
+// secretly 3D, so anything that measured depth - picking, culling, a future
+// shadow - saw a lane that was several centimetres thick.
+constexpr float kQuadPlane = 0.0f;
 
 glm::vec3 unitColour(int index) {
     // raider red, soldier blue, worker amber - close enough to units.json to
@@ -54,7 +60,7 @@ glm::vec3 unitColour(int index) {
 
 entt::entity WolfBrigadeLayer::makeQuad(entt::registry& registry, const char* tag,
                                         const glm::vec3& position, const glm::vec3& size,
-                                        const glm::vec3& colour, bool unlit) {
+                                        const glm::vec3& colour, int32_t layer, bool unlit) {
     const auto entity = registry.create();
     registry.emplace<TagComponent>(entity, tag);
 
@@ -77,7 +83,8 @@ entt::entity WolfBrigadeLayer::makeQuad(entt::registry& registry, const char* ta
     // shadows and fog rather than merely surviving them.
     material.unlit = unlit;
 
-    registry.emplace<RenderableComponent>(entity);
+    auto& renderable = registry.emplace<RenderableComponent>(entity);
+    renderable.sortKey = layer;
     return entity;
 }
 
@@ -129,9 +136,9 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     // It is the control. If the sun changes and the ground does not, the test
     // below is measuring nothing - so the one surface that must react is kept
     // reacting on purpose.
-    makeQuad(registry, "Ground", glm::vec3(0.0f, kGroundY - 1.4f, -kLayerStep),
+    makeQuad(registry, "Ground", glm::vec3(0.0f, kGroundY - 1.4f, kQuadPlane),
              glm::vec3(kLaneLength, 2.8f, kQuadDepth), glm::vec3(0.13f, 0.15f, 0.19f),
-             /*unlit=*/false);
+             /*layer=*/-1, /*unlit=*/false);
 
     // Units along the lane, five drawables each, to the requested count.
     const int unitCount = m_requested / 5;
@@ -154,25 +161,26 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
 
         // Ordered back to front exactly as unit.tscn documents its children:
         // SelectionRing -> Body -> HPBar/Bg -> HPBar/Fill -> Label.
-        unit.ring = makeQuad(registry, "SelectionRing", glm::vec3(x, mid, 0.0f),
+        unit.ring = makeQuad(registry, "SelectionRing", glm::vec3(x, mid, kQuadPlane),
                              glm::vec3(kBodyWidth * 1.35f, kBodyHeight * 1.15f, kQuadDepth),
-                             glm::vec3(0.95f, 0.85f, 0.35f));
-        unit.body = makeQuad(registry, "Body", glm::vec3(x, mid, kLayerStep),
-                             glm::vec3(kBodyWidth, kBodyHeight, kQuadDepth), colour);
+                             glm::vec3(0.95f, 0.85f, 0.35f), /*layer=*/0);
+        unit.body = makeQuad(registry, "Body", glm::vec3(x, mid, kQuadPlane),
+                             glm::vec3(kBodyWidth, kBodyHeight, kQuadDepth), colour,
+                             /*layer=*/1);
         unit.barBg = makeQuad(registry, "HPBar/Bg",
-                              glm::vec3(x, feet + kBodyHeight + 0.10f, kLayerStep * 2.0f),
+                              glm::vec3(x, feet + kBodyHeight + 0.10f, kQuadPlane),
                               glm::vec3(kBarWidth, kBarHeight, kQuadDepth),
-                              glm::vec3(0.10f, 0.10f, 0.12f));
+                              glm::vec3(0.10f, 0.10f, 0.12f), /*layer=*/2);
         unit.barFill = makeQuad(registry, "HPBar/Fill",
-                                glm::vec3(x, feet + kBodyHeight + 0.10f, kLayerStep * 3.0f),
+                                glm::vec3(x, feet + kBodyHeight + 0.10f, kQuadPlane),
                                 glm::vec3(kBarWidth * unit.health, kBarHeight, kQuadDepth),
-                                glm::vec3(0.35f, 0.80f, 0.35f));
+                                glm::vec3(0.35f, 0.80f, 0.35f), /*layer=*/3);
         // Stands in for the Label. Phase 2 makes it text; this is here so the
         // drawable count is honest.
         unit.label = makeQuad(registry, "Label",
-                              glm::vec3(x, feet + kBodyHeight + 0.20f, kLayerStep * 4.0f),
+                              glm::vec3(x, feet + kBodyHeight + 0.20f, kQuadPlane),
                               glm::vec3(kBarWidth * 0.7f, kBarHeight * 1.2f, kQuadDepth),
-                              glm::vec3(0.75f, 0.75f, 0.80f));
+                              glm::vec3(0.75f, 0.75f, 0.80f), /*layer=*/4);
 
         m_units.push_back(unit);
     }
