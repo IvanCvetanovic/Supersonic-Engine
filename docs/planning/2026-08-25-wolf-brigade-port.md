@@ -417,6 +417,15 @@ re-derive them written beside them.
 |---|---|---|
 | gesture machine | `verify_touch` A | Every case that harness asserts, at its own coordinates. Five mutations caught, including both comparison operators — the GDScript uses `>` on distance and `>=` on time. |
 | data + validator | `verify_data` | The ten key counts the original prints (`world -> 11 keys`, `units -> 5`, …), 0 cross-reference issues, and **nine deliberate typos** — one per check — each caught. Six mutations caught. |
+| economy state | `verify_economy` 1, 2c, 3 | Extraction clamps (200 → 170 → 0), spending is atomic, and `resources_changed` carries the new TOTAL. Difficulty scales the opening balance to the numbers the presets imply — 450 on Easy, 240 on Hard — and owned meta lands flat on top of it, not through it. Six mutations, all caught. Sections 2 and 2b, the worker gather/deliver loop, wait for `unit.gd`. |
+
+**A fixture that could not fail, caught by its own mutation.** `ScaleWaveCount`
+guards with `max(1, ...)` so Easy never rounds a wave's single brute away — and
+at shipped values that guard is unreachable, because 0.7 of one rounds to one
+anyway. The first version of the case asserted it at Easy, and removing the
+guard changed nothing. It now runs against an authored preset at 0.2, where the
+floor is the only thing standing between a scripted wave and losing its
+centrepiece.
 
 **Two things the data slice cost that reading would not have found.**
 

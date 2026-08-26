@@ -17,7 +17,9 @@
 add_library(WolfBrigadeSim STATIC
     DataValidator.cpp
     GameData.cpp
+    GameState.cpp
     GestureMachine.cpp
+    ResourceNode.cpp
 )
 
 # Where the ported data lives, as a compile definition rather than a path the
