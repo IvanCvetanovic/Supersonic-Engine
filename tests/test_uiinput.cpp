@@ -395,6 +395,136 @@ static void testFocusPutsTheCaretAtTheEnd() {
               registry.get<UITextFieldComponent>(field).text);
 }
 
+// --- overlap ----------------------------------------------------------------
+//
+// Every case above has elements that do not touch, so each one could answer
+// "am I under the pointer" for itself and be right. Once a pause menu can be
+// drawn over a HUD, overlap is the ordinary case rather than an authoring
+// mistake, and the question changes to "am I THE one under the pointer" -
+// which no element can answer alone.
+
+// A panel of a known size at a known place, on a given layer.
+static entt::entity addPanel(entt::registry& registry, UIAnchor anchor,
+                             const glm::vec2& offset, const glm::vec2& size, int32_t layer) {
+    const auto entity = registry.create();
+    auto& panel = registry.emplace<UIPanelComponent>(entity);
+    panel.anchor = anchor;
+    panel.offset = offset;
+    panel.size = size;
+    if (layer != 0) registry.emplace<UIOrderComponent>(entity).order = layer;
+    return entity;
+}
+
+static void testTwoOverlappingButtonsDoNotBothFire() {
+    // Both used to. They highlighted together and one click ran two actions,
+    // which in a menu is "Resume" and "Quit to desktop" on the same press.
+    entt::registry registry;
+    const auto lower = addButton(registry, "Lower", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const auto upper = addButton(registry, "Upper", UIAnchor::TopLeft, glm::vec2(60.0f, 50.0f));
+
+    clickAt(registry, glm::vec2(140.0f, 70.0f)); // inside both
+
+    const bool lowerFired = registry.get<UIButtonComponent>(lower).clicked;
+    const bool upperFired = registry.get<UIButtonComponent>(upper).clicked;
+    CHECK_MSG(!(lowerFired && upperFired), "one click must not fire two buttons");
+    CHECK_MSG(lowerFired || upperFired, "and it must still fire one of them");
+}
+
+static void testAButtonOnAHigherLayerTakesTheClick() {
+    entt::registry registry;
+    const auto hud = addButton(registry, "Fire", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const auto menu = addButton(registry, "Resume", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    registry.emplace<UIOrderComponent>(menu).order = 9;
+
+    clickAt(registry, glm::vec2(140.0f, 70.0f));
+
+    CHECK_MSG(registry.get<UIButtonComponent>(menu).clicked,
+              "the layer 9 button is the one on screen and must take the click");
+    CHECK_MSG(!registry.get<UIButtonComponent>(hud).clicked,
+              "the layer 0 button underneath must not also fire");
+}
+
+static void testAnOverlayPanelSwallowsClicksMeantForTheGameBehindIt() {
+    // What makes a pause menu modal, with no flag saying so. A panel is drawn
+    // under every button on its own layer, so it can only ever block one on a
+    // LOWER layer - which is the backdrop of a menu, and nothing else.
+    entt::registry registry;
+    const auto hud = addButton(registry, "Fire", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    addPanel(registry, UIAnchor::TopLeft, glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f), 9);
+
+    clickAt(registry, glm::vec2(140.0f, 70.0f));
+
+    CHECK_MSG(!registry.get<UIButtonComponent>(hud).clicked,
+              "a button under a higher overlay must not be clickable");
+    CHECK_MSG(!registry.get<UIButtonComponent>(hud).hovered,
+              "and must not highlight either, or it reads as pressable");
+}
+
+static void testAPanelDoesNotBlockAButtonOnItsOwnLayer() {
+    // The other half of the same rule, and the one that would break every HUD
+    // built so far: a button sitting on its own backdrop is the normal way to
+    // draw one, and the backdrop is drawn first precisely so the button is on
+    // top of it.
+    entt::registry registry;
+    addPanel(registry, UIAnchor::TopLeft, glm::vec2(0.0f, 0.0f), glm::vec2(600.0f, 400.0f), 0);
+    const auto button = addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+
+    clickAt(registry, glm::vec2(140.0f, 70.0f));
+
+    CHECK_MSG(registry.get<UIButtonComponent>(button).clicked,
+              "a button drawn on top of a panel on the same layer must still work");
+}
+
+static void testADisabledButtonStillCoversWhatIsBeneathIt() {
+    // Disabled is drawn; hidden is not. A greyed-out item that let clicks
+    // through would fire whatever happened to be behind it, which is worse
+    // than doing nothing and looks identical until it happens.
+    entt::registry registry;
+    const auto behind = addButton(registry, "Behind", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const auto greyed = addButton(registry, "Greyed", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    registry.get<UIButtonComponent>(greyed).enabled = false;
+    registry.emplace<UIOrderComponent>(greyed).order = 9;
+
+    clickAt(registry, glm::vec2(140.0f, 70.0f));
+
+    CHECK_MSG(!registry.get<UIButtonComponent>(greyed).clicked, "a disabled button takes nothing");
+    CHECK_MSG(!registry.get<UIButtonComponent>(behind).clicked,
+              "and passes nothing on to what it covers");
+}
+
+static void testAHiddenOverlayStopsBlocking() {
+    // Hiding is how a menu closes. If its backdrop kept swallowing clicks the
+    // game would be unplayable after one pause, with nothing on screen to show
+    // why - the exact failure the visible check on buttons already prevents.
+    entt::registry registry;
+    const auto hud = addButton(registry, "Fire", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const auto cover = addPanel(registry, UIAnchor::TopLeft, glm::vec2(0.0f, 0.0f),
+                                glm::vec2(1920.0f, 1080.0f), 9);
+    registry.get<UIPanelComponent>(cover).visible = false;
+
+    clickAt(registry, glm::vec2(140.0f, 70.0f));
+
+    CHECK_MSG(registry.get<UIButtonComponent>(hud).clicked,
+              "closing the menu must give the game its clicks back");
+}
+
+static void testAFieldUnderAnOverlayCannotBeFocused() {
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& field = registry.emplace<UITextFieldComponent>(entity);
+    field.anchor = UIAnchor::TopLeft;
+    field.offset = glm::vec2(40.0f, 40.0f);
+    field.size = glm::vec2(300.0f, 48.0f);
+
+    addPanel(registry, UIAnchor::TopLeft, glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f), 9);
+
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(140.0f, 60.0f), true, false),
+                    noKeyboard(), kNoStacks);
+
+    CHECK_MSG(!registry.get<UITextFieldComponent>(entity).focused,
+              "a press on an overlay must not focus the field behind it");
+}
+
 static void runTests() {
     testAClickReachesTheButtonUnderThePointer();
     testOnlyTheButtonUnderThePointerIsClicked();
@@ -415,6 +545,14 @@ static void runTests() {
     testHidingAFocusedFieldGivesTheKeyboardBack();
     testSubmitIsTrueForExactlyOneFrame();
     testFocusPutsTheCaretAtTheEnd();
+
+    testTwoOverlappingButtonsDoNotBothFire();
+    testAButtonOnAHigherLayerTakesTheClick();
+    testAnOverlayPanelSwallowsClicksMeantForTheGameBehindIt();
+    testAPanelDoesNotBlockAButtonOnItsOwnLayer();
+    testADisabledButtonStillCoversWhatIsBeneathIt();
+    testAHiddenOverlayStopsBlocking();
+    testAFieldUnderAnOverlayCannotBeFocused();
 }
 
-TEST_MAIN("test_uiinput", 30)
+TEST_MAIN("test_uiinput", 41)
