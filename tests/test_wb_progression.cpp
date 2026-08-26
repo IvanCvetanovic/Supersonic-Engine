@@ -50,6 +50,7 @@
 #include "sim/World.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
