@@ -65,6 +65,39 @@ constexpr int LeftTrigger = 4, RightTrigger = 5;
 constexpr int AxisCount = 6;
 } // namespace Pad
 
+namespace Touch {
+// How many contacts one frame can carry.
+//
+// Eight, which is more than any gesture worth writing and fewer than a screen
+// can physically report. Android's NativeActivity will hand over as many
+// pointers as the panel tracks; a machine that reports a tenth finger loses it
+// here rather than growing the snapshot for a case nobody has.
+//
+// The number that actually matters is two. A one-finger drag and a two-finger
+// drag are different gestures on every touch device ever made, and telling
+// them apart is the whole reason a contact COUNT exists rather than a single
+// position - which is what this engine had.
+constexpr int kMaxContacts = 8;
+} // namespace Touch
+
+// One finger, as the device reports it.
+//
+// No phase here, deliberately. This is a snapshot of what is touching the
+// screen right now, exactly as `keys` is a snapshot of what is held right now -
+// and "began" and "ended" are not things a snapshot contains, they are things a
+// comparison between two snapshots produces. Input::Update does that comparison,
+// which keeps the part with the logic in it testable without a device.
+struct RawContact {
+    // Stable for as long as the finger stays down, and reused freely after it
+    // lifts. Godot spells it `index` on InputEventScreenTouch and so does
+    // Android; a gesture machine keyed on it is keyed on the same thing there.
+    //
+    // -1 means the slot is empty, which only matters for the ones past
+    // `contactCount`.
+    int id{-1};
+    glm::vec2 position{0.0f};
+};
+
 namespace Text {
 // How many characters one frame can carry.
 //
@@ -101,6 +134,45 @@ struct RawInputState {
     // they are an ordinary field a test fills in by hand.
     unsigned int textCharacters[Text::kMaxCharacters]{};
     int textCharacterCount{0};
+
+    // What is touching the screen this frame, in no particular order.
+    //
+    // A count of zero is the desktop case and must stay indistinguishable from
+    // this field not existing: nothing above changes meaning, and a caller that
+    // never fills these in gets exactly the engine it had.
+    RawContact contacts[Touch::kMaxContacts]{};
+    int contactCount{0};
+};
+
+// What a contact is doing, which only a pair of frames can say.
+enum class ContactPhase {
+    // Down this frame and not last. Its delta is zero - there is nothing to
+    // subtract from - and a gesture machine that measures movement from the
+    // first frame of a touch measures it from here.
+    Began,
+
+    // Still down. Includes not having moved, because "stationary" is a
+    // threshold question and the threshold belongs to whoever is asking: a 12px
+    // hold test and a 2px one disagree, and neither belongs in the engine.
+    Moved,
+
+    // Lifted. Reported for exactly one frame, at the last position it was seen
+    // at, and then gone. A gesture that ends on release has to see this frame
+    // or it never ends at all.
+    Ended,
+};
+
+// One contact, with the part a snapshot cannot carry filled in.
+struct Contact {
+    int id{-1};
+    glm::vec2 position{0.0f};
+
+    // Since the previous frame. Zero on Began and on Ended: a finger that has
+    // just landed has not moved, and one that has lifted did not move to get
+    // there.
+    glm::vec2 delta{0.0f};
+
+    ContactPhase phase{ContactPhase::Began};
 };
 
 // What the pointer is doing, in the terms a game means them.
@@ -231,6 +303,50 @@ public:
     // field itself has to read Backspace through something.
     static void SetTextCaptureActive(bool active);
     static bool TextCaptureActive();
+
+    // ---- Contacts ---------------------------------------------------------
+    //
+    // What the engine could not express before: `mousePosition` is ONE point,
+    // so a two-finger gesture arrived as a single jittering pointer somewhere
+    // between the fingers, and a machine keyed on finger index had no index to
+    // key on.
+    //
+    // These are DERIVED, not passed through. Every frame the current snapshot
+    // is compared against the previous one to work out which contacts are new,
+    // which are still down, and which have just lifted - the last of which does
+    // not appear in the current snapshot at all and would otherwise vanish
+    // without ever reporting an end.
+    //
+    // Ordering: everything still down first, in the order the device reported
+    // it, then everything that lifted this frame. Stable enough to iterate,
+    // and not something to index into by position - use the id.
+
+    // What a desktop reports instead of fingers: the mouse, as contact 0,
+    // while its left button is held.
+    //
+    // Lives here rather than in the polling layer so it can be tested. Without
+    // it a gesture machine written against contacts is dead code until Android
+    // exists, which is the same as untested - and the day it stops being dead
+    // code is the worst possible day to find out it was wrong.
+    //
+    // Held, not hovering. A finger that is not touching the screen is not
+    // reported at all, and a contact that existed whenever the pointer was over
+    // the window would make every gesture begin the moment the mouse entered
+    // it. Overwrites whatever was in slot 0, so a platform that reports real
+    // contacts must not call this.
+    static void SynthesiseMouseContact(RawInputState& state);
+
+    static int ContactCount();
+
+    // By position in that list. Returns a contact with an id of -1 for an index
+    // nobody has, rather than failing, so a loop that runs one past the end is
+    // a contact that is not there instead of a crash.
+    static Contact GetContact(int index);
+
+    // By id, which is what a gesture machine actually holds: it decided PAN on
+    // finger 1 and needs finger 1 again next frame, not "whatever is second in
+    // the list now".
+    static bool TryGetContact(int id, Contact& out);
 
     // Raw access, for the few places that legitimately want a specific key
     // rather than an action.

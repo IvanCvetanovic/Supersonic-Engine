@@ -191,6 +191,11 @@ void InputPolling::Poll(Window& window) {
     state.scroll = g_pendingScroll;
     g_pendingScroll = 0.0f;
 
+    // The mouse, as contact 0, so a gesture machine has something to run on
+    // before Android exists. The rule itself lives in Input, where it can be
+    // tested; this file only says that a desktop has no fingers.
+    Input::SynthesiseMouseContact(state);
+
     // Drained, not copied: the accumulators belong to the callbacks and the
     // snapshot belongs to the frame, and a character delivered twice is a
     // letter typed twice.

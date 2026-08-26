@@ -35,6 +35,71 @@ std::unordered_map<std::string, bool> g_actionPrevious;
 
 glm::vec2 g_mouseDelta{0.0f};
 
+// This frame's contacts, with the phase and delta a snapshot cannot carry.
+//
+// Rebuilt every Update rather than stored on the snapshot, because one of these
+// - the one that just lifted - is not in the current snapshot at all.
+std::vector<Contact> g_contacts;
+
+// Where a contact was in a snapshot, or nothing.
+const RawContact* findRaw(const RawInputState& state, int id) {
+    const int count = std::min(state.contactCount, Touch::kMaxContacts);
+    for (int i = 0; i < count; ++i) {
+        if (state.contacts[i].id == id) return &state.contacts[i];
+    }
+    return nullptr;
+}
+
+// Compares the two snapshots and works out what each finger is doing.
+//
+// Everything still down first, in the order the device reported it, then
+// everything that lifted. An id of -1 is skipped: it is what an unfilled slot
+// holds, and a device that reports a count larger than the array it filled
+// would otherwise produce a phantom finger at the origin.
+void rebuildContacts() {
+    g_contacts.clear();
+
+    const int count = std::min(g_current.contactCount, Touch::kMaxContacts);
+    for (int i = 0; i < count; ++i) {
+        const RawContact& now = g_current.contacts[i];
+        if (now.id < 0) continue;
+
+        Contact contact;
+        contact.id = now.id;
+        contact.position = now.position;
+
+        if (const RawContact* before = findRaw(g_previous, now.id)) {
+            contact.phase = ContactPhase::Moved;
+            contact.delta = now.position - before->position;
+        } else {
+            // Nothing to subtract from. A gesture that measures movement from
+            // the first frame of a touch measures it from here, and a delta
+            // against a finger that did not exist last frame is the distance
+            // from wherever the previous one happened to lift.
+            contact.phase = ContactPhase::Began;
+            contact.delta = glm::vec2(0.0f);
+        }
+        g_contacts.push_back(contact);
+    }
+
+    // And the ones that are gone. Reported once, at the last position they were
+    // seen at: a gesture that ends on release has to see this frame or it never
+    // ends at all.
+    const int before = std::min(g_previous.contactCount, Touch::kMaxContacts);
+    for (int i = 0; i < before; ++i) {
+        const RawContact& gone = g_previous.contacts[i];
+        if (gone.id < 0) continue;
+        if (findRaw(g_current, gone.id)) continue;
+
+        Contact contact;
+        contact.id = gone.id;
+        contact.position = gone.position;
+        contact.delta = glm::vec2(0.0f);
+        contact.phase = ContactPhase::Ended;
+        g_contacts.push_back(contact);
+    }
+}
+
 CursorMode g_requestedCursor = CursorMode::Normal;
 bool g_cursorSuppressed = false;
 bool g_windowFocused = true;
@@ -97,6 +162,7 @@ void Input::ClearBindings() {
     g_current = RawInputState{};
     g_previous = RawInputState{};
     g_mouseDelta = glm::vec2(0.0f);
+    g_contacts.clear();
 
     // The pointer and the keyboard are NOT reset here, and the first version of
     // this did reset them.
@@ -110,6 +176,32 @@ void Input::ClearBindings() {
     // Who owns the mouse is not a binding. A test that needs it back where it
     // started says so with the ordinary setters, which are public precisely
     // because a game sets them too.
+}
+
+void Input::SynthesiseMouseContact(RawInputState& state) {
+    if (state.mouseButtons[MouseButton::Left]) {
+        state.contacts[0].id = 0;
+        state.contacts[0].position = state.mousePosition;
+        state.contactCount = 1;
+    } else {
+        state.contactCount = 0;
+    }
+}
+
+int Input::ContactCount() { return static_cast<int>(g_contacts.size()); }
+
+Contact Input::GetContact(int index) {
+    if (index < 0 || index >= static_cast<int>(g_contacts.size())) return Contact{};
+    return g_contacts[static_cast<size_t>(index)];
+}
+
+bool Input::TryGetContact(int id, Contact& out) {
+    for (const Contact& contact : g_contacts) {
+        if (contact.id != id) continue;
+        out = contact;
+        return true;
+    }
+    return false;
 }
 
 const unsigned int* Input::TypedCharacters() { return g_current.textCharacters; }
@@ -235,6 +327,8 @@ void Input::Update(const RawInputState& state) {
     }
 
     g_mouseDelta = g_current.mousePosition - g_previous.mousePosition;
+
+    rebuildContacts();
 
     g_actionPrevious = g_actionCurrent;
     for (const auto& [name, binding] : g_actions) {

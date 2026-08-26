@@ -401,6 +401,56 @@ synthesises contact 0, which is also how the game runs before Android exists.
 gesture machine's thresholds are unit-tested against a scripted contact stream
 with no window.
 
+### Phase 4 progress — 26 August 2026
+
+**The engine half is done. The phase is not**, and the difference matters: the
+gesture machine is port work against a game that is not in this repository, so
+"the marquee and the pan are both reachable with a mouse" cannot be shown here.
+What can be, and is:
+
+`RawInputState` carries up to eight contacts — an id and a position each, in the
+same style as `textCharacters`/`textCharacterCount`. A count of zero is the
+desktop case and is byte-for-byte the engine that existed before the field did,
+which an existing case asserts directly.
+
+**Phase is derived, not reported.** A snapshot says what is touching the screen
+right now, exactly as `keys` says what is held right now; "began" and "ended"
+are not in a snapshot, they are what a comparison between two snapshots
+produces. `Input::Update` does that comparison, which is what keeps the part
+with the logic in it testable without a device. The case that forces the design:
+a lifted finger is *not in the current frame at all*, so it has to be
+synthesised, at its last position, for exactly one frame — without which a
+gesture that ends on release never ends, and the machine sits in PAN forever
+with nothing moving.
+
+**Not stationary, just `Moved` with a zero delta.** Whether a finger has moved
+is a threshold question, and Wolf Brigade's threshold is 12 px — which is its
+number, not the engine's. A 2 px hold test disagrees about the same frame and
+neither answer belongs here.
+
+**The mouse is contact 0 while its left button is held**, through
+`Input::SynthesiseMouseContact`. That lives in `Input` rather than in the
+polling layer for one reason: otherwise a gesture machine written against
+contacts is dead code until Android exists, which is the same as untested, and
+the day it stops being dead code is the worst day to find out it was wrong.
+Held, not hovering — making hovering count fails three cases, because a contact
+that exists whenever the pointer is over the window begins every gesture the
+moment the mouse enters it.
+
+Five mutations, all caught: never reporting a lift (4 failures), giving a new
+finger a delta from somewhere (3), letting an empty slot become a phantom finger
+at the origin (1), trusting a count larger than the array (1), and counting a
+hover as a touch (3).
+
+**`UIPointer` did not get a `source`.** The plan asked for one. Nothing in
+`UIInput` or `UISystem` would branch on it today, so it would be a field nobody
+reads that later reads as done — the same failure the 2.5 row above was
+corrected for. It goes in when something asks the question.
+
+**Still open:** the gesture machine itself (~90 lines, port-side), and the
+script ABI, which exposes `mouseDelta` and not contacts. The port is a C++
+layer rather than scripts, so nothing needs it yet.
+
 ---
 
 ## Phase 5 — Android (2–4 months, and it is not the same phase as the rest)

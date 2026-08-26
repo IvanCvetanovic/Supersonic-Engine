@@ -14,6 +14,8 @@
 #include "core/Input.hpp"
 
 #include <cmath>
+#include <initializer_list>
+#include <utility>
 #include <string>
 
 using namespace Supersonic;
@@ -512,6 +514,248 @@ static void testTakingTheKeyboardIsAnEdgeLikeAnyOther() {
               "and reports the press, because the key really is still down");
 }
 
+// --- contacts ---------------------------------------------------------------
+//
+// The engine had ONE mouse position, so a two-finger gesture arrived as a
+// single point jittering somewhere between the fingers and a machine keyed on
+// finger index had no index to key on. These are the tests for the part that
+// cannot come from a snapshot: which finger is new, which is still down, and
+// which has just lifted - the last of which is not in the current frame at all
+// and would otherwise vanish without ever reporting an end.
+
+// A frame with the given fingers down, and nothing else.
+static RawInputState touching(std::initializer_list<std::pair<int, glm::vec2>> fingers) {
+    RawInputState state;
+    int index = 0;
+    for (const auto& [id, position] : fingers) {
+        if (index >= Touch::kMaxContacts) break;
+        state.contacts[index].id = id;
+        state.contacts[index].position = position;
+        ++index;
+    }
+    state.contactCount = index;
+    return state;
+}
+
+static void testAFingerThatJustLandedBegins() {
+    reset();
+    frame(touching({}));
+    frame(touching({{0, glm::vec2(100.0f, 200.0f)}}));
+
+    CHECK_EQ(Input::ContactCount(), 1);
+    Contact contact;
+    CHECK_MSG(Input::TryGetContact(0, contact), "finger 0 must be findable by its id");
+    CHECK(contact.phase == ContactPhase::Began);
+    CHECK_NEAR(contact.position.x, 100.0f);
+
+    // Zero, not the distance from wherever the last finger lifted. A gesture
+    // that measures movement from the first frame of a touch measures it from
+    // here, and a threshold crossed on frame one is a gesture decided before
+    // anybody moved.
+    CHECK_NEAR(contact.delta.x, 0.0f);
+    CHECK_NEAR(contact.delta.y, 0.0f);
+}
+
+static void testAFingerThatStaysDownMovesAndCarriesItsDelta() {
+    reset();
+    frame(touching({{0, glm::vec2(100.0f, 200.0f)}}));
+    frame(touching({{0, glm::vec2(112.0f, 195.0f)}}));
+
+    Contact contact;
+    CHECK(Input::TryGetContact(0, contact));
+    CHECK(contact.phase == ContactPhase::Moved);
+    CHECK_NEAR(contact.delta.x, 12.0f);
+    CHECK_NEAR(contact.delta.y, -5.0f);
+}
+
+static void testAFingerThatHasNotMovedIsStillMovedRatherThanStationary() {
+    // "Stationary" is a threshold question and the threshold belongs to
+    // whoever is asking: a 12px hold test and a 2px one disagree about the same
+    // frame, and neither answer belongs in the engine. Moved with a zero delta
+    // says what happened and lets the asker decide what it means.
+    reset();
+    frame(touching({{0, glm::vec2(100.0f, 200.0f)}}));
+    frame(touching({{0, glm::vec2(100.0f, 200.0f)}}));
+
+    Contact contact;
+    CHECK(Input::TryGetContact(0, contact));
+    CHECK(contact.phase == ContactPhase::Moved);
+    CHECK_NEAR(contact.delta.x, 0.0f);
+}
+
+static void testALiftedFingerIsReportedOnceAndThenGone() {
+    // The case a snapshot cannot express. The finger is not in this frame's
+    // state at all, so without synthesising it here a gesture that ends on
+    // release never ends: the machine sits in PAN forever with nothing moving.
+    reset();
+    frame(touching({{0, glm::vec2(100.0f, 200.0f)}}));
+    frame(touching({{0, glm::vec2(150.0f, 200.0f)}}));
+    frame(touching({}));
+
+    CHECK_EQ(Input::ContactCount(), 1);
+    Contact contact;
+    CHECK_MSG(Input::TryGetContact(0, contact), "the lift must be reported");
+    CHECK(contact.phase == ContactPhase::Ended);
+
+    // At the last place it was seen, not at the origin.
+    CHECK_NEAR(contact.position.x, 150.0f);
+
+    // And exactly once. An end that repeats fires whatever the release does -
+    // a unit order, a shot - every frame until the next touch.
+    frame(touching({}));
+    CHECK_EQ(Input::ContactCount(), 0);
+}
+
+static void testTwoFingersAreTwoContactsWithTheirOwnDeltas() {
+    // The whole reason this exists. One mousePosition cannot say that finger 0
+    // went left while finger 1 went right, which is the difference between a
+    // pan and a pinch.
+    reset();
+    frame(touching({{0, glm::vec2(100.0f, 100.0f)}, {1, glm::vec2(300.0f, 100.0f)}}));
+    frame(touching({{0, glm::vec2(80.0f, 100.0f)}, {1, glm::vec2(320.0f, 100.0f)}}));
+
+    CHECK_EQ(Input::ContactCount(), 2);
+
+    Contact first, second;
+    CHECK(Input::TryGetContact(0, first));
+    CHECK(Input::TryGetContact(1, second));
+    CHECK_NEAR(first.delta.x, -20.0f);
+    CHECK_NEAR(second.delta.x, 20.0f);
+}
+
+static void testASecondFingerBeginsWhileTheFirstKeepsMoving() {
+    // The phases are per contact, not per frame. A machine that reads "this
+    // frame is a Began frame" and applies it to everything restarts the pan the
+    // moment a second finger lands.
+    reset();
+    frame(touching({{0, glm::vec2(100.0f, 100.0f)}}));
+    frame(touching({{0, glm::vec2(110.0f, 100.0f)}, {1, glm::vec2(300.0f, 100.0f)}}));
+
+    Contact first, second;
+    CHECK(Input::TryGetContact(0, first));
+    CHECK(Input::TryGetContact(1, second));
+    CHECK(first.phase == ContactPhase::Moved);
+    CHECK(second.phase == ContactPhase::Began);
+    CHECK_NEAR(first.delta.x, 10.0f);
+    CHECK_NEAR(second.delta.x, 0.0f);
+}
+
+static void testAnIdIsFollowedRatherThanAPositionInTheList() {
+    // Devices do not promise an order, and a finger that lifts closes a gap.
+    // A machine that decided PAN on "the second contact" would be panning with
+    // a different finger the moment the first one lifted; one that decided on
+    // finger 1 still has finger 1.
+    reset();
+    frame(touching({{0, glm::vec2(100.0f, 100.0f)}, {1, glm::vec2(300.0f, 100.0f)}}));
+    // Same two fingers, reported the other way round, and one has moved.
+    frame(touching({{1, glm::vec2(340.0f, 100.0f)}, {0, glm::vec2(100.0f, 100.0f)}}));
+
+    Contact tracked;
+    CHECK(Input::TryGetContact(1, tracked));
+    CHECK_NEAR(tracked.delta.x, 40.0f);
+    CHECK(tracked.phase == ContactPhase::Moved);
+}
+
+static void testAnUnknownIdIsAbsentRatherThanWrong() {
+    reset();
+    frame(touching({{0, glm::vec2(100.0f, 100.0f)}}));
+
+    Contact contact;
+    CHECK_MSG(!Input::TryGetContact(7, contact), "a finger nobody is touching with must not be found");
+
+    // And an index past the end is a contact that is not there, not a crash:
+    // a loop that runs one too far is an ordinary bug and should behave like
+    // one.
+    CHECK_EQ(Input::GetContact(5).id, -1);
+    CHECK_EQ(Input::GetContact(-1).id, -1);
+}
+
+static void testAFrameWithNoContactsChangesNothingElse() {
+    // The control, and the promise every existing caller depends on: a snapshot
+    // that never fills these in is the engine that existed before they did.
+    reset();
+    RawInputState state;
+    state.mousePosition = glm::vec2(42.0f, 43.0f);
+    state.mouseButtons[MouseButton::Left] = true;
+    frame(state);
+
+    CHECK_EQ(Input::ContactCount(), 0);
+    CHECK_MSG(Input::IsMouseButtonDown(MouseButton::Left), "the mouse must be unaffected");
+    CHECK_NEAR(Input::MousePosition().x, 42.0f);
+}
+
+static void testACountLargerThanTheFilledSlotsProducesNoPhantomFinger() {
+    // A platform layer that sets the count before filling the array leaves
+    // empty slots behind it. Those hold an id of -1, and a phantom finger at
+    // the origin would begin a gesture nobody started.
+    reset();
+    RawInputState state;
+    state.contacts[0].id = 0;
+    state.contacts[0].position = glm::vec2(100.0f, 100.0f);
+    state.contactCount = 4;
+    frame(state);
+
+    CHECK_EQ(Input::ContactCount(), 1);
+    CHECK_EQ(Input::GetContact(0).id, 0);
+}
+
+static void testACountBeyondTheArrayIsClampedRatherThanReadPast() {
+    reset();
+    RawInputState state;
+    for (int i = 0; i < Touch::kMaxContacts; ++i) {
+        state.contacts[i].id = i;
+        state.contacts[i].position = glm::vec2(static_cast<float>(i), 0.0f);
+    }
+    state.contactCount = Touch::kMaxContacts + 40;
+    frame(state);
+
+    CHECK_EQ(Input::ContactCount(), Touch::kMaxContacts);
+}
+
+static void testTheMouseIsContactZeroForAsLongAsItIsHeld() {
+    // The desktop path, end to end. Without it a gesture machine written
+    // against contacts is dead code until Android exists, which is the same as
+    // untested - and the day it stops being dead code is the worst possible day
+    // to find out it was wrong.
+    reset();
+
+    RawInputState hovering;
+    hovering.mousePosition = glm::vec2(50.0f, 50.0f);
+    Input::SynthesiseMouseContact(hovering);
+    frame(hovering);
+    CHECK_MSG(Input::ContactCount() == 0,
+              "hovering is not touching; a contact here begins every gesture on entry");
+
+    RawInputState pressed;
+    pressed.mousePosition = glm::vec2(50.0f, 50.0f);
+    pressed.mouseButtons[MouseButton::Left] = true;
+    Input::SynthesiseMouseContact(pressed);
+    frame(pressed);
+    Contact contact;
+    CHECK(Input::TryGetContact(0, contact));
+    CHECK(contact.phase == ContactPhase::Began);
+
+    RawInputState dragged;
+    dragged.mousePosition = glm::vec2(62.0f, 50.0f);
+    dragged.mouseButtons[MouseButton::Left] = true;
+    Input::SynthesiseMouseContact(dragged);
+    frame(dragged);
+    CHECK(Input::TryGetContact(0, contact));
+    CHECK(contact.phase == ContactPhase::Moved);
+
+    // Twelve pixels, which is the threshold Wolf Brigade's gesture machine
+    // arbitrates a marquee against a pan on. It reads that from here.
+    CHECK_NEAR(contact.delta.x, 12.0f);
+
+    RawInputState released;
+    released.mousePosition = glm::vec2(62.0f, 50.0f);
+    Input::SynthesiseMouseContact(released);
+    frame(released);
+    CHECK(Input::TryGetContact(0, contact));
+    CHECK(contact.phase == ContactPhase::Ended);
+    CHECK_NEAR(contact.position.x, 62.0f);
+}
+
 static void runTests() {
     testActionRespondsToItsKey();
     testPressIsAnEdgeNotALevel();
@@ -539,6 +783,18 @@ static void runTests() {
     testTypingDoesNotAlsoWalkThePlayer();
     testAPadStillDrivesTheGameWhileANameIsTyped();
     testTakingTheKeyboardIsAnEdgeLikeAnyOther();
+    testAFingerThatJustLandedBegins();
+    testAFingerThatStaysDownMovesAndCarriesItsDelta();
+    testAFingerThatHasNotMovedIsStillMovedRatherThanStationary();
+    testALiftedFingerIsReportedOnceAndThenGone();
+    testTwoFingersAreTwoContactsWithTheirOwnDeltas();
+    testASecondFingerBeginsWhileTheFirstKeepsMoving();
+    testAnIdIsFollowedRatherThanAPositionInTheList();
+    testAnUnknownIdIsAbsentRatherThanWrong();
+    testAFrameWithNoContactsChangesNothingElse();
+    testACountLargerThanTheFilledSlotsProducesNoPhantomFinger();
+    testACountBeyondTheArrayIsClampedRatherThanReadPast();
+    testTheMouseIsContactZeroForAsLongAsItIsHeld();
 }
 
-TEST_MAIN("test_input", 50)
+TEST_MAIN("test_input", 88)
