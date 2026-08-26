@@ -6,6 +6,7 @@
 
 namespace WolfBrigade {
 
+class Building;
 class Damageable;
 class ProjectilePool;
 class Unit;
@@ -42,6 +43,17 @@ public:
     virtual int NearestDeposit(float x) const = 0;   // -1 when there are none
     virtual bool DepositExists(int index) const = 0;
     virtual glm::vec2 DepositPosition(int index) const = 0;
+
+    // The nearest building of this unit's OWN faction that is still being
+    // built, at any distance. Null when everything is finished.
+    //
+    // No range, deliberately, and this is the anti-deadlock rule: ANY idle
+    // worker walks to ANY unfinished site. The builder that was assigned to one
+    // may have fled, died or been re-tasked, and without this the half-built
+    // barracks it left behind stands there for the rest of the run with the
+    // player unable to see why.
+    virtual Building* NearestUnfinishedBuilding(const std::string& faction,
+                                                float x) const = 0;
 
     // --- Combat -----------------------------------------------------------
 

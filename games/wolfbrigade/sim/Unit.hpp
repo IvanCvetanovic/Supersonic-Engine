@@ -92,6 +92,12 @@ public:
     // reflex comes back the moment the player re-tasks them.
     void CommandAttack(Damageable* target);
 
+    // Send a worker to finish a building.
+    //
+    // Clears any attack the way a move order does, so a worker pulled off a
+    // fight to build gets its flee reflex back with it.
+    void CommandBuild(Building* site);
+
     // --- Damage ------------------------------------------------------------
 
     void TakeDamage(int amount) override;
@@ -121,6 +127,7 @@ public:
     const std::string& CarryResource() const { return m_carryResource; }
 
     ResourceNode* TargetNode() const { return m_targetNode; }
+    const Building* BuildTarget() const { return m_buildTarget; }
     const Damageable* AttackTarget() const { return m_attackTarget; }
     bool OrderedToAttack() const { return m_orderedToAttack; }
 
@@ -137,6 +144,7 @@ private:
     void StepDeliver(double delta);
     void StepFlee(double delta);
     void StepAttack(double delta);
+    void StepBuild(double delta);
     void FireProjectile();
 
     void FleeCheck();
@@ -169,6 +177,7 @@ private:
     std::string m_carryResource;
     double m_gatherAccumulator{0.0};
     ResourceNode* m_targetNode{nullptr};
+    Building* m_buildTarget{nullptr};
     int m_depositIndex{-1};
 
     // Combat. Only the parts the worker needs are used here: an ordered worker

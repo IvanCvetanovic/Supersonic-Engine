@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "sim/Building.hpp"
 #include "sim/Projectiles.hpp"
 
 namespace WolfBrigade {
@@ -37,6 +38,7 @@ void Unit::Step(double delta) {
     case State::Delivering: StepDeliver(delta); break;
     case State::Fleeing:    StepFlee(delta); break;
     case State::Attacking:  StepAttack(delta); break;
+    case State::Building:   StepBuild(delta); break;
     default: break;
     }
 
@@ -161,6 +163,23 @@ void Unit::TickWorker() {
         if (!HasLiveNode()) AfterGathering();
         break;
 
+    case State::Building:
+        // Finished, or gone, or knocked down. Either way there is nothing left
+        // to pour into, and the next tick finds this worker something else.
+        //
+        // The aliveness check is what Godot's is_instance_valid does here: a
+        // destroyed building is freed after its fade, so the original's worker
+        // is released by the pointer going stale. Nothing goes stale in this
+        // port, so the question has to be asked directly - otherwise a worker
+        // stands over rubble pouring time into a building that cannot accept
+        // it, forever.
+        if (m_buildTarget == nullptr || m_buildTarget->IsComplete() ||
+            !m_buildTarget->IsAlive()) {
+            m_buildTarget = nullptr;
+            SetState(State::Idle);
+        }
+        break;
+
     case State::Delivering:
         // Acquired HERE rather than when delivering began, because this is the
         // thinking tick and scans belong on it. StepDeliver simply waits for
@@ -197,9 +216,15 @@ void Unit::SeekWork() {
         return;
     }
 
-    // Construction sites come before gathering in the original, so a building
-    // never stalls when its assigned builder flees, dies or is re-tasked - any
-    // idle worker picks it up. That branch arrives with buildings.
+    // Construction BEFORE gathering, and the order is the point. A worker that
+    // preferred a tree would leave a half-built barracks standing until every
+    // node on the map ran dry - and since any idle worker picks a site up, the
+    // whole village would walk past it together.
+    if (Building* site = m_world->NearestUnfinishedBuilding(m_stats.faction, m_position.x)) {
+        m_buildTarget = site;
+        SetState(State::Building);
+        return;
+    }
 
     if (ResourceNode* node = m_world->NearestHarvestable(m_position.x)) {
         m_targetNode = node;
@@ -321,6 +346,28 @@ void Unit::ClearAttack() {
     m_orderedToAttack = false;
 }
 
+// Walk to the site, then pour time into it.
+//
+// The reach is the building's half-width plus the worker's GATHER range, not
+// its attack range - a worker builds from where it would harvest, and the two
+// numbers are different in the data for a reason.
+void Unit::StepBuild(double delta) {
+    if (m_buildTarget == nullptr || m_buildTarget->IsComplete() || !m_buildTarget->IsAlive()) {
+        return;   // the tick clears it
+    }
+
+    const float reach = m_buildTarget->Stats().bodySize.x * 0.5f + m_stats.gatherRange;
+    const float siteX = m_buildTarget->Position().x;
+    if (std::fabs(m_position.x - siteX) > reach) {
+        StepToward(glm::vec2(siteX, m_position.y), delta);
+        return;
+    }
+
+    // A second of a worker's time is a second of build time. The building
+    // clamps at its total and announces its own completion.
+    m_buildTarget->AddBuildProgress(delta);
+}
+
 void Unit::FleeCheck() {
     if (!m_world->DepositExists(m_fleeIndex)) m_fleeIndex = m_world->NearestDeposit(m_position.x);
 
@@ -355,6 +402,17 @@ void Unit::CommandMoveTo(const glm::vec2& target) {
 
     m_moveTarget = glm::vec2(target.x, m_position.y);
     SetState(State::Moving);
+}
+
+void Unit::CommandBuild(Building* site) {
+    if (m_phase == State::Dead || site == nullptr) return;
+
+    // Re-task: drop any attack order, so a worker sent from a fight to a
+    // building has its flee reflex back.
+    ClearAttack();
+
+    m_buildTarget = site;
+    SetState(State::Building);
 }
 
 void Unit::CommandAttack(Damageable* target) {

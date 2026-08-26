@@ -419,6 +419,7 @@ re-derive them written beside them.
 | data + validator | `verify_data` | The ten key counts the original prints (`world -> 11 keys`, `units -> 5`, …), 0 cross-reference issues, and **nine deliberate typos** — one per check — each caught. Six mutations caught. |
 | wave director | `verify_waves` | **The first slice the oracle actually constrains.** 30 raiders, 1 brute, 31 across five waves, reaching wave 5 — the output of 300 steps through the schedule, the difficulty scaling and the spawn interval, and not derivable by reading. Matched on the first run. Plus victory only on a cleared field, defeat on the Town Hall, and the empty-final-wave soft-lock the original wrote its own case against. Eight mutations, all caught. |
 | buildings | `verify_buildings` | **two bolts pooled** from a tower in three seconds, plus construction, training queues, footprints and the deposit-point rule. Thirteen mutations; **four survived** the shipped data and needed authored fixtures — one of which had to be SEARCHED for. |
+| worker builds | `verify_buildings` 2, 6 | The unit's BUILDING state, which closes the seam between the two halves: a worker sent to a site finishes it, and **any idle worker resumes an abandoned one**. Four mutations, all caught. |
 | combat | `verify_combat` | **soldier 36/60, Town Hall 934/1000** — and the second one is the first number in the whole port that DISAGREED. Plus the lane index, orders beating instincts, and the arrow pool. Nine mutations, all caught after two blind spots were closed. |
 | worker economy | `verify_economy` 2, 2b + `verify_units` FSM | **tree 79/100, banked +20, carried 1** — 140 steps of 0.2s between a tree at 1300 and a deposit at 1000, matched exactly, for both resources. Plus the FSM (spawns idle at 30 hp, a move order strips the y, arrival releases the order) and the flee reflex. Twelve mutations; **four survived the first pass** and needed cases the original's own harness cannot see. |
 | economy state | `verify_economy` 1, 2c, 3 | Extraction clamps (200 → 170 → 0), spending is atomic, and `resources_changed` carries the new TOTAL. Difficulty scales the opening balance to the numbers the presets imply — 450 on Easy, 240 on Hard — and owned meta lands flat on top of it, not through it. Six mutations, all caught. Sections 2 and 2b, the worker gather/deliver loop, wait for `unit.gd`. |
@@ -451,6 +452,24 @@ discrimination cases counted totals, and replacing `buildings.json` to break one
 cost also removed two buildings that an upgrade elsewhere referenced. That is
 collateral from the fixture rather than the check under test, and a total makes
 the file brittle in a way that reads as the validator misbehaving.
+
+**What the oracle proves, and what it does not.** Four slices running, surviving
+mutations have needed authored fixtures because the shipped data cannot reach
+the branch. That is not a flaw in the method — it is a fact about `verify_*`.
+Those harnesses were written against shipped values, so they exercise the paths
+the game actually takes. The oracle proves fidelity on the LIVED path; mutation
+testing proves it everywhere else. Neither substitutes for the other, and a
+slice that only did the first would be a port that agrees with the original
+right up until a designer changes a number.
+
+**Godot's `is_instance_valid` has no equivalent here, and one place needed it.**
+A worker building a site that gets destroyed under it is released in the
+original because the building is freed after its fade and the pointer goes
+stale. Nothing goes stale in this port, so the question is asked directly —
+`IsAlive()` alongside `IsComplete()`. Without it a worker stands over rubble
+pouring time into something that cannot accept it, forever. Expect the same
+question wherever the original leans on instance validity; the save slice will
+be full of them.
 
 ### A mutation that had to be hunted for
 
@@ -543,6 +562,14 @@ the data depends on object order — the wave schedule and the difficulty menu
 order are both JSON arrays, and that is asserted rather than assumed — but
 anything ported later that iterates an object and cares about the sequence has
 to sort explicitly rather than inherit it.
+
+**The phase is not nearly closed, whatever the table's length suggests.** The
+done-when is "the simulation runs headless in a test executable, waves spawn on
+schedule, **and a save round-trips**". Nothing yet ports `save.gd` or
+`snapshot.gd`, and those four harnesses serialise every class written so far —
+including the `Damageable*` and world-index indirections this port introduced,
+which have no GDScript analogue and need a deliberate stable-id design. That is
+where the novel work in Phase 3 actually is.
 
 **Order**, by dependency rather than by file size: `input_controller` (Phase 4's
 open half, and the smallest slice with an oracle) → `data` → `economy` →

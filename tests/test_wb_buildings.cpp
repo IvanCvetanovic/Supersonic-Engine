@@ -69,7 +69,14 @@ public:
     ProjectilePool bolts;
     std::vector<std::unique_ptr<Unit>> units;
 
-    ResourceNode* NearestHarvestable(float) const override { return nullptr; }
+    // One optional node, for the case that asks which of a tree and a
+    // building site an idle worker picks.
+    mutable ResourceNode node;
+    bool hasNode{false};
+
+    ResourceNode* NearestHarvestable(float) const override {
+        return hasNode && node.Harvestable() ? &node : nullptr;
+    }
 
     // Deposit points are the COMPLETE buildings that say they are one, which is
     // the group membership the original maintains as construction finishes.
@@ -93,6 +100,23 @@ public:
     glm::vec2 DepositPosition(int index) const override {
         return DepositExists(index) ? buildings[static_cast<size_t>(index)]->Position()
                                     : glm::vec2(0.0f);
+    }
+
+    // The anti-deadlock scan: any unfinished building of this faction, at any
+    // distance, nearest first.
+    Building* NearestUnfinishedBuilding(const std::string& faction, float x) const override {
+        Building* best = nullptr;
+        float bestDistance = 0.0f;
+        for (const auto& building : buildings) {
+            if (building->Faction() != faction) continue;
+            if (building->IsComplete() || !building->IsAlive()) continue;
+            const float distance = std::fabs(x - building->Position().x);
+            if (best == nullptr || distance < bestDistance) {
+                best = building.get();
+                bestDistance = distance;
+            }
+        }
+        return best;
     }
 
     Unit* NearestEnemyUnit(const std::string& faction, float x, float maxRange) const override {
@@ -129,6 +153,16 @@ struct Site {
         building->SetTrainTimes(wb::Shipped().Units());
         Building* raw = building.get();
         town.buildings.push_back(std::move(building));
+        return raw;
+    }
+
+    Unit* SpawnUnit(const std::string& id, float x) {
+        auto unit = std::make_unique<Unit>(
+            UnitStats::FromJson(id, wb::Shipped().Unit(id)), state, bus, town);
+        unit->SetPosition(glm::vec2(x, kGroundY));
+        Unit* raw = unit.get();
+        town.units.push_back(std::move(unit));
+        town.lane.Register(raw);
         return raw;
     }
 
@@ -595,6 +629,116 @@ void testABuildingWithRangeButNoDamageStillNeverFires() {
     CHECK_EQ(town.bolts.PoolSize(), 0);
 }
 
+// --- 8. The worker that finishes it --------------------------------------
+//
+// The five lines of `verify_buildings` that need both halves of the port at
+// once. Building landed before the unit's BUILDING state did, and these are
+// what closes that.
+
+void testAWorkerSentToASiteWalksThereAndFinishesIt() {
+    Site site;
+    Building* barracks = site.Place(Ids::kBarracks, 2600.0f, false);
+    Unit* worker = site.SpawnUnit(Ids::kWorker, 2000.0f);
+
+    worker->CommandBuild(barracks);
+    CHECK_MSG(worker->CurrentState() == Unit::State::Building,
+              "an ordered worker enters BUILDING");
+    CHECK_MSG(worker->BuildTarget() == barracks, "and remembers which site");
+
+    // 600px at 140/sec is 4.3 seconds of walking, then ten of building.
+    for (int i = 0; i < 300; ++i) worker->Step(0.1);
+
+    CHECK_MSG(barracks->IsComplete(), "the worker must finish it");
+    CHECK_EQ(static_cast<int>(site.completed.size()), 1);
+    CHECK_MSG(worker->CurrentState() == Unit::State::Idle,
+              "and go back to idle when there is nothing left to pour into");
+    CHECK_MSG(worker->BuildTarget() == nullptr, "letting the site go");
+}
+
+void testAnIdleWorkerFindsAnAbandonedSiteWithoutBeingTold() {
+    // The anti-deadlock rule, and the reason the scan has no range. A builder
+    // that flees, dies or is re-tasked leaves a half-built barracks; without
+    // this it stands there for the rest of the run with nothing on screen to
+    // explain why the player's army never arrives.
+    Site site;
+    Building* barracks = site.Place(Ids::kBarracks, 2600.0f, false);
+    barracks->AddBuildProgress(4.0);   // somebody got a third of the way
+
+    Unit* other = site.SpawnUnit(Ids::kWorker, 2000.0f);
+    CHECK_MSG(other->CurrentState() == Unit::State::Idle, "this one was never told anything");
+
+    for (int i = 0; i < 300; ++i) other->Step(0.1);
+
+    CHECK_MSG(barracks->IsComplete(), "any idle worker resumes an abandoned site");
+}
+
+void testAWorkerBuildsBeforeItGathersAndBanksBeforeEither() {
+    // The priority order, which is the deadlock fix. A worker that preferred a
+    // tree would leave the site standing until every node ran dry - and since
+    // every idle worker uses the same rule, the whole village would walk past
+    // it together.
+    Site site;
+    Building* barracks = site.Place(Ids::kBarracks, 2600.0f, false);
+    Unit* worker = site.SpawnUnit(Ids::kWorker, 2600.0f);
+
+    // A tree is right there too, and it must lose.
+    site.town.node.resource = Ids::kWood;
+    site.town.node.amount = 100;
+    site.town.node.maxAmount = 100;
+    site.town.node.position = glm::vec2(2600.0f, kGroundY);
+    site.town.hasNode = true;
+
+    worker->Step(0.2);   // one thinking tick
+    CHECK_MSG(worker->CurrentState() == Unit::State::Building,
+              "the site comes first");
+    CHECK_EQ(site.town.node.amount, 100);
+
+    // Finish it, and now the tree wins.
+    barracks->AddBuildProgress(20.0);
+    for (int i = 0; i < 5; ++i) worker->Step(0.2);
+    CHECK_MSG(worker->CurrentState() == Unit::State::Gathering,
+              "with nothing left to build, it gathers");
+}
+
+void testAWorkerBuildsFromItsGatherRangeNotItsAttackRange() {
+    // reach = the building's half-width plus the worker's GATHER range. Using
+    // the attack range instead would have it stop 6px short of a barracks it
+    // could otherwise reach - close enough to look right and never finish.
+    Site site;
+    Building* barracks = site.Place(Ids::kBarracks, 2600.0f, false);
+    Unit* worker = site.SpawnUnit(Ids::kWorker, 2000.0f);
+    worker->CommandBuild(barracks);
+
+    for (int i = 0; i < 100; ++i) worker->Step(0.1);
+
+    // It comes from the LEFT, so it stops 101px short of the centre - 55 of
+    // body plus 46 of gather range - at 2499 rather than walking to 2600.
+    // Using the attack range of 40 instead would send it 6px further in, which
+    // looks identical and is a different number in the data for a reason.
+    CHECK_MSG(worker->Position().x >= 2499.0f, "it walks in to gather range");
+    CHECK_MSG(worker->Position().x <= 2515.0f, "and no further than it needs to");
+    CHECK_MSG(barracks->BuildProgress() > 0.0, "and it is pouring");
+}
+
+void testABuildingDestroyedUnderItsBuilderReleasesTheWorker() {
+    Site site;
+    Building* barracks = site.Place(Ids::kBarracks, 2100.0f, false);
+    Unit* worker = site.SpawnUnit(Ids::kWorker, 2000.0f);
+    worker->CommandBuild(barracks);
+
+    for (int i = 0; i < 20; ++i) worker->Step(0.1);
+    CHECK_MSG(barracks->BuildProgress() > 0.0, "it started");
+
+    barracks->Destroy();
+    for (int i = 0; i < 20; ++i) worker->Step(0.1);
+
+    // A dead site is not complete either, so the tick has to notice it is gone
+    // rather than only that it is finished - a worker pouring time into rubble
+    // is a worker doing nothing forever.
+    CHECK_MSG(worker->CurrentState() != Unit::State::Building,
+              "a worker must not keep building a ruin");
+}
+
 } // namespace
 
 static void runTests() {
@@ -627,6 +771,12 @@ static void runTests() {
     testTrainingStartsTheNextUnitFromZeroRatherThanFromTheOvershoot();
     testATowersRateIsCappedByItsThinkingTickNotOnlyByItsCooldown();
     testABuildingWithRangeButNoDamageStillNeverFires();
+
+    testAWorkerSentToASiteWalksThereAndFinishesIt();
+    testAnIdleWorkerFindsAnAbandonedSiteWithoutBeingTold();
+    testAWorkerBuildsBeforeItGathersAndBanksBeforeEither();
+    testAWorkerBuildsFromItsGatherRangeNotItsAttackRange();
+    testABuildingDestroyedUnderItsBuilderReleasesTheWorker();
 }
 
 TEST_MAIN("test_wb_buildings", 55)

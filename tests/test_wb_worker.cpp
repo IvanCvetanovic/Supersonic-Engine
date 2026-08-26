@@ -130,6 +130,9 @@ public:
     // Nothing to fight here. A world with no enemies and no arrows is a
     // legitimate one - it is what a peaceful minute of gathering looks like -
     // and the combat suite next door builds the other kind.
+    Building* NearestUnfinishedBuilding(const std::string&, float) const override {
+        return nullptr;
+    }
     Unit* NearestEnemyUnit(const std::string&, float, float) const override { return nullptr; }
     Damageable* NearestEnemyBuilding(const std::string&, float) const override { return nullptr; }
     ProjectilePool* Projectiles() override { return nullptr; }

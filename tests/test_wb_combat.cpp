@@ -140,6 +140,10 @@ public:
                                     : glm::vec2(0.0f);
     }
 
+    Building* NearestUnfinishedBuilding(const std::string&, float) const override {
+        return nullptr;
+    }
+
     Unit* NearestEnemyUnit(const std::string& faction, float x, float maxRange) const override {
         return lane.NearestEnemy(faction, x, maxRange);
     }
