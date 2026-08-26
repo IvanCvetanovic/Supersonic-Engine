@@ -376,6 +376,48 @@ The ~14% that does needs decisions made once and applied everywhere:
 schedule, and a save round-trips — all with no renderer attached. This is the
 phase with the best test story, and it should be taken.
 
+### The test story is better than this plan assumed — 26 August 2026
+
+The game is at **`D:/The-Wolf-Brigade`**, and it ships **22 headless
+verification harnesses** (`tools/verify_*.gd`) that already assert its
+behaviour and print their numbers. All 22 pass today. Godot 4.7.1 is
+Steam-installed at
+`D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe`;
+`tools/verify_all.bat` runs the lot in about two minutes.
+
+So the port is not verified by reading the GDScript and believing the result.
+Each harness is a **vertical slice with pass/fail already encoded**, and the
+method is the one the rest of this engine is built on — differential comparison
+against code already trusted — with a real oracle rather than a reconstructed
+one:
+
+1. Port the GDScript one harness exercises.
+2. Port the harness into a C++ test.
+3. Require the C++ test to reproduce **the numbers the Godot harness printed**.
+
+`verify_waves` already hands over four of them: 30 raiders, 1 brute, 31 enemies
+across 5 waves. Those become constants in the C++ test, with the command to
+re-derive them written beside them.
+
+**Three rules this imposes.**
+
+- **The game repo is read-only.** It is the oracle; an edit there invalidates
+  every comparison the port is verified by.
+- **Nothing shells out to Godot from `ctest`.** That binary is Steam-managed on
+  another volume and will not exist on a build machine. A harness is run once,
+  by hand, and its numbers are recorded.
+- **The stepping is part of the specification, not an implementation detail.**
+  `verify_waves` drives `wd._process(2.0)` exactly 300 times. A port that
+  accumulates instead of stepping, or steps at a different dt, drifts — and the
+  debugging goes into the port when the disagreement is in the harness.
+
+**Order**, by dependency rather than by file size: `input_controller` (Phase 4's
+open half, and the smallest slice with an oracle) → `data` → `economy` →
+`units`/`combat` → `waves` → `buildings` → `upgrades`/`meta` → the four
+save-shaped harnesses last, because they serialise everything above them and are
+the "a save round-trips" half of the done-when. `unit.gd` is the largest file in
+the project and is deliberately not first.
+
 ---
 
 ## Phase 4 — Touch and multi-pointer input (1–2 weeks engine, ~90 lines port)
@@ -403,10 +445,9 @@ with no window.
 
 ### Phase 4 progress — 26 August 2026
 
-**The engine half is done. The phase is not**, and the difference matters: the
-gesture machine is port work against a game that is not in this repository, so
-"the marquee and the pan are both reachable with a mouse" cannot be shown here.
-What can be, and is:
+**The engine half is done. The phase is not:** the gesture machine itself is
+port work and had not been written when this was recorded. What the engine now
+provides, and how it was measured:
 
 `RawInputState` carries up to eight contacts — an id and a position each, in the
 same style as `textCharacters`/`textCharacterCount`. A count of zero is the
@@ -460,6 +501,12 @@ corrected for. It goes in when something asks the question.
 **Still open:** the gesture machine itself (~90 lines, port-side), and the
 script ABI, which exposes `mouseDelta` and not contacts. The port is a C++
 layer rather than scripts, so nothing needs it yet.
+
+> **Correction, later the same day.** This section originally said the machine
+> could not be written because the game "is not in this repository". It is not
+> in this repository and it IS on this machine, at `D:/The-Wolf-Brigade` — I
+> had searched one directory and generalised from it. See the Phase 3 section
+> for what that changes, which is most of the plan's test story.
 
 ---
 
