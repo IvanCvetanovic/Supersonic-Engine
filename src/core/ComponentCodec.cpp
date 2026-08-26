@@ -464,6 +464,25 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* stack = registry.try_get<UIStackComponent>(entity)) {
+        out << indent << "\"UIStack\": {\n";
+        out << indent << "  \"Horizontal\": " << (stack->horizontal ? "true" : "false") << ",\n";
+        out << indent << "  \"Anchor\": " << static_cast<int>(stack->anchor) << ",\n";
+        out << indent << "  \"Offset\": [" << stack->offset.x << ", " << stack->offset.y << "],\n";
+        out << indent << "  \"Spacing\": " << stack->spacing << ",\n";
+        out << indent << "  \"Visible\": " << (stack->visible ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
+    // Written whenever it is present, including at zero. Zero is the default,
+    // but an author who set it back to zero on purpose meant that, and dropping
+    // it would silently re-rank the element behind anything that kept its own.
+    if (const auto* ordering = registry.try_get<UIOrderComponent>(entity)) {
+        out << indent << "\"UIOrder\": {\n";
+        out << indent << "  \"Order\": " << ordering->order << "\n";
+        out << indent << "},\n";
+    }
+
     if (const auto* script = registry.try_get<ScriptComponent>(entity)) {
         out << indent << "\"Script\": {\n";
         out << indent << "  \"Name\": \"" << Json::Escape(script->scriptName) << "\",\n";
@@ -862,6 +881,21 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         panel.drawTrack = p["DrawTrack"].AsBool(false);
         panel.trackColor = readVec4(p["TrackColor"], panel.trackColor);
         panel.visible = p["Visible"].AsBool(true);
+    }
+
+    if (node.Has("UIStack")) {
+        const auto& st = node["UIStack"];
+        auto& stack = registry.emplace_or_replace<UIStackComponent>(entity);
+        stack.horizontal = st["Horizontal"].AsBool(false);
+        stack.anchor = readAnchor(st["Anchor"], stack.anchor);
+        stack.offset = readVec2(st["Offset"], stack.offset);
+        stack.spacing = st["Spacing"].AsFloat(8.0f);
+        stack.visible = st["Visible"].AsBool(true);
+    }
+
+    if (node.Has("UIOrder")) {
+        auto& ordering = registry.emplace_or_replace<UIOrderComponent>(entity);
+        ordering.order = static_cast<int32_t>(node["UIOrder"]["Order"].AsFloat(0.0f));
     }
 
     if (node.Has("Script")) {

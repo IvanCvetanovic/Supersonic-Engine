@@ -1275,6 +1275,39 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // UIStackComponent
+    if (registry.all_of<UIStackComponent>(entity)) {
+        if (ImGui::CollapsingHeader("HUD Stack", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& stack = registry.get<UIStackComponent>(entity);
+
+            ImGui::Checkbox("Horizontal", &stack.horizontal);
+            ImGui::TextDisabled("Off is a column, on is a row. Children are whatever is");
+            ImGui::TextDisabled("parented to this entity in the hierarchy.");
+            drawAnchorCombo("Anchor##stack", stack.anchor);
+            ImGui::DragFloat2("Offset##stack", glm::value_ptr(stack.offset), 1.0f, -4000.0f, 4000.0f);
+            ImGui::DragFloat("Spacing##stack", &stack.spacing, 0.5f, 0.0f, 400.0f);
+            ImGui::TextDisabled("The anchor places the whole block. A child in a stack");
+            ImGui::TextDisabled("ignores its own anchor and offset.");
+            ImGui::Checkbox("Visible##stack", &stack.visible);
+        }
+    }
+
+    ImGui::Spacing();
+
+    // UIOrderComponent
+    if (registry.all_of<UIOrderComponent>(entity)) {
+        if (ImGui::CollapsingHeader("HUD Order", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& ordering = registry.get<UIOrderComponent>(entity);
+
+            ImGui::DragInt("Order", &ordering.order, 0.2f, -1000, 1000);
+            ImGui::TextDisabled("Inside a stack: position among siblings, low first.");
+            ImGui::TextDisabled("Outside one: which overlay it belongs to, low drawn");
+            ImGui::TextDisabled("first. A pause menu over a HUD wants a higher number.");
+        }
+    }
+
+    ImGui::Spacing();
+
     // UIButtonComponent
     if (registry.all_of<UIButtonComponent>(entity)) {
         if (ImGui::CollapsingHeader("HUD Button", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1466,6 +1499,14 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
         if (!registry.all_of<UITextFieldComponent>(entity) && ImGui::MenuItem("HUD Text Field")) {
             registry.emplace<UITextFieldComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<UIStackComponent>(entity) && ImGui::MenuItem("HUD Stack")) {
+            registry.emplace<UIStackComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<UIOrderComponent>(entity) && ImGui::MenuItem("HUD Order")) {
+            registry.emplace<UIOrderComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();

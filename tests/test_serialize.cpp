@@ -1393,6 +1393,79 @@ static void testABrokenPrefabIsNotCached() {
     PrefabSerializer::ClearCache();
 }
 
+static void testAStackAndItsRankingSurviveARoundTrip() {
+    // A container decides where its children go, so losing it on save does not
+    // lose a stack - it scatters every child back to whatever anchor it stopped
+    // using when it joined one. And losing the ranking is worse than losing the
+    // stack: the children stay together and quietly re-order, which reads as
+    // the menu being written wrong rather than as the file being lossy.
+    const std::string path = "test_uistack_tmp.scene";
+
+    {
+        entt::registry registry;
+
+        const auto menu = registry.create();
+        registry.emplace<TagComponent>(menu, "PauseMenu");
+        registry.emplace<TransformComponent>(menu);
+        auto& stack = registry.emplace<UIStackComponent>(menu);
+        stack.horizontal = true;
+        stack.anchor = UIAnchor::BottomRight;
+        stack.offset = glm::vec2(-24.0f, -16.0f);
+        stack.spacing = 13.5f;
+        stack.visible = false;
+
+        const auto second = registry.create();
+        registry.emplace<TagComponent>(second, "Quit");
+        registry.emplace<TransformComponent>(second);
+        registry.emplace<UIPanelComponent>(second);
+        registry.emplace<UIOrderComponent>(second).order = 9;
+
+        // Zero, written on purpose. It is the default, so a codec that skips
+        // defaults drops it - and this child then ranks behind the one that
+        // kept its 9 instead of in front of it.
+        const auto first = registry.create();
+        registry.emplace<TagComponent>(first, "Resume");
+        registry.emplace<TransformComponent>(first);
+        registry.emplace<UIPanelComponent>(first);
+        registry.emplace<UIOrderComponent>(first).order = 0;
+
+        CHECK_MSG(SceneSerializer::Serialize(registry, path).ok, "the scene must save");
+    }
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    std::remove(path.c_str());
+    CHECK_MSG(result.ok, "the scene must load: " + result.message);
+
+    entt::entity menu = entt::null, resume = entt::null, quit = entt::null;
+    for (auto [entity, tag] : loaded.view<TagComponent>().each()) {
+        if (tag.tag == "PauseMenu") menu = entity;
+        if (tag.tag == "Resume") resume = entity;
+        if (tag.tag == "Quit") quit = entity;
+    }
+    CHECK_MSG(menu != entt::null, "the stack entity must survive");
+    CHECK_MSG(resume != entt::null && quit != entt::null, "both children must survive");
+    if (menu == entt::null || resume == entt::null || quit == entt::null) return;
+
+    const auto* stack = loaded.try_get<UIStackComponent>(menu);
+    CHECK_MSG(stack != nullptr, "the scene lost its UIStackComponent");
+    if (stack == nullptr) return;
+    CHECK_MSG(stack->horizontal, "the axis must survive");
+    CHECK(stack->anchor == UIAnchor::BottomRight);
+    CHECK_NEAR(stack->offset.x, -24.0f);
+    CHECK_NEAR(stack->offset.y, -16.0f);
+    CHECK_NEAR(stack->spacing, 13.5f);
+    CHECK_MSG(!stack->visible, "a hidden stack must load hidden");
+
+    const auto* ranked = loaded.try_get<UIOrderComponent>(quit);
+    CHECK_MSG(ranked != nullptr, "the scene lost its UIOrderComponent");
+    if (ranked != nullptr) CHECK_EQ(ranked->order, 9);
+
+    const auto* zero = loaded.try_get<UIOrderComponent>(resume);
+    CHECK_MSG(zero != nullptr, "an order of zero is a choice and must be written");
+    if (zero != nullptr) CHECK_EQ(zero->order, 0);
+}
+
 static void runTests() {
     testInstantiatingAPrefabTwiceParsesItOnce();
     testSavingAPrefabInvalidatesWhatWasParsedFromIt();
@@ -1402,6 +1475,7 @@ static void runTests() {
     testTheScenesLookSurvivesARoundTrip();
     testASceneWithNoLookGetsTheDefaultOne();
     testWorldPhysicsSurvivesARoundTrip();
+    testAStackAndItsRankingSurviveARoundTrip();
     testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
     testUnversionedScenesStillLoad();
     testAFutureSceneIsRefusedAndChangesNothing();
@@ -1425,4 +1499,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 303)
+TEST_MAIN("test_serialize", 318)

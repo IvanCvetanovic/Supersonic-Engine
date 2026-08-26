@@ -1,0 +1,233 @@
+// What order the HUD is drawn in.
+//
+// Every other UI test in this suite checks where an element lands. This one
+// checks WHEN it is drawn, which is a different question with the same
+// symptom: a pause menu placed exactly right is still broken if the health bar
+// it is covering draws on top of it.
+//
+// The engine has no way to screenshot this. The HUD goes into an ImGui draw
+// list which is composited into the swapchain, while --screenshot reads back
+// the offscreen colour target the 3D scene rendered into - so the picture CI
+// compares does not contain the HUD at all. What it does contain, exactly and
+// in order, is the vertex buffer ImGui produced. So that is what is measured
+// here: a headless context, one frame, and the order the coloured rectangles
+// appear in ImDrawData.
+
+#include "TestHarness.hpp"
+
+#include "core/Components.hpp"
+#include "core/UISystem.hpp"
+
+#include <entt/entt.hpp>
+#include <imgui.h>
+
+#include <string>
+
+using namespace Supersonic;
+
+namespace {
+
+// Colours chosen to be unmistakable and unlike anything ImGui draws for
+// itself, so "the first vertex of this colour" identifies one rectangle.
+constexpr ImU32 kHudPanel = IM_COL32(255, 0, 0, 255);
+constexpr ImU32 kHudButton = IM_COL32(0, 255, 0, 255);
+constexpr ImU32 kOverlay = IM_COL32(0, 0, 255, 255);
+
+glm::vec4 toVec4(ImU32 color) {
+    return glm::vec4(static_cast<float>((color >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f,
+                     static_cast<float>((color >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f,
+                     static_cast<float>((color >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f,
+                     static_cast<float>((color >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f);
+}
+
+// A context with no graphics backend at all.
+//
+// ImGui 1.92 builds glyphs on demand instead of requiring an uploaded atlas,
+// so declaring RendererHasTextures is the whole of what a backend has to
+// provide here. Nothing is ever uploaded, and nothing needs to be: the draw
+// data is produced on the CPU, and that is what is being read.
+struct HeadlessImGui {
+    HeadlessImGui() {
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(1920.0f, 1080.0f);
+        io.DeltaTime = 1.0f / 60.0f;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+        io.IniFilename = nullptr;
+    }
+    ~HeadlessImGui() { ImGui::DestroyContext(); }
+    HeadlessImGui(const HeadlessImGui&) = delete;
+    HeadlessImGui& operator=(const HeadlessImGui&) = delete;
+};
+
+// A health bar, a button beside it, and an overlay meant to cover both.
+void buildScene(entt::registry& registry, bool layered) {
+    const auto bar = registry.create();
+    auto& panel = registry.emplace<UIPanelComponent>(bar);
+    panel.anchor = UIAnchor::TopLeft;
+    panel.offset = glm::vec2(24.0f, 24.0f);
+    panel.size = glm::vec2(320.0f, 32.0f);
+    panel.color = toVec4(kHudPanel);
+    panel.cornerRadius = 0.0f;
+
+    const auto action = registry.create();
+    auto& button = registry.emplace<UIButtonComponent>(action);
+    button.label.clear();
+    button.anchor = UIAnchor::TopLeft;
+    button.offset = glm::vec2(24.0f, 80.0f);
+    button.size = glm::vec2(200.0f, 48.0f);
+    button.color = toVec4(kHudButton);
+    button.cornerRadius = 0.0f;
+
+    const auto pause = registry.create();
+    auto& cover = registry.emplace<UIPanelComponent>(pause);
+    cover.anchor = UIAnchor::Center;
+    cover.offset = glm::vec2(0.0f, 0.0f);
+    cover.size = glm::vec2(600.0f, 400.0f);
+    cover.color = toVec4(kOverlay);
+    cover.cornerRadius = 0.0f;
+    if (layered) registry.emplace<UIOrderComponent>(pause).order = 9;
+}
+
+// One frame, and what came out of it.
+struct Frame {
+    // Where each colour FIRST appears, in draw order. -1 for a colour that was
+    // never drawn at all, which is a different failure from "drawn in the
+    // wrong place" and worth telling apart.
+    int firstHudPanel{-1};
+    int firstHudButton{-1};
+    int firstOverlay{-1};
+
+    // And how many vertices each one contributed, which is how "drawn twice"
+    // is told from "drawn once".
+    int countHudPanel{0};
+    int countHudButton{0};
+    int countOverlay{0};
+
+    bool complete() const {
+        return firstHudPanel >= 0 && firstHudButton >= 0 && firstOverlay >= 0;
+    }
+};
+
+Frame drawOnce(entt::registry& registry) {
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(1920.0f, 1080.0f));
+    ImGui::Begin("game", nullptr, ImGuiWindowFlags_NoDecoration);
+
+    UICanvas::UIPointer pointer;
+    // Off the screen entirely: a hovered button recolours itself, and a test
+    // that identifies rectangles by colour would then be looking for one that
+    // is not there.
+    pointer.position = glm::vec2(-4000.0f, -4000.0f);
+    UICanvas::UIKeyboard keyboard;
+
+    UISystem::Render(registry,
+                     UIRect{glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f)},
+                     pointer, keyboard, glm::mat4(1.0f));
+
+    ImGui::End();
+    ImGui::Render();
+
+    Frame frame;
+    int index = 0;
+    const ImDrawData* data = ImGui::GetDrawData();
+    for (int list = 0; data != nullptr && list < data->CmdListsCount; ++list) {
+        const ImDrawList* commands = data->CmdLists[list];
+        for (int v = 0; v < commands->VtxBuffer.Size; ++v, ++index) {
+            const ImU32 color = commands->VtxBuffer[v].col;
+            if (color == kHudPanel) {
+                if (frame.firstHudPanel < 0) frame.firstHudPanel = index;
+                ++frame.countHudPanel;
+            } else if (color == kHudButton) {
+                if (frame.firstHudButton < 0) frame.firstHudButton = index;
+                ++frame.countHudButton;
+            } else if (color == kOverlay) {
+                if (frame.firstOverlay < 0) frame.firstOverlay = index;
+                ++frame.countOverlay;
+            }
+        }
+    }
+    return frame;
+}
+
+void testAnUnlayeredHudDrawsPanelsThenButtons() {
+    // The order this engine has always used, and the reason a layer is needed
+    // at all: EVERY panel is drawn before ANY button, so a panel cannot be put
+    // over a button by moving it in the scene or by creating it later.
+    HeadlessImGui imgui;
+    entt::registry registry;
+    buildScene(registry, false);
+
+    const Frame frame = drawOnce(registry);
+    CHECK_MSG(frame.complete(), "all three elements must be drawn");
+    if (!frame.complete()) return;
+
+    CHECK_MSG(frame.firstOverlay < frame.firstHudButton,
+              "unranked, the overlay draws with the other panels and under the button");
+
+    // Nothing is claimed about which of the two PANELS comes first. entt's
+    // iteration order is not a contract - this suite was first written
+    // expecting creation order and got the reverse - and that is precisely why
+    // UIOrderComponent exists rather than being read off the scene.
+}
+
+void testALayeredOverlayDrawsOverEverythingBelowIt() {
+    // The whole point. Godot spells it CanvasLayer.layer; Wolf Brigade puts its
+    // pause menu on 9 and its game-over screen on 10, over a HUD on the
+    // default. If the overlay does not come last here, both of those screens
+    // open with the HUD punched through them.
+    HeadlessImGui imgui;
+    entt::registry registry;
+    buildScene(registry, true);
+
+    const Frame frame = drawOnce(registry);
+    CHECK_MSG(frame.complete(), "all three elements must still be drawn");
+    if (!frame.complete()) return;
+
+    CHECK_MSG(frame.firstOverlay > frame.firstHudButton,
+              "a layer 9 panel must draw after a layer 0 button");
+    CHECK_MSG(frame.firstOverlay > frame.firstHudPanel,
+              "and after a layer 0 panel");
+    CHECK_MSG(frame.firstHudPanel < frame.firstHudButton,
+              "and the type order still holds inside a layer");
+}
+
+void testEveryElementIsStillDrawnExactlyOnce() {
+    // Running the four loops once per layer is a loop over layers wrapped
+    // around a loop over entities, and the guard that keeps an element out of
+    // the layers it does not belong to is easy to leave off. Without it every
+    // element draws once per layer present: correct-looking for an opaque
+    // colour, twice the cost, and visible only as translucent HUD elements
+    // getting darker the moment a menu opens.
+    HeadlessImGui imgui;
+    entt::registry registry;
+
+    entt::registry plain;
+    buildScene(plain, false);
+    const Frame unlayered = drawOnce(plain);
+
+    buildScene(registry, true);
+    const Frame layered = drawOnce(registry);
+
+    CHECK_MSG(unlayered.complete() && layered.complete(), "all three must draw either way");
+    if (!unlayered.complete() || !layered.complete()) return;
+
+    // Two layers are present once the overlay is ranked, so a missing guard
+    // doubles all three of these. Compared against the same scene without the
+    // ranking rather than against a number written down here, so the check
+    // survives ImGui changing how many vertices a rectangle costs.
+    CHECK_EQ(layered.countHudPanel, unlayered.countHudPanel);
+    CHECK_EQ(layered.countHudButton, unlayered.countHudButton);
+    CHECK_EQ(layered.countOverlay, unlayered.countOverlay);
+}
+
+} // namespace
+
+static void runTests() {
+    testAnUnlayeredHudDrawsPanelsThenButtons();
+    testALayeredOverlayDrawsOverEverythingBelowIt();
+    testEveryElementIsStillDrawnExactlyOnce();
+}
+
+TEST_MAIN("test_uilayer", 8)

@@ -17,6 +17,39 @@ ImU32 toColor(const glm::vec4& color) {
 
 ImVec2 toVec(const glm::vec2& v) { return ImVec2(v.x, v.y); }
 
+// Which layer an element draws on. Absent means zero.
+//
+// The same field a stack uses to order its children, because it is the same
+// question at a different scope: where does this sit relative to the things
+// beside it. Within one layer the type order below still holds - panels, then
+// buttons, then fields, then text - so a label still reads on top of its own
+// backdrop.
+int32_t layerOf(const entt::registry& registry, entt::entity entity) {
+    if (const auto* ordering = registry.try_get<UIOrderComponent>(entity)) return ordering->order;
+    return 0;
+}
+
+// Every distinct layer in the scene, low to high.
+//
+// Godot spells this CanvasLayer.layer, and Wolf Brigade uses exactly three
+// values: the HUD at the default, the pause menu at 9 and the game-over overlay
+// at 10. Without it a pause menu draws underneath the HUD it is meant to cover,
+// which reads as the menu being broken rather than as a z-order question.
+//
+// Returns a single zero when nothing is ranked, so the common scene runs the
+// four loops once and pays nothing for a feature it is not using.
+std::vector<int32_t> layersPresent(const entt::registry& registry) {
+    std::vector<int32_t> layers;
+    for (auto [entity, ordering] : registry.view<UIOrderComponent>().each()) {
+        (void)entity;
+        layers.push_back(ordering.order);
+    }
+    layers.push_back(0);
+    std::sort(layers.begin(), layers.end());
+    layers.erase(std::unique(layers.begin(), layers.end()), layers.end());
+    return layers;
+}
+
 // The rectangle the layout pass assigned, or the one the element places for
 // itself. Mirrors UIInput's helper of the same shape, and exists for the same
 // reason: an element inside a stack is no longer using its own anchor, and
@@ -161,10 +194,13 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // frame rather than lagging it by one.
     UIInput::Update(registry, gameRect, pointer, keyboard, stacked);
 
-    // Panels first, then text, so a label always reads on top of its backdrop
-    // regardless of the order the entities happen to be in.
+    // Once per layer, low to high, so a pause menu covers the HUD it is drawn
+    // over. Within a layer: panels first, then text, so a label always reads on
+    // top of its backdrop regardless of the order the entities happen to be in.
+    for (const int32_t layer : layersPresent(registry)) {
     for (auto [entity, panel] : registry.view<UIPanelComponent>().each()) {
         if (!panel.visible) continue;
+        if (layerOf(registry, entity) != layer) continue;
 
         const UIRect rect = placedRect(stacked, entity, panel.anchor, panel.offset,
                                        panel.size, gameRect, scale);
@@ -193,6 +229,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // Interaction ran above; this only draws what it decided.
     for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
         if (!button.visible) continue;
+        if (layerOf(registry, entity) != layer) continue;
 
         // The same placement UIInput used, from the same component - not a
         // second calculation that could disagree with it.
@@ -232,6 +269,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // read over its box and under nothing.
     for (auto [entity, field] : registry.view<UITextFieldComponent>().each()) {
         if (!field.visible) continue;
+        if (layerOf(registry, entity) != layer) continue;
 
         const UIRect rect = placedRect(stacked, entity, field.anchor, field.offset,
                                        field.size, gameRect, scale);
@@ -289,6 +327,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 
     for (auto [entity, text] : registry.view<UITextComponent>().each()) {
         if (!text.visible || text.text.empty()) continue;
+        if (layerOf(registry, entity) != layer) continue;
 
         const float size = text.fontSize * scale;
         if (size < 1.0f) continue;
@@ -336,6 +375,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 
         draw->AddText(font, size, toVec(rect.min), toColor(text.color), text.text.c_str());
     }
+
+    }  // layer
 
     draw->PopClipRect();
 }
