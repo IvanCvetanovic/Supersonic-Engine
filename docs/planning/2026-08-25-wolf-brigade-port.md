@@ -411,6 +411,41 @@ re-derive them written beside them.
   accumulates instead of stepping, or steps at a different dt, drifts — and the
   debugging goes into the port when the disagreement is in the harness.
 
+### Slices ported so far
+
+| slice | oracle | how it was proved |
+|---|---|---|
+| gesture machine | `verify_touch` A | Every case that harness asserts, at its own coordinates. Five mutations caught, including both comparison operators — the GDScript uses `>` on distance and `>=` on time. |
+| data + validator | `verify_data` | The ten key counts the original prints (`world -> 11 keys`, `units -> 5`, …), 0 cross-reference issues, and **nine deliberate typos** — one per check — each caught. Six mutations caught. |
+
+**Two things the data slice cost that reading would not have found.**
+
+`Json::Parser` holds a **reference** to the text it is given, so
+`Parser(buffer.str())` parses a string that has already been destroyed. It does
+not crash — it fails on the first character and reports ten perfectly good files
+as malformed JSON, a long way from the constructor. The rvalue constructor is
+now `= delete`d, so the compiler says it instead. Nothing in the engine was
+relying on it.
+
+And **absence is not a type error**. The GDScript reaches nearly every shape
+check through `dict.get(key, {})`, where a missing key yields the empty default
+and never reaches the check; reading an absent key here gives a null, and
+treating that as "should be an object" reports every building without a
+`researches` list. Making that mistake deliberately fails five cases.
+
+**Counting issues by substring, not in total.** The first version of the
+discrimination cases counted totals, and replacing `buildings.json` to break one
+cost also removed two buildings that an upgrade elsewhere referenced. That is
+collateral from the fixture rather than the check under test, and a total makes
+the file brittle in a way that reads as the validator misbehaving.
+
+**One divergence to remember.** Godot's `Dictionary` preserves insertion order;
+this engine's `Json::Object` is a `std::map` and is sorted by key. Nothing in
+the data depends on object order — the wave schedule and the difficulty menu
+order are both JSON arrays, and that is asserted rather than assumed — but
+anything ported later that iterates an object and cares about the sequence has
+to sort explicitly rather than inherit it.
+
 **Order**, by dependency rather than by file size: `input_controller` (Phase 4's
 open half, and the smallest slice with an oracle) → `data` → `economy` →
 `units`/`combat` → `waves` → `buildings` → `upgrades`/`meta` → the four

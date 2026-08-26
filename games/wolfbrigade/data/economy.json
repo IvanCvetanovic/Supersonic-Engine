@@ -1,0 +1,11 @@
+{
+  "starting_resources": { "wood": 300, "food": 100 },
+  "starting_workers": 3,
+  "deposit_building": "town_hall",
+  "resource_nodes": [
+    { "resource": "wood", "amount": 200, "body_size": [44, 96], "color": "#3f6b34",
+      "positions": [700, 1150, 1900, 2450, 3150, 3850, 4650, 5450] },
+    { "resource": "food", "amount": 120, "body_size": [40, 50], "color": "#c9a44a",
+      "positions": [1350, 2750, 4250, 5150] }
+  ]
+}

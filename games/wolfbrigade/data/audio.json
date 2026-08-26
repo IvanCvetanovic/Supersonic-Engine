@@ -1,0 +1,21 @@
+{
+	"_comment": "Data-driven audio. Each sfx is EITHER a real asset {\"file\": \"res://...\"} OR a synthesised placeholder {\"tone\": {...}}. Swap tone->file to use a real sound, no code. wave: sine|square|saw|triangle. Music is file-only (silent until supplied). volumes are per-bus dB.",
+	"sfx": {
+		"train":    { "tone": { "freq": 660, "ms": 90,  "wave": "square",   "vol": 0.35 } },
+		"build":    { "tone": { "freq": 320, "ms": 170, "wave": "sine",     "vol": 0.4 } },
+		"death":    { "tone": { "freq": 170, "ms": 200, "wave": "saw",      "vol": 0.4 } },
+		"destroy":  { "tone": { "freq": 90,  "ms": 340, "wave": "saw",      "vol": 0.5 } },
+		"wave":     { "tone": { "freq": 210, "ms": 420, "wave": "square",   "vol": 0.45 } },
+		"victory":  { "tone": { "freq": 880, "ms": 520, "wave": "sine",     "vol": 0.5 } },
+		"defeat":   { "tone": { "freq": 110, "ms": 620, "wave": "saw",      "vol": 0.5 } },
+		"research": { "tone": { "freq": 990, "ms": 150, "wave": "triangle", "vol": 0.4 } },
+		"place":    { "tone": { "freq": 440, "ms": 110, "wave": "sine",     "vol": 0.35 } },
+		"attack":   { "tone": { "freq": 500, "ms": 55,  "wave": "square",   "vol": 0.2 } },
+		"shoot":    { "tone": { "freq": 720, "ms": 45,  "wave": "sine",     "vol": 0.2 } }
+	},
+	"music": {
+		"menu": {},
+		"game": {}
+	},
+	"volumes": { "master_db": 0.0, "sfx_db": 0.0, "music_db": -6.0 }
+}

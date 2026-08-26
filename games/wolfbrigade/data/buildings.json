@@ -1,0 +1,47 @@
+{
+  "town_hall": {
+    "display_name": "Town Hall",
+    "faction": "player",
+    "cost": {},
+    "build_time": 0.0,
+    "max_hp": 1000,
+    "pre_placed": true,
+    "is_deposit_point": true,
+    "trains": ["worker"],
+    "researches": ["sharper_axes", "iron_swords", "fletching", "masterwork_bows", "reinforced_walls"],
+    "spawn_offset": 40,
+    "body_size": [120, 160],
+    "color": "#3b6fa0"
+  },
+  "barracks": {
+    "display_name": "Barracks",
+    "faction": "player",
+    "cost": { "wood": 150 },
+    "build_time": 10.0,
+    "max_hp": 500,
+    "pre_placed": false,
+    "is_deposit_point": false,
+    "buildable": true,
+    "trains": ["soldier", "archer"],
+    "spawn_offset": 40,
+    "body_size": [110, 130],
+    "color": "#355f88"
+  },
+  "tower": {
+    "display_name": "Tower",
+    "faction": "player",
+    "cost": { "wood": 120, "food": 30 },
+    "build_time": 8.0,
+    "max_hp": 400,
+    "pre_placed": false,
+    "is_deposit_point": false,
+    "buildable": true,
+    "trains": [],
+    "damage": 10,
+    "attacks_per_sec": 0.7,
+    "attack_range": 300,
+    "projectile_speed": 760,
+    "body_size": [64, 150],
+    "color": "#6b6f7a"
+  }
+}

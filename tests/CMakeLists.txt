@@ -64,6 +64,7 @@ function(add_port_test name)
 endfunction()
 
 add_port_test(test_wb_gestures)
+add_port_test(test_wb_data)
 add_engine_test(test_environmentmap)
 add_engine_test(test_assetdatabase)
 add_engine_test(test_serialize)

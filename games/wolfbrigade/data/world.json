@@ -1,0 +1,22 @@
+{
+  "width": 6000,
+  "height": 1080,
+  "ground_y": 800,
+  "background_color": "#161a22",
+  "ground_color": "#3a2f22",
+  "town_hall_spawn_x": 1500,
+  "player_spawn_x": 1680,
+  "player_spawn_spacing": 60,
+  "enemy_spawn_x": 5960,
+  "camera": {
+    "pan_speed": 1400,
+    "edge_push_margin": 28,
+    "start_x": 1500
+  },
+  "input": {
+    "drag_threshold_px": 12,
+    "touch_hold_select_ms": 300,
+    "unit_pick_radius": 52,
+    "formation_spacing": 46
+  }
+}

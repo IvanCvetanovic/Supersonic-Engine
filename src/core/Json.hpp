@@ -140,6 +140,13 @@ class Parser {
 public:
     explicit Parser(const std::string& text) : m_text(text) {}
 
+    // A temporary would dangle: m_text is a reference, so `Parser(read(path))`
+    // parses a string that no longer exists. It does not crash - it fails on
+    // the first character and reports a perfectly good document as malformed,
+    // which is a long way from the constructor. Deleted so the compiler says
+    // so instead.
+    explicit Parser(std::string&&) = delete;
+
     // Nesting deeper than this is refused rather than recursed into.
     //
     // parseValue, parseObject and parseArray are mutual recursion with no

@@ -15,8 +15,21 @@
 # binaries that touch no Vulkan entry point, exactly as the engine's own do.
 
 add_library(WolfBrigadeSim STATIC
+    DataValidator.cpp
+    GameData.cpp
     GestureMachine.cpp
 )
+
+# Where the ported data lives, as a compile definition rather than a path the
+# test works out for itself.
+#
+# ctest runs from the build tree and the game's own harnesses run from the
+# project root, so any relative path is right for exactly one of them. An
+# absolute path baked in at configure time is right for both, and a test that
+# cannot find its data fails loudly instead of validating an empty document and
+# reporting zero issues.
+target_compile_definitions(WolfBrigadeSim PUBLIC
+    WOLFBRIGADE_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../data")
 
 target_include_directories(WolfBrigadeSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(WolfBrigadeSim PUBLIC SupersonicCore)

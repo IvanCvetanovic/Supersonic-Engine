@@ -1,0 +1,42 @@
+{
+  "currency": {
+    "display_name": "Renown",
+    "per_wave": 8,
+    "per_wave_growth": 2,
+    "victory_bonus": 60
+  },
+  "upgrades": {
+    "sharper_axes": {
+      "display_name": "Sharper Axes",
+      "description": "Workers gather wood faster in every run.",
+      "max_level": 3,
+      "base_cost": 40,
+      "cost_growth": 40,
+      "effects": { "worker": { "gather_rate": 0.3 } }
+    },
+    "veteran_soldiers": {
+      "display_name": "Veteran Soldiers",
+      "description": "Soldiers are trained tougher, forever.",
+      "max_level": 3,
+      "base_cost": 60,
+      "cost_growth": 60,
+      "effects": { "soldier": { "max_hp": 15 } }
+    },
+    "deeper_coffers": {
+      "display_name": "Deeper Coffers",
+      "description": "Begin every run with extra wood.",
+      "max_level": 3,
+      "base_cost": 50,
+      "cost_growth": 50,
+      "effects": { "starting_resources": { "wood": 40 } }
+    },
+    "fortified_halls": {
+      "display_name": "Fortified Halls",
+      "description": "Your Town Hall stands stronger in every run.",
+      "max_level": 3,
+      "base_cost": 70,
+      "cost_growth": 70,
+      "effects": { "town_hall": { "max_hp": 150 } }
+    }
+  }
+}

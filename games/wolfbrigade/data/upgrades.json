@@ -1,0 +1,7 @@
+{
+  "sharper_axes":     { "display_name": "Sharper Axes",     "cost": { "wood": 80 },              "effects": { "worker": { "gather_rate": 0.5 } } },
+  "iron_swords":      { "display_name": "Iron Swords",      "cost": { "wood": 100, "food": 40 }, "effects": { "soldier": { "damage": 4 } } },
+  "fletching":        { "display_name": "Fletching",        "cost": { "wood": 80, "food": 30 },  "effects": { "archer": { "damage": 3, "attack_range": 40 } } },
+  "masterwork_bows":  { "display_name": "Masterwork Bows",  "cost": { "wood": 120, "food": 50 }, "requires": ["fletching"], "effects": { "archer": { "damage": 4 } } },
+  "reinforced_walls": { "display_name": "Reinforced Walls", "cost": { "wood": 150 },             "effects": { "town_hall": { "max_hp": 500 }, "barracks": { "max_hp": 200 } } }
+}
