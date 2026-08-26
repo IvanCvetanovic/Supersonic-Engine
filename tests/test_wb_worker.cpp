@@ -40,6 +40,7 @@
 #include "sim/EventBus.hpp"
 #include "sim/GameState.hpp"
 #include "sim/ResourceNode.hpp"
+#include "sim/Projectiles.hpp"
 #include "sim/Unit.hpp"
 #include "sim/World.hpp"
 
@@ -56,7 +57,10 @@ constexpr float kGroundY = 800.0f;
 constexpr float kDepositX = 1000.0f;
 constexpr float kNodeX = 1300.0f;
 constexpr float kWorkerX = 1100.0f;
-constexpr float kStep = 0.2f;
+// The harness's dt, as a DOUBLE. `0.2f` is 0.20000000298023224 once widened,
+// which is not the number the GDScript steps by - and over 140 steps that is
+// the difference between reproducing the original and nearly reproducing it.
+constexpr double kStep = 0.2;
 constexpr int kSteps = 140;
 
 // A world made of a list of nodes and a list of deposits, which is what the
@@ -122,6 +126,13 @@ public:
     glm::vec2 DepositPosition(int index) const override {
         return DepositExists(index) ? deposits[static_cast<size_t>(index)] : glm::vec2(0.0f);
     }
+
+    // Nothing to fight here. A world with no enemies and no arrows is a
+    // legitimate one - it is what a peaceful minute of gathering looks like -
+    // and the combat suite next door builds the other kind.
+    Unit* NearestEnemyUnit(const std::string&, float, float) const override { return nullptr; }
+    Damageable* NearestEnemyBuilding(const std::string&, float) const override { return nullptr; }
+    ProjectilePool* Projectiles() override { return nullptr; }
 };
 
 // A run with one worker in it.
@@ -224,7 +235,7 @@ void testTheGatherRemainderIsKeptRatherThanTruncated() {
     ResourceNode* tree = site.world.Add(Ids::kWood, kNodeX, 100);
 
     auto worker = site.Worker(kNodeX - 10.0f);   // already in range
-    for (int i = 0; i < 120; ++i) worker->Step(1.0f / 60.0f);   // 2 seconds
+    for (int i = 0; i < 120; ++i) worker->Step(1.0 / 60.0);   // 2 seconds
 
     CHECK_MSG(tree->amount < 100, "a worker stepping at 60Hz must still gather");
     CHECK_EQ(100 - tree->amount, worker->Carrying());
@@ -371,7 +382,7 @@ void testDecisionsRunOnTheTickAndMovementRunsEveryStep() {
     worker->CommandMoveTo(glm::vec2(1500.0f, 0.0f));
 
     // One step far shorter than the tick interval. It has to MOVE.
-    worker->Step(0.01f);
+    worker->Step(0.01);
     CHECK_MSG(worker->Position().x > 1000.0f, "movement does not wait for the thinking tick");
 
     // But it has not arrived, so it is still moving - and nothing decided
@@ -391,7 +402,7 @@ void testAStepLongerThanTheTickThinksOnceRatherThanCatchingUp() {
     // One second: eight ticks' worth. It picks up work on the first and only
     // one of them, so it is gathering rather than having cycled through
     // gather-deliver-gather.
-    worker->Step(1.0f);
+    worker->Step(1.0);
     CHECK(worker->CurrentState() == Unit::State::Gathering);
     CHECK_MSG(tree->amount == 100, "the decision happens after the step's work, not before it");
 }
@@ -417,7 +428,7 @@ void testTheRemainderSurvivesATreeRunningOutMidBite() {
     ResourceNode* plenty = site.world.Add(Ids::kWood, kNodeX, 100);
 
     auto worker = site.Worker(kNodeX);
-    for (int i = 0; i < 6; ++i) worker->Step(5.0f);
+    for (int i = 0; i < 6; ++i) worker->Step(5.0);
 
     // Two from the first tree, banked; then eight from the second in one bite -
     // five seconds of rate plus the three that were owed.
@@ -442,7 +453,7 @@ void testAWorkerNeverCarriesMoreThanItCanCarry() {
     const int before = site.state.Amount(Ids::kWood);
 
     for (int i = 0; i < 14; ++i) {
-        worker->Step(5.0f);
+        worker->Step(5.0);
         CHECK_MSG(worker->Carrying() <= capacity, "a worker cannot hold more than its capacity");
     }
 
@@ -468,14 +479,14 @@ void testAnEmptiedTreeSendsTheWorkerHomeOnTheSameStep() {
     // design working, and the first version of this case assumed one step was
     // enough.
     for (int i = 0; i < 8 && worker->CurrentState() != Unit::State::Gathering; ++i) {
-        worker->Step(1.0f / 60.0f);
+        worker->Step(1.0 / 60.0);
     }
     CHECK(worker->CurrentState() == Unit::State::Gathering);
 
     // Step at 60Hz until the tree is empty, and check the state on that step.
     bool leftImmediately = false;
     for (int i = 0; i < 600 && stump->amount > 0; ++i) {
-        worker->Step(1.0f / 60.0f);
+        worker->Step(1.0 / 60.0);
         if (stump->amount == 0) leftImmediately = worker->CurrentState() == Unit::State::Delivering;
     }
     CHECK_EQ(stump->amount, 0);
@@ -494,7 +505,7 @@ void testALongStepDoesNotChainDecisions() {
     worker->CommandMoveTo(glm::vec2(kNodeX, 0.0f));
 
     // Long enough to cover the distance AND eight thinking intervals.
-    worker->Step(5.0f);
+    worker->Step(5.0);
     CHECK_MSG(worker->CurrentState() == Unit::State::Idle,
               "arriving releases the order and nothing else happens this step");
 }

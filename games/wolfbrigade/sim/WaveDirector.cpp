@@ -17,21 +17,21 @@ void WaveDirector::Setup(SpawnFn spawn, float enemyX, float groundY) {
     m_groundY = groundY;
 
     m_waves = m_data->Waves();
-    m_spawnInterval = m_data->WaveConfig()["spawn_interval"].AsFloat(0.8f);
+    m_spawnInterval = m_data->WaveConfig()["spawn_interval"].AsNumber(0.8);
 
     m_endless = m_state->IsEndless();
     m_endlessConfig = m_data->WaveConfig()["endless"];
-    m_endlessInterval = m_endlessConfig["interval"].AsFloat(75.0f);
+    m_endlessInterval = m_endlessConfig["interval"].AsNumber(75.0);
 
     // Endless begins a delay after the LAST scripted wave, not after the clock
     // starts. A player who has just fought wave five gets the same breathing
     // space whatever the schedule looked like.
-    float lastTime = 0.0f;
-    if (!m_waves.empty()) lastTime = m_waves.back()["time"].AsFloat(0.0f);
-    m_endlessBaseTime = lastTime + m_endlessConfig["start_delay"].AsFloat(90.0f);
+    double lastTime = 0.0;
+    if (!m_waves.empty()) lastTime = m_waves.back()["time"].AsNumber(0.0);
+    m_endlessBaseTime = lastTime + m_endlessConfig["start_delay"].AsNumber(90.0);
 }
 
-void WaveDirector::Step(float delta) {
+void WaveDirector::Step(double delta) {
     // Nothing runs without somewhere to put a spawn, and nothing runs once the
     // run is decided: a director that kept spawning through a defeat would
     // bury a player who had already lost.
@@ -42,7 +42,7 @@ void WaveDirector::Step(float delta) {
     // A while, not an if. A step long enough to pass two wave times has to
     // start both, or a hitch quietly skips a wave.
     while (m_nextWave < m_waves.size() &&
-           m_elapsed >= m_waves[m_nextWave]["time"].AsFloat(0.0f)) {
+           m_elapsed >= m_waves[m_nextWave]["time"].AsNumber(0.0)) {
         StartWave(m_nextWave);
         ++m_nextWave;
     }
@@ -74,16 +74,16 @@ void WaveDirector::Step(float delta) {
     }
 }
 
-float WaveDirector::SecondsToNextWave() const {
+double WaveDirector::SecondsToNextWave() const {
     if (m_nextWave < m_waves.size()) {
-        return std::max(0.0f, m_waves[m_nextWave]["time"].AsFloat(0.0f) - m_elapsed);
+        return std::max(0.0, m_waves[m_nextWave]["time"].AsNumber(0.0) - m_elapsed);
     }
-    if (m_endless) return std::max(0.0f, NextEndlessTime() - m_elapsed);
-    return -1.0f;
+    if (m_endless) return std::max(0.0, NextEndlessTime() - m_elapsed);
+    return -1.0;
 }
 
-float WaveDirector::NextEndlessTime() const {
-    return m_endlessBaseTime + static_cast<float>(m_endlessIndex) * m_endlessInterval;
+double WaveDirector::NextEndlessTime() const {
+    return m_endlessBaseTime + static_cast<double>(m_endlessIndex) * m_endlessInterval;
 }
 
 void WaveDirector::StartWave(size_t index) {

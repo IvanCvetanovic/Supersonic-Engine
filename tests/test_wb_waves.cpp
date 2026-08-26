@@ -57,7 +57,10 @@ constexpr float kGroundY = 800.0f;
 
 // And its stepping. 300 steps of two seconds is ~600s of simulation, which
 // clears the last scripted wave at t=420 with room to spare.
-constexpr float kStep = 2.0f;
+// A DOUBLE, like the GDScript's own dt. `2.0f` happens to be exact, but the
+// habit is what matters: 0.25f is not 0.25, and a schedule stepped by the wrong
+// number drifts a wave at a time.
+constexpr double kStep = 2.0;
 constexpr int kSteps = 300;
 
 // A director with somewhere to put its spawns, and a record of what came out.
@@ -93,7 +96,7 @@ struct Field {
             kEnemyX, kGroundY);
     }
 
-    void Run(int steps = kSteps, float step = kStep) {
+    void Run(int steps = kSteps, double step = kStep) {
         for (int i = 0; i < steps; ++i) director.Step(step);
     }
 
@@ -184,7 +187,7 @@ void testAnEmptyFinalWaveStillResolvesToVictory() {
     field.Begin();
 
     // Up to just before the empty final wave: two raiders out, still playing.
-    field.Run(20, 2.0f);
+    field.Run(20, 2.0);
     CHECK_EQ(static_cast<int>(field.spawned.size()), 2);
     CHECK_MSG(field.state.IsPlaying(), "no premature victory before the final wave starts");
     CHECK_EQ(field.wonCount, 0);
@@ -195,7 +198,7 @@ void testAnEmptyFinalWaveStillResolvesToVictory() {
     CHECK_MSG(field.state.IsPlaying(),
               "clearing the field before the last wave is not a win either");
 
-    field.Run(20, 2.0f);
+    field.Run(20, 2.0);
     CHECK_MSG(!field.state.IsPlaying(), "the empty final wave must resolve");
     CHECK_EQ(field.wonCount, 1);
 }
@@ -217,7 +220,7 @@ void testAWaveArrivesAsAColumnRatherThanAllAtOnce() {
     // t=60 is wave 1. Thirty steps of 2.0 gets there with the wave starting on
     // the step that crosses it.
     for (int i = 0; i < 30; ++i) {
-        field.director.Step(2.0f);
+        field.director.Step(2.0);
         if (i < 29) CHECK_MSG(field.spawned.empty(), "nothing spawns before the first wave");
     }
     CHECK_EQ(static_cast<int>(field.spawned.size()), 2);
@@ -243,20 +246,25 @@ void testTheFirstOfAWaveArrivesOnTheStepTheWaveStarts() {
     Field field(data);
     field.Begin();
 
-    for (int i = 0; i < 9; ++i) field.director.Step(0.1f);
+    // TEN steps of 0.1 do not reach t=1. They come to 0.9999999999999999, and
+    // this case failed the moment the simulation's scalars were widened to
+    // double - in single precision the same ten steps overshoot to 1.0000001
+    // and the wave had already started. The fixture was sitting on the
+    // boundary; the eleventh step is unambiguously past it.
+    for (int i = 0; i < 10; ++i) field.director.Step(0.1);
     CHECK_MSG(field.spawned.empty(), "nothing before the wave's time");
 
     // The step that crosses t=1 starts the wave AND lets the first one out.
-    field.director.Step(0.1f);
+    field.director.Step(0.1);
     CHECK_EQ(static_cast<int>(field.spawned.size()), 1);
 
     // And the rest follow at one every 0.8s, not all at once. Sampled well
     // clear of the boundary in both directions: the accumulator is 0.1 after
     // the first spawn, and asking exactly when it reaches 0.8 is asking what
     // seven additions of 0.1f come to.
-    for (int i = 0; i < 5; ++i) field.director.Step(0.1f);   // ~0.6
+    for (int i = 0; i < 5; ++i) field.director.Step(0.1);   // ~0.6
     CHECK_EQ(static_cast<int>(field.spawned.size()), 1);
-    for (int i = 0; i < 3; ++i) field.director.Step(0.1f);   // ~0.9
+    for (int i = 0; i < 3; ++i) field.director.Step(0.1);   // ~0.9
     CHECK_EQ(static_cast<int>(field.spawned.size()), 2);
 }
 
@@ -266,7 +274,7 @@ void testALongStepStartsEveryWaveItPassedRatherThanOne() {
     // schedule quietly loses the ones in between.
     Field field;
     field.Begin();
-    field.director.Step(500.0f);
+    field.director.Step(500.0);
 
     CHECK_EQ(static_cast<int>(field.wavesStarted.size()), 5);
     CHECK_EQ(field.state.CurrentWave(), 5);
@@ -353,7 +361,7 @@ void testEndlessRampsCountAndToughnessPerWave() {
     // leaves the queue empty and the second wave still 12s away - the window
     // matters, and the first version of this case picked one where three waves
     // had started and read the partial drain as a wrong count.
-    field.Run(80, 0.25f);   // t=20
+    field.Run(80, 0.25);   // t=20
     CHECK_EQ(field.CountOf(Ids::kRaider), 8);
     CHECK_EQ(field.CountOf(Ids::kBrute), 0);
     CHECK_EQ(field.director.QueuedSpawns(), 0);
@@ -364,7 +372,7 @@ void testEndlessRampsCountAndToughnessPerWave() {
     CHECK_EQ(field.spawned.front().maxHp, 40);
 
     // The second fires at t=32 and brings the heavy with it.
-    field.Run(120, 0.25f);   // t=50
+    field.Run(120, 0.25);   // t=50
     CHECK_EQ(field.CountOf(Ids::kRaider), 18);
     CHECK_MSG(field.CountOf(Ids::kBrute) == 1, "brute_every 2 means the SECOND wave, not the first");
 
@@ -391,7 +399,7 @@ void testEndlessCannotGenerateUnboundedWavesInOneStep() {
     field.Begin();
 
     // One step of an hour. Without the cap this is 3600 waves.
-    field.director.Step(3600.0f);
+    field.director.Step(3600.0);
     CHECK_MSG(field.state.CurrentWave() <= 1 + 8,
               "no more than the per-step cap of endless waves may start at once");
 }
@@ -404,7 +412,7 @@ void testSecondsToNextWaveCountsDownAndEndsAtMinusOne() {
 
     // Wave 1 is at t=60.
     CHECK_NEAR(field.director.SecondsToNextWave(), 60.0f);
-    field.director.Step(10.0f);
+    field.director.Step(10.0);
     CHECK_NEAR(field.director.SecondsToNextWave(), 50.0f);
 
     field.Run();

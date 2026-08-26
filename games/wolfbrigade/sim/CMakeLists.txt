@@ -19,6 +19,8 @@ add_library(WolfBrigadeSim STATIC
     GameData.cpp
     GameState.cpp
     GestureMachine.cpp
+    Lane.cpp
+    Projectiles.cpp
     ResourceNode.cpp
     Unit.cpp
     UnitStats.cpp

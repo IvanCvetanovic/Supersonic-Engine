@@ -46,7 +46,11 @@ public:
     // One step. The original is a Godot _process, and the harness drives it at
     // a fixed dt rather than a frame time - which is what makes the counts it
     // prints reproducible at all.
-    void Step(float delta);
+    //
+    // A double, like every other scalar in the simulation. GDScript's float is
+    // 64-bit and an elapsed time accumulated over hundreds of steps is exactly
+    // where the width shows - see the note at the top of Unit.hpp.
+    void Step(double delta);
 
     // --- What the HUD asks ------------------------------------------------
 
@@ -55,7 +59,7 @@ public:
 
     // Seconds until the next wave, or -1 when none is scheduled. Endless
     // always has a next one, so it never returns -1.
-    float SecondsToNextWave() const;
+    double SecondsToNextWave() const;
 
     // --- What the rest of the simulation tells it -------------------------
 
@@ -70,7 +74,7 @@ public:
     void OnTownHallDestroyed();
 
     int AliveEnemies() const { return m_aliveEnemies; }
-    float Elapsed() const { return m_elapsed; }
+    double Elapsed() const { return m_elapsed; }
     int QueuedSpawns() const { return static_cast<int>(m_queue.size()); }
 
 private:
@@ -90,7 +94,7 @@ private:
     void StartEndlessWave();
     void SpawnNext();
     void CheckVictory();
-    float NextEndlessTime() const;
+    double NextEndlessTime() const;
 
     const GameData* m_data{nullptr};
     GameState* m_state{nullptr};
@@ -101,20 +105,20 @@ private:
     float m_groundY{800.0f};
 
     std::vector<Supersonic::Json::Value> m_waves;
-    float m_spawnInterval{0.8f};
+    double m_spawnInterval{0.8};
 
-    float m_elapsed{0.0f};
+    double m_elapsed{0.0};
     size_t m_nextWave{0};
     std::vector<Queued> m_queue;
-    float m_spawnAccumulator{0.0f};
+    double m_spawnAccumulator{0.0};
     int m_aliveEnemies{0};
     bool m_allSpawned{false};
 
     bool m_endless{false};
     Supersonic::Json::Value m_endlessConfig;
     int m_endlessIndex{0};
-    float m_endlessBaseTime{0.0f};
-    float m_endlessInterval{75.0f};
+    double m_endlessBaseTime{0.0};
+    double m_endlessInterval{75.0};
 
     // Never generate more than this many endless waves in one step.
     //

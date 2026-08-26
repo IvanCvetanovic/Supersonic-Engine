@@ -1,9 +1,14 @@
 #pragma once
 
+#include <string>
+
 #include <glm/glm.hpp>
 
 namespace WolfBrigade {
 
+class Damageable;
+class ProjectilePool;
+class Unit;
 struct ResourceNode;
 
 // Everything a unit can see that it does not own.
@@ -37,6 +42,27 @@ public:
     virtual int NearestDeposit(float x) const = 0;   // -1 when there are none
     virtual bool DepositExists(int index) const = 0;
     virtual glm::vec2 DepositPosition(int index) const = 0;
+
+    // --- Combat -----------------------------------------------------------
+
+    // The nearest living unit of the OTHER faction within range, from the lane
+    // index. Null when nothing is in aggro, which is most of the time.
+    virtual Unit* NearestEnemyUnit(const std::string& faction, float x,
+                                   float maxRange) const = 0;
+
+    // The nearest standing building of the other faction, at any distance.
+    //
+    // No range, deliberately: a raider with nothing in aggro walks toward the
+    // Town Hall from the far end of a six-thousand-pixel world, and that walk
+    // IS the game. Null once every enemy building has fallen, at which point a
+    // raider heads for the left edge instead.
+    virtual Damageable* NearestEnemyBuilding(const std::string& faction, float x) const = 0;
+
+    // Where arrows come from. Null in a world with no ranged units in it,
+    // which is a legitimate configuration and not an error - an archer that
+    // cannot find a pool simply does not shoot, exactly as the original
+    // returns null from _acquire when nothing has set a parent.
+    virtual ProjectilePool* Projectiles() = 0;
 };
 
 } // namespace WolfBrigade

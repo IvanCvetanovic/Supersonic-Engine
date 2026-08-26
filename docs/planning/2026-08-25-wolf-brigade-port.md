@@ -418,6 +418,7 @@ re-derive them written beside them.
 | gesture machine | `verify_touch` A | Every case that harness asserts, at its own coordinates. Five mutations caught, including both comparison operators — the GDScript uses `>` on distance and `>=` on time. |
 | data + validator | `verify_data` | The ten key counts the original prints (`world -> 11 keys`, `units -> 5`, …), 0 cross-reference issues, and **nine deliberate typos** — one per check — each caught. Six mutations caught. |
 | wave director | `verify_waves` | **The first slice the oracle actually constrains.** 30 raiders, 1 brute, 31 across five waves, reaching wave 5 — the output of 300 steps through the schedule, the difficulty scaling and the spawn interval, and not derivable by reading. Matched on the first run. Plus victory only on a cleared field, defeat on the Town Hall, and the empty-final-wave soft-lock the original wrote its own case against. Eight mutations, all caught. |
+| combat | `verify_combat` | **soldier 36/60, Town Hall 934/1000** — and the second one is the first number in the whole port that DISAGREED. Plus the lane index, orders beating instincts, and the arrow pool. Nine mutations, all caught after two blind spots were closed. |
 | worker economy | `verify_economy` 2, 2b + `verify_units` FSM | **tree 79/100, banked +20, carried 1** — 140 steps of 0.2s between a tree at 1300 and a deposit at 1000, matched exactly, for both resources. Plus the FSM (spawns idle at 30 hp, a move order strips the y, arrival releases the order) and the flee reflex. Twelve mutations; **four survived the first pass** and needed cases the original's own harness cannot see. |
 | economy state | `verify_economy` 1, 2c, 3 | Extraction clamps (200 → 170 → 0), spending is atomic, and `resources_changed` carries the new TOTAL. Difficulty scales the opening balance to the numbers the presets imply — 450 on Easy, 240 on Hard — and owned meta lands flat on top of it, not through it. Six mutations, all caught. Sections 2 and 2b, the worker gather/deliver loop, wait for `unit.gd`. |
 
@@ -449,6 +450,36 @@ discrimination cases counted totals, and replacing `buildings.json` to break one
 cost also removed two buildings that an upgrade elsewhere referenced. That is
 collateral from the fixture rather than the check under test, and a total makes
 the file brittle in a way that reads as the validator misbehaving.
+
+### GDScript's `float` is 64-bit, and that changed the answer
+
+The raider-versus-Town-Hall case is the first thing in this port that came out
+wrong: **928 against the original's 934**, stable across four re-runs of the
+oracle. One extra hit of six damage in twelve seconds.
+
+The cause is not the port's logic. It is a cooldown of 1.0 decremented by 0.1
+every step, which reaches zero or below after **eleven** decrements in double
+and **ten** in float — 0.1 is unrepresentable in both and the errors accumulate
+in opposite directions. Eleven steps of 0.1 is an attack every 1.1 seconds for a
+unit whose data says one per second.
+
+GDScript's `float` is 64-bit. Godot's `Vector2` is **not** — it holds 32-bit
+`real_t` — so the original runs positions in single precision and every other
+scalar in double, and a port that picks one width for both is wrong wherever a
+scalar accumulates. The simulation now follows that split exactly: `delta`,
+cooldowns, timers and accumulators are `double`; positions stay `glm::vec2`.
+With it, 934.
+
+Two things this implies for every remaining slice:
+
+- **A test that steps by `0.1f` is not stepping by 0.1.** Widened to a double
+  that literal is 0.10000000149011612, and over a hundred steps that is a
+  different simulation. Every dt in the port's suites is now a double literal.
+- **It moved a fixture across a boundary.** Ten steps of 0.1 come to
+  0.9999999999999999 in double and 1.0000001 in float, and a wave scheduled at
+  t=1.0 had been starting on the tenth step and now starts on the eleventh.
+  That case was sitting on the boundary and now sits well clear of it — the
+  same trap, for the third time.
 
 **The harness's own dt hid three bugs.** `verify_economy` steps at 0.2s and the
 worker gathers at 1.0/sec, so a step never asks for more than one unit of wood —

@@ -4,6 +4,7 @@
 
 #include <glm/glm.hpp>
 
+#include "sim/Damageable.hpp"
 #include "sim/EventBus.hpp"
 #include "sim/GameState.hpp"
 #include "sim/ResourceNode.hpp"
@@ -25,9 +26,31 @@ namespace WolfBrigade {
 // distance checks a frame for an answer that has not changed. Mixing the two up
 // is the difference between a game that runs on a phone and one that does not.
 //
-// This is the WORKER half of the port. Soldiers, archers and raiders need the
-// lane index and the buildings they fight over, and arrive with those.
-class Unit {
+// SCALARS ARE DOUBLES HERE, AND THAT IS NOT AN ACCIDENT.
+//
+// GDScript's `float` is 64-bit. Godot's `Vector2` is not - it holds 32-bit
+// `real_t` - so the original runs its POSITIONS in single precision and
+// everything else in double, and a port that picks one width for both is wrong
+// wherever a scalar accumulates.
+//
+// It cost a real disagreement to find. A raider left with the Town Hall for
+// twelve seconds took it to 934 in the original and 928 here: one extra hit.
+// The reason is a cooldown of 1.0 decremented by 0.1 at every step - which
+// reaches zero or below after ELEVEN decrements in double and TEN in float,
+// because 0.1 is not representable in either and the errors accumulate in
+// opposite directions. Eleven steps of 0.1 is an attack every 1.1 seconds
+// rather than every 1.0, for a unit whose data says one per second.
+//
+// So: `delta`, cooldowns, timers and accumulators are `double`; positions and
+// sizes stay `glm::vec2`. That is the same split the original has, and it is
+// what makes the numbers match.
+//
+// Four behaviours, three thinking routines. A soldier and an archer decide the
+// same way and differ only in how they close the distance - which is why the
+// original dispatches both to _tick_defender and branches inside the attack
+// step, and why doing it the other way round would duplicate the acquisition
+// logic twice with one copy quietly drifting.
+class Unit final : public Damageable {
 public:
     enum class State { Idle, Moving, Gathering, Delivering, Building, Attacking, Fleeing, Dead };
 
@@ -39,7 +62,7 @@ public:
 
     // ~8 Hz. A performance knob, not a game stat - which is why it is a
     // constant here and not a number in the data files.
-    static constexpr float kAiTickInterval = 0.125f;
+    static constexpr double kAiTickInterval = 0.125;
 
     // Close enough to count as arrived. Without a threshold a unit oscillates
     // around its target forever, one sub-pixel step at a time.
@@ -48,8 +71,8 @@ public:
     Unit(const UnitStats& stats, GameState& state, EventBus& bus, World& world)
         : m_stats(stats), m_state(&state), m_bus(&bus), m_world(&world), m_hp(stats.maxHp) {}
 
-    // One step. `delta` is seconds.
-    void Step(float delta);
+    // One step. `delta` is seconds, in double - see the note above.
+    void Step(double delta);
 
     // --- Orders ------------------------------------------------------------
 
@@ -61,16 +84,24 @@ public:
     // ground row would be walking through the sky.
     void CommandMoveTo(const glm::vec2& target);
 
+    // Attack a specific thing, because the player said so.
+    //
+    // Sets the ordered-to-attack flag, which is what makes a WORKER fight
+    // instead of running: a worker told to attack has been told, and taking a
+    // hit does not change the order. Any other order clears it, so the flee
+    // reflex comes back the moment the player re-tasks them.
+    void CommandAttack(Damageable* target);
+
     // --- Damage ------------------------------------------------------------
 
-    void TakeDamage(int amount);
+    void TakeDamage(int amount) override;
     void Kill();
 
-    bool IsAlive() const { return m_phase != State::Dead; }
+    bool IsAlive() const override { return m_phase != State::Dead; }
 
     // Half the body width, so an attacker stops adjacent rather than standing
     // inside what it is hitting.
-    float HitHalfWidth() const { return m_stats.bodySize.x * 0.5f; }
+    float HitHalfWidth() const override { return m_stats.bodySize.x * 0.5f; }
 
     // --- What it is doing --------------------------------------------------
 
@@ -80,7 +111,7 @@ public:
     const std::string& Faction() const { return m_stats.faction; }
     bool IsPlayer() const { return m_stats.faction == Factions::kPlayer; }
 
-    glm::vec2 Position() const { return m_position; }
+    glm::vec2 Position() const override { return m_position; }
     void SetPosition(const glm::vec2& position) { m_position = position; }
 
     // What it is carrying, and of what. Exposed because conservation - what
@@ -90,19 +121,27 @@ public:
     const std::string& CarryResource() const { return m_carryResource; }
 
     ResourceNode* TargetNode() const { return m_targetNode; }
+    const Damageable* AttackTarget() const { return m_attackTarget; }
+    bool OrderedToAttack() const { return m_orderedToAttack; }
 
 private:
     void TickAi();
     void TickWorker();
+    void TickDefender();
+    void TickAggressor();
     void SeekWork();
     void BeginDelivering();
 
-    void StepToward(const glm::vec2& target, float delta);
-    void StepGather(float delta);
-    void StepDeliver(float delta);
-    void StepFlee(float delta);
+    void StepToward(const glm::vec2& target, double delta);
+    void StepGather(double delta);
+    void StepDeliver(double delta);
+    void StepFlee(double delta);
+    void StepAttack(double delta);
+    void FireProjectile();
 
     void FleeCheck();
+    bool HasValidTarget() const;
+    void ClearAttack();
     void AfterGathering();
     bool HasLiveNode() const;
     bool Arrived() const;
@@ -123,20 +162,21 @@ private:
     // in the port creates a hundred units on one frame yet, and a random
     // offset is the one thing that would make a replay diverge from the run it
     // is replaying.
-    float m_aiAccumulator{0.0f};
+    double m_aiAccumulator{0.0};
 
     // Worker economy.
     int m_carry{0};
     std::string m_carryResource;
-    float m_gatherAccumulator{0.0f};
+    double m_gatherAccumulator{0.0};
     ResourceNode* m_targetNode{nullptr};
     int m_depositIndex{-1};
 
     // Combat. Only the parts the worker needs are used here: an ordered worker
     // fights instead of fleeing, and that flag is what remembers it.
+    Damageable* m_attackTarget{nullptr};
     bool m_orderedToAttack{false};
     int m_fleeIndex{-1};
-    float m_attackCooldown{0.0f};
+    double m_attackCooldown{0.0};
 };
 
 } // namespace WolfBrigade
