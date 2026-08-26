@@ -181,12 +181,21 @@ needs a tint multiplier and an alpha, not a flat colour. Cheap if designed in
 now, annoying to retrofit. The scene target is already floating point, so values
 above 1 survive to the tone mapper.
 
-**Immediate-mode shapes.** Two overlays are drawn rather than composed:
-`order_marker.gd:30-33` is `draw_arc(centre, r, 0, TAU, 40, colour, 3.0, true)`
-plus `draw_circle`, and `marquee.gd:19-23` is a filled `draw_rect` plus a 2px
-outline. Supersonic has no line or arc primitive. Small — a debug-draw path with
-lines and a filled quad covers both — but it is not zero and nothing else in the
-engine wants it.
+**Immediate-mode shapes — and this entry was wrong.** Two overlays are drawn
+rather than composed: `order_marker.gd:30-33` is
+`draw_arc(centre, r, 0, TAU, 40, colour, 3.0, true)` plus `draw_circle`, and
+`marquee.gd:19-23` is a filled `draw_rect` plus a 2px outline.
+
+I wrote "Supersonic has no line or arc primitive". **That is false for screen
+space.** `UISystem` already draws through ImGui's draw list — `AddRectFilled`,
+`AddRect` (an outlined rect), `AddLine` for the text caret — and ImGui's
+`AddCircle(centre, radius, colour, 40, thickness)` is Godot's `draw_arc` call
+verbatim. So the **marquee**, which is screen space because it lives on a Godot
+`CanvasLayer`, needs no engine work at all.
+
+What genuinely does not exist is a **world-space** line: the 3D pipeline
+hardcodes triangle topology, and nothing draws a line in the world. That is the
+order marker, and it alone.
 
 **Tweens are load-bearing for the look.** Death, depletion, the attack squash and
 the hit flash are all SceneTree tweens on `modulate` and `scale`, several with
@@ -198,6 +207,35 @@ scale for it to drive.
 that order, at a fixed screen size independent of window size; a hit flash
 brightens toward white and returns; and a scene with no orthographic camera
 renders byte-identically to before.
+
+### Phase 1 result — DONE, 26 August 2026
+
+| item | | how it was proved |
+|---|---|---|
+| 1.1 orthographic camera | ✅ | Rays from opposite screen edges point identically and start apart; **perspective rays still diverge** as the control; the perspective matrix does not move by one bit. Picking was the half that was actually wrong — it unprojects a direction and hangs it off the eye, which is exactly inverted for a projection with no eye point. |
+| 1.2 unlit path | ✅ | Turn the sun off: **1 of 1,597** interior unit pixels change. Disable the branch: **1,450 of 1,450**. Edges are counted separately (243 of 877) because 4× MSAA blends them against a background that *is* lit. |
+| 1.3 quad primitive | ✅ | White vertices asserted, **with the cube's deliberate rainbow as the control**. |
+| 1.4 draw order | ✅ | The spike's quads were staggered 0.01 in z so depth would order them. They are now coplanar with the key alone deciding, and the frame is **0 of 293,695 pixels different** from the staggered version. Disabling the sort changes 5,334. |
+| 1.5 tint above 1.0 | ✅ | Free: `albedoColor` is unclamped on the unlit path, so a value above one blooms. |
+| 1.7 per-object scale | ✅ | **Already existed** — per-entity, in the model matrix, and exposed to scripts. Deleted from the list rather than built. |
+| 1.6 immediate shapes | ~ | Screen space already exists via ImGui; only a world-space line is missing. See above. |
+| 1.8 lane camera | — | Port-side, and the spike already pans. |
+
+**Three things learned that no amount of reading would have given:**
+
+1. **The scene's camera is only used when NOT editing.** In edit mode the editor
+   camera drives the viewport, so the spike's orthographic settings were ignored
+   until it was run with `--scene`, which enters Play. A game needs that or an
+   `isGame` manifest.
+2. **A flattened cube is not a flat colour.** `GenerateCube` gives every corner a
+   different colour on purpose, and the shader multiplies albedo by it, so the
+   first "flat" quads came out as rainbow gradients. That is the entire reason
+   item 1.3 exists as a separate primitive.
+3. **Building the game target does not recompile shaders.** `frag.spv` went
+   seventeen minutes stale and three mutation runs silently tested the
+   unmutated shader, nearly producing the conclusion that the test did not
+   discriminate. It discriminates completely. Build `SupersonicEngine` after
+   touching a shader.
 
 ---
 
