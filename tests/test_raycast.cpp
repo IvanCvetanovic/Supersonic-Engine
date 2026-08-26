@@ -5,6 +5,8 @@
 // the slab test never clamped the near parameter on the Z axis.
 
 #include "TestHarness.hpp"
+#include <cmath>
+
 #include "core/Raycast.hpp"
 #include "core/TransformSystem.hpp"
 
@@ -191,6 +193,95 @@ static void testPickFollowsParenting() {
               "and not at its local origin");
 }
 
+// --- orthographic ---------------------------------------------------------
+//
+// The engine was perspective-only, and the picking code encodes that: it
+// unprojects a DIRECTION and hangs it off camera.position. Under an
+// orthographic projection that is exactly inverted - the direction is constant
+// and the origin varies - so running the perspective arithmetic on an
+// orthographic camera resolves every pick as though it were taken from the
+// centre of the screen. Invisible in the middle of the viewport, worse toward
+// the edges.
+
+static CameraComponent makeOrthoCamera() {
+    CameraComponent cam = makeCamera();
+    cam.projection = CameraComponent::Projection::Orthographic;
+    cam.orthoHeight = 10.0f;
+    cam.updateCameraVectors();
+    return cam;
+}
+
+static void testOrthographicRaysAreParallel() {
+    const CameraComponent cam = makeOrthoCamera();
+
+    const Ray left = Raycast::ScreenPointToRay({10.0f, 50.0f}, {100.0f, 100.0f}, cam);
+    const Ray right = Raycast::ScreenPointToRay({90.0f, 50.0f}, {100.0f, 100.0f}, cam);
+
+    // The defining property. Two rays from opposite sides of the viewport point
+    // exactly the same way.
+    CHECK_NEAR(left.direction.x, right.direction.x);
+    CHECK_NEAR(left.direction.y, right.direction.y);
+    CHECK_NEAR(left.direction.z, right.direction.z);
+
+    // And the origins differ, which is where the parallax went. The camera
+    // looks down -Z with +X to its right, so the right-hand pixel starts
+    // further along +X.
+    CHECK_MSG(right.origin.x > left.origin.x + 1.0f,
+              "an orthographic ray must start where the pixel is, not at the eye");
+}
+
+static void testPerspectiveRaysAreNotParallel() {
+    // The control. Without it, the assertion above is satisfied by a picking
+    // function that returns a constant direction for every camera.
+    const CameraComponent cam = makeCamera();
+
+    const Ray left = Raycast::ScreenPointToRay({10.0f, 50.0f}, {100.0f, 100.0f}, cam);
+    const Ray right = Raycast::ScreenPointToRay({90.0f, 50.0f}, {100.0f, 100.0f}, cam);
+
+    CHECK_MSG(std::fabs(left.direction.x - right.direction.x) > 0.1f,
+              "perspective rays must still diverge, or the ortho branch caught everything");
+    CHECK_NEAR(left.origin.x, right.origin.x);
+}
+
+static void testOrthographicSpanIsTheAuthoredHeight() {
+    // orthoHeight is a promise about the world, so measure it in the world: the
+    // vertical distance between the ray through the top edge and the one
+    // through the bottom edge IS the authored height.
+    CameraComponent cam = makeOrthoCamera();
+    cam.orthoHeight = 7.0f;
+
+    const Ray top = Raycast::ScreenPointToRay({50.0f, 0.0f}, {100.0f, 100.0f}, cam);
+    const Ray bottom = Raycast::ScreenPointToRay({50.0f, 100.0f}, {100.0f, 100.0f}, cam);
+
+    CHECK_NEAR(std::fabs(top.origin.y - bottom.origin.y), 7.0f);
+
+    // Width follows from aspect rather than being authored separately, so a
+    // wider window shows more world instead of stretching it.
+    cam.aspect = 2.0f;
+    const Ray left = Raycast::ScreenPointToRay({0.0f, 50.0f}, {100.0f, 100.0f}, cam);
+    const Ray right = Raycast::ScreenPointToRay({100.0f, 50.0f}, {100.0f, 100.0f}, cam);
+    CHECK_NEAR(std::fabs(right.origin.x - left.origin.x), 14.0f);
+}
+
+static void testPerspectiveProjectionIsUnchanged() {
+    // The property that made this safe to land: a camera that never mentions
+    // the new field builds exactly the matrix it always did.
+    CameraComponent cam = makeCamera();
+    const glm::mat4 built = cam.getProjectionMatrix();
+
+    glm::mat4 expected = glm::perspective(glm::radians(cam.fov), cam.aspect, cam.nearPlane,
+                                          cam.farPlane);
+    expected[1][1] *= -1.0f;
+
+    int differing = 0;
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            if (built[col][row] != expected[col][row]) ++differing;
+        }
+    }
+    CHECK_MSG(differing == 0, "the perspective matrix must not have moved by one bit");
+}
+
 static void runTests() {
     testRayCentreIsForward();
     testRayIsNotVerticallyMirrored();
@@ -203,6 +294,10 @@ static void runTests() {
     testPickHonoursRotation();
     testPickUsesColliderSize();
     testPickFollowsParenting();
+    testOrthographicRaysAreParallel();
+    testPerspectiveRaysAreNotParallel();
+    testOrthographicSpanIsTheAuthoredHeight();
+    testPerspectiveProjectionIsUnchanged();
 }
 
-TEST_MAIN("test_raycast", 17)
+TEST_MAIN("test_raycast", 28)

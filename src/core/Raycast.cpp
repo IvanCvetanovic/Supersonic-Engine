@@ -26,6 +26,35 @@ Ray Raycast::ScreenPointToRay(
     const float ndcY = (2.0f * mousePos.y) / viewportSize.y - 1.0f;
 
     const glm::mat4 invProj = glm::inverse(camera.getProjectionMatrix());
+
+    // ORTHOGRAPHIC first, because it is the case the rest of this function is
+    // wrong for.
+    //
+    // Under perspective every ray leaves the same point and only the DIRECTION
+    // varies with the pixel, which is why the code below unprojects a direction
+    // and hangs it off camera.position. Under orthographic that is exactly
+    // inverted: the direction is the same everywhere and the ORIGIN varies. Run
+    // the perspective arithmetic on an orthographic camera and every pick
+    // resolves as though it were taken from the centre of the screen - the
+    // failure is invisible in the middle of the viewport and grows toward the
+    // edges, which is the worst way for a bug like this to present.
+    if (camera.isOrthographic()) {
+        // The near-plane point this pixel looks through, in eye space. w is 1
+        // for an orthographic projection, so no divide is needed - but doing it
+        // costs nothing and survives someone changing the matrix.
+        glm::vec4 nearEye = invProj * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
+        if (std::fabs(nearEye.w) > 1e-8f) nearEye /= nearEye.w;
+
+        const glm::mat4 invView = glm::inverse(camera.getViewMatrix());
+
+        Ray ray;
+        ray.origin = glm::vec3(invView * glm::vec4(glm::vec3(nearEye), 1.0f));
+        // Eye space looks down -Z, and the view matrix is a rigid transform, so
+        // its inverse takes that to the camera's world forward.
+        ray.direction = glm::normalize(glm::vec3(invView * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+        return ray;
+    }
+
     glm::vec4 eyeCoords = invProj * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
     if (std::fabs(eyeCoords.w) > 1e-8f) {
         eyeCoords /= eyeCoords.w;

@@ -179,6 +179,11 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
 
     if (const auto* camera = registry.try_get<CameraComponent>(entity)) {
         out << indent << "\"Camera\": {\n";
+        out << indent << "  \"Orthographic\": "
+            << (camera->projection == CameraComponent::Projection::Orthographic
+                    ? "true" : "false")
+            << ",\n";
+        out << indent << "  \"OrthoHeight\": " << camera->orthoHeight << ",\n";
         out << indent << "  \"FOV\": " << camera->fov << ",\n";
         out << indent << "  \"NearPlane\": " << camera->nearPlane << ",\n";
         out << indent << "  \"FarPlane\": " << camera->farPlane << ",\n";
@@ -590,6 +595,12 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     if (node.Has("Camera")) {
         const auto& c = node["Camera"];
         auto& camera = registry.emplace_or_replace<CameraComponent>(entity);
+        // Defaults to perspective, so every scene written before orthographic
+        // existed reads back exactly as it did.
+        camera.projection = c["Orthographic"].AsBool(false)
+                                ? CameraComponent::Projection::Orthographic
+                                : CameraComponent::Projection::Perspective;
+        camera.orthoHeight = c["OrthoHeight"].AsFloat(10.0f);
         camera.fov = c["FOV"].AsFloat(45.0f);
         camera.nearPlane = c["NearPlane"].AsFloat(0.1f);
         camera.farPlane = c["FarPlane"].AsFloat(100.0f);

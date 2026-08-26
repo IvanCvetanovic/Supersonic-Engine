@@ -248,6 +248,23 @@ struct TransformComponent {
 };
 
 struct CameraComponent {
+    // Which projection this camera builds.
+    //
+    // The engine was perspective-only: getProjectionMatrix called
+    // glm::perspective with no branch and no field to select anything else, so
+    // a 2D game could not be authored at all. A side-scroller wants parallel
+    // projection - two units the same size are the same size on screen wherever
+    // they stand on the lane - and under perspective they visibly are not.
+    enum class Projection : uint8_t { Perspective = 0, Orthographic = 1 };
+
+    Projection projection{Projection::Perspective};
+
+    // How many WORLD units the viewport spans vertically in orthographic.
+    // Width follows from `aspect`, so widening the window shows more of the
+    // world rather than stretching it - which is what a side-scroller wants and
+    // what fov does for perspective.
+    float orthoHeight{10.0f};
+
     float fov{45.0f};
     float aspect{16.0f / 9.0f};
     float nearPlane{0.1f};
@@ -273,9 +290,25 @@ struct CameraComponent {
         return glm::lookAt(position, position + front, up);
     }
 
+    // True when the projection has no eye point - every ray is parallel.
+    // Picking has to be told, because unprojecting a screen point gives a
+    // DIRECTION under perspective and a POSITION under orthographic.
+    bool isOrthographic() const { return projection == Projection::Orthographic; }
+
     glm::mat4 getProjectionMatrix() const {
-        glm::mat4 proj = glm::perspective(glm::radians(fov), aspect, nearPlane, farPlane);
-        proj[1][1] *= -1.0f; // Flip Y coordinate for Vulkan
+        // The Y flip is applied ONCE, after either branch. Vulkan's clip space
+        // has +Y down where GLM builds for +Y up, and doing it in both branches
+        // is two places for it to be forgotten.
+        glm::mat4 proj;
+        if (projection == Projection::Orthographic) {
+            const float halfHeight = orthoHeight * 0.5f;
+            const float halfWidth = halfHeight * aspect;
+            proj = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, nearPlane,
+                              farPlane);
+        } else {
+            proj = glm::perspective(glm::radians(fov), aspect, nearPlane, farPlane);
+        }
+        proj[1][1] *= -1.0f;
         return proj;
     }
 
