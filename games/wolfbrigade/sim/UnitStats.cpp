@@ -79,6 +79,69 @@ bool UnitStats::ApplyDelta(const std::string& field, double delta) {
     return false;
 }
 
+namespace {
+
+// The saved block's fields, in one place, so the writer and the reader cannot
+// drift apart. Splitting them is how a field gets written and never read - which
+// round-trip equivalence cannot see, because both captures re-read the same
+// stale default.
+constexpr const char* kIntBlockFields[] = {"max_hp", "damage", "carry_capacity"};
+constexpr const char* kFloatBlockFields[] = {
+    "attacks_per_sec", "attack_range", "aggro_range", "move_speed",
+    "projectile_speed", "gather_rate", "gather_range", "deposit_range",
+};
+
+} // namespace
+
+Supersonic::Json::Value UnitStats::ToBlock() const {
+    Supersonic::Json::Object block;
+    block["max_hp"] = Supersonic::Json::Value(static_cast<double>(maxHp));
+    block["damage"] = Supersonic::Json::Value(static_cast<double>(damage));
+    block["carry_capacity"] = Supersonic::Json::Value(static_cast<double>(carryCapacity));
+    block["attacks_per_sec"] = Supersonic::Json::Value(static_cast<double>(attacksPerSec));
+    block["attack_range"] = Supersonic::Json::Value(static_cast<double>(attackRange));
+    block["aggro_range"] = Supersonic::Json::Value(static_cast<double>(aggroRange));
+    block["move_speed"] = Supersonic::Json::Value(static_cast<double>(moveSpeed));
+    block["projectile_speed"] = Supersonic::Json::Value(static_cast<double>(projectileSpeed));
+    block["gather_rate"] = Supersonic::Json::Value(static_cast<double>(gatherRate));
+    block["gather_range"] = Supersonic::Json::Value(static_cast<double>(gatherRange));
+    block["deposit_range"] = Supersonic::Json::Value(static_cast<double>(depositRange));
+    return Supersonic::Json::Value(std::move(block));
+}
+
+void UnitStats::ApplyBlock(const Supersonic::Json::Value& block) {
+    // Each field only if PRESENT, so a block written by an older build leaves
+    // the rest at whatever the unit's data row says rather than at zero.
+    const auto& fields = block.AsObject();
+    const auto readInt = [&fields](const char* name, int& target) {
+        const auto it = fields.find(name);
+        if (it != fields.end()) target = static_cast<int>(it->second.AsNumber());
+    };
+    const auto readFloat = [&fields](const char* name, float& target) {
+        const auto it = fields.find(name);
+        if (it != fields.end()) target = static_cast<float>(it->second.AsNumber());
+    };
+
+    readInt("max_hp", maxHp);
+    readInt("damage", damage);
+    readInt("carry_capacity", carryCapacity);
+    readFloat("attacks_per_sec", attacksPerSec);
+    readFloat("attack_range", attackRange);
+    readFloat("aggro_range", aggroRange);
+    readFloat("move_speed", moveSpeed);
+    readFloat("projectile_speed", projectileSpeed);
+    readFloat("gather_rate", gatherRate);
+    readFloat("gather_range", gatherRange);
+    readFloat("deposit_range", depositRange);
+}
+
+std::vector<std::string> UnitStats::BlockFields() {
+    std::vector<std::string> names;
+    for (const char* name : kIntBlockFields) names.emplace_back(name);
+    for (const char* name : kFloatBlockFields) names.emplace_back(name);
+    return names;
+}
+
 bool UnitStats::HasField(const std::string& field) {
     UnitStats probe;
     return probe.ApplyDelta(field, 0.0);

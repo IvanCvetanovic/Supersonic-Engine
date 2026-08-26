@@ -4,6 +4,7 @@
 
 #include <glm/glm.hpp>
 
+#include "core/Json.hpp"
 #include "sim/GameData.hpp"
 
 namespace WolfBrigade {
@@ -54,6 +55,13 @@ struct ResourceNode {
 
     // How full it is, 0..1. The visual reads this; nothing else does.
     float Fraction() const;
+
+    // Every field, including the two the original's own equivalence digest
+    // never compares - the colour and the body size. A node rebuilt without
+    // them looks like a default tree rather than like the node that was saved,
+    // and no round-trip check would notice.
+    Supersonic::Json::Value ToSave() const;
+    static ResourceNode FromSave(const Supersonic::Json::Value& saved);
 };
 
 } // namespace WolfBrigade

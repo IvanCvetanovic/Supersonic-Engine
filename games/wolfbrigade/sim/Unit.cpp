@@ -452,6 +452,87 @@ void Unit::Kill() {
     SetState(State::Dead);
 }
 
+Supersonic::Json::Value Unit::ToSave(const SidTable& ids) const {
+    Supersonic::Json::Object out;
+    out["id"] = Supersonic::Json::Value(m_stats.id);
+    out["stats"] = m_stats.ToBlock();
+    out["hp"] = Supersonic::Json::Value(static_cast<double>(m_hp));
+    out["state"] = Supersonic::Json::Value(static_cast<double>(static_cast<int>(m_phase)));
+
+    Supersonic::Json::Array pos;
+    pos.push_back(Supersonic::Json::Value(static_cast<double>(m_position.x)));
+    pos.push_back(Supersonic::Json::Value(static_cast<double>(m_position.y)));
+    out["pos"] = Supersonic::Json::Value(std::move(pos));
+
+    Supersonic::Json::Array target;
+    target.push_back(Supersonic::Json::Value(static_cast<double>(m_moveTarget.x)));
+    target.push_back(Supersonic::Json::Value(static_cast<double>(m_moveTarget.y)));
+    out["move_target"] = Supersonic::Json::Value(std::move(target));
+
+    out["carry"] = Supersonic::Json::Value(static_cast<double>(m_carry));
+    out["carry_resource"] = Supersonic::Json::Value(m_carryResource);
+    out["attack_cd"] = Supersonic::Json::Value(m_attackCooldown);
+    out["ordered_to_attack"] = Supersonic::Json::Value(m_orderedToAttack);
+
+    // The upcast is deliberate and load-bearing - see SaveIds.hpp. A build
+    // target is a Building and is upcast the same way its own entry was keyed.
+    out["ref_tree"] = Supersonic::Json::Value(static_cast<double>(ids.Of(m_targetNode)));
+    out["ref_build"] = Supersonic::Json::Value(
+        static_cast<double>(ids.Of(static_cast<const Damageable*>(m_buildTarget))));
+    out["ref_attack"] = Supersonic::Json::Value(static_cast<double>(ids.Of(m_attackTarget)));
+    return Supersonic::Json::Value(std::move(out));
+}
+
+void Unit::FromSave(const Supersonic::Json::Value& saved) {
+    m_hp = static_cast<int>(saved["hp"].AsNumber(static_cast<double>(m_stats.maxHp)));
+
+    // Assigned directly rather than through SetState, which would announce a
+    // transition that did not happen - and NOT through a command, which would
+    // clear the very targets Relink is about to restore.
+    const int state = static_cast<int>(saved["state"].AsNumber(0.0));
+    m_phase = (state >= 0 && state <= 7) ? static_cast<State>(state) : State::Idle;
+
+    const auto& target = saved["move_target"].AsArray();
+    if (target.size() >= 2) {
+        m_moveTarget = glm::vec2(target[0].AsFloat(), target[1].AsFloat());
+    } else {
+        // Its own position, not the origin. A unit reloaded mid-walk with no
+        // saved destination would otherwise set off for the left edge of the
+        // world.
+        m_moveTarget = m_position;
+    }
+
+    m_carry = static_cast<int>(saved["carry"].AsNumber(0.0));
+    m_carryResource = saved["carry_resource"].AsString("");
+    m_attackCooldown = saved["attack_cd"].AsNumber(0.0);
+    m_orderedToAttack = saved["ordered_to_attack"].AsBool(false);
+}
+
+void Unit::Relink(const Supersonic::Json::Value& saved, const SidResolver& resolver,
+                  int* unresolved) {
+    const auto resolve = [&saved, unresolved](const char* key, auto lookup) {
+        const int sid = static_cast<int>(saved[key].AsNumber(-1.0));
+        if (sid < 0) return decltype(lookup(sid)){nullptr};
+        auto* found = lookup(sid);
+
+        // An id that resolves to nothing is counted rather than ignored. It
+        // means either a referent the capture skipped - legitimate - or a file
+        // that has been edited, and the caller has to be able to tell the
+        // difference from a clean restore.
+        if (found == nullptr && unresolved != nullptr) ++(*unresolved);
+        return found;
+    };
+
+    m_targetNode = resolve("ref_tree", [&resolver](int sid) { return resolver.AsNode(sid); });
+    m_buildTarget =
+        resolve("ref_build", [&resolver](int sid) { return resolver.AsBuilding(sid); });
+
+    // The polymorphic one, and the whole reason the id space is single: this
+    // may be a Unit or a Building and the file carries no type tag.
+    m_attackTarget =
+        resolve("ref_attack", [&resolver](int sid) { return resolver.AsDamageable(sid); });
+}
+
 void Unit::SetState(State next) {
     if (m_phase == next) return;
     m_phase = next;

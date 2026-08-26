@@ -195,6 +195,54 @@ void Building::Destroy() {
     m_bus->buildingDestroyed.Emit(this);
 }
 
+Supersonic::Json::Value Building::ToSave() const {
+    Supersonic::Json::Object out;
+    out["id"] = Supersonic::Json::Value(m_stats.id);
+    out["hp"] = Supersonic::Json::Value(static_cast<double>(m_hp));
+    out["state"] = Supersonic::Json::Value(static_cast<double>(static_cast<int>(m_state)));
+    out["build_progress"] = Supersonic::Json::Value(m_buildProgress);
+    out["train_progress"] = Supersonic::Json::Value(m_trainProgress);
+    out["attack_cd"] = Supersonic::Json::Value(m_attackCooldown);
+    out["combat_accum"] = Supersonic::Json::Value(m_combatAccumulator);
+
+    Supersonic::Json::Array queue;
+    for (const std::string& unitId : m_queue) queue.push_back(Supersonic::Json::Value(unitId));
+    out["train_queue"] = Supersonic::Json::Value(std::move(queue));
+
+    Supersonic::Json::Array pos;
+    pos.push_back(Supersonic::Json::Value(static_cast<double>(m_position.x)));
+    pos.push_back(Supersonic::Json::Value(static_cast<double>(m_position.y)));
+    out["pos"] = Supersonic::Json::Value(std::move(pos));
+    return Supersonic::Json::Value(std::move(out));
+}
+
+void Building::FromSave(const Supersonic::Json::Value& saved) {
+    const int state = static_cast<int>(saved["state"].AsNumber(1.0));
+    m_state = (state >= 0 && state <= 2) ? static_cast<State>(state) : State::Complete;
+
+    // Clamped to the RE-DERIVED maximum. A player who reset their Armory
+    // progress between saving and loading has a smaller Town Hall now, and a
+    // saved 1300 would put it above its own bar forever - the bar is drawn from
+    // hp over maxHp and would read as more than full.
+    m_hp = std::max(0, std::min(static_cast<int>(saved["hp"].AsNumber(static_cast<double>(m_stats.maxHp))),
+                                m_stats.maxHp));
+
+    m_buildProgress = saved["build_progress"].AsNumber(0.0);
+    m_trainProgress = saved["train_progress"].AsNumber(0.0);
+    m_attackCooldown = saved["attack_cd"].AsNumber(0.0);
+    m_combatAccumulator = saved["combat_accum"].AsNumber(0.0);
+
+    // Assigned DIRECTLY, never through EnqueueTraining. That gate checks both
+    // completeness and membership in the building's trains list, so a data
+    // re-tune between builds - a barracks that no longer trains archers -
+    // would silently drop the player's whole saved queue rather than restoring
+    // something that no longer makes sense and letting them cancel it.
+    m_queue.clear();
+    for (const Supersonic::Json::Value& entry : saved["train_queue"].AsArray()) {
+        m_queue.push_back(entry.AsString());
+    }
+}
+
 Building::Rect Building::Footprint() const {
     // Origin at the BASE CENTRE, extending upward: y grows downward on screen,
     // so the top of the building is at position.y - height. A footprint

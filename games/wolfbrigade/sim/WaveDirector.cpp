@@ -163,6 +163,55 @@ void WaveDirector::SpawnNext() {
     m_spawn(stats, glm::vec2(m_enemyX, m_groundY));
 }
 
+Supersonic::Json::Value WaveDirector::ToSave() const {
+    Supersonic::Json::Object out;
+    out["elapsed"] = Supersonic::Json::Value(m_elapsed);
+    out["next_wave"] = Supersonic::Json::Value(static_cast<double>(m_nextWave));
+    out["endless_index"] = Supersonic::Json::Value(static_cast<double>(m_endlessIndex));
+    out["spawn_accum"] = Supersonic::Json::Value(m_spawnAccumulator);
+
+    Supersonic::Json::Array queue;
+    for (const Queued& item : m_queue) {
+        Supersonic::Json::Object entry;
+        entry["unit"] = Supersonic::Json::Value(item.unit);
+        entry["hp_mult"] = Supersonic::Json::Value(static_cast<double>(item.hpMultiplier));
+        entry["dmg_mult"] = Supersonic::Json::Value(static_cast<double>(item.damageMultiplier));
+        queue.push_back(Supersonic::Json::Value(std::move(entry)));
+    }
+    out["spawn_queue"] = Supersonic::Json::Value(std::move(queue));
+    return Supersonic::Json::Value(std::move(out));
+}
+
+void WaveDirector::FromSave(const Supersonic::Json::Value& saved, int aliveEnemies) {
+    m_elapsed = saved["elapsed"].AsNumber(0.0);
+    m_endlessIndex = static_cast<int>(saved["endless_index"].AsNumber(0.0));
+    m_spawnAccumulator = saved["spawn_accum"].AsNumber(0.0);
+
+    // Clamped at BOTH ends before the cast. m_nextWave is unsigned, so a
+    // hand-edited or truncated -1 would become eighteen quintillion and skip
+    // the schedule entirely; and a data re-tune that removes waves would leave
+    // a saved index past the end of the array.
+    const double next = saved["next_wave"].AsNumber(0.0);
+    const double clamped = std::max(0.0, std::min(next, static_cast<double>(m_waves.size())));
+    m_nextWave = static_cast<size_t>(clamped);
+
+    m_queue.clear();
+    for (const Supersonic::Json::Value& entry : saved["spawn_queue"].AsArray()) {
+        Queued item;
+        item.unit = entry["unit"].AsString(Ids::kRaider);
+        item.hpMultiplier = entry["hp_mult"].AsFloat(1.0f);
+        item.damageMultiplier = entry["dmg_mult"].AsFloat(1.0f);
+        m_queue.push_back(std::move(item));
+    }
+
+    // Recomputed by the first step rather than restored. It is derived from the
+    // schedule position and the queue, both of which have just been set, and a
+    // stored copy could disagree with them.
+    m_allSpawned = false;
+
+    m_aliveEnemies = aliveEnemies;
+}
+
 void WaveDirector::OnEnemySpawned() { ++m_aliveEnemies; }
 
 void WaveDirector::OnEnemyDied() {

@@ -74,6 +74,19 @@ public:
     void OnTownHallDestroyed();
 
     int AliveEnemies() const { return m_aliveEnemies; }
+
+    Supersonic::Json::Value ToSave() const;
+
+    // Restores the live counters. Setup must have run FIRST: the schedule and
+    // the endless configuration are re-derived from the data and the mode
+    // rather than saved, so only progress comes back through here.
+    //
+    // The alive count is a PARAMETER rather than a saved number. The original
+    // recounts the enemy group after every unit is rebuilt, and says why: the
+    // restore path bypasses the spawn function that would have emitted
+    // unit_spawned, so a stored count would be the only source of a truth
+    // nothing else could correct.
+    void FromSave(const Supersonic::Json::Value& saved, int aliveEnemies);
     double Elapsed() const { return m_elapsed; }
     int QueuedSpawns() const { return static_cast<int>(m_queue.size()); }
 

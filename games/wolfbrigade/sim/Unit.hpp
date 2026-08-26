@@ -8,6 +8,7 @@
 #include "sim/EventBus.hpp"
 #include "sim/GameState.hpp"
 #include "sim/ResourceNode.hpp"
+#include "sim/SaveIds.hpp"
 #include "sim/UnitStats.hpp"
 #include "sim/World.hpp"
 
@@ -125,6 +126,31 @@ public:
     // the economy is checked against.
     int Carrying() const { return m_carry; }
     const std::string& CarryResource() const { return m_carryResource; }
+
+    // --- Save --------------------------------------------------------------
+
+    // References become ids through the table. Three of the five are saved:
+    // the gather target, the build target and the attack target.
+    //
+    // The deposit and the flee destination are NOT, and that is a deliberate
+    // divergence from the original with a stated cost. Both are cached indices
+    // into a world-owned list rather than entity references - an idea this port
+    // introduced and the GDScript has no analogue for - and saving them would
+    // force an id space onto every World implementation. A restored worker
+    // stands still for one thinking tick and then re-acquires the NEAREST
+    // deposit, which differs from the original only on a board with two Town
+    // Halls that the shipped game never builds.
+    Supersonic::Json::Value ToSave(const SidTable& ids) const;
+
+    // Scalars only. References come back in a second pass, once every entity
+    // exists - see Relink.
+    void FromSave(const Supersonic::Json::Value& saved);
+
+    // The second pass. Split from FromSave for the reason the original states:
+    // a unit's target may be an entity that has not been rebuilt yet, so
+    // nothing can be resolved until all of them are.
+    void Relink(const Supersonic::Json::Value& saved, const SidResolver& resolver,
+                int* unresolved = nullptr);
 
     ResourceNode* TargetNode() const { return m_targetNode; }
     const Building* BuildTarget() const { return m_buildTarget; }

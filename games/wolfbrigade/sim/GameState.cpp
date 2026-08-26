@@ -124,6 +124,64 @@ void GameState::Lose() {
     m_bus->gameLost.Emit();
 }
 
+Supersonic::Json::Value GameState::ToSave() const {
+    Supersonic::Json::Object out;
+
+    Supersonic::Json::Object resources;
+    for (const auto& [resource, amount] : m_resources) {
+        resources[resource] = Supersonic::Json::Value(static_cast<double>(amount));
+    }
+    out["resources"] = Supersonic::Json::Value(std::move(resources));
+
+    Supersonic::Json::Object upgrades;
+    for (const auto& [id, researched] : m_upgrades) {
+        if (researched) upgrades[id] = Supersonic::Json::Value(true);
+    }
+    out["upgrades"] = Supersonic::Json::Value(std::move(upgrades));
+
+    out["current_wave"] = Supersonic::Json::Value(static_cast<double>(m_currentWave));
+    out["phase"] = Supersonic::Json::Value(static_cast<double>(static_cast<int>(m_phase)));
+    out["difficulty"] = Supersonic::Json::Value(m_difficulty);
+    out["mode"] = Supersonic::Json::Value(m_mode);
+    return Supersonic::Json::Value(std::move(out));
+}
+
+void GameState::FromSave(const Supersonic::Json::Value& saved, const MetaLevels& fromProfile) {
+    m_difficulty = saved["difficulty"].AsString("");
+    m_mode = saved["mode"].AsString(kCampaign);
+
+    m_resources.clear();
+    for (const auto& [resource, amount] : saved["resources"].AsObject()) {
+        m_resources[resource] = static_cast<int>(amount.AsNumber());
+    }
+
+    m_upgrades.clear();
+    for (const auto& [id, researched] : saved["upgrades"].AsObject()) {
+        (void)researched;
+        m_upgrades[id] = true;
+    }
+
+    m_currentWave = static_cast<int>(saved["current_wave"].AsNumber(0.0));
+
+    // Written here rather than through a public setter. Win and Lose are
+    // deliberately one-way and refuse a second call, and a SetPhase that could
+    // move a decided run back to playing would be a hole in that invariant for
+    // the sake of one caller.
+    const int phase = static_cast<int>(saved["phase"].AsNumber(0.0));
+    m_phase = (phase >= 0 && phase <= 2) ? static_cast<Phase>(phase) : Phase::Playing;
+
+    // From the profile, never from the file.
+    m_metaLevels = fromProfile;
+
+    // Re-announced, because nothing polls. A HUD built before this shows the
+    // boot defaults over restored balances until something tells it otherwise,
+    // and there is no HUD in the port yet - which is exactly why dropping this
+    // would have no visible effect for a year.
+    for (const auto& [resource, amount] : m_resources) {
+        m_bus->resourcesChanged.Emit(resource, amount);
+    }
+}
+
 int GameState::StartingResourceBonus(const std::string& resource) const {
     int total = 0;
     for (const auto& [id, definition] : m_data->MetaUpgrades().AsObject()) {

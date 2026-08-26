@@ -156,6 +156,23 @@ public:
     Rect Footprint() const;
     bool ContainsPoint(const glm::vec2& point) const { return Footprint().Contains(point); }
 
+    // --- Save --------------------------------------------------------------
+
+    // No outgoing references: a tower re-acquires its target every tick, so
+    // there is nothing here that has to survive as an id.
+    Supersonic::Json::Value ToSave() const;
+
+    // Restores the live fields onto a building already built from re-derived
+    // stats. The stats are NOT saved - they come back through
+    // Upgrades::ForBuilding, which re-sums the researched and owned effects, so
+    // a building restored after a Reset Progress reflects the CURRENT profile
+    // rather than the one that saved it.
+    //
+    // Which is exactly why the hit points are clamped: the re-derived maximum
+    // can be SMALLER than it was at capture, and a saved 1300 onto a 1000-point
+    // Town Hall would leave a building above its own bar.
+    void FromSave(const Supersonic::Json::Value& saved);
+
     // Raise a researched upgrade's delta onto an already-standing building.
     // For max_hp the current hit points rise with the cap, so reinforcing a
     // damaged wall heals it as well as toughening it.

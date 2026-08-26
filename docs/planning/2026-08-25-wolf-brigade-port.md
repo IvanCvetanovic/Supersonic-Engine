@@ -419,6 +419,7 @@ re-derive them written beside them.
 | data + validator | `verify_data` | The ten key counts the original prints (`world -> 11 keys`, `units -> 5`, …), 0 cross-reference issues, and **nine deliberate typos** — one per check — each caught. Six mutations caught. |
 | wave director | `verify_waves` | **The first slice the oracle actually constrains.** 30 raiders, 1 brute, 31 across five waves, reaching wave 5 — the output of 300 steps through the schedule, the difficulty scaling and the spawn interval, and not derivable by reading. Matched on the first run. Plus victory only on a cleared field, defeat on the Town Hall, and the empty-final-wave soft-lock the original wrote its own case against. Eight mutations, all caught. |
 | buildings | `verify_buildings` | **two bolts pooled** from a tower in three seconds, plus construction, training queues, footprints and the deposit-point rule. Thirteen mutations; **four survived** the shipped data and needed authored fixtures — one of which had to be SEARCHED for. |
+| save + restore | `verify_snapshot`, `verify_continue` | Capture → JSON → restore → re-capture, plus independent ground truth off the LIVE restored entities. **Fifteen mutations, three survived** and each pointed at something real. |
 | upgrades + meta | `verify_upgrades`, `verify_meta` | More computed numbers than any other pair: soldier damage 8→12, Town Hall 1000→1500, three Armory levels at exactly 40+80+120, a wave-3 loss worth 30 renown, a stacked gather rate of 1.8. **Eight mutations, all caught on the first pass** — the first slice where none survived. |
 | worker builds | `verify_buildings` 2, 6 | The unit's BUILDING state, which closes the seam between the two halves: a worker sent to a site finishes it, and **any idle worker resumes an abandoned one**. Four mutations, all caught. |
 | combat | `verify_combat` | **soldier 36/60, Town Hall 934/1000** — and the second one is the first number in the whole port that DISAGREED. Plus the lane index, orders beating instincts, and the arrow pool. Nine mutations, all caught after two blind spots were closed. |
@@ -453,6 +454,93 @@ discrimination cases counted totals, and replacing `buildings.json` to break one
 cost also removed two buildings that an upgrade elsewhere referenced. That is
 collateral from the fixture rather than the check under test, and a total makes
 the file brittle in a way that reads as the validator misbehaving.
+
+### The save slice, and why it was designed before it was written
+
+This is the one slice with novel design in it: the original resolves node
+references through Godot instance ids and a capture map, and the port has
+`Damageable*` and world indices instead. Three independent designs were
+produced, scored, and then attacked; the winner was the one whose ownership
+assumption is already true of the tree — **nothing in `sim/` owns a sim entity**.
+So the save is an OBSERVER: capture walks whatever the caller enumerates,
+restore builds into whatever the caller provides. Deciding where entities live
+belongs to the slice that ports `main.gd`, which has information this one does
+not.
+
+**One monotonic id space across units, buildings and resource nodes**, straight
+from `snapshot.gd`, which says why: a unit's attack target may be a Unit OR a
+Building, and one space lets that reference come back with no type tag in the
+file. Two spaces would need a tag, and a tag is a thing that can be wrong.
+
+Three things the design pass caught that writing-then-testing would not have.
+
+**Round-trip equivalence is blind to whatever both sides omit.** The original's
+own harness says so in a comment — "that's how the building-cooldown gap first
+hid" — and answers it with independent ground truth. This suite does the same
+AND makes the digest far less lossy: Godot renumbers its ids on rebuild so its
+digest throws away the entire stats block, every reference, `move_target`,
+`carry` and `attack_cd`. Only `sid` and the refs actually renumber here, so
+everything else is compared exactly and the refs are compared by TRANSLATING
+each id to its referent's own record — which catches "relinked to the wrong
+entity of the same type", something no amount of dropping could.
+
+**A relink test that steps even once passes with relink deleted.** The thinking
+tick re-acquires within 0.125s and usually picks the same thing. The board has
+to discriminate: two nodes, the worker on the FARTHER one, asserted at zero
+steps — dropped relink gives null, re-acquisition gives the nearer one. The
+precondition is asserted inside the test so a later edit cannot quietly make the
+board indiscriminate.
+
+**Six significant digits is the default, and every oracle tolerance passes under
+it.** The original compares cooldowns within 0.001 and elapsed within 0.5; both
+survive a truncating writer. This port's whole numeric argument is that a
+cooldown decremented by 0.1 lands on a different side of zero in float than in
+double — a save that rounds it reintroduces exactly that. The writer uses
+`%.17g` and the test asserts the text is byte-identical across a round trip.
+
+**And an unknown id is skipped, never fabricated.** `UnitStats::FromJson` on a
+missing row returns every default — a player-faction worker — so a saved raider
+whose row was re-tuned away would come back on the player's side, counted by no
+enemy tally, handing them a victory. A building is worse: a missing row is
+`maxHp 1`, and the hp clamp then puts a saved Town Hall back at one hit point.
+The schema version does not cover this; it guards the shape of the FILE, and
+nobody bumps it when only `units.json` changes.
+
+**Three mutations survived the first pass, and all three were the test's fault
+rather than the code's.** A sink that does more than the contract requires hides
+what the contract promises: the Board called `SetTrainTimes` itself, so removing
+it from `Restore` changed nothing, and it ignored the `complete` flag because
+`FromSave` sets the state a moment later. Both needed a deliberately minimal
+sink that does only what a sink must. The third was the profile levels, where
+the guarantee turned out to be structural — the document does not carry them at
+all — and the test now asserts that directly, because the day somebody adds
+`meta_levels` to `ToSave` "for completeness" is the day a stale save can undo a
+Reset Progress.
+
+**What this slice cannot do**, stated so it is not claimed later:
+
+- **`verify_autosave` is out of reach entirely.** Six of its seven assertions
+  are window and OS plumbing — quit interception, Android Back, an
+  application-paused notification. The seventh is pure simulation and has no
+  call site here, which means the original's anti-farm property (a finished run
+  clears its Continue, and a later autosave must not re-write it) is
+  **unenforced in the port**. `ClearRun` exists and nothing calls it.
+- **Five of `verify_continue`'s assertions** read a menu button's visibility.
+  What survives is the predicate the decision rests on, `Snapshot::IsValid`.
+- **The exact numbers in `verify_snapshot`** — 270 wood, 963 hit points, six
+  units — come from booting the whole match through `main.gd`. The port has no
+  match boot, so this suite builds its own board and asserts the same
+  PROPERTIES against numbers it sets itself.
+- **The run file is not interchangeable with Godot's.** Colours are written
+  differently, a unit's position is `global_position` there and plain here, and
+  ids are minted in enumeration order rather than scene-tree child order.
+  `kVersion = 1` is the PORT's schema 1.
+- **The deposit and flee references are deliberately not saved.** Both are
+  cached indices into a world-owned list — an idea this port introduced with no
+  GDScript analogue — and saving them would force an id space onto every `World`
+  implementation. A restored worker stands still for one thinking tick and then
+  re-acquires the nearest deposit. That cost is pinned as a passing assertion
+  rather than left to be discovered as a position mismatch.
 
 ### C++ has no reflection, and that turned out to be an improvement
 

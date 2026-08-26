@@ -2,6 +2,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -83,10 +84,33 @@ struct UnitStats {
     // they are applied in does not matter.
     bool ApplyDelta(const std::string& field, double delta);
 
+    // The numeric fields that are BAKED at spawn and cannot be recovered from
+    // the unit's id alone.
+    //
+    // Difficulty scales an enemy's hit points, endless growth multiplies on top,
+    // and in-run research plus owned meta levels add to a player unit - all onto
+    // the block handed to that one spawn. Units are never retroactively
+    // re-upgraded, so a saved unit cannot be rebuilt by asking the data what a
+    // raider is; it has to carry its own numbers.
+    //
+    // Everything NOT here - name, faction, behaviour, body size, colour, cost -
+    // comes back from the id unchanged, so it is not stored per unit.
+    //
+    // Exactly the set ApplyDelta accepts, minus `train_time`, which is a
+    // building's business. A test pins that correspondence, so adding an
+    // upgradable field and forgetting this list is a failure rather than a
+    // silently unsaved stat.
+    Supersonic::Json::Value ToBlock() const;
+    void ApplyBlock(const Supersonic::Json::Value& block);
+
     // Whether a field can be upgraded at all. Lets the data check itself: every
     // effect field in upgrades.json and meta.json must be one of these, and a
     // typo is a balance change nobody made.
     static bool HasField(const std::string& field);
+
+    // The block's field names, so a test can assert the set against HasField
+    // rather than a human keeping two lists in step.
+    static std::vector<std::string> BlockFields();
 };
 
 } // namespace WolfBrigade

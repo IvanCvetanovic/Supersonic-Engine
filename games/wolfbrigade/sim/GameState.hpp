@@ -134,6 +134,22 @@ public:
     void SetCurrentWave(int wave) { m_currentWave = wave; }
     int CurrentWave() const { return m_currentWave; }
 
+    Supersonic::Json::Value ToSave() const;
+
+    // Restores a run, BYPASSING Reset - which would zero the resources and
+    // clear the upgrades this is trying to put back, and would re-bank the
+    // persistent starting bonus on top of balances that already contain it.
+    // Reloading twice would double a player's Deeper Coffers.
+    //
+    // Difficulty and mode are set FIRST because everything downstream reads
+    // them: WaveDirector::Setup re-derives its schedule from the mode, and
+    // enemy stat scaling reads the difficulty.
+    //
+    // Meta levels are NOT read from the file. They belong to the profile, which
+    // outlives the run - and a snapshot that could resurrect them would let a
+    // stale save undo a Reset Progress the player has since performed.
+    void FromSave(const Supersonic::Json::Value& saved, const MetaLevels& fromProfile);
+
 private:
     const GameData* m_data{nullptr};
     EventBus* m_bus{nullptr};

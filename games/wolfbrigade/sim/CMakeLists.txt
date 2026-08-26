@@ -24,6 +24,8 @@ add_library(WolfBrigadeSim STATIC
     Projectiles.cpp
     Progression.cpp
     ResourceNode.cpp
+    SaveIds.cpp
+    Snapshot.cpp
     Unit.cpp
     UnitStats.cpp
     WaveDirector.cpp
