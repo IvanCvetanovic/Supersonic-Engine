@@ -280,6 +280,73 @@ two different window sizes with the same layout.
 
 ---
 
+### Phase 2 progress — 26 August 2026
+
+Route 1 was taken: `UICanvas` grew the containers the game actually uses, and
+nothing more.
+
+| item | | how it stands |
+|---|---|---|
+| 2.1 stack containers | ✅ | `UICanvas::LayoutStack` plus `UIStackComponent`. One bool for the axis, because `HBoxContainer` and `VBoxContainer` differ by one axis. Spacing goes *between*, not after: three items have two gaps, and a stack that trails one is half a gap off centre and looks like nothing is wrong. |
+| 2.2 centring | ✅ | The stack's own anchor, which is `CenterContainer`: the **block** is centred, not each child on the same point. The test is written against that mistake — anchoring each child independently puts them all on top of one another, which reads as the layout having done nothing. |
+| 2.3 one layout, two readers | ✅ | `UICanvas::StackedRects`, computed once per frame and handed to both the input pass and the draw pass. Each used to call `Place()` for itself, which is safe only while both compute the same answer — and the moment a container decides a position, "compute it twice" becomes "compute it twice from different information". |
+| 2.4 world-space labels | ✅ | `UITextComponent::worldSpace` + `UICanvas::ProjectToScreen`. Projected through the camera that actually drew the frame, not the editor camera, or a label lands somewhere plausible and wrong. |
+| 2.5 world-space bars | ✅ | **Not built as UI.** In an orthographic 2D view an HP bar is a quad: Phase 1's unlit quad primitive, parented to the unit, scaled by HP, ordered by `sortKey`. Building a second world-space path through the UI system would have been a parallel renderer for rectangles. |
+| 2.7 aspect handling | ✅ | **Already satisfied.** `orthoHeight` with an aspect-derived width *is* `aspect=expand`, and `kReferenceHeight = 1080.0f` with `ScaleFor()` already gave the HUD resolution-independent authored units. Deleted from the list rather than built. |
+| 2.8 layer/overlay stacking | ✅ | See below — it was two features, not one. |
+| 2.6 pooled damage numbers | — | Port-side, and now expressible: a world-space label, pooled by the game, soft-capped at 64. |
+| 2.9 scroll container | — | One use in the whole game, and it may not survive the redesign the port implies. Left until the port asks for it. |
+
+**2.8 was two features.** The draw half is what the item said: the four draw
+loops run once per layer, low to high, so a pause menu covers the HUD it is
+drawn over. The input half was not on the list and had to be built anyway —
+every button answered "am I under the pointer" for itself, which is right only
+while no two overlap. Two that did both highlighted and both fired on one
+click. Overlap was an authoring mistake before an overlay could be drawn over a
+HUD; afterwards it is the ordinary case, and an overlay that covers the health
+bar while the button under it keeps taking clicks is not covering anything.
+
+Panels take part in that reckoning, and that is what makes a menu modal with no
+flag saying so. A panel is drawn under every button on its own layer, so it can
+only ever block one on a *lower* layer — a backdrop swallowing clicks meant for
+the game behind it, and nothing else. A button on its own backdrop still works,
+which is how every HUD built so far is put together.
+
+`UIStackComponent` and `UIOrderComponent` were also going through the codec
+nowhere, so a container authored in the editor came back scattered and a
+ranking came back gone. Both now round-trip and both have inspector sections.
+That was not in the estimate and is the kind of thing that silently expands the
+items after it: a component is not finished when it is read by a system, it is
+finished when it survives a save.
+
+**The HUD cannot be screenshotted, and this changes how UI is verified.**
+`--screenshot` reads back `offscreen.GetPresentedImage()` — the colour target
+the 3D scene rendered into. The HUD goes into an ImGui draw list that is
+composited into the swapchain *after* that, so it is never in the PNG. The
+whole screenshot-and-diff workflow the renderer work leans on is structurally
+unavailable here. What replaced it: a headless `ImGuiContext` with
+`ImGuiBackendFlags_RendererHasTextures` set — ImGui 1.92 builds glyphs on
+demand, so that flag is the whole of what a backend has to provide — one
+`NewFrame`/`Render`, and then read `ImDrawData`'s vertex buffer directly. Which
+colour appears first is draw order; how many vertices each contributed is
+whether anything was drawn twice. Drawing layers high-to-low fails it; leaving
+the layer guard off one of the four loops reports 8 vertices where 4 are
+expected.
+
+**And entt's iteration order is not creation order.** This suite was first
+written expecting the two panels to come out in the order they were created and
+got the reverse. That is not a bug to work around — it is the reason
+`UIOrderComponent` exists rather than the order being read off the scene — but
+it is worth knowing before writing an assertion that depends on it.
+
+**Still open for Phase 2:** the scroll container (2.9), and the port-side
+pooling (2.6). The **done when** condition — the pause menu and the HUD
+rendering from the port's own layer at two window sizes with the same layout —
+is not met yet, because the port's own layer does not draw a pause menu yet.
+Everything it needs from the engine is there.
+
+---
+
 ## Phase 3 — Port the game (3–5 weeks)
 
 Mechanical translation of ~8,150 lines, of which ~86% is logic that has no
