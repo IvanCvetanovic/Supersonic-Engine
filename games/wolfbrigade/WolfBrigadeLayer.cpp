@@ -54,7 +54,7 @@ glm::vec3 unitColour(int index) {
 
 entt::entity WolfBrigadeLayer::makeQuad(entt::registry& registry, const char* tag,
                                         const glm::vec3& position, const glm::vec3& size,
-                                        const glm::vec3& colour) {
+                                        const glm::vec3& colour, bool unlit) {
     const auto entity = registry.create();
     registry.emplace<TagComponent>(entity, tag);
 
@@ -63,22 +63,19 @@ entt::entity WolfBrigadeLayer::makeQuad(entt::registry& registry, const char* ta
     transform.scale = size;
 
     auto& mesh = registry.emplace<MeshComponent>(entity);
-    mesh.primitiveType = "Cube";
+    // Quad, not Cube. A flattened cube is the same number of draws but its
+    // corners are rainbow by design, so a flat colour came out as a gradient -
+    // which a screenshot caught and no amount of reading would have.
+    mesh.primitiveType = "Quad";
 
     auto& material = registry.emplace<MaterialComponent>(entity);
     material.albedoColor = glm::vec4(colour, 1.0f);
 
-    // Emissive rather than lit, because a ColorRect is not lit. The engine has
-    // no unlit path yet (item 1.2), and emissive is the closest thing it does
-    // have: the colour is added after shading rather than modulated by it, so
-    // the quad reads as its authored colour whatever the lights are doing.
-    //
-    // Deliberately at 1.0 and not above. The scene target is floating point and
-    // the bright pass thresholds at 1.0, so a higher value would bloom - which
-    // is exactly the mechanism Wolf Brigade's hit flash wants (item 1.5) and
-    // exactly what a resting unit must not do.
-    material.emissiveColor = colour;
-    material.emissiveStrength = 1.0f;
+    // UNLIT, which is what a ColorRect is. Phase 0 faked this with an emissive
+    // material because the engine had no unlit path; item 1.2 built one, so the
+    // fake is gone and the quad now genuinely skips lighting, ambient, IBL,
+    // shadows and fog rather than merely surviving them.
+    material.unlit = unlit;
 
     registry.emplace<RenderableComponent>(entity);
     return entity;
@@ -104,8 +101,18 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     auto& view = registry.emplace<CameraComponent>(camera);
     view.position = cameraTransform.position;
     view.yaw = -90.0f;
-    view.pitch = -4.0f;
+    // Level, because a side-scroller looks straight at its lane. Phase 0 tilted
+    // 4 degrees down to make a perspective view legible; an orthographic one
+    // does not need the help.
+    view.pitch = 0.0f;
     view.isPrimary = true;
+
+    // ORTHOGRAPHIC, which is item 1.1 and the reason the lane stopped bending
+    // away at its edges. orthoHeight is the world height the viewport spans -
+    // Godot authors 1080 px against a 1920x1080 viewport, and this is the same
+    // promise in world units.
+    view.projection = CameraComponent::Projection::Orthographic;
+    view.orthoHeight = 4.0f;
 
     // A light, because emissive alone leaves the ground unreadable and the
     // ground is what makes the lane look like a lane.
@@ -115,11 +122,16 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     auto& light = registry.emplace<LightComponent>(sun);
     light.type = 0;
     light.direction = glm::vec3(0.4f, 1.0f, 0.6f);
-    light.intensity = 1.4f;
+    light.intensity = m_sunIntensity;
 
-    // The ground: one quad, as it is one ColorRect in Godot (main.gd:134-136).
+    // The ground, deliberately LIT while everything else is not.
+    //
+    // It is the control. If the sun changes and the ground does not, the test
+    // below is measuring nothing - so the one surface that must react is kept
+    // reacting on purpose.
     makeQuad(registry, "Ground", glm::vec3(0.0f, kGroundY - 1.4f, -kLayerStep),
-             glm::vec3(kLaneLength, 2.8f, kQuadDepth), glm::vec3(0.13f, 0.15f, 0.19f));
+             glm::vec3(kLaneLength, 2.8f, kQuadDepth), glm::vec3(0.13f, 0.15f, 0.19f),
+             /*unlit=*/false);
 
     // Units along the lane, five drawables each, to the requested count.
     const int unitCount = m_requested / 5;

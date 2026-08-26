@@ -368,6 +368,17 @@ struct LightComponent {
 
 struct MaterialComponent {
     glm::vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
+
+    // Emit the authored colour and skip lighting completely.
+    //
+    // For surfaces that are not surfaces: a 2D sprite, a flat-colour quad, a
+    // UI panel in the world. Nothing about a lamp, a shadow or an environment
+    // should reach one, and with this set nothing does.
+    //
+    // albedoColor is NOT clamped on this path, so a value above 1.0 stays above
+    // 1.0 and reaches the bright pass. That is deliberate: it is how a flat
+    // sprite flashes white when it is hit.
+    bool unlit{false};
     float roughness{0.4f};
     float metallic{0.1f};
     float ao{1.0f};

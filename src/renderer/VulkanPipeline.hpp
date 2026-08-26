@@ -153,6 +153,26 @@ struct PushConstantData {
     // existed. A -1 default would silently drop every such draw back to the
     // analytic hemisphere, which looks like a descriptor bug and is not one.
     int32_t probeIndex{0};        // 120..123 (fragment)
+
+    // Per-draw switches, one bit each. Currently only kUnlit.
+    //
+    // This takes the block to exactly 128 bytes, which is the guaranteed
+    // minimum every Vulkan implementation must offer - so it is the last thing
+    // that fits. Anything after it needs a uniform buffer or a bigger limit
+    // than the spec promises, and should not be quietly added here.
+    //
+    // A bitfield rather than a bool because the next per-draw switch should not
+    // cost another four bytes there are not any of.
+    int32_t flags{0};             // 124..127 (fragment)
+
+    // Skip lighting entirely and emit the authored colour.
+    //
+    // A ColorRect has no normal, no roughness and no relationship to any light
+    // in the scene, and a 2D game is made of them. Without this the only way to
+    // get a flat colour out of a PBR shader is to fight it - emissive at
+    // exactly 1.0, ambient tuned to nothing - and the result still moves when
+    // somebody adds a lamp.
+    static constexpr int32_t kUnlit = 1 << 0;
 };
 
 // The depth pass has its own, because it needs a different second half: which

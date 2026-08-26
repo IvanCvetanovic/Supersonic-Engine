@@ -153,6 +153,36 @@ bool ModelLoader::GenerateCube(float size, MeshData& out) {
     return true;
 }
 
+bool ModelLoader::GenerateQuad(float width, float height, MeshData& out) {
+    out.clear();
+
+    if (width <= 0.0f || height <= 0.0f) {
+        SUPERSONIC_LOG_ERROR("ModelLoader")
+            << "GenerateQuad requires positive extents (got " << width << "x" << height << ")."
+            << std::endl;
+        return false;
+    }
+
+    const float hw = width * 0.5f;
+    const float hh = height * 0.5f;
+
+    // XY plane, facing +Z, wound counter-clockwise when seen from +Z.
+    //
+    // WHITE vertex colours. The shader multiplies albedo by the vertex colour,
+    // so anything else here turns an authored flat colour into a gradient -
+    // which is exactly what happens if you build a 2D quad out of GenerateCube,
+    // whose corners are deliberately rainbow.
+    out.vertices = {
+        {{-hw, -hh, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+        {{ hw, -hh, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+        {{ hw,  hh, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 0.0f}},
+        {{-hw,  hh, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
+    };
+
+    out.indices = {0, 1, 2, 2, 3, 0};
+    return true;
+}
+
 bool ModelLoader::GeneratePlane(float width, float height, MeshData& out) {
     out.clear();
 

@@ -4,6 +4,8 @@
 // been able to fire. They are wired into MeshRegistry now, which makes the
 // unsigned underflows and the uint16 index overflow reachable.
 
+#include <algorithm>
+
 #include "TestHarness.hpp"
 #include "core/ModelLoader.hpp"
 #include "core/TerrainGenerator.hpp"
@@ -60,6 +62,68 @@ static glm::vec3 faceNormal(const MeshData& mesh, size_t tri) {
     const glm::vec3 b = mesh.vertices[mesh.indices[tri * 3 + 1]].pos;
     const glm::vec3 c = mesh.vertices[mesh.indices[tri * 3 + 2]].pos;
     return glm::normalize(glm::cross(b - a, c - a));
+}
+
+static void testQuadIsFlatAndWhite() {
+    // The quad exists because a flattened CUBE is not a flat colour.
+    //
+    // GenerateCube gives every corner a different colour on purpose - it is the
+    // engine's debug primitive - and the shader multiplies albedo by the vertex
+    // colour, so a 2D sprite built from a cube renders as a rainbow gradient.
+    // That cost a screenshot to notice and it is the whole reason for a
+    // separate primitive, so it is what this asserts first.
+    MeshData mesh;
+    CHECK(ModelLoader::GenerateQuad(3.0f, 5.0f, mesh));
+
+    CHECK_EQ(mesh.vertices.size(), size_t{4});
+    CHECK_EQ(mesh.indices.size(), size_t{6});
+
+    int coloured = 0;
+    for (const Vertex& v : mesh.vertices) {
+        if (v.color != glm::vec3(1.0f)) ++coloured;
+    }
+    CHECK_MSG(coloured == 0, "every quad vertex must be white, or a flat colour is a gradient");
+
+    // The control: the cube it is NOT. If this ever goes white too, the
+    // assertion above stops meaning anything.
+    MeshData cube;
+    CHECK(ModelLoader::GenerateCube(1.0f, cube));
+    int cubeColoured = 0;
+    for (const Vertex& v : cube.vertices) {
+        if (v.color != glm::vec3(1.0f)) ++cubeColoured;
+    }
+    CHECK_MSG(cubeColoured > 0, "the cube is meant to be rainbow; that is why the quad exists");
+}
+
+static void testQuadFacesTheViewerAndIsTheSizeAsked() {
+    // XY facing +Z, not XZ like GeneratePlane. A floor seen by a side-on 2D
+    // camera is a line.
+    MeshData mesh;
+    CHECK(ModelLoader::GenerateQuad(3.0f, 5.0f, mesh));
+
+    int wrongNormal = 0;
+    int offPlane = 0;
+    for (const Vertex& v : mesh.vertices) {
+        if (v.normal != glm::vec3(0.0f, 0.0f, 1.0f)) ++wrongNormal;
+        if (v.pos.z != 0.0f) ++offPlane;
+    }
+    CHECK_MSG(wrongNormal == 0, "a sprite quad must face +Z");
+    CHECK_MSG(offPlane == 0, "and be flat in Z, or a scale on Z would give it thickness");
+
+    // One unit of scale must mean one unit of world, so a 30x40 pixel body is
+    // scale (0.30, 0.40) and nothing has to be divided by anything.
+    float minX = mesh.vertices[0].pos.x, maxX = minX;
+    float minY = mesh.vertices[0].pos.y, maxY = minY;
+    for (const Vertex& v : mesh.vertices) {
+        minX = std::min(minX, v.pos.x); maxX = std::max(maxX, v.pos.x);
+        minY = std::min(minY, v.pos.y); maxY = std::max(maxY, v.pos.y);
+    }
+    CHECK_NEAR(maxX - minX, 3.0f);
+    CHECK_NEAR(maxY - minY, 5.0f);
+
+    MeshData bad;
+    CHECK_MSG(!ModelLoader::GenerateQuad(0.0f, 1.0f, bad), "a zero extent is not a quad");
+    CHECK_MSG(!ModelLoader::GenerateQuad(1.0f, -2.0f, bad), "nor is a negative one");
 }
 
 static void testPlane() {
@@ -386,6 +450,8 @@ static void testFaceWindingAgreesWithNormals() {
 static void runTests() {
     testCube();
     testSphereRejectsDegenerateParameters();
+    testQuadIsFlatAndWhite();
+    testQuadFacesTheViewerAndIsTheSizeAsked();
     testPlane();
     testPlaneFacesUpward();
     testTangentsAreValid();
@@ -403,4 +469,4 @@ static void runTests() {
     testFaceWindingAgreesWithNormals();
 }
 
-TEST_MAIN("test_meshgen", 180)
+TEST_MAIN("test_meshgen", 192)

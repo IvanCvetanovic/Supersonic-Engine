@@ -41,7 +41,11 @@ public:
     // The plan's campaign figure is 40-60 units at 5 drawables each; `units`
     // here is DRAWABLES, so the default is one busy campaign frame. Raise it to
     // measure the endless case, which has no data-driven ceiling at all.
-    explicit WolfBrigadeLayer(int drawables = 400) : m_requested(drawables) {}
+    // `sunIntensity` exists so the unlit path can be PROVEN rather than
+    // admired: render the same lane twice with different light and the unlit
+    // quads must not move by one bit, while the lit ground must.
+    explicit WolfBrigadeLayer(int drawables = 400, float sunIntensity = 1.4f)
+        : m_requested(drawables), m_sunIntensity(sunIntensity) {}
 
     const char* Name() const override { return "WolfBrigade (Phase 0 spike)"; }
 
@@ -69,10 +73,11 @@ private:
     };
 
     entt::entity makeQuad(entt::registry& registry, const char* tag, const glm::vec3& position,
-                          const glm::vec3& size, const glm::vec3& colour);
+                          const glm::vec3& size, const glm::vec3& colour, bool unlit = true);
 
     std::vector<Unit> m_units;
     int m_requested{0};
+    float m_sunIntensity{1.4f};
     float m_elapsed{0.0f};
 };
 

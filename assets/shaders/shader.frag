@@ -64,7 +64,11 @@ layout(push_constant) uniform PushConstants {
     int skinPaletteBase;
     int skinJointCount;
     int probeIndex;
+    int flags;
 } push;
+
+// Must match VulkanPipeline::PushConstantData::kUnlit.
+const int FLAG_UNLIT = 1;
 
 const float PI = 3.14159265359;
 
@@ -336,6 +340,25 @@ void main() {
     }
 
     vec3 albedo = albedoTex.rgb * fragColor * push.albedoColor.rgb;
+
+    // UNLIT: the authored colour, and nothing else touches it.
+    //
+    // A single early exit rather than a flag threaded through the terms below,
+    // because "smallest" and "cheapest" are the same answer here. Returning
+    // from this point skips the ORM fetch, the normal-map fetch and the TBN
+    // rebuild, the froxel light loop with its shadow taps, both IBL fetches,
+    // the emissive add and the fog. A branch placed lower down would compute
+    // all of it and then throw it away, on the one kind of material that exists
+    // precisely because it does not want any of it.
+    //
+    // Deliberately ABOVE the tone mapper's reach in one respect: albedoColor is
+    // not clamped here, so a value above 1.0 comes out above 1.0 and blooms.
+    // That is not an oversight - it is Godot's `modulate` past white, which is
+    // how this game flashes a unit that has been hit.
+    if ((push.flags & FLAG_UNLIT) != 0) {
+        outColor = vec4(albedo, albedoTex.a * push.albedoColor.a);
+        return;
+    }
 
     // The map MULTIPLIES the material's constants rather than replacing them.
     //

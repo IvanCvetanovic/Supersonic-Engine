@@ -27,6 +27,7 @@ layout(push_constant) uniform PushConstants {
     int skinPaletteBase;   // -1 = not skinned
     int skinJointCount;
     int probeIndex;        // which environment lights this draw
+    int flags;             // bit 0 = unlit
 } push;
 
 // This frame's joint matrices for every skinned entity, back to back. std430

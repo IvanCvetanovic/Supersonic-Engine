@@ -156,7 +156,9 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         // Pinned rather than assumed: these are the std430 push-constant offsets
         // the shaders declare, and GLM_FORCE_ALIGNED_GENTYPES would shift every
         // one of them without a word.
-        static_assert(sizeof(PushConstantData) == 124, "push constant layout shifted");
+        static_assert(sizeof(PushConstantData) == 128, "push constant layout shifted");
+        static_assert(offsetof(PushConstantData, flags) == 124,
+                      "flags must sit in the last four bytes of the guaranteed minimum");
         static_assert(offsetof(PushConstantData, probeIndex) == 120,
                       "probeIndex must sit in the four bytes after skinJointCount");
         static_assert(offsetof(PushConstantData, emissive) == 96, "push constant layout shifted");

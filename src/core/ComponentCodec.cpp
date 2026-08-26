@@ -200,6 +200,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
 
     if (const auto* mat = registry.try_get<MaterialComponent>(entity)) {
         out << indent << "\"Material\": {\n";
+        out << indent << "  \"Unlit\": " << (mat->unlit ? "true" : "false") << ",\n";
         out << indent << "  \"Albedo\": [" << mat->albedoColor.x << ", " << mat->albedoColor.y << ", "
              << mat->albedoColor.z << ", " << mat->albedoColor.w << "],\n";
         writeAssetRef(out, indent, "AlbedoTexture", mat->albedoTexturePath, ",\n");
@@ -619,6 +620,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         const auto& m = node["Material"];
         auto& material = registry.emplace_or_replace<MaterialComponent>(entity);
         material.albedoColor = readVec4(m["Albedo"], glm::vec4(1.0f));
+        // Defaults to false, so every scene written before this reads back lit.
+        material.unlit = m["Unlit"].AsBool(false);
         material.albedoTexturePath = readAssetRef(m, "AlbedoTexture");
         material.normalTexturePath = readAssetRef(m, "NormalTexture");
         // Absent from every scene written before packed maps existed, which

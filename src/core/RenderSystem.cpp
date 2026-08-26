@@ -25,6 +25,7 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
     }
 
     if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
+        if (material->unlit) push.flags |= PushConstantData::kUnlit;
         push.albedoColor = material->albedoColor;
         // w is the alpha cutoff. Zero is no cutout, which is also what every
         // caller that builds a push constant by hand leaves it at.

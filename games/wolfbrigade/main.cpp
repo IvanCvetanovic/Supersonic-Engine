@@ -26,6 +26,7 @@ int main(int argc, char** argv) {
     // How many drawables to build. The plan's busy campaign frame is 350-400;
     // endless has no ceiling in the data, so the number is an argument.
     int drawables = 400;
+    float sunIntensity = 1.4f;
     std::string filtered;
     std::vector<char*> passthrough;
     passthrough.push_back(argv[0]);
@@ -37,6 +38,12 @@ int main(int argc, char** argv) {
             if (drawables < 5) drawables = 5;
             continue;
         }
+        // Varies the sun so the unlit path can be proved: the unlit quads must
+        // not move by one bit between two runs, and the lit ground must.
+        if (arg == "--sun" && i + 1 < argc) {
+            sunIntensity = static_cast<float>(std::atof(argv[++i]));
+            continue;
+        }
         passthrough.push_back(argv[i]);
     }
 
@@ -45,7 +52,8 @@ int main(int argc, char** argv) {
 
     if (options.helpRequested) {
         std::cout << Supersonic::LaunchOptions::Usage()
-                  << "  --drawables <n>  how many quads the lane spawns (default 400)\n";
+                  << "  --drawables <n>  how many quads the lane spawns (default 400)\n"
+                  << "  --sun <f>        directional light intensity (default 1.4)\n";
         return EXIT_SUCCESS;
     }
     if (!options.ok) {
@@ -57,7 +65,7 @@ int main(int argc, char** argv) {
         Supersonic::SupersonicApp app(options);
 
         // The whole claim, in one line.
-        app.PushLayer(std::make_unique<WolfBrigade::WolfBrigadeLayer>(drawables));
+        app.PushLayer(std::make_unique<WolfBrigade::WolfBrigadeLayer>(drawables, sunIntensity));
 
         app.Run();
     } catch (const std::exception& e) {

@@ -172,6 +172,8 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
     } else if (primitiveType == "Sphere") {
         ok = ModelLoader::GenerateSphere(ModelLoader::kSphereRadius, ModelLoader::kSphereRings,
                                          ModelLoader::kSphereSectors, data);
+    } else if (primitiveType == "Quad") {
+        ok = ModelLoader::GenerateQuad(ModelLoader::kQuadWidth, ModelLoader::kQuadHeight, data);
     } else if (primitiveType == "Plane") {
         ok = ModelLoader::GeneratePlane(ModelLoader::kPlaneWidth, ModelLoader::kPlaneHeight, data);
     } else if (primitiveType == "Terrain") {
