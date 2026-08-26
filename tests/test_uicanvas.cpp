@@ -10,6 +10,8 @@
 #include "core/Components.hpp"
 #include "core/UICanvas.hpp"
 
+#include <vector>
+
 #include <string>
 
 using namespace Supersonic;
@@ -569,6 +571,108 @@ static void testTheScreenRectIsAnOffsetNotAnAssumption() {
     CHECK_NEAR(out.y, 350.0f);
 }
 
+// --- stacking ---------------------------------------------------------------
+//
+// Every element placed itself from an anchor and an offset, so an author
+// computed every position by hand and re-computed them all whenever anything
+// changed size. Wolf Brigade uses six VBoxContainers, five HBoxContainers and
+// four CenterContainers - fifteen of its sixteen container uses are a stack
+// with an anchor.
+
+// A screen exactly the reference height, so scale is 1 and authored units are
+// pixels. Every expected number below is then arithmetic anyone can redo.
+static UIRect unitScaleScreen() {
+    return UIRect{glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f)};
+}
+
+static void testAVerticalStackAdvancesByHeightPlusSpacing() {
+    const std::vector<glm::vec2> sizes{{100.0f, 20.0f}, {100.0f, 30.0f}, {100.0f, 40.0f}};
+    const std::vector<UIRect> rects =
+        UICanvas::LayoutStack(sizes, false, 10.0f, UIAnchor::TopLeft, glm::vec2(0.0f),
+                              unitScaleScreen());
+
+    CHECK_EQ(rects.size(), size_t{3});
+    CHECK_NEAR(rects[0].min.y, 0.0f);
+    CHECK_NEAR(rects[1].min.y, 30.0f);          // 20 + 10
+    CHECK_NEAR(rects[2].min.y, 70.0f);          // 20 + 10 + 30 + 10
+    CHECK_NEAR(rects[2].max.y, 110.0f);
+
+    // Spacing goes BETWEEN, not after: three items have two gaps. A stack that
+    // trails a gap is half a gap off centre and looks like nothing is wrong.
+    CHECK_MSG(rects[2].max.y - rects[0].min.y == 110.0f,
+              "three items and two gaps, not three gaps");
+}
+
+static void testAHorizontalStackAdvancesAlongX() {
+    const std::vector<glm::vec2> sizes{{50.0f, 20.0f}, {70.0f, 20.0f}};
+    const std::vector<UIRect> rects =
+        UICanvas::LayoutStack(sizes, true, 8.0f, UIAnchor::TopLeft, glm::vec2(0.0f),
+                              unitScaleScreen());
+
+    CHECK_NEAR(rects[0].min.x, 0.0f);
+    CHECK_NEAR(rects[1].min.x, 58.0f);          // 50 + 8
+    CHECK_NEAR(rects[0].min.y, rects[1].min.y);
+}
+
+static void testCentringCentresTheGroupNotEachChild() {
+    // The mistake this is written against: anchoring each child independently
+    // centres every child on the same point, so they land on top of one another
+    // and it looks like the layout did nothing at all.
+    // Spacing is NON-ZERO on purpose. With zero spacing this test cannot tell a
+    // correct block size from one that trails a gap after the last child, and a
+    // trailing gap is off-centre by half a gap - which is exactly the kind of
+    // wrong that looks fine until someone measures it.
+    const std::vector<glm::vec2> sizes{{200.0f, 40.0f}, {200.0f, 40.0f}, {200.0f, 40.0f}};
+    const std::vector<UIRect> rects =
+        UICanvas::LayoutStack(sizes, false, 10.0f, UIAnchor::Center, glm::vec2(0.0f),
+                              unitScaleScreen());
+
+    CHECK_MSG(rects[0].min.y != rects[1].min.y, "children must not share a row");
+
+    // Three 40-tall children with two 10 gaps is 140. Centred in 1080 that
+    // spans 470..610, and the middle of what is actually drawn must be 540.
+    const float top = rects[0].min.y;
+    const float bottom = rects[2].max.y;
+    CHECK_NEAR(bottom - top, 140.0f);
+    CHECK_NEAR((top + bottom) * 0.5f, 540.0f);
+}
+
+static void testTheCrossAxisIsCentredSoARowOfMixedHeightsLinesUp() {
+    const std::vector<glm::vec2> sizes{{40.0f, 20.0f}, {40.0f, 60.0f}};
+    const std::vector<UIRect> rects =
+        UICanvas::LayoutStack(sizes, true, 0.0f, UIAnchor::TopLeft, glm::vec2(0.0f),
+                              unitScaleScreen());
+
+    const float shortMid = (rects[0].min.y + rects[0].max.y) * 0.5f;
+    const float tallMid = (rects[1].min.y + rects[1].max.y) * 0.5f;
+    CHECK_NEAR(shortMid, tallMid);
+}
+
+static void testTheStackScalesWithTheScreenLikeEverythingElse() {
+    // Authored units, not pixels. A menu authored at 1080 has to be the same
+    // fraction of a 4K screen, or the HUD and the containers disagree about
+    // what a unit means - which is worse than either convention alone.
+    const std::vector<glm::vec2> sizes{{100.0f, 50.0f}, {100.0f, 50.0f}};
+
+    const UIRect small = unitScaleScreen();
+    const UIRect large{glm::vec2(0.0f, 0.0f), glm::vec2(3840.0f, 2160.0f)};
+
+    const auto a = UICanvas::LayoutStack(sizes, false, 10.0f, UIAnchor::TopLeft,
+                                         glm::vec2(0.0f), small);
+    const auto b = UICanvas::LayoutStack(sizes, false, 10.0f, UIAnchor::TopLeft,
+                                         glm::vec2(0.0f), large);
+
+    CHECK_NEAR(b[1].min.y, a[1].min.y * 2.0f);
+    CHECK_NEAR(b[0].max.y - b[0].min.y, (a[0].max.y - a[0].min.y) * 2.0f);
+}
+
+static void testAnEmptyStackIsEmptyRatherThanAPoint() {
+    const std::vector<UIRect> rects =
+        UICanvas::LayoutStack({}, false, 8.0f, UIAnchor::Center, glm::vec2(0.0f),
+                              unitScaleScreen());
+    CHECK_EQ(rects.size(), size_t{0});
+}
+
 static void runTests() {
     testScaleIsOneAtTheReferenceHeight();
     testScaleSurvivesADegenerateScreen();
@@ -605,6 +709,12 @@ static void runTests() {
     testAPointBehindTheCameraIsRefused();
     testOrthographicProjectsTooAndSpansTheAuthoredHeight();
     testTheScreenRectIsAnOffsetNotAnAssumption();
+    testAVerticalStackAdvancesByHeightPlusSpacing();
+    testAHorizontalStackAdvancesAlongX();
+    testCentringCentresTheGroupNotEachChild();
+    testTheCrossAxisIsCentredSoARowOfMixedHeightsLinesUp();
+    testTheStackScalesWithTheScreenLikeEverythingElse();
+    testAnEmptyStackIsEmptyRatherThanAPoint();
 }
 
-TEST_MAIN("test_uicanvas", 88)
+TEST_MAIN("test_uicanvas", 106)

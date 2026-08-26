@@ -22,7 +22,17 @@ namespace {
 // where the pointer is. Focus cannot: exactly one field may hold it, so a flat
 // per-entity loop would hand the keystroke to every field under the cursor and
 // to none of them correctly. One pass decides, a second applies.
+// The rectangle the layout pass assigned, or the one the element places for
+// itself. One helper, used by both passes, so the two cannot disagree.
+UIRect rectFor(const UICanvas::StackedRects& stacked, entt::entity entity, UIAnchor anchor,
+               const glm::vec2& offset, const glm::vec2& size, const UIRect& gameRect,
+               float scale) {
+    if (const auto it = stacked.find(entity); it != stacked.end()) return it->second;
+    return UICanvas::Place(anchor, offset * scale, size * scale, gameRect);
+}
+
 void updateTextFields(entt::registry& registry, const UIRect& gameRect, float scale,
+                      const UICanvas::StackedRects& stacked,
                       const UICanvas::UIPointer& pointer,
                       const UICanvas::UIKeyboard& keyboard) {
     auto view = registry.view<UITextFieldComponent>();
@@ -49,8 +59,8 @@ void updateTextFields(entt::registry& registry, const UIRect& gameRect, float sc
             continue;
         }
 
-        const UIRect rect = UICanvas::Place(field.anchor, field.offset * scale,
-                                            field.size * scale, gameRect);
+        const UIRect rect = rectFor(stacked, entity, field.anchor, field.offset,
+                                    field.size, gameRect, scale);
         field.hovered = pointer.active && UICanvas::Contains(rect, pointer.position);
 
         if (field.focused) focusedField = entity;
@@ -97,14 +107,15 @@ void updateTextFields(entt::registry& registry, const UIRect& gameRect, float sc
 
 int Update(entt::registry& registry, const UIRect& gameRect,
            const UICanvas::UIPointer& pointer,
-           const UICanvas::UIKeyboard& keyboard) {
+           const UICanvas::UIKeyboard& keyboard,
+           const UICanvas::StackedRects& stacked) {
     const glm::vec2 screenSize = gameRect.size();
     if (screenSize.x < 1.0f || screenSize.y < 1.0f) return 0;
 
     const float scale = UICanvas::ScaleFor(screenSize);
     int clicked = 0;
 
-    updateTextFields(registry, gameRect, scale, pointer, keyboard);
+    updateTextFields(registry, gameRect, scale, stacked, pointer, keyboard);
 
     for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
         // An invisible button is not a click target. Hiding a menu is how a
@@ -117,8 +128,8 @@ int Update(entt::registry& registry, const UIRect& gameRect,
             continue;
         }
 
-        const UIRect rect = UICanvas::Place(button.anchor, button.offset * scale,
-                                            button.size * scale, gameRect);
+        const UIRect rect = rectFor(stacked, entity, button.anchor, button.offset,
+                                    button.size, gameRect, scale);
 
         // A disabled button is drawn but not live, so an unavailable menu item
         // stays where it is instead of moving everything below it.

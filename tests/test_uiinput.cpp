@@ -19,6 +19,12 @@
 
 using namespace Supersonic;
 
+
+// No containers in these cases: every element here places itself from its own
+// anchor, which is the path this suite is about. Stack layout has its own tests
+// in test_uicanvas.
+static const UICanvas::StackedRects kNoStacks;
+
 namespace {
 
 // A 1920x1080 game area at the origin, so authored units are pixels and the
@@ -65,9 +71,9 @@ entt::entity addButton(entt::registry& registry, const std::string& label,
 
 // Presses and releases at a point, as three frames of pointer input.
 void clickAt(entt::registry& registry, const glm::vec2& point) {
-    UIInput::Update(registry, screen(), pointerAt(point, false, false), noKeyboard());
-    UIInput::Update(registry, screen(), pointerAt(point, true, false), noKeyboard());
-    UIInput::Update(registry, screen(), pointerAt(point, false, true), noKeyboard());
+    UIInput::Update(registry, screen(), pointerAt(point, false, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(point, true, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(point, false, true), noKeyboard(), kNoStacks);
 }
 
 } // namespace
@@ -120,11 +126,11 @@ static void testUpdateReportsHowManyWereClicked() {
     // Held in locals: Update advances state, so calling it inside a check that
     // might evaluate its argument more than once would run the frame twice.
     const int onPress = UIInput::Update(registry, screen(),
-                                        pointerAt(glm::vec2(140.0f, 70.0f), true, false), noKeyboard());
+                                        pointerAt(glm::vec2(140.0f, 70.0f), true, false), noKeyboard(), kNoStacks);
     const int onRelease = UIInput::Update(registry, screen(),
-                                          pointerAt(glm::vec2(140.0f, 70.0f), false, true), noKeyboard());
+                                          pointerAt(glm::vec2(140.0f, 70.0f), false, true), noKeyboard(), kNoStacks);
     const int afterwards = UIInput::Update(registry, screen(),
-                                           pointerAt(glm::vec2(140.0f, 70.0f), false, false), noKeyboard());
+                                           pointerAt(glm::vec2(140.0f, 70.0f), false, false), noKeyboard(), kNoStacks);
 
     CHECK_MSG(onPress == 0, "the press is not the click");
     CHECK_MSG(onRelease == 1, "the release over the button is");
@@ -135,9 +141,9 @@ static void testClickingEmptySpaceReportsNothing() {
     entt::registry registry;
     addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
 
-    UIInput::Update(registry, screen(), pointerAt(glm::vec2(900.0f, 900.0f), true, false), noKeyboard());
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(900.0f, 900.0f), true, false), noKeyboard(), kNoStacks);
     const int clicked = UIInput::Update(registry, screen(),
-                                        pointerAt(glm::vec2(900.0f, 900.0f), false, true), noKeyboard());
+                                        pointerAt(glm::vec2(900.0f, 900.0f), false, true), noKeyboard(), kNoStacks);
     CHECK_MSG(clicked == 0, "clicking empty space must report nothing");
 }
 
@@ -180,15 +186,15 @@ static void testAButtonFollowsItsAnchorAcrossResolutions() {
     const glm::vec2 centre(1280.0f - (50.0f + 100.0f) * scale,
                             720.0f - (50.0f + 30.0f) * scale);
 
-    UIInput::Update(registry, small, pointerAt(centre, true, false), noKeyboard());
-    UIInput::Update(registry, small, pointerAt(centre, false, true), noKeyboard());
+    UIInput::Update(registry, small, pointerAt(centre, true, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, small, pointerAt(centre, false, true), noKeyboard(), kNoStacks);
     CHECK_MSG(registry.get<UIButtonComponent>(button).clicked,
               "the click target must follow the button when the window changes size");
 
     // And the place it would have been at the authored size must now miss.
     const glm::vec2 authored(1920.0f - 150.0f, 1080.0f - 80.0f);
-    UIInput::Update(registry, small, pointerAt(authored, true, false), noKeyboard());
-    UIInput::Update(registry, small, pointerAt(authored, false, true), noKeyboard());
+    UIInput::Update(registry, small, pointerAt(authored, true, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, small, pointerAt(authored, false, true), noKeyboard(), kNoStacks);
     CHECK_MSG(!registry.get<UIButtonComponent>(button).clicked,
               "and must not still be where the button was authored");
 }
@@ -203,13 +209,13 @@ static void testTheGameRectOffsetIsHonoured() {
 
     const UIRect panel{ glm::vec2(300.0f, 100.0f), glm::vec2(2220.0f, 1180.0f) };
 
-    UIInput::Update(registry, panel, pointerAt(glm::vec2(440.0f, 170.0f), true, false), noKeyboard());
-    UIInput::Update(registry, panel, pointerAt(glm::vec2(440.0f, 170.0f), false, true), noKeyboard());
+    UIInput::Update(registry, panel, pointerAt(glm::vec2(440.0f, 170.0f), true, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, panel, pointerAt(glm::vec2(440.0f, 170.0f), false, true), noKeyboard(), kNoStacks);
     CHECK_MSG(registry.get<UIButtonComponent>(button).clicked,
               "the button sits at the panel's origin plus its offset");
 
-    UIInput::Update(registry, panel, pointerAt(glm::vec2(140.0f, 70.0f), true, false), noKeyboard());
-    UIInput::Update(registry, panel, pointerAt(glm::vec2(140.0f, 70.0f), false, true), noKeyboard());
+    UIInput::Update(registry, panel, pointerAt(glm::vec2(140.0f, 70.0f), true, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, panel, pointerAt(glm::vec2(140.0f, 70.0f), false, true), noKeyboard(), kNoStacks);
     CHECK_MSG(!registry.get<UIButtonComponent>(button).clicked,
               "and not at the window origin plus its offset");
 }
@@ -221,7 +227,7 @@ static void testADegenerateGameRectIsIgnored() {
     const auto button = addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
 
     const UIRect none{ glm::vec2(0.0f), glm::vec2(0.0f) };
-    const int clicked = UIInput::Update(registry, none, pointerAt(glm::vec2(0.0f), true, false), noKeyboard());
+    const int clicked = UIInput::Update(registry, none, pointerAt(glm::vec2(0.0f), true, false), noKeyboard(), kNoStacks);
     CHECK_MSG(clicked == 0, "a zero-size game area has nothing to click");
     CHECK(!registry.get<UIButtonComponent>(button).hovered);
 }
@@ -247,8 +253,8 @@ entt::entity addField(entt::registry& registry, UIAnchor anchor, const glm::vec2
 
 // A press EDGE at a point, which is what decides focus.
 void pressAt(entt::registry& registry, const glm::vec2& point) {
-    UIInput::Update(registry, screen(), pointerAt(point, false, false), noKeyboard());
-    UIInput::Update(registry, screen(), pointerAt(point, true, false), noKeyboard());
+    UIInput::Update(registry, screen(), pointerAt(point, false, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(point, true, false), noKeyboard(), kNoStacks);
 }
 
 } // namespace
@@ -298,7 +304,7 @@ static void testMovingThePointerAwayDoesNotLoseTheTypedName() {
 
     const unsigned int characters[] = { 'I', 'v' };
     UIInput::Update(registry, screen(), pointerAt(glm::vec2(1500.0f, 900.0f), false, false),
-                    typing(characters, 2));
+                    typing(characters, 2), kNoStacks);
 
     const auto& state = registry.get<UITextFieldComponent>(field);
     CHECK_MSG(state.focused, "the pointer left and the keyboard stayed");
@@ -317,7 +323,7 @@ static void testAPointerWithNoPositionDecidesNothing() {
 
     UIInput::Update(registry, screen(),
                     pointerAt(glm::vec2(-9000.0f, 40000.0f), true, false, /*active=*/false),
-                    noKeyboard());
+                    noKeyboard(), kNoStacks);
     CHECK_MSG(registry.get<UITextFieldComponent>(field).focused,
               "a press from a pointer that is not anywhere decides nothing");
 }
@@ -331,7 +337,7 @@ static void testOnlyTheFocusedFieldReceivesCharacters() {
 
     const unsigned int characters[] = { 'A' };
     UIInput::Update(registry, screen(), pointerAt(glm::vec2(100.0f, 60.0f), true, true),
-                    typing(characters, 1));
+                    typing(characters, 1), kNoStacks);
 
     CHECK_MSG(registry.get<UITextFieldComponent>(first).text == "A", "the focused one hears it");
     CHECK_MSG(registry.get<UITextFieldComponent>(second).text.empty(), "and nothing else does");
@@ -348,7 +354,7 @@ static void testHidingAFocusedFieldGivesTheKeyboardBack() {
 
     registry.get<UITextFieldComponent>(field).visible = false;
     UIInput::Update(registry, screen(), pointerAt(glm::vec2(100.0f, 60.0f), false, false),
-                    noKeyboard());
+                    noKeyboard(), kNoStacks);
 
     CHECK_MSG(!registry.get<UITextFieldComponent>(field).focused, "hidden means not focused");
     CHECK_MSG(!UIInput::AnyTextFieldFocused(registry),
@@ -363,11 +369,11 @@ static void testSubmitIsTrueForExactlyOneFrame() {
 
     UICanvas::UIKeyboard enter = noKeyboard();
     enter.submit = true;
-    UIInput::Update(registry, screen(), pointerAt(glm::vec2(100.0f, 60.0f), true, true), enter);
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(100.0f, 60.0f), true, true), enter, kNoStacks);
     CHECK(registry.get<UITextFieldComponent>(field).submitted);
 
     UIInput::Update(registry, screen(), pointerAt(glm::vec2(100.0f, 60.0f), true, true),
-                    noKeyboard());
+                    noKeyboard(), kNoStacks);
     CHECK_MSG(!registry.get<UITextFieldComponent>(field).submitted,
               "or a menu would answer itself every frame until the next keystroke");
 }
@@ -384,7 +390,7 @@ static void testFocusPutsTheCaretAtTheEnd() {
 
     const unsigned int characters[] = { '!' };
     UIInput::Update(registry, screen(), pointerAt(glm::vec2(100.0f, 60.0f), true, true),
-                    typing(characters, 1));
+                    typing(characters, 1), kNoStacks);
     CHECK_MSG(registry.get<UITextFieldComponent>(field).text == "Ivan!",
               registry.get<UITextFieldComponent>(field).text);
 }

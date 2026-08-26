@@ -1129,6 +1129,49 @@ struct ParticleEmitterComponent {
 // one it was authored at.
 // ---------------------------------------------------------------------------
 
+// Lays its CHILDREN out in a row or a column instead of each one placing itself.
+//
+// Every UI element in this engine positions itself from an anchor and an
+// offset, which means an author computes every position by hand and re-computes
+// them all whenever anything changes size. A menu of five buttons is five
+// offsets that have to agree; a label whose text grew moves nothing.
+//
+// A child is any UI entity whose HierarchyComponent names this one. The stack
+// measures each of them, sizes itself to the result, places itself by its own
+// anchor, and hands each child a rectangle - so the child's own anchor and
+// offset are ignored while it is in a stack. That is the point: it is no longer
+// deciding where it goes.
+struct UIStackComponent {
+    // Along x rather than down y. Godot spells these HBoxContainer and
+    // VBoxContainer; the difference is one axis, so it is one bool.
+    bool horizontal{false};
+
+    // Where the whole BLOCK attaches, once its size is known. Setting this to
+    // Center is Godot's CenterContainer - the group is centred, not each child
+    // on the same point.
+    UIAnchor anchor{UIAnchor::TopLeft};
+    glm::vec2 offset{0.0f, 0.0f};
+
+    // Between children, in authored units. Between, not after: n children have
+    // n-1 gaps, and a stack that trails one is half a gap off centre.
+    float spacing{8.0f};
+
+    bool visible{true};
+};
+
+// Where an element sits among its siblings in a stack.
+//
+// entt's iteration order is not a contract - it depends on pool sizes and on
+// what was created when - so "the order they were created in" is not something
+// a menu can be built on. This is the same answer RenderableComponent::sortKey
+// gives for draw order, and for the same reason.
+//
+// Absent means zero, and equal orders keep whatever order the view produced,
+// which is stable within a run and is fine for children nobody ranked.
+struct UIOrderComponent {
+    int32_t order{0};
+};
+
 struct UITextComponent {
     std::string text{"Score: 0"};
 

@@ -17,6 +17,100 @@ ImU32 toColor(const glm::vec4& color) {
 
 ImVec2 toVec(const glm::vec2& v) { return ImVec2(v.x, v.y); }
 
+// The rectangle the layout pass assigned, or the one the element places for
+// itself. Mirrors UIInput's helper of the same shape, and exists for the same
+// reason: an element inside a stack is no longer using its own anchor, and
+// drawing it where the anchor says while hit-testing it where the stack says is
+// a click target that does not match the picture.
+UIRect placedRect(const UICanvas::StackedRects& stacked, entt::entity entity, UIAnchor anchor,
+                  const glm::vec2& offset, const glm::vec2& size, const UIRect& gameRect,
+                  float scale) {
+    if (const auto it = stacked.find(entity); it != stacked.end()) return it->second;
+    return UICanvas::Place(anchor, offset * scale, size * scale, gameRect);
+}
+
+// Runs every stack and records where each child ended up.
+//
+// Measuring is why this lives here rather than in UICanvas: a label's size is
+// whatever the font says it is, and the font is an ImGui object. Panels,
+// buttons and fields carry an authored size and need no measuring at all.
+//
+// The result is computed ONCE and used by both the input pass and the draw
+// pass. Letting each derive it would be two places that have to agree about
+// where a button is, which is the failure UISystem.hpp's header already warns
+// about for anchors and would be worse here.
+UICanvas::StackedRects layoutStacks(entt::registry& registry, const UIRect& gameRect,
+                                    ImFont* font, float scale) {
+    UICanvas::StackedRects stacked;
+    auto stacks = registry.view<UIStackComponent>();
+    if (stacks.begin() == stacks.end()) return stacked;
+
+    for (auto [stackEntity, stack] : stacks.each()) {
+        if (!stack.visible) continue;
+
+        // Children, by the hierarchy the rest of the engine already uses.
+        struct Child {
+            entt::entity entity{entt::null};
+            glm::vec2 size{0.0f};
+            int32_t order{0};
+        };
+        std::vector<Child> children;
+
+        for (auto [entity, hierarchy] : registry.view<HierarchyComponent>().each()) {
+            if (hierarchy.parent != stackEntity) continue;
+
+            glm::vec2 size(0.0f);
+            bool isUi = false;
+            if (const auto* text = registry.try_get<UITextComponent>(entity)) {
+                if (!text->visible) continue;
+                // Measured at the authored size and divided back out, because
+                // LayoutStack works in authored units and applies scale itself.
+                const ImVec2 measured =
+                    font->CalcTextSizeA(text->fontSize * scale, FLT_MAX, 0.0f,
+                                        text->text.c_str());
+                size = glm::vec2(measured.x, measured.y) / scale;
+                isUi = true;
+            } else if (const auto* panel = registry.try_get<UIPanelComponent>(entity)) {
+                if (!panel->visible) continue;
+                size = panel->size;
+                isUi = true;
+            } else if (const auto* button = registry.try_get<UIButtonComponent>(entity)) {
+                size = button->size;
+                isUi = true;
+            } else if (const auto* field = registry.try_get<UITextFieldComponent>(entity)) {
+                size = field->size;
+                isUi = true;
+            }
+            if (!isUi) continue;
+
+            const auto* ordering = registry.try_get<UIOrderComponent>(entity);
+            children.push_back(Child{entity, size, ordering ? ordering->order : 0});
+        }
+
+        if (children.empty()) continue;
+
+        // Stable, so children nobody ranked keep the order the view produced -
+        // the same rule the renderer's sort key follows.
+        std::stable_sort(children.begin(), children.end(),
+                         [](const Child& left, const Child& right) {
+                             return left.order < right.order;
+                         });
+
+        std::vector<glm::vec2> sizes;
+        sizes.reserve(children.size());
+        for (const Child& child : children) sizes.push_back(child.size);
+
+        const std::vector<UIRect> rects = UICanvas::LayoutStack(
+            sizes, stack.horizontal, stack.spacing, stack.anchor, stack.offset, gameRect);
+
+        for (size_t i = 0; i < children.size() && i < rects.size(); ++i) {
+            stacked[children[i].entity] = rects[i];
+        }
+    }
+
+    return stacked;
+}
+
 // Where a UI entity sits in the world.
 //
 // The resolved world transform when there is one, so a label parented to a unit
@@ -56,17 +150,24 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 
     const float scale = UICanvas::ScaleFor(screenSize);
 
+    ImFont* font = ImGui::GetFont();
+
+    // Layout BEFORE input, and input before drawing. A stacked button has to
+    // be hit-tested against where the stack put it, and drawn there too - all
+    // three from one answer.
+    const UICanvas::StackedRects stacked = layoutStacks(registry, gameRect, font, scale);
+
     // Before drawing, so a button drawn this frame reflects the pointer this
     // frame rather than lagging it by one.
-    UIInput::Update(registry, gameRect, pointer, keyboard);
+    UIInput::Update(registry, gameRect, pointer, keyboard, stacked);
 
     // Panels first, then text, so a label always reads on top of its backdrop
     // regardless of the order the entities happen to be in.
     for (auto [entity, panel] : registry.view<UIPanelComponent>().each()) {
         if (!panel.visible) continue;
 
-        const UIRect rect = UICanvas::Place(panel.anchor, panel.offset * scale,
-                                            panel.size * scale, gameRect);
+        const UIRect rect = placedRect(stacked, entity, panel.anchor, panel.offset,
+                                       panel.size, gameRect, scale);
         const float rounding = panel.cornerRadius * scale;
 
         if (panel.drawTrack) {
@@ -88,7 +189,6 @@ void Render(entt::registry& registry, const UIRect& gameRect,
         }
     }
 
-    ImFont* font = ImGui::GetFont();
 
     // Interaction ran above; this only draws what it decided.
     for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
@@ -96,8 +196,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 
         // The same placement UIInput used, from the same component - not a
         // second calculation that could disagree with it.
-        const UIRect rect = UICanvas::Place(button.anchor, button.offset * scale,
-                                            button.size * scale, gameRect);
+        const UIRect rect = placedRect(stacked, entity, button.anchor, button.offset,
+                                       button.size, gameRect, scale);
 
         // Pressed beats hovered: while held, the button reads as held even
         // though the pointer is still over it.
@@ -133,8 +233,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     for (auto [entity, field] : registry.view<UITextFieldComponent>().each()) {
         if (!field.visible) continue;
 
-        const UIRect rect = UICanvas::Place(field.anchor, field.offset * scale,
-                                            field.size * scale, gameRect);
+        const UIRect rect = placedRect(stacked, entity, field.anchor, field.offset,
+                                       field.size, gameRect, scale);
 
         const bool live = field.focused && field.enabled;
         draw->AddRectFilled(toVec(rect.min), toVec(rect.max),
@@ -214,8 +314,14 @@ void Render(entt::registry& registry, const UIRect& gameRect,
                        text.offset * scale;
             rect.max = rect.min + glm::vec2(measured.x, measured.y);
         } else {
-            rect = UICanvas::PlaceMeasured(text.anchor, text.offset * scale,
-                                           glm::vec2(measured.x, measured.y), gameRect);
+            if (const auto it = stacked.find(entity); it != stacked.end()) {
+                // The stack decided where; the measurement decided how big.
+                rect.min = it->second.min;
+                rect.max = rect.min + glm::vec2(measured.x, measured.y);
+            } else {
+                rect = UICanvas::PlaceMeasured(text.anchor, text.offset * scale,
+                                               glm::vec2(measured.x, measured.y), gameRect);
+            }
         }
 
         if (text.shadow) {

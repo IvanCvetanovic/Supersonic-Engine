@@ -25,6 +25,60 @@ float ScaleFor(const glm::vec2& screenSize) {
     return screenSize.y / kReferenceHeight;
 }
 
+std::vector<UIRect> LayoutStack(const std::vector<glm::vec2>& sizes, bool horizontal,
+                                float spacing, UIAnchor anchor, const glm::vec2& offset,
+                                const UIRect& screen) {
+    std::vector<UIRect> rects;
+    if (sizes.empty()) return rects;
+
+    const float scale = ScaleFor(screen.size());
+    const float gap = spacing * scale;
+
+    // The block first, so it can be placed as one thing.
+    //
+    // Measuring the group and then anchoring it is what makes "centre" mean the
+    // group is centred. Anchoring each child independently centres every child
+    // on the same point, which stacks them all on top of one another and looks
+    // like the layout silently did nothing.
+    glm::vec2 block(0.0f);
+    for (size_t i = 0; i < sizes.size(); ++i) {
+        const glm::vec2 size = sizes[i] * scale;
+        if (horizontal) {
+            block.x += size.x + (i > 0 ? gap : 0.0f);
+            block.y = std::max(block.y, size.y);
+        } else {
+            block.y += size.y + (i > 0 ? gap : 0.0f);
+            block.x = std::max(block.x, size.x);
+        }
+    }
+
+    // Placed through the same Place() every other element uses, in AUTHORED
+    // units, so a stack sits where a single element of the same size would and
+    // the two cannot drift apart.
+    const UIRect placed = Place(anchor, offset, block / scale, screen);
+
+    float cursor = horizontal ? placed.min.x : placed.min.y;
+    rects.reserve(sizes.size());
+    for (const glm::vec2& authored : sizes) {
+        const glm::vec2 size = authored * scale;
+
+        UIRect rect;
+        if (horizontal) {
+            // Centred on the cross axis, which is what a row of buttons of
+            // different heights should look like.
+            rect.min = glm::vec2(cursor, placed.min.y + (block.y - size.y) * 0.5f);
+            cursor += size.x + gap;
+        } else {
+            rect.min = glm::vec2(placed.min.x + (block.x - size.x) * 0.5f, cursor);
+            cursor += size.y + gap;
+        }
+        rect.max = rect.min + size;
+        rects.push_back(rect);
+    }
+
+    return rects;
+}
+
 bool ProjectToScreen(const glm::mat4& viewProj, const glm::vec3& world, const UIRect& screen,
                      glm::vec3& outScreen) {
     const glm::vec4 clip = viewProj * glm::vec4(world, 1.0f);

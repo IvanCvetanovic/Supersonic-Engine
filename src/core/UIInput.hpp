@@ -31,9 +31,13 @@ namespace UIInput {
 // draws, focuses, blinks its caret and silently cannot be typed into - which is
 // the whole feature, missing, with nothing to point at. Seventeen call sites
 // the compiler names are cheaper than one that fails quietly.
+// `stacked` is where the layout pass put anything inside a container. An
+// element in it is hit-tested against THAT rectangle rather than against the
+// anchor it is no longer using; anything absent places itself as before.
 int Update(entt::registry& registry, const UIRect& gameRect,
            const UICanvas::UIPointer& pointer,
-           const UICanvas::UIKeyboard& keyboard);
+           const UICanvas::UIKeyboard& keyboard,
+           const UICanvas::StackedRects& stacked);
 
 // Whether any field currently holds focus.
 //
