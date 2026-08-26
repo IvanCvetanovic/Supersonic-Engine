@@ -27,6 +27,7 @@
 //   ok  : add() emits resources_changed(wood, <before+50>)
 
 #include "TestHarness.hpp"
+#include "WolfBrigadeFixture.hpp"
 
 #include "sim/EventBus.hpp"
 #include "sim/GameData.hpp"
@@ -43,14 +44,7 @@ using namespace WolfBrigade;
 
 namespace {
 
-const GameData& shipped() {
-    static const GameData data = [] {
-        GameData loaded;
-        loaded.LoadAll(WOLFBRIGADE_DATA_DIR);
-        return loaded;
-    }();
-    return data;
-}
+const GameData& shipped() { return wb::Shipped(); }
 
 // A fresh run: a bus nobody is listening to yet and a state just reset.
 struct Run {
@@ -58,34 +52,6 @@ struct Run {
     GameState state{shipped(), bus};
 
     Run() { state.Reset(); }
-};
-
-// The shipped data with one file swapped, in a scratch directory. Same shape as
-// the one in test_wb_data, and here for the same reason: some behaviour is
-// unreachable at shipped values and has to be authored to be seen at all.
-class ScratchData {
-public:
-    ScratchData(const std::string& file, const std::string& contents) {
-        m_directory = std::filesystem::temp_directory_path() /
-                      ("wb_econ_" + file + std::to_string(contents.size()));
-        std::filesystem::remove_all(m_directory);
-        std::filesystem::create_directories(m_directory);
-        std::filesystem::copy(WOLFBRIGADE_DATA_DIR, m_directory,
-                              std::filesystem::copy_options::overwrite_existing);
-        std::ofstream out(m_directory / file, std::ios::binary);
-        out << contents;
-    }
-    ~ScratchData() {
-        std::error_code ignored;
-        std::filesystem::remove_all(m_directory, ignored);
-    }
-    ScratchData(const ScratchData&) = delete;
-    ScratchData& operator=(const ScratchData&) = delete;
-
-    std::string Path() const { return m_directory.string(); }
-
-private:
-    std::filesystem::path m_directory;
 };
 
 // --- 1. ResourceNode extract + deplete -----------------------------------
@@ -296,7 +262,7 @@ void testWaveCountsScaleAndNeverRoundAGroupAway() {
     // version of this case pretended otherwise: 0.7 of one brute rounds to
     // one anyway, so removing the max(1, ...) changed nothing and the mutation
     // walked straight through. It takes a gentler preset than any that ships.
-    const ScratchData gentle("difficulty.json", R"({
+    const wb::ScratchData gentle("econ", "difficulty.json", R"({
       "default": "normal",
       "order": ["gentle", "normal"],
       "presets": {

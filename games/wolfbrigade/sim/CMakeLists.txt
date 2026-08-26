@@ -20,6 +20,8 @@ add_library(WolfBrigadeSim STATIC
     GameState.cpp
     GestureMachine.cpp
     ResourceNode.cpp
+    UnitStats.cpp
+    WaveDirector.cpp
 )
 
 # Where the ported data lives, as a compile definition rather than a path the

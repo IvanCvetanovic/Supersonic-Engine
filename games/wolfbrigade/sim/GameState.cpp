@@ -84,6 +84,17 @@ float GameState::DifficultyMultiplier(const std::string& key) const {
     return m_data->DifficultyPreset(CurrentDifficulty())[key].AsFloat(1.0f);
 }
 
+UnitStats& GameState::ScaleEnemyStats(UnitStats& stats) const {
+    // At least 1 HP and at least 0 damage. Easy multiplies both down, and an
+    // enemy rounded to zero hit points is one that dies to the first tick of
+    // anything - which reads as the difficulty being broken rather than easy.
+    stats.maxHp = std::max(1, roundToInt(static_cast<float>(stats.maxHp) *
+                                         DifficultyMultiplier("enemy_hp_mult")));
+    stats.damage = std::max(0, roundToInt(static_cast<float>(stats.damage) *
+                                          DifficultyMultiplier("enemy_damage_mult")));
+    return stats;
+}
+
 int GameState::ScaleWaveCount(int baseCount) const {
     if (baseCount <= 0) return 0;
 

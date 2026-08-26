@@ -5,6 +5,7 @@
 
 #include "sim/EventBus.hpp"
 #include "sim/GameData.hpp"
+#include "sim/UnitStats.hpp"
 
 namespace WolfBrigade {
 
@@ -87,6 +88,14 @@ public:
     // no-op until code reads it, rather than a zero that silently disables
     // something.
     float DifficultyMultiplier(const std::string& key) const;
+
+    // Scales a freshly-built ENEMY stat block by the active difficulty.
+    //
+    // Mutates and returns the same block, which is safe only because every
+    // spawn is handed its own: scaling a shared one would make the tenth
+    // raider inherit the ninth's difficulty on top of its own. Player units
+    // never come through here.
+    UnitStats& ScaleEnemyStats(UnitStats& stats) const;
 
     // A wave's base spawn count, scaled - and never dropping a non-empty group
     // to zero. Easy must still send at least one of anything a wave lists, or

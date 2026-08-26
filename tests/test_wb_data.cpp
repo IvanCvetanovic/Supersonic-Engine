@@ -35,6 +35,7 @@
 // and every slice ported after this one reads its stats through them.
 
 #include "TestHarness.hpp"
+#include "WolfBrigadeFixture.hpp"
 
 #include "sim/DataValidator.hpp"
 #include "sim/GameData.hpp"
@@ -52,52 +53,13 @@ namespace {
 // The data as it ships, loaded once. WOLFBRIGADE_DATA_DIR is baked in at
 // configure time because ctest runs from the build tree and nothing relative
 // would be right from both there and the project root.
-const GameData& shipped() {
-    static const GameData data = [] {
-        GameData loaded;
-        loaded.LoadAll(WOLFBRIGADE_DATA_DIR);
-        return loaded;
-    }();
-    return data;
-}
+const GameData& shipped() { return wb::Shipped(); }
 
 int keyCount(const Value& document) { return static_cast<int>(document.AsObject().size()); }
 
-// The shipped data with ONE file replaced, in a scratch directory.
-//
-// The shipped files are clean, which is the point of them - so the only way to
-// find out whether a check discriminates is to author the mistake it exists for
-// and watch it get caught. Without this, removing an entire check from the
-// validator leaves every case in this file green.
-class BrokenData {
-public:
-    BrokenData(const std::string& file, const std::string& contents) {
-        m_directory = std::filesystem::temp_directory_path() /
-                      ("wb_data_" + file + std::to_string(contents.size()));
-        std::filesystem::remove_all(m_directory);
-        std::filesystem::create_directories(m_directory);
-        std::filesystem::copy(WOLFBRIGADE_DATA_DIR, m_directory,
-                              std::filesystem::copy_options::overwrite_existing);
-
-        std::ofstream out(m_directory / file, std::ios::binary);
-        out << contents;
-    }
-    ~BrokenData() {
-        std::error_code ignored;
-        std::filesystem::remove_all(m_directory, ignored);
-    }
-    BrokenData(const BrokenData&) = delete;
-    BrokenData& operator=(const BrokenData&) = delete;
-
-    std::string Path() const { return m_directory.string(); }
-
-private:
-    std::filesystem::path m_directory;
-};
-
 // How many issues the validator finds in the shipped data with one file swapped.
 DataValidator::Issues issuesWith(const std::string& file, const std::string& contents) {
-    const BrokenData broken(file, contents);
+    const wb::ScratchData broken("data", file, contents);
     GameData data;
     data.LoadAll(broken.Path());
     return DataValidator::Check(data);
