@@ -371,6 +371,29 @@ void appendPrimitive(const tinygltf::Model& model,
         }
     }
 
+    // Baked vertex colour.
+    //
+    // Deliberately NOT gated on float, unlike UVs above: exporters write
+    // COLOR_0 as normalised unsigned byte or short far more often than as
+    // float, because it is the one attribute where eight bits is plainly
+    // enough. Refusing those would drop the attribute on most of the files
+    // that actually carry it.
+    //
+    // vec3 and vec4 are both legal; the alpha is read and discarded, because
+    // Vertex::color is rgb and this engine's opacity comes from the material.
+    const uint8_t* colorBytes = nullptr;
+    size_t colorStride = 0;
+    int colorComponentType = 0;
+    bool colorNormalized = false;
+    if (const auto it = primitive.attributes.find("COLOR_0"); it != primitive.attributes.end()) {
+        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(it->second)];
+        if (acc.type == TINYGLTF_TYPE_VEC3 || acc.type == TINYGLTF_TYPE_VEC4) {
+            colorBytes = accessorData<uint8_t>(model, acc, colorStride);
+            colorComponentType = acc.componentType;
+            colorNormalized = acc.normalized;
+        }
+    }
+
     // Skinning influences. Deliberately NOT gated on the component type being
     // float: JOINTS_0 never is, and WEIGHTS_0 frequently is not either.
     const uint8_t* jointBytes = nullptr;
@@ -453,7 +476,22 @@ void appendPrimitive(const tinygltf::Model& model,
             v.jointWeights = sum > 1e-6f ? weights / sum : glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
         }
 
-        v.color = glm::vec3(1.0f);
+        // WHITE WHEN ABSENT, which is the identity for a multiply - so a model
+        // with no COLOR_0 looks exactly as it did before this existed.
+        //
+        // Until this read the attribute, every vertex was white unconditionally
+        // and any baked lighting in the file was silently discarded. For a
+        // model library that paints its shading into the mesh rather than into
+        // a texture, that is the whole look thrown away with nothing to point
+        // at: the geometry is right, the materials are right, and it is flat.
+        if (colorBytes) {
+            const uint8_t* c = colorBytes + i * colorStride;
+            v.color = glm::vec3(componentAsFloat(c, colorComponentType, 0, colorNormalized),
+                                componentAsFloat(c, colorComponentType, 1, colorNormalized),
+                                componentAsFloat(c, colorComponentType, 2, colorNormalized));
+        } else {
+            v.color = glm::vec3(1.0f);
+        }
     }
 
     // Indices. glTF permits ubyte/ushort/uint; all widen to uint32 here.

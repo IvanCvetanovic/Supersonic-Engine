@@ -364,7 +364,137 @@ static void testWhatTheRedChannelIsAllowedToMean() {
     CHECK_MSG(neither.occlusionStrength == 0.0f, "and nothing to believe in it");
 }
 
+// --- Baked vertex colour -------------------------------------------------
+//
+// Every vertex used to come out white, unconditionally: the loader read
+// positions, normals, UVs, tangents and skinning influences, and then assigned
+// glm::vec3(1.0f) over the colour. COLOR_0 appeared nowhere in the engine.
+//
+// For a model library that bakes its shading into the mesh rather than into a
+// texture - which is what a Blender-authored, AO-baked pipeline produces - that
+// is the entire look discarded with nothing to point at. The geometry is right,
+// the materials are right, and everything is flat.
+//
+// Written to a temp file rather than added to assets/, so this suite keeps
+// working on a machine with no art checked out.
+
+// Three vertices, one triangle, POSITION plus COLOR_0 as NORMALISED UNSIGNED
+// BYTE - which is how exporters actually write vertex colour, and the case a
+// float-only reader would silently drop.
+//
+// Red, green, blue at the three corners: 255/0/0, 0/255/0, 0/0/255.
+const char* kColoredTriangleGltf = R"({
+  "asset": { "version": "2.0" },
+  "scene": 0,
+  "scenes": [ { "nodes": [ 0 ] } ],
+  "nodes": [ { "mesh": 0 } ],
+  "meshes": [ { "primitives": [ {
+      "attributes": { "POSITION": 0, "COLOR_0": 1 },
+      "indices": 2
+  } ] } ],
+  "buffers": [ {
+      "byteLength": 56,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA/wAA/wD/AP8AAP//AAABAAIAAAA="
+  } ],
+  "bufferViews": [
+      { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+      { "buffer": 0, "byteOffset": 36, "byteLength": 12 },
+      { "buffer": 0, "byteOffset": 48, "byteLength": 6 }
+  ],
+  "accessors": [
+      { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+        "min": [0,0,0], "max": [1,1,0] },
+      { "bufferView": 1, "componentType": 5121, "count": 3, "type": "VEC4",
+        "normalized": true },
+      { "bufferView": 2, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ]
+})";
+
+static std::string writeTempGltf(const std::string& name, const char* json) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / name;
+    std::ofstream out(path, std::ios::binary);
+    out << json;
+    out.close();
+    return path.string();
+}
+
+static void testBakedVertexColourSurvivesTheImport() {
+    const std::string path = writeTempGltf("supersonic_color0.gltf", kColoredTriangleGltf);
+
+    const auto scene = GltfLoader::Load(path);
+    std::filesystem::remove(path);
+
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.submeshes.empty()) return;
+
+    const auto& mesh = scene.submeshes[0].mesh;
+    CHECK_EQ(static_cast<int>(mesh.vertices.size()), 3);
+    if (mesh.vertices.size() != 3) return;
+
+    // Normalised unsigned byte: 255 becomes 1.0 and 0 becomes 0.0. A reader
+    // that took the raw integer would give 255.0 here and a reader that
+    // ignored the attribute would give white.
+    CHECK_NEAR(mesh.vertices[0].color.r, 1.0f);
+    CHECK_NEAR(mesh.vertices[0].color.g, 0.0f);
+    CHECK_NEAR(mesh.vertices[0].color.b, 0.0f);
+
+    CHECK_NEAR(mesh.vertices[1].color.g, 1.0f);
+    CHECK_NEAR(mesh.vertices[1].color.r, 0.0f);
+
+    CHECK_NEAR(mesh.vertices[2].color.b, 1.0f);
+    CHECK_NEAR(mesh.vertices[2].color.g, 0.0f);
+
+    CHECK_MSG(!(mesh.vertices[0].color == mesh.vertices[1].color),
+              "the three corners are genuinely different, not all one value");
+}
+
+static void testAMeshWithNoVertexColourIsStillWhite() {
+    // The identity for a multiply, so every model that predates this reads
+    // exactly as it did. Asserted rather than assumed, because the natural
+    // mistake when adding an attribute is to leave it at zero - which is black,
+    // and would turn every existing model in the library off.
+    const char* plain = R"({
+      "asset": { "version": "2.0" },
+      "scene": 0,
+      "scenes": [ { "nodes": [ 0 ] } ],
+      "nodes": [ { "mesh": 0 } ],
+      "meshes": [ { "primitives": [ {
+          "attributes": { "POSITION": 0 }, "indices": 1
+      } ] } ],
+      "buffers": [ {
+          "byteLength": 56,
+          "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA/wAA/wD/AP8AAP//AAABAAIAAAA="
+      } ],
+      "bufferViews": [
+          { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+          { "buffer": 0, "byteOffset": 48, "byteLength": 6 }
+      ],
+      "accessors": [
+          { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+            "min": [0,0,0], "max": [1,1,0] },
+          { "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR" }
+      ]
+    })";
+
+    const std::string path = writeTempGltf("supersonic_nocolor.gltf", plain);
+
+    const auto scene = GltfLoader::Load(path);
+    std::filesystem::remove(path);
+
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok || scene.submeshes.empty()) return;
+
+    const auto& mesh = scene.submeshes[0].mesh;
+    if (mesh.vertices.empty()) return;
+
+    CHECK_NEAR(mesh.vertices[0].color.r, 1.0f);
+    CHECK_NEAR(mesh.vertices[0].color.g, 1.0f);
+    CHECK_NEAR(mesh.vertices[0].color.b, 1.0f);
+}
+
 static void runTests() {
+    testBakedVertexColourSurvivesTheImport();
+    testAMeshWithNoVertexColourIsStillWhite();
     // The fixture is committed to the tree and CTest runs this suite from the
     // project root, so it is always reachable. It used to be optional: a miss
     // printed a note, ran two of seven cases and exited 0, which meant a broken
