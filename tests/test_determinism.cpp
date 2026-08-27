@@ -13,6 +13,9 @@
 // the same scene did not render the same way twice.
 
 #include "TestHarness.hpp"
+
+#include <algorithm>
+#include <cmath>
 #include "core/StateHash.hpp"
 #include "core/SimulationClock.hpp"
 #include "core/PhysicsSystem.hpp"
@@ -194,7 +197,185 @@ static void testTheClockIsDerivedRatherThanAccumulated() {
                   std::to_string(drift));
 }
 
+// --- the accumulator, at two frame rates ----------------------------------
+//
+// The engine's loop cannot be linked into a suite - it owns a window and a
+// device - so what is tested here is the ARITHMETIC it runs, transliterated.
+// Two descriptions of one rule, and the risk that they drift is the same risk
+// clusterIndexFor carries and names.
+//
+// This is the rule the whole clock rests on: the number of ticks a run
+// produces depends on how much time passed, and NOT on how that time was
+// delivered. Sixty frames of 1/60 and six frames of 1/6 are the same second and
+// must be the same simulation.
+
+struct TickPump {
+    float accumulator{0.0f};
+    float gameTick{1.0f / 60.0f};
+    int maxStepsPerFrame{5};
+    uint64_t ticks{0};
+    double dropped{0.0};
+    float alpha{0.0f};
+
+    // A transliteration of SupersonicApp's loop. Kept deliberately close to it,
+    // including the order of the drop and the alpha, because reading the two
+    // side by side is the only check that they agree.
+    void Frame(float delta) {
+        accumulator += delta;
+        int steps = 0;
+        while (accumulator >= gameTick && steps < maxStepsPerFrame) {
+            ++ticks;
+            accumulator -= gameTick;
+            ++steps;
+        }
+        if (steps == maxStepsPerFrame && accumulator > 0.0f) {
+            dropped += static_cast<double>(accumulator);
+            accumulator = 0.0f;
+        }
+        alpha = gameTick > 0.0f ? std::clamp(accumulator / gameTick, 0.0f, 1.0f) : 0.0f;
+    }
+};
+
+static void testOneSecondIsTheSameNumberOfTicksAtAnyFrameRate() {
+    // BINARY-EXACT DELTAS, so this measures the loop rather than the floating
+    // point summation underneath it. 1/64 and 1/128 are exact; 1/30 and 1/144
+    // are not, and 144 of the latter add up to slightly LESS than a second - so
+    // a test built on them asserts that the loop should invent the tick that
+    // time did not pay for. It should not, and the next test says so.
+    TickPump slow;
+    slow.gameTick = 1.0f / 64.0f;
+    for (int i = 0; i < 64; ++i) slow.Frame(1.0f / 64.0f);
+
+    TickPump fast;
+    fast.gameTick = 1.0f / 64.0f;
+    for (int i = 0; i < 128; ++i) fast.Frame(1.0f / 128.0f);
+
+    CHECK_MSG(slow.ticks == fast.ticks,
+              "a second of simulation is a second however it was delivered: got "
+              + std::to_string(slow.ticks) + " one way and "
+              + std::to_string(fast.ticks) + " the other");
+    CHECK_EQ(slow.ticks, uint64_t{64});
+
+    // And nothing was thrown away on either, which is the other half: two runs
+    // that both dropped everything would also report equal tick counts.
+    CHECK_MSG(slow.dropped == 0.0, "the slow machine dropped nothing");
+    CHECK_MSG(fast.dropped == 0.0, "and neither did the fast one");
+}
+
+static void testAnInexactFrameRateCostsAtMostOneTick() {
+    // The honest version of the above, with the frame rates a machine actually
+    // produces. 1/144 is not representable, so 144 of them are a hair under a
+    // second and the last tick has genuinely not been paid for.
+    //
+    // This is not drift: the accumulator KEEPS the remainder, so the shortfall
+    // is bounded by one tick forever rather than growing. Asserted here so that
+    // if it ever does grow, something says so.
+    TickPump slow;
+    for (int i = 0; i < 30; ++i) slow.Frame(1.0f / 30.0f);
+
+    TickPump fast;
+    for (int i = 0; i < 144; ++i) fast.Frame(1.0f / 144.0f);
+
+    const long long difference =
+        static_cast<long long>(slow.ticks) - static_cast<long long>(fast.ticks);
+    CHECK_MSG(difference <= 1 && difference >= -1,
+              "at most one tick between two frame rates over a second: got "
+              + std::to_string(slow.ticks) + " and " + std::to_string(fast.ticks));
+
+    // Ten seconds, to show it stays bounded rather than accumulating.
+    TickPump longRun;
+    for (int i = 0; i < 1440; ++i) longRun.Frame(1.0f / 144.0f);
+    const long long drift = 600 - static_cast<long long>(longRun.ticks);
+    CHECK_MSG(drift <= 1 && drift >= -1,
+              "and it is still at most one tick after ten seconds: got "
+              + std::to_string(longRun.ticks) + " of an expected 600");
+}
+
+static void testATickRateIsIndependentOfTheFrameRate() {
+    // The whole point of the split: a game that asks for 20 Hz gets 20 ticks a
+    // second whether it is drawn at 64 or at 128.
+    TickPump slow;
+    slow.gameTick = 1.0f / 20.0f;
+    for (int i = 0; i < 64; ++i) slow.Frame(1.0f / 64.0f);
+
+    TickPump fast;
+    fast.gameTick = 1.0f / 20.0f;
+    for (int i = 0; i < 128; ++i) fast.Frame(1.0f / 128.0f);
+
+    // THE CLAIM IS INDEPENDENCE, and this is the assertion that carries it:
+    // two very different frame rates, the same number of ticks.
+    CHECK_EQ(slow.ticks, fast.ticks);
+
+    // The absolute count is 19 rather than 20, and that is correct. A twentieth
+    // of a second is not representable in binary, so the step is a hair MORE
+    // than 0.05 and twenty of them do not fit in a second. Asserting 20 here
+    // would be asserting that the loop should run a tick nobody paid for.
+    CHECK_MSG(slow.ticks == 19 || slow.ticks == 20,
+              "within a tick of twenty: got " + std::to_string(slow.ticks));
+}
+
+static void testTimeTheLoopCannotRunIsCountedRatherThanVanished() {
+    // A frame so long the loop hits its ceiling. Dropping is the right answer -
+    // catching up under sustained load never catches up - but dropping in
+    // SILENCE was not: a machine that could not keep up ran every mission timer
+    // short and told nobody.
+    TickPump pump;
+    pump.Frame(1.0f);   // sixty ticks' worth, five allowed
+
+    CHECK_EQ(pump.ticks, uint64_t{5});
+    CHECK_MSG(pump.dropped > 0.9, "the fifty-five ticks it could not run were counted");
+
+    // Close to the truth, not merely non-zero: one second in, five sixtieths
+    // simulated, and the rest recorded.
+    const double expected = 1.0 - 5.0 / 60.0;
+    CHECK_MSG(std::fabs(pump.dropped - expected) < 1e-3,
+              "got " + std::to_string(pump.dropped) + ", expected "
+              + std::to_string(expected));
+
+    // And the accumulator really was cleared, or the next frame would run the
+    // ceiling again on time that has already been written off.
+    CHECK_NEAR(pump.alpha, 0.0f);
+}
+
+static void testTheOverstepFractionIsTheRemainder() {
+    // What interpolation will read. Half a tick in, alpha is a half - and at
+    // exactly a tick boundary it is zero rather than one, because the tick has
+    // already run.
+    TickPump pump;
+    pump.Frame(1.0f / 120.0f);          // half of a 1/60 tick
+    CHECK_EQ(pump.ticks, uint64_t{0});
+    CHECK_NEAR(pump.alpha, 0.5f);
+
+    pump.Frame(1.0f / 120.0f);          // the other half
+    CHECK_EQ(pump.ticks, uint64_t{1});
+    CHECK_NEAR(pump.alpha, 0.0f);
+}
+
+static void testTheDefaultRateReproducesTheOldBehaviour() {
+    // The regression that would be easiest to ship: every scene in the project
+    // predates an authored tick, so the default has to be the rate they all
+    // ran at. One physics substep per tick, and the same step length.
+    const float gameTick = 1.0f / 60.0f;
+    const float physicsStep = 1.0f / 60.0f;
+    const int substeps = std::max(1, static_cast<int>(std::lround(gameTick / physicsStep)));
+    CHECK_EQ(substeps, 1);
+    CHECK_NEAR(gameTick / static_cast<float>(substeps), physicsStep);
+
+    // And a 20 Hz game still integrates physics at 1/60, which is what keeps
+    // changing the tick rate from quietly changing how collisions feel.
+    const float slowTick = 1.0f / 20.0f;
+    const int slowSubsteps = std::max(1, static_cast<int>(std::lround(slowTick / physicsStep)));
+    CHECK_EQ(slowSubsteps, 3);
+    CHECK_NEAR(slowTick / static_cast<float>(slowSubsteps), physicsStep);
+}
+
 static void runTests() {
+    testOneSecondIsTheSameNumberOfTicksAtAnyFrameRate();
+    testAnInexactFrameRateCostsAtMostOneTick();
+    testATickRateIsIndependentOfTheFrameRate();
+    testTimeTheLoopCannotRunIsCountedRatherThanVanished();
+    testTheOverstepFractionIsTheRemainder();
+    testTheDefaultRateReproducesTheOldBehaviour();
     testTheSameSceneSteppedTwiceAgreesExactly();
     testTheHashMovesWhenTheSimulationDoes();
     testTheHashDoesNotDependOnEntityCreationOrder();
@@ -203,4 +384,4 @@ static void runTests() {
     testTheClockIsDerivedRatherThanAccumulated();
 }
 
-TEST_MAIN("test_determinism", 9)
+TEST_MAIN("test_determinism", 28)

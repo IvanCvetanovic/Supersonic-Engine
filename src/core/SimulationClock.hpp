@@ -29,7 +29,43 @@ struct SimulationClock {
     uint64_t tick{0};
 
     // The step length every tick advances by. Constant for the run.
+    //
+    // AUTHORED, and no longer the physics step. Those were one number because
+    // there was only one loop, which meant a game wanting to simulate at 20 Hz
+    // paid for 60 and a game wanting 120 could not have it. Physics keeps its
+    // own rate underneath this - a solver has a stability reason for its step
+    // that has nothing to do with how often a game wants to think.
     float fixedDelta{1.0f / 60.0f};
+
+    // How far into the NEXT tick the frame being drawn is, 0 to 1.
+    //
+    // Without it a 20 Hz simulation is drawn at 20 Hz however fast the display
+    // runs, and looks it. With it the render transform is a lerp between the
+    // last two ticks, which is what makes a low tick rate a simulation decision
+    // rather than a visible one.
+    //
+    // Written once per frame AFTER the tick loop, so it is the remainder the
+    // loop could not consume. Deliberately NOT part of the simulation: nothing
+    // inside a tick may read it, or the tick's result would depend on the frame
+    // rate again and everything below would be undone.
+    float alpha{0.0f};
+
+    // Simulated time the loop was unable to run and threw away, in seconds.
+    //
+    // A frame that arrives late has to be answered one of two ways: run the
+    // ticks it owes, which under sustained load never catches up and spirals,
+    // or drop them, which makes every timer in the game run slow. There is no
+    // third answer, so the engine drops - and RECORDS IT, which is the part
+    // that was missing. It used to zero the accumulator silently, so a machine
+    // that could not keep up ran its missions short and said nothing.
+    //
+    // Two sources, both counted here: a tick loop that hit its ceiling, and a
+    // frame longer than kMaxFrameDelta, which is clamped before the accumulator
+    // ever sees it. The second one is older and easier to miss.
+    //
+    // A game that cares can read this - to warn, to lower its own detail, or to
+    // refuse to keep playing a competitive match. A test asserts it is zero.
+    double droppedSeconds{0.0};
 
     // Derived, not accumulated: tick * fixedDelta computed fresh rather than
     // summed. A float summed sixty times a second drifts measurably within an

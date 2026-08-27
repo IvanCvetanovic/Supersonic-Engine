@@ -7,6 +7,7 @@
 #include "core/AssetDatabase.hpp"
 #include "core/EnvironmentSettings.hpp"
 #include "core/PhysicsSettings.hpp"
+#include "core/SimulationClock.hpp"
 #include "core/RenderSettings.hpp"
 
 #include <algorithm>
@@ -68,6 +69,19 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
              << physics.gravity.z << "], \"GroundPlane\": "
              << (physics.hasGroundPlane ? "true" : "false")
              << ", \"GroundPlaneY\": " << physics.groundPlaneY << " },\n";
+    }
+
+    // How often the world thinks, in hertz. One scene, one answer - so it is a
+    // setting rather than a component, for the same reason gravity is.
+    //
+    // Written as a RATE and stored as a step, because a rate is the number a
+    // person has an opinion about: HUSK simulates at 20, and nobody has ever
+    // wanted to type 0.05.
+    {
+        const SimulationClock* clock = registry.ctx().find<SimulationClock>();
+        const float step = (clock && clock->fixedDelta > 0.0f) ? clock->fixedDelta
+                                                               : (1.0f / 60.0f);
+        file << "  \"Simulation\": { \"TickRate\": " << (1.0f / step) << " },\n";
     }
 
     // The surroundings, for the same reason: there is one sky, so making it a
@@ -208,6 +222,22 @@ void applyEnvironmentSettings(entt::registry& registry, const Json::Value& root)
 
 void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
     PhysicsSettings physics;
+
+    // Absent from every scene written before the tick could be authored, and
+    // the fallback is 60 - which is what those scenes ran at, because it was
+    // the only rate there was.
+    if (root.Has("Simulation")) {
+        const float rate = root["Simulation"]["TickRate"].AsFloat(60.0f);
+        // Clamped rather than trusted. A rate of zero would divide by zero on
+        // the way to a step, and a hand-edited scene is a place people put
+        // zero. The ceiling is high enough for anything real and low enough
+        // that a typo cannot ask for a million ticks a frame.
+        const float clamped = std::clamp(rate, 1.0f, 480.0f);
+        auto& clock = registry.ctx().contains<SimulationClock>()
+                          ? registry.ctx().get<SimulationClock>()
+                          : registry.ctx().emplace<SimulationClock>();
+        clock.fixedDelta = 1.0f / clamped;
+    }
 
     if (root.Has("Physics")) {
         const auto& node = root["Physics"];

@@ -54,7 +54,16 @@ namespace {
 // move/size loop, which used to hand physics a two-second delta.
 constexpr float kMaxFrameDelta = 0.10f;
 
+// What the SOLVER wants, which is not what a game wants. Physics is stable at
+// a rate chosen for the solver; a game thinks at a rate chosen for the game.
+// These were one constant because there was one loop, and that made a 20 Hz
+// simulation impossible to ask for.
 constexpr float kFixedPhysicsStep = 1.0f / 60.0f;
+
+// The default game tick, and deliberately the same as the physics step so a
+// scene that says nothing behaves exactly as it did before any of this.
+constexpr float kDefaultGameTick = 1.0f / 60.0f;
+
 constexpr int kMaxPhysicsStepsPerFrame = 5;
 
 // The script plugin lives next to the executable, so this works both from a
@@ -935,6 +944,17 @@ void SupersonicApp::Run() {
                                     ? m_options.fixedDelta
                                     : std::clamp(rawDelta, 0.0f, kMaxFrameDelta);
 
+        // TIME THIS CLAMP THREW AWAY, which is the older of the two leaks and
+        // the easier to miss. A frame longer than kMaxFrameDelta is treated as
+        // a hitch and its excess never reaches the accumulator at all - so
+        // fixing only the tick loop's own drop would close the visible half and
+        // leave this one, and a run that lost a second here would still report
+        // that it lost nothing.
+        const double clampedAway =
+            (m_options.fixedDelta <= 0.0f && rawDelta > kMaxFrameDelta)
+                ? static_cast<double>(rawDelta - kMaxFrameDelta)
+                : 0.0;
+
         // Swap in a rebuilt script plugin. Cheap: one stat unless it changed.
         m_hotReload->Poll();
 
@@ -992,48 +1012,82 @@ void SupersonicApp::Run() {
         const bool stepping = m_playMode.ConsumeSingleStep();
         if (m_playMode.ShouldSimulate() || stepping) {
         if (!TimeTravelDebugger::IsRewinding()) {
-            // Fixed-step physics. The accumulator is capped so a long hitch
-            // costs fidelity rather than exploding the simulation.
+            // THE GAME TICK IS THE OUTER LOOP and physics substeps inside it.
+            //
+            // The two used to be one loop at one rate, so "how often does the
+            // world think" and "how often does the solver integrate" were the
+            // same question. They are not: HUSK simulates at 20 Hz, and under
+            // the old arrangement it would have paid for 60 and had no way to
+            // ask for anything else.
+            //
+            // The substep count keeps the solver at its own rate whatever the
+            // game chooses - a 20 Hz tick runs three 1/60 physics steps, a
+            // 60 Hz tick runs one - so changing the game rate does not change
+            // how physics behaves, which would be a very quiet way to make
+            // every collision in a project feel different.
+            auto& clock = m_registry.ctx().contains<SimulationClock>()
+                              ? m_registry.ctx().get<SimulationClock>()
+                              : m_registry.ctx().emplace<SimulationClock>();
+            const float gameTick = clock.fixedDelta > 0.0f ? clock.fixedDelta : kDefaultGameTick;
+
+            const int physicsSubsteps = std::max(
+                1, static_cast<int>(std::lround(gameTick / kFixedPhysicsStep)));
+            const float physicsStep = gameTick / static_cast<float>(physicsSubsteps);
+
+            clock.droppedSeconds += clampedAway;
+
             m_physicsAccumulator += deltaTime;
             int steps = 0;
             m_contacts.clear();
-            while (m_physicsAccumulator >= kFixedPhysicsStep && steps < kMaxPhysicsStepsPerFrame) {
-                // The simulation's own clock, advanced once per step and
-                // never from the frame delta. Everything that needs to know
-                // what time it is in the world reads this; anything reading a
-                // wall clock instead cannot be replayed.
-                {
-                    auto& clock = m_registry.ctx().contains<SimulationClock>()
-                                      ? m_registry.ctx().get<SimulationClock>()
-                                      : m_registry.ctx().emplace<SimulationClock>();
-                    clock.fixedDelta = kFixedPhysicsStep;
-                    ++clock.tick;
-                }
-
-                {
+            while (m_physicsAccumulator >= gameTick && steps < kMaxPhysicsStepsPerFrame) {
+                for (int sub = 0; sub < physicsSubsteps; ++sub) {
                     SUPERSONIC_PROFILE(Physics);
-                    PhysicsSystem::Update(m_registry, kFixedPhysicsStep, &m_stepContacts);
+                    PhysicsSystem::Update(m_registry, physicsStep, &m_stepContacts);
+                    if (sub + 1 < physicsSubsteps) {
+                        m_contacts.insert(m_contacts.end(),
+                                          m_stepContacts.begin(), m_stepContacts.end());
+                    }
                 }
 
-                // A game's simulation, inside the same loop and on the same
-                // fixed step - so it ticks exactly as often as physics, at a
-                // rate that does not depend on how fast the last frame drew.
-                // AFTER physics, so a tick reads the positions this step just
-                // produced rather than the previous one's.
+                // The simulation's own clock, advanced once per TICK and never
+                // from the frame delta. Everything that needs to know what time
+                // it is in the world reads this; anything reading a wall clock
+                // instead cannot be replayed.
+                ++clock.tick;
+
+                // A game's simulation, on the game's tick. AFTER physics, so a
+                // tick reads the positions this step just produced rather than
+                // the previous one's.
                 {
                     SUPERSONIC_PROFILE(GameLayers);
-                    m_layers.FixedUpdate(m_registry, kFixedPhysicsStep);
+                    m_layers.FixedUpdate(m_registry, gameTick);
                 }
 
-                // Accumulated across the frame's steps, so the count the editor
+                // Accumulated across the frame's ticks, so the count the editor
                 // shows is the frame's contacts rather than the last step's.
                 m_contacts.insert(m_contacts.end(), m_stepContacts.begin(), m_stepContacts.end());
-                m_physicsAccumulator -= kFixedPhysicsStep;
+                m_physicsAccumulator -= gameTick;
                 ++steps;
             }
-            if (steps == kMaxPhysicsStepsPerFrame) {
+
+            // What the loop could not run, DROPPED AND COUNTED rather than
+            // dropped in silence.
+            //
+            // There is no third option: catching up under sustained load never
+            // catches up, and this is the guard against that. What was wrong
+            // before was not the drop but that nothing recorded it - a machine
+            // that could not keep up ran every mission timer short and said
+            // nothing to anyone.
+            if (steps == kMaxPhysicsStepsPerFrame && m_physicsAccumulator > 0.0f) {
+                clock.droppedSeconds += static_cast<double>(m_physicsAccumulator);
                 m_physicsAccumulator = 0.0f;
             }
+
+            // HOW FAR INTO THE NEXT TICK THIS FRAME IS. Written after the loop,
+            // because it is exactly the remainder the loop could not consume.
+            clock.alpha = gameTick > 0.0f
+                              ? std::clamp(m_physicsAccumulator / gameTick, 0.0f, 1.0f)
+                              : 0.0f;
 
             { SUPERSONIC_PROFILE(Audio);     AudioSystem::Update(m_registry, *m_audioEngine, deltaTime); }
             // Before the scripts, so "what did I touch" is answered about the
