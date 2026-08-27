@@ -43,6 +43,7 @@
 #include "sim/Match.hpp"
 #include "sim/Selection.hpp"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -106,6 +107,29 @@ void testTheMarqueesFarEdgesAreOutsideIt() {
     CHECK_MSG(!holds(match.Picked(), onFarEdge), "the far edge is not");
 }
 
+void testTheMarqueeMeasuresTheFeetAndNotTheBody() {
+    // A point pick aims at the BODY, half a height up; a marquee is drawn
+    // around ground POSITIONS. The two are seventeen pixels apart for a worker
+    // and every fixture above straddles both, so a port that measured the body
+    // here would pass all of them. This band sits between the two: the feet at
+    // 800 are inside, the body centre at 783 is not.
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.Run().Reset();
+
+    Unit* worker = spawnWorker(match, 1000.0f);
+    const float centreY = 800.0f - 34.0f * 0.5f;
+    CHECK_MSG(centreY < 790.0f, "the body centre really is above the band");
+
+    match.Picked().BoxSelect(glm::vec2(950.0f, 790.0f), glm::vec2(1150.0f, 900.0f));
+    CHECK_MSG(holds(match.Picked(), worker), "a marquee catches the unit by its feet");
+
+    // And the mirror: a band that covers the body but not the feet takes
+    // nothing, which is what says the choice is deliberate rather than lucky.
+    match.Picked().BoxSelect(glm::vec2(950.0f, 700.0f), glm::vec2(1150.0f, 790.0f));
+    CHECK_MSG(!holds(match.Picked(), worker), "and not by its chest");
+}
+
 void testAMarqueeTakesOnlyThePlayersOwnUnits() {
     Profile profile;
     Match match(wb::Shipped(), profile, "");
@@ -137,6 +161,13 @@ void testAPointPickHitsTheBodyAndMissesTheSky() {
               "unit_at hits a unit under the point");
     CHECK_MSG(match.Picked().UnitAt(glm::vec2(1000.0f, 400.0f)) == nullptr,
               "unit_at misses far point");
+
+    // THE ORACLE'S PROBE CANNOT TELL THE TWO APART. (1000, 783) is seventeen
+    // pixels from the body centre AND seventeen from the feet - it is exactly
+    // between them - so a port measuring either passes. A point further up
+    // separates them: 43 from the centre is a hit, 60 from the feet is not.
+    CHECK_MSG(match.Picked().UnitAt(glm::vec2(1000.0f, 740.0f)) == worker,
+              "a point over the body is a hit, measured from the body");
 }
 
 void testThePickRadiusComesFromTheDataAndNotFromTheBody() {
@@ -163,11 +194,16 @@ void testTheNearestUnitWinsAPointPick() {
     Match match(wb::Shipped(), profile, "");
     match.Run().Reset();
 
+    // The FAR one first, deliberately. With both spawned near enough to be
+    // under the point, a port that stopped at the first candidate would return
+    // whichever was created first - so a fixture that spawns the nearest first
+    // agrees with the bug.
+    Unit* far = spawnWorker(match, 1030.0f);
     Unit* near = spawnWorker(match, 1000.0f);
-    spawnWorker(match, 1030.0f);
 
-    CHECK_MSG(match.Picked().UnitAt(glm::vec2(1005.0f, 783.0f)) == near,
-              "the closer of two overlapping picks wins");
+    Unit* picked = match.Picked().UnitAt(glm::vec2(1005.0f, 783.0f));
+    CHECK_MSG(picked == near, "the closer of two overlapping picks wins");
+    CHECK_MSG(picked != far, "and not merely the first one found");
 }
 
 // --- 3. A building beats a unit -------------------------------------------
@@ -351,6 +387,21 @@ void testAMoveOrderSpreadsTheGroupAroundThePointRatherThanFromIt() {
     CHECK_MSG(a->CurrentState() == Unit::State::Moving, "and they are on their way");
     CHECK_MSG(a->Position().x < b->Position().x, "spread in order");
     CHECK_MSG(b->Position().x < c->Position().x, "along the lane");
+
+    // CENTRED, which is the part the ordering above cannot see: a formation
+    // growing rightward from the point is also in order, and also spread. Let
+    // them arrive and the middle one must be standing where the player tapped,
+    // with one either side of it.
+    for (int i = 0; i < 400; ++i) match.Step(0.1);
+
+    // Within the arrive threshold rather than exactly on it: a unit stops when
+    // it is close enough, and "close enough" is a number the port already
+    // carries. Asserting equality here would be asserting that a unit lands on
+    // a float exactly, which it does not and should not.
+    CHECK_MSG(std::fabs(b->Position().x - 3000.0f) <= Unit::kArriveThreshold,
+              "the middle one stands where the player tapped");
+    CHECK_MSG(a->Position().x < 3000.0f, "one to the left of the tap");
+    CHECK_MSG(c->Position().x > 3000.0f, "and one to the right");
 }
 
 void testAnOrderToAnEmptySelectionPingsNothing() {
@@ -366,6 +417,20 @@ void testAnOrderToAnEmptySelectionPingsNothing() {
 
     match.Orders().MoveSelectedTo(glm::vec2(3000.0f, 800.0f));
     CHECK_EQ(pings, 0);
+
+    // AND WITH A SELECTION THAT IS NOT EMPTY BUT IS NOT ALIVE. An empty one
+    // returns before the ping is even reached, so it cannot tell whether the
+    // ping is guarded - only that the early return exists. A unit killed
+    // BEFORE it is picked gets past the prune (which only watches units already
+    // held) and leaves a selection of one corpse, which is what a player taps
+    // on the frame their soldier falls.
+    Unit* dying = spawnWorker(match, 1000.0f);
+    dying->Kill();
+    match.Picked().SelectOnly(dying);
+    CHECK_MSG(match.Picked().Units().size() == 1, "a corpse can still be picked");
+
+    match.Orders().MoveSelectedTo(glm::vec2(3000.0f, 800.0f));
+    CHECK_MSG(pings == 0, "a ping confirms an order somebody took, not one that was given");
 }
 
 void testARightClickOnAnEnemyAttacksAndOnGroundMoves() {
@@ -484,6 +549,7 @@ void testBootingClearsWhateverWasSelected() {
 static void runTests() {
     testTheMarqueeSelectsExactlyTheUnitsInsideIt();
     testTheMarqueesFarEdgesAreOutsideIt();
+    testTheMarqueeMeasuresTheFeetAndNotTheBody();
     testAMarqueeTakesOnlyThePlayersOwnUnits();
 
     testAPointPickHitsTheBodyAndMissesTheSky();
