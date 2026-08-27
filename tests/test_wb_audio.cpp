@@ -274,7 +274,7 @@ void testASawtoothsFirstSampleTruncatesTowardZeroNotDownward() {
 
     // And the positive side of the same rule, where floor and truncation agree,
     // so the pair together pins the direction rather than just the value.
-    CHECK_EQ(static_cast<int>(samplesFor("train").front()), 11468);   // int(0.35*32767)
+    CHECK_EQ(at(samplesFor("train"), 0), 11468);   // int(0.35*32767)
 }
 
 // The square wave's boundary sample: `frac < 0.5`, not `<=`.
@@ -328,10 +328,10 @@ void testTheDecayEnvelopeRunsLinearlyFromFullToSilence() {
     const std::vector<int16_t> train = samplesFor("train");
     CHECK_EQ(peakOf(train), 11468);
     CHECK_MSG(at(train, 0) == 11468, "a square peaks on its first sample");
-    CHECK_EQ(static_cast<int>(train.back()), 2);       // silence, but signed
+    CHECK_EQ(lastOf(train), 2);       // silence, but signed
 
     const std::vector<int16_t> research = samplesFor("research");
-    CHECK_EQ(static_cast<int>(research.back()), -1);   // the sign survives the fade
+    CHECK_EQ(lastOf(research), -1);   // the sign survives the fade
 
     // Halfway through, a decaying square sits near half its opening amplitude.
     // Carried as measured rather than as reasoning: the exact -5735 depends on
@@ -365,7 +365,7 @@ void testDecayDefaultsToOnAndTurningItOffHoldsTheAmplitude() {
     CHECK_EQ(static_cast<int>(held.size()), 3969);
     CHECK_EQ(at(held, 0), 11468);
     CHECK_EQ(static_cast<int>(held[held.size() / 2]), -11468);   // no fade at all
-    CHECK_EQ(static_cast<int>(held.back()), 11468);              // still at full
+    CHECK_EQ(lastOf(held), 11468);              // still at full
 
     // The same spec with the default: the shipped train, which fades to 2.
     Audio::Tone fading = flat;
@@ -393,7 +393,7 @@ void testAnUnrecognisedWaveformFallsBackToASine() {
     const std::vector<int16_t> fallback = Audio::Synthesise(noise);
     CHECK_MSG(fallback == samplesFor("build"), "an unknown waveform is the sine `build` is");
     CHECK_EQ(static_cast<int>(fallback.size()), 7497);
-    CHECK_EQ(static_cast<int>(fallback[1]), 597);
+    CHECK_EQ(at(fallback, 1), 597);
 }
 
 // A tone too short to have a sample still has one.
@@ -408,7 +408,7 @@ void testAToneShorterThanASingleSampleStillProducesOne() {
     const std::vector<int16_t> one = Audio::Synthesise(instant);
     CHECK_EQ(static_cast<int>(one.size()), 1);
     CHECK_EQ(static_cast<int>(Audio::ToPcmBytes(one).size()), 2);
-    CHECK_EQ(static_cast<int>(one.front()), 0);      // a sine starts at zero
+    CHECK_EQ(at(one, 0), 0);      // a sine starts at zero
 
     CHECK_EQ(instant.SampleCount(), 1);
 
