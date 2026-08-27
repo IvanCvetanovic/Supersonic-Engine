@@ -87,8 +87,22 @@ struct EventBus {
     // Building lifecycle. A raw pointer rather than a handle, because the thing
     // that owns the buildings is the thing listening - and it is the only one
     // that can outlive them.
+    // A building was PLACED - a site, with no progress in it yet. Distinct
+    // from completed, which is the same building some time later.
+    Signal<class Building*> buildingPlaced;
+
     Signal<class Building*> buildingCompleted;
     Signal<class Building*> buildingDestroyed;
+
+    // Placement mode opened or closed.
+    //
+    // This is the edge the gesture machine has been waiting for.
+    // GestureMachine::SetPlacementMode has existed since the input slice with
+    // nothing in the port ever calling it from real state - a flag only a test
+    // ever set. In the original, build_placement emits this and the input
+    // controller follows it, which is what stops a drag drawing a marquee while
+    // a ghost is up.
+    Signal<bool> placementActiveChanged;
 
     // A building finished training something; whoever owns the world spawns it
     // at the point given. The building deliberately does NOT create the unit

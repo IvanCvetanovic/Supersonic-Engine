@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 
 #include "core/Json.hpp"
+#include "sim/BuildPlacement.hpp"
 #include "sim/Building.hpp"
 #include "sim/EventBus.hpp"
 #include "sim/GameData.hpp"
@@ -278,6 +279,29 @@ public:
 
     const Layout& WorldLayout() const { return m_layout; }
 
+    // The data this match was built from. Placement needs it to look a building
+    // row up before entering a mode for an id nobody authored.
+    const GameData& Data() const { return m_data; }
+
+    BuildPlacement& Placement() { return m_placement; }
+    const BuildPlacement& Placement() const { return m_placement; }
+
+    // `main.gd::_back_cancels_placement`, ported whole because it is a PURE
+    // PREDICATE and the original says it was kept that way on purpose - so a
+    // harness could verify the gate without tripping the `quit()` in the other
+    // branch.
+    //
+    // Android's Back means "back out of the current thing". During a live match
+    // with a ghost up that is the placement; once the match is over it is the
+    // app. The second half is the regression this exists for: victory or defeat
+    // can land while a ghost is still up, and that ghost then sits behind the
+    // game-over overlay where nobody can see it - so Back has to EXIT on the
+    // first press rather than spend one silently cancelling something invisible.
+    //
+    // What is NOT here is the notification that delivers it. There is no window
+    // and no Android here; whoever owns one asks this and acts on the answer.
+    bool BackCancelsPlacement() const;
+
     EventBus& Bus() { return m_bus; }
     GameState& Run() { return m_state; }
     const GameState& Run() const { return m_state; }
@@ -443,6 +467,14 @@ private:
     ProjectilePool m_projectiles;
 
     Layout m_layout;
+
+    // Declared AFTER everything it will ask questions of, and constructed
+    // with a reference to a Match that is not finished being built yet.
+    // That is legal because it only stores the reference - it asks nothing
+    // until somebody calls Begin - and it is the same shape the original
+    // has, where BuildPlacement is a child node of main handed the world
+    // container to place into.
+    BuildPlacement m_placement{*this};
 
     // unique_ptr, and it is load-bearing twice over.
     //

@@ -110,7 +110,17 @@ bool Match::BootFromSave(const Supersonic::Json::Value& snapshot,
 
 void Match::ApplyWorld() { m_layout = Layout::FromData(m_data); }
 
+bool Match::BackCancelsPlacement() const {
+    return m_state.IsPlaying() && m_placement.IsActive();
+}
+
 void Match::ClearBoard() {
+    // A ghost does not survive a boot. Godot gets this from the scene going
+    // away; here it has to be said, or a Continue would come back with the
+    // previous run's placement still open over a board that no longer has
+    // the resources it was priced against.
+    m_placement.Cancel();
+
     m_lane.Clear();
     m_projectiles.Clear();
 
