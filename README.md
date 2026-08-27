@@ -680,7 +680,7 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
 
 **It is not empty any more, and measuring it against two real games is what
 filled it.** An engine judged in isolation has no gaps; an engine asked to host
-something has as many as the thing needs. Eight were closed on 27 August and
+something has as many as the thing needs. Ten were closed on 27 August and
 are in the log — most recently the UI image element, the texture coordinate
 transform, and glTF animation without a skin, which between them are a minimap,
 a fog overlay, a portrait, scrolling rain, a flipbook flame, and every one of
@@ -697,11 +697,11 @@ HUSK's nineteen animated models. What is left is here.
   are on its fourth surface casts the silhouette of its first. Nothing HUSK
   needs is affected — every one of its 166 materials is `OPAQUE` — but a leaf
   card packed into a multi-material model would shadow wrongly.
-- **Nothing re-materialises a surface by name yet.** Sections carry the name the
-  file gave them, which is what a game addresses a surface by — HUSK swaps
-  `BODY`, `DARK`, `GLASS` and `EMISSIVE` for team-coloured variants at runtime —
-  but there is no API for an entity to override one section. The name is
-  carried; the override is not built.
+- **A surface override replaces numbers, not maps.** `SurfaceOverridesComponent`
+  re-materialises a named surface's colour, roughness, metallic and emission.
+  It deliberately does not swap the surface's textures, because that needs a
+  per-override texture resolve and nothing has asked for one — HUSK's models
+  carry no textures at all.
 
 **Known and written down elsewhere, repeated because they bite a game**
 

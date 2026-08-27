@@ -454,6 +454,54 @@ constexpr int32_t UnpackUvSlot(int32_t flags) {
     return (flags >> kUvSlotShift) & kUvSlotMask;
 }
 
+// One surface of a model, re-materialised by the name the file gave it.
+//
+// A model is authored as several named surfaces and a game addresses them by
+// those names: the same chassis is a player unit in teal and an enemy in rust,
+// which is ONE model and a pair of lookups rather than two models. Without this
+// the only ways to colour a team are to ship the model twice or to tint the
+// whole thing, and tinting the whole thing takes the visor and the exhaust
+// glow with it.
+//
+// Matched against MeshMaterial::name, which the importer carries through
+// verbatim. A name that matches no surface is inert rather than an error - a
+// model is allowed to not have the part being described, and a rig swapped for
+// one with fewer pieces should not start logging every frame.
+struct SurfaceOverride {
+    std::string surface;
+
+    // REPLACE the file's values rather than modulating them. A team colour is
+    // not a tint of whatever the artist happened to paint; it is the answer.
+    // The entity's own albedoColor still multiplies on top of this, which is
+    // what keeps a hit flash working over a team-coloured unit.
+    glm::vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
+    float roughness{0.5f};
+    float metallic{0.0f};
+
+    glm::vec3 emissiveColor{0.0f};
+    float emissiveStrength{0.0f};
+};
+
+// The overrides one entity applies to its mesh's surfaces.
+//
+// A VECTOR AND A LINEAR SCAN, not a map. There are a handful of these per
+// entity - four is a lot - and the comparison is against a short string that
+// almost always differs in its first character or its length, which
+// std::string::operator== checks before it looks at any bytes. A hash map would
+// cost an allocation per entity and a hash of the name per section per frame to
+// avoid a scan of four.
+struct SurfaceOverridesComponent {
+    std::vector<SurfaceOverride> overrides;
+
+    const SurfaceOverride* Find(const std::string& surface) const {
+        if (surface.empty()) return nullptr;
+        for (const SurfaceOverride& entry : overrides) {
+            if (entry.surface == surface) return &entry;
+        }
+        return nullptr;
+    }
+};
+
 struct MaterialComponent {
     glm::vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
 

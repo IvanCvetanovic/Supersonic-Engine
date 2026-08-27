@@ -15,6 +15,7 @@
 #include "core/Components.hpp"
 #include "core/MaterialLibrary.hpp"
 #include "core/MaterialSystem.hpp"
+#include "core/RenderSystem.hpp"
 #include "core/SceneSerializer.hpp"
 
 #include <chrono>
@@ -883,7 +884,166 @@ static void testTheShaderAgreesAboutWhereTheSlotLives() {
     CHECK_EQ(sizeof(UvTransform), size_t(32));
 }
 
+// --- re-materialising one named surface -----------------------------------
+//
+// A model is authored as several named surfaces and a game addresses them by
+// name. HUSK tells its two teams apart exactly this way: one chassis, with
+// BODY and DARK swapped for a teal set or a rust set depending on who owns the
+// unit. Without it the only options are shipping the model twice or tinting the
+// whole thing - and tinting the whole thing takes the visor and the exhaust
+// glow with it.
+
+static MeshMaterial surfaceNamed(const char* name, const glm::vec4& colour) {
+    MeshMaterial m;
+    m.present = true;
+    m.name = name;
+    m.baseColor = colour;
+    m.roughness = 0.9f;
+    m.albedoTexturePath = "assets/textures/uv_grid.png";
+    return m;
+}
+
+static void testAnOverrideReplacesOnlyTheSurfaceItNames() {
+    SurfaceOverridesComponent overrides;
+    SurfaceOverride teal;
+    teal.surface = "BODY";
+    teal.albedoColor = glm::vec4(0.20f, 0.40f, 0.55f, 1.0f);
+    teal.roughness = 0.6f;
+    overrides.overrides.push_back(teal);
+
+    const MeshMaterial body = surfaceNamed("BODY", glm::vec4(0.16f, 0.155f, 0.165f, 1.0f));
+    const MeshMaterial dark = surfaceNamed("DARK", glm::vec4(0.10f, 0.10f, 0.11f, 1.0f));
+
+    const MeshMaterial resolvedBody = RenderSystem::ResolveSurface(body, &overrides);
+    CHECK_NEAR(resolvedBody.baseColor.x, 0.20f);
+    CHECK_NEAR(resolvedBody.baseColor.y, 0.40f);
+    CHECK_NEAR(resolvedBody.baseColor.z, 0.55f);
+    CHECK_NEAR(resolvedBody.roughness, 0.6f);
+
+    // THE NEIGHBOUR IS UNTOUCHED. An override that leaked onto every surface
+    // would look like a team colour working, right up until somebody noticed
+    // the whole unit was one flat colour again.
+    const MeshMaterial resolvedDark = RenderSystem::ResolveSurface(dark, &overrides);
+    CHECK_NEAR(resolvedDark.baseColor.x, 0.10f);
+    CHECK_NEAR(resolvedDark.baseColor.z, 0.11f);
+    CHECK_NEAR(resolvedDark.roughness, 0.9f);
+}
+
+static void testTheMapsSurviveTheOverride() {
+    // An override says what colour a surface is, not what shape it is. A model
+    // whose BODY carries a normal map keeps it when the team colour lands.
+    SurfaceOverridesComponent overrides;
+    SurfaceOverride entry;
+    entry.surface = "BODY";
+    entry.albedoColor = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    overrides.overrides.push_back(entry);
+
+    const MeshMaterial resolved =
+        RenderSystem::ResolveSurface(surfaceNamed("BODY", glm::vec4(1.0f)), &overrides);
+    CHECK_MSG(resolved.albedoTexturePath == "assets/textures/uv_grid.png",
+              "the surface keeps the maps the file gave it");
+    CHECK_MSG(resolved.name == "BODY", "and keeps its name, so it can be overridden again");
+}
+
+static void testAnOverrideThatNamesNothingIsInert() {
+    // A model is allowed not to have the part being described - a rig swapped
+    // for one with fewer pieces, or a shared override list applied to a
+    // building as well as a unit. It must be silent, not an error.
+    SurfaceOverridesComponent overrides;
+    SurfaceOverride entry;
+    entry.surface = "TURRET";
+    entry.albedoColor = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f);
+    overrides.overrides.push_back(entry);
+
+    const MeshMaterial body = surfaceNamed("BODY", glm::vec4(0.5f, 0.5f, 0.5f, 1.0f));
+    const MeshMaterial resolved = RenderSystem::ResolveSurface(body, &overrides);
+    CHECK_NEAR(resolved.baseColor.x, 0.5f);
+
+    // And no overrides at all is the ordinary case for every model in a scene.
+    const MeshMaterial untouched = RenderSystem::ResolveSurface(body, nullptr);
+    CHECK_NEAR(untouched.baseColor.x, 0.5f);
+
+    // A surface the file left unnamed cannot be addressed, and must not match
+    // an override that happens to have an empty name either.
+    SurfaceOverridesComponent empty;
+    empty.overrides.push_back(SurfaceOverride{});
+    MeshMaterial anonymous = body;
+    anonymous.name.clear();
+    CHECK_NEAR(RenderSystem::ResolveSurface(anonymous, &empty).baseColor.x, 0.5f);
+}
+
+static void testTwoTeamsShareOneModel() {
+    // The whole point, in the shape HUSK uses it: one mesh material, two
+    // entities, two different answers - and neither writes into the other.
+    const MeshMaterial body = surfaceNamed("BODY", glm::vec4(0.16f, 0.155f, 0.165f, 1.0f));
+
+    SurfaceOverridesComponent player;
+    SurfaceOverride teal;
+    teal.surface = "BODY";
+    teal.albedoColor = glm::vec4(0.20f, 0.40f, 0.55f, 1.0f);
+    player.overrides.push_back(teal);
+
+    SurfaceOverridesComponent enemy;
+    SurfaceOverride rust;
+    rust.surface = "BODY";
+    rust.albedoColor = glm::vec4(0.50f, 0.19f, 0.13f, 1.0f);
+    enemy.overrides.push_back(rust);
+
+    CHECK_NEAR(RenderSystem::ResolveSurface(body, &player).baseColor.z, 0.55f);
+    CHECK_NEAR(RenderSystem::ResolveSurface(body, &enemy).baseColor.x, 0.50f);
+
+    // The FILE's material is unchanged by either, which is what makes it safe
+    // for the mesh to be shared: it belongs to the mesh, not to an entity, and
+    // an in-place override would colour every other unit drawing the same model.
+    CHECK_NEAR(body.baseColor.x, 0.16f);
+}
+
+static void testOverridesSurviveASaveAndLoad() {
+    cleanup();
+    entt::registry registry;
+    const auto entity = makeEntity(registry, "Unit");
+    auto& surfaces = registry.emplace<SurfaceOverridesComponent>(entity);
+    SurfaceOverride entry;
+    entry.surface = "BODY";
+    entry.albedoColor = glm::vec4(0.20f, 0.40f, 0.55f, 1.0f);
+    entry.roughness = 0.6f;
+    entry.emissiveColor = glm::vec3(0.1f, 0.2f, 0.3f);
+    entry.emissiveStrength = 2.0f;
+    surfaces.overrides.push_back(entry);
+
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("SurfaceOverrides") != std::string::npos, "the list was written");
+    CHECK_MSG(text.find("BODY") != std::string::npos, "and the surface it names");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+
+    bool found = false;
+    for (auto e : loaded.view<SurfaceOverridesComponent>()) {
+        const auto& back = loaded.get<SurfaceOverridesComponent>(e);
+        found = true;
+        CHECK_MSG(back.overrides.size() == size_t{1}, "one override came back");
+        if (back.overrides.empty()) break;
+        CHECK_MSG(back.overrides[0].surface == "BODY", back.overrides[0].surface);
+        CHECK_NEAR(back.overrides[0].albedoColor.z, 0.55f);
+        CHECK_NEAR(back.overrides[0].roughness, 0.6f);
+        CHECK_NEAR(back.overrides[0].emissiveStrength, 2.0f);
+
+        // And the lookup works on the loaded copy, which is what the draw loop
+        // will do with it.
+        CHECK_MSG(back.Find("BODY") != nullptr, "and it can still be found by name");
+        CHECK_MSG(back.Find("DARK") == nullptr, "without matching a surface it does not name");
+    }
+    CHECK_MSG(found, "the entity came back with its overrides");
+    cleanup();
+}
+
 static void runTests() {
+    testAnOverrideReplacesOnlyTheSurfaceItNames();
+    testTheMapsSurviveTheOverride();
+    testAnOverrideThatNamesNothingIsInert();
+    testTwoTeamsShareOneModel();
+    testOverridesSurviveASaveAndLoad();
     testTheShaderAgreesAboutWhereTheSlotLives();
     testAUvTransformSurvivesASaveAndLoad();
     testAMaterialWrittenBeforeThisExistedLoadsUntransformed();
@@ -920,4 +1080,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 160)
+TEST_MAIN("test_materials", 195)

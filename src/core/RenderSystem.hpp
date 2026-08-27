@@ -275,6 +275,20 @@ public:
     // resources, uploading any that are new. Runs outside command buffer
     // recording because it performs transfers.
     static void SyncResources(entt::registry& registry, MeshRegistry& meshes, TextureRegistry& textures);
+
+    // What a surface actually looks like once the entity has had its say.
+    //
+    // The file describes the model; an override re-materialises one named
+    // surface of it. Returned by value rather than applied in place because the
+    // file's material belongs to the MESH and is shared by every entity drawing
+    // it - writing an entity's team colour into it would colour every other
+    // entity's copy, which is the kind of bug that looks like a race.
+    //
+    // A free function for the same reason MaterialSystem::ApplyImportedMaterial
+    // is one: the draw loop needs a Vulkan device to reach and this rule does
+    // not, so it can be tested against numbers instead of against a picture.
+    static MeshMaterial ResolveSurface(const MeshMaterial& fromFile,
+                                       const SurfaceOverridesComponent* overrides);
 };
 
 } // namespace Supersonic

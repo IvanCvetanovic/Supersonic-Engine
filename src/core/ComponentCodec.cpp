@@ -231,6 +231,29 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* surfaces = registry.try_get<SurfaceOverridesComponent>(entity);
+        surfaces && !surfaces->overrides.empty()) {
+        out << indent << "\"SurfaceOverrides\": [\n";
+        for (size_t i = 0; i < surfaces->overrides.size(); ++i) {
+            const SurfaceOverride& entry = surfaces->overrides[i];
+            out << indent << "  {\n";
+            out << indent << "    \"Surface\": \"" << Json::Escape(entry.surface) << "\",\n";
+            out << indent << "    \"Albedo\": [" << jsonSafe(entry.albedoColor.x, "override albedo")
+                << ", " << jsonSafe(entry.albedoColor.y, "override albedo")
+                << ", " << jsonSafe(entry.albedoColor.z, "override albedo")
+                << ", " << jsonSafe(entry.albedoColor.w, "override albedo") << "],\n";
+            out << indent << "    \"Roughness\": " << jsonSafe(entry.roughness, "override roughness") << ",\n";
+            out << indent << "    \"Metallic\": " << jsonSafe(entry.metallic, "override metallic") << ",\n";
+            out << indent << "    \"Emissive\": ";
+            writeVec3(out, entry.emissiveColor, "SurfaceOverride.emissiveColor");
+            out << ",\n";
+            out << indent << "    \"EmissiveStrength\": "
+                << jsonSafe(entry.emissiveStrength, "override emissiveStrength") << "\n";
+            out << indent << "  }" << (i + 1 < surfaces->overrides.size() ? "," : "") << "\n";
+        }
+        out << indent << "],\n";
+    }
+
     if (const auto* body = registry.try_get<RigidBodyComponent>(entity)) {
         out << indent << "\"RigidBody\": {\n";
         out << indent << "  \"Velocity\": "; writeVec3(out, body->velocity); out << ",\n";
@@ -690,6 +713,26 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         material.uvScale = readVec2(m["UvScale"], glm::vec2(1.0f, 1.0f));
         material.uvRotation = m["UvRotation"].AsFloat(0.0f);
         material.uvOffset = readVec2(m["UvOffset"], glm::vec2(0.0f, 0.0f));
+    }
+
+    // Absent from every scene written before a surface could be re-materialised,
+    // and an empty list draws exactly what the file says - so those scenes load
+    // as the models they already were.
+    if (node.Has("SurfaceOverrides")) {
+        auto& surfaces = registry.emplace_or_replace<SurfaceOverridesComponent>(entity);
+        for (const auto& item : node["SurfaceOverrides"].AsArray()) {
+            SurfaceOverride entry;
+            entry.surface = item["Surface"].AsString("");
+            // A nameless override can never match a surface, so it is dropped
+            // here rather than sitting in the list being scanned every frame.
+            if (entry.surface.empty()) continue;
+            entry.albedoColor = readVec4(item["Albedo"], glm::vec4(1.0f));
+            entry.roughness = item["Roughness"].AsFloat(0.5f);
+            entry.metallic = item["Metallic"].AsFloat(0.0f);
+            entry.emissiveColor = readVec3(item["Emissive"], glm::vec3(0.0f));
+            entry.emissiveStrength = item["EmissiveStrength"].AsFloat(0.0f);
+            surfaces.overrides.push_back(std::move(entry));
+        }
     }
 
     if (node.Has("RigidBody")) {

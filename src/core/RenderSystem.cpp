@@ -77,11 +77,22 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
     // drawing every surface in the same default grey - which is the bug this
     // whole change exists to fix, reintroduced one level down.
     if (surface != nullptr && surface->present) {
-        push.albedoColor *= surface->baseColor;
-        push.material.x = surface->roughness;
-        push.material.y = surface->metallic;
-        push.emissive = glm::vec4(surface->emissiveColor * surface->emissiveStrength,
-                                  surface->occlusionStrength);
+        // Re-materialised first, if the entity named this surface. HUSK tells
+        // its teams apart exactly this way: one model, BODY and DARK swapped
+        // for a teal set or a rust set depending on who owns the unit.
+        const MeshMaterial resolved =
+            RenderSystem::ResolveSurface(*surface,
+                                         registry.try_get<SurfaceOverridesComponent>(entity));
+
+        // MULTIPLIED, not replaced, and this is the line that keeps a hit flash
+        // working: the entity's albedo defaults to white, so an un-tinted unit
+        // shows its team colour exactly, and one flashed past white blooms in
+        // its team colour rather than losing it.
+        push.albedoColor *= resolved.baseColor;
+        push.material.x = resolved.roughness;
+        push.material.y = resolved.metallic;
+        push.emissive = glm::vec4(resolved.emissiveColor * resolved.emissiveStrength,
+                                  resolved.occlusionStrength);
     }
 
     // Both passes go through this one function, so the shadow pass skins with
@@ -137,6 +148,26 @@ uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
     // this introduces is between two inputs one of which hashes to zero, and
     // costs a redundant re-resolve rather than a stale one.
     return signature == 0 ? 1ull : signature;
+}
+
+MeshMaterial RenderSystem::ResolveSurface(const MeshMaterial& fromFile,
+                                          const SurfaceOverridesComponent* overrides) {
+    if (overrides == nullptr || !fromFile.present) return fromFile;
+
+    const SurfaceOverride* entry = overrides->Find(fromFile.name);
+    if (entry == nullptr) return fromFile;
+
+    // The MAPS are kept, the numbers are replaced. An override says what colour
+    // a surface is, not what shape it is - so a model whose BODY has a normal
+    // map keeps that map when the team colour lands on it, and only the values
+    // that were being replaced are replaced.
+    MeshMaterial out = fromFile;
+    out.baseColor = entry->albedoColor;
+    out.roughness = entry->roughness;
+    out.metallic = entry->metallic;
+    out.emissiveColor = entry->emissiveColor;
+    out.emissiveStrength = entry->emissiveStrength;
+    return out;
 }
 
 void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes, TextureRegistry& textures) {
