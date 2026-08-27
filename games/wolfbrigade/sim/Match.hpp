@@ -423,6 +423,13 @@ private:
     // caller's, because the profile outlives the match and a Match that wrote
     // it would be deciding where it lives - but the window is real and this is
     // where it is written down.
+    //
+    // The empty-path guard here is belt and braces and is NOT testable:
+    // Snapshot::ClearRun is std::remove, and std::remove("") is a silent
+    // no-op, so removing the guard changes nothing any assertion could see.
+    // Said rather than left to look like coverage. The guard on AutosaveRun is
+    // a different matter - that one is observable, because it decides a return
+    // value, and it has a test.
     void OnGameOver(bool won);
 
     const GameData& m_data;
