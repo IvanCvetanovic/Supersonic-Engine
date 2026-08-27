@@ -448,8 +448,13 @@ void Unit::TakeDamage(int amount) {
 }
 
 void Unit::Kill() {
+    // The early-out is what makes the announcement fire EXACTLY once, and the
+    // enemy tally depends on that: a unit killed twice would take the count of
+    // living enemies below zero, and a director that is waiting for it to reach
+    // zero would never declare victory.
     if (m_phase == State::Dead) return;
     SetState(State::Dead);
+    m_bus->unitDied.Emit(this);
 }
 
 Supersonic::Json::Value Unit::ToSave(const SidTable& ids) const {

@@ -102,6 +102,14 @@ public:
     // --- Damage ------------------------------------------------------------
 
     void TakeDamage(int amount) override;
+
+    // Kills it outright, and announces it. Emits unitDied EXACTLY once - the
+    // phase guard inside is what guarantees that, and the enemy tally depends
+    // on it.
+    //
+    // Does not unregister from the lane and does not remove itself from
+    // anything, because it cannot: it does not know who owns it. Whoever does
+    // keeps it as a tombstone, which is the rule Damageable.hpp states.
     void Kill();
 
     bool IsAlive() const override { return m_phase != State::Dead; }

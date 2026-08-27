@@ -26,9 +26,14 @@ int Profile::MetaLevel(const std::string& id) const {
     return it == m_metaLevels.end() ? 0 : it->second;
 }
 
+void Profile::RecordWave(int wave) {
+    if (wave > m_bestWave) m_bestWave = wave;
+}
+
 std::string Profile::ToJson() const {
     std::ostringstream out;
-    out << "{\n  \"renown\": " << m_renown << ",\n  \"meta_levels\": {";
+    out << "{\n  \"renown\": " << m_renown << ",\n  \"best_wave\": " << m_bestWave
+        << ",\n  \"meta_levels\": {";
     bool first = true;
     for (const auto& [id, level] : m_metaLevels) {
         if (!first) out << ",";
@@ -45,6 +50,11 @@ bool Profile::FromJson(const std::string& text) {
     if (!parser.Parse(parsed)) return false;
 
     m_renown = static_cast<int>(parsed["renown"].AsNumber(0.0));
+
+    // Absent means zero, which is an older profile written before the key
+    // existed rather than an error.
+    m_bestWave = static_cast<int>(parsed["best_wave"].AsNumber(0.0));
+
     m_metaLevels.clear();
     for (const auto& [id, level] : parsed["meta_levels"].AsObject()) {
         m_metaLevels[id] = static_cast<int>(level.AsNumber(0.0));

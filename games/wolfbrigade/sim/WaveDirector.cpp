@@ -31,6 +31,16 @@ void WaveDirector::Setup(SpawnFn spawn, float enemyX, float groundY) {
     m_endlessBaseTime = lastTime + m_endlessConfig["start_delay"].AsNumber(90.0);
 }
 
+void WaveDirector::Reset() {
+    m_elapsed = 0.0;
+    m_nextWave = 0;
+    m_queue.clear();
+    m_spawnAccumulator = 0.0;
+    m_aliveEnemies = 0;
+    m_allSpawned = false;
+    m_endlessIndex = 0;
+}
+
 void WaveDirector::Step(double delta) {
     // Nothing runs without somewhere to put a spawn, and nothing runs once the
     // run is decided: a director that kept spawning through a defeat would

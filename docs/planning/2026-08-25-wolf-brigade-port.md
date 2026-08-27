@@ -425,6 +425,7 @@ re-derive them written beside them.
 | combat | `verify_combat` | **soldier 36/60, Town Hall 934/1000** — and the second one is the first number in the whole port that DISAGREED. Plus the lane index, orders beating instincts, and the arrow pool. Nine mutations, all caught after two blind spots were closed. |
 | worker economy | `verify_economy` 2, 2b + `verify_units` FSM | **tree 79/100, banked +20, carried 1** — 140 steps of 0.2s between a tree at 1300 and a deposit at 1000, matched exactly, for both resources. Plus the FSM (spawns idle at 30 hp, a move order strips the y, arrival releases the order) and the flee reflex. Twelve mutations; **four survived the first pass** and needed cases the original's own harness cannot see. |
 | economy state | `verify_economy` 1, 2c, 3 | Extraction clamps (200 → 170 → 0), spending is atomic, and `resources_changed` carries the new TOTAL. Difficulty scales the opening balance to the numbers the presets imply — 450 on Easy, 240 on Hard — and owned meta lands flat on top of it, not through it. Six mutations, all caught. Sections 2 and 2b, the worker gather/deliver loop, wait for `unit.gd`. |
+| match boot (`main.gd`) | `verify_snapshot`, `verify_meta` 3, `verify_save` 4 | **The whole-match numbers, which no earlier slice could reach**: 270 wood, 963 hit points, six units, three gathering, one enemy alive — off a real boot rather than a board built by hand. Twenty-six mutations, twenty-five caught; the one survivor was predicted and is why the sink stays minimal. Found three real defects on the way: a restored endless run whose director was not endless, a re-booted match carrying the last run's wave clock, and a fresh run that never saw the Armory levels it was bought with. |
 
 **A fixture that could not fail, caught by its own mutation.** `ScaleWaveCount`
 guards with `max(1, ...)` so Easy never rounds a wave's single brute away — and
@@ -671,6 +672,155 @@ order are both JSON arrays, and that is asserted rather than assumed — but
 anything ported later that iterates an object and cares about the sequence has
 to sort explicitly rather than inherit it.
 
+### The match boot, and the three bugs that were hiding behind not having one — 27 August 2026
+
+Porting `main.gd` gave the port a `Match`: the first thing in it that owns an
+entity. Every suite before this built its board by hand, and
+`test_wb_snapshot`'s own header said what that cost — "its specific numbers …
+come from booting the whole match through `main.gd`. The port has no match boot,
+so this suite builds its own board and asserts the same PROPERTIES against
+numbers it sets itself."
+
+Those numbers now come off a real boot, and they matched on the first run. The
+ledger, because a number nobody can explain is a number nobody can defend when
+it changes:
+
+- **270 wood** is `economy.json`'s 300 times hard's 0.8, which is 240, plus
+  three workers each banking one full carry of ten inside sixteen seconds. They
+  spawn at 1680 / 1740 / 1800, the nearest tree to all three is the one at 1900,
+  ten seconds of gathering at 1.0/sec, then a walk back to the Town Hall at 1500
+  — and all three are back on the tree at t=16, which is also the **3 gathering**.
+- **6 units** is three starting workers, one hand-placed raider, and **two
+  soldiers the Barracks trained**. Those two are the load-bearing pair: they
+  exist only if a building finishing a unit reaches a spawn, and that edge is
+  what this slice adds.
+- **963 hit points** is the Town Hall's authored 1000 less the 37 the harness
+  deals. The 1000 is the boot number inside it.
+
+**Elapsed is not 16.0, and saying it is would have been the port marking its own
+homework.** Eighty additions of the double nearest 0.2 come to
+15.999999999999975; the harness compares elapsed within 0.5 for exactly this
+reason. Both sides do the same additions in the same order, so the residue is
+identical rather than lucky — which is why the suite asserts the tolerance AND
+the exact value, the second as a determinism pin. The two soldiers arrive on
+steps 40 and 80, and forty additions of 0.2 reach 8.000000000000004 against a
+train time of 8.0: a margin of four parts in a quadrillion, on the right side,
+and the same margin in Godot.
+
+**Three real defects, none of which any existing test could see.**
+
+**A restored endless run was not endless.** `WaveDirector::Setup` is the only
+thing that ever sets `m_endless`, it reads the mode off `GameState`, and
+`Snapshot::Restore` never calls it — while the original's `snapshot.gd` calls
+`wd.setup()` from *inside* restore, right after `from_save` and before the
+entities, precisely so the mode is re-read. So a Continue of an endless run came
+back with a director that would never generate another endless wave: the run
+silently became "survive the five scripted waves and then nothing, forever". The
+existing suite asserted `state.IsEndless()` and never the director's, which is
+why it passed. Proved before it was fixed, with a temporary assertion that
+failed.
+
+The fix is that the Match arms the director **twice**, and both calls are
+load-bearing. The first, before the restore, puts the schedule in place, because
+`FromSave` clamps the saved wave index against `m_waves` and a never-armed
+director clamps a wave-four run back to zero and replays the whole match. The
+second, after it, re-reads a mode that did not exist yet when the first ran.
+That this is safe is a fact about `Setup` rather than a hope: it writes the
+schedule and the configuration, `FromSave` writes the counters, and the two sets
+are disjoint. Both have their own test and both mutations go red.
+
+**A re-booted match inherited the previous run's wave clock.** Godot never has
+this problem — a fresh match is a fresh scene and therefore a brand-new director
+— so there is no line in `main.gd` that corresponds to the fix. A `Match` is an
+object that gets re-booted, and `Setup` deliberately touches no counter, so the
+second run began with the first one's elapsed already past its opening waves and
+its dead still counted as alive: it would spawn a backlog on its first step and
+could never declare victory. `WaveDirector::Reset` is new, and it is exactly the
+set `FromSave` writes.
+
+**A fresh run never saw the Armory levels it was bought with.** `GameState::Reset`
+adds the persistent starting bonus and reads it out of its own copy of the meta
+levels — and until this slice the only writer of those levels was the restore
+path. Deeper Coffers applied to a Continue and silently not to a New Game, which
+is the one direction a player would never report: they would simply never see
+the thing they paid for. One line, before `Reset` rather than after.
+
+**`Snapshot::ClearRun` finally has a caller, and the anti-farm property is
+enforced.** It is a pair and the port had neither half. A finished run banks its
+renown and drops its Continue — the original does both in its game-over overlay,
+and the *decision* half belongs in the simulation — and `AutosaveRun` refuses to
+write once the run is over, which is what stops the next backgrounding putting
+the file straight back. Without either, a player could reach game over, bank the
+renown, and resume the same run from disk to bank it again. `Progression.hpp`
+already claimed this ("so this cannot be farmed by quitting and resuming"); it is
+now true rather than a comment about a caller that did not exist.
+
+**Nothing is ever erased from the three entity vectors, and that is the design.**
+`World.hpp` claims a deposit index is "the same question Godot's
+`is_instance_valid` answers, asked in a way that cannot dangle". That is true
+only while the container is append-only. An index is a *positional alias*, not
+an identity: erase a building from the middle and a worker's cached index
+silently names a different live Town Hall — it still passes `DepositExists`, the
+worker still delivers, the wood still balances because nothing in the economy
+cares who banked it, and no assertion anywhere notices. Erasing turns a crash
+into a wrong answer, which is strictly worse. What it costs is stated rather than
+hidden: memory grows with total spawns rather than with what is standing, and
+every fighter walks the corpses at 8 Hz for the rest of the run. `DeadUnits()`
+exists so a test can put a number on it, and the eventual fix — a reap *between*
+frames that unregisters from the lane and invalidates every cached index in the
+same moment — is a slice, not a line.
+
+**One thing decided rather than demonstrated.** `Match::Step` runs
+Buildings → Units → Projectiles → Director, read off the scene tree: `main.tscn`
+declares `World` before `WaveDirector`, `World`'s children in that order, and
+nothing in the game sets `process_priority`. The suite asserts only that this
+order agrees with the harness's (Units → Buildings → Director) on the board the
+oracle numbers come from — which it does — so swapping the two entity phases
+would go unnoticed by every number in this port. What IS measured is the
+frame-entry rule: the entity counts are taken once, before anything runs, so a
+unit trained during the buildings phase waits for the next frame the way a node
+added to a Godot tree mid-frame does. That has its own case, with a raider
+placed inside the newborn's aggro so that "did it think this frame" is the only
+question the assertion can be answering — without which an Idle soldier that had
+thought and found nothing is indistinguishable from one that never thought.
+
+**Twenty-six mutations, twenty-five caught.** Three survived the first pass and
+all three were fixture gaps of the kind this project keeps re-learning: the
+`Layout` struct's defaults are the shipped file's numbers, so removing the
+`world.json` read entirely changed nothing until an authored 4000-wide world
+with its ground line at 640 was written; no board had an unfinished building on
+it, so a sink that always reported "finished" — a free Barracks on every
+Continue — walked through the round-trip check; and one anchor matched two call
+sites. The **one deliberate survivor** is a sink that *also* joins a building
+against `units.json`, which changes nothing observable — and that is precisely
+why the sink must not do it. A sink that duplicates what `Snapshot::Restore`
+promises cannot tell you whether Restore is keeping its promise; that guard
+stays in `test_wb_snapshot`'s `BareSink`.
+
+**What this slice deliberately did not do: migrate the nine existing suites onto
+a `Match`.** It looks like a free cleanup and it is not.
+`Town::NearestEnemyBuilding` returns null unconditionally even though that
+fixture owns real buildings, so the raider-walks-to-the-Town-Hall path is dead
+code in `test_wb_buildings` today; `Battlefield`'s deposits are bare floats whose
+`DepositExists` is a bounds check with no liveness at all, so combat's flee
+reflex runs against a deposit that can never be invalidated; and
+`test_wb_progression`'s fixture resets the run in its constructor, which an
+un-booted `Match` does not do and a booted one contaminates with twelve resource
+nodes. Swapping in a real `Match` hands three suites behaviour they have never
+had, and any assertion that is green *because* of a stub flips. That is a
+migration with three named deltas, and it is its own slice — the next one.
+
+**And what it does not claim.** `verify_autosave`'s six window-and-OS assertions
+are still out of reach: a static library has no `auto_accept_quit` to intercept.
+What is ported is the ACTION each notification takes, which is `AutosaveRun()`;
+whoever owns a window calls it on close and on background. One asymmetry is
+written into the header rather than left to be found: the original's
+`add_renown` writes the profile through to disk, and this banks into a `Profile`
+the caller owns and then deletes the Continue — so a crash between those two
+lines costs the player the run and the renown it earned.
+
+---
+
 **The phase is not nearly closed, whatever the table's length suggests.** The
 done-when is "the simulation runs headless in a test executable, waves spawn on
 schedule, **and a save round-trips**". Nothing yet ports `save.gd` or
@@ -678,6 +828,10 @@ schedule, **and a save round-trips**". Nothing yet ports `save.gd` or
 including the `Damageable*` and world-index indirections this port introduced,
 which have no GDScript analogue and need a deliberate stable-id design. That is
 where the novel work in Phase 3 actually is.
+
+*(Written before the save slice landed, and left standing because the order it
+argues for is the order that was taken. Both halves are now done: the save
+round-trips, and as of 27 August it round-trips through a real match boot.)*
 
 **Order**, by dependency rather than by file size: `input_controller` (Phase 4's
 open half, and the smallest slice with an oracle) → `data` → `economy` →

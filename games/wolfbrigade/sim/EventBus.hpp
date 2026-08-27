@@ -95,8 +95,28 @@ struct EventBus {
     // itself - it has no way to, and should not learn one.
     Signal<const std::string&, const glm::vec2&> unitTrained;
 
-    // Wave and win/lose flow. The rest of the lifecycle signals - units,
-    // buildings, selection - arrive with the slices that emit them.
+    // A unit entered the world, and a unit left it.
+    //
+    // These are two of the three this file's previous comment promised would
+    // "arrive with the slices that emit them". This is that slice: the match
+    // boot emits unitSpawned from inside its own spawn path, and a unit emits
+    // unitDied from the death routine.
+    //
+    // unitSpawned is emitted by the SPAWN path only, never by a restore.
+    // Snapshot::Restore recounts the enemies it rebuilt and hands the number to
+    // WaveDirector::FromSave precisely because a restore bypasses the spawn
+    // function - so a restore that also emitted would double-count and the
+    // recount would silently repair it. The number of emissions is the only
+    // thing that can see that mistake, which is why the director hears about an
+    // enemy by listening here rather than by being told at the call site.
+    //
+    // A raw Unit*, for the same reason the building signals carry a Building*:
+    // the thing that owns the units is the thing listening.
+    Signal<class Unit*> unitSpawned;
+    Signal<class Unit*> unitDied;
+
+    // Wave and win/lose flow. The selection and placement signals arrive with
+    // the input slice that emits them.
     Signal<int> waveStarted;
     Signal<int> waveCleared;
     Signal<> allWavesCleared;

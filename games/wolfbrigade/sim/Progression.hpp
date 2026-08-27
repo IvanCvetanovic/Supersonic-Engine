@@ -34,6 +34,22 @@ public:
 
     const MetaLevels& AllMetaLevels() const { return m_metaLevels; }
 
+    // The deepest wave ever reached, from `save.gd`.
+    //
+    // MAX ONLY, and the asymmetry is the whole of it: a player who restarts and
+    // replays the easy early waves must not lower their own record, so a
+    // smaller number is a no-op rather than a write. It lives on the Profile
+    // because it outlives the run, like the renown beside it.
+    //
+    // It arrives with the match-boot slice rather than with the rest of meta
+    // because the edge that feeds it is main.gd's wave_started -> record_wave,
+    // and that edge is the boot's. The cost of arriving late is stated: the
+    // profile document gains a "best_wave" key with no version bump, which is
+    // safe in exactly one direction. An older profile reads 0, which is right;
+    // a newer profile read by an older build loses the record silently.
+    int BestWave() const { return m_bestWave; }
+    void RecordWave(int wave);
+
     // Round-trips through JSON, which is what the original writes to disk.
     std::string ToJson() const;
     bool FromJson(const std::string& text);
@@ -43,6 +59,7 @@ public:
 
 private:
     int m_renown{0};
+    int m_bestWave{0};
     MetaLevels m_metaLevels;
 };
 

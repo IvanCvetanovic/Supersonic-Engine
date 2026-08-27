@@ -41,7 +41,24 @@ public:
     // enemies come in. Called once before the first step, and again after a
     // load - the schedule is re-derived from data rather than saved, so only
     // the live counters below are restored.
+    //
+    // Deliberately touches NO counter. That is what lets a restore call it
+    // twice - once before, to give FromSave a schedule to clamp the saved wave
+    // index against, and once after, to re-read a mode that did not exist yet
+    // the first time - without rewinding the run it just put back.
     void Setup(SpawnFn spawn, float enemyX, float groundY);
+
+    // Back to the start of a run: no time elapsed, no wave reached, nothing
+    // queued and nothing alive.
+    //
+    // The counters Setup deliberately leaves alone, and exactly the set
+    // FromSave writes. Godot never needs this because a fresh match is a fresh
+    // scene and therefore a brand-new director; a Match here is an object that
+    // gets re-booted, and without this a second run would begin with the first
+    // one's clock already past its opening waves and its dead still counted as
+    // alive - so the new run would spawn a backlog immediately and could never
+    // declare victory.
+    void Reset();
 
     // One step. The original is a Godot _process, and the harness drives it at
     // a fixed dt rather than a frame time - which is what makes the counts it

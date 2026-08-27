@@ -21,6 +21,7 @@ add_library(WolfBrigadeSim STATIC
     GameState.cpp
     GestureMachine.cpp
     Lane.cpp
+    Match.cpp
     Projectiles.cpp
     Progression.cpp
     ResourceNode.cpp
