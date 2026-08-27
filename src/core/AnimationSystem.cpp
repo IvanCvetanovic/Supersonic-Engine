@@ -206,6 +206,45 @@ void AnimationSystem::ComposePose(const Skeleton& skeleton, const std::vector<gl
 }
 
 void AnimationSystem::SyncSkeletons(entt::registry& registry, AnimationLibrary& library) {
+    // A model that has clips gets something to play them with.
+    //
+    // Nothing used to add an AnimatorComponent, so importing a rig produced an
+    // entity that COULD animate and did not - and the difference between those
+    // two is invisible: the model is there, it is correct, it simply stands
+    // still. The loop below only ever looked at entities that already had an
+    // animator, so an imported character never reached it.
+    //
+    // THE EXCLUDE FILTER IS THE FEATURE, not an optimisation. An entity is
+    // considered once, at the moment it has no animator; after that it is not
+    // in this view at all. That is what makes a clip name cleared in the
+    // inspector stay cleared, and a clip name the user chose stay chosen -
+    // re-applying the file's first clip every frame would make the control
+    // unusable while looking like it worked.
+    //
+    // Attaching is therefore a standing rule with a one-shot effect, and the
+    // honest limit of that is written here rather than discovered: nothing can
+    // currently remove a component, and if a remove button is ever added this
+    // has to become a real one-shot or the button will appear not to work.
+    //
+    // The first clip is a STARTING POINT rather than an authority - the same
+    // thing a file's material is, and for the same reason. A game names the
+    // clip it wants; this is so a model dropped into the editor moves.
+    for (auto entity : registry.view<MeshComponent>(entt::exclude<AnimatorComponent>)) {
+        const auto& mesh = registry.get<MeshComponent>(entity);
+        if (mesh.filePath.empty()) continue;
+
+        // Acquire caches its misses, so a rigless mesh costs one map lookup a
+        // frame here rather than a re-parse.
+        const uint32_t skeletonID = library.Acquire(mesh.filePath);
+        if (skeletonID == AnimationLibrary::kInvalidSkeleton) continue;
+
+        const std::vector<AnimationClip>* clips = library.GetClips(skeletonID);
+        if (clips == nullptr || clips->empty()) continue;
+
+        auto& animator = registry.emplace<AnimatorComponent>(entity);
+        animator.clipName = clips->front().name;
+    }
+
     for (auto entity : registry.view<AnimatorComponent, MeshComponent>()) {
         const auto& mesh = registry.get<MeshComponent>(entity);
 

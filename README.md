@@ -688,10 +688,6 @@ HUSK's nineteen animated models. What is left is here.
 
 **For a game that generates its world**
 
-- **Nothing adds an `AnimatorComponent` on import.** A model with clips still
-  has to be given an animator by the scene or by hand in the inspector, so an
-  imported character arrives able to animate and not animating. Small, and the
-  last step between the importer and a moving model.
 - **`Skeleton::skinRadius` is declared, documented and never written.** It is
   meant to inflate pose bounds so an animated mesh is not culled by the
   bind-pose box it has walked out of. Nothing computes it and nothing reads it,

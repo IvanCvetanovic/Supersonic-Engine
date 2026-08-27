@@ -576,7 +576,93 @@ static void testAReloadedRigRebuildsWhatWasDerivedFromIt() {
     clearReloadDir();
 }
 
+// --- a model that can animate should arrive animating ---------------------
+//
+// Nothing added an AnimatorComponent, so importing a rig produced an entity
+// that COULD animate and did not - and the two look identical: the model is
+// there, it is correct, it stands still. SyncSkeletons only ever looked at
+// entities that already had an animator, so an imported character never
+// reached it.
+
+static void testAModelWithClipsIsGivenSomethingToPlayThemWith() {
+    entt::registry registry;
+    AnimationLibrary library;
+
+    const entt::entity entity = registry.create();
+    registry.emplace<MeshComponent>(entity).filePath = kFixture;
+
+    CHECK_MSG(!registry.all_of<AnimatorComponent>(entity), "it starts with no animator");
+
+    AnimationSystem::SyncSkeletons(registry, library);
+
+    CHECK_MSG(registry.all_of<AnimatorComponent>(entity), "and is given one");
+    if (!registry.all_of<AnimatorComponent>(entity)) return;
+
+    // Attached AND aimed at something. An animator with no clip name is a
+    // component that changes nothing, which is the same standing still it was
+    // supposed to fix.
+    const auto& animator = registry.get<AnimatorComponent>(entity);
+    CHECK_MSG(!animator.clipName.empty(), "and it names a clip rather than sitting idle");
+
+    const uint32_t id = library.Acquire(kFixture);
+    const std::vector<AnimationClip>* clips = library.GetClips(id);
+    CHECK_MSG(clips != nullptr && !clips->empty(), "the fixture really does have clips");
+    if (clips && !clips->empty()) {
+        CHECK_MSG(animator.clipName == clips->front().name, animator.clipName);
+    }
+}
+
+static void testAMeshWithNoRigIsLeftAlone() {
+    // The regression this could most easily cause: every static prop in the
+    // project acquiring an animator, a clip it cannot play, and a per-frame
+    // warning about it.
+    entt::registry registry;
+    AnimationLibrary library;
+
+    const entt::entity crate = registry.create();
+    registry.emplace<MeshComponent>(crate).primitiveType = "Cube";   // no file at all
+
+    const entt::entity missing = registry.create();
+    registry.emplace<MeshComponent>(missing).filePath = "assets/models/definitely_missing_71.gltf";
+
+    AnimationSystem::SyncSkeletons(registry, library);
+
+    CHECK_MSG(!registry.all_of<AnimatorComponent>(crate), "a primitive gets no animator");
+    CHECK_MSG(!registry.all_of<AnimatorComponent>(missing), "and neither does a broken path");
+}
+
+static void testTheClipNameIsAStartingPointAndNotAnAuthority() {
+    // The difference between a working feature and an annoying one. Attaching
+    // is a standing rule, so it runs every frame - but the NAME is set only at
+    // the moment of attachment, or a user clearing it in the inspector would
+    // watch it come straight back.
+    entt::registry registry;
+    AnimationLibrary library;
+
+    const entt::entity entity = registry.create();
+    registry.emplace<MeshComponent>(entity).filePath = kFixture;
+
+    AnimationSystem::SyncSkeletons(registry, library);
+    CHECK_MSG(registry.all_of<AnimatorComponent>(entity), "attached on the first pass");
+    if (!registry.all_of<AnimatorComponent>(entity)) return;
+
+    registry.get<AnimatorComponent>(entity).clipName.clear();
+    AnimationSystem::SyncSkeletons(registry, library);
+
+    CHECK_MSG(registry.get<AnimatorComponent>(entity).clipName.empty(),
+              "a cleared clip name stays cleared");
+
+    // And a name the user chose is not overwritten either.
+    registry.get<AnimatorComponent>(entity).clipName = "SomethingTheUserPicked";
+    AnimationSystem::SyncSkeletons(registry, library);
+    CHECK_MSG(registry.get<AnimatorComponent>(entity).clipName == "SomethingTheUserPicked",
+              "and a chosen one is left alone");
+}
+
 static void runTests() {
+    testAModelWithClipsIsGivenSomethingToPlayThemWith();
+    testAMeshWithNoRigIsLeftAlone();
+    testTheClipNameIsAStartingPointAndNotAnAuthority();
     testVertexLayoutIsWhatThePipelineDeclares();
     testFixtureLoads();
     testJointsAreReorderedParentBeforeChild();
@@ -603,4 +689,4 @@ static void runTests() {
     clearReloadDir();
 }
 
-TEST_MAIN("test_skeletal", 100)
+TEST_MAIN("test_skeletal", 150)
