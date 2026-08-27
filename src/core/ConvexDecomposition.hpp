@@ -43,7 +43,25 @@ public:
     };
 
     bool Build(const std::vector<glm::vec3>& positions, const std::vector<uint32_t>& indices,
-               const Options& options = Options{});
+               const Options& options);
+
+    // An OVERLOAD rather than a default argument of `Options{}`, and the reason
+    // is a conformance rule rather than taste.
+    //
+    // A default argument is a complete-class context, but it is not a member
+    // function BODY - and a default member initializer of a nested class may
+    // only be used inside one. MSVC accepts `= Options{}` here; clang rejects
+    // it outright with "default member initializer for 'concavityFraction'
+    // needed within definition of enclosing class ... outside of member
+    // functions", which is the standard's reading. An inline body is a
+    // complete-class context where the initializers ARE available, so this
+    // compiles everywhere and callers cannot tell the difference.
+    //
+    // Found by pointing the Android NDK's clang at this tree. It is not an
+    // Android problem: any clang build of the engine hits it.
+    bool Build(const std::vector<glm::vec3>& positions, const std::vector<uint32_t>& indices) {
+        return Build(positions, indices, Options{});
+    }
 
     const std::vector<ConvexHull>& pieces() const { return m_pieces; }
     bool valid() const { return !m_pieces.empty(); }

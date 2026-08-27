@@ -129,11 +129,28 @@ else()
 endif()
 
 # GLFW setup
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw-3.4)
+#
+# DESKTOP ONLY, and this guard is the first thing standing between this tree and
+# an Android build. GLFW 3.4 has no Android backend at all, and worse than being
+# useless there it is actively fatal: the NDK toolchain sets UNIX=1, so GLFW's
+# own CMakeLists turns Wayland and X11 support on for "any UNIX that is not
+# Apple" and then fails the configure outright looking for wayland-scanner. The
+# engine never gets as far as reporting its own problems.
+#
+# What replaces it on Android is not written yet - a surface comes from
+# ANativeWindow through VK_KHR_android_surface rather than from
+# glfwCreateWindowSurface - so an Android configure that gets past this point
+# still fails to COMPILE, at Window.hpp. That is the honest next blocker and it
+# is a real one; this only moves the failure from "cannot configure the tree" to
+# "has not written the windowing backend", which is progress of the kind that
+# can be worked on.
+if (NOT ANDROID)
+    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw-3.4)
+endif()
 
 # EnTT setup
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/entt-3.13.2)
@@ -148,10 +165,16 @@ set(IMGUI_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/imgui_widgets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/imgui_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/imgui_demo.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends/imgui_impl_glfw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends/imgui_impl_vulkan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imguizmo/ImGuizmo.cpp
 )
+
+# The GLFW backend follows GLFW. ImGui itself is platform-agnostic and the
+# Vulkan backend is fine anywhere; only the window-system half has to go.
+if (NOT ANDROID)
+    list(APPEND IMGUI_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui/backends/imgui_impl_glfw.cpp)
+endif()
 
 # Collect engine sources. CONFIGURE_DEPENDS re-globs on build so adding or
 # removing a file does not silently produce a stale project.
@@ -286,11 +309,16 @@ endif()
 # any of those needs the same include paths and the same link libraries.
 target_link_libraries(SupersonicCore PUBLIC
     Vulkan::Vulkan
-    glfw
     EnTT::EnTT
     VulkanMemoryAllocator
     Threads::Threads
 )
+
+# glfw is PUBLIC on desktop for the reason above - Window.hpp includes it - and
+# simply absent on Android, where the target does not exist.
+if (NOT ANDROID)
+    target_link_libraries(SupersonicCore PUBLIC glfw)
+endif()
 
 # Audio output.
 #

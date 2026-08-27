@@ -1163,6 +1163,47 @@ port is a C++ layer rather than scripts, so nothing needs it yet.
 Everything above lands a desktop game. This lands *the* game, and it is the
 majority of the remaining cost.
 
+### Phase 5 progress — the configure blocker is cleared, 27 August 2026
+
+**It configures now.** With an NDK toolchain and Ninja:
+
+    ANDROID_NDK=<sdk>/ndk/28.2.13676358
+    cmake -S . -B build-android-arm64-v8a -G Ninja         -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake         -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26         -DCMAKE_BUILD_TYPE=Release -DSUPERSONIC_BUILD_TESTS=OFF         -DSUPERSONIC_BUILD_SCRIPT_PLUGIN=OFF
+
+**The failure was one line from where it was predicted to be, and worse than
+described.** The note below says `find_package(X11 REQUIRED)` kills the
+configure. What actually kills it first is Wayland: the NDK toolchain sets
+`UNIX=1`, GLFW's own CMakeLists turns BOTH Wayland and X11 on for "any UNIX
+that is not Apple", and it dies at `Failed to find wayland-scanner` before X11
+is ever reached. Same root cause, and the fix is the one the note proposes —
+GLFW, `imgui_impl_glfw` and the `glfw` PUBLIC link are now behind `NOT ANDROID`.
+
+The engine never got as far as reporting its own problems. Now it does, and
+they are MEASURED rather than ranked:
+
+| blocker | where it now fails |
+|---|---|
+| Windowing | `src/platform/Window.hpp:4` — `'GLFW/glfw3.h' file not found` |
+| The C++ Vulkan headers | `src/core/Components.hpp:24` — `'vulkan/vulkan.hpp' file not found`. The NDK sysroot ships the C header and `libvulkan.so`; `vulkan.hpp` comes from the Vulkan SDK and is not on the NDK include path. A separate problem from windowing and a much smaller one. |
+| A clang conformance bug in our own code | `src/core/ConvexDecomposition.hpp:46` — **fixed, and it was never an Android problem.** |
+
+**That third one is the find worth keeping.** `Build(..., const Options& options
+= Options{})` uses a nested type's default member initializers in a DEFAULT
+ARGUMENT. A default argument is a complete-class context but it is not a member
+function body, and only a body may use those initializers. MSVC accepts it;
+clang rejects it outright. Any clang build of this engine hits it — the Android
+attempt is simply the first thing that pointed a clang at the tree. It is now an
+inline overload, which is a body, and callers cannot tell the difference.
+
+**What this does and does not buy.** It moves Android from "cannot configure the
+tree" to "has not written the windowing backend". That is real progress of the
+only kind available here — the next blocker can now be worked on — and it is not
+close to a running app. The windowing backend, the NativeActivity entry point,
+the AAudio backend, `AAssetManager` in every loader and an APK step are all
+still ahead, and together they are the 2–4 months this phase has always been.
+
+---
+
 The build does not currently get past CMake configure — see the Platforms
 section of the README, corrected on 25 August. The work:
 
