@@ -313,7 +313,8 @@ void appendPrimitive(const tinygltf::Model& model,
                      const std::string& sourcePath,
                      const std::string& nodeName,
                      std::vector<GltfLoader::Submesh>& out,
-                    int32_t skinIndex) {
+                    int32_t skinIndex,
+                    int32_t rigidJoint) {
 
     // Triangles only. Fans, strips and point/line modes are not something the
     // renderer can draw, so they are skipped loudly rather than silently
@@ -454,7 +455,19 @@ void appendPrimitive(const tinygltf::Model& model,
                                   t[3] < 0.0f ? -1.0f : 1.0f);
         }
 
-        if (jointBytes && weightBytes) {
+        if (rigidJoint >= 0 && !(jointBytes && weightBytes)) {
+            // RIGID SKINNING. The primitive has no influences of its own, so it
+            // is given exactly one: full weight on the node that animates it.
+            //
+            // This is what turns a node-hierarchy rig into something the
+            // existing skinning path can play. The vertices are already baked
+            // into world space by visitNode, and the joint's inverse bind is
+            // the inverse of that same world matrix - so at rest the two cancel
+            // and the mesh sits where it was authored, and in motion the joint
+            // carries it.
+            v.jointIndices = glm::u8vec4(static_cast<uint8_t>(rigidJoint), 0u, 0u, 0u);
+            v.jointWeights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+        } else if (jointBytes && weightBytes) {
             const uint8_t* j = jointBytes + i * jointStride;
             const uint8_t* w = weightBytes + i * weightStride;
 
@@ -727,24 +740,20 @@ std::vector<int> buildParentTable(const tinygltf::Model& model) {
 // pose as a single forward pass over it reads an uninitialised parent for any
 // file that lists a child first. Sorting by depth in the node hierarchy fixes
 // that for every valid file, because a node is always deeper than its parent.
-Skeleton buildSkeleton(const tinygltf::Model& model, const tinygltf::Skin& skin,
-                       const std::vector<int>& parents,
-                       std::unordered_map<int, int32_t>& outNodeToJoint) {
+// The half both rigs share: order the joints parent-before-child, remap the
+// parent indices, and fold any non-joint ancestors into preTransform.
+//
+// `inverseBinds` is aligned to `jointNodes` in the order given, NOT to the
+// sorted order, because a skin's inverse bind matrices are indexed by the
+// original skin.joints order. An empty vector leaves every joint's inverse bind
+// at identity.
+Skeleton buildSkeletonFromNodes(const tinygltf::Model& model,
+                                const std::vector<int>& jointNodes,
+                                const std::vector<glm::mat4>& inverseBinds,
+                                const std::vector<int>& parents,
+                                std::unordered_map<int, int32_t>& outNodeToJoint) {
     Skeleton skeleton;
     outNodeToJoint.clear();
-    if (skin.joints.empty()) return skeleton;
-
-    std::vector<int> jointNodes;
-    jointNodes.reserve(skin.joints.size());
-    for (const int node : skin.joints) {
-        if (node < 0 || static_cast<size_t>(node) >= model.nodes.size()) continue;
-        if (jointNodes.size() >= jointLimit) {
-            SUPERSONIC_LOG_ERROR("GltfLoader") << "Skin '" << skin.name << "' has more than " << jointLimit
-                      << " joints; the rest are ignored." << std::endl;
-            break;
-        }
-        jointNodes.push_back(node);
-    }
     if (jointNodes.empty()) return skeleton;
 
     std::unordered_map<int, size_t> originalIndexOf;
@@ -767,18 +776,6 @@ Skeleton buildSkeleton(const tinygltf::Model& model, const tinygltf::Skin& skin,
     std::unordered_map<int, int32_t> jointOf;
     for (size_t i = 0; i < ordered.size(); ++i) {
         jointOf.emplace(ordered[i], static_cast<int32_t>(i));
-    }
-
-    // Inverse bind matrices are indexed by the ORIGINAL skin.joints order, so
-    // they have to be permuted alongside the sort rather than read positionally.
-    const float* inverseBinds = nullptr;
-    size_t inverseBindStride = 0;
-    if (skin.inverseBindMatrices >= 0 &&
-        static_cast<size_t>(skin.inverseBindMatrices) < model.accessors.size()) {
-        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(skin.inverseBindMatrices)];
-        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc.type == TINYGLTF_TYPE_MAT4) {
-            inverseBinds = accessorData<float>(model, acc, inverseBindStride);
-        }
     }
 
     skeleton.joints.resize(ordered.size());
@@ -807,15 +804,143 @@ Skeleton buildSkeleton(const tinygltf::Model& model, const tinygltf::Skin& skin,
         }
         joint.preTransform = preTransform;
 
-        if (inverseBinds) {
+        // Permuted alongside the sort rather than read positionally: the
+        // caller's array is in ITS order, and this loop is in depth order.
+        if (!inverseBinds.empty()) {
             const size_t original = originalIndexOf[nodeIndex];
-            const auto* m = reinterpret_cast<const float*>(
-                reinterpret_cast<const uint8_t*>(inverseBinds) + original * inverseBindStride);
-            joint.inverseBind = glm::make_mat4(m);
+            if (original < inverseBinds.size()) joint.inverseBind = inverseBinds[original];
         }
     }
 
     outNodeToJoint = jointOf;
+    return skeleton;
+}
+
+// One glTF skin -> one Skeleton.
+Skeleton buildSkeleton(const tinygltf::Model& model, const tinygltf::Skin& skin,
+                       const std::vector<int>& parents,
+                       std::unordered_map<int, int32_t>& outNodeToJoint) {
+    outNodeToJoint.clear();
+    if (skin.joints.empty()) return Skeleton{};
+
+    std::vector<int> jointNodes;
+    jointNodes.reserve(skin.joints.size());
+    for (const int node : skin.joints) {
+        if (node < 0 || static_cast<size_t>(node) >= model.nodes.size()) continue;
+        if (jointNodes.size() >= jointLimit) {
+            SUPERSONIC_LOG_ERROR("GltfLoader") << "Skin '" << skin.name << "' has more than " << jointLimit
+                      << " joints; the rest are ignored." << std::endl;
+            break;
+        }
+        jointNodes.push_back(node);
+    }
+
+    std::vector<glm::mat4> inverseBinds;
+    if (skin.inverseBindMatrices >= 0 &&
+        static_cast<size_t>(skin.inverseBindMatrices) < model.accessors.size()) {
+        const tinygltf::Accessor& acc = model.accessors[static_cast<size_t>(skin.inverseBindMatrices)];
+        if (acc.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT && acc.type == TINYGLTF_TYPE_MAT4) {
+            size_t stride = 0;
+            if (const float* data = accessorData<float>(model, acc, stride)) {
+                inverseBinds.reserve(jointNodes.size());
+                for (size_t i = 0; i < jointNodes.size(); ++i) {
+                    const auto* m = reinterpret_cast<const float*>(
+                        reinterpret_cast<const uint8_t*>(data) + i * stride);
+                    inverseBinds.push_back(glm::make_mat4(m));
+                }
+            }
+        }
+    }
+
+    return buildSkeletonFromNodes(model, jointNodes, inverseBinds, parents, outNodeToJoint);
+}
+
+// Where a node sits in the file's bind pose, composed from the root down.
+glm::mat4 nodeWorldMatrix(const tinygltf::Model& model, int nodeIndex,
+                          const std::vector<int>& parents) {
+    glm::mat4 world(1.0f);
+    int current = nodeIndex;
+    int guard = 0;
+    while (current >= 0 && guard++ < 1024) {
+        world = nodeLocalMatrix(model.nodes[static_cast<size_t>(current)]) * world;
+        current = parents[static_cast<size_t>(current)];
+    }
+    return world;
+}
+
+// A skeleton for a file that animates its NODES and has no skin at all.
+//
+// This is not an exotic case, it is the common one for hand-built content: an
+// exporter writes a skin when a mesh is deformed by bones, and writes nothing
+// when a turret rotates, a wheel spins or a limb swings as a rigid piece. The
+// importer built clips only from skins, so every one of those files came in
+// silent - and it never said so, because a file with no skin is not an error.
+//
+// The trick is that rigid animation IS skinning with one influence per vertex.
+// visitNode has already baked each primitive into world space, so with
+//
+//     inverseBind(J) = inverse(worldBind(J))
+//
+// the joint matrix worldAnim(J) * inverseBind(J) cancels the bake at rest and
+// carries the mesh in motion. Nothing in the pose evaluator, the palette upload
+// or the vertex shader needs to know the difference.
+//
+// ONLY THE ANIMATED NODES BECOME JOINTS, and that is a budget decision rather
+// than a tidiness one. kMaxPaletteMatrices is 1024 for the whole frame across
+// every entity, so a soldier costs six joints and about a hundred and seventy
+// of them fit; making every node a joint would cost twenty-three and fit
+// forty-four. Non-animated nodes in between are folded into preTransform, which
+// the skin path already does for the same reason.
+Skeleton buildNodeRig(const tinygltf::Model& model, const std::vector<int>& parents,
+                      std::unordered_map<int, int32_t>& outNodeToJoint,
+                      int32_t& outStaticJoint) {
+    Skeleton skeleton;
+    outNodeToJoint.clear();
+    outStaticJoint = -1;
+
+    std::vector<int> animated;
+    std::vector<bool> seen(model.nodes.size(), false);
+    for (const auto& animation : model.animations) {
+        for (const auto& channel : animation.channels) {
+            const int node = channel.target_node;
+            if (node < 0 || static_cast<size_t>(node) >= model.nodes.size()) continue;
+            // Morph weights do not move a node, so a file that only animates
+            // them must not acquire a rig that does nothing.
+            if (channel.target_path != "translation" && channel.target_path != "rotation" &&
+                channel.target_path != "scale") continue;
+            if (seen[static_cast<size_t>(node)]) continue;
+            seen[static_cast<size_t>(node)] = true;
+            animated.push_back(node);
+        }
+    }
+    if (animated.empty()) return skeleton;
+
+    // One spare joint for the static geometry, and it is not optional.
+    // MeshRegistry merges a file into ONE mesh and skips any primitive whose
+    // skin index differs from the first, so a file where some primitives were
+    // rigged and others were not would lose the others outright. Everything
+    // binds to something; this one is identity, so what binds to it does not
+    // move.
+    if (animated.size() + 1 > jointLimit) {
+        SUPERSONIC_LOG_ERROR("GltfLoader")
+            << "A node rig with " << animated.size() << " animated nodes exceeds the "
+            << jointLimit << "-joint limit; the file is imported unanimated." << std::endl;
+        return skeleton;
+    }
+
+    std::vector<glm::mat4> inverseBinds;
+    inverseBinds.reserve(animated.size());
+    for (const int node : animated) {
+        inverseBinds.push_back(glm::inverse(nodeWorldMatrix(model, node, parents)));
+    }
+
+    skeleton = buildSkeletonFromNodes(model, animated, inverseBinds, parents, outNodeToJoint);
+    if (skeleton.joints.empty()) return skeleton;
+
+    outStaticJoint = static_cast<int32_t>(skeleton.joints.size());
+    Joint stationary;
+    stationary.name = "static";
+    skeleton.joints.push_back(stationary);   // identity throughout, parent -1
     return skeleton;
 }
 
@@ -902,9 +1027,37 @@ std::vector<AnimationClip> buildClips(const tinygltf::Model& model,
     return clips;
 }
 
+// What a node-rigged file needs the walk to know. Absent for a file with a real
+// skin or no animation at all, in which case the walk behaves exactly as before.
+struct NodeRig {
+    const std::unordered_map<int, int32_t>* nodeToJoint{nullptr};
+    int32_t staticJoint{-1};
+
+    bool active() const { return nodeToJoint != nullptr && staticJoint >= 0; }
+
+    // The joint that moves this node: itself if it is animated, otherwise its
+    // nearest animated ancestor, otherwise the stationary joint.
+    //
+    // NEAREST, walked upward, and not "the animated node whose subtree contains
+    // this one" - those differ the moment one rigged node sits inside another,
+    // and taking the outer one would leave the inner animation doing nothing.
+    int32_t JointFor(int nodeIndex, const std::vector<int>& parents) const {
+        int current = nodeIndex;
+        int guard = 0;
+        while (current >= 0 && guard++ < 1024) {
+            if (const auto it = nodeToJoint->find(current); it != nodeToJoint->end()) {
+                return it->second;
+            }
+            current = parents[static_cast<size_t>(current)];
+        }
+        return staticJoint;
+    }
+};
+
 void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& parentMatrix,
                const std::string& sourcePath, std::vector<GltfLoader::Submesh>& out,
-               std::vector<bool>& visited) {
+               std::vector<bool>& visited, const NodeRig& rig,
+               const std::vector<int>& parents) {
 
     if (nodeIndex < 0 || nodeIndex >= static_cast<int>(model.nodes.size())) return;
 
@@ -921,18 +1074,37 @@ void visitNode(const tinygltf::Model& model, int nodeIndex, const glm::mat4& par
         const std::string name = !node.name.empty() ? node.name
                                : (!mesh.name.empty() ? mesh.name : "GltfMesh");
         for (const auto& primitive : mesh.primitives) {
-            // A skinned primitive is handed the IDENTITY, not its node's world
-            // matrix: the inverse bind matrices are authored in the skin's own
-            // space, and the glTF spec requires the skinned mesh node's own
-            // transform to be ignored. Baking it in transforms the mesh twice.
+            // THREE cases, and conflating any two of them is a mesh in the
+            // wrong place.
+            //
+            // A real skin is handed the IDENTITY, not its node's world matrix:
+            // the inverse bind matrices are authored in the skin's own space,
+            // and the glTF spec requires the skinned mesh node's own transform
+            // to be ignored. Baking it in transforms the mesh twice.
+            //
+            // A NODE RIG is the opposite: its inverse binds are the inverse of
+            // exactly these world matrices, so the bake is what they cancel.
+            // Handing it identity here - which is what reusing "is it skinned"
+            // as the test would do - collapses every animated prop onto the
+            // origin. So bake-or-not is its own question, asked separately from
+            // which skeleton the primitive belongs to.
+            //
+            // And a plain rigid primitive in a file with no animation at all is
+            // baked and unskinned, exactly as before any of this existed.
             const int32_t skin = static_cast<int32_t>(node.skin);
+            const bool rigged = skin < 0 && rig.active();
+
             const glm::mat4 primitiveMatrix = skin >= 0 ? glm::mat4(1.0f) : world;
-            appendPrimitive(model, primitive, primitiveMatrix, sourcePath, name, out, skin);
+            const int32_t submeshSkin = rigged ? 0 : skin;
+            const int32_t rigidJoint = rigged ? rig.JointFor(nodeIndex, parents) : -1;
+
+            appendPrimitive(model, primitive, primitiveMatrix, sourcePath, name, out,
+                            submeshSkin, rigidJoint);
         }
     }
 
     for (const int child : node.children) {
-        visitNode(model, child, world, sourcePath, out, visited);
+        visitNode(model, child, world, sourcePath, out, visited, rig, parents);
     }
 }
 
@@ -994,6 +1166,24 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
         if (i == 0) nodeToJoint = skinNodeToJoint;
         scene.skeletons.push_back(std::move(skeleton));
     }
+    // No skin, but animated nodes: build a rig out of the node graph instead.
+    //
+    // A skin WINS when there is one - a file carrying both is describing its
+    // deformation with the skin, and a second skeleton over the same nodes
+    // would fight it.
+    NodeRig rig;
+    if (nodeToJoint.empty() && !model.animations.empty()) {
+        int32_t staticJoint = -1;
+        Skeleton nodeSkeleton = buildNodeRig(model, parents, nodeToJoint, staticJoint);
+        if (!nodeSkeleton.empty()) {
+            scene.skeletons.push_back(std::move(nodeSkeleton));
+            rig.nodeToJoint = &nodeToJoint;
+            rig.staticJoint = staticJoint;
+        } else {
+            nodeToJoint.clear();
+        }
+    }
+
     if (!nodeToJoint.empty()) {
         scene.clips = buildClips(model, nodeToJoint);
     }
@@ -1002,16 +1192,16 @@ GltfLoader::Scene GltfLoader::Load(const std::string& path) {
     // placed by its parent chain.
     if (model.defaultScene >= 0 && model.defaultScene < static_cast<int>(model.scenes.size())) {
         for (const int root : model.scenes[static_cast<size_t>(model.defaultScene)].nodes) {
-            visitNode(model, root, glm::mat4(1.0f), path, scene.submeshes, visited);
+            visitNode(model, root, glm::mat4(1.0f), path, scene.submeshes, visited, rig, parents);
         }
     } else if (!model.scenes.empty()) {
         for (const int root : model.scenes[0].nodes) {
-            visitNode(model, root, glm::mat4(1.0f), path, scene.submeshes, visited);
+            visitNode(model, root, glm::mat4(1.0f), path, scene.submeshes, visited, rig, parents);
         }
     } else {
         // No scene description at all: fall back to every node in the file.
         for (int i = 0; i < static_cast<int>(model.nodes.size()); ++i) {
-            visitNode(model, i, glm::mat4(1.0f), path, scene.submeshes, visited);
+            visitNode(model, i, glm::mat4(1.0f), path, scene.submeshes, visited, rig, parents);
         }
     }
 

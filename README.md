@@ -680,18 +680,22 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
 
 **It is not empty any more, and measuring it against two real games is what
 filled it.** An engine judged in isolation has no gaps; an engine asked to host
-something has as many as the thing needs. Seven were closed on 27 August and
-are in the log — most recently the UI image element and the texture coordinate
-transform, which between them are a minimap, a fog overlay, a portrait,
-scrolling rain and a flipbook flame. What is left is here.
+something has as many as the thing needs. Eight were closed on 27 August and
+are in the log — most recently the UI image element, the texture coordinate
+transform, and glTF animation without a skin, which between them are a minimap,
+a fog overlay, a portrait, scrolling rain, a flipbook flame, and every one of
+HUSK's nineteen animated models. What is left is here.
 
 **For a game that generates its world**
 
-- **glTF animation requires a skin.** Clips are built only when a file has
-  joints, and any channel not targeting one is dropped - so a rigidly animated
-  prop imports silently still. Measured against HUSK rather than guessed at:
-  **every one of its 19 animated models is rigged this way and none has a
-  skin**, so the importer currently produces no clips for that game at all.
+- **Nothing adds an `AnimatorComponent` on import.** A model with clips still
+  has to be given an animator by the scene or by hand in the inspector, so an
+  imported character arrives able to animate and not animating. Small, and the
+  last step between the importer and a moving model.
+- **`Skeleton::skinRadius` is declared, documented and never written.** It is
+  meant to inflate pose bounds so an animated mesh is not culled by the
+  bind-pose box it has walked out of. Nothing computes it and nothing reads it,
+  so that culling does not happen — for node rigs or for skinned meshes.
 - **One primitive per mesh.** `MeshRegistry` merges every primitive into one
   mesh with one material, first wins, and `MeshMaterial` carries no name - so a
   multi-material model cannot be re-materialised after import. Measured rather

@@ -8,6 +8,8 @@
 
 #include "TestHarness.hpp"
 #include "core/GltfLoader.hpp"
+#include "core/AnimationSystem.hpp"
+#include "core/Skeleton.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -492,7 +494,148 @@ static void testAMeshWithNoVertexColourIsStillWhite() {
     CHECK_NEAR(mesh.vertices[0].color.b, 1.0f);
 }
 
+
+// A file that animates its NODES and has no skin - the shape almost all
+// hand-built content takes, and the shape the importer used to drop on the
+// floor. Buffer holds 3 positions then 3 indices, then the animation's
+// times (2 floats) and translations (2 vec3).
+const char* kNodeRigGltf = R"({
+  "asset": { "version": "2.0" },
+  "scenes": [ { "nodes": [0] } ],
+  "scene": 0,
+  "nodes": [
+    { "name": "arm",   "translation": [5, 0, 0], "children": [1] },
+    { "name": "plate", "translation": [2, 0, 0], "mesh": 0 }
+  ],
+  "meshes": [ { "primitives": [ { "attributes": { "POSITION": 0 }, "indices": 1 } ] } ],
+  "animations": [ {
+    "name": "swing",
+    "channels": [ { "sampler": 0, "target": { "node": 0, "path": "translation" } } ],
+    "samplers": [ { "input": 2, "output": 3, "interpolation": "LINEAR" } ]
+  } ],
+  "buffers": [ { "byteLength": 76, "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAABAAIAAAAAAAAAAACAPwAAoEAAAAAAAAAAAAAAoEAAACBBAAAAAA==" } ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0,  "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 6  },
+    { "buffer": 0, "byteOffset": 44, "byteLength": 8  },
+    { "buffer": 0, "byteOffset": 52, "byteLength": 24 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+      "min": [0,0,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR" },
+    { "bufferView": 2, "componentType": 5126, "count": 2, "type": "SCALAR",
+      "min": [0], "max": [1] },
+    { "bufferView": 3, "componentType": 5126, "count": 2, "type": "VEC3" }
+  ]
+})";
+
+static void testAFileThatAnimatesNodesAndHasNoSkinStillAnimates() {
+    // The measured motivation: of HUSK's 58 models, 19 are animated and NOT ONE
+    // has a skin, so the importer produced no clips whatsoever for that game.
+    // A file with no skin is not an error, so nothing said a word.
+    const std::string path = writeTempGltf("supersonic_noderig.gltf", kNodeRigGltf);
+    const auto scene = GltfLoader::Load(path);
+    std::filesystem::remove(path);
+
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok) return;
+
+    CHECK_MSG(scene.clips.size() == 1, "the node animation became a clip");
+    CHECK_MSG(scene.skeletons.size() == 1, "and a skeleton was built out of the node graph");
+    if (scene.clips.empty() || scene.skeletons.empty()) return;
+
+    const Skeleton& skeleton = scene.skeletons[0];
+    // One animated node, plus the stationary joint everything unrigged binds to.
+    CHECK_MSG(skeleton.joints.size() == 2, "one animated node and one stationary joint");
+    if (skeleton.joints.size() != 2) return;
+
+    // THE CANCELLATION THE WHOLE DESIGN RESTS ON. The vertices are baked into
+    // world space, so the joint's inverse bind must be the inverse of that same
+    // world matrix - here a translation of -5 against a rest of +5.
+    const Joint& arm = skeleton.joints[0];
+    CHECK_NEAR(arm.restTranslation.x, 5.0f);
+    CHECK_NEAR(arm.inverseBind[3][0], -5.0f);
+
+    // The geometry really was baked: the triangle's first vertex is authored at
+    // the origin and its node chain is 5 + 2.
+    bool foundPlate = false;
+    for (const auto& submesh : scene.submeshes) {
+        if (submesh.name != "plate") continue;
+        foundPlate = true;
+        CHECK_MSG(submesh.skinIndex == 0, "the primitive belongs to the node rig");
+        CHECK_MSG(!submesh.mesh.vertices.empty(), "and it has vertices");
+        if (submesh.mesh.vertices.empty()) break;
+
+        CHECK_NEAR(submesh.mesh.vertices[0].pos.x, 7.0f);
+
+        // Bound to the arm, at full weight, with nothing left for the others -
+        // which is what makes a rigid piece follow one node exactly.
+        CHECK_MSG(submesh.mesh.vertices[0].jointIndices[0] == 0,
+                  "every vertex follows the node above it");
+        CHECK_NEAR(submesh.mesh.vertices[0].jointWeights.x, 1.0f);
+        CHECK_NEAR(submesh.mesh.vertices[0].jointWeights.y, 0.0f);
+    }
+    CHECK_MSG(foundPlate, "the mesh node survived the walk");
+
+    // And now the part a "clips.size() > 0" check cannot tell you: whether the
+    // maths is right. Drive the real pose pipeline and read the joint matrix.
+    std::vector<JointPose> pose;
+    std::vector<glm::mat4> locals;
+    std::vector<glm::mat4> matrices;
+
+    AnimationSystem::SamplePose(skeleton, scene.clips[0], 0.0f, pose);
+    AnimationSystem::PoseToLocals(pose, locals);
+    AnimationSystem::ComposePose(skeleton, locals, matrices);
+    CHECK_MSG(matrices.size() == 2, "a matrix per joint");
+    if (matrices.size() != 2) return;
+
+    // AT REST THE JOINT MATRIX IS THE IDENTITY. If it is not, the bake and the
+    // inverse bind disagree and every animated prop starts life in the wrong
+    // place - which looks like a broken export, not a broken importer.
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 4; ++r) {
+            CHECK_NEAR(matrices[0][c][r], c == r ? 1.0f : 0.0f);
+        }
+    }
+
+    // At the far keyframe it is a pure ten along Y - the authored motion, and
+    // nothing added by the node's own five along X.
+    AnimationSystem::SamplePose(skeleton, scene.clips[0], 1.0f, pose);
+    AnimationSystem::PoseToLocals(pose, locals);
+    AnimationSystem::ComposePose(skeleton, locals, matrices);
+    CHECK_NEAR(matrices[0][3][0], 0.0f);
+    CHECK_NEAR(matrices[0][3][1], 10.0f);
+    CHECK_NEAR(matrices[0][3][2], 0.0f);
+
+    // The stationary joint stays the identity at every time, which is what lets
+    // unrigged geometry in a rigged file be merged rather than skipped.
+    for (int c = 0; c < 4; ++c) {
+        for (int r = 0; r < 4; ++r) {
+            CHECK_NEAR(matrices[1][c][r], c == r ? 1.0f : 0.0f);
+        }
+    }
+}
+
+static void testAFileWithNoAnimationIsUntouched() {
+    // The regression this could most easily cause: every rigid model in the
+    // project acquiring a skeleton it does not need, a joint index it did not
+    // have, and a skin index that changes how MeshRegistry merges it.
+    const auto scene = GltfLoader::Load(kModel);
+    CHECK_MSG(scene.ok, scene.error);
+    if (!scene.ok) return;
+
+    CHECK_MSG(scene.skeletons.empty(), "an unanimated file gets no skeleton");
+    CHECK_MSG(scene.clips.empty(), "and no clips");
+    for (const auto& submesh : scene.submeshes) {
+        CHECK_MSG(submesh.skinIndex == -1, "and its primitives stay unskinned");
+        break;
+    }
+}
+
 static void runTests() {
+    testAFileThatAnimatesNodesAndHasNoSkinStillAnimates();
+    testAFileWithNoAnimationIsUntouched();
     testBakedVertexColourSurvivesTheImport();
     testAMeshWithNoVertexColourIsStillWhite();
     // The fixture is committed to the tree and CTest runs this suite from the
@@ -518,4 +661,4 @@ static void runTests() {
     testWhatTheRedChannelIsAllowedToMean();
 }
 
-TEST_MAIN("test_gltf", 105)
+TEST_MAIN("test_gltf", 250)
