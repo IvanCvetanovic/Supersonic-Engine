@@ -555,6 +555,7 @@ void appendPrimitive(const tinygltf::Model& model,
         const auto& pbr = material.pbrMetallicRoughness;
 
         submesh.material.present = true;
+        submesh.material.name = material.name;
 
         if (pbr.baseColorFactor.size() == 4) {
             submesh.material.baseColor = glm::vec4(

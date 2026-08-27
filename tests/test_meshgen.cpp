@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "TestHarness.hpp"
+#include "renderer/MeshRegistry.hpp"
 #include "core/ModelLoader.hpp"
 #include "core/TerrainGenerator.hpp"
 #include "core/JobSystem.hpp"
@@ -447,7 +448,167 @@ static void testFaceWindingAgreesWithNormals() {
     }
 }
 
+// --- a model is several surfaces, not one ---------------------------------
+//
+// Every primitive in a file was merged into one mesh with ONE material and the
+// first won, so a monument of stone and gold arrived entirely stone. Measured
+// rather than guessed: 48 of HUSK's 58 models carry more than one material, up
+// to eight across thirty-six primitives, so this was most of that game's art
+// arriving in a single flat colour.
+//
+// The arithmetic is an index offset per surface, which is the kind of thing
+// that is off by one and looks very nearly right - a seam of one triangle
+// drawn with its neighbour's texture is not something a screenshot shows.
+
+static GltfLoader::Submesh makeSubmesh(const char* materialName, uint32_t triangles,
+                                       int32_t skinIndex = -1) {
+    GltfLoader::Submesh submesh;
+    submesh.name = materialName;
+    submesh.skinIndex = skinIndex;
+    if (materialName != nullptr) {
+        submesh.material.present = true;
+        submesh.material.name = materialName;
+    }
+    for (uint32_t t = 0; t < triangles; ++t) {
+        const auto base = static_cast<uint32_t>(submesh.mesh.vertices.size());
+        Vertex v{};
+        submesh.mesh.vertices.push_back(v);
+        submesh.mesh.vertices.push_back(v);
+        submesh.mesh.vertices.push_back(v);
+        submesh.mesh.indices.push_back(base + 0);
+        submesh.mesh.indices.push_back(base + 1);
+        submesh.mesh.indices.push_back(base + 2);
+    }
+    return submesh;
+}
+
+static void testEachMaterialBecomesItsOwnIndexRange() {
+    // Two surfaces, deliberately different sizes so a swapped pair of ranges
+    // cannot pass by symmetry.
+    std::vector<GltfLoader::Submesh> submeshes;
+    submeshes.push_back(makeSubmesh("BODY", 2));    // 6 indices
+    submeshes.push_back(makeSubmesh("GLASS", 5));   // 15 indices
+
+    MeshData data;
+    std::vector<MeshSection> sections;
+    MeshRegistry::BuildSections(submeshes, -1, "test.glb", data, sections);
+
+    CHECK_MSG(sections.size() == size_t{2}, "one section per material");
+    if (sections.size() != 2) return;
+
+    CHECK_MSG(sections[0].material.name == "BODY", sections[0].material.name);
+    CHECK_EQ(sections[0].firstIndex, 0u);
+    CHECK_EQ(sections[0].indexCount, 6u);
+
+    CHECK_MSG(sections[1].material.name == "GLASS", sections[1].material.name);
+    CHECK_EQ(sections[1].firstIndex, 6u);
+    CHECK_EQ(sections[1].indexCount, 15u);
+
+    // THE RANGES TILE THE BUFFER. No hole, no overlap, nothing past the end -
+    // and a hole is what a skipped primitive would leave behind.
+    CHECK_EQ(static_cast<uint32_t>(data.indices.size()), 21u);
+    uint32_t covered = 0;
+    for (const MeshSection& section : sections) covered += section.indexCount;
+    CHECK_EQ(covered, static_cast<uint32_t>(data.indices.size()));
+}
+
+static void testPrimitivesSharingAMaterialAreOneSection() {
+    // The reason grouping beats file order. A soldier is seventeen primitives
+    // over three materials; appended as authored that is seventeen draws and
+    // seventeen material binds, and grouped it is three.
+    std::vector<GltfLoader::Submesh> submeshes;
+    submeshes.push_back(makeSubmesh("DARK", 1));
+    submeshes.push_back(makeSubmesh("BODY", 1));
+    submeshes.push_back(makeSubmesh("DARK", 1));
+    submeshes.push_back(makeSubmesh("DARK", 1));
+    submeshes.push_back(makeSubmesh("BODY", 1));
+
+    MeshData data;
+    std::vector<MeshSection> sections;
+    MeshRegistry::BuildSections(submeshes, -1, "test.glb", data, sections);
+
+    CHECK_MSG(sections.size() == size_t{2}, "five primitives, two materials, two sections");
+    if (sections.size() != 2) return;
+
+    // First-seen order, so the file's own ordering still decides which surface
+    // comes first - the entity is offered section 0's material on import.
+    CHECK_MSG(sections[0].material.name == "DARK", sections[0].material.name);
+    CHECK_EQ(sections[0].indexCount, 9u);    // three primitives
+    CHECK_EQ(sections[1].indexCount, 6u);    // two
+    CHECK_EQ(sections[1].firstIndex, 9u);
+}
+
+static void testIndicesAreRebasedOntoTheMergedVertexBuffer() {
+    // Each primitive indexes its OWN vertices from zero. Merged into one buffer
+    // they have to be offset, and a surface whose indices were not rebased
+    // draws the first surface's triangles again - geometry that looks like a
+    // modelling mistake rather than an importer one.
+    std::vector<GltfLoader::Submesh> submeshes;
+    submeshes.push_back(makeSubmesh("A", 1));
+    submeshes.push_back(makeSubmesh("B", 1));
+
+    MeshData data;
+    std::vector<MeshSection> sections;
+    MeshRegistry::BuildSections(submeshes, -1, "test.glb", data, sections);
+
+    CHECK_EQ(static_cast<uint32_t>(data.vertices.size()), 6u);
+    CHECK_EQ(static_cast<uint32_t>(data.indices.size()), 6u);
+    if (data.indices.size() != 6) return;
+
+    CHECK_EQ(data.indices[0], 0u);
+    CHECK_EQ(data.indices[3], 3u);   // the second surface starts at vertex 3
+
+    uint32_t highest = 0;
+    for (const uint32_t index : data.indices) highest = std::max(highest, index);
+    CHECK_MSG(highest < data.vertices.size(),
+              "no index points past the end of the merged vertex buffer");
+}
+
+static void testAPrimitiveFromAnotherSkinIsLeftOutWithoutLeavingAHole() {
+    // Two skeletons welded into one mesh would have their joint indices
+    // addressing the wrong palette slice, so the odd one out is skipped. What
+    // must NOT happen is a section still reserving its indices.
+    std::vector<GltfLoader::Submesh> submeshes;
+    submeshes.push_back(makeSubmesh("BODY", 2, 0));
+    submeshes.push_back(makeSubmesh("OTHER", 3, 1));   // a different skin
+    submeshes.push_back(makeSubmesh("GLASS", 1, 0));
+
+    MeshData data;
+    std::vector<MeshSection> sections;
+    MeshRegistry::BuildSections(submeshes, 0, "test.glb", data, sections);
+
+    CHECK_MSG(sections.size() == size_t{2}, "the other skin contributes no section");
+    if (sections.size() != 2) return;
+
+    uint32_t covered = 0;
+    for (const MeshSection& section : sections) covered += section.indexCount;
+    CHECK_EQ(covered, static_cast<uint32_t>(data.indices.size()));
+    CHECK_EQ(sections[1].firstIndex, sections[0].indexCount);
+}
+
+static void testAFileWithOneMaterialIsOneSection() {
+    // The case that must not change: a single-material model is one section
+    // covering everything, which is what makes the draw loop's "more than one
+    // surface" test fall back to exactly the behaviour that already worked.
+    std::vector<GltfLoader::Submesh> submeshes;
+    submeshes.push_back(makeSubmesh("ONLY", 4));
+
+    MeshData data;
+    std::vector<MeshSection> sections;
+    MeshRegistry::BuildSections(submeshes, -1, "test.glb", data, sections);
+
+    CHECK_MSG(sections.size() == size_t{1}, "one material, one section");
+    if (sections.empty()) return;
+    CHECK_EQ(sections[0].firstIndex, 0u);
+    CHECK_EQ(sections[0].indexCount, static_cast<uint32_t>(data.indices.size()));
+}
+
 static void runTests() {
+    testEachMaterialBecomesItsOwnIndexRange();
+    testPrimitivesSharingAMaterialAreOneSection();
+    testIndicesAreRebasedOntoTheMergedVertexBuffer();
+    testAPrimitiveFromAnotherSkinIsLeftOutWithoutLeavingAHole();
+    testAFileWithOneMaterialIsOneSection();
     testCube();
     testSphereRejectsDegenerateParameters();
     testQuadIsFlatAndWhite();
@@ -469,4 +630,4 @@ static void runTests() {
     testFaceWindingAgreesWithNormals();
 }
 
-TEST_MAIN("test_meshgen", 192)
+TEST_MAIN("test_meshgen", 295)

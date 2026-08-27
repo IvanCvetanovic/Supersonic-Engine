@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/GltfLoader.hpp"   // Submesh, for BuildSections
 #include "core/MeshData.hpp"
 #include "renderer/VulkanBuffer.hpp"
 #include "renderer/VulkanDevice.hpp"
@@ -13,10 +14,51 @@ namespace Supersonic {
 
 // GPU-resident mesh: device-local vertex and index buffers plus the local-space
 // bounds the picker uses.
+// One contiguous run of indices sharing a material.
+//
+// A model is authored as several named surfaces and arrives as several
+// primitives; they were merged into one mesh with one material and the first
+// won, so a monument of stone and gold drew entirely in stone. Sections keep
+// the merge - one vertex buffer, one index buffer, one bind - and let the draw
+// loop issue a range per surface.
+//
+// The runs are built by GROUPING the file's primitives by material rather than
+// by keeping file order, so a model with seventeen primitives over three
+// materials is three draws and not seventeen.
+struct MeshSection {
+    uint32_t firstIndex{0};
+    uint32_t indexCount{0};
+    MeshMaterial material;
+
+    // Resolved from the paths above, ONCE PER MESH rather than once per entity
+    // per frame. Resolving a path means building a map key by concatenating
+    // strings, and a scene of eighty units sharing one model would otherwise
+    // pay for the same eight lookups eighty times a frame.
+    //
+    // Cached here and not on the entity because a section belongs to the MESH -
+    // every entity drawing this model wants the same answer.
+    uint32_t albedoTextureID{0};
+    uint32_t normalTextureID{0};
+    uint32_t ormTextureID{0};
+};
+
 struct GpuMesh {
     std::unique_ptr<VulkanBuffer> vertexBuffer;
     std::unique_ptr<VulkanBuffer> indexBuffer;
     uint32_t indexCount{0};
+
+    // One entry per surface, in the order their indices appear. ALWAYS at least
+    // one for a mesh that drew at all: a procedural primitive and a
+    // single-material file both produce exactly one section covering every
+    // index, so the draw loop has no special case and "sections" is not a
+    // second way of describing a mesh that only some meshes have.
+    std::vector<MeshSection> sections;
+
+    // Which texture generation the ids above were resolved against. Zero means
+    // never, which is what a freshly uploaded mesh is - and a reload bumps the
+    // generation, so a re-imported texture is picked up rather than leaving
+    // every section pointing at the image it replaced.
+    uint64_t sectionTextureGeneration{0};
     glm::vec3 boundsMin{-0.5f};
     glm::vec3 boundsMax{0.5f};
 
@@ -58,6 +100,29 @@ public:
     // and `present == false` when the geometry came from a generator or the
     // file named no material.
     const MeshMaterial* GetMaterial(uint32_t id) const;
+
+    // Groups a loaded file's primitives by material and merges them into one
+    // mesh, recording the index range each surface ends up occupying.
+    //
+    // A free function rather than inline in Acquire because Acquire needs a
+    // Vulkan device to reach and the suites deliberately touch no Vulkan entry
+    // point - the same reason MaterialSystem::ApplyImportedMaterial is one.
+    // The arithmetic here is an index offset per surface, which is exactly the
+    // kind of thing that is off by one and looks almost right.
+    //
+    // `mergeSkin` is the skin every kept primitive must belong to; the rest are
+    // reported and skipped, because two skeletons welded into one mesh would
+    // have their joint indices addressing the wrong palette slice.
+    static void BuildSections(const std::vector<GltfLoader::Submesh>& submeshes,
+                              int32_t mergeSkin,
+                              const std::string& sourcePath,
+                              MeshData& outData,
+                              std::vector<MeshSection>& outSections);
+
+    // Mutable access for the one caller that resolves section textures. Not a
+    // general door into the cache: RenderSystem::SyncResources owns both
+    // registries and is the only place that can turn a path into a texture id.
+    GpuMesh* GetMutable(uint32_t id);
 
     // Drops the cache entry for a key and hands its buffers to the device's
     // deferred-destroy queue, so the next Acquire re-reads the file.

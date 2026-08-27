@@ -32,6 +32,19 @@ struct MeshMaterial {
     // and "the file said nothing".
     bool present{false};
 
+    // What the FILE called this material, carried through verbatim.
+    //
+    // Not decoration and not a label for the inspector. A model is authored as
+    // several named surfaces - BODY, DARK, GLASS, EMISSIVE is a real example -
+    // and a game re-materialises them by that name: the same chassis in two
+    // team colours is one model and two lookups, not two models. Without the
+    // name a multi-material import is a bag of anonymous surfaces that can only
+    // be replaced wholesale.
+    //
+    // Empty when the file named the material but gave it no name of its own,
+    // which is legal and means the surface can be drawn but not addressed.
+    std::string name;
+
     glm::vec4 baseColor{1.0f};
     float roughness{0.5f};
     float metallic{0.0f};

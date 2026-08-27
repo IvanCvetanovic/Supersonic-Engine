@@ -101,6 +101,7 @@ public:
         uint32_t albedoTextureID{0};
         uint32_t normalTextureID{0};
         uint32_t ormTextureID{0};
+
         int32_t sortKey{0};
     };
 

@@ -12,8 +12,31 @@ namespace Supersonic {
 
 namespace {
 
+// `surface` is the mesh section being drawn, or nullptr for a mesh that has
+// only one - in which case the entity's own material describes it, exactly as
+// it did before sections existed.
+//
+// WHAT A SURFACE OVERRIDES AND WHAT IT DOES NOT is the whole question here, and
+// it is decided per field rather than wholesale:
+//
+//   albedo    MULTIPLIED by the entity's, because the entity's default is white
+//             and white is the identity. That is what keeps a script tinting a
+//             unit red, or flashing it past white on a hit, working across a
+//             model with eight surfaces - it dims or brightens all of them
+//             instead of replacing one.
+//   roughness,
+//   metallic  REPLACED, because the entity's defaults are 0.4 and 0.1 and
+//             neither is an identity for a multiply. Multiplying would make
+//             every surface of every imported model rougher and less metallic
+//             than the file said, which reads as the lighting being wrong.
+//   emissive  REPLACED, so a surface a file marked as glowing glows and its
+//             neighbours do not.
+//   cutoff    the ENTITY's, always. It is one number for the draw and the
+//             depth pass cuts with one texture; see the note in
+//             GatherShadowCasters.
 PushConstantData buildPushConstants(const entt::registry& registry, entt::entity entity,
-                                    const glm::mat4& model) {
+                                    const glm::mat4& model,
+                                    const MeshMaterial* surface = nullptr) {
     PushConstantData push{};
     push.model = model;
 
@@ -46,6 +69,19 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
         // No material means no map either, and the neutral map's red is 1 -
         // so a strength of 1 over it still resolves to no occlusion at all.
         push.emissive = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+    // AFTER both branches, deliberately. An entity that has never been given a
+    // MaterialComponent is exactly the case a freshly imported multi-surface
+    // model is in, and folding this into the branch above would leave those
+    // drawing every surface in the same default grey - which is the bug this
+    // whole change exists to fix, reintroduced one level down.
+    if (surface != nullptr && surface->present) {
+        push.albedoColor *= surface->baseColor;
+        push.material.x = surface->roughness;
+        push.material.y = surface->metallic;
+        push.emissive = glm::vec4(surface->emissiveColor * surface->emissiveStrength,
+                                  surface->occlusionStrength);
     }
 
     // Both passes go through this one function, so the shadow pass skins with
@@ -169,6 +205,41 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
         if (const GpuMesh* gpuMesh = meshes.Get(renderable.meshID)) {
             renderable.localBoundsMin = gpuMesh->boundsMin;
             renderable.localBoundsMax = gpuMesh->boundsMax;
+        }
+
+        // Every SURFACE of the mesh, resolved once per mesh rather than once per
+        // entity. A model is authored as several named surfaces and they used
+        // to be merged down to one material, first wins - a monument of stone
+        // and gold arrived entirely stone, and 48 of HUSK's 58 models arrived
+        // in a single flat colour for the same reason.
+        //
+        // Guarded on the texture generation and not on `resolve`, because the
+        // answer belongs to the MESH: eighty units sharing one model resolve it
+        // once between them, and a reloaded texture bumps the generation so
+        // nothing is left pointing at the image it replaced.
+        if (GpuMesh* gpuMesh = meshes.GetMutable(renderable.meshID);
+            gpuMesh && gpuMesh->sectionTextureGeneration != textureGeneration) {
+            gpuMesh->sectionTextureGeneration = textureGeneration;
+
+            for (MeshSection& section : gpuMesh->sections) {
+                const MeshMaterial& surface = section.material;
+
+                // The same three fallbacks the entity path uses, and the same
+                // reasons: white multiplies to nothing, a flat normal points
+                // straight out, and a neutral ORM is 1 in every channel.
+                section.albedoTextureID = surface.albedoTexturePath.empty()
+                                        ? textures.GetWhiteTexture()
+                                        : textures.Acquire(surface.albedoTexturePath, true,
+                                                           textures.GetCheckerTexture());
+                section.normalTextureID = surface.normalTexturePath.empty()
+                                        ? textures.GetFlatNormalTexture()
+                                        : textures.Acquire(surface.normalTexturePath, false,
+                                                           textures.GetFlatNormalTexture());
+                section.ormTextureID = surface.ormTexturePath.empty()
+                                     ? textures.GetNeutralOrmTexture()
+                                     : textures.Acquire(surface.ormTexturePath, false,
+                                                        textures.GetNeutralOrmTexture());
+            }
         }
 
         if (!resolve) continue;
@@ -621,31 +692,92 @@ void RenderSystem::Render(
             boundMesh = draw.meshID;
         }
 
-        // One set per combination of maps, cached, so entities sharing a
-        // material do not rebind.
+        // ONE RANGE PER SURFACE. A model authored as several named materials -
+        // BODY, DARK, GLASS, EMISSIVE is a real example - used to be merged
+        // down to whichever came first, and arrived in a single flat colour.
         //
-        // Note the interaction with sorting: run-length grouping by mesh and
-        // material survives only while equal keys keep their gather order, which
-        // is why the sort is stable. A key per entity would destroy it, exactly
-        // as distance ordering destroyed it for the transparent pass.
-        if (vk::DescriptorSet materialSet =
-                textures.AcquireMaterialSet(draw.albedoTextureID,
-                                            draw.normalTextureID,
-                                            draw.ormTextureID);
-            materialSet && materialSet != boundMaterialSet) {
-            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
-                                             VulkanPipeline::kMaterialSet, 1, &materialSet, 0, nullptr);
-            boundMaterialSet = materialSet;
+        // The buffers are bound once above and the push constant written once
+        // here; only the material set changes between ranges, so a model with
+        // eight surfaces costs eight draws and no extra bind of anything else.
+        //
+        // THE ENTITY STILL WINS where it has said anything. A MaterialComponent
+        // is what a person edits and what a script tints, so a material
+        // authored on the entity overrides every surface; the file's own
+        // materials are what an unedited import draws with. Section 0's ids are
+        // what the entity path already resolved for it, so the two agree on a
+        // single-material model rather than fighting.
+        // WHERE THE TEXTURES COME FROM, and the rule is decided by how many
+        // surfaces the mesh actually has.
+        //
+        // One surface: the entity, exactly as before. Its MaterialComponent was
+        // either authored or copied off the file at import, so nothing changes
+        // for every model that already worked.
+        //
+        // More than one: the sections, because a MaterialComponent is ONE
+        // material and cannot describe eight surfaces. Asking it to would mean
+        // picking one of them to be the real one, which is the "first wins"
+        // this replaces.
+        //
+        // Only the MAPS are decided this way. albedoColor, roughness, metallic,
+        // emissive and unlit ride in the push constant and are written once for
+        // the whole mesh, so tinting an entity red still turns the whole model
+        // red across every surface - which is what a script flashing a unit on
+        // hit is doing, and it goes on working here.
+        const GpuMesh* gpuMesh = meshes.Get(draw.meshID);
+        const bool multiSurface = gpuMesh && gpuMesh->sections.size() > 1;
+        const size_t sectionCount = multiSurface ? gpuMesh->sections.size() : 1u;
+
+        for (size_t s = 0; s < sectionCount; ++s) {
+            uint32_t albedo = draw.albedoTextureID;
+            uint32_t normal = draw.normalTextureID;
+            uint32_t orm = draw.ormTextureID;
+            uint32_t firstIndex = 0;
+            uint32_t indexCount = draw.indexCount;
+
+            if (multiSurface) {
+                const MeshSection& section = gpuMesh->sections[s];
+                firstIndex = section.firstIndex;
+                indexCount = section.indexCount;
+                albedo = section.albedoTextureID;
+                normal = section.normalTextureID;
+                orm = section.ormTextureID;
+            }
+
+            // One set per combination of maps, cached, so surfaces and entities
+            // sharing a material do not rebind.
+            //
+            // Note the interaction with sorting: run-length grouping by mesh and
+            // material survives only while equal keys keep their gather order,
+            // which is why the sort is stable. A key per entity would destroy
+            // it, exactly as distance ordering destroyed it for the transparent
+            // pass.
+            if (vk::DescriptorSet materialSet =
+                    textures.AcquireMaterialSet(albedo, normal, orm);
+                materialSet && materialSet != boundMaterialSet) {
+                commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                                 pipeline.GetLayout(),
+                                                 VulkanPipeline::kMaterialSet, 1, &materialSet,
+                                                 0, nullptr);
+                boundMaterialSet = materialSet;
+            }
+
+            // Written per section, not once for the mesh. HUSK's models carry
+            // NO TEXTURES AT ALL - eight surfaces distinguished purely by
+            // base colour, metallic and roughness - so a version of this that
+            // only varied the maps would have looked finished and changed
+            // nothing anyone could see.
+            const PushConstantData push =
+                buildPushConstants(registry, draw.entity, draw.matrix,
+                                   multiSurface ? &gpuMesh->sections[s].material : nullptr);
+            commandBuffer.pushConstants(
+                pipeline.GetLayout(),
+                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                0, sizeof(PushConstantData), &push);
+
+            if (indexCount > 0) {
+                commandBuffer.drawIndexed(indexCount, 1, firstIndex, 0, 0);
+            }
         }
-
-        // World matrix, so a child follows its parent.
-        const PushConstantData push = buildPushConstants(registry, draw.entity, draw.matrix);
-        commandBuffer.pushConstants(
-            pipeline.GetLayout(),
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-            0, sizeof(PushConstantData), &push);
-
-        commandBuffer.drawIndexed(draw.indexCount, 1, 0, 0, 0);
     }
 
     // ---- Sky -------------------------------------------------------------

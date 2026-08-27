@@ -1,4 +1,6 @@
 #include "renderer/MeshRegistry.hpp"
+
+#include <unordered_map>
 #include "core/Log.hpp"
 
 #include "core/ModelLoader.hpp"
@@ -28,6 +30,77 @@ MeshRegistry::~MeshRegistry() {
     m_meshes.clear();
 }
 
+void MeshRegistry::BuildSections(const std::vector<GltfLoader::Submesh>& submeshes,
+                                 int32_t mergeSkin,
+                                 const std::string& sourcePath,
+                                 MeshData& outData,
+                                 std::vector<MeshSection>& outSections) {
+    // GROUPED BY MATERIAL, not appended in file order.
+    //
+    // Every primitive still lands in one vertex buffer and one
+    // index buffer - the merge is what makes a whole model one bind
+    // - but primitives sharing a material are made contiguous, and
+    // each run becomes a section the draw loop can issue on its
+    // own. A soldier authored as seventeen primitives over three
+    // materials is three draws, not seventeen.
+    //
+    // Grouped by NAME where there is one, because that is what the
+    // file means by "the same surface" and what a game addresses it
+    // by. A material with no name falls back to a key of its own,
+    // so two anonymous surfaces are not silently welded together.
+    std::vector<std::string> groupKeys;      // first-seen order
+    std::unordered_map<std::string, std::vector<const GltfLoader::Submesh*>> groups;
+
+    size_t kept = 0;
+    for (const auto& submesh : submeshes) {
+        if (submesh.skinIndex != mergeSkin) {
+            SUPERSONIC_LOG_ERROR("MeshRegistry") << "Skipping '" << submesh.name << "' in " << sourcePath
+                      << ": it belongs to skin " << submesh.skinIndex
+                      << " while the mesh is being built from skin " << mergeSkin << "."
+                      << std::endl;
+            continue;
+        }
+        ++kept;
+
+        // The prefix is a control character, which a glTF material
+        // name cannot usefully contain - so a file cannot collide
+        // with these by naming a material "none".
+        std::string groupKey;
+        if (!submesh.material.present) {
+            groupKey = "\x01none";
+        } else if (submesh.material.name.empty()) {
+            groupKey = "\x01anon:" + std::to_string(groupKeys.size());
+        } else {
+            groupKey = submesh.material.name;
+        }
+
+        if (groups.find(groupKey) == groups.end()) groupKeys.push_back(groupKey);
+        groups[groupKey].push_back(&submesh);
+    }
+
+    for (const std::string& groupKey : groupKeys) {
+        MeshSection section;
+        section.firstIndex = static_cast<uint32_t>(outData.indices.size());
+
+        for (const GltfLoader::Submesh* submesh : groups[groupKey]) {
+            if (submesh->material.present && !section.material.present) {
+                section.material = submesh->material;
+            }
+            const auto vertexOffset = static_cast<uint32_t>(outData.vertices.size());
+            outData.vertices.insert(outData.vertices.end(),
+                                 submesh->mesh.vertices.begin(),
+                                 submesh->mesh.vertices.end());
+            for (const uint32_t index : submesh->mesh.indices) {
+                outData.indices.push_back(index + vertexOffset);
+            }
+        }
+
+        section.indexCount =
+            static_cast<uint32_t>(outData.indices.size()) - section.firstIndex;
+        if (section.indexCount > 0) outSections.push_back(std::move(section));
+    }
+}
+
 uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data) {
     if (auto it = m_lookup.find(key); it != m_lookup.end()) {
         return it->second;
@@ -42,6 +115,13 @@ uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data) {
     mesh.indexCount = static_cast<uint32_t>(data.indices.size());
     mesh.boundsMin = data.boundsMin;
     mesh.boundsMax = data.boundsMax;
+
+    // EVERY mesh gets a section, here, at the one place geometry becomes a
+    // GpuMesh. A procedural cube, an OBJ and a single-material glTF all end up
+    // with exactly one covering every index, so the draw loop never has to ask
+    // whether a mesh has sections - the empty case does not exist. Acquire
+    // replaces this when a file actually described more than one surface.
+    mesh.sections.push_back(MeshSection{0u, mesh.indexCount, MeshMaterial{}});
 
     // Vertices: staged through a host-visible buffer into device-local memory.
     {
@@ -94,6 +174,7 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
 
     MeshData data;
     MeshMaterial material;
+    std::vector<MeshSection> sections;
     bool ok = false;
 
     if (!filePath.empty()) {
@@ -119,45 +200,14 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
                     if (submesh.skinIndex >= 0) { mergeSkin = submesh.skinIndex; break; }
                 }
 
-                // Acquire merges every primitive into ONE mesh with one
-                // material slot, so a file describing several surfaces can only
-                // contribute one of them. The first wins, and the rest are
-                // reported rather than dropped in silence - a monument whose
-                // stone and gold are separate glTF materials arrives as stone,
-                // and it should be possible to find out why.
-                bool tookMaterial = false;
-                size_t distinctMaterials = 0;
+                MeshRegistry::BuildSections(scene.submeshes, mergeSkin, filePath,
+                                            data, sections);
 
-                for (const auto& submesh : scene.submeshes) {
-                    if (submesh.skinIndex != mergeSkin) {
-                        SUPERSONIC_LOG_ERROR("MeshRegistry") << "Skipping '" << submesh.name << "' in " << filePath
-                                  << ": it belongs to skin " << submesh.skinIndex
-                                  << " while the mesh is being built from skin " << mergeSkin << "."
-                                  << std::endl;
-                        continue;
-                    }
-
-                    if (submesh.material.present) {
-                        ++distinctMaterials;
-                        if (!tookMaterial) {
-                            material = submesh.material;
-                            tookMaterial = true;
-                        }
-                    }
-
-                    const auto vertexOffset = static_cast<uint32_t>(data.vertices.size());
-                    data.vertices.insert(data.vertices.end(),
-                                         submesh.mesh.vertices.begin(), submesh.mesh.vertices.end());
-                    for (const uint32_t index : submesh.mesh.indices) {
-                        data.indices.push_back(index + vertexOffset);
-                    }
-                }
-                if (distinctMaterials > 1) {
-                    SUPERSONIC_LOG_WARN("MeshRegistry")
-                        << filePath << " describes " << distinctMaterials
-                        << " materials; the primitives are merged into one mesh, so only "
-                        << "the first is imported." << std::endl;
-                }
+                // The first surviving material is still what the ENTITY is
+                // offered on import, because a MaterialComponent is one
+                // material. The difference is that the others now draw from
+                // their own sections instead of being dropped.
+                if (!sections.empty()) material = sections.front().material;
 
                 data.computeBounds();
                 ok = !data.empty();
@@ -197,11 +247,25 @@ uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::stri
 
     // After Upload, because Upload is also the entry point for procedural
     // geometry, which has no source file and therefore no material to carry.
-    if (id < m_meshes.size()) m_meshes[id].material = material;
+    if (id < m_meshes.size()) {
+        m_meshes[id].material = material;
+
+        // ONE SECTION COVERING EVERYTHING is the answer for a procedural
+        // primitive, for an OBJ, and for a glTF whose surfaces all share a
+        // material. Upload already writes that, and it is what lets the draw
+        // loop treat every mesh alike rather than asking whether this one has
+        // sections. Only a file that really described several replaces it.
+        if (!sections.empty()) m_meshes[id].sections = std::move(sections);
+    }
     return id;
 }
 
 const GpuMesh* MeshRegistry::Get(uint32_t id) const {
+    if (id >= m_meshes.size()) return nullptr;
+    return &m_meshes[id];
+}
+
+GpuMesh* MeshRegistry::GetMutable(uint32_t id) {
     if (id >= m_meshes.size()) return nullptr;
     return &m_meshes[id];
 }

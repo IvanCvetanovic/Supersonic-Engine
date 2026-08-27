@@ -692,12 +692,16 @@ HUSK's nineteen animated models. What is left is here.
   meant to inflate pose bounds so an animated mesh is not culled by the
   bind-pose box it has walked out of. Nothing computes it and nothing reads it,
   so that culling does not happen — for node rigs or for skinned meshes.
-- **One primitive per mesh.** `MeshRegistry` merges every primitive into one
-  mesh with one material, first wins, and `MeshMaterial` carries no name - so a
-  multi-material model cannot be re-materialised after import. Measured rather
-  than guessed at as well: **48 of HUSK's 58 models carry more than one
-  material**, up to eight over thirty-six primitives, so this is not a trim
-  detail - it is most of that game's art arriving in a single flat colour.
+- **A cut-out shadow cuts against the first surface.** `GatherShadowCasters`
+  resolves one material set per caster, so a multi-surface model whose holes
+  are on its fourth surface casts the silhouette of its first. Nothing HUSK
+  needs is affected — every one of its 166 materials is `OPAQUE` — but a leaf
+  card packed into a multi-material model would shadow wrongly.
+- **Nothing re-materialises a surface by name yet.** Sections carry the name the
+  file gave them, which is what a game addresses a surface by — HUSK swaps
+  `BODY`, `DARK`, `GLASS` and `EMISSIVE` for team-coloured variants at runtime —
+  but there is no API for an entity to override one section. The name is
+  carried; the override is not built.
 
 **Known and written down elsewhere, repeated because they bite a game**
 
