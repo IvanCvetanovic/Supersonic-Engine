@@ -44,6 +44,7 @@
 #include "sim/GameState.hpp"
 #include "sim/WaveDirector.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -338,6 +339,66 @@ void testEndlessKeepsGeneratingAndNeverDeclaresVictory() {
     CHECK_EQ(field.lostCount, 1);
 }
 
+void testTheShippedEndlessBlockGeneratesWhatTheOriginalCounted() {
+    // THE SHIPPED ENDLESS BLOCK, STEPPED. Everything else in this section runs
+    // against an authored waves.json, because authored values are the only way
+    // to reach a branch shipped data cannot - and the cost of that, unnoticed
+    // until it was looked for, is that `start_delay 90`, `interval 75`,
+    // `base_count 8`, `count_growth 2`, `hp_growth 0.08` and `brute_every 2`
+    // were READ by the data suite and SIMULATED by nothing. The case above
+    // exercises them and then asserts only inequalities - "past 5", "more than
+    // 30" - which a port that got the cadence wrong by a factor of two would
+    // still pass.
+    //
+    // These are the numbers the original prints for the same run:
+    //
+    //   ok  : wave number climbs past 5 (got 12)
+    //   ok  : endless spawned more than the 31 scripted (got 132)
+    //   ok  : endless raiders grow tougher than base (59 > 40)
+    //   ok  : endless adds brutes beyond the single scripted one (got 4)
+    //
+    //   cd /d/The-Wolf-Brigade
+    //   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
+    //       --headless --path . res://tools/verify_endless.tscn
+    //
+    // FIVE HUNDRED STEPS OF 2.0 IS PART OF THE SPECIFICATION, not a round
+    // number. t=1000 falls between the seventh endless wave at 960 and the
+    // eighth at 1035, and the seventh's twenty raiders finish leaving the spawn
+    // edge around t=977 at an interval of 0.8. Twenty more steps would be eight
+    // waves and a half-drained queue; twenty fewer would be six. The window is
+    // load-bearing in both directions, which is the trap this suite has now hit
+    // three times.
+    //
+    // Difficulty is set to "normal" explicitly, as the harness does. It
+    // resolves to the same 1.0 multipliers as leaving it unset, and saying it
+    // out loud is the point: what is being measured is endless growth, with
+    // difficulty scaling held at identity so the two cannot be confused.
+    Field field;
+    field.state.SetMode(GameState::kEndless);
+    field.state.SetDifficulty("normal");
+    field.state.Reset();
+    field.Begin();
+
+    field.Run(500, 2.0);
+
+    CHECK_MSG(field.state.CurrentWave() == 12, "seven endless waves after the scripted five");
+    CHECK_MSG(static_cast<int>(field.spawned.size()) == 132,
+              "the scripted 31, plus 8+10+12+14+16+18+20 raiders and three more brutes");
+    CHECK_EQ(field.CountOf(Ids::kBrute), 4);
+    CHECK_EQ(field.CountOf(Ids::kRaider), 128);
+
+    // The toughest raider the run produced, against the row it was built from.
+    // Growth is measured from the FIRST endless wave rather than compounded, so
+    // the seventh is 40 x (1 + 0.08 x 6) = 59.2, truncated.
+    int toughest = 0;
+    for (const UnitStats& stats : field.spawned) {
+        if (stats.id == Ids::kRaider) toughest = std::max(toughest, stats.maxHp);
+    }
+    const int base = UnitStats::FromJson(Ids::kRaider, wb::Shipped().Unit(Ids::kRaider)).maxHp;
+    CHECK_EQ(base, 40);
+    CHECK_EQ(toughest, 59);
+}
+
 void testEndlessRampsCountAndToughnessPerWave() {
     // base_count 8, +2 a wave; hp_growth 0.08 and damage_growth 0.05, both
     // measured from the FIRST endless wave rather than compounding.
@@ -445,6 +506,7 @@ static void runTests() {
     testDifficultyScalesTheScheduleAndTheEnemiesInIt();
 
     testEndlessKeepsGeneratingAndNeverDeclaresVictory();
+    testTheShippedEndlessBlockGeneratesWhatTheOriginalCounted();
     testEndlessRampsCountAndToughnessPerWave();
     testEndlessCannotGenerateUnboundedWavesInOneStep();
 

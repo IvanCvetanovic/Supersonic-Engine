@@ -819,6 +819,112 @@ written into the header rather than left to be found: the original's
 the caller owns and then deletes the Continue — so a crash between those two
 lines costs the player the run and the renown it earned.
 
+### Surveying the nine harnesses nobody had looked at — 27 August 2026
+
+Twelve of the twenty-two `verify_*` harnesses are reproduced and three are known
+to have no headless oracle. The remaining **nine had never been surveyed**, and
+"every harness with an oracle is ported" was being said without anyone having
+checked. So they were read, run, and ranked.
+
+**Two things came out of it immediately, and both are in.**
+
+**The shipped `endless` block was read everywhere and simulated nowhere.** Every
+endless case in `test_wb_waves` runs against an *authored* `waves.json` —
+which is right, because authored values are the only way to reach a branch
+shipped data cannot — with the result that `start_delay 90`, `interval 75`,
+`base_count 8`, `count_growth 2`, `hp_growth 0.08` and `brute_every 2` were
+validated by the data suite and stepped by nothing. The one case that did use
+shipped data asserted only inequalities: "past wave 5", "more than 30 raiders".
+A port that had the endless cadence wrong by a factor of two would have passed
+it.
+
+`verify_endless` has the numbers: **wave 12, 132 spawns, 4 brutes, a toughest
+raider at 59 against a base of 40**, from 500 steps of 2.0 at difficulty
+`normal`. They are simulation output in the sense this project prefers — the
+sum over seven waves of `8 + 2e` raiders, a heavy on every second one, and
+growth measured from the first endless wave rather than compounded. The port
+reproduced all four on the first run, and the oracle was re-derived by hand
+afterwards rather than taken from a paste.
+
+**Five hundred steps of 2.0 is part of the specification.** t=1000 falls between
+the seventh endless wave at 960 and the eighth at 1035, and the seventh's twenty
+raiders finish leaving the spawn edge around t=977. Twenty steps more is eight
+waves and a half-drained queue; twenty fewer is six. That is the same
+window-too-wide trap this port has now hit three times, and it is written beside
+the case.
+
+**Two assertions in the combat suite were looser than the harness they came
+from.** `verify_projectiles` asserts an in-flight arrow's *position* is
+unchanged after game over; the port asserted only that it had not landed and
+had dealt no damage — both of which are satisfied by an implementation that
+keeps flying arrows and merely suppresses the damage, leaving a volley drifting
+across a frozen board behind the game-over panel. And the pool-reuse case
+bounded the pool at `<= 6` where the original pins it at exactly **3**: three
+concurrent shots make three arrows, and three more after those retire make no
+more. A pool that grew by one every *other* shot passed the bound.
+
+Both are now the harness's own assertions. Six mutations, all caught.
+
+**What the survey says is NOT worth porting, so nobody re-proposes it.**
+
+- **`verify_export` and `verify_project`** — every assertion is a `ProjectSettings`
+  read or a substring match against `export_presets.cfg`. Two of export's six are
+  literal duplicates of project's. Nothing.
+- **`verify_flow`** — Godot's resource filesystem and scene paths. The one line
+  with a decision in it (`tree.paused = false` before every transition) has no
+  port analogue.
+- **`verify_pause`** — eight assertions, six of them `Control.visible` and
+  `SceneTree.paused`.
+- **`verify_input` sections 1 and 2** — real mouse events through
+  `mouse_filter`, `CenterContainer` layout, CanvasLayer routing, and GUI input
+  surviving `get_tree().paused` via `PROCESS_MODE_ALWAYS`. That last is the most
+  Godot-specific assertion in all twenty-two.
+- **The freed-node half of `verify_projectiles`** — the harness calls `free()`
+  and leans on `is_instance_valid`. The port models a *dead* `Damageable*`, not
+  a freed one; a dangling pointer there is undefined behaviour, and inventing an
+  analogue would be fiction.
+- **`verify_fx`'s floating numbers and `verify_project`'s camera clamp** are
+  both real logic with real oracles — a pool soft cap of 64 that recycles rather
+  than grows, and a clamp that centres when the world is narrower than the view
+  — but both are presentation, and `Match.hpp`'s not-ported ledger already
+  defers them by name. Revisiting is a decision, not an oversight.
+
+**Two slices the survey found and did NOT take yet**, both with the reason they
+rank where they do:
+
+1. **Tone synthesis** (`audio.gd::_synth_tone`, ~30 lines). The strongest
+   remaining oracle in the whole set: eleven sound effects whose byte counts and
+   sample values are deterministic DSP output, with two truncation traps that
+   discriminate a careless port — `int(44100 * 55 / 1000.0)` is 2425 from
+   2425.5, and a saw's first sample is `int(-16383.5)` = -16383, not -16384. It
+   needs one free function and no Godot-shaped abstraction, and it is the only
+   candidate the not-ported ledger does not already defer. The game ships no
+   audio files, exactly as it ships no art, so these tones ARE the sound.
+2. **`BuildPlacement`** (`build_placement.gd`, ~120 lines). Weaker oracle —
+   behaviour with decisions in it rather than computed numbers — but it is
+   gameplay, and it unblocks two things this port has already written down as
+   waiting for it: `Match`'s `_back_cancels_placement` predicate, and
+   `GestureMachine::SetPlacementMode`, which is a flag nothing in the port ever
+   sets from real state. The assertion worth having is the one no other harness
+   makes: **cancelling a placement spends nothing and builds nothing**.
+
+**And the fixture migration is NOT the next item, whatever the last note said.**
+The claim was that nine suites should drop their hand-rolled `World`s. Measured
+rather than assumed: the four migratable ones hold 64, 62, 72 and 13 lines of
+scan code against `Match`'s 77, so the entire upside is deleting about 211 lines
+that already agree with each other. Two of the five cannot migrate at all
+without losing a real instrument — `test_wb_combat`'s `Battlefield` scans stub
+buildings that COUNT HITS, and `test_wb_worker`'s `TestWorld` is the only world
+in the port with no projectile pool, which is what proves an archer without one
+simply does not shoot. And the delta that was supposed to justify the churn
+turns out not to exist: `Town::NearestEnemyBuilding` returning null is harmless
+because **every tower case steps only the tower and never the raider**, so
+migrating would flip no assertion at all.
+
+That last point is the real finding hiding inside the migration question. The
+gap in `test_wb_buildings` is not its fixture — it is that no case there ever
+steps an enemy at a tower.
+
 ---
 
 **The phase is not nearly closed, whatever the table's length suggests.** The

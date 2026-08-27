@@ -435,12 +435,66 @@ void testArrowsFreezeWithTheRestOfTheBoard() {
     Unit* raider = fight.Spawn(Ids::kRaider, 2500.0f);
     fight.field.arrows.Spawn(glm::vec2(2000.0f, kGroundY), raider, 6, 700.0f);
 
+    // Where it was when the run ended. Read BEFORE the loss, because the
+    // assertion below is about movement rather than about damage.
+    const Projectile* arrow = fight.field.arrows.At(0);
+    CHECK_MSG(arrow != nullptr, "the arrow is in the pool");
+    if (arrow == nullptr) return;
+    const glm::vec2 launched = arrow->position;
+
     fight.state.Lose();
     for (int i = 0; i < 60; ++i) fight.Step(0.1);
 
     CHECK_MSG(fight.field.arrows.ActiveCount() == 1,
               "an arrow in flight when the run ends must not land");
     CHECK_EQ(raider->Hp(), raider->Stats().maxHp);
+
+    // AND IT DID NOT MOVE. The two assertions above are both satisfied by an
+    // implementation that keeps flying arrows and merely suppresses the damage
+    // on arrival - which would leave a volley drifting across a frozen board
+    // behind the game-over panel. The original asserts the position for exactly
+    // this reason:
+    //   verify_projectiles.gd -> "in-flight arrow frozen after game over"
+    CHECK_NEAR(fight.field.arrows.At(0)->position.x, launched.x);
+    CHECK_NEAR(fight.field.arrows.At(0)->position.y, launched.y);
+}
+
+void testThePoolSettlesAtTheMostArrowsEverInTheAirAtOnce() {
+    // The bound next door - "did not grow one entry per shot" - is loose enough
+    // that a pool which grew by one every OTHER shot would pass it. The
+    // original pins the number instead: three concurrent shots make three
+    // arrows, and three more once those have retired make no more.
+    //
+    //   ok  : pool grew to 3 for 3 concurrent shots
+    //   ok  : 3 more shots REUSED the pool (size still 3, not 6)
+    //   ok  : 3 active after reuse
+    Fight fight;
+
+    // Far enough that nothing arrives during the steps below, so what is being
+    // measured is the pool rather than the flight.
+    CountingTarget target(9000.0f);
+    const glm::vec2 from(2000.0f, kGroundY);
+
+    for (int i = 0; i < 3; ++i) fight.field.arrows.Spawn(from, &target, 1, 700.0f);
+    CHECK_EQ(fight.field.arrows.PoolSize(), 3);
+    CHECK_EQ(fight.field.arrows.ActiveCount(), 3);
+
+    // Retire all three by killing what they were aimed at: a target that dies
+    // in flight makes its arrow coast to where it last saw it and fizzle.
+    target.alive = false;
+    for (int i = 0; i < 200 && fight.field.arrows.ActiveCount() > 0; ++i) fight.Step(0.1);
+    CHECK_EQ(fight.field.arrows.ActiveCount(), 0);
+    CHECK_MSG(fight.field.arrows.PoolSize() == 3, "the pool never shrinks");
+
+    // ALIVE AGAIN BEFORE THE SECOND VOLLEY, and the order matters: Launch aims
+    // a shot at a DEAD target at the launch point itself, so a batch fired at a
+    // corpse is already at its destination and retires on its first step -
+    // which would make the reuse assertion below measure nothing at all.
+    target.alive = true;
+    for (int i = 0; i < 3; ++i) fight.field.arrows.Spawn(from, &target, 1, 700.0f);
+
+    CHECK_MSG(fight.field.arrows.PoolSize() == 3, "three, not six");
+    CHECK_EQ(fight.field.arrows.ActiveCount(), 3);
 }
 
 void testARaiderWalksToADistantTownHallRatherThanAttackingItFromAfar() {
@@ -526,6 +580,7 @@ static void runTests() {
     testAnArrowThatLandsOnALiveTargetDoesDealItsDamage();
     testFiringAtNothingIsHarmless();
     testArrowsFreezeWithTheRestOfTheBoard();
+    testThePoolSettlesAtTheMostArrowsEverInTheAirAtOnce();
 }
 
 TEST_MAIN("test_wb_combat", 35)
