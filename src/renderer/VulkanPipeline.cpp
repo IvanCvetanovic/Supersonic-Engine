@@ -337,10 +337,26 @@ void VulkanPipeline::createDescriptorSetLayout() {
         environmentBindings[i].stageFlags = vk::ShaderStageFlagBits::eFragment;
     }
 
-    const std::array<vk::DescriptorSetLayoutBinding, 10> sceneBindings = {
+    // Every texture coordinate transform in the frame. Beside the joint
+    // palette rather than in a set of its own for the same reason that one is
+    // here: both are per-frame arrays a draw indexes into, and set 0 is already
+    // bound once per frame while set 1 is rebound per draw.
+    //
+    // Fragment only. The transform could as correctly be applied in the vertex
+    // stage - it is affine, so transforming interpolated coordinates and
+    // interpolating transformed ones give the same answer - but doing it in the
+    // fragment stage keeps it in the one shader that samples, so a pass that
+    // only writes depth needs nothing from this binding.
+    vk::DescriptorSetLayoutBinding uvTransformBinding{};
+    uvTransformBinding.binding = 10;
+    uvTransformBinding.descriptorType = vk::DescriptorType::eStorageBuffer;
+    uvTransformBinding.descriptorCount = 1;
+    uvTransformBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+    const std::array<vk::DescriptorSetLayoutBinding, 11> sceneBindings = {
         uboBinding, shadowBinding, paletteBinding, pointShadowBinding, spotShadowBinding,
         clusterBindings[0], clusterBindings[1], clusterBindings[2],
-        environmentBindings[0], environmentBindings[1]
+        environmentBindings[0], environmentBindings[1], uvTransformBinding
     };
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};

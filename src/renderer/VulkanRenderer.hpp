@@ -251,6 +251,19 @@ private:
     static constexpr uint32_t kMaxPaletteMatrices = 1024;
     std::vector<std::unique_ptr<VulkanBuffer>> m_jointPaletteBuffers;
 
+    // Every texture coordinate transform in the frame, on the same terms and
+    // for the same reason: the push constant block is full, so a scrolling or
+    // flipbooked material pushes an index here instead of six floats.
+    //
+    // The ceiling is the twelve bits kUvSlotMask leaves for
+    // the index and cannot be raised without moving the index somewhere else.
+    // Slot 0 is the identity, so 4095 materials may scroll at once - and a
+    // scene where nothing does still uploads that one entry, because a storage
+    // buffer descriptor a shader reads has to have been written.
+    static constexpr uint32_t kMaxUvTransforms =
+        static_cast<uint32_t>(kUvSlotMask) + 1u;
+    std::vector<std::unique_ptr<VulkanBuffer>> m_uvTransformBuffers;
+
     // The clustered light data, one set per frame in flight: every light in
     // the frame, the per-froxel (offset, count) table, and the flat index list
     // that table points into. What used to be a fixed array of eight inside the
@@ -270,6 +283,7 @@ private:
 
     // Reused between frames so the gather does not allocate every frame.
     std::vector<glm::mat4> m_paletteScratch;
+    std::vector<UvTransform> m_uvTransformScratch;
     RenderSystem::Stats m_renderStats{};
 
     // Rebuilt once per frame and read by all eighteen depth passes. A member

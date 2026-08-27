@@ -6,6 +6,7 @@
 
 #include "core/AnimationSystem.hpp"
 #include "core/RenderSystem.hpp"
+#include "core/MaterialSystem.hpp"
 #include "core/LightSelection.hpp"
 #include "core/ClusterGrid.hpp"
 #include "core/WorldShapes.hpp"
@@ -97,6 +98,7 @@ VulkanRenderer::~VulkanRenderer() {
     m_textureRegistry.reset();
     m_uniformBuffers.clear();
     m_jointPaletteBuffers.clear();
+    m_uvTransformBuffers.clear();
     m_lightBuffers.clear();
     m_clusterRangeBuffers.clear();
     m_lightIndexBuffers.clear();
@@ -513,6 +515,20 @@ void VulkanRenderer::createUniformBuffers() {
             VMA_ALLOCATION_CREATE_MAPPED_BIT);
     }
 
+    // The frame's texture coordinate transforms, one buffer per frame in
+    // flight, sized at capacity like the palette above and for the same reason:
+    // the descriptor has to be valid every frame, and the shader reads it on
+    // every draw whether the scene scrolls anything or not.
+    m_uvTransformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        m_uvTransformBuffers[i] = std::make_unique<VulkanBuffer>(
+            m_deviceRef.GetAllocator(),
+            sizeof(UvTransform) * kMaxUvTransforms,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            VMA_MEMORY_USAGE_CPU_TO_GPU,
+            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    }
+
     // The three clustered-light buffers, one set per frame in flight and each
     // sized at capacity for the same reason the palette is: a storage buffer
     // descriptor has to be valid every frame whether or not the scene has
@@ -575,13 +591,14 @@ void VulkanRenderer::createDescriptorPool() {
     poolSizes[1].descriptorCount =
         static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * VulkanPipeline::kSamplersPerSceneSet;
 
-    // FOUR storage buffers per frame: the joint palette at binding 2, and the
-    // three clustered-light buffers at 5, 6 and 7. Omitting any of them makes
-    // allocateDescriptorSets throw at startup, which presents as a launch
-    // failure rather than as a rendering bug - so the count is spelled out
-    // rather than left as a number somebody has to remember to bump.
+    // FIVE storage buffers per frame: the joint palette at binding 2, the
+    // three clustered-light buffers at 5, 6 and 7, and the texture coordinate
+    // transforms at 10. Omitting any of them makes allocateDescriptorSets throw
+    // at startup, which presents as a launch failure rather than as a rendering
+    // bug - so the count is spelled out rather than left as a number somebody
+    // has to remember to bump.
     poolSizes[2].type = vk::DescriptorType::eStorageBuffer;
-    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 4u;
+    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 5u;
 
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
@@ -777,7 +794,12 @@ void VulkanRenderer::createDescriptorSets() {
             prefilteredInfo[slot] = m_environments[slot]->PrefilteredInfo();
         }
 
-        std::array<vk::WriteDescriptorSet, 10> writes{};
+        vk::DescriptorBufferInfo uvTransformInfo{};
+        uvTransformInfo.buffer = m_uvTransformBuffers[i]->GetBuffer();
+        uvTransformInfo.offset = 0;
+        uvTransformInfo.range = sizeof(UvTransform) * kMaxUvTransforms;
+
+        std::array<vk::WriteDescriptorSet, 11> writes{};
 
         writes[0].dstSet = m_descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -839,6 +861,12 @@ void VulkanRenderer::createDescriptorSets() {
         writes[9].descriptorType = vk::DescriptorType::eCombinedImageSampler;
         writes[9].descriptorCount = VulkanPipeline::kMaxEnvironmentProbes;
         writes[9].pImageInfo = prefilteredInfo.data();
+
+        writes[10].dstSet = m_descriptorSets[i];
+        writes[10].dstBinding = 10;
+        writes[10].descriptorType = vk::DescriptorType::eStorageBuffer;
+        writes[10].descriptorCount = 1;
+        writes[10].pBufferInfo = &uvTransformInfo;
 
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
@@ -1373,6 +1401,20 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
             m_paletteScratch.data(), sizeof(glm::mat4) * paletteCount);
     }
     m_renderStats.skinnedMatrices = paletteCount;
+
+    // This frame's texture coordinate transforms. Before recording, like the
+    // palettes, because a draw's push constant carries the SLOT and the buffer
+    // has to already hold what that slot points at.
+    //
+    // Uploaded UNCONDITIONALLY, and that is the point: the gather always writes
+    // the identity at slot 0, and every draw that never asked for a transform
+    // reads it. Skipping the upload when nothing scrolls would leave the shader
+    // reading a buffer nobody wrote - undefined even though the answer would
+    // have been discarded, and undefined differently on every driver.
+    const uint32_t uvTransformCount =
+        MaterialSystem::GatherUvTransforms(registry, m_uvTransformScratch, kMaxUvTransforms);
+    m_uvTransformBuffers[m_currentFrame]->UploadData(
+        m_uvTransformScratch.data(), sizeof(UvTransform) * uvTransformCount);
 
     // Culling frustum for the scene pass. Each cascade carries its own for the
     // depth pass - an object behind the camera can still cast a shadow into

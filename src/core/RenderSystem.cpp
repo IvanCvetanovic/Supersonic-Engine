@@ -33,6 +33,13 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
                                   material->alphaCutoff);
         push.emissive = glm::vec4(material->emissiveColor * material->emissiveStrength,
                                   material->occlusionStrength);
+
+        // Which texture coordinate transform this draw samples through.
+        // Resolved once per frame by MaterialSystem::GatherUvTransforms, and
+        // zero - the identity slot - when nothing resolved it, which is also
+        // what an ungathered material and a hand-built push constant both
+        // leave it at.
+        push.SetUvSlot(material->uvSlot);
     } else {
         push.albedoColor = glm::vec4(1.0f);
         push.material = glm::vec4(0.4f, 0.1f, 1.0f, 0.0f);

@@ -87,6 +87,43 @@ bool MaterialSystem::Assign(entt::registry& registry, entt::entity entity,
     return true;
 }
 
+uint32_t MaterialSystem::GatherUvTransforms(entt::registry& registry,
+                                           std::vector<UvTransform>& out,
+                                           uint32_t capacity) {
+    out.clear();
+
+    // Slot 0, unconditionally and first. Every other slot is an offset from it
+    // and every draw that never asked for a transform points at it.
+    out.push_back(UvTransform{});
+    if (capacity == 0) return 1;   // cannot happen; costs one compare to say so
+
+    for (auto entity : registry.view<MaterialComponent>()) {
+        auto& material = registry.get<MaterialComponent>(entity);
+
+        if (!material.HasUvTransform()) {
+            // Reset rather than leave alone. A material that scrolled last
+            // frame and stopped this one would otherwise keep pointing at a
+            // slot that now holds somebody else's transform.
+            material.uvSlot = 0;
+            continue;
+        }
+
+        if (static_cast<uint32_t>(out.size()) >= capacity) {
+            // Untransformed rather than out of bounds. robustBufferAccess is
+            // not enabled on this device, so a slot past the end is a device
+            // loss and not a zeroed read.
+            material.uvSlot = 0;
+            continue;
+        }
+
+        material.uvSlot = static_cast<int32_t>(out.size());
+        out.push_back(MakeUvTransform(material.uvScale, material.uvRotation,
+                                      material.uvOffset));
+    }
+
+    return static_cast<uint32_t>(out.size());
+}
+
 void MaterialSystem::ApplyImportedMaterial(const MeshMaterial& imported, MaterialComponent& out) {
     if (!imported.present) return;
 

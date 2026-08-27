@@ -564,7 +564,283 @@ static void testRenamingTheMaterialItselfKeepsItsIdAndItsEdits() {
     cleanup();
 }
 
+// --- The texture coordinate transform -------------------------------------
+//
+// Scrolling rain and a flipbook flame are one feature seen twice: the mesh
+// stands still and the texture coordinates move. The transform is per DRAW -
+// twenty flames share a material and each is on its own frame - so it travels
+// as an index into a per-frame buffer, and every failure mode of that is quiet.
+//
+// A gather that skips the identity leaves the shader reading a buffer nobody
+// wrote. One that forgets to reset a material that stopped scrolling leaves it
+// pointing at somebody else's transform. And a slot packed into the wrong bits
+// takes the unlit switch with it - which is the switch both of the materials
+// this feature was built for happen to set.
+
+// A TRANSLITERATION of transformedUV() in assets/shaders/shader.frag, and it is
+// written that way on purpose: that expression is the only one that matters and
+// the only one no test can reach. Two descriptions of the same multiply, and
+// changing one without the other is the whole risk.
+static glm::vec2 applyUv(const UvTransform& t, const glm::vec2& uv) {
+    // mat2(x, y, z, w) takes COLUMNS, so axes.xy is column 0 and axes.zw is
+    // column 1 - which is what the shader's mat2 constructor does with the
+    // same four floats.
+    return glm::vec2(t.axes.x * uv.x + t.axes.z * uv.y + t.offset.x,
+                     t.axes.y * uv.x + t.axes.w * uv.y + t.offset.y);
+}
+
+static void testTheIdentityAlwaysOccupiesSlotZero() {
+    entt::registry registry;
+    std::vector<UvTransform> out;
+
+    // Nothing in the scene at all. The buffer still has to be written: the
+    // shader indexes it on EVERY draw, and reading a storage buffer nobody
+    // wrote is undefined even where the answer is thrown away.
+    CHECK_EQ(MaterialSystem::GatherUvTransforms(registry, out, 64), 1u);
+    CHECK_EQ(out.size(), size_t(1));
+
+    CHECK_NEAR(out[0].axes.x, 1.0f);
+    CHECK_NEAR(out[0].axes.y, 0.0f);
+    CHECK_NEAR(out[0].axes.z, 0.0f);
+    CHECK_NEAR(out[0].axes.w, 1.0f);
+    CHECK_NEAR(out[0].offset.x, 0.0f);
+    CHECK_NEAR(out[0].offset.y, 0.0f);
+}
+
+static void testOnlyMaterialsThatActuallyScrollTakeASlot() {
+    entt::registry registry;
+    std::vector<UvTransform> out;
+
+    const entt::entity plain = registry.create();
+    registry.emplace<MaterialComponent>(plain);
+
+    const entt::entity scrolling = registry.create();
+    auto& rain = registry.emplace<MaterialComponent>(scrolling);
+    rain.uvOffset = glm::vec2(0.0f, -0.25f);
+
+    CHECK_EQ(MaterialSystem::GatherUvTransforms(registry, out, 64), 2u);
+
+    // The identity one points at slot 0 rather than taking a slot of its own.
+    // A scene where nothing scrolls uploads thirty-two bytes.
+    CHECK_EQ(registry.get<MaterialComponent>(plain).uvSlot, 0);
+    CHECK_MSG(registry.get<MaterialComponent>(scrolling).uvSlot != 0,
+              "a material that scrolls got a slot of its own");
+
+    const int slot = registry.get<MaterialComponent>(scrolling).uvSlot;
+    CHECK_NEAR(out[static_cast<size_t>(slot)].offset.y, -0.25f);
+}
+
+static void testAFlipbookFrameComposesTheWayItsSourceDid() {
+    // HUSK's fire is a sixteen-frame strip: scale (1/16, 1), offset frame/16.
+    // The numbers are checked against what the Bevy original computes, because
+    // "nearly the same" here is a flame showing two half frames at once.
+    const UvTransform t = MakeUvTransform(glm::vec2(1.0f / 16.0f, 1.0f), 0.0f,
+                                          glm::vec2(3.0f / 16.0f, 0.0f));
+
+    CHECK_NEAR(t.axes.x, 1.0f / 16.0f);   // U axis, scaled
+    CHECK_NEAR(t.axes.y, 0.0f);
+    CHECK_NEAR(t.axes.z, 0.0f);           // V axis, untouched
+    CHECK_NEAR(t.axes.w, 1.0f);
+    CHECK_NEAR(t.offset.x, 0.1875f);
+    CHECK_NEAR(t.offset.y, 0.0f);
+
+    // And what the shader will actually compute, since those four floats are
+    // only right if they multiply the way mat2 does. Frame 3 of 16 maps the
+    // quad's full 0..1 U range onto 0.1875..0.25 of the strip.
+    const glm::vec2 left = applyUv(t, glm::vec2(0.0f, 0.5f));
+    const glm::vec2 right = applyUv(t, glm::vec2(1.0f, 0.5f));
+    CHECK_NEAR(left.x, 0.1875f);
+    CHECK_NEAR(right.x, 0.25f);
+    CHECK_NEAR(left.y, 0.5f);
+    CHECK_NEAR(right.y, 0.5f);
+}
+
+static void testScaleHappensBeforeRotationAndTranslationAfterBoth() {
+    // The one composition-order question, and the only way to get it wrong
+    // quietly: every order agrees when the rotation is zero, which is what both
+    // of the materials that motivated this feature use.
+    //
+    // A quarter turn, scale (2, 3), then slid one to the right. Under
+    // scale-then-rotate the U axis is (0, 2); under rotate-then-scale it would
+    // be (0, 3), and nothing but a number says which one ran.
+    const UvTransform t = MakeUvTransform(glm::vec2(2.0f, 3.0f),
+                                          glm::radians(90.0f),
+                                          glm::vec2(1.0f, 0.0f));
+
+    CHECK_NEAR(t.axes.x, 0.0f);
+    CHECK_NEAR(t.axes.y, 2.0f);
+    CHECK_NEAR(t.axes.z, -3.0f);
+    CHECK_NEAR(t.axes.w, 0.0f);
+
+    // The origin lands on the translation, which is what "translate last"
+    // means and what a rotation applied after it would break.
+    const glm::vec2 origin = applyUv(t, glm::vec2(0.0f, 0.0f));
+    CHECK_NEAR(origin.x, 1.0f);
+    CHECK_NEAR(origin.y, 0.0f);
+
+    const glm::vec2 alongU = applyUv(t, glm::vec2(1.0f, 0.0f));
+    CHECK_NEAR(alongU.x, 1.0f);
+    CHECK_NEAR(alongU.y, 2.0f);
+
+    const glm::vec2 alongV = applyUv(t, glm::vec2(0.0f, 1.0f));
+    CHECK_NEAR(alongV.x, -2.0f);
+    CHECK_NEAR(alongV.y, 0.0f);
+}
+
+static void testAMaterialThatStopsScrollingGoesBackToTheIdentity() {
+    // Slots are assigned fresh every frame, so a material that scrolled and
+    // then stopped is left pointing at a slot that now holds SOMEBODY ELSE'S
+    // transform. Leaving the stale value alone looks like a rounding error and
+    // is a texture belonging to another object.
+    entt::registry registry;
+    std::vector<UvTransform> out;
+
+    const entt::entity stops = registry.create();
+    auto& material = registry.emplace<MaterialComponent>(stops);
+    material.uvOffset = glm::vec2(0.5f, 0.0f);
+
+    CHECK_EQ(MaterialSystem::GatherUvTransforms(registry, out, 64), 2u);
+    CHECK_MSG(registry.get<MaterialComponent>(stops).uvSlot != 0, "it took a slot");
+
+    registry.get<MaterialComponent>(stops).uvOffset = glm::vec2(0.0f, 0.0f);
+
+    CHECK_EQ(MaterialSystem::GatherUvTransforms(registry, out, 64), 1u);
+    CHECK_EQ(registry.get<MaterialComponent>(stops).uvSlot, 0);
+}
+
+static void testRunningOutOfSlotsDrawsUntransformedRatherThanOutOfBounds() {
+    // robustBufferAccess is not enabled on this device, so a slot past the end
+    // of the buffer is a device loss and not a zeroed read. Four materials into
+    // room for two.
+    entt::registry registry;
+    std::vector<UvTransform> out;
+
+    std::vector<entt::entity> entities;
+    for (int i = 0; i < 4; ++i) {
+        const entt::entity e = registry.create();
+        auto& material = registry.emplace<MaterialComponent>(e);
+        material.uvOffset = glm::vec2(0.1f * static_cast<float>(i + 1), 0.0f);
+        entities.push_back(e);
+    }
+
+    const uint32_t written = MaterialSystem::GatherUvTransforms(registry, out, 3);
+    CHECK_EQ(written, 3u);
+    CHECK_EQ(out.size(), size_t(3));
+
+    int dropped = 0;
+    for (entt::entity e : entities) {
+        const int slot = registry.get<MaterialComponent>(e).uvSlot;
+        CHECK_MSG(slot >= 0 && static_cast<size_t>(slot) < out.size(),
+                  "every slot handed out is inside the buffer that was written");
+        if (slot == 0) ++dropped;
+    }
+    CHECK_MSG(dropped == 2, "the two that did not fit draw untransformed");
+}
+
+static void testASlotAndTheUnlitSwitchShareAWordWithoutTouching() {
+    // The slot rides in the twelve bits above the switches. Both of the
+    // materials this feature was built for are unlit, so a slot packed one bit
+    // too low would turn every scrolling surface into a lit one - and lighting
+    // that happens to look plausible is not a bug anybody reports.
+    const int32_t kUnlitBit = 1;
+
+    int32_t flags = kUnlitBit;
+    flags = PackUvSlot(flags, 4095);
+
+    CHECK_EQ(UnpackUvSlot(flags), 4095);
+    CHECK_MSG((flags & kUnlitBit) != 0, "the unlit switch survived the packing");
+    CHECK_MSG(flags > 0, "and the sign bit was never reached");
+
+    // Repacking REPLACES rather than accumulates: a draw whose slot changes
+    // between frames must not end up with the two ORed together.
+    flags = PackUvSlot(flags, 7);
+    CHECK_EQ(UnpackUvSlot(flags), 7);
+    CHECK_MSG((flags & kUnlitBit) != 0, "and it is still unlit");
+
+    // The identity slot is what an untouched flags word already says, which is
+    // what lets a hand-built push constant - the particle path builds one -
+    // draw correctly having never heard of any of this.
+    CHECK_EQ(UnpackUvSlot(0), 0);
+}
+
+static void testAUvTransformSurvivesASaveAndLoad() {
+    // The quiet failure: a scene that writes the transform but does not read it
+    // back loads every scrolling surface as a still one, and the only symptom
+    // is that the rain has stopped. Both halves are asserted, and the write is
+    // asserted by NAME so a field renamed on one side of the codec is caught
+    // where it happens rather than by a picture.
+    cleanup();
+    entt::registry registry;
+    const auto entity = makeEntity(registry, "Rain");
+    auto& material = registry.get<MaterialComponent>(entity);
+    material.uvScale = glm::vec2(6.0f, 3.0f);
+    material.uvRotation = 0.75f;
+    material.uvOffset = glm::vec2(0.0f, -0.4f);
+
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("UvScale") != std::string::npos, "the scale was written");
+    CHECK_MSG(text.find("UvRotation") != std::string::npos, "and the rotation");
+    CHECK_MSG(text.find("UvOffset") != std::string::npos, "and the offset");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+
+    bool found = false;
+    for (auto e : loaded.view<MaterialComponent>()) {
+        const auto& m = loaded.get<MaterialComponent>(e);
+        found = true;
+        CHECK_NEAR(m.uvScale.x, 6.0f);
+        CHECK_NEAR(m.uvScale.y, 3.0f);
+        CHECK_NEAR(m.uvRotation, 0.75f);
+        CHECK_NEAR(m.uvOffset.y, -0.4f);
+    }
+    CHECK_MSG(found, "the entity came back");
+    cleanup();
+}
+
+static void testAMaterialWrittenBeforeThisExistedLoadsUntransformed() {
+    // Every scene on disk predates this feature. The fallbacks have to be the
+    // IDENTITY and not zero: a scale of zero collapses every texture
+    // coordinate onto one texel, so an absent field would repaint every old
+    // scene in a single flat colour.
+    cleanup();
+    entt::registry registry;
+    makeEntity(registry, "Old");   // makeEntity already gives it a material
+
+    std::string text = SceneSerializer::SerializeToString(registry);
+
+    // Strip the three keys back out, which is exactly what an older file is.
+    for (const char* key : {"UvScale", "UvRotation", "UvOffset"}) {
+        const size_t at = text.find(key);
+        if (at == std::string::npos) continue;
+        const size_t lineStart = text.rfind('\n', at);
+        const size_t lineEnd = text.find('\n', at);
+        if (lineStart == std::string::npos || lineEnd == std::string::npos) continue;
+        text.erase(lineStart, lineEnd - lineStart);
+    }
+    CHECK_MSG(text.find("UvScale") == std::string::npos, "the field really is gone");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+    for (auto e : loaded.view<MaterialComponent>()) {
+        const auto& m = loaded.get<MaterialComponent>(e);
+        CHECK_NEAR(m.uvScale.x, 1.0f);
+        CHECK_NEAR(m.uvScale.y, 1.0f);
+        CHECK_MSG(!m.HasUvTransform(), "and it costs no transform slot");
+    }
+    cleanup();
+}
+
 static void runTests() {
+    testAUvTransformSurvivesASaveAndLoad();
+    testAMaterialWrittenBeforeThisExistedLoadsUntransformed();
+    testTheIdentityAlwaysOccupiesSlotZero();
+    testOnlyMaterialsThatActuallyScrollTakeASlot();
+    testAFlipbookFrameComposesTheWayItsSourceDid();
+    testScaleHappensBeforeRotationAndTranslationAfterBoth();
+    testAMaterialThatStopsScrollingGoesBackToTheIdentity();
+    testRunningOutOfSlotsDrawsUntransformedRatherThanOutOfBounds();
+    testASlotAndTheUnlitSwitchShareAWordWithoutTouching();
     testTextRoundTrip();
     testGarbageIsRejected();
     testCreateAndReload();
@@ -591,4 +867,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 83)
+TEST_MAIN("test_materials", 160)

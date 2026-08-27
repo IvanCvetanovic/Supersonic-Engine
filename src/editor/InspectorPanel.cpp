@@ -529,6 +529,41 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                     ImGui::TextDisabled("(red ignored)");
                 }
             }
+
+            // The texture coordinate transform, applied to all three maps
+            // above. Collapsed by default because the identity is what almost
+            // every material wants and an always-open block of three more
+            // controls buries the ones that matter.
+            if (ImGui::TreeNode("UV Transform")) {
+                ImGui::DragFloat2("UV Scale", &material.uvScale.x, 0.01f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "How many times the texture repeats across the surface.\n"
+                        "A sixteen-frame flipbook strip is (1/16, 1) here and an\n"
+                        "offset of frame/16 below.");
+                }
+
+                float degrees = glm::degrees(material.uvRotation);
+                if (ImGui::DragFloat("UV Rotation", &degrees, 0.5f, -360.0f, 360.0f, "%.1f deg")) {
+                    material.uvRotation = glm::radians(degrees);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("About the texture's TOP-LEFT corner, not its middle.\n"
+                                      "Rotating about the centre is offset 0.5, rotate,\n"
+                                      "offset -0.5 - written out rather than guessed at.");
+                }
+
+                ImGui::DragFloat2("UV Offset", &material.uvOffset.x, 0.005f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Slides the texture. Animate this from game code and\n"
+                                      "the surface scrolls: rain, a conveyor, a waterfall.");
+                }
+
+                if (!material.HasUvTransform()) {
+                    ImGui::TextDisabled("Identity - this material costs no transform slot.");
+                }
+                ImGui::TreePop();
+            }
             }
         }
     }

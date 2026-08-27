@@ -114,7 +114,7 @@ struct UniformBufferObject {
     // every froxel and putting it in the grid would only cost memory to say so.
 };
 
-// 120 bytes, inside the 128-byte guaranteed minimum.
+// 128 bytes, exactly the guaranteed minimum, with nothing to spare.
 struct PushConstantData {
     glm::mat4 model;         // 0..63   (vertex)
     glm::vec4 albedoColor;   // 64..79  (fragment)
@@ -173,6 +173,14 @@ struct PushConstantData {
     // exactly 1.0, ambient tuned to nothing - and the result still moves when
     // somebody adds a lamp.
     static constexpr int32_t kUnlit = 1 << 0;
+
+    // The low byte is switches; the twelve bits above it are a UV transform
+    // slot. The packing itself, and the reasons for its shape, are in
+    // Components.hpp beside UvTransform - it is a protocol shared with the
+    // gather and the shader, and this is the only one of the three that can
+    // include a Vulkan header.
+    int32_t UvSlot() const { return UnpackUvSlot(flags); }
+    void SetUvSlot(int32_t slot) { flags = PackUvSlot(flags, slot); }
 };
 
 // The depth pass has its own, because it needs a different second half: which

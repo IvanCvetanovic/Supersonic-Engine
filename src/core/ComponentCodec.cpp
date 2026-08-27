@@ -220,6 +220,13 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"EmissiveStrength\": " << jsonSafe(mat->emissiveStrength, "emissiveStrength") << ",\n";
         out << indent << "  \"Transparent\": " << (mat->transparent ? "true" : "false") << ",\n";
         out << indent << "  \"AlphaCutoff\": " << jsonSafe(mat->alphaCutoff, "alphaCutoff") << ",\n";
+        // The three authored numbers, and not uvSlot - that is renderer scratch
+        // and means nothing outside the frame that wrote it.
+        out << indent << "  \"UvScale\": [" << jsonSafe(mat->uvScale.x, "uvScale.x")
+            << ", " << jsonSafe(mat->uvScale.y, "uvScale.y") << "],\n";
+        out << indent << "  \"UvRotation\": " << jsonSafe(mat->uvRotation, "uvRotation") << ",\n";
+        out << indent << "  \"UvOffset\": [" << jsonSafe(mat->uvOffset.x, "uvOffset.x")
+            << ", " << jsonSafe(mat->uvOffset.y, "uvOffset.y") << "],\n";
         writeAssetRef(out, indent, "Asset", mat->materialPath, "\n");
         out << indent << "},\n";
     }
@@ -677,6 +684,12 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         material.alphaCutoff = m["AlphaCutoff"].AsFloat(0.0f);
         material.emissiveColor = readVec3(m["Emissive"], glm::vec3(0.0f));
         material.emissiveStrength = m["EmissiveStrength"].AsFloat(0.0f);
+        // Absent from every scene written before texture coordinates could be
+        // transformed, and the fallbacks here are the identity - so those
+        // scenes load as exactly the surfaces they were.
+        material.uvScale = readVec2(m["UvScale"], glm::vec2(1.0f, 1.0f));
+        material.uvRotation = m["UvRotation"].AsFloat(0.0f);
+        material.uvOffset = readVec2(m["UvOffset"], glm::vec2(0.0f, 0.0f));
     }
 
     if (node.Has("RigidBody")) {

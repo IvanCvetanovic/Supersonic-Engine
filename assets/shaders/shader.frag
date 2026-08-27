@@ -70,6 +70,37 @@ layout(push_constant) uniform PushConstants {
 // Must match VulkanPipeline::PushConstantData::kUnlit.
 const int FLAG_UNLIT = 1;
 
+// The UV slot lives in the twelve bits ABOVE the switches. Must match
+// PushConstantData::kUvSlotShift and kUvSlotMask.
+const int UV_SLOT_SHIFT = 8;
+const int UV_SLOT_MASK = 0xFFF;
+
+// Must match Supersonic::UvTransform. std430 gives this a 32-byte stride, which
+// is what the C++ side asserts its own size against.
+struct UvTransform {
+    vec4 axes;      // xy = where U points, zw = where V points
+    vec4 offset;    // xy = translation, zw unused
+};
+
+// Every texture coordinate transform in the frame. SLOT 0 IS ALWAYS THE
+// IDENTITY and is written whether or not anything scrolls, which is what lets
+// the lookup below run with no branch and no bounds test: a draw that never
+// asked for a transform pushed a zero and reads its coordinates back unchanged.
+layout(std430, set = 0, binding = 10) readonly buffer UvTransformBuffer {
+    UvTransform transforms[];
+} uvBuffer;
+
+// The one place texture coordinates are turned into the ones actually sampled.
+//
+// Called ONCE and the result reused for all three maps, rather than per sample.
+// Albedo, normal and ORM describe the same surface, and sliding one off the
+// others is never what anybody meant - a normal map that scrolls while its
+// albedo stands still lights a texture that is not there.
+vec2 transformedUV(vec2 uv) {
+    UvTransform t = uvBuffer.transforms[(push.flags >> UV_SLOT_SHIFT) & UV_SLOT_MASK];
+    return mat2(t.axes.x, t.axes.y, t.axes.z, t.axes.w) * uv + t.offset.xy;
+}
+
 const float PI = 3.14159265359;
 
 // Cook-Torrance GGX Normal Distribution (Trowbridge-Reitz)
@@ -316,7 +347,11 @@ float spotShadowFactor(int slot, float NdotL) {
 }
 
 void main() {
-    vec4 albedoTex = texture(albedoMap, fragTexCoord);
+    // Every map on this material samples through the same transform. See
+    // transformedUV above for why it is computed once rather than three times.
+    vec2 uv = transformedUV(fragTexCoord);
+
+    vec4 albedoTex = texture(albedoMap, uv);
 
     // Alpha cutout, before anything is shaded.
     //
@@ -373,7 +408,7 @@ void main() {
     // The floor on roughness stays where it was and stays LAST, after the
     // multiply: a GGX lobe at zero roughness is a division by zero, and a map
     // is now a second way to arrive there.
-    vec3 orm = texture(ormMap, fragTexCoord).rgb;
+    vec3 orm = texture(ormMap, uv).rgb;
 
     float roughness = clamp(push.material.x * orm.g, 0.02, 1.0);
     float metallic  = clamp(push.material.y * orm.b, 0.0, 1.0);
@@ -400,7 +435,7 @@ void main() {
     mat3 TBN = mat3(T, B, N);
 
     // Unpack from [0,1] to [-1,1] and rotate into world space.
-    vec3 sampledNormal = texture(normalMap, fragTexCoord).xyz * 2.0 - 1.0;
+    vec3 sampledNormal = texture(normalMap, uv).xyz * 2.0 - 1.0;
     N = normalize(TBN * sampledNormal);
 
     vec3 V = normalize(ubo.cameraPosition.xyz - fragWorldPos);

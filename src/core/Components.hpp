@@ -366,6 +366,94 @@ struct LightComponent {
     bool castsShadow{true};
 };
 
+// A 2D affine transform on texture coordinates.
+//
+// Scrolling rain and a flipbook flame are the same feature: the mesh never
+// moves and the texture coordinates do. Without one, a sixteen-frame fire is
+// sixteen meshes or sixteen textures, and rain is a scrolling vertex buffer.
+//
+// PER DRAW rather than per material, and that is the whole reason it is not
+// simply three floats on a material asset. Twenty flames share one texture and
+// one material and each is on its OWN frame, so the number has to travel with
+// the draw. The push constant block is full at 128 bytes - the guaranteed
+// minimum - so it travels as an index into a per-frame storage buffer instead,
+// exactly as a skinned draw's joint matrices do.
+//
+// SLOT 0 IS ALWAYS THE IDENTITY and is written every frame whether anything
+// asked for a transform or not. That is what lets the shader multiply
+// unconditionally with no branch and no bounds check: a draw that never heard
+// of this - the particle path builds `PushConstantData push{}` and touches
+// nothing - reads slot 0 and gets its texture coordinates back unchanged.
+struct UvTransform {
+    // The two COLUMNS of the 2x2: xy is where U points, zw is where V points.
+    // That order is not arbitrary - it is exactly what GLSL's mat2(x,y,z,w)
+    // constructor takes, so the shader needs no transpose and cannot get one
+    // wrong.
+    glm::vec4 axes{1.0f, 0.0f, 0.0f, 1.0f};
+
+    // xy is the translation. zw are PADDING AND MUST STAY: std430 starts every
+    // vec4 on a sixteen-byte boundary, so a shorter entry here would leave the
+    // array stride at 32 on the C++ side and 24 on the shader side, and each
+    // transform after the first would read half of its neighbour.
+    glm::vec4 offset{0.0f, 0.0f, 0.0f, 0.0f};
+};
+
+// One layout, two transports: the scene pass reads these out of a storage
+// buffer and the cut-out depth pass takes one by value in its push constants.
+// The size is asserted because that is the only thing keeping the two in step.
+static_assert(sizeof(UvTransform) == 32, "UvTransform must match its std430 stride");
+
+// Builds one from the three numbers a person authors.
+//
+// SCALE, then ROTATE, then TRANSLATE - the order KHR_texture_transform
+// specifies, and the order Bevy's Affine2::from_scale_angle_translation
+// composes in, so a material ported from either arrives looking the same
+// instead of looking nearly the same.
+//
+// The columns are written out rather than built with glm::rotate and a matrix
+// multiply because the whole thing is four multiplies, and because a reader
+// checking this against the spec should be able to see the four numbers.
+inline UvTransform MakeUvTransform(const glm::vec2& scale, float rotation,
+                                   const glm::vec2& offset) {
+    const float c = std::cos(rotation);
+    const float s = std::sin(rotation);
+
+    UvTransform out;
+    // Column 0 is where U points, column 1 where V points.
+    out.axes = glm::vec4(c * scale.x, s * scale.x, -s * scale.y, c * scale.y);
+    out.offset = glm::vec4(offset.x, offset.y, 0.0f, 0.0f);
+    return out;
+}
+
+// Where a draw's transform slot rides in its flags word.
+//
+// A deliberate crowding of a field documented as "per-draw switches, one bit
+// each": the push constant block is exactly 128 bytes, the guaranteed minimum,
+// with no thirteenth byte to put an index in - and a per-draw transform can
+// only travel as a per-draw index.
+//
+// TWELVE BITS, ABOVE THE SWITCHES, and both halves of that matter. Starting at
+// 8 leaves the whole low byte to switches, so packing a slot cannot disturb the
+// unlit bit - which is exactly the bit both of the materials this feature was
+// built for happen to set, and a scrolling surface that quietly became a lit
+// one is not a bug anybody reports. Stopping at 12 leaves the sign bit alone,
+// because the field is an int32_t and shifting into bit 31 is undefined.
+//
+// Here rather than beside PushConstantData because it is a protocol between
+// three places - the draw loop, the gather and the shader - and only one of
+// them can include a Vulkan header.
+constexpr int32_t kUvSlotShift = 8;
+constexpr int32_t kUvSlotMask = 0xFFF;
+
+constexpr int32_t PackUvSlot(int32_t flags, int32_t slot) {
+    return (flags & ~(kUvSlotMask << kUvSlotShift))
+         | ((slot & kUvSlotMask) << kUvSlotShift);
+}
+
+constexpr int32_t UnpackUvSlot(int32_t flags) {
+    return (flags >> kUvSlotShift) & kUvSlotMask;
+}
+
 struct MaterialComponent {
     glm::vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
 
@@ -464,6 +552,56 @@ struct MaterialComponent {
     // density of zero is how fog is turned off: the disabled path is then the
     // same arithmetic rather than a branch that can disagree with it.
     float alphaCutoff{0.0f};
+
+    // --- The texture coordinate transform -----------------------------------
+    //
+    // Applied to EVERY map this material samples - albedo, normal and the
+    // packed ORM - because they describe the same surface and sliding one off
+    // the others is never what anybody meant.
+    //
+    // Scrolling rain and a flipbook flame are one feature seen twice: the mesh
+    // stands still and the texture coordinates move. Without it a sixteen-frame
+    // fire is sixteen meshes or sixteen textures, and rain is a vertex buffer
+    // rewritten every frame.
+    //
+    // Composed as SCALE, then ROTATION, then OFFSET, which is the order glTF's
+    // KHR_texture_transform specifies and the order every tool that authors one
+    // uses. Written as three authored numbers rather than as the matrix they
+    // become because "half the texture, a sixteenth along" is a thing a person
+    // can type and a 2x2 is not.
+    //
+    // These are PER ENTITY and MaterialSystem deliberately does not copy them
+    // off a shared asset: twenty flames share one material and each is on its
+    // own frame, so a shared asset overwriting this every frame would lock them
+    // together. The look is shared; the position in the animation is not.
+    glm::vec2 uvScale{1.0f, 1.0f};
+
+    // Radians, about the texture coordinate origin - the top-left corner, not
+    // the middle of the image. Rotating about the centre is offset(0.5) then
+    // rotate then offset(-0.5), which this can express and deliberately does
+    // not do for you: guessing a pivot is how a decal ends up half a texture
+    // away from where it was authored.
+    float uvRotation{0.0f};
+
+    glm::vec2 uvOffset{0.0f, 0.0f};
+
+    // Where this material's transform landed in the frame's transform buffer.
+    // Renderer scratch, rewritten every frame by MaterialSystem::GatherUvTransforms
+    // and meaningless outside one - the same arrangement, for the same reason,
+    // as SkinnedMeshComponent::paletteBase.
+    //
+    // ZERO IS THE IDENTITY SLOT, which is why zero is the default: a material
+    // nothing gathered, or one gathered in a frame that ran out of slots, draws
+    // untransformed rather than reading whatever the last frame left behind.
+    int32_t uvSlot{0};
+
+    // True when the three numbers above are not the identity, which is the only
+    // question the gather asks and the only reason a material takes a slot at
+    // all. A scene where nothing scrolls uploads one identity entry and stops.
+    bool HasUvTransform() const {
+        return uvScale != glm::vec2(1.0f, 1.0f) || uvRotation != 0.0f ||
+               uvOffset != glm::vec2(0.0f, 0.0f);
+    }
 
     bool warnedMissingAsset{false};
 };
