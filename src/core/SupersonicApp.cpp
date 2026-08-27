@@ -281,6 +281,26 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     // should not live inside the thing being cleared.
     m_registry.ctx().insert_or_assign<SceneManager*>(&m_sceneManager);
 
+    // The two registries a game has to reach, and only those two.
+    //
+    // NOT the renderer. A game does not need to drive a frame - the engine does
+    // that - but it does need to put geometry and pixels into one, and until
+    // this line there was no way to. MeshRegistry::Replace and
+    // TextureRegistry::ReplaceRGBA are public and documented for exactly this
+    // use, and a layer could not see either of them: m_renderer is a private
+    // unique_ptr on a class a game never holds.
+    //
+    // Anything that generates its world rather than loading it needs this.
+    // Terrain built from a heightfield is a mesh nobody exported; fog of war is
+    // a texture that changes every few frames; a minimap is both. Each was
+    // blocked outright, not made awkward.
+    //
+    // Published after the renderer is constructed, which it is - the renderer is
+    // built well above this, and these are references into it rather than copies
+    // of it, so the lifetime is the renderer's and it outlives the registry.
+    m_registry.ctx().insert_or_assign<MeshRegistry*>(&m_renderer->GetMeshRegistry());
+    m_registry.ctx().insert_or_assign<TextureRegistry*>(&m_renderer->GetTextureRegistry());
+
     // Asset identities, before the first scene is read.
     //
     // A SCAN, not an import: this reads the sidecars that are already there and
