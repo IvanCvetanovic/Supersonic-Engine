@@ -1,0 +1,577 @@
+// The game's synthesised sound effects, against the original's own arithmetic.
+//
+// Wolf Brigade ships no audio files, for the same reason it ships no art: the
+// whole aural language is generated. Every entry in `data/audio.json` is a
+// `tone` block, and `scripts/systems/audio.gd::_synth_tone` turns it into a
+// short 16-bit mono buffer at load. These eleven buffers ARE the game's sound,
+// not a placeholder for it.
+//
+// This is the strongest oracle left in the original's harness set, and the
+// reason is worth naming: these are numbers that are COMPUTATION OUTPUT. A
+// shared misreading of audio.json cannot make a square wave and a sawtooth
+// produce the same bytes. Every earlier slice of this port could, in principle,
+// have agreed with the original because both sides read a field the same wrong
+// way; this one cannot.
+//
+// WHERE THE NUMBERS COME FROM, and how to re-derive them.
+//
+// `tools/verify_audio.gd` asserts that the train sound synthesises and prints
+// its size - "synthesised PCM data (7938 bytes)" - and that is the ONLY sample
+// figure the harness reports. It checks format, mix rate and non-silence for
+// one sound out of eleven. So the harness anchors the chain but does not span
+// it, and the rest was measured directly from Godot:
+//
+//   cd <scratchpad>/synthprobe
+//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
+//       --headless --path . --script res://probe.gd     # the eleven shipped
+//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
+//       --headless --path . --script res://probe2.gd    # the authored branches
+//
+// probe.gd carries `_synth_tone` VERBATIM and reads the real
+// D:/The-Wolf-Brigade/data/audio.json. The game repository is the oracle and is
+// never edited in order to be measured, so the probe lives outside it - which
+// makes "verbatim" a claim that has to be checked rather than asserted.
+//
+// It was checked. Taking both bodies from the first `var freq :=` to the line
+// that stops synthesising - `var stream := AudioStreamWAV.new()` in the game,
+// `return bytes` in the probe - and collapsing runs of whitespace, the two are
+// 698 characters and CHARACTER-IDENTICAL. What the probe adds is only what it
+// does with the buffer afterwards. Independently, the probe's train row
+// reproduces the harness's own printed 7938. Measured 27 August 2026 against
+// Godot 4.7.1.
+//
+// THE TWO TRAPS THAT DISCRIMINATE A CARELESS PORT. Both are truncation, and
+// both are invisible in nine of the eleven sounds:
+//
+//   * `int(MIX_RATE * ms / 1000.0)` truncates toward zero. 55ms is 2425.5
+//     samples and 45ms is 1984.5, so `attack` and `shoot` come out one sample
+//     SHORTER than a round would give. The other nine divide evenly.
+//   * `int(clampf(...) * 32767.0)` truncates too. A sawtooth's first sample at
+//     full volume is int(-16383.5) = -16383, NOT -16384. `destroy` and `defeat`
+//     are the two that show it.
+//
+// A port that rounded in either place would agree with the original everywhere
+// else and be wrong about the sound of the game.
+
+#include "TestHarness.hpp"
+#include "WolfBrigadeFixture.hpp"
+
+#include "sim/AudioTones.hpp"
+#include "sim/GameData.hpp"
+
+#include <algorithm>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+using namespace WolfBrigade;
+
+namespace {
+
+const GameData& shipped() { return wb::Shipped(); }
+
+// The samples for a shipped sfx id, by way of the same lookup the game uses.
+//
+// Deliberately NOT `Tone::FromJson(data.Audio()["sfx"][id]["tone"])`: routing
+// through SoundFor is what makes these cases exercise the file/tone dispatch as
+// well as the arithmetic, and a regression that resolved every id to silence
+// would otherwise pass eleven times over on a hand-built Tone.
+std::vector<int16_t> samplesFor(const std::string& id) {
+    const Audio::Sound sound = Audio::SoundFor(shipped(), id);
+    if (sound.kind != Audio::Sound::Kind::Tone) return {};
+    return Audio::Synthesise(sound.tone);
+}
+
+int peakOf(const std::vector<int16_t>& samples) {
+    int peak = 0;
+    for (const int16_t sample : samples) peak = std::max(peak, std::abs(static_cast<int>(sample)));
+    return peak;
+}
+
+// A sample that is not there has to FAIL a check, not end the process.
+//
+// This is not defensive habit; it is a defect this suite actually had. A
+// mutation deleting the `max(1, ...)` floor from SampleCount makes Synthesise
+// return an EMPTY buffer - and MSVC's debug std::vector answers `front()` on
+// one with a blocking assertion dialog. The run did not go red. It HUNG, and
+// sat there until the process was killed by hand, which in CI is a timeout
+// rather than a failing test and reads as infrastructure trouble rather than
+// as the bug it is.
+//
+// It is the same shape as the rule the port already follows for pointers - a
+// CHECK that a pointer is non-null does not stop the next line dereferencing it
+// - applied to a container. Out of range returns a value no real sample can
+// hold, so whatever was expected, the comparison fails and says what it got.
+constexpr int kNoSample = -999999;
+
+int at(const std::vector<int16_t>& samples, size_t index) {
+    return index < samples.size() ? static_cast<int>(samples[index]) : kNoSample;
+}
+
+int lastOf(const std::vector<int16_t>& samples) {
+    return samples.empty() ? kNoSample : static_cast<int>(samples.back());
+}
+
+// One row of the probe's table.
+struct Row {
+    const char* id;
+    int samples;
+    int bytes;
+    int first;    // s[0]
+    int second;   // s[1]
+    int middle;   // s[n/2], integer division, as the probe indexes it
+    int peak;
+
+    // And the whole buffer. See the note below - the landmarks above are not
+    // enough on their own, and that is a measured fact rather than a worry.
+    long long sum;
+    long long sumOfSquares;
+};
+
+// THE WHOLE BUFFER, AND WHY THE LANDMARKS ABOVE ARE NOT ENOUGH.
+//
+// The first version of this suite asserted exactly those six numbers per sound
+// and nothing else. A mutation that narrowed the phase accumulator to single
+// precision - `float` where the GDScript uses a 64-bit float - walked through
+// all eleven sounds without failing a single check.
+//
+// The reason is arithmetic rather than luck. A float phase carries about seven
+// significant digits, so early in a buffer its error is orders of magnitude
+// below one count, and it only grows into something audible late: by sample
+// twenty-two thousand of `victory` the phase is past 457 cycles and the error
+// has climbed into the low counts. Every landmark this suite looked at - the
+// first sample, the second, the middle - was early enough to be identical
+// either way. The peak was too, because a decaying tone peaks in its opening
+// cycles.
+//
+// So both sums run over EVERY sample. A one-count difference anywhere moves the
+// sum by one, and the sum of squares catches the case where two differences
+// would cancel. Sixty-four bits is comfortable: the largest here is 27,342
+// samples peaking at 16,383, which is 7.3e12. With them, the same mutation
+// fails sixteen assertions.
+//
+// The lesson generalises past this suite: SPOT CHECKS MEASURE WHERE YOU LOOKED.
+// When the thing under test produces a buffer, assert the buffer.
+struct Checksums {
+    long long sum{0};
+    long long sumOfSquares{0};
+};
+
+Checksums checksum(const std::vector<int16_t>& samples) {
+    Checksums sums;
+    for (const int16_t sample : samples) {
+        const auto value = static_cast<long long>(sample);
+        sums.sum += value;
+        sums.sumOfSquares += value * value;
+    }
+    return sums;
+}
+
+// The eleven shipped sounds, exactly as probe.gd printed them.
+//
+// Ordered as audio.json orders them so a reader can hold the two side by side.
+// `bytes` is twice `samples` in every row and is carried anyway, because the
+// harness reports the train sound in BYTES and a port asserting only samples
+// would be comparing against half the oracle's number without saying so.
+constexpr Row kShipped[] = {
+    // id          samples  bytes    s[0]     s[1]    s[n/2]    peak
+    {"train",       3969,    7938,   11468,   11465,   -5735,   11468, 236206LL, 174051024140LL},
+    {"build",       7497,   14994,       0,     597,    6185,   13044, 286907LL, 214615700091LL},
+    {"death",       8820,   17640,  -13106,  -13004,   -6553,   13106, -578249LL, 168438565129LL},
+    {"destroy",    14994,   29988,  -16383,  -16315,   -3276,   16383, -1590780LL, 447358930706LL},
+    {"wave",       18522,   37044,   14745,   14744,    7372,   14745, 773062LL, 1342319861210LL},
+    {"victory",    22932,   45864,       0,    2048,   -7790,   16345, 130543LL, 1025778296219LL},
+    {"defeat",     27342,   54684,  -16383,  -16301,   -6553,   16383, -1166072LL, 815514343900LL},
+    {"research",    6615,   13230,   13106,   11928,     294,   13106, 6705LL, 126333109311LL},
+    {"place",       4851,    9702,       0,     718,    5396,   11409, 182519LL, 106318822013LL},
+    {"attack",      2425,    4850,    6553,    6550,   -3278,    6553, 165238LL, 34729063518LL},
+    {"shoot",       1984,    3968,       0,     670,    3089,    6500, 63599LL, 14196627301LL},
+};
+
+// ---------------------------------------------------------------------------
+
+// The whole table, in one case, because the table IS the assertion.
+//
+// Every sound, every landmark. Six numbers times eleven sounds is the sound of
+// the game pinned to the byte, and any single arithmetic slip in Synthesise
+// moves dozens of them at once.
+void testTheElevenShippedSoundsSynthesiseWhatGodotSynthesises() {
+    for (const Row& row : kShipped) {
+        const std::vector<int16_t> samples = samplesFor(row.id);
+        const std::string where = std::string(" [") + row.id + "]";
+
+        CHECK_MSG(static_cast<int>(samples.size()) == row.samples,
+                  std::string("sample count") + where + " got " +
+                      std::to_string(samples.size()) + ", expected " +
+                      std::to_string(row.samples));
+        if (static_cast<int>(samples.size()) != row.samples) continue;
+
+        CHECK_MSG(static_cast<int>(Audio::ToPcmBytes(samples).size()) == row.bytes,
+                  std::string("byte count") + where);
+        CHECK_MSG(at(samples, 0) == row.first,
+                  std::string("s[0]") + where + " got " + std::to_string(at(samples, 0)));
+        CHECK_MSG(at(samples, 1) == row.second,
+                  std::string("s[1]") + where + " got " + std::to_string(at(samples, 1)));
+        CHECK_MSG(at(samples, samples.size() / 2) == row.middle,
+                  std::string("s[n/2]") + where + " got " +
+                      std::to_string(at(samples, samples.size() / 2)));
+        CHECK_MSG(peakOf(samples) == row.peak,
+                  std::string("peak") + where + " got " + std::to_string(peakOf(samples)));
+
+        // And every sample between the landmarks, which is the assertion that
+        // actually constrains the arithmetic.
+        const Checksums sums = checksum(samples);
+        CHECK_MSG(sums.sum == row.sum,
+                  std::string("sum over the whole buffer") + where + " got " +
+                      std::to_string(sums.sum));
+        CHECK_MSG(sums.sumOfSquares == row.sumOfSquares,
+                  std::string("sum of squares") + where + " got " +
+                      std::to_string(sums.sumOfSquares));
+    }
+}
+
+// A guard on the guard.
+//
+// The checksums above are only worth carrying if a change to ONE late sample
+// moves them - which is precisely the case a landmark check cannot see. This
+// perturbs the last sample of the longest sound by a single count and requires
+// both sums to notice.
+void testOneCountAnywhereInTheBufferMovesBothChecksums() {
+    std::vector<int16_t> samples = samplesFor("defeat");
+    CHECK_MSG(samples.size() == 27342, "the longest sound is the one being perturbed");
+    if (samples.size() != 27342) return;
+
+    const Checksums before = checksum(samples);
+    samples.back() = static_cast<int16_t>(samples.back() + 1);
+    const Checksums after = checksum(samples);
+
+    CHECK_MSG(after.sum != before.sum, "one count anywhere moves the sum");
+    CHECK_MSG(after.sumOfSquares != before.sumOfSquares, "and the sum of squares");
+}
+
+// The first truncation trap, isolated so its failure names itself.
+//
+// 44100 * 55 / 1000 is 2425.5 and 44100 * 45 / 1000 is 1984.5. Nine of the
+// eleven shipped durations divide evenly into the mix rate and say nothing
+// about rounding; these two are the entire evidence, and they are why the
+// original writes `int(...)` rather than `roundi(...)`.
+void testSampleCountsTruncateRatherThanRound() {
+    CHECK_EQ(static_cast<int>(samplesFor("attack").size()), 2425);   // not 2426
+    CHECK_EQ(static_cast<int>(samplesFor("shoot").size()), 1984);    // not 1985
+
+    // The even case, so a port that truncated the WRONG quantity is still seen.
+    CHECK_EQ(static_cast<int>(samplesFor("train").size()), 3969);
+}
+
+// The second truncation trap.
+//
+// A sawtooth starts at -1.0. At vol 0.5 that is -16383.5, and truncation toward
+// zero makes it -16383 - one quieter than the -16384 a floor would give. Both
+// shipped sawtooths at vol 0.5 land on it exactly.
+void testASawtoothsFirstSampleTruncatesTowardZeroNotDownward() {
+    CHECK_EQ(at(samplesFor("destroy"), 0), -16383);
+    CHECK_EQ(at(samplesFor("defeat"), 0), -16383);
+
+    // And the positive side of the same rule, where floor and truncation agree,
+    // so the pair together pins the direction rather than just the value.
+    CHECK_EQ(static_cast<int>(samplesFor("train").front()), 11468);   // int(0.35*32767)
+}
+
+// The square wave's boundary sample: `frac < 0.5`, not `<=`.
+//
+// 210 * 105 / 44100 is 0.5 EXACTLY - the only sample in the shipped data that
+// lands on the boundary in binary floating point, which is why this is a real
+// assertion rather than a hypothetical about a comparison operator. It flips
+// sign: s[104] is +14662 and s[105] is -14661. A port written with `<=` would
+// produce +14661 there and be right about all 18521 other samples of `wave`.
+void testTheSquareWaveBoundarySampleBelongsToTheLowHalf() {
+    const std::vector<int16_t> wave = samplesFor("wave");
+    CHECK_EQ(static_cast<int>(wave.size()), 18522);
+
+    CHECK_EQ(at(wave, 104), 14662);
+    CHECK_MSG(at(wave, 105) == -14661,
+              "phase is exactly 0.5 at i=105; `frac < 0.5` puts it low");
+    CHECK_EQ(at(wave, 106), -14660);
+}
+
+// Square and triangle are NOT separated by their first sample.
+//
+// At i=0 the phase is zero, so a square gives +1.0 and a triangle gives
+// 4*|0-0.5|-1 = +1.0 as well. Both `train` and `research` therefore open at
+// +vol*32767 and a test that pinned only s[0] would not notice the two
+// waveforms being swapped. The second sample is where they part: the square is
+// still flat while the triangle has already begun ramping down.
+void testSquareAndTriangleAreDistinguishedBeyondTheirFirstSample() {
+    const std::vector<int16_t> square = samplesFor("train");      // 660Hz, vol 0.35
+    const std::vector<int16_t> triangle = samplesFor("research"); // 990Hz, vol 0.40
+
+    // The shape of the trap: both open at the top of their range.
+    CHECK_EQ(at(square, 0), 11468);
+    CHECK_EQ(at(triangle, 0), 13106);
+
+    // And the samples that actually tell them apart.
+    CHECK_EQ(at(square, 1), 11465);      // barely moved: still +1.0
+    CHECK_EQ(at(triangle, 1), 11928);    // ramping: 4*|frac-0.5|-1
+    CHECK_MSG(at(triangle, 1) < at(triangle, 0) - 1000,
+              "a triangle leaves its peak immediately");
+    CHECK_MSG(at(square, 1) > at(square, 0) - 10, "a square holds its level");
+}
+
+// The decay envelope, from both ends.
+//
+// It is linear from full to silence across the buffer, so the LAST sample of a
+// decaying tone is near zero whatever the waveform - and the peak is the first
+// sample for a square or a saw, which start at full deflection. An
+// implementation that dropped the envelope would keep every s[0] correct and
+// every s[n-1] wrong.
+void testTheDecayEnvelopeRunsLinearlyFromFullToSilence() {
+    const std::vector<int16_t> train = samplesFor("train");
+    CHECK_EQ(peakOf(train), 11468);
+    CHECK_MSG(at(train, 0) == 11468, "a square peaks on its first sample");
+    CHECK_EQ(static_cast<int>(train.back()), 2);       // silence, but signed
+
+    const std::vector<int16_t> research = samplesFor("research");
+    CHECK_EQ(static_cast<int>(research.back()), -1);   // the sign survives the fade
+
+    // Halfway through, a decaying square sits near half its opening amplitude.
+    // Carried as measured rather than as reasoning: the exact -5735 depends on
+    // which half-cycle sample n/2 lands in as well as on the envelope.
+    CHECK_EQ(static_cast<int>(train[train.size() / 2]), -5735);
+}
+
+// ---------------------------------------------------------------------------
+// Branches the shipped data cannot reach.
+//
+// Everything above runs on values the game ships, which is the point - but the
+// shipped file sets no `decay`, no unknown waveform, no zero duration and no
+// volume above one. Those branches exist in `_synth_tone` and would be
+// untested on both sides, so they were authored and measured through Godot the
+// same way (probe2.gd), and the port is checked harder than the original is.
+
+// `decay` absent means TRUE, and the other reading changes all eleven sounds.
+//
+// Nothing in audio.json sets `decay`, so every shipped sound reaches this
+// default. A port that defaulted it to false would produce eleven sounds that
+// never fade and would still match every s[0] in the table above.
+void testDecayDefaultsToOnAndTurningItOffHoldsTheAmplitude() {
+    Audio::Tone flat;
+    flat.freq = 660.0;
+    flat.ms = 90;
+    flat.wave = "square";
+    flat.vol = 0.35;
+    flat.decay = false;
+
+    const std::vector<int16_t> held = Audio::Synthesise(flat);
+    CHECK_EQ(static_cast<int>(held.size()), 3969);
+    CHECK_EQ(at(held, 0), 11468);
+    CHECK_EQ(static_cast<int>(held[held.size() / 2]), -11468);   // no fade at all
+    CHECK_EQ(static_cast<int>(held.back()), 11468);              // still at full
+
+    // The same spec with the default: the shipped train, which fades to 2.
+    Audio::Tone fading = flat;
+    fading.decay = true;
+    CHECK_EQ(lastOf(Audio::Synthesise(fading)), 2);
+
+    // And the default really is on, read off a spec that omits the key.
+    Supersonic::Json::Value spec;
+    spec.Set("freq", Supersonic::Json::Value(660.0));
+    CHECK_MSG(Audio::Tone::FromJson(spec).decay, "an unset `decay` decays");
+}
+
+// An unrecognised waveform is a sine, exactly as the GDScript's `_` arm says.
+//
+// Measured, not assumed: a spec identical to `build` but naming a waveform that
+// does not exist produces `build` byte for byte. A typo in a waveform name is a
+// sound that still plays.
+void testAnUnrecognisedWaveformFallsBackToASine() {
+    Audio::Tone noise;
+    noise.freq = 320.0;
+    noise.ms = 170;
+    noise.wave = "noise";
+    noise.vol = 0.4;
+
+    const std::vector<int16_t> fallback = Audio::Synthesise(noise);
+    CHECK_MSG(fallback == samplesFor("build"), "an unknown waveform is the sine `build` is");
+    CHECK_EQ(static_cast<int>(fallback.size()), 7497);
+    CHECK_EQ(static_cast<int>(fallback[1]), 597);
+}
+
+// A tone too short to have a sample still has one.
+//
+// `maxi(1, ...)` is in the original, and it is a real decision rather than
+// defensive noise: a zero-length buffer is not a quiet sound, it is a stream
+// that cannot be played.
+void testAToneShorterThanASingleSampleStillProducesOne() {
+    Audio::Tone instant;
+    instant.ms = 0;
+
+    const std::vector<int16_t> one = Audio::Synthesise(instant);
+    CHECK_EQ(static_cast<int>(one.size()), 1);
+    CHECK_EQ(static_cast<int>(Audio::ToPcmBytes(one).size()), 2);
+    CHECK_EQ(static_cast<int>(one.front()), 0);      // a sine starts at zero
+
+    CHECK_EQ(instant.SampleCount(), 1);
+
+    // 44100 * 1 / 1000 is 44.1, so one millisecond is 44 samples and not 45.
+    Audio::Tone oneMs;
+    oneMs.ms = 1;
+    CHECK_EQ(oneMs.SampleCount(), 44);
+}
+
+// Volume above 1.0 is clamped, not wrapped.
+//
+// The clamp is the only thing between a mis-authored `vol` and a sample that
+// overflows its own type. At vol 2.0 a sawtooth opens at -2.0, and the clamp
+// makes that exactly -32767 - not -32768, and not a positive number.
+void testAVolumeAboveOneIsClampedRatherThanWrapped() {
+    Audio::Tone loud;
+    loud.freq = 90.0;
+    loud.ms = 340;
+    loud.wave = "saw";
+    loud.vol = 2.0;
+
+    const std::vector<int16_t> clipped = Audio::Synthesise(loud);
+    CHECK_EQ(at(clipped, 0), -32767);
+    CHECK_EQ(peakOf(clipped), 32767);
+    CHECK_MSG(clipped[clipped.size() / 2] == -13106, "the envelope still applies under the clamp");
+}
+
+// An empty spec is a 440Hz sine, and every default is load-bearing.
+//
+// Four defaults at once - freq 440, ms 120, sine, vol 0.5 - so a port that got
+// any one of them wrong produces a different buffer here while every shipped
+// sound, which sets all four, stays correct.
+void testAnEmptySpecIsTheGDScriptsFourDefaults() {
+    const Audio::Tone fallback = Audio::Tone::FromJson(Supersonic::Json::Value{});
+
+    CHECK_NEAR(static_cast<float>(fallback.freq), 440.0f);
+    CHECK_EQ(fallback.ms, 120);
+    CHECK_MSG(fallback.wave == "sine", "an unset waveform is a sine");
+    CHECK_NEAR(static_cast<float>(fallback.vol), 0.5f);
+
+    const std::vector<int16_t> samples = Audio::Synthesise(fallback);
+    CHECK_EQ(static_cast<int>(samples.size()), 5292);
+    CHECK_EQ(at(samples, 1), 1026);
+    CHECK_EQ(peakOf(samples), 16305);
+}
+
+// ---------------------------------------------------------------------------
+// The lookup, which is where the port's SHAPE differs from the original's.
+
+// Every shipped sfx id resolves to a tone, and there are eleven of them.
+//
+// The count matters as much as the kinds: audio.json is the one data file whose
+// contents are an inventory of sounds rather than a schema, and a file that
+// arrived here truncated would show up as a missing id rather than a bad value.
+void testEveryShippedSoundIsASynthesisedToneAndThereAreEleven() {
+    int tones = 0;
+    for (const Row& row : kShipped) {
+        const Audio::Sound sound = Audio::SoundFor(shipped(), row.id);
+        CHECK_MSG(sound.kind == Audio::Sound::Kind::Tone, std::string("tone for ") + row.id);
+        if (sound.kind == Audio::Sound::Kind::Tone) ++tones;
+    }
+    CHECK_EQ(tones, 11);
+    CHECK_EQ(static_cast<int>(shipped().Audio()["sfx"].AsObject().size()), 11);
+}
+
+// A FILE WINS OVER A TONE, and this assertion is the only thing holding it.
+//
+// The original is an `if file / elif tone` chain, so a spec carrying both plays
+// the file - or, if the file is missing, plays SILENCE. It never falls back to
+// the tone. That is deliberate: audio.json's own comment says "Swap tone->file
+// to use a real sound, no code", and a fallback would let a placeholder outlive
+// the asset that replaced it.
+//
+// The port reports Kind::File and leaves existence to the caller that owns a
+// resource system, which means nothing in the sim can enforce the rule - so if
+// this case were dropped, a later reader could reorder the two checks and every
+// other test here would still pass.
+void testAFileWinsOverAToneEvenWhenBothAreAuthored() {
+    const wb::ScratchData authored("audio", "audio.json",
+        "{\n"
+        "  \"sfx\": {\n"
+        "    \"both\":     { \"file\": \"res://sfx/real.wav\",\n"
+        "                    \"tone\": { \"freq\": 660, \"ms\": 90, \"wave\": \"square\" } },\n"
+        "    \"fileonly\": { \"file\": \"res://sfx/only.wav\" },\n"
+        "    \"toneonly\": { \"tone\": { \"freq\": 220, \"ms\": 100 } },\n"
+        "    \"neither\":  { }\n"
+        "  },\n"
+        "  \"music\": { \"menu\": {}, \"game\": {} },\n"
+        "  \"volumes\": { \"master_db\": 0.0, \"sfx_db\": 0.0, \"music_db\": -6.0 }\n"
+        "}\n");
+
+    GameData data;
+    data.LoadAll(authored.Path());
+
+    const Audio::Sound both = Audio::SoundFor(data, "both");
+    CHECK_MSG(both.kind == Audio::Sound::Kind::File, "a file beats a tone in the same spec");
+    CHECK_MSG(both.file == "res://sfx/real.wav", "and it is the authored path");
+
+    CHECK_MSG(Audio::SoundFor(data, "fileonly").kind == Audio::Sound::Kind::File, "file only");
+    CHECK_MSG(Audio::SoundFor(data, "toneonly").kind == Audio::Sound::Kind::Tone, "tone only");
+
+    // A spec with neither key is silence, not a default beep.
+    CHECK_MSG(Audio::SoundFor(data, "neither").kind == Audio::Sound::Kind::None,
+              "an sfx with neither file nor tone is silent");
+}
+
+// An id nobody authored is silence, and asking for one does not crash.
+//
+// The original caches a null stream against the id and plays nothing. A port
+// that answered with a default 440Hz sine would make a typo audible instead of
+// visible, which is the harder bug of the two to find.
+void testAnUnknownIdResolvesToSilenceRatherThanADefaultTone() {
+    const Audio::Sound missing = Audio::SoundFor(shipped(), "trumpet");
+    CHECK_MSG(missing.kind == Audio::Sound::Kind::None, "an unauthored id is silent");
+    CHECK_MSG(missing.file.empty(), "and carries no path");
+
+    // The empty string, which is what a caller building an id by concatenation
+    // hands over when one half of it is missing.
+    CHECK_MSG(Audio::SoundFor(shipped(), "").kind == Audio::Sound::Kind::None, "empty id");
+}
+
+// The bytes are little-endian pairs, low byte first.
+//
+// Here because the harness reports sizes in bytes and the endianness is the one
+// thing a sample-level test cannot see. A port that wrote the high byte first
+// would match every assertion above and produce noise on a real device.
+void testPcmBytesArePairedLowByteFirst() {
+    const std::vector<int16_t> train = samplesFor("train");
+    const std::vector<uint8_t> bytes = Audio::ToPcmBytes(train);
+
+    CHECK_EQ(static_cast<int>(bytes.size()), 7938);   // the harness's own number
+    CHECK_EQ(static_cast<int>(bytes.size()), static_cast<int>(train.size()) * 2);
+
+    // 11468 is 0x2CCC: low byte 0xCC, high byte 0x2C.
+    CHECK_EQ(static_cast<int>(bytes[0]), 0xCC);
+    CHECK_EQ(static_cast<int>(bytes[1]), 0x2C);
+
+    // And a negative sample, where a sign-extension slip would show.
+    // -16383 is 0xC001 in two's complement.
+    const std::vector<uint8_t> saw = Audio::ToPcmBytes(samplesFor("destroy"));
+    CHECK_EQ(static_cast<int>(saw[0]), 0x01);
+    CHECK_EQ(static_cast<int>(saw[1]), 0xC0);
+}
+
+void runTests() {
+    testTheElevenShippedSoundsSynthesiseWhatGodotSynthesises();
+    testOneCountAnywhereInTheBufferMovesBothChecksums();
+    testSampleCountsTruncateRatherThanRound();
+    testASawtoothsFirstSampleTruncatesTowardZeroNotDownward();
+    testTheSquareWaveBoundarySampleBelongsToTheLowHalf();
+    testSquareAndTriangleAreDistinguishedBeyondTheirFirstSample();
+    testTheDecayEnvelopeRunsLinearlyFromFullToSilence();
+    testDecayDefaultsToOnAndTurningItOffHoldsTheAmplitude();
+    testAnUnrecognisedWaveformFallsBackToASine();
+    testAToneShorterThanASingleSampleStillProducesOne();
+    testAVolumeAboveOneIsClampedRatherThanWrapped();
+    testAnEmptySpecIsTheGDScriptsFourDefaults();
+    testEveryShippedSoundIsASynthesisedToneAndThereAreEleven();
+    testAFileWinsOverAToneEvenWhenBothAreAuthored();
+    testAnUnknownIdResolvesToSilenceRatherThanADefaultTone();
+    testPcmBytesArePairedLowByteFirst();
+}
+
+} // namespace
+
+TEST_MAIN("test_wb_audio", 120)

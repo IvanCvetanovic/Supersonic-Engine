@@ -15,6 +15,7 @@
 # binaries that touch no Vulkan entry point, exactly as the engine's own do.
 
 add_library(WolfBrigadeSim STATIC
+    AudioTones.cpp
     Building.cpp
     DataValidator.cpp
     GameData.cpp

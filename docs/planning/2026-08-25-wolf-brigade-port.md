@@ -425,6 +425,7 @@ re-derive them written beside them.
 | combat | `verify_combat` | **soldier 36/60, Town Hall 934/1000** — and the second one is the first number in the whole port that DISAGREED. Plus the lane index, orders beating instincts, and the arrow pool. Nine mutations, all caught after two blind spots were closed. |
 | worker economy | `verify_economy` 2, 2b + `verify_units` FSM | **tree 79/100, banked +20, carried 1** — 140 steps of 0.2s between a tree at 1300 and a deposit at 1000, matched exactly, for both resources. Plus the FSM (spawns idle at 30 hp, a move order strips the y, arrival releases the order) and the flee reflex. Twelve mutations; **four survived the first pass** and needed cases the original's own harness cannot see. |
 | economy state | `verify_economy` 1, 2c, 3 | Extraction clamps (200 → 170 → 0), spending is atomic, and `resources_changed` carries the new TOTAL. Difficulty scales the opening balance to the numbers the presets imply — 450 on Easy, 240 on Hard — and owned meta lands flat on top of it, not through it. Six mutations, all caught. Sections 2 and 2b, the worker gather/deliver loop, wait for `unit.gd`. |
+| tone synthesis | `verify_audio` + a verbatim probe | **The strongest oracle in the whole set, because the numbers are computation output.** Eleven synthesised sounds reproduced sample for sample - counts, first, second and middle samples, peaks, and a sum and sum-of-squares over every sample of all eleven buffers. Matched on the first run. Sixteen mutations, fifteen caught; the sixteenth is proved equivalent rather than excused. |
 | match boot (`main.gd`) | `verify_snapshot`, `verify_meta` award-wiring, `verify_save` wave-recording | **The whole-match numbers, which no earlier slice could reach**: 270 wood, 963 hit points, six units, three gathering, one enemy alive — off a real boot rather than a board built by hand. Twenty-six mutations, twenty-five caught; the one survivor was predicted and is why the sink stays minimal. Found three real defects on the way: a restored endless run whose director was not endless, a re-booted match carrying the last run's wave clock, and a fresh run that never saw the Armory levels it was bought with. |
 
 **A fixture that could not fail, caught by its own mutation.** `ScaleWaveCount`
@@ -889,17 +890,10 @@ Both are now the harness's own assertions. Six mutations, all caught.
   — but both are presentation, and `Match.hpp`'s not-ported ledger already
   defers them by name. Revisiting is a decision, not an oversight.
 
-**Two slices the survey found and did NOT take yet**, both with the reason they
-rank where they do:
+**Two slices the survey found. The first was taken the same day; the second is
+the next item.**
 
-1. **Tone synthesis** (`audio.gd::_synth_tone`, ~30 lines). The strongest
-   remaining oracle in the whole set: eleven sound effects whose byte counts and
-   sample values are deterministic DSP output, with two truncation traps that
-   discriminate a careless port — `int(44100 * 55 / 1000.0)` is 2425 from
-   2425.5, and a saw's first sample is `int(-16383.5)` = -16383, not -16384. It
-   needs one free function and no Godot-shaped abstraction, and it is the only
-   candidate the not-ported ledger does not already defer. The game ships no
-   audio files, exactly as it ships no art, so these tones ARE the sound.
+1. **Tone synthesis** (`audio.gd::_synth_tone`, ~30 lines) — **DONE, below.**
 2. **`BuildPlacement`** (`build_placement.gd`, ~120 lines). Weaker oracle —
    behaviour with decisions in it rather than computed numbers — but it is
    gameplay, and it unblocks two things this port has already written down as
@@ -924,6 +918,56 @@ migrating would flip no assertion at all.
 That last point is the real finding hiding inside the migration question. The
 gap in `test_wb_buildings` is not its fixture — it is that no case there ever
 steps an enemy at a tower.
+
+### The tones are the sound, and they are the best oracle in the set — 27 August 2026
+
+Wolf Brigade ships no audio files for the same reason it ships no art: every
+sound in `audio.json` is a `tone` block — a frequency, a duration, a waveform
+and a volume — that the game turns into a short 16-bit mono buffer at load. So
+a port without them is a silent game rather than a game whose audio arrives
+later, and `sim/AudioTones.{hpp,cpp}` is now that half of `audio.gd`. Only that
+half: the voice pool, the round-robin, the mute flag and the dB busses are
+engine-side plumbing and belong with whoever owns a device.
+
+**Why this is the strongest oracle the port has had.** Every number is
+COMPUTATION OUTPUT. The first three slices asserted structure — transitions,
+key counts, balances recomputed from the same file both sides read — where a
+shared misreading passes both sides. A shared misreading of `audio.json` cannot
+make a square wave and a sawtooth produce the same bytes. All eleven sounds
+matched on the first run.
+
+**Two truncation traps live in the shipped data, and both discriminate.** The
+sample count is `int(44100 * ms / 1000.0)`, truncated toward zero rather than
+rounded — 55ms is 2425.5 samples and 45ms is 1984.5, so `attack` and `shoot`
+come out one sample SHORTER than a rounding port gives, while the other nine
+agree either way. And a sawtooth's first sample at full volume is
+`int(-16383.5)`, which truncates to **-16383** and not to the -16384 a floor
+would give; `destroy` and `defeat` are the two that reach it.
+
+**A mutation walked through eleven sounds, and fixing it is the lesson.** The
+first version pinned four samples per sound — first, second, middle and peak —
+and narrowing the phase accumulator to single precision changed none of them. A
+float phase is good to about seven digits, so its error is far below one count
+early in a buffer and only grows into something visible late; every sample the
+suite happened to look at was early. The fix is a sum and a sum of squares over
+EVERY sample of all eleven buffers, computed the same way on both sides. With
+them the same mutation fails sixteen assertions. **Spot checks measure where you
+looked; a checksum measures the buffer.**
+
+**And one mutation survives on purpose.** Truncating the sample count and
+flooring it are indistinguishable, because they differ only for negative values
+and every negative value is clamped to one sample. That is a *proof* that the
+mutation cannot change an answer, not an admission that nothing is watching, and
+it is written in the header beside the line. The truncation is spelled the way
+the GDScript spells it so the two files read the same — which is the whole of
+why it is a truncation.
+
+**The probe, and why it is not in the game repository.** The harness only
+reports one buffer's size ("7938 bytes"), so the rest of the table came from
+running `_synth_tone` verbatim over the real `audio.json` in a throwaway Godot
+project outside the game tree. Its `train` row reproduces the harness's own
+7938, which is what says the copy is faithful. The game repository is the
+oracle; it does not get edited in order to be measured.
 
 ---
 
