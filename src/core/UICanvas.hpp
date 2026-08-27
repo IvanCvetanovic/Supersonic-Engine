@@ -87,6 +87,29 @@ std::vector<UIRect> LayoutStack(const std::vector<glm::vec2>& sizes, bool horizo
                                 float spacing, UIAnchor anchor, const glm::vec2& offset,
                                 const UIRect& screen);
 
+// The same layout, into an AREA that is not the screen, at a scale that is.
+//
+// Once stacks nest, "where does this block go" and "how big is an authored
+// unit" stop being the same question. The overload above answers both from one
+// rect, which is right for a stack anchored to the screen and wrong for a stack
+// anchored inside its parent: deriving the scale from a 200-pixel-tall row
+// would shrink its contents to a fifth of the size the identical row gets at
+// the top level.
+//
+// So `area` places and `scale` sizes. A caller laying out a tree computes the
+// scale ONCE from the game rect and passes it down unchanged, which is what
+// makes a button the same size wherever it is nested.
+std::vector<UIRect> LayoutStack(const std::vector<glm::vec2>& sizes, bool horizontal,
+                                float spacing, UIAnchor anchor, const glm::vec2& offset,
+                                const UIRect& area, float scale);
+
+// What a stack of these children would MEASURE, in authored units.
+//
+// The same block arithmetic LayoutStack does before it places anything, minus
+// the placing - so a parent can reserve room for a nested stack without laying
+// it out twice and without the two disagreeing.
+glm::vec2 MeasureStack(const std::vector<glm::vec2>& sizes, bool horizontal, float spacing);
+
 // Where a world point lands on the screen, or false when it does not.
 //
 // Returns false for a point behind the camera or outside the depth range, and

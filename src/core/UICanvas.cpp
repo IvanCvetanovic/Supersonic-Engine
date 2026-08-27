@@ -25,13 +25,33 @@ float ScaleFor(const glm::vec2& screenSize) {
     return screenSize.y / kReferenceHeight;
 }
 
+glm::vec2 MeasureStack(const std::vector<glm::vec2>& sizes, bool horizontal, float spacing) {
+    glm::vec2 block(0.0f);
+    for (size_t i = 0; i < sizes.size(); ++i) {
+        if (horizontal) {
+            block.x += sizes[i].x + (i > 0 ? spacing : 0.0f);
+            block.y = std::max(block.y, sizes[i].y);
+        } else {
+            block.y += sizes[i].y + (i > 0 ? spacing : 0.0f);
+            block.x = std::max(block.x, sizes[i].x);
+        }
+    }
+    return block;
+}
+
 std::vector<UIRect> LayoutStack(const std::vector<glm::vec2>& sizes, bool horizontal,
                                 float spacing, UIAnchor anchor, const glm::vec2& offset,
                                 const UIRect& screen) {
+    return LayoutStack(sizes, horizontal, spacing, anchor, offset, screen,
+                       ScaleFor(screen.size()));
+}
+
+std::vector<UIRect> LayoutStack(const std::vector<glm::vec2>& sizes, bool horizontal,
+                                float spacing, UIAnchor anchor, const glm::vec2& offset,
+                                const UIRect& screen, float scale) {
     std::vector<UIRect> rects;
     if (sizes.empty()) return rects;
 
-    const float scale = ScaleFor(screen.size());
     const float gap = spacing * scale;
 
     // The block first, so it can be placed as one thing.

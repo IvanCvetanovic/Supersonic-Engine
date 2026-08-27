@@ -4,6 +4,8 @@
 
 #include "core/UICanvas.hpp"
 
+struct ImFont;
+
 namespace Supersonic {
 
 // Draws the scene's UI components over the game.
@@ -33,6 +35,29 @@ void Render(entt::registry& registry, const UIRect& gameRect,
             const UICanvas::UIPointer& pointer,
             const UICanvas::UIKeyboard& keyboard,
             const glm::mat4& viewProj);
+
+// Where every stacked element ended up, without drawing anything.
+//
+// Render computes this and uses it for both the input pass and the draw pass;
+// it is public because two other callers have a real claim on the answer. A
+// game may want to know where its own HUD landed - to put a tooltip beside a
+// button, or to place a world-space marker against a panel edge - and a test
+// wants the arithmetic without an ImGui context.
+//
+// STACKS NEST. A stack that is a child of another stack is measured by its own
+// contents and placed inside its parent's slot; only a stack whose parent is
+// not a stack is placed against `gameRect`. Depth is capped, so a hierarchy
+// with a cycle in it stops rather than hanging the frame.
+//
+// `font` may be null when nothing in the tree carries text - a dock of panels
+// and buttons never measures a glyph. It is dereferenced only for
+// UITextComponent, and a null font with text in the tree is a crash rather
+// than a guess, because a UI measured with no font is not a UI.
+//
+// `scale` sizes and `gameRect` places, and they stay separate all the way
+// down: an authored unit is the same size at every depth.
+UICanvas::StackedRects LayoutStacks(entt::registry& registry, const UIRect& gameRect,
+                                    ImFont* font, float scale);
 
 } // namespace UISystem
 

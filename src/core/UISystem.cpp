@@ -5,6 +5,11 @@
 
 #include "imgui.h"
 
+#include <algorithm>
+#include <functional>
+#include <unordered_map>
+#include <vector>
+
 namespace Supersonic {
 
 namespace UISystem {
@@ -72,16 +77,92 @@ UIRect placedRect(const UICanvas::StackedRects& stacked, entt::entity entity, UI
 // pass. Letting each derive it would be two places that have to agree about
 // where a button is, which is the failure UISystem.hpp's header already warns
 // about for anchors and would be worse here.
-UICanvas::StackedRects layoutStacks(entt::registry& registry, const UIRect& gameRect,
-                                    ImFont* font, float scale) {
+UICanvas::StackedRects layoutStacksImpl(entt::registry& registry, const UIRect& gameRect,
+                                        ImFont* font, float scale) {
     UICanvas::StackedRects stacked;
     auto stacks = registry.view<UIStackComponent>();
     if (stacks.begin() == stacks.end()) return stacked;
 
-    for (auto [stackEntity, stack] : stacks.each()) {
-        if (!stack.visible) continue;
+    // Children by parent, gathered ONCE.
+    //
+    // The previous shape walked every HierarchyComponent per stack, which is
+    // fine for one menu and quadratic for a dock. It also could not nest,
+    // which is the reason this was rewritten.
+    std::unordered_map<entt::entity, std::vector<entt::entity>> childrenOf;
+    for (auto [entity, hierarchy] : registry.view<HierarchyComponent>().each()) {
+        if (hierarchy.parent == entt::null) continue;
+        childrenOf[hierarchy.parent].push_back(entity);
+    }
 
-        // Children, by the hierarchy the rest of the engine already uses.
+    // What one element measures, in authored units.
+    //
+    // A NESTED STACK MEASURES ITS OWN CONTENTS, which is the whole of what was
+    // missing: the chain below used to test text, panel, button and field and
+    // stop, so a stack inside a stack failed every branch, was skipped, and
+    // then laid itself out against the SCREEN - landing on top of whatever its
+    // parent had put there. Nothing reported it, because both passes agreed.
+    //
+    // Recursive, and bounded by a depth limit. NOT for cycles - those are
+    // unreachable, because an entity has one parent, so every member of a
+    // cycle has a stack for a parent and is skipped by the root test below
+    // before any of this runs. The cap is for legitimate DEPTH, and it is the
+    // one thing here a malformed-but-acyclic tree could otherwise run away
+    // with.
+    std::function<bool(entt::entity, int, glm::vec2&)> measure =
+        [&](entt::entity entity, int depth, glm::vec2& out) -> bool {
+        if (depth > 16) return false;
+
+        if (const auto* text = registry.try_get<UITextComponent>(entity)) {
+            if (!text->visible) return false;
+            // Measured at the authored size and divided back out, because
+            // LayoutStack works in authored units and applies scale itself.
+            const ImVec2 measured =
+                font->CalcTextSizeA(text->fontSize * scale, FLT_MAX, 0.0f, text->text.c_str());
+            out = glm::vec2(measured.x, measured.y) / scale;
+            return true;
+        }
+        if (const auto* panel = registry.try_get<UIPanelComponent>(entity)) {
+            if (!panel->visible) return false;
+            out = panel->size;
+            return true;
+        }
+        if (const auto* button = registry.try_get<UIButtonComponent>(entity)) {
+            out = button->size;
+            return true;
+        }
+        if (const auto* field = registry.try_get<UITextFieldComponent>(entity)) {
+            out = field->size;
+            return true;
+        }
+        if (const auto* nested = registry.try_get<UIStackComponent>(entity)) {
+            if (!nested->visible) return false;
+
+            const auto it = childrenOf.find(entity);
+            if (it == childrenOf.end()) return false;
+
+            std::vector<glm::vec2> sizes;
+            for (entt::entity child : it->second) {
+                glm::vec2 childSize(0.0f);
+                if (measure(child, depth + 1, childSize)) sizes.push_back(childSize);
+            }
+            if (sizes.empty()) return false;
+
+            out = UICanvas::MeasureStack(sizes, nested->horizontal, nested->spacing);
+            return true;
+        }
+        return false;
+    };
+
+    // One stack, into the area it was given. Recurses so a nested stack is
+    // placed inside its parent's slot rather than against the screen.
+    std::function<void(entt::entity, const UIStackComponent&, const UIRect&, int)> place =
+        [&](entt::entity stackEntity, const UIStackComponent& stack, const UIRect& area,
+            int depth) {
+        if (depth > 16) return;
+
+        const auto it = childrenOf.find(stackEntity);
+        if (it == childrenOf.end()) return;
+
         struct Child {
             entt::entity entity{entt::null};
             glm::vec2 size{0.0f};
@@ -89,38 +170,13 @@ UICanvas::StackedRects layoutStacks(entt::registry& registry, const UIRect& game
         };
         std::vector<Child> children;
 
-        for (auto [entity, hierarchy] : registry.view<HierarchyComponent>().each()) {
-            if (hierarchy.parent != stackEntity) continue;
-
+        for (entt::entity child : it->second) {
             glm::vec2 size(0.0f);
-            bool isUi = false;
-            if (const auto* text = registry.try_get<UITextComponent>(entity)) {
-                if (!text->visible) continue;
-                // Measured at the authored size and divided back out, because
-                // LayoutStack works in authored units and applies scale itself.
-                const ImVec2 measured =
-                    font->CalcTextSizeA(text->fontSize * scale, FLT_MAX, 0.0f,
-                                        text->text.c_str());
-                size = glm::vec2(measured.x, measured.y) / scale;
-                isUi = true;
-            } else if (const auto* panel = registry.try_get<UIPanelComponent>(entity)) {
-                if (!panel->visible) continue;
-                size = panel->size;
-                isUi = true;
-            } else if (const auto* button = registry.try_get<UIButtonComponent>(entity)) {
-                size = button->size;
-                isUi = true;
-            } else if (const auto* field = registry.try_get<UITextFieldComponent>(entity)) {
-                size = field->size;
-                isUi = true;
-            }
-            if (!isUi) continue;
-
-            const auto* ordering = registry.try_get<UIOrderComponent>(entity);
-            children.push_back(Child{entity, size, ordering ? ordering->order : 0});
+            if (!measure(child, depth + 1, size)) continue;
+            const auto* ordering = registry.try_get<UIOrderComponent>(child);
+            children.push_back(Child{child, size, ordering ? ordering->order : 0});
         }
-
-        if (children.empty()) continue;
+        if (children.empty()) return;
 
         // Stable, so children nobody ranked keep the order the view produced -
         // the same rule the renderer's sort key follows.
@@ -133,12 +189,41 @@ UICanvas::StackedRects layoutStacks(entt::registry& registry, const UIRect& game
         sizes.reserve(children.size());
         for (const Child& child : children) sizes.push_back(child.size);
 
-        const std::vector<UIRect> rects = UICanvas::LayoutStack(
-            sizes, stack.horizontal, stack.spacing, stack.anchor, stack.offset, gameRect);
+        // The AREA places and the game rect's SCALE sizes. Passing the area as
+        // both would shrink a nested row's contents in proportion to the row.
+        const std::vector<UIRect> rects =
+            UICanvas::LayoutStack(sizes, stack.horizontal, stack.spacing, stack.anchor,
+                                  stack.offset, area, scale);
 
         for (size_t i = 0; i < children.size() && i < rects.size(); ++i) {
             stacked[children[i].entity] = rects[i];
+
+            if (const auto* nested = registry.try_get<UIStackComponent>(children[i].entity)) {
+                place(children[i].entity, *nested, rects[i], depth + 1);
+            }
         }
+    };
+
+    // Only ROOTS start from the screen. A stack whose parent is itself a stack
+    // is reached by recursion, with its parent's slot as its area - running it
+    // here as well would place it twice and the second answer would win.
+    //
+    // WHICH answer wins depends on entt's view order, and this file already
+    // says elsewhere that that order is not a contract. So removing this skip
+    // is a bug whose symptom is non-deterministic, and a test cannot pin it -
+    // the suite covers the containment invariant it protects instead. Said
+    // here so the guard is not mistaken for something the tests are watching.
+    for (auto [stackEntity, stack] : stacks.each()) {
+        if (!stack.visible) continue;
+
+        const auto* hierarchy = registry.try_get<HierarchyComponent>(stackEntity);
+        if (hierarchy != nullptr && hierarchy->parent != entt::null &&
+            registry.valid(hierarchy->parent) &&
+            registry.try_get<UIStackComponent>(hierarchy->parent) != nullptr) {
+            continue;
+        }
+
+        place(stackEntity, stack, gameRect, 0);
     }
 
     return stacked;
@@ -162,6 +247,11 @@ glm::vec3 worldPositionOf(const entt::registry& registry, entt::entity entity) {
 }
 
 } // namespace
+
+UICanvas::StackedRects LayoutStacks(entt::registry& registry, const UIRect& gameRect,
+                                    ImFont* font, float scale) {
+    return layoutStacksImpl(registry, gameRect, font, scale);
+}
 
 void Render(entt::registry& registry, const UIRect& gameRect,
             const UICanvas::UIPointer& pointer,
@@ -188,7 +278,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // Layout BEFORE input, and input before drawing. A stacked button has to
     // be hit-tested against where the stack put it, and drawn there too - all
     // three from one answer.
-    const UICanvas::StackedRects stacked = layoutStacks(registry, gameRect, font, scale);
+    const UICanvas::StackedRects stacked = layoutStacksImpl(registry, gameRect, font, scale);
 
     // Before drawing, so a button drawn this frame reflects the pointer this
     // frame rather than lagging it by one.

@@ -9,6 +9,9 @@
 #include "TestHarness.hpp"
 #include "core/Components.hpp"
 #include "core/UICanvas.hpp"
+#include "core/UISystem.hpp"
+
+#include <entt/entt.hpp>
 
 #include <vector>
 
@@ -673,7 +676,206 @@ static void testAnEmptyStackIsEmptyRatherThanAPoint() {
     CHECK_EQ(rects.size(), size_t{0});
 }
 
+// --- Nested stacks -------------------------------------------------------
+//
+// A stack inside a stack used to be skipped entirely: the measurement chain
+// tested text, panel, button and field and stopped, so a nested stack failed
+// every branch, was left out of its parent's block, and then placed itself
+// against the SCREEN - landing on top of whatever the parent had put there.
+// Nothing reported it, because the input pass and the draw pass agreed with
+// each other. Godot nests containers freely and any dock deeper than one level
+// needs this.
+
+void testMeasureStackCountsTheGapsBetweenAndNotAfter() {
+    // n children have n-1 gaps. A stack that trails one is half a gap off
+    // centre and looks like nothing is wrong.
+    const std::vector<glm::vec2> three{{100.0f, 20.0f}, {60.0f, 30.0f}, {80.0f, 20.0f}};
+
+    const glm::vec2 column = UICanvas::MeasureStack(three, false, 10.0f);
+    CHECK_NEAR(column.y, 90.0f);    // 20 + 30 + 20 and TWO gaps
+    CHECK_NEAR(column.x, 100.0f);   // the widest child
+
+    const glm::vec2 row = UICanvas::MeasureStack(three, true, 10.0f);
+    CHECK_NEAR(row.x, 260.0f);
+    CHECK_NEAR(row.y, 30.0f);       // the tallest child
+
+    CHECK_NEAR(UICanvas::MeasureStack({}, false, 10.0f).x, 0.0f);
+
+    const std::vector<glm::vec2> one{{50.0f, 10.0f}};
+    CHECK_NEAR(UICanvas::MeasureStack(one, false, 10.0f).y, 10.0f);   // no trailing gap
+}
+
+void testAnAreaPlacesAndAScaleSizesAndTheyAreDifferentQuestions() {
+    // The bug this prevents: deriving the scale from the area would shrink a
+    // nested row's contents in proportion to the row. A 200-tall slot inside a
+    // 1080-tall screen would draw its buttons at a fifth size.
+    const UIRect slot{{100.0f, 100.0f}, {400.0f, 300.0f}};
+    const std::vector<glm::vec2> sizes{{100.0f, 20.0f}, {100.0f, 20.0f}};
+
+    const std::vector<UIRect> inSlot =
+        UICanvas::LayoutStack(sizes, false, 8.0f, UIAnchor::TopLeft, glm::vec2(0.0f), slot, 1.0f);
+    CHECK_EQ(static_cast<int>(inSlot.size()), 2);
+    if (inSlot.size() != 2) return;
+
+    // At scale 1 a child is its authored size, wherever it was put.
+    CHECK_NEAR(inSlot[0].size().x, 100.0f);
+    CHECK_NEAR(inSlot[0].size().y, 20.0f);
+    CHECK_MSG(inSlot[0].min.x >= slot.min.x && inSlot[0].min.y >= slot.min.y,
+              "the block was placed into the area it was given");
+
+    // The screen overload derives its scale from what it is handed, which is
+    // right for a screen and is exactly what must not happen for a slot.
+    const std::vector<UIRect> derived =
+        UICanvas::LayoutStack(sizes, false, 8.0f, UIAnchor::TopLeft, glm::vec2(0.0f), slot);
+    CHECK_MSG(derived[0].size().x < inSlot[0].size().x,
+              "deriving the scale from a small area shrinks the contents - the bug");
+}
+
+void testAStackInsideAStackIsPlacedInsideItsParent() {
+    // Panels only, so no glyph is measured and the font is never dereferenced -
+    // which is what lets this run with no ImGui context.
+    entt::registry registry;
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+
+    const entt::entity outer = registry.create();
+    auto& outerStack = registry.emplace<UIStackComponent>(outer);
+    outerStack.horizontal = false;
+    outerStack.spacing = 0.0f;
+    outerStack.anchor = UIAnchor::TopLeft;
+
+    const entt::entity top = registry.create();
+    registry.emplace<UIPanelComponent>(top).size = glm::vec2(100.0f, 40.0f);
+    registry.emplace<HierarchyComponent>(top).parent = outer;
+    registry.emplace<UIOrderComponent>(top).order = 0;
+
+    const entt::entity row = registry.create();
+    auto& rowStack = registry.emplace<UIStackComponent>(row);
+    rowStack.horizontal = true;
+    rowStack.spacing = 0.0f;
+    registry.emplace<HierarchyComponent>(row).parent = outer;
+    registry.emplace<UIOrderComponent>(row).order = 1;
+
+    const entt::entity left = registry.create();
+    registry.emplace<UIPanelComponent>(left).size = glm::vec2(30.0f, 20.0f);
+    registry.emplace<HierarchyComponent>(left).parent = row;
+    registry.emplace<UIOrderComponent>(left).order = 0;
+
+    const entt::entity right = registry.create();
+    registry.emplace<UIPanelComponent>(right).size = glm::vec2(30.0f, 20.0f);
+    registry.emplace<HierarchyComponent>(right).parent = row;
+    registry.emplace<UIOrderComponent>(right).order = 1;
+
+    const UICanvas::StackedRects placed =
+        UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+
+    // Every leaf placed, INCLUDING the two inside the nested row. Before this
+    // they were absent from the parent's block and laid out against the screen.
+    CHECK_MSG(placed.count(top) == 1, "the plain panel was placed");
+    CHECK_MSG(placed.count(left) == 1, "and the left child of the nested row");
+    CHECK_MSG(placed.count(right) == 1, "and the right one");
+    if (placed.count(top) == 0 || placed.count(left) == 0 || placed.count(right) == 0) return;
+
+    const UIRect topRect = placed.at(top);
+    const UIRect leftRect = placed.at(left);
+    const UIRect rightRect = placed.at(right);
+
+    // The row sits BELOW the panel above it, because the parent reserved twenty
+    // units of height for it. Skip the nested stack and the parent block is 40
+    // tall rather than 60, and the row lands at the top of the screen.
+    CHECK_MSG(leftRect.min.y >= topRect.max.y - 0.001f,
+              "the nested row got its own slot under the panel above it");
+
+    CHECK_NEAR(leftRect.size().x, 30.0f);
+    CHECK_NEAR(leftRect.size().y, 20.0f);
+    CHECK_MSG(leftRect.min.x < rightRect.min.x, "and ran along the row in order");
+    CHECK_NEAR(rightRect.min.x - leftRect.min.x, 30.0f);
+}
+
+void testANestedStackIsNotAlsoPlacedAgainstTheScreen() {
+    // A stack whose parent is a stack must be reached ONLY by recursion. Run it
+    // from the top level as well and it is placed twice with the second answer
+    // silently winning - which is how a nested row ends up at the screen anchor
+    // whatever its parent decided.
+    entt::registry registry;
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+
+    const entt::entity outer = registry.create();
+    auto& outerStack = registry.emplace<UIStackComponent>(outer);
+    outerStack.anchor = UIAnchor::BottomRight;   // far from the nested default
+    outerStack.spacing = 0.0f;
+
+    const entt::entity row = registry.create();
+    registry.emplace<UIStackComponent>(row).horizontal = true;
+    registry.emplace<HierarchyComponent>(row).parent = outer;
+
+    const entt::entity leaf = registry.create();
+    registry.emplace<UIPanelComponent>(leaf).size = glm::vec2(40.0f, 20.0f);
+    registry.emplace<HierarchyComponent>(leaf).parent = row;
+
+    const UICanvas::StackedRects placed =
+        UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+
+    CHECK_MSG(placed.count(leaf) == 1, "the leaf was placed");
+    if (placed.count(leaf) == 0) return;
+
+    // The nested stack's own anchor is the TopLeft default. Its parent anchors
+    // bottom-right, so a leaf placed through the parent lands bottom-right and
+    // one placed against the screen lands top-left.
+    CHECK_MSG(placed.at(leaf).min.x > screen.size().x * 0.5f,
+              "the leaf followed its PARENT's anchor, not the screen's");
+    CHECK_MSG(placed.at(leaf).min.y > screen.size().y * 0.5f, "on both axes");
+
+    // And the leaf is inside the row that owns it, which is the invariant the
+    // anchor check above is really about.
+    CHECK_MSG(placed.count(row) == 1, "the nested row was itself placed");
+    if (placed.count(row) == 0) return;
+    const UIRect rowRect = placed.at(row);
+    const UIRect leafRect = placed.at(leaf);
+    CHECK_MSG(leafRect.min.x >= rowRect.min.x - 0.001f &&
+                  leafRect.max.x <= rowRect.max.x + 0.001f,
+              "a child never leaves the slot its parent gave it");
+}
+
+void testACycleIsUnreachableRatherThanGuardedAgainst() {
+    // A mutation removing the depth cap SURVIVED this suite, and chasing that
+    // down is the useful part: a cycle is not caught by the cap, it is
+    // unreachable before the cap is ever consulted.
+    //
+    // The reason is structural. An entity has ONE parent, so the only cycles
+    // expressible are A->B->A and A->A - and in every one of them each member
+    // has a stack for a parent, which is exactly the test the root loop uses to
+    // skip it. Nothing in a cycle is ever a root, so nothing in a cycle is ever
+    // laid out.
+    //
+    // The cap therefore guards legitimate DEPTH, not cycles. It is asserted
+    // here as what it is rather than left reading as cycle protection.
+    entt::registry registry;
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+
+    const entt::entity a = registry.create();
+    const entt::entity b = registry.create();
+    registry.emplace<UIStackComponent>(a);
+    registry.emplace<UIStackComponent>(b);
+    registry.emplace<HierarchyComponent>(a).parent = b;
+    registry.emplace<HierarchyComponent>(b).parent = a;
+
+    const entt::entity leaf = registry.create();
+    registry.emplace<UIPanelComponent>(leaf).size = glm::vec2(10.0f, 10.0f);
+    registry.emplace<HierarchyComponent>(leaf).parent = a;
+
+    const UICanvas::StackedRects placed = UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+
+    CHECK_MSG(placed.empty(),
+              "nothing in a cycle is a root, so nothing in a cycle is placed at all");
+    CHECK_MSG(placed.count(leaf) == 0, "including a leaf hanging off one");
+}
+
 static void runTests() {
+    testMeasureStackCountsTheGapsBetweenAndNotAfter();
+    testAnAreaPlacesAndAScaleSizesAndTheyAreDifferentQuestions();
+    testAStackInsideAStackIsPlacedInsideItsParent();
+    testANestedStackIsNotAlsoPlacedAgainstTheScreen();
+    testACycleIsUnreachableRatherThanGuardedAgainst();
     testScaleIsOneAtTheReferenceHeight();
     testScaleSurvivesADegenerateScreen();
     testTopLeftOffsetsInwardFromTheCorner();
@@ -717,4 +919,4 @@ static void runTests() {
     testAnEmptyStackIsEmptyRatherThanAPoint();
 }
 
-TEST_MAIN("test_uicanvas", 106)
+TEST_MAIN("test_uicanvas", 125)
