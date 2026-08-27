@@ -36,6 +36,10 @@ Match::Layout Match::Layout::FromData(const GameData& data) {
     layout.townHallX = world["town_hall_spawn_x"].AsFloat(1500.0f);
     layout.playerSpawnX = world["player_spawn_x"].AsFloat(1680.0f);
     layout.playerSpawnSpacing = world["player_spawn_spacing"].AsFloat(60.0f);
+
+    const Value& input = world["input"];
+    layout.pickRadius = input["unit_pick_radius"].AsFloat(52.0f);
+    layout.formationSpacing = input["formation_spacing"].AsFloat(46.0f);
     return layout;
 }
 
@@ -49,6 +53,11 @@ Match::Match(const GameData& data, Profile& profile, std::string runPath)
     m_bus.waveStarted.Connect([this](int index) { OnWaveStarted(index); });
     m_bus.gameWon.Connect([this] { OnGameOver(true); });
     m_bus.gameLost.Connect([this] { OnGameOver(false); });
+
+    // Last, so the selection's own prune handlers run after the director has
+    // been told - the order does not matter today, and saying which one it is
+    // costs nothing and stops it mattering later.
+    m_selection.Connect();
 }
 
 Match::~Match() = default;
@@ -120,6 +129,9 @@ void Match::ClearBoard() {
     // previous run's placement still open over a board that no longer has
     // the resources it was priced against.
     m_placement.Cancel();
+
+    // A selection cannot survive the board it pointed at.
+    m_selection.Clear();
 
     m_lane.Clear();
     m_projectiles.Clear();

@@ -18,6 +18,7 @@ add_library(WolfBrigadeSim STATIC
     AudioTones.cpp
     BuildPlacement.cpp
     Building.cpp
+    Commands.cpp
     DataValidator.cpp
     GameData.cpp
     GameState.cpp
@@ -25,6 +26,7 @@ add_library(WolfBrigadeSim STATIC
     Lane.cpp
     Match.cpp
     Projectiles.cpp
+    Selection.cpp
     Progression.cpp
     ResourceNode.cpp
     SaveIds.cpp

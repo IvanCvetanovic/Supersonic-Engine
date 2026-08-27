@@ -87,8 +87,9 @@ struct EventBus {
     // Building lifecycle. A raw pointer rather than a handle, because the thing
     // that owns the buildings is the thing listening - and it is the only one
     // that can outlive them.
-    // A building was PLACED - a site, with no progress in it yet. Distinct
-    // from completed, which is the same building some time later.
+    //
+    // PLACED is a site with no progress in it yet, which is a different moment
+    // from COMPLETED - the same building, some time later.
     Signal<class Building*> buildingPlaced;
 
     Signal<class Building*> buildingCompleted;
@@ -129,8 +130,15 @@ struct EventBus {
     Signal<class Unit*> unitSpawned;
     Signal<class Unit*> unitDied;
 
-    // Wave and win/lose flow. The selection and placement signals arrive with
-    // the input slice that emits them.
+    // The selection changed - units, a building, or nothing.
+    //
+    // Carries NOTHING, exactly as the original declares it. A contextual
+    // panel rebuilds from the selection it can already see; handing it a
+    // list here would be a second copy of the truth, and the two would
+    // disagree the first time an entity died between the emit and the read.
+    Signal<> selectionChanged;
+
+    // Wave and win/lose flow.
     Signal<int> waveStarted;
     Signal<int> waveCleared;
     Signal<> allWavesCleared;

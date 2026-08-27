@@ -8,6 +8,7 @@
 
 #include "core/Json.hpp"
 #include "sim/BuildPlacement.hpp"
+#include "sim/Commands.hpp"
 #include "sim/Building.hpp"
 #include "sim/EventBus.hpp"
 #include "sim/GameData.hpp"
@@ -16,6 +17,7 @@
 #include "sim/Progression.hpp"
 #include "sim/Projectiles.hpp"
 #include "sim/ResourceNode.hpp"
+#include "sim/Selection.hpp"
 #include "sim/Snapshot.hpp"
 #include "sim/Unit.hpp"
 #include "sim/WaveDirector.hpp"
@@ -87,6 +89,15 @@ public:
         float townHallX{1500.0f};
         float playerSpawnX{1680.0f};
         float playerSpawnSpacing{60.0f};
+
+        // Read from world.json's `input` block. These two were deferred by
+        // the boot slice as presentation and that was half right: the drag
+        // threshold and the touch hold time are, but these are not. A pick
+        // radius decides WHAT THE PLAYER SELECTED and a formation spacing
+        // decides WHERE THEIR UNITS GO, which are both answers a test can
+        // be wrong about.
+        float pickRadius{52.0f};
+        float formationSpacing{46.0f};
 
         static Layout FromData(const GameData& data);
     };
@@ -286,6 +297,13 @@ public:
     BuildPlacement& Placement() { return m_placement; }
     const BuildPlacement& Placement() const { return m_placement; }
 
+    // Who is picked, and what turns a tap into an order. Owned here because
+    // the original owns them the same way - siblings under main, wired to
+    // each other once at boot.
+    class Selection& Picked() { return m_selection; }
+    const class Selection& Picked() const { return m_selection; }
+    class Commands& Orders() { return m_orders; }
+
     // `main.gd::_back_cancels_placement`, ported whole because it is a PURE
     // PREDICATE and the original says it was kept that way on purpose - so a
     // harness could verify the gate without tripping the `quit()` in the other
@@ -475,6 +493,8 @@ private:
     // has, where BuildPlacement is a child node of main handed the world
     // container to place into.
     BuildPlacement m_placement{*this};
+    Selection m_selection{*this};
+    Commands m_orders{*this, m_selection};
 
     // unique_ptr, and it is load-bearing twice over.
     //
