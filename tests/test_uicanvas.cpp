@@ -870,7 +870,136 @@ void testACycleIsUnreachableRatherThanGuardedAgainst() {
     CHECK_MSG(placed.count(leaf) == 0, "including a leaf hanging off one");
 }
 
+// --- Images are first-class UI elements ----------------------------------
+//
+// The widget set was text, panel, button and field. None of them can show a
+// picture, which is a minimap, a fog overlay, a portrait, an item icon and a
+// crosshair all missing for one reason.
+//
+// The half worth testing here is that an image LAYS OUT like everything else -
+// that it is measured, stacked and ordered rather than being a special case
+// bolted to the draw pass. The pixels need a device and are proved elsewhere.
+
+void testAnImageIsMeasuredAndStackedLikeAnyOtherElement() {
+    entt::registry registry;
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+
+    const entt::entity column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.horizontal = false;
+    stack.spacing = 0.0f;
+    stack.anchor = UIAnchor::TopLeft;
+
+    const entt::entity portrait = registry.create();
+    auto& image = registry.emplace<UIImageComponent>(portrait);
+    image.size = glm::vec2(64.0f, 64.0f);
+    image.texture = 1234;   // any non-zero handle
+    registry.emplace<HierarchyComponent>(portrait).parent = column;
+    registry.emplace<UIOrderComponent>(portrait).order = 0;
+
+    const entt::entity caption = registry.create();
+    registry.emplace<UIPanelComponent>(caption).size = glm::vec2(64.0f, 16.0f);
+    registry.emplace<HierarchyComponent>(caption).parent = column;
+    registry.emplace<UIOrderComponent>(caption).order = 1;
+
+    const UICanvas::StackedRects placed =
+        UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+
+    CHECK_MSG(placed.count(portrait) == 1, "the image was placed by the stack");
+    CHECK_MSG(placed.count(caption) == 1, "and so was the panel under it");
+    if (placed.count(portrait) == 0 || placed.count(caption) == 0) return;
+
+    CHECK_NEAR(placed.at(portrait).size().x, 64.0f);
+    CHECK_NEAR(placed.at(portrait).size().y, 64.0f);
+
+    // The panel sits BELOW the image, which is only true if the image's height
+    // was reserved. An unmeasured image would let the panel start at the top.
+    CHECK_MSG(placed.at(caption).min.y >= placed.at(portrait).max.y - 0.001f,
+              "the image reserved its own height in the column");
+}
+
+void testAnInvisibleImageTakesNoSpace() {
+    // The same rule text and panels follow: hidden means gone from the layout,
+    // not present and transparent. A HUD that hides a portrait should close the
+    // gap rather than leave a hole.
+    entt::registry registry;
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+
+    const entt::entity column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.spacing = 0.0f;
+    stack.anchor = UIAnchor::TopLeft;
+
+    const entt::entity hidden = registry.create();
+    auto& image = registry.emplace<UIImageComponent>(hidden);
+    image.size = glm::vec2(64.0f, 64.0f);
+    image.texture = 7;
+    image.visible = false;
+    registry.emplace<HierarchyComponent>(hidden).parent = column;
+    registry.emplace<UIOrderComponent>(hidden).order = 0;
+
+    const entt::entity shown = registry.create();
+    registry.emplace<UIPanelComponent>(shown).size = glm::vec2(64.0f, 16.0f);
+    registry.emplace<HierarchyComponent>(shown).parent = column;
+    registry.emplace<UIOrderComponent>(shown).order = 1;
+
+    const UICanvas::StackedRects placed =
+        UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+
+    CHECK_MSG(placed.count(hidden) == 0, "a hidden image is not placed at all");
+    CHECK_MSG(placed.count(shown) == 1, "the visible panel still is");
+    if (placed.count(shown) == 0) return;
+
+    CHECK_MSG(placed.at(shown).min.y <= screen.min.y + 0.001f,
+              "and it closed up to the top rather than leaving the gap");
+}
+
+void testAnImageNestsInsideAStackToo() {
+    // The dock case: a row of portraits inside a column. Both features have to
+    // work together, and neither test above would notice if only one did.
+    entt::registry registry;
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+
+    const entt::entity column = registry.create();
+    auto& outer = registry.emplace<UIStackComponent>(column);
+    outer.spacing = 0.0f;
+    outer.anchor = UIAnchor::TopLeft;
+
+    const entt::entity row = registry.create();
+    auto& inner = registry.emplace<UIStackComponent>(row);
+    inner.horizontal = true;
+    inner.spacing = 0.0f;
+    registry.emplace<HierarchyComponent>(row).parent = column;
+
+    const entt::entity left = registry.create();
+    auto& a = registry.emplace<UIImageComponent>(left);
+    a.size = glm::vec2(32.0f, 32.0f);
+    a.texture = 1;
+    registry.emplace<HierarchyComponent>(left).parent = row;
+    registry.emplace<UIOrderComponent>(left).order = 0;
+
+    const entt::entity right = registry.create();
+    auto& b = registry.emplace<UIImageComponent>(right);
+    b.size = glm::vec2(32.0f, 32.0f);
+    b.texture = 2;
+    registry.emplace<HierarchyComponent>(right).parent = row;
+    registry.emplace<UIOrderComponent>(right).order = 1;
+
+    const UICanvas::StackedRects placed =
+        UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+
+    CHECK_MSG(placed.count(left) == 1 && placed.count(right) == 1,
+              "both portraits in the nested row were placed");
+    if (placed.count(left) == 0 || placed.count(right) == 0) return;
+
+    CHECK_MSG(placed.at(left).min.x < placed.at(right).min.x, "side by side, in order");
+    CHECK_NEAR(placed.at(right).min.x - placed.at(left).min.x, 32.0f);
+}
+
 static void runTests() {
+    testAnImageIsMeasuredAndStackedLikeAnyOtherElement();
+    testAnInvisibleImageTakesNoSpace();
+    testAnImageNestsInsideAStackToo();
     testMeasureStackCountsTheGapsBetweenAndNotAfter();
     testAnAreaPlacesAndAScaleSizesAndTheyAreDifferentQuestions();
     testAStackInsideAStackIsPlacedInsideItsParent();
@@ -919,4 +1048,4 @@ static void runTests() {
     testAnEmptyStackIsEmptyRatherThanAPoint();
 }
 
-TEST_MAIN("test_uicanvas", 125)
+TEST_MAIN("test_uicanvas", 140)

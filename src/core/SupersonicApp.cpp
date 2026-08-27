@@ -306,6 +306,7 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     // immediate buffer must survive a scene load that clears the registry.
     m_registry.ctx().insert_or_assign<WorldShapes*>(&m_worldShapes);
 
+    m_registry.ctx().insert_or_assign<UIImageStore*>(&m_renderer->GetUIImageStore());
     m_registry.ctx().insert_or_assign<MeshRegistry*>(&m_renderer->GetMeshRegistry());
     m_registry.ctx().insert_or_assign<TextureRegistry*>(&m_renderer->GetTextureRegistry());
 

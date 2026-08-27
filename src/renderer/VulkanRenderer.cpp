@@ -528,6 +528,10 @@ void VulkanRenderer::createUniformBuffers() {
             VMA_MEMORY_USAGE_CPU_TO_GPU,
             VMA_ALLOCATION_CREATE_MAPPED_BIT);
     };
+    // After the command pool exists, which it does by here - the uploads it
+    // performs submit and wait on it.
+    m_uiImages = std::make_unique<UIImageStore>(m_deviceRef, m_commandPool);
+
     m_worldShapeBuffers.resize(MAX_FRAMES_IN_FLIGHT);
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         // Sized for the shape buffer's own ceiling, so an upload can never

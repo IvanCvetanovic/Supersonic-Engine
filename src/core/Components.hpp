@@ -1277,6 +1277,45 @@ struct UITextComponent {
 };
 
 // A rectangle: a backdrop, a bar, a crosshair, a menu panel.
+// A picture in the UI.
+//
+// The widget set was text, panel, button and field - four things, none of which
+// can show an image. That is a minimap, a fog overlay, a portrait, an item
+// icon, a logo and a crosshair, all absent for the same reason.
+//
+// The handle is OPAQUE, and deliberately a plain integer rather than a texture
+// type. Components.hpp is included by gameplay code that must not need Vulkan
+// or ImGui in its translation unit, and the UI draw path needs an ImTextureID -
+// so the value is passed through untouched and interpreted only at the point of
+// drawing. Zero means "nothing to draw", which is what an image whose texture
+// has not finished uploading is.
+//
+// Get one from the renderer's UI image service, published in the registry
+// context; it is the thing that owns the pixels and the device resources.
+struct UIImageComponent {
+    UIAnchor anchor{UIAnchor::TopLeft};
+    glm::vec2 offset{24.0f, 24.0f};
+    glm::vec2 size{128.0f, 128.0f};
+
+    // An ImTextureID, carried as an integer. See the note above.
+    uint64_t texture{0};
+
+    // The sub-rectangle of the texture to show, 0..1. The whole thing by
+    // default. An atlas is the reason this exists - one upload, many icons -
+    // and a minimap that shows only the explored region is the other.
+    glm::vec2 uvMin{0.0f, 0.0f};
+    glm::vec2 uvMax{1.0f, 1.0f};
+
+    // Multiplied into the image. White leaves it alone; alpha is what lets a
+    // fog layer sit over a minimap, and what lets an unavailable icon grey out
+    // without a second asset.
+    glm::vec4 tint{1.0f, 1.0f, 1.0f, 1.0f};
+
+    float cornerRadius{0.0f};
+
+    bool visible{true};
+};
+
 struct UIPanelComponent {
     UIAnchor anchor{UIAnchor::TopLeft};
     glm::vec2 offset{24.0f, 24.0f};

@@ -126,6 +126,11 @@ UICanvas::StackedRects layoutStacksImpl(entt::registry& registry, const UIRect& 
             out = panel->size;
             return true;
         }
+        if (const auto* image = registry.try_get<UIImageComponent>(entity)) {
+            if (!image->visible) return false;
+            out = image->size;
+            return true;
+        }
         if (const auto* button = registry.try_get<UIButtonComponent>(entity)) {
             out = button->size;
             return true;
@@ -349,6 +354,33 @@ void Render(entt::registry& registry, const UIRect& gameRect,
             draw->AddLine(toVec(origin), toVec(tip), color, thickness);
             break;
         }
+        }
+    }
+
+    // Images first within a layer, so a panel can frame one and a label can
+    // read on top of it. The same reasoning the type order already follows.
+    for (auto [entity, image] : registry.view<UIImageComponent>().each()) {
+        if (!image.visible) continue;
+        if (image.texture == 0) continue;   // still uploading, or never set
+        if (layerOf(registry, entity) != layer) continue;
+
+        const UIRect rect = placedRect(stacked, entity, image.anchor, image.offset,
+                                       image.size, gameRect, scale);
+
+        // Rounded needs the rounded overload, and ImGui only offers that one
+        // without UVs - so a rounded image shows the whole texture. Said here
+        // rather than discovered: an atlas icon asking for a corner radius
+        // would otherwise silently show the entire sheet.
+        if (image.cornerRadius > 0.0f) {
+            draw->AddImageRounded(static_cast<ImTextureID>(image.texture),
+                                  toVec(rect.min), toVec(rect.max),
+                                  ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),
+                                  toColor(image.tint), image.cornerRadius * scale);
+        } else {
+            draw->AddImage(static_cast<ImTextureID>(image.texture),
+                           toVec(rect.min), toVec(rect.max),
+                           toVec(image.uvMin), toVec(image.uvMax),
+                           toColor(image.tint));
         }
     }
 

@@ -10,6 +10,7 @@
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanSwapchain.hpp"
 #include "renderer/VulkanPipeline.hpp"
+#include "renderer/UIImageStore.hpp"
 #include "renderer/VulkanBuffer.hpp"
 #include "renderer/VulkanImage.hpp"
 #include "renderer/VulkanOffscreen.hpp"
@@ -108,6 +109,10 @@ public:
     // screenshot readback.
     vk::CommandPool GetCommandPool() const { return m_commandPool; }
 
+    // Pixels a game owns, as something the UI can draw. Owned here because
+    // it holds device resources and needs the renderer's command pool.
+    UIImageStore& GetUIImageStore() { return *m_uiImages; }
+
     MeshRegistry& GetMeshRegistry() { return *m_meshRegistry; }
     TextureRegistry& GetTextureRegistry() { return *m_textureRegistry; }
 
@@ -201,6 +206,8 @@ private:
     // are: the GPU is still reading last frame's while this frame is being
     // written, and one shared buffer would be a write into memory a draw is
     // mid-flight over.
+    std::unique_ptr<UIImageStore> m_uiImages;
+
     std::unique_ptr<VulkanPipeline> m_worldShapePipeline;
     std::vector<std::unique_ptr<VulkanBuffer>> m_worldShapeBuffers;
 
