@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "core/AudioClip.hpp"
 #include "core/Json.hpp"
 #include "sim/GameData.hpp"
 
@@ -92,6 +93,19 @@ std::vector<int16_t> Synthesise(const Tone& tone);
 // bytes" for the train sound - and a port that asserted samples would be
 // comparing against half of the oracle's number without saying so.
 std::vector<uint8_t> ToPcmBytes(const std::vector<int16_t>& samples);
+
+// A synthesised tone as something the engine's mixer will take.
+//
+// The buffer is mono 16-bit at kMixRate, which is exactly what AudioClip
+// describes - so this is a field copy rather than a conversion, and it is here
+// rather than in the caller so the sample rate and the bit depth cannot drift
+// apart from the synthesiser that produced them.
+//
+// Register it with AudioEngine::AddClip under a name, then Play that name. The
+// engine's cache is keyed by string and consults itself before the filesystem,
+// so a generated sound and a shipped file are the same thing to everything
+// downstream.
+Supersonic::AudioClip ToClip(const Tone& tone);
 
 // What a sound id resolves to, from `audio.gd::stream_for`.
 //

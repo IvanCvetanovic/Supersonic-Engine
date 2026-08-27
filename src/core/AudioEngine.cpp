@@ -352,6 +352,32 @@ bool AudioEngine::UnloadClip(const std::string& path) {
     return m_clips.erase(path) > 0;
 }
 
+const AudioClip* AudioEngine::AddClip(const std::string& name, AudioClip clip) {
+    // Refused rather than cached. A cached failure is right for a file that
+    // will not decode - it stops the loader re-opening it every frame - and
+    // wrong for a caller that has just handed over an empty buffer, which is a
+    // bug worth failing on now rather than remembering.
+    if (!clip.valid()) return nullptr;
+
+    const auto existing = m_clips.find(name);
+    if (existing != m_clips.end()) {
+        // A live voice holds a pointer into the buffer this would free.
+        for (const auto& [voice, voicePath] : m_voicePaths) {
+            if (voicePath == name && IsVoicePlaying(voice)) return nullptr;
+        }
+        existing->second = std::move(clip);
+        return &existing->second;
+    }
+
+    auto [it, inserted] = m_clips.emplace(name, std::move(clip));
+    return &it->second;
+}
+
+bool AudioEngine::HasClip(const std::string& name) const {
+    const auto it = m_clips.find(name);
+    return it != m_clips.end() && it->second.valid();
+}
+
 const AudioClip* AudioEngine::LoadClip(const std::string& path) {
     if (auto it = m_clips.find(path); it != m_clips.end()) {
         return it->second.valid() ? &it->second : nullptr;

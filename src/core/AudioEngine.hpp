@@ -37,6 +37,36 @@ public:
     // Loads and caches a clip. Returns nullptr if it could not be decoded.
     const AudioClip* LoadClip(const std::string& path);
 
+    // Registers a clip built IN MEMORY, under a name rather than a path.
+    //
+    // The whole audio path is keyed by string and LoadClip consults that cache
+    // before it touches the filesystem, so a clip registered here plays through
+    // Play() exactly as a file does - the name simply never reaches a loader.
+    // Give it a shape a real path cannot collide with; the engine does not
+    // reserve a prefix and will happily let a game shadow a file.
+    //
+    // THIS EXISTS BECAUSE A GAME MAY GENERATE ITS SOUND. Wolf Brigade ships no
+    // audio files at all: every effect is a `tone` block in a data file that the
+    // game synthesises at load. The port reproduces those buffers sample for
+    // sample and, until this door, had no way to make a single one audible -
+    // every entrance to the mixer took a path.
+    //
+    // REFUSES TO REPLACE A CLIP THAT HAS A LIVE VOICE, returning nullptr and
+    // changing nothing. A voice reads the sample buffer directly, so assigning
+    // over it frees memory an audio thread is mid-read of - the same
+    // use-after-free UnloadClip's comment describes, and re-registering a
+    // re-synthesised tone is exactly when somebody would hit it. Call
+    // StopVoicesUsing(name) first, as you would before unloading.
+    //
+    // An invalid clip is refused rather than cached, which is the opposite of
+    // what LoadClip does for a missing file. A file that will not decode is
+    // worth remembering so it is not re-opened every frame; a caller handing
+    // over an empty buffer has a bug this frame and should be told now.
+    const AudioClip* AddClip(const std::string& name, AudioClip clip);
+
+    // Whether a name resolves without touching the filesystem.
+    bool HasClip(const std::string& name) const;
+
     // Starts a voice for a clip. Returns kInvalidVoice on failure.
     VoiceId Play(const std::string& path, bool loop, float volume, float pitch);
 

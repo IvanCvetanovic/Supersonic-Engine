@@ -79,6 +79,15 @@ std::vector<uint8_t> ToPcmBytes(const std::vector<int16_t>& samples) {
     return bytes;
 }
 
+Supersonic::AudioClip ToClip(const Tone& tone) {
+    Supersonic::AudioClip clip;
+    clip.channels = 1;
+    clip.sampleRate = static_cast<uint32_t>(kMixRate);
+    clip.bitsPerSample = 16;
+    clip.pcm = ToPcmBytes(Synthesise(tone));
+    return clip;
+}
+
 Sound SoundFor(const GameData& data, const std::string& id) {
     const Value& entry = data.Audio()["sfx"][id];
 

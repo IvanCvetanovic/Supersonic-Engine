@@ -56,6 +56,7 @@
 #include "TestHarness.hpp"
 #include "WolfBrigadeFixture.hpp"
 
+#include "core/AudioEngine.hpp"
 #include "sim/AudioTones.hpp"
 #include "sim/GameData.hpp"
 
@@ -553,6 +554,47 @@ void testPcmBytesArePairedLowByteFirst() {
     CHECK_EQ(static_cast<int>(saw[1]), 0xC0);
 }
 
+// --- 8. And it can actually be heard --------------------------------------
+
+void testEverySynthesisedSoundCanReachTheMixer() {
+    // The gap this closes was real and embarrassing: the tone slice was the
+    // port's most strongly verified work - eleven buffers matched sample for
+    // sample on the first run - and every door into the engine's mixer took a
+    // PATH. Correct samples that nothing could play.
+    //
+    // AudioEngine::AddClip is that door. This walks the whole loop for all
+    // eleven shipped sounds: a `tone` block in audio.json, through the
+    // synthesiser, into a clip, into the engine, and back out by name without
+    // the filesystem being consulted once.
+    Supersonic::AudioEngine engine;
+
+    for (const Row& row : kShipped) {
+        const Audio::Sound sound = Audio::SoundFor(shipped(), row.id);
+        if (sound.kind != Audio::Sound::Kind::Tone) continue;
+
+        const std::string name = std::string("wolfbrigade:sfx:") + row.id;
+        const Supersonic::AudioClip clip = Audio::ToClip(sound.tone);
+
+        // The shape the mixer needs, and the shape the synthesiser produces -
+        // asserted rather than assumed, because a mismatch here is silence at
+        // the wrong pitch rather than a compile error.
+        CHECK_MSG(clip.channels == 1, std::string(row.id) + " is mono");
+        CHECK_MSG(static_cast<int>(clip.sampleRate) == Audio::kMixRate,
+                  std::string(row.id) + " runs at the synthesiser's rate");
+        CHECK_MSG(clip.bitsPerSample == 16, std::string(row.id) + " is 16-bit");
+        CHECK_MSG(static_cast<int>(clip.pcm.size()) == row.bytes,
+                  std::string(row.id) + " carries the oracle's byte count");
+
+        const Supersonic::AudioClip* registered = engine.AddClip(name, clip);
+        CHECK_MSG(registered != nullptr, std::string(row.id) + " is accepted by the engine");
+        if (registered == nullptr) continue;
+
+        CHECK_MSG(engine.HasClip(name), std::string(row.id) + " resolves by name");
+        CHECK_MSG(engine.LoadClip(name) == registered,
+                  std::string(row.id) + " loads from cache, not from disk");
+    }
+}
+
 void runTests() {
     testTheElevenShippedSoundsSynthesiseWhatGodotSynthesises();
     testOneCountAnywhereInTheBufferMovesBothChecksums();
@@ -570,8 +612,9 @@ void runTests() {
     testAFileWinsOverAToneEvenWhenBothAreAuthored();
     testAnUnknownIdResolvesToSilenceRatherThanADefaultTone();
     testPcmBytesArePairedLowByteFirst();
+    testEverySynthesisedSoundCanReachTheMixer();
 }
 
 } // namespace
 
-TEST_MAIN("test_wb_audio", 120)
+TEST_MAIN("test_wb_audio", 180)

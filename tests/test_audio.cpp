@@ -344,6 +344,94 @@ static void testALoopingSourceFollowsAChangedSoundFile() {
     std::remove(second.c_str());
 }
 
+// --- Clips that were never on disk ---------------------------------------
+//
+// A game may GENERATE its sound rather than ship it. Until AddClip there was no
+// door into the mixer that did not take a path, so a game whose whole audio is
+// synthesised could produce correct samples and play none of them.
+
+void testAClipBuiltInMemoryPlaysLikeAFile() {
+    AudioEngine engine;
+
+    AudioClip clip;
+    clip.channels = 1;
+    clip.sampleRate = 44100;
+    clip.bitsPerSample = 16;
+    clip.pcm.assign(400, 0);
+    clip.pcm[0] = 0xCC;
+    clip.pcm[1] = 0x2C;   // 11468, the first sample of Wolf Brigade's train tone
+
+    const AudioClip* added = engine.AddClip("generated:train", std::move(clip));
+    CHECK_MSG(added != nullptr, "a valid in-memory clip is accepted");
+    if (added == nullptr) return;
+
+    CHECK_MSG(engine.HasClip("generated:train"), "and the name now resolves");
+
+    // THE POINT: LoadClip consults the cache before the filesystem, so a name
+    // that was never a path resolves without one - which is what makes Play()
+    // work unchanged.
+    const AudioClip* found = engine.LoadClip("generated:train");
+    CHECK_MSG(found == added, "LoadClip returns it without touching the disk");
+    if (found == nullptr) return;
+
+    CHECK_EQ(static_cast<int>(found->pcm.size()), 400);
+    CHECK_EQ(static_cast<int>(found->sampleRate), 44100);
+    CHECK_EQ(static_cast<int>(found->pcm[0]), 0xCC);
+    CHECK_EQ(static_cast<int>(found->pcm[1]), 0x2C);
+}
+
+void testAnEmptyClipIsRefusedRatherThanCached() {
+    // The opposite of what LoadClip does for a missing file, deliberately. A
+    // file that will not decode is worth remembering so the loader stops
+    // re-opening it; a caller handing over an empty buffer has a bug NOW.
+    AudioEngine engine;
+
+    CHECK_MSG(engine.AddClip("generated:silence", AudioClip{}) == nullptr,
+              "an empty clip is refused");
+    CHECK_MSG(!engine.HasClip("generated:silence"),
+              "and refusing it did not cache a failure under the name");
+
+    // Which means a later, valid registration under the same name still works.
+    AudioClip real;
+    real.channels = 1;
+    real.sampleRate = 44100;
+    real.bitsPerSample = 16;
+    real.pcm.assign(64, 7);
+    CHECK_MSG(engine.AddClip("generated:silence", std::move(real)) != nullptr,
+              "the name was not poisoned");
+}
+
+void testARegisteredClipCanBeReplacedWhileNothingIsPlayingIt() {
+    AudioEngine engine;
+
+    AudioClip first;
+    first.channels = 1;
+    first.sampleRate = 44100;
+    first.bitsPerSample = 16;
+    first.pcm.assign(100, 1);
+    CHECK_MSG(engine.AddClip("generated:tone", std::move(first)) != nullptr, "registered");
+
+    // Re-synthesised after a data edit: the same name, a different buffer.
+    AudioClip second;
+    second.channels = 1;
+    second.sampleRate = 44100;
+    second.bitsPerSample = 16;
+    second.pcm.assign(250, 2);
+    const AudioClip* replaced = engine.AddClip("generated:tone", std::move(second));
+
+    CHECK_MSG(replaced != nullptr, "replacing a clip nothing is reading is allowed");
+    if (replaced == nullptr) return;
+    CHECK_EQ(static_cast<int>(replaced->pcm.size()), 250);
+    CHECK_EQ(static_cast<int>(engine.LoadClip("generated:tone")->pcm.size()), 250);
+}
+
+void testAnUnregisteredNameStillFailsRatherThanInventingSilence() {
+    AudioEngine engine;
+    CHECK_MSG(!engine.HasClip("generated:never_registered"), "an unknown name resolves to nothing");
+    CHECK_MSG(engine.LoadClip("generated:never_registered") == nullptr,
+              "and loading it fails rather than returning an empty clip");
+}
+
 static void runTests() {
     testLoadsValidWav();
     testSkipsUnknownChunks();
@@ -358,6 +446,11 @@ static void runTests() {
     testReloadClipStopsTheVoiceReadingTheOldSamples();
     testAVoiceIsFoundByWhatItPlaysNotByWhatItsSourceNamesNow();
     testALoopingSourceFollowsAChangedSoundFile();
+
+    testAClipBuiltInMemoryPlaysLikeAFile();
+    testAnEmptyClipIsRefusedRatherThanCached();
+    testARegisteredClipCanBeReplacedWhileNothingIsPlayingIt();
+    testAnUnregisteredNameStillFailsRatherThanInventingSilence();
 }
 
-TEST_MAIN("test_audio", 19)
+TEST_MAIN("test_audio", 30)
