@@ -425,6 +425,7 @@ re-derive them written beside them.
 | combat | `verify_combat` | **soldier 36/60, Town Hall 934/1000** — and the second one is the first number in the whole port that DISAGREED. Plus the lane index, orders beating instincts, and the arrow pool. Nine mutations, all caught after two blind spots were closed. |
 | worker economy | `verify_economy` 2, 2b + `verify_units` FSM | **tree 79/100, banked +20, carried 1** — 140 steps of 0.2s between a tree at 1300 and a deposit at 1000, matched exactly, for both resources. Plus the FSM (spawns idle at 30 hp, a move order strips the y, arrival releases the order) and the flee reflex. Twelve mutations; **four survived the first pass** and needed cases the original's own harness cannot see. |
 | economy state | `verify_economy` 1, 2c, 3 | Extraction clamps (200 → 170 → 0), spending is atomic, and `resources_changed` carries the new TOTAL. Difficulty scales the opening balance to the numbers the presets imply — 450 on Easy, 240 on Hard — and owned meta lands flat on top of it, not through it. Six mutations, all caught. Sections 2 and 2b, the worker gather/deliver loop, wait for `unit.gd`. |
+| build placement | `verify_buildings` placement, `verify_input` 3 | **The last slice with an oracle.** A Town Hall at 2000 with a footprint of [1940, 2060]: 2000 refused, 4000 allowed, edge-to-edge buildable. Plus the four assertions only `verify_input` makes - cancel spends nothing, and the Back gate's truth table including the ghost that outlives the match. Eighteen mutations. Gives `GestureMachine::SetPlacementMode` its first real caller. |
 | tone synthesis | `verify_audio` + a verbatim probe | **The strongest oracle in the whole set, because the numbers are computation output.** Eleven synthesised sounds reproduced sample for sample - counts, first, second and middle samples, peaks, and a sum and sum-of-squares over every sample of all eleven buffers. Matched on the first run. Sixteen mutations, fifteen caught; the sixteenth is proved equivalent rather than excused. |
 | match boot (`main.gd`) | `verify_snapshot`, `verify_meta` award-wiring, `verify_save` wave-recording | **The whole-match numbers, which no earlier slice could reach**: 270 wood, 963 hit points, six units, three gathering, one enemy alive — off a real boot rather than a board built by hand. Twenty-six mutations, twenty-five caught; the one survivor was predicted and is why the sink stays minimal. Found three real defects on the way: a restored endless run whose director was not endless, a re-booted match carrying the last run's wave clock, and a fresh run that never saw the Armory levels it was bought with. |
 
@@ -894,7 +895,8 @@ Both are now the harness's own assertions. Six mutations, all caught.
 the next item.**
 
 1. **Tone synthesis** (`audio.gd::_synth_tone`, ~30 lines) — **DONE, below.**
-2. **`BuildPlacement`** (`build_placement.gd`, ~120 lines). Weaker oracle —
+2. **`BuildPlacement`** (`build_placement.gd`, ~120 lines) — **DONE, below.**
+   Weaker oracle —
    behaviour with decisions in it rather than computed numbers — but it is
    gameplay, and it unblocks two things this port has already written down as
    waiting for it: `Match`'s `_back_cancels_placement` predicate, and
@@ -968,6 +970,59 @@ running `_synth_tone` verbatim over the real `audio.json` in a throwaway Godot
 project outside the game tree. Its `train` row reproduces the harness's own
 7938, which is what says the copy is faithful. The game repository is the
 oracle; it does not get edited in order to be measured.
+
+---
+
+### Build placement, and the end of the harness list — 27 August 2026
+
+`build_placement.gd` was the last file in the game with an oracle behind it, and
+porting it exhausts the list: **there is no `verify_*` harness left that holds a
+number or a decision worth reproducing.** Everything from here is a choice about
+what to build rather than about what to match.
+
+The ghost is gone — a translucent rectangle following the pointer is
+presentation. What survives is what it was *drawing*: a candidate x and a
+validity flag.
+
+**The order of operations in `Confirm` is the whole slice**, and it is three
+different bugs if any line moves. It re-clamps and re-validates BEFORE spending,
+so the price is paid for the spot the building lands on rather than the one the
+pointer was over. An invalid spot returns WITHOUT cancelling, so a player who
+taps a wall slides over and tries again instead of walking back to the menu. And
+a cost that became unaffordable mid-placement cancels WITHOUT building. Each is
+one line; each has its own case.
+
+**Two divergences Godot gets for free and this port has to ask for.** Placement
+scans the player-buildings *group*, which a destroyed building leaves when it is
+freed — nothing is freed here, so without an explicit liveness check the rubble
+of a fallen barracks would reserve that stretch of lane for the rest of the run.
+And the overlap test is **x-only**, not the rectangle test the port already has:
+the original calls itself a "single-lane x check" and is right to, because two
+buildings sharing a stretch of lane collide whatever their heights. The two
+agree on every board the game can build — everything sits on one ground line —
+and differ only on a fixture that puts a building where the game cannot.
+
+**A flag that has never had a caller finally has one.**
+`GestureMachine::SetPlacementMode` has existed since the input slice with
+nothing in the port ever setting it from real state — only a test ever touched
+it. Placement now emits `placementActiveChanged`, and the suite pins the
+non-obvious half: beginning a placement while one is already open is a SWAP, so
+it announces false and then true rather than staying silent. An input controller
+that only listens for edges would otherwise never learn the building changed.
+
+**The Back gate is ported whole**, because the original kept it a pure predicate
+on purpose — its own comment says so, so that a harness could verify the gate
+without tripping the `quit()` in the other branch. The regression it exists for
+is asserted directly: victory or defeat can land while a ghost is still up, that
+ghost then sits behind the game-over overlay where nobody can see it, and Back
+must EXIT on the first press rather than spend one cancelling something
+invisible.
+
+**What is not claimed.** `verify_input` does not run headless — its own header
+says so, and a headless run fails six assertions because an offscreen viewport
+will not route GUI mouse picking. Every one of those six is a real click on a
+`Control`. What this suite reproduces is the placement state those clicks were
+driving; the clicks themselves are Godot mechanism and stay unported.
 
 ---
 

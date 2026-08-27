@@ -363,6 +363,95 @@ void testWithNoIdleWorkerTheNearestOneOfAnyKindGoes() {
     CHECK_MSG(sent == 1, "exactly one worker was sent");
 }
 
+void testACorpseIsNotSentToBuild() {
+    // In Godot a dead worker is freed and leaves the units group, so the
+    // question never reaches it. Nothing is freed here, so it has to be asked -
+    // and a site "assigned" to a corpse is a site that never gets built, with
+    // nothing on screen to explain why.
+    // THE IDLE PREFERENCE HIDES THIS, which is why the board has to be driven
+    // first. A corpse is in state Dead, never Idle, so while any living worker
+    // is standing around the preference picks it and a port with no liveness
+    // check looks correct. The bug is only reachable once every worker is busy
+    // and the nearest-of-any-kind pass is the one that decides - which is
+    // exactly the moment a player is most likely to be placing a building.
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.BootFresh();
+
+    for (int i = 0; i < 20; ++i) match.Step(0.1);
+    for (const auto& unit : match.Units()) {
+        CHECK_MSG(unit->CurrentState() != Unit::State::Idle, "every worker has found work");
+    }
+
+    // The three starting workers stand at 1680 / 1740 / 1800. Kill the one
+    // nearest the site so a port that ignores liveness would pick it.
+    Unit* nearest = nullptr;
+    for (const auto& unit : match.Units()) {
+        if (nearest == nullptr || unit->Position().x > nearest->Position().x) {
+            nearest = unit.get();
+        }
+    }
+    CHECK_MSG(nearest != nullptr, "there are workers");
+    if (nearest == nullptr) return;
+    nearest->Kill();
+    const float corpseX = nearest->Position().x;
+
+    Building* placed = nullptr;
+    match.Bus().buildingPlaced.Connect([&placed](Building* b) { placed = b; });
+
+    // Right on top of the corpse, so distance cannot be the reason it loses.
+    match.Placement().Begin(Ids::kBarracks);
+    match.Placement().Confirm(corpseX);
+    CHECK_MSG(placed != nullptr, "the site went up");
+    if (placed == nullptr) return;
+
+    CHECK_MSG(nearest->BuildTarget() == nullptr, "the corpse was not sent");
+
+    int sentAndAlive = 0;
+    for (const auto& unit : match.Units()) {
+        if (unit->BuildTarget() == placed) {
+            ++sentAndAlive;
+            CHECK_MSG(unit->IsAlive(), "whoever was sent is alive");
+        }
+    }
+    CHECK_MSG(sentAndAlive == 1, "and a living worker went instead");
+}
+
+void testAnEnemyWorkerWillNotBuildForThePlayer() {
+    // The original scans the PLAYER units group. Every enemy the shipped game
+    // has is an aggressor, so the behaviour filter already excludes them and
+    // the faction check looks redundant - it is reachable only by authoring an
+    // enemy that works for a living, which is exactly the kind of branch this
+    // port keeps finding is untested.
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.BootFresh();
+
+    UnitStats thrall = UnitStats::FromJson(Ids::kWorker, wb::Shipped().Unit(Ids::kWorker));
+    thrall.faction = Factions::kEnemy;
+    CHECK_MSG(thrall.behavior == Unit::kWorker, "it works like a worker");
+
+    // Standing right on the site, so distance cannot be the reason it loses.
+    Unit* enemyWorker = match.SpawnUnit(thrall, glm::vec2(3000.0f, 800.0f));
+
+    Building* placed = nullptr;
+    match.Bus().buildingPlaced.Connect([&placed](Building* b) { placed = b; });
+
+    match.Placement().Begin(Ids::kBarracks);
+    match.Placement().Confirm(3000.0f);
+    CHECK_MSG(placed != nullptr, "the site went up");
+    if (placed == nullptr) return;
+
+    CHECK_MSG(enemyWorker->BuildTarget() == nullptr,
+              "an enemy worker is not the player's to command");
+
+    int sent = 0;
+    for (const auto& unit : match.Units()) {
+        if (unit->BuildTarget() == placed) ++sent;
+    }
+    CHECK_MSG(sent == 1, "one of the player's own went instead");
+}
+
 void testABoardWithNoWorkersLeavesTheSiteStanding() {
     // A real state late in a bad run, and not an error: the site waits until
     // somebody is free, which the worker slice's anti-deadlock rule then
@@ -401,6 +490,7 @@ void testPlacementAnnouncesEveryChangeAndNoChangeTwice() {
 
     match.Placement().Begin(Ids::kBarracks);
     CHECK_EQ(static_cast<int>(changes.size()), 1);
+    if (changes.size() != 1) return;
     CHECK_MSG(changes[0], "opening announces true");
 
     // Beginning again is a SWAP, so it closes and reopens rather than staying
@@ -408,11 +498,20 @@ void testPlacementAnnouncesEveryChangeAndNoChangeTwice() {
     // edges keep up with a change of building.
     match.Placement().Begin(Ids::kTower);
     CHECK_EQ(static_cast<int>(changes.size()), 3);
+
+    // The guard is not decoration. CHECK_EQ reports and CONTINUES, so a
+    // mutation that drops the swap's first edge leaves two entries here and the
+    // reads below run off the end - which under MSVC's debug std::vector is a
+    // blocking assertion dialog rather than a failure. The mutation that
+    // deletes the swap hung this suite for two minutes before this line
+    // existed.
+    if (changes.size() != 3) return;
     CHECK_MSG(!changes[1], "the swap closes the first");
     CHECK_MSG(changes[2], "and opens the second");
 
     match.Placement().Cancel();
     CHECK_EQ(static_cast<int>(changes.size()), 4);
+    if (changes.size() != 4) return;
     CHECK_MSG(!changes[3], "closing announces false");
 }
 
@@ -491,6 +590,8 @@ static void runTests() {
 
     testAnIdleWorkerIsPreferredOverACloserBusyOne();
     testWithNoIdleWorkerTheNearestOneOfAnyKindGoes();
+    testACorpseIsNotSentToBuild();
+    testAnEnemyWorkerWillNotBuildForThePlayer();
     testABoardWithNoWorkersLeavesTheSiteStanding();
 
     testPlacementAnnouncesEveryChangeAndNoChangeTwice();
@@ -500,4 +601,4 @@ static void runTests() {
     testBootingClosesAnOpenPlacement();
 }
 
-TEST_MAIN("test_wb_placement", 55)
+TEST_MAIN("test_wb_placement", 65)
