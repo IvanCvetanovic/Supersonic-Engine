@@ -1,4 +1,6 @@
 #include "core/SupersonicApp.hpp"
+
+#include "core/WorldShapes.hpp"
 #include "renderer/ScreenCapture.hpp"
 #include "core/AssetDatabase.hpp"
 #include "core/Log.hpp"
@@ -298,6 +300,12 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     // Published after the renderer is constructed, which it is - the renderer is
     // built well above this, and these are references into it rather than copies
     // of it, so the lifetime is the renderer's and it outlives the registry.
+    // The world-space shape layer, for the same reason: a game's effects are
+    // emitted from a layer, and the renderer consumes and clears them once a
+    // frame. Published as a pointer into a member the app owns, because an
+    // immediate buffer must survive a scene load that clears the registry.
+    m_registry.ctx().insert_or_assign<WorldShapes*>(&m_worldShapes);
+
     m_registry.ctx().insert_or_assign<MeshRegistry*>(&m_renderer->GetMeshRegistry());
     m_registry.ctx().insert_or_assign<TextureRegistry*>(&m_renderer->GetTextureRegistry());
 

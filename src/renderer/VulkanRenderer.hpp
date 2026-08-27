@@ -195,6 +195,15 @@ private:
     std::unique_ptr<VulkanPipeline> m_skyPipeline;
     std::unique_ptr<VulkanPipeline> m_gridPipeline;
 
+    // The world-space shape layer: lines drawn in the scene, against its depth.
+    //
+    // One buffer per frame in flight, for the same reason the uniform buffers
+    // are: the GPU is still reading last frame's while this frame is being
+    // written, and one shared buffer would be a write into memory a draw is
+    // mid-flight over.
+    std::unique_ptr<VulkanPipeline> m_worldShapePipeline;
+    std::vector<std::unique_ptr<VulkanBuffer>> m_worldShapeBuffers;
+
     // Depth-only pass from the primary directional light.
     std::unique_ptr<ShadowMap> m_shadowMap;
     std::unique_ptr<PointShadowMap> m_pointShadowMap;

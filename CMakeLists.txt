@@ -367,6 +367,8 @@ set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders")
 set(SHADER_JOBS
     "shader.vert=vert.spv"
     "shader.frag=frag.spv"
+    "world_shape.vert=world_shape_vert.spv"
+    "world_shape.frag=world_shape_frag.spv"
     "grid.vert=grid_vert.spv"
     "grid.frag=grid_frag.spv"
     "sky.vert=sky_vert.spv"

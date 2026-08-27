@@ -6,6 +6,8 @@
 
 #include <entt/entt.hpp>
 
+#include "core/WorldShapes.hpp"
+
 #include "platform/Window.hpp"
 #include "renderer/VulkanContext.hpp"
 #include "renderer/VulkanDevice.hpp"
@@ -102,6 +104,11 @@ private:
     GameManifest m_manifest;
 
     entt::registry m_registry;
+
+    // Immediate-mode world-space shapes, owned here rather than in the
+    // registry: the registry is CLEARED by a scene load, and a buffer a game
+    // layer holds a pointer to must not be one of the things that goes.
+    WorldShapes m_worldShapes;
 
     // A game's own systems. Empty in the editor, which is why nothing else in
     // this file changes shape when there is no game.

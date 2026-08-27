@@ -73,14 +73,27 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
 
         vk::PipelineVertexInputStateCreateInfo vertexInputInfo{};
         if (options.useVertexInput) {
-            vertexInputInfo.vertexBindingDescriptionCount = 1;
-            vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-            vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-            vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+            // A caller-supplied layout wins. It is how a pipeline whose vertex
+            // is not the scene's Vertex - the world-space shape layer, whose
+            // vertex is a position and a colour - describes what it actually
+            // reads. Declaring the scene's full layout over a buffer that does
+            // not contain those attributes is a validation error, not a
+            // harmless overstatement.
+            if (options.vertexBinding != nullptr && options.vertexAttributeCount > 0) {
+                vertexInputInfo.vertexBindingDescriptionCount = 1;
+                vertexInputInfo.pVertexBindingDescriptions = options.vertexBinding;
+                vertexInputInfo.vertexAttributeDescriptionCount = options.vertexAttributeCount;
+                vertexInputInfo.pVertexAttributeDescriptions = options.vertexAttributes;
+            } else {
+                vertexInputInfo.vertexBindingDescriptionCount = 1;
+                vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+                vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+                vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+            }
         }
 
         vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
-        inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+        inputAssembly.topology = options.topology;
         inputAssembly.primitiveRestartEnable = VK_FALSE;
 
         const std::array<vk::DynamicState, 2> dynamicStates = {

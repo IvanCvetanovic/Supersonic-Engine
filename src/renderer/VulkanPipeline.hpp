@@ -224,6 +224,29 @@ struct VulkanPipelineOptions {
     vk::CullModeFlags cullMode{vk::CullModeFlagBits::eBack};
     bool useVertexInput{true};
 
+    // What the vertices mean. Triangles for everything that is a surface, and
+    // lines for the world-space shape layer - an indicator, a range ring, a
+    // path preview. A line list is not a degenerate triangle list; it is the
+    // primitive those things are actually made of, and rasterising them as
+    // triangles would need every line thickened into a quad on the CPU.
+    vk::PrimitiveTopology topology{vk::PrimitiveTopology::eTriangleList};
+
+    // An alternative vertex layout, for a pipeline whose input is not the
+    // scene's Vertex.
+    //
+    // Empty means "use Vertex", which is every pipeline that draws geometry.
+    // The shape layer's vertex is a position and a colour and nothing else -
+    // no normal, no UV, no tangent, no skinning - and declaring the scene's
+    // full layout for it would be describing attributes the buffer does not
+    // contain, which is a validation error rather than wasted space.
+    //
+    // Pointers into the caller's storage, so both must outlive the
+    // constructor call. They are read during pipeline creation and never
+    // again.
+    const vk::VertexInputBindingDescription* vertexBinding{nullptr};
+    const vk::VertexInputAttributeDescription* vertexAttributes{nullptr};
+    uint32_t vertexAttributeCount{0};
+
     // 0 for the depth-only shadow pass, whose render pass has no colour
     // attachment; a mismatch here is a pipeline/render-pass incompatibility.
     uint32_t colorAttachmentCount{1};

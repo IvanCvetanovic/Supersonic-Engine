@@ -678,11 +678,43 @@ Android "not functional"; extending that register forward costs nothing.
 
 Ordered by what it costs against what it unblocks, not by how interesting it is.
 
-Nothing. The list is empty for the first time.
+**It is not empty any more, and measuring it against two real games is what
+filled it.** An engine judged in isolation has no gaps; an engine asked to host
+something has as many as the thing needs. Five were closed on 27 August and are
+in the log; what is left is here.
 
-What would go on it next is a matter of taste rather than of gaps, and two
-honest limits inside features that work are written down where the code is: a
-hinge spring's "critically damped never overshoots" holds where the effective
+**For a game that generates its world**
+
+- **No image element in the UI.** `UISystem` draws circles, lines, rectangles
+  and text. There is no `AddImage`, so a minimap, a fog-of-war overlay and every
+  portrait have nothing to draw with. Bigger than it sounds: it needs a path
+  from a game's own texture to an ImGui-drawable handle, and today only the
+  editor's `ThumbnailCache` has one.
+- **No UV transform on a material.** Nothing in `src/` or the shaders offers
+  tiling or offset, so scrolling rain and flipbook animation have no expression.
+- **glTF animation requires a skin.** Clips are built only when a file has
+  joints, and any channel not targeting one is dropped - so a rigidly animated
+  prop imports silently still.
+- **One primitive per mesh.** `MeshRegistry` merges every primitive into one
+  mesh with one material, first wins, and `MeshMaterial` carries no name - so a
+  multi-material model cannot be re-materialised after import.
+
+**Known and written down elsewhere, repeated because they bite a game**
+
+- The game tick is the physics step rather than an authored rate, there is no
+  interpolation by overstep fraction, and the fixed-step loop discards
+  simulated time after five steps - which a game clock must not copy, or every
+  mission timer runs slow under load. All three are in ARCHITECTURE.md §8c.
+- `UIInput::Update`'s return value is discarded; §10 already says the guard it
+  was written for does not exist.
+- The flycam polls W/A/S/D directly with no way to turn it off, which fights any
+  game that binds those keys.
+
+**Deliberate, and not gaps**
+
+Two honest limits inside features that work are written down where the code is:
+
+a hinge spring's "critically damped never overshoots" holds where the effective
 mass is the true one, and a door anchored at its edge is a little under-damped
 for the number it was given; and convex decomposition splits on axis-aligned
 planes only, so a shape whose natural cut is diagonal gets a worse

@@ -8,6 +8,7 @@
 #include "core/RenderSystem.hpp"
 #include "core/LightSelection.hpp"
 #include "core/ClusterGrid.hpp"
+#include "core/WorldShapes.hpp"
 #include "core/Components.hpp"
 #include "core/EcsUtils.hpp"
 
@@ -440,7 +441,49 @@ void VulkanRenderer::createGraphicsPipeline() {
     // Persist whatever the driver just compiled, so the next launch starts warm.
     m_pipelineCache->Save();
 
-    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Scene, grid and shadow pipelines created." << std::endl;
+    // World-space shapes: line lists, depth-TESTED against the scene and
+    // depth-WRITING nothing.
+    //
+    // Both halves of that are deliberate. Testing is the whole point - a ground
+    // decal must go behind the wall in front of it, which is the thing the UI
+    // shape layer cannot express at all. Not writing is what keeps two rings
+    // that cross from punching holes in each other: they are overlays on a
+    // world, not objects in it.
+    //
+    // No culling, because a line has no facing.
+    {
+        static const vk::VertexInputBindingDescription kShapeBinding{
+            0, static_cast<uint32_t>(sizeof(WorldShapes::Vertex)), vk::VertexInputRate::eVertex};
+        static const std::array<vk::VertexInputAttributeDescription, 2> kShapeAttributes{
+            vk::VertexInputAttributeDescription{
+                0, 0, vk::Format::eR32G32B32Sfloat,
+                static_cast<uint32_t>(offsetof(WorldShapes::Vertex, position))},
+            vk::VertexInputAttributeDescription{
+                1, 0, vk::Format::eR32G32B32A32Sfloat,
+                static_cast<uint32_t>(offsetof(WorldShapes::Vertex, color))},
+        };
+
+        VulkanPipeline::Options shapeOptions{};
+        shapeOptions.blendEnable = true;
+        shapeOptions.depthWrite = false;
+        shapeOptions.cullMode = vk::CullModeFlagBits::eNone;
+        shapeOptions.useVertexInput = true;
+        shapeOptions.topology = vk::PrimitiveTopology::eLineList;
+        shapeOptions.vertexBinding = &kShapeBinding;
+        shapeOptions.vertexAttributes = kShapeAttributes.data();
+        shapeOptions.vertexAttributeCount = static_cast<uint32_t>(kShapeAttributes.size());
+        shapeOptions.cache = m_pipelineCache->Get();
+        shapeOptions.samples = m_offscreenSamples;
+
+        m_worldShapePipeline = std::make_unique<VulkanPipeline>(
+            m_deviceRef.GetDevice(),
+            m_offscreenRenderPass,
+            "assets/shaders/world_shape_vert.spv",
+            "assets/shaders/world_shape_frag.spv",
+            shapeOptions);
+    }
+
+    SUPERSONIC_LOG_INFO("VulkanRenderer") << "Scene, grid, shape and shadow pipelines created." << std::endl;
 }
 
 void VulkanRenderer::createUniformBuffers() {
@@ -485,6 +528,18 @@ void VulkanRenderer::createUniformBuffers() {
             VMA_MEMORY_USAGE_CPU_TO_GPU,
             VMA_ALLOCATION_CREATE_MAPPED_BIT);
     };
+    m_worldShapeBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        // Sized for the shape buffer's own ceiling, so an upload can never
+        // overrun it and no reallocation ever happens mid-frame.
+        m_worldShapeBuffers[i] = std::make_unique<VulkanBuffer>(
+            m_deviceRef.GetAllocator(),
+            sizeof(WorldShapes::Vertex) * WorldShapes::kMaxVertices,
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            VMA_MEMORY_USAGE_CPU_TO_GPU,
+            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    }
+
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         m_lightBuffers[i] = makeStorage(sizeof(GpuLight) * kMaxLights);
         m_clusterRangeBuffers[i] =
@@ -1584,6 +1639,38 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // and only where there is an editor to want one. It is a construction
     // guide, not part of any level, and a shipped game drew it because the call
     // sat here with nothing in front of it.
+    // World-space shapes, after the scene and before the editor's grid.
+    //
+    // After the scene because they are overlays and blend over what they
+    // annotate; before the grid because the grid is a construction guide that
+    // belongs on top of everything, including these.
+    //
+    // Consumed and CLEARED here, which is what makes the API immediate: a
+    // caller emits shapes for the frame it is in and never cleans up. Clearing
+    // anywhere else would race whatever is still adding.
+    if (auto** shapeSlot = registry.ctx().find<WorldShapes*>()) {
+        WorldShapes* shapes = *shapeSlot;
+        if (shapes != nullptr && !shapes->Empty()) {
+            const size_t count = shapes->Vertices().size();
+            VulkanBuffer& buffer = *m_worldShapeBuffers[m_currentFrame];
+            std::memcpy(buffer.GetMappedData(), shapes->Vertices().data(),
+                        sizeof(WorldShapes::Vertex) * count);
+
+            cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                             m_worldShapePipeline->GetPipeline());
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                   m_worldShapePipeline->GetLayout(),
+                                   VulkanPipeline::kSceneSet, 1,
+                                   &m_descriptorSets[m_currentFrame], 0, nullptr);
+
+            const vk::Buffer vertexBuffers[] = {buffer.GetBuffer()};
+            const vk::DeviceSize offsets[] = {0};
+            cmd.bindVertexBuffers(0, 1, vertexBuffers, offsets);
+            cmd.draw(static_cast<uint32_t>(count), 1, 0, 0);
+        }
+        if (shapes != nullptr) shapes->Clear();
+    }
+
     if (m_editorOverlays) {
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_gridPipeline->GetLayout(),
