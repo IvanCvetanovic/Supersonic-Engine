@@ -178,9 +178,16 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         static_assert(offsetof(PushConstantData, skinPaletteBase) == 112, "push constant layout shifted");
         static_assert(offsetof(PushConstantData, skinJointCount) == 116, "push constant layout shifted");
         static_assert(offsetof(ShadowPushConstantData, skinPaletteBase) == 64, "shadow push layout shifted");
+        // 80 is 16-byte aligned, which a vec4 in a push constant block must be.
+        // At 84 or 88 the shader would read the transform from the wrong offset
+        // and no validation layer would mention it.
+        static_assert(offsetof(ShadowPushConstantData, uvTransform) == 80,
+                      "the depth pass's UV transform must stay 16-byte aligned");
+        static_assert(sizeof(ShadowPushConstantData) <= 128,
+                      "the depth push block must stay inside the guaranteed minimum");
         static_assert(offsetof(ShadowPushConstantData, alphaCutoff) == 72, "shadow push layout shifted");
         static_assert(offsetof(ShadowPushConstantData, baseAlpha) == 76, "shadow push layout shifted");
-        static_assert(sizeof(ShadowPushConstantData) == 80, "shadow push layout shifted");
+        static_assert(sizeof(ShadowPushConstantData) == 112, "shadow push layout shifted");
         static_assert(sizeof(ShadowPushConstantData) % 4 == 0, "push constant size must be a multiple of 4");
         static_assert(sizeof(PushConstantData) % 4 == 0, "push constant size must be a multiple of 4");
         if (options.pushConstantSize == 0 || options.pushConstantSize > 128) {

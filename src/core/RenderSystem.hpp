@@ -148,6 +148,11 @@ public:
         uint32_t skinPaletteBase{0};
         int32_t skinJointCount{0};
 
+        // How this caster's albedo is sampled. Identity for almost every
+        // caster; the exception is a cut-out surface whose material scrolls,
+        // where the holes are somewhere other than where the texture puts them.
+        UvTransform uvTransform{};
+
         // Above zero means this caster occludes only where its albedo is
         // opaque enough, and it is drawn by the cut-out depth pipeline instead
         // of the plain one. Zero - the overwhelmingly common case - means the

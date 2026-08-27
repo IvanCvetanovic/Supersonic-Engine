@@ -28,6 +28,11 @@ layout(push_constant) uniform PushConstants {
     int skinJointCount;
     float alphaCutoff;
     float baseAlpha;
+    // Declared and not read. A push constant block must be declared identically
+    // in every stage of a pipeline that has one, and shadow.vert applies these
+    // before the coordinates arrive here.
+    vec4 uvAxes;
+    vec4 uvOffset;
 } push;
 
 void main() {

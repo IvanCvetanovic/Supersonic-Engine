@@ -306,6 +306,19 @@ static void testTheCutoutInputsAreInTheSignature() {
     casters[0].materialSet = fakeDescriptorSet(0x1234);
     CHECK_MSG(base != signatureOf(casters, light),
               "a reloaded texture is a new descriptor set, and a new silhouette");
+
+    // And the fourth way: the texture stands still and the COORDINATES move.
+    // A flipbooked or scrolled cut-out has its holes somewhere else on every
+    // frame, and everything the gather looks at is unchanged.
+    casters[0] = makeCaster(glm::vec3(0.0f, 0.0f, 0.0f));
+    casters[0].alphaCutoff = 0.5f;
+    CHECK_MSG(base == signatureOf(casters, light),
+              "putting every input back must give the baseline back");
+
+    casters[0].uvTransform = MakeUvTransform(glm::vec2(1.0f, 1.0f), 0.0f,
+                                             glm::vec2(0.5f, 0.0f));
+    CHECK_MSG(base != signatureOf(casters, light),
+              "scrolling the cut moves the holes, so the cached pass must record again");
 }
 
 static void testACutoutTheLightCannotSeeChangesNothing() {

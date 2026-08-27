@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -599,6 +601,12 @@ static void testTheIdentityAlwaysOccupiesSlotZero() {
     CHECK_EQ(MaterialSystem::GatherUvTransforms(registry, out, 64), 1u);
     CHECK_EQ(out.size(), size_t(1));
 
+    // Return rather than index an empty vector. MSVC's debug subscript check
+    // opens a MODAL DIALOG, so a suite that indexes past the end does not fail,
+    // it hangs - and a hung suite in a mutation run reads as a mutation that
+    // was never tried. The CHECK above has already recorded the failure.
+    if (out.empty()) return;
+
     CHECK_NEAR(out[0].axes.x, 1.0f);
     CHECK_NEAR(out[0].axes.y, 0.0f);
     CHECK_NEAR(out[0].axes.z, 0.0f);
@@ -626,8 +634,10 @@ static void testOnlyMaterialsThatActuallyScrollTakeASlot() {
     CHECK_MSG(registry.get<MaterialComponent>(scrolling).uvSlot != 0,
               "a material that scrolls got a slot of its own");
 
-    const int slot = registry.get<MaterialComponent>(scrolling).uvSlot;
-    CHECK_NEAR(out[static_cast<size_t>(slot)].offset.y, -0.25f);
+    const size_t slot = static_cast<size_t>(registry.get<MaterialComponent>(scrolling).uvSlot);
+    CHECK_MSG(slot < out.size(), "and the slot points inside the buffer that was written");
+    if (slot >= out.size()) return;
+    CHECK_NEAR(out[slot].offset.y, -0.25f);
 }
 
 static void testAFlipbookFrameComposesTheWayItsSourceDid() {
@@ -831,7 +841,50 @@ static void testAMaterialWrittenBeforeThisExistedLoadsUntransformed() {
     cleanup();
 }
 
+static void testTheShaderAgreesAboutWhereTheSlotLives() {
+    // TWO DESCRIPTIONS OF ONE PACKING: kUvSlotShift and kUvSlotMask here,
+    // UV_SLOT_SHIFT and UV_SLOT_MASK in shader.frag. Nothing links them.
+    //
+    // And a disagreement is invisible in every other way. It is not a compile
+    // error, it is not a validation error, and the round trip inside C++ still
+    // works perfectly - PackUvSlot and UnpackUvSlot both move, so every check
+    // that only asks C++ about C++ still passes. What actually happens is that
+    // the shader reads the slot out of different bits than the draw loop put it
+    // in, so every scrolling surface samples somebody else's transform.
+    //
+    // Read out of the shader SOURCE rather than copied into a literal here,
+    // because a copy in the test is a third description with the same problem.
+    std::ifstream file("assets/shaders/shader.frag");
+    CHECK_MSG(file.good(), "shader.frag must be readable from the working directory");
+    if (!file.good()) return;
+
+    const std::string source((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+    CHECK_MSG(!source.empty(), "and it must not be empty");
+
+    const std::string shiftDecl =
+        "const int UV_SLOT_SHIFT = " + std::to_string(kUvSlotShift) + ";";
+    CHECK_MSG(source.find(shiftDecl) != std::string::npos,
+              "shader.frag must unpack the slot from the bit the packing puts it in: "
+              + shiftDecl);
+
+    std::ostringstream mask;
+    mask << "const int UV_SLOT_MASK = 0x" << std::uppercase << std::hex << kUvSlotMask << ";";
+    CHECK_MSG(source.find(mask.str()) != std::string::npos,
+              "and it must keep the same number of bits: " + mask.str());
+
+    // The stride the other half of this contract depends on. std430 gives an
+    // array of two vec4 a 32-byte stride, which is what sizeof(UvTransform) is
+    // asserted against - so a third vec4 added on one side only would put every
+    // transform after the first half inside its neighbour.
+    CHECK_MSG(source.find("vec4 axes;") != std::string::npos &&
+              source.find("vec4 offset;") != std::string::npos,
+              "the shader's transform must still be exactly the two vec4 C++ writes");
+    CHECK_EQ(sizeof(UvTransform), size_t(32));
+}
+
 static void runTests() {
+    testTheShaderAgreesAboutWhereTheSlotLives();
     testAUvTransformSurvivesASaveAndLoad();
     testAMaterialWrittenBeforeThisExistedLoadsUntransformed();
     testTheIdentityAlwaysOccupiesSlotZero();

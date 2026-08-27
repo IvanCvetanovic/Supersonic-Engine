@@ -191,7 +191,7 @@ struct PushConstantData {
 // of step with the three other declarations of it, which is a mismatch nothing
 // diagnoses.
 //
-// 80 bytes, well inside the 128 every device guarantees.
+// 112 bytes, still inside the 128 every device guarantees.
 struct ShadowPushConstantData {
     // cascadeViewProj * model, premultiplied on the CPU.
     //
@@ -212,7 +212,27 @@ struct ShadowPushConstantData {
     // apart too (push.material.w and push.albedoColor.a).
     float alphaCutoff{0.0f};      // 72..75  (fragment)
     float baseAlpha{1.0f};        // 76..79  (fragment)
-    // 80 bytes total, and a multiple of 4 as vkCmdPushConstants requires.
+
+    // The same transform the scene pass reads out of a storage buffer, taken
+    // BY VALUE here.
+    //
+    // Two transports for one layout, and the asymmetry is the reason: this
+    // block has forty-eight bytes to spare where the scene pass's has none, so
+    // the depth pass needs no descriptor, no gather order and no slot. What
+    // keeps the two in step is that they are the same type and that its size
+    // is asserted.
+    //
+    // Read in the VERTEX stage, unlike the two floats above it. A UV transform
+    // is affine, so transforming coordinates once per vertex and interpolating
+    // gives the same answer as interpolating and then transforming - and
+    // shadow.vert already hands its texture coordinates to the cut-out shader,
+    // so this costs a multiply per vertex instead of one per fragment.
+    //
+    // Without it a cut-out caster samples its albedo through UNTRANSFORMED
+    // coordinates and casts the silhouette it used to have: a scrolled leaf
+    // card shadows holes that have moved. Nothing diagnoses that.
+    UvTransform uvTransform{};    // 80..111 (vertex)
+    // 112 bytes total, and a multiple of 4 as vkCmdPushConstants requires.
 };
 
 // Pipeline creation switches, at namespace scope rather than nested inside

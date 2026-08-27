@@ -118,4 +118,6 @@ set_tests_properties(
     test_convexhull # assets/models/monument.gltf, for the hull cache
     test_physics    # assets/scenes/MainScene.scene, to prove it has a floor
     test_packaging  # copies assets/, and now checks the .meta files come too
+    test_materials  # reads assets/shaders/shader.frag, to check the UV slot
+                    # packing agrees with the shader that unpacks it
     PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")

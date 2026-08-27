@@ -245,7 +245,8 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
 
         // Before the mesh lookup and the eight-corner transform, so a pane of
         // glass costs one try_get rather than the whole caster.
-        const ShadowAlpha alpha = ShadowAlphaFor(registry.try_get<MaterialComponent>(entity));
+        const auto* material = registry.try_get<MaterialComponent>(entity);
+        const ShadowAlpha alpha = ShadowAlphaFor(material);
         if (!alpha.casts) continue;
 
         const GpuMesh* mesh = meshes.Get(renderable.meshID);
@@ -288,6 +289,16 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
                 caster.alphaCutoff = alpha.cutoff;
                 caster.baseAlpha = alpha.baseAlpha;
                 caster.materialSet = set;
+
+                // Only on this branch. An opaque caster never samples its
+                // albedo, so gathering a transform for one would be work that
+                // reaches nothing - and it would put a number into the pass
+                // signature that cannot change what the pass draws.
+                if (material) {
+                    caster.uvTransform = MakeUvTransform(material->uvScale,
+                                                         material->uvRotation,
+                                                         material->uvOffset);
+                }
             }
         }
 
@@ -352,6 +363,12 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
         // statement about the pixels.
         signature = MixSignature(signature, &caster.alphaCutoff, sizeof(caster.alphaCutoff));
         signature = MixSignature(signature, &caster.baseAlpha, sizeof(caster.baseAlpha));
+
+        // A scrolling cut-out is the fourth way the silhouette changes while
+        // the gather sees nothing move: same entity, same transform, same
+        // mesh, same texture, different holes. Miss it and a flipbooked or
+        // scrolled caster keeps the shadow of whichever frame was cached.
+        signature = MixSignature(signature, &caster.uvTransform, sizeof(caster.uvTransform));
         const VkDescriptorSet materialSet = static_cast<VkDescriptorSet>(caster.materialSet);
         signature = MixSignature(signature, &materialSet, sizeof(materialSet));
     }
@@ -432,6 +449,7 @@ void RenderSystem::RenderDepthOnly(
         push.skinJointCount = caster.skinJointCount;
         push.alphaCutoff = caster.alphaCutoff;
         push.baseAlpha = caster.baseAlpha;
+        push.uvTransform = caster.uvTransform;
         // Both stages, because the range declares both, and vkCmdPushConstants
         // requires the mask given here to name every stage the range does.
         // Pushing a vertex-only range against a layout claiming two is a

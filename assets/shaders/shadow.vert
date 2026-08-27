@@ -28,6 +28,12 @@ layout(push_constant) uniform PushConstants {
     // declarations that disagree about its tail is a mismatch nothing catches.
     float alphaCutoff;
     float baseAlpha;
+
+    // Must match Engine::UvTransform. Read HERE and not in the cut-out
+    // fragment shader: the transform is affine, so transforming per vertex and
+    // interpolating is the same answer as the other order, with fewer of them.
+    vec4 uvAxes;     // xy = where U points, zw = where V points
+    vec4 uvOffset;   // xy = translation, zw unused
 } push;
 
 // For the cut-out depth pipeline, which samples albedo to decide whether a
@@ -71,5 +77,10 @@ void main() {
     // says a word, because unconsumed vertex attributes are perfectly legal.
     mat4 skin = skinMatrix(push.skinPaletteBase, push.skinJointCount, inJointIndices, inJointWeights);
     gl_Position = push.viewProjModel * skin * vec4(inPosition, 1.0);
-    fragTexCoord = inTexCoord;
+    // The cut is made against the coordinates the surface actually samples.
+    // Passing inTexCoord straight through casts the silhouette the material
+    // had before it scrolled, which looks like a shadow that is merely a
+    // little wrong.
+    fragTexCoord = mat2(push.uvAxes.x, push.uvAxes.y, push.uvAxes.z, push.uvAxes.w)
+                 * inTexCoord + push.uvOffset.xy;
 }

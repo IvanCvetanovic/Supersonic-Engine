@@ -680,24 +680,24 @@ Ordered by what it costs against what it unblocks, not by how interesting it is.
 
 **It is not empty any more, and measuring it against two real games is what
 filled it.** An engine judged in isolation has no gaps; an engine asked to host
-something has as many as the thing needs. Five were closed on 27 August and are
-in the log; what is left is here.
+something has as many as the thing needs. Seven were closed on 27 August and
+are in the log — most recently the UI image element and the texture coordinate
+transform, which between them are a minimap, a fog overlay, a portrait,
+scrolling rain and a flipbook flame. What is left is here.
 
 **For a game that generates its world**
 
-- **No image element in the UI.** `UISystem` draws circles, lines, rectangles
-  and text. There is no `AddImage`, so a minimap, a fog-of-war overlay and every
-  portrait have nothing to draw with. Bigger than it sounds: it needs a path
-  from a game's own texture to an ImGui-drawable handle, and today only the
-  editor's `ThumbnailCache` has one.
-- **No UV transform on a material.** Nothing in `src/` or the shaders offers
-  tiling or offset, so scrolling rain and flipbook animation have no expression.
 - **glTF animation requires a skin.** Clips are built only when a file has
   joints, and any channel not targeting one is dropped - so a rigidly animated
-  prop imports silently still.
+  prop imports silently still. Measured against HUSK rather than guessed at:
+  **every one of its 19 animated models is rigged this way and none has a
+  skin**, so the importer currently produces no clips for that game at all.
 - **One primitive per mesh.** `MeshRegistry` merges every primitive into one
   mesh with one material, first wins, and `MeshMaterial` carries no name - so a
-  multi-material model cannot be re-materialised after import.
+  multi-material model cannot be re-materialised after import. Measured rather
+  than guessed at as well: **48 of HUSK's 58 models carry more than one
+  material**, up to eight over thirty-six primitives, so this is not a trim
+  detail - it is most of that game's art arriving in a single flat colour.
 
 **Known and written down elsewhere, repeated because they bite a game**
 

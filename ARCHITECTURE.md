@@ -382,16 +382,35 @@ directional-*only*: a point light sitting in slot 0 still reaches its cube
 through the later branch, and a second directional light is lit but never
 shadowed. One shadowed directional light is the limit.
 
-**Descriptor sets.** Set 0 is per-frame and has five bindings; set 1 is
+**Descriptor sets.** Set 0 is per-frame and has eleven bindings; set 1 is
 per-material and has three, rebound per draw.
 
 | Set 0 | Contents | Stages |
 |---|---|---|
-| 0 | UBO: camera, cascade transforms and splits, ambient, spot transforms, the light array | vertex + fragment |
+| 0 | UBO: camera, cascade transforms and splits, ambient, spot transforms, fog, cluster and environment parameters | vertex + fragment |
 | 1 | cascade shadow maps, `sampler2DArray`, 4 layers | fragment |
 | 2 | this frame's joint palette, storage buffer | vertex |
 | 3 | point shadow cubes, `samplerCube[2]` | fragment |
 | 4 | spot shadow maps, `sampler2DArray`, 2 layers | fragment |
+| 5 | every light in the frame, storage buffer, directionals first | fragment |
+| 6 | per-froxel (offset, count) table, storage buffer | fragment |
+| 7 | the flat light-index list those pairs point into, storage buffer | fragment |
+| 8 | irradiance cubes, `samplerCube[2]`, one per environment probe | fragment |
+| 9 | prefiltered cubes, `samplerCube[2]`, one per environment probe | fragment |
+| 10 | this frame's texture coordinate transforms, storage buffer | fragment |
+
+Bindings 5 through 7 are why there is no `MAX_LIGHTS` any more: the light array
+used to live inside the uniform block as a fixed eight, and a storage buffer
+makes its length a runtime count instead of a number compiled into every shader
+that reads the block.
+
+Binding 10 is there for the same reason binding 2 is. Both are per-frame arrays
+a draw indexes into, because the push constant block is exactly 128 bytes — the
+guaranteed minimum — and a joint palette and a texture coordinate transform are
+both per-draw data that does not fit in what is left. Slot 0 of the transform
+buffer is always the identity and is written every frame, so a draw that never
+asked for one indexes it and gets its coordinates back unchanged, with no branch
+and no bounds test in the shader.
 
 The three sampler shapes are not interchangeable. The cascades must be one array
 image because the per-fragment cascade choice is not dynamically uniform — it
