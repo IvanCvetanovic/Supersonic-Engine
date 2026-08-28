@@ -226,17 +226,41 @@ void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
     // Absent from every scene written before the tick could be authored, and
     // the fallback is 60 - which is what those scenes ran at, because it was
     // the only rate there was.
-    if (root.Has("Simulation")) {
-        const float rate = root["Simulation"]["TickRate"].AsFloat(60.0f);
+    //
+    // OUTSIDE the Has() check, which it used to be inside, against the rule
+    // stated at the top of this file: a scene with no Simulation block silently
+    // kept the previous scene's rate, so loading a 20 Hz level and then a 60 Hz
+    // one that predates the block ran the second at 20.
+    {
+        const float rate = root.Has("Simulation")
+                               ? root["Simulation"]["TickRate"].AsFloat(60.0f)
+                               : 60.0f;
         // Clamped rather than trusted. A rate of zero would divide by zero on
         // the way to a step, and a hand-edited scene is a place people put
         // zero. The ceiling is high enough for anything real and low enough
         // that a typo cannot ask for a million ticks a frame.
         const float clamped = std::clamp(rate, 1.0f, 480.0f);
-        auto& clock = registry.ctx().contains<SimulationClock>()
-                          ? registry.ctx().get<SimulationClock>()
-                          : registry.ctx().emplace<SimulationClock>();
+
+        // THE WHOLE CLOCK, not just the rate. A fresh SimulationClock is
+        // assigned over whatever was there, so the tick counter, the dropped
+        // time and the overstep fraction all start from zero.
+        //
+        // They did not. registry.clear() leaves the context alone and nothing
+        // else ever wrote them, so the tick counter was a count of every step
+        // the PROCESS had run - it carried across a scene load, across Stop and
+        // Play, across loading a different level entirely.
+        //
+        // That is not merely untidy, and the reason is worth stating because
+        // nothing about it is visible from the field: SecondsF() narrows
+        // tick * fixedDelta to a float, and a script's elapsed time is derived
+        // from it. The narrowing happens BEFORE the subtraction, so the value a
+        // script integrates sits on a lattice whose spacing grows with the tick
+        // count. The same logical tick of the same scene therefore produced a
+        // different number depending on what the process had done beforehand -
+        // and a script driving std::sin off it moved to a different place.
+        SimulationClock clock;
         clock.fixedDelta = 1.0f / clamped;
+        registry.ctx().insert_or_assign<SimulationClock>(std::move(clock));
     }
 
     if (root.Has("Physics")) {

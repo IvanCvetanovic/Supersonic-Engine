@@ -226,6 +226,59 @@ static void testAValueOnTheWrongEntityIsADifferentState() {
               "swapping two entities' positions is a different state");
 }
 
+static void testLoadingASceneStartsItsClockAtZero() {
+    // The context survives registry.clear(), so a scene load used to inherit
+    // the tick counter of everything the process had already simulated. It read
+    // as harmless - a counter nobody prints - and it is not, because the number
+    // it feeds is narrowed to a float BEFORE anything subtracts from it:
+    // SecondsF() is tick * fixedDelta as a float, and a script's elapsed time
+    // is derived from that. The lattice it lands on gets coarser as the tick
+    // count grows, so the same logical tick of the same scene produced a
+    // different number depending on what had run beforehand, and a script
+    // driving std::sin off it moved somewhere else.
+    entt::registry registry;
+    buildScene(registry);
+
+    // A process that has been running a while.
+    auto& before = registry.ctx().emplace<SimulationClock>();
+    before.tick = 500000;
+    before.droppedSeconds = 4.25;
+    before.alpha = 0.5f;
+    before.fixedDelta = 1.0f / 20.0f;
+
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(SceneSerializer::DeserializeFromString(registry, text).ok, "the scene loads");
+
+    const auto& after = registry.ctx().get<SimulationClock>();
+    CHECK_EQ(after.tick, uint64_t{0});
+    CHECK_MSG(after.droppedSeconds == 0.0, "a fresh scene has lost no time yet");
+    CHECK_NEAR(after.alpha, 0.0f);
+
+    // And the authored rate still arrives, which is the part that must NOT be
+    // reset to a default - the scene said 20 Hz and it means it.
+    CHECK_NEAR(after.fixedDelta, 1.0f / 20.0f);
+}
+
+static void testASceneWithNoAuthoredRateDoesNotInheritTheLastOnes() {
+    // Every scene written before the tick could be authored has no Simulation
+    // block, and the rate assignment used to sit inside the check for one - so
+    // such a scene silently kept whatever the previous scene had asked for.
+    // Loading a 20 Hz level and then a 60 Hz one that predates the block ran the
+    // second at 20, which is the file's own stated rule about the context being
+    // always assigned rather than merely read, broken three lines below where it
+    // is written down.
+    entt::registry registry;
+
+    auto& clock = registry.ctx().emplace<SimulationClock>();
+    clock.fixedDelta = 1.0f / 20.0f;
+
+    // A scene from before the block existed: entities and nothing else.
+    CHECK_MSG(SceneSerializer::DeserializeFromString(registry, R"({"Entities": []})").ok,
+              "a scene with no Simulation block still loads");
+
+    CHECK_NEAR(registry.ctx().get<SimulationClock>().fixedDelta, 1.0f / 60.0f);
+}
+
 static void testAnEntityWithNoPlaceInTheWorldIsStillState() {
     // A HUD element has no transform, by design, because it lives in screen
     // space - and ScriptEngine deliberately runs scripts on entities with or
@@ -670,6 +723,8 @@ static void runTests() {
     testTheSameSceneHashesTheSameHoweverManyLoadsPrecededIt();
     testASceneLoadedTwiceThroughTheSerializerHashesTheSame();
     testAValueOnTheWrongEntityIsADifferentState();
+    testLoadingASceneStartsItsClockAtZero();
+    testASceneWithNoAuthoredRateDoesNotInheritTheLastOnes();
     testAnEntityWithNoPlaceInTheWorldIsStillState();
     testWhereAScriptIsCountsAsState();
     testSleepStateIsPartOfTheState();
