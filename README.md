@@ -713,15 +713,19 @@ HUSK's nineteen animated models. What is left is here.
 
 **Known and written down elsewhere, repeated because they bite a game**
 
-- A scene load requested from inside a tick is applied at frame scope, so the
-  frame's remaining ticks run against the old scene and how many that is depends
-  on frame pacing. A recording is scoped to one scene, which sidesteps it.
-- The broadphase sorts on a partial key with `std::sort`, so the order of equal
-  keys — and therefore the impulse solve order for ties — is whatever the
-  standard library does. Reproducible on one machine, not across two
-  implementations.
-- `registry.ctx()` is read by every tick and hashed by nothing, so a tick-zero
-  checkpoint is necessary and not sufficient.
+- A replay is scoped to ONE scene. The header names one, and a run that changes
+  level part way through is not something `--replay` reproduces.
+- The state hash covers what a tick writes — transforms, bodies, script state,
+  and the world's gravity and ground plane. It does not cover the rest of
+  `registry.ctx()`, which is caches and pointers to subsystems, so a tick-zero
+  checkpoint is necessary and not sufficient: a scene edited in a way the hash
+  cannot see still replays wrongly and says nothing until the difference reaches
+  a transform.
+- **Cross-platform determinism is not claimed.** Reproducibility is tested on
+  one machine and one standard library. The float maths is the same everywhere,
+  and the ordering hazards that were found have been closed, but nobody has run
+  a recording made under MSVC against a replay under libstdc++ — so treat it as
+  untested rather than as working.
 
 **Deliberate, and not gaps**
 

@@ -1193,6 +1193,42 @@ static void testSweepAndPruneSkipsPairsSeparatedOffAxis() {
     CHECK_MSG(pairs.empty(), "boxes apart on Y must not be reported as candidates");
 }
 
+static void testProxiesStartingAtTheSameXKeepAStatedOrder() {
+    // The sweep sorts on min.x, and a row of crates placed on a grid all share
+    // one. Comparing on min.x alone leaves every tie to std::sort, which is free
+    // to order equal elements however its implementation chooses - so the same
+    // scene produced one pair order under one standard library and potentially
+    // another elsewhere.
+    //
+    // That is not confined to the broadphase. The pair list comes out in this
+    // order, the solver applies impulses in the order it receives pairs, and
+    // floating-point addition is not associative - so two machines resolve the
+    // same pile-up to slightly different positions and drift from there. It is
+    // the one determinism hole that fixing the clock and the input cannot
+    // close, and it only ever shows up as a replay that reproduces at home and
+    // not on somebody else's machine.
+    //
+    // Built BACK TO FRONT, so a sort that merely preserved input order would
+    // not pass this: the expected answer is the index order, not the order the
+    // proxies arrived in.
+    std::vector<PhysicsSystem::Proxy> proxies;
+    for (int i = 4; i >= 0; --i) {
+        proxies.push_back(makeProxy(static_cast<uint32_t>(10 + i), static_cast<size_t>(i),
+                                    glm::vec3(0.0f, static_cast<float>(i) * 4.0f, 0.0f),
+                                    glm::vec3(1.0f, static_cast<float>(i) * 4.0f + 1.0f, 1.0f),
+                                    1.0f));
+    }
+
+    std::vector<std::pair<size_t, size_t>> pairs;
+    PhysicsSystem::SweepAndPrune(proxies, pairs);
+
+    for (size_t i = 0; i + 1 < proxies.size(); ++i) {
+        CHECK_MSG(proxies[i].index < proxies[i + 1].index,
+                  "proxies sharing a min.x must come out in index order, not in whichever "
+                  "order the standard library's sort happened to leave them");
+    }
+}
+
 static void testSweepAndPruneIgnoresTwoStatics() {
     std::vector<PhysicsSystem::Proxy> proxies;
     proxies.push_back(makeProxy(1, 0, glm::vec3(0.0f), glm::vec3(1.0f), 0.0f));
@@ -3071,6 +3107,7 @@ static void runTests() {
     testRaycastRespectsItsLayerMask();
     testSweepAndPruneFindsOverlappingPairs();
     testSweepAndPruneSkipsPairsSeparatedOffAxis();
+    testProxiesStartingAtTheSameXKeepAStatedOrder();
     testSweepAndPruneIgnoresTwoStatics();
     testBoxesSeparateInsteadOfOverlapping();
     testBodyRestsOnStaticPlatformNotThroughIt();

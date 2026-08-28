@@ -507,6 +507,21 @@ void SupersonicApp::applyPendingSceneLoad() {
     if (m_editorLayer) {
         m_editorLayer->OnSceneLoaded(m_registry, result);
     }
+
+    // The new scene starts from a whole tick, not from part of one.
+    //
+    // Whatever the accumulator was holding was time owed to the level being
+    // left, and the tick loop breaks out the moment a load is queued precisely
+    // so that time is not spent there. Carrying it across would spend it in the
+    // new scene instead - a level that begins a fraction of a tick in, by an
+    // amount that depends on when during the frame the previous level asked to
+    // leave.
+    //
+    // Deliberately NOT counted as dropped time. droppedSeconds means "this
+    // machine could not keep up", which a game can read and act on; a scene
+    // change is not that, and folding it in would make every level transition
+    // look like a performance problem.
+    m_physicsAccumulator = 0.0f;
 }
 
 void SupersonicApp::PushLayer(std::unique_ptr<EngineLayer> layer) {
@@ -1301,6 +1316,23 @@ void SupersonicApp::Run() {
 
                 m_physicsAccumulator -= gameTick;
                 ++steps;
+
+                // A TICK ASKED FOR A DIFFERENT SCENE, so stop ticking this one.
+                //
+                // The load itself still happens at frame scope, below BuildUI,
+                // because clearing and refilling the registry while a panel is
+                // iterating views over it is the crash that placement is there
+                // to avoid. What was wrong was carrying on: the load was
+                // requested by a tick and the frame kept running the remaining
+                // ticks against the scene being left, so how much extra
+                // simulation a level transition ran depended on how far behind
+                // the machine happened to be.
+                //
+                // On a fast machine, none. On one running late, up to four more
+                // ticks of a level the game has already decided to leave -
+                // which is enough for the player to be killed by something in a
+                // scene they were no longer in.
+                if (m_sceneManager.HasPending()) break;
             }
 
             // What the loop could not run, DROPPED AND COUNTED rather than

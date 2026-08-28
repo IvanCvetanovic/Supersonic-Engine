@@ -344,6 +344,40 @@ static void testWhereAScriptIsCountsAsState() {
               "and which counter holds it matters as much as what it holds");
 }
 
+static void testTheWorldsGravityIsPartOfTheState() {
+    // Everything else the hash walks is on an entity, and the registry's
+    // CONTEXT is read by every tick and was hashed by nothing. Most of what
+    // lives there is a pointer to a subsystem or a cache and is rightly out;
+    // gravity is not. Every integration step reads it, so two runs under
+    // different gravity are two different simulations - and the oracle called
+    // them identical until something had fallen far enough for a transform to
+    // notice, which names a tick long after the one that differed.
+    entt::registry earth;
+    entt::registry moon;
+
+    for (entt::registry* r : { &earth, &moon }) {
+        const auto e = r->create();
+        r->emplace<TransformComponent>(e, glm::vec3(0.0f, 5.0f, 0.0f));
+        r->emplace<RigidBodyComponent>(e);
+        r->ctx().emplace<PhysicsSettings>();
+    }
+    moon.ctx().get<PhysicsSettings>().gravity = glm::vec3(0.0f, -1.62f, 0.0f);
+
+    CHECK_MSG(StateHash::Compute(earth) != StateHash::Compute(moon),
+              "two worlds pulling differently are different worlds, before anything has moved");
+
+    // And the ground plane, which the solver also reads every step.
+    entt::registry floored;
+    const auto e = floored.create();
+    floored.emplace<TransformComponent>(e, glm::vec3(0.0f, 5.0f, 0.0f));
+    floored.emplace<RigidBodyComponent>(e);
+    auto& settings = floored.ctx().emplace<PhysicsSettings>();
+    settings.hasGroundPlane = true;
+
+    CHECK_MSG(StateHash::Compute(floored) != StateHash::Compute(earth),
+              "a world with a floor is not the same as one without");
+}
+
 static void testSleepStateIsPartOfTheState() {
     // A body asleep on one machine and awake on another has not diverged yet
     // and will on the next thing that touches it. Leaving it out of the hash
@@ -727,6 +761,7 @@ static void runTests() {
     testASceneWithNoAuthoredRateDoesNotInheritTheLastOnes();
     testAnEntityWithNoPlaceInTheWorldIsStillState();
     testWhereAScriptIsCountsAsState();
+    testTheWorldsGravityIsPartOfTheState();
     testSleepStateIsPartOfTheState();
     testTheClockIsDerivedRatherThanAccumulated();
 }

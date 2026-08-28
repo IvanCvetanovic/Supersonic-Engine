@@ -164,14 +164,40 @@ The rate assignment moved out of `if (root.Has("Simulation"))` at the same time:
 every scene written before the tick could be authored has no such block, so
 those scenes silently inherited the previous scene's rate.
 
-## Found, tied to a line, not yet fixed
+## Found, tied to a line, and since fixed
 
-Listed so they are not rediscovered as mysteries. Each is a real defect with a
-file and a line; none is speculative.
+These were listed as "not yet fixed" when this document was written, so they
+would not be rediscovered as mysteries. Each was a real defect with a file and a
+line, and all three were closed in one commit after Phase 3:
 
-| | Where | What |
-|---|---|---|
-| **A scene load from inside a tick lands at frame scope** | `SupersonicApp.cpp:1174` | `applyPendingSceneLoad` runs once per frame, so the frame's remaining ticks run against the old scene, and how many that is depends on frame pacing. Scoping a recording to a single scene avoids it for v1, and the header names one scene, so say that is the limit. |
+- **A scene load from inside a tick landed at frame scope.** The load still
+  happens below `BuildUI` — clearing the registry while a panel iterates views
+  over it is the crash that placement avoids — but the tick loop now *breaks*
+  the moment one is queued. Carrying on meant up to four more ticks of a level
+  the game had already decided to leave, the number depending on how far behind
+  the machine was. The accumulator is reset on the load too, so a new scene
+  begins on a whole tick rather than a fraction of one; deliberately not counted
+  as dropped time, because `droppedSeconds` means "could not keep up" and a
+  level transition is not that.
+- **The broadphase sorted on a partial key.** `std::sort` on `min.x` alone left
+  every tie to introsort. That is not confined to the broadphase: pairs come out
+  in that order, the solver applies impulses in the order it receives them, and
+  floating-point addition is not associative — so two machines resolve one
+  pile-up differently and drift. A row of crates on a grid all share a `min.x`,
+  so it is the ordinary case, not a corner. Now a total order on
+  `(min.x, index)`; the test builds its proxies back-to-front so a sort that
+  merely preserved input order would fail it, and removing the tiebreaker fails
+  it 4/4 under MSVC.
+- **`registry.ctx()` was read by every tick and hashed by nothing.** Closed
+  narrowly rather than wholesale: most of what lives there is a cache or a
+  pointer to a subsystem and is rightly out, but **gravity and the ground plane**
+  are read by every integration step, so two runs under different gravity were
+  two different simulations that the oracle called identical.
+
+What remains is a limit rather than a defect, and is now stated in the README:
+**cross-platform determinism is untested.** The ordering hazards that were found
+are closed, but nobody has run a recording made under MSVC against a replay
+under libstdc++.
 | **The broadphase sorts on a partial key** | `PhysicsSystem.cpp:319` | `std::sort` is not stable, so the order of equal keys — and therefore the impulse solve order for ties — is whatever the standard library does. Same-machine reproducible; not reproducible across two standard library implementations. |
 | **`registry.ctx()` is read by every tick and hashed by nothing** | `StateHash.cpp:48` | Open-ended: hashing it wholesale is not obviously right, since much of what lives there is a pointer to an engine subsystem. Named because a tick-0 checkpoint cannot mean what it should until this is decided. |
 

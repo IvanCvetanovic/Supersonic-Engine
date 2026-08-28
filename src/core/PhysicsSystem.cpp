@@ -316,8 +316,26 @@ void PhysicsSystem::SweepAndPrune(std::vector<Proxy>& proxies,
     // Sorted on X, then a forward scan that stops as soon as the next proxy
     // starts past the current one's end. This is what turns the O(n^2) all-pairs
     // test into something that costs a sort plus the actual overlaps.
-    std::sort(proxies.begin(), proxies.end(),
-              [](const Proxy& lhs, const Proxy& rhs) { return lhs.min.x < rhs.min.x; });
+    //
+    // A TOTAL ORDER, and the index is what makes it one. Comparing on min.x
+    // alone leaves every tie to std::sort, which is introsort and is free to
+    // order equal elements however its implementation feels - so a row of
+    // crates all starting at the same x, which is what a stacked or grid-placed
+    // scene is made of, came out in one order under MSVC and potentially
+    // another under libstdc++.
+    //
+    // That reaches the simulation rather than stopping at the broadphase: the
+    // pair list is emitted in this order, the solver applies impulses in the
+    // order it receives pairs, and floating-point addition is not associative.
+    // Two machines would resolve the same pile-up to slightly different
+    // positions and drift apart from there - which is a determinism hole that
+    // no amount of fixing the clock or the input would close, and which only
+    // ever shows up as "the replay from my machine does not reproduce on
+    // yours".
+    std::sort(proxies.begin(), proxies.end(), [](const Proxy& lhs, const Proxy& rhs) {
+        if (lhs.min.x != rhs.min.x) return lhs.min.x < rhs.min.x;
+        return lhs.index < rhs.index;
+    });
 
     for (size_t i = 0; i < proxies.size(); ++i) {
         const Proxy& a = proxies[i];

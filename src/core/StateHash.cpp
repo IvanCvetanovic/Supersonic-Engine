@@ -1,5 +1,6 @@
 #include "core/StateHash.hpp"
 #include "core/Components.hpp"
+#include "core/PhysicsSettings.hpp"
 
 #include <cstring>
 
@@ -150,7 +151,31 @@ uint64_t Compute(const entt::registry& registry) {
     // The count, so an entity whose contribution happens to be zero, or a pair
     // that cancels, cannot hide. Folded in at the end where the order-
     // independence above is already established.
-    return mix(total, &entities, sizeof(entities));
+    uint64_t hash = mix(total, &entities, sizeof(entities));
+
+    // THE WORLD'S OWN SETTINGS, which are not on any entity.
+    //
+    // Everything above walks entities, and the registry's context is read by
+    // every tick and was hashed by nothing. Most of what lives there is a
+    // pointer to a subsystem or a cache and is rightly out - but gravity is
+    // not. Every integration step reads it, so two runs under different gravity
+    // are two different simulations, and the oracle called them identical right
+    // up until something had fallen far enough to notice.
+    //
+    // That is reachable without anything exotic: gravity is authored per scene
+    // and survives registry.clear() in the context, so a scene loaded over
+    // another one that failed to overwrite it would diverge with nothing to
+    // point at. Narrow on purpose - this is the ctx entry that meets the rule
+    // at the top of the header, not an argument for hashing the context
+    // wholesale.
+    if (const auto* physics = registry.ctx().find<const PhysicsSettings>()) {
+        hash = mixVec3(hash, physics->gravity);
+        const unsigned char ground = physics->hasGroundPlane ? 1u : 0u;
+        hash = mix(hash, &ground, 1);
+        hash = mixFloat(hash, physics->groundPlaneY);
+    }
+
+    return hash;
 }
 
 } // namespace Supersonic::StateHash
