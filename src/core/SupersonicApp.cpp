@@ -1045,6 +1045,11 @@ void SupersonicApp::Run() {
                 // BeginTick for why once per frame would look like it worked.
                 InterpolationSystem::BeginTick(m_registry);
 
+                // Hand this tick the input edges nothing has consumed yet. A
+                // frame that runs no tick would otherwise lose the press, and a
+                // frame that runs three would report it to all three.
+                Input::BeginTickInput();
+
                 for (int sub = 0; sub < physicsSubsteps; ++sub) {
                     SUPERSONIC_PROFILE(Physics);
                     PhysicsSystem::Update(m_registry, physicsStep, &m_stepContacts);
@@ -1072,9 +1077,31 @@ void SupersonicApp::Run() {
                 // shows is the frame's contacts rather than the last step's.
                 m_contacts.insert(m_contacts.end(), m_stepContacts.begin(), m_stepContacts.end());
 
+                // SCRIPTS RUN ON THE TICK, which is the whole point of the
+                // exercise. They used to run once per frame on the frame delta,
+                // so a script's motion was a function of how fast the display
+                // was keeping up - the exact bug SimulationClock was built to
+                // end, surviving in the one place a game actually writes its
+                // logic.
+                //
+                // Before the tracker, so "what did I touch" is answered about
+                // the contacts this frame has produced so far rather than the
+                // previous frame's. Frame-cumulative rather than per tick,
+                // which is what it already was.
+                m_contactTracker.Update(m_contacts);
+
+                { SUPERSONIC_PROFILE(Scripts); ScriptEngine::Update(m_registry, gameTick); }
+
+                // Immediately after, and inside the same tick. Spawning or
+                // destroying during the script pass invalidates the iteration
+                // the pass is in the middle of, and a spawn queued by one tick
+                // must exist before the next one runs rather than appearing at
+                // the end of the frame.
+                ScriptEngine::ApplyPendingCommands(m_registry);
+
                 // What this tick produced is what the next frames interpolate
-                // towards. After the game layers, so it captures the tick's
-                // whole result rather than physics' half of it.
+                // towards. After the scripts, so it captures the tick's whole
+                // result rather than physics' half of it.
                 InterpolationSystem::EndTick(m_registry);
 
                 m_physicsAccumulator -= gameTick;
@@ -1105,16 +1132,6 @@ void SupersonicApp::Run() {
             InterpolationSystem::Apply(m_registry, clock.alpha);
 
             { SUPERSONIC_PROFILE(Audio);     AudioSystem::Update(m_registry, *m_audioEngine, deltaTime); }
-            // Before the scripts, so "what did I touch" is answered about the
-            // step that just ran rather than the previous frame's.
-            m_contactTracker.Update(m_contacts);
-
-            { SUPERSONIC_PROFILE(Scripts);   ScriptEngine::Update(m_registry, deltaTime); }
-
-            // After them, and outside the view they ran inside. Spawning or
-            // destroying during the script pass invalidates the iteration the
-            // pass is in the middle of.
-            ScriptEngine::ApplyPendingCommands(m_registry);
             { SUPERSONIC_PROFILE(Animation); AnimationSystem::Advance(m_registry, *m_animationLibrary, deltaTime); }
             { SUPERSONIC_PROFILE(Particles); ParticleSystem::Update(m_registry, deltaTime); }
 

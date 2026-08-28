@@ -26,7 +26,7 @@
  *   6 - added SupersonicScriptData: authored parameters and per-entity state.
  *   5 - added the UI block.
  */
-#define SUPERSONIC_SCRIPT_API_VERSION 10
+#define SUPERSONIC_SCRIPT_API_VERSION 11
 
 /* Cursor modes, matching Supersonic::CursorMode. Plain ints because everything
  * across this boundary is POD, and named here so a plugin does not have to
@@ -246,7 +246,16 @@ typedef struct SupersonicScriptWorld {
 /* Per-entity state handed to a script each frame. The engine copies values in
  * before the call and copies them back out afterwards. */
 typedef struct SupersonicScriptContext {
-    float deltaTime;      /* seconds since the previous update            */
+    /* THE FIXED TICK, not the frame. Scripts run inside the simulation loop
+     * as of API 11, so this is the authored tick length and is the same number
+     * on every machine - which is what makes a script's motion reproducible
+     * rather than a function of how fast the display is keeping up.
+     *
+     * The version bump is for this line and not for any struct member: the
+     * layout is unchanged and the MEANING is not, which is worse, because a
+     * version check cannot see it and nothing about a stale plugin would look
+     * wrong. It would simply move at the wrong speed. */
+    float deltaTime;      /* seconds of simulated time this tick             */
     float elapsed;        /* seconds this script has been running         */
     float position[3];    /* in/out                                        */
     float rotation[3];    /* in/out, radians, Euler XYZ                    */

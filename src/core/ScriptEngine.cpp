@@ -31,8 +31,12 @@ namespace {
 int scriptIsDown(void*, const char* action) {
     return (action && Input::IsDown(action)) ? 1 : 0;
 }
+// The TICK's edges, not the frame's. A script runs on the simulation tick now,
+// and a tick rate below the frame rate means some frames run none - so a
+// frame-scoped press would be gone before any script could see it, and a frame
+// running three ticks would report the same press to all three.
 int scriptWasPressed(void*, const char* action) {
-    return (action && Input::WasPressed(action)) ? 1 : 0;
+    return (action && Input::TickWasPressed(action)) ? 1 : 0;
 }
 int scriptWasReleased(void*, const char* action) {
     return (action && Input::WasReleased(action)) ? 1 : 0;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
 
 namespace Supersonic {
 
@@ -32,6 +33,14 @@ bool g_hasPrevious = false;
 
 std::unordered_map<std::string, bool> g_actionCurrent;
 std::unordered_map<std::string, bool> g_actionPrevious;
+
+// Edges that have happened but no tick has consumed yet, and the set the tick
+// currently running is allowed to see. Two sets rather than one because a frame
+// may run several ticks, and only the first of them may see a given press.
+std::unordered_set<std::string> g_pendingPress;
+std::unordered_set<std::string> g_pendingRelease;
+std::unordered_set<std::string> g_tickPress;
+std::unordered_set<std::string> g_tickRelease;
 
 glm::vec2 g_mouseDelta{0.0f};
 
@@ -158,6 +167,10 @@ void Input::ClearBindings() {
     g_axisNames.clear();
     g_actionCurrent.clear();
     g_actionPrevious.clear();
+    g_pendingPress.clear();
+    g_pendingRelease.clear();
+    g_tickPress.clear();
+    g_tickRelease.clear();
     g_hasPrevious = false;
     g_current = RawInputState{};
     g_previous = RawInputState{};
@@ -343,6 +356,16 @@ void Input::Update(const RawInputState& state) {
         g_actionPrevious.try_emplace(name, down);
     }
 
+    // Latch this frame's edges for whichever tick asks next. Accumulated rather
+    // than assigned: several frames can pass between two ticks, and a press in
+    // any of them still happened.
+    for (const auto& [name, down] : g_actionCurrent) {
+        const auto previous = g_actionPrevious.find(name);
+        const bool wasDown = previous != g_actionPrevious.end() && previous->second;
+        if (down && !wasDown) g_pendingPress.insert(name);
+        if (!down && wasDown) g_pendingRelease.insert(name);
+    }
+
     // Nothing special happens when the keyboard changes hands, and that is the
     // decision rather than the omission.
     //
@@ -359,6 +382,24 @@ void Input::Update(const RawInputState& state) {
 bool Input::IsDown(const std::string& action) {
     const auto it = g_actionCurrent.find(action);
     return it != g_actionCurrent.end() && it->second;
+}
+
+void Input::BeginTickInput() {
+    // Hand the pending edges to this tick and take them off the queue. The
+    // next tick in the same frame therefore sees an empty set, which is what
+    // stops one keystroke firing three times when the frame is running late.
+    g_tickPress = std::move(g_pendingPress);
+    g_tickRelease = std::move(g_pendingRelease);
+    g_pendingPress.clear();
+    g_pendingRelease.clear();
+}
+
+bool Input::TickWasPressed(const std::string& action) {
+    return g_tickPress.find(action) != g_tickPress.end();
+}
+
+bool Input::TickWasReleased(const std::string& action) {
+    return g_tickRelease.find(action) != g_tickRelease.end();
 }
 
 bool Input::WasPressed(const std::string& action) {

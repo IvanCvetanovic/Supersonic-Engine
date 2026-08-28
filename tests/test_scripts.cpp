@@ -152,7 +152,15 @@ static void testApiVersionIsPinned() {
     // engine would read past the end of it. Version 9 widened the INPUT block
     // the same way, with the mouse delta and the cursor mode, and version 10
     // the UI block, with reading a text field and hearing it submitted.
-    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 10);
+    //
+    // Version 11 changed no struct at all, which is why it is the most
+    // dangerous bump on this list. Scripts moved inside the fixed tick, so
+    // deltaTime is now the tick length rather than the frame's, and
+    // wasPressed answers about the tick rather than the frame. A plugin built
+    // against 10 has a byte-identical layout and would load happily while
+    // moving at the wrong speed - so the gate is doing the only thing that
+    // could have caught it.
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 11);
 
     // The world block grew, so its size is pinned here too. This is the struct
     // most likely to be widened next, and a plugin whose copy is shorter than

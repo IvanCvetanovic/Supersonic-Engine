@@ -787,7 +787,114 @@ static void testTheHostOwningThePointerMeansNoContacts() {
     Input::SuppressCursorCapture(false);
 }
 
+// --- input edges for the fixed tick ---------------------------------------
+//
+// WasPressed answers "since the last FRAME", which is right for the camera and
+// the UI and wrong for anything on the simulation tick, in two directions at
+// once. A tick rate below the frame rate means some frames run no tick at all,
+// and a press during one of those is gone before a script could see it: a
+// dropped jump, on a fast machine, occasionally. A frame running late runs
+// several ticks, and a frame-scoped press is reported to every one of them: one
+// keystroke, three shots.
+
+static void testAPressSurvivesUntilATickConsumesIt() {
+    reset();
+    Input::BindActionKey("Fire", Key::Space);
+    // An idle frame first. An action observed for the very first time is seeded
+    // with whatever it currently reads, so binding and pressing in one frame is
+    // deliberately NOT an edge - see the note beside try_emplace in Input.cpp.
+    frame(RawInputState{});
+    Input::BeginTickInput();
+
+    const RawInputState down = withKey(Key::Space);
+    frame(down);   // the frame the key went down
+
+    // Several frames pass with no tick - a 20 Hz simulation on a 144 Hz
+    // display does this six times out of seven.
+    frame(down);
+    frame(down);
+
+    // The first tick to ask still sees it.
+    Input::BeginTickInput();
+    CHECK_MSG(Input::TickWasPressed("Fire"),
+              "a press that happened between ticks is not lost");
+}
+
+static void testOnlyOneTickSeesAGivenPress() {
+    reset();
+    Input::BindActionKey("Fire", Key::Space);
+    // An idle frame first. An action observed for the very first time is seeded
+    // with whatever it currently reads, so binding and pressing in one frame is
+    // deliberately NOT an edge - see the note beside try_emplace in Input.cpp.
+    frame(RawInputState{});
+    Input::BeginTickInput();
+
+    const RawInputState down = withKey(Key::Space);
+    frame(down);
+
+    Input::BeginTickInput();
+    CHECK_MSG(Input::TickWasPressed("Fire"), "the first tick of the frame sees it");
+
+    // A frame running late runs several ticks. The rest must see nothing, or
+    // one keystroke fires as many shots as the machine happened to be behind.
+    Input::BeginTickInput();
+    CHECK_MSG(!Input::TickWasPressed("Fire"), "and the second tick does not");
+    Input::BeginTickInput();
+    CHECK_MSG(!Input::TickWasPressed("Fire"), "and neither does the third");
+}
+
+static void testATickNeverSeesAPressThatDidNotHappen() {
+    reset();
+    Input::BindActionKey("Fire", Key::Space);
+    // An idle frame first. An action observed for the very first time is seeded
+    // with whatever it currently reads, so binding and pressing in one frame is
+    // deliberately NOT an edge - see the note beside try_emplace in Input.cpp.
+    frame(RawInputState{});
+    Input::BeginTickInput();
+
+    frame(RawInputState{});
+    Input::BeginTickInput();
+    CHECK_MSG(!Input::TickWasPressed("Fire"), "nothing was pressed, nothing is reported");
+
+    // Held down is not pressed again. An action that reported its edge on every
+    // tick while the key was held would fire continuously.
+    const RawInputState down = withKey(Key::Space);
+    frame(down);
+    Input::BeginTickInput();
+    CHECK_MSG(Input::TickWasPressed("Fire"), "the edge fires once");
+
+    frame(down);
+    Input::BeginTickInput();
+    CHECK_MSG(!Input::TickWasPressed("Fire"), "and holding is not pressing again");
+}
+
+static void testAReleaseIsLatchedTheSameWay() {
+    reset();
+    Input::BindActionKey("Fire", Key::Space);
+    // An idle frame first. An action observed for the very first time is seeded
+    // with whatever it currently reads, so binding and pressing in one frame is
+    // deliberately NOT an edge - see the note beside try_emplace in Input.cpp.
+    frame(RawInputState{});
+    Input::BeginTickInput();
+
+    const RawInputState down = withKey(Key::Space);
+    frame(down);
+    Input::BeginTickInput();
+
+    frame(RawInputState{});
+    frame(RawInputState{});   // a frame with no tick in between
+
+    Input::BeginTickInput();
+    CHECK_MSG(Input::TickWasReleased("Fire"), "the release survived to the next tick");
+    Input::BeginTickInput();
+    CHECK_MSG(!Input::TickWasReleased("Fire"), "and only one tick saw it");
+}
+
 static void runTests() {
+    testAPressSurvivesUntilATickConsumesIt();
+    testOnlyOneTickSeesAGivenPress();
+    testATickNeverSeesAPressThatDidNotHappen();
+    testAReleaseIsLatchedTheSameWay();
     testActionRespondsToItsKey();
     testPressIsAnEdgeNotALevel();
     testKeyHeldAtStartupIsNotAPress();
@@ -829,4 +936,4 @@ static void runTests() {
     testTheHostOwningThePointerMeansNoContacts();
 }
 
-TEST_MAIN("test_input", 92)
+TEST_MAIN("test_input", 135)

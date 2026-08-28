@@ -235,6 +235,26 @@ public:
     // anything queries, or edge detection reports the same press twice.
     static void Update(const RawInputState& state);
 
+    // --- Edges for the FIXED TICK, which is not the frame -----------------
+    //
+    // WasPressed below answers "did this action go down since the last frame",
+    // which is the right question for anything that runs once per frame - the
+    // camera, the editor, the UI. It is the wrong question for anything running
+    // on the simulation tick, and wrong in two directions at once.
+    //
+    // A tick rate below the frame rate means some frames run NO tick, and the
+    // press that happened during one of them is gone before anything on the
+    // tick could see it - a dropped jump, on a fast machine, occasionally.
+    // A frame that runs SEVERAL ticks reports the same press to every one of
+    // them, so one keystroke fires three shots.
+    //
+    // So a press is LATCHED when it happens and handed to the first tick that
+    // asks. Held until a tick consumes it, seen by exactly one tick, and no
+    // tick ever sees a press that did not happen.
+    static void BeginTickInput();
+    static bool TickWasPressed(const std::string& action);
+    static bool TickWasReleased(const std::string& action);
+
     static bool IsDown(const std::string& action);
     static bool WasPressed(const std::string& action);
     static bool WasReleased(const std::string& action);
