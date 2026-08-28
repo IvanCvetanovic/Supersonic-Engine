@@ -49,7 +49,24 @@ uint64_t Compute(const entt::registry& registry) {
         // Seeded with the entity, so a value found on a different entity is a
         // different state - two crates swapping positions is not the same
         // world, even though the multiset of positions is unchanged.
-        const auto id = static_cast<uint32_t>(entt::to_integral(entity));
+        //
+        // THE INDEX, NOT THE HANDLE. An EnTT handle packs an index and a
+        // VERSION into one integer, and the version counts how many times that
+        // slot has been recycled - destroying an entity bumps it so a stale
+        // handle can be spotted. registry.clear() destroys everything, so a
+        // scene loaded a second time into the same registry gets its indices
+        // back carrying different versions.
+        //
+        // Seeding on the whole handle therefore made the hash a function of how
+        // many scenes the process had loaded, which is not state. The editor
+        // reloads on every Stop and Play; a packaged game reloads the level the
+        // player just died in. Both of those changed the number, so "this run
+        // reproduces" only ever meant "within one process that has done nothing
+        // else" - and the moment a replay is compared against a recording made
+        // in a different process, that is no longer a useful thing to have
+        // proved. The version is bookkeeping about handles; the index is the
+        // identity, and the identity is what the state is keyed on.
+        const auto id = static_cast<uint32_t>(entt::to_entity(entity));
         uint64_t hash = mix(1469598103934665603ull, &id, sizeof(id));
 
         const auto& transform = registry.get<const TransformComponent>(entity);

@@ -22,6 +22,7 @@
 #include "core/PhysicsSystem.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/Components.hpp"
+#include "core/SceneSerializer.hpp"
 
 #include <string>
 #include <vector>
@@ -124,6 +125,84 @@ static void testTheHashDoesNotDependOnEntityCreationOrder() {
 
     CHECK_MSG(StateHash::Compute(forward) == StateHash::Compute(shuffled),
               "the same state must hash the same however it was built");
+}
+
+static void testTheSameSceneHashesTheSameHoweverManyLoadsPrecededIt() {
+    // THE ONE THAT DECIDES WHETHER ANY OF THIS SURVIVES LEAVING THE PROCESS.
+    //
+    // Every other test here builds one registry and never reloads it, so all
+    // of them agree with a hash that depends on how many scenes have been
+    // loaded before this one. A real run does not look like that: the editor
+    // loads a scene, plays it, stops, loads it again; a packaged game loads a
+    // level, the player dies, it loads the same level. If the hash moves across
+    // a reload then "this run reproduces" is a claim about one process that has
+    // done nothing else, which is not a claim anybody can use.
+    //
+    // EnTT's entity handle is an index and a VERSION packed into one integer,
+    // and destroying an entity bumps the version so a stale handle can be
+    // spotted. registry.clear() destroys everything, so the second load gets
+    // the same indices back carrying different versions - and a seed taken from
+    // the whole handle therefore differs while the state is identical.
+    entt::registry registry;
+
+    buildScene(registry);
+    const uint64_t first = StateHash::Compute(registry);
+
+    // The same scene again, into the same registry, exactly as a reload does.
+    registry.clear();
+    buildScene(registry);
+    const uint64_t second = StateHash::Compute(registry);
+
+    CHECK_MSG(first == second,
+              "a reloaded scene is the same state and must hash the same: " +
+                  std::to_string(first) + " vs " + std::to_string(second));
+
+    // And a third, because the version increments each time: two loads could
+    // agree by an accident that three would not survive.
+    registry.clear();
+    buildScene(registry);
+    CHECK_MSG(StateHash::Compute(registry) == first, "and again on the third load");
+}
+
+static void testASceneLoadedTwiceThroughTheSerializerHashesTheSame() {
+    // The test above proves the HASH does not care how many times a registry
+    // has been cleared. This proves the thing that actually has to be true for
+    // a replay to be worth anything: that the real load path - the one an
+    // editor Stop/Play and a packaged game's level reload both go through -
+    // puts the world back in a state the oracle calls identical.
+    //
+    // Those are two different claims and only this one involves
+    // SceneSerializer, which clears the registry and then creates one entity
+    // per array element in file order. That order is what makes the indices
+    // line up; if a load ever started creating before clearing, or resolved
+    // parents by creating out of order, the hash would move and this would say
+    // so.
+    entt::registry authored;
+    buildScene(authored);
+    const std::string text = SceneSerializer::SerializeToString(authored);
+
+    entt::registry loaded;
+    const SerializationResult first = SceneSerializer::DeserializeFromString(loaded, text);
+    CHECK_MSG(first.ok, "the scene must load at all: " + first.message);
+    const uint64_t firstHash = StateHash::Compute(loaded);
+
+    // The same text again, into the registry that already holds it. This is a
+    // reload, not a fresh process.
+    const SerializationResult second = SceneSerializer::DeserializeFromString(loaded, text);
+    CHECK_MSG(second.ok, "and load again: " + second.message);
+
+    CHECK_MSG(StateHash::Compute(loaded) == firstHash,
+              "reloading a scene must land on the state it was already in");
+
+    // And a registry that has never loaded anything agrees with one that has,
+    // which is the cross-PROCESS half: a recording made this morning and a
+    // replay run this afternoon are two different registries with two different
+    // histories, and they have to agree about tick zero or nothing after it
+    // means anything.
+    entt::registry fresh;
+    CHECK_MSG(SceneSerializer::DeserializeFromString(fresh, text).ok, "a fresh registry loads it");
+    CHECK_MSG(StateHash::Compute(fresh) == firstHash,
+              "a scene's state does not depend on what the registry did before it");
 }
 
 static void testAValueOnTheWrongEntityIsADifferentState() {
@@ -523,6 +602,8 @@ static void runTests() {
     testTheSameSceneSteppedTwiceAgreesExactly();
     testTheHashMovesWhenTheSimulationDoes();
     testTheHashDoesNotDependOnEntityCreationOrder();
+    testTheSameSceneHashesTheSameHoweverManyLoadsPrecededIt();
+    testASceneLoadedTwiceThroughTheSerializerHashesTheSame();
     testAValueOnTheWrongEntityIsADifferentState();
     testSleepStateIsPartOfTheState();
     testTheClockIsDerivedRatherThanAccumulated();
