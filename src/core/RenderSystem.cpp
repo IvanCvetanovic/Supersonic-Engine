@@ -31,9 +31,12 @@ namespace {
 //             than the file said, which reads as the lighting being wrong.
 //   emissive  REPLACED, so a surface a file marked as glowing glows and its
 //             neighbours do not.
-//   cutoff    the ENTITY's, always. It is one number for the draw and the
-//             depth pass cuts with one texture; see the note in
-//             GatherShadowCasters.
+//   cutoff    the SURFACE's when it names one, the entity's otherwise. It was
+//             the entity's always, and the entity's is copied from the first
+//             surface on import - so a MASK leaf packed behind an opaque
+//             surface was cut at zero and drew as a solid rectangle. A widening
+//             rather than a replacement, so the inspector's Alpha Cutoff slider
+//             still reaches a surface that says nothing about alpha.
 PushConstantData buildPushConstants(const entt::registry& registry, entt::entity entity,
                                     const glm::mat4& model,
                                     const MeshMaterial* surface = nullptr) {
@@ -93,6 +96,23 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
         push.material.y = resolved.metallic;
         push.emissive = glm::vec4(resolved.emissiveColor * resolved.emissiveStrength,
                                   resolved.occlusionStrength);
+
+        // The cutoff, WHEN THIS SURFACE NAMES ONE. It used to be the entity's
+        // always, and the entity's is copied from the FIRST surface on import -
+        // so a leaf card packed as the fourth surface of a model whose first is
+        // opaque was cut at zero, which is not cut at all. A fence, a grate or a
+        // leaf behind any opaque surface drew as a solid rectangle, and there
+        // was no authoring mistake to find: the file said MASK and the engine
+        // read it and dropped it one surface later.
+        //
+        // Only when it names one, so this is a widening rather than a
+        // replacement. A surface that says nothing about alpha leaves the
+        // entity's cutoff standing, which is what keeps the inspector's Alpha
+        // Cutoff slider working on an imported model - a straight replacement
+        // would make that control silently inert on everything multi-material.
+        if (resolved.alphaCutoff > 0.0f) {
+            push.material.w = resolved.alphaCutoff;
+        }
     }
 
     // Both passes go through this one function, so the shadow pass skins with
@@ -404,7 +424,69 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
             }
         }
 
-        out.push_back(caster);
+        // ONE CASTER PER CUT-OUT SURFACE, and one for the whole mesh otherwise.
+        //
+        // Everything above resolved a single material set from the ENTITY's
+        // texture ids, which are the first surface's. That is right for a
+        // single-material model and wrong for every other kind: a model whose
+        // holes are on its fourth surface cast the silhouette of its first, and
+        // a model whose FIRST surface is the cut-out one cut every other
+        // surface against that surface's albedo at its own UVs - a chassis with
+        // leaf-shaped holes in it, in all eighteen depth passes, cached by the
+        // shadow cache so it looked stable and deliberate.
+        //
+        // Split only where a surface actually names a cutoff. A mesh whose
+        // surfaces all cut at zero keeps the single whole-mesh caster it always
+        // had, so the common case - and every one of HUSK's 166 materials,
+        // which are all OPAQUE - does exactly the work it did before.
+        const bool anySurfaceCuts =
+            std::any_of(mesh->sections.begin(), mesh->sections.end(),
+                        [](const MeshSection& section) {
+                            return section.material.present && section.material.alphaCutoff > 0.0f;
+                        });
+
+        if (!anySurfaceCuts || mesh->sections.size() < 2) {
+            out.push_back(caster);
+            continue;
+        }
+
+        for (const MeshSection& section : mesh->sections) {
+            if (section.indexCount == 0) continue;
+
+            ShadowCaster surfaceCaster = caster;
+            surfaceCaster.firstIndex = section.firstIndex;
+            surfaceCaster.indexCount = section.indexCount;
+
+            const MeshMaterial resolved =
+                ResolveSurface(section.material,
+                               registry.try_get<SurfaceOverridesComponent>(entity));
+
+            if (resolved.alphaCutoff > 0.0f) {
+                // This surface's own texture, so the holes are the ones this
+                // surface has. Resolved here for the same reason the entity's
+                // was: the depth pass runs with a render pass open and cannot
+                // afford a call that allocates.
+                if (const vk::DescriptorSet set =
+                        textures.AcquireMaterialSet(section.albedoTextureID,
+                                                    section.normalTextureID,
+                                                    section.ormTextureID)) {
+                    surfaceCaster.alphaCutoff = resolved.alphaCutoff;
+                    surfaceCaster.baseAlpha = alpha.baseAlpha * resolved.baseColor.a;
+                    surfaceCaster.materialSet = set;
+                }
+            } else {
+                // An opaque surface of a model that has a cut-out one somewhere
+                // else. It occludes everywhere and must not inherit the
+                // entity-level cut resolved above, or a solid chassis would
+                // develop the holes of the leaf beside it.
+                surfaceCaster.alphaCutoff = 0.0f;
+                surfaceCaster.baseAlpha = 1.0f;
+                surfaceCaster.materialSet = vk::DescriptorSet{};
+                surfaceCaster.uvTransform = UvTransform{};
+            }
+
+            out.push_back(surfaceCaster);
+        }
     }
 
     // Solid casters first. The depth pass then changes pipeline once instead of
@@ -453,6 +535,13 @@ uint64_t RenderSystem::ShadowPassSignature(const std::vector<ShadowCaster>& cast
         const VkBuffer buffer = static_cast<VkBuffer>(caster.vertexBuffer);
         signature = MixSignature(signature, &buffer, sizeof(buffer));
         signature = MixSignature(signature, &caster.indexCount, sizeof(caster.indexCount));
+
+        // WHICH run of indices, not only how many. Two surfaces of one mesh can
+        // have the same index count - a cube of six quads is the ordinary case -
+        // so without this the cache cannot tell "the leaf casts" from "the panel
+        // beside it casts", and a change that swapped which surface cuts would
+        // serve the shadow map recorded before it.
+        signature = MixSignature(signature, &caster.firstIndex, sizeof(caster.firstIndex));
 
         // What the cut is made against. Miss any of these three and the cache
         // serves a shadow map recorded before the material changed: edit a
@@ -562,7 +651,10 @@ void RenderSystem::RenderDepthOnly(
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
             0, sizeof(ShadowPushConstantData), &push);
 
-        commandBuffer.drawIndexed(caster.indexCount, 1, 0, 0, 0);
+        // firstIndex, not zero. A caster is one run of indices now rather than
+        // always a whole mesh, which is what lets a cut-out surface be cut
+        // against its OWN texture instead of the first surface's.
+        commandBuffer.drawIndexed(caster.indexCount, 1, caster.firstIndex, 0, 0);
     }
 }
 

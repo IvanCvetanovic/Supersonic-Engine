@@ -143,6 +143,17 @@ public:
         // about why. Three values weigh less than a pointer plus that argument.
         vk::Buffer vertexBuffer{};
         vk::Buffer indexBuffer{};
+
+        // WHICH RUN OF INDICES. A caster used to be a whole mesh, because the
+        // depth pass had one material for it - and that made a cut-out on any
+        // surface but the first impossible to express: the holes are in that
+        // surface's texture, and one draw can bind only one.
+        //
+        // A mesh whose surfaces all cut at zero is still ONE caster covering
+        // every index, which is the overwhelmingly common case and every model
+        // in HUSK. Splitting only happens where a surface actually cuts, so
+        // nothing that did one draw now does eight.
+        uint32_t firstIndex{0};
         uint32_t indexCount{0};
         uint32_t meshID{0};
 

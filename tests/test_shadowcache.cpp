@@ -401,7 +401,45 @@ static void testAnOpaqueMaterialsAlphaNeverReachesTheDepthPass() {
               "an opaque caster's alpha factor is normalised, not carried");
 }
 
+static void testTwoSurfacesOfOneMeshDoNotShareASignature() {
+    // A caster is a RUN OF INDICES now, not always a whole mesh, so that a
+    // cut-out surface can be cut against its own texture rather than the first
+    // surface's. That makes firstIndex part of what the pass draws, and
+    // anything the pass draws has to be in the signature or the cache serves a
+    // shadow map recorded before it changed.
+    //
+    // The two casters carry the SAME index count on purpose. A mesh of equal
+    // quads is the ordinary case, and makeCaster leaves indexCount at zero, so
+    // a version of this test that varied only the count would hash 0 against 0
+    // and pass green with firstIndex left out of the signature entirely.
+    const glm::mat4 lightViewProj = lightMatrix(glm::vec3(0.0f, 0.0f, 10.0f));
+    const Frustum frustum = Frustum::FromMatrix(lightViewProj);
+
+    RenderSystem::ShadowCaster leaf = makeCaster(glm::vec3(0.0f));
+    leaf.indexCount = 36;
+    leaf.firstIndex = 0;
+
+    RenderSystem::ShadowCaster panel = makeCaster(glm::vec3(0.0f));
+    panel.indexCount = 36;
+    panel.firstIndex = 36;
+
+    const uint64_t first = RenderSystem::ShadowPassSignature({ leaf }, lightViewProj, frustum, 0);
+    const uint64_t second = RenderSystem::ShadowPassSignature({ panel }, lightViewProj, frustum, 0);
+
+    CHECK_MSG(first != second,
+              "two runs of the same length at different offsets are different draws");
+
+    // And the same offset really is the same signature, or the cache would
+    // never hit and the whole thing would be a slow no-op.
+    RenderSystem::ShadowCaster again = makeCaster(glm::vec3(0.0f));
+    again.indexCount = 36;
+    again.firstIndex = 36;
+    CHECK_MSG(RenderSystem::ShadowPassSignature({ again }, lightViewProj, frustum, 0) == second,
+              "the same run hashes the same, or nothing is ever cached");
+}
+
 static void runTests() {
+    testTwoSurfacesOfOneMeshDoNotShareASignature();
     testAPassIsAlwaysRecordedTheFirstTime();
     testAChangedSignatureRecordsAgain();
     testPassesDoNotShareState();

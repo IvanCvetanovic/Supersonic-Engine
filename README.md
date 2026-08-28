@@ -720,12 +720,8 @@ HUSK's nineteen animated models. What is left is here.
   keys — and therefore the impulse solve order for ties — is whatever the
   standard library does. Reproducible on one machine, not across two
   implementations.
-- **A cut-out shadow cuts against the first surface.** `GatherShadowCasters`
-  resolves one material set per caster, so a multi-surface model whose holes are
-  on a later surface casts the wrong silhouette — and, because the alpha cutoff
-  is copied from surface 0, a leaf card packed behind an opaque surface casts a
-  solid quad in both passes. Nothing HUSK needs is affected; all 166 of its
-  materials are `OPAQUE`.
+- `registry.ctx()` is read by every tick and hashed by nothing, so a tick-zero
+  checkpoint is necessary and not sufficient.
 
 **Deliberate, and not gaps**
 

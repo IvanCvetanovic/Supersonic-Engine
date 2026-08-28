@@ -655,6 +655,28 @@ so a material reads the same whichever route it takes. glTF `alphaMode: MASK`
 imports straight onto it, with the spec's 0.5 default when the file omits a
 cutoff.
 
+**Per SURFACE, and it was not.** The cutoff used to be the entity's in both
+passes, and the entity's material is copied from the model's *first* surface on
+import. So a leaf card packed as the fourth surface of a model whose first is
+opaque was cut at zero — which is not cut at all — and drew as a solid
+rectangle, in the camera and in all eighteen depth passes. There was no
+authoring mistake to find: the file said `MASK`, the engine read it, and dropped
+it one surface later. The mirror case was worse: a model whose *first* surface
+was the cut-out one cut every other surface against that surface's albedo at its
+own UVs, so a chassis grew leaf-shaped holes, cached by the shadow cache so it
+looked stable and deliberate.
+
+A surface's cutoff now wins when it names one, and the entity's stands
+otherwise — a widening rather than a replacement, so the inspector's Alpha
+Cutoff slider still reaches a surface that says nothing about alpha. In the
+depth pass a caster became a *run of indices* rather than always a whole mesh,
+so a cut-out surface is cut against its own texture. A mesh whose surfaces all
+cut at zero is still one caster covering every index, which is the common case
+and every one of HUSK's 166 materials — nothing that did one draw now does
+eight. `firstIndex` had to join the pass signature: two surfaces of one mesh can
+have the same index count, so without it the cache cannot tell one from the
+other.
+
 **Where that alpha reaches the light.** A depth pass records one bit per texel -
 blocked or not blocked - so the two halves of transparency get the only two
 answers that bit has.
