@@ -192,6 +192,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"Pitch\": " << camera->pitch << ",\n";
         out << indent << "  \"MovementSpeed\": " << camera->movementSpeed << ",\n";
         out << indent << "  \"MouseSensitivity\": " << camera->mouseSensitivity << ",\n";
+        out << indent << "  \"FlyControls\": "
+            << (camera->flyControlsEnabled ? "true" : "false") << ",\n";
         // aspect is not persisted: it is recomputed from the viewport panel
         // every frame, so a stored value would be wrong on any other layout.
         out << indent << "  \"IsPrimary\": " << (camera->isPrimary ? "true" : "false") << "\n";
@@ -686,6 +688,13 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // Defaults true, matching the component, so a scene authored before
         // the flag existed still yields a usable camera.
         camera.isPrimary = c["IsPrimary"].AsBool(true);
+
+        // Also true, and the default is the whole compatibility story: this
+        // component is emplace_or_replace'd above, so the struct's own default
+        // is overwritten by whatever the reader writes. AsBool(false) here would
+        // turn every camera in every existing scene to stone with no error
+        // message anywhere.
+        camera.flyControlsEnabled = c["FlyControls"].AsBool(true);
         camera.updateCameraVectors();
     }
 

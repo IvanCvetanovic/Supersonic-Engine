@@ -1,43 +1,58 @@
 #include "core/CameraSystem.hpp"
 #include "core/EcsUtils.hpp"
 #include "core/Input.hpp"
-#include <GLFW/glfw3.h>
 #include <algorithm>
 
 namespace Supersonic {
 
 bool CameraSystem::s_looking = false;
 
-void CameraSystem::Update(entt::registry& registry, Window& window, float deltaTime,
+void CameraSystem::Update(entt::registry& registry, float deltaTime,
                           bool allowKeyboard, bool allowMouse) {
-    GLFWwindow* nativeWin = window.GetNativeWindow();
-
-    // Raw GLFW polling bypasses ImGui's callbacks entirely, so the caller has
-    // to tell us whether the UI currently owns the input. Without this, typing
-    // "Rock" into the inspector strafed the camera and re-bound the gizmo.
     // Only the primary camera. Driving every CameraComponent in lockstep meant
     // a second camera in the scene moved along with the one you were flying.
     const entt::entity primary = FindPrimaryCamera(registry);
     if (primary == entt::null) return;
 
-    if (allowKeyboard) {
-        {
-            auto& camera = registry.get<CameraComponent>(primary);
-            const float velocity = camera.movementSpeed * deltaTime;
+    auto& camera = registry.get<CameraComponent>(primary);
 
-            if (glfwGetKey(nativeWin, GLFW_KEY_W) == GLFW_PRESS) camera.position += camera.front * velocity;
-            if (glfwGetKey(nativeWin, GLFW_KEY_S) == GLFW_PRESS) camera.position -= camera.front * velocity;
-            if (glfwGetKey(nativeWin, GLFW_KEY_A) == GLFW_PRESS) camera.position -= camera.right * velocity;
-            if (glfwGetKey(nativeWin, GLFW_KEY_D) == GLFW_PRESS) camera.position += camera.right * velocity;
-            if (glfwGetKey(nativeWin, GLFW_KEY_SPACE) == GLFW_PRESS) camera.position += camera.worldUp * velocity;
-            if (glfwGetKey(nativeWin, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.position -= camera.worldUp * velocity;
-        }
+    // THE GATE, ONCE, BEFORE EITHER HALF. A packaged game goes straight into
+    // Play and this system runs in Play, so until there was a switch here a
+    // shipped game had an editor fly camera bolted to the keys its own player
+    // is bound to - W walked the character forward and flew the view through
+    // the wall behind it at the same time.
+    //
+    // Covering the mouse as well as the keyboard, from the same read of the
+    // component, because a game that has turned the flycam off and can still
+    // have its view spun by a right-drag has not turned it off.
+    if (!camera.flyControlsEnabled) {
+        // A look already in progress is abandoned rather than left latched, for
+        // the reason spelled out below: a latch that survives the thing that
+        // set it carries a turn into a frame nobody asked for.
+        s_looking = false;
+        return;
     }
 
-    ProcessMouseInput(registry, allowMouse);
+    // The caller's veto is still required and is not redundant. Input's raw key
+    // queries are deliberately ungated - only actions and axes are silenced
+    // while a name is being typed - so without this, typing into a HUD field
+    // would fly the camera forward in exactly the shipped game this was built
+    // for.
+    if (allowKeyboard) {
+        const float velocity = camera.movementSpeed * deltaTime;
+
+        if (Input::IsKeyDown(Key::W)) camera.position += camera.front * velocity;
+        if (Input::IsKeyDown(Key::S)) camera.position -= camera.front * velocity;
+        if (Input::IsKeyDown(Key::A)) camera.position -= camera.right * velocity;
+        if (Input::IsKeyDown(Key::D)) camera.position += camera.right * velocity;
+        if (Input::IsKeyDown(Key::Space)) camera.position += camera.worldUp * velocity;
+        if (Input::IsKeyDown(Key::LeftShift)) camera.position -= camera.worldUp * velocity;
+    }
+
+    ProcessMouseInput(camera, allowMouse);
 }
 
-void CameraSystem::ProcessMouseInput(entt::registry& registry, bool allowMouse) {
+void CameraSystem::ProcessMouseInput(CameraComponent& camera, bool allowMouse) {
     // A locked pointer IS the look.
     //
     // Everything below this branch exists because the cursor is a shared,
@@ -76,21 +91,15 @@ void CameraSystem::ProcessMouseInput(entt::registry& registry, bool allowMouse) 
     const float rawX = delta.x;
     const float rawY = -delta.y;   // screen Y grows downward
 
-    const entt::entity primary = FindPrimaryCamera(registry);
-    if (primary == entt::null) return;
-    {
-        auto& camera = registry.get<CameraComponent>(primary);
+    // Scale into locals. These used to be the loop-invariant deltas themselves,
+    // mutated in place, so the k-th camera received the raw delta multiplied by
+    // sensitivity^k.
+    const float xoffset = rawX * camera.mouseSensitivity;
+    const float yoffset = rawY * camera.mouseSensitivity;
 
-        // Scale into locals. These used to be the loop-invariant deltas
-        // themselves, mutated in place, so the k-th camera received the raw
-        // delta multiplied by sensitivity^k.
-        const float xoffset = rawX * camera.mouseSensitivity;
-        const float yoffset = rawY * camera.mouseSensitivity;
-
-        camera.yaw += xoffset;
-        camera.pitch = std::clamp(camera.pitch + yoffset, -89.0f, 89.0f);
-        camera.updateCameraVectors();
-    }
+    camera.yaw += xoffset;
+    camera.pitch = std::clamp(camera.pitch + yoffset, -89.0f, 89.0f);
+    camera.updateCameraVectors();
 }
 
 } // namespace Supersonic

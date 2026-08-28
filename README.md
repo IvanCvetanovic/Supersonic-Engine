@@ -309,6 +309,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped |
 | `test_determinism` | That one binary over one scene produces the same frames twice |
 | `test_replay` | Recording a run's input and reading it back: levels carry, edges do not, floats keep their bits, and a truncated file is refused |
+| `test_camera` | That the fly camera can be turned off, in both halves, and that a scene written before the switch existed still flies |
 | `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
 | `test_codecextension` | Serialising a game's own components alongside the engine's |
 | `test_packaging` | That a packaged folder has a binary, a manifest, and the scene it was asked for |
@@ -712,14 +713,19 @@ HUSK's nineteen animated models. What is left is here.
 
 **Known and written down elsewhere, repeated because they bite a game**
 
-- The game tick is the physics step rather than an authored rate, there is no
-  interpolation by overstep fraction, and the fixed-step loop discards
-  simulated time after five steps - which a game clock must not copy, or every
-  mission timer runs slow under load. All three are in ARCHITECTURE.md §8c.
-- `UIInput::Update`'s return value is discarded; §10 already says the guard it
-  was written for does not exist.
-- The flycam polls W/A/S/D directly with no way to turn it off, which fights any
-  game that binds those keys.
+- A scene load requested from inside a tick is applied at frame scope, so the
+  frame's remaining ticks run against the old scene and how many that is depends
+  on frame pacing. A recording is scoped to one scene, which sidesteps it.
+- The broadphase sorts on a partial key with `std::sort`, so the order of equal
+  keys — and therefore the impulse solve order for ties — is whatever the
+  standard library does. Reproducible on one machine, not across two
+  implementations.
+- **A cut-out shadow cuts against the first surface.** `GatherShadowCasters`
+  resolves one material set per caster, so a multi-surface model whose holes are
+  on a later surface casts the wrong silhouette — and, because the alpha cutoff
+  is copied from surface 0, a leaf card packed behind an opaque surface casts a
+  solid quad in both passes. Nothing HUSK needs is affected; all 166 of its
+  materials are `OPAQUE`.
 
 **Deliberate, and not gaps**
 

@@ -286,6 +286,21 @@ struct CameraComponent {
     // entity in lockstep, which broke as soon as a scene had two.
     bool isPrimary{true};
 
+    // Whether W/A/S/D/Space/Shift and a right-drag fly this camera.
+    //
+    // THE OFF SWITCH A GAME NEEDS, and there was not one. A packaged game goes
+    // straight into Play, and CameraSystem runs in Play, so a shipped game had
+    // an editor fly camera bolted to the same keys the default bindings already
+    // give a player: MoveX is D/A, MoveY is W/S, Jump is Space, Sprint is Left
+    // Shift. Pressing W walked the character forward AND flew the view through
+    // the wall behind it, and nothing could turn the second one off.
+    //
+    // Defaults TRUE so that every scene authored before this existed behaves
+    // exactly as it did - the flycam is how the demo scene is meant to be flown,
+    // and a silent change to that would be a worse bug than the one being fixed.
+    // A game turns it off in the inspector and the scene carries the answer.
+    bool flyControlsEnabled{true};
+
     glm::mat4 getViewMatrix() const {
         return glm::lookAt(position, position + front, up);
     }

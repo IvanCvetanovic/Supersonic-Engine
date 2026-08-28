@@ -1114,13 +1114,19 @@ void SupersonicApp::Run() {
                                                     m_editorLayer->IsViewportHovered());
         } else {
             // Both gates, because they cover different things and this camera
-            // polls the keyboard straight from GLFW, where neither Input's veto
-            // nor ImGui's callbacks can reach it. io.WantTextInput knows about
-            // ImGui's own widgets; TextCaptureActive knows about the HUD's, and
-            // a packaged game has only the second kind - so without it, typing a
-            // name into a field flies the camera forward, unconditionally, in
-            // exactly the shipped game this was built for.
-            CameraSystem::Update(m_registry, *m_window, deltaTime,
+            // reads Input's RAW key snapshot, which no veto touches - only
+            // actions and axes are silenced while a name is being typed.
+            // io.WantTextInput knows about ImGui's own widgets;
+            // TextCaptureActive knows about the HUD's, and a packaged game has
+            // only the second kind - so without it, typing a name into a field
+            // flies the camera forward, unconditionally, in exactly the shipped
+            // game this was built for.
+            //
+            // Whether the camera may be flown AT ALL is the camera's own answer
+            // now, and it is checked inside Update rather than here: these two
+            // say who owns the device this frame, which is a different question
+            // from whether this scene wants a fly camera.
+            CameraSystem::Update(m_registry, deltaTime,
                                  m_editorLayer->IsViewportFocused() && !io.WantTextInput &&
                                      !Input::TextCaptureActive(),
                                  m_editorLayer->IsViewportHovered());

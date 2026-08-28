@@ -1255,6 +1255,15 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             if (!camera.isPrimary) {
                 ImGui::TextDisabled("Play mode renders through the primary camera.");
             }
+
+            // The off switch, and the only place a game gets to throw it: a
+            // scene is authored here and packaged as it stands, so this
+            // checkbox IS the shipped answer.
+            ImGui::Checkbox("Fly Controls", &camera.flyControlsEnabled);
+            if (camera.flyControlsEnabled) {
+                ImGui::TextDisabled("W/A/S/D, Space, Shift and right-drag fly this camera in Play.");
+                ImGui::TextDisabled("Turn off for a game that binds those keys - the defaults do.");
+            }
         }
     }
 
