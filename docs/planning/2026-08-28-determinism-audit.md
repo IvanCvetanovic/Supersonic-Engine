@@ -1,7 +1,7 @@
 # What the determinism story was actually missing
 
 > **Audit, 28 August 2026.** Written against Supersonic at `bf491fd` and
-> updated through `04ea68e` as the fixes landed the same day, after
+> updated through `94cd8d4`, by which point Phase 2 had shipped, after
 > Phase 1 of [the 27 August roadmap](2026-08-27-engine-roadmap.md) landed and
 > before Phase 2 was started. Every claim below is tied to a file and a line, or
 > to a test in this repository that fails without the fix.
@@ -47,8 +47,10 @@ against a replay run in another — is precisely the case it could not serve.
 "Five runs of one scene produce one image" was true, and was not evidence: a
 `--frames` run loads once.
 
-**So the honest estimate for Phase 2 is not 3–5 days.** The hard 80% was the
-design, not the state. What follows is what a replay would have fallen through.
+**So the honest estimate for Phase 2 was not 3–5 days.** The hard 80% was the
+design, not the state. What follows is what a replay would have fallen through —
+seven commits of it, before a line of the file format was written. Phase 2
+itself then took two.
 
 ## The two kinds of hole
 
@@ -173,11 +175,11 @@ file and a line; none is speculative.
 | **The broadphase sorts on a partial key** | `PhysicsSystem.cpp:319` | `std::sort` is not stable, so the order of equal keys — and therefore the impulse solve order for ties — is whatever the standard library does. Same-machine reproducible; not reproducible across two standard library implementations. |
 | **`registry.ctx()` is read by every tick and hashed by nothing** | `StateHash.cpp:48` | Open-ended: hashing it wholesale is not obviously right, since much of what lives there is a pointer to an engine subsystem. Named because a tick-0 checkpoint cannot mean what it should until this is decided. |
 
-## What this changes about Phase 2
+## What this changed about Phase 2
 
-The design still stands: record the resolved per-tick input, delta-encode it,
-check `StateHash` at checkpoints. Two corrections the audit forced, both about
-the file rather than the engine:
+The design stood: record the resolved per-tick input, delta-encode it, check
+`StateHash` at checkpoints. Two corrections the audit forced, both about the
+file rather than the engine, and both are in the shipped format:
 
 - **An edge is not a level.** Delta encoding that holds every channel until it
   changes turns a one-tick press into a press held for every tick until the next
@@ -194,22 +196,40 @@ The open decision that was blocking the format has been made. **UI clicks are
 tick-readable, so they are now latched per tick** the way keypresses already
 were, which both fixes the live triple-fire bug and makes them recordable: a
 tick's clicks are a set of entity ids, and entity ids are stable across loads
-now that the hash and the load path agree about them. A recorded `TickInput`
-therefore carries the clicked ids, by the same argument that says a mouse delta
-must be recorded rather than re-derived — the value was computed at frame scope
-and cannot be reconstructed from a different frame cadence.
+now that the hash and the load path agree about them.
 
-What remains for Phase 2 is the file itself: `Input::TickInput`,
-`CaptureTickInput` and `BeginReplayedTick`/`EndReplayedTick` are in
-`Input.hpp`/`.cpp` and compile, with no tests and no caller. The writer, the
-reader, the `--record` and `--replay` flags and the verification path are not
-written.
+**Phase 2 shipped** in `0c299ec` (the format) and `94cd8d4` (the flags and the
+loop). `--record` writes every tick's input and a hash every second; `--replay`
+feeds it back, reports the first tick that disagrees with both hashes, and exits
+non-zero. Measured on the demo scene: three seconds records to 2.3 KB, replays
+to the same hash at every checkpoint, and a checkpoint edited by one byte is
+reported at exactly the tick it was edited at.
 
-One trap to record before it is: `CaptureTickInput` reads through the same
-queries `BeginReplayedTick` diverts, so capturing during a replay returns the
-replayed values. That is correct and useful, and it means a verifier comparing
-re-captured input against the file would pass trivially. **The verification path
-must compare `StateHash` and nothing else.**
+Both flags together are refused, because a run recording the input it is being
+fed writes a file that agrees with itself by construction. The related trap,
+recorded because it nearly became the verification: `CaptureTickInput` reads
+through the same queries `BeginReplayedTick` diverts, so capturing during a
+replay returns the replayed values. The verification path compares `StateHash`
+and nothing else.
+
+### The caveat that a green end-to-end run hides
+
+**Nothing in `MainScene` reads input inside a tick.** So replaying it reproduces
+whatever it is fed — changing a recorded mouse delta and replaying produces an
+identical hash. That was measured, not assumed, and it means the end-to-end run
+proves the simulation reproduces and *not* that the recorded input drives it.
+
+This is the *falsely true* failure mode again, one level up: a demo that works,
+a green run, and a claim that is not being tested. The claim is carried instead
+by four cases in `test_replay` that run a simulation which reads input and
+writes state, and check that changing one axis on one tick — or one press that
+did not happen, or one tick of mouse movement — moves where the run ends.
+Without those the end-to-end run would be worthless and would look identical.
+
+The general lesson, which is the third time this session it has come up: **an
+integration test is only as strong as the fixture it runs against**, and the way
+to find out how strong that is, is to break something on purpose and check that
+it notices.
 
 ## How this was found
 
