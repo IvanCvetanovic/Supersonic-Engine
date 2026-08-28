@@ -2,6 +2,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -254,6 +255,85 @@ public:
     static void BeginTickInput();
     static bool TickWasPressed(const std::string& action);
     static bool TickWasReleased(const std::string& action);
+
+    // Throw away edges nothing is going to consume.
+    //
+    // The latch above holds a press until a tick asks for it, and the only
+    // thing that asks is the tick loop - which runs only while the scene is
+    // simulating. Everything else about input keeps running: the devices are
+    // polled every frame, in the editor, while paused, on the menu. So the
+    // presses made in all that time did not go anywhere. They QUEUED, and the
+    // first tick after Play was handed the lot.
+    //
+    // The symptom is a player pressing keys in the editor, hitting Play, and
+    // the character jumping and firing on frame one from input given a minute
+    // earlier - and, less visibly, a recorded run and a replay that entered
+    // Play by different routes starting from different input on tick zero.
+    //
+    // Called every frame the simulation is not running, which is the honest
+    // shape of it: a latch is only correct if something is definitely coming to
+    // empty it, and while nothing is ticking nothing is.
+    static void DiscardPendingTickInput();
+
+    // --- One tick's input, as a value ---------------------------------------
+    //
+    // Everything above answers a question about global state that only exists
+    // while the devices are being polled. A recording needs the same answers as
+    // something it can keep, write to a file, and hand back to a tick that runs
+    // a week later on a different machine.
+    //
+    // RESOLVED, not raw. The obvious alternative is to record RawInputState -
+    // the keys, the buttons, the stick positions - and let replay derive the
+    // rest, and it cannot work, for a reason that is easy to miss: some of what
+    // a tick reads is derived per FRAME rather than per tick. MouseDelta is the
+    // clear case. A frame that runs three ticks hands the same delta to all
+    // three; a frame that runs none hands it to nobody. Re-deriving that on a
+    // machine whose frames fall differently produces different numbers for the
+    // same recording, which is a divergence nobody caused.
+    //
+    // So this is what the tick was actually handed, frozen. It is also why a
+    // replay survives a rebind: the recording says the player moved, not that
+    // they held W.
+    //
+    // Keyed by NAME rather than by index, because that is how the rest of this
+    // file works and because an index would be a second, silent contract about
+    // the order of ActionNames(). InputRecording turns names into indices when
+    // it writes a file, where the saving is worth the bookkeeping.
+    struct TickInput {
+        std::vector<std::string> down;      // actions held for the whole tick
+        std::vector<std::string> pressed;   // the latched edges this tick owns
+        std::vector<std::string> released;
+        std::vector<std::pair<std::string, float>> axes;
+        glm::vec2 mouseDelta{0.0f};
+
+        bool operator==(const TickInput& other) const;
+        bool operator!=(const TickInput& other) const { return !(*this == other); }
+    };
+
+    // What the tick about to run would read, as a value. Call after
+    // BeginTickInput, which is what decides which edges this tick owns.
+    //
+    // Every action and axis that has a binding, including the ones that are not
+    // doing anything: an absent name and a name reading zero have to be the
+    // same thing on the way back in, or a replay would leave the previous
+    // tick's value standing.
+    static TickInput CaptureTickInput();
+
+    // Replace the devices with a recorded tick, for the duration of that tick.
+    //
+    // Only the queries a simulation makes are diverted: IsDown, the two tick
+    // edges, GetAxis and MouseDelta. The raw key and button queries are NOT,
+    // and that is deliberate - the editor camera, the UI canvas and ImGui all
+    // read input once per frame, from OUTSIDE the tick, and a replay that fed
+    // them recorded values would stop the person watching it from being able to
+    // move the camera or press stop.
+    //
+    // Bracketed rather than latched for the same reason: live between Begin and
+    // End, which is exactly the span the tick occupies, so nothing that runs
+    // per frame can see a replayed value even by accident.
+    static void BeginReplayedTick(const TickInput& input);
+    static void EndReplayedTick();
+    static bool ReplayingTick();
 
     static bool IsDown(const std::string& action);
     static bool WasPressed(const std::string& action);

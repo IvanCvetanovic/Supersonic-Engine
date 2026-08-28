@@ -184,7 +184,51 @@ static void testSeveralPartnersAreAllReported() {
     CHECK_EQ(phaseOf(tracker, centre, right), static_cast<int>(ContactTracker::Phase::Enter));
 }
 
+static void testATicksContactsAreThatTicksAlone() {
+    // WHY THE CALLER MUST NOT ACCUMULATE. Enter/Stay/Exit is a diff between two
+    // calls, so whatever a call covers is what the events end up being about -
+    // and the app loop used to clear its contact list once per FRAME while
+    // calling this once per TICK, so the second tick of a frame was handed the
+    // first tick's contacts as well as its own.
+    //
+    // The effect, reproduced here by passing the two ticks together the way the
+    // accumulating version did: a pair that touches and separates inside one
+    // frame never reports Exit. The identical two ticks, one per frame, do.
+    // Which of the two a game saw depended on how fast the machine was drawing.
+    entt::registry registry;
+    const auto a = registry.create();
+    const auto b = registry.create();
+
+    // Two ticks, delivered one per call, which is the contract.
+    {
+        ContactTracker perTick;
+        perTick.Update({ makeContact(a, b) });     // tick 1: touching
+        perTick.Update({});                        // tick 2: apart
+        const auto* events = perTick.For(a);
+        CHECK_MSG(events != nullptr && events->size() == 1, "tick 2 reports one event");
+        if (events && events->size() == 1) {
+            CHECK_MSG((*events)[0].phase == ContactTracker::Phase::Exit,
+                      "and it is the Exit, because they came apart");
+        }
+    }
+
+    // The same two ticks, accumulated into one call. The tick-1 contact is
+    // still in the list, so the pair looks like it is still touching.
+    {
+        ContactTracker accumulated;
+        accumulated.Update({ makeContact(a, b) });
+        accumulated.Update({ makeContact(a, b) });  // tick 1's contact, carried
+        const auto* events = accumulated.For(a);
+        CHECK_MSG(events != nullptr && events->size() == 1, "one event either way");
+        if (events && events->size() == 1) {
+            CHECK_MSG((*events)[0].phase == ContactTracker::Phase::Stay,
+                      "but it is Stay - the Exit the game needed never arrives");
+        }
+    }
+}
+
 static void runTests() {
+    testATicksContactsAreThatTicksAlone();
     testFirstTouchIsEnterAndThenStay();
     testSeparationIsReportedOnceAsExit();
     testPairOrderDoesNotRestartTheContact();

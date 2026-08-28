@@ -42,6 +42,21 @@ std::unordered_set<std::string> g_pendingRelease;
 std::unordered_set<std::string> g_tickPress;
 std::unordered_set<std::string> g_tickRelease;
 
+// A recorded tick, standing in for the devices while it runs.
+//
+// Separate storage rather than writing over g_actionCurrent and g_tickPress,
+// which would have been fewer lines and one bug: those are also what the
+// editor, the UI and the camera read once a frame, and overwriting them would
+// mean a replay stole the mouse from the person watching it. Everything here
+// is consulted only while g_replayingTick is raised, which is only inside a
+// tick.
+bool g_replayingTick = false;
+std::unordered_set<std::string> g_replayDown;
+std::unordered_set<std::string> g_replayPress;
+std::unordered_set<std::string> g_replayRelease;
+std::unordered_map<std::string, float> g_replayAxes;
+glm::vec2 g_replayMouseDelta{0.0f};
+
 glm::vec2 g_mouseDelta{0.0f};
 
 // This frame's contacts, with the phase and delta a snapshot cannot carry.
@@ -176,6 +191,12 @@ void Input::ClearBindings() {
     g_previous = RawInputState{};
     g_mouseDelta = glm::vec2(0.0f);
     g_contacts.clear();
+
+    // A replay in progress is abandoned with everything else. Rebinding while
+    // one runs is not a thing anybody should do, but leaving the flag raised
+    // over a cleared binding table would make every action read from a
+    // recording that no longer describes the actions that exist.
+    EndReplayedTick();
 
     // The pointer and the keyboard are NOT reset here, and the first version of
     // this did reset them.
@@ -380,6 +401,9 @@ void Input::Update(const RawInputState& state) {
 }
 
 bool Input::IsDown(const std::string& action) {
+    if (g_replayingTick) {
+        return g_replayDown.find(action) != g_replayDown.end();
+    }
     const auto it = g_actionCurrent.find(action);
     return it != g_actionCurrent.end() && it->second;
 }
@@ -394,11 +418,25 @@ void Input::BeginTickInput() {
     g_pendingRelease.clear();
 }
 
+void Input::DiscardPendingTickInput() {
+    // The pending sets only, NOT g_tickPress and g_tickRelease. Those belong to
+    // a tick that has already begun and may still be reading them; the pending
+    // ones are edges waiting for a tick that is not coming.
+    g_pendingPress.clear();
+    g_pendingRelease.clear();
+}
+
 bool Input::TickWasPressed(const std::string& action) {
+    if (g_replayingTick) {
+        return g_replayPress.find(action) != g_replayPress.end();
+    }
     return g_tickPress.find(action) != g_tickPress.end();
 }
 
 bool Input::TickWasReleased(const std::string& action) {
+    if (g_replayingTick) {
+        return g_replayRelease.find(action) != g_replayRelease.end();
+    }
     return g_tickRelease.find(action) != g_tickRelease.end();
 }
 
@@ -417,6 +455,15 @@ bool Input::WasReleased(const std::string& action) {
 }
 
 float Input::GetAxis(const std::string& axis) {
+    if (g_replayingTick) {
+        // An axis the recording does not name reads zero, exactly as an unbound
+        // one does live. A recording carries every bound axis including the
+        // ones sitting at rest, so a name missing from it is a name that did
+        // not exist when the file was written.
+        const auto replayed = g_replayAxes.find(axis);
+        return replayed != g_replayAxes.end() ? replayed->second : 0.0f;
+    }
+
     const auto it = g_axes.find(axis);
     if (it == g_axes.end()) return 0.0f;
     const AxisBindingStorage& binding = it->second;
@@ -441,7 +488,12 @@ float Input::GetAxis(const std::string& axis) {
 }
 
 glm::vec2 Input::MousePosition() { return g_current.mousePosition; }
-glm::vec2 Input::MouseDelta() { return g_mouseDelta; }
+
+// The one query whose replayed answer differs from its live one for a reason
+// that is not about recording at all: a delta is a per-FRAME difference, and a
+// tick is not a frame. See TickInput's comment - this is the value the tick was
+// handed, not one recomputed from positions that no longer exist.
+glm::vec2 Input::MouseDelta() { return g_replayingTick ? g_replayMouseDelta : g_mouseDelta; }
 float Input::Scroll() { return g_current.scroll; }
 bool Input::IsGamepadConnected() { return g_current.padConnected; }
 
@@ -457,6 +509,79 @@ bool Input::WasKeyPressed(int key) {
 bool Input::IsMouseButtonDown(int button) {
     return button >= 0 && button < MouseButton::Count && g_current.mouseButtons[button];
 }
+
+// --- One tick's input, as a value -----------------------------------------
+
+bool Input::TickInput::operator==(const TickInput& other) const {
+    // Member-wise, and the vectors compare in ORDER. Both sides are built by
+    // CaptureTickInput or read back from a file that CaptureTickInput's output
+    // produced, and both walk g_actionNames, so the order is the binding order
+    // in each case. This is an equality for "is this the same tick as the last
+    // one", which is what the delta encoding asks; it is not a set comparison
+    // and would be wrong as one.
+    return down == other.down && pressed == other.pressed && released == other.released &&
+           axes == other.axes && mouseDelta == other.mouseDelta;
+}
+
+Input::TickInput Input::CaptureTickInput() {
+    TickInput captured;
+
+    // Every bound action, not only the ones doing something. An action that is
+    // absent and an action that is present-and-false have to mean the same
+    // thing on the way back in, and the cheapest way to guarantee that is for
+    // the writer never to produce the ambiguous case: `down` lists what is
+    // held, and anything bound and not listed is up.
+    for (const std::string& action : g_actionNames) {
+        if (IsDown(action)) captured.down.push_back(action);
+        if (TickWasPressed(action)) captured.pressed.push_back(action);
+        if (TickWasReleased(action)) captured.released.push_back(action);
+    }
+
+    // Axes carry a value rather than a flag, so every one of them is written
+    // whatever it reads. A missing axis is zero on the way back in - see
+    // GetAxis - which makes an axis at rest and an axis nobody bound the same
+    // number, and they are.
+    captured.axes.reserve(g_axisNames.size());
+    for (const std::string& axis : g_axisNames) {
+        captured.axes.emplace_back(axis, GetAxis(axis));
+    }
+
+    captured.mouseDelta = MouseDelta();
+    return captured;
+}
+
+void Input::BeginReplayedTick(const TickInput& input) {
+    g_replayDown.clear();
+    g_replayPress.clear();
+    g_replayRelease.clear();
+    g_replayAxes.clear();
+
+    g_replayDown.insert(input.down.begin(), input.down.end());
+    g_replayPress.insert(input.pressed.begin(), input.pressed.end());
+    g_replayRelease.insert(input.released.begin(), input.released.end());
+    for (const auto& [name, value] : input.axes) g_replayAxes[name] = value;
+    g_replayMouseDelta = input.mouseDelta;
+
+    // Raised last, so a query that somehow ran during the copy above would read
+    // the live devices rather than a half-filled recording.
+    g_replayingTick = true;
+}
+
+void Input::EndReplayedTick() {
+    // Lowered first, for the mirror of the reason it is raised last.
+    g_replayingTick = false;
+
+    // Cleared rather than left standing. A tick that ends and leaves its input
+    // in place costs nothing while the flag is down, and costs an entire
+    // afternoon on the day something reads it with the flag accidentally up.
+    g_replayDown.clear();
+    g_replayPress.clear();
+    g_replayRelease.clear();
+    g_replayAxes.clear();
+    g_replayMouseDelta = glm::vec2(0.0f);
+}
+
+bool Input::ReplayingTick() { return g_replayingTick; }
 
 const std::vector<std::string>& Input::ActionNames() { return g_actionNames; }
 const std::vector<std::string>& Input::AxisNames() { return g_axisNames; }

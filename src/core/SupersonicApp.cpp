@@ -1011,6 +1011,23 @@ void SupersonicApp::Run() {
         // Gameplay only runs in play mode. The editor used to simulate
         // permanently, so a scene could never be authored and then tried.
         const bool stepping = m_playMode.ConsumeSingleStep();
+
+        // Nothing is going to consume this frame's input edges, so drop them.
+        //
+        // The latch that hands a press to exactly one tick is only correct
+        // while a tick is coming to collect it. In the editor, while paused, and
+        // while the time-travel debugger is scrubbing, none is - and the
+        // presses queued up instead of expiring, so the first tick after Play
+        // was handed every key touched since the last one. A character jumping
+        // and firing on frame one from input given a minute earlier, in the
+        // editor, before the game started.
+        //
+        // Deliberately outside the rewind check as well as the play check,
+        // because a scrub runs no ticks either.
+        if (!(m_playMode.ShouldSimulate() || stepping) || TimeTravelDebugger::IsRewinding()) {
+            Input::DiscardPendingTickInput();
+        }
+
         if (m_playMode.ShouldSimulate() || stepping) {
         if (!TimeTravelDebugger::IsRewinding()) {
             // THE GAME TICK IS THE OUTER LOOP and physics substeps inside it.
@@ -1039,8 +1056,32 @@ void SupersonicApp::Run() {
 
             m_physicsAccumulator += deltaTime;
             int steps = 0;
-            m_contacts.clear();
+
+            // What the whole frame touched, for the editor's contact count.
+            // Separate from the per-tick list below, because the two want
+            // opposite things and used to be one vector serving both badly.
+            m_frameContacts.clear();
+
             while (m_physicsAccumulator >= gameTick && steps < kMaxPhysicsStepsPerFrame) {
+                // THIS TICK'S CONTACTS, cleared per tick rather than per frame.
+                //
+                // The clear used to sit outside this loop while the tracker
+                // below ran inside it, so the second tick of a frame was handed
+                // the first tick's contacts as well as its own - and Enter,
+                // Stay and Exit became a function of how many ticks the frame
+                // happened to run. A pair that touched on one tick and came
+                // apart on the next never reported Exit at all if both ticks
+                // fell in one frame, and did report it if they did not.
+                //
+                // That is the same class of bug as scripts running on the frame
+                // delta, in the same place, and it was carried over deliberately
+                // when scripts moved inside the tick - the note that used to be
+                // here said "frame-cumulative rather than per tick, which is
+                // what it already was". It was harmless while the tracker was
+                // read once a frame by the editor. It stopped being harmless
+                // when a script started reading it inside a tick.
+                m_contacts.clear();
+
                 // Inside the loop, before anything moves. See the note on
                 // BeginTick for why once per frame would look like it worked.
                 InterpolationSystem::BeginTick(m_registry);
@@ -1073,9 +1114,16 @@ void SupersonicApp::Run() {
                     m_layers.FixedUpdate(m_registry, gameTick);
                 }
 
-                // Accumulated across the frame's ticks, so the count the editor
-                // shows is the frame's contacts rather than the last step's.
                 m_contacts.insert(m_contacts.end(), m_stepContacts.begin(), m_stepContacts.end());
+
+                // The tick is complete, so fold the whole of it into the
+                // frame's running total - which is what the editor shows, and
+                // which would blink whenever a frame ran more than one tick if
+                // it reported only the last. Appended wholesale here rather
+                // than mirrored at each of the inserts above, so there is one
+                // place that decides what a tick's contacts are.
+                m_frameContacts.insert(m_frameContacts.end(),
+                                       m_contacts.begin(), m_contacts.end());
 
                 // SCRIPTS RUN ON THE TICK, which is the whole point of the
                 // exercise. They used to run once per frame on the frame delta,
@@ -1155,7 +1203,9 @@ void SupersonicApp::Run() {
         m_editorLayer->SetMaterialLibrary(m_materialLibrary.get());
         m_editorLayer->SetAnimationLibrary(m_animationLibrary.get());
         m_editorLayer->SetRenderStats(m_renderer->GetRenderStats());
-        m_editorLayer->SetContacts(m_contacts);
+        // The FRAME's, not the tick's: a count that showed only the last tick
+        // would flicker on any frame that ran more than one.
+        m_editorLayer->SetContacts(m_frameContacts);
         m_editorLayer->SetScriptHostInfo(m_hotReload->IsLoaded(),
                                          m_hotReload->GetStatus(),
                                          m_hotReload->GetReloadCount());

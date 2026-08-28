@@ -890,7 +890,61 @@ static void testAReleaseIsLatchedTheSameWay() {
     CHECK_MSG(!Input::TickWasReleased("Fire"), "and only one tick saw it");
 }
 
+static void testEdgesNobodyIsComingForAreDropped() {
+    // The latch holds a press until a tick asks for it, and the only thing that
+    // asks is the tick loop - which runs only while the scene is simulating.
+    // Input keeps being polled the whole time it is not: in the editor, while
+    // paused, on a menu. Those presses did not go anywhere, they QUEUED, and
+    // the first tick after Play was handed all of them at once.
+    //
+    // What that looks like is a character jumping and firing on the first frame
+    // of Play from keys touched a minute earlier while the scene was being
+    // authored.
+    reset();
+    Input::BindActionKey("Fire", Key::Space);
+    frame(RawInputState{});
+    Input::BeginTickInput();
+
+    // A press while nothing is ticking - the editor, say.
+    frame(withKey(Key::Space));
+
+    // The host notices no tick is coming and says so, once per frame, exactly
+    // as the frame loop does while not simulating.
+    Input::DiscardPendingTickInput();
+
+    Input::BeginTickInput();
+    CHECK_MSG(!Input::TickWasPressed("Fire"),
+              "a press made while nothing was ticking does not arrive later");
+
+    // And the latch still works afterwards: dropping what nobody wanted must
+    // not break the thing it is part of.
+    frame(RawInputState{});
+    frame(withKey(Key::Space));
+    Input::BeginTickInput();
+    CHECK_MSG(Input::TickWasPressed("Fire"), "a press made while ticking still arrives");
+}
+
+static void testDiscardingLeavesTheRunningTicksOwnEdgesAlone() {
+    // The pending set and the set a tick is currently reading are two different
+    // things. Dropping the second would mean a tick that had already been given
+    // a press could lose it half way through its own update, which is a far
+    // stranger bug than the one being fixed.
+    reset();
+    Input::BindActionKey("Fire", Key::Space);
+    frame(RawInputState{});
+    Input::BeginTickInput();
+
+    frame(withKey(Key::Space));
+    Input::BeginTickInput();
+    CHECK_MSG(Input::TickWasPressed("Fire"), "this tick owns the press");
+
+    Input::DiscardPendingTickInput();
+    CHECK_MSG(Input::TickWasPressed("Fire"), "and still owns it after the drop");
+}
+
 static void runTests() {
+    testEdgesNobodyIsComingForAreDropped();
+    testDiscardingLeavesTheRunningTicksOwnEdgesAlone();
     testAPressSurvivesUntilATickConsumesIt();
     testOnlyOneTickSeesAGivenPress();
     testATickNeverSeesAPressThatDidNotHappen();

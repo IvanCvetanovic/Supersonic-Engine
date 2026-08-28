@@ -12,7 +12,17 @@
 
 namespace Supersonic {
 
-// Turns a frame's contact list into something a script can ask questions of.
+// Turns a TICK's contact list into something a script can ask questions of.
+//
+// The tick, not the frame, and the distinction is the whole correctness of this
+// file rather than a wording preference. Enter/Stay/Exit are a diff between two
+// calls, so whatever period one call covers becomes the period the events are
+// about - and a script reads them from inside a tick. Handed a frame's worth,
+// the second tick of a frame sees the first tick's contacts as well as its own:
+// a pair that touched and came apart inside one frame reports Stay and never
+// Exit, while the identical two ticks spread over two frames report Exit
+// correctly. The events would then depend on how fast the machine was drawing,
+// which is the one thing a fixed tick exists to prevent.
 //
 // PhysicsSystem has always produced contacts. SupersonicApp accumulated them
 // across the frame's fixed steps and handed them to the editor, which displayed
@@ -35,9 +45,9 @@ namespace Supersonic {
 class ContactTracker {
 public:
     enum class Phase : int {
-        Enter = 0,  // first frame of this pair touching
+        Enter = 0,  // first tick of this pair touching
         Stay  = 1,  // still touching
-        Exit  = 2,  // touched last frame, not this one
+        Exit  = 2,  // touched last tick, not this one
     };
 
     struct Event {
@@ -47,9 +57,10 @@ public:
         Phase phase{Phase::Enter};
     };
 
-    // Call once per frame with everything that touched during it. Both halves
-    // of each pair get an event, with the normal flipped for the second, so a
-    // script always reads a normal pointing away from itself.
+    // Call once per TICK with everything that touched during that tick, and
+    // nothing from any other. Both halves of each pair get an event, with the
+    // normal flipped for the second, so a script always reads a normal pointing
+    // away from itself.
     void Update(const std::vector<PhysicsSystem::Contact>& contacts);
 
     const std::vector<Event>* For(entt::entity entity) const;

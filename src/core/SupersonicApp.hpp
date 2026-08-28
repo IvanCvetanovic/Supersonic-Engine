@@ -126,7 +126,19 @@ private:
 
     // Reused between frames so the fixed-step loop does not allocate per step.
     std::vector<PhysicsSystem::Contact> m_stepContacts;
+
+    // THIS TICK's contacts, which is what the contact tracker is fed and
+    // therefore what a script sees when it asks what it touched. Cleared at the
+    // top of every tick.
     std::vector<PhysicsSystem::Contact> m_contacts;
+
+    // THIS FRAME's, for the editor's count. Two vectors because the two
+    // consumers want different things: a tracker turning contacts into
+    // Enter/Stay/Exit has to be handed exactly one tick's worth or the phases
+    // depend on how many ticks the frame ran, while a panel showing a number to
+    // a person wants the frame, or it flickers whenever the frame runs more
+    // than one. One vector served both, and served the tracker wrongly.
+    std::vector<PhysicsSystem::Contact> m_frameContacts;
 };
 
 } // namespace Supersonic
