@@ -1,6 +1,7 @@
 # What the determinism story was actually missing
 
-> **Audit, 28 August 2026.** Written against Supersonic at `bf491fd`, after
+> **Audit, 28 August 2026.** Written against Supersonic at `bf491fd` and
+> updated through `04ea68e` as the fixes landed the same day, after
 > Phase 1 of [the 27 August roadmap](2026-08-27-engine-roadmap.md) landed and
 > before Phase 2 was started. Every claim below is tied to a file and a line, or
 > to a test in this repository that fails without the fix.
@@ -98,16 +99,68 @@ not.
 The last two are the *falsely true* kind. Neither would have stopped a replay
 being built and shown working.
 
-### A gesture scoped two different ways
+### Three channels of input still scoped to the frame
 
-`scriptWasPressed` was moved onto the latched tick edge when scripts moved
-inside the tick; `scriptWasReleased` was left reading the frame edge, under a
-comment saying both had moved. A script that charges on the press and fires on
-the release saw the press exactly once and the release either never — the key
-came up during a frame that ran no tick, which at 20 Hz on a 144 Hz display is
-six frames out of seven — or three times, because the frame ran three ticks.
-Fixed in `bf491fd`, with the ABI version bumped for a change that moves no
-struct.
+This turned out to be the shape of the whole session, and it is worth stating as
+a pattern rather than as three bugs, because each one was found only by going
+and looking for the next.
+
+Gameplay moved onto the fixed tick in `fb9f86e`. Everything a tick *reads* had
+to move with it, and only the keypress did. The rest kept answering the
+question a frame asks, which is wrong in both directions at once: a frame that
+runs no tick loses the event — at 20 Hz on a 144 Hz display that is six frames
+out of seven — and a frame that runs three hands it to all three.
+
+- **`wasReleased`** was left on the frame edge while `wasPressed` was latched,
+  under a comment saying both had moved. Worse than either being wrong alone: a
+  script that charges on the press and fires on the release saw the press
+  exactly once and the release never or three times, so the shot did not come
+  out or came out in triplicate. (`bf491fd`)
+- **Contacts** were accumulated per frame while `ContactTracker::Update` ran per
+  tick, so `Enter`/`Stay`/`Exit` depended on how many ticks the frame ran. A
+  pair that touched and separated inside one frame never reported `Exit`.
+  (`76f67a0`)
+- **UI clicks** were computed once per frame by the UI pass and read inside the
+  tick through `ctx->ui->wasClicked`. One press of a Buy button did its action
+  three times on a machine that was a frame behind. (`04ea68e`)
+
+Three ABI bumps — 11, 12 and 13 — each leaving every struct byte-identical and
+changing what a call answers. That is the one kind of change a plugin cannot
+detect for itself, and the version list is the only place it can be told.
+
+**The lesson worth keeping is the search, not the fixes.** "Which channel is
+next" is a question with a finite answer: enumerate what a tick can read, and
+check each one for whether the value it returns was computed per frame. That
+enumeration is also exactly the list a recording has to serialise, which is why
+doing it was a prerequisite rather than a detour.
+
+### Input edges queued up while nothing was ticking
+
+The latch that hands a press to exactly one tick is only correct while a tick is
+coming to collect it. In the editor, while paused, and during a time-travel
+scrub, none is — and nothing expired them, so the first tick after Play was
+handed every key touched since the last one. A character jumping and firing on
+frame one of Play from input given a minute earlier while the scene was being
+authored. The same was true of clicks once they were latched, and both are now
+dropped on every frame that runs no tick. (`76f67a0`, `04ea68e`)
+
+### The clock never started over
+
+`registry.clear()` leaves the context alone and nothing but the loop ever wrote
+the tick counter, so it counted every step the *process* had run — across a
+scene load, across Stop and Play, across loading a different level.
+
+That reads like untidiness. It is not, and the reason is invisible from the
+field: `SecondsF()` narrows `tick * fixedDelta` to a float, a script's elapsed
+time is derived from it, and the narrowing happens *before* anything subtracts.
+So the value a script integrates sits on a lattice whose spacing grows with the
+tick count, and the same logical tick of the same scene produced a different
+number depending on what the process had done first. Two runs of one scene
+agreed only if they were the first thing their process did. (`76f2551`)
+
+The rate assignment moved out of `if (root.Has("Simulation"))` at the same time:
+every scene written before the tick could be authored has no such block, so
+those scenes silently inherited the previous scene's rate.
 
 ## Found, tied to a line, not yet fixed
 
@@ -116,10 +169,7 @@ file and a line; none is speculative.
 
 | | Where | What |
 |---|---|---|
-| **The clock never resets** | `SceneSerializer.cpp:236` | A scene load assigns `fixedDelta` and nothing else. `tick` and `droppedSeconds` survive `registry.clear()` in the context and carry into the next scene. `SecondsF()` narrows `tick * fixedDelta` to a float *before* the subtraction in `script.elapsed`, so the value a script integrates sits on a lattice whose spacing depends on the base tick — the same logical tick produces a different number depending on what the process did earlier. |
-| **Edit-mode edges arrive in one lump** | `SupersonicApp.cpp:1051` | `BeginTickInput` runs only inside the tick loop, which is gated on Play. `Input::Update` keeps latching every frame regardless. So every key pressed while the editor sat in Edit or Paused piles up, and the first tick after Play sees the union — a set that is a function of how long a human sat there. |
-| **Contacts are frame-scoped, the tracker is tick-scoped** | `SupersonicApp.cpp:1042` | `m_contacts.clear()` is outside the tick loop; `m_contactTracker.Update(m_contacts)` is inside it. On the second tick of a frame the tracker is handed the first tick's contacts too, so `Enter`/`Stay`/`Exit` depend on how many ticks the frame ran. A pair that touches and separates within one frame never reports `Exit`; run the identical two ticks one per frame and it does. |
-| **A scene load from inside a tick lands at frame scope** | `SupersonicApp.cpp:1174` | `applyPendingSceneLoad` runs once per frame, so the frame's remaining ticks run against the old scene, and how many that is depends on frame pacing. |
+| **A scene load from inside a tick lands at frame scope** | `SupersonicApp.cpp:1174` | `applyPendingSceneLoad` runs once per frame, so the frame's remaining ticks run against the old scene, and how many that is depends on frame pacing. Scoping a recording to a single scene avoids it for v1, and the header names one scene, so say that is the limit. |
 | **The broadphase sorts on a partial key** | `PhysicsSystem.cpp:319` | `std::sort` is not stable, so the order of equal keys — and therefore the impulse solve order for ties — is whatever the standard library does. Same-machine reproducible; not reproducible across two standard library implementations. |
 | **`registry.ctx()` is read by every tick and hashed by nothing** | `StateHash.cpp:48` | Open-ended: hashing it wholesale is not obviously right, since much of what lives there is a pointer to an engine subsystem. Named because a tick-0 checkpoint cannot mean what it should until this is decided. |
 
@@ -140,14 +190,26 @@ the file rather than the engine:
   not the value the tick saw. The tick step has the same problem and is worse,
   because it is wrong for the whole run rather than for one tick.
 
-And one open decision, which is the reason the file format is not written yet:
-**UI clicks are tick-readable and are not in the recorded surface.** A script
-reads `wasClicked` inside the tick; the flag behind it is written at render
-scope from a screen rectangle, so it depends on frame cadence *and* on
-resolution. Either the recorded tick input grows a UI channel — carrying the
-clicked entity ids, by the same argument that says a mouse delta must be
-recorded rather than re-derived — or UI-in-a-tick has to fail loudly. The file
-format should not be built around a struct that is about to change shape.
+The open decision that was blocking the format has been made. **UI clicks are
+tick-readable, so they are now latched per tick** the way keypresses already
+were, which both fixes the live triple-fire bug and makes them recordable: a
+tick's clicks are a set of entity ids, and entity ids are stable across loads
+now that the hash and the load path agree about them. A recorded `TickInput`
+therefore carries the clicked ids, by the same argument that says a mouse delta
+must be recorded rather than re-derived — the value was computed at frame scope
+and cannot be reconstructed from a different frame cadence.
+
+What remains for Phase 2 is the file itself: `Input::TickInput`,
+`CaptureTickInput` and `BeginReplayedTick`/`EndReplayedTick` are in
+`Input.hpp`/`.cpp` and compile, with no tests and no caller. The writer, the
+reader, the `--record` and `--replay` flags and the verification path are not
+written.
+
+One trap to record before it is: `CaptureTickInput` reads through the same
+queries `BeginReplayedTick` diverts, so capturing during a replay returns the
+replayed values. That is correct and useful, and it means a verifier comparing
+re-captured input against the file would pass trivially. **The verification path
+must compare `StateHash` and nothing else.**
 
 ## How this was found
 
