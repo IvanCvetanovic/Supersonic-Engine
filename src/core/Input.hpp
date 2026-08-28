@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -305,6 +306,20 @@ public:
         std::vector<std::string> released;
         std::vector<std::pair<std::string, float>> axes;
         glm::vec2 mouseDelta{0.0f};
+
+        // UI buttons this tick was handed, as plain entity ids.
+        //
+        // Plain integers rather than an EnTT type, for the reason the key codes
+        // at the top of this file are plain ints whose values mirror GLFW's:
+        // the value passes straight through, and nothing here has to include a
+        // header describing what it means. UIInput fills this and reads it
+        // back, because a click belongs to an entity and this file does not
+        // know what one is.
+        //
+        // Here at all because a script reads clicks from inside the tick, so
+        // they are part of what a tick was handed and a recording that left
+        // them out would not reproduce a menu.
+        std::vector<uint32_t> clicked;
 
         bool operator==(const TickInput& other) const;
         bool operator!=(const TickInput& other) const { return !(*this == other); }

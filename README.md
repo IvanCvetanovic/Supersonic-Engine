@@ -308,6 +308,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_shadowcache` | The signature that lets a depth pass be skipped, and what must dirty it |
 | `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped |
 | `test_determinism` | That one binary over one scene produces the same frames twice |
+| `test_replay` | Recording a run's input and reading it back: levels carry, edges do not, floats keep their bits, and a truncated file is refused |
 | `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
 | `test_codecextension` | Serialising a game's own components alongside the engine's |
 | `test_packaging` | That a packaged folder has a binary, a manifest, and the scene it was asked for |

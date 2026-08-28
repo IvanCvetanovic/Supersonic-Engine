@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 #include <entt/entt.hpp>
 
 #include "core/UICanvas.hpp"
@@ -58,6 +61,30 @@ void BeginTickClicks(entt::registry& registry);
 // together on the first tick after Play, so a button pressed while authoring
 // fires when the game starts. Call once on every frame that runs no tick.
 void DiscardPendingClicks(entt::registry& registry);
+
+// --- Recording and replaying a tick's clicks ------------------------------
+//
+// The clicks half of Input::TickInput, which lives here rather than there
+// because a click belongs to an entity and Input does not know what one is.
+// Ids travel as plain uint32_t for the same reason key codes are plain ints in
+// that file: the value passes through, and no header describing it has to.
+
+// The ids BeginTickClicks just handed this tick, for a recording to keep.
+// Call after BeginTickClicks and before anything reads a click.
+std::vector<uint32_t> ClicksThisTick(const entt::registry& registry);
+
+// Install a recorded tick's clicks in place of the live ones.
+//
+// The replacement for BeginTickClicks, not a supplement to it: it assigns every
+// button's clickedThisTick, so an id absent from the recording reads as not
+// clicked rather than as whatever the live pointer happened to be doing. A
+// replay that let a real click through would be a replay of something else.
+//
+// An id naming an entity that no longer exists, or one that is not a button, is
+// ignored. That is a scene the recording does not match, which checkpoint
+// hashing is what actually reports - failing here would only say it later and
+// less clearly.
+void BeginReplayedTickClicks(entt::registry& registry, const std::vector<uint32_t>& clicked);
 
 // Whether any field currently holds focus.
 //

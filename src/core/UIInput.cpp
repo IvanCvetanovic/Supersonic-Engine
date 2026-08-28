@@ -1,5 +1,7 @@
 #include "core/UIInput.hpp"
 
+#include <algorithm>
+
 #include "core/Components.hpp"
 
 namespace Supersonic {
@@ -283,6 +285,39 @@ void BeginTickClicks(entt::registry& registry) {
     // knows nothing about the registry.
     for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
         button.clickedThisTick = button.clickPending;
+        button.clickPending = false;
+    }
+}
+
+std::vector<uint32_t> ClicksThisTick(const entt::registry& registry) {
+    std::vector<uint32_t> clicked;
+    for (auto [entity, button] : registry.view<const UIButtonComponent>().each()) {
+        if (button.clickedThisTick) clicked.push_back(static_cast<uint32_t>(entt::to_entity(entity)));
+    }
+
+    // Sorted, because EnTT's iteration order comes from how components were
+    // added rather than from the state - so two runs holding the same clicks
+    // could write them in different orders and a byte comparison of two
+    // recordings would call that a difference. The same argument StateHash
+    // makes about being order-independent, made here by fixing the order.
+    //
+    // By INDEX, not by handle: the index is what survives a reload, and it is
+    // what the hash is seeded on for the same reason.
+    std::sort(clicked.begin(), clicked.end());
+    return clicked;
+}
+
+void BeginReplayedTickClicks(entt::registry& registry, const std::vector<uint32_t>& clicked) {
+    // Every button assigned, not only the ones in the list. Leaving the rest
+    // alone would let a live click through beside the recorded ones, so the
+    // replay would be of something that never happened.
+    for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
+        const auto index = static_cast<uint32_t>(entt::to_entity(entity));
+        button.clickedThisTick =
+            std::find(clicked.begin(), clicked.end(), index) != clicked.end();
+
+        // The pending latch is emptied too. A replayed tick must not leave a
+        // real click queued for the tick after it.
         button.clickPending = false;
     }
 }
