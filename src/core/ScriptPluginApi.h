@@ -10,15 +10,27 @@
  * whose layout or vtable lives in the plugin would dangle the moment the DLL is
  * freed. Scripts read and write a flat context and return.
  *
- * Bump SUPERSONIC_SCRIPT_API_VERSION on any change to the structs below. The engine
- * refuses to load a plugin whose version does not match, which turns a stale
- * build into a clear log line instead of undefined behaviour.
+ * Bump SUPERSONIC_SCRIPT_API_VERSION on any change to the structs below, AND on
+ * any change to what a function behind them answers. The second half was learnt
+ * rather than designed: versions 11 and 12 both left every struct byte-identical
+ * and changed what a call means, which is the one kind of change a plugin cannot
+ * detect for itself. The engine refuses to load a plugin whose version does not
+ * match, which turns a stale build into a clear log line instead of undefined
+ * behaviour.
  */
 
 /* offsetof, for the layout pins at the bottom of this file. */
 #include <stddef.h>
 
 /* Version history. A plugin built against a different number is refused.
+ *  12 - wasReleased answers about the tick, as wasPressed already did. No
+ *       struct changed. Version 11 moved scripts onto the tick and rescoped
+ *       wasPressed with them, and left wasReleased reading the frame - so the
+ *       two halves of one gesture were scoped differently and a charge-and-fire
+ *       script dropped its shot or fired it three times.
+ *  11 - scripts run on the fixed tick. No struct changed: deltaTime became the
+ *       tick length rather than the frame's, and wasPressed became the tick's
+ *       edge rather than the frame's.
  *  10 - added getText and wasSubmitted to SupersonicScriptUI.
  *   9 - added mouseDelta and the cursor mode to SupersonicScriptInput.
  *   8 - added loadScene to SupersonicScriptWorld.
@@ -26,7 +38,7 @@
  *   6 - added SupersonicScriptData: authored parameters and per-entity state.
  *   5 - added the UI block.
  */
-#define SUPERSONIC_SCRIPT_API_VERSION 11
+#define SUPERSONIC_SCRIPT_API_VERSION 12
 
 /* Cursor modes, matching Supersonic::CursorMode. Plain ints because everything
  * across this boundary is POD, and named here so a plugin does not have to

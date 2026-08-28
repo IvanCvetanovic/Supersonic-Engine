@@ -2079,10 +2079,30 @@ simulation is pinned — the profiler still measures real elapsed time per zone 
 and it stays opt-in, because a game that ignores how long a frame took plays in
 slow motion the moment it drops below its target rate.
 
-Not done: the game tick is still the physics step rather than an authored rate,
-there is no interpolation by overstep fraction, and the fixed-step loop still
-discards simulated time after five steps — which a game clock must not copy, or
-every mission timer runs slow under load.
+The three things this section used to end by listing as not done are done, and
+each was a separate confusion rather than a missing feature:
+
+- **The game tick is an authored rate.** It was the physics step, because there
+  was one loop and therefore one number, so "how often does the world think" and
+  "how often does the solver integrate" could not be asked separately. A scene
+  writes `Simulation.TickRate` and the loop runs physics as substeps underneath
+  it — a 20 Hz tick runs three 1/60 steps — so choosing a tick rate does not
+  quietly change how every collision in the project behaves.
+- **A frame is drawn between the last two ticks**, by the overstep fraction the
+  tick loop could not consume. Without it a 20 Hz simulation is drawn at 20 Hz
+  however fast the display runs and looks exactly like that. The fraction is
+  written after the loop and is deliberately not readable from inside a tick:
+  a tick that read it would depend on the frame rate, which is the whole thing
+  this section exists to prevent.
+- **Time the loop cannot run is counted rather than vanished.** It is still
+  dropped, and dropping is right — catching up under sustained load never
+  catches up. What was wrong was the silence: a machine that could not keep up
+  ran every mission timer short and told nobody. `droppedSeconds` records both
+  sources, the tick loop hitting its ceiling and the older `kMaxFrameDelta`
+  clamp, which is the easier of the two to miss.
+
+What that leaves is §8e: the inputs, which are the last thing a run needs to
+reproduce and the only one that cannot be derived from the scene.
 
 ### 8d. Saving a game's own components
 

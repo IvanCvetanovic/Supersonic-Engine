@@ -160,7 +160,17 @@ static void testApiVersionIsPinned() {
     // against 10 has a byte-identical layout and would load happily while
     // moving at the wrong speed - so the gate is doing the only thing that
     // could have caught it.
-    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 11);
+    //
+    // Version 12 is the same kind of change and exists because 11 was applied
+    // to half of a pair: wasPressed was rescoped to the tick and wasReleased
+    // was left reading the frame, under a comment that said both had moved.
+    // That is worse than either being wrong alone - a script that charges on
+    // the press and fires on the release saw the press exactly once and the
+    // release either never, because the key came up during a frame that ran no
+    // tick, or three times, because the frame ran three. The lesson kept here
+    // rather than in the fix: the bump list is the only place a plugin can be
+    // told that a call it already compiles against now answers differently.
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 12);
 
     // The world block grew, so its size is pinned here too. This is the struct
     // most likely to be widened next, and a plugin whose copy is shorter than

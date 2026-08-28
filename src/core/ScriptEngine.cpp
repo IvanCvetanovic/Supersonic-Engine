@@ -35,11 +35,19 @@ int scriptIsDown(void*, const char* action) {
 // and a tick rate below the frame rate means some frames run none - so a
 // frame-scoped press would be gone before any script could see it, and a frame
 // running three ticks would report the same press to all three.
+//
+// BOTH of them, which is what this comment claimed and only the press did. A
+// release routed through the frame edge while the press was latched is worse
+// than either being wrong on its own: a script that charges on the press and
+// fires on the release sees the press exactly once and the release zero times
+// or three, so the shot never comes out or comes out in triplicate. The two
+// halves of one gesture have to be scoped the same way or the gesture is not
+// one thing.
 int scriptWasPressed(void*, const char* action) {
     return (action && Input::TickWasPressed(action)) ? 1 : 0;
 }
 int scriptWasReleased(void*, const char* action) {
-    return (action && Input::WasReleased(action)) ? 1 : 0;
+    return (action && Input::TickWasReleased(action)) ? 1 : 0;
 }
 float scriptAxis(void*, const char* axis) {
     return axis ? Input::GetAxis(axis) : 0.0f;
