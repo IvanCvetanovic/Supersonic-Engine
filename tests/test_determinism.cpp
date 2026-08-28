@@ -226,6 +226,71 @@ static void testAValueOnTheWrongEntityIsADifferentState() {
               "swapping two entities' positions is a different state");
 }
 
+static void testAnEntityWithNoPlaceInTheWorldIsStillState() {
+    // A HUD element has no transform, by design, because it lives in screen
+    // space - and ScriptEngine deliberately runs scripts on entities with or
+    // without one, so that a script can drive it.
+    //
+    // While the hash opened on view<TransformComponent> such an entity was
+    // invisible twice: it contributed nothing, and it was not even counted, so
+    // the count that exists to stop things hiding was itself inside the filter
+    // that hid them. An entire menu hashed the same as an empty registry, and a
+    // replay of one would have reported success without looking at anything.
+    entt::registry empty;
+    entt::registry withHud;
+
+    const auto hud = withHud.create();
+    withHud.emplace<ScriptComponent>(hud);
+
+    CHECK_MSG(StateHash::Compute(empty) != StateHash::Compute(withHud),
+              "an entity with no transform is still an entity");
+
+    // And existing is enough on its own. A spawn that has not been given a
+    // position yet must still move the number, or a replay that diverged by one
+    // spawn says nothing until the spawned thing is placed.
+    entt::registry bare;
+    bare.create();
+    CHECK_MSG(StateHash::Compute(bare) != StateHash::Compute(empty),
+              "spawning an entity that carries nothing is still a change");
+}
+
+static void testWhereAScriptIsCountsAsState() {
+    // THE ONE THAT WOULD HAVE MADE A REPLAY LIE. Script state is written by one
+    // tick and read by the next, which is the inclusion rule the header states,
+    // and it was not in the hash. A script keeping a cooldown or a state-machine
+    // phase could therefore diverge on tick one and be reported as agreeing -
+    // until the tick that finally turned the counter into a position, which
+    // names a tick thousands after the one that actually went wrong.
+    entt::registry a;
+    entt::registry b;
+
+    for (entt::registry* r : { &a, &b }) {
+        const auto e = r->create();
+        r->emplace<TransformComponent>(e, glm::vec3(1.0f, 2.0f, 3.0f));
+        r->emplace<ScriptComponent>(e);
+    }
+
+    CHECK_MSG(StateHash::Compute(a) == StateHash::Compute(b),
+              "two identical scripts agree to begin with");
+
+    // One of them has been somewhere the other has not, and nothing it can be
+    // seen to have done has happened yet.
+    for (auto e : b.view<ScriptComponent>()) {
+        b.get<ScriptComponent>(e).state.emplace_back("cooldown", 0.5f);
+    }
+
+    CHECK_MSG(StateHash::Compute(a) != StateHash::Compute(b),
+              "a counter a later tick will read is state, even before it moves anything");
+
+    // The name is part of it, not only the number: two scripts holding 0.5
+    // under different keys are in different places.
+    for (auto e : a.view<ScriptComponent>()) {
+        a.get<ScriptComponent>(e).state.emplace_back("charge", 0.5f);
+    }
+    CHECK_MSG(StateHash::Compute(a) != StateHash::Compute(b),
+              "and which counter holds it matters as much as what it holds");
+}
+
 static void testSleepStateIsPartOfTheState() {
     // A body asleep on one machine and awake on another has not diverged yet
     // and will on the next thing that touches it. Leaving it out of the hash
@@ -605,6 +670,8 @@ static void runTests() {
     testTheSameSceneHashesTheSameHoweverManyLoadsPrecededIt();
     testASceneLoadedTwiceThroughTheSerializerHashesTheSame();
     testAValueOnTheWrongEntityIsADifferentState();
+    testAnEntityWithNoPlaceInTheWorldIsStillState();
+    testWhereAScriptIsCountsAsState();
     testSleepStateIsPartOfTheState();
     testTheClockIsDerivedRatherThanAccumulated();
 }

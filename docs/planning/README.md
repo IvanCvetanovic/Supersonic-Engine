@@ -20,6 +20,8 @@ directory and that section disagree, that section is right.
 | [2026-08-19-plan.md](2026-08-19-plan.md) | 19 Aug 2026 | The execution plan: Phases 0–14, their ordering constraints, and a status block written as the work ran |
 | [2026-08-25-wolf-brigade-port.md](2026-08-25-wolf-brigade-port.md) | 25 Aug 2026 | What it would take to port the Godot game Wolf Brigade to this engine, read from both trees. Phased, costed, and led by the finding that the game has no art yet |
 | [2026-08-22-gap-audit.md](2026-08-22-gap-audit.md) | 22 Aug 2026 | A verification pass over the whole engine asking what is left, with every claim tied to a file and line |
+| [2026-08-27-engine-roadmap.md](2026-08-27-engine-roadmap.md) | 27 Aug 2026 | What to build next and what not to, ordered by the finding that the determinism work was nearly done. Its Phase 5 table is the list of things deliberately not being built, with a reason per line |
+| [2026-08-28-determinism-audit.md](2026-08-28-determinism-audit.md) | 28 Aug 2026 | What the determinism story was actually missing. Falsifies the premise the 27 August roadmap is ordered by, with the test that says so |
 
 ## What the two-games document changed
 
@@ -39,6 +41,23 @@ It also recorded a tension rather than silently acting on it: two items in the
 gameplay workstream are actively *harmful* to a deterministic simulation, since
 a script pushing a body the sim also owns is exactly the coupling that desyncs a
 fixed tick.
+
+## A caveat about the roadmap's opening claim
+
+`2026-08-27-engine-roadmap.md` is ordered by a section called *The finding that
+should decide the order*, which says the determinism work is "nearly finished"
+and represents "the hard 80%". That is wrong, and the 28 August audit is the
+record of how wrong.
+
+The three components it points at are all well built. The mistake was inferring
+from three good components that the property they exist to provide had been
+achieved, without running the experiment. The experiment — load the same scene
+twice and hash it — had never been written, and failed: the hash was seeded on
+an EnTT handle including its recycle count, so every determinism claim the
+engine made was scoped to one process that had loaded exactly one scene.
+
+The roadmap's *ordering* survives this. Clock, then replay, then the small gaps
+is still right. Its estimate does not.
 
 ## A caveat about the status block
 
