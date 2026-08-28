@@ -502,6 +502,35 @@ struct SurfaceOverridesComponent {
     }
 };
 
+// The two ticks a drawn frame sits between.
+//
+// Add it to anything whose motion comes from the simulation and should look
+// smooth at a tick rate below the frame rate. Leave it off scenery, off UI, and
+// off anything a script moves per frame - those are already drawn where they
+// are, and interpolating them would draw them one tick in the past.
+//
+// EVERYTHING HERE IS RUNTIME STATE and none of it is serialised. A scene that
+// stored these would restore a half-finished slide between two ticks that no
+// longer exist, and the first tick after a load overwrites all of it anyway.
+struct InterpolatedTransformComponent {
+    glm::vec3 previousPosition{0.0f};
+    glm::vec3 previousRotation{0.0f};
+    glm::vec3 previousScale{1.0f};
+
+    // The simulation's authoritative transform, kept here because
+    // TransformComponent holds the DRAWN one between ticks. A tick that read the
+    // drawn value would make the world depend on the frame rate, which is what
+    // the fixed tick exists to prevent.
+    glm::vec3 currentPosition{0.0f};
+    glm::vec3 currentRotation{0.0f};
+    glm::vec3 currentScale{1.0f};
+
+    // False until the entity has run one whole tick. Until then there is no
+    // previous state to come from, and interpolating out of an uninitialised
+    // one streaks the entity in from wherever that memory happened to point.
+    bool captured{false};
+};
+
 struct MaterialComponent {
     glm::vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
 

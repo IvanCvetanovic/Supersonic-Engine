@@ -6,6 +6,7 @@
 #include "core/Log.hpp"
 #include "core/Profiler.hpp"
 #include "core/ConvexHullCache.hpp"
+#include "core/InterpolationSystem.hpp"
 #include "core/Components.hpp"
 #include "core/CameraSystem.hpp"
 #include "core/PhysicsSystem.hpp"
@@ -1040,6 +1041,10 @@ void SupersonicApp::Run() {
             int steps = 0;
             m_contacts.clear();
             while (m_physicsAccumulator >= gameTick && steps < kMaxPhysicsStepsPerFrame) {
+                // Inside the loop, before anything moves. See the note on
+                // BeginTick for why once per frame would look like it worked.
+                InterpolationSystem::BeginTick(m_registry);
+
                 for (int sub = 0; sub < physicsSubsteps; ++sub) {
                     SUPERSONIC_PROFILE(Physics);
                     PhysicsSystem::Update(m_registry, physicsStep, &m_stepContacts);
@@ -1066,6 +1071,12 @@ void SupersonicApp::Run() {
                 // Accumulated across the frame's ticks, so the count the editor
                 // shows is the frame's contacts rather than the last step's.
                 m_contacts.insert(m_contacts.end(), m_stepContacts.begin(), m_stepContacts.end());
+
+                // What this tick produced is what the next frames interpolate
+                // towards. After the game layers, so it captures the tick's
+                // whole result rather than physics' half of it.
+                InterpolationSystem::EndTick(m_registry);
+
                 m_physicsAccumulator -= gameTick;
                 ++steps;
             }
@@ -1088,6 +1099,10 @@ void SupersonicApp::Run() {
             clock.alpha = gameTick > 0.0f
                               ? std::clamp(m_physicsAccumulator / gameTick, 0.0f, 1.0f)
                               : 0.0f;
+
+            // And the frame is drawn between the last two ticks. After the loop
+            // and after alpha, so it uses the remainder this frame arrived at.
+            InterpolationSystem::Apply(m_registry, clock.alpha);
 
             { SUPERSONIC_PROFILE(Audio);     AudioSystem::Update(m_registry, *m_audioEngine, deltaTime); }
             // Before the scripts, so "what did I touch" is answered about the

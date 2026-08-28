@@ -18,6 +18,7 @@
 #include <cmath>
 #include "core/StateHash.hpp"
 #include "core/SimulationClock.hpp"
+#include "core/InterpolationSystem.hpp"
 #include "core/PhysicsSystem.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/Components.hpp"
@@ -369,7 +370,150 @@ static void testTheDefaultRateReproducesTheOldBehaviour() {
     CHECK_NEAR(slowTick / static_cast<float>(slowSubsteps), physicsStep);
 }
 
+// --- drawing between two ticks --------------------------------------------
+//
+// A simulation thinking twenty times a second and drawn a hundred and
+// forty-four times a second draws the same twenty positions seven times each,
+// and looks exactly like that. Interpolation hides the tick rate without
+// changing it - and the way to get it wrong is to let the drawn value leak back
+// into the simulation, which would make the world depend on the frame rate and
+// undo the entire reason the tick is fixed.
+
+static void tickOnce(entt::registry& registry, const glm::vec3& moveTo) {
+    InterpolationSystem::BeginTick(registry);
+    for (auto entity : registry.view<TransformComponent>()) {
+        registry.get<TransformComponent>(entity).position = moveTo;
+    }
+    InterpolationSystem::EndTick(registry);
+}
+
+static void testAFrameIsDrawnBetweenTheLastTwoTicks() {
+    entt::registry registry;
+    const entt::entity entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = glm::vec3(0.0f);
+    registry.emplace<InterpolatedTransformComponent>(entity);
+
+    tickOnce(registry, glm::vec3(0.0f));    // settles previous == current
+    tickOnce(registry, glm::vec3(10.0f, 0.0f, 0.0f));
+
+    InterpolationSystem::Apply(registry, 0.0f);
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.x, 0.0f);
+
+    InterpolationSystem::Apply(registry, 0.5f);
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.x, 5.0f);
+
+    InterpolationSystem::Apply(registry, 1.0f);
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.x, 10.0f);
+}
+
+static void testTheDrawnValueNeverReachesTheSimulation() {
+    // THE ONE THAT MATTERS. If a tick reads the interpolated transform rather
+    // than the simulated one, the world's state depends on the frame rate - the
+    // exact bug the fixed tick exists to prevent, reintroduced by the feature
+    // meant to hide it. And it would be invisible: the motion would look right.
+    entt::registry registry;
+    const entt::entity entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = glm::vec3(0.0f);
+    registry.emplace<InterpolatedTransformComponent>(entity);
+
+    tickOnce(registry, glm::vec3(0.0f));
+    tickOnce(registry, glm::vec3(10.0f, 0.0f, 0.0f));
+
+    // A frame is drawn part way between the two ticks...
+    InterpolationSystem::Apply(registry, 0.5f);
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.x, 5.0f);
+
+    // ...and the next tick must start from TEN, not from five. BeginTick puts
+    // the authoritative value back before anything reads it.
+    InterpolationSystem::BeginTick(registry);
+    CHECK_MSG(std::fabs(registry.get<TransformComponent>(entity).position.x - 10.0f) < 1e-4f,
+              "the tick starts from the simulated position, not the drawn one: got "
+              + std::to_string(registry.get<TransformComponent>(entity).position.x));
+
+    // And a run of ticks lands where the simulation says regardless of how many
+    // frames were drawn between them.
+    for (auto e : registry.view<TransformComponent>()) {
+        registry.get<TransformComponent>(e).position = glm::vec3(20.0f, 0.0f, 0.0f);
+    }
+    InterpolationSystem::EndTick(registry);
+    InterpolationSystem::Apply(registry, 1.0f);
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.x, 20.0f);
+}
+
+static void testAnEntitysFirstTickDoesNotStreakInFromNowhere() {
+    // Before an entity has run a tick there is no previous state. Interpolating
+    // out of an uninitialised one drags it in from wherever that memory
+    // pointed, which for an entity spawned far from the origin is a visible
+    // streak across the map on the frame it appears.
+    entt::registry registry;
+    const entt::entity entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = glm::vec3(500.0f, 0.0f, -300.0f);
+    registry.emplace<InterpolatedTransformComponent>(entity);
+
+    // Drawn before it has ever ticked: left exactly where it was put.
+    InterpolationSystem::Apply(registry, 0.5f);
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.x, 500.0f);
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.z, -300.0f);
+
+    // And after its first tick it still sits still rather than sliding in.
+    tickOnce(registry, glm::vec3(500.0f, 0.0f, -300.0f));
+    InterpolationSystem::Apply(registry, 0.5f);
+    CHECK_NEAR(registry.get<TransformComponent>(entity).position.x, 500.0f);
+}
+
+static void testAnEntityWithoutTheComponentIsUntouched() {
+    // Opt-in. Scenery, UI, and anything a script moves per frame must draw
+    // where they are rather than one tick in the past.
+    entt::registry registry;
+    const entt::entity plain = registry.create();
+    registry.emplace<TransformComponent>(plain).position = glm::vec3(7.0f, 8.0f, 9.0f);
+
+    InterpolationSystem::BeginTick(registry);
+    InterpolationSystem::EndTick(registry);
+    InterpolationSystem::Apply(registry, 0.5f);
+
+    CHECK_NEAR(registry.get<TransformComponent>(plain).position.x, 7.0f);
+    CHECK_NEAR(registry.get<TransformComponent>(plain).position.y, 8.0f);
+    CHECK_NEAR(registry.get<TransformComponent>(plain).position.z, 9.0f);
+}
+
+static void testARotationTakesTheShortWayRound() {
+    // Euler angles wrap. A turret at 179 degrees turning to -179 has moved two
+    // degrees; a straight lerp takes it three hundred and fifty-eight the other
+    // way, which is the turret spinning a full circle for one frame, once per
+    // lap.
+    entt::registry registry;
+    const entt::entity entity = registry.create();
+    auto& transform = registry.emplace<TransformComponent>(entity);
+    registry.emplace<InterpolatedTransformComponent>(entity);
+
+    const float nearPi = 3.12413936f;    // +179 degrees
+    const float nearNegPi = -3.12413936f;
+
+    transform.rotation = glm::vec3(0.0f, nearPi, 0.0f);
+    tickOnce(registry, glm::vec3(0.0f));
+    for (auto e : registry.view<TransformComponent>()) {
+        registry.get<TransformComponent>(e).rotation = glm::vec3(0.0f, nearNegPi, 0.0f);
+    }
+    InterpolationSystem::EndTick(registry);
+
+    InterpolationSystem::Apply(registry, 0.5f);
+    const float y = registry.get<TransformComponent>(entity).rotation.y;
+
+    // Half way across a two-degree gap is one degree past 179, which wraps to
+    // just under -180. What it must NOT be is anywhere near zero - that is the
+    // long way round.
+    CHECK_MSG(std::fabs(y) > 3.0f,
+              "the short way round keeps it near the wrap, not through zero: got "
+              + std::to_string(y));
+}
+
 static void runTests() {
+    testAFrameIsDrawnBetweenTheLastTwoTicks();
+    testTheDrawnValueNeverReachesTheSimulation();
+    testAnEntitysFirstTickDoesNotStreakInFromNowhere();
+    testAnEntityWithoutTheComponentIsUntouched();
+    testARotationTakesTheShortWayRound();
     testOneSecondIsTheSameNumberOfTicksAtAnyFrameRate();
     testAnInexactFrameRateCostsAtMostOneTick();
     testATickRateIsIndependentOfTheFrameRate();
@@ -384,4 +528,4 @@ static void runTests() {
     testTheClockIsDerivedRatherThanAccumulated();
 }
 
-TEST_MAIN("test_determinism", 28)
+TEST_MAIN("test_determinism", 40)
