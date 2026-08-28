@@ -22,6 +22,7 @@ directory and that section disagree, that section is right.
 | [2026-08-22-gap-audit.md](2026-08-22-gap-audit.md) | 22 Aug 2026 | A verification pass over the whole engine asking what is left, with every claim tied to a file and line |
 | [2026-08-27-engine-roadmap.md](2026-08-27-engine-roadmap.md) | 27 Aug 2026 | What to build next and what not to, ordered by the finding that the determinism work was nearly done. Its Phase 5 table is the list of things deliberately not being built, with a reason per line |
 | [2026-08-28-determinism-audit.md](2026-08-28-determinism-audit.md) | 28 Aug 2026 | What the determinism story was actually missing. Falsifies the premise the 27 August roadmap is ordered by, with the test that says so |
+| [2026-08-28-competing-with-godot.md](2026-08-28-competing-with-godot.md) | 28 Aug 2026 | What it would take to compete with Godot on versatility and performance, costed in one-person weeks. Led by the finding that the engine's differentiator is unenforced by CI and blind to the only game in the tree |
 
 ## What the two-games document changed
 
