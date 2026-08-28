@@ -12,9 +12,11 @@
  *
  * Bump SUPERSONIC_SCRIPT_API_VERSION on any change to the structs below, AND on
  * any change to what a function behind them answers. The second half was learnt
- * rather than designed: versions 11 and 12 both left every struct byte-identical
- * and changed what a call means, which is the one kind of change a plugin cannot
- * detect for itself. The engine refuses to load a plugin whose version does not
+ * rather than designed: versions 11, 12 and 13 all left every struct
+ * byte-identical and changed what a call means, which is the one kind of change
+ * a plugin cannot detect for itself - and all three were the same underlying
+ * move, of one more input channel from the frame onto the tick.
+ * The engine refuses to load a plugin whose version does not
  * match, which turns a stale build into a clear log line instead of undefined
  * behaviour.
  */
@@ -23,6 +25,10 @@
 #include <stddef.h>
 
 /* Version history. A plugin built against a different number is refused.
+ *  13 - ui->wasClicked answers about the tick, as the keyboard edges already
+ *       did. No struct changed. A click was computed once per frame and read
+ *       inside the tick, so a frame running no tick dropped it and a frame
+ *       running three did the button's action three times.
  *  12 - wasReleased answers about the tick, as wasPressed already did. No
  *       struct changed. Version 11 moved scripts onto the tick and rescoped
  *       wasPressed with them, and left wasReleased reading the frame - so the
@@ -38,7 +44,7 @@
  *   6 - added SupersonicScriptData: authored parameters and per-entity state.
  *   5 - added the UI block.
  */
-#define SUPERSONIC_SCRIPT_API_VERSION 12
+#define SUPERSONIC_SCRIPT_API_VERSION 13
 
 /* Cursor modes, matching Supersonic::CursorMode. Plain ints because everything
  * across this boundary is POD, and named here so a plugin does not have to

@@ -266,10 +266,37 @@ int Update(entt::registry& registry, const UIRect& gameRect,
         button.pressed = state.pressed;
         button.clicked = state.clicked;
 
+        // Held for whichever tick asks next. Set, never cleared here: clearing
+        // is BeginTickClicks' job, because the whole point is that it survives
+        // the frames between one tick and the next.
+        if (state.clicked) button.clickPending = true;
+
         if (state.clicked) ++clicked;
     }
 
     return clicked;
+}
+
+void BeginTickClicks(entt::registry& registry) {
+    // The mirror of Input::BeginTickInput, and it is here rather than beside
+    // that one because a click belongs to an entity and Input deliberately
+    // knows nothing about the registry.
+    for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
+        button.clickedThisTick = button.clickPending;
+        button.clickPending = false;
+    }
+}
+
+void DiscardPendingClicks(entt::registry& registry) {
+    // Clicks made while nothing is ticking - in the editor, on a pause menu
+    // that stops the sim, during a scrub. A latch is only correct while
+    // something is coming to empty it, and while no tick is running nothing is,
+    // so these would otherwise all arrive together on the first tick after
+    // Play. `clickedThisTick` is left alone: it belongs to a tick that has
+    // already begun and may still be being read.
+    for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
+        button.clickPending = false;
+    }
 }
 
 } // namespace UIInput

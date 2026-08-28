@@ -179,8 +179,14 @@ int scriptUiWasClicked(void* opaque, unsigned int entityId) {
     const auto entity = uiEntity(opaque, entityId, registry);
     if (entity == entt::null) return 0;
 
+    // The TICK's click, not the frame's - the same rescoping wasPressed got,
+    // for the same reason and with the same consequences for getting it wrong.
+    // `clicked` is true for one frame; a script runs on the tick, so reading it
+    // meant a frame running no tick dropped the click and a frame running three
+    // did the button's action three times. One press of Buy, three purchases,
+    // on whichever machine happened to be a frame behind.
     const auto* button = registry->try_get<UIButtonComponent>(entity);
-    return (button && button->clicked) ? 1 : 0;
+    return (button && button->clickedThisTick) ? 1 : 0;
 }
 
 int scriptUiIsHovered(void* opaque, unsigned int entityId) {

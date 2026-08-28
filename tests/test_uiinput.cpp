@@ -525,7 +525,123 @@ static void testAFieldUnderAnOverlayCannotBeFocused() {
               "a press on an overlay must not focus the field behind it");
 }
 
+// --- a click belongs to one tick, not to one frame ------------------------
+
+namespace {
+
+// The two frames that make a click: press over the button, then release.
+void clickOnce(entt::registry& registry, const glm::vec2& at) {
+    UIInput::Update(registry, screen(), pointerAt(at, true, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(at, false, true), noKeyboard(), kNoStacks);
+}
+
+// A frame where nothing happens, which is most of them.
+void idleFrame(entt::registry& registry, const glm::vec2& at) {
+    UIInput::Update(registry, screen(), pointerAt(at, false, false), noKeyboard(), kNoStacks);
+}
+
+bool tickSawClick(entt::registry& registry) {
+    UIInput::BeginTickClicks(registry);
+    for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
+        if (button.clickedThisTick) return true;
+    }
+    return false;
+}
+
+} // namespace
+
+static void testAClickSurvivesTheFramesBeforeTheNextTick() {
+    // `clicked` is true for exactly one FRAME and a script runs on the TICK.
+    // A game simulating at 20 Hz on a 144 Hz display runs no tick at all on six
+    // frames out of seven, so a click landing on one of those was gone before
+    // anything could act on it - a menu button that does nothing, sometimes,
+    // on fast machines.
+    entt::registry registry;
+    addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const glm::vec2 on(140.0f, 70.0f);
+
+    clickOnce(registry, on);
+
+    // Several frames pass with no tick in them.
+    idleFrame(registry, on);
+    idleFrame(registry, on);
+
+    CHECK_MSG(tickSawClick(registry), "the click waited for a tick to ask for it");
+}
+
+static void testOnlyOneTickSeesAGivenClick() {
+    // The other direction, and the more expensive one: a frame running late
+    // runs several ticks, and a click reported to all of them makes one press
+    // of Buy buy three times.
+    entt::registry registry;
+    addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const glm::vec2 on(140.0f, 70.0f);
+
+    clickOnce(registry, on);
+
+    CHECK_MSG(tickSawClick(registry), "the first tick of the frame sees it");
+    CHECK_MSG(!tickSawClick(registry), "and the second does not");
+    CHECK_MSG(!tickSawClick(registry), "and neither does the third");
+}
+
+static void testATickNeverSeesAClickNobodyMade() {
+    entt::registry registry;
+    addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const glm::vec2 on(140.0f, 70.0f);
+
+    idleFrame(registry, on);
+    CHECK_MSG(!tickSawClick(registry), "nothing was clicked, nothing is reported");
+
+    // Holding the button down is not clicking it again, which the frame-scoped
+    // flag already got right and the latch must not undo.
+    UIInput::Update(registry, screen(), pointerAt(on, true, false), noKeyboard(), kNoStacks);
+    CHECK_MSG(!tickSawClick(registry), "a press that has not been released is not a click");
+}
+
+static void testClicksNoTickIsComingForAreDropped() {
+    // Pressing buttons in the editor, or on a pause menu that stops the
+    // simulation, and then hitting Play. Without this the latch holds every one
+    // of them and the first tick after Play does all their actions at once.
+    entt::registry registry;
+    addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const glm::vec2 on(140.0f, 70.0f);
+
+    clickOnce(registry, on);
+    UIInput::DiscardPendingClicks(registry);
+
+    CHECK_MSG(!tickSawClick(registry), "a click made while nothing ticked does not arrive later");
+
+    // And the latch still works afterwards.
+    clickOnce(registry, on);
+    CHECK_MSG(tickSawClick(registry), "a click made while ticking still arrives");
+}
+
+static void testDiscardingLeavesTheRunningTicksOwnClickAlone() {
+    // The pending flag and the one a tick is currently reading are different
+    // things. Dropping the second would take a click away from a tick that had
+    // already been given it, half way through its own update.
+    entt::registry registry;
+    addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const glm::vec2 on(140.0f, 70.0f);
+
+    clickOnce(registry, on);
+    UIInput::BeginTickClicks(registry);
+
+    UIInput::DiscardPendingClicks(registry);
+
+    bool stillHeld = false;
+    for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
+        if (button.clickedThisTick) stillHeld = true;
+    }
+    CHECK_MSG(stillHeld, "the tick that owns the click keeps it");
+}
+
 static void runTests() {
+    testAClickSurvivesTheFramesBeforeTheNextTick();
+    testOnlyOneTickSeesAGivenClick();
+    testATickNeverSeesAClickNobodyMade();
+    testClicksNoTickIsComingForAreDropped();
+    testDiscardingLeavesTheRunningTicksOwnClickAlone();
     testAClickReachesTheButtonUnderThePointer();
     testOnlyTheButtonUnderThePointerIsClicked();
     testClickingBetweenTwoButtonsHitsNeither();

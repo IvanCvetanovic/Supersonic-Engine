@@ -170,7 +170,15 @@ static void testApiVersionIsPinned() {
     // tick, or three times, because the frame ran three. The lesson kept here
     // rather than in the fix: the bump list is the only place a plugin can be
     // told that a call it already compiles against now answers differently.
-    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 12);
+    //
+    // Version 13 is the third of the same kind, and by now the pattern is the
+    // point: every one of them moved one more input channel off the frame and
+    // onto the tick, and each was found only by going looking for the next one.
+    // This time it was ui->wasClicked, computed once per frame by the UI pass
+    // and read inside the tick - so a frame running no tick dropped the click
+    // and a frame running three did the button's action three times. One press
+    // of Buy, three purchases, on whichever machine was a frame behind.
+    CHECK_EQ(SUPERSONIC_SCRIPT_API_VERSION, 13);
 
     // The world block grew, so its size is pinned here too. This is the struct
     // most likely to be widened next, and a plugin whose copy is shorter than

@@ -39,6 +39,26 @@ int Update(entt::registry& registry, const UIRect& gameRect,
            const UICanvas::UIKeyboard& keyboard,
            const UICanvas::StackedRects& stacked);
 
+// Hand this tick the clicks nothing has consumed yet.
+//
+// Update above runs once per FRAME and a script runs on the TICK, so a click
+// left at frame scope is wrong in both directions: a frame that runs no tick
+// loses it - six frames out of seven for a 20 Hz game on a 144 Hz display - and
+// a frame that runs three reports it to all three, so one press of a button
+// does its action three times.
+//
+// This is the same latch the keyboard already has in Input::BeginTickInput, and
+// it lives here rather than beside it because a click belongs to an entity and
+// Input deliberately knows nothing about the registry. Call once at the top of
+// every tick, before anything reads a click.
+void BeginTickClicks(entt::registry& registry);
+
+// Throw away clicks no tick is coming for: the editor, a pause menu that stops
+// the simulation, a time-travel scrub. Without it they queue and arrive
+// together on the first tick after Play, so a button pressed while authoring
+// fires when the game starts. Call once on every frame that runs no tick.
+void DiscardPendingClicks(entt::registry& registry);
+
 // Whether any field currently holds focus.
 //
 // A query rather than something this file acts on: the keyboard veto belongs to

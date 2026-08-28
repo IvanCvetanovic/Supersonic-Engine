@@ -1026,6 +1026,7 @@ void SupersonicApp::Run() {
         // because a scrub runs no ticks either.
         if (!(m_playMode.ShouldSimulate() || stepping) || TimeTravelDebugger::IsRewinding()) {
             Input::DiscardPendingTickInput();
+            UIInput::DiscardPendingClicks(m_registry);
         }
 
         if (m_playMode.ShouldSimulate() || stepping) {
@@ -1090,6 +1091,12 @@ void SupersonicApp::Run() {
                 // frame that runs no tick would otherwise lose the press, and a
                 // frame that runs three would report it to all three.
                 Input::BeginTickInput();
+
+                // And the same for clicks, which are computed once per frame by
+                // the UI pass and read inside the tick by any script that has a
+                // button. Separate call because a click belongs to an entity
+                // and Input knows nothing about the registry.
+                UIInput::BeginTickClicks(m_registry);
 
                 for (int sub = 0; sub < physicsSubsteps; ++sub) {
                     SUPERSONIC_PROFILE(Physics);

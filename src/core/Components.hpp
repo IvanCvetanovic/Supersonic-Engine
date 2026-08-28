@@ -1585,6 +1585,25 @@ struct UIButtonComponent {
     bool hovered{false};
     bool pressed{false};
     bool clicked{false};
+
+    // THE CLICK, LATCHED FOR THE TICK, which is not the frame.
+    //
+    // `clicked` above is true for exactly one FRAME, and scripts run on the
+    // tick. Those are different periods and the mismatch is wrong in both
+    // directions at once, which is the same bug the keyboard had and was fixed
+    // for: a frame that runs no tick loses the click entirely - at 20 Hz on a
+    // 144 Hz display that is six frames out of seven - and a frame that runs
+    // three ticks reports the same click to all three, so one press of Buy
+    // buys three.
+    //
+    // So the click is held from the frame that produced it until a tick takes
+    // it, and exactly one tick sees it. `clicked` is left alone because the
+    // renderer and the editor genuinely do want the frame's answer.
+    //
+    // Not serialised, for the reason above and more so: a latched click
+    // restored from a snapshot would fire on the first tick after loading.
+    bool clickPending{false};
+    bool clickedThisTick{false};
 };
 
 // A field: somewhere a player can type their name.
