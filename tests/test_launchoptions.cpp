@@ -176,7 +176,53 @@ static void testTheRealClockIsTheDefault() {
     CHECK_MSG(o.fixedDelta == 0.0f, "without the flag the simulation follows the real clock");
 }
 
+// --- --record and --replay --------------------------------------------------
+
+static void testRecordAndReplayTakePaths() {
+    const auto recording = parse({"--record", "session.replay"});
+    CHECK(recording.ok);
+    CHECK(recording.recordPath == "session.replay");
+    CHECK(recording.replayPath.empty());
+
+    const auto replaying = parse({"--replay", "bug.replay"});
+    CHECK(replaying.ok);
+    CHECK(replaying.replayPath == "bug.replay");
+    CHECK(replaying.recordPath.empty());
+
+    CHECK_MSG(!parse({"--record"}).ok, "a path is not optional");
+    CHECK_MSG(!parse({"--replay"}).ok, "for either of them");
+}
+
+static void testRecordingAReplayIsRefused() {
+    // Not resolved by picking one. A run being fed its input while writing that
+    // input down produces a file that agrees with itself by construction - a
+    // verification that passes without verifying anything, which is worse than
+    // either flag simply failing.
+    const auto both = parse({"--record", "out.replay", "--replay", "in.replay"});
+    CHECK_MSG(!both.ok, "recording a replay is not a thing");
+
+    // And the other way round, because the message must not depend on the order
+    // the two were typed in.
+    const auto reversed = parse({"--replay", "in.replay", "--record", "out.replay"});
+    CHECK_MSG(!reversed.ok, "in either order");
+    CHECK_MSG(both.error == reversed.error, "with the same message: " + both.error);
+}
+
+static void testAReplayCanBePinnedAndFramed() {
+    // The combination a verification run actually uses: a recorded session,
+    // a constant delta so the tick count is pinned, and a frame budget so it
+    // exits by itself.
+    const auto options = parse({"--replay", "bug.replay", "--fixed-step", "--frames", "600"});
+    CHECK(options.ok);
+    CHECK(options.replayPath == "bug.replay");
+    CHECK_EQ(options.maxFrames, 600);
+    CHECK_MSG(options.fixedDelta > 0.0f, "and the step is pinned");
+}
+
 static void runTests() {
+    testRecordAndReplayTakePaths();
+    testRecordingAReplayIsRefused();
+    testAReplayCanBePinnedAndFramed();
     testFixedStepDefaultsToSixtyHertz();
     testFixedStepTakesAnExplicitStep();
     testFixedStepDoesNotSwallowTheNextFlag();

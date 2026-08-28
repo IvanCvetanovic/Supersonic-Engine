@@ -22,6 +22,7 @@
 #include "core/Components.hpp"
 #include "core/PhysicsSystem.hpp"
 #include "core/ContactTracker.hpp"
+#include "core/InputRecording.hpp"
 #include "core/LayerStack.hpp"
 #include "core/AnimationLibrary.hpp"
 #include "core/MaterialLibrary.hpp"
@@ -65,6 +66,27 @@ private:
     void initECS();
 
     void applyPendingSceneLoad();
+
+    // Open the file named by --record or --replay, once the scene is loaded.
+    void setUpRecording(const std::string& startupScene);
+
+    // Record or feed one tick's input. False means a replay has run out, which
+    // is what stops the loop rather than letting it feed the run nothing and
+    // call the result a reproduction.
+    bool stepRecording(uint64_t tick);
+
+    // Write the recording out, or report whether the replay reproduced.
+    void finishRecording();
+
+public:
+    // Whether a --replay run disagreed with the hashes it was checked against.
+    //
+    // Read by main() to choose the exit status, because a verification that
+    // reports failure only in its own log is one no CI job can act on - and
+    // being runnable without a person watching is the whole point of a replay.
+    bool ReplayDiverged() const;
+
+private:
 
     ContactTracker m_contactTracker;
     AssetWatcher m_assetWatcher;
@@ -131,6 +153,24 @@ private:
     // therefore what a script sees when it asks what it touched. Cleared at the
     // top of every tick.
     std::vector<PhysicsSystem::Contact> m_contacts;
+
+    // The run being written down, or the one being played back. At most one is
+    // ever set - LaunchOptions refuses both, because a run recording the input
+    // it is being fed writes a file that agrees with itself by construction.
+    std::unique_ptr<InputRecording> m_recording;
+    std::unique_ptr<InputRecording> m_replay;
+
+    // The first checkpoint a replay disagreed with, and whether there was one.
+    //
+    // Kept rather than acted on immediately: the run carries on to the end so
+    // the log shows how far the divergence spread, and the exit status is
+    // decided once at the bottom. Reporting only the FIRST is the useful part -
+    // after a divergence every later checkpoint disagrees too, and the tick
+    // that matters is the one where the two runs stopped being the same.
+    bool m_replayDiverged{false};
+    uint64_t m_replayDivergedAtTick{0};
+    uint64_t m_replayExpectedHash{0};
+    uint64_t m_replayActualHash{0};
 
     // THIS FRAME's, for the editor's count. Two vectors because the two
     // consumers want different things: a tracker turning contacts into

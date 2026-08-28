@@ -2104,6 +2104,78 @@ each was a separate confusion rather than a missing feature:
 What that leaves is §8e: the inputs, which are the last thing a run needs to
 reproduce and the only one that cannot be derived from the scene.
 
+Two things the hash learnt later, both found by asking what a replay would fall
+through. It was seeded on `entt::to_integral` — the whole EnTT handle, which
+packs an index with the recycle counter `registry.clear()` bumps — so **the same
+scene loaded twice hashed differently**, and every determinism claim was
+implicitly scoped to one process that had loaded exactly one scene. And it
+opened on `view<TransformComponent>`, which put the *count* inside the filter
+too, so an entity without a transform was invisible twice over and a scene of
+scripted HUD elements hashed identically to an empty registry. Both are fixed;
+both had tests that could have been written at any point and were not.
+
+### 8e. Replay
+
+Determinism on its own is a property nobody can spend. §8c can prove one scene
+stepped N times lands in one state — but a *run* is not only a scene and a tick
+count, it is also everything the player did, and that had nowhere to be written
+down. So a bug a player hit could still only be described, which is exactly what
+determinism was supposed to stop being necessary.
+
+`--record <path>` writes every tick's input and a state hash every second.
+`--replay <path>` feeds it back and checks it, printing the first tick that
+disagrees and exiting non-zero. The two are refused together: a run recording
+the input it is being fed writes a file that agrees with itself by construction.
+
+**What is recorded is what the tick was handed, not what the devices did.** The
+obvious alternative — store the keys and stick positions, re-derive the rest —
+cannot work, and the reason is easy to miss: some of what a tick reads is
+computed per *frame*. A mouse delta is the clear case and a UI click is the one
+that surprised us. A frame running three ticks hands the same delta to all
+three; a frame running none hands it to nobody. Re-deriving that where the
+frames fall differently produces different numbers from the same file. Freezing
+the resolved value also makes a replay survive a rebind for free: the file says
+the player moved, not that they held W.
+
+Getting there meant moving three more channels off the frame and onto the tick
+first — `wasReleased`, the contact list, and clicks. Each was found by asking
+which channel was next, and that enumeration *is* the list a recording has to
+serialise, so it was a prerequisite rather than a detour.
+
+**Levels persist and edges do not**, which is the rule the encoding turns on.
+Held actions and axis values carry until a line changes them; press, release,
+click and the mouse delta belong to exactly the tick that names them. A format
+that held a press the way it holds a key-down would report one keystroke on
+every following tick — undoing, in the file, the latch that exists to give a
+keypress to exactly one tick. Most ticks repeat the one before, so holding a key
+for three seconds is two lines rather than a hundred and eighty.
+
+**Floats are written as their bits.** Nothing here writes a decimal float that
+reads back bit-identical — `ComponentCodec` uses the iostream default of six
+significant digits — so a decimal axis value would not be the value the tick
+saw, and the run would diverge slightly and intermittently for a reason that is
+not a bug in anything.
+
+**The tick count is written twice**, at the top and at the end, and that is not
+redundancy: delta encoding makes half a file syntactically perfect. The reader
+would carry the last levels forward, hand back the number of ticks the header
+promised, and report success on half a session. Nothing in the data can reveal
+that, so the file has to say where it ends.
+
+Checkpoint zero is taken after the load and before the first tick, so a mismatch
+there says *this is not the scene that was recorded* rather than letting the run
+diverge for four thousand ticks and reporting the symptom. It is necessary and
+not sufficient — the hash covers what a tick can change, not everything a scene
+load establishes.
+
+One measured caveat worth keeping. Replaying the demo scene reproduces, and that
+proves less than it looks: **nothing in `MainScene` reads input inside a tick**,
+so changing a recorded mouse delta and replaying it produces an identical hash.
+The claim that recorded input actually drives state is carried by
+`test_replay`'s last few cases, which run a simulation that reads input and
+check that changing one tick of it moves the world. An end-to-end run is only as
+strong as the scene it is run against.
+
 ### 8d. Saving a game's own components
 
 `ComponentCodec` is the single reader and writer for an entity, and it named

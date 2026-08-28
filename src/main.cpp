@@ -175,9 +175,19 @@ int main(int argc, char** argv) {
                   << " for writing; continuing without a log file." << std::endl;
     }
 
+    // Whether a --replay run disagreed with the hashes it was checked against.
+    //
+    // Kept out here rather than returned from Run, because the validation-layer
+    // check below is a second reason the same run can fail and both have to be
+    // able to say so. A replay that reported a divergence only in its own log
+    // would be a verification no CI job could act on, and running without a
+    // person watching is the whole point of one.
+    bool replayDiverged = false;
+
     try {
         Supersonic::SupersonicApp app(options);
         app.Run();
+        replayDiverged = app.ReplayDiverged();
     } catch (const std::exception& e) {
         reportFatal(e.what());
         Supersonic::Log::CloseFileSink();
@@ -198,6 +208,16 @@ int main(int argc, char** argv) {
         std::cerr << "[Engine] " << validationErrors
                   << " Vulkan validation error(s) were reported; failing the run."
                   << std::endl;
+        Supersonic::Log::CloseFileSink();
+        return EXIT_FAILURE;
+    }
+
+    // A replay that did not reproduce fails the run, for the same reason a
+    // validation error does: the process finished, and what it was asked to
+    // check did not hold. The tick and the two hashes have already been printed
+    // by the time this is reached.
+    if (replayDiverged) {
+        std::cerr << "[Engine] The replay did not reproduce; failing the run." << std::endl;
         Supersonic::Log::CloseFileSink();
         return EXIT_FAILURE;
     }

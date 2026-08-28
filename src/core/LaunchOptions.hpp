@@ -38,6 +38,22 @@ struct LaunchOptions {
     // lets a rendered image be compared against anything at all.
     float fixedDelta = 0.0f;
 
+    // Write every tick's input to this file, and a state hash every so often.
+    //
+    // Empty means record nothing, which is every ordinary run. A recording is
+    // what turns "it went wrong on my machine" into a file somebody else can
+    // run - see InputRecording for why it stores what the tick was handed
+    // rather than what the devices did.
+    std::string recordPath;
+
+    // Feed a recorded run back in, and check it against the hashes it stored.
+    //
+    // Exclusive with recordPath, and the parser says so rather than picking
+    // one: a run that is being fed its input and is also writing that input
+    // down would produce a file that agrees with itself by construction, which
+    // is a test that passes without checking anything.
+    std::string replayPath;
+
     // Mint an identity for every asset that has none, write the sidecars, and
     // exit without opening a window.
     //

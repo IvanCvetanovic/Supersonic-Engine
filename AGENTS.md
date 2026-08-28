@@ -115,6 +115,31 @@ not rely on it without reading `SupersonicApp.cpp` first. `--screenshot` capture
 viewport shows, already tone-mapped and encoded - so a rendering change can be
 looked at rather than only reasoned about.
 
+### Recording a run and playing it back
+
+```bash
+# Play, and write down everything each tick was handed.
+./build/Debug/SupersonicEngine.exe --scene assets/scenes/MainScene.scene     --record session.replay
+
+# Feed it back and check it against the hashes it stored. Non-zero, with the
+# tick number and both hashes, if it does not reproduce.
+./build/Debug/SupersonicEngine.exe --frames 180 --fixed-step     --scene assets/scenes/MainScene.scene --replay session.replay
+```
+
+`--record` and `--replay` are refused together: a run recording the input it is
+being fed writes a file that agrees with itself by construction.
+
+The file is text and delta-encoded — three seconds of the demo scene is about
+2 KB — so it can be read, diffed and hand-edited. `ARCHITECTURE.md` §8e explains
+the two rules that make it work: levels persist between ticks and edges do not,
+and floats are written as their bits.
+
+> A replay only tests what the scene actually reads. **`MainScene` reads no
+> input inside a tick**, so replaying it reproduces whatever it is fed — change
+> a recorded mouse delta and the hash is identical. That is a property of the
+> scene, not of the feature; `test_replay` carries the claim that recorded input
+> drives state.
+
 ### With validation layers, if the SDK is not installed system-wide
 
 ```powershell

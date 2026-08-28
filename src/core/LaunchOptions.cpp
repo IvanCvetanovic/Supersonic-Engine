@@ -14,6 +14,11 @@ const char* LaunchOptions::Usage() {
            "  --fixed-step [s]  simulate at a constant delta (default 1/60) so a\n"
            "                    run reproduces exactly; without it the simulation\n"
                     "                    follows the real clock\n"
+           "  --record <path>   write every tick's input, and a state hash every\n"
+           "                    second, so the run can be replayed elsewhere\n"
+           "  --replay <path>   run a recorded session's input back and check it\n"
+           "                    against the hashes it stored; exits non-zero on\n"
+           "                    the first tick that disagrees\n"
            "  --import-assets give every asset under assets/ a stable identity,\n"
            "                  writing a .meta beside each, then exit\n"
            "  --help          print this message\n";
@@ -89,9 +94,27 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
         } else if (arg == "--scene") {
             if (!value(options.scenePath)) return fail("--scene needs a path");
             if (options.scenePath.empty()) return fail("--scene needs a path");
+        } else if (arg == "--record") {
+            if (!value(options.recordPath)) return fail("--record needs a path");
+            if (options.recordPath.empty()) return fail("--record needs a path");
+        } else if (arg == "--replay") {
+            if (!value(options.replayPath)) return fail("--replay needs a path");
+            if (options.replayPath.empty()) return fail("--replay needs a path");
         } else {
             return fail("unrecognised option '" + arg + "'");
         }
+    }
+
+    // Checked after the loop rather than when the second flag arrives, so the
+    // message does not depend on which order they were typed in.
+    //
+    // Refused rather than resolved. A run being fed its input while writing
+    // that input down produces a file that agrees with itself by construction
+    // - a verification that passes without verifying, which is worse than
+    // either flag failing outright.
+    if (!options.recordPath.empty() && !options.replayPath.empty()) {
+        return fail("--record and --replay cannot both be given: a run cannot "
+                    "record the input it is being fed");
     }
 
     return options;

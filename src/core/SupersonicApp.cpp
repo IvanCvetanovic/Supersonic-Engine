@@ -24,6 +24,8 @@
 #include "core/EcsUtils.hpp"
 #include "core/TransformSystem.hpp"
 #include "core/SimulationClock.hpp"
+#include "core/StateHash.hpp"
+#include "core/InputRecording.hpp"
 #include "core/RenderSettings.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/SceneSerializer.hpp"
@@ -368,6 +370,122 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
             SUPERSONIC_LOG_ERROR("SupersonicApp") << started.message << std::endl;
         }
     }
+
+    setUpRecording(startupScene);
+}
+
+// Open the recording, or the file being replayed, once the scene is loaded.
+//
+// AFTER the load and after Play, deliberately: the clock a replay pins and the
+// tick-zero hash it checks are both properties of the world the run starts
+// from, and neither exists until the scene is in the registry.
+void SupersonicApp::setUpRecording(const std::string& startupScene) {
+    if (!m_options.replayPath.empty()) {
+        auto loaded = std::make_unique<InputRecording>(
+            InputRecording::Load(m_options.replayPath));
+        if (!loaded->ok) {
+            SUPERSONIC_LOG_ERROR("Replay") << loaded->error << std::endl;
+            return;
+        }
+
+        // The scene is a warning rather than a refusal. A replay pointed at the
+        // wrong scene is caught properly by the tick-zero hash below, which
+        // knows what the world actually is; the path only knows what it was
+        // called, and a project that has renamed a level would fail here for no
+        // reason.
+        if (!loaded->scenePath.empty() && loaded->scenePath != startupScene) {
+            SUPERSONIC_LOG_WARN("Replay")
+                << "recorded against " << loaded->scenePath << " but running "
+                << startupScene << "." << std::endl;
+        }
+
+        // THE STEP IS TAKEN FROM THE FILE, not from the scene. The scene
+        // authors a rate and the recording knows the exact float the run
+        // actually used; if a level has been retuned since, replaying it at the
+        // new rate would produce a different number of ticks per second and
+        // diverge for a reason that has nothing to do with the bug.
+        auto& clock = m_registry.ctx().contains<SimulationClock>()
+                          ? m_registry.ctx().get<SimulationClock>()
+                          : m_registry.ctx().emplace<SimulationClock>();
+        clock.fixedDelta = loaded->fixedDelta;
+
+        SUPERSONIC_LOG_INFO("Replay")
+            << "Replaying " << loaded->ticks.size() << " tick(s) from "
+            << m_options.replayPath << " at " << (1.0f / loaded->fixedDelta) << " Hz."
+            << std::endl;
+
+        m_replay = std::move(loaded);
+        return;
+    }
+
+    if (!m_options.recordPath.empty()) {
+        m_recording = std::make_unique<InputRecording>();
+        m_recording->scenePath = startupScene;
+
+        const auto* clock = m_registry.ctx().find<SimulationClock>();
+        m_recording->fixedDelta = clock && clock->fixedDelta > 0.0f ? clock->fixedDelta
+                                                                    : kDefaultGameTick;
+
+        SUPERSONIC_LOG_INFO("Record")
+            << "Recording " << startupScene << " to " << m_options.recordPath << "."
+            << std::endl;
+    }
+}
+
+// One tick's worth of recording or replaying, at the top of the tick.
+//
+// Returns false when a replay has run out of recorded ticks, which is what
+// stops the loop rather than letting it carry on feeding the run nothing and
+// calling the result a reproduction.
+bool SupersonicApp::stepRecording(uint64_t tick) {
+    // The checkpoint is taken BEFORE the tick runs, so checkpoint N is the
+    // world after N ticks - which makes checkpoint zero the state the run
+    // started from, and that is the one worth having. A mismatch there says
+    // "this is not the scene that was recorded" instead of letting the run
+    // diverge for four thousand ticks and reporting the symptom.
+    const bool atCheckpoint = (tick % InputRecording::kDefaultCheckpointInterval) == 0;
+
+    if (m_replay) {
+        if (tick >= m_replay->ticks.size()) return false;
+
+        if (atCheckpoint) {
+            if (const ReplayCheckpoint* expected = m_replay->CheckpointAt(tick)) {
+                const uint64_t actual = StateHash::Compute(m_registry);
+                if (actual != expected->hash && !m_replayDiverged) {
+                    // Only the FIRST. After a divergence every later checkpoint
+                    // disagrees as well, and the tick worth reporting is the one
+                    // where the two runs stopped being the same.
+                    m_replayDiverged = true;
+                    m_replayDivergedAtTick = tick;
+                    m_replayExpectedHash = expected->hash;
+                    m_replayActualHash = actual;
+                    SUPERSONIC_LOG_ERROR("Replay")
+                        << "diverged at tick " << tick << ": expected " << expected->hash
+                        << ", got " << actual << "." << std::endl;
+                }
+            }
+        }
+
+        const Input::TickInput& recorded = m_replay->ticks[static_cast<size_t>(tick)];
+        Input::BeginReplayedTick(recorded);
+        UIInput::BeginReplayedTickClicks(m_registry, recorded.clicked);
+        return true;
+    }
+
+    if (m_recording) {
+        if (atCheckpoint) {
+            m_recording->checkpoints.push_back(
+                ReplayCheckpoint{tick, StateHash::Compute(m_registry)});
+        }
+
+        // Captured AFTER BeginTickInput and BeginTickClicks, which is what
+        // decides the edges this tick owns, and before anything reads them.
+        Input::TickInput captured = Input::CaptureTickInput();
+        captured.clicked = UIInput::ClicksThisTick(m_registry);
+        m_recording->ticks.push_back(std::move(captured));
+    }
+
+    return true;
 }
 
 void SupersonicApp::applyPendingSceneLoad() {
@@ -1097,6 +1215,16 @@ void SupersonicApp::Run() {
                 // and Input knows nothing about the registry.
                 UIInput::BeginTickClicks(m_registry);
 
+                // Write this tick's input down, or feed it back in. AFTER the
+                // two latches above, which decide what this tick owns, and
+                // before anything reads them.
+                //
+                // A replay that has run out of recorded ticks stops the loop
+                // here rather than carrying on: a run fed nothing would keep
+                // simulating, keep hashing, and eventually be described as a
+                // reproduction of something it stopped following.
+                if (!stepRecording(clock.tick)) break;
+
                 for (int sub = 0; sub < physicsSubsteps; ++sub) {
                     SUPERSONIC_PROFILE(Physics);
                     PhysicsSystem::Update(m_registry, physicsStep, &m_stepContacts);
@@ -1157,6 +1285,13 @@ void SupersonicApp::Run() {
                 // towards. After the scripts, so it captures the tick's whole
                 // result rather than physics' half of it.
                 InterpolationSystem::EndTick(m_registry);
+
+                // The recorded input stops standing in for the devices here,
+                // and not one line later: everything after this point in the
+                // frame runs per frame, and the editor camera reading a
+                // replayed mouse delta would take the view away from whoever is
+                // watching the replay.
+                Input::EndReplayedTick();
 
                 m_physicsAccumulator -= gameTick;
                 ++steps;
@@ -1367,10 +1502,64 @@ void SupersonicApp::Run() {
                               *renderCamera);
     }
 
+    finishRecording();
+
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Window close requested. Waiting for GPU idle..." << std::endl;
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
         m_vulkanDevice->GetDevice().waitIdle();
     }
 }
+
+// Write the recording out, or say whether the replay reproduced.
+//
+// At the end of Run rather than at the end of each tick, because a recording is
+// only useful whole - a file flushed per tick would cost a write at 60 Hz and
+// still be truncated if the process died, which is the case the end marker
+// already refuses to read.
+void SupersonicApp::finishRecording() {
+    if (m_recording) {
+        // A final checkpoint at whatever tick the run stopped on, so the end of
+        // the session is checked even when it does not land on the interval.
+        // Without it the last few seconds of every recording are unverified,
+        // which is where a bug being recorded usually is.
+        const auto* clock = m_registry.ctx().find<SimulationClock>();
+        const uint64_t finalTick = clock ? clock->tick : 0;
+        if (m_recording->CheckpointAt(finalTick) == nullptr) {
+            m_recording->checkpoints.push_back(
+                ReplayCheckpoint{finalTick, StateHash::Compute(m_registry)});
+        }
+
+        std::string error;
+        if (InputRecording::Save(*m_recording, m_options.recordPath, error)) {
+            SUPERSONIC_LOG_INFO("Record")
+                << "Wrote " << m_recording->ticks.size() << " tick(s) and "
+                << m_recording->checkpoints.size() << " checkpoint(s) to "
+                << m_options.recordPath << "." << std::endl;
+        } else {
+            SUPERSONIC_LOG_ERROR("Record") << error << std::endl;
+        }
+        return;
+    }
+
+    if (m_replay) {
+        if (m_replayDiverged) {
+            // Plain stdout as well as the log, because this is the ANSWER the
+            // run was asked for rather than a diagnostic about producing it -
+            // the same argument the profiler summary makes a few hundred lines
+            // above.
+            std::cout << "Replay diverged at tick " << m_replayDivergedAtTick
+                      << ": expected " << m_replayExpectedHash
+                      << ", got " << m_replayActualHash << std::endl;
+        } else {
+            const auto* clock = m_registry.ctx().find<SimulationClock>();
+            const uint64_t reached = clock ? clock->tick : 0;
+            std::cout << "Replay reproduced " << reached << " of "
+                      << m_replay->ticks.size() << " recorded tick(s) across "
+                      << m_replay->checkpoints.size() << " checkpoint(s)." << std::endl;
+        }
+    }
+}
+
+bool SupersonicApp::ReplayDiverged() const { return m_replayDiverged; }
 
 } // namespace Supersonic

@@ -18,6 +18,9 @@
 #include "TestHarness.hpp"
 
 #include "core/InputRecording.hpp"
+#include "core/Components.hpp"
+#include "core/StateHash.hpp"
+#include "core/UIInput.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -428,6 +431,143 @@ static void testAFileWrittenOnTheOtherPlatformStillReads() {
               "and the content survived them");
 }
 
+// --- the whole chain, which is the claim ------------------------------------
+//
+// Everything above tests the FILE: that what went in comes out. None of it
+// tests the thing the file exists for, which is that feeding a recorded run
+// back produces the same world - and that is a different claim, because it goes
+// through Input's replay override and out the other side into state.
+//
+// It is also the claim most likely to pass for the wrong reason. A scene that
+// does not read input reproduces whatever you feed it, so a green end-to-end
+// run against the demo scene says nothing at all: measured, changing a recorded
+// mouse delta and replaying it produces an identical hash, because nothing in
+// that scene reads one. The simulation below therefore reads input and writes
+// state, which is what makes the last case here able to fail.
+
+namespace {
+
+// A stand-in for a game's OnFixedUpdate: reads what the tick was handed and
+// turns it into world state, which is the only path that matters.
+void simulateTick(entt::registry& registry, entt::entity entity) {
+    auto& transform = registry.get<TransformComponent>(entity);
+    transform.position.x += Input::GetAxis("MoveX") * 0.1f;
+    transform.position.z += Input::MouseDelta().x * 0.01f;
+    if (Input::TickWasPressed("Jump")) transform.position.y += 1.0f;
+    if (Input::TickWasReleased("Jump")) transform.position.y -= 0.5f;
+    if (Input::IsDown("Fire")) transform.rotation.y += 0.05f;
+}
+
+uint64_t runThrough(const InputRecording& recording) {
+    entt::registry registry;
+    const entt::entity entity = registry.create();
+    registry.emplace<TransformComponent>(entity);
+
+    for (const Input::TickInput& tick : recording.ticks) {
+        Input::BeginReplayedTick(tick);
+        UIInput::BeginReplayedTickClicks(registry, tick.clicked);
+        simulateTick(registry, entity);
+        Input::EndReplayedTick();
+    }
+    return StateHash::Compute(registry);
+}
+
+// A session with something in it: movement, a jump, a held trigger, mouse look.
+InputRecording aSession() {
+    InputRecording recording = emptyRun(40);
+    for (size_t i = 0; i < recording.ticks.size(); ++i) {
+        Input::TickInput& tick = recording.ticks[i];
+        tick.axes = { { "MoveX", i < 20 ? 1.0f : -0.5f } };
+        tick.mouseDelta = glm::vec2(static_cast<float>(i) * 0.25f, 0.0f);
+        if (i >= 10 && i < 30) tick.down = { "Fire" };
+    }
+    recording.ticks[5].pressed = { "Jump" };
+    recording.ticks[5].down = { "Jump" };
+    recording.ticks[6].released = { "Jump" };
+    return recording;
+}
+
+} // namespace
+
+static void testARecordedRunReproducesThroughTheFile() {
+    // THE CLAIM, end to end: a session, written to text, read back, fed into a
+    // simulation that reads input, lands on the same state to the bit.
+    const InputRecording original = aSession();
+    const uint64_t direct = runThrough(original);
+
+    const InputRecording parsed = roundTrip(original);
+    const uint64_t replayed = runThrough(parsed);
+
+    CHECK_MSG(direct == replayed,
+              "a run replayed from its file must land where it landed: " +
+                  std::to_string(direct) + " vs " + std::to_string(replayed));
+
+    // And again, because two agreeing could be two copies of one accident.
+    CHECK_MSG(runThrough(parsed) == direct, "and again on a third run");
+}
+
+static void testChangingOneTicksInputChangesWhereTheRunEnds() {
+    // THE ONE THAT STOPS THE TEST ABOVE PASSING FOR NOTHING. If the recorded
+    // input were not actually reaching the simulation, every recording would
+    // reproduce every other and the test above would be green and worthless.
+    // That is not hypothetical - it is exactly what happens against the demo
+    // scene, which reads no input at all.
+    const InputRecording original = aSession();
+    const uint64_t baseline = runThrough(original);
+
+    InputRecording nudged = original;
+    nudged.ticks[12].axes = { { "MoveX", 0.75f } };
+    CHECK_MSG(runThrough(nudged) != baseline, "one axis, on one tick, moves the world");
+
+    InputRecording unpressed = original;
+    unpressed.ticks[5].pressed.clear();
+    CHECK_MSG(runThrough(unpressed) != baseline, "and so does one press that did not happen");
+
+    InputRecording steadier = original;
+    steadier.ticks[20].mouseDelta = glm::vec2(0.0f);
+    CHECK_MSG(runThrough(steadier) != baseline, "and one tick of mouse movement");
+}
+
+static void testAnEdgeHeldForOneTickTooLongIsADifferentRun() {
+    // The property the format's level/edge split exists for, measured in state
+    // rather than in parsed structs. A press carried to the following tick is
+    // an extra jump, so the world ends somewhere else - which is what makes
+    // getting the encoding wrong a bug somebody would eventually notice, and
+    // what makes it worth having a test that notices first.
+    InputRecording once = emptyRun(4);
+    once.ticks[1].pressed = { "Jump" };
+
+    InputRecording twice = emptyRun(4);
+    twice.ticks[1].pressed = { "Jump" };
+    twice.ticks[2].pressed = { "Jump" };
+
+    CHECK_MSG(runThrough(once) != runThrough(twice),
+              "one press and two presses are different runs");
+
+    // And the file agrees with itself about which of the two it holds.
+    CHECK_MSG(runThrough(roundTrip(once)) == runThrough(once),
+              "the single press survives the round trip as a single press");
+}
+
+static void testTheDevicesComeBackWhenTheTickEnds() {
+    // Everything after the tick runs per frame - the editor camera, the UI,
+    // ImGui - and a replay that left its recorded input installed would take the
+    // view away from whoever is watching the replay.
+    InputRecording recording = emptyRun(1);
+    recording.ticks[0].axes = { { "MoveX", 1.0f } };
+    recording.ticks[0].down = { "Fire" };
+
+    Input::BeginReplayedTick(recording.ticks[0]);
+    CHECK_MSG(Input::ReplayingTick(), "the recorded tick is in force");
+    CHECK_NEAR(Input::GetAxis("MoveX"), 1.0f);
+    CHECK_MSG(Input::IsDown("Fire"), "and the recorded action reads as held");
+
+    Input::EndReplayedTick();
+    CHECK_MSG(!Input::ReplayingTick(), "and it is not in force afterwards");
+    CHECK_NEAR(Input::GetAxis("MoveX"), 0.0f);
+    CHECK_MSG(!Input::IsDown("Fire"), "the devices have the input back");
+}
+
 // --- the disk ---------------------------------------------------------------
 
 static void testSaveAndLoadRoundTripThroughAFile() {
@@ -483,6 +623,10 @@ static void runTests() {
     testAParseErrorNamesTheFileAndTheLine();
     testAHandWrittenFileParses();
     testAFileWrittenOnTheOtherPlatformStillReads();
+    testARecordedRunReproducesThroughTheFile();
+    testChangingOneTicksInputChangesWhereTheRunEnds();
+    testAnEdgeHeldForOneTickTooLongIsADifferentRun();
+    testTheDevicesComeBackWhenTheTickEnds();
     testSaveAndLoadRoundTripThroughAFile();
     testLoadingAFileThatIsNotThereSaysSo();
 }
