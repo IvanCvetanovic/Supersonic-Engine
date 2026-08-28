@@ -25,9 +25,26 @@ namespace UIInput {
 // Updates the hovered/pressed/clicked flags on every UIButtonComponent, and
 // runs focus and typing over every UITextFieldComponent.
 //
-// Returns the number of buttons that were clicked this frame, which is what
-// lets a caller cheaply ask "did the UI take this click?" before letting it
-// through to the world underneath.
+// This used to return the number of buttons clicked, as a guard a game could
+// ask before letting a click through to the world underneath. Nothing ever
+// called it, and NO CORRECT GUARD COULD HAVE BEEN BUILT FROM IT - which is why
+// it is gone rather than wired up.
+//
+// It was wrong about the edge. A click lands on the RELEASE, and everything
+// that needs guarding fires on the PRESS, so on the frame a guard would read
+// the count it is zero for every button. Gating on it would have been a no-op
+// that looked like a fix.
+//
+// It was wrong about the set. Only buttons were counted, and a full-screen
+// backdrop panel - the thing this file supports on purpose so a menu swallows
+// clicks meant for the game behind it - is not a button. The count read zero in
+// exactly the case the guard existed for.
+//
+// The question a guard has to ask is who owned the pointer when it went DOWN.
+// `topmostUnderPointer` below already computes that, over panels and fields as
+// well as buttons, and throws it away. Whoever builds the guard should start
+// there; and anything the SIMULATION reads has to come off clickedThisTick
+// instead, because that is what a replay assigns and no frame count is recorded.
 //
 // The keyboard is NOT defaulted, and that is on purpose. An inert default is
 // exactly the argument a caller forgets, and the symptom would be a field that
@@ -37,10 +54,10 @@ namespace UIInput {
 // `stacked` is where the layout pass put anything inside a container. An
 // element in it is hit-tested against THAT rectangle rather than against the
 // anchor it is no longer using; anything absent places itself as before.
-int Update(entt::registry& registry, const UIRect& gameRect,
-           const UICanvas::UIPointer& pointer,
-           const UICanvas::UIKeyboard& keyboard,
-           const UICanvas::StackedRects& stacked);
+void Update(entt::registry& registry, const UIRect& gameRect,
+            const UICanvas::UIPointer& pointer,
+            const UICanvas::UIKeyboard& keyboard,
+            const UICanvas::StackedRects& stacked);
 
 // Hand this tick the clicks nothing has consumed yet.
 //

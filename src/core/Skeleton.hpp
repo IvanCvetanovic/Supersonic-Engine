@@ -51,10 +51,27 @@ struct Joint {
 struct Skeleton {
     std::vector<Joint> joints;
 
-    // Largest distance from a bind-pose vertex to its dominant joint's origin.
-    // Used to inflate the pose bounds so an animated mesh is not culled by the
-    // bind-pose AABB it has moved out of.
-    float skinRadius{0.0f};
+    // There was a `skinRadius` here, and it was never written or read.
+    //
+    // It described a first design for keeping an animated mesh from being
+    // culled against the bind-pose box it has walked out of: a radius per
+    // skeleton, unioned into the pose bounds as a sphere. What actually shipped,
+    // in the same commit, is stricter and lives in AnimationSystem::EvaluatePoses
+    // - the bind box carried by EVERY joint matrix and unioned in. So the field
+    // was dead on arrival, and the documentation that grew up around it went on
+    // describing a bug that the code beside it had already prevented.
+    //
+    // Removed rather than implemented, because implementing it would have made
+    // the bounds WORSE. A sphere on a joint origin is isotropic and the origin
+    // sits at the end of a bone, so its radius is roughly a bone length in all
+    // six directions: measured on this repo's own rig, the radius version bounds
+    // 6.9x the volume of what ships.
+    //
+    // The real defect underneath is the opposite one and is not this field:
+    // carrying the WHOLE bind box on every joint is 1.5x to 2.5x looser than
+    // necessary, which costs draw calls and makes the editor's AABB pick claim
+    // space beside a character. A per-joint bind-space box would fix that, and
+    // is an optimisation no game here has asked for yet.
 
     bool empty() const { return joints.empty(); }
 };

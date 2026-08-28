@@ -2416,11 +2416,25 @@ script may pass a stack buffer it is about to overwrite. `hovered`, `pressed` an
 from the scene format, because a button saved mid-press comes back stuck and a
 click restored from a Play snapshot fires an action nobody asked for.
 
-One piece is built and not connected. `UIInput::Update` returns the number of
-buttons clicked this frame so that a caller can ask whether the UI took the click
-before letting it through to the world underneath. `UISystem::Render` discards
-that return value, and nothing between it and the editor viewport's pick test
-consults it. The guard the API was written for does not exist yet.
+`UIInput::Update` used to return the number of buttons clicked this frame, so a
+caller could ask whether the UI took the click before letting it through to the
+world. Nothing called it, and **no correct guard could have been built from it** —
+so it is gone rather than wired up.
+
+It was wrong about the edge: a click lands on the *release*, and anything needing
+a guard fires on the *press*, so on the frame a guard would read the count it is
+zero for every button. Gating on it would have been a no-op that looked like a
+fix. It was wrong about the set: only buttons were counted, and a full-screen
+backdrop panel — supported here on purpose so a menu swallows clicks meant for
+the game behind it — is not a button, so the count read zero in exactly the case
+the guard existed for.
+
+The question a guard has to ask is who owned the pointer when it went *down*.
+`topmostUnderPointer` already computes that, over panels and fields as well as
+buttons, and throws it away; that is where to start. Anything the simulation
+reads has to come off `clickedThisTick` instead, because that is what a replay
+assigns and no frame count is ever recorded. The one live consumer still without
+a guard is the editor viewport's pick test.
 
 ### 11. Audio
 

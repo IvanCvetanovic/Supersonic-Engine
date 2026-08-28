@@ -374,6 +374,42 @@ static void testPoseBoundsCoverTheAnimation() {
     CHECK_MSG(renderable.localBoundsMax.y >= bindMax.y, "the bounds must never shrink below bind pose");
 }
 
+static void testPoseBoundsNeverShrinkBelowTheBindBox() {
+    // The claim the line above tries to make, moved somewhere it can fail.
+    //
+    // `localBoundsMax = glm::max(bindMax, posedMax)` is the implementation, so
+    // asserting `localBoundsMax.y >= bindMax.y` against the box the same call
+    // just read is true whatever the pose did - it cannot fail, and a check that
+    // cannot fail is a check that is not being made. That one is left where it
+    // is because it reads as an intention; this is the version with a way to go
+    // wrong in it.
+    //
+    // A bind box far LARGER than anything the pose reaches. The union has to
+    // keep it. An implementation that assigned the posed extent instead of
+    // taking the maximum would shrink it to roughly the rig's own size, and
+    // every character in the project would start being culled the moment its
+    // authored bounds mattered - which is the failure the union exists for.
+    entt::registry registry;
+    AnimationLibrary library;
+    const auto entity = makeAnimated(registry, library);
+
+    auto& renderable = registry.get<RenderableComponent>(entity);
+    renderable.localBoundsMin = glm::vec3(-50.0f);
+    renderable.localBoundsMax = glm::vec3(50.0f);
+
+    auto& animator = registry.get<AnimatorComponent>(entity);
+    animator.clipName = "Bend";
+    animator.time = 1.0f;
+    AnimationSystem::EvaluatePoses(registry, library);
+
+    CHECK_MSG(renderable.localBoundsMax.x >= 50.0f && renderable.localBoundsMax.y >= 50.0f &&
+                  renderable.localBoundsMax.z >= 50.0f,
+              "a pose smaller than the authored box must not shrink it");
+    CHECK_MSG(renderable.localBoundsMin.x <= -50.0f && renderable.localBoundsMin.y <= -50.0f &&
+                  renderable.localBoundsMin.z <= -50.0f,
+              "at either end");
+}
+
 static void testPoseBoundsDoNotAccumulate() {
     // The pose bounds are the union of the bind box carried by each joint. Union
     // that into the CURRENT bounds and the result feeds back into itself, growing
@@ -678,6 +714,7 @@ static void runTests() {
     testSyncSkeletonsResolvesTheRig();
     testClockLoopsAndRunsBackwards();
     testPoseBoundsCoverTheAnimation();
+    testPoseBoundsNeverShrinkBelowTheBindBox();
     testPoseBoundsDoNotAccumulate();
     testPaletteGatherPacksAndBoundsCheck();
     testMissingFileIsHandled();

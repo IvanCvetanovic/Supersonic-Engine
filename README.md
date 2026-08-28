@@ -689,10 +689,16 @@ HUSK's nineteen animated models. What is left is here.
 
 **For a game that generates its world**
 
-- **`Skeleton::skinRadius` is declared, documented and never written.** It is
-  meant to inflate pose bounds so an animated mesh is not culled by the
-  bind-pose box it has walked out of. Nothing computes it and nothing reads it,
-  so that culling does not happen — for node rigs or for skinned meshes.
+- **Animated bounds are looser than they need to be.** `AnimationSystem` widens
+  an animated entity's render bounds by carrying the whole bind box on every
+  joint, which is safe and about 1.5–2.5× larger than the posed mesh. The cost
+  is draw calls, and an editor AABB pick that claims empty space beside a
+  character.
+  A per-joint bind-space box would tighten it; no game here has needed it yet.
+  (This replaces a claim that a dead `Skeleton::skinRadius` field meant animated
+  meshes were culled against their bind pose. They are not — the widening has
+  always been there, by a different and stricter mechanism, and the field has
+  been removed.)
 - **A cut-out shadow cuts against the first surface.** `GatherShadowCasters`
   resolves one material set per caster, so a multi-surface model whose holes
   are on its fourth surface casts the silhouette of its first. Nothing HUSK

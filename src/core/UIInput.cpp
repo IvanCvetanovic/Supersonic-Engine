@@ -218,15 +218,14 @@ void updateTextFields(entt::registry& registry, const UIRect& gameRect, float sc
 
 } // namespace
 
-int Update(entt::registry& registry, const UIRect& gameRect,
-           const UICanvas::UIPointer& pointer,
-           const UICanvas::UIKeyboard& keyboard,
-           const UICanvas::StackedRects& stacked) {
+void Update(entt::registry& registry, const UIRect& gameRect,
+            const UICanvas::UIPointer& pointer,
+            const UICanvas::UIKeyboard& keyboard,
+            const UICanvas::StackedRects& stacked) {
     const glm::vec2 screenSize = gameRect.size();
-    if (screenSize.x < 1.0f || screenSize.y < 1.0f) return 0;
+    if (screenSize.x < 1.0f || screenSize.y < 1.0f) return;
 
     const float scale = UICanvas::ScaleFor(screenSize);
-    int clicked = 0;
 
     // Who the pointer belongs to, decided once for the whole scene before any
     // element is asked about itself - the same shape as focus below, and for
@@ -272,11 +271,7 @@ int Update(entt::registry& registry, const UIRect& gameRect,
         // is BeginTickClicks' job, because the whole point is that it survives
         // the frames between one tick and the next.
         if (state.clicked) button.clickPending = true;
-
-        if (state.clicked) ++clicked;
     }
-
-    return clicked;
 }
 
 void BeginTickClicks(entt::registry& registry) {

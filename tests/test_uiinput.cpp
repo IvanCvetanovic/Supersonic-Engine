@@ -117,34 +117,63 @@ static void testClickingBetweenTwoButtonsHitsNeither() {
     CHECK(!registry.get<UIButtonComponent>(quit).clicked);
 }
 
-static void testUpdateReportsHowManyWereClicked() {
-    // The count is what lets the game ask "did the UI take this click?" before
-    // passing it to the world - otherwise pressing a menu button also shoots.
+static void testAClickIsTheReleaseAndOnlyTheReleaseFrame() {
+    // What the deleted return value tried to say, asserted on the component
+    // instead. This is also the fact that killed it: a click exists on the
+    // RELEASE frame, and any guard asking "did the UI take this click?" runs on
+    // the PRESS - so the number it read was zero every time it mattered.
     entt::registry registry;
-    addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const auto play = addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const auto& button = registry.get<UIButtonComponent>(play);
 
-    // Held in locals: Update advances state, so calling it inside a check that
-    // might evaluate its argument more than once would run the frame twice.
-    const int onPress = UIInput::Update(registry, screen(),
-                                        pointerAt(glm::vec2(140.0f, 70.0f), true, false), noKeyboard(), kNoStacks);
-    const int onRelease = UIInput::Update(registry, screen(),
-                                          pointerAt(glm::vec2(140.0f, 70.0f), false, true), noKeyboard(), kNoStacks);
-    const int afterwards = UIInput::Update(registry, screen(),
-                                           pointerAt(glm::vec2(140.0f, 70.0f), false, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(140.0f, 70.0f), true, false),
+                    noKeyboard(), kNoStacks);
+    CHECK_MSG(!button.clicked, "the press is not the click");
 
-    CHECK_MSG(onPress == 0, "the press is not the click");
-    CHECK_MSG(onRelease == 1, "the release over the button is");
-    CHECK_MSG(afterwards == 0, "and it is not reported again the frame after");
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(140.0f, 70.0f), false, true),
+                    noKeyboard(), kNoStacks);
+    CHECK_MSG(button.clicked, "the release over the button is");
+
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(140.0f, 70.0f), false, false),
+                    noKeyboard(), kNoStacks);
+    CHECK_MSG(!button.clicked, "and it is not reported again the frame after");
+}
+
+static void testAPanelSwallowsAClickAndNoButtonReportsOne() {
+    // The other half of why a count of clicked BUTTONS could never have been the
+    // guard. A full-screen backdrop over a menu is supported on purpose, so that
+    // clicks meant for the game behind it are swallowed - and a backdrop is a
+    // panel, not a button. The UI took the click and the count would have read
+    // zero, in exactly the case the guard existed for.
+    entt::registry registry;
+    const auto play = addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+
+    const auto backdrop = registry.create();
+    auto& panel = registry.emplace<UIPanelComponent>(backdrop);
+    panel.anchor = UIAnchor::TopLeft;
+    panel.offset = glm::vec2(0.0f);
+    panel.size = glm::vec2(4000.0f, 4000.0f);
+    registry.emplace<UIOrderComponent>(backdrop).order = 1;   // over the button
+
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(140.0f, 70.0f), true, false),
+                    noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(140.0f, 70.0f), false, true),
+                    noKeyboard(), kNoStacks);
+
+    const auto& button = registry.get<UIButtonComponent>(play);
+    CHECK_MSG(!button.clicked, "the panel took it, so the button did not");
+    CHECK_MSG(!button.hovered, "and the button is not even hovered through it");
 }
 
 static void testClickingEmptySpaceReportsNothing() {
     entt::registry registry;
-    addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    const auto play = addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
 
     UIInput::Update(registry, screen(), pointerAt(glm::vec2(900.0f, 900.0f), true, false), noKeyboard(), kNoStacks);
-    const int clicked = UIInput::Update(registry, screen(),
-                                        pointerAt(glm::vec2(900.0f, 900.0f), false, true), noKeyboard(), kNoStacks);
-    CHECK_MSG(clicked == 0, "clicking empty space must report nothing");
+    UIInput::Update(registry, screen(), pointerAt(glm::vec2(900.0f, 900.0f), false, true),
+                    noKeyboard(), kNoStacks);
+    CHECK_MSG(!registry.get<UIButtonComponent>(play).clicked,
+              "clicking empty space must click nothing");
 }
 
 static void testAHiddenButtonIsNotAClickTarget() {
@@ -227,8 +256,9 @@ static void testADegenerateGameRectIsIgnored() {
     const auto button = addButton(registry, "Play", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
 
     const UIRect none{ glm::vec2(0.0f), glm::vec2(0.0f) };
-    const int clicked = UIInput::Update(registry, none, pointerAt(glm::vec2(0.0f), true, false), noKeyboard(), kNoStacks);
-    CHECK_MSG(clicked == 0, "a zero-size game area has nothing to click");
+    UIInput::Update(registry, none, pointerAt(glm::vec2(0.0f), true, false), noKeyboard(), kNoStacks);
+    CHECK_MSG(!registry.get<UIButtonComponent>(button).clicked,
+              "a zero-size game area has nothing to click");
     CHECK(!registry.get<UIButtonComponent>(button).hovered);
 }
 
@@ -645,7 +675,8 @@ static void runTests() {
     testAClickReachesTheButtonUnderThePointer();
     testOnlyTheButtonUnderThePointerIsClicked();
     testClickingBetweenTwoButtonsHitsNeither();
-    testUpdateReportsHowManyWereClicked();
+    testAClickIsTheReleaseAndOnlyTheReleaseFrame();
+    testAPanelSwallowsAClickAndNoButtonReportsOne();
     testClickingEmptySpaceReportsNothing();
     testAHiddenButtonIsNotAClickTarget();
     testADisabledButtonDrawsButDoesNotReact();
