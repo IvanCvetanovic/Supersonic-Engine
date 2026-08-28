@@ -1026,7 +1026,6 @@ void SupersonicApp::Run() {
         // because a scrub runs no ticks either.
         if (!(m_playMode.ShouldSimulate() || stepping) || TimeTravelDebugger::IsRewinding()) {
             Input::DiscardPendingTickInput();
-            UIInput::DiscardPendingClicks(m_registry);
         }
 
         if (m_playMode.ShouldSimulate() || stepping) {
@@ -1238,6 +1237,26 @@ void SupersonicApp::Run() {
         // touching when Stop was pressed.
         if (m_playMode.IsEditing()) {
             m_contactTracker.Clear();
+        }
+
+        // Clicks nothing is going to consume, dropped DOWN HERE rather than
+        // beside the keyboard's equivalent at the top of the frame.
+        //
+        // The two look like the same thing and are not, because the two kinds
+        // of input are computed at opposite ends of the frame. Devices are
+        // polled before the tick loop, so a discard placed there sees this
+        // frame's key edges. Clicks are computed by the UI pass inside BuildUI,
+        // which runs AFTER the tick loop - so the same discard placed there saw
+        // only the PREVIOUS frame's, and the last click made before Play was
+        // pressed survived into the first tick of the run. Which is the bug the
+        // latch was added to fix, arriving by a different route.
+        //
+        // Same every-frame assignment as the tracker above, and for the reason
+        // written there: a clear that is ever missed leaves a click queued with
+        // nothing on screen to explain why the game did something on its first
+        // tick.
+        if (!m_playMode.ShouldSimulate()) {
+            UIInput::DiscardPendingClicks(m_registry);
         }
 
         // Re-published because a scene load clears the registry, and a stale

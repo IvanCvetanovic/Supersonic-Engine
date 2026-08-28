@@ -420,6 +420,12 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         // hovered/pressed/clicked are rebuilt from the pointer every frame and
         // are deliberately absent: a button saved mid-press would come back
         // stuck, and a restored click would fire an action nobody asked for.
+        //
+        // So are clickPending and clickedThisTick, and more so. Those hold a
+        // click until a tick takes it, so a snapshot carrying one would fire it
+        // on the first tick after the snapshot was restored - which is
+        // precisely a Play-mode Stop and Start, so the button pressed just
+        // before Stop would press itself again on the next Play.
         out << indent << "\"UIButton\": {\n";
         out << indent << "  \"Label\": \"" << Json::Escape(button->label) << "\",\n";
         out << indent << "  \"Anchor\": " << static_cast<int>(button->anchor) << ",\n";
