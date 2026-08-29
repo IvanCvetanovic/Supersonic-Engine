@@ -49,8 +49,7 @@ std::filesystem::path ExecutableDirectory() {
 }
 
 
-bool AnchorAssetRootToExecutable() {
-    const std::filesystem::path directory = ExecutableDirectory();
+bool LooksLikeAPackagedFolder(const std::filesystem::path& directory) {
     if (directory.empty()) return false;
 
     // ONLY IF THE ASSETS ARE ACTUALLY THERE.
@@ -77,10 +76,20 @@ bool AnchorAssetRootToExecutable() {
     // the right NAME and none of the contents fails in exactly the way this
     // check exists to prevent. Shaders are also the first thing the renderer
     // opens, so if they are not here nothing else being here would save it.
+    //
+    // This is one of TWO descriptions of the same layout. The other is
+    // GamePackager, which chooses the directories it copies beside the
+    // executable. If that list ever stops including shaders, a packaged game
+    // silently stops anchoring and dies on a missing .spv - so
+    // test_executable_path builds a folder the way the packager describes one
+    // and asserts this agrees, rather than leaving the two to drift.
     std::error_code exists;
-    if (!std::filesystem::is_directory(directory / "assets" / "shaders", exists) || exists) {
-        return false;
-    }
+    return std::filesystem::is_directory(directory / "assets" / "shaders", exists) && !exists;
+}
+
+bool AnchorAssetRootToExecutable() {
+    const std::filesystem::path directory = ExecutableDirectory();
+    if (!LooksLikeAPackagedFolder(directory)) return false;
 
     std::error_code ec;
     std::filesystem::current_path(directory, ec);

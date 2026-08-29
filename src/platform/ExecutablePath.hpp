@@ -42,6 +42,16 @@ std::filesystem::path ExecutableDirectory();
 // not laid out like a packaged folder.
 bool AnchorAssetRootToExecutable();
 
+// Whether `directory` is laid out the way a PACKAGED game is, rather than the
+// way a build tree is. The judgement behind the anchoring above.
+//
+// Split out so it can be tested. Anchoring is an action with a process-wide
+// effect - it moves the working directory - and a test that called it would
+// change where every later test in the same binary resolves its fixtures. The
+// decision is a pure question about a path, so it is asked separately, the same
+// way RenderSystem::SortOpaqueDraws is reachable without a GPU.
+bool LooksLikeAPackagedFolder(const std::filesystem::path& directory);
+
 // Where relative asset paths resolve from. The working directory, named so that
 // code reads as though it means it.
 std::filesystem::path AssetRoot();

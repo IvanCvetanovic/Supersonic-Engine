@@ -321,7 +321,51 @@ static void testAPackagedGameShipsAssetIdentities() {
     cleanup();
 }
 
+// The packaged folder has to be one the RUNTIME will recognise.
+//
+// A game anchors its working directory to its own folder so it survives being
+// launched from a shortcut, and it does that only when the assets are actually
+// beside it. That test and this packager are two descriptions of one layout,
+// written in different files, and nothing held them together: drop "shaders"
+// from the packager's copy list and every packaged game keeps packaging
+// successfully, keeps passing every other test in this suite, and dies on
+// startup on a missing .spv.
+//
+// So rather than restating the list here - which is a copy, and copies drift -
+// this packages for real and asks the runtime's own predicate about the result.
+static void testAPackagedFolderIsOneTheRuntimeWillAnchorTo() {
+    cleanup();
+    const fs::path out = scratchRoot() / "Anchorable";
+
+    const auto result = GamePackager::PackageStandaloneGame(
+        out.string(), "assets/scenes/MainScene.scene");
+    CHECK_MSG(result.ok, result.message);
+
+    CHECK_MSG(LooksLikeAPackagedFolder(out),
+              "the packager wrote a folder the runtime does not recognise as a "
+              "packaged game; it will refuse to anchor and die on a missing shader");
+
+    // And the negative that gives the positive its meaning. An empty directory
+    // called `assets` is the case that actually shipped broken: it appears
+    // beside a build output for ordinary reasons, so a check for the NAME
+    // alone anchored the editor into its own build folder.
+    const fs::path decoy = scratchRoot() / "Decoy";
+    std::error_code ec;
+    fs::create_directories(decoy / "assets", ec);
+    CHECK_MSG(!LooksLikeAPackagedFolder(decoy),
+              "a bare `assets` directory is not a packaged game, and treating it "
+              "as one is what broke running a game out of its build tree");
+
+    CHECK_MSG(!LooksLikeAPackagedFolder(scratchRoot() / "NoSuchFolder"),
+              "a folder that is not there cannot be anchored to");
+    CHECK_MSG(!LooksLikeAPackagedFolder({}),
+              "an unknown executable directory must not anchor to the filesystem root");
+
+    cleanup();
+}
+
 static void runTests() {
+    testAPackagedFolderIsOneTheRuntimeWillAnchorTo();
     testTheManifestNamesTheSceneItWasGiven();
     testAPackagedGameShipsAssetIdentities();
     testTheBinaryIsActuallyThere();
@@ -334,4 +378,4 @@ static void runTests() {
     testExtractedGlbTexturesAreShipped();
 }
 
-TEST_MAIN("test_packaging", 27)
+TEST_MAIN("test_packaging", 32)
