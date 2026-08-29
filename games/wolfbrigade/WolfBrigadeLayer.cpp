@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "core/Application.hpp"
 #include "core/Components.hpp"
 #include "core/Log.hpp"
 #include "core/SimulationClock.hpp"
@@ -499,19 +500,13 @@ void WolfBrigadeLayer::buildPauseMenu(entt::registry& registry) {
     m_pause.mainMenu = item("Pause Main Menu", "Main Menu");
     m_pause.quit = item("Pause Quit", "Quit");
 
-    // TWO BUTTONS THAT CANNOT WORK YET, shown greyed rather than left out.
+    // ONE BUTTON THAT CANNOT WORK YET, shown greyed rather than left out.
     //
-    // "Main Menu" needs a menu to go to and a way to route between screens;
-    // neither is ported - game_flow.gd has no counterpart here. "Quit" needs a
-    // game to be able to close its own window, and there is no seam for that
-    // at all: EngineLayer cannot reach the Window, and Window has ShouldClose
-    // but nothing to set it.
-    //
-    // Greyed rather than absent because that is what this game does everywhere
-    // else, and because a menu that is missing two of its four items looks
-    // finished and is not. Whoever adds screen routing will find them here.
+    // "Main Menu" needs a menu to go to and a way to route between screens, and
+    // neither is ported - game_flow.gd has no counterpart here. Greyed rather
+    // than absent because that is what this game does everywhere else, and
+    // because a menu missing one of its four items looks finished and is not.
     registry.get<UIButtonComponent>(m_pause.mainMenu).enabled = false;
-    registry.get<UIButtonComponent>(m_pause.quit).enabled = false;
 
     setPauseMenuVisible(registry, false);
 }
@@ -553,6 +548,13 @@ void WolfBrigadeLayer::updatePauseMenu(entt::registry& registry) {
     if (registry.get<UIButtonComponent>(m_pause.restart).clickedThisTick) {
         restartMatch(registry);
         m_paused = false;
+    }
+
+    // Asked for rather than done. The run loop reads the latch at the top of
+    // the next frame, so the shutdown happens with no tick half-finished and
+    // no frame half-built around it - see Application.hpp.
+    if (registry.get<UIButtonComponent>(m_pause.quit).clickedThisTick) {
+        Supersonic::Application::RequestQuit();
     }
 
     setPauseMenuVisible(registry, m_paused);

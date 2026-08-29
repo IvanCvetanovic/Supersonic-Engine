@@ -24,6 +24,7 @@
 #include "WolfBrigadeLayer.hpp"
 
 #include "core/Components.hpp"
+#include "core/Application.hpp"
 #include "core/UISystem.hpp"
 
 #include <imgui.h>
@@ -752,26 +753,60 @@ static void testRestartBootsAFreshMatch() {
     layer.OnDetach(registry);
 }
 
-// The two that cannot work yet are shown, greyed, rather than left out.
-static void testTheUnroutableItemsAreGreyedRatherThanMissing() {
+// Quit asks the application to stop, and does not stop it itself.
+//
+// A game could not close itself at all before this: a layer cannot reach the
+// Window, and Window::ShouldClose only reports what GLFW already decided. So
+// the Quit button on every pause menu ever written had nothing to call.
+//
+// The latch is checked rather than the process, obviously - but that IS the
+// contract. Pressing Quit inside a tick must not tear the device down from
+// several systems deep with a frame half-built around it; it raises a request
+// the run loop reads at the top of the next frame.
+static void testQuitAsksTheApplicationToStop() {
+    Application::ClearQuitRequest();
+
     entt::registry registry;
     WolfBrigadeLayer layer;
     layer.OnAttach(registry);
     layer.OnFixedUpdate(registry, kTick);
 
-    for (const char* tag : { "Pause Main Menu", "Pause Quit" }) {
-        const entt::entity item = byTag(registry, tag);
-        CHECK_MSG(item != entt::null, std::string(tag) + " is present");
-        if (item == entt::null) continue;
+    CHECK_MSG(!Application::QuitRequested(), "nobody has asked yet");
+
+    registry.get<UIButtonComponent>(byTag(registry, "Pause Quit")).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(byTag(registry, "Pause Quit")).clickedThisTick = false;
+
+    CHECK_MSG(Application::QuitRequested(), "pressing Quit asked the application to stop");
+
+    // And the tick that asked still finished, rather than the layer having torn
+    // anything down under itself.
+    CHECK_MSG(layer.CurrentMatch() != nullptr, "the match is still there to shut down tidily");
+
+    Application::ClearQuitRequest();
+    CHECK_MSG(!Application::QuitRequested(), "and the request can be withdrawn");
+
+    layer.OnDetach(registry);
+}
+
+// Main Menu is still greyed, and named, because there is nowhere to go.
+static void testMainMenuIsGreyedUntilThereIsAMenu() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    const entt::entity item = byTag(registry, "Pause Main Menu");
+    CHECK_MSG(item != entt::null, "Main Menu is present rather than left out");
+    if (item != entt::null) {
         CHECK_MSG(!registry.get<UIButtonComponent>(item).enabled,
-                  std::string(tag) + " is greyed - there is no screen routing to go to, "
-                  "and no way for a game to close its own window");
+                  "and greyed - there is no screen routing to go to yet");
     }
 
-    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Pause Resume")).enabled,
-              "while the two that do work are not greyed");
-    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Pause Restart")).enabled,
-              "either of them");
+    for (const char* tag : { "Pause Resume", "Pause Restart", "Pause Quit" }) {
+        CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, tag)).enabled,
+                  std::string(tag) + " works and is not greyed");
+    }
 
     layer.OnDetach(registry);
 }
@@ -791,7 +826,8 @@ static void runTests() {
     testTheClosedPauseMenuIsInvisibleAndInert();
     testPauseOpensTheOverlayAndResumeClosesIt();
     testRestartBootsAFreshMatch();
-    testTheUnroutableItemsAreGreyedRatherThanMissing();
+    testQuitAsksTheApplicationToStop();
+    testMainMenuIsGreyedUntilThereIsAMenu();
 }
 
-TEST_MAIN("test_wb_hud", 85)
+TEST_MAIN("test_wb_hud", 88)

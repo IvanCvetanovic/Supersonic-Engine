@@ -25,6 +25,7 @@
 #include "core/TransformSystem.hpp"
 #include "core/SimulationClock.hpp"
 #include "core/StateHash.hpp"
+#include "core/Application.hpp"
 #include "core/InputRecording.hpp"
 #include "core/RenderSettings.hpp"
 #include "core/GameRuntime.hpp"
@@ -882,7 +883,9 @@ void SupersonicApp::Run() {
         zoneSamples.reserve(static_cast<size_t>(m_options.maxFrames));
     }
 
-    while (!m_window->ShouldClose()) {
+    // Or until a game asks. Both leave by the same path, so there is exactly
+    // one shutdown rather than one for the window and another for the game.
+    while (!m_window->ShouldClose() && !Application::QuitRequested()) {
         // Fold the frame that just finished into the totals. This has to happen
         // before the exit test, not after the increment, or the final frame is
         // counted in the divisor and never added to the sum.
