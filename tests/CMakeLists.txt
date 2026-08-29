@@ -76,6 +76,12 @@ add_port_test(test_wb_match)
 add_port_test(test_wb_audio)
 add_port_test(test_wb_placement)
 add_port_test(test_wb_selection)
+
+# The LAYER, not the simulation - so this one also links WolfBrigadeGame. It is
+# the only suite that touches the seam between the ported game and the picture,
+# and the reason it can exist at all is that the layer became a library.
+add_port_test(test_wb_hud)
+target_link_libraries(test_wb_hud PRIVATE WolfBrigadeGame)
 add_engine_test(test_environmentmap)
 add_engine_test(test_assetdatabase)
 add_engine_test(test_serialize)

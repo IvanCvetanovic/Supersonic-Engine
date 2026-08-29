@@ -455,10 +455,17 @@ endif()
 # translation units.
 add_subdirectory(games/wolfbrigade/sim)
 
-option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike" OFF)
-if (SUPERSONIC_BUILD_WOLFBRIGADE)
-    add_subdirectory(games/wolfbrigade)
-endif()
+option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike executable" OFF)
+
+# Added unconditionally, and the option now gates only the EXECUTABLE inside it.
+# The layer that turns the simulation into a picture is a library for the same
+# reason the simulation is: a test has to be able to link it. While it lived in
+# an executable nobody builds by default, the one piece of code that decides
+# whether the HUD is wired to the game at all was the only piece nothing could
+# check - and the screenshot tool cannot answer that question either, because it
+# captures the offscreen 3D target and the UI is drawn over that, in ImGui's
+# draw list, on its way to the swapchain.
+add_subdirectory(games/wolfbrigade)
 
 option(SUPERSONIC_BUILD_TESTS "Build engine unit tests" ON)
 if (SUPERSONIC_BUILD_TESTS)

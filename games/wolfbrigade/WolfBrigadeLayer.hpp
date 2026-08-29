@@ -51,6 +51,16 @@ public:
     // The scene authors 30 Hz, which is what the tick rate is for.
     void OnFixedUpdate(entt::registry& registry, float fixedDelta) override;
 
+    // The match this layer is running, or null before OnAttach and after
+    // OnDetach.
+    //
+    // Exposed for the tests, and const so that stays true: the HUD's whole
+    // claim is that what is on screen is what the simulation says, and a test
+    // can only check that by asking the simulation the same question. Handing
+    // out a mutable match would let a test arrange the answer it wanted, which
+    // is the one thing that would make these checks worthless.
+    const Match* CurrentMatch() const { return m_match.get(); }
+
 private:
     // One reusable drawable.
     //
@@ -72,6 +82,37 @@ private:
     // Everything past `used` is hidden rather than destroyed, for the reason
     // the pool exists.
     void retire(entt::registry& registry, std::size_t used);
+
+    // The heads-up display: two resource counters, the wave counter and a
+    // Pause button.
+    //
+    // Built ONCE, in OnAttach, and afterwards only written to. That is not a
+    // style preference - it is the one hard constraint the UI puts on a caller.
+    // A button's `pressed` flag lives on its component and a click is the
+    // transition off it, so a screen rebuilt from the simulation every tick
+    // hands the release to a component that was never pressed and no button
+    // ever fires. `test_uiinput` pins it. The set of elements here never
+    // changes, so building once is also just the simple thing; the bottom bar,
+    // whose buttons depend on what is selected, is where this will actually
+    // take thought.
+    void buildHud(entt::registry& registry);
+
+    // This tick's numbers into the labels built above. Writing text is not
+    // rebuilding: the entities, and so the click state, survive.
+    void updateHud(entt::registry& registry);
+
+    struct Hud {
+        entt::entity wood{entt::null};
+        entt::entity food{entt::null};
+        entt::entity wave{entt::null};
+        entt::entity pause{entt::null};
+    };
+    Hud m_hud;
+
+    // The game's own pause, which is not the engine's. The tick still runs -
+    // the layer simply stops stepping the match - so the UI stays live and the
+    // button that got us here can get us back.
+    bool m_paused{false};
 
     std::unique_ptr<GameData> m_data;
     std::unique_ptr<Profile> m_profile;

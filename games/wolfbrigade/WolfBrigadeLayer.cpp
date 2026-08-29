@@ -1,6 +1,7 @@
 #include "WolfBrigadeLayer.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 #include "core/Components.hpp"
@@ -10,6 +11,7 @@
 #include "sim/ResourceNode.hpp"
 #include "sim/Snapshot.hpp"
 #include "sim/Unit.hpp"
+#include "sim/WaveDirector.hpp"
 
 using namespace Supersonic;
 
@@ -133,6 +135,83 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     groundMaterial.unlit = true;
     auto& groundRenderable = registry.emplace<RenderableComponent>(ground);
     groundRenderable.sortKey = kLayerGround;
+
+    buildHud(registry);
+}
+
+void WolfBrigadeLayer::buildHud(entt::registry& registry) {
+    // Authored in the original's pixels, which is also the canvas's reference
+    // height, so every offset below is the number in main.tscn unchanged. That
+    // is worth more than it looks: it makes the two screens comparable by eye,
+    // which is the only check this port has.
+    auto label = [&registry](const char* name, UIAnchor anchor, glm::vec2 offset,
+                             float fontSize) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, name);
+        auto& text = registry.emplace<UITextComponent>(entity);
+        text.anchor = anchor;
+        text.offset = offset;
+        text.fontSize = fontSize;
+        text.text = "";
+        return entity;
+    };
+
+    m_hud.wood = label("HUD Wood", UIAnchor::TopLeft, glm::vec2(28.0f, 20.0f), 40.0f);
+    m_hud.food = label("HUD Food", UIAnchor::TopLeft, glm::vec2(28.0f, 74.0f), 40.0f);
+
+    // Top-RIGHT, because the offset runs inward from the anchored edge: the
+    // original spells the same thing as anchor_left = 1 with offset_right =
+    // -28, and writing it as a right anchor is what keeps it in the corner on a
+    // screen that is not 1920 wide.
+    m_hud.wave = label("HUD Wave", UIAnchor::TopRight, glm::vec2(28.0f, 20.0f), 34.0f);
+
+    m_hud.pause = registry.create();
+    registry.emplace<TagComponent>(m_hud.pause, "HUD Pause");
+    auto& pause = registry.emplace<UIButtonComponent>(m_hud.pause);
+    pause.label = "Pause";
+    pause.anchor = UIAnchor::TopCenter;
+    pause.offset = glm::vec2(0.0f, 20.0f);
+    pause.size = glm::vec2(180.0f, 96.0f);
+    pause.fontSize = 30.0f;
+}
+
+void WolfBrigadeLayer::updateHud(entt::registry& registry) {
+    if (!m_match) return;
+
+    const GameState& state = m_match->Run();
+    const WaveDirector& director = m_match->Director();
+
+    char buffer[128];
+
+    std::snprintf(buffer, sizeof(buffer), "Wood: %d", state.Amount("wood"));
+    registry.get<UITextComponent>(m_hud.wood).text = buffer;
+
+    std::snprintf(buffer, sizeof(buffer), "Food: %d", state.Amount("food"));
+    registry.get<UITextComponent>(m_hud.food).text = buffer;
+
+    // Two lines, exactly as hud.gd builds it. The countdown is dropped rather
+    // than shown as a negative when no wave is scheduled, which is the campaign
+    // on its final wave.
+    const int number = state.CurrentWave();
+    const double seconds = director.SecondsToNextWave();
+    if (director.IsEndless()) {
+        std::snprintf(buffer, sizeof(buffer), "Wave %d - Endless\nNext in %ds", number,
+                      static_cast<int>(std::ceil(seconds)));
+    } else if (seconds >= 0.0) {
+        std::snprintf(buffer, sizeof(buffer), "Wave %d / %d\nNext in %ds", number,
+                      director.TotalWaves(), static_cast<int>(std::ceil(seconds)));
+    } else {
+        std::snprintf(buffer, sizeof(buffer), "Wave %d / %d\n(final wave)", number,
+                      director.TotalWaves());
+    }
+    registry.get<UITextComponent>(m_hud.wave).text = buffer;
+
+    // THE TICK's click, not the frame's. A frame that runs no tick would
+    // otherwise lose the press, and one that runs three would pause, unpause
+    // and pause again from a single tap.
+    auto& pause = registry.get<UIButtonComponent>(m_hud.pause);
+    if (pause.clickedThisTick) m_paused = !m_paused;
+    pause.label = m_paused ? "Resume" : "Pause";
 }
 
 void WolfBrigadeLayer::OnDetach(entt::registry& registry) {
@@ -194,6 +273,9 @@ void WolfBrigadeLayer::retire(entt::registry& registry, std::size_t used) {
 
 void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     if (!m_booted || !m_match) return;
+
+    updateHud(registry);
+    if (m_paused) return;
 
     m_match->Step(static_cast<double>(fixedDelta));
 
