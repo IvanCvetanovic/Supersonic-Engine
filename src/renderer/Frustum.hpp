@@ -81,6 +81,23 @@ public:
 
     const std::array<glm::vec4, 6>& Planes() const { return m_planes; }
 
+    // Which way the view is looking, as a unit vector.
+    //
+    // The near plane's normal, which points INTO the frustum and is already
+    // normalised by the constructor above. Taken from here rather than passed
+    // in beside the frustum for the reason the UI layout and the UI hit test
+    // share one placement function: two things derived from one matrix cannot
+    // disagree, and a caller handing over a camera direction that no longer
+    // matches the matrix it culled with is a bug nobody would look for.
+    //
+    // What needs it is depth sorting. Ordering blended draws by their distance
+    // from the camera POSITION is only an approximation under perspective and
+    // is simply wrong under an orthographic projection, where what decides
+    // occlusion is the distance along this vector and nothing else.
+    glm::vec3 ViewDirection() const {
+        return glm::vec3(m_planes[4]);
+    }
+
 private:
     std::array<glm::vec4, 6> m_planes{};
 };

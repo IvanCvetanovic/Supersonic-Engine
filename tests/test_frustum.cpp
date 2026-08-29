@@ -224,7 +224,57 @@ static void testDegenerateMatrixDoesNotCullEverything() {
               "a degenerate matrix must not cull the scene away");
 }
 
+static void testTheViewDirectionPointsWhereTheCameraLooks() {
+    // A SIGN TEST, and it is the one thing the blended sort's own unit tests
+    // cannot catch. They hand the comparator depths directly, so a
+    // ViewDirection that pointed backwards would negate every depth the
+    // renderer computes, invert the whole pass, and leave every one of those
+    // tests green - the sort would be perfectly correct about numbers that were
+    // all the wrong way round.
+    //
+    // Both projections, because the near plane is row2 under a zero-to-one
+    // depth range and the two matrices reach it differently.
+    const glm::vec3 eye(0.0f, 0.0f, 10.0f);
+    const glm::vec3 lookingAt(0.0f, 0.0f, 0.0f);   // so the camera faces -Z
+    const glm::mat4 view = glm::lookAt(eye, lookingAt, glm::vec3(0.0f, 1.0f, 0.0f));
+
+    {
+        glm::mat4 proj = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+        proj[1][1] *= -1.0f;    // Vulkan's flipped Y, as the renderer builds it
+        const glm::vec3 forward = Frustum::FromMatrix(proj * view).ViewDirection();
+
+        CHECK_MSG(forward.z < -0.9f,
+                  "a camera looking down -Z must report a view direction along -Z, got z = " +
+                      std::to_string(forward.z));
+        CHECK_NEAR(glm::length(forward), 1.0f);
+    }
+
+    {
+        glm::mat4 proj = glm::ortho(-8.0f, 8.0f, -4.5f, 4.5f, 0.1f, 100.0f);
+        proj[1][1] *= -1.0f;
+        const glm::vec3 forward = Frustum::FromMatrix(proj * view).ViewDirection();
+
+        CHECK_MSG(forward.z < -0.9f,
+                  "and so must an orthographic one, got z = " + std::to_string(forward.z));
+        CHECK_NEAR(glm::length(forward), 1.0f);
+    }
+
+    // The property the sort actually rests on: something farther from the
+    // camera along that vector reports a LARGER depth, so back-to-front is a
+    // descending sort. A flipped sign would make this negative and reverse the
+    // pass.
+    glm::mat4 proj = glm::ortho(-8.0f, 8.0f, -4.5f, 4.5f, 0.1f, 100.0f);
+    proj[1][1] *= -1.0f;
+    const glm::vec3 forward = Frustum::FromMatrix(proj * view).ViewDirection();
+
+    const glm::vec3 near(0.0f, 0.0f, 5.0f);    // 5 in front of the eye
+    const glm::vec3 far(0.0f, 0.0f, -5.0f);    // 15 in front of the eye
+    CHECK_MSG(glm::dot(far - eye, forward) > glm::dot(near - eye, forward),
+              "the farther surface must measure deeper, or the blended pass draws front to back");
+}
+
 static void runTests() {
+    testTheViewDirectionPointsWhereTheCameraLooks();
     testBoxInFrontIsVisible();
     testBoxBehindCameraIsCulled();
     testBoxBeyondFarPlaneIsCulled();

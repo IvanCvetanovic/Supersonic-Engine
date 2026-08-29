@@ -1367,7 +1367,23 @@ void SupersonicApp::Run() {
             // something has it rendered this frame rather than next.
             { SUPERSONIC_PROFILE(GameLayers); m_layers.Update(m_registry, deltaTime); }
 
-            TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));
+            // THE EDITOR ONLY, and it was not gated at all.
+            //
+            // This is a scrubbing tool: it exists so somebody watching the
+            // editor can drag a slider back through the last twenty seconds,
+            // and there is no slider in a packaged game. But it was gated on
+            // play mode rather than on being the editor, and a packaged game is
+            // ALWAYS in play mode - so every shipped build paid for it, every
+            // frame, with nothing able to read the result.
+            //
+            // What it costs is not small. EntityStateSnapshot is 68 bytes once
+            // padded and MAX_HISTORY_FRAMES is 1200, so a scene of eight
+            // thousand entities holds 653 MB of history a player cannot reach,
+            // on top of an O(N) walk with a try_get each and 1200 live vectors
+            // being trimmed from the front.
+            if (!m_manifest.isGame) {
+                TimeTravelDebugger::RecordFrame(m_registry, static_cast<float>(currentTime));
+            }
         }
         }
 

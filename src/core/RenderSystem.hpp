@@ -120,6 +120,68 @@ public:
     // mesh registry - the same reason ShadowAlphaFor is exposed.
     static bool SortOpaqueDraws(std::vector<OpaqueDraw>& draws);
 
+    // One blended draw, gathered before the pass is recorded.
+    //
+    // Out here beside OpaqueDraw rather than local to Render for the reason
+    // SortOpaqueDraws is static: the ordering is the part with a decision in
+    // it, and a decision that cannot be reached without a device is a decision
+    // nothing tests.
+    struct TransparentDraw {
+        entt::entity entity{entt::null};
+        const GpuMesh* mesh{nullptr};
+        glm::mat4 matrix{1.0f};
+        uint32_t albedoTextureID{0};
+        uint32_t normalTextureID{0};
+        // Matches RenderableComponent's default, which is the neutral ORM and
+        // not id 0 - that one is the sRGB white ALBEDO. Unreachable, because
+        // the single construction site sets it, and wrong on the day it is not.
+        uint32_t ormTextureID{2};
+
+        // ALONG THE VIEW DIRECTION, not the distance to the camera.
+        //
+        // This was the squared distance to the camera position, which orders
+        // correctly only when everything is roughly ahead of the view. Under an
+        // ORTHOGRAPHIC projection it is wrong outright: what decides occlusion
+        // is depth along the view axis alone, so two quads at the same depth
+        // sorted by how far SIDEWAYS they were, and one off to the edge drew
+        // behind one straight ahead. A 2D scene is entirely made of quads at a
+        // few depths spread across the screen, which is the case this breaks
+        // hardest and the reason it was found.
+        //
+        // Signed, and not squared: a square throws away the sign, so anything
+        // behind the camera sorted as though it were the same distance in
+        // front. Perspective culling hid that; an ortho box does not.
+        float viewDepth{0.0f};
+
+        // The tie-break, so the order is TOTAL.
+        //
+        // Coplanar transparent quads are the normal case in 2D, and their depth
+        // is not merely close but equal - at which point std::sort is free to
+        // order them however it likes, and did. That is a flicker whose cause
+        // is the standard library, and it is the same defect the broadphase had
+        // until its comparator was made total.
+        //
+        // sortKey is what the engine already offers for exactly this, and the
+        // opaque pass has honoured it since sortKey existed. The blended pass
+        // ignored it, so the one place a 2D game most needs explicit layering
+        // was the one place it did not work.
+        int32_t sortKey{0};
+
+        // Last resort, and it is the gather order. Two draws agreeing on depth
+        // AND on sortKey are genuinely unordered by anything the scene said, so
+        // this pins them to the order they were found in rather than leaving it
+        // to the sort. Stable input, stable frame.
+        uint32_t gathered{0};
+    };
+
+    // Orders blended draws back to front, then by sort key, then by gather
+    // order. A TOTAL order on purpose - see TransparentDraw::sortKey.
+    //
+    // Static and pure, so a test can reach it with no device, no registry and
+    // no mesh registry. The same reason SortOpaqueDraws and ShadowAlphaFor are
+    // exposed.
+    static void SortTransparentDraws(std::vector<TransparentDraw>& draws);
+
     struct ShadowCaster {
         glm::mat4 model{1.0f};
 

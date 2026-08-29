@@ -126,6 +126,26 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
 
 } // namespace
 
+void RenderSystem::SortTransparentDraws(std::vector<TransparentDraw>& draws) {
+    std::sort(draws.begin(), draws.end(),
+              [](const TransparentDraw& lhs, const TransparentDraw& rhs) {
+                  // Back to front: the farthest along the view direction is
+                  // drawn first, so nearer surfaces composite over it.
+                  if (lhs.viewDepth != rhs.viewDepth) return lhs.viewDepth > rhs.viewDepth;
+
+                  // Ascending: a HIGHER sort key is drawn later, which is to say
+                  // on top - matching what the opaque pass means by it and what
+                  // a person authoring a HUD expects.
+                  if (lhs.sortKey != rhs.sortKey) return lhs.sortKey < rhs.sortKey;
+
+                  // Gather order, which makes this a TOTAL order. Without it
+                  // two draws agreeing on both keys are left to std::sort, and
+                  // introsort is free to order equal elements however it
+                  // pleases - a flicker whose cause is the standard library.
+                  return lhs.gathered < rhs.gathered;
+              });
+}
+
 uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
                                          const MaterialComponent* material,
                                          uint64_t meshGeneration,
@@ -725,18 +745,11 @@ void RenderSystem::Render(
     // it, sorted back to front. Blending is order-dependent: two overlapping
     // panes drawn in the wrong order composite in the wrong order, and the
     // result is wrong rather than merely differently wrong.
-    struct TransparentDraw {
-        entt::entity entity{entt::null};
-        const GpuMesh* mesh{nullptr};
-        glm::mat4 matrix{1.0f};
-        uint32_t albedoTextureID{0};
-        uint32_t normalTextureID{0};
-        // Matches RenderableComponent's default, which is the neutral ORM and
-        // not id 0 - that one is the sRGB white ALBEDO. Unreachable, because
-        // the single construction site sets it, and wrong on the day it is not.
-        uint32_t ormTextureID{2};
-        float distanceSquared{0.0f};
-    };
+    // One derivation for both blended sorts below, from the same matrix the
+    // culling used - see Frustum::ViewDirection for why it is taken from the
+    // frustum rather than passed in beside it.
+    const glm::vec3 viewDirection = frustum.ViewDirection();
+
     std::vector<TransparentDraw> transparent;
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
@@ -776,12 +789,13 @@ void RenderSystem::Render(
         if (const auto* material = registry.try_get<MaterialComponent>(entity);
             material && material->transparent) {
             const glm::vec3 centre = (worldMin + worldMax) * 0.5f;
-            const glm::vec3 toView = centre - viewPosition;
             transparent.push_back(TransparentDraw{
                 entity, mesh, world.matrix,
                 renderable.albedoTextureID, renderable.normalTextureID,
                 renderable.ormTextureID,
-                glm::dot(toView, toView)});
+                glm::dot(centre - viewPosition, frustum.ViewDirection()),
+                renderable.sortKey,
+                static_cast<uint32_t>(transparent.size())});
             continue;
         }
 
@@ -922,13 +936,12 @@ void RenderSystem::Render(
 
     // ---- Transparent pass ------------------------------------------------
     //
-    // Back to front, by squared distance to the view. Squared because the
-    // ordering is all that matters and a square root per draw buys nothing.
+    // Back to front by depth ALONG THE VIEW DIRECTION, then by the sort key the
+    // scene authored, then by the order they were gathered in. Three keys, so
+    // the comparator is a total order and the frame a scene produces does not
+    // depend on what std::sort felt like doing with equal elements.
     if (!transparent.empty()) {
-        std::sort(transparent.begin(), transparent.end(),
-                  [](const TransparentDraw& lhs, const TransparentDraw& rhs) {
-                      return lhs.distanceSquared > rhs.distanceSquared;
-                  });
+        SortTransparentDraws(transparent);
 
         commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
                                    transparentPipeline.GetPipeline());
@@ -997,7 +1010,12 @@ void RenderSystem::Render(
         glm::vec3 position{0.0f};
         glm::vec4 color{1.0f};
         float size{1.0f};
-        float distanceSquared{0.0f};
+
+        // Along the view direction, and signed, for the reason TransparentDraw
+        // gives: a squared distance to the camera position orders by how far
+        // SIDEWAYS a particle is under an orthographic projection, and loses
+        // the sign of anything behind the camera under either projection.
+        float viewDepth{0.0f};
     };
     std::vector<ParticleDraw> particles;
 
@@ -1008,13 +1026,12 @@ void RenderSystem::Render(
             if (!particle.active) continue;
 
             const float age = particle.maxLifetime > 0.0f ? particle.lifetime / particle.maxLifetime : 0.0f;
-            const glm::vec3 toView = particle.position - viewPosition;
 
             particles.push_back(ParticleDraw{
                 particle.position,
                 particle.color,
                 emitter.particleSize * glm::clamp(age, 0.15f, 1.0f),
-                glm::dot(toView, toView)});
+                glm::dot(particle.position - viewPosition, viewDirection)});
         }
     }
 
@@ -1022,7 +1039,7 @@ void RenderSystem::Render(
 
     std::sort(particles.begin(), particles.end(),
               [](const ParticleDraw& lhs, const ParticleDraw& rhs) {
-                  return lhs.distanceSquared > rhs.distanceSquared;
+                  return lhs.viewDepth > rhs.viewDepth;
               });
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,

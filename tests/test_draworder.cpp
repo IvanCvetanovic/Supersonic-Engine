@@ -18,6 +18,8 @@
 #include "TestHarness.hpp"
 #include "core/RenderSystem.hpp"
 
+#include <algorithm>
+#include <string>
 #include <vector>
 
 using namespace Supersonic;
@@ -99,7 +101,97 @@ void testAnEmptyListIsNotAReorder() {
     CHECK_MSG(!RenderSystem::SortOpaqueDraws(draws), "nothing to sort is not a sort");
 }
 
+// --- the blended pass ------------------------------------------------------
+//
+// The opaque pass above orders by an authored key. The blended one orders by
+// DEPTH, and got it wrong in a way only an orthographic camera shows.
+
+RenderSystem::TransparentDraw blended(float viewDepth, int32_t sortKey, uint32_t gathered) {
+    RenderSystem::TransparentDraw draw;
+    draw.viewDepth = viewDepth;
+    draw.sortKey = sortKey;
+    draw.gathered = gathered;
+    return draw;
+}
+
+void testBlendedDrawsGoBackToFront() {
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blended(2.0f, 0, 0), blended(9.0f, 0, 1), blended(5.0f, 0, 2)};
+
+    RenderSystem::SortTransparentDraws(draws);
+
+    CHECK_NEAR(draws[0].viewDepth, 9.0f);
+    CHECK_NEAR(draws[1].viewDepth, 5.0f);
+    CHECK_MSG(draws[2].viewDepth == 2.0f,
+              "the nearest surface is drawn last, so it composites over the rest");
+}
+
+void testSomethingBehindTheCameraSortsBehind() {
+    // What the squared distance lost. A square has no sign, so a quad four
+    // units BEHIND the view sorted as though it were four in front - and under
+    // a perspective camera the culler hid that, while an orthographic box does
+    // not.
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blended(4.0f, 0, 0), blended(-4.0f, 0, 1)};
+
+    RenderSystem::SortTransparentDraws(draws);
+
+    CHECK_MSG(draws[0].viewDepth == 4.0f, "the one in front of the camera is farther along the view");
+    CHECK_MSG(draws[1].viewDepth == -4.0f, "and the one behind it sorts nearest, not equal to it");
+}
+
+void testCoplanarQuadsAreOrderedByTheirSortKey() {
+    // THE 2D CASE, and the one the blended pass could not express. A lane of
+    // quads at one depth has nothing to sort by, and the pass ignored sortKey
+    // entirely - so the layering a 2D game is built out of was decided by
+    // whatever std::sort did with equal elements.
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blended(3.0f, 2, 0), blended(3.0f, 0, 1), blended(3.0f, 1, 2)};
+
+    RenderSystem::SortTransparentDraws(draws);
+
+    CHECK_EQ(draws[0].sortKey, 0);
+    CHECK_EQ(draws[1].sortKey, 1);
+    CHECK_MSG(draws[2].sortKey == 2, "a higher key draws later, which is to say on top");
+}
+
+void testDepthStillBeatsTheSortKey() {
+    // The key breaks ties; it does not overrule depth. A background quad with a
+    // high key must not jump in front of something genuinely nearer, or the
+    // key would silently become a second, worse depth buffer.
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blended(1.0f, 0, 0), blended(8.0f, 99, 1)};
+
+    RenderSystem::SortTransparentDraws(draws);
+
+    CHECK_MSG(draws[0].viewDepth == 8.0f, "the far one is still drawn first despite its key");
+}
+
+void testTwoDrawsAgreeingOnEverythingKeepGatherOrder() {
+    // The order is TOTAL, so nothing is left to the standard library. Equal
+    // depth and equal key is the ordinary case for a HUD built out of one
+    // material, and introsort is free to permute equal elements - a flicker
+    // with no cause in the scene.
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blended(0.0f, 0, 0), blended(0.0f, 0, 1), blended(0.0f, 0, 2), blended(0.0f, 0, 3)};
+
+    // Handed to the sort back to front, so a comparator that merely preserved
+    // its input would not pass this.
+    std::reverse(draws.begin(), draws.end());
+    RenderSystem::SortTransparentDraws(draws);
+
+    for (uint32_t i = 0; i < draws.size(); ++i) {
+        CHECK_MSG(draws[i].gathered == i,
+                  "draw " + std::to_string(i) + " is where it was gathered");
+    }
+}
+
 void runTests() {
+    testBlendedDrawsGoBackToFront();
+    testSomethingBehindTheCameraSortsBehind();
+    testCoplanarQuadsAreOrderedByTheirSortKey();
+    testDepthStillBeatsTheSortKey();
+    testTwoDrawsAgreeingOnEverythingKeepGatherOrder();
     testNoKeysMeansNoReorderAtAll();
     testAHigherKeyIsSubmittedLater();
     testEqualKeysKeepTheOrderTheyArrivedIn();
