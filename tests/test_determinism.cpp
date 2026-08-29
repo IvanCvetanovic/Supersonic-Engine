@@ -378,6 +378,150 @@ static void testTheWorldsGravityIsPartOfTheState() {
               "a world with a floor is not the same as one without");
 }
 
+// --- a game whose state is not in the registry ------------------------------
+//
+// The shape this engine recommends for a real game, and the shape the oracle
+// could not see. Wolf Brigade's authoritative state is a C++ object graph owned
+// by an EngineLayer - a match, its units, a map of resources - and none of it is
+// components. `Compute` walks a registry, so it walked one containing none of it
+// and returned a number that agreed with itself perfectly.
+
+namespace {
+
+// Stands in for that object graph. Deliberately not components, and reached the
+// way a layer's singleton actually is: a pointer in the registry's context.
+struct PretendMatch {
+    int gold{0};
+    float timer{0.0f};
+    std::vector<int> unitHealth;
+};
+
+void registerMatchContributor() {
+    StateHash::RegisterContributor("PretendMatch",
+        [](const entt::registry& registry, StateHash::Mixer& out) {
+            const auto* slot = registry.ctx().find<PretendMatch*>();
+            if (!slot || !*slot) return;
+            const PretendMatch& match = **slot;
+            out.I64(match.gold);
+            out.F32(match.timer);
+            for (const int health : match.unitHealth) out.I64(health);
+        });
+}
+
+} // namespace
+
+static void testAGamesOwnStateIsInvisibleUntilItRegisters() {
+    // THE ONE THAT SHOWS WHY THE API EXISTS. Two matches that differ in every
+    // number a player would care about, hashing identically, because none of it
+    // is in the registry.
+    StateHash::ClearContributors();
+
+    entt::registry winning;
+    entt::registry losing;
+    PretendMatch ahead{900, 12.5f, {100, 100, 100}};
+    PretendMatch behind{40, 3.25f, {7, 0, 0}};
+
+    winning.ctx().emplace<PretendMatch*>(&ahead);
+    losing.ctx().emplace<PretendMatch*>(&behind);
+
+    CHECK_MSG(StateHash::Compute(winning) == StateHash::Compute(losing),
+              "before registering, two completely different matches hash the same - "
+              "which is the failure this closes, and it looks exactly like success");
+
+    // And with the game's state declared, they stop agreeing.
+    registerMatchContributor();
+    CHECK_MSG(StateHash::Compute(winning) != StateHash::Compute(losing),
+              "a registered contributor makes the game's own state part of the oracle");
+
+    StateHash::ClearContributors();
+}
+
+static void testAnUnregisteredEngineHashesExactlyAsItAlwaysDid() {
+    // The compatibility claim, and it is not cosmetic: a recording made before
+    // this existed has to keep comparing against the engine that made it, or
+    // every replay on disk quietly stops meaning anything.
+    StateHash::ClearContributors();
+
+    entt::registry registry;
+    buildScene(registry);
+    const uint64_t before = StateHash::Compute(registry);
+
+    // Registering something that contributes NOTHING still counts as a
+    // contributor, so this also pins that the guard is on the list being empty
+    // rather than on the bytes being zero.
+    CHECK_MSG(StateHash::RegisterContributor("Nothing",
+                  [](const entt::registry&, StateHash::Mixer&) {}),
+              "an empty contributor registers");
+    CHECK_MSG(StateHash::Compute(registry) != before,
+              "and declaring one changes the number, because the count is part of it");
+
+    StateHash::ClearContributors();
+    CHECK_MSG(StateHash::Compute(registry) == before,
+              "with none registered the hash is exactly what it was before any of this");
+}
+
+static void testTheOrderContributorsRegisteredInCannotMatter() {
+    // The same argument the entity walk makes about EnTT's iteration order, one
+    // level up. Two contributors registered in the other order is not a
+    // divergence, and a hash that folded them in sequence would call it one -
+    // which would make moving a registration between two translation units a
+    // failing replay.
+    entt::registry registry;
+    PretendMatch match{5, 1.0f, {3}};
+    registry.ctx().emplace<PretendMatch*>(&match);
+
+    auto goldOnly = [](const entt::registry& r, StateHash::Mixer& out) {
+        const auto* slot = r.ctx().find<PretendMatch*>();
+        if (slot && *slot) out.I64((*slot)->gold);
+    };
+    auto timerOnly = [](const entt::registry& r, StateHash::Mixer& out) {
+        const auto* slot = r.ctx().find<PretendMatch*>();
+        if (slot && *slot) out.F32((*slot)->timer);
+    };
+
+    StateHash::ClearContributors();
+    StateHash::RegisterContributor("Gold", goldOnly);
+    StateHash::RegisterContributor("Timer", timerOnly);
+    const uint64_t forward = StateHash::Compute(registry);
+
+    StateHash::ClearContributors();
+    StateHash::RegisterContributor("Timer", timerOnly);
+    StateHash::RegisterContributor("Gold", goldOnly);
+    const uint64_t backward = StateHash::Compute(registry);
+
+    CHECK_MSG(forward == backward,
+              "registration order is not state: " + std::to_string(forward) + " vs " +
+                  std::to_string(backward));
+
+    // But WHICH contributor holds a value still matters, or seeding by name
+    // would be pointless - two contributors swapping what they read is a
+    // different world, exactly as two entities swapping positions is.
+    StateHash::ClearContributors();
+    StateHash::RegisterContributor("Gold", timerOnly);
+    StateHash::RegisterContributor("Timer", goldOnly);
+    CHECK_MSG(StateHash::Compute(registry) != forward,
+              "and the name a value is filed under is part of the state");
+
+    StateHash::ClearContributors();
+}
+
+static void testAContributorNameIsClaimedOnce() {
+    StateHash::ClearContributors();
+    const auto noop = [](const entt::registry&, StateHash::Mixer&) {};
+
+    CHECK(StateHash::RegisterContributor("Match", noop));
+    CHECK_MSG(!StateHash::RegisterContributor("Match", noop),
+              "a second registration under one name is refused rather than shadowing");
+    CHECK_EQ(StateHash::ContributorCount(), size_t{1});
+
+    CHECK_MSG(!StateHash::RegisterContributor("", noop), "an unnamed contributor has no seed");
+    CHECK_MSG(!StateHash::RegisterContributor("Empty", nullptr), "and nothing to call");
+    CHECK_EQ(StateHash::ContributorCount(), size_t{1});
+
+    StateHash::ClearContributors();
+    CHECK_EQ(StateHash::ContributorCount(), size_t{0});
+}
+
 static void testSleepStateIsPartOfTheState() {
     // A body asleep on one machine and awake on another has not diverged yet
     // and will on the next thing that touches it. Leaving it out of the hash
@@ -762,6 +906,10 @@ static void runTests() {
     testAnEntityWithNoPlaceInTheWorldIsStillState();
     testWhereAScriptIsCountsAsState();
     testTheWorldsGravityIsPartOfTheState();
+    testAGamesOwnStateIsInvisibleUntilItRegisters();
+    testAnUnregisteredEngineHashesExactlyAsItAlwaysDid();
+    testTheOrderContributorsRegisteredInCannotMatter();
+    testAContributorNameIsClaimedOnce();
     testSleepStateIsPartOfTheState();
     testTheClockIsDerivedRatherThanAccumulated();
 }

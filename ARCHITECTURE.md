@@ -2190,6 +2190,25 @@ diverge for four thousand ticks and reporting the symptom. It is necessary and
 not sufficient — the hash covers what a tick can change, not everything a scene
 load establishes.
 
+**A game's own state is in the oracle too, and had to be opened for.** Everything
+`StateHash::Compute` walks is a registry, and a game built on an `EngineLayer` —
+which is the shape this engine recommends — usually keeps its authoritative state
+in a C++ object graph instead. Wolf Brigade's is a match, its units and a map of
+resources, owned by a layer; none of it is components. So the oracle would have
+walked a registry containing none of it and returned a number that agreed with
+itself perfectly: a replay reproducing the *engine* and reporting success while
+the *game* diverged on tick one.
+
+`StateHash::RegisterContributor` closes that, mirroring `ComponentCodec`'s
+registration — which was opened to a game's own components much earlier, and the
+asymmetry was the bug. A contributor is handed a `Mixer` rather than returning a
+number, so a game cannot accidentally use a different fold; contributions are
+seeded by name and **added**, so the order they were registered in cannot change
+the answer, which is the entity walk's argument about EnTT's iteration order one
+level up. With none registered the hash is byte-for-byte what it was before any
+of this, because a recording made earlier has to keep comparing against the
+engine that made it.
+
 One measured caveat worth keeping. Replaying the demo scene reproduces, and that
 proves less than it looks: **nothing in `MainScene` reads input inside a tick**,
 so changing a recorded mouse delta and replaying it produces an identical hash.

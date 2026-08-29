@@ -3,6 +3,7 @@
 #include "core/PhysicsSettings.hpp"
 
 #include <cstring>
+#include <vector>
 
 namespace Supersonic::StateHash {
 
@@ -40,7 +41,56 @@ uint64_t mixVec3(uint64_t hash, const glm::vec3& v) {
     return mixFloat(hash, v.z);
 }
 
+struct Contributor {
+    std::string name;
+    StateContributor fn;
+};
+
+// A function-local static rather than a namespace-scope one, for the reason
+// ComponentCodec's registry gives: this lives in a static library linked into
+// several binaries, and a function-local static has one definition however many
+// translation units reach it.
+std::vector<Contributor>& contributors() {
+    static std::vector<Contributor> registered;
+    return registered;
+}
+
 } // namespace
+
+// --- Mixer ------------------------------------------------------------------
+
+void Mixer::Bytes(const void* data, size_t bytes) { m_hash = mix(m_hash, data, bytes); }
+void Mixer::Text(std::string_view text) { m_hash = mix(m_hash, text.data(), text.size()); }
+void Mixer::F32(float value) { m_hash = mixFloat(m_hash, value); }
+void Mixer::F64(double value) { m_hash = mix(m_hash, &value, sizeof(value)); }
+void Mixer::I64(int64_t value) { m_hash = mix(m_hash, &value, sizeof(value)); }
+void Mixer::U64(uint64_t value) { m_hash = mix(m_hash, &value, sizeof(value)); }
+
+void Mixer::Bool(bool value) {
+    // One byte, not sizeof(bool), which is not required to be one and is not the
+    // same on every compiler. A padded bool would fold the padding too, and
+    // padding is not state.
+    const unsigned char byte = value ? 1u : 0u;
+    m_hash = mix(m_hash, &byte, 1);
+}
+
+// --- registration -----------------------------------------------------------
+
+bool RegisterContributor(std::string name, StateContributor contributor) {
+    if (name.empty() || !contributor) return false;
+
+    auto& registered = contributors();
+    for (const Contributor& existing : registered) {
+        if (existing.name == name) return false;
+    }
+
+    registered.push_back(Contributor{std::move(name), std::move(contributor)});
+    return true;
+}
+
+void ClearContributors() { contributors().clear(); }
+
+std::size_t ContributorCount() { return contributors().size(); }
 
 uint64_t Compute(const entt::registry& registry) {
     uint64_t total = 0;
@@ -175,6 +225,34 @@ uint64_t Compute(const entt::registry& registry) {
         hash = mixFloat(hash, physics->groundPlaneY);
     }
 
+    // WHAT THE GAME SAYS ITS STATE IS, for the games whose state is not in the
+    // registry at all. See the header for why that is the ordinary case rather
+    // than an exotic one.
+    //
+    // Each contributor is seeded by its own NAME and the results are ADDED, so
+    // the order they were registered in cannot change the answer - the same
+    // argument the entity walk makes about EnTT's iteration order, one level up.
+    // A registration moved between two translation units is not a divergence.
+    if (!contributors().empty()) {
+        uint64_t gameTotal = 0;
+        uint64_t count = 0;
+
+        for (const Contributor& contributor : contributors()) {
+            Mixer mixer(mix(1469598103934665603ull, contributor.name.data(),
+                            contributor.name.size()));
+            contributor.fn(registry, mixer);
+            gameTotal += mixer.Value();
+            ++count;
+        }
+
+        hash = mix(hash, &gameTotal, sizeof(gameTotal));
+        hash = mix(hash, &count, sizeof(count));
+    }
+
+    // Guarded on there being any, deliberately. A run with nothing registered
+    // has to hash exactly what it hashed before this existed, or every recording
+    // ever made stops comparing against the engine that made it - and the whole
+    // point of the number is that it survives leaving the process.
     return hash;
 }
 
