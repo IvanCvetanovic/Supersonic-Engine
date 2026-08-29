@@ -54,12 +54,16 @@ public:
     // The match this layer is running, or null before OnAttach and after
     // OnDetach.
     //
-    // Exposed for the tests, and const so that stays true: the HUD's whole
-    // claim is that what is on screen is what the simulation says, and a test
-    // can only check that by asking the simulation the same question. Handing
-    // out a mutable match would let a test arrange the answer it wanted, which
-    // is the one thing that would make these checks worthless.
+    // Exposed for the tests. Both constnesses, and the mutable one is not a
+    // concession: what the bottom bar shows depends entirely on the state of
+    // the run - which building is selected, what is affordable, what has been
+    // researched - so a test that cannot put the run into a state cannot reach
+    // most of the behaviour. Arranging the WORLD is testing; the thing that
+    // would make these checks worthless is arranging the ANSWER, and the
+    // assertions all read the simulation back rather than a value the test
+    // supplied.
     const Match* CurrentMatch() const { return m_match.get(); }
+    Match* CurrentMatch() { return m_match.get(); }
 
 private:
     // One reusable drawable.
@@ -108,6 +112,55 @@ private:
         entt::entity pause{entt::null};
     };
     Hud m_hud;
+
+    // ---- The contextual bottom bar ----------------------------------------
+    //
+    // What it shows depends on what is selected: a completed building offers a
+    // Train button per unit it trains and a Research button per upgrade it
+    // still can, anything else offers the Build menu, and a placement in
+    // progress replaces the lot with Cancel. That is four different button sets
+    // over the same strip.
+    //
+    // WHICH IS WHY THIS IS THE HARD HALF. The set changes rarely - a selection,
+    // a completed building, a bought upgrade - but AFFORDABILITY changes
+    // constantly, because workers deposit wood every few seconds. Rebuilding on
+    // every affordability change is what the original does and what this cannot
+    // do: recreating a button destroys the `pressed` flag the release needs, so
+    // a bar rebuilt under the player's finger never fires. See
+    // testAButtonRecreatedMidGestureDoesNotFire.
+    //
+    // So the two are separated. The SIGNATURE - which buttons, in order -
+    // decides whether entities are recreated. Everything else, affordability
+    // included, is written into the buttons that are already there.
+    enum class BarAction { Build, Train, Research, Cancel };
+
+    struct BarButton {
+        entt::entity entity{entt::null};
+        BarAction action{BarAction::Build};
+
+        // The building, unit or upgrade this button acts on. Empty for Cancel.
+        std::string id;
+    };
+
+    // What the bar should show right now, derived from the match.
+    std::vector<BarButton> desiredBar() const;
+
+    // Makes the strip agree with `desiredBar`, recreating entities only when
+    // the signature changed.
+    void updateBar(entt::registry& registry);
+
+    // Runs whatever the player pressed. Reads the TICK-latched click.
+    void applyBarClicks(entt::registry& registry);
+
+    // Label text for one button, cost and all, the way bottom_bar.gd builds it.
+    std::string barLabel(const BarButton& button) const;
+
+    // Whether it is affordable / researchable right now.
+    bool barEnabled(const BarButton& button) const;
+
+    // The horizontal stack the buttons hang off. Created once.
+    entt::entity m_barStack{entt::null};
+    std::vector<BarButton> m_bar;
 
     // The game's own pause, which is not the engine's. The tick still runs -
     // the layer simply stops stepping the match - so the UI stays live and the

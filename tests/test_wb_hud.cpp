@@ -29,15 +29,21 @@
 #include <imgui.h>
 
 #include "sim/GameState.hpp"
+#include "sim/Building.hpp"
+#include "sim/BuildPlacement.hpp"
+#include "sim/Selection.hpp"
 #include "sim/Match.hpp"
 #include "sim/WaveDirector.hpp"
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 using namespace Supersonic;
 using WolfBrigade::WolfBrigadeLayer;
 using WolfBrigade::Match;
+using WolfBrigade::Building;
+using WolfBrigade::Cost;
 
 namespace {
 
@@ -363,6 +369,269 @@ static void testTheHudIsActuallyDrawnAndOnScreen() {
     layer.OnDetach(registry);
 }
 
+// ---- The contextual bottom bar ----------------------------------------
+//
+// The bar is where the rebuild constraint actually bites, so these check the
+// SPLIT rather than the buttons: which changes recreate entities and which do
+// not. A bar that rebuilt on every affordability change would pass every
+// "shows the right buttons" test and lose every click.
+
+static std::vector<entt::entity> barButtons(const entt::registry& registry) {
+    std::vector<entt::entity> found;
+    for (auto [entity, tag] : registry.view<const TagComponent>().each()) {
+        if (tag.tag == "WB Bar Button") found.push_back(entity);
+    }
+    return found;
+}
+
+// With nothing selected the bar is the Build menu, one button per buildable.
+static void testTheBarOffersTheBuildMenuByDefault() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    const auto buttons = barButtons(registry);
+    CHECK_MSG(!buttons.empty(), "the build menu has buttons in it");
+
+    bool sawBuild = false;
+    for (entt::entity button : buttons) {
+        if (has(registry.get<UIButtonComponent>(button).label, "Build ")) sawBuild = true;
+    }
+    CHECK_MSG(sawBuild, "and they are Build buttons");
+
+    // Every one carries its cost, which is the half a player needs to decide.
+    for (entt::entity button : buttons) {
+        const std::string label = registry.get<UIButtonComponent>(button).label;
+        CHECK_MSG(label.find('(') != std::string::npos,
+                  "the button says what it costs: \"" + label + "\"");
+    }
+
+    layer.OnDetach(registry);
+}
+
+// THE ONE THAT MATTERS: affordability flips must not recreate anything.
+//
+// Workers deposit wood constantly, so buttons cross the affordable line in
+// both directions all through a run. If that recreated them, a press held
+// across a single deposit would be lost - and deposits are frequent enough
+// that this would be most presses.
+//
+// THE TREASURY IS DRAINED FIRST, and that is the whole test rather than
+// set-up. A run starts with 300 wood against a 150-wood barracks and a
+// 120-wood tower, and wood only ever goes UP as workers gather - so an earlier
+// draft that simply ran for sixty seconds never crossed the line at all. It
+// passed, and it went on passing when affordability was deliberately folded
+// into the rebuild signature, which is the exact bug it exists to catch. A
+// test that cannot fail is worse than no test, because it is counted.
+static void testAffordabilityChangesDoNotRebuildTheBar() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+
+    CHECK_MSG(match->Run().TrySpend(Cost{{"wood", match->Run().Amount("wood")}}),
+              "drained the treasury so the buttons start out of reach");
+    layer.OnFixedUpdate(registry, kTick);
+
+    const auto before = barButtons(registry);
+    CHECK_MSG(!before.empty(), "there is a bar to hold still");
+
+    int disabledBefore = 0;
+    for (entt::entity button : before) {
+        if (!registry.get<UIButtonComponent>(button).enabled) ++disabledBefore;
+    }
+    CHECK_MSG(disabledBefore > 0, "and something on it is unaffordable to begin with");
+
+    // Now let the workers earn it back, and watch for the crossing.
+    bool flipped = false;
+    for (int i = 0; i < 30 * 240 && !flipped; ++i) {
+        layer.OnFixedUpdate(registry, kTick);
+        int disabledNow = 0;
+        for (entt::entity button : barButtons(registry)) {
+            if (!registry.get<UIButtonComponent>(button).enabled) ++disabledNow;
+        }
+        flipped = disabledNow < disabledBefore;
+    }
+
+    CHECK_MSG(flipped,
+              "a button really did become affordable again, or nothing below is being "
+              "measured; wood reached " + std::to_string(match->Run().Amount("wood")));
+
+    const auto after = barButtons(registry);
+    CHECK_MSG(after == before,
+              "the bar's buttons are the SAME entities across an affordability flip - "
+              "recreating them loses any press in flight");
+
+    layer.OnDetach(registry);
+}
+
+// And the set DOES change when the thing it depends on changes.
+//
+// The control for the case above: a bar that never rebuilt at all would also
+// hold its entities still, and would show the wrong buttons forever.
+static void testStartingAPlacementRebuildsTheBarToCancel() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    const auto before = barButtons(registry);
+    CHECK_MSG(!before.empty(), "there is a build button to press");
+    if (before.empty()) { layer.OnDetach(registry); return; }
+
+    // Pressed through the tick-latched flag, exactly as a player reaches it.
+    //
+    // And NOT cleared afterwards, because by then it does not exist: starting a
+    // placement replaces the whole strip, so the button that was pressed is
+    // destroyed inside the same tick that consumed its click. Reaching for it
+    // after the call is what an earlier draft of this test did, and entt
+    // asserts on a destroyed entity - which surfaces as a modal dialog and a
+    // run that never returns rather than as a failure.
+    const entt::entity pressed = before.front();
+    registry.get<UIButtonComponent>(pressed).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    CHECK_MSG(!registry.valid(pressed),
+              "the pressed button is gone, which is why it must not be touched again");
+
+    const Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+
+    CHECK_MSG(match->Placement().IsActive(),
+              "pressing Build started a placement, or the click never reached the game");
+
+    const auto after = barButtons(registry);
+    CHECK_MSG(after.size() == 1, "a placement replaces the whole strip with one button");
+    if (after.size() == 1) {
+        CHECK_MSG(registry.get<UIButtonComponent>(after.front()).label == "Cancel",
+                  "and it is Cancel - on touch there is no Escape, so this is the only "
+                  "way out of a placement");
+    }
+
+    layer.OnDetach(registry);
+}
+
+// A button nobody can afford is greyed, not hidden.
+//
+// bottom_bar.gd disables rather than removes, and the difference is not
+// cosmetic: a button that vanishes when unaffordable moves every button beside
+// it, so the one the player was reaching for is somewhere else by the time
+// their finger lands.
+//
+// A run STARTS with 300 wood and 100 food against a 150-wood barracks and a
+// 120-wood tower, so everything is affordable and an earlier draft of this test
+// asserted otherwise and failed. The state has to be arranged: selecting the
+// town hall turns the bar into its Train buttons, and a worker costs 50 wood,
+// so six of them empty the treasury.
+static void testUnaffordableButtonsAreDisabledRatherThanRemoved() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+
+    Building* hall = nullptr;
+    for (const auto& building : match->Buildings()) {
+        if (building->IsComplete()) { hall = building.get(); break; }
+    }
+    if (hall == nullptr) { CHECK_MSG(false, "no completed building"); layer.OnDetach(registry); return; }
+
+    match->Picked().SelectBuilding(hall);
+    layer.OnFixedUpdate(registry, kTick);
+
+    auto buttons = barButtons(registry);
+    CHECK_MSG(!buttons.empty(), "selecting the town hall gives it a bar");
+
+    bool sawTrain = false;
+    for (entt::entity button : buttons) {
+        if (has(registry.get<UIButtonComponent>(button).label, "Train ")) sawTrain = true;
+    }
+    CHECK_MSG(sawTrain, "and it offers what the building trains");
+
+    // Every button's enabled state IS the affordability question, which is the
+    // rule rather than a symptom of the starting numbers.
+    for (entt::entity button : buttons) {
+        CHECK_MSG(registry.get<UIButtonComponent>(button).visible,
+                  "every button is visible before anything is spent");
+    }
+
+    // Drain it. Pressing Train is the game's own path to spending, so this
+    // exercises the click routing at the same time.
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        buttons = barButtons(registry);
+        entt::entity train = entt::null;
+        for (entt::entity button : buttons) {
+            if (has(registry.get<UIButtonComponent>(button).label, "Train ")) { train = button; break; }
+        }
+        if (train == entt::null) break;
+        if (!registry.get<UIButtonComponent>(train).enabled) break;
+        registry.get<UIButtonComponent>(train).clickedThisTick = true;
+        layer.OnFixedUpdate(registry, kTick);
+        if (registry.valid(train)) registry.get<UIButtonComponent>(train).clickedThisTick = false;
+    }
+
+    CHECK_MSG(match->Run().Amount("wood") < 50,
+              "the treasury is actually empty, or nothing below is being tested; wood is " +
+                  std::to_string(match->Run().Amount("wood")));
+
+    buttons = barButtons(registry);
+    bool sawDisabled = false;
+    for (entt::entity button : buttons) {
+        const auto& widget = registry.get<UIButtonComponent>(button);
+        if (!widget.enabled) sawDisabled = true;
+        CHECK_MSG(widget.visible,
+                  "a button nobody can afford is greyed, not gone - removing it would "
+                  "move every button beside it out from under the player's finger");
+    }
+    CHECK_MSG(sawDisabled, "and something really is unaffordable now");
+
+    layer.OnDetach(registry);
+}
+
+// A disabled button does nothing when pressed.
+//
+// UIInput already refuses to mark a disabled button clicked, so this is the
+// second lock: a button that was affordable when pressed and is not by the tick
+// that consumes the click must not spend money the run no longer has.
+static void testADisabledButtonDoesNotAct() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+
+    // Spend the treasury directly, so the bar is left holding buttons that were
+    // affordable a moment ago - exactly the race this guards.
+    const int wood = match->Run().Amount("wood");
+    CHECK_MSG(match->Run().TrySpend(Cost{{"wood", wood}}), "drained the treasury");
+    layer.OnFixedUpdate(registry, kTick);
+
+    const auto buttons = barButtons(registry);
+    entt::entity disabled = entt::null;
+    for (entt::entity button : buttons) {
+        if (!registry.get<UIButtonComponent>(button).enabled) { disabled = button; break; }
+    }
+    CHECK_MSG(disabled != entt::null, "there is a disabled button to press");
+    if (disabled == entt::null) { layer.OnDetach(registry); return; }
+
+    const bool placingBefore = match->Placement().IsActive();
+    registry.get<UIButtonComponent>(disabled).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+
+    CHECK_MSG(match->Placement().IsActive() == placingBefore,
+              "pressing a disabled Build button started nothing");
+    CHECK_MSG(match->Run().Amount("wood") == 0, "and spent nothing");
+
+    layer.OnDetach(registry);
+}
+
 static void runTests() {
     testAttachingTheLayerBuildsTheHud();
     testTheHudReadsTheSimulation();
@@ -370,6 +639,11 @@ static void runTests() {
     testThePauseButtonStopsTheSimulation();
     testTheHudIsNotRebuiltEveryTick();
     testTheHudIsActuallyDrawnAndOnScreen();
+    testTheBarOffersTheBuildMenuByDefault();
+    testAffordabilityChangesDoNotRebuildTheBar();
+    testStartingAPlacementRebuildsTheBarToCancel();
+    testUnaffordableButtonsAreDisabledRatherThanRemoved();
+    testADisabledButtonDoesNotAct();
 }
 
-TEST_MAIN("test_wb_hud", 30)
+TEST_MAIN("test_wb_hud", 62)

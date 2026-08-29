@@ -11,6 +11,11 @@
 #include "sim/ResourceNode.hpp"
 #include "sim/Snapshot.hpp"
 #include "sim/Unit.hpp"
+#include "sim/Building.hpp"
+#include "sim/BuildPlacement.hpp"
+#include "sim/GameState.hpp"
+#include "sim/Progression.hpp"
+#include "sim/Selection.hpp"
 #include "sim/WaveDirector.hpp"
 
 using namespace Supersonic;
@@ -76,6 +81,13 @@ constexpr int32_t kLayerBuilding = 2;
 constexpr int32_t kLayerUnit = 3;
 constexpr int32_t kLayerBarBack = 4;
 constexpr int32_t kLayerBarFill = 5;
+
+// The bar's buttons, from bottom_bar.gd. 230x96 is a touch target, not a
+// guess: the original says so and the number is load-bearing on a phone.
+constexpr float kBarButtonWidth = 230.0f;
+constexpr float kBarButtonHeight = 96.0f;
+constexpr float kBarFontSize = 22.0f;
+constexpr float kBarSpacing = 16.0f;
 
 } // namespace
 
@@ -173,6 +185,25 @@ void WolfBrigadeLayer::buildHud(entt::registry& registry) {
     pause.offset = glm::vec2(0.0f, 20.0f);
     pause.size = glm::vec2(180.0f, 96.0f);
     pause.fontSize = 30.0f;
+
+    // The strip the contextual buttons hang off, created ONCE. Its children
+    // come and go with the selection; it does not, so nothing about the
+    // container itself can be lost mid-gesture.
+    //
+    // A horizontal stack anchored to the bottom centre is main.tscn's
+    // HBoxContainer with alignment = 1 inside a Panel pinned to the bottom
+    // edge, minus the Panel: a full-width backdrop is not expressible with a
+    // nine-point anchor and a fixed size, and the buttons read fine over the
+    // lane without one. Noted rather than worked around, because the menu
+    // screens want a full-bleed rect too and that is the point at which it is
+    // worth adding.
+    m_barStack = registry.create();
+    registry.emplace<TagComponent>(m_barStack, "WB Bar");
+    auto& bar = registry.emplace<UIStackComponent>(m_barStack);
+    bar.horizontal = true;
+    bar.anchor = UIAnchor::BottomCenter;
+    bar.offset = glm::vec2(0.0f, 18.0f);
+    bar.spacing = kBarSpacing;
 }
 
 void WolfBrigadeLayer::updateHud(entt::registry& registry) {
@@ -212,6 +243,192 @@ void WolfBrigadeLayer::updateHud(entt::registry& registry) {
     auto& pause = registry.get<UIButtonComponent>(m_hud.pause);
     if (pause.clickedThisTick) m_paused = !m_paused;
     pause.label = m_paused ? "Resume" : "Pause";
+}
+
+namespace {
+
+// "75 wood, 20 food" from a cost map, or "free" when there is nothing to pay.
+// _format_cost in bottom_bar.gd, including the word.
+std::string formatCost(const Supersonic::Json::Value& cost) {
+    if (!cost.IsObject() || cost.AsObject().empty()) return "free";
+
+    std::string out;
+    for (const auto& [resource, amount] : cost.AsObject()) {
+        if (!out.empty()) out += ", ";
+        out += std::to_string(static_cast<int>(amount.AsNumber()));
+        out += ' ';
+        out += resource;
+    }
+    return out;
+}
+
+// A Json cost object as the simulation's own Cost map.
+Cost toCost(const Supersonic::Json::Value& cost) {
+    Cost out;
+    if (!cost.IsObject()) return out;
+    for (const auto& [resource, amount] : cost.AsObject()) {
+        out[resource] = static_cast<int>(amount.AsNumber());
+    }
+    return out;
+}
+
+} // namespace
+
+std::vector<WolfBrigadeLayer::BarButton> WolfBrigadeLayer::desiredBar() const {
+    std::vector<BarButton> wanted;
+    if (!m_match) return wanted;
+
+    // A placement in progress takes the whole strip. On touch there is no
+    // right-click and no Escape, so this is the only way out of it - which is
+    // why it replaces the bar rather than sitting beside it.
+    if (m_match->Placement().IsActive()) {
+        wanted.push_back(BarButton{entt::null, BarAction::Cancel, {}});
+        return wanted;
+    }
+
+    const Building* selected = m_match->Picked().SelectedBuilding();
+    if (selected != nullptr && selected->IsAlive() && selected->IsComplete()) {
+        for (const std::string& unit : selected->Stats().trains) {
+            wanted.push_back(BarButton{entt::null, BarAction::Train, unit});
+        }
+        for (const std::string& upgrade : selected->Stats().researches) {
+            // Available, not affordable: an upgrade you cannot pay for yet is
+            // shown greyed, and one whose prerequisites are unmet is not shown
+            // at all. Collapsing those two would make the tree invisible.
+            if (Upgrades::IsAvailable(*m_data, m_match->Run(), upgrade)) {
+                wanted.push_back(BarButton{entt::null, BarAction::Research, upgrade});
+            }
+        }
+        return wanted;
+    }
+
+    for (const auto& [id, building] : m_data->Buildings().AsObject()) {
+        if (building["buildable"].AsBool()) {
+            wanted.push_back(BarButton{entt::null, BarAction::Build, id});
+        }
+    }
+    return wanted;
+}
+
+std::string WolfBrigadeLayer::barLabel(const BarButton& button) const {
+    switch (button.action) {
+    case BarAction::Cancel:
+        return "Cancel";
+    case BarAction::Build: {
+        const auto& data = m_data->Building(button.id);
+        return "Build " + data["display_name"].AsString(button.id) + "\n(" +
+               formatCost(data["cost"]) + ")";
+    }
+    case BarAction::Train: {
+        const auto& data = m_data->Unit(button.id);
+        return "Train " + data["display_name"].AsString(button.id) + "\n(" +
+               formatCost(data["cost"]) + ")";
+    }
+    case BarAction::Research: {
+        const auto& data = m_data->Upgrade(button.id);
+        return "Research " + data["display_name"].AsString(button.id) + "\n(" +
+               formatCost(data["cost"]) + ")";
+    }
+    }
+    return {};
+}
+
+bool WolfBrigadeLayer::barEnabled(const BarButton& button) const {
+    if (!m_match) return false;
+    switch (button.action) {
+    case BarAction::Cancel:
+        return true;
+    case BarAction::Build:
+        return m_match->Run().CanAfford(toCost(m_data->Building(button.id)["cost"]));
+    case BarAction::Train:
+        return m_match->Run().CanAfford(toCost(m_data->Unit(button.id)["cost"]));
+    case BarAction::Research:
+        return Upgrades::CanResearch(*m_data, m_match->Run(), button.id);
+    }
+    return false;
+}
+
+void WolfBrigadeLayer::updateBar(entt::registry& registry) {
+    if (!m_match) return;
+
+    const std::vector<BarButton> wanted = desiredBar();
+
+    // THE SIGNATURE, and only the signature, decides whether entities move.
+    // Affordability is deliberately not part of it: a worker depositing wood
+    // flips several buttons between affordable and not every few seconds, and
+    // if that recreated them, a press held across one deposit would be lost.
+    bool sameSet = wanted.size() == m_bar.size();
+    for (std::size_t i = 0; sameSet && i < wanted.size(); ++i) {
+        sameSet = wanted[i].action == m_bar[i].action && wanted[i].id == m_bar[i].id;
+    }
+
+    if (!sameSet) {
+        for (const BarButton& old : m_bar) {
+            if (registry.valid(old.entity)) registry.destroy(old.entity);
+        }
+        m_bar.clear();
+
+        int32_t order = 0;
+        for (const BarButton& button : wanted) {
+            BarButton made = button;
+            made.entity = registry.create();
+            registry.emplace<TagComponent>(made.entity, "WB Bar Button");
+            auto& widget = registry.emplace<UIButtonComponent>(made.entity);
+            widget.size = glm::vec2(kBarButtonWidth, kBarButtonHeight);
+            widget.fontSize = kBarFontSize;
+            registry.emplace<HierarchyComponent>(made.entity).parent = m_barStack;
+            registry.emplace<UIOrderComponent>(made.entity).order = order++;
+            m_bar.push_back(made);
+        }
+    }
+
+    // And this runs every tick either way, which is the point of the split.
+    for (const BarButton& button : m_bar) {
+        auto& widget = registry.get<UIButtonComponent>(button.entity);
+        widget.label = barLabel(button);
+        widget.enabled = barEnabled(button);
+    }
+}
+
+void WolfBrigadeLayer::applyBarClicks(entt::registry& registry) {
+    if (!m_match) return;
+
+    for (const BarButton& button : m_bar) {
+        auto& widget = registry.get<UIButtonComponent>(button.entity);
+        if (!widget.clickedThisTick) continue;
+
+        // A disabled button still draws and still covers what is under it, but
+        // it must not act. UIInput already refuses to mark it clicked; this is
+        // the second lock, because a button that became unaffordable between
+        // the press and the tick that consumes it would otherwise still fire.
+        if (!widget.enabled) continue;
+
+        switch (button.action) {
+        case BarAction::Cancel:
+            m_match->Placement().Cancel();
+            break;
+        case BarAction::Build:
+            m_match->Placement().Begin(button.id);
+            break;
+        case BarAction::Train: {
+            Building* selected = m_match->Picked().SelectedBuilding();
+            if (selected == nullptr || !selected->IsComplete()) break;
+            // Paid here, enqueued after - Building::EnqueueTraining says it
+            // does not check the cost because whoever enqueues has paid.
+            if (m_match->Run().TrySpend(toCost(m_data->Unit(button.id)["cost"]))) {
+                selected->EnqueueTraining(button.id);
+            }
+            break;
+        }
+        case BarAction::Research: {
+            std::vector<Building*> existing;
+            existing.reserve(m_match->Buildings().size());
+            for (const auto& building : m_match->Buildings()) existing.push_back(building.get());
+            Upgrades::Research(*m_data, m_match->Run(), button.id, existing);
+            break;
+        }
+        }
+    }
 }
 
 void WolfBrigadeLayer::OnDetach(entt::registry& registry) {
@@ -275,6 +492,13 @@ void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta)
     if (!m_booted || !m_match) return;
 
     updateHud(registry);
+
+    // Read what the player pressed BEFORE the match steps, so an order given
+    // this tick takes effect this tick rather than one later, and then make the
+    // strip agree with whatever that changed.
+    applyBarClicks(registry);
+    updateBar(registry);
+
     if (m_paused) return;
 
     m_match->Step(static_cast<double>(fixedDelta));
