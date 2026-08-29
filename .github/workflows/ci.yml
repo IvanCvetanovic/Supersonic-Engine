@@ -14,21 +14,27 @@ name: CI
 # Linux, runs the suites, recompiles and byte-compares every shader, runs the
 # sanitizer and validation legs, and checks the documented counts.
 #
-# Automatic runs are ON. They were off from 19 August to save Actions minutes,
-# and the cost of that was not minutes: nothing gated a push for ten days, and
-# in that window the documented suite count drifted from 36 to 61 while the job
-# built to catch exactly that sat waiting to be dispatched by hand. A gate
-# nobody triggers is a gate that reports on request, which is what a person does
-# anyway when they already suspect something.
+# DISPATCH ONLY, deliberately. This repository is private, so every automatic
+# run is charged, and the owner has chosen not to spend that.
 #
-# Worth knowing: minutes are only charged for PRIVATE repositories. This one is
-# private today, so this is a real cost - but a determinism engine whose replay
-# is not checked on push is claiming something it does not test.
+# What that costs is worth writing down rather than discovering again. Automatic
+# runs were off from 19 August, and in those ten days the documented suite count
+# drifted from 36 to 61 while `doc-facts` - the job built to catch exactly that -
+# sat waiting to be dispatched by hand. A gate nobody triggers reports on
+# request, which is what a person does anyway once they already suspect
+# something.
+#
+# So the checks that must not wait for a dispatch do not live here. See
+# `tools/verify-replay` for the determinism round trip, which runs locally in
+# under a minute and needs no runner.
+#
+# To turn automatic runs back on, restore:
+#
+#   push:
+#     branches: ["**"]
+#   pull_request:
 # ---------------------------------------------------------------------------
 on:
-  push:
-    branches: ["**"]
-  pull_request:
   workflow_dispatch:
 
 concurrency:

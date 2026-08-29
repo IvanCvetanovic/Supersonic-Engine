@@ -143,6 +143,22 @@ and floats are written as their bits.
 > scene, not of the feature; `test_replay` carries the claim that recorded input
 > drives state.
 
+### Checking the determinism claim before a push
+
+```powershell
+pwsh tools/verify-replay.ps1
+```
+
+Records a session, replays it, then **corrupts one checkpoint and requires the
+replay to fail at that tick**. The third step is the point: a harness that never
+diverges and one that cannot detect divergence produce identical output on the
+first two, and this project has shipped that shape of mistake before.
+
+It lives here rather than in CI because CI is dispatch-only — the repository is
+private, so automatic runs are charged. Run it before pushing anything that
+touches the tick loop, the state hash, or the recording format. It takes under a
+minute and needs no runner.
+
 ### With validation layers, if the SDK is not installed system-wide
 
 ```powershell

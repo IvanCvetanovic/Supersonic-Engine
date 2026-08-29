@@ -1580,6 +1580,36 @@ void SupersonicApp::finishRecording() {
     }
 
     if (m_replay) {
+        // THE FINAL CHECKPOINT, which the tick loop can never reach.
+        //
+        // stepRecording stops the loop the moment `tick` reaches the recorded
+        // count, so a checkpoint written AT that count - which finishRecording
+        // always writes, because the end of a session is where a bug being
+        // recorded usually is - was compared against nothing. The run ended, the
+        // most valuable checkpoint in the file went unread, and the verdict said
+        // it reproduced.
+        //
+        // Found by corrupting it and watching a replay pass: the whole reason
+        // tools/verify-replay corrupts the LAST checkpoint rather than the
+        // first. The roadmap's own Done-when is "reproduces its final StateHash
+        // byte for byte", and that was the one comparison not being made.
+        if (!m_replayDiverged) {
+            const auto* clock = m_registry.ctx().find<SimulationClock>();
+            const uint64_t finalTick = clock ? clock->tick : 0;
+            if (const ReplayCheckpoint* expected = m_replay->CheckpointAt(finalTick)) {
+                const uint64_t actual = StateHash::Compute(m_registry);
+                if (actual != expected->hash) {
+                    m_replayDiverged = true;
+                    m_replayDivergedAtTick = finalTick;
+                    m_replayExpectedHash = expected->hash;
+                    m_replayActualHash = actual;
+                    SUPERSONIC_LOG_ERROR("Replay")
+                        << "diverged at tick " << finalTick << ": expected " << expected->hash
+                        << ", got " << actual << "." << std::endl;
+                }
+            }
+        }
+
         if (m_replayDiverged) {
             // Plain stdout as well as the log, because this is the ANSWER the
             // run was asked for rather than a diagnostic about producing it -
