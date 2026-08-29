@@ -79,6 +79,25 @@ std::array<glm::vec3, 8> ShadowCascades::SliceCorners(const CameraComponent& cam
     const float tanHalfV = std::tan(glm::radians(camera.fov) * 0.5f);
     const float tanHalfH = tanHalfV * std::max(camera.aspect, 0.0001f);
 
+    // AN ORTHOGRAPHIC FRUSTUM IS A BOX, and this built a pyramid for it.
+    //
+    // The half extents below were `d * tanHalf`, which is the perspective
+    // construction: the slice widens with distance because the rays diverge.
+    // Under an orthographic projection they do not diverge at all - the extent
+    // is `orthoHeight` at every depth, near and far alike.
+    //
+    // Using the perspective form anyway did not merely misfit the cascade, it
+    // inverted its shape. The near slice sits at a small `d`, so its corners
+    // collapsed towards the camera axis and the cascade covering the player was
+    // fitted to almost nothing; the far slice was handed a volume that grows
+    // without bound. The visible result is shadows missing near the camera and
+    // a texel density far away that no resolution rescues - in a 2D scene, which
+    // is what an orthographic camera is usually for, that is every shadow in the
+    // frame.
+    const bool orthographic = camera.isOrthographic();
+    const float orthoHalfV = camera.orthoHeight * 0.5f;
+    const float orthoHalfH = orthoHalfV * std::max(camera.aspect, 0.0001f);
+
     const glm::vec3 forward = glm::normalize(camera.front);
     const glm::vec3 right = glm::normalize(camera.right);
     const glm::vec3 up = glm::normalize(camera.up);
@@ -89,8 +108,8 @@ std::array<glm::vec3, 8> ShadowCascades::SliceCorners(const CameraComponent& cam
     for (int plane = 0; plane < 2; ++plane) {
         const float d = distances[plane];
         const glm::vec3 centre = camera.position + forward * d;
-        const glm::vec3 halfUp = up * (d * tanHalfV);
-        const glm::vec3 halfRight = right * (d * tanHalfH);
+        const glm::vec3 halfUp = up * (orthographic ? orthoHalfV : d * tanHalfV);
+        const glm::vec3 halfRight = right * (orthographic ? orthoHalfH : d * tanHalfH);
 
         corners[static_cast<size_t>(plane) * 4 + 0] = centre - halfUp - halfRight;
         corners[static_cast<size_t>(plane) * 4 + 1] = centre - halfUp + halfRight;

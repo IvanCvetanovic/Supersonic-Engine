@@ -259,7 +259,68 @@ static void testShadowDistanceIsClampedToTheCamera() {
               "cascades must not be fitted past the camera's own far plane");
 }
 
+static void testAnOrthographicSliceIsABoxAndNotAPyramid() {
+    // The perspective construction is `d * tan(fov/2)`, which widens the slice
+    // with distance because the rays diverge. Orthographic rays are parallel:
+    // the extent is orthoHeight at every depth, near and far alike.
+    //
+    // Using the perspective form under an ortho camera did not merely misfit
+    // the cascade, it inverted its shape. A near slice sits at a small d, so
+    // its corners collapsed towards the camera axis and the cascade covering
+    // whatever is closest was fitted to nearly nothing - while the far slice
+    // was handed a volume that grows without bound.
+    CameraComponent camera = makeCamera(glm::vec3(0.0f, 0.0f, 0.0f), -90.0f);
+    camera.projection = CameraComponent::Projection::Orthographic;
+    camera.orthoHeight = 10.0f;
+    camera.aspect = 2.0f;
+
+    const auto nearSlice = ShadowCascades::SliceCorners(camera, 2.0f, 10.0f);
+    const auto farSlice  = ShadowCascades::SliceCorners(camera, 40.0f, 80.0f);
+
+    const float nearWidth = glm::length(nearSlice[1] - nearSlice[0]);
+    const float farWidth  = glm::length(nearSlice[5] - nearSlice[4]);
+
+    // orthoHeight 10, aspect 2 -> 20 wide, and the same at both planes.
+    CHECK_NEAR(nearWidth, 20.0f);
+    CHECK_MSG(std::fabs(farWidth - nearWidth) < 1e-3f,
+              "an orthographic slice does not widen with depth: " + std::to_string(nearWidth) +
+                  " then " + std::to_string(farWidth));
+
+    const float nearHeight = glm::length(nearSlice[2] - nearSlice[0]);
+    CHECK_NEAR(nearHeight, 10.0f);
+
+    // And a slice forty units out is the same box as one two units out. Under
+    // the perspective construction it was twenty times larger.
+    CHECK_MSG(std::fabs(glm::length(farSlice[1] - farSlice[0]) - nearWidth) < 1e-3f,
+              "a distant orthographic slice is the same size as a near one");
+
+    // The centres still track the camera, so only the extents changed.
+    glm::vec3 centre(0.0f);
+    for (int i = 0; i < 4; ++i) centre += farSlice[static_cast<size_t>(i)];
+    centre /= 4.0f;
+    const glm::vec3 expected = camera.position + glm::normalize(camera.front) * 40.0f;
+    CHECK_NEAR(centre.z, expected.z);
+}
+
+static void testAPerspectiveSliceStillWidensWithDepth() {
+    // The control. A fix that made every camera orthographic would pass the
+    // test above and break every 3D scene in the project, and "the extents are
+    // constant" is exactly what that failure looks like.
+    CameraComponent camera = makeCamera(glm::vec3(0.0f, 0.0f, 0.0f), -90.0f);
+    camera.projection = CameraComponent::Projection::Perspective;
+
+    const auto corners = ShadowCascades::SliceCorners(camera, 2.0f, 10.0f);
+    const float nearWidth = glm::length(corners[1] - corners[0]);
+    const float farWidth  = glm::length(corners[5] - corners[4]);
+
+    CHECK_MSG(farWidth > nearWidth * 4.0f,
+              "a perspective slice five times deeper is five times wider: " +
+                  std::to_string(nearWidth) + " then " + std::to_string(farWidth));
+}
+
 static void runTests() {
+    testAnOrthographicSliceIsABoxAndNotAPyramid();
+    testAPerspectiveSliceStillWidensWithDepth();
     testSplitsIncreaseAndReachTheShadowDistance();
     testSplitsDoNotCollapseOntoTheNearPlane();
     testUniformAndLogarithmicSplitsDiffer();
