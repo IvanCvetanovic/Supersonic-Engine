@@ -17,38 +17,22 @@
 
 #include "core/LaunchOptions.hpp"
 #include "core/Log.hpp"
+#include "core/GameRuntime.hpp"
 #include "core/SupersonicApp.hpp"
 #include "renderer/VulkanContext.hpp"
 
 #include "WolfBrigadeLayer.hpp"
 
 int main(int argc, char** argv) {
-    // How many drawables to build. The plan's busy campaign frame is 350-400;
-    // endless has no ceiling in the data, so the number is an argument.
-    int drawables = 400;
-    float sunIntensity = 1.4f;
-    std::string filtered;
-    std::vector<char*> passthrough;
-    passthrough.push_back(argv[0]);
+    // Nothing to filter any more.
+    //
+    // The spike took --drawables and --sun, because what it built was a lane of
+    // invented quads whose COUNT was the measurement and whose lighting was the
+    // thing being proved. The layer runs the real match now, so how many
+    // drawables there are is the game's answer rather than the argument's, and
+    // every flag the engine understands passes straight through.
 
-    for (int i = 1; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg == "--drawables" && i + 1 < argc) {
-            drawables = std::atoi(argv[++i]);
-            if (drawables < 5) drawables = 5;
-            continue;
-        }
-        // Varies the sun so the unlit path can be proved: the unlit quads must
-        // not move by one bit between two runs, and the lit ground must.
-        if (arg == "--sun" && i + 1 < argc) {
-            sunIntensity = static_cast<float>(std::atof(argv[++i]));
-            continue;
-        }
-        passthrough.push_back(argv[i]);
-    }
-
-    const auto options = Supersonic::LaunchOptions::Parse(
-        static_cast<int>(passthrough.size()), passthrough.data());
+    const auto options = Supersonic::LaunchOptions::Parse(argc, argv);
 
     if (options.helpRequested) {
         std::cout << Supersonic::LaunchOptions::Usage()
@@ -61,11 +45,20 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // DECLARED, not discovered. This binary is a game whether or not somebody
+    // remembered to drop a game.manifest beside it, and saying so is what stops
+    // the engine handing it the editor's demo scene and leaving it in edit mode
+    // with its layer never ticked.
+    Supersonic::GameManifest manifest;
+    manifest.isGame = true;
+    manifest.title = "Wolf Brigade";
+    // No startup scene: the board is built by the simulation, not placed.
+
     try {
-        Supersonic::SupersonicApp app(options);
+        Supersonic::SupersonicApp app(options, &manifest);
 
         // The whole claim, in one line.
-        app.PushLayer(std::make_unique<WolfBrigade::WolfBrigadeLayer>(drawables, sunIntensity));
+        app.PushLayer(std::make_unique<WolfBrigade::WolfBrigadeLayer>());
 
         app.Run();
     } catch (const std::exception& e) {

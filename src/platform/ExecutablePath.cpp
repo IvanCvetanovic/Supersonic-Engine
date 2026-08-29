@@ -53,6 +53,35 @@ bool AnchorAssetRootToExecutable() {
     const std::filesystem::path directory = ExecutableDirectory();
     if (directory.empty()) return false;
 
+    // ONLY IF THE ASSETS ARE ACTUALLY THERE.
+    //
+    // A packaged game has its assets copied in beside the executable, and
+    // anchoring is what makes it survive being launched from a shortcut whose
+    // working directory is somewhere else entirely. The same binary run out of
+    // a BUILD TREE does not: the executable sits in build/<config>/ and the
+    // assets are at the project root, several levels up.
+    //
+    // Anchoring unconditionally therefore broke exactly the case a game
+    // developer is in all day. The first failure is BloomPass throwing about a
+    // missing fullscreen_vert.spv during pipeline creation - a message about a
+    // shader, a long way from the working directory that actually caused it,
+    // and one that appears the moment a game declares itself a game.
+    //
+    // Checking is cheap and it is also honest: "my assets are beside me" is a
+    // fact about the layout on disk, not something a manifest can assert.
+    //
+    // `assets/shaders` rather than `assets`, and the difference is not
+    // pedantry. An empty `assets` directory turns up beside a build output for
+    // all sorts of reasons - a previous run of the game creating one relative
+    // to the working directory is enough - and anchoring to a folder that has
+    // the right NAME and none of the contents fails in exactly the way this
+    // check exists to prevent. Shaders are also the first thing the renderer
+    // opens, so if they are not here nothing else being here would save it.
+    std::error_code exists;
+    if (!std::filesystem::is_directory(directory / "assets" / "shaders", exists) || exists) {
+        return false;
+    }
+
     std::error_code ec;
     std::filesystem::current_path(directory, ec);
     return !ec;

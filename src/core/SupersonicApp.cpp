@@ -100,7 +100,7 @@ std::string scriptPluginPath() {
 }
 } // namespace
 
-SupersonicApp::SupersonicApp(const LaunchOptions& options)
+SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* manifest)
     : m_options(options) {
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Initializing Engine Subsystems..." << std::endl;
 
@@ -135,7 +135,12 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
     m_hotReload->WatchPlugin(scriptPluginPath());
 
     // Read before the window exists, because it decides the title on it.
-    m_manifest = GameRuntime::Load();
+    //
+    // A DECLARED manifest wins outright and skips the lookup. A game linking
+    // the engine knows it is a game; requiring it to also ship a file beside
+    // its own executable to be believed made "run it from the build tree" a
+    // different program from "run the packaged copy".
+    m_manifest = manifest ? *manifest : GameRuntime::Load();
 
     // A packaged game re-anchors to its own folder before anything opens a file
     // by relative path. This has to happen BEFORE the renderer is built: the
@@ -150,9 +155,15 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
             SUPERSONIC_LOG_INFO("SupersonicApp")
                 << "Packaged game: assets resolve from " << AssetRoot().string();
         } else {
-            SUPERSONIC_LOG_WARN("SupersonicApp")
-                << "Could not anchor the asset root to the executable's folder; "
-                << "relative paths will resolve from the working directory.";
+            // Not a warning any more, because the ordinary case reaches it: a
+            // game run out of its build tree has its executable in build/ and
+            // its assets at the project root, and resolving from the working
+            // directory is then exactly right. Anchoring only happens when the
+            // assets are genuinely beside the executable, which is what a
+            // packaged folder looks like and a build tree does not.
+            SUPERSONIC_LOG_INFO("SupersonicApp")
+                << "No assets beside the executable; they resolve from "
+                << AssetRoot().string() << " as the editor's do.";
         }
     }
 
@@ -342,7 +353,10 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
         }
     }
 
-    initECS();
+    // The demo scene is the EDITOR's starting point, and a game has its own.
+    // Building it for one meant a game opened with a camera, a sun and eleven
+    // props it never asked for, sitting in front of whatever it built itself.
+    if (!m_manifest.isGame) initECS();
 
     // --scene wins over the manifest, and applies in the editor too: a smoke
     // test is only worth running against the scene you want to smoke test.
@@ -350,14 +364,19 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options)
         m_options.scenePath.empty() ? m_manifest.startupScene : m_options.scenePath;
 
     if (m_manifest.isGame || !m_options.scenePath.empty()) {
-        // The demo scene initECS just built is the editor's starting point, not
-        // the game's. A packaged game that opened it was the clearest symptom
-        // that packaging shipped an editor.
-        const auto loaded = SceneSerializer::Deserialize(m_registry, startupScene);
+        // A game whose world comes from a LAYER has no scene file, and that is
+        // a legitimate shape rather than a misconfiguration - Wolf Brigade
+        // builds its board out of a simulation, not out of entities somebody
+        // placed. Asking the serializer to open "" logged a parse failure and
+        // an alarming line about falling back, on the startup path of a game
+        // that was working correctly.
+        const bool hasScene = !startupScene.empty();
+        SerializationResult loaded{true, "No startup scene; the game builds its own world."};
+        if (hasScene) loaded = SceneSerializer::Deserialize(m_registry, startupScene);
         SUPERSONIC_LOG_INFO("SupersonicApp") << loaded.message << std::endl;
         if (!loaded.ok) {
             SUPERSONIC_LOG_ERROR("SupersonicApp") << "Falling back to the built-in scene." << std::endl;
-        } else {
+        } else if (hasScene) {
             // So the manager names the scene that is actually open. Otherwise
             // Save would write it over the default scene's file.
             m_sceneManager.AdoptLoaded(startupScene);

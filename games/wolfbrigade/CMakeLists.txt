@@ -18,7 +18,14 @@ add_executable(WolfBrigade
 # Everything it needs - the src/ include root, the vendored headers, and the
 # GLM configuration that MUST match the engine's - arrives through
 # SupersonicCore's PUBLIC interface, exactly as the test suites get it.
-target_link_libraries(WolfBrigade PRIVATE SupersonicCore)
+#
+# AND THE SIMULATION, which until now only the test suites linked. Four thousand
+# lines of ported game, verified against twenty-two of the original's harnesses,
+# and none of it was in the binary that runs: this target drew coloured quads
+# from numbers it made up while the real match sat in a library beside it. The
+# sim's include root and WOLFBRIGADE_DATA_DIR are PUBLIC on that target, so the
+# data path arrives with it and nothing here has to guess where the JSON lives.
+target_link_libraries(WolfBrigade PRIVATE SupersonicCore WolfBrigadeSim)
 target_include_directories(WolfBrigade PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if (MSVC)

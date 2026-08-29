@@ -1,9 +1,15 @@
 #include "WolfBrigadeLayer.hpp"
 
-#include <cmath>
+#include <algorithm>
+#include <cstdio>
 
 #include "core/Components.hpp"
 #include "core/Log.hpp"
+#include "core/SimulationClock.hpp"
+
+#include "sim/ResourceNode.hpp"
+#include "sim/Snapshot.hpp"
+#include "sim/Unit.hpp"
 
 using namespace Supersonic;
 
@@ -11,208 +17,240 @@ namespace WolfBrigade {
 
 namespace {
 
-// The lane, in world units.
+// Godot pixels to engine units.
 //
-// Godot's is 6000 x 1080 px showing 1920 at a time (world.json, camera_controller.gd).
-// Divided by 100 so a unit body - 30x40 px for a soldier - is a sensible size in
-// an engine whose default cube is one unit across. The ratio is what matters;
-// Phase 1's orthographic camera is where pixels become the authored unit again.
-constexpr float kLaneLength = 60.0f;
-constexpr float kGroundY = 0.0f;
-
-// A soldier is 30x40 px in units.json. Everything else is scaled from that.
-constexpr float kBodyWidth = 0.30f;
-constexpr float kBodyHeight = 0.40f;
-
-// The HP bar is a fixed 40x6 px above the body (unit.gd:16).
-constexpr float kBarWidth = 0.40f;
-constexpr float kBarHeight = 0.06f;
-
-// Quads are thin cubes. There is no quad primitive yet - item 1.3 in the plan -
-// and a flattened cube is the same number of draws, which is what is being
-// measured.
-constexpr float kQuadDepth = 0.02f;
-
-// Everything is on ONE plane now.
+// The ported data is in the original's coordinates - the lane is 6000 px wide
+// and the ground sits at y = 800 - because changing them would have meant
+// re-deriving every number the twenty-two harnesses check. So the conversion
+// lives here, in the view, which is the only place that cares what a metre is.
 //
-// Phase 0 nudged each layer 0.01 toward the camera so the depth buffer would
-// order them, and said in this comment that it was a shortcut. Item 1.4 removed
-// the need for it: RenderableComponent::sortKey orders coplanar surfaces the
-// way Godot's child index does, so the z-stagger is gone and the ordering is
-// authored rather than smuggled in through geometry.
-//
-// This matters beyond tidiness. The stagger meant a "flat" 2D scene was
-// secretly 3D, so anything that measured depth - picking, culling, a future
-// shadow - saw a lane that was several centimetres thick.
-constexpr float kQuadPlane = 0.0f;
+// A hundred to one puts the lane at sixty units and a soldier at about a third
+// of one, which is a sensible size in an engine whose default cube is one unit.
+constexpr float kPixelsPerUnit = 100.0f;
 
-glm::vec3 unitColour(int index) {
-    // raider red, soldier blue, worker amber - close enough to units.json to
-    // tell at a glance whether the lane is populated correctly.
-    switch (index % 3) {
-        case 0: return glm::vec3(0.78f, 0.28f, 0.24f);
-        case 1: return glm::vec3(0.30f, 0.52f, 0.85f);
-        default: return glm::vec3(0.85f, 0.68f, 0.28f);
-    }
+// Godot's Y grows DOWNWARD and the engine's grows up, so the ground line is a
+// mirror rather than an offset. Getting this wrong does not look like an error:
+// the lane renders upside down and every unit stands on the sky.
+constexpr float kGroundPixels = 800.0f;
+
+glm::vec3 toWorld(const glm::vec2& simPosition, float z) {
+    return glm::vec3(simPosition.x / kPixelsPerUnit,
+                     (kGroundPixels - simPosition.y) / kPixelsPerUnit,
+                     z);
 }
+
+// "#3b6fa0" as the engine's linear-ish colour.
+//
+// Passed straight through without an sRGB conversion, deliberately: these are
+// drawn UNLIT, so the value in the file is the value on screen, which is what
+// makes a ported ColorRect look like the one it was ported from. A colour that
+// went through a transfer function here would be subtly wrong against every
+// screenshot of the original.
+glm::vec3 parseHex(const std::string& text, const glm::vec3& fallback) {
+    if (text.size() < 7 || text[0] != '#') return fallback;
+
+    auto nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+
+    float channels[3]{};
+    for (int i = 0; i < 3; ++i) {
+        const int high = nibble(text[static_cast<size_t>(1 + i * 2)]);
+        const int low = nibble(text[static_cast<size_t>(2 + i * 2)]);
+        if (high < 0 || low < 0) return fallback;
+        channels[i] = static_cast<float>(high * 16 + low) / 255.0f;
+    }
+    return glm::vec3(channels[0], channels[1], channels[2]);
+}
+
+// Draw order within the lane. Everything is coplanar, so this is the only thing
+// separating them - see RenderableComponent::sortKey.
+constexpr int32_t kLayerGround = 0;
+constexpr int32_t kLayerNode = 1;
+constexpr int32_t kLayerBuilding = 2;
+constexpr int32_t kLayerUnit = 3;
+constexpr int32_t kLayerBarBack = 4;
+constexpr int32_t kLayerBarFill = 5;
 
 } // namespace
 
-entt::entity WolfBrigadeLayer::makeQuad(entt::registry& registry, const char* tag,
-                                        const glm::vec3& position, const glm::vec3& size,
-                                        const glm::vec3& colour, int32_t layer, bool unlit) {
-    const auto entity = registry.create();
-    registry.emplace<TagComponent>(entity, tag);
-
-    auto& transform = registry.emplace<TransformComponent>(entity);
-    transform.position = position;
-    transform.scale = size;
-
-    auto& mesh = registry.emplace<MeshComponent>(entity);
-    // Quad, not Cube. A flattened cube is the same number of draws but its
-    // corners are rainbow by design, so a flat colour came out as a gradient -
-    // which a screenshot caught and no amount of reading would have.
-    mesh.primitiveType = "Quad";
-
-    auto& material = registry.emplace<MaterialComponent>(entity);
-    material.albedoColor = glm::vec4(colour, 1.0f);
-
-    // UNLIT, which is what a ColorRect is. Phase 0 faked this with an emissive
-    // material because the engine had no unlit path; item 1.2 built one, so the
-    // fake is gone and the quad now genuinely skips lighting, ambient, IBL,
-    // shadows and fog rather than merely surviving them.
-    material.unlit = unlit;
-
-    auto& renderable = registry.emplace<RenderableComponent>(entity);
-    renderable.sortKey = layer;
-    return entity;
-}
-
 void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
-    // The game owns the world, so it clears what the editor loaded.
-    //
-    // This is what a standalone game does and it is the honest thing to prove:
-    // a layer that only ever ADDS to somebody else's scene has not shown that a
-    // game can live here. It also makes the spike independent of which scene
-    // happens to be on disk.
-    registry.clear();
-
-    // A camera looking down the lane from the side. Wolf Brigade's is a
-    // Camera2D with no zoom, panning along x over a 6000-wide world; this is
-    // the perspective stand-in, pulled back far enough to see a stretch of it.
-    const auto camera = registry.create();
-    registry.emplace<TagComponent>(camera, "Lane Camera");
-    auto& cameraTransform = registry.emplace<TransformComponent>(camera);
-    cameraTransform.position = glm::vec3(0.0f, 1.4f, 12.0f);
-
-    auto& view = registry.emplace<CameraComponent>(camera);
-    view.position = cameraTransform.position;
-    view.yaw = -90.0f;
-    // Level, because a side-scroller looks straight at its lane. Phase 0 tilted
-    // 4 degrees down to make a perspective view legible; an orthographic one
-    // does not need the help.
-    view.pitch = 0.0f;
-    view.isPrimary = true;
-
-    // ORTHOGRAPHIC, which is item 1.1 and the reason the lane stopped bending
-    // away at its edges. orthoHeight is the world height the viewport spans -
-    // Godot authors 1080 px against a 1920x1080 viewport, and this is the same
-    // promise in world units.
-    view.projection = CameraComponent::Projection::Orthographic;
-    view.orthoHeight = 4.0f;
-
-    // A light, because emissive alone leaves the ground unreadable and the
-    // ground is what makes the lane look like a lane.
-    const auto sun = registry.create();
-    registry.emplace<TagComponent>(sun, "Sun");
-    registry.emplace<TransformComponent>(sun);
-    auto& light = registry.emplace<LightComponent>(sun);
-    light.type = 0;
-    light.direction = glm::vec3(0.4f, 1.0f, 0.6f);
-    light.intensity = m_sunIntensity;
-
-    // The ground, deliberately LIT while everything else is not.
-    //
-    // It is the control. If the sun changes and the ground does not, the test
-    // below is measuring nothing - so the one surface that must react is kept
-    // reacting on purpose.
-    makeQuad(registry, "Ground", glm::vec3(0.0f, kGroundY - 1.4f, kQuadPlane),
-             glm::vec3(kLaneLength, 2.8f, kQuadDepth), glm::vec3(0.13f, 0.15f, 0.19f),
-             /*layer=*/-1, /*unlit=*/false);
-
-    // Units along the lane, five drawables each, to the requested count.
-    const int unitCount = m_requested / 5;
-    m_units.reserve(static_cast<size_t>(unitCount));
-
-    for (int i = 0; i < unitCount; ++i) {
-        const float t = unitCount > 1 ? static_cast<float>(i) / static_cast<float>(unitCount - 1)
-                                      : 0.5f;
-        const float x = (t - 0.5f) * kLaneLength;
-        const glm::vec3 colour = unitColour(i);
-
-        Unit unit;
-        unit.laneX = x;
-        // Alternating directions, so the lane reads as two sides meeting.
-        unit.speed = (i % 2 == 0) ? 0.6f : -0.6f;
-        unit.health = 0.35f + 0.65f * static_cast<float>((i * 37) % 100) / 100.0f;
-
-        const float feet = kGroundY;
-        const float mid = feet + kBodyHeight * 0.5f;
-
-        // Ordered back to front exactly as unit.tscn documents its children:
-        // SelectionRing -> Body -> HPBar/Bg -> HPBar/Fill -> Label.
-        unit.ring = makeQuad(registry, "SelectionRing", glm::vec3(x, mid, kQuadPlane),
-                             glm::vec3(kBodyWidth * 1.35f, kBodyHeight * 1.15f, kQuadDepth),
-                             glm::vec3(0.95f, 0.85f, 0.35f), /*layer=*/0);
-        unit.body = makeQuad(registry, "Body", glm::vec3(x, mid, kQuadPlane),
-                             glm::vec3(kBodyWidth, kBodyHeight, kQuadDepth), colour,
-                             /*layer=*/1);
-        unit.barBg = makeQuad(registry, "HPBar/Bg",
-                              glm::vec3(x, feet + kBodyHeight + 0.10f, kQuadPlane),
-                              glm::vec3(kBarWidth, kBarHeight, kQuadDepth),
-                              glm::vec3(0.10f, 0.10f, 0.12f), /*layer=*/2);
-        unit.barFill = makeQuad(registry, "HPBar/Fill",
-                                glm::vec3(x, feet + kBodyHeight + 0.10f, kQuadPlane),
-                                glm::vec3(kBarWidth * unit.health, kBarHeight, kQuadDepth),
-                                glm::vec3(0.35f, 0.80f, 0.35f), /*layer=*/3);
-        // Stands in for the Label. Phase 2 makes it text; this is here so the
-        // drawable count is honest.
-        unit.label = makeQuad(registry, "Label",
-                              glm::vec3(x, feet + kBodyHeight + 0.20f, kQuadPlane),
-                              glm::vec3(kBarWidth * 0.7f, kBarHeight * 1.2f, kQuadDepth),
-                              glm::vec3(0.75f, 0.75f, 0.80f), /*layer=*/4);
-
-        m_units.push_back(unit);
+    m_data = std::make_unique<GameData>();
+    if (!m_data->LoadAll(WOLFBRIGADE_DATA_DIR)) {
+        SUPERSONIC_LOG_ERROR("WolfBrigade")
+            << "could not load the game data from " << WOLFBRIGADE_DATA_DIR
+            << "; the lane will be empty." << std::endl;
+        return;
     }
+
+    m_profile = std::make_unique<Profile>();
+    m_match = std::make_unique<Match>(*m_data, *m_profile, "");
+    m_match->BootFresh();
+    m_booted = true;
 
     SUPERSONIC_LOG_INFO("WolfBrigade")
-        << "Lane built: " << m_units.size() << " units, "
-        << (m_units.size() * 5 + 1) << " drawables." << std::endl;
+        << "Booted a match: " << m_match->Units().size() << " unit(s), "
+        << m_match->Buildings().size() << " building(s)." << std::endl;
+
+    // The camera looks straight down -Z at the lane, orthographic, because a
+    // side-on 1D strip through a perspective camera is a strip with perspective
+    // in it - the far end of the lane is smaller than the near end, and the
+    // original has no such thing.
+    m_camera = registry.create();
+    registry.emplace<TagComponent>(m_camera, "Lane Camera");
+    auto& camera = registry.emplace<CameraComponent>(m_camera);
+    camera.projection = CameraComponent::Projection::Orthographic;
+    // Framed on the player's end of the lane. The town hall is at 1500 px and
+    // the spawn at 1680, so a six-unit-tall window centred just above the
+    // ground line puts the base and its workers on screen at a readable size.
+    camera.orthoHeight = 6.0f;
+    camera.position = glm::vec3(18.0f, 1.4f, 20.0f);
+    camera.yaw = -90.0f;
+    camera.pitch = 0.0f;
+    camera.isPrimary = true;
+
+    // The fly controls are the editor's, and this is a game. Without this,
+    // W/A/S/D would fly the lane camera at the same time as the player's own
+    // bindings read them.
+    camera.flyControlsEnabled = false;
+    camera.updateCameraVectors();
+
+    auto& transform = registry.emplace<TransformComponent>(m_camera);
+    transform.position = camera.position;
+
+    // A ground strip, so the lane has a floor rather than sitting in the sky.
+    const entt::entity ground = registry.create();
+    registry.emplace<TagComponent>(ground, "Ground");
+    auto& groundTransform = registry.emplace<TransformComponent>(ground);
+    groundTransform.position = glm::vec3(30.0f, -1.2f, 0.0f);
+    groundTransform.scale = glm::vec3(62.0f, 2.4f, 1.0f);
+    registry.emplace<MeshComponent>(ground).primitiveType = "Quad";
+    auto& groundMaterial = registry.emplace<MaterialComponent>(ground);
+    groundMaterial.albedoColor = glm::vec4(0.16f, 0.19f, 0.14f, 1.0f);
+    groundMaterial.unlit = true;
+    auto& groundRenderable = registry.emplace<RenderableComponent>(ground);
+    groundRenderable.sortKey = kLayerGround;
 }
 
-void WolfBrigadeLayer::OnUpdate(entt::registry& registry, float deltaTime) {
-    m_elapsed += deltaTime;
+void WolfBrigadeLayer::OnDetach(entt::registry& registry) {
+    // The match owns nothing in the registry, and the registry owns nothing in
+    // the match. Dropping them in this order is not load-bearing; saying so is,
+    // because the next person will look for a dependency that is not there.
+    (void)registry;
+    m_match.reset();
+    m_profile.reset();
+    m_data.reset();
+    m_booted = false;
+}
 
-    // Movement along x only, because the game is a strictly 1D lane
-    // (unit.gd:313). Nothing here is the real simulation - Phase 3 is - it
-    // moves so that a screenshot of frame 40 differs from frame 1, which is
-    // what makes the measurement a measurement rather than a static image.
-    for (Unit& unit : m_units) {
-        unit.laneX += unit.speed * deltaTime;
-        const float half = kLaneLength * 0.5f;
-        if (unit.laneX > half) unit.laneX -= kLaneLength;
-        if (unit.laneX < -half) unit.laneX += kLaneLength;
-
-        const auto move = [&](entt::entity entity) {
-            if (entity == entt::null || !registry.valid(entity)) return;
-            registry.get<TransformComponent>(entity).position.x = unit.laneX;
-        };
-        move(unit.ring);
-        move(unit.body);
-        move(unit.barBg);
-        move(unit.barFill);
-        move(unit.label);
+entt::entity WolfBrigadeLayer::claim(entt::registry& registry, std::size_t& cursor,
+                                     const glm::vec2& simPosition, const glm::vec2& simSize,
+                                     const glm::vec3& colour, int32_t layer) {
+    if (cursor >= m_pool.size()) {
+        Quad made;
+        made.entity = registry.create();
+        registry.emplace<TagComponent>(made.entity, "WB Quad");
+        registry.emplace<TransformComponent>(made.entity);
+        registry.emplace<MeshComponent>(made.entity).primitiveType = "Quad";
+        auto& material = registry.emplace<MaterialComponent>(made.entity);
+        material.unlit = true;
+        registry.emplace<RenderableComponent>(made.entity);
+        m_pool.push_back(made);
     }
+
+    Quad& quad = m_pool[cursor++];
+    quad.live = true;
+
+    auto& transform = registry.get<TransformComponent>(quad.entity);
+    transform.position = toWorld(simPosition, 0.0f);
+    transform.scale = glm::vec3(std::max(simSize.x, 1.0f) / kPixelsPerUnit,
+                                std::max(simSize.y, 1.0f) / kPixelsPerUnit,
+                                1.0f);
+
+    auto& material = registry.get<MaterialComponent>(quad.entity);
+    material.albedoColor = glm::vec4(colour, 1.0f);
+
+    auto& renderable = registry.get<RenderableComponent>(quad.entity);
+    renderable.sortKey = layer;
+    renderable.isVisible = true;
+
+    return quad.entity;
+}
+
+void WolfBrigadeLayer::retire(entt::registry& registry, std::size_t used) {
+    // HIDDEN, not destroyed. A wave dying is the ordinary case, and destroying
+    // forty entities on the tick it happens would recycle their indices - which
+    // the state hash is seeded on, so a run would stop comparing against its own
+    // recording for a reason that is about drawing.
+    for (std::size_t i = used; i < m_pool.size(); ++i) {
+        if (!m_pool[i].live) continue;
+        registry.get<RenderableComponent>(m_pool[i].entity).isVisible = false;
+        m_pool[i].live = false;
+    }
+}
+
+void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
+    if (!m_booted || !m_match) return;
+
+    m_match->Step(static_cast<double>(fixedDelta));
+
+    const Snapshot::Scene scene = m_match->View();
+    std::size_t cursor = 0;
+
+    for (const ResourceNode* node : scene.resourceNodes) {
+        if (!node) continue;
+        claim(registry, cursor, node->position, node->bodySize,
+              parseHex(node->color, glm::vec3(0.25f, 0.42f, 0.20f)), kLayerNode);
+    }
+
+    for (const Building* building : scene.buildings) {
+        if (!building || !building->IsAlive()) continue;
+        const BuildingStats& stats = building->Stats();
+
+        // A building under construction is drawn dimmer rather than differently,
+        // which is what the original does with modulate.
+        glm::vec3 colour = parseHex(stats.color, glm::vec3(0.23f, 0.44f, 0.63f));
+        if (!building->IsComplete()) colour *= 0.55f;
+
+        claim(registry, cursor, building->Position(), stats.bodySize, colour, kLayerBuilding);
+    }
+
+    for (const Unit* unit : scene.units) {
+        if (!unit || !unit->IsAlive()) continue;
+        const UnitStats& stats = unit->Stats();
+        const glm::vec2 position = unit->Position();
+
+        claim(registry, cursor, position, stats.bodySize,
+              parseHex(stats.color, glm::vec3(0.8f)), kLayerUnit);
+
+        // The health bar, which is the one piece of the original's unit scene
+        // that carries information rather than identity. Forty by six pixels
+        // above the body, exactly as unit.gd places it.
+        const float barY = position.y - stats.bodySize.y * 0.5f - 10.0f;
+        const glm::vec2 barSize(40.0f, 6.0f);
+        claim(registry, cursor, glm::vec2(position.x, barY), barSize,
+              glm::vec3(0.09f, 0.09f, 0.11f), kLayerBarBack);
+
+        const float fraction = stats.maxHp > 0
+                                   ? std::clamp(static_cast<float>(unit->Hp()) /
+                                                    static_cast<float>(stats.maxHp), 0.0f, 1.0f)
+                                   : 1.0f;
+        if (fraction > 0.0f) {
+            // Anchored left rather than centred, so a bar at half health empties
+            // from one end instead of shrinking towards its middle.
+            const float filled = barSize.x * fraction;
+            const float left = position.x - barSize.x * 0.5f + filled * 0.5f;
+            claim(registry, cursor, glm::vec2(left, barY), glm::vec2(filled, barSize.y),
+                  unit->IsPlayer() ? glm::vec3(0.35f, 0.78f, 0.35f)
+                                   : glm::vec3(0.82f, 0.31f, 0.27f),
+                  kLayerBarFill);
+        }
+    }
+
+    retire(registry, cursor);
 }
 
 } // namespace WolfBrigade

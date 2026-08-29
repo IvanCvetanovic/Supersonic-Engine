@@ -33,7 +33,19 @@ namespace Supersonic {
 
 class SupersonicApp {
 public:
-    explicit SupersonicApp(const LaunchOptions& options = {});
+    // `manifest` lets a game DECLARE ITSELF rather than be discovered.
+    //
+    // Without it the only way to be a game was to have a `game.manifest` beside
+    // the executable, which is what the packager writes - so a game linking the
+    // engine and building its own world in a layer was, on its own developer's
+    // machine, the editor: it got the demo scene it did not ask for, sat in edit
+    // mode, and never ran a tick. Its layer's OnFixedUpdate was never called,
+    // which is a game that does not start.
+    //
+    // Passing one skips the file lookup entirely. Null keeps the old behaviour
+    // and is what the engine's own main() does.
+    explicit SupersonicApp(const LaunchOptions& options = {},
+                           const GameManifest* manifest = nullptr);
     ~SupersonicApp();
 
     SupersonicApp(const SupersonicApp&) = delete;
