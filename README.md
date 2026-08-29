@@ -721,11 +721,15 @@ HUSK's nineteen animated models. What is left is here.
   checkpoint is necessary and not sufficient: a scene edited in a way the hash
   cannot see still replays wrongly and says nothing until the difference reaches
   a transform.
-- **Cross-platform determinism is not claimed.** Reproducibility is tested on
-  one machine and one standard library. The float maths is the same everywhere,
-  and the ordering hazards that were found have been closed, but nobody has run
-  a recording made under MSVC against a replay under libstdc++ — so treat it as
-  untested rather than as working.
+- **Cross-toolchain determinism is measured; cross-*platform* is not.**
+  `test_determinism` pins the hash of four seconds of the fixture scene as a
+  constant, and that constant holds byte-for-byte across MSVC 2022 (MSVC STL)
+  and GCC 15.2 (libstdc++), Debug and Release, x64 — two compiler backends, two
+  standard libraries, two optimisation levels. What that pair does **not** vary
+  is the C runtime: both link the UCRT, so `asin` in the Euler conversion and
+  `pow` in the damping curve are the same implementations either way. A glibc
+  build would vary those and has not been run, so a Windows→Linux replay is
+  still untested.
 
 **Deliberate, and not gaps**
 

@@ -2209,6 +2209,22 @@ level up. With none registered the hash is byte-for-byte what it was before any
 of this, because a recording made earlier has to keep comparing against the
 engine that made it.
 
+**One number is written down, and it is the only test here about a machine
+rather than about the code.** Every other determinism test compares two hashes
+computed in one process, so a build whose floats behave differently agrees with
+itself perfectly and passes all of them — reproducibility that holds within a
+binary and not between two, which is the same failure one level up. So
+`test_determinism` pins the hash of four seconds of the fixture scene as a
+constant. It holds across MSVC 2022 and GCC 15.2, Debug and Release: two
+backends, two standard libraries, two optimisation levels, byte for byte.
+
+Both link the UCRT, so that pair does not vary `asin` or `pow` — a glibc build
+would, and has not been run. When the constant fails it is a decision rather
+than a chore: either the simulation changed, and every recording on disk has
+stopped comparing, or the toolchain did, and a replay does not cross that
+boundary. Updating the number without deciding which is how the test stops
+meaning anything.
+
 One measured caveat worth keeping. Replaying the demo scene reproduces, and that
 proves less than it looks: **nothing in `MainScene` reads input inside a tick**,
 so changing a recorded mouse delta and replaying it produces an identical hash.

@@ -88,6 +88,43 @@ static void testTheSameSceneSteppedTwiceAgreesExactly() {
     CHECK_MSG(runFor(240) == first, "and a third time");
 }
 
+static void testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild() {
+    // THE CROSS-TOOLCHAIN GATE, and the only test here that is about a machine
+    // rather than about the code.
+    //
+    // Every other test compares two hashes computed in one process, so a build
+    // whose floats behave differently agrees with itself perfectly and passes
+    // all of them. That is exactly the shape of failure this suite exists to
+    // catch, one level up: reproducibility that holds within a binary and not
+    // between two. A recording is only worth sending to somebody if the number
+    // means the same thing on their machine.
+    //
+    // So the number is written down. Four seconds of the fixture scene - six
+    // boxes and a ball falling onto a floor, which runs the integrator, the
+    // broadphase, the SAT narrowphase and the impulse solver - has one answer,
+    // and it is this one.
+    //
+    // WHEN THIS FAILS, it is a decision and not a chore. Either the simulation
+    // changed, in which case every recording on disk has stopped comparing and
+    // the constant should move deliberately; or the toolchain changed, in which
+    // case a replay does not cross that boundary and that is the thing worth
+    // knowing. Updating the number to make the suite green without deciding
+    // which of those happened is how this stops meaning anything.
+    //
+    // Verified across MSVC 2022 (MSVC STL) and GCC 15.2 (libstdc++), both x64
+    // Release, on 29 August 2026. Note what that pair does and does not vary:
+    // different compiler backends and different standard libraries, but the
+    // same UCRT - so `asin` in the Euler conversion and `pow` in the damping
+    // curve are the SAME implementations in both. A glibc build would vary
+    // those too, and has not been run.
+    constexpr uint64_t kCanonical = 8818694387102185031ull;
+
+    const uint64_t actual = runFor(240);
+    CHECK_MSG(actual == kCanonical,
+              "the canonical scene hashed to " + std::to_string(actual) +
+                  ", and this build expects " + std::to_string(kCanonical));
+}
+
 static void testTheHashMovesWhenTheSimulationDoes() {
     // The other half. A hash that never changes agrees with everything and
     // proves nothing - which is exactly what a state oracle would look like if
@@ -896,6 +933,7 @@ static void runTests() {
     testTheOverstepFractionIsTheRemainder();
     testTheDefaultRateReproducesTheOldBehaviour();
     testTheSameSceneSteppedTwiceAgreesExactly();
+    testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild();
     testTheHashMovesWhenTheSimulationDoes();
     testTheHashDoesNotDependOnEntityCreationOrder();
     testTheSameSceneHashesTheSameHoweverManyLoadsPrecededIt();
