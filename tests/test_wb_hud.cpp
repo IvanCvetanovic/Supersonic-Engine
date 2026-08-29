@@ -24,11 +24,15 @@
 #include "WolfBrigadeLayer.hpp"
 
 #include "core/Components.hpp"
+#include "core/UISystem.hpp"
+
+#include <imgui.h>
 
 #include "sim/GameState.hpp"
 #include "sim/Match.hpp"
 #include "sim/WaveDirector.hpp"
 
+#include <algorithm>
 #include <string>
 
 using namespace Supersonic;
@@ -225,12 +229,147 @@ static void testTheHudIsNotRebuiltEveryTick() {
     layer.OnDetach(registry);
 }
 
+// AND IT ACTUALLY REACHES A DRAW CALL, ON SCREEN.
+//
+// Everything above proves the HUD holds the right numbers. It does not prove a
+// single pixel of it is drawn, and those are different failures: a label
+// anchored off the edge, or one the draw pass skips, holds exactly the right
+// text and is invisible.
+//
+// The screenshot cannot answer this (see the note at the top of this file), so
+// the measurement is the one test_uilayer established - run ImGui with no
+// graphics backend at all and read the vertex buffer it produced. That is the
+// real draw call rather than a proxy for it.
+//
+// The elements are recoloured first so each can be told from the others by its
+// vertices. Colour is not what is under test; identity is.
+namespace {
+
+constexpr ImU32 kWoodInk = IM_COL32(255, 0, 0, 255);
+constexpr ImU32 kFoodInk = IM_COL32(0, 255, 0, 255);
+constexpr ImU32 kWaveInk = IM_COL32(0, 0, 255, 255);
+constexpr ImU32 kPauseInk = IM_COL32(255, 0, 255, 255);
+
+glm::vec4 toVec4(ImU32 color) {
+    return glm::vec4(static_cast<float>((color >> IM_COL32_R_SHIFT) & 0xFF) / 255.0f,
+                     static_cast<float>((color >> IM_COL32_G_SHIFT) & 0xFF) / 255.0f,
+                     static_cast<float>((color >> IM_COL32_B_SHIFT) & 0xFF) / 255.0f,
+                     static_cast<float>((color >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f);
+}
+
+struct Bounds {
+    int vertices{0};
+    float minX{1e9f}, minY{1e9f}, maxX{-1e9f}, maxY{-1e9f};
+    void add(float x, float y) {
+        ++vertices;
+        minX = std::min(minX, x); minY = std::min(minY, y);
+        maxX = std::max(maxX, x); maxY = std::max(maxY, y);
+    }
+};
+
+} // namespace
+
+static void testTheHudIsActuallyDrawnAndOnScreen() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    registry.get<UITextComponent>(byTag(registry, "HUD Wood")).color = toVec4(kWoodInk);
+    registry.get<UITextComponent>(byTag(registry, "HUD Food")).color = toVec4(kFoodInk);
+    registry.get<UITextComponent>(byTag(registry, "HUD Wave")).color = toVec4(kWaveInk);
+    auto& pause = registry.get<UIButtonComponent>(byTag(registry, "HUD Pause"));
+    pause.color = toVec4(kPauseInk);
+    pause.cornerRadius = 0.0f;
+
+    // The drop shadow would draw the same glyphs a second time in another
+    // colour, which is a second bounding box for the same label.
+    for (const char* tag : { "HUD Wood", "HUD Food", "HUD Wave" }) {
+        registry.get<UITextComponent>(byTag(registry, tag)).shadow = false;
+    }
+
+    const float width = 1920.0f;
+    const float height = 1080.0f;
+
+    ImGui::CreateContext();
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(width, height);
+        io.DeltaTime = 1.0f / 60.0f;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+        io.IniFilename = nullptr;
+    }
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(width, height));
+    ImGui::Begin("game", nullptr, ImGuiWindowFlags_NoDecoration);
+
+    UICanvas::UIPointer pointer;
+    // Off screen: a hovered button recolours itself, and this identifies it by
+    // colour.
+    pointer.position = glm::vec2(-4000.0f, -4000.0f);
+    UICanvas::UIKeyboard keyboard;
+    UISystem::Render(registry, UIRect{glm::vec2(0.0f), glm::vec2(width, height)},
+                     pointer, keyboard, glm::mat4(1.0f));
+
+    ImGui::End();
+    ImGui::Render();
+
+    Bounds wood, food, wave, button;
+    const ImDrawData* data = ImGui::GetDrawData();
+    for (int list = 0; data != nullptr && list < data->CmdListsCount; ++list) {
+        const ImDrawList* commands = data->CmdLists[list];
+        for (int v = 0; v < commands->VtxBuffer.Size; ++v) {
+            const ImDrawVert& vertex = commands->VtxBuffer[v];
+            Bounds* target = nullptr;
+            if (vertex.col == kWoodInk) target = &wood;
+            else if (vertex.col == kFoodInk) target = &food;
+            else if (vertex.col == kWaveInk) target = &wave;
+            else if (vertex.col == kPauseInk) target = &button;
+            if (target != nullptr) target->add(vertex.pos.x, vertex.pos.y);
+        }
+    }
+    ImGui::DestroyContext();
+
+    const struct { const char* name; const Bounds* bounds; } drawn[] = {
+        { "the wood counter", &wood }, { "the food counter", &food },
+        { "the wave counter", &wave }, { "the pause button", &button },
+    };
+
+    for (const auto& element : drawn) {
+        CHECK_MSG(element.bounds->vertices > 0,
+                  std::string(element.name) + " produced no geometry at all - it holds "
+                  "the right text and nothing draws it");
+        if (element.bounds->vertices == 0) continue;
+
+        CHECK_MSG(element.bounds->minX >= -0.5f && element.bounds->maxX <= width + 0.5f &&
+                      element.bounds->minY >= -0.5f && element.bounds->maxY <= height + 0.5f,
+                  std::string(element.name) + " drew outside the screen: x " +
+                      std::to_string(element.bounds->minX) + ".." +
+                      std::to_string(element.bounds->maxX) + ", y " +
+                      std::to_string(element.bounds->minY) + ".." +
+                      std::to_string(element.bounds->maxY));
+    }
+
+    // The three corners the original puts them in, so a label that drifted to
+    // the wrong side of the screen is caught rather than merely being on it.
+    CHECK_MSG(wood.maxX < width * 0.5f, "the wood counter is on the left");
+    CHECK_MSG(food.minY > wood.minY, "the food counter sits below the wood one");
+    CHECK_MSG(wave.minX > width * 0.5f, "the wave counter is on the right");
+    CHECK_MSG(button.minX > wood.maxX && button.maxX < wave.minX,
+              "and the pause button is between them");
+
+    layer.OnDetach(registry);
+}
+
 static void runTests() {
     testAttachingTheLayerBuildsTheHud();
     testTheHudReadsTheSimulation();
     testTheHudFollowsTheRunAsItGoes();
     testThePauseButtonStopsTheSimulation();
     testTheHudIsNotRebuiltEveryTick();
+    testTheHudIsActuallyDrawnAndOnScreen();
 }
 
-TEST_MAIN("test_wb_hud", 18)
+TEST_MAIN("test_wb_hud", 30)
