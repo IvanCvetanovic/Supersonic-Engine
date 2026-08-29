@@ -1313,6 +1313,13 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             if (panel.drawTrack) {
                 ImGui::ColorEdit4("Track Color", glm::value_ptr(panel.trackColor));
             }
+            ImGui::Checkbox("Fill Width", &panel.fillWidth);
+            ImGui::SameLine();
+            ImGui::Checkbox("Fill Height", &panel.fillHeight);
+            ImGui::TextDisabled("Spread across the screen on that axis, whatever the");
+            ImGui::TextDisabled("screen is - a menu background, the dim behind a modal,");
+            ImGui::TextDisabled("the strip a bottom bar sits on. The other axis keeps");
+            ImGui::TextDisabled("its anchor and size.");
             ImGui::Checkbox("Visible##panel", &panel.visible);
         }
     }

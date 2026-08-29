@@ -427,8 +427,9 @@ void Render(entt::registry& registry, const UIRect& gameRect,
         if (!panel.visible || stacked.Hidden(entity)) continue;
         if (layerOf(registry, entity) != layer) continue;
 
-        const UIRect rect = placedRect(stacked, entity, panel.anchor, panel.offset,
-                                       panel.size, gameRect, scale);
+        const UIRect rect = UICanvas::Stretch(
+            placedRect(stacked, entity, panel.anchor, panel.offset, panel.size, gameRect, scale),
+            gameRect, panel.fillWidth, panel.fillHeight);
         const float rounding = panel.cornerRadius * scale;
 
         if (panel.drawTrack) {

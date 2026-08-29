@@ -46,6 +46,13 @@ std::vector<UIRect> LayoutStack(const std::vector<glm::vec2>& sizes, bool horizo
                        ScaleFor(screen.size()));
 }
 
+UIRect Stretch(const UIRect& rect, const UIRect& screen, bool fillWidth, bool fillHeight) {
+    UIRect out = rect;
+    if (fillWidth) { out.min.x = screen.min.x; out.max.x = screen.max.x; }
+    if (fillHeight) { out.min.y = screen.min.y; out.max.y = screen.max.y; }
+    return out;
+}
+
 std::vector<UIRect> LayoutStack(const std::vector<glm::vec2>& sizes, bool horizontal,
                                 float spacing, UIAnchor anchor, const glm::vec2& offset,
                                 const UIRect& screen, float scale) {

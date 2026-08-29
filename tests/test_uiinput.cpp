@@ -903,7 +903,66 @@ static void testAColumnIsStillOrderedAfterTheSplit() {
               "order still decides which is above the other");
 }
 
+// A FULL-BLEED BACKDROP SWALLOWS CLICKS EVERYWHERE, not just where it was
+// authored.
+//
+// The draw pass and the hit test both have to apply the stretch, and if only
+// one does, the backdrop is painted across the screen while the corners of it
+// pass clicks through to the live game underneath. That is the click target not
+// matching the picture - the failure UISystem's header warns about - and it
+// would show up as a modal that mostly works.
+static void testAFullBleedBackdropIsHitTestedWhereItIsDrawn() {
+    entt::registry registry;
+
+    // A HUD button in the far corner, well outside anything a modestly sized
+    // panel would cover.
+    const entt::entity hud = addButton(registry, "Build", UIAnchor::BottomRight,
+                                       glm::vec2(40.0f, 40.0f), glm::vec2(200.0f, 60.0f));
+
+    // The dim, authored small and told to fill.
+    const entt::entity backdrop = registry.create();
+    auto& dim = registry.emplace<UIPanelComponent>(backdrop);
+    dim.anchor = UIAnchor::TopLeft;
+    dim.offset = glm::vec2(0.0f, 0.0f);
+    dim.size = glm::vec2(10.0f, 10.0f);
+    dim.fillWidth = true;
+    dim.fillHeight = true;
+    registry.emplace<UIOrderComponent>(backdrop).layer = 9;
+
+    // Dead centre of the button in the opposite corner.
+    clickAt(registry, glm::vec2(1920.0f - 40.0f - 100.0f, 1080.0f - 40.0f - 30.0f));
+
+    CHECK_MSG(!registry.get<UIButtonComponent>(hud).clicked,
+              "a backdrop drawn across the whole screen must be hit-tested across the "
+              "whole screen, or a modal leaks clicks into the game at its corners");
+    CHECK_MSG(!registry.get<UIButtonComponent>(hud).hovered, "nor highlight through it");
+}
+
+// The control: the SAME panel without the fill covers only what it was
+// authored to cover.
+static void testAPanelWithoutFillStillCoversOnlyItself() {
+    entt::registry registry;
+
+    const entt::entity hud = addButton(registry, "Build", UIAnchor::BottomRight,
+                                       glm::vec2(40.0f, 40.0f), glm::vec2(200.0f, 60.0f));
+
+    const entt::entity backdrop = registry.create();
+    auto& dim = registry.emplace<UIPanelComponent>(backdrop);
+    dim.anchor = UIAnchor::TopLeft;
+    dim.offset = glm::vec2(0.0f, 0.0f);
+    dim.size = glm::vec2(10.0f, 10.0f);
+    registry.emplace<UIOrderComponent>(backdrop).layer = 9;
+
+    clickAt(registry, glm::vec2(1920.0f - 40.0f - 100.0f, 1080.0f - 40.0f - 30.0f));
+
+    CHECK_MSG(registry.get<UIButtonComponent>(hud).clicked,
+              "without the fill the corner button is still reachable, so the case "
+              "above is about the stretch rather than about the layer");
+}
+
 static void runTests() {
+    testAFullBleedBackdropIsHitTestedWhereItIsDrawn();
+    testAPanelWithoutFillStillCoversOnlyItself();
     testAMenuOnARaisedLayerIsClickableThroughItsOwnBackdrop();
     testAColumnIsStillOrderedAfterTheSplit();
     testAButtonRecreatedMidGestureDoesNotFire();
@@ -945,4 +1004,4 @@ static void runTests() {
     testAFieldUnderAnOverlayCannotBeFocused();
 }
 
-TEST_MAIN("test_uiinput", 72)
+TEST_MAIN("test_uiinput", 75)

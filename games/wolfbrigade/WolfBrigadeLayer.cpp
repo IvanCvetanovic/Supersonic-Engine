@@ -191,12 +191,18 @@ void WolfBrigadeLayer::buildHud(entt::registry& registry) {
     // container itself can be lost mid-gesture.
     //
     // A horizontal stack anchored to the bottom centre is main.tscn's
-    // HBoxContainer with alignment = 1 inside a Panel pinned to the bottom
-    // edge, minus the Panel: a full-width backdrop is not expressible with a
-    // nine-point anchor and a fixed size, and the buttons read fine over the
-    // lane without one. Noted rather than worked around, because the menu
-    // screens want a full-bleed rect too and that is the point at which it is
-    // worth adding.
+    // HBoxContainer with alignment = 1, and the strip it sits on is the Panel
+    // above it - as wide as the screen and 132 tall, which is what fillWidth
+    // is for.
+    const entt::entity backdrop = registry.create();
+    registry.emplace<TagComponent>(backdrop, "WB Bar Panel");
+    auto& strip = registry.emplace<UIPanelComponent>(backdrop);
+    strip.anchor = UIAnchor::BottomCenter;
+    strip.offset = glm::vec2(0.0f, 0.0f);
+    strip.size = glm::vec2(0.0f, 132.0f);
+    strip.fillWidth = true;
+    strip.color = glm::vec4(0.09f, 0.10f, 0.13f, 0.92f);
+    strip.cornerRadius = 0.0f;
     m_barStack = registry.create();
     registry.emplace<TagComponent>(m_barStack, "WB Bar");
     auto& bar = registry.emplace<UIStackComponent>(m_barStack);

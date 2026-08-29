@@ -98,8 +98,13 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
         // The whole panel, not the drawn fraction: a health bar that has run
         // down is still a rectangle in the way, and a hit target that shrinks
         // as the player takes damage would be its own bug.
-        const UIRect rect = rectFor(stacked, entity, panel.anchor, panel.offset,
-                                    panel.size, gameRect, scale);
+        // Stretched exactly as the draw pass stretches it, or a full-bleed
+        // backdrop would be drawn across the screen and hit-tested at whatever
+        // size it happened to be authored - which is the click target not
+        // matching the picture that UISystem's header warns about.
+        const UIRect rect = UICanvas::Stretch(
+            rectFor(stacked, entity, panel.anchor, panel.offset, panel.size, gameRect, scale),
+            gameRect, panel.fillWidth, panel.fillHeight);
         if (UICanvas::Contains(rect, pointer.position)) {
             topmost.consider(DrawPosition{layerOf(registry, entity), kPanelType, at});
         }

@@ -167,6 +167,25 @@ bool ProjectToScreen(const glm::mat4& viewProj, const glm::vec3& world, const UI
 UIRect Place(UIAnchor anchor, const glm::vec2& offset, const glm::vec2& size,
              const UIRect& screen);
 
+// Spreads `rect` across `screen` on the axes asked for, leaving the others.
+//
+// The nine-point anchor plus a fixed size says where something sits and how big
+// it is, and there is one shape it cannot say at all: "as wide as the screen,
+// whatever the screen is". Godot spells that with anchors on all four edges and
+// uses it constantly - a menu background, the dim behind a modal, the strip a
+// bottom bar sits on. Wolf Brigade wants it four times.
+//
+// The alternative was authoring a panel wide enough for any display and letting
+// it hang off both sides, which is wrong on an ultrawide, wrong again on the
+// next one, and silently so.
+//
+// Deliberately two bools rather than four edge anchors. Every caller wants a
+// full bleed on an axis, none wants "twenty pixels in from both edges", and
+// four offsets would be a second layout model beside the one that already
+// works. The axis NOT filled keeps its anchor and size, which is exactly the
+// bottom bar: as wide as the screen, 132 tall, pinned to the bottom.
+UIRect Stretch(const UIRect& rect, const UIRect& screen, bool fillWidth, bool fillHeight);
+
 // Same, for something whose size is only known after measuring - a run of text.
 // Identical rules; separate name because the caller has to measure first.
 inline UIRect PlaceMeasured(UIAnchor anchor, const glm::vec2& offset,

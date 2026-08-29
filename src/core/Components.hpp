@@ -1580,6 +1580,20 @@ struct UIPanelComponent {
     bool drawTrack{false};
     glm::vec4 trackColor{0.0f, 0.0f, 0.0f, 0.45f};
 
+    // Spread across the whole screen on this axis, whatever the screen is.
+    //
+    // The one shape an anchor and a size cannot express, and the one every
+    // game reaches for first: a menu background, the dim behind a modal, the
+    // strip a bottom bar sits on. The axis NOT filled keeps its anchor and
+    // size, so "as wide as the screen, 132 tall, pinned to the bottom" is
+    // fillWidth with everything else authored as usual.
+    //
+    // Applies to a panel placed from its own anchor. A panel inside a stack is
+    // positioned by the stack, and filling an axis there would take it out of
+    // the block it was measured into.
+    bool fillWidth{false};
+    bool fillHeight{false};
+
     bool visible{true};
 };
 

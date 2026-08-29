@@ -1078,11 +1078,52 @@ void testAnImageNestsInsideAStackToo() {
     CHECK_NEAR(layout.rects.at(right).min.x - layout.rects.at(left).min.x, 32.0f);
 }
 
+static void testStretchSpreadsOnlyTheAxesAskedFor() {
+    // The shape a nine-point anchor and a fixed size cannot express, and the
+    // one every game reaches for first.
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+    const UIRect authored{{100.0f, 900.0f}, {420.0f, 1032.0f}};
+
+    const UIRect none = UICanvas::Stretch(authored, screen, false, false);
+    CHECK_MSG(none.min.x == authored.min.x && none.max.y == authored.max.y,
+              "asking for nothing changes nothing");
+
+    // The bottom bar: as wide as the screen, still 132 tall, still pinned where
+    // it was authored.
+    const UIRect wide = UICanvas::Stretch(authored, screen, true, false);
+    CHECK_NEAR(wide.min.x, 0.0f);
+    CHECK_NEAR(wide.max.x, 1920.0f);
+    CHECK_MSG(test::nearly(wide.min.y, authored.min.y) &&
+                  test::nearly(wide.max.y, authored.max.y),
+              "the axis not filled keeps its anchor and size");
+
+    const UIRect tall = UICanvas::Stretch(authored, screen, false, true);
+    CHECK_NEAR(tall.min.y, 0.0f);
+    CHECK_NEAR(tall.max.y, 1080.0f);
+    CHECK_MSG(test::nearly(tall.min.x, authored.min.x), "and the other way round");
+
+    const UIRect both = UICanvas::Stretch(authored, screen, true, true);
+    CHECK_MSG(both.min == screen.min && both.max == screen.max,
+              "a full bleed is the whole screen - the menu background case");
+}
+
+static void testStretchFollowsTheGivenRectNotTheWindow() {
+    // In the editor the game occupies a panel. A backdrop that filled the
+    // WINDOW would spill across the inspector beside it.
+    const UIRect viewport{{300.0f, 100.0f}, {1300.0f, 700.0f}};
+    const UIRect filled =
+        UICanvas::Stretch(UIRect{{0.0f, 0.0f}, {10.0f, 10.0f}}, viewport, true, true);
+    CHECK_MSG(filled.min == viewport.min && filled.max == viewport.max,
+              "it fills the rectangle the game was given, not the display");
+}
+
 static void runTests() {
     testAnImageIsMeasuredAndStackedLikeAnyOtherElement();
     testAnInvisibleImageTakesNoSpace();
     testAnInvisibleButtonTakesNoSpace();
     testAnInvisibleTextFieldTakesNoSpace();
+    testStretchSpreadsOnlyTheAxesAskedFor();
+    testStretchFollowsTheGivenRectNotTheWindow();
     testAnImageNestsInsideAStackToo();
     testMeasureStackCountsTheGapsBetweenAndNotAfter();
     testAnAreaPlacesAndAScaleSizesAndTheyAreDifferentQuestions();
@@ -1132,4 +1173,4 @@ static void runTests() {
     testAnEmptyStackIsEmptyRatherThanAPoint();
 }
 
-TEST_MAIN("test_uicanvas", 200)
+TEST_MAIN("test_uicanvas", 209)

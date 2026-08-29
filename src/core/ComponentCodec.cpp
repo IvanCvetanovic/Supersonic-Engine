@@ -498,6 +498,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"DrawTrack\": " << (panel->drawTrack ? "true" : "false") << ",\n";
         out << indent << "  \"TrackColor\": [" << panel->trackColor.x << ", " << panel->trackColor.y << ", "
              << panel->trackColor.z << ", " << panel->trackColor.w << "],\n";
+        out << indent << "  \"FillWidth\": " << (panel->fillWidth ? "true" : "false") << ",\n";
+        out << indent << "  \"FillHeight\": " << (panel->fillHeight ? "true" : "false") << ",\n";
         out << indent << "  \"Visible\": " << (panel->visible ? "true" : "false") << "\n";
         out << indent << "},\n";
     }
@@ -969,6 +971,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         panel.fill = p["Fill"].AsFloat(1.0f);
         panel.drawTrack = p["DrawTrack"].AsBool(false);
         panel.trackColor = readVec4(p["TrackColor"], panel.trackColor);
+        panel.fillWidth = p["FillWidth"].AsBool(false);
+        panel.fillHeight = p["FillHeight"].AsBool(false);
         panel.visible = p["Visible"].AsBool(true);
     }
 
