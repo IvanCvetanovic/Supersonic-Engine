@@ -151,6 +151,7 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
 
     buildHud(registry);
     buildPauseMenu(registry);
+    buildGameOver(registry);
 }
 
 void WolfBrigadeLayer::buildHud(entt::registry& registry) {
@@ -249,7 +250,10 @@ void WolfBrigadeLayer::updateHud(entt::registry& registry) {
     // otherwise lose the press, and one that runs three would pause, unpause
     // and pause again from a single tap.
     auto& pause = registry.get<UIButtonComponent>(m_hud.pause);
-    if (pause.clickedThisTick) m_paused = !m_paused;
+    // Refused outright while a result is up, rather than toggled and undone
+    // later: a finished game is not pausable, and that is a rule about the
+    // press rather than about the menu.
+    if (pause.clickedThisTick && !m_showingResult) m_paused = !m_paused;
     pause.label = m_paused ? "Resume" : "Pause";
 }
 
@@ -560,6 +564,121 @@ void WolfBrigadeLayer::updatePauseMenu(entt::registry& registry) {
     setPauseMenuVisible(registry, m_paused);
 }
 
+
+void WolfBrigadeLayer::buildGameOver(entt::registry& registry) {
+    // Ten, above the pause menu's nine. You cannot pause a finished game, so a
+    // result that could be covered by something you can still open would be a
+    // result you could hide from.
+    constexpr int32_t kResultLayer = 10;
+
+    m_over.backdrop = registry.create();
+    registry.emplace<TagComponent>(m_over.backdrop, "Result Backdrop");
+    auto& dim = registry.emplace<UIPanelComponent>(m_over.backdrop);
+    dim.anchor = UIAnchor::Center;
+    dim.offset = glm::vec2(0.0f, 0.0f);
+    dim.fillWidth = true;
+    dim.fillHeight = true;
+    dim.cornerRadius = 0.0f;
+    dim.color = glm::vec4(0.05f, 0.06f, 0.09f, 0.86f);
+    registry.emplace<UIOrderComponent>(m_over.backdrop).layer = kResultLayer;
+
+    m_over.column = registry.create();
+    registry.emplace<TagComponent>(m_over.column, "Result Menu");
+    auto& column = registry.emplace<UIStackComponent>(m_over.column);
+    column.anchor = UIAnchor::Center;
+    column.spacing = 40.0f;
+
+    m_over.message = registry.create();
+    registry.emplace<TagComponent>(m_over.message, "Result Message");
+    auto& message = registry.emplace<UITextComponent>(m_over.message);
+    message.text = "VICTORY";
+    message.fontSize = 96.0f;
+    registry.emplace<HierarchyComponent>(m_over.message).parent = m_over.column;
+    {
+        auto& ordering = registry.emplace<UIOrderComponent>(m_over.message);
+        ordering.order = 0;
+        ordering.layer = kResultLayer;
+    }
+
+    // A ROW inside the column, which is the nesting the layout pass was
+    // rewritten for: two buttons side by side under a heading, measured as one
+    // block and centred as one.
+    m_over.row = registry.create();
+    registry.emplace<TagComponent>(m_over.row, "Result Buttons");
+    auto& row = registry.emplace<UIStackComponent>(m_over.row);
+    row.horizontal = true;
+    row.spacing = 40.0f;
+    registry.emplace<HierarchyComponent>(m_over.row).parent = m_over.column;
+    {
+        auto& ordering = registry.emplace<UIOrderComponent>(m_over.row);
+        ordering.order = 1;
+        ordering.layer = kResultLayer;
+    }
+
+    auto item = [&](const char* tag, const char* label, int32_t order) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& button = registry.emplace<UIButtonComponent>(entity);
+        button.label = label;
+        button.size = glm::vec2(300.0f, 96.0f);
+        button.fontSize = 36.0f;
+        registry.emplace<HierarchyComponent>(entity).parent = m_over.row;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = order;
+        ordering.layer = kResultLayer;
+        return entity;
+    };
+
+    m_over.restart = item("Result Restart", "Restart", 0);
+    m_over.mainMenu = item("Result Main Menu", "Main Menu", 1);
+    registry.get<UIButtonComponent>(m_over.mainMenu).enabled = false;
+
+    registry.get<UIStackComponent>(m_over.column).visible = false;
+    registry.get<UIPanelComponent>(m_over.backdrop).visible = false;
+}
+
+void WolfBrigadeLayer::updateGameOver(entt::registry& registry) {
+    if (!m_match || !registry.valid(m_over.column)) return;
+
+    const GameState& state = m_match->Run();
+    const bool finished = !state.IsPlaying();
+
+    // WRITTEN ONCE, on the transition. The wave is read before anything that
+    // ends a run can reset it, exactly as game_over_overlay.gd does, and a
+    // line recomputed every tick would be a different claim about the same run.
+    if (finished && !m_showingResult) {
+        const bool won = state.CurrentPhase() == GameState::Phase::Won;
+
+        // Recomputed rather than captured from the award. Match banks the
+        // renown itself and discards the amount, and RunEndRenown is pure - it
+        // depends on the wave and the outcome and nothing else - so asking it
+        // again gives the number that was banked without a second source of
+        // truth for it.
+        const int earned = Meta::RunEndRenown(*m_data, state.CurrentWave(), won);
+
+        char buffer[160];
+        if (earned <= 0) {
+            std::snprintf(buffer, sizeof(buffer), "%s", won ? "VICTORY" : "DEFEAT");
+        } else {
+            std::snprintf(buffer, sizeof(buffer), "%s\n+%d renown  (total %d)",
+                          won ? "VICTORY" : "DEFEAT", earned, m_profile->Renown());
+        }
+        registry.get<UITextComponent>(m_over.message).text = buffer;
+
+        registry.get<UIStackComponent>(m_over.column).visible = true;
+        registry.get<UIPanelComponent>(m_over.backdrop).visible = true;
+        m_showingResult = true;
+    }
+
+    if (m_showingResult && registry.get<UIButtonComponent>(m_over.restart).clickedThisTick) {
+        restartMatch(registry);
+        m_showingResult = false;
+        m_paused = false;
+        registry.get<UIStackComponent>(m_over.column).visible = false;
+        registry.get<UIPanelComponent>(m_over.backdrop).visible = false;
+    }
+}
+
 void WolfBrigadeLayer::OnDetach(entt::registry& registry) {
     // The match owns nothing in the registry, and the registry owns nothing in
     // the match. Dropping them in this order is not load-bearing; saying so is,
@@ -620,6 +739,13 @@ void WolfBrigadeLayer::retire(entt::registry& registry, std::size_t used) {
 void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     if (!m_booted || !m_match) return;
 
+    // THE RESULT FIRST, and the order is load-bearing. "You cannot pause a
+    // finished game" has to be known before the Pause button is read, or the
+    // press is honoured, the menu is raised over the result, and only the tick
+    // AFTER that takes it down again - which is a frame of a pause menu on top
+    // of a game that has already ended.
+    updateGameOver(registry);
+
     updateHud(registry);
 
     // Read what the player pressed BEFORE the match steps, so an order given
@@ -631,7 +757,7 @@ void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta)
     // rebuilds. UIInput already refuses a click that landed on the backdrop,
     // and this is the matching half: a bar that kept rebuilding behind a pause
     // menu would change under the player while they could not see it.
-    if (!m_paused) {
+    if (!m_paused && !m_showingResult) {
         applyBarClicks(registry);
         updateBar(registry);
     }

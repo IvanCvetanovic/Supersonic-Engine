@@ -811,6 +811,117 @@ static void testMainMenuIsGreyedUntilThereIsAMenu() {
     layer.OnDetach(registry);
 }
 
+// ---- The game-over overlay ---------------------------------------------
+
+// A run that ends raises the result, once, with what it earned.
+static void testEndingTheRunRaisesTheResultOverlay() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Result Menu")).visible,
+              "a running game shows no result");
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+
+    match->Run().Win();
+    layer.OnFixedUpdate(registry, kTick);
+
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Result Menu")).visible,
+              "winning raised the overlay");
+    CHECK_MSG(registry.get<UIPanelComponent>(byTag(registry, "Result Backdrop")).visible,
+              "with its dim over the lane");
+    CHECK_MSG(has(textOf(registry, "Result Message"), "VICTORY"),
+              "and it says which way it went: \"" + textOf(registry, "Result Message") + "\"");
+
+    layer.OnDetach(registry);
+}
+
+// Defeat says so, rather than the overlay being a victory screen that also
+// appears when you lose.
+static void testLosingSaysDefeat() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+
+    match->Run().Lose();
+    layer.OnFixedUpdate(registry, kTick);
+
+    const std::string message = textOf(registry, "Result Message");
+    CHECK_MSG(has(message, "DEFEAT"), "a lost run says DEFEAT: \"" + message + "\"");
+    CHECK_MSG(!has(message, "VICTORY"), "and does not also say VICTORY");
+
+    layer.OnDetach(registry);
+}
+
+// A finished game is not pausable and its bar is inert.
+static void testAFinishedGameCannotBePausedOrPlayed() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+
+    const std::size_t barBefore = barButtons(registry).size();
+    CHECK_MSG(barBefore > 0, "there is a bar while the run is live");
+
+    match->Run().Lose();
+    layer.OnFixedUpdate(registry, kTick);
+
+    // Pressing Pause while the result is up must not raise the pause menu over
+    // it - you cannot pause a finished game.
+    registry.get<UIButtonComponent>(byTag(registry, "HUD Pause")).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(byTag(registry, "HUD Pause")).clickedThisTick = false;
+
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Pause Menu")).visible,
+              "the pause menu did not open over the result");
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Result Menu")).visible,
+              "and the result is still the thing on screen");
+
+    layer.OnDetach(registry);
+}
+
+// Restart from the result screen starts a new run and clears the overlay.
+static void testRestartFromTheResultStartsANewRun() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+
+    match->Run().Lose();
+    layer.OnFixedUpdate(registry, kTick);
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Result Menu")).visible,
+              "the result is up to restart from");
+
+    registry.get<UIButtonComponent>(byTag(registry, "Result Restart")).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(byTag(registry, "Result Restart")).clickedThisTick = false;
+
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Result Menu")).visible,
+              "the overlay went away");
+
+    const Match* fresh = layer.CurrentMatch();
+    if (fresh == nullptr) { CHECK_MSG(false, "no match after restart"); layer.OnDetach(registry); return; }
+    CHECK_MSG(fresh->Run().IsPlaying(), "and the new run is actually playing");
+
+    layer.OnFixedUpdate(registry, kTick);
+    CHECK_MSG(!barButtons(registry).empty(), "with a bar to play it with");
+
+    layer.OnDetach(registry);
+}
+
 static void runTests() {
     testAttachingTheLayerBuildsTheHud();
     testTheHudReadsTheSimulation();
@@ -828,6 +939,10 @@ static void runTests() {
     testRestartBootsAFreshMatch();
     testQuitAsksTheApplicationToStop();
     testMainMenuIsGreyedUntilThereIsAMenu();
+    testEndingTheRunRaisesTheResultOverlay();
+    testLosingSaysDefeat();
+    testAFinishedGameCannotBePausedOrPlayed();
+    testRestartFromTheResultStartsANewRun();
 }
 
-TEST_MAIN("test_wb_hud", 88)
+TEST_MAIN("test_wb_hud", 101)

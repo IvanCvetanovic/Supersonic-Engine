@@ -192,6 +192,31 @@ private:
     // Boots a fresh match over the top of this one, which is Restart.
     void restartMatch(entt::registry& registry);
 
+    // ---- The game-over overlay ---------------------------------------------
+    //
+    // VICTORY or DEFEAT over the dimmed lane, with what the run earned, on
+    // layer 10 - above the pause menu's 9, because you cannot pause a finished
+    // game and the result must not be coverable by something you can still
+    // open.
+    void buildGameOver(entt::registry& registry);
+    void updateGameOver(entt::registry& registry);
+
+    struct GameOver {
+        entt::entity backdrop{entt::null};
+        entt::entity column{entt::null};
+        entt::entity message{entt::null};
+        entt::entity row{entt::null};
+        entt::entity restart{entt::null};
+        entt::entity mainMenu{entt::null};
+    };
+    GameOver m_over;
+
+    // Whether the overlay is up. Held rather than re-derived from the phase
+    // each tick, because the text is written ONCE on the transition: the
+    // original reads the wave before anything resets it, and a line recomputed
+    // every tick would be a different claim about the same run.
+    bool m_showingResult{false};
+
     // The game's own pause, which is not the engine's. The tick still runs -
     // the layer simply stops stepping the match - so the UI stays live and the
     // button that got us here can get us back.
