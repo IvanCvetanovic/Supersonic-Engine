@@ -162,6 +162,36 @@ private:
     entt::entity m_barStack{entt::null};
     std::vector<BarButton> m_bar;
 
+    // ---- The pause overlay -------------------------------------------------
+    //
+    // Built once and shown by hiding and unhiding, not by creating and
+    // destroying - the same constraint the bar obeys, for the same reason.
+    //
+    // Hiding the COLUMN is enough for everything in it, which it was not until
+    // recently: a hidden stack used to leave its children with no rectangle, so
+    // they fell back to their own anchors and landed in a heap in the middle of
+    // the screen, invisible and still clickable over the running match. The
+    // backdrop is a sibling rather than a child, so it is hidden alongside.
+    void buildPauseMenu(entt::registry& registry);
+
+    // Opens and closes it, and runs whatever was pressed.
+    void updatePauseMenu(entt::registry& registry);
+
+    void setPauseMenuVisible(entt::registry& registry, bool shown);
+
+    struct PauseMenu {
+        entt::entity backdrop{entt::null};
+        entt::entity column{entt::null};
+        entt::entity resume{entt::null};
+        entt::entity restart{entt::null};
+        entt::entity mainMenu{entt::null};
+        entt::entity quit{entt::null};
+    };
+    PauseMenu m_pause;
+
+    // Boots a fresh match over the top of this one, which is Restart.
+    void restartMatch(entt::registry& registry);
+
     // The game's own pause, which is not the engine's. The tick still runs -
     // the layer simply stops stepping the match - so the UI stays live and the
     // button that got us here can get us back.

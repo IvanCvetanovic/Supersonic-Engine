@@ -632,6 +632,150 @@ static void testADisabledButtonDoesNotAct() {
     layer.OnDetach(registry);
 }
 
+// ---- The pause overlay -------------------------------------------------
+
+static entt::entity pauseButton(entt::registry& registry) { return byTag(registry, "HUD Pause"); }
+
+// Opening it must not merely draw it - it must take the input.
+//
+// This is the regression the engine fix behind it exists for: a hidden stack
+// used to leave its children with no rectangle, so they fell back to their own
+// anchors and landed in a heap in the middle of the screen, invisible and still
+// clickable over the running match. A closed pause menu that swallows clicks is
+// a game that stops responding for no visible reason.
+static void testTheClosedPauseMenuIsInvisibleAndInert() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Pause Menu")).visible,
+              "the overlay starts closed");
+    CHECK_MSG(!registry.get<UIPanelComponent>(byTag(registry, "Pause Backdrop")).visible,
+              "and so does the dim behind it");
+
+    // The layout pass is the thing that used to strand them.
+    const UICanvas::StackedLayout placed =
+        UISystem::LayoutStacks(registry, UIRect{glm::vec2(0.0f), glm::vec2(1920.0f, 1080.0f)},
+                               nullptr, 1.0f);
+    for (const char* tag : { "Pause Resume", "Pause Restart", "Pause Main Menu", "Pause Quit" }) {
+        const entt::entity item = byTag(registry, tag);
+        CHECK_MSG(placed.Hidden(item),
+                  std::string(tag) + " is suppressed while the menu is closed, rather "
+                  "than falling back to its own anchor in the middle of the screen");
+    }
+
+    layer.OnDetach(registry);
+}
+
+// Pressing Pause opens it, and Resume closes it again.
+static void testPauseOpensTheOverlayAndResumeClosesIt() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    registry.get<UIButtonComponent>(pauseButton(registry)).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(pauseButton(registry)).clickedThisTick = false;
+
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Pause Menu")).visible,
+              "the Pause button opened the overlay");
+    CHECK_MSG(registry.get<UIPanelComponent>(byTag(registry, "Pause Backdrop")).visible,
+              "with its dim");
+
+    const Match* match = layer.CurrentMatch();
+    if (match == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+    const double stopped = match->Director().Elapsed();
+    for (int i = 0; i < 30 * 3; ++i) layer.OnFixedUpdate(registry, kTick);
+    CHECK_MSG(match->Director().Elapsed() == stopped, "and the match is not stepping");
+
+    registry.get<UIButtonComponent>(byTag(registry, "Pause Resume")).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(byTag(registry, "Pause Resume")).clickedThisTick = false;
+
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Pause Menu")).visible,
+              "Resume closed it");
+    for (int i = 0; i < 30 * 3; ++i) layer.OnFixedUpdate(registry, kTick);
+    CHECK_MSG(match->Director().Elapsed() > stopped, "and the match is running again");
+
+    layer.OnDetach(registry);
+}
+
+// Restart abandons the run and boots a fresh one.
+static void testRestartBootsAFreshMatch() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+
+    // Get the run somewhere distinctive first.
+    for (int i = 0; i < 30 * 30; ++i) layer.OnFixedUpdate(registry, kTick);
+    const Match* before = layer.CurrentMatch();
+    if (before == nullptr) { CHECK_MSG(false, "no match"); layer.OnDetach(registry); return; }
+    const double elapsedBefore = before->Director().Elapsed();
+    CHECK_MSG(elapsedBefore > 0.0, "the run got somewhere to be abandoned");
+    const std::size_t beforeCount = barButtons(registry).size();
+    CHECK_MSG(beforeCount > 0, "and it has a bar to compare against");
+
+    registry.get<UIButtonComponent>(pauseButton(registry)).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(pauseButton(registry)).clickedThisTick = false;
+
+    registry.get<UIButtonComponent>(byTag(registry, "Pause Restart")).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(byTag(registry, "Pause Restart")).clickedThisTick = false;
+
+    const Match* after = layer.CurrentMatch();
+    if (after == nullptr) { CHECK_MSG(false, "no match after restart"); layer.OnDetach(registry); return; }
+    CHECK_MSG(after->Director().Elapsed() < elapsedBefore,
+              "the clock went back to the start of a fresh run");
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Pause Menu")).visible,
+              "and it never reloads into a paused game");
+
+    // The bar has to be rebuilt against the new match rather than left pointing
+    // at the old one's selection - AND the old buttons have to be gone.
+    //
+    // Clearing the layer's own list without destroying the entities left them
+    // in the registry, still parented to the bar's stack and still drawn and
+    // clickable beside the new set: a restarted game grew a second row of
+    // buttons wired to a match that no longer existed. Counting them is what
+    // catches that; checking the bar is merely non-empty does not.
+    layer.OnFixedUpdate(registry, kTick);
+    const auto rebuilt = barButtons(registry);
+    CHECK_MSG(!rebuilt.empty(), "the bar came back for the new run");
+    CHECK_MSG(rebuilt.size() == beforeCount,
+              "and it is the same SIZE as before the restart - " +
+                  std::to_string(rebuilt.size()) + " against " +
+                  std::to_string(beforeCount) + " means the old run's buttons "
+                  "were forgotten rather than destroyed");
+
+    layer.OnDetach(registry);
+}
+
+// The two that cannot work yet are shown, greyed, rather than left out.
+static void testTheUnroutableItemsAreGreyedRatherThanMissing() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    layer.OnFixedUpdate(registry, kTick);
+
+    for (const char* tag : { "Pause Main Menu", "Pause Quit" }) {
+        const entt::entity item = byTag(registry, tag);
+        CHECK_MSG(item != entt::null, std::string(tag) + " is present");
+        if (item == entt::null) continue;
+        CHECK_MSG(!registry.get<UIButtonComponent>(item).enabled,
+                  std::string(tag) + " is greyed - there is no screen routing to go to, "
+                  "and no way for a game to close its own window");
+    }
+
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Pause Resume")).enabled,
+              "while the two that do work are not greyed");
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Pause Restart")).enabled,
+              "either of them");
+
+    layer.OnDetach(registry);
+}
+
 static void runTests() {
     testAttachingTheLayerBuildsTheHud();
     testTheHudReadsTheSimulation();
@@ -644,6 +788,10 @@ static void runTests() {
     testStartingAPlacementRebuildsTheBarToCancel();
     testUnaffordableButtonsAreDisabledRatherThanRemoved();
     testADisabledButtonDoesNotAct();
+    testTheClosedPauseMenuIsInvisibleAndInert();
+    testPauseOpensTheOverlayAndResumeClosesIt();
+    testRestartBootsAFreshMatch();
+    testTheUnroutableItemsAreGreyedRatherThanMissing();
 }
 
-TEST_MAIN("test_wb_hud", 62)
+TEST_MAIN("test_wb_hud", 85)

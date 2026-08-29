@@ -149,6 +149,7 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     groundRenderable.sortKey = kLayerGround;
 
     buildHud(registry);
+    buildPauseMenu(registry);
 }
 
 void WolfBrigadeLayer::buildHud(entt::registry& registry) {
@@ -437,6 +438,126 @@ void WolfBrigadeLayer::applyBarClicks(entt::registry& registry) {
     }
 }
 
+void WolfBrigadeLayer::buildPauseMenu(entt::registry& registry) {
+    // Layer 9, which is pause_menu.tscn's own number. Everything in the overlay
+    // carries it, and nothing else in this game does - so the whole menu sits
+    // above the HUD and the bar without either of them knowing.
+    constexpr int32_t kPauseLayer = 9;
+
+    m_pause.backdrop = registry.create();
+    registry.emplace<TagComponent>(m_pause.backdrop, "Pause Backdrop");
+    auto& dim = registry.emplace<UIPanelComponent>(m_pause.backdrop);
+    dim.anchor = UIAnchor::Center;
+    dim.offset = glm::vec2(0.0f, 0.0f);
+    dim.fillWidth = true;
+    dim.fillHeight = true;
+    dim.cornerRadius = 0.0f;
+    dim.color = glm::vec4(0.05f, 0.06f, 0.09f, 0.86f);
+    registry.emplace<UIOrderComponent>(m_pause.backdrop).layer = kPauseLayer;
+
+    m_pause.column = registry.create();
+    registry.emplace<TagComponent>(m_pause.column, "Pause Menu");
+    auto& column = registry.emplace<UIStackComponent>(m_pause.column);
+    column.horizontal = false;
+    column.anchor = UIAnchor::Center;
+    column.spacing = 18.0f;
+
+    int32_t order = 0;
+    auto title = registry.create();
+    registry.emplace<TagComponent>(title, "Pause Title");
+    auto& heading = registry.emplace<UITextComponent>(title);
+    heading.text = "PAUSED";
+    heading.fontSize = 88.0f;
+    registry.emplace<HierarchyComponent>(title).parent = m_pause.column;
+    {
+        auto& ordering = registry.emplace<UIOrderComponent>(title);
+        ordering.order = order++;
+        ordering.layer = kPauseLayer;
+    }
+
+    // The title is IN the column rather than at its own fixed offset above it,
+    // which is a small departure from the original's layout and a deliberate
+    // one: a stack that measures its own contents keeps the heading and the
+    // buttons together at any font size, where two independent anchors drift
+    // apart the moment either changes.
+    auto item = [&](const char* tag, const char* label) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& button = registry.emplace<UIButtonComponent>(entity);
+        button.label = label;
+        button.size = glm::vec2(440.0f, 96.0f);
+        button.fontSize = 34.0f;
+        registry.emplace<HierarchyComponent>(entity).parent = m_pause.column;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = order++;
+        ordering.layer = kPauseLayer;
+        return entity;
+    };
+
+    m_pause.resume = item("Pause Resume", "Resume");
+    m_pause.restart = item("Pause Restart", "Restart");
+    m_pause.mainMenu = item("Pause Main Menu", "Main Menu");
+    m_pause.quit = item("Pause Quit", "Quit");
+
+    // TWO BUTTONS THAT CANNOT WORK YET, shown greyed rather than left out.
+    //
+    // "Main Menu" needs a menu to go to and a way to route between screens;
+    // neither is ported - game_flow.gd has no counterpart here. "Quit" needs a
+    // game to be able to close its own window, and there is no seam for that
+    // at all: EngineLayer cannot reach the Window, and Window has ShouldClose
+    // but nothing to set it.
+    //
+    // Greyed rather than absent because that is what this game does everywhere
+    // else, and because a menu that is missing two of its four items looks
+    // finished and is not. Whoever adds screen routing will find them here.
+    registry.get<UIButtonComponent>(m_pause.mainMenu).enabled = false;
+    registry.get<UIButtonComponent>(m_pause.quit).enabled = false;
+
+    setPauseMenuVisible(registry, false);
+}
+
+void WolfBrigadeLayer::setPauseMenuVisible(entt::registry& registry, bool shown) {
+    if (!registry.valid(m_pause.column)) return;
+    registry.get<UIStackComponent>(m_pause.column).visible = shown;
+    registry.get<UIPanelComponent>(m_pause.backdrop).visible = shown;
+}
+
+void WolfBrigadeLayer::restartMatch(entt::registry& registry) {
+    if (!m_data || !m_profile) return;
+    m_match = std::make_unique<Match>(*m_data, *m_profile, "");
+    m_match->BootFresh();
+
+    // The bar's buttons point at the OLD match's selection and buildings, so
+    // they are DESTROYED rather than merely forgotten and the next updateBar
+    // builds a fresh set against the new run.
+    //
+    // Clearing the vector alone was not enough, and the failure was quiet:
+    // the entities stayed in the registry, still parented to the bar's stack
+    // and still drawn and clickable, beside the new set. A restarted game grew
+    // a second row of buttons wired to a match that no longer existed.
+    for (const BarButton& old : m_bar) {
+        if (registry.valid(old.entity)) registry.destroy(old.entity);
+    }
+    m_bar.clear();
+}
+
+void WolfBrigadeLayer::updatePauseMenu(entt::registry& registry) {
+    if (!registry.valid(m_pause.column)) return;
+
+    // Resume, and the Pause button in the HUD, are the same action from two
+    // places. Both are read here so there is one place that decides.
+    if (registry.get<UIButtonComponent>(m_pause.resume).clickedThisTick) {
+        m_paused = false;
+    }
+
+    if (registry.get<UIButtonComponent>(m_pause.restart).clickedThisTick) {
+        restartMatch(registry);
+        m_paused = false;
+    }
+
+    setPauseMenuVisible(registry, m_paused);
+}
+
 void WolfBrigadeLayer::OnDetach(entt::registry& registry) {
     // The match owns nothing in the registry, and the registry owns nothing in
     // the match. Dropping them in this order is not load-bearing; saying so is,
@@ -502,8 +623,16 @@ void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta)
     // Read what the player pressed BEFORE the match steps, so an order given
     // this tick takes effect this tick rather than one later, and then make the
     // strip agree with whatever that changed.
-    applyBarClicks(registry);
-    updateBar(registry);
+    updatePauseMenu(registry);
+
+    // The bar is UNDER the overlay, so while it is up the bar neither acts nor
+    // rebuilds. UIInput already refuses a click that landed on the backdrop,
+    // and this is the matching half: a bar that kept rebuilding behind a pause
+    // menu would change under the player while they could not see it.
+    if (!m_paused) {
+        applyBarClicks(registry);
+        updateBar(registry);
+    }
 
     if (m_paused) return;
 
