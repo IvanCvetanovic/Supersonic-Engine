@@ -160,6 +160,55 @@ no containers, no scroll view and no theme. That is where a "2–3 week" estimat
 becomes five. Build exactly the containers those 60 controls need and let the
 general shape emerge from a real caller.
 
+> **Correction, 29 August.** The two paragraphs above are wrong in three ways,
+> and left standing they commission a week of work nobody needs. Kept rather
+> than rewritten, because a dated planning record that edits itself to have been
+> right is worth nothing — but do not re-estimate from them.
+>
+> 1. **The sim IS in the game binary.** `games/wolfbrigade/CMakeLists.txt:31`
+>    links `WolfBrigadeSim`, and the layer steps a real `Match` on the tick.
+>    Phase 3 shipped.
+> 2. **It is 44 screen-space controls, not 60.** The census counted scene files,
+>    not UI: 13 of the 19 `ColorRect`s and 3 of the 20 `Label`s are world-space
+>    entity visuals, and `WolfBrigadeLayer.cpp` already draws all 16 as quads.
+>    44 + 16 = 60, so the original number reconciles exactly — it was just
+>    counting two different things.
+> 3. **"No containers, no theme" is false.** `UIStackComponent` is Godot's
+>    HBox/VBox with `spacing`, block-level `anchor` (= CenterContainer) and
+>    explicit child order; `layoutStacksImpl` nests, measures text through font
+>    metrics, and centres children on the cross axis. `UICanvas.hpp` had already
+>    counted the real game: **15 of its 16 container uses are covered.** And
+>    there is no theme to port — the original has zero `.tres` files, just
+>    inline overrides that map onto fields the components already have. Only the
+>    scroll-view clause survives, and that ScrollContainer never scrolls: the
+>    armory's four rows are 442 units in a 560 viewport, and a sixth would be
+>    the first to overflow.
+>
+> What is actually missing is correctness, not capability, and it does not show
+> up in a screenshot. Two are fixed as of this correction: a hidden button or
+> field still reserved its slot in a stack, and — worse — hiding a *container*
+> left its children with no rectangle, so they fell back to their own anchors
+> and every button in a hidden menu piled onto the middle of the screen, still
+> clickable over the live game. That is how this game opens all three of its
+> modals. Still open: `UIOrderComponent` is read as both the intra-stack sort
+> key and the draw layer, which collides on exactly one screen (the pause menu,
+> at layer 9 with ranked children), and there is no `selected` look for the five
+> radio buttons.
+>
+> The sequencing also changes. Build the **in-match HUD and bottom bar first** —
+> it needs no engine change at all. The main menu is blocked behind three
+> unported subsystems that are not UI work (`save.gd`'s difficulty, mode, muted
+> and volume keys; ~250 lines of audio state; 43 lines of screen routing), and
+> that, not widgets, is what "2–3 weeks becomes five" should have been pointing
+> at.
+>
+> One constraint found while proving this, and it decides how every screen is
+> written: **a button rebuilt mid-gesture never fires.** `pressed` lives on the
+> component and a click is the transition off it, so a HUD rebuilt from the
+> simulation every tick — the obvious shape, and the one the lane's quad pool
+> uses — hands the release to a component that was never pressed. Rebuild a
+> screen when it *changes*. Pinned by `test_uiinput`.
+
 This phase produces the first screenshot of a real game running on this engine,
 which is the artifact that makes every other claim on this page legible.
 

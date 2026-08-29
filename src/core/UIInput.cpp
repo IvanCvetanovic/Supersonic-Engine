@@ -19,10 +19,10 @@ namespace {
 
 // The rectangle the layout pass assigned, or the one the element places for
 // itself. One helper, used by both passes, so the two cannot disagree.
-UIRect rectFor(const UICanvas::StackedRects& stacked, entt::entity entity, UIAnchor anchor,
+UIRect rectFor(const UICanvas::StackedLayout& stacked, entt::entity entity, UIAnchor anchor,
                const glm::vec2& offset, const glm::vec2& size, const UIRect& gameRect,
                float scale) {
-    if (const auto it = stacked.find(entity); it != stacked.end()) return it->second;
+    if (const auto it = stacked.rects.find(entity); it != stacked.rects.end()) return it->second;
     return UICanvas::Place(anchor, offset * scale, size * scale, gameRect);
 }
 
@@ -86,7 +86,7 @@ struct Topmost {
 };
 
 Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRect, float scale,
-                            const UICanvas::StackedRects& stacked,
+                            const UICanvas::StackedLayout& stacked,
                             const UICanvas::UIPointer& pointer) {
     Topmost topmost;
     if (!pointer.active) return topmost;
@@ -94,7 +94,7 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
     int32_t index = 0;
     for (auto [entity, panel] : registry.view<const UIPanelComponent>().each()) {
         const int32_t at = index++;
-        if (!panel.visible) continue;
+        if (!panel.visible || stacked.Hidden(entity)) continue;
         // The whole panel, not the drawn fraction: a health bar that has run
         // down is still a rectangle in the way, and a hit target that shrinks
         // as the player takes damage would be its own bug.
@@ -110,7 +110,7 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
         const int32_t at = index++;
         // Disabled, not invisible: a greyed-out menu item is still drawn, so it
         // still covers what is beneath it. Hidden is what removes a target.
-        if (!button.visible) continue;
+        if (!button.visible || stacked.Hidden(entity)) continue;
         const UIRect rect = rectFor(stacked, entity, button.anchor, button.offset,
                                     button.size, gameRect, scale);
         if (UICanvas::Contains(rect, pointer.position)) {
@@ -121,7 +121,7 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
     index = 0;
     for (auto [entity, field] : registry.view<const UITextFieldComponent>().each()) {
         const int32_t at = index++;
-        if (!field.visible) continue;
+        if (!field.visible || stacked.Hidden(entity)) continue;
         const UIRect rect = rectFor(stacked, entity, field.anchor, field.offset,
                                     field.size, gameRect, scale);
         if (UICanvas::Contains(rect, pointer.position)) {
@@ -140,7 +140,7 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
 // per-entity loop would hand the keystroke to every field under the cursor and
 // to none of them correctly. One pass decides, a second applies.
 void updateTextFields(entt::registry& registry, const UIRect& gameRect, float scale,
-                      const UICanvas::StackedRects& stacked, const Topmost& topmost,
+                      const UICanvas::StackedLayout& stacked, const Topmost& topmost,
                       const UICanvas::UIPointer& pointer,
                       const UICanvas::UIKeyboard& keyboard) {
     auto view = registry.view<UITextFieldComponent>();
@@ -158,7 +158,7 @@ void updateTextFields(entt::registry& registry, const UIRect& gameRect, float sc
         auto& field = view.get<UITextFieldComponent>(entity);
         const DrawPosition at{layerOf(registry, entity), kFieldType, index++};
 
-        const bool live = field.visible && field.enabled;
+        const bool live = field.visible && field.enabled && !stacked.Hidden(entity);
         if (!live) {
             // A field hidden or disabled while focused gives it up. A menu
             // closes by hiding, and a hidden field that kept the keyboard would
@@ -221,7 +221,7 @@ void updateTextFields(entt::registry& registry, const UIRect& gameRect, float sc
 void Update(entt::registry& registry, const UIRect& gameRect,
             const UICanvas::UIPointer& pointer,
             const UICanvas::UIKeyboard& keyboard,
-            const UICanvas::StackedRects& stacked) {
+            const UICanvas::StackedLayout& stacked) {
     const glm::vec2 screenSize = gameRect.size();
     if (screenSize.x < 1.0f || screenSize.y < 1.0f) return;
 
@@ -242,7 +242,7 @@ void Update(entt::registry& registry, const UIRect& gameRect,
         // An invisible button is not a click target. Hiding a menu is how a
         // game closes it, and a hidden menu that still swallowed clicks would
         // block the game underneath it.
-        if (!button.visible) {
+        if (!button.visible || stacked.Hidden(entity)) {
             button.hovered = false;
             button.pressed = false;
             button.clicked = false;

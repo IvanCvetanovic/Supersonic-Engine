@@ -765,19 +765,19 @@ void testAStackInsideAStackIsPlacedInsideItsParent() {
     registry.emplace<HierarchyComponent>(right).parent = row;
     registry.emplace<UIOrderComponent>(right).order = 1;
 
-    const UICanvas::StackedRects placed =
+    const UICanvas::StackedLayout layout =
         UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
 
     // Every leaf placed, INCLUDING the two inside the nested row. Before this
     // they were absent from the parent's block and laid out against the screen.
-    CHECK_MSG(placed.count(top) == 1, "the plain panel was placed");
-    CHECK_MSG(placed.count(left) == 1, "and the left child of the nested row");
-    CHECK_MSG(placed.count(right) == 1, "and the right one");
-    if (placed.count(top) == 0 || placed.count(left) == 0 || placed.count(right) == 0) return;
+    CHECK_MSG(layout.rects.count(top) == 1, "the plain panel was placed");
+    CHECK_MSG(layout.rects.count(left) == 1, "and the left child of the nested row");
+    CHECK_MSG(layout.rects.count(right) == 1, "and the right one");
+    if (layout.rects.count(top) == 0 || layout.rects.count(left) == 0 || layout.rects.count(right) == 0) return;
 
-    const UIRect topRect = placed.at(top);
-    const UIRect leftRect = placed.at(left);
-    const UIRect rightRect = placed.at(right);
+    const UIRect topRect = layout.rects.at(top);
+    const UIRect leftRect = layout.rects.at(left);
+    const UIRect rightRect = layout.rects.at(right);
 
     // The row sits BELOW the panel above it, because the parent reserved twenty
     // units of height for it. Skip the nested stack and the parent block is 40
@@ -812,25 +812,25 @@ void testANestedStackIsNotAlsoPlacedAgainstTheScreen() {
     registry.emplace<UIPanelComponent>(leaf).size = glm::vec2(40.0f, 20.0f);
     registry.emplace<HierarchyComponent>(leaf).parent = row;
 
-    const UICanvas::StackedRects placed =
+    const UICanvas::StackedLayout layout =
         UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
 
-    CHECK_MSG(placed.count(leaf) == 1, "the leaf was placed");
-    if (placed.count(leaf) == 0) return;
+    CHECK_MSG(layout.rects.count(leaf) == 1, "the leaf was placed");
+    if (layout.rects.count(leaf) == 0) return;
 
     // The nested stack's own anchor is the TopLeft default. Its parent anchors
     // bottom-right, so a leaf placed through the parent lands bottom-right and
     // one placed against the screen lands top-left.
-    CHECK_MSG(placed.at(leaf).min.x > screen.size().x * 0.5f,
+    CHECK_MSG(layout.rects.at(leaf).min.x > screen.size().x * 0.5f,
               "the leaf followed its PARENT's anchor, not the screen's");
-    CHECK_MSG(placed.at(leaf).min.y > screen.size().y * 0.5f, "on both axes");
+    CHECK_MSG(layout.rects.at(leaf).min.y > screen.size().y * 0.5f, "on both axes");
 
     // And the leaf is inside the row that owns it, which is the invariant the
     // anchor check above is really about.
-    CHECK_MSG(placed.count(row) == 1, "the nested row was itself placed");
-    if (placed.count(row) == 0) return;
-    const UIRect rowRect = placed.at(row);
-    const UIRect leafRect = placed.at(leaf);
+    CHECK_MSG(layout.rects.count(row) == 1, "the nested row was itself placed");
+    if (layout.rects.count(row) == 0) return;
+    const UIRect rowRect = layout.rects.at(row);
+    const UIRect leafRect = layout.rects.at(leaf);
     CHECK_MSG(leafRect.min.x >= rowRect.min.x - 0.001f &&
                   leafRect.max.x <= rowRect.max.x + 0.001f,
               "a child never leaves the slot its parent gave it");
@@ -863,11 +863,11 @@ void testACycleIsUnreachableRatherThanGuardedAgainst() {
     registry.emplace<UIPanelComponent>(leaf).size = glm::vec2(10.0f, 10.0f);
     registry.emplace<HierarchyComponent>(leaf).parent = a;
 
-    const UICanvas::StackedRects placed = UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+    const UICanvas::StackedLayout layout = UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
 
-    CHECK_MSG(placed.empty(),
+    CHECK_MSG(layout.rects.empty(),
               "nothing in a cycle is a root, so nothing in a cycle is placed at all");
-    CHECK_MSG(placed.count(leaf) == 0, "including a leaf hanging off one");
+    CHECK_MSG(layout.rects.count(leaf) == 0, "including a leaf hanging off one");
 }
 
 // --- Images are first-class UI elements ----------------------------------
@@ -902,19 +902,19 @@ void testAnImageIsMeasuredAndStackedLikeAnyOtherElement() {
     registry.emplace<HierarchyComponent>(caption).parent = column;
     registry.emplace<UIOrderComponent>(caption).order = 1;
 
-    const UICanvas::StackedRects placed =
+    const UICanvas::StackedLayout layout =
         UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
 
-    CHECK_MSG(placed.count(portrait) == 1, "the image was placed by the stack");
-    CHECK_MSG(placed.count(caption) == 1, "and so was the panel under it");
-    if (placed.count(portrait) == 0 || placed.count(caption) == 0) return;
+    CHECK_MSG(layout.rects.count(portrait) == 1, "the image was placed by the stack");
+    CHECK_MSG(layout.rects.count(caption) == 1, "and so was the panel under it");
+    if (layout.rects.count(portrait) == 0 || layout.rects.count(caption) == 0) return;
 
-    CHECK_NEAR(placed.at(portrait).size().x, 64.0f);
-    CHECK_NEAR(placed.at(portrait).size().y, 64.0f);
+    CHECK_NEAR(layout.rects.at(portrait).size().x, 64.0f);
+    CHECK_NEAR(layout.rects.at(portrait).size().y, 64.0f);
 
     // The panel sits BELOW the image, which is only true if the image's height
     // was reserved. An unmeasured image would let the panel start at the top.
-    CHECK_MSG(placed.at(caption).min.y >= placed.at(portrait).max.y - 0.001f,
+    CHECK_MSG(layout.rects.at(caption).min.y >= layout.rects.at(portrait).max.y - 0.001f,
               "the image reserved its own height in the column");
 }
 
@@ -943,15 +943,97 @@ void testAnInvisibleImageTakesNoSpace() {
     registry.emplace<HierarchyComponent>(shown).parent = column;
     registry.emplace<UIOrderComponent>(shown).order = 1;
 
-    const UICanvas::StackedRects placed =
+    const UICanvas::StackedLayout layout =
         UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
 
-    CHECK_MSG(placed.count(hidden) == 0, "a hidden image is not placed at all");
-    CHECK_MSG(placed.count(shown) == 1, "the visible panel still is");
-    if (placed.count(shown) == 0) return;
+    CHECK_MSG(layout.rects.count(hidden) == 0, "a hidden image is not placed at all");
+    CHECK_MSG(layout.rects.count(shown) == 1, "the visible panel still is");
+    if (layout.rects.count(shown) == 0) return;
 
-    CHECK_MSG(placed.at(shown).min.y <= screen.min.y + 0.001f,
+    CHECK_MSG(layout.rects.at(shown).min.y <= screen.min.y + 0.001f,
               "and it closed up to the top rather than leaving the gap");
+}
+
+void testAnInvisibleButtonTakesNoSpace() {
+    // THE SAME RULE, FOR THE TWO TYPES THAT DID NOT FOLLOW IT.
+    //
+    // The test above states the rule as universal - "hidden means gone from the
+    // layout, not present and transparent" - and proves it for an image, with a
+    // panel beside it. Text, panels, images and nested stacks all check
+    // `visible` before they measure. Buttons and text fields did not, so a
+    // hidden button was measured in, given a rectangle, and then skipped by the
+    // draw pass: a hole exactly its own size, with everything below it pushed
+    // down by the hole plus a separation.
+    //
+    // Wolf Brigade's main menu does this on every first launch -
+    // `_continue.visible = Snapshot.is_valid(_run_snap)` hides one 440x104
+    // button inside a twelve-child column - so the boot screen of the game this
+    // engine is being built for sits off centre.
+    entt::registry registry;
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+
+    const entt::entity column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.spacing = 0.0f;
+    stack.anchor = UIAnchor::TopLeft;
+
+    const entt::entity hidden = registry.create();
+    auto& button = registry.emplace<UIButtonComponent>(hidden);
+    button.size = glm::vec2(440.0f, 104.0f);
+    button.visible = false;
+    registry.emplace<HierarchyComponent>(hidden).parent = column;
+    registry.emplace<UIOrderComponent>(hidden).order = 0;
+
+    const entt::entity shown = registry.create();
+    registry.emplace<UIPanelComponent>(shown).size = glm::vec2(440.0f, 16.0f);
+    registry.emplace<HierarchyComponent>(shown).parent = column;
+    registry.emplace<UIOrderComponent>(shown).order = 1;
+
+    const UICanvas::StackedLayout layout =
+        UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+
+    CHECK_MSG(layout.rects.count(hidden) == 0, "a hidden button is not placed at all");
+    CHECK_MSG(layout.rects.count(shown) == 1, "the visible panel still is");
+    if (layout.rects.count(shown) == 0) return;
+
+    CHECK_MSG(layout.rects.at(shown).min.y <= screen.min.y + 0.001f,
+              "and it closed up to the top rather than leaving the button's hole");
+}
+
+void testAnInvisibleTextFieldTakesNoSpace() {
+    // The other half of the same omission. No Wolf Brigade screen has a text
+    // field, so this one is for the rule rather than for the port - but a rule
+    // that holds for five of six element types is not a rule, and the next
+    // game to hide a field would find this the same way.
+    entt::registry registry;
+    const UIRect screen{{0.0f, 0.0f}, {1920.0f, 1080.0f}};
+
+    const entt::entity column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.spacing = 0.0f;
+    stack.anchor = UIAnchor::TopLeft;
+
+    const entt::entity hidden = registry.create();
+    auto& field = registry.emplace<UITextFieldComponent>(hidden);
+    field.size = glm::vec2(320.0f, 48.0f);
+    field.visible = false;
+    registry.emplace<HierarchyComponent>(hidden).parent = column;
+    registry.emplace<UIOrderComponent>(hidden).order = 0;
+
+    const entt::entity shown = registry.create();
+    registry.emplace<UIPanelComponent>(shown).size = glm::vec2(320.0f, 16.0f);
+    registry.emplace<HierarchyComponent>(shown).parent = column;
+    registry.emplace<UIOrderComponent>(shown).order = 1;
+
+    const UICanvas::StackedLayout layout =
+        UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
+
+    CHECK_MSG(layout.rects.count(hidden) == 0, "a hidden text field is not placed at all");
+    CHECK_MSG(layout.rects.count(shown) == 1, "the visible panel still is");
+    if (layout.rects.count(shown) == 0) return;
+
+    CHECK_MSG(layout.rects.at(shown).min.y <= screen.min.y + 0.001f,
+              "and it closed up rather than leaving the field's hole");
 }
 
 void testAnImageNestsInsideAStackToo() {
@@ -985,20 +1067,22 @@ void testAnImageNestsInsideAStackToo() {
     registry.emplace<HierarchyComponent>(right).parent = row;
     registry.emplace<UIOrderComponent>(right).order = 1;
 
-    const UICanvas::StackedRects placed =
+    const UICanvas::StackedLayout layout =
         UISystem::LayoutStacks(registry, screen, nullptr, 1.0f);
 
-    CHECK_MSG(placed.count(left) == 1 && placed.count(right) == 1,
+    CHECK_MSG(layout.rects.count(left) == 1 && layout.rects.count(right) == 1,
               "both portraits in the nested row were placed");
-    if (placed.count(left) == 0 || placed.count(right) == 0) return;
+    if (layout.rects.count(left) == 0 || layout.rects.count(right) == 0) return;
 
-    CHECK_MSG(placed.at(left).min.x < placed.at(right).min.x, "side by side, in order");
-    CHECK_NEAR(placed.at(right).min.x - placed.at(left).min.x, 32.0f);
+    CHECK_MSG(layout.rects.at(left).min.x < layout.rects.at(right).min.x, "side by side, in order");
+    CHECK_NEAR(layout.rects.at(right).min.x - layout.rects.at(left).min.x, 32.0f);
 }
 
 static void runTests() {
     testAnImageIsMeasuredAndStackedLikeAnyOtherElement();
     testAnInvisibleImageTakesNoSpace();
+    testAnInvisibleButtonTakesNoSpace();
+    testAnInvisibleTextFieldTakesNoSpace();
     testAnImageNestsInsideAStackToo();
     testMeasureStackCountsTheGapsBetweenAndNotAfter();
     testAnAreaPlacesAndAScaleSizesAndTheyAreDifferentQuestions();
@@ -1048,4 +1132,4 @@ static void runTests() {
     testAnEmptyStackIsEmptyRatherThanAPoint();
 }
 
-TEST_MAIN("test_uicanvas", 140)
+TEST_MAIN("test_uicanvas", 200)

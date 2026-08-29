@@ -60,10 +60,10 @@ std::vector<int32_t> layersPresent(const entt::registry& registry) {
 // reason: an element inside a stack is no longer using its own anchor, and
 // drawing it where the anchor says while hit-testing it where the stack says is
 // a click target that does not match the picture.
-UIRect placedRect(const UICanvas::StackedRects& stacked, entt::entity entity, UIAnchor anchor,
+UIRect placedRect(const UICanvas::StackedLayout& stacked, entt::entity entity, UIAnchor anchor,
                   const glm::vec2& offset, const glm::vec2& size, const UIRect& gameRect,
                   float scale) {
-    if (const auto it = stacked.find(entity); it != stacked.end()) return it->second;
+    if (const auto it = stacked.rects.find(entity); it != stacked.rects.end()) return it->second;
     return UICanvas::Place(anchor, offset * scale, size * scale, gameRect);
 }
 
@@ -77,9 +77,9 @@ UIRect placedRect(const UICanvas::StackedRects& stacked, entt::entity entity, UI
 // pass. Letting each derive it would be two places that have to agree about
 // where a button is, which is the failure UISystem.hpp's header already warns
 // about for anchors and would be worse here.
-UICanvas::StackedRects layoutStacksImpl(entt::registry& registry, const UIRect& gameRect,
-                                        ImFont* font, float scale) {
-    UICanvas::StackedRects stacked;
+UICanvas::StackedLayout layoutStacksImpl(entt::registry& registry, const UIRect& gameRect,
+                                         ImFont* font, float scale) {
+    UICanvas::StackedLayout stacked;
     auto stacks = registry.view<UIStackComponent>();
     if (stacks.begin() == stacks.end()) return stacked;
 
@@ -132,10 +132,19 @@ UICanvas::StackedRects layoutStacksImpl(entt::registry& registry, const UIRect& 
             return true;
         }
         if (const auto* button = registry.try_get<UIButtonComponent>(entity)) {
+            // The `visible` check the four branches above have, which these two
+            // did not. Without it a hidden button was measured in and given a
+            // rectangle, then skipped by the draw pass - a hole exactly its own
+            // size, with everything below pushed down by the hole plus a
+            // separation. Wolf Brigade's main menu hides one 440x104 button
+            // inside a twelve-child column whenever there is no run to
+            // continue, so its boot screen sat off centre.
+            if (!button->visible) return false;
             out = button->size;
             return true;
         }
         if (const auto* field = registry.try_get<UITextFieldComponent>(entity)) {
+            if (!field->visible) return false;
             out = field->size;
             return true;
         }
@@ -201,13 +210,43 @@ UICanvas::StackedRects layoutStacksImpl(entt::registry& registry, const UIRect& 
                                   stack.offset, area, scale);
 
         for (size_t i = 0; i < children.size() && i < rects.size(); ++i) {
-            stacked[children[i].entity] = rects[i];
+            stacked.rects[children[i].entity] = rects[i];
 
             if (const auto* nested = registry.try_get<UIStackComponent>(children[i].entity)) {
                 place(children[i].entity, *nested, rects[i], depth + 1);
             }
         }
     };
+
+    // A HIDDEN STACK TAKES ITS WHOLE SUBTREE WITH IT.
+    //
+    // Skipping it below is not enough, and the difference is not subtle. Its
+    // children never get a rectangle, and an element without one falls back to
+    // placing itself from its own anchor - correct for an element that was
+    // never in a container, wrong for one whose container is hidden.
+    // UIButtonComponent::anchor defaults to Center with a zero offset, so
+    // hiding a menu did not remove it: every button in it landed on the middle
+    // of the screen, on top of one another, invisible and still clickable over
+    // whatever was really there. That is how the game opens a modal - hide the
+    // menu, show the box - in three separate screens.
+    //
+    // Every hidden stack, not only the roots: a hidden stack nested in a
+    // visible one is skipped by `measure` and strands its children the same
+    // way. The insert doubles as the cycle guard, so a malformed parent chain
+    // stops rather than recurring.
+    std::function<void(entt::entity, int)> suppress = [&](entt::entity entity, int depth) {
+        if (depth > 16) return;
+        const auto it = childrenOf.find(entity);
+        if (it == childrenOf.end()) return;
+        for (entt::entity child : it->second) {
+            if (!stacked.hidden.insert(child).second) continue;
+            suppress(child, depth + 1);
+        }
+    };
+
+    for (auto [stackEntity, stack] : stacks.each()) {
+        if (!stack.visible) suppress(stackEntity, 0);
+    }
 
     // Only ROOTS start from the screen. A stack whose parent is itself a stack
     // is reached by recursion, with its parent's slot as its area - running it
@@ -253,8 +292,8 @@ glm::vec3 worldPositionOf(const entt::registry& registry, entt::entity entity) {
 
 } // namespace
 
-UICanvas::StackedRects LayoutStacks(entt::registry& registry, const UIRect& gameRect,
-                                    ImFont* font, float scale) {
+UICanvas::StackedLayout LayoutStacks(entt::registry& registry, const UIRect& gameRect,
+                                     ImFont* font, float scale) {
     return layoutStacksImpl(registry, gameRect, font, scale);
 }
 
@@ -283,7 +322,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // Layout BEFORE input, and input before drawing. A stacked button has to
     // be hit-tested against where the stack put it, and drawn there too - all
     // three from one answer.
-    const UICanvas::StackedRects stacked = layoutStacksImpl(registry, gameRect, font, scale);
+    const UICanvas::StackedLayout stacked = layoutStacksImpl(registry, gameRect, font, scale);
 
     // Before drawing, so a button drawn this frame reflects the pointer this
     // frame rather than lagging it by one.
@@ -295,7 +334,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // to be in, and a selection marker stays under the HUD it is not part of.
     for (const int32_t layer : layersPresent(registry)) {
     for (auto [entity, shape] : registry.view<UIShapeComponent>().each()) {
-        if (!shape.visible) continue;
+        if (!shape.visible || stacked.Hidden(entity)) continue;
         if (layerOf(registry, entity) != layer) continue;
 
         // The anchor point, in pixels. Everything below is measured from here.
@@ -360,7 +399,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // Images first within a layer, so a panel can frame one and a label can
     // read on top of it. The same reasoning the type order already follows.
     for (auto [entity, image] : registry.view<UIImageComponent>().each()) {
-        if (!image.visible) continue;
+        if (!image.visible || stacked.Hidden(entity)) continue;
         if (image.texture == 0) continue;   // still uploading, or never set
         if (layerOf(registry, entity) != layer) continue;
 
@@ -385,7 +424,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     }
 
     for (auto [entity, panel] : registry.view<UIPanelComponent>().each()) {
-        if (!panel.visible) continue;
+        if (!panel.visible || stacked.Hidden(entity)) continue;
         if (layerOf(registry, entity) != layer) continue;
 
         const UIRect rect = placedRect(stacked, entity, panel.anchor, panel.offset,
@@ -414,7 +453,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 
     // Interaction ran above; this only draws what it decided.
     for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
-        if (!button.visible) continue;
+        if (!button.visible || stacked.Hidden(entity)) continue;
         if (layerOf(registry, entity) != layer) continue;
 
         // The same placement UIInput used, from the same component - not a
@@ -454,7 +493,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // Fields between the buttons and the loose text, so a field's own contents
     // read over its box and under nothing.
     for (auto [entity, field] : registry.view<UITextFieldComponent>().each()) {
-        if (!field.visible) continue;
+        if (!field.visible || stacked.Hidden(entity)) continue;
         if (layerOf(registry, entity) != layer) continue;
 
         const UIRect rect = placedRect(stacked, entity, field.anchor, field.offset,
@@ -512,7 +551,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     }
 
     for (auto [entity, text] : registry.view<UITextComponent>().each()) {
-        if (!text.visible || text.text.empty()) continue;
+        if (!text.visible || text.text.empty() || stacked.Hidden(entity)) continue;
         if (layerOf(registry, entity) != layer) continue;
 
         const float size = text.fontSize * scale;
@@ -539,7 +578,7 @@ void Render(entt::registry& registry, const UIRect& gameRect,
                        text.offset * scale;
             rect.max = rect.min + glm::vec2(measured.x, measured.y);
         } else {
-            if (const auto it = stacked.find(entity); it != stacked.end()) {
+            if (const auto it = stacked.rects.find(entity); it != stacked.rects.end()) {
                 // The stack decided where; the measurement decided how big.
                 rect.min = it->second.min;
                 rect.max = rect.min + glm::vec2(measured.x, measured.y);

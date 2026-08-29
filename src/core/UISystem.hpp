@@ -56,8 +56,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 //
 // `scale` sizes and `gameRect` places, and they stay separate all the way
 // down: an authored unit is the same size at every depth.
-UICanvas::StackedRects LayoutStacks(entt::registry& registry, const UIRect& gameRect,
-                                    ImFont* font, float scale);
+UICanvas::StackedLayout LayoutStacks(entt::registry& registry, const UIRect& gameRect,
+                                     ImFont* font, float scale);
 
 } // namespace UISystem
 

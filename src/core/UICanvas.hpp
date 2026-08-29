@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <entt/entt.hpp>
@@ -60,6 +61,38 @@ float ScaleFor(const glm::vec2& screenSize);
 // different information". A click target that does not match what is on screen
 // is the exact failure UISystem.hpp's own header warns about.
 using StackedRects = std::unordered_map<entt::entity, UIRect>;
+
+// The layout pass's whole answer: where things landed, and what must not be
+// drawn or hit-tested at all.
+//
+// The second half exists because "no rectangle" and "nothing to draw" are not
+// the same thing, and treating them as one had a specific, bad symptom. An
+// element the layout skipped falls back to placing itself from its own anchor -
+// which is correct for an element that was never in a container, and wrong for
+// one whose container is hidden. UIButtonComponent's anchor defaults to
+// Center, so hiding a menu did not remove it: it stacked every button on the
+// middle of the screen, invisible, over whatever was really there.
+//
+// So a hidden container names its descendants here, and both passes skip them
+// exactly as they skip an element whose own `visible` is false. Computed once,
+// by the pass that already knows the hierarchy, rather than re-derived by each
+// consumer - the same argument the rects themselves are shared for.
+// The boundary, stated because the editor lets you cross it: this names a
+// hidden stack's DESCENDANTS, not the stack entity itself. Nothing draws a
+// UIStackComponent, so for every caller today that is the same thing - but an
+// entity can carry a stack and a panel at once (the inspector's add-component
+// menu offers both), and hiding the stack on such an entity leaves its own
+// panel painted. That is the component model being literal rather than a bug:
+// `panel.visible` is the panel's answer. If a caller ever wants one flag for
+// both, it should say so by setting both.
+struct StackedLayout {
+    StackedRects rects;
+
+    // Everything inside a hidden container, at any depth.
+    std::unordered_set<entt::entity> hidden;
+
+    bool Hidden(entt::entity entity) const { return hidden.count(entity) != 0; }
+};
 
 // Stacks a run of elements along one axis and returns where each one goes.
 //

@@ -57,7 +57,7 @@ namespace UIInput {
 void Update(entt::registry& registry, const UIRect& gameRect,
             const UICanvas::UIPointer& pointer,
             const UICanvas::UIKeyboard& keyboard,
-            const UICanvas::StackedRects& stacked);
+            const UICanvas::StackedLayout& stacked);
 
 // Hand this tick the clicks nothing has consumed yet.
 //

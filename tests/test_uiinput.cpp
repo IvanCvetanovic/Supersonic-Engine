@@ -14,6 +14,7 @@
 #include "TestHarness.hpp"
 #include "core/Components.hpp"
 #include "core/UIInput.hpp"
+#include "core/UISystem.hpp"
 
 #include <string>
 
@@ -23,7 +24,7 @@ using namespace Supersonic;
 // No containers in these cases: every element here places itself from its own
 // anchor, which is the path this suite is about. Stack layout has its own tests
 // in test_uicanvas.
-static const UICanvas::StackedRects kNoStacks;
+static const UICanvas::StackedLayout kNoStacks;
 
 namespace {
 
@@ -666,7 +667,148 @@ static void testDiscardingLeavesTheRunningTicksOwnClickAlone() {
     CHECK_MSG(stillHeld, "the tick that owns the click keeps it");
 }
 
+// HIDING A CONTAINER MUST HIDE WHAT IS INSIDE IT.
+//
+// This is the worse half of the same rule, and it does not leave a hole - it
+// piles the whole menu on one point.
+//
+// The layout pass skips a hidden stack before it measures anything, so none of
+// its children get a rectangle. Both the draw pass and this one then fall back
+// to "place the element from its own anchor" - and UIButtonComponent::anchor
+// defaults to Center with a zero offset. So every button in a hidden column
+// lands on the middle of the screen, on top of one another, and the topmost of
+// them is clickable over whatever is really there.
+//
+// Wolf Brigade hides a container to open a modal in three places (main_menu's
+// confirm box, the pause menu, the game-over overlay), so the first modal in
+// the game would have put four invisible buttons across the middle of a live
+// match.
+static void testAButtonInsideAHiddenStackIsNotClickable() {
+    entt::registry registry;
+
+    const entt::entity column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.anchor = UIAnchor::Center;
+    stack.visible = false;
+
+    const entt::entity hidden = registry.create();
+    auto& button = registry.emplace<UIButtonComponent>(hidden);
+    button.label = "Quit";
+    button.size = glm::vec2(440.0f, 104.0f);
+    registry.emplace<HierarchyComponent>(hidden).parent = column;
+
+    // The layout pass is given the same registry the draw pass would be, so
+    // the fallback under test is the real one rather than kNoStacks.
+    const UICanvas::StackedLayout placed =
+        UISystem::LayoutStacks(registry, screen(), nullptr, 1.0f);
+
+    // Dead centre of the screen, which is exactly where the fallback anchor
+    // would put it.
+    const glm::vec2 middle(960.0f, 540.0f);
+    UIInput::Update(registry, screen(), pointerAt(middle, false, false), noKeyboard(), placed);
+    UIInput::Update(registry, screen(), pointerAt(middle, true, false), noKeyboard(), placed);
+    UIInput::Update(registry, screen(), pointerAt(middle, false, true), noKeyboard(), placed);
+
+    CHECK_MSG(!registry.get<UIButtonComponent>(hidden).clicked,
+              "a button inside a hidden container must not be clickable, and must "
+              "not fall back to its own anchor in the middle of the screen");
+    CHECK_MSG(!registry.get<UIButtonComponent>(hidden).hovered, "nor hovered");
+}
+
+// The control that gives the case above its meaning: the SAME column, shown.
+// Without this, hiding everything unconditionally would also pass.
+static void testAButtonInsideAShownStackStillIs() {
+    entt::registry registry;
+
+    const entt::entity column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.anchor = UIAnchor::Center;
+    stack.visible = true;
+
+    const entt::entity shown = registry.create();
+    auto& button = registry.emplace<UIButtonComponent>(shown);
+    button.label = "Quit";
+    button.size = glm::vec2(440.0f, 104.0f);
+    registry.emplace<HierarchyComponent>(shown).parent = column;
+
+    const UICanvas::StackedLayout placed =
+        UISystem::LayoutStacks(registry, screen(), nullptr, 1.0f);
+
+    const glm::vec2 middle(960.0f, 540.0f);
+    UIInput::Update(registry, screen(), pointerAt(middle, false, false), noKeyboard(), placed);
+    UIInput::Update(registry, screen(), pointerAt(middle, true, false), noKeyboard(), placed);
+    UIInput::Update(registry, screen(), pointerAt(middle, false, true), noKeyboard(), placed);
+
+    CHECK_MSG(registry.get<UIButtonComponent>(shown).clicked,
+              "the same button in a visible column is still clickable, or the fix "
+              "above is just switching the UI off");
+}
+
+// A BUTTON REBUILT MID-GESTURE NEVER FIRES, AND THAT DECIDES HOW A MENU IS
+// WRITTEN.
+//
+// `pressed` lives on the component, and a click is the transition from pressed
+// to released: UpdateButton reads the PREVIOUS frame's flag off the same
+// component to decide the release meant something. So the state that makes a
+// click a click is stored on the entity, between frames.
+//
+// The engine's other view code pools its entities for unrelated reasons - the
+// lane's quads are reused rather than recreated so the state hash does not move
+// for reasons about drawing - and a HUD written the obvious way, rebuilt from
+// the simulation every tick, would be destroying and recreating its buttons
+// under the player's finger. The press lands on one component and the release
+// on a fresh one, which has never been pressed, so nothing fires. No button in
+// the game would ever work, and it would look like the click was going to the
+// wrong place rather than like the button was a different button.
+//
+// Pinned as a characterisation test, not reported as a bug: the alternative is
+// click state living outside the entity, keyed on something that survives the
+// rebuild, and there is nothing to key it on. The constraint on the caller is
+// the cheaper half - rebuild a screen when it CHANGES, not every tick - and
+// this is where that constraint is written down.
+static void testAButtonRecreatedMidGestureDoesNotFire() {
+    entt::registry registry;
+    const glm::vec2 at(140.0f, 70.0f);
+
+    const auto first = addButton(registry, "Buy", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    UIInput::Update(registry, screen(), pointerAt(at, false, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(at, true, false), noKeyboard(), kNoStacks);
+    CHECK_MSG(registry.get<UIButtonComponent>(first).pressed,
+              "the press landed, so the gesture really is in flight");
+
+    // The rebuild: same label, same place, new entity.
+    registry.destroy(first);
+    const auto rebuilt = addButton(registry, "Buy", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+
+    UIInput::Update(registry, screen(), pointerAt(at, false, true), noKeyboard(), kNoStacks);
+
+    CHECK_MSG(!registry.get<UIButtonComponent>(rebuilt).clicked,
+              "the release fell on a component that was never pressed, so the click "
+              "is lost - a screen rebuilt every tick has no working buttons");
+    CHECK_MSG(!registry.get<UIButtonComponent>(rebuilt).clickPending,
+              "and nothing is latched for a later tick to find either");
+}
+
+// The control: the SAME gesture, on an entity that survives it.
+static void testAButtonThatSurvivesTheGestureDoesFire() {
+    entt::registry registry;
+    const glm::vec2 at(140.0f, 70.0f);
+
+    const auto button = addButton(registry, "Buy", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
+    UIInput::Update(registry, screen(), pointerAt(at, false, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(at, true, false), noKeyboard(), kNoStacks);
+    UIInput::Update(registry, screen(), pointerAt(at, false, true), noKeyboard(), kNoStacks);
+
+    CHECK_MSG(registry.get<UIButtonComponent>(button).clicked,
+              "the identical gesture fires when the button is not rebuilt under it, "
+              "which is what makes the case above about the rebuild");
+}
+
 static void runTests() {
+    testAButtonRecreatedMidGestureDoesNotFire();
+    testAButtonThatSurvivesTheGestureDoesFire();
+    testAButtonInsideAHiddenStackIsNotClickable();
+    testAButtonInsideAShownStackStillIs();
     testAClickSurvivesTheFramesBeforeTheNextTick();
     testOnlyOneTickSeesAGivenClick();
     testATickNeverSeesAClickNobodyMade();
@@ -702,4 +844,4 @@ static void runTests() {
     testAFieldUnderAnOverlayCannotBeFocused();
 }
 
-TEST_MAIN("test_uiinput", 41)
+TEST_MAIN("test_uiinput", 68)
