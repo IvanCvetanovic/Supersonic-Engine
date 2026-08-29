@@ -28,7 +28,7 @@ UIRect rectFor(const UICanvas::StackedLayout& stacked, entt::entity entity, UIAn
 
 // Which layer an element is on. Absent means zero, exactly as UISystem reads it.
 int32_t layerOf(const entt::registry& registry, entt::entity entity) {
-    if (const auto* ordering = registry.try_get<UIOrderComponent>(entity)) return ordering->order;
+    if (const auto* ordering = registry.try_get<UIOrderComponent>(entity)) return ordering->layer;
     return 0;
 }
 

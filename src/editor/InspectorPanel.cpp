@@ -1386,9 +1386,12 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             auto& ordering = registry.get<UIOrderComponent>(entity);
 
             ImGui::DragInt("Order", &ordering.order, 0.2f, -1000, 1000);
-            ImGui::TextDisabled("Inside a stack: position among siblings, low first.");
-            ImGui::TextDisabled("Outside one: which overlay it belongs to, low drawn");
-            ImGui::TextDisabled("first. A pause menu over a HUD wants a higher number.");
+            ImGui::TextDisabled("Position among siblings inside a stack, low first.");
+            ImGui::DragInt("Layer", &ordering.layer, 0.2f, -1000, 1000);
+            ImGui::TextDisabled("Which overlay it belongs to, low drawn first. A pause");
+            ImGui::TextDisabled("menu over a HUD wants a higher number here.");
+            ImGui::TextDisabled("Two fields because a menu's buttons need both: a rank");
+            ImGui::TextDisabled("in the column AND the layer the whole menu is on.");
         }
     }
 

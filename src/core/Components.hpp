@@ -1465,6 +1465,23 @@ struct UIStackComponent {
 // which is stable within a run and is fine for children nobody ranked.
 struct UIOrderComponent {
     int32_t order{0};
+
+    // WHICH LAYER the element draws and hit-tests on. Godot spells this
+    // CanvasLayer.layer.
+    //
+    // A separate field from `order` above, and it has to be, though it was one
+    // field to begin with on the argument that a layer is "the same question at
+    // a different scope". It is not, and a menu shows why: its buttons need
+    // 0..3 to stack top to bottom, and they need one shared raised value to sit
+    // above the backdrop that dims the game behind them. One integer cannot
+    // carry both, and the failure is not subtle - the buttons take their
+    // position in the column as their layer, lose the topmost test to their own
+    // backdrop, and the menu cannot be clicked at all.
+    //
+    // Within a layer the type order still holds - shapes, panels, buttons,
+    // fields, text - so a label still reads on top of its own backdrop without
+    // anybody ranking it.
+    int32_t layer{0};
 };
 
 struct UITextComponent {

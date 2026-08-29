@@ -154,7 +154,7 @@ static void testAPanelSwallowsAClickAndNoButtonReportsOne() {
     panel.anchor = UIAnchor::TopLeft;
     panel.offset = glm::vec2(0.0f);
     panel.size = glm::vec2(4000.0f, 4000.0f);
-    registry.emplace<UIOrderComponent>(backdrop).order = 1;   // over the button
+    registry.emplace<UIOrderComponent>(backdrop).layer = 1;   // over the button
 
     UIInput::Update(registry, screen(), pointerAt(glm::vec2(140.0f, 70.0f), true, false),
                     noKeyboard(), kNoStacks);
@@ -442,7 +442,7 @@ static entt::entity addPanel(entt::registry& registry, UIAnchor anchor,
     panel.anchor = anchor;
     panel.offset = offset;
     panel.size = size;
-    if (layer != 0) registry.emplace<UIOrderComponent>(entity).order = layer;
+    if (layer != 0) registry.emplace<UIOrderComponent>(entity).layer = layer;
     return entity;
 }
 
@@ -465,7 +465,7 @@ static void testAButtonOnAHigherLayerTakesTheClick() {
     entt::registry registry;
     const auto hud = addButton(registry, "Fire", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
     const auto menu = addButton(registry, "Resume", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
-    registry.emplace<UIOrderComponent>(menu).order = 9;
+    registry.emplace<UIOrderComponent>(menu).layer = 9;
 
     clickAt(registry, glm::vec2(140.0f, 70.0f));
 
@@ -514,7 +514,7 @@ static void testADisabledButtonStillCoversWhatIsBeneathIt() {
     const auto behind = addButton(registry, "Behind", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
     const auto greyed = addButton(registry, "Greyed", UIAnchor::TopLeft, glm::vec2(40.0f, 40.0f));
     registry.get<UIButtonComponent>(greyed).enabled = false;
-    registry.emplace<UIOrderComponent>(greyed).order = 9;
+    registry.emplace<UIOrderComponent>(greyed).layer = 9;
 
     clickAt(registry, glm::vec2(140.0f, 70.0f));
 
@@ -804,7 +804,108 @@ static void testAButtonThatSurvivesTheGestureDoesFire() {
               "which is what makes the case above about the rebuild");
 }
 
+// A MENU ON A HIGH LAYER, WHOSE BUTTONS ARE RANKED INSIDE A STACK.
+//
+// One integer was doing two unrelated jobs. UIOrderComponent::order is
+// documented as where an element sits among its siblings in a stack, and both
+// UISystem and UIInput also read it as the CanvasLayer - "the same question at
+// a different scope", which it is not.
+//
+// The two collide the moment a menu on a raised layer puts its buttons in a
+// column. The buttons need order 0..3 to stack top to bottom, and they need
+// layer 9 to sit above the backdrop that dims the game - and with one field
+// they get 0..3 as their layer, lose the topmost test to their own backdrop,
+// and the menu cannot be clicked at all.
+//
+// This is Wolf Brigade's pause menu exactly: layer 9, four ranked buttons.
+static void testAMenuOnARaisedLayerIsClickableThroughItsOwnBackdrop() {
+    entt::registry registry;
+
+    // The dimmer, covering everything, on the menu's layer.
+    const entt::entity backdrop = registry.create();
+    auto& dim = registry.emplace<UIPanelComponent>(backdrop);
+    dim.anchor = UIAnchor::Center;
+    dim.offset = glm::vec2(0.0f, 0.0f);
+    dim.size = glm::vec2(1920.0f, 1080.0f);
+    registry.emplace<UIOrderComponent>(backdrop).layer = 9;
+
+    // A HUD button underneath, on the default layer, right where the menu is.
+    const entt::entity underneath = addButton(registry, "Build", UIAnchor::Center,
+                                              glm::vec2(0.0f, 0.0f), glm::vec2(440.0f, 96.0f));
+
+    // The menu's column.
+    const entt::entity column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.anchor = UIAnchor::Center;
+    stack.spacing = 18.0f;
+
+    entt::entity first = entt::null;
+    const char* labels[] = { "Resume", "Restart", "Main Menu", "Quit" };
+    for (int i = 0; i < 4; ++i) {
+        const entt::entity item = registry.create();
+        auto& button = registry.emplace<UIButtonComponent>(item);
+        button.label = labels[i];
+        button.size = glm::vec2(440.0f, 96.0f);
+        registry.emplace<HierarchyComponent>(item).parent = column;
+        auto& ordering = registry.emplace<UIOrderComponent>(item);
+        ordering.order = i;   // where it sits in the column
+        ordering.layer = 9;   // and which layer the whole menu is on
+        if (i == 0) first = item;
+    }
+
+    const UICanvas::StackedLayout placed =
+        UISystem::LayoutStacks(registry, screen(), nullptr, 1.0f);
+
+    // Four 96-tall buttons with 18 between them is a 438-tall block, centred on
+    // 540, so the first one runs from 321 to 417.
+    const glm::vec2 onResume(960.0f, 369.0f);
+    UIInput::Update(registry, screen(), pointerAt(onResume, false, false), noKeyboard(), placed);
+    UIInput::Update(registry, screen(), pointerAt(onResume, true, false), noKeyboard(), placed);
+    UIInput::Update(registry, screen(), pointerAt(onResume, false, true), noKeyboard(), placed);
+
+    CHECK_MSG(registry.get<UIButtonComponent>(first).clicked,
+              "the top item of a menu on layer 9 must be clickable - it is above the "
+              "backdrop that dims the game, not beneath it");
+    CHECK_MSG(!registry.get<UIButtonComponent>(underneath).clicked,
+              "and the HUD button it covers must not have received the click");
+}
+
+// The control: the SAME column at the default layer is still ordered top to
+// bottom, so splitting the field did not cost the ordering it was there for.
+static void testAColumnIsStillOrderedAfterTheSplit() {
+    entt::registry registry;
+
+    const entt::entity column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.anchor = UIAnchor::TopLeft;
+    stack.spacing = 0.0f;
+
+    entt::entity top = entt::null;
+    entt::entity bottom = entt::null;
+    for (int i = 0; i < 2; ++i) {
+        const entt::entity item = registry.create();
+        auto& button = registry.emplace<UIButtonComponent>(item);
+        button.size = glm::vec2(200.0f, 60.0f);
+        registry.emplace<HierarchyComponent>(item).parent = column;
+        // Deliberately created in the reverse of the order asked for, so the
+        // ordering is doing the work rather than creation order.
+        registry.emplace<UIOrderComponent>(item).order = 1 - i;
+        if (i == 0) bottom = item; else top = item;
+    }
+
+    const UICanvas::StackedLayout placed =
+        UISystem::LayoutStacks(registry, screen(), nullptr, 1.0f);
+
+    CHECK_MSG(placed.rects.count(top) == 1 && placed.rects.count(bottom) == 1,
+              "both are placed");
+    if (placed.rects.count(top) == 0 || placed.rects.count(bottom) == 0) return;
+    CHECK_MSG(placed.rects.at(top).min.y < placed.rects.at(bottom).min.y,
+              "order still decides which is above the other");
+}
+
 static void runTests() {
+    testAMenuOnARaisedLayerIsClickableThroughItsOwnBackdrop();
+    testAColumnIsStillOrderedAfterTheSplit();
     testAButtonRecreatedMidGestureDoesNotFire();
     testAButtonThatSurvivesTheGestureDoesFire();
     testAButtonInsideAHiddenStackIsNotClickable();
@@ -844,4 +945,4 @@ static void runTests() {
     testAFieldUnderAnOverlayCannotBeFocused();
 }
 
-TEST_MAIN("test_uiinput", 68)
+TEST_MAIN("test_uiinput", 72)

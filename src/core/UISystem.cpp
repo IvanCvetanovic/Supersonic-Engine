@@ -24,13 +24,13 @@ ImVec2 toVec(const glm::vec2& v) { return ImVec2(v.x, v.y); }
 
 // Which layer an element draws on. Absent means zero.
 //
-// The same field a stack uses to order its children, because it is the same
-// question at a different scope: where does this sit relative to the things
-// beside it. Within one layer the type order below still holds - shapes,
-// panels, buttons, fields, text - so a label still reads on top of its own
-// backdrop.
+// NOT the same field a stack uses to order its children, though it was: see
+// UIOrderComponent, where a menu with ranked buttons on a raised layer is the
+// case that forced them apart. Within one layer the type order below still
+// holds - shapes, panels, buttons, fields, text - so a label still reads on top
+// of its own backdrop.
 int32_t layerOf(const entt::registry& registry, entt::entity entity) {
-    if (const auto* ordering = registry.try_get<UIOrderComponent>(entity)) return ordering->order;
+    if (const auto* ordering = registry.try_get<UIOrderComponent>(entity)) return ordering->layer;
     return 0;
 }
 
@@ -47,7 +47,7 @@ std::vector<int32_t> layersPresent(const entt::registry& registry) {
     std::vector<int32_t> layers;
     for (auto [entity, ordering] : registry.view<UIOrderComponent>().each()) {
         (void)entity;
-        layers.push_back(ordering.order);
+        layers.push_back(ordering.layer);
     }
     layers.push_back(0);
     std::sort(layers.begin(), layers.end());

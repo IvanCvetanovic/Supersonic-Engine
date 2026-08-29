@@ -87,7 +87,7 @@ void buildScene(entt::registry& registry, bool layered) {
     cover.size = glm::vec2(600.0f, 400.0f);
     cover.color = toVec4(kOverlay);
     cover.cornerRadius = 0.0f;
-    if (layered) registry.emplace<UIOrderComponent>(pause).order = 9;
+    if (layered) registry.emplace<UIOrderComponent>(pause).layer = 9;
 }
 
 // One frame, and what came out of it.

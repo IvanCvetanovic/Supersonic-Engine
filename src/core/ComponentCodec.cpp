@@ -534,7 +534,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
     // it would silently re-rank the element behind anything that kept its own.
     if (const auto* ordering = registry.try_get<UIOrderComponent>(entity)) {
         out << indent << "\"UIOrder\": {\n";
-        out << indent << "  \"Order\": " << ordering->order << "\n";
+        out << indent << "  \"Order\": " << ordering->order << ",\n";
+        out << indent << "  \"Layer\": " << ordering->layer << "\n";
         out << indent << "},\n";
     }
 
@@ -1006,6 +1007,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
     if (node.Has("UIOrder")) {
         auto& ordering = registry.emplace_or_replace<UIOrderComponent>(entity);
         ordering.order = static_cast<int32_t>(node["UIOrder"]["Order"].AsFloat(0.0f));
+        ordering.layer = static_cast<int32_t>(node["UIOrder"]["Layer"].AsFloat(0.0f));
     }
 
     if (node.Has("Script")) {
