@@ -38,6 +38,17 @@ struct LaunchOptions {
     // lets a rendered image be compared against anything at all.
     float fixedDelta = 0.0f;
 
+    // --window WxH. Zero means the flag was not given, and the manifest - or
+    // failing that the engine's default - answers instead.
+    //
+    // It exists beside the manifest rather than instead of it because the two
+    // serve different people. A game states its size once, in the folder it
+    // ships as; a developer overrides it for one run, which is what makes a
+    // measurement at another resolution repeatable rather than a source edit
+    // somebody has to remember to revert.
+    uint32_t windowWidth = 0;
+    uint32_t windowHeight = 0;
+
     // Write every tick's input to this file, and a state hash every so often.
     //
     // Empty means record nothing, which is every ordinary run. A recording is

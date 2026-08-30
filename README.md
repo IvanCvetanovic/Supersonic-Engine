@@ -684,6 +684,9 @@ Android "not functional"; extending that register forward costs nothing.
       matrices, reported by `--frames` under `[Counts]` as a median and a worst.
       Draw calls were never counted before, and are not the same number as
       drawables: the demo scene draws eight in ten
+- [x] A game declares the window it opens at, in its manifest, with `--window
+      1920x1080` to override it for one run. It is the render resolution too:
+      in game mode the offscreen target follows the window
 - [x] Nearest-neighbour texture filtering, asked for by the asset's `.meta` and
       not by the material that uses it — so pixel art stays sharp, and two
       materials naming one file cannot disagree about it

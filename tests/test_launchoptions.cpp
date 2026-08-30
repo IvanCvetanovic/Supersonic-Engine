@@ -219,6 +219,72 @@ static void testAReplayCanBePinnedAndFramed() {
     CHECK_MSG(options.fixedDelta > 0.0f, "and the step is pinned");
 }
 
+
+// --- --window: a size for one run ----------------------------------------
+
+static void testAWindowSizeIsParsedBothWaysRoundIsSpelled() {
+    const char* lower[] = {"engine", "--window", "1920x1080"};
+    const auto a = LaunchOptions::Parse(3, lower);
+    CHECK(a.ok);
+    CHECK_EQ(a.windowWidth, uint32_t{1920});
+    CHECK_EQ(a.windowHeight, uint32_t{1080});
+
+    // Capital X too, because a size is a thing people type.
+    const char* upper[] = {"engine", "--window", "800X600"};
+    const auto b = LaunchOptions::Parse(3, upper);
+    CHECK(b.ok);
+    CHECK_EQ(b.windowWidth, uint32_t{800});
+    CHECK_EQ(b.windowHeight, uint32_t{600});
+}
+
+static void testNoWindowFlagLeavesItToWhoeverElseHasAnOpinion() {
+    // Zero is "not given", which is what lets the manifest - and failing that
+    // the engine's default - answer instead. A flag that defaulted to 1280x720
+    // here would silently outrank a game's own declared size.
+    const char* argv[] = {"engine", "--frames", "10"};
+    const auto options = LaunchOptions::Parse(3, argv);
+    CHECK(options.ok);
+    CHECK_EQ(options.windowWidth, uint32_t{0});
+    CHECK_EQ(options.windowHeight, uint32_t{0});
+}
+
+static void testASizeThatIsAlmostRightIsRefusedRatherThanGuessed() {
+    // The ones worth complaining about. "1920 x 1080" and "1920x1080x" both
+    // contain the answer, and a parser that read them anyway would teach people
+    // a spelling that stops working the day it is tightened.
+    for (const char* bad : {"1920", "1920x", "x1080", "1920 x 1080", "1920x1080x",
+                            "abcxdef", "-100x200", "1920x1080y"}) {
+        const char* argv[] = {"engine", "--window", bad};
+        const auto options = LaunchOptions::Parse(3, argv);
+        CHECK_MSG(!options.ok, std::string("'") + bad + "' is refused");
+        CHECK_MSG(options.error.find(bad) != std::string::npos,
+                  std::string("and the message says what was given: ") + options.error);
+    }
+
+    // And the flag with nothing after it.
+    const char* bare[] = {"engine", "--window"};
+    CHECK_MSG(!LaunchOptions::Parse(2, bare).ok, "a bare --window is refused");
+}
+
+static void testASizeNobodyCouldUseIsRefused() {
+    // Not clamped. A window of sixteen pixels is a typo, and opening one looks
+    // like the engine failing rather than like the mistake it is.
+    for (const char* bad : {"16x9", "1x1", "63x63"}) {
+        const char* argv[] = {"engine", "--window", bad};
+        CHECK_MSG(!LaunchOptions::Parse(3, argv).ok,
+                  std::string("'") + bad + "' is too small");
+    }
+
+    // The other end, which is what an accidental extra digit looks like.
+    const char* huge[] = {"engine", "--window", "99999x1080"};
+    CHECK_MSG(!LaunchOptions::Parse(3, huge).ok, "and an implausible one is too");
+
+    // The floor itself is accepted, or the boundary is off by one and nobody
+    // would notice.
+    const char* edge[] = {"engine", "--window", "64x64"};
+    CHECK_MSG(LaunchOptions::Parse(3, edge).ok, "the smallest allowed size works");
+}
+
 static void runTests() {
     testRecordAndReplayTakePaths();
     testRecordingAReplayIsRefused();
@@ -240,6 +306,11 @@ static void runTests() {
     testNegativeFrameCountIsRejected();
     testUnknownOptionIsRejected();
     testHelpIsNotAnError();
+
+    testAWindowSizeIsParsedBothWaysRoundIsSpelled();
+    testNoWindowFlagLeavesItToWhoeverElseHasAnOpinion();
+    testASizeThatIsAlmostRightIsRefusedRatherThanGuessed();
+    testASizeNobodyCouldUseIsRefused();
 }
 
-TEST_MAIN("test_launchoptions", 30)
+TEST_MAIN("test_launchoptions", 93)

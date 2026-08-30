@@ -168,7 +168,23 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
         }
     }
 
-    m_window = std::make_unique<Window>(1280, 720,
+    // THREE SOURCES, ONE ANSWER, and the order is the point: the flag is for
+    // one run, the manifest is what the game ships as, and the default is what
+    // an engine with neither opens at.
+    //
+    // The flag beating the manifest is what makes a measurement at another
+    // resolution repeatable. The number this decides is also the RENDER
+    // resolution for a game - in game mode the offscreen target follows the
+    // window every frame - so it is the resolution the whole scene pass costs
+    // at, which is exactly what somebody re-running that measurement is asking
+    // about.
+    uint32_t windowWidth = 0;
+    uint32_t windowHeight = 0;
+    GameRuntime::ResolveWindowSize(m_manifest, m_options.windowWidth,
+                                   m_options.windowHeight, windowWidth, windowHeight);
+
+    m_window = std::make_unique<Window>(static_cast<int>(windowWidth),
+                                        static_cast<int>(windowHeight),
                                         m_manifest.isGame ? m_manifest.title : "Supersonic Engine");
 
     // Before the renderer, because the renderer initialises ImGui's GLFW

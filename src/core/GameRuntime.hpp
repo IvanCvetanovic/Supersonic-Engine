@@ -24,6 +24,39 @@ struct GameManifest {
 
     // Shown in the window title bar.
     std::string title{"Supersonic Game"};
+
+    // The window it opens at, in pixels.
+    //
+    // A game had no way to say this at all: the size was one hardcoded literal
+    // in SupersonicApp, so every game this engine ships opens at 1280x720
+    // whatever it was designed for. Wolf Brigade's original is authored at
+    // 1920x1080 and its own project file says so.
+    //
+    // It is the RENDER resolution too, and not incidentally: in game mode the
+    // offscreen target is resized to the window every frame, so this is the
+    // number the whole scene pass costs at.
+    //
+    // Zero means "not stated", which is what every manifest written before this
+    // says by having no such key - and what the engine's own default then
+    // answers. Nothing migrates.
+    uint32_t width{0};
+    uint32_t height{0};
+
+    // What the engine opens at when nothing asks for anything, which is the
+    // literal that used to be the only answer.
+    static constexpr uint32_t kDefaultWidth = 1280;
+    static constexpr uint32_t kDefaultHeight = 720;
+
+    // A window nobody could use is refused rather than clamped silently: zero
+    // is "not stated" and belongs to the caller, but a manifest asking for
+    // eight pixels or for sixty thousand has a typo in it, and a game that
+    // opens 1x1 looks like the engine failing rather than like the mistake it
+    // is.
+    //
+    // The ceiling is deliberately generous - larger than any display sold - so
+    // that it catches nonsense rather than ambition.
+    static constexpr uint32_t kMinimumExtent = 64;
+    static constexpr uint32_t kMaximumExtent = 16384;
 };
 
 namespace GameRuntime {
@@ -42,6 +75,24 @@ std::string Serialize(const GameManifest& manifest);
 
 // Name of the marker file, so the packager and the loader cannot disagree.
 inline constexpr const char* kManifestFilename = "game.manifest";
+
+// Which of the three possible answers decides the window size.
+//
+// THE ORDER IS THE POINT: the flag is for one run, the manifest is what the
+// game ships as, and the default is what an engine with neither opens at. A
+// developer overriding a game's declared size for one measurement is the case
+// that stops a resolution experiment being a source edit somebody has to
+// remember to revert.
+//
+// Static and pure, and split out for the reason SortOpaqueDraws is: the only
+// caller is SupersonicApp, which no test can construct - it needs a device, a
+// window and a swapchain - so a rule left inline there is a rule nothing can
+// check. This is the whole of the decision, and it needs none of those things.
+//
+// Zero from either source means "not stated". Both extents must be stated
+// together; half a size is not a size.
+void ResolveWindowSize(const GameManifest& manifest, uint32_t optionWidth,
+                       uint32_t optionHeight, uint32_t& outWidth, uint32_t& outHeight);
 
 } // namespace GameRuntime
 

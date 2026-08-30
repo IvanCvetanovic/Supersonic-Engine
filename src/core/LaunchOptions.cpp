@@ -1,3 +1,6 @@
+#include <cerrno>
+#include <cstdlib>
+#include "core/GameRuntime.hpp"
 #include "core/LaunchOptions.hpp"
 
 #include <cstdlib>
@@ -19,6 +22,9 @@ const char* LaunchOptions::Usage() {
            "  --replay <path>   run a recorded session's input back and check it\n"
            "                    against the hashes it stored; exits non-zero on\n"
            "                    the first tick that disagrees\n"
+           "  --window <WxH>  open at this size instead of the manifest's, e.g.\n"
+           "                  --window 1920x1080. This is the render resolution\n"
+           "                  for a game: the offscreen target follows the window\n"
            "  --import-assets give every asset under assets/ a stable identity,\n"
            "                  writing a .meta beside each, then exit\n"
            "  --help          print this message\n";
@@ -64,6 +70,44 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
             if (parsed < 0) return fail("--frames cannot be negative");
             if (parsed > 1000000) return fail("--frames is implausibly large: " + raw);
             options.maxFrames = static_cast<int>(parsed);
+        } else if (arg == "--window") {
+            std::string raw;
+            if (!value(raw)) return fail("--window needs a size, e.g. 1920x1080");
+
+            // Split on the FIRST separator and require the rest to parse whole,
+            // so "1920x1080x" and "1920 x 1080" are refused rather than
+            // silently read as 1920x1080. A size that was almost right is the
+            // one worth complaining about.
+            const std::size_t split = raw.find_first_of("xX");
+            if (split == std::string::npos || split == 0 || split + 1 >= raw.size()) {
+                return fail("--window wants <width>x<height>, got '" + raw + "'");
+            }
+
+            const auto extent = [](const std::string& text, uint32_t& out) {
+                if (text.empty()) return false;
+                for (const char c : text) {
+                    if (c < '0' || c > '9') return false;
+                }
+                errno = 0;
+                const unsigned long parsed = std::strtoul(text.c_str(), nullptr, 10);
+                if (errno != 0 || parsed > GameManifest::kMaximumExtent) return false;
+                out = static_cast<uint32_t>(parsed);
+                return true;
+            };
+
+            uint32_t width = 0;
+            uint32_t height = 0;
+            if (!extent(raw.substr(0, split), width) ||
+                !extent(raw.substr(split + 1), height)) {
+                return fail("--window wants <width>x<height>, got '" + raw + "'");
+            }
+            if (width < GameManifest::kMinimumExtent ||
+                height < GameManifest::kMinimumExtent) {
+                return fail("--window is too small to be usable: '" + raw + "'");
+            }
+
+            options.windowWidth = width;
+            options.windowHeight = height;
         } else if (arg == "--import-assets") {
             options.importAssets = true;
         } else if (arg == "--screenshot") {
