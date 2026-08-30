@@ -193,6 +193,7 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     buildHud(registry);
     buildPauseMenu(registry);
     buildGameOver(registry);
+    buildMenu(registry);
 }
 
 void WolfBrigadeLayer::buildHud(entt::registry& registry) {
@@ -545,15 +546,250 @@ void WolfBrigadeLayer::buildPauseMenu(entt::registry& registry) {
     m_pause.mainMenu = item("Pause Main Menu", "Main Menu");
     m_pause.quit = item("Pause Quit", "Quit");
 
-    // ONE BUTTON THAT CANNOT WORK YET, shown greyed rather than left out.
-    //
-    // "Main Menu" needs a menu to go to and a way to route between screens, and
-    // neither is ported - game_flow.gd has no counterpart here. Greyed rather
-    // than absent because that is what this game does everywhere else, and
-    // because a menu missing one of its four items looks finished and is not.
-    registry.get<UIButtonComponent>(m_pause.mainMenu).enabled = false;
-
     setPauseMenuVisible(registry, false);
+}
+
+// --- The main menu ---------------------------------------------------------
+
+void WolfBrigadeLayer::buildMenu(entt::registry& registry) {
+    // Above the result overlay's 10, and above it unconditionally - see the
+    // header. Everything on this screen carries it.
+    constexpr int32_t kMenuLayer = 20;
+
+    // Every size and font here is `main_menu.tscn`'s own number, unchanged,
+    // for the same reason the HUD's are: the original authors in 1080-tall
+    // pixels and so does UICanvas, which makes the two screens comparable by
+    // eye. That is the only check this port has for a layout.
+    m_menu.backdrop = registry.create();
+    registry.emplace<TagComponent>(m_menu.backdrop, "Menu Backdrop");
+    auto& back = registry.emplace<UIPanelComponent>(m_menu.backdrop);
+    back.anchor = UIAnchor::Center;
+    back.offset = glm::vec2(0.0f, 0.0f);
+    back.fillWidth = true;
+    back.fillHeight = true;
+    back.cornerRadius = 0.0f;
+
+    // OPAQUE, where the pause menu's backdrop is a dim. The pause menu is a
+    // modal over a match you can still see; this is a different screen, and a
+    // menu you can see the lane through would say the run is still there.
+    back.color = glm::vec4(0.05f, 0.06f, 0.09f, 1.0f);
+    registry.emplace<UIOrderComponent>(m_menu.backdrop).layer = kMenuLayer;
+
+    m_menu.column = registry.create();
+    registry.emplace<TagComponent>(m_menu.column, "Main Menu");
+    auto& column = registry.emplace<UIStackComponent>(m_menu.column);
+    column.horizontal = false;
+    column.anchor = UIAnchor::Center;
+    column.spacing = 20.0f;   // theme_override_constants/separation
+
+    int32_t order = 0;
+    auto label = [&](const char* tag, const char* text, float fontSize,
+                     const glm::vec4& colour) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& item = registry.emplace<UITextComponent>(entity);
+        item.text = text;
+        item.fontSize = fontSize;
+        item.color = colour;
+        registry.emplace<HierarchyComponent>(entity).parent = m_menu.column;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = order++;
+        ordering.layer = kMenuLayer;
+        return entity;
+    };
+
+    auto button = [&](const char* tag, const char* text) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& item = registry.emplace<UIButtonComponent>(entity);
+        item.label = text;
+        item.size = glm::vec2(440.0f, 104.0f);
+        item.fontSize = 40.0f;
+        registry.emplace<HierarchyComponent>(entity).parent = m_menu.column;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = order++;
+        ordering.layer = kMenuLayer;
+        return entity;
+    };
+
+    label("Menu Title", "WOLF BRIGADE", 104.0f, glm::vec4(1.0f));
+    label("Menu Subtitle", "Lane RTS", 30.0f, glm::vec4(0.62f, 0.68f, 0.78f, 1.0f));
+
+    // The two rows the original puts here - Mode and Difficulty - are not in
+    // this commit. They are radio rows, which is a look rather than a widget,
+    // and they are the only consumer of the profile's mode and difficulty; both
+    // belong together in the commit that adds them. Said rather than left as a
+    // gap somebody has to notice.
+    m_menu.best = label("Menu Best", "Best: no runs yet", 24.0f,
+                        glm::vec4(0.55f, 0.61f, 0.72f, 1.0f));
+    m_menu.renown = label("Menu Renown", "Renown: 0", 26.0f,
+                          glm::vec4(0.95f, 0.83f, 0.4f, 1.0f));
+
+    m_menu.resume = button("Menu Continue", "Continue");
+    m_menu.newGame = button("Menu New Game", "New Game");
+    m_menu.armory = button("Menu Armory", "Armory");
+    m_menu.settings = button("Menu Settings", "Settings");
+    m_menu.quit = button("Menu Quit", "Quit");
+
+    // TWO BUTTONS THAT CANNOT WORK YET, greyed rather than left out, which is
+    // what this game does everywhere else and what "Main Menu" itself was until
+    // this commit. Each needs a screen of its own.
+    registry.get<UIButtonComponent>(m_menu.armory).enabled = false;
+    registry.get<UIButtonComponent>(m_menu.settings).enabled = false;
+
+    setMenuVisible(registry, false);
+}
+
+void WolfBrigadeLayer::refreshMenu(entt::registry& registry) {
+    if (!registry.valid(m_menu.column) || !m_profile) return;
+
+    char buffer[96];
+    const int best = m_profile->BestWave();
+    if (best > 0) {
+        std::snprintf(buffer, sizeof(buffer), "Best: wave %d", best);
+    } else {
+        std::snprintf(buffer, sizeof(buffer), "Best: no runs yet");
+    }
+    registry.get<UITextComponent>(m_menu.best).text = buffer;
+
+    std::snprintf(buffer, sizeof(buffer), "Renown: %d", m_profile->Renown());
+    registry.get<UITextComponent>(m_menu.renown).text = buffer;
+
+    // CONTINUE IS SHOWN ONLY WHEN THERE IS A RUN TO CONTINUE, and validity is
+    // asked of the document rather than of the file's mere existence -
+    // `main_menu.gd:40` calls Snapshot.is_valid, and `Snapshot::LoadRun`
+    // deliberately does not validate. A run written by an older build parses
+    // and must not be offered.
+    const bool resumable =
+        !m_runPath.empty() && Snapshot::IsValid(Snapshot::LoadRun(m_runPath));
+    registry.get<UIButtonComponent>(m_menu.resume).visible = resumable;
+}
+
+void WolfBrigadeLayer::setMenuVisible(entt::registry& registry, bool shown) {
+    if (!registry.valid(m_menu.column)) return;
+    registry.get<UIStackComponent>(m_menu.column).visible = shown;
+    registry.get<UIPanelComponent>(m_menu.backdrop).visible = shown;
+}
+
+void WolfBrigadeLayer::setMatchVisible(entt::registry& registry, bool shown) {
+    if (registry.valid(m_hud.wood)) {
+        for (const entt::entity entity : { m_hud.wood, m_hud.food, m_hud.wave }) {
+            registry.get<UITextComponent>(entity).visible = shown;
+        }
+        registry.get<UIButtonComponent>(m_hud.pause).visible = shown;
+    }
+
+    if (registry.valid(m_barStack)) {
+        registry.get<UIStackComponent>(m_barStack).visible = shown;
+    }
+
+    // AND THE LANE. The quad pool is not UI - it is entities with a
+    // RenderableComponent - so nothing about hiding a UI stack reaches it, and
+    // without this the last frame of the match stays drawn behind an opaque
+    // menu that happens to cover it. "Happens to" is the problem: the backdrop
+    // is what would be hiding it, and that is not a thing to depend on.
+    for (Quad& quad : m_pool) {
+        if (!registry.valid(quad.entity)) continue;
+        registry.get<RenderableComponent>(quad.entity).isVisible = shown && quad.live;
+    }
+}
+
+void WolfBrigadeLayer::goTo(entt::registry& registry, Screen next) {
+    // BOTH modal states, at every transition. The original throws the whole
+    // scene away and gets this for free; here they are fields, and a
+    // transition that cleared only one is the same class of bug as the pause
+    // menu that could be raised over a finished game.
+    m_paused = false;
+    if (m_showingResult) {
+        m_showingResult = false;
+        if (registry.valid(m_over.column)) {
+            registry.get<UIStackComponent>(m_over.column).visible = false;
+            registry.get<UIPanelComponent>(m_over.backdrop).visible = false;
+        }
+    }
+    setPauseMenuVisible(registry, false);
+
+    m_screen = next;
+
+    if (next == Screen::Menu) {
+        // THE RUN IS SAVED ON THE WAY OUT, unconditionally, and the single call
+        // covers both paths that arrive here. `pause_menu.gd:59-62` saves
+        // before leaving a live game; `game_over_overlay.gd:53-54` does not,
+        // because the run is over - and Match::AutosaveRun refuses a finished
+        // game itself. So the branch the original writes twice is already
+        // inside the thing being called.
+        if (m_match) m_match->AutosaveRun();
+
+        // Dropped, not paused. A match kept alive behind the menu would keep
+        // its buildings and its wave director, and New Game would then have to
+        // remember to replace it - which is the state the original cannot get
+        // into because change_scene destroys the tree.
+        m_match.reset();
+
+        // The bar's buttons point at the match that just went away, exactly as
+        // in a Restart, and for the same reason are destroyed rather than
+        // forgotten: a cleared vector leaves them drawn and clickable.
+        for (const BarButton& old : m_bar) {
+            if (registry.valid(old.entity)) registry.destroy(old.entity);
+        }
+        m_bar.clear();
+
+        setMatchVisible(registry, false);
+        refreshMenu(registry);
+        setMenuVisible(registry, true);
+        return;
+    }
+
+    setMenuVisible(registry, false);
+    setMatchVisible(registry, true);
+}
+
+void WolfBrigadeLayer::startGame(entt::registry& registry, bool fromSave) {
+    if (!m_data || !m_profile) return;
+
+    // Read BEFORE the match exists, because building one is what will clear it:
+    // Match::OnGameOver clears the file, and a fresh boot over a stale document
+    // is the case Boot's fork is for.
+    const Supersonic::Json::Value pending =
+        (fromSave && !m_runPath.empty()) ? Snapshot::LoadRun(m_runPath)
+                                         : Supersonic::Json::Value{};
+
+    // `_start_new_game`: starting fresh abandons any saved run. Done before the
+    // Match is built rather than after, so a restore that is refused cannot
+    // leave the file it was refused from lying around.
+    if (!fromSave && !m_runPath.empty()) Snapshot::ClearRun(m_runPath);
+
+    m_match = std::make_unique<Match>(*m_data, *m_profile, m_runPath);
+
+    // Boot takes the fork itself - a valid pending document restores, anything
+    // else starts fresh - which is `main.gd::_ready`. Passing a null value on
+    // the New Game path is therefore not a special case, it is the same call.
+    m_match->Boot(pending);
+
+    // A restore consumed the file it restored from. Leaving it would mean the
+    // menu still offering to continue a run that is now the live one, and a
+    // second Continue would rewind the player to where they resumed.
+    if (fromSave && !m_runPath.empty()) Snapshot::ClearRun(m_runPath);
+
+    goTo(registry, Screen::Match);
+}
+
+void WolfBrigadeLayer::updateMenu(entt::registry& registry) {
+    if (m_screen != Screen::Menu || !registry.valid(m_menu.column)) return;
+
+    if (registry.get<UIButtonComponent>(m_menu.resume).clickedThisTick) {
+        startGame(registry, true);
+        return;
+    }
+
+    if (registry.get<UIButtonComponent>(m_menu.newGame).clickedThisTick) {
+        startGame(registry, false);
+        return;
+    }
+
+    if (registry.get<UIButtonComponent>(m_menu.quit).clickedThisTick) {
+        Supersonic::Application::RequestQuit();
+    }
 }
 
 void WolfBrigadeLayer::setPauseMenuVisible(entt::registry& registry, bool shown) {
@@ -606,6 +842,13 @@ void WolfBrigadeLayer::updatePauseMenu(entt::registry& registry) {
     if (registry.get<UIButtonComponent>(m_pause.restart).clickedThisTick) {
         restartMatch(registry);
         m_paused = false;
+    }
+
+    // `pause_menu.gd:51-53`. The save it does first lives inside goTo, which is
+    // the one place every transition passes through.
+    if (registry.get<UIButtonComponent>(m_pause.mainMenu).clickedThisTick) {
+        goTo(registry, Screen::Menu);
+        return;
     }
 
     // Asked for rather than done. The run loop reads the latch at the top of
@@ -730,6 +973,15 @@ void WolfBrigadeLayer::updateGameOver(entt::registry& registry) {
         m_paused = false;
         registry.get<UIStackComponent>(m_over.column).visible = false;
         registry.get<UIPanelComponent>(m_over.backdrop).visible = false;
+        return;
+    }
+
+    // `game_over_overlay.gd:53-54`, which does NOT save on the way out - the
+    // run is over and Meta::AwardRunEnd has already banked it. goTo calls
+    // AutosaveRun unconditionally and that is still right: it refuses a
+    // finished game itself, so this path writes nothing.
+    if (m_showingResult && registry.get<UIButtonComponent>(m_over.mainMenu).clickedThisTick) {
+        goTo(registry, Screen::Menu);
     }
 }
 
@@ -821,7 +1073,16 @@ void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta)
 }
 
 void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
-    if (!m_booted || !m_match) return;
+    if (!m_booted) return;
+
+    // THE MENU FIRST, and before the match test rather than after it, because
+    // there is no match while the menu is up - it was dropped on the way in.
+    // A New Game pressed this tick creates one, and everything below then runs
+    // against it in the same tick, which is what a click reaching the
+    // simulation immediately means everywhere else in this file.
+    updateMenu(registry);
+
+    if (!m_match) return;
 
     // THE RESULT FIRST, and the order is load-bearing. "You cannot pause a
     // finished game" has to be known before the Pause button is read, or the
@@ -830,12 +1091,26 @@ void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
     // of a game that has already ended.
     updateGameOver(registry);
 
+    // LEAVING FOR THE MENU DROPS THE MATCH, so every step after one that can
+    // transition has to ask again whether there is still one.
+    //
+    // This is the price of switching where the click is read instead of
+    // deferring it to a drain point, and it is worth paying here: a Restart
+    // already replaces the match synchronously from inside these same
+    // handlers. But a Restart leaves a match behind and a Main Menu does not,
+    // which is the difference that made this a crash rather than a subtlety -
+    // updateBar dereferences the match, and goTo clears both modal flags on the
+    // way out, so the guard that would have skipped the bar was cleared by the
+    // same call that removed what the bar reads.
+    if (!m_match) return;
+
     updateHud(registry);
 
     // Read what the player pressed BEFORE the match steps, so an order given
     // this tick takes effect this tick rather than one later, and then make the
     // strip agree with whatever that changed.
     updatePauseMenu(registry);
+    if (!m_match) return;
 
     // The bar is UNDER the overlay, so while it is up the bar neither acts nor
     // rebuilds. UIInput already refuses a click that landed on the backdrop,

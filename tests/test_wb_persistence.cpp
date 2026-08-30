@@ -58,6 +58,23 @@ bool press(entt::registry& registry, const std::string& tag) {
     return true;
 }
 
+// One tick, and then the latch is cleared the way UIInput clears it.
+//
+// THE CLEAR IS THE POINT, and leaving it out cost an hour. A click is given to
+// exactly ONE tick - that is what `clickedThisTick` means, and `3eedb5e` is the
+// commit that made it true. A fixture that sets the flag and never clears it
+// leaves every button ever pressed in this test still pressed, so a walk from
+// the pause menu to the main menu and back into a game arrives with "Pause Main
+// Menu" still down and bounces straight back out to the menu in the same tick.
+//
+// It reads as the transition not working. It is the fixture holding the button.
+void tickOnce(WolfBrigadeLayer& layer, entt::registry& registry) {
+    layer.OnFixedUpdate(registry, kTick);
+    for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
+        button.clickedThisTick = false;
+    }
+}
+
 // A scratch directory that removes itself, so a failing case cannot leave a
 // profile behind for the next one to read as its own.
 class ScratchDir {
@@ -299,6 +316,308 @@ void testASaveDirectoryThatCannotBeWrittenDoesNotStopTheGame() {
     layer.OnDetach(registry);
 }
 
+// --- Routing between screens ---------------------------------------------
+
+void testLeavingToTheMenuSavesTheRunAndTakesTheLaneDown() {
+    // `pause_menu.gd:51-62`: Main Menu saves the live run first. Here the save
+    // lives inside the one transition function, so this is also the check that
+    // the transition passes through it.
+    ScratchDir scratch("wb_route_to_menu");
+
+    entt::registry registry;
+    WolfBrigadeLayer layer(scratch.String());
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    CHECK_MSG(layer.CurrentMatch() != nullptr, "a match is running");
+    CHECK_MSG(!std::filesystem::exists(scratch.Run()), "and nothing is saved yet");
+
+    // Through the pause menu, the way a player gets there.
+    CHECK_MSG(press(registry, "HUD Pause"), "the Pause button is there");
+    tickOnce(layer, registry);
+    CHECK_MSG(press(registry, "Pause Main Menu"), "Main Menu is there and pressable");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(std::filesystem::exists(scratch.Run()),
+              "leaving a live run saved it");
+    CHECK_MSG(layer.CurrentMatch() == nullptr,
+              "and the match is gone rather than paused behind the menu");
+
+    // The menu is up and the in-match screens are down.
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Main Menu")).visible,
+              "the menu is showing");
+    CHECK_MSG(!registry.get<UITextComponent>(byTag(registry, "HUD Wood")).visible,
+              "and the HUD is not");
+
+    // AND THE LANE. The quad pool is not UI, so nothing about hiding a stack
+    // reaches it - without an explicit pass the last frame of the match stays
+    // drawn, and only the menu's backdrop happening to cover it hides the bug.
+    int visibleQuads = 0;
+    for (auto [entity, renderable, tag] :
+         registry.view<const RenderableComponent, const TagComponent>().each()) {
+        if (tag.tag == "WB Quad" && renderable.isVisible) ++visibleQuads;
+    }
+    CHECK_EQ(visibleQuads, 0);
+
+    layer.OnDetach(registry);
+}
+
+void testTheMenuStartsAFreshGameAndAbandonsTheSavedRun() {
+    // `_start_new_game`: starting fresh abandons any saved run.
+    ScratchDir scratch("wb_route_new_game");
+
+    entt::registry registry;
+    WolfBrigadeLayer layer(scratch.String());
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    // Get to the menu with a run on disk.
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+    CHECK_MSG(std::filesystem::exists(scratch.Run()), "there is a run to abandon");
+
+    CHECK_MSG(press(registry, "Menu New Game"), "New Game is there");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(layer.CurrentMatch() != nullptr, "a match is running again");
+    CHECK_MSG(!std::filesystem::exists(scratch.Run()),
+              "and the run it would have resumed is gone");
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Main Menu")).visible,
+              "the menu is down");
+    CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "HUD Wood")).visible,
+              "and the HUD is back");
+}
+
+void testContinueIsOfferedOnlyWhenThereIsARunToContinue() {
+    // `main_menu.gd:40`. Validity is asked of the DOCUMENT, not of the file's
+    // existence - Snapshot::LoadRun deliberately does not validate, so a run
+    // written by an older build parses and must not be offered.
+    ScratchDir scratch("wb_route_continue");
+
+    entt::registry registry;
+    WolfBrigadeLayer layer(scratch.String());
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    // A run that has moved, so a restore is distinguishable from a fresh boot.
+    for (int i = 0; i < 30 * 20; ++i) tickOnce(layer, registry);
+    Match* first = layer.CurrentMatch();
+    CHECK_MSG(first != nullptr, "a match is running");
+    if (first == nullptr) { layer.OnDetach(registry); return; }
+    const int bankedWood = first->Run().Amount("wood");
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Menu Continue")).visible,
+              "Continue is offered, because there is a run");
+
+    CHECK_MSG(press(registry, "Menu Continue"), "and pressable");
+    tickOnce(layer, registry);
+
+    Match* restored = layer.CurrentMatch();
+    CHECK_MSG(restored != nullptr, "it booted a match");
+    if (restored == nullptr) { layer.OnDetach(registry); return; }
+
+    // The restored run is the one that was saved, not a fresh one. Twenty
+    // seconds of gathering is the difference.
+    CHECK_EQ(restored->Run().Amount("wood"), bankedWood);
+
+    // And the file it restored from is consumed, or the menu would offer to
+    // continue the run that is now live - and a second Continue would rewind
+    // the player to where they resumed.
+    CHECK_MSG(!std::filesystem::exists(scratch.Run()),
+              "the restored run is consumed");
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+    layer.OnDetach(registry);
+}
+
+void testAMenuWithNoSavedRunDoesNotOfferContinue() {
+    // The other half, and the one a fresh install sees.
+    entt::registry registry;
+    WolfBrigadeLayer layer;   // no save directory at all: nothing can be saved
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(!registry.get<UIButtonComponent>(byTag(registry, "Menu Continue")).visible,
+              "nothing to continue, so nothing is offered");
+
+    // New Game still works, which is the whole of a first launch.
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Menu New Game")).enabled,
+              "and New Game is live");
+
+    layer.OnDetach(registry);
+}
+
+void testLeavingFromTheResultScreenTakesTheResultWithIt() {
+    // Both modal states are cleared at every transition. The original throws
+    // the scene away and gets this free; here they are fields, and a result
+    // overlay left standing would sit on top of the menu - which is the same
+    // class of bug as the pause menu that could be raised over a finished game.
+    ScratchDir scratch("wb_route_from_result");
+
+    entt::registry registry;
+    WolfBrigadeLayer layer(scratch.String());
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+
+    match->Run().Win();
+    tickOnce(layer, registry);
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Result Menu")).visible,
+              "the result is up");
+
+    CHECK_MSG(press(registry, "Result Main Menu"), "its Main Menu is there");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Result Menu")).visible,
+              "and leaving takes it down");
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Main Menu")).visible,
+              "leaving the menu itself visible");
+
+    // A FINISHED run is not saved on the way out. goTo calls AutosaveRun
+    // unconditionally and that is still right, because AutosaveRun refuses a
+    // game that is over - so this path writes nothing and the menu will not
+    // offer to continue a run that ended.
+    CHECK_MSG(!std::filesystem::exists(scratch.Run()),
+              "a finished run leaves no Continue behind");
+
+    layer.OnDetach(registry);
+}
+
+void testTheMenuShowsWhatThePlayerHasEarned() {
+    // `_refresh_best` and the renown line, read on the way IN to the screen -
+    // which is where main_menu.gd reads them, in _ready.
+    ScratchDir scratch("wb_route_labels");
+
+    entt::registry registry;
+    WolfBrigadeLayer layer(scratch.String());
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+
+    // Reach a wave and end the run, so both numbers have something to say.
+    match->PlayerProfile().RecordWave(7);
+    match->Run().Win();
+    tickOnce(layer, registry);
+
+    // READ BEFORE LEAVING. Going to the menu destroys the Match, and with it
+    // the Profile reference this pointer reaches - so asking it afterwards is
+    // a use-after-free that happens to segfault rather than a wrong number.
+    // The renown itself outlives the run, on the layer's Profile; it is only
+    // this HANDLE that dies.
+    const int banked = match->PlayerProfile().Renown();
+
+    press(registry, "Result Main Menu");
+    tickOnce(layer, registry);
+
+    const std::string best =
+        registry.get<UITextComponent>(byTag(registry, "Menu Best")).text;
+    CHECK_MSG(best == "Best: wave 7", "the high score is shown: got \"" + best + "\"");
+
+    const std::string renown =
+        registry.get<UITextComponent>(byTag(registry, "Menu Renown")).text;
+    const std::string expected = "Renown: " + std::to_string(banked);
+    CHECK_MSG(renown == expected,
+              "and the renown balance: got \"" + renown + "\", expected \"" + expected + "\"");
+
+    layer.OnDetach(registry);
+}
+
+void testAFreshProfileSaysSoRatherThanClaimingWaveZero() {
+    // "Best: no runs yet", not "Best: wave 0". The original branches on it and
+    // a port that printed the number would tell a new player they had a score.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+
+    const std::string best =
+        registry.get<UITextComponent>(byTag(registry, "Menu Best")).text;
+    CHECK_MSG(best == "Best: no runs yet", "got \"" + best + "\"");
+
+    layer.OnDetach(registry);
+}
+
+void testARunFromAnOlderBuildIsNotOffered() {
+    // THE DISTINCTION BETWEEN "there is a file" AND "there is a run".
+    //
+    // Snapshot::LoadRun deliberately does not validate - HasRun and IsValid are
+    // separate questions, and the original keeps them separate for exactly this
+    // case. A run written by a build with a different schema PARSES; offering it
+    // would hand Snapshot::Restore a document it refuses, and the player would
+    // press Continue and get nothing.
+    //
+    // Written here rather than assumed, because a menu that asked HasRun passes
+    // every other case in this file: in all of them the file that exists is
+    // also valid, so the two questions have the same answer.
+    //
+    // Reached through a FINISHED run, and that is the only way to reach it: the
+    // transition autosaves on the way out, so a live match would overwrite the
+    // stale document with a current one before the menu ever read it. A game
+    // that is over writes nothing - AutosaveRun refuses it - which leaves the
+    // file on disk exactly as planted.
+    ScratchDir scratch("wb_route_stale_run");
+
+    entt::registry registry;
+    WolfBrigadeLayer layer(scratch.String());
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+
+    match->Run().Lose();
+    tickOnce(layer, registry);
+    CHECK_MSG(!std::filesystem::exists(scratch.Run()),
+              "the finished run cleared its own file");
+
+    // Now the save a previous version of the game left behind.
+    {
+        std::ofstream out(scratch.Run(), std::ios::binary);
+        out << R"({"version": 0, "state": {}, "units": [], "buildings": [],)"
+               R"( "resource_nodes": [], "director": {}})";
+    }
+    CHECK_MSG(Snapshot::HasRun(scratch.Run().string()), "the stale file is there");
+    CHECK_MSG(!Snapshot::IsValid(Snapshot::LoadRun(scratch.Run().string())),
+              "and this build refuses it");
+
+    press(registry, "Result Main Menu");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(std::filesystem::exists(scratch.Run()),
+              "leaving a finished run wrote nothing over it");
+    CHECK_MSG(!registry.get<UIButtonComponent>(byTag(registry, "Menu Continue")).visible,
+              "so the menu does not offer to continue something it cannot restore");
+
+    layer.OnDetach(registry);
+}
+
 } // namespace
 
 static void runTests() {
@@ -312,6 +631,15 @@ static void runTests() {
     testARestartAbandonsTheSavedRun();
 
     testASaveDirectoryThatCannotBeWrittenDoesNotStopTheGame();
+
+    testLeavingToTheMenuSavesTheRunAndTakesTheLaneDown();
+    testTheMenuStartsAFreshGameAndAbandonsTheSavedRun();
+    testContinueIsOfferedOnlyWhenThereIsARunToContinue();
+    testAMenuWithNoSavedRunDoesNotOfferContinue();
+    testLeavingFromTheResultScreenTakesTheResultWithIt();
+    testTheMenuShowsWhatThePlayerHasEarned();
+    testAFreshProfileSaysSoRatherThanClaimingWaveZero();
+    testARunFromAnOlderBuildIsNotOffered();
 }
 
-TEST_MAIN("test_wb_persistence", 27)
+TEST_MAIN("test_wb_persistence", 66)

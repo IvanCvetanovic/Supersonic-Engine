@@ -789,22 +789,22 @@ static void testQuitAsksTheApplicationToStop() {
     layer.OnDetach(registry);
 }
 
-// Main Menu is still greyed, and named, because there is nowhere to go.
-static void testMainMenuIsGreyedUntilThereIsAMenu() {
+// Every item of the pause menu works, Main Menu included.
+//
+// It was greyed until there was a screen to route to, and this case asserted
+// that it was - so un-greying it and inverting the check have to be the same
+// commit, or one of them is a commit where the suite is red.
+static void testEveryPauseMenuItemIsLive() {
     entt::registry registry;
     WolfBrigadeLayer layer;
     layer.OnAttach(registry);
     layer.OnFixedUpdate(registry, kTick);
 
-    const entt::entity item = byTag(registry, "Pause Main Menu");
-    CHECK_MSG(item != entt::null, "Main Menu is present rather than left out");
-    if (item != entt::null) {
-        CHECK_MSG(!registry.get<UIButtonComponent>(item).enabled,
-                  "and greyed - there is no screen routing to go to yet");
-    }
-
-    for (const char* tag : { "Pause Resume", "Pause Restart", "Pause Quit" }) {
-        CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, tag)).enabled,
+    for (const char* tag : { "Pause Resume", "Pause Restart", "Pause Main Menu", "Pause Quit" }) {
+        const entt::entity item = byTag(registry, tag);
+        CHECK_MSG(item != entt::null, std::string(tag) + " is present");
+        if (item == entt::null) continue;
+        CHECK_MSG(registry.get<UIButtonComponent>(item).enabled,
                   std::string(tag) + " works and is not greyed");
     }
 
@@ -938,7 +938,7 @@ static void runTests() {
     testPauseOpensTheOverlayAndResumeClosesIt();
     testRestartBootsAFreshMatch();
     testQuitAsksTheApplicationToStop();
-    testMainMenuIsGreyedUntilThereIsAMenu();
+    testEveryPauseMenuItemIsLive();
     testEndingTheRunRaisesTheResultOverlay();
     testLosingSaysDefeat();
     testAFinishedGameCannotBePausedOrPlayed();

@@ -77,8 +77,28 @@ public:
     // would make these checks worthless is arranging the ANSWER, and the
     // assertions all read the simulation back rather than a value the test
     // supplied.
+    // THE POINTER DOES NOT SURVIVE A TRANSITION. Leaving for the menu destroys
+    // the Match, and a Restart replaces it - so a caller that holds one across
+    // a tick in which either can happen is holding a dangling pointer, and the
+    // Profile reference reachable through it dies with it. Ask again after the
+    // tick rather than keeping it. (The renown itself outlives the run, on the
+    // layer's own Profile; it is only this handle that dies.)
     const Match* CurrentMatch() const { return m_match.get(); }
     Match* CurrentMatch() { return m_match.get(); }
+
+    // Which screen the player is on, from `game_flow.gd`.
+    //
+    // In Godot each of these is a whole scene and a transition is
+    // `change_scene_to_file`, which destroys the tree. Here they are states of
+    // one layer, because a layer IS the program - there is no tree to swap.
+    //
+    // Match FIRST, not Menu, even though `project.godot:10` boots the original
+    // to the menu. Which screen a launched game opens on is a decision for the
+    // commit that finishes the menu, and flipping it here would change what
+    // every existing layer suite sees a tick after OnAttach.
+    enum class Screen { Match, Menu, Armory, Settings };
+
+    Screen CurrentScreen() const { return m_screen; }
 
 private:
     // One reusable drawable.
@@ -225,6 +245,70 @@ private:
         entt::entity mainMenu{entt::null};
     };
     GameOver m_over;
+
+    // ---- The main menu -----------------------------------------------------
+    //
+    // `main_menu.gd` and `main_menu.tscn`, which in the original is the boot
+    // scene. Built once and shown by hiding, like every other screen here.
+    //
+    // Layer 20, above the result overlay's 10. Not because anything raises a
+    // result while the menu is up - going to the menu takes the result down -
+    // but because the ordering has to be true independently of that. A screen
+    // whose layer is only correct while some other screen behaves is a screen
+    // that breaks when the other one changes.
+    void buildMenu(entt::registry& registry);
+
+    // This launch's numbers into the labels, and Continue shown only when there
+    // is a run to continue. Called on the way IN to the screen rather than
+    // every tick: `main_menu.gd` does its reading in `_ready`, and a Continue
+    // button whose visibility is recomputed under the player's finger is the
+    // rebuild-mid-gesture bug wearing a different hat.
+    void refreshMenu(entt::registry& registry);
+
+    void updateMenu(entt::registry& registry);
+    void setMenuVisible(entt::registry& registry, bool shown);
+
+    struct MainMenu {
+        entt::entity backdrop{entt::null};
+        entt::entity column{entt::null};
+        entt::entity best{entt::null};
+        entt::entity renown{entt::null};
+        entt::entity resume{entt::null};
+        entt::entity newGame{entt::null};
+        entt::entity armory{entt::null};
+        entt::entity settings{entt::null};
+        entt::entity quit{entt::null};
+    };
+    MainMenu m_menu;
+
+    // ---- Routing -----------------------------------------------------------
+
+    // Leaves whatever screen we are on and enters `next`.
+    //
+    // ONE function, which is what `game_flow.gd::_change_to` is for: it does
+    // exactly two things at every transition, and the second - clearing the
+    // pause - has its own comment saying a Quit-to-Menu from a paused game
+    // would otherwise leave the menu frozen. Here there are three such things,
+    // because the result overlay is a second modal state the original throws
+    // away with the scene.
+    //
+    // NOT DEFERRED, unlike the original's `call_deferred`. That exists because
+    // a Godot `pressed` signal is mid-emit when the emitter is freed. Clicks
+    // here are tick-latched and read inside the tick, so there is no live
+    // emitter - and `restartMatch` already destroys button entities
+    // synchronously from inside `updatePauseMenu` and has shipped that way.
+    void goTo(entt::registry& registry, Screen next);
+
+    // Makes the in-match screens - HUD, bar, and the lane itself - agree with
+    // whether there is a match to look at.
+    void setMatchVisible(entt::registry& registry, bool shown);
+
+    // Boots a match and enters it: `game_flow.gd::start_game`, both forks.
+    // `fromSave` restores the run on disk; otherwise it abandons it and starts
+    // fresh, which is `_start_new_game`.
+    void startGame(entt::registry& registry, bool fromSave);
+
+    Screen m_screen{Screen::Match};
 
     // Whether the overlay is up. Held rather than re-derived from the phase
     // each tick, because the text is written ONCE on the transition: the
