@@ -1169,6 +1169,279 @@ void testAnOwnedUpgradeReachesTheNextRunsUnits() {
     layer.OnDetach(registry);
 }
 
+// --- Settings ------------------------------------------------------------
+
+void openSettings(WolfBrigadeLayer& layer, entt::registry& registry) {
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+    press(registry, "Menu Settings");
+    tickOnce(layer, registry);
+}
+
+void testTheVolumeStepsAndStopsAtBothEnds() {
+    // Ten per cent a press, and a button that cannot move is greyed rather than
+    // left to do nothing - `settings.gd:66-67`. The setter clamps either way,
+    // so a live-looking button that no-ops is the thing being avoided.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+    openSettings(layer, registry);
+
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Settings")).visible,
+              "the Settings screen is up");
+    CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text ==
+                  "Volume: 100%",
+              "a new profile is at full volume, got \"" +
+                  registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text + "\"");
+
+    CHECK_MSG(!registry.get<UIButtonComponent>(byTag(registry, "Settings Volume Up")).enabled,
+              "and cannot go louder");
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Volume Down")).enabled,
+              "but can go quieter");
+
+    press(registry, "Settings Volume Down");
+    tickOnce(layer, registry);
+    CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text ==
+                  "Volume: 90%",
+              "one press is ten per cent, got \"" +
+                  registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text + "\"");
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Volume Up")).enabled,
+              "and louder is live again");
+
+    // All the way down, then one more, which must not wrap or go negative.
+    for (int i = 0; i < 12; ++i) {
+        press(registry, "Settings Volume Down");
+        tickOnce(layer, registry);
+    }
+    CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text ==
+                  "Volume: 0%",
+              "it stops at silence, got \"" +
+                  registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text + "\"");
+    CHECK_MSG(!registry.get<UIButtonComponent>(byTag(registry, "Settings Volume Down")).enabled,
+              "and quieter is greyed");
+
+    layer.OnDetach(registry);
+}
+
+void testMutingIsRememberedAndSaidOnTheButton() {
+    ScratchDir scratch("wb_settings_mute");
+
+    {
+        entt::registry registry;
+        WolfBrigadeLayer layer(scratch.String());
+        layer.OnAttach(registry);
+        tickOnce(layer, registry);
+        openSettings(layer, registry);
+
+        CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Mute")).label ==
+                      "Sound: On",
+                  "it opens un-muted");
+
+        press(registry, "Settings Mute");
+        tickOnce(layer, registry);
+        CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Mute")).label ==
+                      "Sound: Off",
+                  "and the button says what it did");
+
+        layer.OnDetach(registry);
+    }
+
+    {
+        entt::registry registry;
+        WolfBrigadeLayer layer(scratch.String());
+        layer.OnAttach(registry);
+        tickOnce(layer, registry);
+
+        Match* match = layer.CurrentMatch();
+        CHECK_MSG(match != nullptr, "the second launch boots");
+        if (match == nullptr) return;
+        CHECK_MSG(match->PlayerProfile().Muted(),
+                  "and the game reopens the way it was left");
+
+        layer.OnDetach(registry);
+    }
+}
+
+void testResettingProgressTakesTwoTapsAndKeepsThePreferences() {
+    // A profile is the only thing in this game a player cannot get back, and it
+    // sits one press away from a volume control. `settings.gd:44-60`.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+    match->PlayerProfile().AddRenown(300);
+    match->PlayerProfile().SetMetaLevel("sharper_axes", 2);
+    match->PlayerProfile().RecordWave(9);
+
+    openSettings(layer, registry);
+
+    // Set a preference, so the keep-half of ResetProgress has something to keep.
+    press(registry, "Settings Volume Down");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Reset")).label ==
+                  "Reset Progress",
+              "it starts disarmed");
+
+    press(registry, "Settings Reset");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Reset")).label ==
+                  "Tap again to confirm",
+              "the first tap arms and says so");
+
+    // NOTHING IS GONE YET. This is the check that makes it a guard rather than
+    // a label.
+    //
+    // Read from the LAYER's profile, not from a match: getting to this screen
+    // goes through the menu, which drops the match. The profile is the thing
+    // that outlives one, which is the whole reason this screen can edit it.
+    Profile* profile = layer.PlayerProfile();
+    CHECK_MSG(profile != nullptr, "the profile is still there");
+    if (profile == nullptr) { layer.OnDetach(registry); return; }
+    CHECK_EQ(profile->Renown(), 300);
+
+    press(registry, "Settings Reset");
+    tickOnce(layer, registry);
+
+    CHECK_EQ(profile->Renown(), 0);
+    CHECK_EQ(profile->MetaLevel("sharper_axes"), 0);
+    CHECK_EQ(profile->BestWave(), 0);
+
+    // AND THE PREFERENCES SURVIVE, which is `verify_settings.gd:79` - "Reset
+    // keeps preferences (volume untouched)". The two halves of that document
+    // have different lifetimes and this screen is where the difference shows.
+    CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text ==
+                  "Volume: 90%",
+              "the volume is untouched, got \"" +
+                  registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text + "\"");
+
+    layer.OnDetach(registry);
+}
+
+void testAnArmedResetDisarmsItselfBeforeItCanBeMisTapped() {
+    // Counted in TICKS, not off a wall clock - every other deadline in this
+    // game is simulated time. Without it an armed button survives the player
+    // wandering off, and the next stray tap wipes a profile.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+    match->PlayerProfile().AddRenown(300);
+
+    openSettings(layer, registry);
+
+    press(registry, "Settings Reset");
+    tickOnce(layer, registry);
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Reset")).label ==
+                  "Tap again to confirm",
+              "armed");
+
+    // Four seconds, past the three the original allows.
+    for (int i = 0; i < 30 * 4; ++i) tickOnce(layer, registry);
+
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Reset")).label ==
+                  "Reset Progress",
+              "and it disarms itself, got \"" +
+                  registry.get<UIButtonComponent>(byTag(registry, "Settings Reset")).label + "\"");
+
+    // A tap now ARMS rather than wipes.
+    press(registry, "Settings Reset");
+    tickOnce(layer, registry);
+    CHECK_EQ(layer.PlayerProfile()->Renown(), 300);
+
+    layer.OnDetach(registry);
+}
+
+void testLeavingAndReturningDoesNotArriveArmed() {
+    // A Reset armed on one visit and left there would be one tap from wiping a
+    // profile the moment somebody opened the screen again.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+    match->PlayerProfile().AddRenown(300);
+
+    openSettings(layer, registry);
+    press(registry, "Settings Reset");
+    tickOnce(layer, registry);
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Reset")).label ==
+                  "Tap again to confirm",
+              "armed");
+
+    press(registry, "Settings Back");
+    tickOnce(layer, registry);
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Main Menu")).visible,
+              "Back returns to the menu");
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Settings")).visible,
+              "and takes the screen down");
+
+    press(registry, "Menu Settings");
+    tickOnce(layer, registry);
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Settings Reset")).label ==
+                  "Reset Progress",
+              "and it comes back disarmed");
+
+    press(registry, "Settings Reset");
+    tickOnce(layer, registry);
+    CHECK_EQ(layer.PlayerProfile()->Renown(), 300);
+
+    layer.OnDetach(registry);
+}
+
+void testTheVolumeSurvivesTheLaunchThatSetIt() {
+    ScratchDir scratch("wb_settings_volume");
+
+    {
+        entt::registry registry;
+        WolfBrigadeLayer layer(scratch.String());
+        layer.OnAttach(registry);
+        tickOnce(layer, registry);
+        openSettings(layer, registry);
+
+        for (int i = 0; i < 3; ++i) {
+            press(registry, "Settings Volume Down");
+            tickOnce(layer, registry);
+        }
+        CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text ==
+                      "Volume: 70%",
+                  "three presses, got \"" +
+                      registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text + "\"");
+
+        layer.OnDetach(registry);
+    }
+
+    {
+        entt::registry registry;
+        WolfBrigadeLayer layer(scratch.String());
+        layer.OnAttach(registry);
+        tickOnce(layer, registry);
+        openSettings(layer, registry);
+
+        CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text ==
+                      "Volume: 70%",
+                  "and it reopens where it was left, got \"" +
+                      registry.get<UITextComponent>(byTag(registry, "Settings Volume")).text + "\"");
+
+        layer.OnDetach(registry);
+    }
+}
+
 } // namespace
 
 static void runTests() {
@@ -1206,6 +1479,13 @@ static void runTests() {
     testAPurchaseIsRememberedAcrossLaunches();
     testBackReturnsToTheMenuWithTheNewBalance();
     testAnOwnedUpgradeReachesTheNextRunsUnits();
+
+    testTheVolumeStepsAndStopsAtBothEnds();
+    testMutingIsRememberedAndSaidOnTheButton();
+    testResettingProgressTakesTwoTapsAndKeepsThePreferences();
+    testAnArmedResetDisarmsItselfBeforeItCanBeMisTapped();
+    testLeavingAndReturningDoesNotArriveArmed();
+    testTheVolumeSurvivesTheLaunchThatSetIt();
 }
 
-TEST_MAIN("test_wb_persistence", 145)
+TEST_MAIN("test_wb_persistence", 178)

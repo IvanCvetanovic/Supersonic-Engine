@@ -225,6 +225,7 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     buildGameOver(registry);
     buildMenu(registry);
     buildArmory(registry);
+    buildSettings(registry);
 }
 
 void WolfBrigadeLayer::buildHud(entt::registry& registry) {
@@ -717,6 +718,219 @@ void WolfBrigadeLayer::connectAudioEvents() {
         [this](const std::string&) { playSfx("research"); }));
 }
 
+// --- Settings ---------------------------------------------------------------
+
+namespace {
+
+// `settings.gd:8`. Ten per cent a press, because touch has no slider
+// affordance and a stepped control is one a test can be exact about.
+constexpr float kVolumeStep = 0.1f;
+
+// `settings.gd:54`. Long enough to be a deliberate second tap, short enough
+// that an armed button cannot survive the player wandering off.
+constexpr float kResetArmedSeconds = 3.0f;
+
+} // namespace
+
+void WolfBrigadeLayer::buildSettings(entt::registry& registry) {
+    constexpr int32_t kSettingsLayer = 20;
+
+    m_settings.backdrop = registry.create();
+    registry.emplace<TagComponent>(m_settings.backdrop, "Settings Backdrop");
+    auto& back = registry.emplace<UIPanelComponent>(m_settings.backdrop);
+    back.anchor = UIAnchor::Center;
+    back.offset = glm::vec2(0.0f, 0.0f);
+    back.fillWidth = true;
+    back.fillHeight = true;
+    back.cornerRadius = 0.0f;
+    back.color = glm::vec4(0.05f, 0.06f, 0.09f, 1.0f);
+    registry.emplace<UIOrderComponent>(m_settings.backdrop).layer = kSettingsLayer;
+
+    m_settings.column = registry.create();
+    registry.emplace<TagComponent>(m_settings.column, "Settings");
+    auto& column = registry.emplace<UIStackComponent>(m_settings.column);
+    column.horizontal = false;
+    column.anchor = UIAnchor::Center;
+    column.spacing = 24.0f;
+
+    int32_t order = 0;
+    {
+        const entt::entity title = registry.create();
+        registry.emplace<TagComponent>(title, "Settings Title");
+        auto& text = registry.emplace<UITextComponent>(title);
+        text.text = "SETTINGS";
+        text.fontSize = 80.0f;
+        registry.emplace<HierarchyComponent>(title).parent = m_settings.column;
+        auto& ordering = registry.emplace<UIOrderComponent>(title);
+        ordering.order = order++;
+        ordering.layer = kSettingsLayer;
+    }
+
+    m_settings.volume = registry.create();
+    registry.emplace<TagComponent>(m_settings.volume, "Settings Volume");
+    {
+        auto& text = registry.emplace<UITextComponent>(m_settings.volume);
+        text.text = "Volume: 100%";
+        text.fontSize = 40.0f;
+        registry.emplace<HierarchyComponent>(m_settings.volume).parent = m_settings.column;
+        auto& ordering = registry.emplace<UIOrderComponent>(m_settings.volume);
+        ordering.order = order++;
+        ordering.layer = kSettingsLayer;
+    }
+
+    // The minus and plus, side by side, as a row nested in the column.
+    const entt::entity row = registry.create();
+    registry.emplace<TagComponent>(row, "Settings Volume Row");
+    auto& rowStack = registry.emplace<UIStackComponent>(row);
+    rowStack.horizontal = true;
+    rowStack.spacing = 24.0f;
+    registry.emplace<HierarchyComponent>(row).parent = m_settings.column;
+    {
+        auto& ordering = registry.emplace<UIOrderComponent>(row);
+        ordering.order = order++;
+        ordering.layer = kSettingsLayer;
+    }
+
+    int32_t stepOrder = 0;
+    auto step = [&](const char* tag, const char* label) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& button = registry.emplace<UIButtonComponent>(entity);
+        button.label = label;
+        button.size = glm::vec2(140.0f, 100.0f);
+        button.fontSize = 44.0f;
+        registry.emplace<HierarchyComponent>(entity).parent = row;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = stepOrder++;
+        ordering.layer = kSettingsLayer;
+        return entity;
+    };
+
+    // "-" rather than the original's U+2212 MINUS SIGN. The label goes through
+    // ImGui's default font, which has no glyph for it, and a typographically
+    // correct character nobody can see is worse than a hyphen.
+    m_settings.down = step("Settings Volume Down", "-");
+    m_settings.up = step("Settings Volume Up", "+");
+
+    auto wide = [&](const char* tag, const char* label, float fontSize) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& button = registry.emplace<UIButtonComponent>(entity);
+        button.label = label;
+        button.size = glm::vec2(440.0f, 100.0f);
+        button.fontSize = fontSize;
+        registry.emplace<HierarchyComponent>(entity).parent = m_settings.column;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = order++;
+        ordering.layer = kSettingsLayer;
+        return entity;
+    };
+
+    m_settings.mute = wide("Settings Mute", "Sound: On", 34.0f);
+    m_settings.reset = wide("Settings Reset", "Reset Progress", 30.0f);
+    m_settings.back = wide("Settings Back", "Back", 40.0f);
+
+    setSettingsVisible(registry, false);
+}
+
+void WolfBrigadeLayer::setSettingsVisible(entt::registry& registry, bool shown) {
+    if (!registry.valid(m_settings.column)) return;
+    registry.get<UIStackComponent>(m_settings.column).visible = shown;
+    registry.get<UIPanelComponent>(m_settings.backdrop).visible = shown;
+}
+
+void WolfBrigadeLayer::refreshSettings(entt::registry& registry) {
+    if (!registry.valid(m_settings.column) || !m_profile) return;
+
+    const float volume = m_profile->MasterVolume();
+
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "Volume: %d%%",
+                  static_cast<int>(std::lround(volume * 100.0f)));
+    registry.get<UITextComponent>(m_settings.volume).text = buffer;
+
+    registry.get<UIButtonComponent>(m_settings.mute).label =
+        m_profile->Muted() ? "Sound: Off" : "Sound: On";
+
+    // A step that cannot move is greyed rather than left to do nothing, which
+    // is `settings.gd:66-67`. Compared against the ends exactly: the setter
+    // clamps, so a press at either end is a no-op and a button that looks live
+    // and does nothing is worse than one that says it cannot.
+    registry.get<UIButtonComponent>(m_settings.down).enabled = volume > 0.0f;
+    registry.get<UIButtonComponent>(m_settings.up).enabled = volume < 1.0f;
+
+    registry.get<UIButtonComponent>(m_settings.reset).label =
+        m_resetArmed ? "Tap again to confirm" : "Reset Progress";
+}
+
+void WolfBrigadeLayer::updateSettings(entt::registry& registry, float fixedDelta) {
+    if (m_screen != Screen::Settings || !registry.valid(m_settings.column)) return;
+    if (!m_profile) return;
+
+    // The arming window expires on the TICK, not on a wall clock. Done before the
+    // presses are read so a tap arriving on the tick the window closes is a
+    // fresh arm rather than a confirmation - the safe direction for a button
+    // that wipes a profile.
+    if (m_resetArmed) {
+        m_resetArmedFor += fixedDelta;
+        if (m_resetArmedFor >= kResetArmedSeconds) {
+            m_resetArmed = false;
+            m_resetArmedFor = 0.0f;
+        }
+    }
+
+    if (registry.get<UIButtonComponent>(m_settings.back).clickedThisTick) {
+        goTo(registry, Screen::Menu);
+        return;
+    }
+
+    bool stepped = false;
+    auto& down = registry.get<UIButtonComponent>(m_settings.down);
+    auto& up = registry.get<UIButtonComponent>(m_settings.up);
+
+    // Refused when greyed, for the reason the bottom bar refuses: UIInput does
+    // not mark a disabled button clicked, and this is the second lock.
+    if (down.clickedThisTick && down.enabled) {
+        m_profile->SetMasterVolume(m_profile->MasterVolume() - kVolumeStep);
+        stepped = true;
+    }
+    if (up.clickedThisTick && up.enabled) {
+        m_profile->SetMasterVolume(m_profile->MasterVolume() + kVolumeStep);
+        stepped = true;
+    }
+
+    // A blip AT THE NEW LEVEL, so the setting is heard rather than read.
+    // Skipped when muted, where it would be silence with a voice spent on it.
+    if (stepped) playSfx("place");
+
+    if (registry.get<UIButtonComponent>(m_settings.mute).clickedThisTick) {
+        m_profile->SetMuted(!m_profile->Muted());
+    }
+
+    if (registry.get<UIButtonComponent>(m_settings.reset).clickedThisTick) {
+        // TWO TAPS. The first arms and relabels; the second wipes. A profile is
+        // the only thing in this game a player cannot get back, and it sits one
+        // press away from a volume control.
+        if (m_resetArmed) {
+            m_profile->ResetProgress();
+            m_resetArmed = false;
+            m_resetArmedFor = 0.0f;
+            registry.get<UIButtonComponent>(m_settings.reset).label = "Progress reset";
+            refreshSettings(registry);
+
+            // Written back rather than left to the tick's own save, because
+            // ResetProgress is the one change here a player would be most upset
+            // to lose - and returned to the caller as a fact, not a hope.
+            return;
+        }
+
+        m_resetArmed = true;
+        m_resetArmedFor = 0.0f;
+    }
+
+    refreshSettings(registry);
+}
+
 // --- The Armory ------------------------------------------------------------
 
 namespace {
@@ -1068,12 +1282,6 @@ void WolfBrigadeLayer::buildMenu(entt::registry& registry) {
     m_menu.settings = button("Menu Settings", "Settings");
     m_menu.quit = button("Menu Quit", "Quit");
 
-    // ONE BUTTON THAT CANNOT WORK YET, greyed rather than left out, which is
-    // what this game does everywhere else. Settings needs a screen of its own,
-    // and behind it the audio state that gives its volume and mute controls
-    // something to move.
-    registry.get<UIButtonComponent>(m_menu.settings).enabled = false;
-
     // --- The New Game confirmation -----------------------------------------
     //
     // `main_menu.gd:71-72` says why it exists: New Game silently wiping an
@@ -1314,6 +1522,7 @@ void WolfBrigadeLayer::goTo(entt::registry& registry, Screen next) {
 
         setMatchVisible(registry, false);
         setArmoryVisible(registry, false);
+        setSettingsVisible(registry, false);
         refreshMenu(registry);
         setMenuVisible(registry, true);
         return;
@@ -1323,11 +1532,27 @@ void WolfBrigadeLayer::goTo(entt::registry& registry, Screen next) {
         // No match to drop: you can only get here from the menu, which dropped
         // it on the way in. The Armory reads the Profile and nothing else.
         setMenuVisible(registry, false);
+        setSettingsVisible(registry, false);
         setArmoryVisible(registry, true);
         return;
     }
 
+    if (next == Screen::Settings) {
+        // Disarmed on the way IN. A Reset Progress armed on a previous visit
+        // and left there would be one tap from wiping a profile the moment
+        // somebody opened this screen again.
+        m_resetArmed = false;
+        m_resetArmedFor = 0.0f;
+        refreshSettings(registry);
+
+        setMenuVisible(registry, false);
+        setArmoryVisible(registry, false);
+        setSettingsVisible(registry, true);
+        return;
+    }
+
     setArmoryVisible(registry, false);
+    setSettingsVisible(registry, false);
     setMenuVisible(registry, false);
     setMatchVisible(registry, true);
 }
@@ -1438,6 +1663,11 @@ void WolfBrigadeLayer::updateMenu(entt::registry& registry) {
 
     if (registry.get<UIButtonComponent>(m_menu.armory).clickedThisTick) {
         goTo(registry, Screen::Armory);
+        return;
+    }
+
+    if (registry.get<UIButtonComponent>(m_menu.settings).clickedThisTick) {
+        goTo(registry, Screen::Settings);
         return;
     }
 
@@ -1751,6 +1981,7 @@ void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
     // simulation immediately means everywhere else in this file.
     updateMenu(registry);
     updateArmory(registry);
+    updateSettings(registry, fixedDelta);
 
     if (!m_match) return;
 

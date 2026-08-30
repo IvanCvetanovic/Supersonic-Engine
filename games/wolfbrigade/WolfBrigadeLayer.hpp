@@ -87,6 +87,16 @@ public:
     const Match* CurrentMatch() const { return m_match.get(); }
     Match* CurrentMatch() { return m_match.get(); }
 
+    // What the player keeps, which is the thing that OUTLIVES a match.
+    //
+    // Reachable through CurrentMatch too, and that is exactly why this exists:
+    // on the menu, the Armory and the Settings screen there is no match, so the
+    // only handle to a profile went away with the run - and those are the three
+    // screens whose whole subject is the profile. Null only before OnAttach and
+    // after OnDetach.
+    const Profile* PlayerProfile() const { return m_profile.get(); }
+    Profile* PlayerProfile() { return m_profile.get(); }
+
     // Which screen the player is on, from `game_flow.gd`.
     //
     // In Godot each of these is a whole scene and a transition is
@@ -408,6 +418,39 @@ private:
         std::vector<ArmoryRow> rows;
     };
     Armory m_armory;
+
+    // ---- Settings ----------------------------------------------------------
+    //
+    // `settings.gd`: master volume, mute, and a two-tap Reset Progress. Every
+    // value it moves already exists on the Profile - this screen is what gives
+    // them a way to be moved.
+    void buildSettings(entt::registry& registry);
+    void updateSettings(entt::registry& registry, float fixedDelta);
+    void refreshSettings(entt::registry& registry);
+    void setSettingsVisible(entt::registry& registry, bool shown);
+
+    struct Settings {
+        entt::entity backdrop{entt::null};
+        entt::entity column{entt::null};
+        entt::entity volume{entt::null};
+        entt::entity down{entt::null};
+        entt::entity up{entt::null};
+        entt::entity mute{entt::null};
+        entt::entity reset{entt::null};
+        entt::entity back{entt::null};
+    };
+    Settings m_settings;
+
+    // Reset Progress takes two taps, from `settings.gd:44-60`, and disarms
+    // itself so a stale armed button cannot wipe a profile on a later stray
+    // one.
+    //
+    // Counted in TICKS rather than off a wall clock. The original hangs a
+    // three-second SceneTree timer on it; this game's every other deadline is
+    // simulated time, and a wall clock in a layer is the thing the engine's own
+    // fixed-tick work exists to get rid of.
+    bool m_resetArmed{false};
+    float m_resetArmedFor{0.0f};
 
     // ---- Routing -----------------------------------------------------------
 
