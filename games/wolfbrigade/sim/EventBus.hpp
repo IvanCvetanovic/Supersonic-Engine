@@ -84,6 +84,21 @@ struct EventBus {
     Signal<const glm::vec2&> moveOrdered;
     Signal<const glm::vec2&> attackOrdered;
 
+    // A BLOW LANDING and AN ARROW LEAVING, which are the two sounds this game
+    // makes most and the two the original does NOT put on a bus.
+    //
+    // `unit.gd` and `building.gd` call Audio.play_sfx_throttled directly from
+    // the entity, because in Godot a script can reach an autoload from
+    // anywhere. Here the simulation is the half verified against twenty-two
+    // harnesses and it stays free of a device, a clock and a mixer - so what
+    // reaches out is a signal, and the layer decides what it sounds like.
+    //
+    // damageDealt is NOT these. It fires at the VICTIM when damage arrives from
+    // any source, including an arrow landing - which the original deliberately
+    // does not sound, having already sounded the shot. Two different facts.
+    Signal<const glm::vec2&> unitAttacked;
+    Signal<const glm::vec2&> projectileFired;
+
     // Building lifecycle. A raw pointer rather than a handle, because the thing
     // that owns the buildings is the thing listening - and it is the only one
     // that can outlive them.

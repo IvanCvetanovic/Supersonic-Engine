@@ -860,6 +860,119 @@ void testResearchingAnUpgradeAnnouncesIt() {
 }
 
 
+
+// --- The two combat sounds, and their throttle ---------------------------
+
+void testABlowAndAnArrowEachMakeTheirOwnSound() {
+    // The two the original plays directly from unit.gd and building.gd rather
+    // than from a bus. Here they arrive as signals, because the simulation
+    // stays free of a device, a clock and a mixer.
+    SoundedLayer sounded;
+    EventBus& bus = sounded.Match().Bus();
+
+    bus.unitAttacked.Emit(glm::vec2(0.0f));
+    if (sounded.engine.IsAvailable()) {
+        // Not counted in the floor: needs a real output device.
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("attack")).empty(),
+                  "a blow landing is heard");
+    }
+
+    bus.projectileFired.Emit(glm::vec2(0.0f));
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("shoot")).empty(),
+                  "and an arrow leaving");
+    }
+}
+
+void testTheCombatThrottleStopsALaneTurningToMush() {
+    // Many units attack in the same tick - the original names the problem and
+    // picks seventy milliseconds. Without a throttle a lane of twenty soldiers
+    // starts twenty sounds at once, which the six-voice pool then eats.
+    SoundedLayer sounded;
+    EventBus& bus = sounded.Match().Bus();
+
+    for (int i = 0; i < 20; ++i) bus.unitAttacked.Emit(glm::vec2(0.0f));
+
+    if (sounded.engine.IsAvailable()) {
+        // Not counted in the floor: needs a real output device.
+        const auto playing = sounded.engine.StopVoicesUsing(clipName("attack"));
+        CHECK_MSG(playing.size() == 1,
+                  "twenty blows in one tick are one sound, got " +
+                      std::to_string(playing.size()));
+    }
+}
+
+void testTheThrottleOpensAgainAfterEnoughSimulatedTime() {
+    // MEASURED IN TICKS, not off a wall clock, and this is the case that says
+    // so: no real time passes inside this loop worth speaking of, and the
+    // throttle opens anyway because the simulation moved.
+    //
+    // The other direction is what matters in a game: a wall clock would let a
+    // paused game accumulate its whole pause as elapsed, so the first tick
+    // after a resume would sound every throttled event at once.
+    SoundedLayer sounded;
+    EventBus& bus = sounded.Match().Bus();
+
+    bus.unitAttacked.Emit(glm::vec2(0.0f));
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("attack")).empty(),
+                  "the first one plays");
+    }
+
+    // Immediately again: refused.
+    bus.unitAttacked.Emit(glm::vec2(0.0f));
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(sounded.engine.StopVoicesUsing(clipName("attack")).empty(),
+                  "the second, in the same tick, is refused");
+    }
+
+    // Four ticks at thirty hertz is 133 ms, past the seventy the throttle asks
+    // for. Nothing else advances it.
+    for (int i = 0; i < 4; ++i) sounded.layer.OnFixedUpdate(sounded.registry, 1.0f / 30.0f);
+
+    bus.unitAttacked.Emit(glm::vec2(0.0f));
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("attack")).empty(),
+                  "and after enough simulated time it opens again");
+    }
+}
+
+void testEachThrottledSoundHasItsOwnWindow() {
+    // Per id, as `play_sfx_throttled` keys its map. An arrow leaving must not
+    // be silenced because a sword landed a millisecond earlier - they are
+    // different sounds and a shared window would drop half the combat.
+    SoundedLayer sounded;
+    EventBus& bus = sounded.Match().Bus();
+
+    bus.unitAttacked.Emit(glm::vec2(0.0f));
+    bus.projectileFired.Emit(glm::vec2(0.0f));
+
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("attack")).empty(),
+                  "the blow is heard");
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("shoot")).empty(),
+                  "and so is the arrow, in the same tick");
+    }
+}
+
+void testAnUnthrottledSoundIsNotRateLimitedByAccident() {
+    // The other nine edges are things that happen once - a wave, a purchase, a
+    // building finishing - and must not inherit the combat window. A wave
+    // starting twice in quick succession is two waves.
+    SoundedLayer sounded;
+    EventBus& bus = sounded.Match().Bus();
+
+    bus.waveStarted.Emit(1);
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("wave")).empty(), "the first");
+    }
+    bus.waveStarted.Emit(2);
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("wave")).empty(),
+                  "and the second, immediately after");
+    }
+}
+
 void runTests() {
     testTheElevenShippedSoundsSynthesiseWhatGodotSynthesises();
     testOneCountAnywhereInTheBufferMovesBothChecksums();
@@ -885,8 +998,14 @@ void runTests() {
     testAMutedGameStartsNoVoicesAtAll();
     testARestartHangsTheHandlersOnTheNewBus();
     testResearchingAnUpgradeAnnouncesIt();
+
+    testABlowAndAnArrowEachMakeTheirOwnSound();
+    testTheCombatThrottleStopsALaneTurningToMush();
+    testTheThrottleOpensAgainAfterEnoughSimulatedTime();
+    testEachThrottledSoundHasItsOwnWindow();
+    testAnUnthrottledSoundIsNotRateLimitedByAccident();
 }
 
 } // namespace
 
-TEST_MAIN("test_wb_audio", 272)
+TEST_MAIN("test_wb_audio", 282)

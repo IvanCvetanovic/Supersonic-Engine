@@ -324,6 +324,11 @@ void Unit::StepAttack(double delta) {
     if (m_attackCooldown <= 0.0) {
         m_attackCooldown = 1.0 / std::max(static_cast<double>(m_stats.attacksPerSec), 0.01);
         m_attackTarget->TakeDamage(m_stats.damage);
+
+        // AFTER the damage, as `unit.gd:384-386` does: the blow is what makes
+        // the sound, so announcing it before would be a claim about something
+        // that has not happened.
+        if (m_bus) m_bus->unitAttacked.Emit(m_position);
     }
 }
 
@@ -335,6 +340,8 @@ void Unit::FireProjectile() {
     // archer's chest.
     const glm::vec2 from = m_position + glm::vec2(0.0f, -m_stats.bodySize.y * 0.5f);
     pool->Spawn(from, m_attackTarget, m_stats.damage, m_stats.projectileSpeed);
+
+    if (m_bus) m_bus->projectileFired.Emit(from);
 }
 
 bool Unit::HasValidTarget() const {

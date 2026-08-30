@@ -1,4 +1,9 @@
-// The layer's filesystem contract, and what a player keeps between launches.
+// The layer's filesystem contract, its screens, and what a player keeps.
+//
+// It began as the filesystem half and grew the screens with them, because the
+// menu, the Armory and the Settings screen are all about the profile - and
+// several of their cases build a layer with NO save directory, which is the
+// contract the first case here asserts.
 //
 // SEPARATE FROM test_wb_hud on purpose, and the separation is the point rather
 // than tidiness. That suite builds a bare layer and asserts about a registry;

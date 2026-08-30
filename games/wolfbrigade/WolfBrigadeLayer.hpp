@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -350,6 +351,26 @@ private:
     // every new Match, because a Match owns its own EventBus and the old one
     // died with the run it belonged to.
     void connectAudioEvents();
+
+    // One sfx, rate-limited per id.
+    //
+    // `play_sfx_throttled`, for the two combat sounds. Many units can attack in
+    // the same tick and the soundscape turns to mush without it - the original
+    // calls that out by name and picks seventy milliseconds.
+    //
+    // Measured in SIMULATED time, where the original reads
+    // Time.get_ticks_msec(). Every other deadline in this game is the tick's,
+    // and a wall clock inside a layer would make how a paused game sounds when
+    // it resumes depend on how long the player left it.
+    void playSfxThrottled(const std::string& id, double minimumGap);
+
+    // Simulated seconds since the layer attached, and when each throttled id
+    // last played. Only the tick advances it, so a paused game holds.
+    double m_simTime{0.0};
+    std::map<std::string, double> m_lastPlayed;
+
+    // `COMBAT_THROTTLE_MS`, in seconds.
+    static constexpr double kCombatThrottle = 0.070;
 
     // One sfx, through the round-robin pool.
     //

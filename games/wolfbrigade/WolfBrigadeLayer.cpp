@@ -687,16 +687,28 @@ void WolfBrigadeLayer::playSfx(const std::string& id) {
     m_nextVoice = (m_nextVoice + 1) % kSfxVoices;
 }
 
+void WolfBrigadeLayer::playSfxThrottled(const std::string& id, double minimumGap) {
+    const auto last = m_lastPlayed.find(id);
+
+    // A first play is never throttled, which is what the original's
+    // `-100000` default does with less ceremony.
+    if (last != m_lastPlayed.end() && m_simTime - last->second < minimumGap) return;
+
+    m_lastPlayed[id] = m_simTime;
+    playSfx(id);
+}
+
 void WolfBrigadeLayer::connectAudioEvents() {
     if (!m_match) return;
 
-    // The nine edges `connect_events` wires, and only those. `attack` and
-    // `shoot` are `play_sfx_throttled` calls made directly from unit.gd and
-    // building.gd rather than from a signal, and this port's Unit and Building
-    // know nothing about audio on purpose - the sim is the half that has been
-    // verified against twenty-two harnesses and it stays free of a device.
-    // Their clips are registered and unused, which is said here rather than
-    // left as an absence somebody has to notice.
+    // ELEVEN EDGES. Nine are `connect_events`; the last two are the combat
+    // sounds, which the original plays directly from unit.gd and building.gd
+    // because a Godot script can reach an autoload from anywhere.
+    //
+    // Here they arrive as signals instead, because the simulation is the half
+    // verified against twenty-two harnesses and it stays free of a device, a
+    // clock and a mixer. What it emits is that a blow landed and that an arrow
+    // left; what that sounds like, and how often, is this layer's answer.
     EventBus& bus = m_match->Bus();
     m_audioSubscriptions.clear();
 
@@ -716,6 +728,14 @@ void WolfBrigadeLayer::connectAudioEvents() {
     m_audioSubscriptions.push_back(bus.gameLost.Connect([this]() { playSfx("defeat"); }));
     m_audioSubscriptions.push_back(bus.upgradeResearched.Connect(
         [this](const std::string&) { playSfx("research"); }));
+
+    // The two combat sounds, throttled. They are the only ones that are: every
+    // other edge here is a thing that happens once - a wave, a purchase, a
+    // building finishing - while a lane of soldiers attacks every tick.
+    m_audioSubscriptions.push_back(bus.unitAttacked.Connect(
+        [this](const glm::vec2&) { playSfxThrottled("attack", kCombatThrottle); }));
+    m_audioSubscriptions.push_back(bus.projectileFired.Connect(
+        [this](const glm::vec2&) { playSfxThrottled("shoot", kCombatThrottle); }));
 }
 
 // --- Settings ---------------------------------------------------------------
@@ -1973,6 +1993,10 @@ void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta)
 
 void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
     if (!m_booted) return;
+
+    // Simulated time, advanced by the tick and by nothing else - so a game left
+    // paused for an hour resumes sounding the way it stopped.
+    m_simTime += static_cast<double>(fixedDelta);
 
     // THE MENU FIRST, and before the match test rather than after it, because
     // there is no match while the menu is up - it was dropped on the way in.

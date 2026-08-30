@@ -623,7 +623,8 @@ Android "not functional"; extending that register forward costs nothing.
 - [x] A sorted transparent pass, and emissive materials that drive the bloom
 - [x] Shadows that know what a material is: a cut-out surface casts its own
       silhouette rather than its bounding rectangle, and a blended one casts
-      nothing at all
+      nothing at all — per SURFACE, so a model whose holes are on its fourth
+      material casts them rather than the silhouette of its first
 - [x] Reflection probes: more than one environment in a scene, so a room and
       the outdoors it opens onto no longer light identically
 - [x] Concave collision: a collider is the convex pieces a shape decomposes
@@ -719,11 +720,6 @@ HUSK's nineteen animated models. What is left is here.
   meshes were culled against their bind pose. They are not — the widening has
   always been there, by a different and stricter mechanism, and the field has
   been removed.)
-- **A cut-out shadow cuts against the first surface.** `GatherShadowCasters`
-  resolves one material set per caster, so a multi-surface model whose holes
-  are on its fourth surface casts the silhouette of its first. Nothing HUSK
-  needs is affected — every one of its 166 materials is `OPAQUE` — but a leaf
-  card packed into a multi-material model would shadow wrongly.
 - **A surface override replaces numbers, not maps.** `SurfaceOverridesComponent`
   re-materialises a named surface's colour, roughness, metallic and emission.
   It deliberately does not swap the surface's textures, because that needs a

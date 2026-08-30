@@ -165,6 +165,10 @@ void Building::StepCombat(double delta) {
     const glm::vec2 from = m_position + glm::vec2(0.0f, -m_stats.bodySize.y * 0.7f);
     pool->Spawn(from, target, m_stats.damage, static_cast<float>(m_stats.projectileSpeed));
 
+    // A tower firing is the same sound an archer makes, which is what
+    // `building.gd:162` plays - the same id, through the same throttle.
+    if (m_bus) m_bus->projectileFired.Emit(from);
+
     m_attackCooldown = 1.0 / std::max(m_stats.attacksPerSec, 0.01);
 }
 
