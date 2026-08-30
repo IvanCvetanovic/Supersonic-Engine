@@ -362,8 +362,12 @@ void testLeavingToTheMenuSavesTheRunAndTakesTheLaneDown() {
     layer.OnDetach(registry);
 }
 
-void testTheMenuStartsAFreshGameAndAbandonsTheSavedRun() {
-    // `_start_new_game`: starting fresh abandons any saved run.
+void testNewGameAsksBeforeThrowingARunAway() {
+    // `main_menu.gd:71-83`: New Game silently wiping an in-progress run is a
+    // footgun, so with something to lose it confirms first. This is also the
+    // path that opens a modal over a live screen, which is the shape `b918b84`
+    // exists for - a hidden container used to leave its children anchored at
+    // the screen centre, invisible and still clickable.
     ScratchDir scratch("wb_route_new_game");
 
     entt::registry registry;
@@ -381,6 +385,33 @@ void testTheMenuStartsAFreshGameAndAbandonsTheSavedRun() {
     CHECK_MSG(press(registry, "Menu New Game"), "New Game is there");
     tickOnce(layer, registry);
 
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Menu Confirm")).visible,
+              "it asked instead of acting");
+    CHECK_MSG(layer.CurrentMatch() == nullptr, "and started nothing yet");
+    CHECK_MSG(std::filesystem::exists(scratch.Run()), "and threw nothing away yet");
+
+    // THE MENU UNDER IT IS HIDDEN, not merely covered. The original hides
+    // $Center so keyboard focus is trapped; here the reason is the same shape -
+    // a backdrop swallows the clicks it covers, but the menu's buttons are
+    // still laid out and still hit-testable by anything it does not reach.
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Main Menu")).visible,
+              "the menu under it is hidden");
+
+    // Cancel puts it back, having changed nothing.
+    CHECK_MSG(press(registry, "Menu Confirm No"), "Cancel is there");
+    tickOnce(layer, registry);
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Menu Confirm")).visible,
+              "Cancel closes it");
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Main Menu")).visible,
+              "and the menu comes back");
+    CHECK_MSG(std::filesystem::exists(scratch.Run()), "with the run still there");
+
+    // And confirming does what New Game meant.
+    press(registry, "Menu New Game");
+    tickOnce(layer, registry);
+    CHECK_MSG(press(registry, "Menu Confirm Yes"), "the confirmation is there again");
+    tickOnce(layer, registry);
+
     CHECK_MSG(layer.CurrentMatch() != nullptr, "a match is running again");
     CHECK_MSG(!std::filesystem::exists(scratch.Run()),
               "and the run it would have resumed is gone");
@@ -388,6 +419,30 @@ void testTheMenuStartsAFreshGameAndAbandonsTheSavedRun() {
               "the menu is down");
     CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "HUD Wood")).visible,
               "and the HUD is back");
+}
+
+void testNewGameWithNothingToLoseDoesNotAsk() {
+    // The other half of `main_menu.gd:73-83`, and it matters: a dialog that
+    // always appears is one people learn to dismiss without reading.
+    entt::registry registry;
+    WolfBrigadeLayer layer;   // no save directory, so no run can exist
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+    CHECK_MSG(layer.CurrentMatch() == nullptr, "we are on the menu");
+
+    press(registry, "Menu New Game");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Menu Confirm")).visible,
+              "nothing to lose, so nothing is asked");
+    CHECK_MSG(layer.CurrentMatch() != nullptr, "it just started");
+
+    layer.OnDetach(registry);
 }
 
 void testContinueIsOfferedOnlyWhenThereIsARunToContinue() {
@@ -618,6 +673,254 @@ void testARunFromAnOlderBuildIsNotOffered() {
     layer.OnDetach(registry);
 }
 
+// --- The radio rows ------------------------------------------------------
+
+void testTheChosenDifficultyIsLitAndTheOthersAreNot() {
+    // A radio look is three colours, not one. UISystem picks the fill fresh
+    // every frame in the order disabled, pressed, hovered, colour - so a
+    // selection written only into `color` VANISHES the moment the pointer
+    // crosses it, on the one button the player is most likely pointing at.
+    //
+    // Asserted as a relation between buttons rather than against literals: the
+    // claim is "the chosen one differs from the others in all three", which
+    // survives someone re-tuning the palette.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+
+    // The data's own default is what a player who has chosen nothing sees.
+    const entt::entity normal = byTag(registry, "Menu Difficulty Normal");
+    const entt::entity hard = byTag(registry, "Menu Difficulty Hard");
+    CHECK_MSG(normal != entt::null && hard != entt::null,
+              "both difficulty options are on screen");
+    if (normal == entt::null || hard == entt::null) { layer.OnDetach(registry); return; }
+
+    {
+        const auto& lit = registry.get<UIButtonComponent>(normal);
+        const auto& dim = registry.get<UIButtonComponent>(hard);
+        CHECK_MSG(lit.color != dim.color, "the default difficulty is lit");
+        CHECK_MSG(lit.hoverColor != dim.hoverColor,
+                  "and stays lit under the pointer, which one colour would not");
+        CHECK_MSG(lit.pressColor != dim.pressColor, "and while pressed");
+    }
+
+    // Choosing another moves the light.
+    press(registry, "Menu Difficulty Hard");
+    tickOnce(layer, registry);
+
+    {
+        const auto& wasLit = registry.get<UIButtonComponent>(normal);
+        const auto& nowLit = registry.get<UIButtonComponent>(hard);
+        CHECK_MSG(nowLit.color != wasLit.color, "the light moved");
+        CHECK_MSG(nowLit.hoverColor != wasLit.hoverColor, "in all three");
+        CHECK_MSG(nowLit.pressColor != wasLit.pressColor, "colours");
+    }
+
+    layer.OnDetach(registry);
+}
+
+void testTheDifficultyRowIsInTheOrderTheDataDeclares() {
+    // `difficulty.json` carries an "order" array, and it exists because the
+    // presets are an object: iterating that gives a std::map's alphabetical
+    // order - easy, hard, normal - which would put Hard in the middle.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    const char* expected[] = { "Menu Difficulty Easy", "Menu Difficulty Normal",
+                               "Menu Difficulty Hard" };
+    int32_t previous = -1;
+    for (const char* tag : expected) {
+        const entt::entity entity = byTag(registry, tag);
+        CHECK_MSG(entity != entt::null, std::string(tag) + " is present");
+        if (entity == entt::null) continue;
+        const int32_t order = registry.get<UIOrderComponent>(entity).order;
+        CHECK_MSG(order > previous,
+                  std::string(tag) + " comes after the one before it, got " +
+                      std::to_string(order));
+        previous = order;
+    }
+
+    layer.OnDetach(registry);
+}
+
+void testTheChosenRulesReachTheRunAndSurviveTheLaunch() {
+    // The whole point of the rows, and the half a look cannot show. The choice
+    // has to arrive in GameState BEFORE the boot, because Reset scales the
+    // opening resources by the difficulty and WaveDirector::Setup reads the
+    // mode to pick a schedule.
+    ScratchDir scratch("wb_route_rules");
+
+    int hardWood = 0;
+    {
+        entt::registry registry;
+        WolfBrigadeLayer layer(scratch.String());
+        layer.OnAttach(registry);
+        tickOnce(layer, registry);
+
+        Match* fresh = layer.CurrentMatch();
+        CHECK_MSG(fresh != nullptr, "a match is running");
+        if (fresh == nullptr) return;
+        const int normalWood = fresh->Run().Amount("wood");
+
+        press(registry, "HUD Pause");
+        tickOnce(layer, registry);
+        press(registry, "Pause Main Menu");
+        tickOnce(layer, registry);
+
+        press(registry, "Menu Difficulty Hard");
+        tickOnce(layer, registry);
+        press(registry, "Menu Mode Endless");
+        tickOnce(layer, registry);
+
+        press(registry, "Menu New Game");
+        tickOnce(layer, registry);
+        press(registry, "Menu Confirm Yes");
+        tickOnce(layer, registry);
+
+        Match* started = layer.CurrentMatch();
+        CHECK_MSG(started != nullptr, "a match started");
+        if (started == nullptr) return;
+
+        CHECK_MSG(started->Run().CurrentDifficulty() == "hard",
+                  "the run is on the chosen difficulty, got " +
+                      started->Run().CurrentDifficulty());
+        CHECK_MSG(started->Run().IsEndless(), "and in the chosen mode");
+
+        // AND IT REACHED THE BOOT, not just the field. Hard scales starting
+        // resources by 0.8, so the opening balance is the check that the order
+        // was right - setting the difficulty after Reset would leave a run that
+        // says "hard" and was dealt a normal hand.
+        hardWood = started->Run().Amount("wood");
+        CHECK_MSG(hardWood < normalWood,
+                  "and was applied before the run was dealt: " +
+                      std::to_string(hardWood) + " vs " + std::to_string(normalWood));
+
+        layer.OnDetach(registry);
+    }
+
+    // And it is remembered, which is `SaveData.set_difficulty` beside
+    // `GameState.set_difficulty` - one is the run, the other is next launch.
+    {
+        entt::registry registry;
+        WolfBrigadeLayer layer(scratch.String());
+        layer.OnAttach(registry);
+        tickOnce(layer, registry);
+
+        Match* match = layer.CurrentMatch();
+        CHECK_MSG(match != nullptr, "the second launch boots");
+        if (match == nullptr) return;
+
+        CHECK_MSG(match->Run().CurrentDifficulty() == "hard",
+                  "and opens on the difficulty last chosen, got " +
+                      match->Run().CurrentDifficulty());
+        CHECK_MSG(match->Run().IsEndless(), "and the mode");
+        CHECK_EQ(match->Run().Amount("wood"), hardWood);
+
+        layer.OnDetach(registry);
+    }
+}
+
+void testARestartKeepsTheDifficultyItWasStartedOn() {
+    // `game_state.gd:22-31` says it twice: neither difficulty nor mode is
+    // cleared by reset(), because the autoload survives the scene reload and
+    // only the run state is rebuilt. Here the GameState goes WITH the Match, so
+    // keeping them across a Restart is an act rather than the default.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+    press(registry, "Menu Difficulty Hard");
+    tickOnce(layer, registry);
+    press(registry, "Menu New Game");
+    tickOnce(layer, registry);
+
+    Match* started = layer.CurrentMatch();
+    CHECK_MSG(started != nullptr, "a match started");
+    if (started == nullptr) { layer.OnDetach(registry); return; }
+    CHECK_MSG(started->Run().CurrentDifficulty() == "hard", "on hard");
+    const int hardWood = started->Run().Amount("wood");
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Restart");
+    tickOnce(layer, registry);
+
+    Match* restarted = layer.CurrentMatch();
+    CHECK_MSG(restarted != nullptr && restarted != started, "a new match is running");
+    if (restarted == nullptr) { layer.OnDetach(registry); return; }
+    CHECK_MSG(restarted->Run().CurrentDifficulty() == "hard",
+              "and it is still hard, got " + restarted->Run().CurrentDifficulty());
+    CHECK_EQ(restarted->Run().Amount("wood"), hardWood);
+
+    layer.OnDetach(registry);
+}
+
+void testResumingARunDoesNotRetuneIt() {
+    // Snapshot::Restore sets both from the document at its own first step, and
+    // the run being resumed was played on the difficulty it was started on.
+    // Pushing whatever the menu currently shows over that would re-tune a run
+    // mid-flight - a player who switches to Easy in the menu and then presses
+    // Continue must not find their hard run softened.
+    ScratchDir scratch("wb_route_resume_rules");
+
+    entt::registry registry;
+    WolfBrigadeLayer layer(scratch.String());
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    // Start a hard run and leave it.
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+    press(registry, "Menu Difficulty Hard");
+    tickOnce(layer, registry);
+    press(registry, "Menu New Game");
+    tickOnce(layer, registry);
+
+    // There IS a run on disk here - the first match was left through the pause
+    // menu - so New Game asks before throwing it away.
+    CHECK_MSG(press(registry, "Menu Confirm Yes"), "it confirmed first");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(layer.CurrentMatch() != nullptr &&
+                  layer.CurrentMatch()->Run().CurrentDifficulty() == "hard",
+              "a hard run is going");
+
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+
+    // Change the preference, then resume.
+    press(registry, "Menu Difficulty Easy");
+    tickOnce(layer, registry);
+    CHECK_MSG(press(registry, "Menu Continue"), "Continue is offered");
+    tickOnce(layer, registry);
+
+    Match* resumed = layer.CurrentMatch();
+    CHECK_MSG(resumed != nullptr, "it resumed");
+    if (resumed == nullptr) { layer.OnDetach(registry); return; }
+    CHECK_MSG(resumed->Run().CurrentDifficulty() == "hard",
+              "and the resumed run is still the one that was saved, got " +
+                  resumed->Run().CurrentDifficulty());
+
+    layer.OnDetach(registry);
+}
+
 } // namespace
 
 static void runTests() {
@@ -633,13 +936,20 @@ static void runTests() {
     testASaveDirectoryThatCannotBeWrittenDoesNotStopTheGame();
 
     testLeavingToTheMenuSavesTheRunAndTakesTheLaneDown();
-    testTheMenuStartsAFreshGameAndAbandonsTheSavedRun();
+    testNewGameAsksBeforeThrowingARunAway();
+    testNewGameWithNothingToLoseDoesNotAsk();
     testContinueIsOfferedOnlyWhenThereIsARunToContinue();
     testAMenuWithNoSavedRunDoesNotOfferContinue();
     testLeavingFromTheResultScreenTakesTheResultWithIt();
     testTheMenuShowsWhatThePlayerHasEarned();
     testAFreshProfileSaysSoRatherThanClaimingWaveZero();
     testARunFromAnOlderBuildIsNotOffered();
+
+    testTheChosenDifficultyIsLitAndTheOthersAreNot();
+    testTheDifficultyRowIsInTheOrderTheDataDeclares();
+    testTheChosenRulesReachTheRunAndSurviveTheLaunch();
+    testARestartKeepsTheDifficultyItWasStartedOn();
+    testResumingARunDoesNotRetuneIt();
 }
 
-TEST_MAIN("test_wb_persistence", 66)
+TEST_MAIN("test_wb_persistence", 110)

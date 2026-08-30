@@ -268,6 +268,28 @@ private:
     void updateMenu(entt::registry& registry);
     void setMenuVisible(entt::registry& registry, bool shown);
 
+    // One option of a radio row: the button, and the id it selects.
+    struct Radio {
+        entt::entity entity{entt::null};
+        std::string id;
+    };
+
+    // Paints a radio row so the chosen one reads as chosen.
+    //
+    // THREE COLOURS, not one, and that is the whole subtlety. `UISystem` picks
+    // the fill fresh every frame in the order disabled, pressed, hovered,
+    // colour - so writing `color` alone gives a selection that VANISHES the
+    // moment the pointer crosses it, which is the one button the player is
+    // most likely to have the pointer over.
+    //
+    // Written per tick from the layer's own selection rather than held on the
+    // component. A `selected` field would be the struct, the codec both ways,
+    // the inspector twice, a script-ABI bump and two test floors - about eleven
+    // sites, of which this game uses none: it ships no scene, no prefab and no
+    // script, so the only one that would ever run is the draw.
+    void paintRadios(entt::registry& registry, const std::vector<Radio>& row,
+                     const std::string& selected) const;
+
     struct MainMenu {
         entt::entity backdrop{entt::null};
         entt::entity column{entt::null};
@@ -278,8 +300,29 @@ private:
         entt::entity armory{entt::null};
         entt::entity settings{entt::null};
         entt::entity quit{entt::null};
+
+        // The two radio rows, each a horizontal stack nested in the column.
+        entt::entity modeRow{entt::null};
+        entt::entity difficultyRow{entt::null};
+        std::vector<Radio> modes;
+        std::vector<Radio> difficulties;
+
+        // The New Game confirmation, from `main_menu.gd:73-89`.
+        //
+        // A separate column and backdrop rather than a flag on the menu,
+        // because the original hides `$Center` and `$SoundButton` while it is
+        // up - it is a screen over a screen, not a state of one.
+        entt::entity confirmBackdrop{entt::null};
+        entt::entity confirmColumn{entt::null};
+        entt::entity confirmYes{entt::null};
+        entt::entity confirmNo{entt::null};
     };
     MainMenu m_menu;
+
+    // Whether the New Game confirmation is up.
+    bool m_confirmingNewGame{false};
+
+    void setConfirmVisible(entt::registry& registry, bool shown);
 
     // ---- Routing -----------------------------------------------------------
 
@@ -342,6 +385,10 @@ private:
     // Said once. A save directory that refuses writes must not print a line a
     // tick for the rest of the session.
     bool m_reportedSaveFailure{false};
+
+    // Pushes the saved mode and difficulty into the run being booted. Called
+    // by every site that builds a Match, which is the point: there are three.
+    void applySavedRules();
 
     // Writes the profile if it has anything to write. Called at the end of the
     // tick and again on the way out, which between them is `save.gd`'s

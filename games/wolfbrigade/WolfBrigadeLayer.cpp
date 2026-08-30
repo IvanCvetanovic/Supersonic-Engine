@@ -105,6 +105,26 @@ WolfBrigadeLayer::WolfBrigadeLayer(std::string saveDir) : m_saveDir(std::move(sa
     m_runPath = (directory / "wolf_brigade_run.json").string();
 }
 
+void WolfBrigadeLayer::applySavedRules() {
+    if (!m_match || !m_profile || !m_data) return;
+
+    // `main_menu.gd:32-33` writing the chosen mode and difficulty into
+    // GameState, which in Godot survives the scene change so `main._ready`
+    // finds it. Here the GameState is built WITH the Match, so every place that
+    // builds one has to push them in - and this is that one place, because
+    // there are three such sites and the third is the one that gets forgotten.
+    //
+    // BEFORE Boot, and the order is the whole of whether it takes effect:
+    // GameState::Reset scales the opening resources by the difficulty and
+    // WaveDirector::Setup reads IsEndless to pick the schedule. Applied after,
+    // it gives a run that says "hard" and was dealt an easy hand.
+    //
+    // The fallbacks are the caller's, as everywhere: never chosen means the
+    // difficulty the DATA declares, not one this layer invented.
+    m_match->Run().SetMode(m_profile->Mode(GameState::kCampaign));
+    m_match->Run().SetDifficulty(m_profile->Difficulty(m_data->DifficultyDefault()));
+}
+
 void WolfBrigadeLayer::saveProfileIfDirty() {
     if (!m_profile || m_profilePath.empty() || !m_profile->IsDirty()) return;
 
@@ -144,6 +164,7 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     if (!m_profilePath.empty()) m_profile->Load(m_profilePath);
 
     m_match = std::make_unique<Match>(*m_data, *m_profile, m_runPath);
+    applySavedRules();
     m_match->BootFresh();
     m_booted = true;
 
@@ -615,11 +636,68 @@ void WolfBrigadeLayer::buildMenu(entt::registry& registry) {
     label("Menu Title", "WOLF BRIGADE", 104.0f, glm::vec4(1.0f));
     label("Menu Subtitle", "Lane RTS", 30.0f, glm::vec4(0.62f, 0.68f, 0.78f, 1.0f));
 
-    // The two rows the original puts here - Mode and Difficulty - are not in
-    // this commit. They are radio rows, which is a look rather than a widget,
-    // and they are the only consumer of the profile's mode and difficulty; both
-    // belong together in the commit that adds them. Said rather than left as a
-    // gap somebody has to notice.
+    // The two radio rows. Each is an HBoxContainer in the original and a
+    // NESTED horizontal stack here - a stack measured from its own contents and
+    // placed in its parent's slot, which is what `layoutStacksImpl` does.
+    const glm::vec4 rowLabelColour(0.62f, 0.68f, 0.78f, 1.0f);
+    auto radioRow = [&](const char* rowTag, const char* headingTag, const char* heading) {
+        label(headingTag, heading, 26.0f, rowLabelColour);
+
+        const entt::entity row = registry.create();
+        registry.emplace<TagComponent>(row, rowTag);
+        auto& stack = registry.emplace<UIStackComponent>(row);
+        stack.horizontal = true;
+        stack.spacing = 16.0f;   // theme_override_constants/separation
+        registry.emplace<HierarchyComponent>(row).parent = m_menu.column;
+        auto& ordering = registry.emplace<UIOrderComponent>(row);
+        ordering.order = order++;
+        ordering.layer = kMenuLayer;
+        return row;
+    };
+
+    // A radio option. The COLOURS are not set here: paintRadios writes all
+    // three of them every tick, and a default written once would be overwritten
+    // on the first one anyway.
+    int32_t optionOrder = 0;
+    auto radio = [&](entt::entity row, const std::string& tag, const std::string& text,
+                     const std::string& id, const glm::vec2& size) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& item = registry.emplace<UIButtonComponent>(entity);
+        item.label = text;
+        item.size = size;
+        item.fontSize = 30.0f;
+        registry.emplace<HierarchyComponent>(entity).parent = row;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = optionOrder++;
+        ordering.layer = kMenuLayer;
+        return Radio{entity, id};
+    };
+
+    m_menu.modeRow = radioRow("Menu Mode Row", "Menu Mode Label", "Mode");
+    optionOrder = 0;
+    m_menu.modes.push_back(radio(m_menu.modeRow, "Menu Mode Campaign", "Campaign",
+                                 GameState::kCampaign, glm::vec2(230.0f, 96.0f)));
+    m_menu.modes.push_back(radio(m_menu.modeRow, "Menu Mode Endless", "Endless",
+                                 GameState::kEndless, glm::vec2(230.0f, 96.0f)));
+
+    // IN DATA ORDER, from `difficulty.json`'s own "order" array, which is what
+    // `DataLoader.difficulty_order()` is for. Iterating the presets object
+    // instead would give a std::map's alphabetical order - easy, hard, normal -
+    // and put Hard in the middle of the row.
+    m_menu.difficultyRow = radioRow("Menu Difficulty Row", "Menu Difficulty Label",
+                                    "Difficulty");
+    optionOrder = 0;
+    for (const auto& entry : m_data->DifficultyOrder()) {
+        const std::string id = entry.AsString();
+        if (id.empty()) continue;
+        const std::string display =
+            m_data->DifficultyPreset(id)["display_name"].AsString(id);
+        m_menu.difficulties.push_back(
+            radio(m_menu.difficultyRow, "Menu Difficulty " + display, display, id,
+                  glm::vec2(150.0f, 96.0f)));
+    }
+
     m_menu.best = label("Menu Best", "Best: no runs yet", 24.0f,
                         glm::vec4(0.55f, 0.61f, 0.72f, 1.0f));
     m_menu.renown = label("Menu Renown", "Renown: 0", 26.0f,
@@ -637,7 +715,121 @@ void WolfBrigadeLayer::buildMenu(entt::registry& registry) {
     registry.get<UIButtonComponent>(m_menu.armory).enabled = false;
     registry.get<UIButtonComponent>(m_menu.settings).enabled = false;
 
+    // --- The New Game confirmation -----------------------------------------
+    //
+    // `main_menu.gd:71-72` says why it exists: New Game silently wiping an
+    // in-progress run is a footgun. It is a screen over a screen - the original
+    // hides $Center and $SoundButton while it is up, so that keyboard focus is
+    // TRAPPED rather than merely covered.
+    //
+    // Layer 21, one above the menu it covers, for the same reason the menu is
+    // above the result: the ordering has to be true on its own rather than
+    // because of what happens to be on screen.
+    constexpr int32_t kConfirmLayer = kMenuLayer + 1;
+
+    m_menu.confirmBackdrop = registry.create();
+    registry.emplace<TagComponent>(m_menu.confirmBackdrop, "Menu Confirm Backdrop");
+    auto& dim = registry.emplace<UIPanelComponent>(m_menu.confirmBackdrop);
+    dim.anchor = UIAnchor::Center;
+    dim.offset = glm::vec2(0.0f, 0.0f);
+    dim.fillWidth = true;
+    dim.fillHeight = true;
+    dim.cornerRadius = 0.0f;
+    dim.color = glm::vec4(0.05f, 0.06f, 0.09f, 0.86f);
+    registry.emplace<UIOrderComponent>(m_menu.confirmBackdrop).layer = kConfirmLayer;
+
+    m_menu.confirmColumn = registry.create();
+    registry.emplace<TagComponent>(m_menu.confirmColumn, "Menu Confirm");
+    auto& confirm = registry.emplace<UIStackComponent>(m_menu.confirmColumn);
+    confirm.horizontal = false;
+    confirm.anchor = UIAnchor::Center;
+    confirm.spacing = 24.0f;
+
+    int32_t confirmOrder = 0;
+    {
+        const entt::entity question = registry.create();
+        registry.emplace<TagComponent>(question, "Menu Confirm Question");
+        auto& text = registry.emplace<UITextComponent>(question);
+        text.text = "Start a new game?\nThe run in progress will be lost.";
+        text.fontSize = 34.0f;
+        registry.emplace<HierarchyComponent>(question).parent = m_menu.confirmColumn;
+        auto& ordering = registry.emplace<UIOrderComponent>(question);
+        ordering.order = confirmOrder++;
+        ordering.layer = kConfirmLayer;
+    }
+
+    // A ROW NESTED IN THE COLUMN, as the result overlay's buttons are: Yes and
+    // No sit side by side under the question.
+    const entt::entity confirmRow = registry.create();
+    registry.emplace<TagComponent>(confirmRow, "Menu Confirm Row");
+    auto& rowStack = registry.emplace<UIStackComponent>(confirmRow);
+    rowStack.horizontal = true;
+    rowStack.spacing = 24.0f;
+    registry.emplace<HierarchyComponent>(confirmRow).parent = m_menu.confirmColumn;
+    {
+        auto& ordering = registry.emplace<UIOrderComponent>(confirmRow);
+        ordering.order = confirmOrder++;
+        ordering.layer = kConfirmLayer;
+    }
+
+    int32_t answerOrder = 0;
+    auto answer = [&](const char* tag, const char* text) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& item = registry.emplace<UIButtonComponent>(entity);
+        item.label = text;
+        item.size = glm::vec2(220.0f, 96.0f);
+        item.fontSize = 34.0f;
+        registry.emplace<HierarchyComponent>(entity).parent = confirmRow;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = answerOrder++;
+        ordering.layer = kConfirmLayer;
+        return entity;
+    };
+
+    m_menu.confirmYes = answer("Menu Confirm Yes", "New Game");
+    m_menu.confirmNo = answer("Menu Confirm No", "Cancel");
+
+    setConfirmVisible(registry, false);
     setMenuVisible(registry, false);
+}
+
+void WolfBrigadeLayer::paintRadios(entt::registry& registry, const std::vector<Radio>& row,
+                                   const std::string& selected) const {
+    // The unselected look is the button default; the selected one is the
+    // engine's own hover colour raised, so a chosen option reads as lit rather
+    // than as a different kind of control.
+    constexpr glm::vec4 kIdle(0.16f, 0.17f, 0.21f, 0.96f);
+    constexpr glm::vec4 kIdleHover(0.24f, 0.26f, 0.32f, 0.98f);
+    constexpr glm::vec4 kIdlePress(0.10f, 0.11f, 0.14f, 1.0f);
+    constexpr glm::vec4 kChosen(0.27f, 0.42f, 0.60f, 1.0f);
+    constexpr glm::vec4 kChosenHover(0.33f, 0.50f, 0.70f, 1.0f);
+    constexpr glm::vec4 kChosenPress(0.22f, 0.35f, 0.52f, 1.0f);
+
+    for (const Radio& option : row) {
+        if (!registry.valid(option.entity)) continue;
+        auto& button = registry.get<UIButtonComponent>(option.entity);
+        const bool chosen = option.id == selected;
+
+        // ALL THREE. UISystem picks the fill fresh each frame in the order
+        // disabled, pressed, hovered, colour - so setting only `color` gives a
+        // selection that disappears under the pointer, on the one button the
+        // player is most likely to be pointing at.
+        button.color = chosen ? kChosen : kIdle;
+        button.hoverColor = chosen ? kChosenHover : kIdleHover;
+        button.pressColor = chosen ? kChosenPress : kIdlePress;
+    }
+}
+
+void WolfBrigadeLayer::setConfirmVisible(entt::registry& registry, bool shown) {
+    m_confirmingNewGame = shown;
+
+    // Re-applied through the ONE function that owns this screen's visibility,
+    // rather than written here. Two setters both assigning the menu column's
+    // `visible` is two answers to one question, and whichever ran last would
+    // win - so opening the confirmation and then re-entering the screen would
+    // show the menu underneath it.
+    setMenuVisible(registry, m_screen == Screen::Menu);
 }
 
 void WolfBrigadeLayer::refreshMenu(entt::registry& registry) {
@@ -663,12 +855,39 @@ void WolfBrigadeLayer::refreshMenu(entt::registry& registry) {
     const bool resumable =
         !m_runPath.empty() && Snapshot::IsValid(Snapshot::LoadRun(m_runPath));
     registry.get<UIButtonComponent>(m_menu.resume).visible = resumable;
+
+    // PAINTED ON THE WAY IN, not only from the tick loop. updateMenu runs
+    // BEFORE the transition that arrives here - the pause menu is read later in
+    // the same tick - so a row painted only there is unpainted for the first
+    // frame the screen is visible, and the player sees a menu with nothing
+    // selected before it corrects itself.
+    if (m_data) {
+        paintRadios(registry, m_menu.modes, m_profile->Mode(GameState::kCampaign));
+        paintRadios(registry, m_menu.difficulties,
+                    m_profile->Difficulty(m_data->DifficultyDefault()));
+    }
+
+    // A confirmation left up from the last visit is not a state to arrive in.
+    setConfirmVisible(registry, false);
 }
 
 void WolfBrigadeLayer::setMenuVisible(entt::registry& registry, bool shown) {
     if (!registry.valid(m_menu.column)) return;
-    registry.get<UIStackComponent>(m_menu.column).visible = shown;
+
+    // ONE PLACE decides what this screen shows, from `shown` and one flag,
+    // because the menu and the confirmation both want to write the column's
+    // visibility and the last writer would win.
+    //
+    // The backdrop stays up under the confirmation: it is the screen, and what
+    // the confirmation covers is the menu on it rather than the screen itself.
     registry.get<UIPanelComponent>(m_menu.backdrop).visible = shown;
+    registry.get<UIStackComponent>(m_menu.column).visible = shown && !m_confirmingNewGame;
+
+    if (registry.valid(m_menu.confirmColumn)) {
+        const bool confirming = shown && m_confirmingNewGame;
+        registry.get<UIStackComponent>(m_menu.confirmColumn).visible = confirming;
+        registry.get<UIPanelComponent>(m_menu.confirmBackdrop).visible = confirming;
+    }
 }
 
 void WolfBrigadeLayer::setMatchVisible(entt::registry& registry, bool shown) {
@@ -761,6 +980,18 @@ void WolfBrigadeLayer::startGame(entt::registry& registry, bool fromSave) {
 
     m_match = std::make_unique<Match>(*m_data, *m_profile, m_runPath);
 
+    // UNCONDITIONAL, and it does not need a fork - which was worth finding out
+    // rather than assuming. A restore path guard was written here first and a
+    // mutation run could not make it fail: `GameState::FromSave`
+    // (`GameState.cpp:150-151`) sets the difficulty and the mode from the saved
+    // document, and it runs INSIDE Boot, after this. So a resumed run keeps the
+    // rules it was played on whatever the menu currently shows, and the branch
+    // was a second way of saying something the order already said.
+    //
+    // Kept before Boot rather than moved after it, because on the fresh fork it
+    // is the only thing that sets them and Reset reads them.
+    applySavedRules();
+
     // Boot takes the fork itself - a valid pending document restores, anything
     // else starts fresh - which is `main.gd::_ready`. Passing a null value on
     // the New Game path is therefore not a special case, it is the same call.
@@ -775,7 +1006,45 @@ void WolfBrigadeLayer::startGame(entt::registry& registry, bool fromSave) {
 }
 
 void WolfBrigadeLayer::updateMenu(entt::registry& registry) {
-    if (m_screen != Screen::Menu || !registry.valid(m_menu.column)) return;
+    if (m_screen != Screen::Menu || !registry.valid(m_menu.column) || !m_profile) return;
+
+    // THE CONFIRMATION FIRST, and nothing else while it is up. The menu's own
+    // buttons are hidden under it, so UIInput will not deliver them a click -
+    // but this is the layer's half of the same refusal, and it is the half that
+    // holds if the two ever disagree about what "hidden" means. The bar answers
+    // the pause menu the same way.
+    if (m_confirmingNewGame) {
+        if (registry.get<UIButtonComponent>(m_menu.confirmYes).clickedThisTick) {
+            startGame(registry, false);
+        } else if (registry.get<UIButtonComponent>(m_menu.confirmNo).clickedThisTick) {
+            setConfirmVisible(registry, false);
+        }
+        return;
+    }
+
+    // The radio rows, read before anything that leaves the screen so a mode
+    // chosen and a New Game pressed in the same tick take effect in that order.
+    //
+    // BOTH HOMES, exactly as `_on_mode` and `_on_difficulty` write both: the
+    // profile is where the choice persists, and it is pushed into the run's
+    // GameState by startGame. Writing only the profile would remember a setting
+    // that never reached a match; writing only the state would lose it on exit.
+    for (const Radio& option : m_menu.modes) {
+        if (registry.get<UIButtonComponent>(option.entity).clickedThisTick) {
+            m_profile->SetMode(option.id);
+        }
+    }
+    for (const Radio& option : m_menu.difficulties) {
+        if (registry.get<UIButtonComponent>(option.entity).clickedThisTick) {
+            m_profile->SetDifficulty(option.id);
+        }
+    }
+
+    // Repainted every tick, which is what makes a selection a look rather than
+    // a component field. Cheap: six buttons, three colours each.
+    paintRadios(registry, m_menu.modes, m_profile->Mode(GameState::kCampaign));
+    paintRadios(registry, m_menu.difficulties,
+                m_profile->Difficulty(m_data->DifficultyDefault()));
 
     if (registry.get<UIButtonComponent>(m_menu.resume).clickedThisTick) {
         startGame(registry, true);
@@ -783,7 +1052,17 @@ void WolfBrigadeLayer::updateMenu(entt::registry& registry) {
     }
 
     if (registry.get<UIButtonComponent>(m_menu.newGame).clickedThisTick) {
-        startGame(registry, false);
+        // ASK FIRST when there is something to lose. `main_menu.gd:73-83`: with
+        // no resumable run there is nothing to confirm, so it starts
+        // immediately - a dialog that always appears is a dialog people learn
+        // to dismiss without reading.
+        const bool resumable =
+            !m_runPath.empty() && Snapshot::IsValid(Snapshot::LoadRun(m_runPath));
+        if (resumable) {
+            setConfirmVisible(registry, true);
+        } else {
+            startGame(registry, false);
+        }
         return;
     }
 
@@ -814,6 +1093,14 @@ void WolfBrigadeLayer::restartMatch(entt::registry& registry) {
     // THE SAME PATH the first match got, not an empty one. A Restart that built
     // a filesystem-free Match could never autosave or clear again.
     m_match = std::make_unique<Match>(*m_data, *m_profile, m_runPath);
+
+    // A RESTART KEEPS THE SAME DIFFICULTY AND MODE, which `game_state.gd:22-31`
+    // says twice in its own words: neither is cleared by reset(), because the
+    // autoload survives the scene reload and only the run state is rebuilt.
+    // Here the GameState goes with the Match, so keeping them is an act rather
+    // than the default - without this a Restart on Hard silently drops to
+    // whatever the data calls normal.
+    applySavedRules();
     m_match->BootFresh();
 
     // The bar's buttons point at the OLD match's selection and buildings, so
