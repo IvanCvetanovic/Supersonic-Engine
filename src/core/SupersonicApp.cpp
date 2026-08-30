@@ -883,6 +883,25 @@ void SupersonicApp::Run() {
         zoneSamples.reserve(static_cast<size_t>(m_options.maxFrames));
     }
 
+    // AND WHAT THE FRAME COST IN QUANTITIES, not only in milliseconds.
+    //
+    // A millisecond threshold is flaky across machines and gets deleted within
+    // a month. "This scene submits one draw call per drawable" is a property,
+    // and when instancing lands the number drops and this is what records it.
+    //
+    // Sampled here rather than assembled at the end because the renderer zeroes
+    // its counters at the top of every DrawFrame - the totals do not exist
+    // anywhere by the time the loop is over.
+    //
+    // The counts reach the editor's statistics panel too, and that is exactly
+    // the problem this solves: a measurement no script can read is not one CI
+    // can act on, which is the same argument the profiler report above makes
+    // for itself.
+    std::vector<RenderSystem::Stats> statsSamples;
+    if (m_options.maxFrames > 0) {
+        statsSamples.reserve(static_cast<size_t>(m_options.maxFrames));
+    }
+
     // Or until a game asks. Both leave by the same path, so there is exactly
     // one shutdown rather than one for the window and another for the game.
     while (!m_window->ShouldClose() && !Application::QuitRequested()) {
@@ -895,6 +914,7 @@ void SupersonicApp::Run() {
                 sample[i] = Profiler::Milliseconds(static_cast<ProfileZone>(i));
             }
             zoneSamples.push_back(sample);
+            statsSamples.push_back(m_renderer->GetRenderStats());
         }
 
         if (m_options.maxFrames > 0 && frame >= m_options.maxFrames) {
@@ -976,6 +996,53 @@ void SupersonicApp::Run() {
                 std::cout << "  " << Profiler::Name(static_cast<ProfileZone>(i))
                           << ": " << median << " ms (worst " << worst
                           << " on frame " << worstFrame << ")" << std::endl;
+            }
+
+            // The quantities. Median and worst, exactly as above and for the
+            // same reason: one contended frame moves a mean arbitrarily far,
+            // and a scene load is not what the frame usually costs.
+            if (!statsSamples.empty()) {
+                std::cout << "[Counts] Per frame over " << statsSamples.size()
+                          << " frame(s), median and worst:" << std::endl;
+
+                struct Counter {
+                    const char* name;
+                    uint32_t RenderSystem::Stats::*field;
+                };
+                static constexpr Counter kCounters[] = {
+                    { "Drawables drawn",     &RenderSystem::Stats::drawn },
+                    { "Drawables culled",    &RenderSystem::Stats::culled },
+                    { "Blended drawables",   &RenderSystem::Stats::transparentDrawn },
+                    { "Draw calls",          &RenderSystem::Stats::drawCalls },
+                    { "Particles",           &RenderSystem::Stats::particlesDrawn },
+                    { "Shadow casters",      &RenderSystem::Stats::shadowDrawn },
+                    { "Shadow culled",       &RenderSystem::Stats::shadowCulled },
+                    { "Skinned matrices",    &RenderSystem::Stats::skinnedMatrices },
+                    { "Shadow passes saved", &RenderSystem::Stats::shadowPassesSkipped },
+                };
+
+                std::vector<uint32_t> counts;
+                counts.reserve(statsSamples.size());
+                for (const Counter& counter : kCounters) {
+                    counts.clear();
+                    uint32_t worst = 0;
+                    for (const RenderSystem::Stats& sample : statsSamples) {
+                        counts.push_back(sample.*counter.field);
+                        worst = std::max(worst, sample.*counter.field);
+                    }
+
+                    const std::size_t middle = counts.size() / 2;
+                    std::nth_element(counts.begin(), counts.begin() + middle, counts.end());
+
+                    // A counter that stayed at zero all run is left out, as a
+                    // zone that cost nothing is. Printing nine zeroes for a
+                    // scene with no shadows and no particles buries the two
+                    // numbers somebody came to read.
+                    if (counts[middle] == 0 && worst == 0) continue;
+
+                    std::cout << "  " << counter.name << ": " << counts[middle]
+                              << " (worst " << worst << ")" << std::endl;
+                }
             }
             break;
         }

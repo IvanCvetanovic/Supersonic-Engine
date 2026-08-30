@@ -704,6 +704,12 @@ bool RenderSystem::ComputeSceneBounds(entt::registry& registry, MeshRegistry& me
     return any;
 }
 
+uint32_t RenderSystem::DrawCallsForMesh(const GpuMesh* mesh) {
+    return (mesh && mesh->sections.size() > 1)
+               ? static_cast<uint32_t>(mesh->sections.size())
+               : 1u;
+}
+
 bool RenderSystem::SortOpaqueDraws(std::vector<OpaqueDraw>& draws) {
     // The early out is the feature, not an optimisation.
     //
@@ -789,6 +795,7 @@ void RenderSystem::Render(
         if (const auto* material = registry.try_get<MaterialComponent>(entity);
             material && material->transparent) {
             const glm::vec3 centre = (worldMin + worldMax) * 0.5f;
+            ++stats.transparentDrawn;
             transparent.push_back(TransparentDraw{
                 entity, mesh, world.matrix,
                 renderable.albedoTextureID, renderable.normalTextureID,
@@ -862,7 +869,10 @@ void RenderSystem::Render(
         // hit is doing, and it goes on working here.
         const GpuMesh* gpuMesh = meshes.Get(draw.meshID);
         const bool multiSurface = gpuMesh && gpuMesh->sections.size() > 1;
-        const size_t sectionCount = multiSurface ? gpuMesh->sections.size() : 1u;
+
+        // The same decision the counter uses, so the two cannot come to
+        // disagree about what a draw is.
+        const size_t sectionCount = DrawCallsForMesh(gpuMesh);
 
         for (size_t s = 0; s < sectionCount; ++s) {
             uint32_t albedo = draw.albedoTextureID;
@@ -913,6 +923,7 @@ void RenderSystem::Render(
 
             if (indexCount > 0) {
                 commandBuffer.drawIndexed(indexCount, 1, firstIndex, 0, 0);
+                ++stats.drawCalls;
             }
         }
     }
@@ -928,6 +939,10 @@ void RenderSystem::Render(
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, skyPipeline->GetLayout(),
                                          VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
         commandBuffer.draw(3, 1, 0, 0);
+
+        // A call belonging to no entity, which is why `drawn` could never have
+        // accounted for it.
+        ++stats.drawCalls;
 
         // Nothing is rebound here on purpose: both blocks below bind their own
         // pipeline and reset the rebind-avoidance state, and the opaque pass
@@ -981,6 +996,7 @@ void RenderSystem::Render(
                 0, sizeof(PushConstantData), &push);
 
             commandBuffer.drawIndexed(draw.mesh->indexCount, 1, 0, 0, 0);
+            ++stats.drawCalls;
         }
 
     }
@@ -1073,6 +1089,8 @@ void RenderSystem::Render(
             0, sizeof(PushConstantData), &push);
 
         commandBuffer.drawIndexed(particleMesh->indexCount, 1, 0, 0, 0);
+        ++stats.drawCalls;
+        ++stats.particlesDrawn;
     }
 }
 

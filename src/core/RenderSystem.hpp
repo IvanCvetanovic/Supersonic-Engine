@@ -20,6 +20,31 @@ public:
     struct Stats {
         uint32_t drawn{0};
         uint32_t culled{0};
+
+        // Of `drawn`, the ones diverted into the blended pass. Opaque and
+        // blended cost different things and are fixed by different work, and
+        // until now they were one number.
+        uint32_t transparentDrawn{0};
+
+        // DRAW CALLS, which is not the same number as `drawn` and never was.
+        //
+        // `drawn` counts ENTITIES that survived the frustum. A multi-material
+        // model is one of those and issues one call per surface, the sky is a
+        // call belonging to no entity, and a particle system is a call per
+        // particle counted nowhere at all. So "one draw call per drawable" was
+        // a property this engine did not have and nothing could see it.
+        //
+        // The scene pass only. The shadow pass has `shadowDrawn`, which is
+        // already one-to-one with its own submissions.
+        //
+        // This is the number instancing moves. It is here so that when
+        // instancing lands the drop is recorded rather than asserted.
+        uint32_t drawCalls{0};
+
+        // Particles submitted, which is a call each. Counted separately
+        // because a particle is not a drawable and lumping them in would make
+        // `drawCalls` move for a reason `drawn` cannot explain.
+        uint32_t particlesDrawn{0};
         // Summed across every cascade, so with four cascades an object visible
         // in two of them counts twice - which is what it costs.
         uint32_t shadowDrawn{0};
@@ -119,6 +144,22 @@ public:
     // Static and pure so a test can reach it with no device, no registry and no
     // mesh registry - the same reason ShadowAlphaFor is exposed.
     static bool SortOpaqueDraws(std::vector<OpaqueDraw>& draws);
+
+    // How many draw calls one drawable costs in the opaque pass.
+    //
+    // ONE PER SURFACE for a multi-material model, one for everything else. A
+    // single-section mesh takes the same path as a sectionless one on purpose -
+    // see GpuMesh::sections - so the loop has no special case, and neither does
+    // this.
+    //
+    // Split out for the same reason the sorts are: it is the DECISION the draw
+    // loop bounds itself by, it needs no device, and it is the only place the
+    // gap between "drawables" and "draw calls" is decided. The loop uses it, so
+    // the counter and the loop cannot come to disagree about what a draw is.
+    //
+    // A null mesh is one call, matching the loop: a drawable whose mesh has
+    // gone is still bound and pushed, it simply submits nothing.
+    static uint32_t DrawCallsForMesh(const GpuMesh* mesh);
 
     // One blended draw, gathered before the pass is recorded.
     //

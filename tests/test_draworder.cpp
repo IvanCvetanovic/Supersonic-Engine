@@ -17,6 +17,7 @@
 
 #include "TestHarness.hpp"
 #include "core/RenderSystem.hpp"
+#include "renderer/MeshRegistry.hpp"
 
 #include <algorithm>
 #include <string>
@@ -186,6 +187,107 @@ void testTwoDrawsAgreeingOnEverythingKeepGatherOrder() {
     }
 }
 
+
+// --- What a frame COSTS, in quantities ------------------------------------
+//
+// The engine measured itself only in milliseconds. A millisecond threshold is
+// flaky across machines and gets deleted within a month; "one draw call per
+// drawable" is a property, and it is one this engine does not actually have -
+// which nothing could see, because the only counter was of ENTITIES.
+
+void testAModelWithOneSurfaceCostsOneDrawCall() {
+    GpuMesh plain;
+    plain.sections.resize(1);
+    CHECK_EQ(RenderSystem::DrawCallsForMesh(&plain), uint32_t{1});
+
+    // A mesh with NO sections takes the same path, which is the reason
+    // GpuMesh::sections is documented as always having at least one: the draw
+    // loop has no special case, so neither does this.
+    GpuMesh sectionless;
+    CHECK_EQ(RenderSystem::DrawCallsForMesh(&sectionless), uint32_t{1});
+
+    // And a drawable whose mesh has gone is still bound and pushed - it simply
+    // submits nothing. One call's worth of loop, as the loop does.
+    CHECK_EQ(RenderSystem::DrawCallsForMesh(nullptr), uint32_t{1});
+}
+
+void testAMultiSurfaceModelCostsOneCallPerSurface() {
+    // THE GAP BETWEEN DRAWABLES AND DRAW CALLS, which is what the counter
+    // exists to make visible. One entity, one `drawn`, four submissions.
+    //
+    // Not hypothetical: the demo scene draws eight drawables in ten calls, and
+    // HUSK has forty-eight multi-material models out of fifty-eight.
+    GpuMesh model;
+    model.sections.resize(4);
+    CHECK_EQ(RenderSystem::DrawCallsForMesh(&model), uint32_t{4});
+
+    GpuMesh pair;
+    pair.sections.resize(2);
+    CHECK_EQ(RenderSystem::DrawCallsForMesh(&pair), uint32_t{2});
+}
+
+void testSortingIsAPermutationAndLosesNothing() {
+    // The suite asserted ORDER and never SIZE. A sort that dropped a draw -
+    // a partition that forgot its tail, a unique that should not have been
+    // there - reorders the survivors perfectly and every existing case passes.
+    std::vector<RenderSystem::OpaqueDraw> draws;
+    for (uint32_t i = 0; i < 64; ++i) draws.push_back(draw(i, static_cast<int32_t>(i % 7)));
+
+    std::vector<uint32_t> before = meshOrder(draws);
+    RenderSystem::SortOpaqueDraws(draws);
+    std::vector<uint32_t> after = meshOrder(draws);
+
+    CHECK_EQ(after.size(), before.size());
+
+    // The same multiset, not merely the same count. Sorting both copies turns
+    // "is a permutation" into one comparison.
+    std::sort(before.begin(), before.end());
+    std::sort(after.begin(), after.end());
+    CHECK_MSG(before == after, "every draw that went in comes out, exactly once");
+}
+
+void testTheBlendedSortIsAPermutationToo() {
+    // Same claim for the pass where losing one is least visible: a blended
+    // draw that vanished leaves the scene behind it looking correct.
+    std::vector<RenderSystem::TransparentDraw> draws;
+    for (uint32_t i = 0; i < 32; ++i) {
+        RenderSystem::TransparentDraw d;
+        d.viewDepth = static_cast<float>((i * 7919u) % 100u);
+        d.sortKey = static_cast<int32_t>(i % 5);
+        d.gathered = i;
+        draws.push_back(d);
+    }
+
+    std::vector<uint32_t> before;
+    for (const auto& d : draws) before.push_back(d.gathered);
+
+    RenderSystem::SortTransparentDraws(draws);
+
+    std::vector<uint32_t> after;
+    for (const auto& d : draws) after.push_back(d.gathered);
+
+    CHECK_EQ(after.size(), before.size());
+    std::sort(before.begin(), before.end());
+    std::sort(after.begin(), after.end());
+    CHECK_MSG(before == after, "every blended draw survives the sort");
+}
+
+void testAnUntouchedStatsBlockIsAllZeroes() {
+    // The class of bug the renderer documents having shipped: a counter nobody
+    // initialised read zero for every frame the engine ever rendered. Cheap to
+    // state, and it is the check a new field is most likely to fail.
+    const RenderSystem::Stats stats;
+    CHECK_EQ(stats.drawn, uint32_t{0});
+    CHECK_EQ(stats.culled, uint32_t{0});
+    CHECK_EQ(stats.transparentDrawn, uint32_t{0});
+    CHECK_EQ(stats.drawCalls, uint32_t{0});
+    CHECK_EQ(stats.particlesDrawn, uint32_t{0});
+    CHECK_EQ(stats.shadowDrawn, uint32_t{0});
+    CHECK_EQ(stats.shadowCulled, uint32_t{0});
+    CHECK_EQ(stats.skinnedMatrices, uint32_t{0});
+    CHECK_EQ(stats.shadowPassesSkipped, uint32_t{0});
+}
+
 void runTests() {
     testBlendedDrawsGoBackToFront();
     testSomethingBehindTheCameraSortsBehind();
@@ -197,8 +299,14 @@ void runTests() {
     testEqualKeysKeepTheOrderTheyArrivedIn();
     testNegativeKeysSortBehindZero();
     testAnEmptyListIsNotAReorder();
+
+    testAModelWithOneSurfaceCostsOneDrawCall();
+    testAMultiSurfaceModelCostsOneCallPerSurface();
+    testSortingIsAPermutationAndLosesNothing();
+    testTheBlendedSortIsAPermutationToo();
+    testAnUntouchedStatsBlockIsAllZeroes();
 }
 
 } // namespace
 
-TEST_MAIN("test_draworder", 11)
+TEST_MAIN("test_draworder", 42)
