@@ -56,4 +56,49 @@ bool LooksLikeAPackagedFolder(const std::filesystem::path& directory);
 // code reads as though it means it.
 std::filesystem::path AssetRoot();
 
+// Where a game writes what belongs to the PLAYER rather than to the
+// installation: saves, settings, screenshots.
+//
+// The engine had no answer to this, and both obvious answers ship a broken
+// game. Beside the executable fails the moment the game is installed where a
+// user cannot write, which on Windows is the default install location and is
+// not something the player did wrong. The working directory is wherever the
+// shortcut happened to point, so two launches of the same game can disagree
+// about where its save is.
+//
+// `application` names the game's own folder inside the location the PLATFORM
+// nominates:
+//
+//   Windows   %APPDATA%\<application>
+//   macOS     ~/Library/Application Support/<application>
+//   Linux     $XDG_DATA_HOME/<application>, else ~/.local/share/<application>
+//
+// Godot spells this `user://` and a game reaches for it before almost anything
+// else. It is one function because the alternative is every game inventing its
+// own, which is how the three executable-path copies above came to disagree.
+//
+// Read from the environment rather than through SHGetKnownFolderPath, and the
+// reason is the cross-toolchain build: the whole of SupersonicCore compiles
+// under MinGW-w64 today with no Windows-SDK-only link dependency, and that
+// property is worth more here than the marginal robustness of the shell API.
+// %APPDATA% is what the shell API would return anyway.
+//
+// CREATES the directory. Every caller would have to, and forgetting is silent -
+// a save that returns false on the first launch and on every launch after.
+//
+// The name is SANITISED, not trusted: it becomes a path component, and a title
+// carrying a separator or a `..` would otherwise write outside the folder it
+// names. Returns empty for a name with nothing usable left in it, and for a
+// platform that will not say where home is - a game that cannot persist is
+// still playable, and that is a better answer than writing somewhere
+// unpredictable.
+std::filesystem::path UserDataDirectory(const std::string& application);
+
+// The sanitisation UserDataDirectory applies, on its own.
+//
+// Split out for the same reason LooksLikeAPackagedFolder is: the function
+// around it touches the real filesystem and the real environment, and the
+// question "what does this name become" is pure.
+std::string SanitiseForPathComponent(const std::string& name);
+
 } // namespace Supersonic

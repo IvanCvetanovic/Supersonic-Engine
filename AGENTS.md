@@ -59,7 +59,7 @@ cmake --build build --parallel
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Sixty-two suites. Rather than repeat the list here - the copy that used to
+Sixty-three suites. Rather than repeat the list here - the copy that used to
 live in this file had fallen thirteen entries behind - see the table in
 [README.md](README.md#testing), or read it from the build, which is where CI
 gets it:
@@ -67,7 +67,7 @@ gets it:
 ```bash
 # Both registrars. add_port_test wraps add_engine_test, so the fourteen Wolf
 # Brigade suites run like any other and a count of the first pattern alone
-# reports 48 against a ctest run of 62.
+# reports 49 against a ctest run of 63.
 grep -cE '^add_(engine|port)_test\([a-z_]+\)$' tests/CMakeLists.txt
 ```
 

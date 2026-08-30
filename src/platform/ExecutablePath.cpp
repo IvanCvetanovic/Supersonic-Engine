@@ -1,5 +1,8 @@
 #include "platform/ExecutablePath.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 #if defined(_WIN32)
@@ -100,6 +103,83 @@ std::filesystem::path AssetRoot() {
     std::error_code ec;
     const std::filesystem::path here = std::filesystem::current_path(ec);
     return ec ? std::filesystem::path{} : here;
+}
+
+std::string SanitiseForPathComponent(const std::string& name) {
+    // TRIMMED FIRST, THEN MAPPED, and the order is the whole of it. Mapping
+    // first turns a trailing dot into an underscore, and there is then nothing
+    // left for the trim to find - so "Game..." becomes "Game___" rather than
+    // "Game", which is a folder name nobody chose.
+    //
+    // Leading and trailing spaces and dots are stripped rather than replaced
+    // because Windows silently drops a trailing dot from a directory name: a
+    // folder CREATED as "Game." is later OPENED as "Game", and the two names
+    // stop agreeing about where the save is.
+    const auto notPadding = [](char c) { return c != ' ' && c != '.'; };
+    const auto first = std::find_if(name.begin(), name.end(), notPadding);
+    const auto last = std::find_if(name.rbegin(), name.rend(), notPadding).base();
+    if (first >= last) return {};
+
+    std::string out;
+    out.reserve(static_cast<std::size_t>(last - first));
+
+    for (auto it = first; it != last; ++it) {
+        // An allow-list, not a deny-list. A deny-list is a guess about which
+        // separators the platform has, and this string is written by whoever
+        // named the game rather than by the engine.
+        const unsigned char c = static_cast<unsigned char>(*it);
+        const bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                          (c >= '0' && c <= '9') || c == ' ' || c == '-' || c == '_';
+        out.push_back(keep ? static_cast<char>(c) : '_');
+    }
+
+    return out;
+}
+
+std::filesystem::path UserDataDirectory(const std::string& application) {
+    const std::string folder = SanitiseForPathComponent(application);
+    if (folder.empty()) return {};
+
+    std::filesystem::path base;
+
+#if defined(_WIN32)
+    if (const char* appData = std::getenv("APPDATA"); appData != nullptr && *appData != '\0') {
+        base = std::filesystem::path(appData);
+    }
+#elif defined(__APPLE__)
+    if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
+        base = std::filesystem::path(home) / "Library" / "Application Support";
+    }
+#else
+    // XDG first, and only when it is ABSOLUTE. The specification says a
+    // relative value is invalid and must be ignored, and honouring one would
+    // put the save wherever the game happened to be started from - which is
+    // the failure this whole function exists to avoid.
+    if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg != nullptr && *xdg != '\0') {
+        const std::filesystem::path candidate(xdg);
+        if (candidate.is_absolute()) base = candidate;
+    }
+    if (base.empty()) {
+        if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
+            base = std::filesystem::path(home) / ".local" / "share";
+        }
+    }
+#endif
+
+    if (base.empty()) return {};
+
+    const std::filesystem::path directory = base / folder;
+
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+
+    // create_directories reports "already there" as a non-error with a false
+    // return, so the error code is what to read - but a race with another
+    // process creating the same directory sets one too. Ask the filesystem
+    // what is actually there rather than trusting either.
+    if (!std::filesystem::is_directory(directory, ec)) return {};
+
+    return directory;
 }
 
 } // namespace Supersonic
