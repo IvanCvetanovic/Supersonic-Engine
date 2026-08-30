@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <utility>
 
 #include "core/Application.hpp"
 #include "core/Components.hpp"
@@ -92,6 +94,36 @@ constexpr float kBarSpacing = 16.0f;
 
 } // namespace
 
+WolfBrigadeLayer::WolfBrigadeLayer(std::string saveDir) : m_saveDir(std::move(saveDir)) {
+    if (m_saveDir.empty()) return;
+
+    // The original's own filenames, so a player's save reads the same either
+    // side of the port. Built here rather than at each use so there is one
+    // place that decides, and so a test can see them by constructing a layer.
+    const std::filesystem::path directory(m_saveDir);
+    m_profilePath = (directory / "wolf_brigade_save.json").string();
+    m_runPath = (directory / "wolf_brigade_run.json").string();
+}
+
+void WolfBrigadeLayer::saveProfileIfDirty() {
+    if (!m_profile || m_profilePath.empty() || !m_profile->IsDirty()) return;
+
+    if (m_profile->Save(m_profilePath)) {
+        m_reportedSaveFailure = false;
+        return;
+    }
+
+    // ONCE. A directory that refuses writes would otherwise print a line every
+    // tick for the rest of the session, and the profile stays dirty either way
+    // so the next tick tries again.
+    if (!m_reportedSaveFailure) {
+        m_reportedSaveFailure = true;
+        SUPERSONIC_LOG_ERROR("WolfBrigade")
+            << "could not write the profile to " << m_profilePath
+            << "; progress will not persist." << std::endl;
+    }
+}
+
 void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     m_data = std::make_unique<GameData>();
     if (!m_data->LoadAll(WOLFBRIGADE_DATA_DIR)) {
@@ -102,7 +134,16 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     }
 
     m_profile = std::make_unique<Profile>();
-    m_match = std::make_unique<Match>(*m_data, *m_profile, "");
+
+    // A profile that is not there is a new player, not a failure, so the return
+    // value is deliberately not checked - see Profile::Load. What matters is
+    // that this happens BEFORE the match boots: GameState::Reset reads the
+    // owned meta levels to add Deeper Coffers to the opening balance, and a
+    // match booted over an unloaded profile would silently start a returning
+    // player at a new player's resources.
+    if (!m_profilePath.empty()) m_profile->Load(m_profilePath);
+
+    m_match = std::make_unique<Match>(*m_data, *m_profile, m_runPath);
     m_match->BootFresh();
     m_booted = true;
 
@@ -523,7 +564,20 @@ void WolfBrigadeLayer::setPauseMenuVisible(entt::registry& registry, bool shown)
 
 void WolfBrigadeLayer::restartMatch(entt::registry& registry) {
     if (!m_data || !m_profile) return;
-    m_match = std::make_unique<Match>(*m_data, *m_profile, "");
+
+    // A FRESH RESTART ABANDONS THE SAVED RUN, which is `pause_menu.gd:45` in
+    // its own words. Nothing else would do it: Match clears the run file from
+    // OnGameOver, and a restart is the path that does not end a run - so the
+    // Continue the player just restarted out of would still be on the menu.
+    //
+    // Clearing a file that is already gone is a no-op, so the game-over
+    // Restart - which arrives here having been cleared by OnGameOver already -
+    // needs no branch of its own.
+    if (!m_runPath.empty()) Snapshot::ClearRun(m_runPath);
+
+    // THE SAME PATH the first match got, not an empty one. A Restart that built
+    // a filesystem-free Match could never autosave or clear again.
+    m_match = std::make_unique<Match>(*m_data, *m_profile, m_runPath);
     m_match->BootFresh();
 
     // The bar's buttons point at the OLD match's selection and buildings, so
@@ -680,6 +734,26 @@ void WolfBrigadeLayer::updateGameOver(entt::registry& registry) {
 }
 
 void WolfBrigadeLayer::OnDetach(entt::registry& registry) {
+    // THE PORT OF `main.gd:98-100` - the close-request autosave - and this is
+    // where it goes because this is the only inbound notification the engine
+    // gives a layer. Both ways out of the run loop, the window closing and
+    // Application::RequestQuit, leave through the same path, and
+    // ~SupersonicApp calls LayerStack::Clear before the registry is destroyed
+    // on purpose. So there is exactly one shutdown and this is inside it.
+    //
+    // What it does NOT cover, said rather than assumed: a crash, and Android's
+    // APPLICATION_PAUSED, which fires without exiting. Neither has a delivery
+    // path today - the second because GLFW has no Android backend at all - and
+    // the answer to the first is a periodic autosave rather than a callback.
+    //
+    // AutosaveRun refuses a finished game itself, so a player who quits from
+    // the result screen does not get a Continue for a run that is over.
+    if (m_match) m_match->AutosaveRun();
+
+    // And the profile, which the last tick may have dirtied after its own
+    // write - a wave started, or renown banked, on the way out.
+    saveProfileIfDirty();
+
     // The match owns nothing in the registry, and the registry owns nothing in
     // the match. Dropping them in this order is not load-bearing; saying so is,
     // because the next person will look for a dependency that is not there.
@@ -737,6 +811,16 @@ void WolfBrigadeLayer::retire(entt::registry& registry, std::size_t used) {
 }
 
 void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
+    tick(registry, fixedDelta);
+
+    // AFTER the tick, whichever way the tick left. The body below returns early
+    // in three places - not booted, and paused - and a save written at the end
+    // of it would be skipped by all three. Wrapping is two lines; remembering
+    // to write before each return is a thing the fourth return forgets.
+    saveProfileIfDirty();
+}
+
+void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
     if (!m_booted || !m_match) return;
 
     // THE RESULT FIRST, and the order is load-bearing. "You cannot pause a

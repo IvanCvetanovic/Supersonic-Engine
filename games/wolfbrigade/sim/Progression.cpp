@@ -28,10 +28,17 @@ int Profile::MetaLevel(const std::string& id) const {
 
 void Profile::AddRenown(int amount) {
     m_renown = std::max(0, m_renown + amount);
+    m_dirty = true;
 }
 
 void Profile::RecordWave(int wave) {
-    if (wave > m_bestWave) m_bestWave = wave;
+    // Dirtied ONLY when the record actually moves, because the original does
+    // not write either: `save.gd:92` guards the `_put`. A replay of the easy
+    // early waves would otherwise rewrite the file once a wave for nothing.
+    if (wave > m_bestWave) {
+        m_bestWave = wave;
+        m_dirty = true;
+    }
 }
 
 std::string Profile::Difficulty(const std::string& fallback) const {
@@ -44,12 +51,14 @@ std::string Profile::Mode(const std::string& fallback) const {
 
 void Profile::SetMasterVolume(float volume) {
     m_masterVolume = std::clamp(volume, 0.0f, 1.0f);
+    m_dirty = true;
 }
 
 void Profile::ResetProgress() {
     m_renown = 0;
     m_bestWave = 0;
     m_metaLevels.clear();
+    m_dirty = true;
 
     // The preferences are NOT touched, and this is the whole point of the
     // function - see the header. Naming them here rather than leaving them to
@@ -100,6 +109,11 @@ bool Profile::FromJson(const std::string& text) {
     for (const auto& [id, level] : parsed["meta_levels"].AsObject()) {
         m_metaLevels[id] = static_cast<int>(level.AsNumber(0.0));
     }
+
+    // LAST, after every setter above has had its say. SetMasterVolume dirties
+    // like any other setter, and a profile that has just arrived from disk has
+    // nothing to write back.
+    m_dirty = false;
     return true;
 }
 
@@ -107,7 +121,12 @@ bool Profile::Save(const std::string& path) const {
     std::ofstream out(path, std::ios::binary);
     if (!out) return false;
     out << ToJson();
-    return out.good();
+    if (!out.good()) return false;
+
+    // Cleared only on a write that SUCCEEDED. A failed save that reported
+    // itself clean would be a save silently skipped on every tick after.
+    m_dirty = false;
+    return true;
 }
 
 bool Profile::Load(const std::string& path) {
@@ -126,6 +145,7 @@ bool Profile::Load(const std::string& path) {
         *this = Profile{};
         return false;
     }
+
 
     std::ostringstream buffer;
     buffer << in.rdbuf();

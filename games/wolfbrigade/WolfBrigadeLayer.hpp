@@ -38,6 +38,21 @@ namespace WolfBrigade {
 // makes.
 class WolfBrigadeLayer final : public Supersonic::EngineLayer {
 public:
+    // `saveDir` is where the profile and the Continue snapshot live, and it is
+    // INJECTED rather than resolved here.
+    //
+    // Empty by default, which means this layer never touches the filesystem -
+    // the same contract `Match`'s empty `runPath` already states, for the same
+    // reason. Every suite that builds a layer builds it bare, and a hardcoded
+    // path would have all of them writing into the ctest working directory and
+    // reading each other's files, which is order-dependent failure that reads
+    // as a flake.
+    //
+    // Only the shipped binary passes one, and it gets it from
+    // Supersonic::UserDataDirectory. The layer does not ask for itself because
+    // "where may I write" is a question about the machine, not about this game.
+    explicit WolfBrigadeLayer(std::string saveDir = {});
+
     const char* Name() const override { return "WolfBrigade"; }
 
     void OnAttach(entt::registry& registry) override;
@@ -225,6 +240,33 @@ private:
     std::unique_ptr<GameData> m_data;
     std::unique_ptr<Profile> m_profile;
     std::unique_ptr<Match> m_match;
+
+    // Where this game may write, and the two files it writes there. Both are
+    // empty when no directory was injected, which is what keeps a bare layer
+    // filesystem-free.
+    //
+    // The FILENAMES are the original's - `wolf_brigade_save.json` and
+    // `wolf_brigade_run.json` - so a player's save is the same document either
+    // side of the port. They differ in lifetime, which is why the original
+    // splits them and this does too: the profile outlives everything, and the
+    // run file is written when you leave a live match and deleted when one
+    // ends.
+    std::string m_saveDir;
+    std::string m_profilePath;
+    std::string m_runPath;
+
+    // Said once. A save directory that refuses writes must not print a line a
+    // tick for the rest of the session.
+    bool m_reportedSaveFailure{false};
+
+    // Writes the profile if it has anything to write. Called at the end of the
+    // tick and again on the way out, which between them is `save.gd`'s
+    // write-through with one disk touch instead of one per setter.
+    void saveProfileIfDirty();
+
+    // The tick itself. Separate from OnFixedUpdate only so that the save above
+    // runs whichever of this function's early returns was taken.
+    void tick(entt::registry& registry, float fixedDelta);
 
     std::vector<Quad> m_pool;
 

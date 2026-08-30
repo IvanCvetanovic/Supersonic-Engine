@@ -82,6 +82,15 @@ add_port_test(test_wb_selection)
 # and the reason it can exist at all is that the layer became a library.
 add_port_test(test_wb_hud)
 target_link_libraries(test_wb_hud PRIVATE WolfBrigadeGame)
+
+# Also the layer, and the ONE suite allowed to give it a save directory.
+#
+# Every other layer suite depends on a bare layer touching no disk - two suites
+# writing the same filenames in the same working directory fail in an
+# order-dependent way that reads as a flake. So that contract is asserted here,
+# and this is the only file that exercises the paths.
+add_port_test(test_wb_persistence)
+target_link_libraries(test_wb_persistence PRIVATE WolfBrigadeGame)
 add_engine_test(test_environmentmap)
 add_engine_test(test_assetdatabase)
 add_engine_test(test_serialize)

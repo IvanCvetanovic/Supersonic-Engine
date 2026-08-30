@@ -10,6 +10,7 @@
 
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -19,6 +20,7 @@
 #include "core/Log.hpp"
 #include "core/GameRuntime.hpp"
 #include "core/SupersonicApp.hpp"
+#include "platform/ExecutablePath.hpp"
 #include "renderer/VulkanContext.hpp"
 
 #include "WolfBrigadeLayer.hpp"
@@ -54,11 +56,25 @@ int main(int argc, char** argv) {
     manifest.title = "Wolf Brigade";
     // No startup scene: the board is built by the simulation, not placed.
 
+    // WHERE THIS GAME MAY WRITE, resolved once, here, and handed down.
+    //
+    // The layer does not ask for itself: "where may I write" is a question
+    // about the machine rather than about this game, and a layer that resolved
+    // its own path could not be built by a test without one. Empty when the
+    // platform will not say - the game is still playable, it just does not
+    // persist, and it says so rather than writing somewhere unpredictable.
+    const std::filesystem::path saveDir =
+        Supersonic::UserDataDirectory(manifest.title);
+    if (saveDir.empty()) {
+        std::cerr << "[Wolf Brigade] no writable user directory; "
+                     "this session will not be saved.\n";
+    }
+
     try {
         Supersonic::SupersonicApp app(options, &manifest);
 
         // The whole claim, in one line.
-        app.PushLayer(std::make_unique<WolfBrigade::WolfBrigadeLayer>());
+        app.PushLayer(std::make_unique<WolfBrigade::WolfBrigadeLayer>(saveDir.string()));
 
         app.Run();
     } catch (const std::exception& e) {

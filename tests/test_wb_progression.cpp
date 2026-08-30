@@ -569,6 +569,86 @@ void testTheVolumeIsClampedOnTheWayInAndOnTheWayBack() {
     CHECK_MSG(edited.MasterVolume() == 1.0f, "and is clamped on read");
 }
 
+void testNothingIsWrittenUntilSomethingChanges() {
+    // The stand-in for save.gd's write-through. Every writer dirties, and the
+    // caller writes once a tick - so a new writer does not have to remember to
+    // call Save, which is the failure a per-setter write eventually has.
+    Profile profile;
+    CHECK_MSG(!profile.IsDirty(), "a fresh profile has nothing to write");
+
+    profile.AddRenown(10);
+    CHECK_MSG(profile.IsDirty(), "renown dirties it");
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "wb_profile_dirty.json";
+    std::filesystem::remove(path);
+    CHECK_MSG(profile.Save(path.string()), "and it saves");
+    CHECK_MSG(!profile.IsDirty(), "which is the point at which it stops having one");
+
+    // Every other writer, one at a time, because a flag set in four places and
+    // missed in the fifth is exactly the shape of the bug above.
+    profile.SetMetaLevel("sharper_axes", 1);
+    CHECK_MSG(profile.IsDirty(), "an Armory purchase dirties it");
+    profile.Save(path.string());
+
+    profile.SetDifficulty("hard");
+    CHECK_MSG(profile.IsDirty(), "so does the difficulty");
+    profile.Save(path.string());
+
+    profile.SetMode("endless");
+    CHECK_MSG(profile.IsDirty(), "and the mode");
+    profile.Save(path.string());
+
+    profile.SetMuted(true);
+    CHECK_MSG(profile.IsDirty(), "and mute");
+    profile.Save(path.string());
+
+    profile.SetMasterVolume(0.5f);
+    CHECK_MSG(profile.IsDirty(), "and the volume");
+    profile.Save(path.string());
+
+    profile.ResetProgress();
+    CHECK_MSG(profile.IsDirty(), "and starting over");
+
+    // Loading is not a change. Treating it as one rewrites the file on every
+    // launch, which turns a read into a write on a disk that might refuse it.
+    Profile loaded;
+    CHECK_MSG(loaded.Load(path.string()), "a profile loads");
+    CHECK_MSG(!loaded.IsDirty(), "and arriving from disk is not a change");
+
+    std::filesystem::remove(path);
+}
+
+void testARecordThatDoesNotMoveIsNotAWrite() {
+    // `save.gd:92` guards its `_put` the same way. Without this a replay of the
+    // easy early waves rewrites the file once per wave to store the number it
+    // already held.
+    Profile profile;
+    profile.RecordWave(9);
+    CHECK_MSG(profile.IsDirty(), "a new record is worth writing");
+
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "wb_profile_record.json";
+    std::filesystem::remove(path);
+    profile.Save(path.string());
+
+    profile.RecordWave(4);
+    CHECK_EQ(profile.BestWave(), 9);
+    CHECK_MSG(!profile.IsDirty(), "and a wave already beaten is not");
+
+    std::filesystem::remove(path);
+}
+
+void testAFailedSaveIsStillPending() {
+    // A save that could not be written must not report itself clean, or the
+    // tick after it skips the write and the change is gone for good.
+    Profile profile;
+    profile.AddRenown(5);
+
+    CHECK_MSG(!profile.Save("no/such/directory/profile.json"), "an impossible save fails");
+    CHECK_MSG(profile.IsDirty(), "and leaves the change pending");
+}
+
 void testRenownCannotBeDrivenBelowZero() {
     // `save.gd:105` is `maxi(0, renown() + delta)`. Meta::Buy guards with
     // CanBuy so nothing shipped could reach this, which is exactly why it went
@@ -632,7 +712,10 @@ static void runTests() {
     testEveryPreferenceSurvivesBeingWrittenAndReadBack();
     testResettingProgressKeepsThePreferences();
     testTheVolumeIsClampedOnTheWayInAndOnTheWayBack();
+    testNothingIsWrittenUntilSomethingChanges();
+    testARecordThatDoesNotMoveIsNotAWrite();
+    testAFailedSaveIsStillPending();
     testRenownCannotBeDrivenBelowZero();
 }
 
-TEST_MAIN("test_wb_progression", 113)
+TEST_MAIN("test_wb_progression", 130)

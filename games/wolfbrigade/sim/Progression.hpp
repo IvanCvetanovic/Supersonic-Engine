@@ -37,7 +37,10 @@ public:
     // Absent means zero, which is a fresh profile - not an error. Every Armory
     // upgrade starts unowned.
     int MetaLevel(const std::string& id) const;
-    void SetMetaLevel(const std::string& id, int level) { m_metaLevels[id] = level; }
+    void SetMetaLevel(const std::string& id, int level) {
+        m_metaLevels[id] = level;
+        m_dirty = true;
+    }
 
     const MetaLevels& AllMetaLevels() const { return m_metaLevels; }
 
@@ -78,17 +81,26 @@ public:
     // to one this class invented. An empty string is that state, which is the
     // convention `GameState::m_difficulty` already uses for the same value.
     std::string Difficulty(const std::string& fallback) const;
-    void SetDifficulty(std::string id) { m_difficulty = std::move(id); }
+    void SetDifficulty(std::string id) {
+        m_difficulty = std::move(id);
+        m_dirty = true;
+    }
 
     std::string Mode(const std::string& fallback) const;
-    void SetMode(std::string mode) { m_mode = std::move(mode); }
+    void SetMode(std::string mode) {
+        m_mode = std::move(mode);
+        m_dirty = true;
+    }
 
     // No fallback, unlike the original's `muted(fallback)`. A bool has nowhere
     // to put "absent", every one of the four call sites passes false, and false
     // is the default here - so the tri-state would be a distinction this game
     // never draws. Say it rather than build it.
     bool Muted() const { return m_muted; }
-    void SetMuted(bool muted) { m_muted = muted; }
+    void SetMuted(bool muted) {
+        m_muted = muted;
+        m_dirty = true;
+    }
 
     // A 0..1 linear scalar, clamped on the way in AND on the way out of JSON,
     // because `save.gd:76` clamps on read and `:79` on write. A hand-edited
@@ -101,6 +113,23 @@ public:
     // reason this function exists: a player starting over does not want their
     // volume reset, and `verify_settings.gd:79` asserts exactly that.
     void ResetProgress();
+
+    // Whether anything has changed since the last Save or Load.
+    //
+    // `save.gd` writes through on EVERY setter - `_put` calls `_flush` - which
+    // is affordable there because the document is tiny and the writes are rare.
+    // Reproducing that literally would mean a filesystem call inside a class
+    // that deliberately has no path, so the flag is here and the write is the
+    // caller's, once per tick.
+    //
+    // The point is that it is not something each new writer has to remember.
+    // The Armory screen, the settings screen and the run-end award all change
+    // this object, and a design where each of them calls Save is a design where
+    // the fourth one does not.
+    //
+    // Load and FromJson CLEAR it: arriving from disk is not a change to write
+    // back, and treating it as one would rewrite the file on every launch.
+    bool IsDirty() const { return m_dirty; }
 
     // Round-trips through JSON, which is what the original writes to disk.
     std::string ToJson() const;
@@ -119,6 +148,12 @@ private:
     std::string m_mode;
     bool m_muted{false};
     float m_masterVolume{1.0f};
+
+    // Not serialised, and cleared by Save and Load. See IsDirty.
+    //
+    // `mutable` because Save is const: writing the file is not a change to
+    // the profile, it is the point at which the profile stops having one.
+    mutable bool m_dirty{false};
 };
 
 // In-run research, from `scripts/systems/upgrades.gd`.
