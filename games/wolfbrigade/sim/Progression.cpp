@@ -26,13 +26,44 @@ int Profile::MetaLevel(const std::string& id) const {
     return it == m_metaLevels.end() ? 0 : it->second;
 }
 
+void Profile::AddRenown(int amount) {
+    m_renown = std::max(0, m_renown + amount);
+}
+
 void Profile::RecordWave(int wave) {
     if (wave > m_bestWave) m_bestWave = wave;
+}
+
+std::string Profile::Difficulty(const std::string& fallback) const {
+    return m_difficulty.empty() ? fallback : m_difficulty;
+}
+
+std::string Profile::Mode(const std::string& fallback) const {
+    return m_mode.empty() ? fallback : m_mode;
+}
+
+void Profile::SetMasterVolume(float volume) {
+    m_masterVolume = std::clamp(volume, 0.0f, 1.0f);
+}
+
+void Profile::ResetProgress() {
+    m_renown = 0;
+    m_bestWave = 0;
+    m_metaLevels.clear();
+
+    // The preferences are NOT touched, and this is the whole point of the
+    // function - see the header. Naming them here rather than leaving them to
+    // an implicit "everything else" is what stops the next field from being
+    // wiped by accident.
 }
 
 std::string Profile::ToJson() const {
     std::ostringstream out;
     out << "{\n  \"renown\": " << m_renown << ",\n  \"best_wave\": " << m_bestWave
+        << ",\n  \"difficulty\": \"" << Supersonic::Json::Escape(m_difficulty) << "\""
+        << ",\n  \"mode\": \"" << Supersonic::Json::Escape(m_mode) << "\""
+        << ",\n  \"muted\": " << (m_muted ? "true" : "false")
+        << ",\n  \"master_volume\": " << m_masterVolume
         << ",\n  \"meta_levels\": {";
     bool first = true;
     for (const auto& [id, level] : m_metaLevels) {
@@ -55,6 +86,16 @@ bool Profile::FromJson(const std::string& text) {
     // existed rather than an error.
     m_bestWave = static_cast<int>(parsed["best_wave"].AsNumber(0.0));
 
+    // Absent means never chosen, which is what an empty string says here and
+    // what the menu turns into the data's own default.
+    m_difficulty = parsed["difficulty"].AsString("");
+    m_mode = parsed["mode"].AsString("");
+    m_muted = parsed["muted"].AsBool(false);
+
+    // Clamped on READ as well as on write, because the file is a text document
+    // a player can edit and `save.gd:76` clamps in the same place.
+    SetMasterVolume(static_cast<float>(parsed["master_volume"].AsNumber(1.0)));
+
     m_metaLevels.clear();
     for (const auto& [id, level] : parsed["meta_levels"].AsObject()) {
         m_metaLevels[id] = static_cast<int>(level.AsNumber(0.0));
@@ -74,9 +115,15 @@ bool Profile::Load(const std::string& path) {
 
     // A profile that is not there is a new player, not a failure. The original
     // says the same thing by starting from an empty dictionary.
+    //
+    // ASSIGNMENT, not a list of fields, and the reason is a bug that shipped:
+    // this cleared m_renown and m_metaLevels and silently left m_bestWave
+    // holding whatever the previous profile had reached. It was inert only
+    // because nothing outside the tests called Load at all; the moment a save
+    // path exists it is live, and a list of fields is a thing the NEXT field
+    // gets left out of too.
     if (!in) {
-        m_renown = 0;
-        m_metaLevels.clear();
+        *this = Profile{};
         return false;
     }
 

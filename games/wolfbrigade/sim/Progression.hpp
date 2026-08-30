@@ -25,7 +25,14 @@ namespace WolfBrigade {
 class Profile {
 public:
     int Renown() const { return m_renown; }
-    void AddRenown(int amount) { m_renown += amount; }
+
+    // CLAMPED AT ZERO, because `save.gd:105` is `maxi(0, renown() + delta)` and
+    // this took the delta unguarded. Nothing shipped could reach the
+    // difference - Meta::Buy checks CanBuy first, and AwardRunEnd only ever
+    // adds - so it was a divergence from the oracle that no caller exercised
+    // and no test named. It is the accessor that is public, though, and the
+    // next caller is the one that would find it.
+    void AddRenown(int amount);
 
     // Absent means zero, which is a fresh profile - not an error. Every Armory
     // upgrade starts unowned.
@@ -50,6 +57,51 @@ public:
     int BestWave() const { return m_bestWave; }
     void RecordWave(int wave);
 
+    // --- Preferences -------------------------------------------------------
+    //
+    // `save.gd`'s other half: difficulty, mode, mute and volume. They live HERE
+    // rather than in a store of their own because the original is one file with
+    // one dictionary and seven keys, and a second file would mean a second
+    // path, a second load, a second corruption policy and a second thing every
+    // screen has to remember to read.
+    //
+    // What actually separates the two halves is not where they are written but
+    // what erases them, and that is `ResetProgress` below rather than a file
+    // boundary.
+    //
+    // The key names are the original's - "difficulty", "mode", "muted",
+    // "master_volume" - so the two games read each other's save.
+    //
+    // The getters take the caller's fallback exactly as `save.gd:49-67` do,
+    // because "never chosen" is a state the menu has to be able to see: on a
+    // first launch the difficulty falls back to the one the DATA declares, not
+    // to one this class invented. An empty string is that state, which is the
+    // convention `GameState::m_difficulty` already uses for the same value.
+    std::string Difficulty(const std::string& fallback) const;
+    void SetDifficulty(std::string id) { m_difficulty = std::move(id); }
+
+    std::string Mode(const std::string& fallback) const;
+    void SetMode(std::string mode) { m_mode = std::move(mode); }
+
+    // No fallback, unlike the original's `muted(fallback)`. A bool has nowhere
+    // to put "absent", every one of the four call sites passes false, and false
+    // is the default here - so the tri-state would be a distinction this game
+    // never draws. Say it rather than build it.
+    bool Muted() const { return m_muted; }
+    void SetMuted(bool muted) { m_muted = muted; }
+
+    // A 0..1 linear scalar, clamped on the way in AND on the way out of JSON,
+    // because `save.gd:76` clamps on read and `:79` on write. A hand-edited
+    // save must not be able to over-drive the mixer.
+    float MasterVolume() const { return m_masterVolume; }
+    void SetMasterVolume(float volume);
+
+    // `save.gd:111-116`. Wipes the META half - renown, owned levels, and the
+    // high score - and KEEPS the preferences beside it. The asymmetry is the
+    // reason this function exists: a player starting over does not want their
+    // volume reset, and `verify_settings.gd:79` asserts exactly that.
+    void ResetProgress();
+
     // Round-trips through JSON, which is what the original writes to disk.
     std::string ToJson() const;
     bool FromJson(const std::string& text);
@@ -61,6 +113,12 @@ private:
     int m_renown{0};
     int m_bestWave{0};
     MetaLevels m_metaLevels;
+
+    // Empty means never chosen; see Difficulty/Mode above.
+    std::string m_difficulty;
+    std::string m_mode;
+    bool m_muted{false};
+    float m_masterVolume{1.0f};
 };
 
 // In-run research, from `scripts/systems/upgrades.gd`.

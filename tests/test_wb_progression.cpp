@@ -468,10 +468,115 @@ void testAProfileSurvivesBeingWrittenAndReadBack() {
 void testAMissingProfileIsANewPlayerRatherThanAFailure() {
     Profile profile;
     profile.AddRenown(500);
+    profile.SetMetaLevel("sharper_axes", 3);
+
+    // THE HIGH SCORE TOO, and it is here because it was not.
+    //
+    // Load's miss path listed the fields it cleared, and best_wave arrived
+    // after that list was written - so a Profile that had reached wave 12 and
+    // was then pointed at a file that is not there came back a new player
+    // holding somebody else's record. It was invisible while nothing shipped
+    // called Load; it went live the moment the layer got a save path.
+    profile.RecordWave(12);
 
     CHECK_MSG(!profile.Load("no/such/profile.json"), "it says it found nothing");
     CHECK_EQ(profile.Renown(), 0);
     CHECK_EQ(profile.MetaLevel("sharper_axes"), 0);
+    CHECK_EQ(profile.BestWave(), 0);
+
+    // And the preferences, for the same reason: a new player has chosen no
+    // difficulty, so the caller's fallback is what the menu must show.
+    CHECK_MSG(profile.Difficulty("normal") == "normal",
+              "got " + profile.Difficulty("normal"));
+    CHECK_MSG(profile.Mode("campaign") == "campaign",
+              "got " + profile.Mode("campaign"));
+    CHECK_MSG(!profile.Muted(), "a new player is not muted");
+    CHECK_MSG(profile.MasterVolume() == 1.0f, "and is at full volume");
+}
+
+// --- 8. Preferences ------------------------------------------------------
+//
+// `save.gd`'s other four keys. They share a document with the meta half and
+// differ from it in exactly one way - what erases them.
+
+void testEveryPreferenceSurvivesBeingWrittenAndReadBack() {
+    const std::filesystem::path path =
+        std::filesystem::temp_directory_path() / "wb_profile_prefs.json";
+    std::filesystem::remove(path);
+
+    {
+        Profile profile;
+        profile.SetDifficulty("hard");
+        profile.SetMode("endless");
+        profile.SetMuted(true);
+        profile.SetMasterVolume(0.25f);
+        profile.AddRenown(70);
+        CHECK_MSG(profile.Save(path.string()), "a profile with preferences saves");
+    }
+
+    Profile loaded;
+    CHECK_MSG(loaded.Load(path.string()), "and loads");
+
+    // The fallback is passed and IGNORED, which is the half of the contract a
+    // test that only ever asks a fresh profile would never reach.
+    CHECK_MSG(loaded.Difficulty("normal") == "hard", "got " + loaded.Difficulty("normal"));
+    CHECK_MSG(loaded.Mode("campaign") == "endless", "got " + loaded.Mode("campaign"));
+    CHECK_MSG(loaded.Muted(), "mute survives");
+    CHECK_MSG(loaded.MasterVolume() == 0.25f, "and so does the volume");
+    CHECK_EQ(loaded.Renown(), 70);
+
+    std::filesystem::remove(path);
+}
+
+void testResettingProgressKeepsThePreferences() {
+    // `verify_settings.gd:79` - "Reset keeps preferences (volume untouched)".
+    // The two halves of this document have different lifetimes and this is the
+    // only place that difference is visible.
+    Profile profile;
+    profile.AddRenown(240);
+    profile.SetMetaLevel("veteran_soldiers", 3);
+    profile.RecordWave(11);
+    profile.SetDifficulty("hard");
+    profile.SetMode("endless");
+    profile.SetMuted(true);
+    profile.SetMasterVolume(0.5f);
+
+    profile.ResetProgress();
+
+    CHECK_EQ(profile.Renown(), 0);
+    CHECK_EQ(profile.MetaLevel("veteran_soldiers"), 0);
+    CHECK_EQ(profile.BestWave(), 0);
+
+    CHECK_MSG(profile.Difficulty("normal") == "hard", "got " + profile.Difficulty("normal"));
+    CHECK_MSG(profile.Mode("campaign") == "endless", "got " + profile.Mode("campaign"));
+    CHECK_MSG(profile.Muted(), "starting over does not un-mute the game");
+    CHECK_MSG(profile.MasterVolume() == 0.5f, "nor move the volume slider");
+}
+
+void testTheVolumeIsClampedOnTheWayInAndOnTheWayBack() {
+    Profile profile;
+
+    profile.SetMasterVolume(4.0f);
+    CHECK_MSG(profile.MasterVolume() == 1.0f, "a setter cannot over-drive the mixer");
+    profile.SetMasterVolume(-2.0f);
+    CHECK_MSG(profile.MasterVolume() == 0.0f, "nor drive it below silence");
+
+    // And a hand-edited file cannot either. The save is a text document in a
+    // user directory, so the read is a second place the clamp has to hold -
+    // clamping only on write trusts every file the program did not write.
+    Profile edited;
+    CHECK_MSG(edited.FromJson("{ \"master_volume\": 9 }"), "a hand-edited save parses");
+    CHECK_MSG(edited.MasterVolume() == 1.0f, "and is clamped on read");
+}
+
+void testRenownCannotBeDrivenBelowZero() {
+    // `save.gd:105` is `maxi(0, renown() + delta)`. Meta::Buy guards with
+    // CanBuy so nothing shipped could reach this, which is exactly why it went
+    // unnoticed: the accessor is public and the guard is somewhere else.
+    Profile profile;
+    profile.AddRenown(100);
+    profile.AddRenown(-500);
+    CHECK_EQ(profile.Renown(), 0);
 }
 
 void testACorruptProfileDoesNotTakeTheRenownWithIt() {
@@ -523,6 +628,11 @@ static void runTests() {
     testAProfileSurvivesBeingWrittenAndReadBack();
     testAMissingProfileIsANewPlayerRatherThanAFailure();
     testACorruptProfileDoesNotTakeTheRenownWithIt();
+
+    testEveryPreferenceSurvivesBeingWrittenAndReadBack();
+    testResettingProgressKeepsThePreferences();
+    testTheVolumeIsClampedOnTheWayInAndOnTheWayBack();
+    testRenownCannotBeDrivenBelowZero();
 }
 
-TEST_MAIN("test_wb_progression", 70)
+TEST_MAIN("test_wb_progression", 113)
