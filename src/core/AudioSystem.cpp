@@ -158,6 +158,21 @@ void AudioSystem::Update(entt::registry& registry, AudioEngine& audio, float del
 
         audio.SetVoiceParameters(source.voice, volume, source.pitch, pan);
     }
+
+    // AFTER the component pass, and this is the engine's only per-frame audio
+    // housekeeping, so it is the only place a fire-and-forget voice can be
+    // freed at all. See AudioEngine::ReapFinishedVoices.
+    //
+    // After rather than before, so a voice started by the loop above cannot be
+    // considered by the same Update that created it. It would survive either
+    // way - Play submits its buffer and starts it before returning - but "the
+    // frame that starts a sound never reaps it" is a property worth having
+    // without depending on a backend detail.
+    //
+    // A component's own finished non-looping voice may be freed here, and that
+    // changes nothing: the next Update finds PathOf empty, which is already how
+    // it decides to restart one.
+    audio.ReapFinishedVoices();
 }
 
 } // namespace Supersonic

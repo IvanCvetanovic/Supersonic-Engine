@@ -71,6 +71,27 @@ public:
     VoiceId Play(const std::string& path, bool loop, float volume, float pitch);
 
     void Stop(VoiceId voice);
+
+    // Frees every voice that has finished playing by itself. Returns how many.
+    //
+    // Play() mints a voice per call and, until this existed, only Stop() ever
+    // freed one - and the only caller that stops anything is AudioSystem, for
+    // voices owned by an AudioSourceComponent. So a game that plays
+    // fire-and-forget one-shots, which is what an event-driven sound design IS,
+    // accumulated a live backend voice and a map entry per sound for the whole
+    // session. On Win32 that is an IXAudio2SourceVoice each, all of them in the
+    // mixer graph, all of them finished.
+    //
+    // It went unnoticed because nothing in the tree played a sound that way:
+    // the engine's own path is components, and the one game in the tree had not
+    // wired its audio up yet. The alternative - every game bounding it with a
+    // voice pool of its own - is a contract no engine should hand out.
+    //
+    // A LOOPING voice is never finished, so this leaves one alone. Ids are
+    // handed out by a counter that only increases, so a reaped id is never
+    // reused and a caller still holding one sees exactly what it would see for
+    // a voice that had ended: not playing, and no path.
+    std::size_t ReapFinishedVoices();
     void SetVoiceParameters(VoiceId voice, float volume, float pitch, float pan);
     bool IsVoicePlaying(VoiceId voice) const;
 

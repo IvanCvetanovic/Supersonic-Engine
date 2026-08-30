@@ -13,7 +13,9 @@
 #include <entt/entt.hpp>
 #include "core/AudioClip.hpp"
 
+#include <chrono>
 #include <cstdio>
+#include <thread>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -432,6 +434,110 @@ void testAnUnregisteredNameStillFailsRatherThanInventingSilence() {
               "and loading it fails rather than returning an empty clip");
 }
 
+
+// --- Reaping finished voices ---------------------------------------------
+
+static void testReapingAnEngineWithNoVoicesIsANoOp() {
+    // The base case, and it is not free: an implementation that walked the
+    // backend's voice table instead of the path map would trip over an empty
+    // one, and an implementation that reaped optimistically would report work
+    // it did not do.
+    AudioEngine engine;
+    CHECK_EQ(engine.ReapFinishedVoices(), size_t{0});
+    CHECK_EQ(engine.ReapFinishedVoices(), size_t{0});
+}
+
+static void testALoopingVoiceIsNeverFinishedAndIsNeverReaped() {
+    // The property that makes reaping safe to run every frame. A looping voice
+    // always has a buffer queued, so it is never finished - and music, which is
+    // the thing that loops, is exactly the voice a game would be worst served
+    // by losing.
+    const std::string path = "test_audio_reap_loop_tmp.wav";
+    writeWav(path, 22050, false);
+
+    AudioEngine engine;
+    const AudioEngine::VoiceId voice = engine.Play(path, true, 1.0f, 1.0f);
+
+    if (voice != AudioEngine::kInvalidVoice) {
+        // Needs a real output device, so these are not counted in the floor -
+        // without one Play returns kInvalidVoice and there is no voice to keep.
+        CHECK_EQ(engine.ReapFinishedVoices(), size_t{0});
+        CHECK_MSG(engine.PathOf(voice) == path,
+                  "a looping voice keeps its place in the table");
+        CHECK_MSG(engine.IsVoicePlaying(voice), "and keeps playing");
+        engine.Stop(voice);
+    }
+
+    std::remove(path.c_str());
+}
+
+static void testAFinishedOneShotIsFreedRatherThanKept() {
+    // THE LEAK. Play mints a voice per call and only Stop ever freed one, and
+    // the only caller that stops anything is AudioSystem, for voices owned by a
+    // component. A game playing fire-and-forget one-shots - an event-driven
+    // sound design - therefore accumulated a live backend voice per sound for
+    // the whole session.
+    //
+    // A tiny clip so it finishes on its own within the window below. The wait
+    // is bounded and polled rather than slept, so on a machine where the sound
+    // finishes instantly this costs nothing.
+    AudioClip clip;
+    clip.sampleRate = 8000;
+    clip.channels = 1;
+    clip.bitsPerSample = 16;
+    clip.pcm.assign(160 * sizeof(int16_t), 0);   // 20 ms of silence
+
+    AudioEngine engine;
+    CHECK_MSG(engine.AddClip("generated:reap", std::move(clip)) != nullptr,
+              "a generated clip registers");
+
+    const AudioEngine::VoiceId voice = engine.Play("generated:reap", false, 1.0f, 1.0f);
+
+    if (voice != AudioEngine::kInvalidVoice) {
+        // Not counted in the floor: needs a real output device.
+        CHECK_MSG(engine.PathOf(voice) == "generated:reap",
+                  "the engine is tracking it while it plays");
+
+        bool finished = false;
+        for (int i = 0; i < 400 && !finished; ++i) {
+            finished = !engine.IsVoicePlaying(voice);
+            if (!finished) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK_MSG(finished, "twenty milliseconds of audio finishes within two seconds");
+
+        if (finished) {
+            CHECK_EQ(engine.ReapFinishedVoices(), size_t{1});
+            CHECK_MSG(engine.PathOf(voice).empty(),
+                      "and the engine has forgotten it, got \"" + engine.PathOf(voice) + "\"");
+            CHECK_EQ(engine.ReapFinishedVoices(), size_t{0});
+        }
+    }
+}
+
+
+static void testAClipWithNoBitDepthIsRefusedRatherThanSilent() {
+    // It used to be accepted, cached, and then silent: the backend computes its
+    // block alignment as channels * (bitsPerSample / 8), gets zero, and
+    // CreateSourceVoice refuses it - so Play returned kInvalidVoice for a clip
+    // the engine had said was fine.
+    //
+    // Only a game that SYNTHESISES its audio can reach it. A decoder that got
+    // as far as samples had already read the format chunk.
+    AudioEngine engine;
+
+    AudioClip clip;
+    clip.channels = 1;
+    clip.sampleRate = 44100;
+    clip.pcm.assign(400, 0);
+    // bitsPerSample deliberately left at its default.
+
+    CHECK_MSG(!clip.valid(), "a clip with no bit depth is not a valid clip");
+    CHECK_MSG(engine.AddClip("generated:depthless", std::move(clip)) == nullptr,
+              "so the engine refuses it at the door");
+    CHECK_MSG(!engine.HasClip("generated:depthless"),
+              "rather than caching something that can never sound");
+}
+
 static void runTests() {
     testLoadsValidWav();
     testSkipsUnknownChunks();
@@ -444,6 +550,11 @@ static void runTests() {
     testUnloadClipMakesTheNextLoadReadDiskAgain();
     testReloadClipLetsASourceThatGaveUpTryAgain();
     testReloadClipStopsTheVoiceReadingTheOldSamples();
+
+    testAClipWithNoBitDepthIsRefusedRatherThanSilent();
+    testReapingAnEngineWithNoVoicesIsANoOp();
+    testALoopingVoiceIsNeverFinishedAndIsNeverReaped();
+    testAFinishedOneShotIsFreedRatherThanKept();
     testAVoiceIsFoundByWhatItPlaysNotByWhatItsSourceNamesNow();
     testALoopingSourceFollowsAChangedSoundFile();
 
@@ -453,4 +564,4 @@ static void runTests() {
     testAnUnregisteredNameStillFailsRatherThanInventingSilence();
 }
 
-TEST_MAIN("test_audio", 30)
+TEST_MAIN("test_audio", 62)

@@ -333,6 +333,25 @@ void AudioEngine::Stop(VoiceId voice) {
     m_voicePaths.erase(voice);
 }
 
+std::size_t AudioEngine::ReapFinishedVoices() {
+    std::size_t freed = 0;
+    for (auto it = m_voicePaths.begin(); it != m_voicePaths.end();) {
+        // A looping voice always has a buffer queued, so it is never finished
+        // and never reaped. That is the whole of the loop case.
+        if (IsVoicePlaying(it->first)) {
+            ++it;
+            continue;
+        }
+
+        // stopImpl rather than Stop: Stop would erase from the map this loop is
+        // already walking.
+        stopImpl(it->first);
+        it = m_voicePaths.erase(it);
+        ++freed;
+    }
+    return freed;
+}
+
 const std::string& AudioEngine::PathOf(VoiceId voice) const {
     const auto it = m_voicePaths.find(voice);
     return it == m_voicePaths.end() ? m_noPath : it->second;
