@@ -675,6 +675,22 @@ Android "not functional"; extending that register forward costs nothing.
       replacing them
 - [x] Clustered forward lighting: the eight-light cap is gone. The frustum is cut
       into 16x9x24 froxels and a fragment loops only the lights that reach it
+- [x] A place for a game to save: `UserDataDirectory` resolves `%APPDATA%`,
+      `~/Library/Application Support` or `$XDG_DATA_HOME`, so a save survives an
+      install into a folder the player cannot write to and a shortcut that
+      starts the game from somewhere else
+- [x] What a frame costs in QUANTITIES, not only in milliseconds — drawables,
+      blended drawables, draw calls, particles, shadow casters and skinned
+      matrices, reported by `--frames` under `[Counts]` as a median and a worst.
+      Draw calls were never counted before, and are not the same number as
+      drawables: the demo scene draws eight in ten
+- [x] Nearest-neighbour texture filtering, asked for by the asset's `.meta` and
+      not by the material that uses it — so pixel art stays sharp, and two
+      materials naming one file cannot disagree about it
+- [x] A sound is freed once it has finished. `Play` minted a voice per call and
+      only an explicit `Stop` ever released one, so a game playing
+      fire-and-forget one-shots accumulated a live voice per sound for the
+      whole session
 
 ### Next
 

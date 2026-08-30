@@ -495,6 +495,149 @@ void testTheHashSurvivesJsonsDoubles() {
     CHECK_MSG(imported.adopted == 1, "the stored hash has to come back bit for bit");
 }
 
+
+// --- Import settings: how a texture asks to be sampled -------------------
+//
+// The engine filtered every texture linearly with no way to say otherwise,
+// which makes pixel art blurred and unfixable. It is the one thing the sprite
+// work found that a quad, a UV transform and an unlit material genuinely
+// cannot express - region, flip, pivot and pixels-per-unit all already can.
+//
+// It belongs to the ASSET rather than to a material because TextureRegistry
+// caches by path: two materials naming one file cannot disagree about it, since
+// the first to ask would silently decide for both.
+//
+// Driven through the public surface only - FilterForAsset and Import - because
+// that is what TextureRegistry and the importer actually call.
+
+// A .meta as a hand-edited file, which is how somebody turns this on today.
+std::string writeMeta(const fs::path& path, const std::string& guid,
+                      const std::string& hash, const std::string& filter) {
+    std::string text = "{\n  \"Guid\": \"" + guid + "\",\n  \"Hash\": \"" + hash + "\"";
+    if (!filter.empty()) text += ",\n  \"Filter\": \"" + filter + "\"";
+    text += "\n}\n";
+    return write(path, text);
+}
+
+static void testATextureWithNoMetaIsFilteredLinearly() {
+    // Every texture in the tree today, and every generated one - which is what
+    // UploadRGBA hands over, under a key that was never a path.
+    const fs::path root = freshRoot();
+
+    CHECK_MSG(AssetDatabase::FilterForAsset((root / "textures/absent.png").generic_string()) ==
+                  AssetDatabase::TextureFilter::Linear,
+              "a texture with no .meta is linear");
+    CHECK_MSG(AssetDatabase::FilterForAsset("generated:tone") ==
+                  AssetDatabase::TextureFilter::Linear,
+              "and so is a name that was never a path");
+}
+
+static void testAMetaThatSaysNothingStillMeansLinear() {
+    // Every .meta already committed says nothing about filtering, and must go
+    // on meaning what it has always meant. Nothing migrates.
+    const fs::path root = freshRoot();
+    const std::string asset = write(root / "textures/plain.png", "not really a png");
+    writeMeta(root / "textures/plain.png.meta",
+              "320e51673e6f8a91c3d06bca0efebea9", "c3d06bca0efebea9", "");
+
+    CHECK_MSG(AssetDatabase::FilterForAsset(asset) == AssetDatabase::TextureFilter::Linear,
+              "silence is linear");
+}
+
+static void testAMetaCanAskForNearest() {
+    const fs::path root = freshRoot();
+    const std::string asset = write(root / "textures/pixel_art.png", "pixels");
+    writeMeta(root / "textures/pixel_art.png.meta",
+              "7e56bc09147250985d6a0e1624caacee", "5d6a0e1624caacee", "nearest");
+
+    CHECK_MSG(AssetDatabase::FilterForAsset(asset) == AssetDatabase::TextureFilter::Nearest,
+              "and asking for nearest is heard");
+}
+
+static void testAReimportKeepsTheFilterSomebodyChose() {
+    // THE ONE THAT WOULD HAVE BITTEN. Import rewrites a .meta whenever the
+    // asset's content hash moves, which is every time the artist saves the
+    // file - so an import setting the importer did not carry forward would
+    // survive exactly until the next edit, and come back as a blurred sprite
+    // with nothing to blame.
+    //
+    // It works because ReadMeta fills the whole entry and Import writes that
+    // entry back, rather than minting a fresh one. Asserted rather than left to
+    // that happening to stay true.
+    const fs::path root = freshRoot();
+    const std::string asset = write(root / "textures/hero.png", "version one");
+    writeMeta(root / "textures/hero.png.meta",
+              "239e87cb7045b349edfbc46b8f882006", "0", "nearest");
+
+    AssetDatabase database;
+    database.Import(root.generic_string());
+    const std::string guid = database.GuidForPath(asset);
+    CHECK_EQ(guid.size(), size_t{32});
+
+    // The artist saves the file again, which moves the hash and makes Import
+    // rewrite the .meta.
+    write(root / "textures/hero.png", "version two, a different length entirely");
+    const auto again = database.Import(root.generic_string());
+    CHECK_MSG(again.refreshed >= 1, "the changed asset was re-imported");
+
+    CHECK_MSG(AssetDatabase::FilterForAsset(asset) == AssetDatabase::TextureFilter::Nearest,
+              "and the filter survived the rewrite");
+    CHECK_MSG(database.GuidForPath(asset) == guid,
+              "along with the identity, which is the thing the rewrite is for");
+}
+
+static void testImportingAPlainTextureWritesNoFilterKey() {
+    // A .meta that said "linear" would be a diff across every identity file in
+    // the project the first time anyone imported it, saying the thing their
+    // absence already said. Those files are committed, and a diff nobody reads
+    // is a diff that hides the one line that mattered.
+    const fs::path root = freshRoot();
+    const std::string asset = write(root / "textures/ordinary.png", "pixels");
+
+    AssetDatabase database;
+    database.Import(root.generic_string());
+
+    std::ifstream in((root / "textures/ordinary.png.meta"), std::ios::binary);
+    CHECK_MSG(in.is_open(), "the importer minted a .meta");
+    const std::string text((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    CHECK_MSG(text.find("Filter") == std::string::npos,
+              "and said nothing about filtering: " + text);
+    CHECK_MSG(AssetDatabase::FilterForAsset(asset) == AssetDatabase::TextureFilter::Linear,
+              "which reads back as linear");
+}
+
+static void testAFilterFromTheFutureIsNotAnError() {
+    // A typo, or a setting written by a later build. A texture that refuses to
+    // load because its import settings are from the future is worse than one
+    // that loads looking slightly wrong - and the IDENTITY is in the same file,
+    // so refusing the entry over an import setting would lose the rename
+    // recovery that is the whole reason a .meta exists.
+    const fs::path root = freshRoot();
+    const std::string asset = write(root / "textures/future.png", "pixels");
+    writeMeta(root / "textures/future.png.meta",
+              "083faf927389156960b458882481ad94", "60b458882481ad94", "anisotropic16x");
+
+    CHECK_MSG(AssetDatabase::FilterForAsset(asset) == AssetDatabase::TextureFilter::Linear,
+              "an unrecognised filter falls back");
+
+    AssetDatabase database;
+    database.Scan(root.generic_string());
+    CHECK_MSG(database.GuidForPath(asset) == "083faf927389156960b458882481ad94",
+              "and the identity in the same file is still read");
+}
+
+static void testTheTwoSpellingsAgreeWithEachOther() {
+    // The writer and the reader use one pair of functions, so they cannot come
+    // to disagree about how a filter is spelled on disk.
+    for (const auto filter : { AssetDatabase::TextureFilter::Linear,
+                               AssetDatabase::TextureFilter::Nearest }) {
+        CHECK_MSG(AssetDatabase::FilterFromName(AssetDatabase::NameOfFilter(filter)) == filter,
+                  std::string("round trip through \"") +
+                      AssetDatabase::NameOfFilter(filter) + "\"");
+    }
+}
+
 void runTests() {
     testWhatCountsAsAnAsset();
     testPathsHaveOneSpelling();
@@ -520,8 +663,16 @@ void runTests() {
 
     std::error_code ec;
     fs::remove_all(scratchRoot(), ec);
+
+    testATextureWithNoMetaIsFilteredLinearly();
+    testAMetaThatSaysNothingStillMeansLinear();
+    testAMetaCanAskForNearest();
+    testAReimportKeepsTheFilterSomebodyChose();
+    testImportingAPlainTextureWritesNoFilterKey();
+    testAFilterFromTheFutureIsNotAnError();
+    testTheTwoSpellingsAgreeWithEachOther();
 }
 
 } // namespace
 
-TEST_MAIN("test_assetdatabase", 75)
+TEST_MAIN("test_assetdatabase", 110)

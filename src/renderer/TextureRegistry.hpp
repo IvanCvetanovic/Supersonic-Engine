@@ -48,8 +48,19 @@ public:
     uint32_t Acquire(const std::string& path, bool srgb, uint32_t fallback);
 
     // Uploads raw RGBA8 pixels under an explicit cache key.
+    //
+    // `filter` is PASSED IN rather than looked up from the key, and that is not
+    // a style choice: the key is not a path. Acquire prefixes it with "srgb:"
+    // or "data:" so one file uploaded in two colour spaces gets two entries, so
+    // a .meta lookup made here would be for a file that cannot exist - which is
+    // exactly the bug this parameter replaced, and one every unit test passed
+    // over because none of them composed the two.
+    //
+    // Linear by default, which is right for every generated texture: they have
+    // no asset on disk to carry an import setting.
     uint32_t UploadRGBA(const std::string& key, const uint8_t* pixels,
-                        uint32_t width, uint32_t height, bool srgb = true);
+                        uint32_t width, uint32_t height, bool srgb = true,
+                        vk::Filter filter = vk::Filter::eLinear);
 
     // Descriptor set binding both maps for one material, cached per pair so a
     // scene sharing materials does not allocate a set per entity.

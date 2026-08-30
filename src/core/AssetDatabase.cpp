@@ -136,7 +136,29 @@ bool AssetDatabase::ReadMeta(const std::string& metaPath, Entry& out) {
     // survive one. It came back as a rounded value and every adoption missed.
     const std::string hash = root["Hash"].AsString("");
     out.contentHash = hash.empty() ? 0 : std::strtoull(hash.c_str(), nullptr, 16);
+
+    // Absent means Linear, so every .meta already on disk keeps meaning what it
+    // meant and nothing has to migrate.
+    out.filter = FilterFromName(root["Filter"].AsString(""));
     return true;
+}
+
+const char* AssetDatabase::NameOfFilter(TextureFilter filter) {
+    return filter == TextureFilter::Nearest ? "nearest" : "linear";
+}
+
+AssetDatabase::TextureFilter AssetDatabase::FilterFromName(const std::string& name) {
+    // ONLY "nearest" turns it on. An unrecognised value - a typo, or a setting
+    // written by a later build - reads as the default rather than as an error:
+    // a texture that refuses to load because its import settings are from the
+    // future is worse than one that loads looking slightly wrong.
+    return name == "nearest" ? TextureFilter::Nearest : TextureFilter::Linear;
+}
+
+AssetDatabase::TextureFilter AssetDatabase::FilterForAsset(const std::string& assetPath) {
+    Entry entry;
+    if (!ReadMeta(MetaPathFor(assetPath), entry)) return TextureFilter::Linear;
+    return entry.filter;
 }
 
 bool AssetDatabase::WriteMeta(const std::string& metaPath, const Entry& entry) {
@@ -145,8 +167,17 @@ bool AssetDatabase::WriteMeta(const std::string& metaPath, const Entry& entry) {
 
     file << "{\n"
          << "  \"Guid\": \"" << entry.guid << "\",\n"
-         << "  \"Hash\": \"" << toHex(entry.contentHash) << "\"\n"
-         << "}\n";
+         << "  \"Hash\": \"" << toHex(entry.contentHash) << "\"";
+
+    // WRITTEN ONLY WHEN IT IS NOT THE DEFAULT, so importing a project does not
+    // rewrite every .meta in it to say the thing their absence already said.
+    // The identity files are committed, and a diff that touches all of them is
+    // one nobody reads.
+    if (entry.filter != TextureFilter::Linear) {
+        file << ",\n  \"Filter\": \"" << NameOfFilter(entry.filter) << "\"";
+    }
+
+    file << "\n}\n";
     return file.good();
 }
 

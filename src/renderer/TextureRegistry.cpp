@@ -1,5 +1,6 @@
 #include "renderer/TextureRegistry.hpp"
 #include <algorithm>
+#include "core/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "renderer/VulkanBuffer.hpp"
 
@@ -116,7 +117,8 @@ const TextureRegistry::Texture* TextureRegistry::get(uint32_t id) const {
 }
 
 uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixels,
-                                     uint32_t width, uint32_t height, bool srgb) {
+                                     uint32_t width, uint32_t height, bool srgb,
+                                     vk::Filter filter) {
     if (auto it = m_lookup.find(key); it != m_lookup.end()) {
         return it->second;
     }
@@ -153,7 +155,10 @@ uint32_t TextureRegistry::UploadRGBA(const std::string& key, const uint8_t* pixe
         /*generateMipmaps*/ true);
 
     // After the image, because the sampler's maxLod comes from its level count.
-    texture.image->CreateSampler();
+    //
+    // The filter arrives from the caller, which is the only one that knows the
+    // PATH - see the header.
+    texture.image->CreateSampler(filter);
 
     VulkanImage::TransitionLayout(m_deviceRef, m_commandPool, texture.image->GetImage(),
                                   vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
@@ -208,8 +213,25 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb, uint32_t f
         return fallback;
     }
 
+    // THE FILTER COMES FROM THE ASSET, not from here and not from the material
+    // that asked. It is a property of the image: two materials naming one file
+    // cannot disagree about it, because this cache is keyed by path and the
+    // first one to ask would decide for both.
+    //
+    // Resolved HERE, from `path`, because `key` is not one - it carries a
+    // colour-space prefix, and asking the filesystem about it looks for a
+    // .meta that can never exist.
+    const AssetDatabase::TextureFilter wanted = AssetDatabase::FilterForAsset(path);
+    if (wanted == AssetDatabase::TextureFilter::Nearest) {
+        SUPERSONIC_LOG_INFO("TextureRegistry")
+            << path << ": nearest-neighbour filtering, as its .meta asks." << std::endl;
+    }
+
     const uint32_t id = UploadRGBA(key, pixels,
-                                   static_cast<uint32_t>(width), static_cast<uint32_t>(height), srgb);
+                                   static_cast<uint32_t>(width), static_cast<uint32_t>(height), srgb,
+                                   wanted == AssetDatabase::TextureFilter::Nearest
+                                       ? vk::Filter::eNearest
+                                       : vk::Filter::eLinear);
     stbi_image_free(pixels);
 
     const auto* uploaded = get(id);

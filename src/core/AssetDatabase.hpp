@@ -32,11 +32,43 @@ class AssetDatabase {
 public:
     // 32 hex characters. A string rather than a pair of integers because it is
     // written to JSON, compared, and read by people.
+    // How a texture should be sampled, decided when it is IMPORTED rather than
+    // where it is used.
+    //
+    // It lives beside the asset because it is a property of the image, not of a
+    // material: two materials naming one file must not disagree about it. They
+    // could not even try - TextureRegistry caches by path, so the first
+    // material to ask would win and the second would silently get the other
+    // one's answer.
+    //
+    // Every texture in this engine was linearly filtered with no way to say
+    // otherwise, which makes pixel art blurred and unfixable. That is the one
+    // thing the sprite work found that a quad, a UV transform and an unlit
+    // material genuinely cannot express.
+    enum class TextureFilter { Linear, Nearest };
+
     struct Entry {
         std::string guid;
         std::string path;          // relative, forward slashes
         uint64_t contentHash{0};
+
+        // Absent from the file means Linear, which is what every .meta already
+        // written says by saying nothing. Nothing has to migrate.
+        TextureFilter filter{TextureFilter::Linear};
     };
+
+    // The filter a texture asks for, read from the .meta beside it.
+    //
+    // Static and file-backed rather than a lookup into the scanned database:
+    // a texture is acquired once and cached, so one small read is cheap, and it
+    // works in a packaged game whose database was never scanned. Linear for a
+    // file with no .meta, which is every texture in the tree today.
+    static TextureFilter FilterForAsset(const std::string& assetPath);
+
+    // The two spellings that appear in a .meta, and their round trip. Exposed
+    // so the writer and the reader cannot disagree about them.
+    static const char* NameOfFilter(TextureFilter filter);
+    static TextureFilter FilterFromName(const std::string& name);
 
     // ---- Reading what is on disk -------------------------------------------
 
