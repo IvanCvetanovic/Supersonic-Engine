@@ -215,6 +215,7 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
     buildPauseMenu(registry);
     buildGameOver(registry);
     buildMenu(registry);
+    buildArmory(registry);
 }
 
 void WolfBrigadeLayer::buildHud(entt::registry& registry) {
@@ -570,6 +571,218 @@ void WolfBrigadeLayer::buildPauseMenu(entt::registry& registry) {
     setPauseMenuVisible(registry, false);
 }
 
+// --- The Armory ------------------------------------------------------------
+
+namespace {
+
+// The order `meta.json` declares them in, which is NOT the order they come out
+// of the data.
+//
+// `Supersonic::Json` holds an object as a std::map, so walking MetaUpgrades()
+// gives deeper_coffers, fortified_halls, sharper_axes, veteran_soldiers - and
+// the original shows sharper_axes, veteran_soldiers, deeper_coffers,
+// fortified_halls, because a Godot Dictionary keeps insertion order.
+//
+// Written here rather than as an "order" array in the data, and that is a
+// deliberate trade: `games/wolfbrigade/data/meta.json` is byte-identical with
+// the oracle's copy, and so are difficulty, waves and units. Keeping the two
+// games reading one file is worth more than the generality - and the difficulty
+// row shows what the alternative looks like when the ORIGINAL needed it, which
+// is an explicit "order" array the original itself carries.
+//
+// It is a display preference and not a filter: anything the data declares that
+// is missing from this list is appended rather than dropped, so a fifth upgrade
+// appears at the end instead of silently vanishing.
+constexpr const char* kArmoryOrder[] = {
+    "sharper_axes", "veteran_soldiers", "deeper_coffers", "fortified_halls",
+};
+
+} // namespace
+
+void WolfBrigadeLayer::buildArmory(entt::registry& registry) {
+    constexpr int32_t kArmoryLayer = 20;
+
+    m_armory.backdrop = registry.create();
+    registry.emplace<TagComponent>(m_armory.backdrop, "Armory Backdrop");
+    auto& back = registry.emplace<UIPanelComponent>(m_armory.backdrop);
+    back.anchor = UIAnchor::Center;
+    back.offset = glm::vec2(0.0f, 0.0f);
+    back.fillWidth = true;
+    back.fillHeight = true;
+    back.cornerRadius = 0.0f;
+    back.color = glm::vec4(0.05f, 0.06f, 0.09f, 1.0f);
+    registry.emplace<UIOrderComponent>(m_armory.backdrop).layer = kArmoryLayer;
+
+    m_armory.column = registry.create();
+    registry.emplace<TagComponent>(m_armory.column, "Armory");
+    auto& column = registry.emplace<UIStackComponent>(m_armory.column);
+    column.horizontal = false;
+    column.anchor = UIAnchor::Center;
+    column.spacing = 18.0f;
+
+    int32_t order = 0;
+    auto label = [&](entt::entity parent, const std::string& tag, const std::string& text,
+                     float fontSize, const glm::vec4& colour, int32_t& counter) {
+        const entt::entity entity = registry.create();
+        registry.emplace<TagComponent>(entity, tag);
+        auto& item = registry.emplace<UITextComponent>(entity);
+        item.text = text;
+        item.fontSize = fontSize;
+        item.color = colour;
+        registry.emplace<HierarchyComponent>(entity).parent = parent;
+        auto& ordering = registry.emplace<UIOrderComponent>(entity);
+        ordering.order = counter++;
+        ordering.layer = kArmoryLayer;
+        return entity;
+    };
+
+    label(m_armory.column, "Armory Title", "ARMORY", 80.0f, glm::vec4(1.0f), order);
+    m_armory.renown = label(m_armory.column, "Armory Renown", "Renown: 0", 40.0f,
+                            glm::vec4(0.95f, 0.83f, 0.4f, 1.0f), order);
+    label(m_armory.column, "Armory Hint",
+          "Permanent upgrades - they apply to every run.", 24.0f,
+          glm::vec4(0.62f, 0.68f, 0.78f, 1.0f), order);
+
+    // The upgrades the data declares, in the original's order, with anything it
+    // does not name appended - see kArmoryOrder.
+    std::vector<std::string> ids;
+    for (const char* id : kArmoryOrder) {
+        if (m_data->MetaUpgrade(id).IsObject() && !m_data->MetaUpgrade(id).AsObject().empty()) {
+            ids.emplace_back(id);
+        }
+    }
+    for (const auto& [id, definition] : m_data->MetaUpgrades().AsObject()) {
+        (void)definition;
+        if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+    }
+
+    // NO SCROLL VIEW, and it is worth saying why rather than leaving it as an
+    // omission. The original wraps this list in a ScrollContainer that never
+    // scrolls: four rows at a hundred pixels plus fourteen of separation is 442
+    // in a 560 viewport. A fifth upgrade would be the first to overflow, and
+    // the honest place to build one is the commit that authors it.
+    for (const std::string& id : ids) {
+        const Supersonic::Json::Value& definition = m_data->MetaUpgrade(id);
+
+        const entt::entity row = registry.create();
+        registry.emplace<TagComponent>(row, "Armory Row " + id);
+        auto& rowStack = registry.emplace<UIStackComponent>(row);
+        rowStack.horizontal = true;
+        rowStack.spacing = 24.0f;
+        registry.emplace<HierarchyComponent>(row).parent = m_armory.column;
+        {
+            auto& ordering = registry.emplace<UIOrderComponent>(row);
+            ordering.order = order++;
+            ordering.layer = kArmoryLayer;
+        }
+
+        const entt::entity info = registry.create();
+        registry.emplace<TagComponent>(info, "Armory Info " + id);
+        auto& infoStack = registry.emplace<UIStackComponent>(info);
+        infoStack.horizontal = false;
+        infoStack.spacing = 4.0f;
+        registry.emplace<HierarchyComponent>(info).parent = row;
+        {
+            auto& ordering = registry.emplace<UIOrderComponent>(info);
+            ordering.order = 0;
+            ordering.layer = kArmoryLayer;
+        }
+
+        // A stack nested in a stack nested in a stack - info inside the row
+        // inside the column - which is the deepest this game goes and what
+        // `layoutStacksImpl`'s recursive measure-and-place is for.
+        int32_t infoOrder = 0;
+        ArmoryRow built;
+        built.id = id;
+        built.title = label(info, "Armory Level " + id, "", 30.0f, glm::vec4(1.0f), infoOrder);
+        label(info, "Armory Desc " + id, definition["description"].AsString(""), 22.0f,
+              glm::vec4(0.62f, 0.68f, 0.78f, 1.0f), infoOrder);
+
+        built.buy = registry.create();
+        registry.emplace<TagComponent>(built.buy, "Armory Buy " + id);
+        auto& buy = registry.emplace<UIButtonComponent>(built.buy);
+        buy.size = glm::vec2(320.0f, 100.0f);
+        buy.fontSize = 24.0f;
+        registry.emplace<HierarchyComponent>(built.buy).parent = row;
+        {
+            auto& ordering = registry.emplace<UIOrderComponent>(built.buy);
+            ordering.order = 1;
+            ordering.layer = kArmoryLayer;
+        }
+
+        m_armory.rows.push_back(built);
+    }
+
+    m_armory.back = registry.create();
+    registry.emplace<TagComponent>(m_armory.back, "Armory Back");
+    auto& backButton = registry.emplace<UIButtonComponent>(m_armory.back);
+    backButton.label = "Back";
+    backButton.size = glm::vec2(440.0f, 104.0f);
+    backButton.fontSize = 40.0f;
+    registry.emplace<HierarchyComponent>(m_armory.back).parent = m_armory.column;
+    {
+        auto& ordering = registry.emplace<UIOrderComponent>(m_armory.back);
+        ordering.order = order++;
+        ordering.layer = kArmoryLayer;
+    }
+
+    setArmoryVisible(registry, false);
+}
+
+void WolfBrigadeLayer::setArmoryVisible(entt::registry& registry, bool shown) {
+    if (!registry.valid(m_armory.column)) return;
+    registry.get<UIStackComponent>(m_armory.column).visible = shown;
+    registry.get<UIPanelComponent>(m_armory.backdrop).visible = shown;
+}
+
+void WolfBrigadeLayer::updateArmory(entt::registry& registry) {
+    if (m_screen != Screen::Armory || !registry.valid(m_armory.column)) return;
+    if (!m_profile || !m_data) return;
+
+    if (registry.get<UIButtonComponent>(m_armory.back).clickedThisTick) {
+        goTo(registry, Screen::Menu);
+        return;
+    }
+
+    // READ EVERY ROW'S CLICK BEFORE WRITING ANY ROW'S TEXT. A purchase changes
+    // the renown balance, which changes what every OTHER row can afford - so
+    // buying and then repainting in one pass would leave the rows above the
+    // bought one describing a balance that no longer exists until the next
+    // tick.
+    for (const ArmoryRow& row : m_armory.rows) {
+        if (!registry.get<UIButtonComponent>(row.buy).clickedThisTick) continue;
+
+        // Refused twice, as the bottom bar's buttons are: once by the disabled
+        // flag UIInput honours, and again here by Meta::Buy re-checking cost
+        // and cap. The second is what covers a button that went unaffordable
+        // between the press and the tick that reads it.
+        Meta::Buy(*m_data, *m_profile, row.id);
+    }
+
+    char buffer[160];
+    std::snprintf(buffer, sizeof(buffer), "Renown: %d", m_profile->Renown());
+    registry.get<UITextComponent>(m_armory.renown).text = buffer;
+
+    for (const ArmoryRow& row : m_armory.rows) {
+        const std::string name =
+            m_data->MetaUpgrade(row.id)["display_name"].AsString(row.id);
+        std::snprintf(buffer, sizeof(buffer), "%s   -   Lv %d/%d", name.c_str(),
+                      m_profile->MetaLevel(row.id), Meta::MaxLevel(*m_data, row.id));
+        registry.get<UITextComponent>(row.title).text = buffer;
+
+        auto& buy = registry.get<UIButtonComponent>(row.buy);
+        if (Meta::IsMaxed(*m_data, *m_profile, row.id)) {
+            buy.label = "MAX";
+            buy.enabled = false;
+        } else {
+            std::snprintf(buffer, sizeof(buffer), "Buy\n(%d renown)",
+                          Meta::NextCost(*m_data, *m_profile, row.id));
+            buy.label = buffer;
+            buy.enabled = Meta::CanBuy(*m_data, *m_profile, row.id);
+        }
+    }
+}
+
 // --- The main menu ---------------------------------------------------------
 
 void WolfBrigadeLayer::buildMenu(entt::registry& registry) {
@@ -709,10 +922,10 @@ void WolfBrigadeLayer::buildMenu(entt::registry& registry) {
     m_menu.settings = button("Menu Settings", "Settings");
     m_menu.quit = button("Menu Quit", "Quit");
 
-    // TWO BUTTONS THAT CANNOT WORK YET, greyed rather than left out, which is
-    // what this game does everywhere else and what "Main Menu" itself was until
-    // this commit. Each needs a screen of its own.
-    registry.get<UIButtonComponent>(m_menu.armory).enabled = false;
+    // ONE BUTTON THAT CANNOT WORK YET, greyed rather than left out, which is
+    // what this game does everywhere else. Settings needs a screen of its own,
+    // and behind it the audio state that gives its volume and mute controls
+    // something to move.
     registry.get<UIButtonComponent>(m_menu.settings).enabled = false;
 
     // --- The New Game confirmation -----------------------------------------
@@ -954,11 +1167,21 @@ void WolfBrigadeLayer::goTo(entt::registry& registry, Screen next) {
         m_bar.clear();
 
         setMatchVisible(registry, false);
+        setArmoryVisible(registry, false);
         refreshMenu(registry);
         setMenuVisible(registry, true);
         return;
     }
 
+    if (next == Screen::Armory) {
+        // No match to drop: you can only get here from the menu, which dropped
+        // it on the way in. The Armory reads the Profile and nothing else.
+        setMenuVisible(registry, false);
+        setArmoryVisible(registry, true);
+        return;
+    }
+
+    setArmoryVisible(registry, false);
     setMenuVisible(registry, false);
     setMatchVisible(registry, true);
 }
@@ -1063,6 +1286,11 @@ void WolfBrigadeLayer::updateMenu(entt::registry& registry) {
         } else {
             startGame(registry, false);
         }
+        return;
+    }
+
+    if (registry.get<UIButtonComponent>(m_menu.armory).clickedThisTick) {
+        goTo(registry, Screen::Armory);
         return;
     }
 
@@ -1368,6 +1596,7 @@ void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
     // against it in the same tick, which is what a click reaching the
     // simulation immediately means everywhere else in this file.
     updateMenu(registry);
+    updateArmory(registry);
 
     if (!m_match) return;
 

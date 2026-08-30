@@ -324,6 +324,38 @@ private:
 
     void setConfirmVisible(entt::registry& registry, bool shown);
 
+    // ---- The Armory --------------------------------------------------------
+    //
+    // `armory.gd`: one row per meta upgrade, renown spent on levels that apply
+    // to every run after.
+    //
+    // BUILT ONCE AND WRITTEN, where the original rebuilds every row on every
+    // purchase. Godot can afford that because `queue_free` is deferred, so the
+    // button that is mid-press survives its own handler. Here a rebuilt button
+    // is a new component with `pressed` false, and the release lands on
+    // something that was never pressed - the constraint `test_uiinput` pins and
+    // the bottom bar was designed around. The set of upgrades is fixed by
+    // `meta.json` anyway, so there is nothing a rebuild would change except the
+    // text, and text is written.
+    void buildArmory(entt::registry& registry);
+    void updateArmory(entt::registry& registry);
+    void setArmoryVisible(entt::registry& registry, bool shown);
+
+    struct ArmoryRow {
+        std::string id;
+        entt::entity title{entt::null};
+        entt::entity buy{entt::null};
+    };
+
+    struct Armory {
+        entt::entity backdrop{entt::null};
+        entt::entity column{entt::null};
+        entt::entity renown{entt::null};
+        entt::entity back{entt::null};
+        std::vector<ArmoryRow> rows;
+    };
+    Armory m_armory;
+
     // ---- Routing -----------------------------------------------------------
 
     // Leaves whatever screen we are on and enters `next`.

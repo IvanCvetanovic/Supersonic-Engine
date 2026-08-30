@@ -921,6 +921,254 @@ void testResumingARunDoesNotRetuneIt() {
     layer.OnDetach(registry);
 }
 
+// --- The Armory ----------------------------------------------------------
+
+// Walks from a running match out to the Armory, which is the only way in.
+void openArmory(WolfBrigadeLayer& layer, entt::registry& registry) {
+    press(registry, "HUD Pause");
+    tickOnce(layer, registry);
+    press(registry, "Pause Main Menu");
+    tickOnce(layer, registry);
+    press(registry, "Menu Armory");
+    tickOnce(layer, registry);
+}
+
+void testTheArmoryListsEveryUpgradeInTheOrderTheOriginalShowsThem() {
+    // The data is a JSON object and Supersonic::Json holds one as a std::map,
+    // so walking it gives deeper_coffers, fortified_halls, sharper_axes,
+    // veteran_soldiers - alphabetical. The original shows the file's own order,
+    // because a Godot Dictionary keeps insertion order.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+    openArmory(layer, registry);
+
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Armory")).visible,
+              "the Armory is up");
+
+    const char* expected[] = { "sharper_axes", "veteran_soldiers", "deeper_coffers",
+                               "fortified_halls" };
+    int32_t previous = -1;
+    for (const char* id : expected) {
+        const entt::entity row = byTag(registry, std::string("Armory Row ") + id);
+        CHECK_MSG(row != entt::null, std::string(id) + " has a row");
+        if (row == entt::null) continue;
+        const int32_t order = registry.get<UIOrderComponent>(row).order;
+        CHECK_MSG(order > previous,
+                  std::string(id) + " comes after the row before it, got " +
+                      std::to_string(order));
+        previous = order;
+    }
+
+    layer.OnDetach(registry);
+}
+
+void testAnUnaffordableUpgradeIsGreyedAndPricedAnyway() {
+    // "Available" and "affordable" are different questions - the original greys
+    // what cannot be paid for and still shows the price, because most of the
+    // reason to open this screen is to see what you are saving up for.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+    openArmory(layer, registry);
+
+    const entt::entity buy = byTag(registry, "Armory Buy sharper_axes");
+    CHECK_MSG(buy != entt::null, "it has a Buy button");
+    if (buy == entt::null) { layer.OnDetach(registry); return; }
+
+    const auto& button = registry.get<UIButtonComponent>(buy);
+    CHECK_MSG(!button.enabled, "a new player cannot afford anything");
+    CHECK_MSG(button.label.find("40") != std::string::npos,
+              "and is told the price anyway, got \"" + button.label + "\"");
+
+    // The level line reads from the profile, not from a constant.
+    const std::string level =
+        registry.get<UITextComponent>(byTag(registry, "Armory Level sharper_axes")).text;
+    CHECK_MSG(level.find("Lv 0/3") != std::string::npos,
+              "and the level line is the profile's, got \"" + level + "\"");
+
+    layer.OnDetach(registry);
+}
+
+void testBuyingSpendsRenownAndRaisesTheLevel() {
+    // The screen's whole job. Driven through the button rather than through
+    // Meta::Buy, because Meta::Buy already has a suite and what is untested is
+    // the wiring between a press and it.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+    match->PlayerProfile().AddRenown(200);
+
+    openArmory(layer, registry);
+
+    CHECK_MSG(registry.get<UIButtonComponent>(byTag(registry, "Armory Buy sharper_axes")).enabled,
+              "200 renown affords the 40-renown first level");
+    CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Armory Renown")).text ==
+                  "Renown: 200",
+              "and the balance is shown");
+
+    press(registry, "Armory Buy sharper_axes");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Armory Renown")).text ==
+                  "Renown: 160",
+              "buying spent exactly the price, got \"" +
+                  registry.get<UITextComponent>(byTag(registry, "Armory Renown")).text + "\"");
+
+    const std::string level =
+        registry.get<UITextComponent>(byTag(registry, "Armory Level sharper_axes")).text;
+    CHECK_MSG(level.find("Lv 1/3") != std::string::npos,
+              "and raised the level, got \"" + level + "\"");
+
+    // The next level costs more, and the row says so without being rebuilt.
+    const std::string next =
+        registry.get<UIButtonComponent>(byTag(registry, "Armory Buy sharper_axes")).label;
+    CHECK_MSG(next.find("80") != std::string::npos,
+              "the price rose with the level, got \"" + next + "\"");
+
+    layer.OnDetach(registry);
+}
+
+void testAMaxedUpgradeSaysSoAndCannotBeBoughtAgain() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+    match->PlayerProfile().AddRenown(5000);
+    match->PlayerProfile().SetMetaLevel("sharper_axes", 3);
+
+    openArmory(layer, registry);
+
+    const auto& buy =
+        registry.get<UIButtonComponent>(byTag(registry, "Armory Buy sharper_axes"));
+    CHECK_MSG(buy.label == "MAX", "a maxed upgrade says MAX, got \"" + buy.label + "\"");
+    CHECK_MSG(!buy.enabled, "and is greyed even with renown to burn");
+
+    layer.OnDetach(registry);
+}
+
+void testAPurchaseIsRememberedAcrossLaunches() {
+    // The half that makes it META progression rather than a shop. It also
+    // exercises the write path: buying dirties the profile and the layer writes
+    // it at the end of the same tick.
+    ScratchDir scratch("wb_armory_persist");
+
+    {
+        entt::registry registry;
+        WolfBrigadeLayer layer(scratch.String());
+        layer.OnAttach(registry);
+        tickOnce(layer, registry);
+
+        Match* match = layer.CurrentMatch();
+        CHECK_MSG(match != nullptr, "a match is running");
+        if (match == nullptr) return;
+        match->PlayerProfile().AddRenown(200);
+
+        openArmory(layer, registry);
+        press(registry, "Armory Buy veteran_soldiers");
+        tickOnce(layer, registry);
+
+        layer.OnDetach(registry);
+    }
+
+    {
+        entt::registry registry;
+        WolfBrigadeLayer layer(scratch.String());
+        layer.OnAttach(registry);
+        tickOnce(layer, registry);
+
+        Match* match = layer.CurrentMatch();
+        CHECK_MSG(match != nullptr, "the second launch boots");
+        if (match == nullptr) return;
+
+        CHECK_EQ(match->PlayerProfile().MetaLevel("veteran_soldiers"), 1);
+        CHECK_EQ(match->PlayerProfile().Renown(), 140);
+
+        layer.OnDetach(registry);
+    }
+}
+
+void testBackReturnsToTheMenuWithTheNewBalance() {
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "a match is running");
+    if (match == nullptr) { layer.OnDetach(registry); return; }
+    match->PlayerProfile().AddRenown(200);
+
+    openArmory(layer, registry);
+    press(registry, "Armory Buy sharper_axes");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(press(registry, "Armory Back"), "Back is there");
+    tickOnce(layer, registry);
+
+    CHECK_MSG(!registry.get<UIStackComponent>(byTag(registry, "Armory")).visible,
+              "the Armory is down");
+    CHECK_MSG(registry.get<UIStackComponent>(byTag(registry, "Main Menu")).visible,
+              "and the menu is back");
+
+    // Read on the way IN, which is where main_menu.gd reads it - so the menu
+    // shows what the Armory just spent rather than what it held before.
+    CHECK_MSG(registry.get<UITextComponent>(byTag(registry, "Menu Renown")).text ==
+                  "Renown: 160",
+              "showing the balance the Armory left, got \"" +
+                  registry.get<UITextComponent>(byTag(registry, "Menu Renown")).text + "\"");
+
+    layer.OnDetach(registry);
+}
+
+void testAnOwnedUpgradeReachesTheNextRunsUnits() {
+    // The reason any of this exists. Meta::Apply is covered by its own suite;
+    // what is not is that a purchase made on this SCREEN reaches a match
+    // started afterwards - the Profile is shared by reference, and a layer that
+    // handed the Armory a copy would sell upgrades that never arrive.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    tickOnce(layer, registry);
+
+    Match* first = layer.CurrentMatch();
+    CHECK_MSG(first != nullptr, "a match is running");
+    if (first == nullptr) { layer.OnDetach(registry); return; }
+    const int plainWood = first->Run().Amount("wood");
+    first->PlayerProfile().AddRenown(500);
+
+    openArmory(layer, registry);
+    press(registry, "Armory Buy deeper_coffers");
+    tickOnce(layer, registry);
+    press(registry, "Armory Back");
+    tickOnce(layer, registry);
+    press(registry, "Menu New Game");
+    tickOnce(layer, registry);
+
+    Match* started = layer.CurrentMatch();
+    CHECK_MSG(started != nullptr, "a new run started");
+    if (started == nullptr) { layer.OnDetach(registry); return; }
+
+    CHECK_EQ(started->PlayerProfile().MetaLevel("deeper_coffers"), 1);
+    CHECK_MSG(started->Run().Amount("wood") > plainWood,
+              "and Deeper Coffers reached its opening balance: " +
+                  std::to_string(started->Run().Amount("wood")) + " vs " +
+                  std::to_string(plainWood));
+
+    layer.OnDetach(registry);
+}
+
 } // namespace
 
 static void runTests() {
@@ -950,6 +1198,14 @@ static void runTests() {
     testTheChosenRulesReachTheRunAndSurviveTheLaunch();
     testARestartKeepsTheDifficultyItWasStartedOn();
     testResumingARunDoesNotRetuneIt();
+
+    testTheArmoryListsEveryUpgradeInTheOrderTheOriginalShowsThem();
+    testAnUnaffordableUpgradeIsGreyedAndPricedAnyway();
+    testBuyingSpendsRenownAndRaisesTheLevel();
+    testAMaxedUpgradeSaysSoAndCannotBeBoughtAgain();
+    testAPurchaseIsRememberedAcrossLaunches();
+    testBackReturnsToTheMenuWithTheNewBalance();
+    testAnOwnedUpgradeReachesTheNextRunsUnits();
 }
 
-TEST_MAIN("test_wb_persistence", 110)
+TEST_MAIN("test_wb_persistence", 145)
