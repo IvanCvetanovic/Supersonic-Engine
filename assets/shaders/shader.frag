@@ -56,16 +56,36 @@ layout(set = 1, binding = 2) uniform sampler2D ormMap;
 // A push constant block must be declared identically in every stage of a
 // pipeline that declares one, so these two ints are here even though the
 // fragment stage never reads them.
-layout(push_constant) uniform PushConstants {
+// PER-DRAW DATA, ONE ENTRY PER INSTANCE.
+//
+// This was a push constant, and the block was exactly 128 bytes - the
+// guaranteed minimum, with the comment on `flags` saying outright that nothing
+// else fits. It moves here for a different reason though: a push constant is
+// written per draw, so every drawable cost a vkCmdPushConstants and a
+// vkCmdDrawIndexed of its own. Read from a buffer and indexed by the instance,
+// a thousand identical cubes are ONE draw.
+//
+// The layout is unchanged and still matches Engine::PushConstantData byte for
+// byte - std430 gives mat4 a 16-byte alignment and a 64-byte size, each vec4
+// 16, each int 4, for 128 with no padding, which is the stride the C++ side
+// asserts.
+struct InstanceData {
     mat4 model;
     vec4 albedoColor;
-    vec4 material;   // x = roughness, y = metallic, z = ao
-    vec4 emissive;      // rgb added after shading, may exceed 1.0
-    int skinPaletteBase;
+    vec4 material;      // x = roughness, y = metallic, z = ao, w = alpha cutoff
+    vec4 emissive;      // rgb added after shading, may exceed 1.0; w = occlusion
+    int skinPaletteBase;   // -1 = not skinned
     int skinJointCount;
-    int probeIndex;
-    int flags;
-} push;
+    int probeIndex;        // which environment lights this draw
+    int flags;             // bit 0 = unlit; bits 8.. = uv slot
+};
+
+layout(std430, set = 0, binding = 11) readonly buffer InstanceBuffer {
+    InstanceData instances[];
+};
+
+// Handed over by the vertex stage - see shader.vert.
+layout(location = 6) flat in int fragInstance;
 
 // Must match VulkanPipeline::PushConstantData::kUnlit.
 const int FLAG_UNLIT = 1;
@@ -76,7 +96,7 @@ const int UV_SLOT_SHIFT = 8;
 const int UV_SLOT_MASK = 0xFFF;
 
 // Must match Supersonic::UvTransform. std430 gives this a 32-byte stride, which
-// is what the C++ side asserts its own size against.
+// is what the C++ side asserts its own size againstances[fragInstance].
 struct UvTransform {
     vec4 axes;      // xy = where U points, zw = where V points
     vec4 offset;    // xy = translation, zw unused
@@ -97,7 +117,7 @@ layout(std430, set = 0, binding = 10) readonly buffer UvTransformBuffer {
 // others is never what anybody meant - a normal map that scrolls while its
 // albedo stands still lights a texture that is not there.
 vec2 transformedUV(vec2 uv) {
-    UvTransform t = uvBuffer.transforms[(push.flags >> UV_SLOT_SHIFT) & UV_SLOT_MASK];
+    UvTransform t = uvBuffer.transforms[(instances[fragInstance].flags >> UV_SLOT_SHIFT) & UV_SLOT_MASK];
     return mat2(t.axes.x, t.axes.y, t.axes.z, t.axes.w) * uv + t.offset.xy;
 }
 
@@ -369,12 +389,12 @@ void main() {
     //
     // Early, because a discarded fragment should not pay for eight lights and
     // eighteen shadow taps first.
-    float alphaCutoff = push.material.w;
-    if (alphaCutoff > 0.0 && albedoTex.a * push.albedoColor.a < alphaCutoff) {
+    float alphaCutoff = instances[fragInstance].material.w;
+    if (alphaCutoff > 0.0 && albedoTex.a * instances[fragInstance].albedoColor.a < alphaCutoff) {
         discard;
     }
 
-    vec3 albedo = albedoTex.rgb * fragColor * push.albedoColor.rgb;
+    vec3 albedo = albedoTex.rgb * fragColor * instances[fragInstance].albedoColor.rgb;
 
     // UNLIT: the authored colour, and nothing else touches it.
     //
@@ -390,8 +410,8 @@ void main() {
     // not clamped here, so a value above 1.0 comes out above 1.0 and blooms.
     // That is not an oversight - it is Godot's `modulate` past white, which is
     // how this game flashes a unit that has been hit.
-    if ((push.flags & FLAG_UNLIT) != 0) {
-        outColor = vec4(albedo, albedoTex.a * push.albedoColor.a);
+    if ((instances[fragInstance].flags & FLAG_UNLIT) != 0) {
+        outColor = vec4(albedo, albedoTex.a * instances[fragInstance].albedoColor.a);
         return;
     }
 
@@ -410,8 +430,8 @@ void main() {
     // is now a second way to arrive there.
     vec3 orm = texture(ormMap, uv).rgb;
 
-    float roughness = clamp(push.material.x * orm.g, 0.02, 1.0);
-    float metallic  = clamp(push.material.y * orm.b, 0.0, 1.0);
+    float roughness = clamp(instances[fragInstance].material.x * orm.g, 0.02, 1.0);
+    float metallic  = clamp(instances[fragInstance].material.y * orm.b, 0.0, 1.0);
 
     // Occlusion, gated by how much of the red channel is actually occlusion.
     //
@@ -423,8 +443,8 @@ void main() {
     // the red channel, and this is glTF's own formula for spending that: at
     // strength 0 it is exactly 1.0, so ignoring the channel is the SAME
     // arithmetic rather than a branch that can disagree with it.
-    float occlusion = 1.0 + push.emissive.w * (orm.r - 1.0);
-    float ao        = clamp(push.material.z * occlusion, 0.0, 1.0);
+    float occlusion = 1.0 + instances[fragInstance].emissive.w * (orm.r - 1.0);
+    float ao        = clamp(instances[fragInstance].material.z * occlusion, 0.0, 1.0);
 
     // Re-orthonormalise the interpolated basis: interpolation across a
     // triangle does not preserve orthogonality, and a skewed basis tilts the
@@ -582,7 +602,7 @@ void main() {
     // same shape. It costs one extra cube fetch per fragment and is correct on
     // every driver rather than on the ones that happen to be lenient.
     uint probeMask = uint(ubo.environmentParams.z);
-    int probe = clamp(push.probeIndex, 0, MAX_ENV_PROBES - 1);
+    int probe = clamp(instances[fragInstance].probeIndex, 0, MAX_ENV_PROBES - 1);
     bool hasEnvironment = (probeMask & (1u << uint(probe))) != 0u;
 
     vec3 irradiance = hasEnvironment
@@ -637,7 +657,7 @@ void main() {
     // Not clamped. Above 1.0 is the point: the target is floating point and the
     // bright pass thresholds at 1.0, so an intensity above one is how a
     // material is authored to actually glow rather than merely to be pale.
-    color += push.emissive.rgb;
+    color += instances[fragInstance].emissive.rgb;
 
     // Distance fog, applied last and in LINEAR space.
     //
@@ -661,5 +681,5 @@ void main() {
         color = mix(ubo.fogColorAndDensity.rgb, color, visibility);
     }
 
-    outColor = vec4(color, albedoTex.a * push.albedoColor.a);
+    outColor = vec4(color, albedoTex.a * instances[fragInstance].albedoColor.a);
 }

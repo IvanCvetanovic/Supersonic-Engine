@@ -3,6 +3,7 @@
 #include <entt/entt.hpp>
 #include <vulkan/vulkan.hpp>
 #include <glm/glm.hpp>
+#include <vector>
 
 #include "core/Components.hpp"
 #include "renderer/VulkanDevice.hpp"
@@ -89,7 +90,17 @@ public:
         vk::DescriptorSet sceneSet,
         const Frustum& frustum,
         const glm::vec3& viewPosition,
-        Stats& stats
+        Stats& stats,
+
+        // Where the per-draw records go. FILLED here and uploaded by the caller
+        // after recording finishes, which is in time: recording writes draw
+        // commands, and the buffer those commands read is not touched until the
+        // GPU runs them.
+        //
+        // A vector rather than a mapped pointer, so the count is the vector's
+        // own size and cannot disagree with what was written.
+        std::vector<PushConstantData>& instances,
+        uint32_t maxInstances
     );
 
     // One entity, resolved down to what a depth pass actually needs.

@@ -1,3 +1,4 @@
+#include "core/Log.hpp"
 #include "core/RenderSystem.hpp"
 
 #include <algorithm>
@@ -744,8 +745,33 @@ void RenderSystem::Render(
     vk::CommandBuffer commandBuffer,
     vk::DescriptorSet sceneSet,
     const Frustum& frustum,
-    const glm::vec3& viewPosition,
-    Stats& stats) {
+                          const glm::vec3& viewPosition,
+                          Stats& stats,
+                          std::vector<PushConstantData>& instances,
+                          uint32_t maxInstances) {
+    instances.clear();
+
+    // Appends one per-draw record and returns where it landed, or -1 when the
+    // frame has produced more drawables than the buffer can hold.
+    //
+    // A refusal DROPS THE DRAW rather than writing past the end, and says so
+    // once. Sixty-five thousand records is three times the count at which this
+    // engine already misses 60 Hz for other reasons, so this is a backstop
+    // rather than a limit anybody should meet.
+    static bool warnedInstanceOverflow = false;
+    auto record = [&instances, maxInstances](const PushConstantData& data) -> int32_t {
+        if (instances.size() >= maxInstances) {
+            if (!warnedInstanceOverflow) {
+                warnedInstanceOverflow = true;
+                SUPERSONIC_LOG_ERROR("RenderSystem")
+                    << "more than " << maxInstances
+                    << " drawables in one frame; the rest are not drawn." << std::endl;
+            }
+            return -1;
+        }
+        instances.push_back(data);
+        return static_cast<int32_t>(instances.size()) - 1;
+    };
 
     // Transparent entities are collected during the opaque walk and drawn after
     // it, sorted back to front. Blending is order-dependent: two overlapping
@@ -827,8 +853,45 @@ void RenderSystem::Render(
     // existed.
     SortOpaqueDraws(opaque);
 
+    // WHAT MAKES TWO DRAWS ONE DRAW.
+    //
+    // Everything that is not per-instance has to match: the mesh, because its
+    // vertex and index buffers are bound once; the index range, because that is
+    // what the draw call names; and the material set, because it is a
+    // descriptor bound once. Everything else - the transform, the colour, the
+    // roughness, the skin range - travels in the instance record now and is
+    // free to differ.
+    struct BatchKey {
+        uint32_t meshID{0xFFFFFFFFu};
+        uint32_t firstIndex{0};
+        uint32_t indexCount{0};
+        vk::DescriptorSet material{};
+
+        bool operator==(const BatchKey& other) const {
+            return meshID == other.meshID && firstIndex == other.firstIndex &&
+                   indexCount == other.indexCount && material == other.material;
+        }
+    };
+
+    // The batch being accumulated: where its records start, how many, and what
+    // they have in common. Flushed when the key changes and again at the end.
+    BatchKey openKey;
+    int32_t openFirst = -1;
+    uint32_t openCount = 0;
+
+    auto flush = [&]() {
+        if (openCount == 0) return;
+        commandBuffer.drawIndexed(openKey.indexCount, openCount, openKey.firstIndex, 0,
+                                  static_cast<uint32_t>(openFirst));
+        ++stats.drawCalls;
+        openCount = 0;
+        openFirst = -1;
+    };
+
     for (const OpaqueDraw& draw : opaque) {
         if (draw.meshID != boundMesh) {
+            // A rebind ends the batch: the next draw reads different buffers.
+            flush();
             const vk::Buffer buffers[] = { draw.vertexBuffer };
             const vk::DeviceSize offsets[] = { 0 };
             commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
@@ -898,9 +961,11 @@ void RenderSystem::Render(
             // which is why the sort is stable. A key per entity would destroy
             // it, exactly as distance ordering destroyed it for the transparent
             // pass.
-            if (vk::DescriptorSet materialSet =
-                    textures.AcquireMaterialSet(albedo, normal, orm);
-                materialSet && materialSet != boundMaterialSet) {
+            const vk::DescriptorSet materialSet =
+                textures.AcquireMaterialSet(albedo, normal, orm);
+            if (materialSet && materialSet != boundMaterialSet) {
+                // A rebind ends the batch, for the same reason as the mesh.
+                flush();
                 commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                                  pipeline.GetLayout(),
                                                  VulkanPipeline::kMaterialSet, 1, &materialSet,
@@ -916,17 +981,39 @@ void RenderSystem::Render(
             const PushConstantData push =
                 buildPushConstants(registry, draw.entity, draw.matrix,
                                    multiSurface ? &gpuMesh->sections[s].material : nullptr);
-            commandBuffer.pushConstants(
-                pipeline.GetLayout(),
-                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                0, sizeof(PushConstantData), &push);
 
-            if (indexCount > 0) {
-                commandBuffer.drawIndexed(indexCount, 1, firstIndex, 0, 0);
-                ++stats.drawCalls;
+            if (indexCount == 0) continue;
+
+            const int32_t slot = record(push);
+            if (slot < 0) continue;
+
+            // JOIN THE OPEN BATCH, OR START A NEW ONE.
+            //
+            // A record is only ever appended, so a batch's instances are
+            // contiguous by construction - which is what lets one drawIndexed
+            // name them with a firstInstance and a count. The moment anything
+            // that is not per-instance changes, the batch is closed and the
+            // next draw opens another.
+            //
+            // Order is preserved exactly: batches are submitted in the order
+            // their first member was reached, and members keep their places
+            // inside one. The sortKey contract is untouched.
+            const BatchKey key{ draw.meshID, firstIndex, indexCount, materialSet };
+            if (openCount > 0 && key == openKey) {
+                ++openCount;
+            } else {
+                flush();
+                openKey = key;
+                openFirst = slot;
+                openCount = 1;
             }
         }
     }
+
+    // THE LAST BATCH. Nothing after this point belongs to it, and a batch left
+    // open is a draw that was recorded into `instances` and never submitted -
+    // which is a silently missing object rather than an error.
+    flush();
 
     // ---- Sky -------------------------------------------------------------
     //
@@ -990,12 +1077,15 @@ void RenderSystem::Render(
             }
 
             const PushConstantData push = buildPushConstants(registry, draw.entity, draw.matrix);
-            commandBuffer.pushConstants(
-                transparentPipeline.GetLayout(),
-                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-                0, sizeof(PushConstantData), &push);
+            // NOT BATCHED, and it must not be. The blended pass is ordered
+            // back to front and every draw depends on what is already in the
+            // framebuffer, so two of them submitted as one instanced draw have
+            // no defined order between themselves.
+            const int32_t slot = record(push);
+            if (slot < 0) continue;
 
-            commandBuffer.drawIndexed(draw.mesh->indexCount, 1, 0, 0, 0);
+            commandBuffer.drawIndexed(draw.mesh->indexCount, 1, 0, 0,
+                                      static_cast<uint32_t>(slot));
             ++stats.drawCalls;
         }
 
@@ -1083,12 +1173,13 @@ void RenderSystem::Render(
         push.albedoColor = draw.color;
         push.material = glm::vec4(1.0f, 0.0f, 1.0f, 0.0f);
 
-        commandBuffer.pushConstants(
-            transparentPipeline.GetLayout(),
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-            0, sizeof(PushConstantData), &push);
+        // Not batched, for the reason the blended meshes above are not: these
+        // are ordered back to front and each depends on what is already there.
+        const int32_t slot = record(push);
+        if (slot < 0) continue;
 
-        commandBuffer.drawIndexed(particleMesh->indexCount, 1, 0, 0, 0);
+        commandBuffer.drawIndexed(particleMesh->indexCount, 1, 0, 0,
+                                  static_cast<uint32_t>(slot));
         ++stats.drawCalls;
         ++stats.particlesDrawn;
     }

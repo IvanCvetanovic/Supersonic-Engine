@@ -260,9 +260,25 @@ private:
     // Slot 0 is the identity, so 4095 materials may scroll at once - and a
     // scene where nothing does still uploads that one entry, because a storage
     // buffer descriptor a shader reads has to have been written.
+    // How many per-draw records one frame may hold.
+    //
+    // 128 bytes each, so this is 8 MB per frame in flight. Generous on purpose:
+    // the alternative to a comfortable ceiling is a frame that silently stops
+    // drawing, and 65,536 drawables is three times the count at which this
+    // engine already misses 60 Hz for other reasons.
+    static constexpr uint32_t kMaxInstances = 65536;
+
     static constexpr uint32_t kMaxUvTransforms =
         static_cast<uint32_t>(kUvSlotMask) + 1u;
     std::vector<std::unique_ptr<VulkanBuffer>> m_uvTransformBuffers;
+
+    // Filled by RenderSystem while it records, uploaded before the submit.
+    //
+    // Recording only WRITES the draw commands; the buffer they read is not
+    // touched until the GPU runs them, so filling it after the command buffer
+    // is recorded and before it is submitted is in time.
+    std::vector<std::unique_ptr<VulkanBuffer>> m_instanceBuffers;
+    std::vector<PushConstantData> m_instanceScratch;
 
     // The clustered light data, one set per frame in flight: every light in
     // the frame, the per-froxel (offset, count) table, and the flat index list

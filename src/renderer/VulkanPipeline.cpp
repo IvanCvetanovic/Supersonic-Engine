@@ -360,10 +360,24 @@ void VulkanPipeline::createDescriptorSetLayout() {
     uvTransformBinding.descriptorCount = 1;
     uvTransformBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
 
-    const std::array<vk::DescriptorSetLayoutBinding, 11> sceneBindings = {
+    // Per-draw data, one record per INSTANCE.
+    //
+    // Vertex AND fragment: the vertex stage needs the model matrix and the skin
+    // range, the fragment stage the material. The fragment stage cannot read
+    // gl_InstanceIndex - it is a vertex input - so the index is carried across
+    // as a flat varying and the record is read twice rather than passed.
+    vk::DescriptorSetLayoutBinding instanceBinding{};
+    instanceBinding.binding = 11;
+    instanceBinding.descriptorType = vk::DescriptorType::eStorageBuffer;
+    instanceBinding.descriptorCount = 1;
+    instanceBinding.stageFlags =
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+
+    const std::array<vk::DescriptorSetLayoutBinding, 12> sceneBindings = {
         uboBinding, shadowBinding, paletteBinding, pointShadowBinding, spotShadowBinding,
         clusterBindings[0], clusterBindings[1], clusterBindings[2],
-        environmentBindings[0], environmentBindings[1], uvTransformBinding
+        environmentBindings[0], environmentBindings[1], uvTransformBinding,
+        instanceBinding
     };
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};

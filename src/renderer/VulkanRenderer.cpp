@@ -99,6 +99,7 @@ VulkanRenderer::~VulkanRenderer() {
     m_uniformBuffers.clear();
     m_jointPaletteBuffers.clear();
     m_uvTransformBuffers.clear();
+    m_instanceBuffers.clear();
     m_lightBuffers.clear();
     m_clusterRangeBuffers.clear();
     m_lightIndexBuffers.clear();
@@ -519,6 +520,17 @@ void VulkanRenderer::createUniformBuffers() {
     // flight, sized at capacity like the palette above and for the same reason:
     // the descriptor has to be valid every frame, and the shader reads it on
     // every draw whether the scene scrolls anything or not.
+    m_instanceBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        m_instanceBuffers[i] = std::make_unique<VulkanBuffer>(
+            m_deviceRef.GetAllocator(),
+            sizeof(PushConstantData) * kMaxInstances,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            VMA_MEMORY_USAGE_CPU_TO_GPU,
+            VMA_ALLOCATION_CREATE_MAPPED_BIT);
+    }
+    m_instanceScratch.reserve(kMaxInstances);
+
     m_uvTransformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         m_uvTransformBuffers[i] = std::make_unique<VulkanBuffer>(
@@ -591,14 +603,14 @@ void VulkanRenderer::createDescriptorPool() {
     poolSizes[1].descriptorCount =
         static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * VulkanPipeline::kSamplersPerSceneSet;
 
-    // FIVE storage buffers per frame: the joint palette at binding 2, the
-    // three clustered-light buffers at 5, 6 and 7, and the texture coordinate
-    // transforms at 10. Omitting any of them makes allocateDescriptorSets throw
-    // at startup, which presents as a launch failure rather than as a rendering
-    // bug - so the count is spelled out rather than left as a number somebody
-    // has to remember to bump.
+    // SIX storage buffers per frame: the joint palette at binding 2, the three
+    // clustered-light buffers at 5, 6 and 7, the texture coordinate transforms
+    // at 10, and the per-draw instance records at 11. Omitting any of them
+    // makes allocateDescriptorSets throw at startup, which presents as a launch
+    // failure rather than as a rendering bug - so the count is spelled out
+    // rather than left as a number somebody has to remember to bump.
     poolSizes[2].type = vk::DescriptorType::eStorageBuffer;
-    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 5u;
+    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 6u;
 
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
@@ -794,12 +806,17 @@ void VulkanRenderer::createDescriptorSets() {
             prefilteredInfo[slot] = m_environments[slot]->PrefilteredInfo();
         }
 
+        vk::DescriptorBufferInfo instanceInfo{};
+        instanceInfo.buffer = m_instanceBuffers[i]->GetBuffer();
+        instanceInfo.offset = 0;
+        instanceInfo.range = sizeof(PushConstantData) * kMaxInstances;
+
         vk::DescriptorBufferInfo uvTransformInfo{};
         uvTransformInfo.buffer = m_uvTransformBuffers[i]->GetBuffer();
         uvTransformInfo.offset = 0;
         uvTransformInfo.range = sizeof(UvTransform) * kMaxUvTransforms;
 
-        std::array<vk::WriteDescriptorSet, 11> writes{};
+        std::array<vk::WriteDescriptorSet, 12> writes{};
 
         writes[0].dstSet = m_descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -867,6 +884,12 @@ void VulkanRenderer::createDescriptorSets() {
         writes[10].descriptorType = vk::DescriptorType::eStorageBuffer;
         writes[10].descriptorCount = 1;
         writes[10].pBufferInfo = &uvTransformInfo;
+
+        writes[11].dstSet = m_descriptorSets[i];
+        writes[11].dstBinding = 11;
+        writes[11].descriptorType = vk::DescriptorType::eStorageBuffer;
+        writes[11].descriptorCount = 1;
+        writes[11].pBufferInfo = &instanceInfo;
 
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
@@ -1679,7 +1702,23 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline, m_skyPipeline.get(),
                          *m_meshRegistry, *m_textureRegistry,
                          cmd, m_descriptorSets[m_currentFrame],
-                         cameraFrustum, glm::vec3(ubo.cameraPosition), m_renderStats);
+                         cameraFrustum, glm::vec3(ubo.cameraPosition), m_renderStats,
+                         m_instanceScratch, kMaxInstances);
+
+    // UPLOADED AFTER RECORDING, which is in time and not a race.
+    //
+    // Recording writes draw COMMANDS; the buffer those commands read is not
+    // touched until the GPU executes them, and that cannot happen before this
+    // command buffer is submitted - which is after this line. Uploading before
+    // Render would be the impossible order: the records do not exist yet.
+    //
+    // Guarded because a frame that drew nothing still has a valid empty vector,
+    // and UploadData with a zero size is not something to ask a driver.
+    if (!m_instanceScratch.empty()) {
+        m_instanceBuffers[m_currentFrame]->UploadData(
+            m_instanceScratch.data(),
+            sizeof(PushConstantData) * m_instanceScratch.size());
+    }
 
     // Ground grid last so it blends over the scene it is depth-tested against -
     // and only where there is an editor to want one. It is a construction
