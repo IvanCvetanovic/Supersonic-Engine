@@ -7,10 +7,12 @@
 #include <utility>
 
 #include "core/Application.hpp"
+#include "core/AudioEngine.hpp"
 #include "core/Components.hpp"
 #include "core/Log.hpp"
 #include "core/SimulationClock.hpp"
 
+#include "sim/AudioTones.hpp"
 #include "sim/ResourceNode.hpp"
 #include "sim/Snapshot.hpp"
 #include "sim/Unit.hpp"
@@ -165,6 +167,13 @@ void WolfBrigadeLayer::OnAttach(entt::registry& registry) {
 
     m_match = std::make_unique<Match>(*m_data, *m_profile, m_runPath);
     applySavedRules();
+
+    // BEFORE the boot, so the sounds a boot itself emits are heard. BootFresh
+    // places the starting buildings and spawns the starting units, and each of
+    // those raises a signal the table below listens to.
+    attachAudio(registry);
+    connectAudioEvents();
+
     m_match->BootFresh();
     m_booted = true;
 
@@ -500,7 +509,16 @@ void WolfBrigadeLayer::applyBarClicks(entt::registry& registry) {
             std::vector<Building*> existing;
             existing.reserve(m_match->Buildings().size());
             for (const auto& building : m_match->Buildings()) existing.push_back(building.get());
-            Upgrades::Research(*m_data, m_match->Run(), button.id, existing);
+            // AND ANNOUNCE IT. `EventBus::upgradeResearched` was declared and
+            // never emitted by anything - EventBus.hpp says outright that a
+            // signal nothing emits is declared anyway, which is what let this
+            // sit unnoticed. Upgrades::Research takes no bus, so the emit
+            // belongs to whoever called it, and this is the only caller.
+            //
+            // Only on success, because a refused research is not a research.
+            if (Upgrades::Research(*m_data, m_match->Run(), button.id, existing)) {
+                m_match->Bus().upgradeResearched.Emit(button.id);
+            }
             break;
         }
         }
@@ -569,6 +587,134 @@ void WolfBrigadeLayer::buildPauseMenu(entt::registry& registry) {
     m_pause.quit = item("Pause Quit", "Quit");
 
     setPauseMenuVisible(registry, false);
+}
+
+// --- Sound -----------------------------------------------------------------
+
+namespace {
+
+// The eleven event ids `audio.gd` declares, as its own constants do. Nine of
+// them are reached through the bus below; `attack` and `shoot` are called
+// directly from the original's entity scripts rather than wired to a signal,
+// and there is no bus edge here to hang them on - see connectAudioEvents.
+constexpr const char* kSfxIds[] = {
+    "train", "build", "death", "destroy", "wave", "victory",
+    "defeat", "research", "place", "attack", "shoot",
+};
+
+// The name a synthesised sound is registered under.
+//
+// Prefixed, because AudioEngine's clip cache is keyed by string and shared with
+// every path a file could arrive on. "train" is a plausible filename; a game
+// that registered under bare ids would shadow one.
+std::string clipName(const std::string& id) { return "wolfbrigade:sfx:" + id; }
+
+// `audio.gd:73-76`'s dB sum, which Godot applies to a bus and this folds into
+// the per-voice gain Play already takes.
+//
+// Two numbers rather than a bus graph: on the shipped data both are zero, so
+// the whole chain is the identity and the user's 0..1 scalar passes through
+// unchanged. It is written out anyway because it is six lines and it is what
+// makes `master_db` and `sfx_db` mean something - a data edit that set either
+// would otherwise be silently ignored.
+double decibelsToLinear(double db) { return std::pow(10.0, db / 20.0); }
+
+} // namespace
+
+void WolfBrigadeLayer::attachAudio(entt::registry& registry) {
+    // The handle AudioSystem::Attach put here during engine init, before any
+    // layer was pushed. Null on a machine with no device, and on every test
+    // that builds a bare registry - which is most of them.
+    if (auto* slot = registry.ctx().find<Supersonic::AudioEngine*>()) m_audio = *slot;
+    if (m_audio == nullptr || !m_data) return;
+
+    for (auto& voice : m_sfxVoices) voice = Supersonic::AudioEngine::kInvalidVoice;
+    m_nextVoice = 0;
+
+    // REGISTERED ONCE, at attach, and never invalidated. `audio.gd` has a
+    // reload_data() that drops its cache because Godot re-enters main._ready on
+    // every scene change and DataLoader can be re-read; nothing here re-reads
+    // GameData, so there is no transition for an invalidation to fire on.
+    for (const char* id : kSfxIds) {
+        const Audio::Sound sound = Audio::SoundFor(*m_data, id);
+
+        // A FILE is not silently substituted. The original asks Godot's
+        // ResourceLoader and falls back to silence; this port has no resource
+        // system, and the shipped data names no files - so an id that grew one
+        // is left out rather than played as the tone it no longer has.
+        if (sound.kind != Audio::Sound::Kind::Tone) continue;
+
+        if (m_audio->AddClip(clipName(id), Audio::ToClip(sound.tone)) != nullptr) {
+            m_sfxNames.emplace_back(id);
+        }
+    }
+}
+
+float WolfBrigadeLayer::sfxVolume() const {
+    if (!m_data || !m_profile) return 1.0f;
+
+    const Supersonic::Json::Value& volumes = m_data->Audio()["volumes"];
+
+    // Clamped away from zero before the log, exactly as `audio.gd:73` clamps to
+    // 0.0001: linear_to_db(0) is negative infinity, and the sum below would
+    // carry it into every sound rather than into silence.
+    const double user = std::max(0.0001, static_cast<double>(m_profile->MasterVolume()));
+    const double master = volumes["master_db"].AsNumber(0.0) + 20.0 * std::log10(user);
+    const double sfx = master + volumes["sfx_db"].AsNumber(0.0);
+
+    return static_cast<float>(std::clamp(decibelsToLinear(sfx), 0.0, 1.0));
+}
+
+void WolfBrigadeLayer::playSfx(const std::string& id) {
+    if (m_audio == nullptr || !m_profile) return;
+
+    // MUTE IS A SKIPPED CALL, not a bus level, which is what `audio.gd:86`
+    // does. A muted game that still started voices at zero gain would burn the
+    // pool and the mixer on sounds nobody can hear.
+    if (m_profile->Muted()) return;
+
+    if (std::find(m_sfxNames.begin(), m_sfxNames.end(), id) == m_sfxNames.end()) return;
+
+    // ROUND ROBIN, and the slot is stopped before it is reused. That is what
+    // bounds the game to six simultaneous sounds - the engine would otherwise
+    // happily start one per call, and a wave of forty deaths is forty sounds in
+    // the same tick.
+    Supersonic::AudioEngine::VoiceId& slot = m_sfxVoices[m_nextVoice];
+    if (slot != Supersonic::AudioEngine::kInvalidVoice) m_audio->Stop(slot);
+
+    slot = m_audio->Play(clipName(id), false, sfxVolume(), 1.0f);
+    m_nextVoice = (m_nextVoice + 1) % kSfxVoices;
+}
+
+void WolfBrigadeLayer::connectAudioEvents() {
+    if (!m_match) return;
+
+    // The nine edges `connect_events` wires, and only those. `attack` and
+    // `shoot` are `play_sfx_throttled` calls made directly from unit.gd and
+    // building.gd rather than from a signal, and this port's Unit and Building
+    // know nothing about audio on purpose - the sim is the half that has been
+    // verified against twenty-two harnesses and it stays free of a device.
+    // Their clips are registered and unused, which is said here rather than
+    // left as an absence somebody has to notice.
+    EventBus& bus = m_match->Bus();
+    m_audioSubscriptions.clear();
+
+    m_audioSubscriptions.push_back(bus.unitTrained.Connect(
+        [this](const std::string&, const glm::vec2&) { playSfx("train"); }));
+    m_audioSubscriptions.push_back(
+        bus.buildingPlaced.Connect([this](Building*) { playSfx("place"); }));
+    m_audioSubscriptions.push_back(
+        bus.buildingCompleted.Connect([this](Building*) { playSfx("build"); }));
+    m_audioSubscriptions.push_back(
+        bus.unitDied.Connect([this](Unit*) { playSfx("death"); }));
+    m_audioSubscriptions.push_back(
+        bus.buildingDestroyed.Connect([this](Building*) { playSfx("destroy"); }));
+    m_audioSubscriptions.push_back(
+        bus.waveStarted.Connect([this](int) { playSfx("wave"); }));
+    m_audioSubscriptions.push_back(bus.gameWon.Connect([this]() { playSfx("victory"); }));
+    m_audioSubscriptions.push_back(bus.gameLost.Connect([this]() { playSfx("defeat"); }));
+    m_audioSubscriptions.push_back(bus.upgradeResearched.Connect(
+        [this](const std::string&) { playSfx("research"); }));
 }
 
 // --- The Armory ------------------------------------------------------------
@@ -1214,6 +1360,7 @@ void WolfBrigadeLayer::startGame(entt::registry& registry, bool fromSave) {
     // Kept before Boot rather than moved after it, because on the fresh fork it
     // is the only thing that sets them and Reset reads them.
     applySavedRules();
+    connectAudioEvents();
 
     // Boot takes the fork itself - a valid pending document restores, anything
     // else starts fresh - which is `main.gd::_ready`. Passing a null value on
@@ -1329,6 +1476,13 @@ void WolfBrigadeLayer::restartMatch(entt::registry& registry) {
     // than the default - without this a Restart on Hard silently drops to
     // whatever the data calls normal.
     applySavedRules();
+
+    // A NEW MATCH IS A NEW BUS - EventBus lives on the Match and died with the
+    // last one - so the handlers have to be hung again. Nothing would say
+    // otherwise: the old subscriptions are simply gone, and the game would go
+    // quiet from the first Restart onward.
+    connectAudioEvents();
+
     m_match->BootFresh();
 
     // The bar's buttons point at the OLD match's selection and buildings, so

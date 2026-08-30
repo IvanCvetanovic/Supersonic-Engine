@@ -56,7 +56,17 @@
 #include "TestHarness.hpp"
 #include "WolfBrigadeFixture.hpp"
 
+#include "WolfBrigadeLayer.hpp"
+
 #include "core/AudioEngine.hpp"
+#include "core/AudioSystem.hpp"
+#include "core/Components.hpp"
+#include "sim/EventBus.hpp"
+#include "sim/Building.hpp"
+#include "sim/GameState.hpp"
+#include "sim/Match.hpp"
+#include "sim/Selection.hpp"
+#include "sim/Progression.hpp"
 #include "sim/AudioTones.hpp"
 #include "sim/GameData.hpp"
 
@@ -595,6 +605,261 @@ void testEverySynthesisedSoundCanReachTheMixer() {
     }
 }
 
+
+// --- The layer's half: registration, the pool, mute and the nine edges -----
+//
+// Everything above is arithmetic and needs no device. Everything here needs the
+// engine, and some of it needs a real output device - those checks are guarded
+// and are deliberately not counted in this suite's floor, exactly as
+// test_audio's voice cases are. Without a device Play returns kInvalidVoice and
+// there is no voice to assert about, which is the honest answer rather than a
+// skipped test.
+
+// The name a sound is registered under. Prefixed, because the engine's clip
+// cache is shared with every path a file could arrive on and "train" is a
+// plausible filename.
+std::string clipName(const std::string& id) { return "wolfbrigade:sfx:" + id; }
+
+// A layer with an engine behind it. AudioSystem::Attach is what puts the handle
+// in the registry context, which is the only way a layer can reach one.
+struct SoundedLayer {
+    Supersonic::AudioEngine engine;
+    entt::registry registry;
+    WolfBrigade::WolfBrigadeLayer layer;
+
+    SoundedLayer() {
+        Supersonic::AudioSystem::Attach(registry, engine);
+        layer.OnAttach(registry);
+    }
+
+    ~SoundedLayer() {
+        layer.OnDetach(registry);
+        Supersonic::AudioSystem::Detach(registry);
+    }
+
+    SoundedLayer(const SoundedLayer&) = delete;
+    SoundedLayer& operator=(const SoundedLayer&) = delete;
+
+    WolfBrigade::Match& Match() { return *layer.CurrentMatch(); }
+};
+
+void testEveryShippedSoundIsRegisteredWithTheEngineOnce() {
+    // Needs no device: AddClip is a cache write. This is the check that the
+    // synthesised samples above actually reach the thing that would play them,
+    // which is the seam the suite could not see until the layer had one.
+    SoundedLayer sounded;
+
+    for (const char* id : { "train", "build", "death", "destroy", "wave", "victory",
+                            "defeat", "research", "place", "attack", "shoot" }) {
+        CHECK_MSG(sounded.engine.HasClip(clipName(id)),
+                  std::string(id) + " is registered as " + clipName(id));
+    }
+
+    // PREFIXED, not bare. The cache is keyed by string and shared with the
+    // filesystem path, so a game registering "train" would shadow a file of
+    // that name for everything downstream.
+    CHECK_MSG(!sounded.engine.HasClip("train"),
+              "and not under a name a file could also have");
+}
+
+void testEachGameplaySignalPlaysItsOwnSound() {
+    // The nine edges `connect_events` wires. Driven by emitting on the Match's
+    // own bus, which is what the simulation does - so this tests the wiring
+    // rather than a function the test called itself.
+    SoundedLayer sounded;
+    WolfBrigade::EventBus& bus = sounded.Match().Bus();
+
+    struct Edge {
+        const char* sound;
+        void (*emit)(WolfBrigade::EventBus&);
+    };
+    const Edge edges[] = {
+        { "train",    [](WolfBrigade::EventBus& b) { b.unitTrained.Emit("soldier", glm::vec2(0.0f)); } },
+        { "place",    [](WolfBrigade::EventBus& b) { b.buildingPlaced.Emit(nullptr); } },
+        { "build",    [](WolfBrigade::EventBus& b) { b.buildingCompleted.Emit(nullptr); } },
+        { "death",    [](WolfBrigade::EventBus& b) { b.unitDied.Emit(nullptr); } },
+        { "destroy",  [](WolfBrigade::EventBus& b) { b.buildingDestroyed.Emit(nullptr); } },
+        { "wave",     [](WolfBrigade::EventBus& b) { b.waveStarted.Emit(1); } },
+        { "victory",  [](WolfBrigade::EventBus& b) { b.gameWon.Emit(); } },
+        { "defeat",   [](WolfBrigade::EventBus& b) { b.gameLost.Emit(); } },
+        { "research", [](WolfBrigade::EventBus& b) { b.upgradeResearched.Emit("iron_swords"); } },
+    };
+
+    for (const Edge& edge : edges) {
+        edge.emit(bus);
+
+        // Not counted in the floor: needs a real output device.
+        const auto playing = sounded.engine.StopVoicesUsing(clipName(edge.sound));
+        if (!playing.empty()) {
+            CHECK_MSG(playing.size() == 1,
+                      std::string(edge.sound) + " started exactly one voice");
+        }
+    }
+}
+
+void testTheVoicePoolBoundsHowManySoundsOverlap() {
+    // SIX, from `audio.gd`'s own constant, and the pool is ported rather than
+    // dropped even though the engine mints a voice per call. It is a decision
+    // about how the game SOUNDS - a wave of forty deaths is forty simultaneous
+    // sounds without it - not an artefact of Godot needing one player each.
+    SoundedLayer sounded;
+    WolfBrigade::EventBus& bus = sounded.Match().Bus();
+
+    for (int i = 0; i < 20; ++i) bus.unitDied.Emit(nullptr);
+
+    // Not counted in the floor: needs a real output device.
+    const auto playing = sounded.engine.StopVoicesUsing(clipName("death"));
+    if (!playing.empty()) {
+        CHECK_MSG(playing.size() <= 6,
+                  "twenty deaths hold at most six voices, got " +
+                      std::to_string(playing.size()));
+    }
+}
+
+void testAMutedGameStartsNoVoicesAtAll() {
+    // Mute is a SKIPPED CALL, not a bus level, which is what `audio.gd:86`
+    // does. A muted game that still started voices at zero gain would burn the
+    // pool and the mixer on sounds nobody can hear.
+    SoundedLayer sounded;
+    sounded.Match().PlayerProfile().SetMuted(true);
+
+    WolfBrigade::EventBus& bus = sounded.Match().Bus();
+    for (int i = 0; i < 5; ++i) bus.unitDied.Emit(nullptr);
+
+    CHECK_MSG(sounded.engine.StopVoicesUsing(clipName("death")).empty(),
+              "a muted game starts nothing");
+
+    // And un-muting brings it back, or this would pass on an engine that had
+    // simply stopped working.
+    sounded.Match().PlayerProfile().SetMuted(false);
+    bus.unitDied.Emit(nullptr);
+
+    // Not counted in the floor: needs a real output device.
+    const auto playing = sounded.engine.StopVoicesUsing(clipName("death"));
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(!playing.empty(), "and un-muting starts sounds again");
+    }
+}
+
+void testARestartHangsTheHandlersOnTheNewBus() {
+    // A Match owns its EventBus, so a new one is a new bus and the old
+    // subscriptions are simply gone. Nothing would say so - the game would go
+    // quiet from the first Restart onward and no test above would notice,
+    // because they all use the first match's bus.
+    SoundedLayer sounded;
+
+    // Restart through the pause menu, the way a player does.
+    for (auto [entity, tag] : sounded.registry.view<const Supersonic::TagComponent>().each()) {
+        if (tag.tag == "Pause Restart") {
+            sounded.registry.get<Supersonic::UIButtonComponent>(entity).clickedThisTick = true;
+        }
+    }
+    sounded.layer.OnFixedUpdate(sounded.registry, 1.0f / 30.0f);
+
+    WolfBrigade::Match* restarted = sounded.layer.CurrentMatch();
+    CHECK_MSG(restarted != nullptr, "a new match is running");
+    if (restarted == nullptr) return;
+
+    restarted->Bus().unitDied.Emit(nullptr);
+
+    // Not counted in the floor: needs a real output device.
+    if (sounded.engine.IsAvailable()) {
+        CHECK_MSG(!sounded.engine.StopVoicesUsing(clipName("death")).empty(),
+                  "and its signals still reach the mixer");
+    }
+}
+
+// The bar's Research button, found by what it says - every bar button carries
+// the same tag. Re-found after every tick that could have rebuilt the strip,
+// because a rebuild DESTROYS the old entities: holding one across a research
+// that succeeds is a handle to something that no longer exists, and EnTT
+// answers that with an assertion rather than a wrong value.
+entt::entity findResearchButton(entt::registry& registry) {
+    for (auto [entity, tag, button] :
+         registry.view<const Supersonic::TagComponent,
+                       Supersonic::UIButtonComponent>().each()) {
+        if (tag.tag == "WB Bar Button" && button.label.find("Research") != std::string::npos) {
+            return entity;
+        }
+    }
+    return entt::null;
+}
+
+void testResearchingAnUpgradeAnnouncesIt() {
+    // `EventBus::upgradeResearched` was DECLARED AND NEVER EMITTED. EventBus.hpp
+    // says outright that a signal nothing emits is declared anyway, which is
+    // what let this sit unnoticed - and it is one of the nine edges `audio.gd`
+    // wires, so the research sound could never have played.
+    //
+    // Upgrades::Research takes no bus, so the emit belongs to whoever called
+    // it. There is exactly one caller.
+    SoundedLayer sounded;
+    Match& match = sounded.Match();
+
+    // A probe rather than the sound, because the claim is about the SIGNAL. The
+    // sound it drives is covered by the edge table above.
+    std::vector<std::string> announced;
+    match.Bus().upgradeResearched.Connect(
+        [&announced](const std::string& id) { announced.push_back(id); });
+
+    // Select a completed building that researches something, and make it
+    // affordable. Arranging the WORLD is testing; what would make this
+    // worthless is arranging the answer.
+    Building* researcher = nullptr;
+    for (const auto& building : match.Buildings()) {
+        if (building->IsAlive() && building->IsComplete() &&
+            !building->Stats().researches.empty()) {
+            researcher = building.get();
+            break;
+        }
+    }
+    CHECK_MSG(researcher != nullptr, "the board has a building that researches");
+    if (researcher == nullptr) return;
+
+    match.Picked().SelectBuilding(researcher);
+    match.Run().Add("wood", 5000);
+    match.Run().Add("food", 5000);
+    sounded.layer.OnFixedUpdate(sounded.registry, 1.0f / 30.0f);
+
+    const entt::entity button = findResearchButton(sounded.registry);
+    CHECK_MSG(button != entt::null, "the bar offers a Research button");
+    if (button == entt::null) return;
+
+    CHECK_MSG(sounded.registry.get<Supersonic::UIButtonComponent>(button).enabled,
+              "and it is affordable");
+
+    sounded.registry.get<Supersonic::UIButtonComponent>(button).clickedThisTick = true;
+    sounded.layer.OnFixedUpdate(sounded.registry, 1.0f / 30.0f);
+
+    CHECK_EQ(announced.size(), size_t{1});
+    if (!announced.empty()) {
+        CHECK_MSG(match.Run().IsResearched(announced[0]),
+                  "and it announced the upgrade that was actually bought, got \"" +
+                      announced[0] + "\"");
+    }
+
+    // ONLY ON SUCCESS, and this is the case the layer's own second lock
+    // describes: a button that went unaffordable between the press and the tick
+    // that consumes it. UIInput would not mark a disabled button clicked, so
+    // the state is arranged directly - enabled in the registry, unaffordable in
+    // the run - which is exactly the race.
+    const entt::entity next = findResearchButton(sounded.registry);
+    if (next != entt::null) {
+        const size_t announcedSoFar = announced.size();
+
+        match.Run().Add("wood", -match.Run().Amount("wood"));
+        match.Run().Add("food", -match.Run().Amount("food"));
+
+        auto& widget = sounded.registry.get<Supersonic::UIButtonComponent>(next);
+        widget.enabled = true;
+        widget.clickedThisTick = true;
+        sounded.layer.OnFixedUpdate(sounded.registry, 1.0f / 30.0f);
+
+        CHECK_EQ(announced.size(), announcedSoFar);
+    }
+}
+
+
 void runTests() {
     testTheElevenShippedSoundsSynthesiseWhatGodotSynthesises();
     testOneCountAnywhereInTheBufferMovesBothChecksums();
@@ -613,8 +878,15 @@ void runTests() {
     testAnUnknownIdResolvesToSilenceRatherThanADefaultTone();
     testPcmBytesArePairedLowByteFirst();
     testEverySynthesisedSoundCanReachTheMixer();
+
+    testEveryShippedSoundIsRegisteredWithTheEngineOnce();
+    testEachGameplaySignalPlaysItsOwnSound();
+    testTheVoicePoolBoundsHowManySoundsOverlap();
+    testAMutedGameStartsNoVoicesAtAll();
+    testARestartHangsTheHandlersOnTheNewBus();
+    testResearchingAnUpgradeAnnouncesIt();
 }
 
 } // namespace
 
-TEST_MAIN("test_wb_audio", 180)
+TEST_MAIN("test_wb_audio", 272)

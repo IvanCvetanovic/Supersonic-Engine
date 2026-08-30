@@ -91,6 +91,12 @@ target_link_libraries(test_wb_hud PRIVATE WolfBrigadeGame)
 # and this is the only file that exercises the paths.
 add_port_test(test_wb_persistence)
 target_link_libraries(test_wb_persistence PRIVATE WolfBrigadeGame)
+
+# And test_wb_audio, which grew a second half. The first is arithmetic against
+# the original's harness and needs nothing; the second is the layer registering
+# those samples with a real engine and playing them, which is the seam the
+# synthesis tests could not see.
+target_link_libraries(test_wb_audio PRIVATE WolfBrigadeGame)
 add_engine_test(test_environmentmap)
 add_engine_test(test_assetdatabase)
 add_engine_test(test_serialize)

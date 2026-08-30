@@ -8,6 +8,7 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
+#include "core/AudioEngine.hpp"
 #include "core/EngineLayer.hpp"
 
 #include "sim/GameData.hpp"
@@ -323,6 +324,58 @@ private:
     bool m_confirmingNewGame{false};
 
     void setConfirmVisible(entt::registry& registry, bool shown);
+
+    // ---- Sound -------------------------------------------------------------
+    //
+    // `audio.gd`'s half that needs a device, which is everything the sim's
+    // `Audio` namespace deliberately left out: the voice pool, the mute flag,
+    // the volumes and the wiring from gameplay signals to sounds.
+    //
+    // The synthesis is NOT here - `sim/AudioTones` already produces the samples
+    // and has its own suite against the original's harness. What this does is
+    // register those samples with the engine once and play them.
+    void attachAudio(entt::registry& registry);
+
+    // Subscribes the nine gameplay signals `connect_events` wires. Re-run on
+    // every new Match, because a Match owns its own EventBus and the old one
+    // died with the run it belonged to.
+    void connectAudioEvents();
+
+    // One sfx, through the round-robin pool.
+    //
+    // SIX VOICES, from `audio.gd`'s own constant, and the pool is ported rather
+    // than dropped even though AudioEngine::Play mints a voice per call. It is
+    // what stops a wave of forty deaths from starting forty simultaneous
+    // sounds, which is a design decision about how the game sounds and not an
+    // artefact of Godot needing one player per voice.
+    void playSfx(const std::string& id);
+
+    // Where the profile's volume and mute reach the mixer. `audio.gd` computes
+    // a dB sum and Godot applies it to a bus; here it is a linear gain folded
+    // into the one Play already takes.
+    float sfxVolume() const;
+
+    static constexpr std::size_t kSfxVoices = 6;
+
+    // Not owned. Handed over by AudioSystem through the registry context, which
+    // is where a layer can reach it - the engine inserts it during init, before
+    // any layer is pushed, and it outlives every scene load.
+    //
+    // Null when the engine has no device, which is a real state on a build
+    // machine and on a headless run. Every path here checks it.
+    Supersonic::AudioEngine* m_audio{nullptr};
+
+    Supersonic::AudioEngine::VoiceId m_sfxVoices[kSfxVoices]{};
+    std::size_t m_nextVoice{0};
+
+    // Which sfx ids actually got a clip. An id whose data names a FILE rather
+    // than a tone has nothing to synthesise, and this port has no resource
+    // system to load one with - so it is absent rather than silently silent.
+    std::vector<std::string> m_sfxNames;
+
+    // The subscriptions on the current Match's bus, so a new Match does not
+    // stack a second set of handlers on top.
+    std::vector<int> m_audioSubscriptions;
 
     // ---- The Armory --------------------------------------------------------
     //
