@@ -89,13 +89,16 @@ bool MaterialSystem::Assign(entt::registry& registry, entt::entity entity,
 
 uint32_t MaterialSystem::GatherUvTransforms(entt::registry& registry,
                                            std::vector<UvTransform>& out,
-                                           uint32_t capacity) {
+                                           uint32_t capacity,
+                                           uint32_t* outDropped) {
     out.clear();
+    uint32_t dropped = 0;
+    const auto report = [&] { if (outDropped) *outDropped = dropped; };
 
     // Slot 0, unconditionally and first. Every other slot is an offset from it
     // and every draw that never asked for a transform points at it.
     out.push_back(UvTransform{});
-    if (capacity == 0) return 1;   // cannot happen; costs one compare to say so
+    if (capacity == 0) { report(); return 1; }  // cannot happen; one compare to say so
 
     for (auto entity : registry.view<MaterialComponent>()) {
         auto& material = registry.get<MaterialComponent>(entity);
@@ -112,7 +115,13 @@ uint32_t MaterialSystem::GatherUvTransforms(entt::registry& registry,
             // Untransformed rather than out of bounds. robustBufferAccess is
             // not enabled on this device, so a slot past the end is a device
             // loss and not a zeroed read.
+            //
+            // COUNTED, because "untransformed" is not a small wrongness here: a
+            // material that asked for one cell of an atlas and is handed the
+            // identity draws the entire atlas. The caller turns this into a log
+            // line - see the header for why it is worth one.
             material.uvSlot = 0;
+            ++dropped;
             continue;
         }
 
@@ -121,6 +130,7 @@ uint32_t MaterialSystem::GatherUvTransforms(entt::registry& registry,
                                       material.uvOffset));
     }
 
+    report();
     return static_cast<uint32_t>(out.size());
 }
 

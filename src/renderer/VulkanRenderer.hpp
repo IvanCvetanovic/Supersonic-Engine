@@ -297,6 +297,11 @@ private:
     // Said once per change rather than once per frame, like the light cap.
     uint32_t m_clusterOverflowReportedFor{0};
 
+    // The same, for the texture coordinate transform buffer. Separate counter
+    // because the two run out for unrelated reasons and either one silencing
+    // the other is a report nobody sees.
+    uint32_t m_uvOverflowReportedFor{0};
+
     // Reused between frames so the gather does not allocate every frame.
     std::vector<glm::mat4> m_paletteScratch;
     std::vector<UvTransform> m_uvTransformScratch;

@@ -58,13 +58,27 @@ public:
     //
     // Identical transforms are NOT shared. Twenty flames on the same frame take
     // twenty slots. Deduplicating means hashing six floats per material to save
-    // 32 bytes each, and the capacity below is the thing that would have to run
-    // out first for that to matter.
+    // 32 bytes each, and the capacity is the thing that would have to run out
+    // first for that to matter.
+    //
+    // `outDropped`, when given, receives how many materials asked for a slot and
+    // did not get one. THAT NUMBER USED TO GO NOWHERE, and it is the one thing
+    // about this function worth reporting: running out does not fail, it hands
+    // the material slot 0 and slot 0 is the identity - so a sprite past the
+    // limit silently draws its WHOLE atlas instead of one cell of it. A wrong
+    // picture with no message, in the one situation where the wrongness is
+    // large and obvious and its cause is not.
+    //
+    // The asymmetry that made this worth fixing: the instance buffer, which is
+    // sixteen times larger and correspondingly harder to exhaust, has always
+    // said so when it filled up. This, at 4,095, said nothing. A tilemap or a
+    // sprite sheet reaches four thousand entities without trying.
     //
     // Returns how many entries were written, always at least one.
     static uint32_t GatherUvTransforms(entt::registry& registry,
                                        std::vector<UvTransform>& out,
-                                       uint32_t capacity);
+                                       uint32_t capacity,
+                                       uint32_t* outDropped = nullptr);
 };
 
 } // namespace Supersonic

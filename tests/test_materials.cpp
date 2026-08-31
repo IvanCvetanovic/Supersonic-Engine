@@ -748,6 +748,57 @@ static void testRunningOutOfSlotsDrawsUntransformedRatherThanOutOfBounds() {
     CHECK_MSG(dropped == 2, "the two that did not fit draw untransformed");
 }
 
+static void testRunningOutOfSlotsIsReportedRatherThanSwallowed() {
+    // WHAT DID NOT EXIST WAS THE NUMBER, not the behaviour above. Overflow has
+    // always handed the material slot 0 and carried on, and slot 0 is the
+    // IDENTITY - so a sprite past the limit draws its whole atlas rather than
+    // one cell of it. A large, obvious wrongness whose cause is invisible,
+    // while the instance buffer sixteen times larger has always logged when it
+    // filled. The caller cannot warn about a count it is never given.
+    entt::registry registry;
+    std::vector<UvTransform> out;
+
+    for (int i = 0; i < 7; ++i) {
+        const entt::entity e = registry.create();
+        auto& material = registry.emplace<MaterialComponent>(e);
+        material.uvOffset = glm::vec2(0.05f * static_cast<float>(i + 1), 0.0f);
+    }
+
+    // Room for the identity plus two, so five of the seven must be turned away.
+    uint32_t droppedCount = 99;
+    const uint32_t written = MaterialSystem::GatherUvTransforms(registry, out, 3, &droppedCount);
+
+    CHECK_EQ(written, 3u);
+    CHECK_MSG(droppedCount == 5u, "every material that asked and was refused is counted");
+}
+
+static void testAFrameThatFitsReportsNothingDropped() {
+    // The control, and it is the half that would otherwise pass by accident: a
+    // counter wired to the wrong place, or one never cleared between frames,
+    // reports a shortage in a scene that has none - and a warning that cries
+    // wolf on every frame is worse than the silence it replaced.
+    entt::registry registry;
+    std::vector<UvTransform> out;
+
+    for (int i = 0; i < 3; ++i) {
+        const entt::entity e = registry.create();
+        auto& material = registry.emplace<MaterialComponent>(e);
+        material.uvOffset = glm::vec2(0.05f * static_cast<float>(i + 1), 0.0f);
+    }
+
+    uint32_t droppedCount = 99;
+    MaterialSystem::GatherUvTransforms(registry, out, 64, &droppedCount);
+    CHECK_EQ(droppedCount, 0u);
+
+    // And a material that never wanted a transform is not a material that was
+    // refused one. Those are different facts and only one of them is a problem.
+    registry.emplace<MaterialComponent>(registry.create());
+    droppedCount = 99;
+    MaterialSystem::GatherUvTransforms(registry, out, 64, &droppedCount);
+    CHECK_MSG(droppedCount == 0u,
+              "a material with an identity transform takes no slot and is not a drop");
+}
+
 static void testASlotAndTheUnlitSwitchShareAWordWithoutTouching() {
     // The slot rides in the twelve bits above the switches. Both of the
     // materials this feature was built for are unlit, so a slot packed one bit
@@ -1053,6 +1104,8 @@ static void runTests() {
     testScaleHappensBeforeRotationAndTranslationAfterBoth();
     testAMaterialThatStopsScrollingGoesBackToTheIdentity();
     testRunningOutOfSlotsDrawsUntransformedRatherThanOutOfBounds();
+    testRunningOutOfSlotsIsReportedRatherThanSwallowed();
+    testAFrameThatFitsReportsNothingDropped();
     testASlotAndTheUnlitSwitchShareAWordWithoutTouching();
     testTextRoundTrip();
     testGarbageIsRejected();
@@ -1080,4 +1133,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 195)
+TEST_MAIN("test_materials", 201)

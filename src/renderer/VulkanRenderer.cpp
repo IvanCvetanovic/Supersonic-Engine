@@ -1445,8 +1445,33 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // reads it. Skipping the upload when nothing scrolls would leave the shader
     // reading a buffer nobody wrote - undefined even though the answer would
     // have been discarded, and undefined differently on every driver.
-    const uint32_t uvTransformCount =
-        MaterialSystem::GatherUvTransforms(registry, m_uvTransformScratch, kMaxUvTransforms);
+    uint32_t uvTransformsDropped = 0;
+    const uint32_t uvTransformCount = MaterialSystem::GatherUvTransforms(
+        registry, m_uvTransformScratch, kMaxUvTransforms, &uvTransformsDropped);
+
+    // Said out loud, which it was not. Running out of slots does not fail - it
+    // hands the material the identity, and the identity is the WHOLE texture -
+    // so a sprite sheet past the limit draws every cell at once and nothing
+    // anywhere mentions it. The froxel list twenty lines up has warned about
+    // exactly this shape of exhaustion since it was written, and it is the
+    // buffer sixteen times harder to fill.
+    //
+    // Re-reported when the number CHANGES rather than once ever, matching the
+    // froxel warning: a scene that quietly gets worse is the case a one-shot
+    // log hides.
+    if (uvTransformsDropped != m_uvOverflowReportedFor) {
+        m_uvOverflowReportedFor = uvTransformsDropped;
+        if (uvTransformsDropped > 0) {
+            SUPERSONIC_LOG_WARN("VulkanRenderer")
+                << "The texture coordinate transform buffer is full: "
+                << uvTransformsDropped
+                << " material(s) draw untransformed this frame, which for an atlas "
+                   "means the whole sheet rather than one cell. Raise "
+                   "VulkanRenderer::kMaxUvTransforms, which the twelve-bit slot "
+                   "field in Components.hpp bounds at 4096." << std::endl;
+        }
+    }
+
     m_uvTransformBuffers[m_currentFrame]->UploadData(
         m_uvTransformScratch.data(), sizeof(UvTransform) * uvTransformCount);
 
