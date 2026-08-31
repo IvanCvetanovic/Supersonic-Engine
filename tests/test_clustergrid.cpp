@@ -29,6 +29,13 @@ constexpr float kNear = 0.1f;
 constexpr float kFar = 100.0f;
 const float kTanHalfFovY = std::tan(glm::radians(60.0f) * 0.5f);
 constexpr float kAspect = 16.0f / 9.0f;
+const ClusterGrid::ViewVolume kVolume =
+    ClusterGrid::ViewVolume::Perspective(kTanHalfFovY, kAspect);
+
+// The 2D camera. Six world units tall, which is what Wolf Brigade's board uses.
+constexpr float kOrthoHeight = 6.0f;
+const ClusterGrid::ViewVolume kOrthoVolume =
+    ClusterGrid::ViewVolume::Orthographic(kOrthoHeight, kAspect);
 
 LocalLight lightAt(float x, float y, float z, float radius) {
     LocalLight light;
@@ -131,7 +138,7 @@ static void testALightReachesTheClusterItSitsIn() {
     const float depth = 5.0f;
     std::vector<LocalLight> lights{ lightAt(0.0f, 0.0f, depth, 1.0f) };
 
-    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kTanHalfFovY, kAspect);
+    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kVolume);
     const auto found = clustersHolding(assignment, 0);
     CHECK_MSG(!found.empty(), "a light must appear in at least the cluster it is standing in");
 
@@ -147,7 +154,7 @@ static void testATinyLightDoesNotReachTheWholeScreen() {
     // The point of culling. A pinpoint lamp in the middle of the view must not
     // end up in every cluster, or the grid costs memory and buys nothing.
     std::vector<LocalLight> lights{ lightAt(0.0f, 0.0f, 5.0f, 0.05f) };
-    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kTanHalfFovY, kAspect);
+    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kVolume);
 
     const auto found = clustersHolding(assignment, 0);
     CHECK_MSG(!found.empty(), "it still has to light something");
@@ -159,7 +166,7 @@ static void testAHugeLightReachesEverything() {
     // The other end, and the one that catches an inverted test: a light whose
     // radius swallows the frustum must be in every cluster.
     std::vector<LocalLight> lights{ lightAt(0.0f, 0.0f, 1.0f, 10000.0f) };
-    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kTanHalfFovY, kAspect);
+    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kVolume);
 
     CHECK_EQ(clustersHolding(assignment, 0).size(), size_t{ClusterGrid::kClusterCount});
 }
@@ -169,7 +176,7 @@ static void testALightBehindTheCameraLightsNothingInFront() {
     // backwards puts every lamp behind the viewer into the near slice, which
     // looks like the scene being lit from the wrong side and is one character.
     std::vector<LocalLight> lights{ lightAt(0.0f, 0.0f, -20.0f, 1.0f) };
-    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kTanHalfFovY, kAspect);
+    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kVolume);
 
     CHECK_MSG(clustersHolding(assignment, 0).empty(),
               "a lamp twenty metres behind the camera must not reach the frustum");
@@ -182,7 +189,7 @@ static void testALightOffToOneSideStaysOnThatSide() {
     const float halfWidth = kTanHalfFovY * depth * kAspect;
     std::vector<LocalLight> lights{ lightAt(halfWidth * 0.8f, 0.0f, depth, 0.3f) };
 
-    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kTanHalfFovY, kAspect);
+    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kVolume);
     const auto found = clustersHolding(assignment, 0);
     CHECK_MSG(!found.empty(), "it is inside the frustum and must light something");
 
@@ -201,7 +208,7 @@ static void testTheRangesDescribeTheListTheyIndex() {
         lightAt(2.0f, 1.0f, 9.0f, 4.0f),
         lightAt(-3.0f, -1.0f, 20.0f, 8.0f),
     };
-    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kTanHalfFovY, kAspect);
+    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kVolume);
 
     CHECK_EQ(assignment.clusters.size(), size_t{ClusterGrid::kClusterCount});
     CHECK_EQ(assignment.dropped, 0u);
@@ -232,7 +239,7 @@ static void testALightWithNoRadiusIsNotAssigned() {
     // A range of zero is how a light is turned off, and a zero-radius sphere
     // touching a box it is inside would put it in every cluster it stood in.
     std::vector<LocalLight> lights{ lightAt(0.0f, 0.0f, 5.0f, 0.0f) };
-    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kTanHalfFovY, kAspect);
+    const auto assignment = ClusterGrid::Assign(lights, kNear, kFar, kVolume);
     CHECK_MSG(clustersHolding(assignment, 0).empty(), "a light with no range lights nothing");
 }
 
@@ -240,7 +247,7 @@ static void testTheClusterPredicateAgreesWithTheAssignment() {
     // Assign is a loop over the predicate, and a test that only reads the packed
     // lists cannot say which of the two was wrong. This pins them together.
     const LocalLight light = lightAt(1.0f, 0.5f, 6.0f, 2.0f);
-    const auto assignment = ClusterGrid::Assign({light}, kNear, kFar, kTanHalfFovY, kAspect);
+    const auto assignment = ClusterGrid::Assign({light}, kNear, kFar, kVolume);
 
     int checked = 0;
     for (uint32_t z = 0; z < ClusterGrid::kSlices; z += 5) {
@@ -250,7 +257,7 @@ static void testTheClusterPredicateAgreesWithTheAssignment() {
                                          z * ClusterGrid::kTilesX * ClusterGrid::kTilesY;
                 const bool packed = assignment.clusters[cluster].count > 0;
                 const bool predicate = ClusterGrid::SphereTouchesCluster(
-                    light, x, y, z, kNear, kFar, kTanHalfFovY, kAspect);
+                    light, x, y, z, kNear, kFar, kVolume);
                 CHECK_MSG(packed == predicate,
                           "the packed list and the predicate must agree about every cluster");
                 ++checked;
@@ -263,10 +270,10 @@ static void testTheClusterPredicateAgreesWithTheAssignment() {
 static void testAnOutOfRangeClusterIsNotTouched() {
     const LocalLight light = lightAt(0.0f, 0.0f, 5.0f, 1000.0f);
     CHECK_MSG(!ClusterGrid::SphereTouchesCluster(light, ClusterGrid::kTilesX, 0, 0,
-                                                 kNear, kFar, kTanHalfFovY, kAspect),
+                                                 kNear, kFar, kVolume),
               "a tile index past the edge must be refused, not wrapped");
     CHECK_MSG(!ClusterGrid::SphereTouchesCluster(light, 0, 0, ClusterGrid::kSlices,
-                                                 kNear, kFar, kTanHalfFovY, kAspect),
+                                                 kNear, kFar, kVolume),
               "and so must a slice past the far plane");
 }
 
@@ -291,10 +298,10 @@ static void testTheRadiusIsExactAtASliceFace() {
     const LocalLight justReaches = lightAt(0.0f, 0.0f, sliceNear - gap, gap * 1.1f);
 
     CHECK_MSG(!ClusterGrid::SphereTouchesCluster(justShort, midX, midY, 10,
-                                                 kNear, kFar, kTanHalfFovY, kAspect),
+                                                 kNear, kFar, kVolume),
               "a sphere stopping short of the slice must not reach into it");
     CHECK_MSG(ClusterGrid::SphereTouchesCluster(justReaches, midX, midY, 10,
-                                                kNear, kFar, kTanHalfFovY, kAspect),
+                                                kNear, kFar, kVolume),
               "and one reaching past that face must");
 }
 
@@ -320,10 +327,10 @@ static void testTheRadiusIsExactAcrossTheScreen() {
     const LocalLight reaching = lightAt(tileMinX - gap, 0.0f, depth, gap * 1.2f);
 
     CHECK_MSG(!ClusterGrid::SphereTouchesCluster(shy, midX, midY, slice,
-                                                 kNear, kFar, kTanHalfFovY, kAspect),
+                                                 kNear, kFar, kVolume),
               "a sphere short of the tile edge must not reach across it");
     CHECK_MSG(ClusterGrid::SphereTouchesCluster(reaching, midX, midY, slice,
-                                                kNear, kFar, kTanHalfFovY, kAspect),
+                                                kNear, kFar, kVolume),
               "and one reaching past it must");
 }
 
@@ -381,13 +388,85 @@ static void testAFragmentAndALightAgreeAboutTheirCluster() {
                 ClusterGrid::ClusterForFragment(fragCoord, depth, target, kNear, kFar);
 
             const auto assignment =
-                ClusterGrid::Assign({light}, kNear, kFar, kTanHalfFovY, kAspect);
+                ClusterGrid::Assign({light}, kNear, kFar, kVolume);
             CHECK_MSG(assignment.clusters[cluster].count == 1,
                       "the froxel a fragment resolves to must hold the light standing in it");
             ++checked;
         }
     }
     CHECK_EQ(checked, 9);
+}
+
+static void testAFragmentAndALightAgreeUnderAnOrthographicCamera() {
+    // THE SAME ROUND TRIP, THROUGH THE OTHER PROJECTION, and it did not hold.
+    //
+    // The two halves of the mapping have to agree about where a froxel is. The
+    // fragment half never cared which projection was in use - it reads a screen
+    // tile and a view depth off the rasteriser. The light half built the froxel
+    // out of tan(fov/2) times the depth, a pyramid, and an orthographic camera
+    // does not have one: at every depth its cross-section is the same rectangle.
+    //
+    // So a lamp four units to the left of the camera was gathered for whichever
+    // tile column the pyramid put it in, while the fragments it should light are
+    // in the column the ortho projection puts them in - and those are different
+    // columns everywhere except straight ahead. This case fails outright on the
+    // pyramid, at six of its nine points.
+    const glm::vec2 target(1600.0f, 900.0f);
+
+    glm::mat4 proj = glm::ortho(-kOrthoHeight * 0.5f * kAspect, kOrthoHeight * 0.5f * kAspect,
+                                -kOrthoHeight * 0.5f, kOrthoHeight * 0.5f, kNear, kFar);
+    proj[1][1] *= -1.0f;   // exactly what CameraComponent::getProjectionMatrix does
+
+    // Inside the box the camera actually sees: half-height 3, half-width 3*16/9.
+    const float ys[3] = { -2.4f, 0.0f, 2.4f };
+    const float xs[3] = { -4.6f, 0.0f, 4.6f };
+
+    // Two depths, because the pyramid and the box differ by MORE the further
+    // out you go - a case taken at one depth could be passed by a pyramid that
+    // happens to be the right width there.
+    const float depths[2] = { 4.0f, 30.0f };
+
+    int checked = 0;
+    for (const float depth : depths) {
+        for (const float y : ys) {
+            for (const float x : xs) {
+                const LocalLight light = lightAt(x, y, depth, 0.4f);
+
+                const glm::vec4 clip = proj * glm::vec4(x, y, -depth, 1.0f);
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                const glm::vec2 fragCoord((ndc.x * 0.5f + 0.5f) * target.x,
+                                          (ndc.y * 0.5f + 0.5f) * target.y);
+
+                const uint32_t cluster =
+                    ClusterGrid::ClusterForFragment(fragCoord, depth, target, kNear, kFar);
+
+                const auto assignment =
+                    ClusterGrid::Assign({light}, kNear, kFar, kOrthoVolume);
+                CHECK_MSG(assignment.clusters[cluster].count == 1,
+                          "under ortho too, the froxel a fragment resolves to must hold "
+                          "the light standing in it");
+                ++checked;
+            }
+        }
+    }
+    CHECK_EQ(checked, 18);
+}
+
+static void testAnOrthographicFroxelDoesNotWidenWithDepth() {
+    // What the round trip above rests on, stated directly. A perspective volume
+    // is twice as wide at twice the distance; an orthographic one is exactly as
+    // wide, which is the whole difference between the two.
+    CHECK_NEAR(kOrthoVolume.halfHeightAt(1.0f), kOrthoHeight * 0.5f);
+    CHECK_NEAR(kOrthoVolume.halfHeightAt(50.0f), kOrthoHeight * 0.5f);
+    CHECK_MSG(kVolume.halfHeightAt(50.0f) > kVolume.halfHeightAt(1.0f) * 40.0f,
+              "and a perspective volume grows in proportion to the depth");
+
+    // The default is the perspective one with no field of view, which is a
+    // degenerate volume rather than a wrong one: it collapses to the axis. A
+    // caller that forgets to build a volume gets a grid that holds nothing,
+    // which is visible, rather than one fitted to somebody else's camera.
+    const ClusterGrid::ViewVolume unset;
+    CHECK_NEAR(unset.halfHeightAt(10.0f), 0.0f);
 }
 
 static void runTests() {
@@ -412,6 +491,8 @@ static void runTests() {
     testTheRadiusIsExactAcrossTheScreen();
     testTheTopOfTheImageIsTheTopOfTheGrid();
     testAFragmentAndALightAgreeAboutTheirCluster();
+    testAFragmentAndALightAgreeUnderAnOrthographicCamera();
+    testAnOrthographicFroxelDoesNotWidenWithDepth();
 }
 
-TEST_MAIN("test_clustergrid", 55)
+TEST_MAIN("test_clustergrid", 201)

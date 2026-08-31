@@ -100,14 +100,63 @@ uint32_t SliceForDepth(float viewZ, float nearPlane, float farPlane);
 void SliceDepthRange(uint32_t slice, float nearPlane, float farPlane,
                      float& outNear, float& outFar);
 
+// How wide the view volume is at a given depth, which is the ONE thing about a
+// projection this grid needs and the one thing it used to assume.
+//
+// The grid has two descriptions of the same mapping - this file assigns LIGHTS
+// to froxels, and scene_ubo.glsl assigns FRAGMENTS to them - and they have to
+// agree about where a froxel is. The fragment half never cared what the
+// projection was: it takes a screen tile and a view depth, and both are read
+// straight off the rasteriser. The light half took `tanHalfFovY` and built a
+// widening pyramid out of it, which is right for a perspective camera and
+// describes nothing an orthographic one does. So under an ortho projection the
+// two halves disagreed about which froxel a given piece of the world was in,
+// and a point light was gathered for the wrong screen tiles - it lit a column
+// of the image that widened with distance, in a projection where nothing
+// widens with distance.
+//
+// ONE EXPRESSION FOR BOTH, rather than a branch: half-height is an affine
+// function of depth, `constant + perDepth * z`. A perspective volume sets
+// perDepth to tan(fov/2) and constant to zero; an orthographic one sets
+// constant to half its height and perDepth to zero. There is no third case, and
+// a branch would be a second place for the two projections to drift apart.
+//
+// The 28 August plan looked at this and recorded it as NOT a defect, on the
+// grounds that the shader's depth lookup is projection-independent. That is
+// true of the DEPTH axis and this does not change it: both halves slice depth
+// by the same exponential, which under ortho is merely a wasteful distribution
+// of froxels rather than a wrong one. It is the two SCREEN axes that were
+// wrong, and they are the ones a light is culled by.
+struct ViewVolume {
+    // Half-height at unit depth: tan(fov/2) for a perspective projection, zero
+    // for an orthographic one.
+    float perDepth{0.0f};
+
+    // Half-height that does not depend on depth: half of `orthoHeight` for an
+    // orthographic projection, zero for a perspective one.
+    float constant{0.0f};
+
+    float aspect{1.0f};
+
+    float halfHeightAt(float viewZ) const { return constant + perDepth * viewZ; }
+
+    static ViewVolume Perspective(float tanHalfFovY, float aspect) {
+        return ViewVolume{tanHalfFovY, 0.0f, aspect};
+    }
+
+    static ViewVolume Orthographic(float orthoHeight, float aspect) {
+        return ViewVolume{0.0f, orthoHeight * 0.5f, aspect};
+    }
+};
+
 // Assigns lights to clusters for one frame.
 //
-// `tanHalfFovY` and `aspect` describe the frustum the same way the projection
-// does. Lights are given in VIEW space; the caller has already applied the view
-// matrix, because it has the matrix and this file does not want it.
+// `volume` describes the view volume the same way the projection does. Lights
+// are given in VIEW space; the caller has already applied the view matrix,
+// because it has the matrix and this file does not want it.
 Assignment Assign(const std::vector<LocalLight>& lights,
                   float nearPlane, float farPlane,
-                  float tanHalfFovY, float aspect);
+                  const ViewVolume& volume);
 
 // Which cluster a FRAGMENT is in, given where it landed on screen and how far
 // in front of the camera it is.
@@ -131,7 +180,7 @@ uint32_t ClusterForFragment(const glm::vec2& fragCoord, float viewZ,
 // say which half was wrong.
 bool SphereTouchesCluster(const LocalLight& light, uint32_t x, uint32_t y, uint32_t z,
                           float nearPlane, float farPlane,
-                          float tanHalfFovY, float aspect);
+                          const ViewVolume& volume);
 
 } // namespace ClusterGrid
 

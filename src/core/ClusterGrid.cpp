@@ -56,19 +56,22 @@ float distanceSquaredToBox(const glm::vec3& point, const glm::vec3& boxMin,
 // which would be a dark patch in a shape nobody could explain.
 void clusterBounds(uint32_t x, uint32_t y, uint32_t z,
                    float nearPlane, float farPlane,
-                   float tanHalfFovY, float aspect,
+                   const ViewVolume& volume,
                    glm::vec3& outMin, glm::vec3& outMax) {
     float sliceNear = 0.0f;
     float sliceFar = 0.0f;
     SliceDepthRange(z, nearPlane, farPlane, sliceNear, sliceFar);
 
-    // Evaluated at BOTH faces and unioned, because the frustum widens.
-    const float halfYNear = tanHalfFovY * sliceNear;
-    const float halfYFar = tanHalfFovY * sliceFar;
+    // Evaluated at BOTH faces and unioned, because a perspective frustum
+    // widens. An orthographic one does not - the two come out equal, the union
+    // is exact rather than conservative, and that is why this needs no branch
+    // on which projection it was handed.
+    const float halfYNear = volume.halfHeightAt(sliceNear);
+    const float halfYFar = volume.halfHeightAt(sliceFar);
 
     float minXNear, maxXNear, minXFar, maxXFar;
-    axisBounds(x, kTilesX, halfYNear * aspect, minXNear, maxXNear);
-    axisBounds(x, kTilesX, halfYFar * aspect, minXFar, maxXFar);
+    axisBounds(x, kTilesX, halfYNear * volume.aspect, minXNear, maxXNear);
+    axisBounds(x, kTilesX, halfYFar * volume.aspect, minXFar, maxXFar);
 
     float minYNear, maxYNear, minYFar, maxYFar;
     axisBounds(y, kTilesY, halfYNear, minYNear, maxYNear);
@@ -135,13 +138,13 @@ uint32_t ClusterForFragment(const glm::vec2& fragCoord, float viewZ,
 
 bool SphereTouchesCluster(const LocalLight& light, uint32_t x, uint32_t y, uint32_t z,
                           float nearPlane, float farPlane,
-                          float tanHalfFovY, float aspect) {
+                          const ViewVolume& volume) {
     if (x >= kTilesX || y >= kTilesY || z >= kSlices) return false;
     if (light.radius <= 0.0f) return false;
 
     glm::vec3 boxMin(0.0f);
     glm::vec3 boxMax(0.0f);
-    clusterBounds(x, y, z, nearPlane, farPlane, tanHalfFovY, aspect, boxMin, boxMax);
+    clusterBounds(x, y, z, nearPlane, farPlane, volume, boxMin, boxMax);
 
     // The light's position is in view space with z as positive distance in
     // front of the camera, matching the box the bounds above describe.
@@ -151,7 +154,7 @@ bool SphereTouchesCluster(const LocalLight& light, uint32_t x, uint32_t y, uint3
 
 Assignment Assign(const std::vector<LocalLight>& lights,
                   float nearPlane, float farPlane,
-                  float tanHalfFovY, float aspect) {
+                  const ViewVolume& volume) {
     sanitisePlanes(nearPlane, farPlane);
 
     Assignment out;
@@ -193,7 +196,7 @@ Assignment Assign(const std::vector<LocalLight>& lights,
 
                 glm::vec3 boxMin(0.0f);
                 glm::vec3 boxMax(0.0f);
-                clusterBounds(x, y, z, nearPlane, farPlane, tanHalfFovY, aspect, boxMin, boxMax);
+                clusterBounds(x, y, z, nearPlane, farPlane, volume, boxMin, boxMax);
 
                 for (size_t i = 0; i < lights.size(); ++i) {
                     const LocalLight& light = lights[i];

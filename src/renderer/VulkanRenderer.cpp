@@ -1359,10 +1359,21 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
         m_localLightScratch.push_back(local);
     }
 
-    const float tanHalfFovY = std::tan(glm::radians(camera.fov) * 0.5f);
+    // The volume the grid cuts up, taken from the camera's OWN projection.
+    //
+    // This was tan(fov/2) unconditionally, and `fov` is a field an orthographic
+    // camera never reads - so a 2D scene's froxels were a pyramid fitted to a
+    // number nothing had set for it, and its point and spot lights were
+    // gathered for the wrong screen tiles. See ClusterGrid::ViewVolume.
+    const float aspect = std::max(camera.aspect, 0.0001f);
+    const ClusterGrid::ViewVolume volume =
+        camera.isOrthographic()
+            ? ClusterGrid::ViewVolume::Orthographic(camera.orthoHeight, aspect)
+            : ClusterGrid::ViewVolume::Perspective(
+                  std::tan(glm::radians(camera.fov) * 0.5f), aspect);
+
     const ClusterGrid::Assignment assignment = ClusterGrid::Assign(
-        m_localLightScratch, camera.nearPlane, camera.farPlane, tanHalfFovY,
-        std::max(camera.aspect, 0.0001f));
+        m_localLightScratch, camera.nearPlane, camera.farPlane, volume);
 
     if (assignment.dropped > 0 && m_clusterOverflowReportedFor != assignment.dropped) {
         m_clusterOverflowReportedFor = assignment.dropped;
