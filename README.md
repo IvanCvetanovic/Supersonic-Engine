@@ -706,6 +706,26 @@ Android "not functional"; extending that register forward costs nothing.
       changes. The blended pass and the particles get records and are
       deliberately not batched — they are drawn back to front, and an order
       between them is not something a batch may choose
+- [x] …and then they were, because that reason was wrong. Vulkan orders the
+      instances of one draw by instance index, and primitive order is what
+      rasterization order is derived from — so a back-to-front pass can be
+      batched as long as the records are written in that order. Twenty thousand
+      particles cost one draw call rather than twenty thousand. Worth knowing
+      what that bought: 0.29 ms of 3.29, because a bare draw call with no state
+      change between them is about 15 ns. The expensive part of a draw was never
+      the call, it was the 128 bytes pushed with it
+- [x] A 2D scene can be authored in the editor. The projection, the
+      orthographic matrix, the picking branch and the serialisation had all been
+      there for months, and nothing in the editor could write any of it — so the
+      only way to make a camera orthographic was to type it into the scene file
+      by hand. There is a Projection control on the camera now, and a **2D View**
+      that pans on a right-drag and zooms on the wheel. It does not fly forward,
+      because under a parallel projection that changes nothing you can see
+- [x] Point and spot lights land in the right place under an orthographic
+      camera. The froxel grid cut the view into a widening pyramid built from
+      `fov` — a field an orthographic camera never reads — while the shader
+      assigned fragments to froxels by screen tile, so the two halves disagreed
+      about where a froxel was and a lamp lit the wrong column of the image
 
 ### Next
 
