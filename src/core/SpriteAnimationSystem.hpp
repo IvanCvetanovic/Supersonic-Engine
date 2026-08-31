@@ -16,14 +16,29 @@ namespace Supersonic {
 // every off-by-one in a sprite sheet lives.
 class SpriteAnimationSystem {
 public:
-    // One tick. Writes the frame index, the accumulator, and each animated
-    // entity's MaterialComponent UV transform.
+    // One tick of the CLOCK. Writes the frame index and the accumulator, and
+    // touches no material.
     //
     // `fixedDelta` is the tick's own step and never a frame delta. Passing a
     // frame delta here would make how fast a sprite animates depend on how fast
     // the display is keeping up, and would take the animation out of the
     // replay - which is the whole reason gameplay moved onto the tick.
     static void Update(entt::registry& registry, float fixedDelta);
+
+    // Writes where each sprite currently IS, into its material. PER FRAME, in
+    // both modes, and that is the point of it being separate.
+    //
+    // The tick loop is gated on play mode. Folded into Update, this ran only
+    // while the game was running - so a sprite in the EDITOR drew its whole
+    // sheet, with the inspector beside it cheerfully reporting "Frame 0 of 16".
+    // A 2D scene could be authored and could not be seen, which is the exact
+    // complaint the orthographic viewport was built to answer, reintroduced one
+    // commit later inside the feature meant to be authored through it.
+    //
+    // Advancing is a clock and belongs on the tick. Showing a cell is not: it
+    // is where the sprite is, the same argument the paused case already rested
+    // on. So the clock is gated and this is not.
+    static void Apply(entt::registry& registry);
 
     // Where one cell of a sheet sits, as the scale and offset a material wants.
     //

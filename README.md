@@ -768,6 +768,19 @@ HUSK's nineteen animated models. What is left is here.
   per-override texture resolve and nothing has asked for one — HUSK's models
   carry no textures at all.
 
+**For a game seen through a flat camera**
+
+- **The procedural sky is drawn as though the camera had an eye point.**
+  `sky.vert` recovers a view ray from the projection matrix as
+  `1 / proj[0][0]`, which is the tangent of half the field of view — a number an
+  orthographic projection does not have. Under one, every ray through the image
+  should be parallel and instead they fan out from a point that is not there, so
+  the gradient is placed as if the scene were in perspective. Nothing has hit it:
+  the only orthographic camera that ships draws no sky, and a 2D scene usually
+  wants a colour or a backdrop sprite rather than a horizon. It is here because
+  the editor can now author an orthographic view, so a 2D scene with the sky
+  left on is a thing somebody can now make by accident.
+
 **Known and written down elsewhere, repeated because they bite a game**
 
 - A replay is scoped to ONE scene. The header names one, and a run that changes

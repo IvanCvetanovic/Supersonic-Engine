@@ -23,6 +23,26 @@ constexpr float kMaxOrthoHeight = 5000.0f;
 
 } // namespace
 
+glm::vec3 EditorCamera::PanOffset(float worldPerPixel, float dx, float dy,
+                                  const glm::vec3& right, const glm::vec3& up) {
+    // THE EYE MOVES AGAINST THE DRAG, so the world moves with it and whatever
+    // is under the pointer stays under it. Dragging the cursor right carries
+    // the scene right, which means the camera goes left.
+    //
+    // And PLUS up for a positive dy, because screen Y grows DOWN: dragging
+    // down is a negative move in view space, so the eye rising is what carries
+    // the scene down with the hand.
+    return -right * (dx * worldPerPixel) + up * (dy * worldPerPixel);
+}
+
+float EditorCamera::ZoomedHeight(float current, float scroll) {
+    if (scroll == 0.0f) return std::clamp(current, kMinOrthoHeight, kMaxOrthoHeight);
+
+    // Under one, so scrolling UP - a positive notch, the direction every tool
+    // means by "zoom in" - SHRINKS the span and the world gets bigger.
+    return std::clamp(current * std::pow(0.88f, scroll), kMinOrthoHeight, kMaxOrthoHeight);
+}
+
 void EditorCamera::SetOrthographic(bool orthographic) {
     if (orthographic == m_camera.isOrthographic()) return;
 
@@ -131,11 +151,7 @@ void EditorCamera::Update(Window& window, float deltaTime, bool viewportHovered)
 void EditorCamera::updateOrthographic(GLFWwindow* native, float deltaTime,
                                       bool viewportHovered, bool rightHeld) {
     if (viewportHovered) {
-        const float scroll = Input::Scroll();
-        if (scroll != 0.0f) {
-            m_camera.orthoHeight = std::clamp(m_camera.orthoHeight * std::pow(0.88f, scroll),
-                                              kMinOrthoHeight, kMaxOrthoHeight);
-        }
+        m_camera.orthoHeight = ZoomedHeight(m_camera.orthoHeight, Input::Scroll());
     }
 
     // World units per pixel of cursor travel. This is what makes a drag stick
@@ -168,9 +184,7 @@ void EditorCamera::updateOrthographic(GLFWwindow* native, float deltaTime,
         m_lastX = x;
         m_lastY = y;
 
-        // The eye moves AGAINST the drag, so the world moves with it.
-        m_camera.position -= m_camera.right * (dx * worldPerPixel);
-        m_camera.position += m_camera.up * (dy * worldPerPixel);
+        m_camera.position += PanOffset(worldPerPixel, dx, dy, m_camera.right, m_camera.up);
     }
 
     // Keys pan too, and unlike the fly camera they do not need a button held:

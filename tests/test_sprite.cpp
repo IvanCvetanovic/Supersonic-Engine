@@ -218,6 +218,7 @@ static void testASecondAnimationInTheSameSheetPlaysItsOwnCells() {
     registry.emplace<MaterialComponent>(entity);
 
     SpriteAnimationSystem::Update(registry, kTick);
+    SpriteAnimationSystem::Apply(registry);
 
     // One tick at sixty is one frame: cell 9, which is row 2 column 1.
     const auto& material = registry.get<MaterialComponent>(entity);
@@ -238,6 +239,7 @@ static void testTheSystemWritesTheMaterialItAnimates() {
     material.uvScale = glm::vec2(1.0f);
 
     SpriteAnimationSystem::Update(registry, kTick);
+    SpriteAnimationSystem::Apply(registry);
 
     CHECK_NEAR(registry.get<MaterialComponent>(entity).uvScale.x, 0.25f);
     CHECK_MSG(std::fabs(registry.get<MaterialComponent>(entity).uvOffset.x - 0.25f) < 1e-5f,
@@ -259,6 +261,7 @@ static void testAPausedSpriteStillSaysWhichCellItIsShowing() {
     registry.emplace<MaterialComponent>(entity);
 
     SpriteAnimationSystem::Update(registry, kTick);
+    SpriteAnimationSystem::Apply(registry);
 
     const auto& material = registry.get<MaterialComponent>(entity);
     CHECK_NEAR(material.uvScale.x, 0.25f);
@@ -272,6 +275,7 @@ static void testASpriteWithNoMaterialIsSkippedRatherThanCrashing() {
     registry.emplace<SpriteAnimationComponent>(entity).columns = 4;
 
     SpriteAnimationSystem::Update(registry, kTick);
+    SpriteAnimationSystem::Apply(registry);
     CHECK_MSG(!registry.all_of<MaterialComponent>(entity),
               "the system pairs the two rather than inventing one");
 }
@@ -426,6 +430,67 @@ static void testASceneWrittenBeforeThisExistedLoadsAsAStill() {
     CHECK_MSG(sprite.resolvedFrameCount() == 1u, "which is a one-cell still, and drawable");
 }
 
+static void testTheCellIsWrittenWithNoTickAtAll() {
+    // THE EDITOR CASE, and the reason the clock and the cell are two calls.
+    //
+    // The tick loop is gated on play mode. With the write folded into the tick,
+    // a sprite in the editor drew its whole sheet - with the inspector beside
+    // it reporting "Frame 0 of 16" - until Play was pressed. That is the
+    // complaint the orthographic viewport was built to answer, reappearing
+    // inside the feature meant to be authored through it.
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& sprite = registry.emplace<SpriteAnimationComponent>(entity);
+    sprite.columns = 4;
+    sprite.rows = 4;
+    sprite.frame = 6;
+    auto& material = registry.emplace<MaterialComponent>(entity);
+    material.uvScale = glm::vec2(1.0f);
+    material.uvOffset = glm::vec2(0.0f);
+
+    // No Update. This is exactly what edit mode runs.
+    SpriteAnimationSystem::Apply(registry);
+
+    CHECK_NEAR(material.uvScale.x, 0.25f);
+    CHECK_MSG(std::fabs(material.uvOffset.x - 0.5f) < 1e-5f, "cell 6 is column 2");
+    CHECK_MSG(std::fabs(material.uvOffset.y - 0.25f) < 1e-5f, "of row 1");
+}
+
+static void testApplyIsAWriteAndNotAClock() {
+    // The other half of the split. Apply must not advance anything, or the
+    // editor would animate at frame rate - which is the defect the whole
+    // component is arranged to avoid, arriving through the door opened to fix
+    // a different one.
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& sprite = registry.emplace<SpriteAnimationComponent>(entity);
+    sprite.columns = 4;
+    sprite.rows = 4;
+    sprite.framesPerSecond = 1000.0f;
+    registry.emplace<MaterialComponent>(entity);
+
+    for (int i = 0; i < 100; ++i) SpriteAnimationSystem::Apply(registry);
+
+    CHECK_MSG(sprite.frame == 0u, "a hundred frames of drawing is not a hundred ticks");
+    CHECK_MSG(sprite.elapsed == 0.0f, "and no time has passed");
+}
+
+static void testASpriteWithNoMaterialYetStillKeepsTime() {
+    // Update walks every sprite rather than the pair Apply walks. A clock
+    // stopped because nothing was drawing it would jump the moment a material
+    // was attached, which is a bug that only appears in a scene assembled in
+    // an unusual order.
+    entt::registry registry;
+    const auto entity = registry.create();
+    auto& sprite = registry.emplace<SpriteAnimationComponent>(entity);
+    sprite.columns = 4;
+    sprite.rows = 1;
+    sprite.framesPerSecond = 60.0f;
+
+    SpriteAnimationSystem::Update(registry, kTick);
+    CHECK_MSG(sprite.frame == 1u, "the clock runs whether or not anything is reading it");
+}
+
 static void runTests() {
     testTheFirstCellIsTheTopLeftCornerScaledToTheGrid();
     testCellsRunAcrossBeforeTheyRunDown();
@@ -447,6 +512,9 @@ static void runTests() {
     testTheSystemWritesTheMaterialItAnimates();
     testAPausedSpriteStillSaysWhichCellItIsShowing();
     testASpriteWithNoMaterialIsSkippedRatherThanCrashing();
+    testTheCellIsWrittenWithNoTickAtAll();
+    testApplyIsAWriteAndNotAClock();
+    testASpriteWithNoMaterialYetStillKeepsTime();
 
     testTheStateHashSeesWhichFrameASpriteIsOn();
     testTheStateHashSeesTheAccumulatorAndTheStopToo();
@@ -456,4 +524,4 @@ static void runTests() {
     testASceneWrittenBeforeThisExistedLoadsAsAStill();
 }
 
-TEST_MAIN("test_sprite", 60)
+TEST_MAIN("test_sprite", 66)

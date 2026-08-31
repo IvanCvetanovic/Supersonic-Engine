@@ -1583,6 +1583,21 @@ void SupersonicApp::Run() {
         // the same frame.
         MaterialSystem::Sync(m_registry, *m_materialLibrary);
 
+        // AFTER Sync, and per frame in BOTH modes.
+        //
+        // After, because Sync copies a shared asset's numbers over every entity
+        // using it, and a sprite's cell is per entity by design - the comment on
+        // MaterialComponent::uvScale says so in as many words, since twenty
+        // flames share one material and each is on its own frame. Running this
+        // first would leave the order deciding whether a flipbook survives being
+        // linked to an asset.
+        //
+        // In both modes, because the clock is gated on play and showing a cell
+        // is not. Without this an authored sprite drew its whole sheet in the
+        // editor until Play was pressed, which is the thing the orthographic
+        // viewport exists to prevent.
+        SpriteAnimationSystem::Apply(m_registry);
+
         // The scene's look, handed to the pass that applies it. Pushed every
         // frame rather than on change: the offscreen target and its bloom pass
         // are rebuilt whenever the viewport resizes, so a value written once

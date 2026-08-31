@@ -44,6 +44,24 @@ public:
     void SetOrthographic(bool orthographic);
     bool IsOrthographic() const { return m_camera.isOrthographic(); }
 
+    // How far the eye moves for a drag of dx, dy PIXELS.
+    //
+    // Static and pure because it is a SIGN, and a sign is the one thing here
+    // that a screenshot cannot show and a person notices immediately: get it
+    // backwards and the world runs away from the pointer instead of following
+    // it. The rest of the 2D controls need GLFW and a window, which is exactly
+    // the argument this class makes for splitting anything decidable out of
+    // them - and having made that argument, the first version of this shipped
+    // sixty lines that nothing had ever executed.
+    static glm::vec3 PanOffset(float worldPerPixel, float dx, float dy,
+                               const glm::vec3& right, const glm::vec3& up);
+
+    // The vertical span after a wheel notch. Multiplicative, so it moves by the
+    // same proportion of what you are looking at however far out you are, and
+    // clamped at both ends because a multiplicative zoom has zero as a fixed
+    // point it can never climb back out of.
+    static float ZoomedHeight(float current, float scroll);
+
     const CameraComponent& Get() const { return m_camera; }
 
     // Frames a point, used by "focus on selection".

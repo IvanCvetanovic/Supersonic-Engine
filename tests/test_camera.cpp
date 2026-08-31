@@ -337,6 +337,80 @@ static void testTheFramedHeightIsClampedRatherThanUnbounded() {
               "a camera standing on its own target must still frame something");
 }
 
+static void testDraggingCarriesTheWorldWithThePointer() {
+    // A SIGN, which is the one thing here a screenshot cannot show and a person
+    // notices in the first second: get it backwards and the scene runs away
+    // from the cursor. The eye moves against the drag so the world moves with
+    // it and whatever was under the pointer stays there.
+    const glm::vec3 right(1.0f, 0.0f, 0.0f);
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+
+    // Ten pixels right, at a tenth of a world unit each.
+    const glm::vec3 dragRight = EditorCamera::PanOffset(0.1f, 10.0f, 0.0f, right, up);
+    CHECK_MSG(dragRight.x < 0.0f, "dragging right moves the EYE left, so the scene goes right");
+    CHECK_NEAR(dragRight.x, -1.0f);
+
+    // Screen Y grows DOWN, so a positive dy is a downward drag - and the eye
+    // rising is what carries the scene down with the hand.
+    const glm::vec3 dragDown = EditorCamera::PanOffset(0.1f, 0.0f, 10.0f, right, up);
+    CHECK_MSG(dragDown.y > 0.0f, "dragging down moves the eye up");
+    CHECK_NEAR(dragDown.y, 1.0f);
+}
+
+static void testAPanIsMeasuredInWhatAPixelIsWorth() {
+    // What makes a drag stick to the thing under the pointer: the same gesture
+    // must cross the same fraction of the screen at any zoom, which means the
+    // offset scales with the world-per-pixel and nothing else.
+    const glm::vec3 right(1.0f, 0.0f, 0.0f);
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+
+    const glm::vec3 near = EditorCamera::PanOffset(0.01f, 50.0f, 0.0f, right, up);
+    const glm::vec3 far = EditorCamera::PanOffset(0.10f, 50.0f, 0.0f, right, up);
+    CHECK_NEAR(far.x, near.x * 10.0f);
+
+    // And it uses the axes it is handed rather than the world's, so a rolled or
+    // turned view pans along what the viewer sees.
+    const glm::vec3 turned =
+        EditorCamera::PanOffset(0.1f, 10.0f, 0.0f, glm::vec3(0.0f, 0.0f, 1.0f), up);
+    CHECK_NEAR(turned.z, -1.0f);
+    CHECK_MSG(turned.x == 0.0f, "and not along an axis nobody passed");
+}
+
+static void testScrollingUpZoomsIn() {
+    // The direction every tool in existence means by a positive notch. Inverted,
+    // the wheel still works and does the opposite of what the hand expects,
+    // which is a complaint rather than a crash and therefore easy to ship.
+    const float closer = EditorCamera::ZoomedHeight(10.0f, 1.0f);
+    const float wider = EditorCamera::ZoomedHeight(10.0f, -1.0f);
+
+    CHECK_MSG(closer < 10.0f, "scrolling up shrinks the span, so the world gets bigger");
+    CHECK_MSG(wider > 10.0f, "and scrolling down widens it");
+}
+
+static void testTheZoomIsProportionalRatherThanAdditive() {
+    // An additive zoom crawls when you are far out and jumps when you are close
+    // in. A ratio moves by the same proportion of what you are looking at
+    // either way, which is the property being asserted.
+    const float fromTen = EditorCamera::ZoomedHeight(10.0f, 1.0f) / 10.0f;
+    const float fromThousand = EditorCamera::ZoomedHeight(1000.0f, 1.0f) / 1000.0f;
+    CHECK_NEAR(fromTen, fromThousand);
+
+    CHECK_MSG(EditorCamera::ZoomedHeight(10.0f, 0.0f) == 10.0f,
+              "and no notch is no change at all");
+}
+
+static void testTheZoomCannotReachZeroOrRunAway() {
+    // Zero is a FIXED POINT of a multiplication, so a zoom that reaches it can
+    // never climb back out - and the world-per-pixel conversion the pan rests on
+    // would then be dividing by it.
+    float height = 10.0f;
+    for (int i = 0; i < 500; ++i) height = EditorCamera::ZoomedHeight(height, 1.0f);
+    CHECK_MSG(height > 0.0f, "five hundred notches in must still frame something");
+
+    for (int i = 0; i < 1000; ++i) height = EditorCamera::ZoomedHeight(height, -1.0f);
+    CHECK_MSG(height < 1e6f, "and a thousand notches out must not swallow the far plane");
+}
+
 static void runTests() {
     testWasdFliesTheCameraByDefault();
     testTheSameKeyLeavesADisabledCameraExactlyWhereItWas();
@@ -351,6 +425,11 @@ static void runTests() {
     testGoingBackToPerspectiveReturnsToWhereTheEyeWas();
     testAskingForTheProjectionItAlreadyHasChangesNothing();
     testTheFramedHeightIsClampedRatherThanUnbounded();
+    testDraggingCarriesTheWorldWithThePointer();
+    testAPanIsMeasuredInWhatAPixelIsWorth();
+    testScrollingUpZoomsIn();
+    testTheZoomIsProportionalRatherThanAdditive();
+    testTheZoomCannotReachZeroOrRunAway();
 }
 
-TEST_MAIN("test_camera", 25)
+TEST_MAIN("test_camera", 38)

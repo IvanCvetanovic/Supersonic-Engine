@@ -78,17 +78,25 @@ void SpriteAnimationSystem::Advance(SpriteAnimationComponent& sprite, float fixe
 }
 
 void SpriteAnimationSystem::Update(entt::registry& registry, float fixedDelta) {
+    // The whole registry, not the pair Apply walks: a sprite whose material has
+    // not been given to it yet is still a clock, and stopping it because
+    // nothing is drawing it would make the animation jump the moment one was
+    // attached.
+    for (auto entity : registry.view<SpriteAnimationComponent>()) {
+        Advance(registry.get<SpriteAnimationComponent>(entity), fixedDelta);
+    }
+}
+
+void SpriteAnimationSystem::Apply(entt::registry& registry) {
     auto view = registry.view<SpriteAnimationComponent, MaterialComponent>();
     for (auto entity : view) {
-        auto& sprite = view.get<SpriteAnimationComponent>(entity);
+        const auto& sprite = view.get<SpriteAnimationComponent>(entity);
         auto& material = view.get<MaterialComponent>(entity);
-
-        Advance(sprite, fixedDelta);
 
         // WRITTEN EVEN WHEN PAUSED, and even when the animation has finished.
         // The cell is where the sprite IS, not something that happens when it
         // moves - so a paused flipbook keeps showing its frame, and a scene
-        // loaded with a sprite mid-animation shows that frame on the tick it
+        // loaded with a sprite mid-animation shows that frame on the frame it
         // loads rather than on the first tick that happens to advance it.
         const uint32_t count = sprite.resolvedFrameCount();
         if (count == 0) continue;
