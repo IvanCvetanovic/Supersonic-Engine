@@ -147,6 +147,19 @@ void RenderSystem::SortTransparentDraws(std::vector<TransparentDraw>& draws) {
               });
 }
 
+void RenderSystem::SortParticleDraws(std::vector<ParticleDraw>& draws) {
+    std::sort(draws.begin(), draws.end(),
+              [](const ParticleDraw& lhs, const ParticleDraw& rhs) {
+                  // Back to front, exactly as the blended pass above.
+                  if (lhs.viewDepth != rhs.viewDepth) return lhs.viewDepth > rhs.viewDepth;
+
+                  // And gather order, which is what makes it total. See
+                  // ParticleDraw::gathered: a burst of particles shares one
+                  // spawn position, so equal depths here are the rule.
+                  return lhs.gathered < rhs.gathered;
+              });
+}
+
 uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
                                          const MaterialComponent* material,
                                          uint64_t meshGeneration,
@@ -1056,19 +1069,57 @@ void RenderSystem::Render(
         boundMesh = MeshRegistry::kInvalidMesh;
         boundMaterialSet = vk::DescriptorSet{};
 
+        // The opaque pass tracks its mesh by id; this one has a pointer and no
+        // id, since a blended draw carries the GpuMesh it was gathered with.
+        const GpuMesh* boundBlendedMesh = nullptr;
+
+        // BATCHED, CONSECUTIVELY, and the back-to-front order survives it - see
+        // the particle pass below for the clause of Vulkan's primitive order
+        // that says so. This pass refused batching on the grounds that an
+        // instanced draw has no internal order; it has one, by instance index,
+        // and the records are appended in the sorted order already.
+        //
+        // Consecutive only, and for a stricter reason than the opaque pass has:
+        // there, re-sorting would lose an authored sortKey. Here it would lose
+        // the depth order itself, which is not a preference but the difference
+        // between a correct frame and a wrong one. A batch closes the moment
+        // the mesh or the material set changes, because those are bound rather
+        // than carried in the record.
+        const GpuMesh* batchMesh = nullptr;
+        int32_t batchFirst = -1;
+        uint32_t batchCount = 0;
+
+        auto flushBlended = [&]() {
+            if (batchCount == 0) return;
+            commandBuffer.drawIndexed(batchMesh->indexCount, batchCount, 0, 0,
+                                      static_cast<uint32_t>(batchFirst));
+            ++stats.drawCalls;
+            batchCount = 0;
+            batchFirst = -1;
+        };
+
         for (const auto& draw : transparent) {
             if (draw.mesh->indexCount == 0) continue;
 
-            const vk::Buffer buffers[] = { draw.mesh->vertexBuffer->GetBuffer() };
-            const vk::DeviceSize offsets[] = { 0 };
-            commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
-            commandBuffer.bindIndexBuffer(draw.mesh->indexBuffer->GetBuffer(), 0,
-                                          vk::IndexType::eUint32);
+            // The rebind was unconditional, which is why this pass had no
+            // `boundMesh` to consult: it bound the same buffers again for every
+            // draw. It has to be a comparison now, because a rebind is exactly
+            // what ends a batch.
+            if (draw.mesh != boundBlendedMesh) {
+                flushBlended();
+                const vk::Buffer buffers[] = { draw.mesh->vertexBuffer->GetBuffer() };
+                const vk::DeviceSize offsets[] = { 0 };
+                commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
+                commandBuffer.bindIndexBuffer(draw.mesh->indexBuffer->GetBuffer(), 0,
+                                              vk::IndexType::eUint32);
+                boundBlendedMesh = draw.mesh;
+            }
 
             if (vk::DescriptorSet materialSet =
                     textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID,
                                                 draw.ormTextureID);
                 materialSet && materialSet != boundMaterialSet) {
+                flushBlended();
                 commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                                  transparentPipeline.GetLayout(),
                                                  VulkanPipeline::kMaterialSet, 1, &materialSet,
@@ -1077,18 +1128,20 @@ void RenderSystem::Render(
             }
 
             const PushConstantData push = buildPushConstants(registry, draw.entity, draw.matrix);
-            // NOT BATCHED, and it must not be. The blended pass is ordered
-            // back to front and every draw depends on what is already in the
-            // framebuffer, so two of them submitted as one instanced draw have
-            // no defined order between themselves.
             const int32_t slot = record(push);
-            if (slot < 0) continue;
 
-            commandBuffer.drawIndexed(draw.mesh->indexCount, 1, 0, 0,
-                                      static_cast<uint32_t>(slot));
-            ++stats.drawCalls;
+            // BREAK rather than continue, for the reason the particle loop
+            // gives: the buffer never empties inside a frame.
+            if (slot < 0) break;
+
+            if (batchCount == 0) {
+                batchFirst = slot;
+                batchMesh = draw.mesh;
+            }
+            ++batchCount;
         }
 
+        flushBlended();
     }
 
     // ---- Particles -------------------------------------------------------
@@ -1112,18 +1165,20 @@ void RenderSystem::Render(
     const GpuMesh* particleMesh = meshes.Get(meshes.GetCubeMesh());
     if (!particleMesh || particleMesh->indexCount == 0) return;
 
-    struct ParticleDraw {
-        glm::vec3 position{0.0f};
-        glm::vec4 color{1.0f};
-        float size{1.0f};
-
-        // Along the view direction, and signed, for the reason TransparentDraw
-        // gives: a squared distance to the camera position orders by how far
-        // SIDEWAYS a particle is under an orthographic projection, and loses
-        // the sign of anything behind the camera under either projection.
-        float viewDepth{0.0f};
-    };
     std::vector<ParticleDraw> particles;
+
+    // Reserved against every emitter's POOL, not against the live count. A pool
+    // is what the emitter has already paid for, so the upper bound is free to
+    // read and the alternative is a second pass over the same memory. Twenty
+    // thousand of these is 640 KB that would otherwise be reallocated and
+    // recopied about fifteen times on the way up.
+    {
+        size_t pooled = 0;
+        for (auto entity : registry.view<ParticleEmitterComponent>()) {
+            pooled += registry.get<ParticleEmitterComponent>(entity).particles.size();
+        }
+        particles.reserve(pooled);
+    }
 
     for (auto entity : registry.view<ParticleEmitterComponent>()) {
         const auto& emitter = registry.get<ParticleEmitterComponent>(entity);
@@ -1137,16 +1192,14 @@ void RenderSystem::Render(
                 particle.position,
                 particle.color,
                 emitter.particleSize * glm::clamp(age, 0.15f, 1.0f),
-                glm::dot(particle.position - viewPosition, viewDirection)});
+                glm::dot(particle.position - viewPosition, viewDirection),
+                static_cast<uint32_t>(particles.size())});
         }
     }
 
     if (particles.empty()) return;
 
-    std::sort(particles.begin(), particles.end(),
-              [](const ParticleDraw& lhs, const ParticleDraw& rhs) {
-                  return lhs.viewDepth > rhs.viewDepth;
-              });
+    SortParticleDraws(particles);
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
                                transparentPipeline.GetPipeline());
@@ -1167,21 +1220,56 @@ void RenderSystem::Render(
                                          VulkanPipeline::kMaterialSet, 1, &whiteSet, 0, nullptr);
     }
 
+    // ONE DRAW CALL, AND THE BACK-TO-FRONT ORDER SURVIVES IT.
+    //
+    // This used to be a call per particle, refused batching on the grounds that
+    // "two of them submitted as one instanced draw have no defined order
+    // between themselves". That is not true, and it is the only thing that was
+    // keeping the pass with the most submissions in the frame off the mechanism
+    // built to remove them. Vulkan defines primitive order, and one of the four
+    // clauses that make it up is "if a drawing command includes multiple
+    // instances, the order in which instances are executed, from lower numbered
+    // instances to higher" - primitive order is what rasterization order is
+    // derived from, and rasterization order is what decides the sequence
+    // fragments blend into the framebuffer in.
+    //
+    // So an instanced draw is ordered, by instance index, and the records were
+    // already being appended in the sorted order. The only thing needed was to
+    // stop cutting the run into pieces.
+    //
+    // Every particle in the engine shares one mesh, one pipeline and one
+    // material set - all three are bound above, once, outside this loop - so
+    // there is no key to compare and the whole sorted list is one batch. That
+    // is the difference between a thousand-particle emitter costing a thousand
+    // draw calls and costing one.
+    int32_t batchFirst = -1;
+    uint32_t batchCount = 0;
+
     for (const auto& draw : particles) {
         PushConstantData push{};
         push.model = glm::scale(glm::translate(glm::mat4(1.0f), draw.position), glm::vec3(draw.size));
         push.albedoColor = draw.color;
         push.material = glm::vec4(1.0f, 0.0f, 1.0f, 0.0f);
 
-        // Not batched, for the reason the blended meshes above are not: these
-        // are ordered back to front and each depends on what is already there.
         const int32_t slot = record(push);
-        if (slot < 0) continue;
 
-        commandBuffer.drawIndexed(particleMesh->indexCount, 1, 0, 0,
-                                  static_cast<uint32_t>(slot));
-        ++stats.drawCalls;
+        // BREAK, not continue. `record` refuses only when the frame's instance
+        // buffer is full, and it never empties again inside a frame - so every
+        // later particle would be refused too, and carrying on would build the
+        // same batch out of the same nothing while pretending to try.
+        if (slot < 0) break;
+
+        // Contiguity is the invariant this batch rests on, and it holds because
+        // `record` appends and nothing else records between two particles.
+        if (batchCount == 0) batchFirst = slot;
+        ++batchCount;
         ++stats.particlesDrawn;
+    }
+
+    if (batchCount > 0) {
+        commandBuffer.drawIndexed(particleMesh->indexCount, batchCount, 0, 0,
+                                  static_cast<uint32_t>(batchFirst));
+        ++stats.drawCalls;
     }
 }
 

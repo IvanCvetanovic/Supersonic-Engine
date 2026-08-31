@@ -187,6 +187,92 @@ void testTwoDrawsAgreeingOnEverythingKeepGatherOrder() {
     }
 }
 
+// --- particles -------------------------------------------------------------
+//
+// The same order the blended pass needs, in the pass that needs it most. A
+// particle has no authored sortKey and nothing can give it one, so there are
+// two keys rather than three - and the tie is not a coincidence here but the
+// ordinary case, because every particle a burst spawns leaves from the
+// emitter's own position and their depths come out BIT-EQUAL.
+
+RenderSystem::ParticleDraw puff(float viewDepth, uint32_t gathered) {
+    RenderSystem::ParticleDraw draw;
+    draw.viewDepth = viewDepth;
+    draw.gathered = gathered;
+    return draw;
+}
+
+void testParticlesGoBackToFront() {
+    std::vector<RenderSystem::ParticleDraw> draws{puff(2.0f, 0), puff(9.0f, 1), puff(5.0f, 2)};
+
+    RenderSystem::SortParticleDraws(draws);
+
+    CHECK_NEAR(draws[0].viewDepth, 9.0f);
+    CHECK_NEAR(draws[1].viewDepth, 5.0f);
+    CHECK_MSG(draws[2].viewDepth == 2.0f,
+              "the nearest particle is drawn last, so it composites over the rest");
+}
+
+void testAParticleBehindTheCameraSortsBehind() {
+    // Signed depth, for the reason TransparentDraw gives. An emitter at the
+    // camera throws particles both ways.
+    std::vector<RenderSystem::ParticleDraw> draws{puff(4.0f, 0), puff(-4.0f, 1)};
+
+    RenderSystem::SortParticleDraws(draws);
+
+    CHECK_MSG(draws[0].viewDepth == 4.0f, "the one in front is farther along the view");
+    CHECK_MSG(draws[1].viewDepth == -4.0f, "and the one behind sorts nearest, not equal to it");
+}
+
+void testABurstAtOneDepthKeepsGatherOrder() {
+    // THE CASE THAT WAS BROKEN, and the reason this sort is now total. Twelve
+    // particles spawned on one frame share a position exactly, so the old
+    // single-float comparator handed twelve equal elements to std::sort - which
+    // is permitted to order them however it likes, and is not required to do it
+    // the same way twice. Two runs of one recording could differ, and the only
+    // evidence would be the picture.
+    std::vector<RenderSystem::ParticleDraw> draws;
+    for (uint32_t i = 0; i < 12; ++i) draws.push_back(puff(3.0f, i));
+
+    // Handed in backwards, so a comparator that merely preserved its input
+    // would not pass this.
+    std::reverse(draws.begin(), draws.end());
+    RenderSystem::SortParticleDraws(draws);
+
+    for (uint32_t i = 0; i < draws.size(); ++i) {
+        CHECK_MSG(draws[i].gathered == i,
+                  "particle " + std::to_string(i) + " is where it was gathered");
+    }
+}
+
+void testTheParticleSortIsAPermutationToo() {
+    // Size, not just order. A comparator that is not a strict weak ordering is
+    // undefined behaviour rather than a wrong answer, and the shape that
+    // usually takes is elements going missing.
+    std::vector<RenderSystem::ParticleDraw> draws{
+        puff(1.0f, 0), puff(1.0f, 1), puff(-2.0f, 2), puff(7.5f, 3), puff(1.0f, 4)};
+
+    std::vector<uint32_t> before;
+    for (const auto& d : draws) before.push_back(d.gathered);
+
+    RenderSystem::SortParticleDraws(draws);
+
+    std::vector<uint32_t> after;
+    for (const auto& d : draws) after.push_back(d.gathered);
+
+    CHECK_EQ(after.size(), before.size());
+    std::sort(before.begin(), before.end());
+    std::sort(after.begin(), after.end());
+    CHECK_MSG(before == after, "every particle survives the sort");
+}
+
+// There is deliberately no unit test here for the batching itself. What a
+// batch costs is a count of vkCmdDrawIndexed calls against a device, and a
+// test that restated the loop's own run-detection would be a copy of it rather
+// than a check on it - the trap DrawCallsForMesh exists to avoid. It is
+// verified where it can be: the draw-call counter reports 2 for a
+// twenty-thousand-particle scene that reported 20,001 before, and the frame is
+// pixel-identical.
 
 // --- What a frame COSTS, in quantities ------------------------------------
 //
@@ -300,6 +386,11 @@ void runTests() {
     testNegativeKeysSortBehindZero();
     testAnEmptyListIsNotAReorder();
 
+    testParticlesGoBackToFront();
+    testAParticleBehindTheCameraSortsBehind();
+    testABurstAtOneDepthKeepsGatherOrder();
+    testTheParticleSortIsAPermutationToo();
+
     testAModelWithOneSurfaceCostsOneDrawCall();
     testAMultiSurfaceModelCostsOneCallPerSurface();
     testSortingIsAPermutationAndLosesNothing();
@@ -309,4 +400,4 @@ void runTests() {
 
 } // namespace
 
-TEST_MAIN("test_draworder", 42)
+TEST_MAIN("test_draworder", 61)

@@ -1,5 +1,10 @@
 #pragma once
 
+// For uint32_t below. MSVC's <string> drags this in transitively and
+// libstdc++'s does not, so leaving it out compiles here and fails under GCC -
+// which is exactly what happened to GameRuntime.hpp in the same commit that
+// added the window size, and was fixed in only one of the two headers.
+#include <cstdint>
 #include <string>
 
 namespace Supersonic {

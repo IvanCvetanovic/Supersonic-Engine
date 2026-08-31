@@ -42,8 +42,10 @@ public:
         // instancing lands the drop is recorded rather than asserted.
         uint32_t drawCalls{0};
 
-        // Particles submitted, which is a call each. Counted separately
-        // because a particle is not a drawable and lumping them in would make
+        // Particles submitted. NOT a call each any more - every particle in a
+        // frame shares one mesh and one material set, so the whole sorted list
+        // goes down as a single instanced draw. Counted separately because a
+        // particle is not a drawable, and lumping the two together would make
         // `drawCalls` move for a reason `drawn` cannot explain.
         uint32_t particlesDrawn{0};
         // Summed across every cascade, so with four cascades an object visible
@@ -233,6 +235,40 @@ public:
     // no mesh registry. The same reason SortOpaqueDraws and ShadowAlphaFor are
     // exposed.
     static void SortTransparentDraws(std::vector<TransparentDraw>& draws);
+
+    // One live particle, gathered from every emitter before any of them is
+    // recorded. Out here beside TransparentDraw for the same reason: the
+    // ordering is the part with a decision in it.
+    struct ParticleDraw {
+        glm::vec3 position{0.0f};
+        glm::vec4 color{1.0f};
+        float size{1.0f};
+
+        // Along the view direction and signed, for the reason
+        // TransparentDraw::viewDepth gives.
+        float viewDepth{0.0f};
+
+        // THE TIE-BREAK, and particles need it more than meshes do.
+        //
+        // Every particle an emitter spawns on one frame starts at the emitter's
+        // own position, so their depths are not merely close but BIT-EQUAL -
+        // and the comparator was a single float run through std::sort, which is
+        // free to order equal elements however it likes and is not even
+        // required to do it the same way twice. That is the defect
+        // TransparentDraw::sortKey was added to close, in the one pass where
+        // equal keys are the common case rather than the coincidence.
+        //
+        // There is no authored key to break the tie with: a particle is not an
+        // entity and nothing can give it one. Gather order is what there is,
+        // and it is a real order - emitters in registry order, particles in
+        // pool order - so the frame is reproducible even though the tie is
+        // arbitrary.
+        uint32_t gathered{0};
+    };
+
+    // Orders particles back to front, then by gather order. Total, static and
+    // pure, for the reason SortTransparentDraws is.
+    static void SortParticleDraws(std::vector<ParticleDraw>& draws);
 
     struct ShadowCaster {
         glm::mat4 model{1.0f};
