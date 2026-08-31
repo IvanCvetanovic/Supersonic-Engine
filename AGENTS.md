@@ -118,6 +118,19 @@ not rely on it without reading `SupersonicApp.cpp` first. `--screenshot` capture
 viewport shows, already tone-mapped and encoded - so a rendering change can be
 looked at rather than only reasoned about.
 
+```bash
+# Open at a chosen size. In game mode this is the render resolution too.
+./build/Debug/SupersonicEngine.exe --frames 300 --window 1920x1080
+```
+
+`--window <W>x<H>` overrides whatever `game.manifest` asked for, for one run.
+It exists so a measurement taken at one resolution can be retaken at another
+without editing a literal and rebuilding — which is how the "the GPU is idle,
+this is a CPU-bound engine" premise was finally checked at 1080p instead of in
+a 755x389 editor viewport. In the editor the flag sizes the window and the
+offscreen target still follows the viewport; **in game mode the offscreen
+target follows the window**, so there the flag really is the render resolution.
+
 ### Recording a run and playing it back
 
 ```bash

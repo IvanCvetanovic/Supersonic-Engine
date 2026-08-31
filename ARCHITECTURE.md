@@ -382,7 +382,7 @@ directional-*only*: a point light sitting in slot 0 still reaches its cube
 through the later branch, and a second directional light is lit but never
 shadowed. One shadowed directional light is the limit.
 
-**Descriptor sets.** Set 0 is per-frame and has eleven bindings; set 1 is
+**Descriptor sets.** Set 0 is per-frame and has twelve bindings; set 1 is
 per-material and has three, rebound per draw.
 
 | Set 0 | Contents | Stages |
@@ -398,6 +398,7 @@ per-material and has three, rebound per draw.
 | 8 | irradiance cubes, `samplerCube[2]`, one per environment probe | fragment |
 | 9 | prefiltered cubes, `samplerCube[2]`, one per environment probe | fragment |
 | 10 | this frame's texture coordinate transforms, storage buffer | fragment |
+| 11 | this frame's per-draw records, one per INSTANCE, storage buffer | vertex + fragment |
 
 Bindings 5 through 7 are why there is no `MAX_LIGHTS` any more: the light array
 used to live inside the uniform block as a fixed eight, and a storage buffer
@@ -405,12 +406,25 @@ makes its length a runtime count instead of a number compiled into every shader
 that reads the block.
 
 Binding 10 is there for the same reason binding 2 is. Both are per-frame arrays
-a draw indexes into, because the push constant block is exactly 128 bytes — the
+a draw indexes into, because a push constant block is exactly 128 bytes — the
 guaranteed minimum — and a joint palette and a texture coordinate transform are
 both per-draw data that does not fit in what is left. Slot 0 of the transform
 buffer is always the identity and is written every frame, so a draw that never
 asked for one indexes it and gets its coordinates back unchanged, with no branch
 and no bounds test in the shader.
+
+Binding 11 is that argument carried all the way. The 128 bytes themselves became
+per-frame array data: the scene pass no longer pushes anything, it writes one
+`PushConstantData` record per instance into binding 11 and the shaders read
+`instances[gl_InstanceIndex]`. That is what lets consecutive compatible draws be
+one `drawIndexed` with an instance count, since the only thing that used to
+differ between them travelled in the one piece of state a draw call cannot
+batch. `gl_InstanceIndex` is a vertex input, so the fragment stage receives it
+as a **flat** varying rather than reading it directly. The depth pass still
+pushes a real push constant — it draws no instanced batches, so it has nothing
+to gain and a smaller block to fill — which is why the 128-byte layout and its
+`static_assert` are still live even though the scene shaders no longer declare
+one.
 
 The three sampler shapes are not interchangeable. The cascades must be one array
 image because the per-fragment cascade choice is not dynamically uniform — it
@@ -2280,17 +2294,27 @@ one.
 
 | Key | Default | Effect |
 |---|---|---|
-| `Game` | `false` | The only thing that marks a game. The other two keys are read only once it passes. |
+| `Game` | `false` | The only thing that marks a game. The other keys are read only once it passes. |
 | `Title` | `Supersonic Game` | Window title. The editor's is `Supersonic Engine`. |
 | `StartupScene` | `assets/scenes/MainScene.scene` | Scene loaded before the first frame. |
+| `Width` | `1280` | The window the game opens at, in pixels. In game mode the offscreen target follows the window every frame, so it is the render resolution too. |
+| `Height` | `720` | The other half. Half a size is not a size, so a manifest naming one without the other gets the default pair rather than that width against somebody else's height. A value outside 64..16384 is refused *and logged* — a size nobody can see is a mistake, and a window they did not ask for with nothing to explain it is worse. |
 
 The `Game` key, not the file's existence, is the switch, so a stray manifest in a
 build tree cannot turn the editor into a game. `Parse` returns immediately when
-it is false, which is why the other two keys are never even looked at in the
+it is false, which is why the other keys are never even looked at in the
 editor case. A manifest that exists but does not parse logs an error and returns
 the editor's manifest: there is nothing else to do without a scene to load, and
 starting the editor silently would hide a packaging bug behind a window that
 looks like it works.
+
+`--window <W>x<H>` overrides the size for one run. The precedence — the flag,
+then the manifest, then 1280×720 — is `GameRuntime::ResolveWindowSize`, a pure
+function taking the manifest and the two option numbers, rather than three `if`s
+inside `SupersonicApp`. It lives there because `SupersonicApp` needs a device, a
+window and a swapchain before it can be constructed, so no suite can reach an
+ordering written inside it; and the order is the whole feature, since reversing
+it makes a flag that quietly does nothing.
 
 `Parse` and `Serialize` are separate from `Load` so the format is testable
 without a packaged folder on disk, and the packager and the loader both take the

@@ -684,7 +684,8 @@ Android "not functional"; extending that register forward costs nothing.
       blended drawables, draw calls, particles, shadow casters and skinned
       matrices, reported by `--frames` under `[Counts]` as a median and a worst.
       Draw calls were never counted before, and are not the same number as
-      drawables: the demo scene draws eight in ten
+      drawables: the demo scene draws eight in nine, and drew eight in ten
+      until instancing collapsed a consecutive pair
 - [x] A game declares the window it opens at, in its manifest, with `--window
       1920x1080` to override it for one run. It is the render resolution too:
       in game mode the offscreen target follows the window
@@ -695,6 +696,16 @@ Android "not functional"; extending that register forward costs nothing.
       only an explicit `Stop` ever released one, so a game playing
       fire-and-forget one-shots accumulated a live voice per sound for the
       whole session
+- [x] Instancing: the per-draw record moved out of the push constant and into a
+      storage buffer a draw indexes by `gl_InstanceIndex`, so consecutive
+      compatible draws go down the wire as one. Twenty thousand and one draw
+      calls become four, and Scene Record goes 5.72 → 3.41 ms at twenty
+      thousand drawables and 2.77 → 1.59 at ten thousand. Consecutive only,
+      never a re-sort: the opaque pass's `sortKey` order is load-bearing, so a
+      batch closes the moment the mesh, the index range or the material set
+      changes. The blended pass and the particles get records and are
+      deliberately not batched — they are drawn back to front, and an order
+      between them is not something a batch may choose
 
 ### Next
 
@@ -759,8 +770,14 @@ how much solid it invents that the mesh does not.
 
 Deliberately not on this list, with the reasons written down in
 [ARCHITECTURE.md](ARCHITECTURE.md): swept CCD, a persistent broadphase, warm
-starting, a multi-threaded solver, and instancing — the last measured at 0.44 ms
-of a 1.7 ms shipped frame and rejected on that basis rather than on taste.
+starting and a multi-threaded solver — each with the mechanism that stands in
+for it and what that mechanism gets wrong.
+
+Instancing used to be the fifth name in that sentence, rejected at 0.44 ms of a
+1.7 ms frame. It shipped once the measurement was retaken somewhere the cost
+could be seen: at twenty thousand drawables the same term is 5.7 ms of an 8.2 ms
+frame. The number that changed was the scene, not the technique — which is the
+argument for retaking a rejection's measurement rather than re-reading it.
 
 ---
 
