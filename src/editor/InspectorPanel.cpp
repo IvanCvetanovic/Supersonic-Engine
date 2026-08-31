@@ -1051,6 +1051,49 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // 7b. SpriteAnimationComponent
+    if (registry.all_of<SpriteAnimationComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Sprite Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& sprite = registry.get<SpriteAnimationComponent>(entity);
+
+            int columns = static_cast<int>(sprite.columns);
+            int rows = static_cast<int>(sprite.rows);
+            // Floored at one rather than zero: a zero grid is a division, and
+            // an inspector that lets you type the number that breaks the
+            // renderer is not a control, it is a trap.
+            if (ImGui::DragInt("Columns", &columns, 0.2f, 1, 256)) {
+                sprite.columns = static_cast<uint32_t>(columns < 1 ? 1 : columns);
+            }
+            if (ImGui::DragInt("Rows", &rows, 0.2f, 1, 256)) {
+                sprite.rows = static_cast<uint32_t>(rows < 1 ? 1 : rows);
+            }
+
+            int firstFrame = static_cast<int>(sprite.firstFrame);
+            int frameCount = static_cast<int>(sprite.frameCount);
+            if (ImGui::DragInt("First Frame", &firstFrame, 0.2f, 0, 65535)) {
+                sprite.firstFrame = static_cast<uint32_t>(firstFrame < 0 ? 0 : firstFrame);
+            }
+            if (ImGui::DragInt("Frame Count", &frameCount, 0.2f, 0, 65535)) {
+                sprite.frameCount = static_cast<uint32_t>(frameCount < 0 ? 0 : frameCount);
+            }
+            ImGui::TextDisabled("Frame Count 0 means every cell from First Frame on.");
+
+            ImGui::DragFloat("Frames Per Second", &sprite.framesPerSecond, 0.5f, 0.0f, 240.0f);
+            ImGui::Checkbox("Loop", &sprite.loop);
+            ImGui::SameLine();
+            ImGui::Checkbox("Playing", &sprite.playing);
+
+            // Read-only, because it is the tick's output and typing into it
+            // would be overwritten on the next one. Shown because "which frame
+            // is it on" is the first question anybody asks a flipbook that
+            // looks wrong.
+            ImGui::Text("Frame %u of %u", sprite.frame, sprite.resolvedFrameCount());
+            ImGui::TextDisabled("Advances on the simulation tick, so it is in the replay.");
+        }
+    }
+
+    ImGui::Spacing();
+
     // 8. LightComponent
     if (registry.all_of<LightComponent>(entity)) {
         if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1591,6 +1634,19 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
         if (!registry.all_of<ParticleEmitterComponent>(entity) && ImGui::MenuItem("Particle Emitter")) {
             registry.emplace<ParticleEmitterComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<SpriteAnimationComponent>(entity) &&
+            ImGui::MenuItem("Sprite Animation")) {
+            registry.emplace<SpriteAnimationComponent>(entity);
+
+            // A flipbook with no material to write is a component that does
+            // nothing and says nothing about why. The system pairs the two, so
+            // adding one without the other is the mistake worth not letting
+            // somebody make.
+            if (!registry.all_of<MaterialComponent>(entity)) {
+                registry.emplace<MaterialComponent>(entity);
+            }
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<LightComponent>(entity) && ImGui::MenuItem("Directional Light")) {

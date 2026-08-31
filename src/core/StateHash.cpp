@@ -190,6 +190,23 @@ uint64_t Compute(const entt::registry& registry) {
             hash = mix(hash, &started, 1);
         }
 
+        // WHICH FRAME A FLIPBOOK IS ON, by the same rule that admitted a
+        // script's counter: a tick writes it and the next tick reads it, so it
+        // is state rather than a derived look.
+        //
+        // Only the three fields a tick actually writes. `columns`, `rows` and
+        // the rate are authored - they come from the scene and no tick can
+        // change them - and hashing authored data would report an edit as a
+        // divergence. `playing` is in here because a non-looping animation
+        // clears it on the tick it finishes, which makes it a tick's output and
+        // not a setting.
+        if (const auto* sprite = registry.try_get<const SpriteAnimationComponent>(entity)) {
+            hash = mix(hash, &sprite->frame, sizeof(sprite->frame));
+            hash = mixFloat(hash, sprite->elapsed);
+            const unsigned char playing = sprite->playing ? 1u : 0u;
+            hash = mix(hash, &playing, 1);
+        }
+
         // Addition, so the order entities are visited in cannot change the
         // answer. EnTT iterates in an order that depends on how components
         // were added and removed rather than on the state, and folding the

@@ -1329,6 +1329,67 @@ struct Particle {
     bool active{false};
 };
 
+// A sprite sheet, played as a flipbook, on the simulation tick.
+//
+// Everything this needs has been in the engine for a while and nothing drove
+// it. `MaterialComponent::uvScale` and `uvOffset` compose exactly the transform
+// a sheet cell wants - the arithmetic for a sixteen-frame strip is asserted in
+// test_materials - the transform reaches the shader through a per-frame slot
+// buffer, and nearest filtering keeps the cells crisp. What was missing was the
+// one thing that makes it an animation rather than a still: something that
+// advances the frame. Nothing on the tick has ever written those two fields;
+// the only writers in the whole tree are the scene loader and the inspector.
+//
+// A game could always do this itself - a layer holds the raw registry and can
+// write a material every tick, which is how Wolf Brigade tints its units - so
+// this is an AUTHORING story rather than a new capability. Dropping a sheet on
+// an entity and typing its grid is the difference between a flipbook that
+// anyone can make and one that needs a C++ layer.
+//
+// ON THE TICK, and that is not a detail. Per frame, the animation would run at
+// whatever rate the display was keeping up at - the exact defect the simulation
+// clock exists to end - and a replay would not reproduce. Which is also why the
+// frame index and the accumulator are in the state hash: they are written by a
+// tick and read by the next one, the same test that admitted a script's
+// counter, and leaving them out is the failure mode that makes a replay report
+// success while blind.
+struct SpriteAnimationComponent {
+    // The grid the sheet is cut into. Cells are counted left to right, then top
+    // to bottom, which is the order every sprite-sheet tool in existence packs
+    // them in.
+    uint32_t columns{1};
+    uint32_t rows{1};
+
+    // Which run of cells is this animation. `frameCount` of zero means "all of
+    // them", so a sheet holding exactly one animation needs neither field.
+    // Several animations packed into one sheet is the reason both exist.
+    uint32_t firstFrame{0};
+    uint32_t frameCount{0};
+
+    float framesPerSecond{12.0f};
+    bool loop{true};
+    bool playing{true};
+
+    // ---- Tick state, hashed --------------------------------------------
+
+    // Which cell of the run is showing, counted from `firstFrame`.
+    uint32_t frame{0};
+
+    // Time carried past the last whole frame. An accumulator rather than a
+    // division of total elapsed time, so changing `framesPerSecond` mid-animation
+    // speeds it up from here instead of teleporting it to wherever the new rate
+    // says the current second lands.
+    float elapsed{0.0f};
+
+    // How many cells this animation actually plays, resolved once so the system
+    // and the inspector cannot disagree about what zero means.
+    uint32_t resolvedFrameCount() const {
+        const uint32_t grid = (columns == 0 || rows == 0) ? 0u : columns * rows;
+        if (frameCount != 0) return frameCount;
+        return firstFrame < grid ? grid - firstFrame : 0u;
+    }
+};
+
 struct ParticleEmitterComponent {
     uint32_t maxParticles{100};
     float emitRate{10.0f};

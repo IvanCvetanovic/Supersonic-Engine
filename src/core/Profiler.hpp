@@ -24,6 +24,13 @@ enum class ProfileZone : std::size_t {
     Scripts,
     Animation,
     Particles,
+
+    // Sprite flipbooks, on the tick. Beside Animation rather than folded into
+    // it because the two answer different questions - one is a skeleton being
+    // posed, the other is a texture coordinate being written - and a cost you
+    // cannot separate is a cost you cannot act on.
+    Sprites,
+
     Transform,
     EditorUI,
     ImGuiRender,
@@ -70,7 +77,7 @@ public:
     static const char* Name(ProfileZone zone) {
         static constexpr const char* kNames[kZoneCount] = {
             "Physics", "Audio", "Scripts", "Animation", "Particles",
-            "Transform", "Editor UI", "ImGui Render", "Resource Sync",
+            "Sprites", "Transform", "Editor UI", "ImGui Render", "Resource Sync",
             "Pose Evaluation",
             "Frame Wait", "Frame Prepare", "Shadow Record", "Scene Record",
             "Game Layers", "Undo Commit",

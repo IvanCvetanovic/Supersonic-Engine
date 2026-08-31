@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-64%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-65%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
@@ -264,7 +264,7 @@ translation units that exist only to compile VMA and tinygltf.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Sixty-four suites, each a plain executable with no test framework behind it —
+Sixty-five suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 | Suite | Covers |
@@ -309,7 +309,8 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped |
 | `test_determinism` | That one binary over one scene produces the same frames twice |
 | `test_replay` | Recording a run's input and reading it back: levels carry, edges do not, floats keep their bits, and a truncated file is refused |
-| `test_camera` | That the fly camera can be turned off, in both halves, and that a scene written before the switch existed still flies |
+| `test_camera` | That the fly camera can be turned off, in both halves, that a scene written before the switch existed still flies, and that the editor's own eye can go flat and come back |
+| `test_sprite` | Where a cell of a sprite sheet is, when a flipbook advances, that a one-shot stops on its last frame rather than its first — and that the state hash sees which frame it is on, while ignoring the grid it was authored with |
 | `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
 | `test_codecextension` | Serialising a game's own components alongside the engine's |
 | `test_packaging` | That a packaged folder has a binary, a manifest, and the scene it was asked for |
@@ -726,6 +727,16 @@ Android "not functional"; extending that register forward costs nothing.
       `fov` — a field an orthographic camera never reads — while the shader
       assigned fragments to froxels by screen tile, so the two halves disagreed
       about where a froxel was and a lamp lit the wrong column of the image
+- [x] Sprite sheets play as flipbooks, on the simulation tick and therefore
+      inside the replay. Every piece of this was already here — the texture
+      coordinate transform, its per-frame slot buffer, the nearest filtering
+      that keeps the cells crisp, and the arithmetic for a sixteen-frame strip
+      with a test already on it — and nothing on the tick had ever written a UV.
+      A game could always animate one from its own layer, so this is an
+      authoring story rather than a new capability: a grid, a rate, and it
+      plays. The frame index is in the state hash, because a tick writes it and
+      the next one reads it; the grid it was cut from is not, because retuning
+      an animation is an edit and not a divergence
 
 ### Next
 

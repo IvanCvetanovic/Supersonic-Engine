@@ -13,6 +13,7 @@
 #include "core/AudioSystem.hpp"
 #include "core/ScriptEngine.hpp"
 #include "core/ParticleSystem.hpp"
+#include "core/SpriteAnimationSystem.hpp"
 #include "core/JobSystem.hpp"
 #include "core/AnimationSystem.hpp"
 #include "core/MaterialSystem.hpp"
@@ -1365,6 +1366,20 @@ void SupersonicApp::Run() {
                 // it is in the world reads this; anything reading a wall clock
                 // instead cannot be replayed.
                 ++clock.tick;
+
+                // Sprite flipbooks, on the tick and not on the frame.
+                //
+                // Per frame this would animate at whatever rate the display
+                // was keeping up at, which is the defect SimulationClock was
+                // built to end, and it would sit outside the replay entirely.
+                // Before the layers, so a game that reads a sprite's frame in
+                // its own FixedUpdate reads this tick's rather than the last
+                // one's - the same ordering argument that puts the layers after
+                // physics.
+                {
+                    SUPERSONIC_PROFILE(Sprites);
+                    SpriteAnimationSystem::Update(m_registry, gameTick);
+                }
 
                 // A game's simulation, on the game's tick. AFTER physics, so a
                 // tick reads the positions this step just produced rather than

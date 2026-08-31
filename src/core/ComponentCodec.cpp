@@ -579,6 +579,26 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* sprite = registry.try_get<SpriteAnimationComponent>(entity)) {
+        // The frame and the accumulator ARE persisted, unlike the particle pool
+        // above and for the reason AnimatorComponent::time is: where a flipbook
+        // has got to is part of the scene, so stopping and starting play mode
+        // does not snap every animation in the level back to its first cell.
+        // The pool is not, because it is a cache of a thousand particles and
+        // reproducing it exactly is not what anybody means by saving a scene.
+        out << indent << "\"SpriteAnimation\": {\n";
+        out << indent << "  \"Columns\": " << sprite->columns << ",\n";
+        out << indent << "  \"Rows\": " << sprite->rows << ",\n";
+        out << indent << "  \"FirstFrame\": " << sprite->firstFrame << ",\n";
+        out << indent << "  \"FrameCount\": " << sprite->frameCount << ",\n";
+        out << indent << "  \"FramesPerSecond\": " << sprite->framesPerSecond << ",\n";
+        out << indent << "  \"Loop\": " << (sprite->loop ? "true" : "false") << ",\n";
+        out << indent << "  \"Playing\": " << (sprite->playing ? "true" : "false") << ",\n";
+        out << indent << "  \"Frame\": " << sprite->frame << ",\n";
+        out << indent << "  \"Elapsed\": " << sprite->elapsed << "\n";
+        out << indent << "},\n";
+    }
+
     if (const auto* animator = registry.try_get<AnimatorComponent>(entity)) {
         // SkinnedMeshComponent is deliberately NOT persisted: it is entirely
         // derived from the mesh path and rebuilt every frame, so persisting
@@ -1043,6 +1063,27 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             emitter.endColor = readVec4(e["EndColor"], glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
             emitter.velocityRange = readVec3(e["VelocityRange"], glm::vec3(0.5f, 2.0f, 0.5f));
             emitter.particleSize = e["ParticleSize"].AsFloat(0.08f);
+        }
+    }
+
+    if (node.Has("SpriteAnimation")) {
+        auto& sprite = registry.emplace_or_replace<SpriteAnimationComponent>(entity);
+        const auto& s = node["SpriteAnimation"];
+        if (s.IsObject()) {
+            // Columns and rows default to ONE, not zero: one cell is the whole
+            // texture, which is what a sheet that says nothing about its grid
+            // has to mean. Zero would be a division, and a key missing from an
+            // older scene must never be the difference between a picture and a
+            // crash.
+            sprite.columns = static_cast<uint32_t>(s["Columns"].AsNumber(1.0));
+            sprite.rows = static_cast<uint32_t>(s["Rows"].AsNumber(1.0));
+            sprite.firstFrame = static_cast<uint32_t>(s["FirstFrame"].AsNumber(0.0));
+            sprite.frameCount = static_cast<uint32_t>(s["FrameCount"].AsNumber(0.0));
+            sprite.framesPerSecond = s["FramesPerSecond"].AsFloat(12.0f);
+            sprite.loop = s["Loop"].AsBool(true);
+            sprite.playing = s["Playing"].AsBool(true);
+            sprite.frame = static_cast<uint32_t>(s["Frame"].AsNumber(0.0));
+            sprite.elapsed = s["Elapsed"].AsFloat(0.0f);
         }
     }
 
