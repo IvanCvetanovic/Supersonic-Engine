@@ -1232,7 +1232,38 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Camera Component", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& camera = registry.get<CameraComponent>(entity);
 
-            ImGui::DragFloat("Field of View", &camera.fov, 0.5f, 10.0f, 120.0f);
+            // THE PROJECTION, which nothing in the editor could set.
+            //
+            // CameraComponent has carried `projection` and `orthoHeight` since
+            // 2D was contemplated - the matrix, the picking branch, the shadow
+            // cascades and the serialisation are all there and all tested - and
+            // this panel offered a field of view and nothing else. So the only
+            // way to author a 2D camera was to close the editor and write
+            // "Orthographic": true into the scene file by hand.
+            //
+            // The two controls are exclusive because the two numbers are: `fov`
+            // means nothing to a box and `orthoHeight` means nothing to a
+            // pyramid, and showing a live slider for whichever one is currently
+            // inert is how somebody spends ten minutes dragging a control that
+            // cannot move anything.
+            int projection = camera.isOrthographic() ? 1 : 0;
+            if (ImGui::Combo("Projection", &projection, "Perspective\0Orthographic\0")) {
+                camera.projection = projection == 1
+                                        ? CameraComponent::Projection::Orthographic
+                                        : CameraComponent::Projection::Perspective;
+            }
+
+            if (camera.isOrthographic()) {
+                ImGui::DragFloat("Ortho Height", &camera.orthoHeight, 0.1f, 0.05f, 5000.0f);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("World units the viewport spans vertically. "
+                                      "Width follows from the aspect ratio, so a wider "
+                                      "window shows more world rather than stretching it.");
+                }
+            } else {
+                ImGui::DragFloat("Field of View", &camera.fov, 0.5f, 10.0f, 120.0f);
+            }
+
             ImGui::DragFloat("Near Plane", &camera.nearPlane, 0.01f, 0.001f, 10.0f);
             ImGui::DragFloat("Far Plane", &camera.farPlane, 1.0f, 10.0f, 1000.0f);
             Theme::DrawVec3Control("Cam Position", camera.position, 0.0f);
@@ -1623,7 +1654,18 @@ void InspectorPanel::RenderGizmo(
     if (selectedEntity == entt::null || !registry.valid(selectedEntity)) return;
     if (!registry.all_of<TransformComponent>(selectedEntity)) return;
 
-    ImGuizmo::SetOrthographic(false);
+    // Was hardcoded false, which was unreachable until the viewport could be
+    // orthographic at all and is worth being accurate about now that it can.
+    //
+    // Narrowly: this does NOT fix handle picking, and it would be easy to claim
+    // it does. ImGuizmo reads the flag in three places - twice to decide which
+    // direction it draws the rotation rings from, and once to cull a gizmo
+    // behind the eye, which an orthographic view has no such thing as. Picking
+    // goes through ComputeCameraRay, which unprojects the matrix it is handed at
+    // both clip depths and is therefore already right for a box. What this
+    // corrects is a rotation ring drawn from the wrong side, and a gizmo that
+    // could vanish near the near plane.
+    ImGuizmo::SetOrthographic(camera.isOrthographic());
     ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
     ImGuizmo::SetRect(viewportPos.x, viewportPos.y, viewportSize.x, viewportSize.y);
 

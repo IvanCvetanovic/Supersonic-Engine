@@ -344,6 +344,7 @@ void EditorLayer::buildGameView(entt::registry& registry) {
             registry.get<CameraComponent>(camEntity).aspect = aspect;
         }
         m_editorCamera.SetAspect(aspect);
+        m_editorCamera.SetViewportHeight(size.y);
 
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         ImGui::Image(m_offscreenPass->GetTextureID(), size);
@@ -489,6 +490,24 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             if (ImGui::MenuItem(ICON_FA_ARROWS "  Translate (W)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::TRANSLATE); }
             if (ImGui::MenuItem(ICON_FA_ROTATE "  Rotate (E)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::ROTATE); }
             if (ImGui::MenuItem(ICON_FA_MAXIMIZE "  Scale (R)")) { m_inspectorPanel.SetGizmoOperation(ImGuizmo::SCALE); }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("View")) {
+            // The 2D switch, and the reason it is a viewport control rather
+            // than a scene one: it changes how you are LOOKING at the level,
+            // not what the level is. A game's own camera says whether it is 2D
+            // in its CameraComponent, which the inspector can now author; this
+            // is the editor's own eye, and authoring a 2D scene through a
+            // perspective view is the thing that was impossible.
+            bool ortho = m_editorCamera.IsOrthographic();
+            if (ImGui::MenuItem("2D View (Orthographic)", nullptr, &ortho)) {
+                m_editorCamera.SetOrthographic(ortho);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Right-drag pans, the wheel zooms, WASD pans. "
+                                  "Flying forward is not offered because under a "
+                                  "parallel projection it changes nothing you can see.");
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Layout Presets")) {
@@ -730,6 +749,7 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
             // from the window squashed everything by ~14% at the default layout.
             const float aspect = viewportPanelSize.x / viewportPanelSize.y;
             m_editorCamera.SetAspect(aspect);
+            m_editorCamera.SetViewportHeight(viewportPanelSize.y);
             if (const auto camEntity = FindPrimaryCamera(registry); camEntity != entt::null) {
                 registry.get<CameraComponent>(camEntity).aspect = aspect;
             }

@@ -18,6 +18,7 @@
 #include "core/Components.hpp"
 #include "core/Input.hpp"
 #include "core/SceneSerializer.hpp"
+#include "editor/EditorCamera.hpp"
 
 #include <cmath>
 #include <string>
@@ -258,6 +259,84 @@ static void testTheFlagSurvivesBeingSavedAndLoaded() {
     }
 }
 
+// --- the editor's own eye ---------------------------------------------------
+//
+// A different camera from the one above: this one belongs to the viewport, not
+// to the scene, and until now it could only be a pyramid. Everything a 2D
+// author needs was already in CameraComponent and none of it was reachable, so
+// a 2D scene could be built and could not be looked at.
+//
+// Only the framing arithmetic is testable here. The pan and the zoom read GLFW
+// directly, the way the fly camera did before CameraSystem was moved onto
+// Input's snapshot - which is the same gap, in the same shape, one level out.
+
+static void testSwitchingToTwoDimensionsFramesWhatWasAlreadyOnScreen() {
+    // The toggle must not throw away where you were looking. Half the vertical
+    // span of a frustum at distance d is tan(fov/2) * d, so an ortho height of
+    // twice that shows the same amount of world.
+    EditorCamera camera;
+    const float fov = camera.Get().fov;
+    const float distance = glm::length(camera.Get().position);
+
+    camera.SetOrthographic(true);
+
+    CHECK_MSG(camera.IsOrthographic(), "the viewport must actually change projection");
+    CHECK_NEAR(camera.Get().orthoHeight,
+               2.0f * std::tan(glm::radians(fov) * 0.5f) * distance);
+}
+
+static void testGoingBackToPerspectiveReturnsToWhereTheEyeWas() {
+    // An orthographic pan walks the eye a long way sideways and the depth it
+    // sits at stops meaning anything, so without restoring the position the
+    // toggle is one-way in practice.
+    EditorCamera camera;
+    const glm::vec3 before = camera.Get().position;
+    const float fov = camera.Get().fov;
+
+    camera.SetOrthographic(true);
+    CHECK_MSG(camera.Get().position == before,
+              "switching does not move the eye by itself");
+
+    camera.SetOrthographic(false);
+
+    CHECK_MSG(!camera.IsOrthographic(), "and it must switch back");
+    CHECK_MSG(camera.Get().position == before, "to the position it left");
+    CHECK_NEAR(camera.Get().fov, fov);
+}
+
+static void testAskingForTheProjectionItAlreadyHasChangesNothing() {
+    // The guard that makes the restore correct. Without it, a second
+    // SetOrthographic(true) would overwrite the saved perspective position with
+    // wherever the pan had reached, and going back would land there instead.
+    EditorCamera camera;
+    const glm::vec3 home = camera.Get().position;
+
+    camera.SetOrthographic(true);
+
+    // MOVED IN BETWEEN, which is the whole point: without something changing
+    // here, a second save would write back the same value and a missing guard
+    // would pass. This is what a pan does in the real viewport.
+    camera.FocusOn(glm::vec3(120.0f, -40.0f, 3.0f), 2.0f);
+    CHECK_MSG(camera.Get().position != home, "the pan has to actually move the eye");
+
+    camera.SetOrthographic(true);
+    camera.SetOrthographic(false);
+
+    CHECK_MSG(camera.Get().position == home,
+              "a repeated switch must not overwrite the position being held for the way back");
+}
+
+static void testTheFramedHeightIsClampedRatherThanUnbounded() {
+    // The zoom is multiplicative, so a height of zero is a fixed point it can
+    // never leave and the world-per-pixel conversion divides by nothing.
+    EditorCamera camera;
+    camera.FocusOn(glm::vec3(0.0f), 0.0f);   // eye exactly on the target
+    camera.SetOrthographic(true);
+
+    CHECK_MSG(camera.Get().orthoHeight > 0.0f,
+              "a camera standing on its own target must still frame something");
+}
+
 static void runTests() {
     testWasdFliesTheCameraByDefault();
     testTheSameKeyLeavesADisabledCameraExactlyWhereItWas();
@@ -267,6 +346,11 @@ static void runTests() {
     testOnlyThePrimaryCameraFlies();
     testASceneWrittenBeforeTheFlagExistedStillFlies();
     testTheFlagSurvivesBeingSavedAndLoaded();
+
+    testSwitchingToTwoDimensionsFramesWhatWasAlreadyOnScreen();
+    testGoingBackToPerspectiveReturnsToWhereTheEyeWas();
+    testAskingForTheProjectionItAlreadyHasChangesNothing();
+    testTheFramedHeightIsClampedRatherThanUnbounded();
 }
 
-TEST_MAIN("test_camera", 14)
+TEST_MAIN("test_camera", 25)
