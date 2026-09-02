@@ -206,14 +206,20 @@ static void testAFullBufferDropsTheRestAndCountsThem() {
               "the batch names what was recorded, never what was asked for");
 }
 
-static void testAPassThatStartsFullDrawsNothingAndDropsEverything() {
+static void testAPassThatStartsFullBindsNothingAtAll() {
     const PassPlan p = plan({ draw(1, 5), draw(2, 6) }, 3, 3);
     CHECK_EQ(p.instances, 0u);
     CHECK_EQ(p.dropped, 2u);
     CHECK_EQ(p.DrawCalls(), 0u);
-    CHECK_MSG(p.meshBinds == 2u && p.materialBinds == 2u,
-              "the binds still happened: the loop binds before it records, and a count "
-              "of what the frame cost must not report a bind it made as one it did not");
+
+    // The opaque loop this replaces bound first and recorded second, so once
+    // the instance buffer filled it went on binding meshes and descriptors for
+    // draws it had already decided not to draw. A bind belonging to no batch
+    // is waste in the one frame least able to afford it, and it is also the
+    // one thing a plan cannot honestly describe, since a batch is where a bind
+    // is named.
+    CHECK_MSG(p.meshBinds == 0u && p.materialBinds == 0u,
+              "nothing is drawn, so nothing is bound");
 }
 
 static void testADropDoesNotWeldTheDrawsAroundIt() {
@@ -309,7 +315,7 @@ int main() {
 
     testAPassStartsWhereTheOneBeforeItStopped();
     testAFullBufferDropsTheRestAndCountsThem();
-    testAPassThatStartsFullDrawsNothingAndDropsEverything();
+    testAPassThatStartsFullBindsNothingAtAll();
     testADropDoesNotWeldTheDrawsAroundIt();
 
     testARangeWithNoIndicesDrawsNothingAndStillBinds();

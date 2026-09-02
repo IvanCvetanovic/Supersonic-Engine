@@ -795,12 +795,28 @@ RenderSystem::PassPlan RenderSystem::PlanPass(const std::vector<PassDraw>& draws
     bool pendingMaterialBind = false;
 
     for (const PassDraw& draw : draws) {
+        // A range with nothing in it draws nothing, and nothing is bound for
+        // it. Unreachable today - BuildSections keeps only non-empty runs and
+        // the gather skips a mesh with no indices - and kept because the
+        // alternative is a drawIndexed of zero indices inside a batch whose
+        // other members are real.
+        if (draw.indexCount == 0) continue;
+
+        // FULL, and checked BEFORE the binds rather than after. The opaque
+        // loop this replaces bound first and recorded second, so once the
+        // frame's instance buffer filled it went on binding meshes and
+        // descriptors for draws it had already decided not to draw. That is
+        // waste in the one frame that can least afford it, and it is also the
+        // one thing a plan cannot honestly describe - a batch names the binds
+        // it needs, and a bind belonging to no batch belongs nowhere.
+        if (firstInstance + plan.instances >= capacity) {
+            ++plan.dropped;
+            continue;
+        }
+
         // A REBIND CLOSES THE BATCH, because the next draw would read
         // different buffers or a different descriptor than the call already
-        // named. Both are decided before the capacity check, so a pass that
-        // has filled the instance buffer still reports the binds it would
-        // have made - the loops this replaces bind first and record second,
-        // and the count has to say what the frame cost, not what it drew.
+        // named.
         if (draw.meshKey != boundMesh) {
             boundMesh = draw.meshKey;
             ++plan.meshBinds;
@@ -813,22 +829,6 @@ RenderSystem::PassPlan RenderSystem::PlanPass(const std::vector<PassDraw>& draws
             boundMaterial = draw.materialKey;
             ++plan.materialBinds;
             pendingMaterialBind = true;
-        }
-
-        // A range with nothing in it binds and draws nothing. Unreachable
-        // today - BuildSections keeps only non-empty runs and the gather
-        // skips a mesh with no indices - and kept because the alternative is
-        // a drawIndexed of zero indices inside a batch whose other members
-        // are real.
-        if (draw.indexCount == 0) continue;
-
-        // FULL. Counted, not written past the end, and not a reason to stop
-        // planning: the caller decides whether to keep feeding draws, and
-        // both answers are expressible because the plan says what happened to
-        // each one.
-        if (firstInstance + plan.instances >= capacity) {
-            ++plan.dropped;
-            continue;
         }
 
         const uint32_t slot = firstInstance + plan.instances;
@@ -916,40 +916,85 @@ void RenderSystem::Render(
 
     std::vector<TransparentDraw> transparent;
 
-    // WHAT EACH PASS IS ABOUT TO SUBMIT, collected as it is recorded so the
-    // plan can be asked the same question the loop is answering.
+    // ONE ITEM PER DRAW A PASS WILL SUBMIT, gathered before any of it is
+    // recorded.
     //
-    // The plan does not decide anything yet. It runs beside the loops that
-    // do, and says so when the two disagree - which turns "the extraction is
-    // faithful" from a claim into a measurement, on every scene anyone
-    // launches, before the loops are deleted in favour of it. The same
-    // argument DrawCallsForMesh makes for bounding the section loop by the
-    // counter's own answer.
-    std::vector<PassDraw> plannedOpaque;
-    std::vector<PassDraw> plannedBlended;
-    std::vector<PassDraw> plannedParticles;
+    // The key is what the planner batches on; the rest is what the recorder
+    // needs once the planner has answered - the handles those keys stand for,
+    // and what a push constant is built from. Splitting them is what lets the
+    // decision be a pure function over numbers while the recording keeps its
+    // Vulkan handles.
+    struct PassItem {
+        PassDraw key{};
+        vk::Buffer vertexBuffer{};
+        vk::Buffer indexBuffer{};
+        vk::DescriptorSet materialSet{};
+        entt::entity entity{entt::null};
+        const glm::mat4* matrix{nullptr};
 
-    const auto checkPlan = [&stats](const char* pass, const std::vector<PassDraw>& draws,
-                                    uint32_t firstInstance, uint32_t capacity,
-                                    uint32_t drawCalls, uint32_t meshBinds,
-                                    uint32_t materialBinds, uint32_t instances) {
-        const PassPlan plan = PlanPass(draws, firstInstance, capacity);
-        if (plan.DrawCalls() == drawCalls && plan.meshBinds == meshBinds &&
-            plan.materialBinds == materialBinds && plan.instances == instances) {
-            return;
+        // The mesh section this draw is, or null for a mesh with one surface -
+        // in which case the entity's own material describes it.
+        const MeshMaterial* surface{nullptr};
+    };
+
+    // Issues a planned pass: binds what each batch says has to be bound,
+    // writes one instance record per draw, and submits one call per batch.
+    //
+    // The plan decides and this records; there is no second opinion here
+    // about what a batch is. That is the whole point of the split - a counter
+    // and a loop that each decide separately can come to disagree, and this
+    // engine has already shipped that once, with a draw-call count that was
+    // never the number of draw calls.
+    const auto recordPass = [&](const std::vector<PassItem>& items, const PassPlan& plan,
+                                VulkanPipeline& passPipeline) {
+        size_t batchIndex = 0;
+        uint32_t inBatch = 0;
+
+        for (const PassItem& item : items) {
+            if (item.key.indexCount == 0) continue;
+
+            // Every batch issued means everything left was refused by a full
+            // instance buffer - the plan drops a suffix, never a hole.
+            if (batchIndex >= plan.batches.size()) break;
+
+            const PassBatch& batch = plan.batches[batchIndex];
+
+            if (inBatch == 0) {
+                if (batch.bindsMesh) {
+                    const vk::Buffer buffers[] = { item.vertexBuffer };
+                    const vk::DeviceSize offsets[] = { 0 };
+                    commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
+                    commandBuffer.bindIndexBuffer(item.indexBuffer, 0, vk::IndexType::eUint32);
+                }
+                if (batch.bindsMaterial) {
+                    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                                     passPipeline.GetLayout(),
+                                                     VulkanPipeline::kMaterialSet, 1,
+                                                     &item.materialSet, 0, nullptr);
+                }
+            }
+
+            const int32_t slot =
+                record(buildPushConstants(registry, item.entity, *item.matrix, item.surface));
+
+            // The plan stopped at the same capacity `record` enforces, so a
+            // refusal here means the two disagree about how full the buffer
+            // is - which is a defect rather than a full frame, and stopping
+            // is what keeps a batch from naming records that were not written.
+            if (slot < 0) break;
+
+            ++inBatch;
+            if (inBatch < batch.instanceCount) continue;
+
+            commandBuffer.drawIndexed(batch.indexCount, batch.instanceCount, batch.firstIndex, 0,
+                                      batch.firstInstance);
+            ++stats.drawCalls;
+            ++batchIndex;
+            inBatch = 0;
         }
 
-        // Once per process, not once per frame: a disagreement is a permanent
-        // property of the code and a line per frame at sixty hertz buries it.
-        static bool warned = false;
-        if (warned) return;
-        warned = true;
-        SUPERSONIC_LOG_ERROR("RenderSystem")
-            << "the " << pass << " plan disagrees with what was recorded: calls "
-            << plan.DrawCalls() << " vs " << drawCalls << ", mesh binds " << plan.meshBinds
-            << " vs " << meshBinds << ", material binds " << plan.materialBinds << " vs "
-            << materialBinds << ", instances " << plan.instances << " vs " << instances
-            << "." << std::endl;
+        stats.meshBinds += plan.meshBinds;
+        stats.materialBinds += plan.materialBinds;
     };
 
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.GetPipeline());
@@ -959,11 +1004,14 @@ void RenderSystem::Render(
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.GetLayout(),
                                      VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
 
-    // Avoid redundant rebinds when consecutive entities share a mesh or
-    // texture, which is the common case.
-    uint32_t boundMesh = MeshRegistry::kInvalidMesh;
-    vk::DescriptorSet boundMaterialSet{};
-
+    // What used to be tracked here - the last mesh and material set bound, so
+    // consecutive draws sharing either did not rebind - is PlanPass's now, and
+    // the batches it returns say which binds a pass actually needs. There were
+    // three copies of that bookkeeping and each carried its own chance of
+    // getting the reset wrong: the blended pass had to remember to clear both
+    // after binding its own pipeline, which is the sort of thing that is
+    // invisible when it is missing until two passes disagree about what is
+    // bound.
     std::vector<OpaqueDraw> opaque;
 
     auto view = registry.view<WorldTransformComponent, RenderableComponent>();
@@ -1022,53 +1070,17 @@ void RenderSystem::Render(
     // existed.
     SortOpaqueDraws(opaque);
 
-    // WHAT MAKES TWO DRAWS ONE DRAW.
-    //
-    // Everything that is not per-instance has to match: the mesh, because its
-    // vertex and index buffers are bound once; the index range, because that is
-    // what the draw call names; and the material set, because it is a
-    // descriptor bound once. Everything else - the transform, the colour, the
-    // roughness, the skin range - travels in the instance record now and is
-    // free to differ.
-    struct BatchKey {
-        uint32_t meshID{0xFFFFFFFFu};
-        uint32_t firstIndex{0};
-        uint32_t indexCount{0};
-        vk::DescriptorSet material{};
-
-        bool operator==(const BatchKey& other) const {
-            return meshID == other.meshID && firstIndex == other.firstIndex &&
-                   indexCount == other.indexCount && material == other.material;
-        }
-    };
-
-    // The batch being accumulated: where its records start, how many, and what
-    // they have in common. Flushed when the key changes and again at the end.
-    BatchKey openKey;
-    int32_t openFirst = -1;
-    uint32_t openCount = 0;
-
-    auto flush = [&]() {
-        if (openCount == 0) return;
-        commandBuffer.drawIndexed(openKey.indexCount, openCount, openKey.firstIndex, 0,
-                                  static_cast<uint32_t>(openFirst));
-        ++stats.drawCalls;
-        openCount = 0;
-        openFirst = -1;
-    };
+    // WHAT MAKES TWO DRAWS ONE DRAW is decided by PlanPass now, over the
+    // items gathered here: everything that is not per-instance has to match -
+    // the mesh, because its vertex and index buffers are bound once; the index
+    // range, because that is what the draw call names; and the material set,
+    // because it is a descriptor bound once. Everything else - the transform,
+    // the colour, the roughness, the skin range - travels in the instance
+    // record and is free to differ.
+    std::vector<PassItem> opaqueItems;
+    opaqueItems.reserve(opaque.size());
 
     for (const OpaqueDraw& draw : opaque) {
-        if (draw.meshID != boundMesh) {
-            // A rebind ends the batch: the next draw reads different buffers.
-            flush();
-            const vk::Buffer buffers[] = { draw.vertexBuffer };
-            const vk::DeviceSize offsets[] = { 0 };
-            commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
-            commandBuffer.bindIndexBuffer(draw.indexBuffer, 0, vk::IndexType::eUint32);
-            boundMesh = draw.meshID;
-            ++stats.meshBinds;
-        }
-
         // ONE RANGE PER SURFACE. A model authored as several named materials -
         // BODY, DARK, GLASS, EMISSIVE is a real example - used to be merged
         // down to whichever came first, and arrived in a single flat colour.
@@ -1133,69 +1145,42 @@ void RenderSystem::Render(
             // pass.
             const vk::DescriptorSet materialSet =
                 textures.AcquireMaterialSet(albedo, normal, orm);
-            if (materialSet && materialSet != boundMaterialSet) {
-                // A rebind ends the batch, for the same reason as the mesh.
-                flush();
-                commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                                 pipeline.GetLayout(),
-                                                 VulkanPipeline::kMaterialSet, 1, &materialSet,
-                                                 0, nullptr);
-                boundMaterialSet = materialSet;
-                ++stats.materialBinds;
-            }
 
-            // What the plan is asked about, recorded where the loop decides
-            // it rather than derived afterwards - a second walk that rebuilt
-            // this list from the same inputs would be a copy of the decision
-            // and could agree with it while both were wrong.
-            plannedOpaque.push_back(PassDraw{ static_cast<uint64_t>(draw.meshID), firstIndex,
-                                              indexCount, HandleKey(
-                                                  static_cast<VkDescriptorSet>(materialSet)) });
+            PassItem item;
+            item.key = PassDraw{ static_cast<uint64_t>(draw.meshID), firstIndex, indexCount,
+                                 HandleKey(static_cast<VkDescriptorSet>(materialSet)) };
+            item.vertexBuffer = draw.vertexBuffer;
+            item.indexBuffer = draw.indexBuffer;
+            item.materialSet = materialSet;
+            item.entity = draw.entity;
+            item.matrix = &draw.matrix;
 
             // Written per section, not once for the mesh. HUSK's models carry
             // NO TEXTURES AT ALL - eight surfaces distinguished purely by
             // base colour, metallic and roughness - so a version of this that
             // only varied the maps would have looked finished and changed
             // nothing anyone could see.
-            const PushConstantData push =
-                buildPushConstants(registry, draw.entity, draw.matrix,
-                                   multiSurface ? &gpuMesh->sections[s].material : nullptr);
-
-            if (indexCount == 0) continue;
-
-            const int32_t slot = record(push);
-            if (slot < 0) continue;
-
-            // JOIN THE OPEN BATCH, OR START A NEW ONE.
-            //
-            // A record is only ever appended, so a batch's instances are
-            // contiguous by construction - which is what lets one drawIndexed
-            // name them with a firstInstance and a count. The moment anything
-            // that is not per-instance changes, the batch is closed and the
-            // next draw opens another.
-            //
-            // Order is preserved exactly: batches are submitted in the order
-            // their first member was reached, and members keep their places
-            // inside one. The sortKey contract is untouched.
-            const BatchKey key{ draw.meshID, firstIndex, indexCount, materialSet };
-            if (openCount > 0 && key == openKey) {
-                ++openCount;
-            } else {
-                flush();
-                openKey = key;
-                openFirst = slot;
-                openCount = 1;
-            }
+            item.surface = multiSurface ? &gpuMesh->sections[s].material : nullptr;
+            opaqueItems.push_back(item);
         }
     }
 
-    // THE LAST BATCH. Nothing after this point belongs to it, and a batch left
-    // open is a draw that was recorded into `instances` and never submitted -
-    // which is a silently missing object rather than an error.
-    flush();
+    // WHAT THE PASS WILL COST, answered before a single call is recorded, and
+    // then done. There is no second opinion below about what a batch is: the
+    // loop that used to decide as it went is gone, and with it the chance for
+    // a counter and a submission to drift apart.
+    {
+        std::vector<PassDraw> keys;
+        keys.reserve(opaqueItems.size());
+        for (const PassItem& item : opaqueItems) keys.push_back(item.key);
 
-    checkPlan("opaque", plannedOpaque, 0, maxInstances, stats.drawCalls, stats.meshBinds,
-              stats.materialBinds, static_cast<uint32_t>(instances.size()));
+        // Nothing is bound yet but the pipeline and set 0: the pass has just
+        // bound its own pipeline, and a pipeline bind is what invalidates the
+        // rest. Said rather than assumed, because it is the one thing the
+        // planner cannot see for itself.
+        const PassPlan plan = PlanPass(keys, 0, maxInstances);
+        recordPass(opaqueItems, plan, pipeline);
+    }
 
     // ---- Sky -------------------------------------------------------------
     //
@@ -1232,26 +1217,12 @@ void RenderSystem::Render(
     if (!transparent.empty()) {
         SortTransparentDraws(transparent);
 
-        const uint32_t blendedFirstInstance = static_cast<uint32_t>(instances.size());
-        const uint32_t blendedCallsBefore = stats.drawCalls;
-        const uint32_t blendedMeshBindsBefore = stats.meshBinds;
-        const uint32_t blendedMaterialBindsBefore = stats.materialBinds;
-
         commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
                                    transparentPipeline.GetPipeline());
         ++stats.pipelineBinds;
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                          transparentPipeline.GetLayout(),
                                          VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
-
-        // The rebind-avoidance state belongs to the pipeline that was bound, so
-        // it resets here rather than carrying over from the opaque pass.
-        boundMesh = MeshRegistry::kInvalidMesh;
-        boundMaterialSet = vk::DescriptorSet{};
-
-        // The opaque pass tracks its mesh by id; this one has a pointer and no
-        // id, since a blended draw carries the GpuMesh it was gathered with.
-        const GpuMesh* boundBlendedMesh = nullptr;
 
         // BATCHED, CONSECUTIVELY, and the back-to-front order survives it - see
         // the particle pass below for the clause of Vulkan's primitive order
@@ -1262,52 +1233,19 @@ void RenderSystem::Render(
         // Consecutive only, and for a stricter reason than the opaque pass has:
         // there, re-sorting would lose an authored sortKey. Here it would lose
         // the depth order itself, which is not a preference but the difference
-        // between a correct frame and a wrong one. A batch closes the moment
-        // the mesh or the material set changes, because those are bound rather
-        // than carried in the record.
-        const GpuMesh* batchMesh = nullptr;
-        int32_t batchFirst = -1;
-        uint32_t batchCount = 0;
-
-        auto flushBlended = [&]() {
-            if (batchCount == 0) return;
-            commandBuffer.drawIndexed(batchMesh->indexCount, batchCount, 0, 0,
-                                      static_cast<uint32_t>(batchFirst));
-            ++stats.drawCalls;
-            batchCount = 0;
-            batchFirst = -1;
-        };
+        // between a correct frame and a wrong one. That rule is PlanPass's now,
+        // and it is the same rule - which is the point of there being one.
+        std::vector<PassItem> blendedItems;
+        blendedItems.reserve(transparent.size());
 
         for (const auto& draw : transparent) {
             if (draw.mesh->indexCount == 0) continue;
 
-            // The rebind was unconditional, which is why this pass had no
-            // `boundMesh` to consult: it bound the same buffers again for every
-            // draw. It has to be a comparison now, because a rebind is exactly
-            // what ends a batch.
-            if (draw.mesh != boundBlendedMesh) {
-                flushBlended();
-                const vk::Buffer buffers[] = { draw.mesh->vertexBuffer->GetBuffer() };
-                const vk::DeviceSize offsets[] = { 0 };
-                commandBuffer.bindVertexBuffers(0, 1, buffers, offsets);
-                commandBuffer.bindIndexBuffer(draw.mesh->indexBuffer->GetBuffer(), 0,
-                                              vk::IndexType::eUint32);
-                boundBlendedMesh = draw.mesh;
-                ++stats.meshBinds;
-            }
-
             const vk::DescriptorSet blendedSet =
                 textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID,
                                             draw.ormTextureID);
-            if (blendedSet && blendedSet != boundMaterialSet) {
-                flushBlended();
-                commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                                 transparentPipeline.GetLayout(),
-                                                 VulkanPipeline::kMaterialSet, 1, &blendedSet,
-                                                 0, nullptr);
-                boundMaterialSet = blendedSet;
-                ++stats.materialBinds;
-            }
+
+            PassItem item;
 
             // KEYED ON THE MESH POINTER, which is what this pass batches on -
             // the opaque pass has an id and this one does not, and the two
@@ -1319,30 +1257,27 @@ void RenderSystem::Render(
             // every index under one material. Reproducing that is the point;
             // giving it sections here would be a behaviour change wearing a
             // refactor's clothes.
-            plannedBlended.push_back(PassDraw{ HandleKey(draw.mesh), 0, draw.mesh->indexCount,
-                                               HandleKey(
-                                                   static_cast<VkDescriptorSet>(blendedSet)) });
-
-            const PushConstantData push = buildPushConstants(registry, draw.entity, draw.matrix);
-            const int32_t slot = record(push);
-
-            // BREAK rather than continue, for the reason the particle loop
-            // gives: the buffer never empties inside a frame.
-            if (slot < 0) break;
-
-            if (batchCount == 0) {
-                batchFirst = slot;
-                batchMesh = draw.mesh;
-            }
-            ++batchCount;
+            item.key = PassDraw{ HandleKey(draw.mesh), 0, draw.mesh->indexCount,
+                                 HandleKey(static_cast<VkDescriptorSet>(blendedSet)) };
+            item.vertexBuffer = draw.mesh->vertexBuffer->GetBuffer();
+            item.indexBuffer = draw.mesh->indexBuffer->GetBuffer();
+            item.materialSet = blendedSet;
+            item.entity = draw.entity;
+            item.matrix = &draw.matrix;
+            blendedItems.push_back(item);
         }
 
-        flushBlended();
+        std::vector<PassDraw> keys;
+        keys.reserve(blendedItems.size());
+        for (const PassItem& item : blendedItems) keys.push_back(item.key);
 
-        checkPlan("blended", plannedBlended, blendedFirstInstance, maxInstances,
-                  stats.drawCalls - blendedCallsBefore, stats.meshBinds - blendedMeshBindsBefore,
-                  stats.materialBinds - blendedMaterialBindsBefore,
-                  static_cast<uint32_t>(instances.size()) - blendedFirstInstance);
+        // Starting where the opaque pass stopped, in the buffer they share.
+        // Nothing is bound: the pipeline bind above invalidates whatever the
+        // opaque pass left, which is why this pass used to reset its own
+        // rebind-avoidance state by hand.
+        const PassPlan plan =
+            PlanPass(keys, static_cast<uint32_t>(instances.size()), maxInstances);
+        recordPass(blendedItems, plan, transparentPipeline);
     }
 
     // ---- Particles -------------------------------------------------------
@@ -1402,11 +1337,16 @@ void RenderSystem::Render(
 
     SortParticleDraws(particles);
 
-    const uint32_t particleFirstInstance = static_cast<uint32_t>(instances.size());
-    const uint32_t particleCallsBefore = stats.drawCalls;
-    const uint32_t particleMeshBindsBefore = stats.meshBinds;
-    const uint32_t particleMaterialBindsBefore = stats.materialBinds;
-
+    // THIS PASS DOES NOT GO THROUGH PlanPass, and the reason is that it has
+    // no decision to make. Every particle in the frame shares one mesh, one
+    // pipeline and one material set - all three bound below, once, outside
+    // the loop - so no key can change inside the pass and the plan would be
+    // one batch of every particle, which is what the loop already builds. A
+    // list of twenty thousand identical planner inputs to be told that would
+    // be a megabyte of scratch a frame to reach a conclusion known in advance.
+    //
+    // If a particle ever varies its material, this is where the rule has to
+    // come from PlanPass rather than from here.
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
                                transparentPipeline.GetPipeline());
     ++stats.pipelineBinds;
@@ -1468,13 +1408,6 @@ void RenderSystem::Render(
 
         const int32_t slot = record(push);
 
-        // Every particle the loop CONSIDERED, including the one the full
-        // buffer refused - the plan counts a drop as a drop, and a list that
-        // stopped short would report a shorter pass rather than a refused one.
-        plannedParticles.push_back(PassDraw{ HandleKey(particleMesh), 0, particleMesh->indexCount,
-                                             HandleKey(
-                                                 static_cast<VkDescriptorSet>(whiteSet)) });
-
         // BREAK, not continue. `record` refuses only when the frame's instance
         // buffer is full, and it never empties again inside a frame - so every
         // later particle would be refused too, and carrying on would build the
@@ -1493,15 +1426,6 @@ void RenderSystem::Render(
                                   static_cast<uint32_t>(batchFirst));
         ++stats.drawCalls;
     }
-
-    // The mesh and material binds above are outside the loop and therefore
-    // outside the plan's own count, so they are added back for the
-    // comparison: the plan says the FIRST draw of the pass binds both, and
-    // this pass has already done that unconditionally.
-    checkPlan("particle", plannedParticles, particleFirstInstance, maxInstances,
-              stats.drawCalls - particleCallsBefore, stats.meshBinds - particleMeshBindsBefore,
-              stats.materialBinds - particleMaterialBindsBefore,
-              static_cast<uint32_t>(instances.size()) - particleFirstInstance);
 }
 
 } // namespace Supersonic
