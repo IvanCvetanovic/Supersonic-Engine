@@ -267,6 +267,21 @@ ctest --test-dir build -C Release --output-on-failure
 Sixty-seven suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
+There is also a scene that exists to be rendered rather than to be played:
+
+```bash
+./build/Debug/SupersonicEngine.exe --frames 40 --fixed-step   --scene assets/scenes/AllPasses.scene --screenshot shot.png
+```
+
+`AllPasses.scene` puts every pass the renderer has into one frame — opaque
+geometry, a multi-surface model, the sky, four blended panes across two
+materials, and particles — and the `[Counts]` block it prints is what a change
+to the draw path is checked against. It was written because the sample scene
+does not: it reaches the blended pass through a shared material asset and
+never with two materials in it, so **no before-and-after in this project had
+ever exercised the blended batcher**, and a refactor of it would have been
+verified by a screenshot of geometry it never touched.
+
 | Suite | Covers |
 |---|---|
 | `test_transform` | Matrix and projection conventions |
@@ -754,6 +769,31 @@ Android "not functional"; extending that register forward costs nothing.
       the next tick reads. Building it was the first call
       `MeshRegistry::Replace` ever had, and it was wrong twice: a dead slot per
       call, and a section still naming the index count it had just replaced
+- [x] What a render pass costs can be answered before it is recorded. Three
+      passes batched consecutive draws and each wrote the rule out for itself —
+      the opaque one keyed on mesh id, index range and material set, the
+      blended one on a mesh pointer and a material set, the particles on
+      nothing at all — and none of the three was reachable by a test, because
+      the numbers came out of a five-hundred-line function needing a command
+      buffer, a device and two registries. This engine's own plan says **assert
+      counts, never milliseconds**, and until now not one suite asserted on any
+      cost quantity: "one draw call per drawable" was false for a year and
+      nothing could have said so. `RenderSystem::PlanPass` is that decision as
+      a pure function over numbers, and the recorder does what it says rather
+      than deciding again, so a counter and a submission cannot drift apart.
+      Ten thousand cubes cull to 6,200 drawables and cost **two draw calls and
+      one mesh bind**, which is now asserted rather than asserted about
+- [x] The renderer says how many binds a frame made, in three numbers rather
+      than one — pipeline, mesh and material. The draw-call counter records
+      that batching happened; these record what it was for, and a fused
+      `stateChanges` would hide which of the three moved when they cost
+      different things and are fixed by different work. Shipped as two commits
+      on purpose: the first ran the new decision beside the three old loops and
+      logged any disagreement, and only once it had agreed on every scene did
+      the second delete them. The control that makes the null diff evidence is
+      one word — forcing every batch to close moves the draw calls from 12 to
+      15 on the fixture below while not one pixel changes, which is exactly
+      what batching is supposed to be
 
 ### Next
 

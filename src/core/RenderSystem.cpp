@@ -926,10 +926,33 @@ void RenderSystem::Render(
     // Vulkan handles.
     struct PassItem {
         PassDraw key{};
+
+        // BY VALUE, for the reason OpaqueDraw gives: Get returns a pointer
+        // INTO a vector that Upload push_backs onto, so one upload mid-frame
+        // would dangle every handle gathered before it.
         vk::Buffer vertexBuffer{};
         vk::Buffer indexBuffer{};
         vk::DescriptorSet materialSet{};
+
         entt::entity entity{entt::null};
+
+        // THE TWO POINTERS, AND WHAT WOULD INVALIDATE THEM. `matrix` points
+        // into the gathered draw list and `surface` two vectors deep into the
+        // mesh registry, and both are now dereferenced in the recording below
+        // rather than at the moment they are taken - which is a window the
+        // code they were copied from did not have.
+        //
+        // Safe because nothing between the gather and the record touches
+        // either: Render only ever calls MeshRegistry::Get, which is a bounds
+        // check and an index, and both draw lists are complete and sorted
+        // before the first pointer into them is taken. An Upload, a Replace,
+        // or a push onto `opaque` or `transparent` in between would break
+        // that, silently, as a wrong material rather than an error - and a
+        // tilemap rebake is exactly such a call, which is why it runs in
+        // SyncResources, before any of this.
+        //
+        // Copied rather than pointed to would cost four std::string copies
+        // per draw per frame, which is worse than the hazard it removes.
         const glm::mat4* matrix{nullptr};
 
         // The mesh section this draw is, or null for a mesh with one surface -
