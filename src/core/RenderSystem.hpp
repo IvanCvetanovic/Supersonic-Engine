@@ -59,6 +59,29 @@ public:
         // Depth passes that were not recorded because their shadow map would
         // have come out identical. Out of eighteen.
         uint32_t shadowPassesSkipped{0};
+
+        // ---- State changes, which are what batching actually removes ------
+        //
+        // The draw-call counter records that batching happened; these record
+        // what it was FOR. A batch closes because something has to be bound,
+        // so a frame's binds are the frame's batches minus the ones that
+        // continued - and until now the only evidence that ten thousand cubes
+        // bind one mesh once was that the draw count fell.
+        //
+        // THREE NUMBERS RATHER THAN ONE. A fused `stateChanges` hides which
+        // bind moved, and the three cost different things and are fixed by
+        // different work: a pipeline bind is the expensive one and happens
+        // three times a frame by construction, a mesh bind is two buffer
+        // binds, and a material bind is a descriptor set. Same argument the
+        // struct already makes for splitting `drawn` from `drawCalls`.
+        //
+        // THE SCENE PASS ONLY, exactly as `drawCalls` is. The eighteen depth
+        // passes bind their own pipeline once each and are counted by
+        // `shadowDrawn` and `shadowPassesSkipped`; folding them in here would
+        // make a number that moves when a light is added and cannot say why.
+        uint32_t pipelineBinds{0};
+        uint32_t meshBinds{0};
+        uint32_t materialBinds{0};
     };
 
     // Draws every visible entity using its own MeshComponent geometry,
@@ -157,6 +180,114 @@ public:
     // Static and pure so a test can reach it with no device, no registry and no
     // mesh registry - the same reason ShadowAlphaFor is exposed.
     static bool SortOpaqueDraws(std::vector<OpaqueDraw>& draws);
+
+    // ---- The plan: what a pass will bind and draw, decided before any of it
+    // is recorded ----------------------------------------------------------
+    //
+    // Three passes in this file batch consecutive draws, and until now each
+    // wrote the rule out for itself: the opaque pass keyed on mesh id, index
+    // range and material set; the blended pass on a mesh POINTER and a
+    // material set; the particles on nothing at all, because everything they
+    // bind is bound once outside their loop. Three copies of one decision,
+    // and not one of them was reachable by a test - the whole thing needs a
+    // command buffer, a device and two registries to run.
+    //
+    // What that costs is written in the plan this engine already has: "assert
+    // counts, never milliseconds", against sixty-five suites and not one
+    // asserting on any cost quantity. "One draw call per drawable" was false
+    // for a year and invisible, and the counter that found it can only be
+    // read by launching the editor and looking at a panel.
+    //
+    // So the decision is separated from the recording. PlanPass takes the
+    // draws a pass is about to submit and answers what it will cost: which
+    // batches, how many binds, how many records, what is dropped. Pure,
+    // static, device-free, and the recorder does what the plan says rather
+    // than deciding again - so the counter and the loop cannot come to
+    // disagree, which is the same argument DrawCallsForMesh already makes one
+    // level down.
+
+    // One draw a pass is about to submit, reduced to what decides whether it
+    // can join the batch in front of it.
+    //
+    // Keyed by NUMBER rather than by Vulkan handle so the decision is
+    // testable: a descriptor set and a mesh id are both just identities to
+    // the batcher, and a suite cannot make a descriptor set. The caller
+    // supplies whatever identity its pass batches on - a mesh id, a pointer,
+    // a handle - and only equality is ever asked of it.
+    struct PassDraw {
+        uint64_t meshKey{0};
+        uint32_t firstIndex{0};
+        uint32_t indexCount{0};
+
+        // ZERO MEANS NO MATERIAL SET, and therefore no bind - which is what a
+        // null descriptor set already meant to the loops this replaces.
+        uint64_t materialKey{0};
+    };
+
+    // One drawIndexed, and what has to be bound before it.
+    struct PassBatch {
+        uint64_t meshKey{0};
+        uint32_t firstIndex{0};
+        uint32_t indexCount{0};
+        uint64_t materialKey{0};
+
+        // Where this batch's instance records start and how many there are.
+        // Contiguous by construction, which is what lets one call name them.
+        uint32_t firstInstance{0};
+        uint32_t instanceCount{0};
+
+        // Whether the recorder must bind before issuing this batch. False
+        // when the previous batch left the right thing bound - which is the
+        // whole point of the run-length grouping and the number the state
+        // counters report.
+        bool bindsMesh{false};
+        bool bindsMaterial{false};
+    };
+
+    struct PassPlan {
+        std::vector<PassBatch> batches;
+
+        uint32_t meshBinds{0};
+        uint32_t materialBinds{0};
+
+        // Instance records the recorder must write, in draw order.
+        uint32_t instances{0};
+
+        // Draws refused because the frame's instance buffer is full. Planned
+        // rather than discovered, so the capacity a pass runs against is a
+        // number a test can set to three.
+        uint32_t dropped{0};
+
+        uint32_t DrawCalls() const { return static_cast<uint32_t>(batches.size()); }
+    };
+
+    // No mesh and no material set bound yet. Not a valid key for either: a
+    // mesh id is a vector index and a descriptor handle is a pointer.
+    static constexpr uint64_t kNothingBound = 0xFFFFFFFFFFFFFFFFull;
+
+    // Groups consecutive draws into batches, CONSECUTIVE ONLY AND NEVER A
+    // RE-SORT.
+    //
+    // The order of `draws` is load-bearing in all three callers and for two
+    // different reasons: the opaque pass carries an authored sortKey, and the
+    // blended and particle passes carry a back-to-front depth order that is
+    // the difference between a correct frame and a wrong one. A batch closes
+    // the moment the mesh, the index range or the material set changes.
+    //
+    // `firstInstance` is where this pass's records start in the frame's
+    // shared instance buffer, and `capacity` is that buffer's size: the
+    // passes run one after another into one buffer, so a pass cannot decide
+    // its own capacity without knowing what came before it.
+    //
+    // `boundMesh` and `boundMaterial` are what the pass starts with already
+    // bound. Every caller today starts with nothing, and passing that in
+    // rather than assuming it is what lets a test ask whether the first draw
+    // of a pass rebinds something it already has.
+    static PassPlan PlanPass(const std::vector<PassDraw>& draws,
+                             uint32_t firstInstance,
+                             uint32_t capacity,
+                             uint64_t boundMesh = kNothingBound,
+                             uint64_t boundMaterial = kNothingBound);
 
     // How many draw calls one drawable costs in the opaque pass.
     //
