@@ -7,7 +7,7 @@ why it is like that".
 ## Before you start
 
 - **Build and run the tests first.** `ctest --test-dir build -C Debug` should be
-  sixty-seven green suites before you change anything. If it is not, that is the
+  sixty-eight green suites before you change anything. If it is not, that is the
   bug worth reporting.
 - **Install the Vulkan SDK.** Without the validation layers, invalid Vulkan
   usage does not produce an error — it produces an access violation, or nothing

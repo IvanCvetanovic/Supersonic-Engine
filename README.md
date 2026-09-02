@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-67%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-68%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
@@ -264,7 +264,7 @@ translation units that exist only to compile VMA and tinygltf.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Sixty-seven suites, each a plain executable with no test framework behind it —
+Sixty-eight suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 There is also a scene that exists to be rendered rather than to be played:
@@ -328,6 +328,7 @@ verified by a screenshot of geometry it never touched.
 | `test_sprite` | Where a cell of a sprite sheet is, when a flipbook advances, that a one-shot stops on its last frame rather than its first — and that the state hash sees which frame it is on, while ignoring the grid it was authored with |
 | `test_tilemap` | Where a cell sits in the world and in the atlas, that a flip swaps one axis and leaves the other, that a map is uploaded once and then replaced behind the same id rather than re-uploaded per stroke, that an emptied map stops drawing instead of showing the fallback cube, and that the state hash sees the cells and not the atlas |
 | `test_renderplan` | What a pass costs before any of it is recorded: that a run of identical draws is one call, that a batch closes on every change that has to be bound and on nothing else, that the order is never re-sorted, and that a full instance buffer drops draws and says how many |
+| `test_nav` | That the oracle sees a wall move before anything else is worth having, that a diagonal never cuts the seam between two walls, that a goal on a wall is refused rather than flooded from, that cut off is a different answer from far away, and that an exact tie falls the same way every time |
 | `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
 | `test_codecextension` | Serialising a game's own components alongside the engine's |
 | `test_packaging` | That a packaged folder has a binary, a manifest, and the scene it was asked for |
@@ -794,6 +795,26 @@ Android "not functional"; extending that register forward costs nothing.
       one word — forcing every batch to close moves the draw calls from 12 to
       15 on the fixture below while not one pixel changes, which is exactly
       what batching is supposed to be
+- [x] Navigation, as a grid of integer costs and the flow field that solves it.
+      A flow field rather than a path per unit, because the game shape in front
+      of this engine is an RTS: A\* answers "how does *this* unit get there"
+      and costs a search per unit, while a field answers "from anywhere, which
+      way" and costs one search for the whole army. **Integers everywhere**, and
+      that is the determinism claim rather than a micro-optimisation — floating
+      point addition is not associative, so a frontier expanded in a different
+      order gives a different total, and two machines that disagree about a
+      distance disagree about where a unit walks. It is also why no navmesh is
+      vendored. The queue is an ordered map rather than a heap because
+      `std::priority_queue` says nothing about equal elements and equal
+      distances are the *ordinary* case on a uniform grid — the same defect
+      already fixed twice here, in the blended draw sort and the particle sort.
+      A diagonal never cuts the seam between two walls, a goal on a wall is
+      refused rather than flooded from, and unreachable is a different answer
+      from far away, because a unit can act on it. It is **not a component**:
+      a game owns one the way it owns its match state and puts it in the oracle
+      through the state hash's contributor seam, because neither game in front
+      of this engine would read an authored one — and the commit that adds the
+      component should be the one that has a caller to shape it
 
 ### Next
 
