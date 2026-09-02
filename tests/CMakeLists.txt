@@ -49,6 +49,7 @@ add_engine_test(test_convexhull)
 add_engine_test(test_decomposition)
 add_engine_test(test_draworder)
 add_engine_test(test_sprite)
+add_engine_test(test_tilemap)
 add_engine_test(test_uilayer)
 
 # The ported game, verified against the original.

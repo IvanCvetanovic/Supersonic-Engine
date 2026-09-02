@@ -6,6 +6,7 @@
 #include <limits>
 #include "core/TransformSystem.hpp"
 #include "core/MaterialSystem.hpp"
+#include "core/TilemapSystem.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -227,6 +228,13 @@ MeshMaterial RenderSystem::ResolveSurface(const MeshMaterial& fromFile,
 void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes, TextureRegistry& textures) {
     // Uploads happen here, before recording starts, because both registries
     // submit transfer command buffers of their own.
+    // Tilemaps first, because a map's mesh is written onto its renderable here
+    // and the loop below reads it. Before the generation is sampled, too: a
+    // map that was replaced this frame has bumped it, and sampling afterwards
+    // is what makes every other entity re-resolve against the new value now
+    // rather than one frame late.
+    TilemapSystem::Sync(registry, meshes);
+
     const uint64_t meshGeneration = meshes.Generation();
     const uint64_t textureGeneration = textures.Generation();
 
@@ -247,7 +255,13 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
         if (resolve) {
             renderable.resourceSignature = signature;
 
-            if (const auto* mesh = meshComponent) {
+            // A tilemap's mesh is the sync above's to decide, and BOTH halves
+            // of this are skipped for one. The second half is the one that
+            // would bite: an empty map is handed kInvalidMesh so that it draws
+            // nothing, and the fallback below would hand it the cube instead.
+            if (registry.all_of<TilemapComponent>(entity)) {
+                // Owned above.
+            } else if (const auto* mesh = meshComponent) {
                 renderable.meshID = meshes.Acquire(mesh->primitiveType, mesh->filePath);
             } else if (renderable.meshID == MeshRegistry::kInvalidMesh) {
                 renderable.meshID = meshes.GetCubeMesh();

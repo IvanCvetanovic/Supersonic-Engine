@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-65%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-66%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
@@ -264,7 +264,7 @@ translation units that exist only to compile VMA and tinygltf.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Sixty-five suites, each a plain executable with no test framework behind it —
+Sixty-six suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 | Suite | Covers |
@@ -311,6 +311,7 @@ pulling one in for pure-logic checks would cost more than it returns.
 | `test_replay` | Recording a run's input and reading it back: levels carry, edges do not, floats keep their bits, and a truncated file is refused |
 | `test_camera` | That the fly camera can be turned off, in both halves, that a scene written before the switch existed still flies, and that the editor's own eye can go flat and come back |
 | `test_sprite` | Where a cell of a sprite sheet is, when a flipbook advances, that a one-shot stops on its last frame rather than its first — and that the state hash sees which frame it is on, while ignoring the grid it was authored with |
+| `test_tilemap` | Where a cell sits in the world and in the atlas, that a flip swaps one axis and leaves the other, that a map is uploaded once and then replaced behind the same id rather than re-uploaded per stroke, that an emptied map stops drawing instead of showing the fallback cube, and that the state hash sees the cells and not the atlas |
 | `test_layerstack` | The seam a game lives in: attach, detach, fixed and per-frame callbacks |
 | `test_codecextension` | Serialising a game's own components alongside the engine's |
 | `test_packaging` | That a packaged folder has a binary, a manifest, and the scene it was asked for |
@@ -737,6 +738,21 @@ Android "not functional"; extending that register forward costs nothing.
       plays. The frame index is in the state hash, because a tick writes it and
       the next one reads it; the grid it was cut from is not, because retuning
       an animation is an edit and not a divergence
+- [x] A tilemap is one mesh. The shape was decided before the code was: one
+      entity per tile is what the sprite path already draws, and instancing
+      folds identical quads into one call — but every cell showing a different
+      tile needs its own texture-coordinate slot, there are 4,095 of those, and
+      a map of a few thousand tiles would have run the buffer out on its first
+      frame, for geometry that never moves. So a map bakes to one quad per
+      occupied cell with the atlas cell written into its vertices, uploaded
+      once and replaced in place when a cell changes. The atlas is cut by the
+      same arithmetic a flipbook uses, so an index means one picture
+      everywhere. Painted in the viewport with a brush, saved one map row per
+      line so the file reads the way the screen does, and in the state hash —
+      the cells, not the atlas — because a wall knocked down on a tick is state
+      the next tick reads. Building it was the first call
+      `MeshRegistry::Replace` ever had, and it was wrong twice: a dead slot per
+      call, and a section still naming the index count it had just replaced
 
 ### Next
 
@@ -780,6 +796,22 @@ HUSK's nineteen animated models. What is left is here.
   wants a colour or a backdrop sprite rather than a horizon. It is here because
   the editor can now author an orthographic view, so a 2D scene with the sky
   left on is a thing somebody can now make by accident.
+- **A tilemap stops at 65,536 cells, and it has no collision.** The cap is
+  there because a tile is four of the renderer's 80-byte vertices — the 3D
+  vertex, carrying a tangent basis and four joint weights a tile never reads —
+  so a filled map at the cap is 21 MB on the GPU. It is enforced where the
+  cells are allocated, not where they are drawn: a resize, a write or a fill
+  past it is refused and the map left as it was, because the first version
+  checked only at the bake and by then the inspector had asked for sixteen
+  gigabytes. A bigger world is several tilemap entities side by side, each
+  culled by its own box; chunking one entity automatically is the response
+  when a real map hits the cap, and a lean 2D vertex is the response if the
+  memory matters before then. Collision is absent on purpose: the solver is a
+  3D one, and no 2D game here has asked to walk on tiles. And a map's mesh is
+  keyed by its entity's index, so a mesh is left behind when the entity is
+  destroyed — it sits in its slot until the next map to land on that index
+  replaces it, which EnTT's recycling makes soon, so the leak is bounded by
+  the most maps a scene ever held at once.
 
 **Known and written down elsewhere, repeated because they bite a game**
 

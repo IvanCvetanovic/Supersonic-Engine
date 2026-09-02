@@ -111,6 +111,23 @@ uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data) {
         return m_cubeMesh;
     }
 
+    GpuMesh mesh = createGpuMesh(data);
+
+    const auto id = static_cast<uint32_t>(m_meshes.size());
+    m_meshes.push_back(std::move(mesh));
+    m_lookup.emplace(key, id);
+
+    SUPERSONIC_LOG_INFO("MeshRegistry") << "Uploaded '" << key << "' (" << data.vertices.size()
+              << " vertices, " << data.indices.size() / 3 << " triangles)." << std::endl;
+    return id;
+}
+
+uint32_t MeshRegistry::Find(const std::string& key) const {
+    const auto it = m_lookup.find(key);
+    return it == m_lookup.end() ? kInvalidMesh : it->second;
+}
+
+GpuMesh MeshRegistry::createGpuMesh(const MeshData& data) {
     GpuMesh mesh;
     mesh.indexCount = static_cast<uint32_t>(data.indices.size());
     mesh.boundsMin = data.boundsMin;
@@ -155,13 +172,7 @@ uint32_t MeshRegistry::Upload(const std::string& key, const MeshData& data) {
                                  staging.GetBuffer(), mesh.indexBuffer->GetBuffer(), size);
     }
 
-    const auto id = static_cast<uint32_t>(m_meshes.size());
-    m_meshes.push_back(std::move(mesh));
-    m_lookup.emplace(key, id);
-
-    SUPERSONIC_LOG_INFO("MeshRegistry") << "Uploaded '" << key << "' (" << data.vertices.size()
-              << " vertices, " << data.indices.size() / 3 << " triangles)." << std::endl;
-    return id;
+    return mesh;
 }
 
 uint32_t MeshRegistry::Acquire(const std::string& primitiveType, const std::string& filePath) {
@@ -332,24 +343,44 @@ bool MeshRegistry::Replace(uint32_t id, const MeshData& data) {
     if (id >= m_meshes.size()) return false;
     if (data.vertices.empty() || data.indices.empty()) return false;
 
-    // Upload into a scratch key first, then move the new buffers over the old
-    // ones. Building in place would leave the id pointing at half a mesh if the
-    // upload threw partway through.
-    const std::string scratchKey = "__replace_scratch";
-    m_lookup.erase(scratchKey);
-    const uint32_t scratchId = Upload(scratchKey, data);
-    m_lookup.erase(scratchKey);
-    if (scratchId >= m_meshes.size()) return false;
+    // Never the built-in cube, for the reason Invalidate gives: every failed
+    // load in the session resolves to it, and replacing it would redraw all
+    // of them as whatever this caller had.
+    if (id == m_cubeMesh) return false;
+
+    // Build the new mesh in full first, then swap it in. Building in place
+    // would leave the id pointing at half a mesh if the upload threw partway
+    // through.
+    //
+    // This used to go through Upload under a scratch key and steal the
+    // buffers back, which nothing had ever called and which was wrong twice:
+    // the scratch slot stayed in the vector - one dead entry per call, and a
+    // brush that replaces a tilemap every frame it is held down makes that a
+    // leak - and the SECTIONS were never touched, so a mesh that grew kept a
+    // section naming its old, smaller index count. That second one was latent
+    // rather than reachable: with one section, the draw loop and the shadow
+    // gather both read the mesh's own count, and the texture resolve reads a
+    // section's material and not its range. But a section that lies about
+    // its range is exactly the thing the next reader trusts.
+    GpuMesh fresh = createGpuMesh(data);
 
     auto oldVertex = std::move(m_meshes[id].vertexBuffer);
     auto oldIndex = std::move(m_meshes[id].indexBuffer);
 
-    m_meshes[id].vertexBuffer = std::move(m_meshes[scratchId].vertexBuffer);
-    m_meshes[id].indexBuffer = std::move(m_meshes[scratchId].indexBuffer);
-    m_meshes[id].indexCount = m_meshes[scratchId].indexCount;
-    m_meshes[id].boundsMin = m_meshes[scratchId].boundsMin;
-    m_meshes[id].boundsMax = m_meshes[scratchId].boundsMax;
-    m_meshes[scratchId].indexCount = 0;
+    m_meshes[id].vertexBuffer = std::move(fresh.vertexBuffer);
+    m_meshes[id].indexBuffer = std::move(fresh.indexBuffer);
+    m_meshes[id].indexCount = fresh.indexCount;
+    m_meshes[id].boundsMin = fresh.boundsMin;
+    m_meshes[id].boundsMax = fresh.boundsMax;
+
+    // One section covering everything, as a fresh upload has. Replaced
+    // geometry is procedural by construction - a file's surfaces come through
+    // Acquire, which never replaces - so the one-section answer is the right
+    // one, and the generation it was resolved against is reset so the section's
+    // texture ids are resolved again rather than trusted from the geometry
+    // they described.
+    m_meshes[id].sections = std::move(fresh.sections);
+    m_meshes[id].sectionTextureGeneration = 0;
 
     m_deviceRef.DeferDestroy(
         [vb = std::shared_ptr<VulkanBuffer>(std::move(oldVertex)),

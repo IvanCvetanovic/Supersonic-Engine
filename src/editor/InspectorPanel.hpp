@@ -34,7 +34,33 @@ public:
     ImGuizmo::OPERATION GetGizmoOperation() const { return m_gizmoOperation; }
     void SetGizmoOperation(ImGuizmo::OPERATION op) { m_gizmoOperation = op; }
 
+    // The tilemap brush. Editor state rather than a component's, because
+    // which tile the next click paints is a fact about the person editing
+    // and not about the map - it is not saved with the scene, it survives
+    // selecting another map, and two maps are painted with one brush.
+    struct TileBrush {
+        // While set, a left click in the viewport paints the selected map
+        // instead of picking. Off by default so a scene with a map in it
+        // still selects like any other scene.
+        bool painting{false};
+
+        int atlasIndex{0};
+        bool flipH{false};
+        bool flipV{false};
+        bool erase{false};
+
+        // The cell value a stroke writes.
+        int32_t Cell() const {
+            if (erase) return TilemapComponent::kEmpty;
+            return TilemapComponent::MakeCell(static_cast<uint32_t>(atlasIndex < 0 ? 0 : atlasIndex),
+                                              flipH, flipV);
+        }
+    };
+
+    const TileBrush& GetTileBrush() const { return m_tileBrush; }
+
 private:
+    TileBrush m_tileBrush;
     MaterialLibrary* m_materialLibrary{nullptr};
     AnimationLibrary* m_animationLibrary{nullptr};
 

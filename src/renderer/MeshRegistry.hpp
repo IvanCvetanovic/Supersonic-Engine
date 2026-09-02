@@ -94,6 +94,12 @@ public:
     // Uploads caller-supplied geometry under an explicit cache key.
     uint32_t Upload(const std::string& key, const MeshData& data);
 
+    // The id a key resolves to, or kInvalidMesh when nothing is cached under
+    // it. Upload answers a known key with its id too, but SILENTLY - it keeps
+    // the old geometry and drops the new - so a caller that means "replace if
+    // present, upload if not" has to be able to ask first.
+    uint32_t Find(const std::string& key) const;
+
     const GpuMesh* Get(uint32_t id) const;
 
     // What the file behind this id said its surface is. Null for an unknown id,
@@ -156,6 +162,17 @@ public:
     size_t Size() const { return m_meshes.size(); }
 
 private:
+    // Stages the vertices and indices into device-local buffers and fills in
+    // everything a GpuMesh derives from the data: the count, the bounds and
+    // the one section covering every index. The registry's bookkeeping - the
+    // slot, the key, the material - is the caller's.
+    //
+    // Shared by Upload and Replace. Replace used to get its buffers by
+    // uploading under a scratch key and stealing them back, which left one
+    // dead slot in the vector per call and one section describing the OLD
+    // index count on the mesh it had just replaced.
+    GpuMesh createGpuMesh(const MeshData& data);
+
     VulkanDevice& m_deviceRef;
     vk::CommandPool m_commandPool;
 

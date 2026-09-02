@@ -1406,6 +1406,161 @@ struct ParticleEmitterComponent {
     float emitAccumulator{0.0f};
 };
 
+// A grid of atlas cells, drawn as ONE mesh.
+//
+// The shape was decided before a line of it was written, because the two
+// obvious shapes cost very differently. One entity per tile is what the sprite
+// path already draws, and instancing collapses identical quads into one call -
+// but every cell showing a different tile needs its own texture-coordinate
+// transform, and those live in a per-frame slot buffer with 4,095 slots. A
+// map of a few thousand tiles would have run it out on its first frame, for
+// geometry that never moves. So a tilemap is a mesh: one quad per occupied
+// cell with the atlas cell written into its vertices, uploaded once and
+// replaced when the map changes. No slot, one draw, and the whole thing culls
+// as one box.
+//
+// The atlas is cut exactly the way SpriteAnimationComponent cuts a sheet -
+// left to right, top to bottom, row zero at the top - through the same
+// function, so an index means the same picture whether it is a flipbook frame
+// or a map cell. Which texture the atlas is comes from the entity's
+// MaterialComponent, as a sprite's does; a tilemap needs no MeshComponent and
+// ignores one if it is there.
+//
+// A cell is where a thing IS, so the map dimensions and the cells are in the
+// state hash: a game that knocks a wall down on a tick writes a cell, and the
+// next tick reads it. The atlas grid is how the thing LOOKS and is not - the
+// same line drawn for the sprite's frame index and the sprite's grid.
+struct TilemapComponent {
+    // How the atlas texture is cut.
+    uint32_t atlasColumns{1};
+    uint32_t atlasRows{1};
+
+    // The map, in cells. Change it through Resize, which keeps the cells that
+    // still fit; writing the fields directly leaves `cells` laid out for the
+    // old width and every row after the first reads shifted.
+    uint32_t width{16};
+    uint32_t height{16};
+
+    // One entry per cell, row-major, ROW ZERO AT THE TOP of the map - the
+    // order the atlas is counted in and the order every 2D tool writes a map.
+    // Negative means empty; otherwise an atlas index with the flip bits below
+    // set on it. Any entry past the end of this vector is empty too, so a map
+    // that has never been touched draws nothing rather than failing.
+    std::vector<int32_t> cells;
+
+    static constexpr int32_t kEmpty = -1;
+
+    // Flip bits, above any index an atlas could have and below the sign bit,
+    // so a flipped cell is still a non-negative number and still one integer
+    // in the scene file.
+    static constexpr int32_t kFlipH = 1 << 29;
+    static constexpr int32_t kFlipV = 1 << 30;
+    static constexpr int32_t kIndexMask = kFlipH - 1;
+
+    // The most cells a map may have. A Vertex is 80 bytes and a cell is four
+    // of them, so a map of this many cells is 21 MB on the GPU if every cell
+    // is filled - the vertex is the 3D one, carrying a tangent basis and four
+    // joint weights a tile will never read. A bigger world is several tilemap
+    // entities side by side, each culled by its own box. The response when a
+    // real map hits this is to chunk automatically inside one entity, and
+    // that is not built because nothing has hit it.
+    //
+    // ENFORCED WHERE THE CELLS ARE ALLOCATED - Resize, Set and Fill refuse a
+    // map past it and leave it untouched - and not only at the bake. The
+    // first version checked it only there, and the inspector offered 65,536
+    // on each side: 65,536 x 65,536 is sixteen gigabytes of cells, requested
+    // in one allocation from a UI frame, and its product wrapped a 32-bit
+    // count to zero, which walked straight past the bake's check.
+    static constexpr size_t kMaxCells = 65536;
+
+    static int32_t MakeCell(uint32_t atlasIndex, bool flipH = false, bool flipV = false) {
+        int32_t cell = static_cast<int32_t>(atlasIndex) & kIndexMask;
+        if (flipH) cell |= kFlipH;
+        if (flipV) cell |= kFlipV;
+        return cell;
+    }
+    static bool IsEmpty(int32_t cell) { return cell < 0; }
+    static uint32_t AtlasIndex(int32_t cell) { return static_cast<uint32_t>(cell & kIndexMask); }
+    static bool FlipH(int32_t cell) { return cell >= 0 && (cell & kFlipH) != 0; }
+    static bool FlipV(int32_t cell) { return cell >= 0 && (cell & kFlipV) != 0; }
+
+    // The number of cells the map describes, which is what every walk over it
+    // is bounded by. Never the vector's size: that may be shorter (never
+    // touched) or, after a size written directly, laid out for another width.
+    //
+    // A size_t product on purpose. As a uint32_t, 65,536 x 65,536 is zero,
+    // and zero is under every cap there is.
+    size_t cellCount() const { return static_cast<size_t>(width) * height; }
+
+    // Whether the cells may be allocated at all. False only for a map whose
+    // size was written directly past the cap; Resize never produces one.
+    bool withinCap() const { return cellCount() <= kMaxCells; }
+
+    // Empty for anything outside the map, so a reader need not bounds-check.
+    int32_t At(uint32_t column, uint32_t row) const {
+        if (column >= width || row >= height) return kEmpty;
+        const size_t index = static_cast<size_t>(row) * width + column;
+        return index < cells.size() ? cells[index] : kEmpty;
+    }
+
+    // False for anything outside the map, and for a map over the cap. Grows
+    // the vector to the map's size on first write, so a map built by a script
+    // needs no separate allocation step.
+    bool Set(uint32_t column, uint32_t row, int32_t cell) {
+        if (column >= width || row >= height) return false;
+        if (!withinCap()) return false;
+        if (cells.size() < cellCount()) cells.resize(cellCount(), kEmpty);
+        cells[static_cast<size_t>(row) * width + column] = cell;
+        return true;
+    }
+
+    // False, and untouched, for a map over the cap.
+    bool Fill(int32_t cell) {
+        if (!withinCap()) return false;
+        cells.assign(cellCount(), cell);
+        return true;
+    }
+
+    // Changes the size and keeps every cell that is still inside it. New
+    // ground is empty. Written as a fresh vector rather than in place because
+    // a row-major layout shifts every row but the first when the width moves.
+    //
+    // REFUSES a size past the cap and leaves the map exactly as it was -
+    // returns false rather than allocating and letting the bake refuse later,
+    // because by then the allocation has happened, and the allocation is the
+    // problem.
+    bool Resize(uint32_t newWidth, uint32_t newHeight) {
+        if (static_cast<size_t>(newWidth) * newHeight > kMaxCells) return false;
+        std::vector<int32_t> resized(static_cast<size_t>(newWidth) * newHeight, kEmpty);
+        const uint32_t keepWidth = newWidth < width ? newWidth : width;
+        const uint32_t keepHeight = newHeight < height ? newHeight : height;
+        for (uint32_t row = 0; row < keepHeight; ++row) {
+            for (uint32_t column = 0; column < keepWidth; ++column) {
+                resized[static_cast<size_t>(row) * newWidth + column] = At(column, row);
+            }
+        }
+        width = newWidth;
+        height = newHeight;
+        cells = std::move(resized);
+        return true;
+    }
+
+    // ---- Renderer scratch, unpersisted ---------------------------------
+
+    // What the mesh on the GPU was baked from, so a frame in which nothing
+    // changed costs a hash and no upload. Zero means never baked, which is
+    // why the hash is folded away from zero.
+    uint64_t bakedHash{0};
+
+    // The mesh that bake produced, or kNoMesh when the map drew nothing. Held
+    // here as well as on the RenderableComponent so that a renderable
+    // re-created in the inspector is handed the map's mesh again rather than
+    // keeping the cube it was born with. Equal to MeshRegistry::kInvalidMesh,
+    // which this header does not include; the system asserts it.
+    static constexpr uint32_t kNoMesh = 0xFFFFFFFFu;
+    uint32_t meshID{kNoMesh};
+};
+
 // ---------------------------------------------------------------------------
 // In-game UI.
 //

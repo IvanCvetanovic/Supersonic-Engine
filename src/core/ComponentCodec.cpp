@@ -599,6 +599,36 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* tilemap = registry.try_get<TilemapComponent>(entity)) {
+        // The cells are written ONE MAP ROW PER LINE, so the scene file shows
+        // the map the way the screen does and a diff of one changed tile is
+        // one changed line. Every cell the map describes is written, empties
+        // included: a reader that was handed fewer cells than the map has
+        // pads with empties, so leaving them out would round-trip - but a
+        // file where the shape of the array is the shape of the map is one a
+        // person can read.
+        //
+        // The scratch fields - the baked hash, the mesh id - are not written,
+        // for the reason RenderableComponent's ids are not: they are answers
+        // about THIS process's registries and mean nothing in another.
+        out << indent << "\"Tilemap\": {\n";
+        out << indent << "  \"AtlasColumns\": " << tilemap->atlasColumns << ",\n";
+        out << indent << "  \"AtlasRows\": " << tilemap->atlasRows << ",\n";
+        out << indent << "  \"Width\": " << tilemap->width << ",\n";
+        out << indent << "  \"Height\": " << tilemap->height << ",\n";
+        out << indent << "  \"Cells\": [";
+        for (uint32_t row = 0; row < tilemap->height; ++row) {
+            out << "\n" << indent << "    ";
+            for (uint32_t column = 0; column < tilemap->width; ++column) {
+                out << tilemap->At(column, row);
+                if (row + 1 < tilemap->height || column + 1 < tilemap->width) out << ", ";
+            }
+        }
+        if (tilemap->cellCount() > 0) out << "\n" << indent << "  ";
+        out << "]\n";
+        out << indent << "},\n";
+    }
+
     if (const auto* animator = registry.try_get<AnimatorComponent>(entity)) {
         // SkinnedMeshComponent is deliberately NOT persisted: it is entirely
         // derived from the mesh path and rebuilt every frame, so persisting
@@ -1084,6 +1114,50 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             sprite.playing = s["Playing"].AsBool(true);
             sprite.frame = static_cast<uint32_t>(s["Frame"].AsNumber(0.0));
             sprite.elapsed = s["Elapsed"].AsFloat(0.0f);
+        }
+    }
+
+    if (node.Has("Tilemap")) {
+        auto& tilemap = registry.emplace_or_replace<TilemapComponent>(entity);
+        const auto& t = node["Tilemap"];
+        if (t.IsObject()) {
+            // The atlas defaults to one cell, as a sprite sheet does: the whole
+            // texture, which is what a grid the file says nothing about must
+            // mean. The map defaults to the component's own default size.
+            tilemap.atlasColumns = static_cast<uint32_t>(t["AtlasColumns"].AsNumber(1.0));
+            tilemap.atlasRows = static_cast<uint32_t>(t["AtlasRows"].AsNumber(1.0));
+
+            const TilemapComponent defaults;
+            const auto width = static_cast<uint32_t>(t["Width"].AsNumber(defaults.width));
+            const auto height = static_cast<uint32_t>(t["Height"].AsNumber(defaults.height));
+
+            // A file can say any size, and the cells are allocated by the
+            // size it says, so the cap is checked HERE and not left to the
+            // bake - by then a hundred-thousand-square map has asked for forty
+            // gigabytes from inside a scene load. A refused size leaves the
+            // map at its default size and empty, with the entity intact and
+            // a line saying why, which is what a load that cannot honour a
+            // number is meant to do.
+            if (!tilemap.Resize(width, height)) {
+                SUPERSONIC_LOG_WARN("ComponentCodec")
+                    << "A " << width << "x" << height << " tilemap is over the cap of "
+                    << TilemapComponent::kMaxCells << " cells; loading it at "
+                    << tilemap.width << "x" << tilemap.height << ", empty." << std::endl;
+            } else {
+                // As many cells as the array has and the map can hold,
+                // whichever is fewer. Too few - a file written by hand, or by
+                // a writer that trimmed trailing empties - leaves the rest
+                // empty; too many is a map that was shrunk in a text editor
+                // without its cells being cut, and the cells past the end are
+                // dropped rather than wrapped onto the next row. A cell that
+                // is not a number is empty.
+                const auto& cells = t["Cells"].AsArray();
+                const size_t count = std::min(cells.size(), tilemap.cellCount());
+                for (size_t i = 0; i < count; ++i) {
+                    tilemap.cells[i] = static_cast<int32_t>(
+                        cells[i].AsNumber(static_cast<double>(TilemapComponent::kEmpty)));
+                }
+            }
         }
     }
 

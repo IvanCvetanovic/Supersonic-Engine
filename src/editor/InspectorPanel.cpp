@@ -1094,6 +1094,88 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
     ImGui::Spacing();
 
+    // 7c. TilemapComponent
+    if (registry.all_of<TilemapComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Tilemap", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& tilemap = registry.get<TilemapComponent>(entity);
+
+            ImGui::TextDisabled("Atlas");
+            int atlasColumns = static_cast<int>(tilemap.atlasColumns);
+            int atlasRows = static_cast<int>(tilemap.atlasRows);
+            // Floored at one for the reason the sprite's grid is: a zero grid
+            // is a division, and the inspector must not offer the number that
+            // breaks the bake.
+            if (ImGui::DragInt("Atlas Columns", &atlasColumns, 0.2f, 1, 256)) {
+                tilemap.atlasColumns = static_cast<uint32_t>(atlasColumns < 1 ? 1 : atlasColumns);
+            }
+            if (ImGui::DragInt("Atlas Rows", &atlasRows, 0.2f, 1, 256)) {
+                tilemap.atlasRows = static_cast<uint32_t>(atlasRows < 1 ? 1 : atlasRows);
+            }
+            ImGui::TextDisabled("Cut from the material's albedo texture, the way a sprite sheet is.");
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Map");
+            int width = static_cast<int>(tilemap.width);
+            int height = static_cast<int>(tilemap.height);
+
+            // Each side is bounded by the OTHER, so the product stays under
+            // the cap: the first version offered 65,536 on both, which is
+            // sixteen gigabytes of cells from one drag. AlwaysClamp, because
+            // a value typed with Ctrl+click is not clamped by the range
+            // alone. Resize refuses the cap on its own as well; this is so
+            // the control cannot offer a number the map will not take.
+            const auto cap = static_cast<int>(TilemapComponent::kMaxCells);
+            const int maxWidth = cap / (height < 1 ? 1 : height);
+            const int maxHeight = cap / (width < 1 ? 1 : width);
+            bool resized = false;
+            if (ImGui::DragInt("Width", &width, 0.2f, 1, maxWidth, "%d",
+                               ImGuiSliderFlags_AlwaysClamp)) resized = true;
+            if (ImGui::DragInt("Height", &height, 0.2f, 1, maxHeight, "%d",
+                               ImGuiSliderFlags_AlwaysClamp)) resized = true;
+            if (resized) {
+                // Through Resize, which keeps every cell that still fits.
+                // Writing the fields would leave the cells laid out for the
+                // old width and shift every row but the first.
+                tilemap.Resize(static_cast<uint32_t>(width < 1 ? 1 : width),
+                               static_cast<uint32_t>(height < 1 ? 1 : height));
+            }
+
+            uint32_t occupied = 0;
+            for (uint32_t row = 0; row < tilemap.height; ++row) {
+                for (uint32_t column = 0; column < tilemap.width; ++column) {
+                    if (!TilemapComponent::IsEmpty(tilemap.At(column, row))) ++occupied;
+                }
+            }
+            ImGui::Text("%u of %zu cells set", occupied, tilemap.cellCount());
+            ImGui::TextDisabled("Up to %zu cells; a bigger world is several tilemap entities.",
+                                TilemapComponent::kMaxCells);
+            ImGui::TextDisabled("Cell (0, 0) hangs from the entity's origin: the map runs "
+                                "right along +X and down along -Y, one unit per cell.");
+
+            ImGui::Separator();
+            ImGui::TextDisabled("Brush");
+            ImGui::Checkbox("Paint in Viewport", &m_tileBrush.painting);
+            ImGui::TextDisabled("While on, a left click or drag in the viewport paints this "
+                                "map instead of selecting.");
+
+            const int lastIndex = atlasColumns * atlasRows - 1;
+            if (m_tileBrush.atlasIndex > lastIndex) m_tileBrush.atlasIndex = lastIndex;
+            if (m_tileBrush.atlasIndex < 0) m_tileBrush.atlasIndex = 0;
+            ImGui::DragInt("Atlas Index", &m_tileBrush.atlasIndex, 0.2f, 0, lastIndex);
+            ImGui::Checkbox("Flip H", &m_tileBrush.flipH);
+            ImGui::SameLine();
+            ImGui::Checkbox("Flip V", &m_tileBrush.flipV);
+            ImGui::SameLine();
+            ImGui::Checkbox("Erase", &m_tileBrush.erase);
+
+            if (ImGui::Button("Fill With Brush")) tilemap.Fill(m_tileBrush.Cell());
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Map")) tilemap.Fill(TilemapComponent::kEmpty);
+        }
+    }
+
+    ImGui::Spacing();
+
     // 8. LightComponent
     if (registry.all_of<LightComponent>(entity)) {
         if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1646,6 +1728,22 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             // somebody make.
             if (!registry.all_of<MaterialComponent>(entity)) {
                 registry.emplace<MaterialComponent>(entity);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<TilemapComponent>(entity) && ImGui::MenuItem("Tilemap")) {
+            registry.emplace<TilemapComponent>(entity);
+
+            // A map draws through a renderable and finds its atlas through a
+            // material. Without both it is a grid of numbers that says
+            // nothing about why nothing appeared. A MeshComponent is NOT
+            // added: the map is its own mesh, and the resource sync leaves a
+            // tilemap's mesh alone whether or not one is there.
+            if (!registry.all_of<MaterialComponent>(entity)) {
+                registry.emplace<MaterialComponent>(entity);
+            }
+            if (!registry.all_of<RenderableComponent>(entity)) {
+                registry.emplace<RenderableComponent>(entity);
             }
             ImGui::CloseCurrentPopup();
         }

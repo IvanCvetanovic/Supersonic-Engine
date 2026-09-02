@@ -151,6 +151,14 @@ private:
     // renderer all go through this so they cannot disagree.
     const CameraComponent& viewportCamera(entt::registry& registry) const;
 
+    // Paints a cell of the selected tilemap under the pointer while the
+    // inspector's brush is on and the left button is down. Returns true
+    // whenever the brush OWNS the click - whether or not a cell was hit - so
+    // the caller skips picking: a stroke that missed the map by a pixel must
+    // not deselect the map it was painting.
+    bool paintTiles(entt::registry& registry, entt::entity selected, bool imageHovered,
+                    const ImVec2& viewportPos, const ImVec2& viewportSize);
+
     // The whole of the UI in game mode: the rendered scene, edge to edge.
     void buildGameView(entt::registry& registry);
 

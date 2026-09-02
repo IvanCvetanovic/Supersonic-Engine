@@ -15,6 +15,7 @@
 #include "core/UISystem.hpp"
 #include "core/PrefabSerializer.hpp"
 #include "core/Raycast.hpp"
+#include "core/TilemapSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
 #include "core/EcsUtils.hpp"
 #include "editor/GamePackager.hpp"
@@ -187,6 +188,41 @@ const CameraComponent& EditorLayer::viewportCamera(entt::registry& registry) con
         }
     }
     return m_editorCamera.Get();
+}
+
+bool EditorLayer::paintTiles(entt::registry& registry, entt::entity selected, bool imageHovered,
+                             const ImVec2& viewportPos, const ImVec2& viewportSize) {
+    const InspectorPanel::TileBrush& brush = m_inspectorPanel.GetTileBrush();
+    if (!brush.painting) return false;
+    if (selected == entt::null || !registry.valid(selected)) return false;
+    if (!registry.all_of<TilemapComponent, WorldTransformComponent>(selected)) return false;
+
+    // From here the brush owns the click even when nothing is painted: a
+    // stroke that runs off the edge of the map must not pick whatever is
+    // behind it and drop the map out of the inspector mid-stroke.
+    if (!imageHovered || ImGuizmo::IsOver() || ImGuizmo::IsUsing()) return true;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) return true;
+
+    const ImVec2 mousePos = ImGui::GetMousePos();
+    const glm::vec2 localMouse(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
+    const CameraComponent& camera = viewportCamera(registry);
+    const Ray ray = Raycast::ScreenPointToRay(
+        localMouse, glm::vec2(viewportSize.x, viewportSize.y), camera);
+
+    auto& map = registry.get<TilemapComponent>(selected);
+    const glm::mat4& world = registry.get<WorldTransformComponent>(selected).matrix;
+
+    uint32_t column = 0;
+    uint32_t row = 0;
+    if (!TilemapSystem::CellFromRay(map, world, ray, column, row)) return true;
+
+    // Only when it changes, so holding the button over one cell is one write
+    // and not sixty a second - and so the content hash the renderer compares
+    // each frame sees a map that has settled rather than one being rewritten
+    // with the same value.
+    const int32_t cell = brush.Cell();
+    if (map.At(column, row) != cell) map.Set(column, row, cell);
+    return true;
 }
 
 void EditorLayer::buildLayout(unsigned int dockspaceId, int preset) {
@@ -761,6 +797,12 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
 
         ImGui::Image(m_offscreenPass->GetTextureID(), viewportPanelSize);
 
+        // Read here, while the image is still the last item. The overlay
+        // below is its own window, so a pointer over one of its buttons is
+        // not over the image - which is what keeps a brush stroke from
+        // landing on the cell under a tool button.
+        const bool imageHovered = ImGui::IsItemHovered();
+
         // After the image, so it draws over it rather than under.
         drawViewportOverlay(viewportPos, viewportPanelSize);
 
@@ -794,7 +836,14 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
                          uiKeyboard(m_viewportFocused),
                          uiViewProj);
 
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
+        // The tilemap brush takes the click when it is on. Dragging keeps
+        // painting, one cell per frame the pointer is over a new one, and the
+        // whole stroke is one undo step because handleUndoRedo waits for the
+        // button to come up before it commits.
+        const bool brushOwnsClick =
+            paintTiles(registry, selectedEntity, imageHovered, viewportPos, viewportPanelSize);
+
+        if (!brushOwnsClick && ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
             const ImVec2 mousePos = ImGui::GetMousePos();
             const glm::vec2 localMouse(mousePos.x - viewportPos.x, mousePos.y - viewportPos.y);
 

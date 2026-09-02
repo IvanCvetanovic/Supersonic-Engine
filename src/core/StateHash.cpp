@@ -207,6 +207,37 @@ uint64_t Compute(const entt::registry& registry) {
             hash = mix(hash, &playing, 1);
         }
 
+        // WHERE THE TILES ARE. The engine's own tick never writes a cell, but
+        // a game's does - a wall knocked down, a door opened, a crop grown is
+        // a cell written on one tick and read by the pathing on the next - so
+        // the cells and the size of the map they are laid into are state by
+        // the rule at the top of the header.
+        //
+        // The atlas grid is NOT here, for the reason the sprite's grid is not:
+        // it decides which picture a cell shows, and retuning a tileset is an
+        // edit rather than a divergence. The renderer's own change detection
+        // does include it, because the renderer's question is a different one.
+        //
+        // Exactly the cells the map describes, as At answers them. A cell the
+        // vector holds past the map's end is read by nothing, so two maps that
+        // differ only there have not diverged - and a map never written and
+        // the same map filled with empties read alike through At, so they
+        // must hash alike too: it is the logical content that is state, not
+        // the length of the vector holding it. Bounded by the cap, past which
+        // nothing allocates or draws and the size already tells the maps apart.
+        if (const auto* tilemap = registry.try_get<const TilemapComponent>(entity)) {
+            hash = mix(hash, &tilemap->width, sizeof(tilemap->width));
+            hash = mix(hash, &tilemap->height, sizeof(tilemap->height));
+            const size_t cellCount = tilemap->cellCount();
+            const size_t present = tilemap->cells.size() < cellCount ? tilemap->cells.size()
+                                                                     : cellCount;
+            if (present > 0) hash = mix(hash, tilemap->cells.data(), present * sizeof(int32_t));
+            if (tilemap->withinCap()) {
+                const int32_t empty = TilemapComponent::kEmpty;
+                for (size_t i = present; i < cellCount; ++i) hash = mix(hash, &empty, sizeof(empty));
+            }
+        }
+
         // Addition, so the order entities are visited in cannot change the
         // answer. EnTT iterates in an order that depends on how components
         // were added and removed rather than on the state, and folding the
