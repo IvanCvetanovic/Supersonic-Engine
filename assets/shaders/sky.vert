@@ -33,13 +33,41 @@ void main() {
     //
     // A view matrix's upper 3x3 is orthonormal, so its transpose is its
     // inverse: transpose(mat3(view)) takes camera-space directions to world
-    // space. The half-extents of the near plane come out of the projection
-    // itself - proj[0][0] is 1/(aspect * tanHalfFov) and proj[1][1] is
-    // -1/tanHalfFov, negative because this engine flips Y for Vulkan.
-    const float tanHalfFovX = 1.0 / ubo.proj[0][0];
-    const float tanHalfFovY = 1.0 / ubo.proj[1][1];
+    // space.
 
-    // -Z is forward in camera space.
-    const vec3 cameraSpace = vec3(ndc.x * tanHalfFovX, ndc.y * tanHalfFovY, -1.0);
+    // WHICH PROJECTION THIS IS, read from the matrix rather than passed in.
+    // The fourth diagonal is 1 for an orthographic projection and 0 for a
+    // perspective one - that is the whole difference between the two, and it
+    // is what the w-divide does or does not do. The engine's Y flip negates
+    // proj[1][1] and leaves this alone, so the test survives it. Pinned in
+    // test_camera against the matrices the camera actually builds, because a
+    // shader cannot be unit-tested and its premise can.
+    const bool orthographic = ubo.proj[3][3] != 0.0;
+
+    vec3 cameraSpace;
+    if (orthographic) {
+        // NO EYE POINT, so every ray through the image is the same one. A
+        // parallel projection has no field of view - the rays do not fan out
+        // from anywhere - and the sky is therefore one colour, which is what a
+        // gradient sampled in a single direction comes out as.
+        //
+        // What this replaces read a tangent of half the field of view out of
+        // proj[0][0], a number an orthographic matrix does not carry: there it
+        // is 2/width, so the "rays" fanned out from a point that is not there
+        // by an amount that depended on how far the camera happened to be
+        // zoomed. Nothing hit it while the only orthographic camera in the
+        // tree drew no sky; the editor can author one now.
+        cameraSpace = vec3(0.0, 0.0, -1.0);
+    } else {
+        // The half-extents of the near plane come out of the projection
+        // itself - proj[0][0] is 1/(aspect * tanHalfFov) and proj[1][1] is
+        // -1/tanHalfFov, negative because this engine flips Y for Vulkan.
+        const float tanHalfFovX = 1.0 / ubo.proj[0][0];
+        const float tanHalfFovY = 1.0 / ubo.proj[1][1];
+
+        // -Z is forward in camera space.
+        cameraSpace = vec3(ndc.x * tanHalfFovX, ndc.y * tanHalfFovY, -1.0);
+    }
+
     fragViewRay = transpose(mat3(ubo.view)) * cameraSpace;
 }

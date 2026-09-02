@@ -848,16 +848,6 @@ HUSK's nineteen animated models. What is left is here.
 
 **For a game seen through a flat camera**
 
-- **The procedural sky is drawn as though the camera had an eye point.**
-  `sky.vert` recovers a view ray from the projection matrix as
-  `1 / proj[0][0]`, which is the tangent of half the field of view — a number an
-  orthographic projection does not have. Under one, every ray through the image
-  should be parallel and instead they fan out from a point that is not there, so
-  the gradient is placed as if the scene were in perspective. Nothing has hit it:
-  the only orthographic camera that ships draws no sky, and a 2D scene usually
-  wants a colour or a backdrop sprite rather than a horizon. It is here because
-  the editor can now author an orthographic view, so a 2D scene with the sky
-  left on is a thing somebody can now make by accident.
 - **A tilemap stops at 65,536 cells, and it has no collision.** The cap is
   there because a tile is four of the renderer's 80-byte vertices — the 3D
   vertex, carrying a tangent basis and four joint weights a tile never reads —

@@ -411,6 +411,57 @@ static void testTheZoomCannotReachZeroOrRunAway() {
     CHECK_MSG(height < 1e6f, "and a thousand notches out must not swallow the far plane");
 }
 
+static void testTheProjectionSaysWhichKindItIsInItsFourthDiagonal() {
+    // THE PREMISE A SHADER RESTS ON, checked where a shader cannot be.
+    //
+    // sky.vert has to know whether the camera has an eye point: under a
+    // perspective projection the rays through the image fan out from one and
+    // it recovers the fan from proj[0][0], while under a parallel projection
+    // there is no eye, no field of view, and every ray is the same one. It
+    // reads the difference straight out of the matrix - proj[3][3] is one for
+    // an orthographic projection and zero for a perspective one, which is
+    // exactly the entry that decides whether the w-divide does anything.
+    //
+    // Written down here because the alternative is a shader that assumes a
+    // property of a matrix built four files away, with nothing between them
+    // that would notice if the convention moved. GLM builds both, the engine
+    // negates proj[1][1] afterwards for Vulkan's flipped clip space, and this
+    // asserts that the flip leaves the entry the shader reads alone.
+    CameraComponent camera;
+    camera.aspect = 16.0f / 9.0f;
+    camera.fov = 50.0f;
+    camera.nearPlane = 0.1f;
+    camera.farPlane = 100.0f;
+
+    camera.projection = CameraComponent::Projection::Perspective;
+    const glm::mat4 perspective = camera.getProjectionMatrix();
+    CHECK_MSG(perspective[3][3] == 0.0f,
+              "a perspective projection divides by w, so its fourth diagonal is zero");
+    CHECK_MSG(perspective[2][3] != 0.0f, "and the w it divides by comes from the depth row");
+
+    camera.projection = CameraComponent::Projection::Orthographic;
+    camera.orthoHeight = 12.0f;
+    const glm::mat4 orthographic = camera.getProjectionMatrix();
+    CHECK_MSG(orthographic[3][3] == 1.0f,
+              "an orthographic projection divides by nothing, so its fourth diagonal is one");
+    CHECK_MSG(orthographic[2][3] == 0.0f, "and its depth row contributes no w at all");
+
+    // The Y flip is the one thing done to both matrices after GLM builds them,
+    // and it must not be what this test is reading.
+    CHECK_MSG(perspective[1][1] < 0.0f && orthographic[1][1] < 0.0f,
+              "both are flipped for Vulkan");
+    CHECK_MSG(orthographic[3][3] == 1.0f && perspective[3][3] == 0.0f,
+              "and the flip touches neither of the entries above");
+
+    // And the number the perspective path actually uses is not something an
+    // orthographic matrix can be asked for: there proj[0][0] is two over the
+    // width, so reading it as one over a tangent gives a fan that widens as
+    // the camera zooms out. That is the defect, stated as a number.
+    CHECK_MSG(std::fabs(1.0f / orthographic[0][0]) > 1e-6f,
+              "an orthographic proj[0][0] is a scale, not a tangent, and inverting it "
+              "silently produces a plausible wrong answer rather than an error");
+}
+
 static void runTests() {
     testWasdFliesTheCameraByDefault();
     testTheSameKeyLeavesADisabledCameraExactlyWhereItWas();
@@ -430,6 +481,8 @@ static void runTests() {
     testScrollingUpZoomsIn();
     testTheZoomIsProportionalRatherThanAdditive();
     testTheZoomCannotReachZeroOrRunAway();
+
+    testTheProjectionSaysWhichKindItIsInItsFourthDiagonal();
 }
 
 TEST_MAIN("test_camera", 38)
