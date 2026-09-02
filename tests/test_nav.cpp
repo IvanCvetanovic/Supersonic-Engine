@@ -417,6 +417,14 @@ static void testTheWholeFieldIsPinnedSoAnyChangeOfAnswerIsVisible() {
     // A wall with a gap, a patch of mud, two goals. Any change to the queue,
     // the neighbour order, the step costs or the corner rule moves at least
     // one of these characters.
+    //
+    // AND IT IS THE SAME PICTURE ON EVERY TOOLCHAIN, which is the question a
+    // pinned answer has to survive before it is worth pinning. Nothing here
+    // reads a library's choice: std::map iterates its keys in ascending order
+    // by the standard rather than by implementation, a bucket is a vector in
+    // push order, push order comes from the goals as the caller gave them and
+    // from a fixed neighbour table, and every comparison in between is between
+    // integers. Held byte-for-byte under MSVC and MinGW GCC.
     NavGrid grid = open(9, 5);
     for (uint32_t y = 0; y < 4; ++y) grid.SetCost(4, y, NavGrid::kBlocked);
     grid.SetCost(6, 2, 5);
@@ -447,6 +455,39 @@ static void testTheWholeFieldIsPinnedSoAnyChangeOfAnswerIsVisible() {
               "read the new picture and paste it in - but a change here is a change to "
               "where every unit in a game walks, so read it rather than pasting it.\n"
               "got:" + picture(grid) + "expected:" + expected);
+}
+
+static void testADistanceThatWouldNotFitIsUnreachableRatherThanWrapped() {
+    // THE GUARD, ACTUALLY EXECUTED. A step costs at most fourteen times the
+    // dearest cell and fits easily; the RUNNING TOTAL over a long path through
+    // expensive ground does not, and an unsigned sum that wraps produces a
+    // small number - which passes the "is this shorter" test, gets stored, and
+    // gets pushed into a bucket below the one being drained. The field would
+    // be wrong and the queue's ordering claim false, both silently.
+    //
+    // Reaching it needs no million-cell grid, which is the point of doing this
+    // rather than writing "unreachable in practice" beside the branch: a
+    // corridor one cell tall at the dearest cost climbs by 655,350 a step, so
+    // seven thousand cells is enough to run out of uint32.
+    NavGrid corridor;
+    CHECK(corridor.Resize(7000, 1));
+    corridor.Fill(65535);
+    corridor.Build({ Cell{0, 0} });
+
+    // 655,350 per step, and the largest number that is a distance rather than
+    // the sentinel is 4,294,967,294. 6,553 steps fit; 6,554 do not.
+    constexpr uint32_t kPerStep = NavGrid::kStraightStep * 65535u;
+    CHECK_MSG(corridor.DistanceAt(6553, 0) == 6553u * kPerStep, "the last one that fits");
+    CHECK_MSG(6553u * kPerStep <= NavGrid::kMaxDistance, "and it really does fit");
+    CHECK_MSG(corridor.DistanceAt(6554, 0) == NavGrid::kUnreachable,
+              "one step further is refused, not wrapped to a small number");
+    CHECK_MSG(corridor.DistanceAt(6999, 0) == NavGrid::kUnreachable,
+              "and so is everything behind it, rather than a corridor of nonsense");
+
+    // The flow at the last reachable cell still leads home, so the boundary is
+    // a wall rather than a hole in the field.
+    CHECK_MSG(corridor.FlowAt(6553, 0) == glm::ivec2(-1, 0), "the edge of the world still flows");
+    CHECK_MSG(corridor.FlowAt(6554, 0) == glm::ivec2(0, 0), "and past it there is nowhere to go");
 }
 
 static void testEveryDistanceIsConsistentWithItsNeighbours() {
@@ -706,6 +747,7 @@ int main() {
     testSeveralGoalsAreOneSearchToTheNearest();
     testATieIsBrokenByTheNeighbourOrderAndTheOrderIsFixed();
     testTheWholeFieldIsPinnedSoAnyChangeOfAnswerIsVisible();
+    testADistanceThatWouldNotFitIsUnreachableRatherThanWrapped();
     testEveryDistanceIsConsistentWithItsNeighbours();
 
     testCellCentresAreHalfACellInFromTheCorner();

@@ -838,12 +838,18 @@ RenderSystem::PassPlan RenderSystem::PlanPass(const std::vector<PassDraw>& draws
         // appended, so a batch's instances are contiguous by construction,
         // which is what lets one call name them with a first and a count.
         PassBatch* open = plan.batches.empty() ? nullptr : &plan.batches.back();
+        // Contiguity is not among the conditions, because it cannot fail. A
+        // slot is handed out only here and only in ascending order, and the
+        // two ways a draw leaves without one - an empty index range and a full
+        // buffer - both take no slot at all, so the run a batch names has no
+        // gap in it to check for. A version of this asked anyway; a mutation
+        // that deleted the question changed no answer, which is how a
+        // condition that cannot be false announces itself.
         const bool joins = open != nullptr && !pendingMeshBind && !pendingMaterialBind &&
                            open->meshKey == draw.meshKey &&
                            open->firstIndex == draw.firstIndex &&
                            open->indexCount == draw.indexCount &&
-                           open->materialKey == draw.materialKey &&
-                           open->firstInstance + open->instanceCount == slot;
+                           open->materialKey == draw.materialKey;
 
         if (joins) {
             ++open->instanceCount;
