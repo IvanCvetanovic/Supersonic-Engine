@@ -16,6 +16,7 @@
 #include "TestHarness.hpp"
 
 #include "core/Components.hpp"
+#include "core/UIInput.hpp"
 #include "core/UISystem.hpp"
 
 #include <entt/entt.hpp>
@@ -460,18 +461,41 @@ Extent measureDrawn(entt::registry& registry, ImU32 colour,
     ImGui::End();
     ImGui::Render();
 
+    // WALKED THROUGH THE COMMANDS, not straight down the vertex buffer, and
+    // that is the whole difference between measuring what was submitted and
+    // measuring what a reader sees.
+    //
+    // A clip is not in the vertices. ImGui expresses it as a rectangle on the
+    // draw COMMAND and lets the scissor do the work, so a row clipped
+    // entirely out of view still has its four corners sitting in the buffer at
+    // the position it would have had. The first version of this read those
+    // positions and reported a clipped row as drawn - and, worse, reported the
+    // clip as working whenever the row happened to be outside the box for its
+    // own reasons. Only geometry inside its own command's clip rectangle is
+    // counted here.
     Extent out;
     const ImDrawData* data = ImGui::GetDrawData();
     for (int list = 0; data != nullptr && list < data->CmdListsCount; ++list) {
         const ImDrawList* commands = data->CmdLists[list];
-        for (int v = 0; v < commands->VtxBuffer.Size; ++v) {
-            if (commands->VtxBuffer[v].col != colour) continue;
-            const ImVec2 p = commands->VtxBuffer[v].pos;
-            out.minX = std::min(out.minX, p.x);
-            out.minY = std::min(out.minY, p.y);
-            out.maxX = std::max(out.maxX, p.x);
-            out.maxY = std::max(out.maxY, p.y);
-            ++out.vertices;
+        for (const ImDrawCmd& cmd : commands->CmdBuffer) {
+            if (cmd.UserCallback != nullptr) continue;
+            const ImVec4& clip = cmd.ClipRect;
+
+            for (unsigned int e = 0; e < cmd.ElemCount; ++e) {
+                const ImDrawIdx index = commands->IdxBuffer[static_cast<int>(cmd.IdxOffset + e)];
+                const ImDrawVert& vertex =
+                    commands->VtxBuffer[static_cast<int>(cmd.VtxOffset) + index];
+                if (vertex.col != colour) continue;
+
+                const ImVec2 p = vertex.pos;
+                if (p.x < clip.x || p.y < clip.y || p.x > clip.z || p.y > clip.w) continue;
+
+                out.minX = std::min(out.minX, p.x);
+                out.minY = std::min(out.minY, p.y);
+                out.maxX = std::max(out.maxX, p.x);
+                out.maxY = std::max(out.maxY, p.y);
+                ++out.vertices;
+            }
         }
     }
     return out;
@@ -622,6 +646,246 @@ static void testAWrappedLabelIsGivenTheHeightItsWrapNeeds() {
               "the panel below the paragraph starts below ALL of it, not below its first line");
 }
 
+// --- clipping ---------------------------------------------------------------
+
+constexpr ImU32 kInsideRow = IM_COL32(200, 40, 200, 255);
+constexpr ImU32 kOutsideRow = IM_COL32(40, 200, 200, 255);
+
+// A viewport panel with two rows parented to it: one inside its rectangle and
+// one below it, which is what a list scrolled down by one row looks like.
+struct ClipFixture {
+    entt::entity viewport{entt::null};
+    entt::entity inside{entt::null};
+    entt::entity outside{entt::null};
+};
+
+ClipFixture buildClippedList(entt::registry& registry, bool clips) {
+    ClipFixture fixture;
+
+    fixture.viewport = registry.create();
+    auto& panel = registry.emplace<UIPanelComponent>(fixture.viewport);
+    panel.anchor = UIAnchor::TopLeft;
+    panel.offset = glm::vec2(100.0f, 100.0f);
+    panel.size = glm::vec2(400.0f, 200.0f);   // (100,100) to (500,300)
+    panel.color = toVec4(kOverlay);
+    panel.cornerRadius = 0.0f;
+    panel.clipsChildren = clips;
+
+    // Well inside the viewport.
+    fixture.inside = registry.create();
+    auto& first = registry.emplace<UIPanelComponent>(fixture.inside);
+    first.anchor = UIAnchor::TopLeft;
+    first.offset = glm::vec2(120.0f, 140.0f);
+    first.size = glm::vec2(200.0f, 40.0f);
+    first.color = toVec4(kInsideRow);
+    first.cornerRadius = 0.0f;
+    registry.emplace<HierarchyComponent>(fixture.inside).parent = fixture.viewport;
+
+    // Entirely below it: the row that has scrolled out of the bottom.
+    fixture.outside = registry.create();
+    auto& second = registry.emplace<UIPanelComponent>(fixture.outside);
+    second.anchor = UIAnchor::TopLeft;
+    second.offset = glm::vec2(120.0f, 400.0f);
+    second.size = glm::vec2(200.0f, 40.0f);
+    second.color = toVec4(kOutsideRow);
+    second.cornerRadius = 0.0f;
+    registry.emplace<HierarchyComponent>(fixture.outside).parent = fixture.viewport;
+
+    return fixture;
+}
+
+static void testAnUnclippedListDrawsEveryRowWhereverItFalls() {
+    // The control, and the behaviour every scene already has: without the
+    // clip a row below its container is simply drawn below it.
+    HeadlessImGui imgui;
+    entt::registry registry;
+    buildClippedList(registry, false);
+
+    CHECK_MSG(measureDrawn(registry, kInsideRow).vertices > 0, "the row inside is drawn");
+    CHECK_MSG(measureDrawn(registry, kOutsideRow).vertices > 0,
+              "and so is the one below, because nothing confines it");
+}
+
+static void testAClipHidesTheRowBelowItsViewport() {
+    HeadlessImGui imgui;
+    entt::registry registry;
+    buildClippedList(registry, true);
+
+    const Extent inside = measureDrawn(registry, kInsideRow);
+    CHECK_MSG(inside.vertices > 0, "the row inside the viewport still draws");
+    CHECK_MSG(inside.minY >= 100.0f && inside.maxY <= 300.0f,
+              "within the viewport it was given");
+
+    // Nothing of the row below survives its own clip rectangle. Measured
+    // through the draw commands, so this is what a reader sees rather than
+    // what was submitted - ImGui keeps the vertices and lets the scissor do
+    // the work, so reading the buffer alone would report the row as drawn.
+    CHECK_MSG(measureDrawn(registry, kOutsideRow).vertices == 0,
+              "the row below the viewport survives nowhere");
+}
+
+static void testAClippedRowTakesNoClick() {
+    // THE HALF A DRAW-ONLY CHANGE WOULD LEAVE BROKEN, and the one this engine
+    // has already shipped once in another form: b918b84, where hiding a
+    // container left its children with no rect and they piled invisible and
+    // still clickable on the screen centre. A row scrolled out of sight that
+    // still takes the press is that defect wearing different clothes.
+    HeadlessImGui imgui;
+    entt::registry registry;
+    const ClipFixture fixture = buildClippedList(registry, true);
+
+    // A button where the clipped-away row is, so there is something whose
+    // state can be read. Parented to the viewport like the rows are.
+    const auto button = registry.create();
+    auto& hidden = registry.emplace<UIButtonComponent>(button);
+    hidden.label.clear();
+    hidden.anchor = UIAnchor::TopLeft;
+    hidden.offset = glm::vec2(120.0f, 400.0f);
+    hidden.size = glm::vec2(200.0f, 40.0f);
+    registry.emplace<HierarchyComponent>(button).parent = fixture.viewport;
+
+    // And one inside the viewport, as the control: the same click machinery
+    // must still work for a row that is visible.
+    const auto reachable = registry.create();
+    auto& shown = registry.emplace<UIButtonComponent>(reachable);
+    shown.label.clear();
+    shown.anchor = UIAnchor::TopLeft;
+    shown.offset = glm::vec2(120.0f, 140.0f);
+    shown.size = glm::vec2(200.0f, 40.0f);
+    registry.emplace<HierarchyComponent>(reachable).parent = fixture.viewport;
+
+    ImGui::NewFrame();
+    ImGui::Begin("game", nullptr, ImGuiWindowFlags_NoDecoration);
+    const UIRect rect{ glm::vec2(0.0f), glm::vec2(1920.0f, 1080.0f) };
+    const UICanvas::StackedLayout layout =
+        UISystem::LayoutStacks(registry, rect, ImGui::GetFont(), 1.0f);
+    ImGui::End();
+    ImGui::EndFrame();
+
+    const auto press = [&](const glm::vec2& at) {
+        for (int frame = 0; frame < 3; ++frame) {
+            UICanvas::UIPointer pointer;
+            pointer.active = true;
+            pointer.position = at;
+            pointer.down = frame == 1;
+            pointer.wasDown = frame == 2;
+            UIInput::Update(registry, rect, pointer, UICanvas::UIKeyboard{}, layout);
+        }
+    };
+
+    press(glm::vec2(220.0f, 420.0f));   // dead centre of the clipped-away button
+    CHECK_MSG(!registry.get<UIButtonComponent>(button).clicked,
+              "a row clipped out of sight must not take the click");
+    CHECK_MSG(!registry.get<UIButtonComponent>(button).hovered, "nor highlight");
+
+    press(glm::vec2(220.0f, 160.0f));   // dead centre of the one inside
+    CHECK_MSG(registry.get<UIButtonComponent>(reachable).clicked,
+              "while a row inside the viewport is still reachable, so the case above "
+              "is about the clip rather than about the click machinery");
+}
+
+static void testNestedClipsIntersectRatherThanReplace() {
+    // An inner panel wider than its container must not let its rows escape:
+    // the two clips compose, and the smaller wins on every edge.
+    HeadlessImGui imgui;
+    entt::registry registry;
+
+    const auto outer = registry.create();
+    auto& outerPanel = registry.emplace<UIPanelComponent>(outer);
+    outerPanel.anchor = UIAnchor::TopLeft;
+    outerPanel.offset = glm::vec2(100.0f, 100.0f);
+    outerPanel.size = glm::vec2(300.0f, 300.0f);   // to (400, 400)
+    outerPanel.color = toVec4(kOverlay);
+    outerPanel.cornerRadius = 0.0f;
+    outerPanel.clipsChildren = true;
+
+    const auto inner = registry.create();
+    auto& innerPanel = registry.emplace<UIPanelComponent>(inner);
+    innerPanel.anchor = UIAnchor::TopLeft;
+    innerPanel.offset = glm::vec2(100.0f, 100.0f);
+    innerPanel.size = glm::vec2(900.0f, 300.0f);   // claims out to x = 1000
+    innerPanel.color = toVec4(kHudPanel);
+    innerPanel.cornerRadius = 0.0f;
+    innerPanel.clipsChildren = true;
+    registry.emplace<HierarchyComponent>(inner).parent = outer;
+
+    // A row that would sit at x = 600, inside the inner panel and outside the
+    // outer one.
+    const auto row = registry.create();
+    auto& rowPanel = registry.emplace<UIPanelComponent>(row);
+    rowPanel.anchor = UIAnchor::TopLeft;
+    rowPanel.offset = glm::vec2(600.0f, 150.0f);
+    rowPanel.size = glm::vec2(200.0f, 40.0f);
+    rowPanel.color = toVec4(kInsideRow);
+    rowPanel.cornerRadius = 0.0f;
+    registry.emplace<HierarchyComponent>(row).parent = inner;
+
+    // The row sits entirely at x 600..800: inside the inner panel, outside the
+    // outer one. If the inner clip REPLACED its ancestor's it would survive;
+    // because they intersect, none of it does.
+    CHECK_MSG(measureDrawn(registry, kInsideRow).vertices == 0,
+              "a row inside a panel wider than its container is still bounded by the "
+              "container, because the two clips intersect rather than the inner one winning");
+
+    // The control, so this is about the intersection rather than about the row
+    // being unreachable for some other reason: the same row moved inside both
+    // rectangles is drawn.
+    auto& moved = registry.get<UIPanelComponent>(row);
+    moved.offset = glm::vec2(150.0f, 150.0f);
+    CHECK_MSG(measureDrawn(registry, kInsideRow).vertices > 0,
+              "and the same row inside both rectangles is drawn");
+}
+
+static void testAClipUnderAPlainContainerStillClips() {
+    // THE BUG A MUTATION FOUND, by surviving. The root test asked whether a
+    // clipping panel had a parent at all, on the assumption that anything with
+    // one is reached by the recursion - but the recursion only descends from
+    // clipping panels. A scroll view inside an ordinary menu frame, which is
+    // the shape a real HUD has, was therefore skipped as a root, reached by
+    // nothing, and quietly clipped nothing at all.
+    HeadlessImGui imgui;
+    entt::registry registry;
+
+    // An ordinary frame that does NOT clip.
+    const auto frame = registry.create();
+    auto& framePanel = registry.emplace<UIPanelComponent>(frame);
+    framePanel.anchor = UIAnchor::TopLeft;
+    framePanel.offset = glm::vec2(50.0f, 50.0f);
+    framePanel.size = glm::vec2(900.0f, 600.0f);
+    framePanel.color = toVec4(kHudButton);
+    framePanel.cornerRadius = 0.0f;
+
+    // The scroll view inside it, which does.
+    const auto viewport = registry.create();
+    auto& viewPanel = registry.emplace<UIPanelComponent>(viewport);
+    viewPanel.anchor = UIAnchor::TopLeft;
+    viewPanel.offset = glm::vec2(100.0f, 100.0f);
+    viewPanel.size = glm::vec2(400.0f, 200.0f);   // (100,100) to (300,300)
+    viewPanel.color = toVec4(kOverlay);
+    viewPanel.cornerRadius = 0.0f;
+    viewPanel.clipsChildren = true;
+    registry.emplace<HierarchyComponent>(viewport).parent = frame;
+
+    // A row scrolled out of the bottom of it.
+    const auto row = registry.create();
+    auto& rowPanel = registry.emplace<UIPanelComponent>(row);
+    rowPanel.anchor = UIAnchor::TopLeft;
+    rowPanel.offset = glm::vec2(120.0f, 400.0f);
+    rowPanel.size = glm::vec2(200.0f, 40.0f);
+    rowPanel.color = toVec4(kOutsideRow);
+    rowPanel.cornerRadius = 0.0f;
+    registry.emplace<HierarchyComponent>(row).parent = viewport;
+
+    CHECK_MSG(measureDrawn(registry, kOutsideRow).vertices == 0,
+              "a clipping panel under a plain container still confines its rows");
+
+    // The control: the same row inside the viewport is drawn, so this is about
+    // the clip rather than about the row being lost for some other reason.
+    rowPanel.offset = glm::vec2(120.0f, 140.0f);
+    CHECK_MSG(measureDrawn(registry, kOutsideRow).vertices > 0,
+              "and the same row inside it is drawn");
+}
+
 } // namespace
 
 static void runTests() {
@@ -640,6 +904,12 @@ static void runTests() {
     testARightAnchoredParagraphIsPlacedByItsWrappedWidth();
     testTheWrapWidthIsAuthoredUnitsAndScalesWithTheScreen();
     testAWrappedLabelIsGivenTheHeightItsWrapNeeds();
+
+    testAnUnclippedListDrawsEveryRowWhereverItFalls();
+    testAClipHidesTheRowBelowItsViewport();
+    testAClippedRowTakesNoClick();
+    testNestedClipsIntersectRatherThanReplace();
+    testAClipUnderAPlainContainerStillClips();
 }
 
-TEST_MAIN("test_uilayer", 30)
+TEST_MAIN("test_uilayer", 45)

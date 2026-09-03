@@ -1538,6 +1538,22 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::TextDisabled("screen is - a menu background, the dim behind a modal,");
             ImGui::TextDisabled("the strip a bottom bar sits on. The other axis keeps");
             ImGui::TextDisabled("its anchor and size.");
+
+            ImGui::Checkbox("Clips Children", &panel.clipsChildren);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Confine every descendant to this rectangle, at draw AND at hit test.\n\n"
+                    "Without it an element whose contents outgrow their box paints over\n"
+                    "the neighbouring panel - a long name, a six-figure count, a list with\n"
+                    "one row too many.\n\n"
+                    "This is also the half of a scroll view the engine cannot express\n"
+                    "otherwise: moving the rows up is arithmetic a game can already do,\n"
+                    "but without a clip they are simply drawn above the panel instead.\n\n"
+                    "Nested clips intersect, and a row clipped out of sight takes no\n"
+                    "click - which is the half that would otherwise be invisible until\n"
+                    "somebody presses empty space and a button fires.");
+            }
+
             ImGui::Checkbox("Visible##panel", &panel.visible);
         }
     }

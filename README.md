@@ -866,6 +866,23 @@ Android "not functional"; extending that register forward costs nothing.
       mirrored frame, and shrinking the borders to fit would silently redesign
       the art — so it falls back to the plain stretch, and the author sees the
       frame they drew, smeared, which is a symptom you can read
+- [x] A panel can confine its children, **at draw and at hit test together**.
+      There was no way to say "and no further" about anything: an element whose
+      contents outgrew their box painted over the neighbouring panel, and a
+      scroll view was inexpressible — moving the rows up is arithmetic a game
+      can already do, but without a clip they are drawn above the panel rather
+      than disappearing into it. Both passes in one commit is the point rather
+      than a nicety: a clip that hides the picture and not the hit leaves a row
+      out of sight that still takes the press, which is this engine's own
+      hidden-container defect wearing different clothes. Nested clips
+      intersect, and a clip closed to nothing is treated exactly as hidden.
+      Mutation testing found the measurement was wrong before it found the
+      code was — reading ImGui's vertex buffer cannot see a clip at all, since
+      the rectangle lives on the draw command and the scissor does the work, so
+      the tests walk the command buffer and count only what survives. That is
+      what then exposed the real bug: a scroll view inside an ordinary frame
+      was skipped as a root and reached by no recursion, because the rule asked
+      whether it had a parent rather than whether an ancestor clips
 
 ### Next
 

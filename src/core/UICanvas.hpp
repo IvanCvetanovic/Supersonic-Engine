@@ -91,7 +91,38 @@ struct StackedLayout {
     // Everything inside a hidden container, at any depth.
     std::unordered_set<entt::entity> hidden;
 
+    // What each element is confined to by an ancestor that clips, already
+    // intersected down the chain so a panel inside a panel is bounded by both.
+    // An entity absent from this map is not clipped by anything.
+    //
+    // Computed ONCE, here, beside the stack rects and for the same reason the
+    // header above gives for those: the draw pass and the hit test both need
+    // it, and two places deriving it independently is two places that have to
+    // agree about where a click lands. That is the failure UISystem's header
+    // already warns about for anchors, and it is worse for a clip - a row
+    // scrolled out of sight that still takes the press looks like nothing at
+    // all until somebody clicks empty space and a button fires.
+    StackedRects clips;
+
     bool Hidden(entt::entity entity) const { return hidden.count(entity) != 0; }
+
+    // The rectangle this element may draw and be clicked in. `fallback` is
+    // what an unclipped element gets, which is the whole screen.
+    UIRect ClipFor(entt::entity entity, const UIRect& fallback) const {
+        const auto it = clips.find(entity);
+        return it == clips.end() ? fallback : it->second;
+    }
+
+    // True when an ancestor's clip has closed to nothing - the element is
+    // inside a panel scrolled entirely off, or one intersected away by a
+    // second clip that does not overlap it. Distinct from Hidden, which is
+    // about a container's own `visible` flag, and treated the same way by
+    // both passes: not drawn, not clickable.
+    bool Clipped(entt::entity entity) const {
+        const auto it = clips.find(entity);
+        if (it == clips.end()) return false;
+        return it->second.max.x <= it->second.min.x || it->second.max.y <= it->second.min.y;
+    }
 };
 
 // Stacks a run of elements along one axis and returns where each one goes.

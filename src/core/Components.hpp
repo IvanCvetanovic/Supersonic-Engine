@@ -1841,6 +1841,29 @@ struct UIPanelComponent {
     glm::vec2 offset{24.0f, 24.0f};
     glm::vec2 size{320.0f, 32.0f};
 
+    // CONFINE EVERY DESCENDANT TO THIS RECTANGLE, in pixels, at draw and at
+    // hit test alike.
+    //
+    // Without it an element whose contents outgrow their box paint straight
+    // over the neighbouring panel: a long unit name, a six-figure resource
+    // count, a wide tooltip, a list with one row too many. There was no way to
+    // say "and no further" about anything.
+    //
+    // This is also the half of a scroll view the engine could not express. The
+    // other half is arithmetic a game can already do - move the children up by
+    // however far it has scrolled - but moving them without a clip just draws
+    // them over whatever is above the panel, so the clip is the part that had
+    // to be here.
+    //
+    // BOTH PASSES, and that is not an implementation detail. Clipping the
+    // picture without clipping the hit test leaves a row scrolled out of sight
+    // that still takes the click, which is this engine's own b918b84 defect
+    // wearing different clothes: a hidden container whose children kept their
+    // anchors piled invisible, clickable buttons on the screen centre.
+    //
+    // Nested clips INTERSECT, so a panel inside a panel is confined by both.
+    bool clipsChildren{false};
+
     glm::vec4 color{0.0f, 0.0f, 0.0f, 0.55f};
     float cornerRadius{6.0f};
 

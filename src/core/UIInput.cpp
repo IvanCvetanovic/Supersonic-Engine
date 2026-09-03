@@ -94,7 +94,7 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
     int32_t index = 0;
     for (auto [entity, panel] : registry.view<const UIPanelComponent>().each()) {
         const int32_t at = index++;
-        if (!panel.visible || stacked.Hidden(entity)) continue;
+        if (!panel.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
         // The whole panel, not the drawn fraction: a health bar that has run
         // down is still a rectangle in the way, and a hit target that shrinks
         // as the player takes damage would be its own bug.
@@ -105,7 +105,8 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
         const UIRect rect = UICanvas::Stretch(
             rectFor(stacked, entity, panel.anchor, panel.offset, panel.size, gameRect, scale),
             gameRect, panel.fillWidth, panel.fillHeight);
-        if (UICanvas::Contains(rect, pointer.position)) {
+        if (UICanvas::Contains(rect, pointer.position) &&
+            UICanvas::Contains(stacked.ClipFor(entity, gameRect), pointer.position)) {
             topmost.consider(DrawPosition{layerOf(registry, entity), kPanelType, at});
         }
     }
@@ -115,10 +116,11 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
         const int32_t at = index++;
         // Disabled, not invisible: a greyed-out menu item is still drawn, so it
         // still covers what is beneath it. Hidden is what removes a target.
-        if (!button.visible || stacked.Hidden(entity)) continue;
+        if (!button.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
         const UIRect rect = rectFor(stacked, entity, button.anchor, button.offset,
                                     button.size, gameRect, scale);
-        if (UICanvas::Contains(rect, pointer.position)) {
+        if (UICanvas::Contains(rect, pointer.position) &&
+            UICanvas::Contains(stacked.ClipFor(entity, gameRect), pointer.position)) {
             topmost.consider(DrawPosition{layerOf(registry, entity), kButtonType, at});
         }
     }
@@ -126,10 +128,11 @@ Topmost topmostUnderPointer(const entt::registry& registry, const UIRect& gameRe
     index = 0;
     for (auto [entity, field] : registry.view<const UITextFieldComponent>().each()) {
         const int32_t at = index++;
-        if (!field.visible || stacked.Hidden(entity)) continue;
+        if (!field.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
         const UIRect rect = rectFor(stacked, entity, field.anchor, field.offset,
                                     field.size, gameRect, scale);
-        if (UICanvas::Contains(rect, pointer.position)) {
+        if (UICanvas::Contains(rect, pointer.position) &&
+            UICanvas::Contains(stacked.ClipFor(entity, gameRect), pointer.position)) {
             topmost.consider(DrawPosition{layerOf(registry, entity), kFieldType, at});
         }
     }
@@ -163,7 +166,8 @@ void updateTextFields(entt::registry& registry, const UIRect& gameRect, float sc
         auto& field = view.get<UITextFieldComponent>(entity);
         const DrawPosition at{layerOf(registry, entity), kFieldType, index++};
 
-        const bool live = field.visible && field.enabled && !stacked.Hidden(entity);
+        const bool live = field.visible && field.enabled && !stacked.Hidden(entity) &&
+                          !stacked.Clipped(entity);
         if (!live) {
             // A field hidden or disabled while focused gives it up. A menu
             // closes by hiding, and a hidden field that kept the keyboard would
@@ -247,7 +251,7 @@ void Update(entt::registry& registry, const UIRect& gameRect,
         // An invisible button is not a click target. Hiding a menu is how a
         // game closes it, and a hidden menu that still swallowed clicks would
         // block the game underneath it.
-        if (!button.visible || stacked.Hidden(entity)) {
+        if (!button.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) {
             button.hovered = false;
             button.pressed = false;
             button.clicked = false;

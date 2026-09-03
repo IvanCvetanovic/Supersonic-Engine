@@ -67,6 +67,136 @@ UIRect placedRect(const UICanvas::StackedLayout& stacked, entt::entity entity, U
     return UICanvas::Place(anchor, offset * scale, size * scale, gameRect);
 }
 
+// Confines a draw to an element's inherited clip for as long as it is drawing.
+//
+// A guard rather than a bare push and pop, because every one of the six draw
+// loops below can leave its body early - a zero font size, a projection that
+// failed, an empty index range - and a clip pushed without its pop corrupts
+// every element drawn after it, including the ones on other layers.
+struct ClipScope {
+    ImDrawList* list{nullptr};
+
+    ClipScope(ImDrawList* draw, const UICanvas::StackedLayout& stacked, entt::entity entity) {
+        const auto it = stacked.clips.find(entity);
+        if (it == stacked.clips.end()) return;   // nothing confines this one
+        list = draw;
+
+        // Intersected with what is already pushed, which is the game rect and
+        // possibly a field's interior. `true` is that intersection.
+        list->PushClipRect(toVec(it->second.min), toVec(it->second.max), true);
+    }
+    ~ClipScope() { if (list != nullptr) list->PopClipRect(); }
+
+    ClipScope(const ClipScope&) = delete;
+    ClipScope& operator=(const ClipScope&) = delete;
+};
+
+// Fills `stacked.clips` from every panel that confines its descendants.
+//
+// AFTER the stacks, because a clipping panel inside a stack is placed by the
+// stack and its rectangle is not known until then. And OUTSIDE the early
+// return above, because a scene can clip without stacking anything at all -
+// which is what a plain scrolling list of absolutely-positioned rows is, and
+// what the first version of this quietly did not support.
+//
+// Intersected down the chain, so nested clips compose: a panel inside a panel
+// is confined by both, and an intersection that closes to nothing means the
+// element is inside something scrolled entirely out of view.
+void resolveClips(entt::registry& registry, const UIRect& gameRect, float scale,
+                  const std::unordered_map<entt::entity, std::vector<entt::entity>>& childrenOf,
+                  UICanvas::StackedLayout& stacked) {
+    auto panels = registry.view<UIPanelComponent>();
+
+    // Nothing clips, so nothing is looked up. A scene that does not use this
+    // pays for one view iteration and stops.
+    bool anyClips = false;
+    for (auto [entity, panel] : panels.each()) {
+        (void)entity;
+        if (panel.clipsChildren) { anyClips = true; break; }
+    }
+    if (!anyClips) return;
+
+    // Depth-first from each clipping panel, carrying the intersection down.
+    // Bounded the same way the measure is, and for the same reason: a cycle is
+    // unreachable because an entity has one parent, so the cap is for
+    // legitimate depth.
+    std::function<void(entt::entity, const UIRect&, int)> confine =
+        [&](entt::entity parent, const UIRect& area, int depth) {
+        if (depth > 16) return;
+
+        const auto it = childrenOf.find(parent);
+        if (it == childrenOf.end()) return;
+
+        for (const entt::entity child : it->second) {
+            // Assigned rather than merged with whatever is already recorded,
+            // because nothing can be: an entity has ONE parent, so it belongs
+            // to one chain and this walk reaches it once. A merge here would
+            // be a guard against a second visit that cannot happen, and a
+            // mutation deleting it changed no answer - which is how a
+            // condition that cannot be false announces itself.
+            //
+            // The composition that DOES happen is one level down, where a
+            // child that clips narrows what its own children get.
+            const UIRect inherited = area;
+            stacked.clips[child] = inherited;
+
+            // The child's own clip, if it has one, narrows what ITS children
+            // get - but not what the child itself is confined to, because a
+            // panel does not clip itself.
+            UIRect passedDown = inherited;
+            if (const auto* childPanel = registry.try_get<UIPanelComponent>(child);
+                childPanel != nullptr && childPanel->clipsChildren) {
+                const UIRect own = UICanvas::Stretch(
+                    placedRect(stacked, child, childPanel->anchor, childPanel->offset,
+                               childPanel->size, gameRect, scale),
+                    gameRect, childPanel->fillWidth, childPanel->fillHeight);
+                passedDown.min = glm::max(passedDown.min, own.min);
+                passedDown.max = glm::min(passedDown.max, own.max);
+            }
+
+            confine(child, passedDown, depth + 1);
+        }
+    };
+
+    for (auto [entity, panel] : panels.each()) {
+        if (!panel.clipsChildren) continue;
+
+        // A clipping panel underneath ANOTHER CLIPPING PANEL is reached by the
+        // recursion above with its ancestor's area already applied; starting
+        // it again from the screen here would widen it back out, which is the
+        // same double-placement trap the stack loop guards against.
+        //
+        // The test is whether an ANCESTOR CLIPS, not whether there is a parent
+        // at all. The first version asked the second question, so a clipping
+        // panel whose parent was an ordinary container - a scroll view inside
+        // a plain menu frame, which is the shape a real HUD has - was skipped
+        // as a root, never reached by any recursion, and quietly clipped
+        // nothing. A mutation found the dead code that was hiding it.
+        bool clippedByAnAncestor = false;
+        entt::entity walk = entity;
+        for (int depth = 0; depth <= 16; ++depth) {
+            const auto* hierarchy = registry.try_get<HierarchyComponent>(walk);
+            if (hierarchy == nullptr || hierarchy->parent == entt::null ||
+                !registry.valid(hierarchy->parent)) {
+                break;
+            }
+            walk = hierarchy->parent;
+
+            const auto* ancestor = registry.try_get<UIPanelComponent>(walk);
+            if (ancestor != nullptr && ancestor->clipsChildren) {
+                clippedByAnAncestor = true;
+                break;
+            }
+        }
+        if (clippedByAnAncestor) continue;
+
+        const UIRect own = UICanvas::Stretch(
+            placedRect(stacked, entity, panel.anchor, panel.offset, panel.size, gameRect, scale),
+            gameRect, panel.fillWidth, panel.fillHeight);
+        confine(entity, own, 0);
+    }
+}
+
 // Runs every stack and records where each child ended up.
 //
 // Measuring is why this lives here rather than in UICanvas: a label's size is
@@ -76,22 +206,28 @@ UIRect placedRect(const UICanvas::StackedLayout& stacked, entt::entity entity, U
 // The result is computed ONCE and used by both the input pass and the draw
 // pass. Letting each derive it would be two places that have to agree about
 // where a button is, which is the failure UISystem.hpp's header already warns
-// about for anchors and would be worse here.
+// about for anchors and would be worse here. The clips it now carries are the
+// same argument one step further: a clip the two passes disagreed about is a
+// row you cannot see and can still click.
 UICanvas::StackedLayout layoutStacksImpl(entt::registry& registry, const UIRect& gameRect,
                                          ImFont* font, float scale) {
     UICanvas::StackedLayout stacked;
-    auto stacks = registry.view<UIStackComponent>();
-    if (stacks.begin() == stacks.end()) return stacked;
 
-    // Children by parent, gathered ONCE.
-    //
-    // The previous shape walked every HierarchyComponent per stack, which is
-    // fine for one menu and quadratic for a dock. It also could not nest,
-    // which is the reason this was rewritten.
+    // Children by parent, gathered ONCE and needed by both halves below.
     std::unordered_map<entt::entity, std::vector<entt::entity>> childrenOf;
     for (auto [entity, hierarchy] : registry.view<HierarchyComponent>().each()) {
         if (hierarchy.parent == entt::null) continue;
         childrenOf[hierarchy.parent].push_back(entity);
+    }
+
+    auto stacks = registry.view<UIStackComponent>();
+    if (stacks.begin() == stacks.end()) {
+        // NO STACKS IS NOT NO LAYOUT ANY MORE. Clipping is decided by the
+        // hierarchy rather than by any stack, so a scene that confines a
+        // column of absolutely-positioned rows - which is what a scrolling
+        // list without a stack is - has to reach the pass below.
+        resolveClips(registry, gameRect, scale, childrenOf, stacked);
+        return stacked;
     }
 
     // What one element measures, in authored units.
@@ -277,6 +413,10 @@ UICanvas::StackedLayout layoutStacksImpl(entt::registry& registry, const UIRect&
         place(stackEntity, stack, gameRect, 0);
     }
 
+    // LAST, because a clipping panel placed by a stack has no rectangle until
+    // the stacks have run.
+    resolveClips(registry, gameRect, scale, childrenOf, stacked);
+
     return stacked;
 }
 
@@ -341,7 +481,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // to be in, and a selection marker stays under the HUD it is not part of.
     for (const int32_t layer : layersPresent(registry)) {
     for (auto [entity, shape] : registry.view<UIShapeComponent>().each()) {
-        if (!shape.visible || stacked.Hidden(entity)) continue;
+        if (!shape.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
+        const ClipScope clip(draw, stacked, entity);
         if (layerOf(registry, entity) != layer) continue;
 
         // The anchor point, in pixels. Everything below is measured from here.
@@ -406,7 +547,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // Images first within a layer, so a panel can frame one and a label can
     // read on top of it. The same reasoning the type order already follows.
     for (auto [entity, image] : registry.view<UIImageComponent>().each()) {
-        if (!image.visible || stacked.Hidden(entity)) continue;
+        if (!image.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
+        const ClipScope clip(draw, stacked, entity);
         if (image.texture == 0) continue;   // still uploading, or never set
         if (layerOf(registry, entity) != layer) continue;
 
@@ -452,7 +594,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     }
 
     for (auto [entity, panel] : registry.view<UIPanelComponent>().each()) {
-        if (!panel.visible || stacked.Hidden(entity)) continue;
+        if (!panel.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
+        const ClipScope clip(draw, stacked, entity);
         if (layerOf(registry, entity) != layer) continue;
 
         const UIRect rect = UICanvas::Stretch(
@@ -482,7 +625,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
 
     // Interaction ran above; this only draws what it decided.
     for (auto [entity, button] : registry.view<UIButtonComponent>().each()) {
-        if (!button.visible || stacked.Hidden(entity)) continue;
+        if (!button.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
+        const ClipScope clip(draw, stacked, entity);
         if (layerOf(registry, entity) != layer) continue;
 
         // The same placement UIInput used, from the same component - not a
@@ -522,7 +666,8 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     // Fields between the buttons and the loose text, so a field's own contents
     // read over its box and under nothing.
     for (auto [entity, field] : registry.view<UITextFieldComponent>().each()) {
-        if (!field.visible || stacked.Hidden(entity)) continue;
+        if (!field.visible || stacked.Hidden(entity) || stacked.Clipped(entity)) continue;
+        const ClipScope clip(draw, stacked, entity);
         if (layerOf(registry, entity) != layer) continue;
 
         const UIRect rect = placedRect(stacked, entity, field.anchor, field.offset,
@@ -580,7 +725,9 @@ void Render(entt::registry& registry, const UIRect& gameRect,
     }
 
     for (auto [entity, text] : registry.view<UITextComponent>().each()) {
-        if (!text.visible || text.text.empty() || stacked.Hidden(entity)) continue;
+        if (!text.visible || text.text.empty() || stacked.Hidden(entity) ||
+            stacked.Clipped(entity)) continue;
+        const ClipScope clip(draw, stacked, entity);
         if (layerOf(registry, entity) != layer) continue;
 
         const float size = text.fontSize * scale;

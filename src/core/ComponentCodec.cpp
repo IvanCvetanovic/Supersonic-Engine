@@ -501,6 +501,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
              << panel->trackColor.z << ", " << panel->trackColor.w << "],\n";
         out << indent << "  \"FillWidth\": " << (panel->fillWidth ? "true" : "false") << ",\n";
         out << indent << "  \"FillHeight\": " << (panel->fillHeight ? "true" : "false") << ",\n";
+        out << indent << "  \"ClipsChildren\": "
+             << (panel->clipsChildren ? "true" : "false") << ",\n";
         out << indent << "  \"Visible\": " << (panel->visible ? "true" : "false") << "\n";
         out << indent << "},\n";
     }
@@ -1029,6 +1031,11 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         panel.trackColor = readVec4(p["TrackColor"], panel.trackColor);
         panel.fillWidth = p["FillWidth"].AsBool(false);
         panel.fillHeight = p["FillHeight"].AsBool(false);
+
+        // False for every scene written before clipping existed, which is the
+        // value that confines nothing - so no saved HUD loses an element to a
+        // clip it never asked for.
+        panel.clipsChildren = p["ClipsChildren"].AsBool(false);
         panel.visible = p["Visible"].AsBool(true);
     }
 
