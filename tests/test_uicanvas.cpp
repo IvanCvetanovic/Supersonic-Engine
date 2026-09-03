@@ -1117,6 +1117,192 @@ static void testStretchFollowsTheGivenRectNotTheWindow() {
               "it fills the rectangle the game was given, not the display");
 }
 
+// --- nine-slice ------------------------------------------------------------
+
+namespace {
+
+// The box every test below slices, and a texture to cut it from.
+UIRect box(float x, float y, float w, float h) {
+    return UIRect{ glm::vec2(x, y), glm::vec2(x + w, y + h) };
+}
+
+int sliceDefault(const UIRect& b, UICanvas::UIPatch out[9], float scale = 1.0f) {
+    // A 64x64 texture with a 16-pixel frame on every edge: a quarter of the
+    // image is corner on each side, which makes every fraction below exact.
+    return UICanvas::SliceNine(b, glm::vec2(64.0f, 64.0f), 16.0f, 16.0f, 16.0f, 16.0f,
+                               scale, out);
+}
+
+} // namespace
+
+static void testAFrameCutsIntoNinePatchesThatTileTheBox() {
+    UICanvas::UIPatch patches[9];
+    const UIRect target = box(100.0f, 200.0f, 400.0f, 300.0f);
+    CHECK_EQ(sliceDefault(target, patches), 9);
+
+    // Together they cover the box exactly: no gap along a seam, no overlap.
+    float area = 0.0f;
+    float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
+    for (int i = 0; i < 9; ++i) {
+        const UIRect& r = patches[i].rect;
+        area += (r.max.x - r.min.x) * (r.max.y - r.min.y);
+        minX = std::min(minX, r.min.x); minY = std::min(minY, r.min.y);
+        maxX = std::max(maxX, r.max.x); maxY = std::max(maxY, r.max.y);
+    }
+    CHECK_NEAR(area, 400.0f * 300.0f);
+    CHECK_NEAR(minX, 100.0f);
+    CHECK_NEAR(minY, 200.0f);
+    CHECK_NEAR(maxX, 500.0f);
+    CHECK_NEAR(maxY, 500.0f);
+}
+
+static void testTheCornersKeepTheirSizeAndTheMiddleTakesTheRest() {
+    // THE WHOLE POINT. A bevel drawn into the art stays the size it was drawn
+    // at whatever the box does; stretched whole, a 16-pixel corner on a
+    // 400-pixel panel becomes a 100-pixel one.
+    UICanvas::UIPatch patches[9];
+    CHECK_EQ(sliceDefault(box(0.0f, 0.0f, 400.0f, 300.0f), patches), 9);
+
+    const UIRect& topLeft = patches[0].rect;
+    CHECK_NEAR(topLeft.max.x - topLeft.min.x, 16.0f);
+    CHECK_NEAR(topLeft.max.y - topLeft.min.y, 16.0f);
+
+    const UIRect& middle = patches[4].rect;
+    CHECK_MSG(std::fabs((middle.max.x - middle.min.x) - (400.0f - 32.0f)) < 1e-3f,
+              "the middle takes everything the corners left");
+    CHECK_MSG(std::fabs((middle.max.y - middle.min.y) - (300.0f - 32.0f)) < 1e-3f,
+              "on both axes");
+
+    // And a box twice as wide leaves the corner alone, which is the property
+    // stated as a comparison rather than as one number.
+    UICanvas::UIPatch wider[9];
+    CHECK_EQ(sliceDefault(box(0.0f, 0.0f, 800.0f, 300.0f), wider), 9);
+    CHECK_NEAR(wider[0].rect.max.x - wider[0].rect.min.x, 16.0f);
+    CHECK_MSG((wider[4].rect.max.x - wider[4].rect.min.x) >
+                  (middle.max.x - middle.min.x) + 300.0f,
+              "while the middle absorbs the whole difference");
+}
+
+static void testTheTextureIsCutWhereTheBorderSaysInFractions() {
+    // Sixteen pixels of a sixty-four-pixel texture is a quarter, and the UVs
+    // have to say so - a border given in texture pixels is exactly so that
+    // re-exporting the art at another resolution changes this and not the
+    // authored number.
+    UICanvas::UIPatch patches[9];
+    CHECK_EQ(sliceDefault(box(0.0f, 0.0f, 400.0f, 300.0f), patches), 9);
+
+    CHECK_NEAR(patches[0].uvMin.x, 0.0f);
+    CHECK_NEAR(patches[0].uvMax.x, 0.25f);
+    CHECK_NEAR(patches[4].uvMin.x, 0.25f);
+    CHECK_NEAR(patches[4].uvMax.x, 0.75f);
+    CHECK_NEAR(patches[8].uvMin.x, 0.75f);
+    CHECK_NEAR(patches[8].uvMax.x, 1.0f);
+    CHECK_MSG(std::fabs(patches[8].uvMax.y - 1.0f) < 1e-5f,
+              "and the last patch reaches the far edge of the texture, not short of it");
+}
+
+static void testAnAsymmetricFrameCutsWhereEachEdgeSays() {
+    // Four numbers rather than one, because a frame is rarely square: a title
+    // bar is taller than its sides. One number here would make every one of
+    // these the same and the art would be wrong on three edges.
+    UICanvas::UIPatch patches[9];
+    CHECK_EQ(UICanvas::SliceNine(box(0.0f, 0.0f, 400.0f, 300.0f), glm::vec2(100.0f, 50.0f),
+                                 10.0f, 5.0f, 20.0f, 25.0f, 1.0f, patches), 9);
+
+    CHECK_NEAR(patches[0].rect.max.x - patches[0].rect.min.x, 10.0f);
+    CHECK_NEAR(patches[0].rect.max.y - patches[0].rect.min.y, 5.0f);
+    CHECK_NEAR(patches[8].rect.max.x - patches[8].rect.min.x, 20.0f);
+    CHECK_NEAR(patches[8].rect.max.y - patches[8].rect.min.y, 25.0f);
+
+    CHECK_NEAR(patches[0].uvMax.x, 0.10f);
+    CHECK_NEAR(patches[0].uvMax.y, 0.10f);
+    CHECK_NEAR(patches[8].uvMin.x, 0.80f);
+    CHECK_NEAR(patches[8].uvMin.y, 0.50f);
+}
+
+static void testTheFrameScalesWithTheScreenAndTheTextureCutDoesNot() {
+    // The border is authored at the reference height like every other size,
+    // so a frame keeps its proportion of the display. The UV cut is a property
+    // of the ART and must not move with the screen - scaling it would show a
+    // different part of the texture on a larger monitor.
+    UICanvas::UIPatch one[9];
+    UICanvas::UIPatch two[9];
+    CHECK_EQ(sliceDefault(box(0.0f, 0.0f, 400.0f, 300.0f), one, 1.0f), 9);
+    CHECK_EQ(sliceDefault(box(0.0f, 0.0f, 800.0f, 600.0f), two, 2.0f), 9);
+
+    CHECK_NEAR(one[0].rect.max.x - one[0].rect.min.x, 16.0f);
+    CHECK_MSG(std::fabs((two[0].rect.max.x - two[0].rect.min.x) - 32.0f) < 1e-3f,
+              "at twice the scale the frame is twice as many pixels");
+    CHECK_MSG(std::fabs(one[0].uvMax.x - two[0].uvMax.x) < 1e-6f,
+              "and it is cut from exactly the same part of the texture");
+}
+
+static void testABoxTooSmallForItsOwnFrameIsRefusedRatherThanFolded() {
+    // The case the naive arithmetic gets wrong and which looks deliberate: a
+    // middle of negative width makes patches that overlap, and the result
+    // reads as a doubled, mirrored frame. Shrinking the borders to fit would
+    // silently redesign the art, so the whole thing declines and the caller
+    // stretches one quad - a legible symptom.
+    UICanvas::UIPatch patches[9];
+    CHECK_MSG(sliceDefault(box(0.0f, 0.0f, 20.0f, 300.0f), patches) == 0,
+              "narrower than its two side borders");
+    CHECK_MSG(sliceDefault(box(0.0f, 0.0f, 400.0f, 20.0f), patches) == 0,
+              "and shorter than its top and bottom");
+    CHECK_MSG(sliceDefault(box(0.0f, 0.0f, 32.0f, 300.0f), patches) == 0,
+              "exactly the width of its borders leaves no middle, which is also refused");
+
+    // And the same box at a scale that makes the frame too big for it.
+    CHECK_MSG(sliceDefault(box(0.0f, 0.0f, 100.0f, 300.0f), patches, 4.0f) == 0,
+              "a frame that fits at one scale and not another is refused at the one it does not");
+}
+
+static void testSlicingIsDeclinedWhenThereIsNothingToSliceBy() {
+    UICanvas::UIPatch patches[9];
+    const UIRect target = box(0.0f, 0.0f, 400.0f, 300.0f);
+
+    CHECK_MSG(UICanvas::SliceNine(target, glm::vec2(0.0f, 0.0f), 16, 16, 16, 16, 1.0f,
+                                  patches) == 0,
+              "a border measured against an unknown texture size is a division");
+
+    // ONE AXIS UNKNOWN, WITH NO BORDER ON IT. This is the case the size check
+    // exists for and the one the sanity check below it cannot catch: sixteen
+    // over zero is infinity, and infinity fails the "wider than the texture"
+    // test straight away - but ZERO over zero is a NaN, and every comparison
+    // against a NaN is false. So it sails through, and three patches come out
+    // carrying NaN texture coordinates, which is a shader reading whatever it
+    // likes. A mutation deleting the size check survived until this line.
+    CHECK_MSG(UICanvas::SliceNine(target, glm::vec2(64.0f, 0.0f), 16, 0, 16, 0, 1.0f,
+                                  patches) == 0,
+              "an unknown height with no vertical border is a zero over zero, not a frame");
+    CHECK_MSG(UICanvas::SliceNine(target, glm::vec2(0.0f, 64.0f), 0, 16, 0, 16, 1.0f,
+                                  patches) == 0,
+              "and the same the other way round");
+    CHECK_MSG(UICanvas::SliceNine(target, glm::vec2(64.0f, 64.0f), 0, 0, 0, 0, 1.0f,
+                                  patches) == 0,
+              "and no border at all is one quad, which is what it always was");
+    CHECK_MSG(UICanvas::SliceNine(target, glm::vec2(64.0f, 64.0f), 40, 0, 40, 0, 1.0f,
+                                  patches) == 0,
+              "a border wider than the texture it is cut from is a typo, not a frame");
+}
+
+static void testAnEdgeOnlyFrameSkipsThePatchesWithNoArea() {
+    // Left and right only - a vertical bar with fixed ends and a stretching
+    // middle. There is no top or bottom strip, so three of the nine rows are
+    // empty and a patch with no area is a draw call that paints nothing.
+    UICanvas::UIPatch patches[9];
+    const int count = UICanvas::SliceNine(box(0.0f, 0.0f, 400.0f, 300.0f),
+                                          glm::vec2(64.0f, 64.0f), 16, 0, 16, 0, 1.0f, patches);
+    CHECK_MSG(count == 3, "three patches across, one row down");
+
+    float area = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        const UIRect& r = patches[i].rect;
+        area += (r.max.x - r.min.x) * (r.max.y - r.min.y);
+        CHECK_MSG(r.max.y - r.min.y > 0.0f, "and every one of them has height");
+    }
+    CHECK_NEAR(area, 400.0f * 300.0f);
+}
+
 static void runTests() {
     testAnImageIsMeasuredAndStackedLikeAnyOtherElement();
     testAnInvisibleImageTakesNoSpace();
@@ -1171,6 +1357,15 @@ static void runTests() {
     testTheCrossAxisIsCentredSoARowOfMixedHeightsLinesUp();
     testTheStackScalesWithTheScreenLikeEverythingElse();
     testAnEmptyStackIsEmptyRatherThanAPoint();
+
+    testAFrameCutsIntoNinePatchesThatTileTheBox();
+    testTheCornersKeepTheirSizeAndTheMiddleTakesTheRest();
+    testTheTextureIsCutWhereTheBorderSaysInFractions();
+    testAnAsymmetricFrameCutsWhereEachEdgeSays();
+    testTheFrameScalesWithTheScreenAndTheTextureCutDoesNot();
+    testABoxTooSmallForItsOwnFrameIsRefusedRatherThanFolded();
+    testSlicingIsDeclinedWhenThereIsNothingToSliceBy();
+    testAnEdgeOnlyFrameSkipsThePatchesWithNoArea();
 }
 
-TEST_MAIN("test_uicanvas", 209)
+TEST_MAIN("test_uicanvas", 240)

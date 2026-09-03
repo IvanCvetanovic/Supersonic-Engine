@@ -348,6 +348,68 @@ UITextEditState EditText(const UITextEditState& previous, std::string& value,
     return state;
 }
 
+int SliceNine(const UIRect& box, const glm::vec2& textureSize, float left, float top,
+              float right, float bottom, float scale, UIPatch out[9]) {
+    if (textureSize.x <= 0.0f || textureSize.y <= 0.0f) return 0;
+    if (left <= 0.0f && top <= 0.0f && right <= 0.0f && bottom <= 0.0f) return 0;
+
+    const float boxWidth = box.max.x - box.min.x;
+    const float boxHeight = box.max.y - box.min.y;
+    if (boxWidth <= 0.0f || boxHeight <= 0.0f) return 0;
+
+    // The borders as they land ON SCREEN, which is where they have to fit.
+    const float screenLeft = std::max(left, 0.0f) * scale;
+    const float screenTop = std::max(top, 0.0f) * scale;
+    const float screenRight = std::max(right, 0.0f) * scale;
+    const float screenBottom = std::max(bottom, 0.0f) * scale;
+
+    // TOO SMALL FOR ITS OWN FRAME. Refused rather than squeezed: shrinking
+    // the borders to fit would silently redesign the art, and the naive
+    // arithmetic would produce a middle of negative width whose patches
+    // overlap and read as a doubled, mirrored frame. One stretched quad is a
+    // legible symptom of a box too small for its own corners.
+    if (screenLeft + screenRight >= boxWidth) return 0;
+    if (screenTop + screenBottom >= boxHeight) return 0;
+
+    // And as fractions of the texture, which is what a UV is. The border is
+    // authored in texture pixels precisely so that re-exporting the art at
+    // another resolution changes this number and not the authored one.
+    const float uvLeft = std::max(left, 0.0f) / textureSize.x;
+    const float uvTop = std::max(top, 0.0f) / textureSize.y;
+    const float uvRight = std::max(right, 0.0f) / textureSize.x;
+    const float uvBottom = std::max(bottom, 0.0f) / textureSize.y;
+
+    // A border wider than the texture it is cut from is a typo, and would
+    // give a middle column with its edges crossed over.
+    if (uvLeft + uvRight >= 1.0f || uvTop + uvBottom >= 1.0f) return 0;
+
+    // The four cut lines on each axis, on screen and in the texture. Writing
+    // them out once is what keeps the nine patches below from each deriving
+    // their own edges and disagreeing at a seam.
+    const float x[4] = { box.min.x, box.min.x + screenLeft, box.max.x - screenRight, box.max.x };
+    const float y[4] = { box.min.y, box.min.y + screenTop, box.max.y - screenBottom, box.max.y };
+    const float u[4] = { 0.0f, uvLeft, 1.0f - uvRight, 1.0f };
+    const float v[4] = { 0.0f, uvTop, 1.0f - uvBottom, 1.0f };
+
+    int count = 0;
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            // A zero-width column or zero-height row happens whenever an edge
+            // is not sliced - a frame with only left and right borders has no
+            // top or bottom strip - and a patch with no area is a draw call
+            // that paints nothing.
+            if (x[column + 1] <= x[column] || y[row + 1] <= y[row]) continue;
+
+            UIPatch& patch = out[count++];
+            patch.rect.min = glm::vec2(x[column], y[row]);
+            patch.rect.max = glm::vec2(x[column + 1], y[row + 1]);
+            patch.uvMin = glm::vec2(u[column], v[row]);
+            patch.uvMax = glm::vec2(u[column + 1], v[row + 1]);
+        }
+    }
+    return count;
+}
+
 } // namespace UICanvas
 
 } // namespace Supersonic

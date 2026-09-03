@@ -306,6 +306,43 @@ struct UITextEditState {
 UITextEditState EditText(const UITextEditState& previous, std::string& value,
                          int maxLength, const UIKeyboard& keyboard);
 
+// ---- Nine-slice ---------------------------------------------------------
+//
+// One patch of a sliced image: where it goes on screen and which part of the
+// texture it shows.
+struct UIPatch {
+    UIRect rect;
+    glm::vec2 uvMin{0.0f, 0.0f};
+    glm::vec2 uvMax{1.0f, 1.0f};
+};
+
+// Cuts a box and its texture into the nine patches a bevelled frame needs.
+//
+// The corners keep their size, the top and bottom edges stretch horizontally,
+// the left and right edges stretch vertically, and the middle stretches both
+// ways. Stretched whole instead, a 32-pixel rounded corner on a 400-pixel
+// panel becomes a 400-pixel ellipse - which is why a HUD without this ends up
+// with one asset per distinct panel size.
+//
+// `border` is in TEXTURE PIXELS and `textureSize` is what turns it into a
+// fraction. `scale` is the UI scale, applied to the on-screen border so a
+// frame keeps its proportion of the display like every other size here.
+//
+// Returns how many patches were written, and writes nothing at all when the
+// image should be drawn as one quad - a zero border, an unknown texture size,
+// or a box too small to hold its own corners. THAT LAST CASE IS THE ONE WORTH
+// NAMING: a 40-pixel-wide box with 32-pixel borders has a middle of negative
+// width, and the naive arithmetic produces patches that overlap and read as a
+// doubled, mirrored frame. Shrinking the borders to fit would silently
+// redesign the art, so the whole thing falls back to a plain stretch and the
+// author sees the frame they authored, smeared, which is a legible symptom.
+//
+// Static and pure, and out here rather than inside the draw loop, because
+// nine rectangles and eighteen texture coordinates is precisely the sort of
+// arithmetic that is off by one edge and looks almost right.
+int SliceNine(const UIRect& box, const glm::vec2& textureSize, float left, float top,
+              float right, float bottom, float scale, UIPatch out[9]);
+
 } // namespace UICanvas
 
 } // namespace Supersonic

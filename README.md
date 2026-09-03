@@ -845,6 +845,21 @@ Android "not functional"; extending that register forward costs nothing.
       mutation run is what found the last two: the first tests all hung off the
       top-left, where a width decides nothing, and all ran at exactly the
       reference height, where the scale factor is one
+- [x] A UI image can be cut into nine, so a frame keeps its corners at any box
+      size. A panel, a button, a well and a tooltip are one PNG each with a
+      bevel drawn into them; stretched whole, a 16-pixel corner on a 400-pixel
+      box becomes a 100-pixel one, and the way out was one asset per distinct
+      box size. The border is four numbers in texture pixels, because a frame
+      is rarely square and because re-exporting the art at another resolution
+      should change the texture size rather than the number the author typed.
+      The arithmetic is a pure function outside the draw loop, since nine
+      rectangles and eighteen texture coordinates is exactly the sort of thing
+      that is off by one edge and looks almost right. **A box too small for its
+      own frame is refused rather than folded**: the naive arithmetic gives a
+      middle of negative width whose patches overlap and read as a doubled,
+      mirrored frame, and shrinking the borders to fit would silently redesign
+      the art — so it falls back to the plain stretch, and the author sees the
+      frame they drew, smeared, which is a symptom you can read
 
 ### Next
 

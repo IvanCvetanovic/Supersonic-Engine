@@ -417,7 +417,28 @@ void Render(entt::registry& registry, const UIRect& gameRect,
         // without UVs - so a rounded image shows the whole texture. Said here
         // rather than discovered: an atlas icon asking for a corner radius
         // would otherwise silently show the entire sheet.
-        if (image.cornerRadius > 0.0f) {
+        // NINE-SLICE FIRST, because it is the case a rounded corner is a
+        // worse answer to: a frame drawn into the art keeps its own corners
+        // at any box size, where a corner radius rounds the box and shows the
+        // whole texture inside it.
+        //
+        // Falls through to the ordinary paths when it declines - a zero
+        // border, an unknown texture size, or a box too small to hold its own
+        // corners - so an image that cannot be sliced is still drawn.
+        UICanvas::UIPatch patches[9];
+        const int sliced = image.border.any()
+                               ? UICanvas::SliceNine(rect, image.textureSize, image.border.left,
+                                                     image.border.top, image.border.right,
+                                                     image.border.bottom, scale, patches)
+                               : 0;
+        if (sliced > 0) {
+            for (int i = 0; i < sliced; ++i) {
+                draw->AddImage(static_cast<ImTextureID>(image.texture),
+                               toVec(patches[i].rect.min), toVec(patches[i].rect.max),
+                               toVec(patches[i].uvMin), toVec(patches[i].uvMax),
+                               toColor(image.tint));
+            }
+        } else if (image.cornerRadius > 0.0f) {
             draw->AddImageRounded(static_cast<ImTextureID>(image.texture),
                                   toVec(rect.min), toVec(rect.max),
                                   ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f),

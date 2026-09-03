@@ -1795,6 +1795,44 @@ struct UIImageComponent {
 
     float cornerRadius{0.0f};
 
+    // NINE-SLICE: how much of each edge of the texture is a border that must
+    // not stretch, in TEXTURE PIXELS. All zero is the ordinary case - one
+    // quad, the whole image stretched to the box - and is why zero is the
+    // default.
+    //
+    // A panel, a button, a well and a tooltip are one PNG each with a bevel
+    // or a rounded frame drawn into their corners. Stretched whole, those
+    // corners smear with the box: a 32-pixel rounded corner on a 400-pixel
+    // panel becomes a 400-pixel ellipse. The alternative was one asset per
+    // distinct panel size, which is the state a HUD ends up in without this.
+    //
+    // Four numbers rather than one, because a frame is rarely square - a
+    // title bar is taller than its sides, and a bottom edge with a shadow in
+    // it is deeper than the top.
+    //
+    // The MIDDLE stretches, the four CORNERS never do, and the four EDGES
+    // stretch along one axis only. That is the whole of the rule.
+    struct Border {
+        float left{0.0f};
+        float top{0.0f};
+        float right{0.0f};
+        float bottom{0.0f};
+
+        bool any() const { return left > 0.0f || top > 0.0f || right > 0.0f || bottom > 0.0f; }
+    };
+
+    Border border;
+
+    // How big the texture is, in pixels. Needed because the border is given
+    // in texture pixels and the UV rectangle is a fraction: without the size
+    // there is no way to turn "16 pixels of corner" into a UV offset, and
+    // asking the author for a fraction instead would mean recomputing it
+    // every time the art is re-exported at another resolution.
+    //
+    // Zero disables slicing whatever the border says, because a border
+    // measured against an unknown size is a division.
+    glm::vec2 textureSize{0.0f, 0.0f};
+
     bool visible{true};
 };
 
