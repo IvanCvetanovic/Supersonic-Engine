@@ -1713,8 +1713,20 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     //
     // 0.00023 is the linear radiance that encodes back to 0.02 on screen:
     // pow(x / (1 + x), 1/2.2) == 0.02.
+    //
+    // A SCENE CAN NOW SAY OTHERWISE, and when it does the sky pass is skipped
+    // rather than painted over - so a flat background is one draw call cheaper
+    // than a gradient rather than one draw call plus a cover. The value below
+    // is what a scene that has not chosen still gets.
+    const RenderSettings* renderSettings = registry.ctx().find<RenderSettings>();
+    const bool drawSky = renderSettings == nullptr || renderSettings->drawsSky();
+
     offscreenClearValues[0].color =
-        vk::ClearColorValue{std::array<float, 4>{0.00023f, 0.00023f, 0.00023f, 1.0f}};
+        drawSky ? vk::ClearColorValue{std::array<float, 4>{0.00023f, 0.00023f, 0.00023f, 1.0f}}
+                : vk::ClearColorValue{std::array<float, 4>{renderSettings->backgroundColor[0],
+                                                           renderSettings->backgroundColor[1],
+                                                           renderSettings->backgroundColor[2],
+                                                           1.0f}};
     offscreenClearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
     offscreenPassInfo.clearValueCount = static_cast<uint32_t>(offscreenClearValues.size());
@@ -1735,7 +1747,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // The sky goes in with the scene rather than after it. It has to be drawn
     // between the opaque and transparent passes, and only RenderSystem knows
     // where the boundary is - see the note on Render.
-    RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline, m_skyPipeline.get(),
+    RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline,
+                         drawSky ? m_skyPipeline.get() : nullptr,
                          *m_meshRegistry, *m_textureRegistry,
                          cmd, m_descriptorSets[m_currentFrame],
                          cameraFrustum, glm::vec3(ubo.cameraPosition), m_renderStats,

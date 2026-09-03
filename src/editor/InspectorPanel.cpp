@@ -191,6 +191,39 @@ void InspectorPanel::drawWorldSettings(entt::registry& registry) {
     ImGui::ColorEdit3("Fog Colour", rendering.fogColor);
     ImGui::TextDisabled("Zero density is no fog. Around 0.02 puts the horizon "
                         "at roughly fifty units.");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Background");
+
+    static const char* kBackgrounds[] = { "Sky", "Colour" };
+    int background = rendering.background == RenderSettings::Background::Color ? 1 : 0;
+    if (ImGui::Combo("Behind Everything", &background, kBackgrounds, IM_ARRAYSIZE(kBackgrounds))) {
+        rendering.background = background == 1 ? RenderSettings::Background::Color
+                                               : RenderSettings::Background::Sky;
+    }
+
+    if (rendering.background == RenderSettings::Background::Color) {
+        // THE PICKER IS sRGB AND THE BUFFER IS LINEAR, so the two are
+        // converted here rather than the number being handed straight over. A
+        // colour picked as #161a22 and written into a floating-point target
+        // comes out visibly lighter, because the composite at the end of the
+        // chain encodes once and would encode this twice.
+        float shown[3];
+        for (int i = 0; i < 3; ++i) {
+            shown[i] = std::pow(std::max(rendering.backgroundColor[i], 0.0f), 1.0f / 2.2f);
+        }
+        if (ImGui::ColorEdit3("Colour", shown)) {
+            for (int i = 0; i < 3; ++i) {
+                rendering.backgroundColor[i] = std::pow(std::max(shown[i], 0.0f), 2.2f);
+            }
+        }
+        ImGui::TextDisabled("The sky pass is not recorded at all, so this is one "
+                            "draw call cheaper than a sky rather than one painted over.");
+    } else {
+        ImGui::TextDisabled("The procedural gradient, or the environment map when a "
+                            "scene has loaded one. What every scene had before this "
+                            "control existed.");
+    }
 }
 
 void InspectorPanel::OnImGuiRender(entt::registry& registry, entt::entity selectedEntity) {

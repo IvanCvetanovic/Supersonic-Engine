@@ -1522,6 +1522,91 @@ static void testAShapeSurvivesARoundTripIncludingItsKind() {
     CHECK_MSG(!shape->visible, "a hidden shape must load hidden");
 }
 
+static void testTheBackgroundSurvivesARoundTripAndDefaultsToTheSky() {
+    // A game could not choose what was behind everything. The sky pass ran
+    // whenever a sky pipeline existed, which is always, and the colour behind
+    // it was a literal in the renderer - so every 2D scene, where the
+    // background is most of the frame, got a procedural horizon.
+    const std::string path = "test_background_tmp.scene";
+
+    {
+        entt::registry registry;
+        RenderSettings look;
+        look.background = RenderSettings::Background::Color;
+
+        // NOT the default colour, which is what the first version of this
+        // test wrote. A mutation that deleted the read entirely still passed,
+        // because a value that never loaded and a value that loaded to exactly
+        // what it already was are the same number - so the check could only
+        // ever have failed if the field were corrupted, never if it were
+        // ignored.
+        look.backgroundColor[0] = 0.31f;
+        look.backgroundColor[1] = 0.62f;
+        look.backgroundColor[2] = 0.93f;
+        registry.ctx().insert_or_assign<RenderSettings>(std::move(look));
+
+        const auto entity = registry.create();
+        registry.emplace<TagComponent>(entity, "Flat");
+        CHECK_MSG(SceneSerializer::Serialize(registry, path).ok, "the scene must save");
+    }
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    CHECK_MSG(result.ok, "and load: " + result.message);
+
+    const auto& look = loaded.ctx().get<RenderSettings>();
+    CHECK_MSG(look.background == RenderSettings::Background::Color, "the choice comes back");
+    CHECK_MSG(!look.drawsSky(), "and the pass that would paint over it is not recorded");
+    CHECK_NEAR(look.backgroundColor[0], 0.31f);
+    CHECK_NEAR(look.backgroundColor[1], 0.62f);
+    CHECK_NEAR(look.backgroundColor[2], 0.93f);
+
+    const RenderSettings untouched;
+    CHECK_MSG(look.backgroundColor[0] != untouched.backgroundColor[0],
+              "and it is not merely the default arriving by another route");
+
+    // Written as a WORD, so the file can be read and hand-edited. A number
+    // would mean something else the day a third mode lands in the middle.
+    std::ifstream file(path);
+    const std::string text((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+    file.close();
+    std::remove(path.c_str());
+    CHECK_MSG(text.find("\"Background\": \"Color\"") != std::string::npos,
+              "the mode is a word in the file, not an index");
+
+    // EVERY SCENE WRITTEN BEFORE THIS EXISTED has no key here, and must keep
+    // the background it has always had. A default of Colour would repaint a
+    // hundred scenes on load.
+    entt::registry old;
+    const std::string oldPath = "test_background_old_tmp.scene";
+    {
+        std::ofstream out(oldPath);
+        out << "{\n  \"Version\": 2,\n  \"Scene\": \"Old\",\n"
+            << "  \"Rendering\": { \"BloomThreshold\": 1, \"Exposure\": 1 },\n"
+            << "  \"Entities\": []\n}\n";
+    }
+    CHECK(SceneSerializer::Deserialize(old, oldPath).ok);
+    std::remove(oldPath.c_str());
+    CHECK_MSG(old.ctx().get<RenderSettings>().drawsSky(),
+              "a scene that says nothing about its background still gets the sky");
+
+    // And a word nobody recognises falls back to the visible default rather
+    // than to a flat colour, which would look deliberate.
+    entt::registry future;
+    const std::string futurePath = "test_background_future_tmp.scene";
+    {
+        std::ofstream out(futurePath);
+        out << "{\n  \"Version\": 2,\n  \"Scene\": \"Future\",\n"
+            << "  \"Rendering\": { \"Background\": \"Panorama\" },\n"
+            << "  \"Entities\": []\n}\n";
+    }
+    CHECK(SceneSerializer::Deserialize(future, futurePath).ok);
+    std::remove(futurePath.c_str());
+    CHECK_MSG(future.ctx().get<RenderSettings>().drawsSky(),
+              "an unknown mode is the sky, not a black screen nobody can explain");
+}
+
 static void testAShapeWithAKindFromTheFutureLoadsAsARing() {
     // A number nobody has a case for switches to nothing and draws an empty
     // marker, which looks exactly like the entity never being reached. Reading
@@ -1560,6 +1645,7 @@ static void runTests() {
     testWorldPhysicsSurvivesARoundTrip();
     testAStackAndItsRankingSurviveARoundTrip();
     testAShapeSurvivesARoundTripIncludingItsKind();
+    testTheBackgroundSurvivesARoundTripAndDefaultsToTheSky();
     testAShapeWithAKindFromTheFutureLoadsAsARing();
     testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
     testUnversionedScenesStillLoad();

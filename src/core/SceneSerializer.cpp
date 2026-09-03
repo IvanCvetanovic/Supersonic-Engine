@@ -119,6 +119,15 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
              << ", \"FogDensity\": " << rendering.fogDensity
              << ", \"FogColor\": [" << rendering.fogColor[0] << ", "
              << rendering.fogColor[1] << ", " << rendering.fogColor[2]
+             << "]"
+             // As a WORD rather than a number. A scene file is meant to be
+             // read and hand-edited, and "Background": 1 tells a reader
+             // nothing about which one that is - and silently means something
+             // else the day a third mode is added in the middle.
+             << ", \"Background\": \""
+             << (rendering.background == RenderSettings::Background::Color ? "Color" : "Sky")
+             << "\", \"BackgroundColor\": [" << rendering.backgroundColor[0] << ", "
+             << rendering.backgroundColor[1] << ", " << rendering.backgroundColor[2]
              << "] },\n";
     }
 
@@ -298,6 +307,27 @@ void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
             if (c.size() == 3) {
                 for (int i = 0; i < 3; ++i) {
                     rendering.fogColor[i] = c[static_cast<size_t>(i)].AsFloat(rendering.fogColor[i]);
+                }
+            }
+        }
+
+        // ANYTHING THAT IS NOT "Color" IS THE SKY, including a missing key,
+        // an empty string and a word nobody recognises. Every scene written
+        // before this existed has no key here and must keep the background it
+        // has always had, so the default has to be the one that changes
+        // nothing - and a typo falling back to the visible default is easier
+        // to spot than one falling back to a flat colour, which looks
+        // deliberate.
+        rendering.background = node["Background"].AsString("Sky") == "Color"
+                                   ? RenderSettings::Background::Color
+                                   : RenderSettings::Background::Sky;
+
+        if (node["BackgroundColor"].IsArray()) {
+            const auto& c = node["BackgroundColor"].AsArray();
+            if (c.size() == 3) {
+                for (int i = 0; i < 3; ++i) {
+                    rendering.backgroundColor[i] =
+                        c[static_cast<size_t>(i)].AsFloat(rendering.backgroundColor[i]);
                 }
             }
         }

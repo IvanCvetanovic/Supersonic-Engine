@@ -44,6 +44,45 @@ struct RenderSettings {
     // units.
     float fogDensity{0.0f};
     float fogColor[3]{0.55f, 0.60f, 0.68f};
+
+    // ---- What is behind everything ---------------------------------------
+    //
+    // A game could not choose this. The sky pass was drawn whenever a sky
+    // pipeline existed, which is always, and the colour behind it was the
+    // literal 0.00023 the offscreen target happened to be cleared to - so
+    // every scene in every genre got a procedural horizon gradient, and the
+    // only way to not have one was to cover the screen in geometry.
+    //
+    // For a 2D game that is most of the frame. A side-on lane, a platformer,
+    // a board: the background is the majority of every pixel and it is the
+    // first thing an art director picks. Wolf Brigade authors #161a22 and
+    // renders on near-black because the engine had nowhere to put the number.
+    enum class Background {
+        // The procedural gradient, or the environment map when one is loaded.
+        // The default, because it is what every existing scene has.
+        Sky,
+
+        // A flat authored colour, and the sky pass is not recorded at all -
+        // so this is one draw call cheaper rather than one draw call painted
+        // over. That is the difference between an option and a setting: a sky
+        // hidden behind a colour would still shade every pixel nothing else
+        // claimed.
+        Color,
+    };
+
+    Background background{Background::Sky};
+
+    // Linear, and written into a floating-point target like everything else
+    // here - bloom_composite.frag tone-maps and encodes once at the end. An
+    // authored sRGB colour therefore has to be de-encoded before it lands
+    // here, which the inspector does, because a colour picked as #161a22 and
+    // written straight into a linear buffer comes out visibly lighter.
+    float backgroundColor[3]{0.086f, 0.102f, 0.133f};
+
+    // Whether the sky pass runs at all this frame. One place to ask, so the
+    // pass that records it and the clear that would otherwise be covered by
+    // it cannot come to disagree about which is responsible for the pixel.
+    bool drawsSky() const { return background == Background::Sky; }
 };
 
 } // namespace Supersonic
