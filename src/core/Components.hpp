@@ -1732,6 +1732,25 @@ struct UITextComponent {
 
     glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f};
 
+    // How wide a paragraph may be before it breaks, in authored units at the
+    // reference height like every other size here. ZERO IS NO WRAPPING, which
+    // is what every label had before this existed and is why it is the
+    // default: a score, a timer and a unit name are one line by nature and a
+    // wrap width imposed on them would be a limit nobody asked for.
+    //
+    // Without it a paragraph is one line. Not a clipped line or an ugly line -
+    // a single line running off both edges of the display, which is what a
+    // briefing screen, a debrief, a tooltip or a quest description is. The
+    // only workaround was for the game to split the string itself, against
+    // font metrics the engine has and did not expose, at a size the engine
+    // scales and the game does not know.
+    //
+    // One number rather than a box, because that is the whole of the problem:
+    // the height a paragraph needs is the ANSWER, not the question. A stack
+    // measures a wrapped label at its wrapped height and gives it that much
+    // room, which is the thing a fixed box cannot do.
+    float wrapWidth{0.0f};
+
     // A drop shadow behind the glyphs. White text over a bright sky is
     // unreadable without one, and every HUD ends up wanting it.
     bool shadow{true};

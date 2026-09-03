@@ -1477,6 +1477,12 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::DragFloat2("Offset", glm::value_ptr(text.offset), 1.0f, -4000.0f, 4000.0f);
             ImGui::DragFloat("Font Size", &text.fontSize, 0.5f, 4.0f, 300.0f);
             ImGui::ColorEdit4("Text Color", glm::value_ptr(text.color));
+            ImGui::DragFloat("Wrap Width", &text.wrapWidth, 1.0f, 0.0f, 4000.0f);
+            ImGui::TextDisabled(text.wrapWidth > 0.0f
+                                    ? "Breaks between words at this width. A stack gives the "
+                                      "label the height the wrap decides."
+                                    : "Zero is one line, however long. Set a width for a "
+                                      "briefing, a tooltip or anything with sentences in it.");
             ImGui::Checkbox("Drop Shadow", &text.shadow);
             ImGui::SameLine();
             ImGui::Checkbox("Visible##text", &text.visible);

@@ -21,6 +21,7 @@
 #include <entt/entt.hpp>
 #include <imgui.h>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -429,6 +430,198 @@ void testAWorldSpaceLabelIsDrawnWhereTheCameraPutsIt() {
     CHECK_MSG(expected.x < 800.0f, "and the fixture must be left of centre");
 }
 
+// The box every glyph of one colour lands in, which for a paragraph is the
+// paragraph's own extent.
+struct Extent {
+    float minX{1e9f}, minY{1e9f}, maxX{-1e9f}, maxY{-1e9f};
+    int vertices{0};
+
+    float width() const { return maxX - minX; }
+    float height() const { return maxY - minY; }
+};
+
+// `screen` is the rect the UI is laid out against, and it is a parameter
+// rather than a constant because the reference height is 1080: at exactly that
+// size every authored unit is one pixel, the scale factor is one, and a
+// mutation that dropped the scale entirely changed nothing any test could see.
+Extent measureDrawn(entt::registry& registry, ImU32 colour,
+                    const glm::vec2& screen = glm::vec2(1920.0f, 1080.0f)) {
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(screen.x, screen.y));
+    ImGui::Begin("game", nullptr, ImGuiWindowFlags_NoDecoration);
+
+    UICanvas::UIPointer pointer;
+    pointer.position = glm::vec2(-4000.0f, -4000.0f);
+    UICanvas::UIKeyboard keyboard;
+    UISystem::Render(registry, UIRect{glm::vec2(0.0f), screen},
+                     pointer, keyboard, glm::mat4(1.0f));
+
+    ImGui::End();
+    ImGui::Render();
+
+    Extent out;
+    const ImDrawData* data = ImGui::GetDrawData();
+    for (int list = 0; data != nullptr && list < data->CmdListsCount; ++list) {
+        const ImDrawList* commands = data->CmdLists[list];
+        for (int v = 0; v < commands->VtxBuffer.Size; ++v) {
+            if (commands->VtxBuffer[v].col != colour) continue;
+            const ImVec2 p = commands->VtxBuffer[v].pos;
+            out.minX = std::min(out.minX, p.x);
+            out.minY = std::min(out.minY, p.y);
+            out.maxX = std::max(out.maxX, p.x);
+            out.maxY = std::max(out.maxY, p.y);
+            ++out.vertices;
+        }
+    }
+    return out;
+}
+
+constexpr ImU32 kParagraph = IM_COL32(11, 222, 33, 255);
+
+entt::entity addParagraph(entt::registry& registry, float wrapWidth) {
+    const auto entity = registry.create();
+    auto& text = registry.emplace<UITextComponent>(entity);
+    text.text = "The convoy will reach the ridge at first light and the escort "
+                "is expected to break formation as soon as the shelling starts.";
+    text.anchor = UIAnchor::TopLeft;
+    text.offset = glm::vec2(40.0f, 40.0f);
+    text.fontSize = 24.0f;
+    text.color = toVec4(kParagraph);
+    text.wrapWidth = wrapWidth;
+
+    // Off, so every vertex of this colour is a glyph rather than a glyph and
+    // its shadow at a different alpha.
+    text.shadow = false;
+    return entity;
+}
+
+static void testAParagraphWithNoWrapWidthRunsOffTheScreen() {
+    // The behaviour every label had, and must keep: a score, a timer and a
+    // unit name are one line by nature. This is also the control for the case
+    // below - without it, a test that says a wrapped paragraph is narrow would
+    // pass against a font that was simply small.
+    HeadlessImGui imgui;
+    entt::registry registry;
+    addParagraph(registry, 0.0f);
+
+    const Extent drawn = measureDrawn(registry, kParagraph);
+    CHECK_MSG(drawn.vertices > 0, "the paragraph is drawn at all");
+    CHECK_MSG(drawn.width() > 1200.0f,
+              "one line, and a long one: it runs most of the way across a 1920 screen");
+    CHECK_MSG(drawn.height() < 40.0f, "and it is one line high");
+}
+
+static void testAWrapWidthBreaksTheParagraphIntoLines() {
+    HeadlessImGui imgui;
+    entt::registry registry;
+    addParagraph(registry, 400.0f);
+
+    const Extent drawn = measureDrawn(registry, kParagraph);
+    CHECK_MSG(drawn.vertices > 0, "still drawn");
+    CHECK_MSG(drawn.width() <= 400.0f,
+              "no line is wider than the width it was given");
+    CHECK_MSG(drawn.height() > 60.0f,
+              "and it is several lines tall, which is the whole point");
+}
+
+static void testTheSameWordsAreDrawnWhetherTheyWrapOrNot() {
+    // Wrapping must break lines, not drop words. A wrap that silently
+    // truncated would look exactly like a paragraph that happened to fit.
+    HeadlessImGui imgui;
+
+    entt::registry wide;
+    addParagraph(wide, 0.0f);
+    const int unwrapped = measureDrawn(wide, kParagraph).vertices;
+
+    entt::registry narrow;
+    addParagraph(narrow, 400.0f);
+    const int wrapped = measureDrawn(narrow, kParagraph).vertices;
+
+    CHECK_MSG(wrapped == unwrapped,
+              "the same glyphs, in a different arrangement - not fewer of them");
+}
+
+static void testARightAnchoredParagraphIsPlacedByItsWrappedWidth() {
+    // THE MEASUREMENT THAT PLACES, which the cases above cannot see: they all
+    // hang off the top-left, where the anchor IS the left edge and the width
+    // decides nothing. A right-anchored label subtracts its own width from the
+    // right edge, so measuring it unwrapped puts it a full unwrapped line to
+    // the left - most of the way off the other side of the screen.
+    HeadlessImGui imgui;
+    entt::registry registry;
+
+    const auto entity = addParagraph(registry, 400.0f);
+    auto& text = registry.get<UITextComponent>(entity);
+    text.anchor = UIAnchor::TopRight;
+    text.offset = glm::vec2(40.0f, 40.0f);
+
+    const Extent drawn = measureDrawn(registry, kParagraph);
+    CHECK_MSG(drawn.vertices > 0, "drawn");
+    CHECK_MSG(drawn.maxX <= 1920.0f - 40.0f + 2.0f,
+              "its right edge sits where the anchor put it");
+    CHECK_MSG(drawn.minX > 1920.0f - 40.0f - 420.0f,
+              "and its left edge is one WRAPPED width in, not one unwrapped line:" +
+                  std::to_string(drawn.minX));
+}
+
+static void testTheWrapWidthIsAuthoredUnitsAndScalesWithTheScreen() {
+    // Every size here is authored at the reference height and scaled, so a
+    // paragraph breaks at the same WORD on every display. A wrap width passed
+    // through in raw pixels would break at a different word on each one, which
+    // is the bug the whole authored-units convention exists to prevent - and
+    // it is invisible at 1080 exactly, where the scale is one.
+    HeadlessImGui imgui;
+    entt::registry registry;
+    addParagraph(registry, 400.0f);
+
+    const Extent atReference = measureDrawn(registry, kParagraph);
+    const Extent atDouble =
+        measureDrawn(registry, kParagraph, glm::vec2(3840.0f, 2160.0f));
+
+    CHECK_MSG(atReference.vertices > 0 && atDouble.vertices > 0, "drawn at both sizes");
+    CHECK_MSG(atDouble.width() > atReference.width() * 1.8f,
+              "at twice the height the paragraph is twice as wide in pixels:" +
+                  std::to_string(atReference.width()) + " then " +
+                  std::to_string(atDouble.width()));
+    CHECK_MSG(atDouble.vertices == atReference.vertices,
+              "and it is the same words broken in the same places, not a different wrap");
+}
+
+static void testAWrappedLabelIsGivenTheHeightItsWrapNeeds() {
+    // THE HALF A DRAW-ONLY CHANGE WOULD SILENTLY GET WRONG. A stack asks each
+    // child how big it is and reserves that much room; measuring a paragraph
+    // unwrapped there reserves one line, and every line after the first
+    // prints over whatever comes next.
+    HeadlessImGui imgui;
+    entt::registry registry;
+
+    const auto column = registry.create();
+    auto& stack = registry.emplace<UIStackComponent>(column);
+    stack.horizontal = false;
+    stack.spacing = 8.0f;
+    stack.anchor = UIAnchor::TopLeft;
+    stack.offset = glm::vec2(40.0f, 40.0f);
+
+    const auto paragraph = addParagraph(registry, 400.0f);
+    registry.emplace<HierarchyComponent>(paragraph).parent = column;
+    registry.emplace<UIOrderComponent>(paragraph).order = 0;
+
+    const auto below = registry.create();
+    auto& marker = registry.emplace<UIPanelComponent>(below);
+    marker.size = glm::vec2(120.0f, 24.0f);
+    marker.color = toVec4(kHudPanel);
+    registry.emplace<HierarchyComponent>(below).parent = column;
+    registry.emplace<UIOrderComponent>(below).order = 1;
+
+    const Extent text = measureDrawn(registry, kParagraph);
+    const Extent panel = measureDrawn(registry, kHudPanel);
+
+    CHECK_MSG(text.vertices > 0 && panel.vertices > 0, "both are drawn");
+    CHECK_MSG(panel.minY >= text.maxY,
+              "the panel below the paragraph starts below ALL of it, not below its first line");
+}
+
 } // namespace
 
 static void runTests() {
@@ -440,6 +633,13 @@ static void runTests() {
     testTheSameMarkerInScreenSpaceIgnoresTheCameraEntirely();
     testAMarkerBehindTheCameraIsNotDrawnAtAll();
     testAWorldSpaceLabelIsDrawnWhereTheCameraPutsIt();
+
+    testAParagraphWithNoWrapWidthRunsOffTheScreen();
+    testAWrapWidthBreaksTheParagraphIntoLines();
+    testTheSameWordsAreDrawnWhetherTheyWrapOrNot();
+    testARightAnchoredParagraphIsPlacedByItsWrappedWidth();
+    testTheWrapWidthIsAuthoredUnitsAndScalesWithTheScreen();
+    testAWrappedLabelIsGivenTheHeightItsWrapNeeds();
 }
 
-TEST_MAIN("test_uilayer", 21)
+TEST_MAIN("test_uilayer", 30)

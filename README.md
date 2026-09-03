@@ -829,6 +829,22 @@ Android "not functional"; extending that register forward costs nothing.
       it had to be told about. The picker converts to linear, because the
       composite at the end of the chain encodes once and would otherwise encode
       it twice
+- [x] In-game text wraps. It never did — not clipped, not truncated, but a
+      briefing, a debrief or a tooltip rendered as a single line running off
+      both edges of the display, with the only workaround being the game
+      splitting the string itself against font metrics the engine has and did
+      not expose, at a size the engine scales and the game does not know. A
+      label carries a wrap width now, in authored units like every other size,
+      and zero is one line however long, which is what every saved scene
+      already has. **Three places have to agree about where the lines break**
+      and only one of them is the draw: the measurement that places a
+      right-anchored label needs the wrapped width, the drop shadow has to
+      break where its own glyphs do, and the stack measurement has to report
+      the wrapped *height* — a stack that measured a paragraph unwrapped
+      reserves one line and lets the rest print over what comes next. A
+      mutation run is what found the last two: the first tests all hung off the
+      top-left, where a width decides nothing, and all ran at exactly the
+      reference height, where the scale factor is one
 
 ### Next
 

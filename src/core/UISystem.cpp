@@ -116,8 +116,15 @@ UICanvas::StackedLayout layoutStacksImpl(entt::registry& registry, const UIRect&
             if (!text->visible) return false;
             // Measured at the authored size and divided back out, because
             // LayoutStack works in authored units and applies scale itself.
+            //
+            // AND MEASURED WRAPPED, which is the half that makes a wrapped
+            // label usable inside a stack: the height a paragraph needs is
+            // the answer to the wrap rather than something the author knows
+            // in advance, so a stack that measured it unwrapped would reserve
+            // one line and let the rest print over whatever came next.
             const ImVec2 measured =
-                font->CalcTextSizeA(text->fontSize * scale, FLT_MAX, 0.0f, text->text.c_str());
+                font->CalcTextSizeA(text->fontSize * scale, FLT_MAX, text->wrapWidth * scale,
+                                    text->text.c_str());
             out = glm::vec2(measured.x, measured.y) / scale;
             return true;
         }
@@ -559,8 +566,15 @@ void Render(entt::registry& registry, const UIRect& gameRect,
         if (size < 1.0f) continue;
 
         // Measured before placing: a right-anchored label has to know its own
-        // width to put its right edge where it belongs.
-        const ImVec2 measured = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.text.c_str());
+        // width to put its right edge where it belongs - and a wrapped one has
+        // to know its own HEIGHT, which is what the wrap decides.
+        //
+        // Scaled, because the width is authored at the reference height like
+        // every other size here. A wrap width in raw pixels would break at a
+        // different word on every display, which is the bug the whole authored-
+        // units convention exists to prevent.
+        const float wrap = text.wrapWidth * scale;
+        const ImVec2 measured = font->CalcTextSizeA(size, FLT_MAX, wrap, text.text.c_str());
 
         UIRect rect;
         if (text.worldSpace) {
@@ -596,10 +610,16 @@ void Render(entt::registry& registry, const UIRect& gameRect,
             const float drop = std::max(1.0f, size * 0.06f);
             draw->AddText(font, size, ImVec2(rect.min.x + drop, rect.min.y + drop),
                           IM_COL32(0, 0, 0, static_cast<int>(text.color.a * 160.0f)),
-                          text.text.c_str());
+                          text.text.c_str(), nullptr, wrap);
         }
 
-        draw->AddText(font, size, toVec(rect.min), toColor(text.color), text.text.c_str());
+        // THE SAME WRAP THE MEASUREMENT USED, and the shadow's too. Three
+        // places have to agree about where the lines break: a draw that
+        // wrapped where the measurement did not would overflow the box the
+        // stack reserved for it, and a shadow that wrapped differently from
+        // its own glyphs would read as two overlapping paragraphs.
+        draw->AddText(font, size, toVec(rect.min), toColor(text.color), text.text.c_str(),
+                      nullptr, wrap);
     }
 
     }  // layer

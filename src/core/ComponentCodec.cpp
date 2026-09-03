@@ -413,6 +413,7 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"FontSize\": " << text->fontSize << ",\n";
         out << indent << "  \"Color\": [" << text->color.x << ", " << text->color.y << ", "
              << text->color.z << ", " << text->color.w << "],\n";
+        out << indent << "  \"WrapWidth\": " << text->wrapWidth << ",\n";
         out << indent << "  \"Shadow\": " << (text->shadow ? "true" : "false") << ",\n";
         out << indent << "  \"Visible\": " << (text->visible ? "true" : "false") << "\n";
         out << indent << "},\n";
@@ -962,6 +963,11 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         text.offset = readVec2(t["Offset"], text.offset);
         text.fontSize = t["FontSize"].AsFloat(32.0f);
         text.color = readVec4(t["Color"], text.color);
+
+        // Zero for a scene written before wrapping existed, which is the value
+        // that means "do not wrap" - so every label in every saved scene keeps
+        // running on one line exactly as it always has.
+        text.wrapWidth = t["WrapWidth"].AsFloat(0.0f);
         text.shadow = t["Shadow"].AsBool(true);
         text.visible = t["Visible"].AsBool(true);
     }
