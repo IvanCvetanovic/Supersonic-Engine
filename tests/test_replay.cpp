@@ -21,7 +21,9 @@
 #include "core/Components.hpp"
 #include "core/StateHash.hpp"
 #include "core/UIInput.hpp"
+#include "core/Input.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -261,6 +263,129 @@ static void testCheckpointsSurviveAndStayInOrder() {
         CHECK_MSG(parsed.checkpoints[i].hash == original.checkpoints[i].hash,
                   "checkpoint " + std::to_string(i) + " kept its hash");
     }
+}
+
+
+// --- The producer -----------------------------------------------------------
+//
+// EVERY CASE ABOVE BUILDS ITS TICKS BY HAND. That is right for testing the
+// format, and it means the function that produces a tick in the actual engine -
+// Input::CaptureTickInput, the one thing on the recording path a real session
+// goes through - was reached by nothing at all. It has exactly one caller,
+// SupersonicApp, which no test runs. A field it forgot to read would be absent
+// from every recording ever written and green here from top to bottom, because
+// both sides of every comparison above are hand-written.
+//
+// So this drives the real devices, captures, and asserts the capture says what
+// was driven. It is the instrument the pointer work needs, and it is worth
+// having on its own.
+
+namespace {
+
+void resetDevices() {
+    Input::ClearBindings();
+    Input::SetCursorMode(CursorMode::Normal);
+    Input::SuppressCursorCapture(false);
+    Input::SetWindowFocused(true);
+    Input::Update(RawInputState{});
+    Input::Update(RawInputState{});
+    Input::BeginTickInput();
+}
+
+bool listed(const std::vector<std::string>& names, const std::string& name) {
+    return std::find(names.begin(), names.end(), name) != names.end();
+}
+
+float axisIn(const Input::TickInput& tick, const std::string& name) {
+    for (const auto& [axis, value] : tick.axes) {
+        if (axis == name) return value;
+    }
+    return std::nanf("");
+}
+
+} // namespace
+
+static void testACaptureSaysWhatTheDevicesWereDoing() {
+    resetDevices();
+    Input::BindActionKey("Fire", Key::Space);
+    Input::BindActionKey("Jump", Key::W);
+    Input::BindAxisKeys("MoveX", Key::D, Key::A);
+
+    // An idle frame first: an action seen for the first time is seeded with
+    // what it reads, so binding and pressing together is deliberately not an
+    // edge. The same note sits beside try_emplace in Input.cpp.
+    Input::Update(RawInputState{});
+    Input::BeginTickInput();
+
+    RawInputState state{};
+    state.keys[Key::Space] = true;
+    state.keys[Key::D] = true;
+    state.mousePosition = glm::vec2(300.0f, 200.0f);
+    Input::Update(state);
+    Input::BeginTickInput();
+
+    const Input::TickInput captured = Input::CaptureTickInput();
+
+    CHECK_MSG(listed(captured.down, "Fire"), "a held action is written as held");
+    CHECK_MSG(listed(captured.pressed, "Fire"), "and its edge is written too");
+    CHECK_MSG(!listed(captured.down, "Jump"), "an action nobody touched is not held");
+    CHECK_MSG(!listed(captured.pressed, "Jump"), "and did not fire an edge");
+
+    // EVERY BOUND AXIS, including the ones at rest. The format's reader treats
+    // a missing axis as zero, which is only safe because the writer never omits
+    // one - so the claim belongs here, at the writer.
+    CHECK_NEAR(axisIn(captured, "MoveX"), 1.0f);
+    CHECK_MSG(captured.axes.size() == Input::AxisNames().size(),
+              "every bound axis is written, not only the ones doing something");
+
+    // And released, on the tick the key comes up.
+    Input::Update(RawInputState{});
+    Input::BeginTickInput();
+    const Input::TickInput after = Input::CaptureTickInput();
+    CHECK_MSG(listed(after.released, "Fire"), "the release is written on its own tick");
+    CHECK_MSG(!listed(after.down, "Fire"), "and it is no longer held");
+    CHECK_NEAR(axisIn(after, "MoveX"), 0.0f);
+
+    resetDevices();
+}
+
+// A captured tick survives the file, and the simulation cannot tell the
+// difference between the devices and the recording.
+static void testACapturedTickReplaysAsItself() {
+    resetDevices();
+    Input::BindActionKey("Fire", Key::Space);
+    Input::BindAxisKeys("MoveX", Key::D, Key::A);
+    Input::Update(RawInputState{});
+    Input::BeginTickInput();
+
+    RawInputState state{};
+    state.keys[Key::Space] = true;
+    state.keys[Key::A] = true;
+    Input::Update(state);
+    Input::BeginTickInput();
+
+    InputRecording recording = emptyRun(1);
+    recording.ticks[0] = Input::CaptureTickInput();
+
+    const InputRecording parsed = roundTrip(recording);
+    CHECK_MSG(parsed.ticks.size() == 1, "one tick in, one tick out");
+    if (parsed.ticks.size() != 1) return;
+
+    CHECK_MSG(parsed.ticks[0] == recording.ticks[0],
+              "a captured tick is the same tick after a trip through the file");
+
+    // Read back through the queries a game actually calls, rather than through
+    // the struct's own fields: the applier is a separate piece of code from the
+    // parser and can lose what the parser kept.
+    Input::BeginReplayedTick(parsed.ticks[0]);
+    CHECK_MSG(Input::IsDown("Fire"), "the replayed tick reads as held");
+    CHECK_MSG(Input::TickWasPressed("Fire"), "and as pressed");
+    CHECK_NEAR(Input::GetAxis("MoveX"), -1.0f);
+    Input::EndReplayedTick();
+
+    // Hand the devices back at rest. A case that leaves a key down hands it to
+    // whichever case runs next, where it arrives with no explanation.
+    resetDevices();
 }
 
 static void testTheRunCanBeAskedWhatATickShouldHaveHashedTo() {
@@ -553,6 +678,15 @@ static void testTheDevicesComeBackWhenTheTickEnds() {
     // Everything after the tick runs per frame - the editor camera, the UI,
     // ImGui - and a replay that left its recorded input installed would take the
     // view away from whoever is watching the replay.
+    //
+    // The reset is the point of the case, not scaffolding: "the devices have
+    // the input back" is a claim about what the DEVICES read, so it needs them
+    // in a known state. Input is file-static and outlives any one case, so
+    // without this the assertion below reads whatever the case before it left
+    // held - and this one used to pass only because nothing above it had ever
+    // touched a real key.
+    resetDevices();
+
     InputRecording recording = emptyRun(1);
     recording.ticks[0].axes = { { "MoveX", 1.0f } };
     recording.ticks[0].down = { "Fire" };
@@ -566,6 +700,251 @@ static void testTheDevicesComeBackWhenTheTickEnds() {
     CHECK_MSG(!Input::ReplayingTick(), "and it is not in force afterwards");
     CHECK_NEAR(Input::GetAxis("MoveX"), 0.0f);
     CHECK_MSG(!Input::IsDown("Fire"), "the devices have the input back");
+}
+
+
+// --- the pointer ------------------------------------------------------------
+
+static void testAPointerThatStopsMovingStaysWhereItIs() {
+    // THE CASE THE LEVEL ENCODING EXISTS FOR, and the one the obvious mistake
+    // fails. The mouse delta is skipped whenever it is zero, because a mouse
+    // that did not move contributes nothing. Copy that rule for the POSITION
+    // and every tick the player holds still is written as no position at all -
+    // which reads back as the origin, and every tap after the first still tick
+    // lands in the top-left corner of the screen.
+    InputRecording original = emptyRun(6);
+    for (size_t i = 0; i < original.ticks.size(); ++i) {
+        original.ticks[i].mousePosition = glm::vec2(640.0f, 360.0f);
+    }
+    // Moves once, on tick 3, and STAYS. The ticks after it write no pointer at
+    // all, so they are the ones that fail if the reader does not carry it.
+    for (size_t i = 3; i < original.ticks.size(); ++i) {
+        original.ticks[i].mousePosition = glm::vec2(700.0f, 360.0f);
+    }
+
+    const InputRecording parsed = roundTrip(original);
+    if (parsed.ticks.size() != 6) { CHECK_MSG(false, "six ticks came back"); return; }
+
+    CHECK_NEAR(parsed.ticks[0].mousePosition.x, 640.0f);
+    CHECK_NEAR(parsed.ticks[2].mousePosition.x, 640.0f);
+    CHECK_NEAR(parsed.ticks[3].mousePosition.x, 700.0f);
+
+    // The ones AFTER the move, which is where an encoder that only wrote
+    // changes but a reader that did not carry them forward would show it.
+    CHECK_NEAR(parsed.ticks[4].mousePosition.x, 700.0f);
+    CHECK_NEAR(parsed.ticks[5].mousePosition.x, 700.0f);
+    CHECK_NEAR(parsed.ticks[5].mousePosition.y, 360.0f);
+}
+
+static void testAPointerAtTheOriginCostsNothing() {
+    // The other half of the level rule: both sides start at the origin, so a
+    // session that never moves the mouse writes no pointer at all. Without
+    // this the encoder puts a line on tick zero of every recording ever made.
+    InputRecording original = emptyRun(50);
+    const std::string text = InputRecording::Write(original);
+    CHECK_MSG(text.find(" pointer ") == std::string::npos,
+              "a pointer that never left the origin is never written");
+
+    // And one that DID move writes exactly once for the move.
+    InputRecording moved = emptyRun(50);
+    for (size_t i = 20; i < moved.ticks.size(); ++i) {
+        moved.ticks[i].mousePosition = glm::vec2(12.0f, 34.0f);
+    }
+    const std::string movedText = InputRecording::Write(moved);
+    size_t count = 0;
+    for (size_t at = movedText.find(" pointer "); at != std::string::npos;
+         at = movedText.find(" pointer ", at + 1)) {
+        ++count;
+    }
+    CHECK_MSG(count == 1, "thirty ticks at one position is one line, got " +
+                              std::to_string(count));
+}
+
+// --- the touches ------------------------------------------------------------
+
+namespace {
+
+Contact aContact(int id, glm::vec2 position, glm::vec2 delta, ContactPhase phase) {
+    Contact contact;
+    contact.id = id;
+    contact.position = position;
+    contact.delta = delta;
+    contact.phase = phase;
+    return contact;
+}
+
+} // namespace
+
+static void testATouchSurvivesTheFileWithEveryFieldIntact() {
+    InputRecording original = emptyRun(4);
+    original.ticks[1].contacts = {
+        aContact(0, glm::vec2(101.5f, 202.25f), glm::vec2(0.0f), ContactPhase::Began),
+        aContact(7, glm::vec2(-3.75f, 9.125f), glm::vec2(1.5f, -2.5f), ContactPhase::Moved),
+    };
+    original.ticks[2].contacts = {
+        aContact(0, glm::vec2(111.0f, 222.0f), glm::vec2(9.5f, 19.75f), ContactPhase::Ended),
+    };
+
+    const InputRecording parsed = roundTrip(original);
+    if (parsed.ticks.size() != 4) { CHECK_MSG(false, "four ticks came back"); return; }
+
+    CHECK_MSG(parsed.ticks[1].contacts.size() == 2, "both touches came back");
+    if (parsed.ticks[1].contacts.size() != 2) return;
+
+    // FIELD BY FIELD. A comparison of the whole vector would pass on a parser
+    // that read the id and defaulted everything else, if the defaults happened
+    // to match - and the phase in particular is the field a gesture machine
+    // lives on.
+    const Contact& first = parsed.ticks[1].contacts[0];
+    CHECK_MSG(first.id == 0, "the id");
+    CHECK_NEAR(first.position.x, 101.5f);
+    CHECK_NEAR(first.position.y, 202.25f);
+    CHECK_MSG(first.phase == ContactPhase::Began, "the phase");
+
+    const Contact& second = parsed.ticks[1].contacts[1];
+    CHECK_MSG(second.id == 7, "the second id, which is not its index");
+    CHECK_NEAR(second.position.x, -3.75f);
+    CHECK_NEAR(second.delta.x, 1.5f);
+    CHECK_NEAR(second.delta.y, -2.5f);
+    CHECK_MSG(second.phase == ContactPhase::Moved, "a Moved is not a Began");
+
+    CHECK_MSG(parsed.ticks[2].contacts.size() == 1, "and the tick after has one");
+    if (parsed.ticks[2].contacts.size() == 1) {
+        CHECK_MSG(parsed.ticks[2].contacts[0].phase == ContactPhase::Ended,
+                  "an Ended survives, which is the frame a tap is decided on");
+    }
+
+    // AN EDGE, NOT A LEVEL. A tick with no touch line has no touches, and a
+    // finger carried forward across the ticks after it lifted would make every
+    // tap in a session last until the next one.
+    CHECK_MSG(parsed.ticks[3].contacts.empty(),
+              "a tick after the touches is empty rather than carrying them");
+    CHECK_MSG(parsed.ticks[0].contacts.empty(), "and so is the tick before");
+}
+
+static void testACorruptTouchIsRejectedRatherThanGuessedAt() {
+    // The file promises to reproduce a run. A contact with a field missing, or
+    // a phase that is not one, is a corrupt recording - and reading it as a
+    // plausible touch puts the divergence a long way from the line that caused
+    // it.
+    const std::string header =
+        "SUPERSONICREPLAY 1\n"
+        "scene assets/scenes/MainScene.scene\n"
+        "step 3c888889\n"
+        "ticks 1\n"
+        "action Fire\n";
+    const std::string footer = "end 1\n";
+
+    struct Case { const char* body; const char* why; };
+    const Case bad[] = {
+        { "t 0 touch 0,42ca0000,43520000,00000000,00000000\n", "five fields is not a contact" },
+        { "t 0 touch 0,42ca0000,43520000,00000000,00000000,1,2\n", "and neither is seven" },
+        { "t 0 touch 0,42ca0000,43520000,00000000,00000000,9\n", "9 is not a phase" },
+        { "t 0 touch 0,zzzz0000,43520000,00000000,00000000,1\n", "a position must be hex" },
+        { "t 0 touch 0\n", "an id on its own is not a contact" },
+    };
+
+    for (const Case& one : bad) {
+        const InputRecording out = InputRecording::Parse(header + one.body + footer, "corrupt");
+        CHECK_MSG(!out.ok, std::string(one.why) + ", but it parsed");
+        CHECK_MSG(!out.error.empty(), "and the refusal says something");
+    }
+
+    // The same line, correct, must parse - or the cases above prove only that
+    // the parser refuses everything, which every one of them would also show.
+    const InputRecording good = InputRecording::Parse(
+        header + "t 0 touch 0,42ca0000,43520000,00000000,00000000,1\n" + footer, "good");
+    CHECK_MSG(good.ok, "the well-formed version parses: " + good.error);
+    CHECK_MSG(good.ticks.size() == 1 && good.ticks[0].contacts.size() == 1,
+              "and carries its one contact");
+    if (!good.ticks.empty() && good.ticks[0].contacts.size() == 1) {
+        CHECK_MSG(good.ticks[0].contacts[0].phase == ContactPhase::Moved, "as a Moved");
+        CHECK_NEAR(good.ticks[0].contacts[0].position.x, 101.0f);
+    }
+}
+
+// --- the queries ------------------------------------------------------------
+
+static void testAReplayedTickAnswersThePointerQueriesTheGameCalls() {
+    // WHERE A RECORDED FIELD BECOMES REAL. Storing the pointer in the tick,
+    // writing it and parsing it back is worth nothing until Input::MousePosition
+    // and the contact queries consult it - and a game calls those, not the
+    // struct. This project has shipped the other shape: a field written,
+    // parsed, and never read, with every test green.
+    resetDevices();
+
+    // The DEVICES are somewhere else entirely, which is the point: a replay is
+    // watched by somebody whose mouse is wherever they left it.
+    RawInputState elsewhere{};
+    elsewhere.mousePosition = glm::vec2(5.0f, 5.0f);
+    Input::Update(elsewhere);
+
+    InputRecording recording = emptyRun(1);
+    recording.ticks[0].mousePosition = glm::vec2(640.0f, 360.0f);
+    recording.ticks[0].contacts = {
+        aContact(3, glm::vec2(640.0f, 360.0f), glm::vec2(2.0f, 0.0f), ContactPhase::Moved),
+    };
+
+    Input::BeginReplayedTick(recording.ticks[0]);
+    CHECK_NEAR(Input::MousePosition().x, 640.0f);
+    CHECK_NEAR(Input::MousePosition().y, 360.0f);
+    CHECK_MSG(Input::ContactCount() == 1, "the recorded contact is the one in force");
+
+    const Contact replayed = Input::GetContact(0);
+    CHECK_MSG(replayed.id == 3, "with its id");
+    CHECK_MSG(replayed.phase == ContactPhase::Moved, "and its phase");
+    CHECK_NEAR(replayed.position.x, 640.0f);
+
+    Contact byId;
+    CHECK_MSG(Input::TryGetContact(3, byId), "and it is findable by id");
+    CHECK_NEAR(byId.delta.x, 2.0f);
+    CHECK_MSG(!Input::TryGetContact(99, byId), "while one that is not there is not found");
+
+    // And the devices come back afterwards, like every other replayed read.
+    Input::EndReplayedTick();
+    CHECK_NEAR(Input::MousePosition().x, 5.0f);
+    CHECK_MSG(Input::ContactCount() == 0, "the watcher's own pointer is theirs again");
+
+    resetDevices();
+}
+
+static void testACaptureCarriesThePointerAndTheTouches() {
+    // Through the real devices, into the real capture: the half of the claim
+    // that hand-built ticks cannot make.
+    resetDevices();
+
+    RawInputState state{};
+    state.mousePosition = glm::vec2(321.0f, 123.0f);
+    state.mouseButtons[0] = true;
+    Input::SynthesiseMouseContact(state);
+    Input::Update(state);
+    Input::BeginTickInput();
+
+    const Input::TickInput captured = Input::CaptureTickInput();
+    CHECK_NEAR(captured.mousePosition.x, 321.0f);
+    CHECK_NEAR(captured.mousePosition.y, 123.0f);
+    CHECK_MSG(captured.contacts.size() == 1,
+              "the press the player is making is part of what the tick was handed");
+    if (captured.contacts.size() == 1) {
+        CHECK_MSG(captured.contacts[0].phase == ContactPhase::Began, "as a Began");
+        CHECK_NEAR(captured.contacts[0].position.x, 321.0f);
+    }
+
+    // All the way round, and read back through the queries.
+    InputRecording recording = emptyRun(1);
+    recording.ticks[0] = captured;
+    const InputRecording parsed = roundTrip(recording);
+    CHECK_MSG(parsed.ticks.size() == 1 && parsed.ticks[0] == captured,
+              "a captured tick with a touch in it is the same tick after the file");
+
+    if (parsed.ticks.size() == 1) {
+        Input::BeginReplayedTick(parsed.ticks[0]);
+        CHECK_MSG(Input::ContactCount() == 1, "and replays as one contact");
+        CHECK_NEAR(Input::MousePosition().x, 321.0f);
+        Input::EndReplayedTick();
+    }
+
+    resetDevices();
 }
 
 // --- the disk ---------------------------------------------------------------
@@ -617,6 +996,14 @@ static void runTests() {
     testANegativeZeroStaysNegative();
     testAnActionNameWithASpaceIsFine();
     testCheckpointsSurviveAndStayInOrder();
+    testACaptureSaysWhatTheDevicesWereDoing();
+    testACapturedTickReplaysAsItself();
+    testAPointerThatStopsMovingStaysWhereItIs();
+    testAPointerAtTheOriginCostsNothing();
+    testATouchSurvivesTheFileWithEveryFieldIntact();
+    testACorruptTouchIsRejectedRatherThanGuessedAt();
+    testAReplayedTickAnswersThePointerQueriesTheGameCalls();
+    testACaptureCarriesThePointerAndTheTouches();
     testTheRunCanBeAskedWhatATickShouldHaveHashedTo();
     testATruncatedFileIsRejected();
     testGarbageIsRejectedRatherThanGuessedAt();
@@ -631,4 +1018,4 @@ static void runTests() {
     testLoadingAFileThatIsNotThereSaysSo();
 }
 
-TEST_MAIN("test_replay", 90)
+TEST_MAIN("test_replay", 230)

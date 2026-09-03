@@ -56,6 +56,8 @@ std::unordered_set<std::string> g_replayPress;
 std::unordered_set<std::string> g_replayRelease;
 std::unordered_map<std::string, float> g_replayAxes;
 glm::vec2 g_replayMouseDelta{0.0f};
+glm::vec2 g_replayMousePosition{0.0f};
+std::vector<Contact> g_replayContacts;
 
 glm::vec2 g_mouseDelta{0.0f};
 
@@ -222,15 +224,24 @@ void Input::SynthesiseMouseContact(RawInputState& state) {
     }
 }
 
-int Input::ContactCount() { return static_cast<int>(g_contacts.size()); }
+// THE QUERIES ARE WHAT MAKES A RECORDED FIELD REAL. Storing the contacts in
+// the tick and parsing them back is worth nothing until the function a game
+// calls consults them, which is why these three go through one accessor rather
+// than reading g_contacts directly.
+const std::vector<Contact>& Input::contactsNow() {
+    return g_replayingTick ? g_replayContacts : g_contacts;
+}
+
+int Input::ContactCount() { return static_cast<int>(contactsNow().size()); }
 
 Contact Input::GetContact(int index) {
-    if (index < 0 || index >= static_cast<int>(g_contacts.size())) return Contact{};
-    return g_contacts[static_cast<size_t>(index)];
+    const std::vector<Contact>& contacts = contactsNow();
+    if (index < 0 || index >= static_cast<int>(contacts.size())) return Contact{};
+    return contacts[static_cast<size_t>(index)];
 }
 
 bool Input::TryGetContact(int id, Contact& out) {
-    for (const Contact& contact : g_contacts) {
+    for (const Contact& contact : contactsNow()) {
         if (contact.id != id) continue;
         out = contact;
         return true;
@@ -487,7 +498,12 @@ float Input::GetAxis(const std::string& axis) {
     return std::clamp(result, -1.0f, 1.0f);
 }
 
-glm::vec2 Input::MousePosition() { return g_current.mousePosition; }
+// Replayed like the contacts and for the same reason: a game that asks where
+// the pointer is during a tick has to be told where it was, not where whoever
+// is watching the replay happens to be holding their mouse.
+glm::vec2 Input::MousePosition() {
+    return g_replayingTick ? g_replayMousePosition : g_current.mousePosition;
+}
 
 // The one query whose replayed answer differs from its live one for a reason
 // that is not about recording at all: a delta is a per-FRAME difference, and a
@@ -520,7 +536,9 @@ bool Input::TickInput::operator==(const TickInput& other) const {
     // one", which is what the delta encoding asks; it is not a set comparison
     // and would be wrong as one.
     return down == other.down && pressed == other.pressed && released == other.released &&
-           axes == other.axes && mouseDelta == other.mouseDelta;
+           axes == other.axes && mouseDelta == other.mouseDelta &&
+           mousePosition == other.mousePosition && contacts == other.contacts &&
+           clicked == other.clicked;
 }
 
 Input::TickInput Input::CaptureTickInput() {
@@ -547,6 +565,13 @@ Input::TickInput Input::CaptureTickInput() {
     }
 
     captured.mouseDelta = MouseDelta();
+    captured.mousePosition = MousePosition();
+
+    // The pointer's contacts, which is what a game that reads taps and drags
+    // is actually handed. Without these a recording of a session played with
+    // the mouse reproduces the KEYS and none of the pointing, and the replay
+    // diverges the moment anything is clicked.
+    captured.contacts = g_contacts;
     return captured;
 }
 
@@ -561,6 +586,8 @@ void Input::BeginReplayedTick(const TickInput& input) {
     g_replayRelease.insert(input.released.begin(), input.released.end());
     for (const auto& [name, value] : input.axes) g_replayAxes[name] = value;
     g_replayMouseDelta = input.mouseDelta;
+    g_replayMousePosition = input.mousePosition;
+    g_replayContacts = input.contacts;
 
     // Raised last, so a query that somehow ran during the copy above would read
     // the live devices rather than a half-filled recording.
@@ -579,6 +606,8 @@ void Input::EndReplayedTick() {
     g_replayRelease.clear();
     g_replayAxes.clear();
     g_replayMouseDelta = glm::vec2(0.0f);
+    g_replayMousePosition = glm::vec2(0.0f);
+    g_replayContacts.clear();
 }
 
 bool Input::ReplayingTick() { return g_replayingTick; }

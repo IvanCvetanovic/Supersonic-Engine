@@ -323,7 +323,7 @@ verified by a screenshot of geometry it never touched.
 | `test_shadowcache` | The signature that lets a depth pass be skipped, and what must dirty it |
 | `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped |
 | `test_determinism` | That one binary over one scene produces the same frames twice |
-| `test_replay` | Recording a run's input and reading it back: levels carry, edges do not, floats keep their bits, and a truncated file is refused |
+| `test_replay` | Recording a run's input and reading it back: levels carry, edges do not, floats keep their bits, and a truncated file is refused. Also the POINTER — where it is, and the touches on it — which is what makes a session played with a mouse reproducible, and the capture function the engine actually records through, which nothing reached before |
 | `test_camera` | That the fly camera can be turned off, in both halves, that a scene written before the switch existed still flies, and that the editor's own eye can go flat and come back |
 | `test_sprite` | Where a cell of a sprite sheet is, when a flipbook advances, that a one-shot stops on its last frame rather than its first — and that the state hash sees which frame it is on, while ignoring the grid it was authored with |
 | `test_tilemap` | Where a cell sits in the world and in the atlas, that a flip swaps one axis and leaves the other, that a map is uploaded once and then replaced behind the same id rather than re-uploaded per stroke, that an emptied map stops drawing instead of showing the fallback cube, and that the state hash sees the cells and not the atlas |
@@ -956,6 +956,13 @@ HUSK's nineteen animated models. What is left is here.
 
 - A replay is scoped to ONE scene. The header names one, and a run that changes
   level part way through is not something `--replay` reproduces.
+- **A replay does not carry the VIEWPORT.** A recorded tick holds where the
+  pointer was in screen pixels, and a game turns that into a world position
+  through the rectangle the viewport occupies — so the same recording replayed
+  into a differently sized or positioned viewport aims somewhere else. Inside
+  the running editor that rectangle follows the window. The recording is
+  reproducible on the layout it was made on, and the fix is to record the
+  rectangle beside the pointer.
 - The state hash covers what a tick writes — transforms, bodies, script state,
   and the world's gravity and ground plane. It does not cover the rest of
   `registry.ctx()`, which is caches and pointers to subsystems, so a tick-zero

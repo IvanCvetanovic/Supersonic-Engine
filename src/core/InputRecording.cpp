@@ -95,6 +95,62 @@ bool splitList(const std::string& token, std::vector<uint64_t>& out) {
     return true;
 }
 
+// "0,42280000,43160000,00000000,00000000,1;1,..." -> two contacts.
+//
+// Strict on every field, because this is a parser for a file that promises to
+// reproduce a run: a contact whose phase is 9 or whose position is half missing
+// is a corrupt recording, and reading it as a plausible touch would put the
+// divergence somewhere far away from the line that caused it.
+bool parseContacts(const std::string& token, std::vector<Contact>& out) {
+    out.clear();
+    if (token.empty()) return false;
+
+    size_t start = 0;
+    while (start <= token.size()) {
+        const size_t semi = token.find(';', start);
+        const std::string piece = token.substr(
+            start, semi == std::string::npos ? std::string::npos : semi - start);
+
+        // id, x, y, dx, dy, phase - six fields, no more and no fewer.
+        std::string fields[6];
+        size_t count = 0;
+        size_t at = 0;
+        while (count < 6) {
+            const size_t comma = piece.find(',', at);
+            fields[count++] = piece.substr(
+                at, comma == std::string::npos ? std::string::npos : comma - at);
+            if (comma == std::string::npos) break;
+            at = comma + 1;
+            if (count == 6) return false;   // a seventh field
+        }
+        if (count != 6) return false;
+
+        Contact contact;
+        uint64_t id = 0;
+        if (!parseIndex(fields[0], id)) return false;
+        contact.id = static_cast<int>(id);
+
+        uint64_t bits[4] = {0, 0, 0, 0};
+        for (int i = 0; i < 4; ++i) {
+            if (!parseHex(fields[1 + static_cast<size_t>(i)], 8, bits[i])) return false;
+        }
+        contact.position = glm::vec2(floatFrom(static_cast<uint32_t>(bits[0])),
+                                     floatFrom(static_cast<uint32_t>(bits[1])));
+        contact.delta = glm::vec2(floatFrom(static_cast<uint32_t>(bits[2])),
+                                  floatFrom(static_cast<uint32_t>(bits[3])));
+
+        uint64_t phase = 0;
+        if (!parseIndex(fields[5], phase)) return false;
+        if (phase > static_cast<uint64_t>(ContactPhase::Ended)) return false;
+        contact.phase = static_cast<ContactPhase>(phase);
+
+        out.push_back(contact);
+        if (semi == std::string::npos) break;
+        start = semi + 1;
+    }
+    return true;
+}
+
 std::string joinList(const std::vector<uint64_t>& values) {
     if (values.empty()) return "-";
     std::string out;
@@ -184,6 +240,8 @@ std::string InputRecording::Write(const InputRecording& recording) {
     // never carried, so they are not here.
     std::vector<uint64_t> previousDown;
     std::unordered_map<uint64_t, uint32_t> previousAxis;
+    uint32_t previousPointerX = 0;
+    uint32_t previousPointerY = 0;
     bool first = true;
 
     for (size_t i = 0; i < recording.ticks.size(); ++i) {
@@ -246,6 +304,53 @@ std::string InputRecording::Write(const InputRecording& recording) {
                  << hex(bitsOf(tick.mouseDelta.y), 8);
         }
 
+        // THE POINTER IS A LEVEL AND THE RULE ABOVE IS THE WRONG ONE FOR IT.
+        // The delta skips itself whenever it is zero, because a mouse that did
+        // not move contributes nothing. A mouse that is not moving still has a
+        // POSITION, and a tick that skipped it on those terms would be read
+        // back at the origin - so every gesture after the player held still for
+        // one tick would aim somewhere else. Absent here means UNCHANGED.
+        //
+        // And unchanged from ZERO on the first tick, with no exception of the
+        // kind the axes need. That exception exists because the reader learns
+        // which axes are in the set from seeing them assigned, so an axis that
+        // sat at rest all session and was never written would come back missing
+        // rather than zero. The pointer is one field that always exists: both
+        // sides start it at the origin, so a session that begins there agrees
+        // without being told, exactly as `down` above does. Writing it anyway
+        // would put a line on tick zero of every recording, which is a cost the
+        // rest of this encoder is built to avoid - and it did: an existing case
+        // measuring "a key held for three seconds is two lines" read three.
+        const uint32_t pointerX = bitsOf(tick.mousePosition.x);
+        const uint32_t pointerY = bitsOf(tick.mousePosition.y);
+        if (pointerX != previousPointerX || pointerY != previousPointerY) {
+            line << " pointer " << hex(pointerX, 8) << ',' << hex(pointerY, 8);
+            previousPointerX = pointerX;
+            previousPointerY = pointerY;
+        }
+
+        // The touches, all of them or none. Absent means NO contacts rather
+        // than unchanged: nobody pressing anything is the common tick, so this
+        // costs nothing on almost every line, and "they all lifted" is then
+        // just the absence rather than a marker for an empty list.
+        //
+        // Semicolons between contacts, commas inside one. The id is decimal
+        // because it is an id; every float is hex bits because this file
+        // promises to reproduce a run and a decimal float does not.
+        if (!tick.contacts.empty()) {
+            line << " touch ";
+            for (size_t c = 0; c < tick.contacts.size(); ++c) {
+                const Contact& contact = tick.contacts[c];
+                if (c != 0) line << ';';
+                line << contact.id << ','
+                     << hex(bitsOf(contact.position.x), 8) << ','
+                     << hex(bitsOf(contact.position.y), 8) << ','
+                     << hex(bitsOf(contact.delta.x), 8) << ','
+                     << hex(bitsOf(contact.delta.y), 8) << ','
+                     << static_cast<int>(contact.phase);
+            }
+        }
+
         first = false;
 
         // A tick that changed nothing and did nothing writes no line at all,
@@ -294,6 +399,7 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
     // the header's tick count may legitimately exceed the last line's index.
     std::vector<uint64_t> currentDown;
     std::unordered_map<uint64_t, uint32_t> currentAxis;
+    glm::vec2 currentPointer{0.0f};
 
     struct PendingTick {
         uint64_t index{0};
@@ -303,6 +409,8 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
         std::vector<uint64_t> released;
         std::vector<uint64_t> clicked;
         glm::vec2 mouse{0.0f};
+        glm::vec2 pointer{0.0f};
+        std::vector<Contact> contacts;
     };
     std::vector<PendingTick> pending;
     uint64_t previousTickIndex = 0;
@@ -431,6 +539,21 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
                     }
                     entry.mouse = glm::vec2(floatFrom(static_cast<uint32_t>(x)),
                                             floatFrom(static_cast<uint32_t>(y)));
+                } else if (segment == "pointer") {
+                    const size_t comma = value.find(',');
+                    uint64_t x = 0;
+                    uint64_t y = 0;
+                    if (comma == std::string::npos ||
+                        !parseHex(value.substr(0, comma), 8, x) ||
+                        !parseHex(value.substr(comma + 1), 8, y)) {
+                        return fail(lineNumber, "'" + value + "' is not a pointer position");
+                    }
+                    currentPointer = glm::vec2(floatFrom(static_cast<uint32_t>(x)),
+                                               floatFrom(static_cast<uint32_t>(y)));
+                } else if (segment == "touch") {
+                    if (!parseContacts(value, entry.contacts)) {
+                        return fail(lineNumber, "'" + value + "' is not a list of contacts");
+                    }
                 } else {
                     return fail(lineNumber, "'" + segment + "' is not something a tick carries");
                 }
@@ -438,6 +561,7 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
 
             entry.down = currentDown;
             entry.axes = currentAxis;
+            entry.pointer = currentPointer;
             pending.push_back(std::move(entry));
             continue;
         }
@@ -541,6 +665,7 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
 
     std::vector<uint64_t> down;
     std::unordered_map<uint64_t, uint32_t> axes;
+    glm::vec2 pointer{0.0f};
     size_t next = 0;
 
     for (uint64_t index = 0; index < declaredTicks; ++index) {
@@ -549,11 +674,17 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
             line = &pending[next];
             down = line->down;
             axes = line->axes;
+            pointer = line->pointer;
             ++next;
         }
 
         Input::TickInput& tick = recording.ticks[static_cast<size_t>(index)];
         tick.down = namesOf(down, actionNames);
+
+        // Carried across the ticks that wrote no line, like the levels above
+        // and unlike the contacts below, which are an edge in every sense that
+        // matters: a tick with no touch line had no touches.
+        tick.mousePosition = pointer;
 
         tick.axes.reserve(axes.size());
         for (size_t axisIdx = 0; axisIdx < axisNames.size(); ++axisIdx) {
@@ -570,6 +701,7 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
                 tick.clicked.push_back(static_cast<uint32_t>(id));
             }
             tick.mouseDelta = line->mouse;
+            tick.contacts = line->contacts;
         }
     }
 

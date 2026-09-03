@@ -150,6 +150,13 @@ The file is text and delta-encoded — three seconds of the demo scene is about
 the two rules that make it work: levels persist between ticks and edges do not,
 and floats are written as their bits.
 
+> **This is about the DEMO SCENE, not about the engine.** Since the pointer
+> joined a recorded tick, a session played with a mouse — Wolf Brigade's taps,
+> drags and orders included — records and replays, and `test_wb_hud` carries
+> that claim end to end: a tap recorded in one run selects the same unit in the
+> next, through the file, with the devices left at rest. What is still scoped is
+> the SCREENSHOT-level check below.
+>
 > A replay only tests what the scene actually reads. **`MainScene` reads no
 > input inside a tick**, so replaying it reproduces whatever it is fed — change
 > a recorded mouse delta and the hash is identical. That is a property of the

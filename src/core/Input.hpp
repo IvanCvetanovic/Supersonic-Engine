@@ -179,6 +179,17 @@ struct Contact {
     glm::vec2 delta{0.0f};
 
     ContactPhase phase{ContactPhase::Began};
+
+    // Here so a recorded tick can be compared with the tick it came from.
+    // Bitwise on the floats is what that question wants, but plain equality is
+    // what it gets: both sides of any comparison this serves have been through
+    // the recording's hex encoding, which is bit-exact, so the one case the two
+    // disagree about - a negative zero against a positive one - cannot arise.
+    bool operator==(const Contact& other) const {
+        return id == other.id && position == other.position && delta == other.delta &&
+               phase == other.phase;
+    }
+    bool operator!=(const Contact& other) const { return !(*this == other); }
 };
 
 // What the pointer is doing, in the terms a game means them.
@@ -306,6 +317,27 @@ public:
         std::vector<std::string> released;
         std::vector<std::pair<std::string, float>> axes;
         glm::vec2 mouseDelta{0.0f};
+
+        // WHERE the pointer is, which is a different kind of thing from the
+        // delta above and is encoded differently for it.
+        //
+        // A LEVEL. Absent from a tick line means UNCHANGED, and the first tick
+        // writes it whatever it reads. The delta's rule - skip it when it is
+        // zero, because a mouse that did not move contributes nothing - is
+        // exactly wrong here: a pointer that stops moving still has a position,
+        // and borrowing that rule would snap it to the origin on the first
+        // still tick and aim every gesture after it somewhere else.
+        glm::vec2 mousePosition{0.0f};
+
+        // The touches this tick was handed, in the order Input reports them.
+        //
+        // Absent means NO contacts. That is the common case - nobody is
+        // pressing anything - so it costs nothing on almost every tick, and any
+        // tick with a touch writes all of them. The other convention, unchanged,
+        // would be cheaper for a finger held across many ticks and would leave
+        // no way to say "they all lifted" without inventing a marker for the
+        // empty list.
+        std::vector<Contact> contacts;
 
         // UI buttons this tick was handed, as plain entity ids.
         //
@@ -491,6 +523,11 @@ public:
     // The binding tables themselves live entirely in the .cpp. Nothing outside
     // needs their layout, and keeping them out means adding a new source type
     // does not recompile everything that reads input.
+private:
+    // Whichever contact list is in force - the devices', or the recorded tick's.
+    // Every public contact query goes through this, so a replay cannot reach one
+    // of them and miss another.
+    static const std::vector<Contact>& contactsNow();
 };
 
 } // namespace Supersonic

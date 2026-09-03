@@ -29,6 +29,7 @@
 #include "sim/Unit.hpp"
 #include "core/ViewportInfo.hpp"
 #include "core/Input.hpp"
+#include "core/InputRecording.hpp"
 
 #include <imgui.h>
 
@@ -1233,6 +1234,112 @@ static void testAPressInterruptedByAPauseDoesNotJamTheGame() {
               "holding a finger that lifted while the game was not looking");
 }
 
+
+// THE ENGINE'S HEADLINE PROPERTY, MEASURED AGAINST THE GAME THAT USES IT.
+//
+// Every determinism claim in this repository was, until this case, scoped to
+// scenes that read no input inside a tick - verify-replay.ps1 says so in its own
+// header, and test_replay carries the recorded-input half against a synthetic
+// simulation. Wolf Brigade is the first thing in the tree that reads a POINTER
+// inside a tick and hashes its own simulation, so it is the first place the two
+// halves have to meet.
+//
+// They did not. The pointer's position was never in TickInput and neither were
+// its contacts, so a recording of a played session reproduced the keyboard and
+// none of the pointing: every tap, drag and order was silently absent, and the
+// replay diverged the moment the player did anything.
+//
+// This records a tap through the real capture, replays it into a FRESH layer
+// through Input's own replay path, and asserts the same unit ends up selected.
+static void testATapRecordedInOneRunIsTheSameTapInTheNext() {
+    resetInput();
+
+    // --- record ---
+    entt::registry live;
+    WolfBrigadeLayer playing;
+    playing.OnAttach(live);
+    publishViewport(live);
+
+    Match* match = playing.CurrentMatch();
+    if (match == nullptr || match->Units().empty()) {
+        CHECK_MSG(false, "the fixture needs a match with a unit in it");
+        return;
+    }
+    const glm::vec2 unit = match->Units().front()->Position();
+    centreCameraOn(live, unit);
+
+    glm::vec2 at(0.0f);
+    CHECK_MSG(simToScreen(live, unit, at), "the unit is on screen to be tapped");
+
+    // Four ticks: idle, press, hold, release. The tap is decided on the last.
+    InputRecording recording;
+    recording.scenePath = "wolfbrigade";
+    const bool pressed[4] = { false, true, true, false };
+    for (int i = 0; i < 4; ++i) {
+        RawInputState state{};
+        state.mousePosition = at;
+        state.mouseButtons[0] = pressed[i];
+        Input::SynthesiseMouseContact(state);
+        Input::Update(state);
+        Input::BeginTickInput();
+
+        recording.ticks.push_back(Input::CaptureTickInput());
+        playing.OnFixedUpdate(live, kTick);
+    }
+
+    CHECK_MSG(playing.CurrentMatch()->Picked().HasSelection(),
+              "the live run selected something, or there is no recording worth replaying");
+
+    // THE RECORDING HAS TO CONTAIN THE POINTER. Without this the case below
+    // could pass on a replay that re-read the live devices, which is exactly
+    // the bug being fixed - the devices are still sitting where the tap left
+    // them.
+    size_t withContacts = 0;
+    for (const Input::TickInput& tick : recording.ticks) {
+        if (!tick.contacts.empty()) ++withContacts;
+    }
+    CHECK_MSG(withContacts >= 2, "the press and the release are both in the recording, got " +
+                                     std::to_string(withContacts) + " tick(s) with contacts");
+    CHECK_NEAR(recording.ticks[1].mousePosition.x, at.x);
+
+    // Through the FILE, not just the struct: a recording that only works in
+    // memory is not a recording.
+    const InputRecording parsed =
+        InputRecording::Parse(InputRecording::Write(recording), "wb");
+    CHECK_MSG(parsed.ok, "the session's file parses: " + parsed.error);
+    if (!parsed.ok || parsed.ticks.size() != 4) return;
+
+    // --- replay ---
+    //
+    // The devices are left holding NOTHING and pointing at the origin, so
+    // anything the replayed run reads from them lands in the corner of the
+    // screen and selects nobody.
+    resetInput();
+
+    entt::registry replayed;
+    WolfBrigadeLayer watching;
+    watching.OnAttach(replayed);
+    publishViewport(replayed);
+
+    Match* second = watching.CurrentMatch();
+    if (second == nullptr || second->Units().empty()) {
+        CHECK_MSG(false, "the replayed run booted a match");
+        return;
+    }
+    centreCameraOn(replayed, second->Units().front()->Position());
+
+    for (const Input::TickInput& tick : parsed.ticks) {
+        Input::BeginReplayedTick(tick);
+        watching.OnFixedUpdate(replayed, kTick);
+        Input::EndReplayedTick();
+    }
+
+    CHECK_MSG(watching.CurrentMatch()->Picked().HasSelection(),
+              "a tap that happened in the recorded run happens again in the replayed one");
+
+    resetInput();
+}
+
 static void runTests() {
     testAttachingTheLayerBuildsTheHud();
     testTheHudReadsTheSimulation();
@@ -1260,6 +1367,7 @@ static void runTests() {
     testAClickTheEditorOwnsIsNotTheGamesToActutOn();
     testWithNoViewportPublishedNothingIsSelected();
     testAPressInterruptedByAPauseDoesNotJamTheGame();
+    testATapRecordedInOneRunIsTheSameTapInTheNext();
 }
 
-TEST_MAIN("test_wb_hud", 110)
+TEST_MAIN("test_wb_hud", 125)
