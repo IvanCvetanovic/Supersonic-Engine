@@ -404,6 +404,29 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 ImGui::SetTooltip("A receiver-only surface - a floor, a backdrop - costs\n"
                                   "nothing to leave out of the eighteen depth passes.");
             }
+
+            // The one control a flat scene cannot do without, and the last
+            // field of this kind that could only be set by hand-editing the
+            // scene file. It was serialised, read by both sorts and decisive
+            // for every pair of coplanar quads - which is what a 2D scene is
+            // made of - and the editor had no way to write it, exactly as it
+            // had no way to make a camera orthographic until the 2D lane
+            // needed one.
+            int sortKey = static_cast<int>(renderable.sortKey);
+            if (ImGui::DragInt("Draw Order", &sortKey, 0.2f, -4096, 4096)) {
+                renderable.sortKey = static_cast<int32_t>(sortKey);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "Which of two surfaces the depth buffer CANNOT separate is drawn on top.\n"
+                    "Higher is later, and later wins at equal depth.\n\n"
+                    "It decides ties only: it cannot pull a surface in front of geometry\n"
+                    "that is genuinely nearer, because the depth test still runs. For flat\n"
+                    "quads sharing a plane that is the whole problem; for anything else it\n"
+                    "is not a layering system.\n\n"
+                    "Zero is no opinion, and a scene where every key is zero skips the sort\n"
+                    "entirely rather than performing one and finding it changed nothing.");
+            }
         }
     }
 

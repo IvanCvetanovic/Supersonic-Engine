@@ -822,9 +822,15 @@ Android "not functional"; extending that register forward costs nothing.
       screen in geometry. For a 2D game that is most of the frame, and it is the
       first thing an art director picks. There is a **Background** control on
       the scene now: the sky, or a flat authored colour. Choosing the colour
-      does not paint over the sky, it stops recording it — measured on a scene
-      holding nothing else, the sky costs one draw call and two pipeline binds
-      and the colour costs zero and one. It lives in the scene's render
+      does not paint over the sky, it stops recording it. What that saves is a
+      call and a pipeline bind, and it is worth being exact that the saving is
+      *constant* rather than proportional: on a scene holding nothing else the
+      sky costs one draw call and two pipeline binds against the colour's zero
+      and one, and on the twelve-drawable AllPasses fixture the same choice
+      takes twelve calls and four binds down to eleven and three. The sky is
+      recorded between the opaque and blended passes precisely so depth
+      rejection makes its *shading* nearly free, so what is being removed is
+      the submission, not the pixels. It lives in the scene's render
       settings, so it is saved, undoable, and restored by Stop, none of which
       it had to be told about. The picker converts to linear, because the
       composite at the end of the chain encodes once and would otherwise encode
