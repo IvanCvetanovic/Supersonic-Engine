@@ -58,8 +58,28 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 function Invoke-Engine([string[]]$EngineArgs) {
     # Output captured rather than streamed: the verdict line is what this script
     # decides on, and the profiler report around it is noise here.
-    $out = & $exe @EngineArgs 2>&1 | Out-String
-    return [pscustomobject]@{ Code = $LASTEXITCODE; Output = $out }
+    #
+    # THE EXIT CODE IS THE VERDICT, NOT WHETHER ANYTHING REACHED STDERR. With
+    # $ErrorActionPreference at Stop - which the rest of this script needs, so
+    # that a Write-Error below actually stops it - PowerShell turns ANY line a
+    # native program writes to stderr into a terminating NativeCommandError.
+    # A Vulkan loader that warns about somebody else's overlay layer therefore
+    # killed this script before it ran a single check, with a message about
+    # naming policy that says nothing about determinism. It is not a rare
+    # configuration: any overlay that injects a Vulkan layer does it.
+    #
+    # So the preference is lowered around the call and put straight back. The
+    # engine's own failures still reach us - through $LASTEXITCODE, which is
+    # what every caller here already tests.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = & $exe @EngineArgs 2>&1 | Out-String
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    return [pscustomobject]@{ Code = $code; Output = $out }
 }
 
 Write-Host "1/3  Recording $Frames frames of $Scene ..." -ForegroundColor Cyan
