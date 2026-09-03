@@ -26,6 +26,9 @@
 #include "core/Components.hpp"
 #include "core/Application.hpp"
 #include "core/UISystem.hpp"
+#include "sim/Unit.hpp"
+#include "core/ViewportInfo.hpp"
+#include "core/Input.hpp"
 
 #include <imgui.h>
 
@@ -37,6 +40,7 @@
 #include "sim/WaveDirector.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -922,6 +926,243 @@ static void testRestartFromTheResultStartsANewRun() {
     layer.OnDetach(registry);
 }
 
+// --- the player -------------------------------------------------------------
+
+namespace {
+
+// Input is FILE-STATIC and outlives a registry, so a case that left a contact
+// down hands it to the next one - where the press arrives as a MOVED on a
+// finger nothing is tracking, is dropped, and the tap that follows does
+// nothing at all. That is exactly how these cases first failed, and the probe
+// that found it showed a contact present on every tick of every test.
+//
+// Two empty frames: one to lift whatever was held, one to retire the Ended
+// that lifting produced.
+void resetInput() {
+    Input::ClearBindings();
+    Input::SetCursorMode(CursorMode::Normal);
+    Input::SuppressCursorCapture(false);
+    Input::SetWindowFocused(true);
+    Input::Update(RawInputState{});
+    Input::Update(RawInputState{});
+}
+
+// A viewport the size of the window, with the pointer over it. Published the
+// way EditorLayer publishes it every frame, which is the only way the layer
+// can find out where its own picture is.
+void publishViewport(entt::registry& registry, bool pointerOverGame = true) {
+    ViewportInfo info;
+    info.rect = UIRect{ glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f) };
+    info.pointerOverGame = pointerOverGame;
+    registry.ctx().insert_or_assign<ViewportInfo>(std::move(info));
+}
+
+entt::entity primaryCamera(entt::registry& registry) {
+    for (auto [entity, camera] : registry.view<const CameraComponent>().each()) {
+        if (camera.isPrimary) return entity;
+    }
+    return entt::null;
+}
+
+// Puts the lane camera on a point in the simulation, so a test can aim at a
+// unit wherever the run happened to place it.
+//
+// Needed rather than convenient: the camera is framed on the player's end of
+// the lane and a six-unit window is about a sixth of a six-thousand-pixel
+// world, so a unit the run spawned elsewhere projects off screen and a tap
+// aimed at it lands nowhere. Asserting the projection would then fail for a
+// reason that has nothing to do with the wiring under test.
+void centreCameraOn(entt::registry& registry, const glm::vec2& sim) {
+    const entt::entity entity = primaryCamera(registry);
+    if (entity == entt::null) return;
+    auto& camera = registry.get<CameraComponent>(entity);
+    camera.position.x = sim.x / 100.0f;
+    camera.position.y = (800.0f - sim.y) / 100.0f;
+    camera.updateCameraVectors();
+    if (auto* transform = registry.try_get<TransformComponent>(entity)) {
+        transform->position = camera.position;
+    }
+}
+
+// Where on screen a point in the simulation's pixels lands, which is the
+// inverse of what the layer computes - so a test can aim at a unit.
+//
+// Returns false when the point is not on screen at all, which is a different
+// failure from a tap that missed and has to be told apart: a test aiming at
+// something outside the camera's window is testing its own arithmetic.
+bool simToScreen(entt::registry& registry, const glm::vec2& sim, glm::vec2& outScreen) {
+    const auto* viewport = registry.ctx().find<ViewportInfo>();
+    const entt::entity entity = primaryCamera(registry);
+    if (viewport == nullptr || entity == entt::null) return false;
+
+    const auto& camera = registry.get<CameraComponent>(entity);
+    const glm::vec3 world(sim.x / 100.0f, (800.0f - sim.y) / 100.0f, 0.0f);
+    const glm::mat4 viewProj = camera.getProjectionMatrix() * camera.getViewMatrix();
+
+    glm::vec3 screen(0.0f);
+    if (!UICanvas::ProjectToScreen(viewProj, world, viewport->rect, screen)) return false;
+    outScreen = glm::vec2(screen.x, screen.y);
+    return true;
+}
+
+// Presses and releases at a screen point, ticking the layer between, which is
+// what a tap is: down for a tick, up the next.
+void tapAt(entt::registry& registry, WolfBrigadeLayer& layer, const glm::vec2& screenPoint) {
+    RawInputState state{};
+    state.mousePosition = screenPoint;
+    state.mouseButtons[0] = true;
+    Input::SynthesiseMouseContact(state);
+    Input::Update(state);
+    layer.OnFixedUpdate(registry, kTick);
+
+    state.mouseButtons[0] = false;
+    Input::SynthesiseMouseContact(state);
+    Input::Update(state);
+    layer.OnFixedUpdate(registry, kTick);
+}
+
+// Aims at a point in the simulation and taps it. Centres the view first, and
+// says so when the point could not be projected at all - which is a fault in
+// the test rather than in the wiring it is exercising.
+bool tapAtSim(entt::registry& registry, WolfBrigadeLayer& layer, const glm::vec2& sim) {
+    centreCameraOn(registry, sim);
+    glm::vec2 screen(0.0f);
+    if (!simToScreen(registry, sim, screen)) return false;
+    tapAt(registry, layer, screen);
+    return true;
+}
+
+} // namespace
+
+static void testATapSelectsTheUnitUnderIt() {
+    resetInput();
+    // THE CLAIM THE WHOLE PORT RESTS ON, and it was false until now: the
+    // gesture machine, the selection and the orders were all ported, all
+    // mutation-tested, and called by nothing but their own suites. A player
+    // could not select a unit, could not order one anywhere, and could not
+    // place a building - the game rendered its own simulation and took no
+    // part in it.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    publishViewport(registry);
+
+    Match* match = layer.CurrentMatch();
+    CHECK_MSG(match != nullptr, "there is a match to play");
+    if (match == nullptr) return;
+
+    // A worker the run starts with. Its position is the simulation's, which is
+    // what the screen conversion has to land on.
+    CHECK_MSG(!match->Units().empty(), "the run starts with something to select");
+    if (match->Units().empty()) return;
+
+    const glm::vec2 unitPosition = match->Units().front()->Position();
+    CHECK_MSG(!match->Picked().HasSelection(), "and nothing is selected to begin with");
+
+    CHECK_MSG(tapAtSim(registry, layer, unitPosition), "the unit is on screen to be tapped");
+
+    CHECK_MSG(layer.CurrentMatch()->Picked().HasSelection(),
+              "a tap on a unit selects it");
+}
+
+static void testATapOnEmptyGroundOrdersTheSelectionThere() {
+    resetInput();
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    publishViewport(registry);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr || match->Units().empty()) {
+        CHECK_MSG(false, "the fixture needs a match with a unit in it");
+        return;
+    }
+
+    WolfBrigade::Unit* unit = match->Units().front().get();
+    const glm::vec2 start = unit->Position();
+    CHECK_MSG(tapAtSim(registry, layer, start), "the unit is on screen");
+    CHECK_MSG(match->Picked().HasSelection(), "selected first");
+
+    // Somewhere along the lane with nothing on it, and inside the camera's
+    // window so the conversion is not being asked about off-screen ground.
+    const glm::vec2 target(start.x + 120.0f, start.y);
+    CHECK_MSG(tapAtSim(registry, layer, target), "and so is the ground it is sent to");
+
+    // ASSERTED BY WALKING, because there is no move-target accessor and
+    // because the order having been recorded is a weaker claim than the unit
+    // acting on it. Twenty ticks is two thirds of a second at this game's
+    // rate, which is plenty to leave the spot it was standing on.
+    for (int i = 0; i < 20; ++i) layer.OnFixedUpdate(registry, kTick);
+
+    const glm::vec2 moved = unit->Position();
+    CHECK_MSG(moved.x > start.x + 1.0f,
+              "a second tap on empty ground sends the selection there, and it goes: "
+              "started at " + std::to_string(start.x) + ", reached " +
+                  std::to_string(moved.x));
+}
+
+static void testAClickTheEditorOwnsIsNotTheGamesToActutOn() {
+    resetInput();
+    // The pointer is over an inspector field, a menu, or a gizmo being
+    // dragged. A point inside the viewport rectangle is not enough - the
+    // editor says whether the click was the game's, and a game that acted on
+    // one meant for a panel would select a unit while somebody typed a name.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    publishViewport(registry, /*pointerOverGame=*/false);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr || match->Units().empty()) {
+        CHECK_MSG(false, "the fixture needs a match with a unit in it");
+        return;
+    }
+
+    // Aim at the unit, exactly as the passing case does.
+    publishViewport(registry, true);
+    centreCameraOn(registry, match->Units().front()->Position());
+    glm::vec2 at(0.0f);
+    CHECK_MSG(simToScreen(registry, match->Units().front()->Position(), at),
+              "the unit is on screen, so this is about ownership rather than aim");
+    publishViewport(registry, false);
+
+    tapAt(registry, layer, at);
+    CHECK_MSG(!layer.CurrentMatch()->Picked().HasSelection(),
+              "a click the editor owns selects nothing");
+}
+
+static void testWithNoViewportPublishedNothingIsSelected() {
+    resetInput();
+    // Every frame before the first draw, and every headless run. The layer has
+    // a camera but no idea where its picture is, so there is no honest
+    // conversion to make - and inventing one would put every click somewhere
+    // plausible and wrong.
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr || match->Units().empty()) {
+        CHECK_MSG(false, "the fixture needs a match with a unit in it");
+        return;
+    }
+
+    RawInputState state{};
+    state.mousePosition = glm::vec2(960.0f, 540.0f);
+    state.mouseButtons[0] = true;
+    Input::SynthesiseMouseContact(state);
+    Input::Update(state);
+    layer.OnFixedUpdate(registry, kTick);
+
+    state.mouseButtons[0] = false;
+    Input::SynthesiseMouseContact(state);
+    Input::Update(state);
+    layer.OnFixedUpdate(registry, kTick);
+
+    CHECK_MSG(!layer.CurrentMatch()->Picked().HasSelection(),
+              "no viewport, no conversion, no click");
+}
+
 static void runTests() {
     testAttachingTheLayerBuildsTheHud();
     testTheHudReadsTheSimulation();
@@ -943,6 +1184,11 @@ static void runTests() {
     testLosingSaysDefeat();
     testAFinishedGameCannotBePausedOrPlayed();
     testRestartFromTheResultStartsANewRun();
+
+    testATapSelectsTheUnitUnderIt();
+    testATapOnEmptyGroundOrdersTheSelectionThere();
+    testAClickTheEditorOwnsIsNotTheGamesToActutOn();
+    testWithNoViewportPublishedNothingIsSelected();
 }
 
-TEST_MAIN("test_wb_hud", 101)
+TEST_MAIN("test_wb_hud", 110)

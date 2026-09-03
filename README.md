@@ -883,6 +883,25 @@ Android "not functional"; extending that register forward costs nothing.
       what then exposed the real bug: a scroll view inside an ordinary frame
       was skipped as a root and reached by no recursion, because the rule asked
       whether it had a parent rather than whether an ancestor clips
+- [x] **The game can be played.** The Wolf Brigade port was complete and
+      untouchable: four thousand lines of simulation verified against
+      twenty-two of the original's own harnesses, a HUD, menus, audio and
+      saves — and a search for `Input::` across the whole game found nothing.
+      Selection, orders and build placement were ported, mutation-tested, and
+      called only by their own suites, so the engine's flagship demonstration
+      rendered a simulation it took no part in. Two things were missing and
+      only one was the game's. A layer gets a registry and a delta, and the
+      rectangle the frame was drawn into was known to the editor alone — so a
+      layer holding its own camera could not turn a pointer into a point in its
+      own world, which is the one conversion every click in every game needs.
+      A scene's viewport is published now, with whether the pointer is the
+      game's at all, since a point inside the rectangle can still be under a
+      tool window. The rest is one function that reads the contacts, steps the
+      already-ported gesture machine and hands the answer to the simulation.
+      The bug that made it look correct while doing nothing: the placement-mode
+      setter *abandons* the gesture in progress by design, so calling it every
+      tick as though it were a state assignment cleared the tracked finger
+      every tick and no gesture could ever complete
 
 ### Next
 

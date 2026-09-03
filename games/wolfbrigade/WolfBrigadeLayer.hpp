@@ -13,6 +13,7 @@
 #include "core/EngineLayer.hpp"
 
 #include "sim/GameData.hpp"
+#include "sim/GestureMachine.hpp"
 #include "sim/Match.hpp"
 #include "sim/Progression.hpp"
 
@@ -548,10 +549,48 @@ private:
     // runs whichever of this function's early returns was taken.
     void tick(entt::registry& registry, float fixedDelta);
 
+    // What the player is doing with the pointer, turned into orders.
+    //
+    // The gesture machine was ported and verified against the original's own
+    // harness months ago and then called by nothing, which made the game a
+    // diorama: every unit walked its own script and no click reached any of
+    // them. This is the wiring, and it is one function because the whole of it
+    // is "read the contacts, ask the machine, hand the answer to the
+    // simulation" - the decisions are all in the machine and in Commands.
+    void applyGestures(entt::registry& registry, float fixedDelta);
+
+    // A screen point, in the coordinates Input reports, as a position in the
+    // SIMULATION's pixels.
+    //
+    // Two conversions, and both are the game's rather than the engine's: the
+    // viewport rectangle turns a window point into a viewport point, and the
+    // lane camera turns that into a world point which is then scaled and
+    // mirrored back into Godot's coordinates. Returns false when there is no
+    // viewport published yet, which is every frame before the first draw.
+    bool screenToSim(entt::registry& registry, const glm::vec2& screenPoint,
+                     glm::vec2& outSim) const;
+
     std::vector<Quad> m_pool;
 
     // The camera, kept so the view can follow the lane.
     entt::entity m_camera{entt::null};
+
+    // The four-state machine from the original's input_controller.gd, stepped
+    // on the TICK rather than the frame: it takes a monotonic clock, and the
+    // simulation's is the one that behaves the same whatever the display is
+    // doing.
+    GestureMachine m_gestures;
+
+    // What the machine was last TOLD, so it is told only when it changes.
+    // SetPlacementMode abandons the gesture in progress by design, so
+    // calling it every tick with the same value clears the tracked finger
+    // every tick and no gesture can ever finish.
+    bool m_placementWasActive{false};
+
+    // Where the camera may sit, so a pan cannot walk off the end of the lane.
+    // The world is 6000 px wide at a hundred pixels to the unit.
+    static constexpr float kLaneMinX = 3.0f;
+    static constexpr float kLaneMaxX = 57.0f;
 
     bool m_booted{false};
 };

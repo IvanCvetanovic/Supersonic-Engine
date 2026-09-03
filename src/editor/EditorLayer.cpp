@@ -13,6 +13,7 @@
 #include "core/Input.hpp"
 #include "core/SceneSerializer.hpp"
 #include "core/UISystem.hpp"
+#include "core/ViewportInfo.hpp"
 #include "core/PrefabSerializer.hpp"
 #include "core/Raycast.hpp"
 #include "core/TilemapSystem.hpp"
@@ -400,10 +401,17 @@ void EditorLayer::buildGameView(entt::registry& registry) {
         const glm::mat4 uiViewProj =
             uiCamera->getProjectionMatrix() * uiCamera->getViewMatrix();
 
-        UISystem::Render(registry,
-                         UIRect{ glm::vec2(origin.x, origin.y),
-                                 glm::vec2(origin.x + size.x, origin.y + size.y) },
-                         uiPointer(true), uiKeyboard(true), uiViewProj);
+        const UIRect gameRect{ glm::vec2(origin.x, origin.y),
+                               glm::vec2(origin.x + size.x, origin.y + size.y) };
+
+        // Where the game is, for the game. Published every frame rather than
+        // once, because the window can be resized and a layer holding a stale
+        // rectangle would unproject a click to somewhere plausible and wrong.
+        // Always the pointer's, here: in a packaged game there is nothing else
+        // on screen for it to be over.
+        registry.ctx().insert_or_assign<ViewportInfo>(ViewportInfo{ gameRect, true });
+
+        UISystem::Render(registry, gameRect, uiPointer(true), uiKeyboard(true), uiViewProj);
     }
 
     ImGui::End();
@@ -826,10 +834,23 @@ void EditorLayer::BuildUI(entt::registry& registry, Window& window) {
         const glm::mat4 uiViewProj =
             uiCamera->getProjectionMatrix() * uiCamera->getViewMatrix();
 
-        UISystem::Render(registry,
-                         UIRect{ glm::vec2(viewportPos.x, viewportPos.y),
-                                 glm::vec2(viewportPos.x + viewportPanelSize.x,
-                                           viewportPos.y + viewportPanelSize.y) },
+        const UIRect gameRect{ glm::vec2(viewportPos.x, viewportPos.y),
+                               glm::vec2(viewportPos.x + viewportPanelSize.x,
+                                         viewportPos.y + viewportPanelSize.y) };
+
+        // The same publication the game-mode path makes, and the reason it is
+        // in both: a game running inside the editor has to see the PANEL, not
+        // the window. The origin here is most of the way across the screen,
+        // and a layer that assumed zero would unproject every click to a point
+        // that is off by exactly the inspector's width.
+        //
+        // `uiOwnsPointer` rather than mere containment: a point inside the
+        // viewport rectangle can still be under a floating tool window or a
+        // gizmo being dragged, and a game acting on that click would be acting
+        // on one the person meant for the editor.
+        registry.ctx().insert_or_assign<ViewportInfo>(ViewportInfo{ gameRect, uiOwnsPointer });
+
+        UISystem::Render(registry, gameRect,
                          uiPointer(uiOwnsPointer),
                          // FOCUS, not hover: moving the pointer off the viewport
                          // while typing must not lose half a name.

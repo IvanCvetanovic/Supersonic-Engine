@@ -9,8 +9,11 @@
 #include "core/Application.hpp"
 #include "core/AudioEngine.hpp"
 #include "core/Components.hpp"
+#include "core/Input.hpp"
 #include "core/Log.hpp"
+#include "core/Raycast.hpp"
 #include "core/SimulationClock.hpp"
+#include "core/ViewportInfo.hpp"
 
 #include "sim/AudioTones.hpp"
 #include "sim/ResourceNode.hpp"
@@ -1991,6 +1994,138 @@ void WolfBrigadeLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta)
     saveProfileIfDirty();
 }
 
+bool WolfBrigadeLayer::screenToSim(entt::registry& registry, const glm::vec2& screenPoint,
+                                   glm::vec2& outSim) const {
+    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
+    if (viewport == nullptr) return false;
+
+    const glm::vec2 size = viewport->Size();
+    if (size.x <= 0.0f || size.y <= 0.0f) return false;
+    if (m_camera == entt::null || !registry.valid(m_camera)) return false;
+
+    const auto* camera = registry.try_get<Supersonic::CameraComponent>(m_camera);
+    if (camera == nullptr) return false;
+
+    // The camera is orthographic, so unprojecting a pixel gives a POSITION
+    // rather than a direction - the ray's origin is already the point on the
+    // lane the player touched, and no plane intersection is needed. That is
+    // the branch Raycast takes for an orthographic camera, and the reason this
+    // does not have to know how a projection matrix is built.
+    const Supersonic::Ray ray = Supersonic::Raycast::ScreenPointToRay(
+        viewport->ToLocal(screenPoint), size, *camera);
+
+    // Back into Godot's pixels: the inverse of toWorld at the top of this
+    // file, mirror included. Getting the mirror wrong here would not look like
+    // an error - every click would land the same distance on the wrong side of
+    // the ground line, which reads as the game ignoring the bottom half of the
+    // lane.
+    outSim = glm::vec2(ray.origin.x * kPixelsPerUnit,
+                       kGroundPixels - ray.origin.y * kPixelsPerUnit);
+    return true;
+}
+
+void WolfBrigadeLayer::applyGestures(entt::registry& registry, float fixedDelta) {
+    (void)fixedDelta;
+    if (!m_match) return;
+
+    // WHILE SOMETHING ELSE OWNS THE POINTER, the machine is stepped with NO
+    // contacts rather than skipped. A gesture in progress when the player
+    // opens the pause menu has to END, not pause: skipping the step latches
+    // the finger, and the marquee resumes from wherever it was the moment the
+    // menu closes, selecting a box the player drew a minute ago.
+    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
+    const bool ours = viewport != nullptr && viewport->pointerOverGame &&
+                      !m_paused && !m_showingResult && m_screen == Screen::Match;
+
+    Supersonic::Contact contacts[Supersonic::Touch::kMaxContacts];
+    int count = 0;
+    if (ours) {
+        count = Supersonic::Input::ContactCount();
+        if (count > Supersonic::Touch::kMaxContacts) count = Supersonic::Touch::kMaxContacts;
+        for (int i = 0; i < count; ++i) contacts[i] = Supersonic::Input::GetContact(i);
+    }
+
+    // ONLY ON A CHANGE, and that is not an optimisation.
+    //
+    // SetPlacementMode ABANDONS whatever gesture is in progress - deliberately,
+    // so a marquee interrupted by the build menu does not resume the moment
+    // placement ends. It is a transition, not a per-frame assignment. Called
+    // every tick with the same value it clears the tracked finger every tick,
+    // so a press recorded on one tick is gone by the next and no gesture can
+    // ever complete: every tap in the game did nothing, silently, and the
+    // machine's own state looked correct at each individual step.
+    const bool placing = m_match->Placement().IsActive();
+    if (placing != m_placementWasActive) {
+        m_placementWasActive = placing;
+        m_gestures.SetPlacementMode(placing);
+    }
+
+    const GestureMachine::Intents intents =
+        m_gestures.Step(contacts, count, static_cast<float>(m_simTime));
+
+    // THE CAMERA FIRST, so a tap that arrives on the same tick as the last of
+    // a pan is resolved against where the view ended up rather than where it
+    // started. They cannot both fire for one finger - the machine commits to
+    // pan or marquee and stays there - but a second finger can, and the order
+    // has to be decided rather than left to whichever branch is written first.
+    if (intents.panned && registry.valid(m_camera)) {
+        auto& camera = registry.get<Supersonic::CameraComponent>(m_camera);
+        const float perPixel = camera.orthoHeight / std::max(viewport->Size().y, 1.0f);
+
+        // Clamped to the lane. Without this the view walks off the end and the
+        // player is looking at empty space with no way to know which way home
+        // is - the original's camera is bounded for the same reason.
+        camera.position.x = std::clamp(camera.position.x + intents.panDelta.x * perPixel,
+                                       kLaneMinX, kLaneMaxX);
+        camera.updateCameraVectors();
+        if (auto* transform = registry.try_get<Supersonic::TransformComponent>(m_camera)) {
+            transform->position = camera.position;
+        }
+    }
+
+    // THE BOX, in the coordinates the simulation thinks in. The machine works
+    // in screen space on purpose - the box is drawn from where the finger
+    // pressed, so a camera that moved mid-drag would make the drawn box and
+    // the selected region disagree - and this is the conversion its header
+    // says the caller owns.
+    if (intents.boxSelect) {
+        glm::vec2 a(0.0f);
+        glm::vec2 b(0.0f);
+        if (screenToSim(registry, intents.box.min, a) &&
+            screenToSim(registry, intents.box.max, b)) {
+            m_match->Picked().BoxSelect(glm::min(a, b), glm::max(a, b));
+        }
+    }
+
+    // THE GHOST FOLLOWS THE POINTER while placement is armed, which is the
+    // difference between choosing where a building goes and confirming one
+    // blind. Only x, because the lane has one ground line and it is not the
+    // pointer's to choose - and it is driven from the raw pointer rather than
+    // from a gesture, because a finger hovering has committed to nothing yet.
+    if (m_match->Placement().IsActive() && ours) {
+        glm::vec2 hover(0.0f);
+        if (screenToSim(registry, Supersonic::Input::MousePosition(), hover)) {
+            m_match->Placement().Update(hover.x);
+        }
+    }
+
+    if (intents.contextTap) {
+        glm::vec2 sim(0.0f);
+        if (screenToSim(registry, intents.tapPosition, sim)) {
+            // ONE ENTRY POINT, and it is the original's: ContextTap decides
+            // whether a tap selects, orders a move, or orders an attack, from
+            // what is under it and what is already selected. Splitting that
+            // decision across the caller would be a second copy of the rule
+            // the port exists to reproduce.
+            if (m_match->Placement().IsActive()) {
+                m_match->Placement().Confirm(sim.x);
+            } else {
+                m_match->Orders().ContextTap(sim);
+            }
+        }
+    }
+}
+
 void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
     if (!m_booted) return;
 
@@ -2047,6 +2182,13 @@ void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
     }
 
     if (m_paused) return;
+
+    // BEFORE the match steps, for the reason the pause menu is read before it:
+    // an order given this tick should take effect this tick rather than one
+    // later. A unit told to move and then stepped is a unit that has started
+    // moving; the other order makes every command feel a frame behind.
+    applyGestures(registry, fixedDelta);
+    if (!m_match) return;
 
     m_match->Step(static_cast<double>(fixedDelta));
 
