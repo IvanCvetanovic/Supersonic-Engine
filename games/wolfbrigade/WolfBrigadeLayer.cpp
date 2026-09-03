@@ -2028,22 +2028,31 @@ void WolfBrigadeLayer::applyGestures(entt::registry& registry, float fixedDelta)
     (void)fixedDelta;
     if (!m_match) return;
 
-    // WHILE SOMETHING ELSE OWNS THE POINTER, the machine is stepped with NO
-    // contacts rather than skipped. A gesture in progress when the player
-    // opens the pause menu has to END, not pause: skipping the step latches
-    // the finger, and the marquee resumes from wherever it was the moment the
-    // menu closes, selecting a box the player drew a minute ago.
+    // WHILE SOMETHING ELSE OWNS THE POINTER, the gesture in progress is
+    // ABANDONED - and that is a call, not an omission.
+    //
+    // The first version of this stepped the machine with an empty contact list
+    // and a comment claiming that ended the gesture. It does not: the machine
+    // ends on an Ended contact, so an empty frame leaves the finger tracked
+    // exactly where it was. What actually happened was worse than a latch.
+    // Press on a unit, open the pause menu, let go - the release lands on a
+    // tick this function never runs - then close the menu, and the FIRST tick
+    // back reads the stale Ended still sitting in Input and fires the tap the
+    // player abandoned a minute ago. The game acted on an intent that had been
+    // cancelled, and the only reason it did not also jam forever is that the
+    // stale contact happened to clear the finger on its way through.
     const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
     const bool ours = viewport != nullptr && viewport->pointerOverGame &&
                       !m_paused && !m_showingResult && m_screen == Screen::Match;
+    if (!ours) {
+        m_gestures.Abandon();
+        return;
+    }
 
     Supersonic::Contact contacts[Supersonic::Touch::kMaxContacts];
-    int count = 0;
-    if (ours) {
-        count = Supersonic::Input::ContactCount();
-        if (count > Supersonic::Touch::kMaxContacts) count = Supersonic::Touch::kMaxContacts;
-        for (int i = 0; i < count; ++i) contacts[i] = Supersonic::Input::GetContact(i);
-    }
+    int count = Supersonic::Input::ContactCount();
+    if (count > Supersonic::Touch::kMaxContacts) count = Supersonic::Touch::kMaxContacts;
+    for (int i = 0; i < count; ++i) contacts[i] = Supersonic::Input::GetContact(i);
 
     // ONLY ON A CHANGE, and that is not an optimisation.
     //
@@ -2181,14 +2190,19 @@ void WolfBrigadeLayer::tick(entt::registry& registry, float fixedDelta) {
         updateBar(registry);
     }
 
-    if (m_paused) return;
-
     // BEFORE the match steps, for the reason the pause menu is read before it:
     // an order given this tick should take effect this tick rather than one
     // later. A unit told to move and then stepped is a unit that has started
     // moving; the other order makes every command feel a frame behind.
+    //
+    // ABOVE the pause return, not below it. The function decides for itself
+    // whether the pointer is the game's - `m_paused` is one of the things it
+    // asks - and while it is not, it has an abandon to perform. Returning
+    // before it is how a press held across a pause survived the pause.
     applyGestures(registry, fixedDelta);
     if (!m_match) return;
+
+    if (m_paused) return;
 
     m_match->Step(static_cast<double>(fixedDelta));
 

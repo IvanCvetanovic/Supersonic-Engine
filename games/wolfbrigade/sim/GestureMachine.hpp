@@ -102,6 +102,15 @@ public:
     void SetPlacementMode(bool on);
     bool PlacementMode() const { return m_placementMode; }
 
+    // Drop whatever gesture is in progress, without ending it.
+    //
+    // NEEDED BECAUSE STEPPING WITH NO CONTACTS IS NOT THE SAME THING. The
+    // machine ends a gesture when it sees an Ended contact, so a frame with an
+    // empty contact list leaves the finger tracked exactly as it was - which
+    // is right for a finger that is still down and wrong for one the game
+    // stopped watching. Call this when something else takes the pointer.
+    void Abandon();
+
     // Which finger is being tracked, or -1. Exposed because "the second finger
     // is ignored" is a claim worth asserting directly rather than inferring
     // from what did not fire.

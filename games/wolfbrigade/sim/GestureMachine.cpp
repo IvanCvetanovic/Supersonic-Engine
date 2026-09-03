@@ -17,14 +17,17 @@ GestureMachine::Rect rectFromPoints(const glm::vec2& a, const glm::vec2& b) {
 
 } // namespace
 
-void GestureMachine::SetPlacementMode(bool on) {
-    m_placementMode = on;
-
+void GestureMachine::Abandon() {
     // Everything, not just the mode. A gesture left half-latched resumes the
-    // moment placement ends, which reads as the game marquee-selecting on its
-    // own after the player put a building down.
+    // moment the pointer comes back, which reads as the game marquee-selecting
+    // on its own after the player put a building down or closed a menu.
     m_finger = -1;
     m_mode = Mode::None;
+}
+
+void GestureMachine::SetPlacementMode(bool on) {
+    m_placementMode = on;
+    Abandon();
 }
 
 GestureMachine::Intents GestureMachine::Step(const Supersonic::Contact* contacts, int count,

@@ -1163,6 +1163,76 @@ static void testWithNoViewportPublishedNothingIsSelected() {
               "no viewport, no conversion, no click");
 }
 
+
+static void testAPressInterruptedByAPauseDoesNotJamTheGame() {
+    resetInput();
+    entt::registry registry;
+    WolfBrigadeLayer layer;
+    layer.OnAttach(registry);
+    publishViewport(registry);
+
+    Match* match = layer.CurrentMatch();
+    if (match == nullptr || match->Units().empty()) {
+        CHECK_MSG(false, "the fixture needs a match with a unit in it");
+        return;
+    }
+    const glm::vec2 unit = match->Units().front()->Position();
+    centreCameraOn(registry, unit);
+
+    glm::vec2 at(0.0f);
+    CHECK_MSG(simToScreen(registry, unit, at), "the unit is on screen");
+
+    // Press, and hold.
+    RawInputState state{};
+    state.mousePosition = at;
+    state.mouseButtons[0] = true;
+    Input::SynthesiseMouseContact(state);
+    Input::Update(state);
+    layer.OnFixedUpdate(registry, kTick);
+
+    // Pause with the finger still down, and release while paused - which is
+    // what happens every time somebody presses Escape mid-drag.
+    const entt::entity pause = byTag(registry, "HUD Pause");
+    if (pause == entt::null) { CHECK_MSG(false, "no pause button"); return; }
+    registry.get<UIButtonComponent>(pause).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(pause).clickedThisTick = false;
+
+    // ASSERT THE CROSSING, or the rest of this passes for the wrong reason: a
+    // test that never actually paused is testing two ordinary taps.
+    CHECK_MSG(registry.get<UIButtonComponent>(pause).label == "Resume",
+              "the game really did pause");
+
+    state.mouseButtons[0] = false;
+    Input::SynthesiseMouseContact(state);
+    Input::Update(state);
+    layer.OnFixedUpdate(registry, kTick);
+
+    // Unpause.
+    registry.get<UIButtonComponent>(pause).clickedThisTick = true;
+    layer.OnFixedUpdate(registry, kTick);
+    registry.get<UIButtonComponent>(pause).clickedThisTick = false;
+    CHECK_MSG(registry.get<UIButtonComponent>(pause).label == "Pause",
+              "and really did resume");
+
+    // NOTHING SHOULD HAVE BEEN SELECTED. The player pressed on a unit and then
+    // reached for the pause button; the release happened while the game was
+    // not looking. Resuming and finding that press honoured as a tap is the
+    // game acting on an intent the player abandoned - and the original drops
+    // it, because its handler returns early while paused.
+    CHECK_MSG(!layer.CurrentMatch()->Picked().HasSelection(),
+              "a press interrupted by a pause is abandoned, not banked and fired on resume");
+
+    // And now play. A machine still holding the finger from before the pause
+    // IGNORES this press - a second finger arriving mid-gesture is dropped by
+    // design - so the game is unclickable for the rest of the run and nothing
+    // says why.
+    CHECK_MSG(tapAtSim(registry, layer, unit), "the unit is still on screen");
+    CHECK_MSG(layer.CurrentMatch()->Picked().HasSelection(),
+              "a tap after a pause still selects, rather than the gesture machine "
+              "holding a finger that lifted while the game was not looking");
+}
+
 static void runTests() {
     testAttachingTheLayerBuildsTheHud();
     testTheHudReadsTheSimulation();
@@ -1189,6 +1259,7 @@ static void runTests() {
     testATapOnEmptyGroundOrdersTheSelectionThere();
     testAClickTheEditorOwnsIsNotTheGamesToActutOn();
     testWithNoViewportPublishedNothingIsSelected();
+    testAPressInterruptedByAPauseDoesNotJamTheGame();
 }
 
 TEST_MAIN("test_wb_hud", 110)
