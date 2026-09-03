@@ -19,6 +19,7 @@
 #include "core/MaterialSystem.hpp"
 #include "core/Input.hpp"
 #include "core/UIInput.hpp"
+#include "core/ViewportInfo.hpp"
 #include "platform/InputPolling.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/TimeTravelDebugger.hpp"
@@ -506,6 +507,12 @@ bool SupersonicApp::stepRecording(uint64_t tick) {
         const Input::TickInput& recorded = m_replay->ticks[static_cast<size_t>(tick)];
         Input::BeginReplayedTick(recorded);
         UIInput::BeginReplayedTickClicks(m_registry, recorded.clicked);
+
+        // The rectangle the recorded frame was drawn into, which every screen
+        // position in that tick is relative to. Without it a session replayed
+        // in a window of another size, or with the editor's panels dragged
+        // anywhere else, aims every click somewhere it was not aimed.
+        BeginReplayedTickViewport(m_registry, recorded);
         return true;
     }
 
@@ -519,6 +526,7 @@ bool SupersonicApp::stepRecording(uint64_t tick) {
         // decides the edges this tick owns, and before anything reads them.
         Input::TickInput captured = Input::CaptureTickInput();
         captured.clicked = UIInput::ClicksThisTick(m_registry);
+        CaptureViewportInto(m_registry, captured);
         m_recording->ticks.push_back(std::move(captured));
     }
 

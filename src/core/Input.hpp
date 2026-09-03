@@ -339,6 +339,29 @@ public:
         // empty list.
         std::vector<Contact> contacts;
 
+        // WHERE THE PICTURE WAS, which a pointer position is meaningless
+        // without.
+        //
+        // A game turns a screen position into a world one through the rectangle
+        // its viewport occupies, so the same recorded pixel aims somewhere else
+        // in a window of another size, or one whose panels are dragged to
+        // different widths. Four floats that cost one line per session and buy
+        // a recording that reproduces on a layout it was not made on.
+        //
+        // Plain floats and a flag rather than the ViewportInfo struct, for the
+        // same reason `clicked` above is plain integers rather than an EnTT
+        // type: the value passes straight through, and this file does not have
+        // to learn what a UI rectangle is. SupersonicApp translates in both
+        // directions, exactly as UIInput does for the clicks.
+        //
+        // hasViewport IS NOT "the size is zero". A tick where nothing published
+        // a viewport must replay as nothing published one - not as a rectangle
+        // of no width, which would reach a ray cast and divide by it.
+        bool hasViewport{false};
+        glm::vec2 viewportMin{0.0f};
+        glm::vec2 viewportSize{0.0f};
+        bool pointerOverGame{false};
+
         // UI buttons this tick was handed, as plain entity ids.
         //
         // Plain integers rather than an EnTT type, for the reason the key codes

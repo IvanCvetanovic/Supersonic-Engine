@@ -538,7 +538,9 @@ bool Input::TickInput::operator==(const TickInput& other) const {
     return down == other.down && pressed == other.pressed && released == other.released &&
            axes == other.axes && mouseDelta == other.mouseDelta &&
            mousePosition == other.mousePosition && contacts == other.contacts &&
-           clicked == other.clicked;
+           clicked == other.clicked && hasViewport == other.hasViewport &&
+           viewportMin == other.viewportMin && viewportSize == other.viewportSize &&
+           pointerOverGame == other.pointerOverGame;
 }
 
 Input::TickInput Input::CaptureTickInput() {

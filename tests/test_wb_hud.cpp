@@ -951,9 +951,10 @@ void resetInput() {
 // A viewport the size of the window, with the pointer over it. Published the
 // way EditorLayer publishes it every frame, which is the only way the layer
 // can find out where its own picture is.
-void publishViewport(entt::registry& registry, bool pointerOverGame = true) {
+void publishViewport(entt::registry& registry, bool pointerOverGame = true,
+                     const glm::vec2& origin = glm::vec2(0.0f)) {
     ViewportInfo info;
-    info.rect = UIRect{ glm::vec2(0.0f, 0.0f), glm::vec2(1920.0f, 1080.0f) };
+    info.rect = UIRect{ origin, origin + glm::vec2(1920.0f, 1080.0f) };
     info.pointerOverGame = pointerOverGame;
     registry.ctx().insert_or_assign<ViewportInfo>(std::move(info));
 }
@@ -1283,7 +1284,9 @@ static void testATapRecordedInOneRunIsTheSameTapInTheNext() {
         Input::Update(state);
         Input::BeginTickInput();
 
-        recording.ticks.push_back(Input::CaptureTickInput());
+        Input::TickInput captured = Input::CaptureTickInput();
+        CaptureViewportInto(live, captured);
+        recording.ticks.push_back(std::move(captured));
         playing.OnFixedUpdate(live, kTick);
     }
 
@@ -1319,7 +1322,15 @@ static void testATapRecordedInOneRunIsTheSameTapInTheNext() {
     entt::registry replayed;
     WolfBrigadeLayer watching;
     watching.OnAttach(replayed);
-    publishViewport(replayed);
+
+    // A DIFFERENT LAYOUT, deliberately. In the editor the game is a panel with
+    // a menu bar above it and an inspector beside it, and nobody drags those to
+    // the same widths twice. If both runs used the same rectangle this case
+    // would pass whether or not the recorded one was ever applied - which is
+    // the failure mode the pointer work was written to avoid, so it would be a
+    // poor place to reintroduce it. Seven hundred pixels is about two hundred
+    // in the simulation, several units wide.
+    publishViewport(replayed, true, glm::vec2(700.0f, 300.0f));
 
     Match* second = watching.CurrentMatch();
     if (second == nullptr || second->Units().empty()) {
@@ -1330,12 +1341,23 @@ static void testATapRecordedInOneRunIsTheSameTapInTheNext() {
 
     for (const Input::TickInput& tick : parsed.ticks) {
         Input::BeginReplayedTick(tick);
+        BeginReplayedTickViewport(replayed, tick);
         watching.OnFixedUpdate(replayed, kTick);
         Input::EndReplayedTick();
     }
 
-    CHECK_MSG(watching.CurrentMatch()->Picked().HasSelection(),
-              "a tap that happened in the recorded run happens again in the replayed one");
+    const auto& picked = watching.CurrentMatch()->Picked();
+    CHECK_MSG(picked.HasSelection(),
+              "a tap that happened in the recorded run happens again in the replayed one, "
+              "through a viewport laid out differently");
+
+    // THE SAME unit, not merely a unit. A tap that landed on somebody else is
+    // a replay that diverged, and with three units in the fixture there is a
+    // real chance of hitting one by accident.
+    if (picked.HasSelection() && !picked.Units().empty()) {
+        CHECK_NEAR(picked.Units().front()->Position().x, unit.x);
+        CHECK_NEAR(picked.Units().front()->Position().y, unit.y);
+    }
 
     resetInput();
 }

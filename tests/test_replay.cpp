@@ -22,6 +22,7 @@
 #include "core/StateHash.hpp"
 #include "core/UIInput.hpp"
 #include "core/Input.hpp"
+#include "core/ViewportInfo.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -947,6 +948,167 @@ static void testACaptureCarriesThePointerAndTheTouches() {
     resetDevices();
 }
 
+
+// --- the viewport -----------------------------------------------------------
+
+static void testTheRectangleThePictureWasDrawnIntoSurvivesTheFile() {
+    InputRecording original = emptyRun(5);
+    for (size_t i = 0; i < original.ticks.size(); ++i) {
+        original.ticks[i].hasViewport = true;
+        original.ticks[i].viewportMin = glm::vec2(320.0f, 48.0f);
+        original.ticks[i].viewportSize = glm::vec2(1280.0f, 720.0f);
+        original.ticks[i].pointerOverGame = true;
+    }
+    original.ticks[3].pointerOverGame = false;   // the pointer moved onto a panel
+
+    const InputRecording parsed = roundTrip(original);
+    if (parsed.ticks.size() != 5) { CHECK_MSG(false, "five ticks came back"); return; }
+
+    CHECK_MSG(parsed.ticks[0].hasViewport, "the first tick has one");
+    CHECK_NEAR(parsed.ticks[0].viewportMin.x, 320.0f);
+    CHECK_NEAR(parsed.ticks[0].viewportMin.y, 48.0f);
+    CHECK_NEAR(parsed.ticks[0].viewportSize.x, 1280.0f);
+    CHECK_NEAR(parsed.ticks[0].viewportSize.y, 720.0f);
+
+    // Carried across the ticks that wrote nothing, like the pointer.
+    CHECK_MSG(parsed.ticks[2].hasViewport, "and so does the tick that wrote no line");
+    CHECK_NEAR(parsed.ticks[2].viewportMin.x, 320.0f);
+
+    CHECK_MSG(parsed.ticks[1].pointerOverGame, "the pointer was over the game");
+    CHECK_MSG(!parsed.ticks[3].pointerOverGame,
+              "and was not, on the tick it moved onto a panel");
+    CHECK_MSG(parsed.ticks[4].pointerOverGame, "and was again after");
+}
+
+static void testAViewportThatGoesAwayIsNotAViewportOfNoSize() {
+    // The two states a lazy encoding runs together. A tick where nothing
+    // published a viewport must come back as nothing published one - NOT as a
+    // rectangle of zero width, which reaches a ray cast and divides by it.
+    InputRecording original = emptyRun(4);
+    for (size_t i = 0; i < 2; ++i) {
+        original.ticks[i].hasViewport = true;
+        original.ticks[i].viewportMin = glm::vec2(10.0f, 20.0f);
+        original.ticks[i].viewportSize = glm::vec2(800.0f, 600.0f);
+        original.ticks[i].pointerOverGame = true;
+    }
+    // Ticks 2 and 3 have none at all.
+
+    const InputRecording parsed = roundTrip(original);
+    if (parsed.ticks.size() != 4) { CHECK_MSG(false, "four ticks came back"); return; }
+
+    CHECK_MSG(parsed.ticks[1].hasViewport, "held while it was published");
+    CHECK_MSG(!parsed.ticks[2].hasViewport,
+              "gone on the tick it stopped being published, rather than carried");
+    CHECK_MSG(!parsed.ticks[3].hasViewport, "and still gone the tick after");
+
+    // The absence is WRITTEN, or the reader would carry the last rectangle
+    // forward and every tick after it would act on a stale layout.
+    const std::string text = InputRecording::Write(original);
+    CHECK_MSG(text.find(" view -") != std::string::npos,
+              "the tick it went away says so, rather than saying nothing");
+}
+
+static void testASessionWithNoViewportWritesNoViewport() {
+    // Both sides start at "nobody published one", so the common case - a
+    // headless run, or any scene nobody is pointing at - costs nothing.
+    const std::string text = InputRecording::Write(emptyRun(60));
+    CHECK_MSG(text.find(" view ") == std::string::npos,
+              "a session that never published a viewport never writes one");
+
+    // And one that publishes the same rectangle for a minute writes it once.
+    InputRecording steady = emptyRun(60);
+    for (Input::TickInput& tick : steady.ticks) {
+        tick.hasViewport = true;
+        tick.viewportMin = glm::vec2(0.0f);
+        tick.viewportSize = glm::vec2(1920.0f, 1080.0f);
+        tick.pointerOverGame = true;
+    }
+    const std::string steadyText = InputRecording::Write(steady);
+    size_t count = 0;
+    for (size_t at = steadyText.find(" view "); at != std::string::npos;
+         at = steadyText.find(" view ", at + 1)) {
+        ++count;
+    }
+    CHECK_MSG(count == 1, "sixty ticks of one layout is one line, got " + std::to_string(count));
+}
+
+static void testACorruptViewportIsRejected() {
+    const std::string header =
+        "SUPERSONICREPLAY 1\n"
+        "scene assets/scenes/MainScene.scene\n"
+        "step 3c888889\n"
+        "ticks 1\n"
+        "action Fire\n";
+    const std::string footer = "end 1\n";
+
+    struct Case { const char* body; const char* why; };
+    const Case bad[] = {
+        { "t 0 view 00000000,00000000,44f00000\n", "three fields is not a viewport" },
+        { "t 0 view 00000000,00000000,44f00000,44870000,1,2\n", "and neither is six" },
+        { "t 0 view 00000000,00000000,44f00000,44870000,7\n", "7 is not a yes or a no" },
+        { "t 0 view 00000000,zzzzzzzz,44f00000,44870000,1\n", "a corner must be hex" },
+    };
+    for (const Case& one : bad) {
+        const InputRecording out = InputRecording::Parse(header + one.body + footer, "corrupt");
+        CHECK_MSG(!out.ok, std::string(one.why) + ", but it parsed");
+    }
+
+    const InputRecording good = InputRecording::Parse(
+        header + "t 0 view 00000000,00000000,44f00000,44870000,1\n" + footer, "good");
+    CHECK_MSG(good.ok, "the well-formed version parses: " + good.error);
+    if (good.ok && good.ticks.size() == 1) {
+        CHECK_MSG(good.ticks[0].hasViewport, "and carries a viewport");
+        CHECK_NEAR(good.ticks[0].viewportSize.x, 1920.0f);
+        CHECK_MSG(good.ticks[0].pointerOverGame, "with the pointer over the game");
+    }
+}
+
+static void testApplyingARecordedViewportPutsItWhereALayerLooks() {
+    // The other end of the translation, and the half that is easy to leave out:
+    // a tick's viewport reaching the registry a game layer reads, and being
+    // REMOVED again on a tick that had none.
+    entt::registry registry;
+
+    Input::TickInput withOne;
+    withOne.hasViewport = true;
+    withOne.viewportMin = glm::vec2(64.0f, 96.0f);
+    withOne.viewportSize = glm::vec2(1024.0f, 768.0f);
+    withOne.pointerOverGame = true;
+
+    BeginReplayedTickViewport(registry, withOne);
+    const auto* installed = registry.ctx().find<ViewportInfo>();
+    CHECK_MSG(installed != nullptr, "a layer can find the recorded viewport");
+    if (installed != nullptr) {
+        CHECK_NEAR(installed->rect.min.x, 64.0f);
+        CHECK_NEAR(installed->Size().x, 1024.0f);
+        CHECK_NEAR(installed->Size().y, 768.0f);
+        CHECK_MSG(installed->pointerOverGame, "and whether the pointer was over the game");
+    }
+
+    // AND THE ERASE. Skipping the insert would leave the rectangle above
+    // standing, so a game that correctly did nothing during the recording
+    // would start acting during the replay, on a layout from a tick that has
+    // already passed.
+    const Input::TickInput withNone;
+    BeginReplayedTickViewport(registry, withNone);
+    CHECK_MSG(registry.ctx().find<ViewportInfo>() == nullptr,
+              "a tick that had no viewport replays as a tick with no viewport");
+
+    // And capture is its inverse.
+    BeginReplayedTickViewport(registry, withOne);
+    Input::TickInput captured;
+    CaptureViewportInto(registry, captured);
+    CHECK_MSG(captured.hasViewport, "what is published is what is captured");
+    CHECK_NEAR(captured.viewportMin.y, 96.0f);
+    CHECK_NEAR(captured.viewportSize.y, 768.0f);
+
+    registry.ctx().erase<ViewportInfo>();
+    Input::TickInput empty;
+    empty.hasViewport = true;
+    CaptureViewportInto(registry, empty);
+    CHECK_MSG(!empty.hasViewport, "and nothing published is nothing captured");
+}
+
 // --- the disk ---------------------------------------------------------------
 
 static void testSaveAndLoadRoundTripThroughAFile() {
@@ -1004,6 +1166,11 @@ static void runTests() {
     testACorruptTouchIsRejectedRatherThanGuessedAt();
     testAReplayedTickAnswersThePointerQueriesTheGameCalls();
     testACaptureCarriesThePointerAndTheTouches();
+    testTheRectangleThePictureWasDrawnIntoSurvivesTheFile();
+    testAViewportThatGoesAwayIsNotAViewportOfNoSize();
+    testASessionWithNoViewportWritesNoViewport();
+    testACorruptViewportIsRejected();
+    testApplyingARecordedViewportPutsItWhereALayerLooks();
     testTheRunCanBeAskedWhatATickShouldHaveHashedTo();
     testATruncatedFileIsRejected();
     testGarbageIsRejectedRatherThanGuessedAt();

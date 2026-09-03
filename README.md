@@ -956,13 +956,12 @@ HUSK's nineteen animated models. What is left is here.
 
 - A replay is scoped to ONE scene. The header names one, and a run that changes
   level part way through is not something `--replay` reproduces.
-- **A replay does not carry the VIEWPORT.** A recorded tick holds where the
-  pointer was in screen pixels, and a game turns that into a world position
-  through the rectangle the viewport occupies — so the same recording replayed
-  into a differently sized or positioned viewport aims somewhere else. Inside
-  the running editor that rectangle follows the window. The recording is
-  reproducible on the layout it was made on, and the fix is to record the
-  rectangle beside the pointer.
+- A replay carries the pointer, its touches, and the RECTANGLE the picture was
+  drawn into — so a session recorded in the editor with the panels at one width
+  replays correctly with them at another. What it does not carry is anything a
+  game derives from the pointer itself: a recording is a recording of INPUT, so
+  a game that reads a wall clock, a random number it did not seed, or a file on
+  disk still diverges, and no amount of pointer fidelity changes that.
 - The state hash covers what a tick writes — transforms, bodies, script state,
   and the world's gravity and ground plane. It does not cover the rest of
   `registry.ctx()`, which is caches and pointers to subsystems, so a tick-zero

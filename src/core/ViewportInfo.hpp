@@ -2,7 +2,10 @@
 
 #include <glm/glm.hpp>
 
+#include <entt/entt.hpp>
+
 #include "core/UICanvas.hpp"
+#include "core/Input.hpp"
 
 namespace Supersonic {
 
@@ -56,5 +59,48 @@ struct ViewportInfo {
         return UICanvas::Contains(rect, screenPosition);
     }
 };
+
+// --- The recording's half ---------------------------------------------------
+//
+// Here rather than in Input, for the reason UIInput owns the clicks half of a
+// recorded tick: a viewport is a UI fact, and Input does not know what a
+// registry or a rectangle is. These are the two ends of the translation, and
+// SupersonicApp calls one on the way out and the other on the way in.
+//
+// A POINTER POSITION IS MEANINGLESS WITHOUT THIS. A recorded tick holds where
+// the pointer was in screen pixels, and every game turns that into a world
+// position through the rectangle it was drawn into. Replay the same pixel
+// into a window of another size and it aims somewhere else entirely.
+
+// Copies whatever the frame published into the tick about to be recorded.
+inline void CaptureViewportInto(const entt::registry& registry, Input::TickInput& tick) {
+    const auto* viewport = registry.ctx().find<ViewportInfo>();
+    if (viewport == nullptr) {
+        tick.hasViewport = false;
+        return;
+    }
+    tick.hasViewport = true;
+    tick.viewportMin = viewport->rect.min;
+    tick.viewportSize = viewport->rect.size();
+    tick.pointerOverGame = viewport->pointerOverGame;
+}
+
+// Installs a recorded tick's viewport, or ERASES the one standing.
+//
+// The erase is the half that is easy to leave out and hard to see afterwards.
+// A tick that had no viewport live must replay as a tick with no viewport, and
+// simply skipping the insert leaves the PREVIOUS tick's rectangle in place -
+// so a game that correctly did nothing during the recording starts acting
+// during the replay, on a rectangle from a tick that has passed.
+inline void BeginReplayedTickViewport(entt::registry& registry, const Input::TickInput& tick) {
+    if (!tick.hasViewport) {
+        registry.ctx().erase<ViewportInfo>();
+        return;
+    }
+    ViewportInfo info;
+    info.rect = UIRect{ tick.viewportMin, tick.viewportMin + tick.viewportSize };
+    info.pointerOverGame = tick.pointerOverGame;
+    registry.ctx().insert_or_assign<ViewportInfo>(std::move(info));
+}
 
 } // namespace Supersonic

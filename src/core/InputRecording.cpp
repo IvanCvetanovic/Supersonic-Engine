@@ -242,6 +242,7 @@ std::string InputRecording::Write(const InputRecording& recording) {
     std::unordered_map<uint64_t, uint32_t> previousAxis;
     uint32_t previousPointerX = 0;
     uint32_t previousPointerY = 0;
+    std::string previousViewport = "-";
     bool first = true;
 
     for (size_t i = 0; i < recording.ticks.size(); ++i) {
@@ -351,6 +352,29 @@ std::string InputRecording::Write(const InputRecording& recording) {
             }
         }
 
+        // THE VIEWPORT, AS A LEVEL WITH AN EXPLICIT ABSENCE.
+        //
+        // Both sides start at "nobody published one", so a session that never
+        // does writes nothing at all. When it changes, the whole state is
+        // written - and a tick where the viewport went AWAY writes the same
+        // marker an empty list uses, because "no viewport" and "a viewport of
+        // no size" are different states and only one of them is safe to hand to
+        // a ray cast.
+        std::string viewport = "-";
+        if (tick.hasViewport) {
+            std::ostringstream encoded;
+            encoded << hex(bitsOf(tick.viewportMin.x), 8) << ','
+                    << hex(bitsOf(tick.viewportMin.y), 8) << ','
+                    << hex(bitsOf(tick.viewportSize.x), 8) << ','
+                    << hex(bitsOf(tick.viewportSize.y), 8) << ','
+                    << (tick.pointerOverGame ? '1' : '0');
+            viewport = encoded.str();
+        }
+        if (viewport != previousViewport) {
+            line << " view " << viewport;
+            previousViewport = viewport;
+        }
+
         first = false;
 
         // A tick that changed nothing and did nothing writes no line at all,
@@ -400,6 +424,10 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
     std::vector<uint64_t> currentDown;
     std::unordered_map<uint64_t, uint32_t> currentAxis;
     glm::vec2 currentPointer{0.0f};
+    bool currentHasViewport = false;
+    glm::vec2 currentViewportMin{0.0f};
+    glm::vec2 currentViewportSize{0.0f};
+    bool currentPointerOverGame = false;
 
     struct PendingTick {
         uint64_t index{0};
@@ -411,6 +439,10 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
         glm::vec2 mouse{0.0f};
         glm::vec2 pointer{0.0f};
         std::vector<Contact> contacts;
+        bool hasViewport{false};
+        glm::vec2 viewportMin{0.0f};
+        glm::vec2 viewportSize{0.0f};
+        bool pointerOverGame{false};
     };
     std::vector<PendingTick> pending;
     uint64_t previousTickIndex = 0;
@@ -550,6 +582,47 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
                     }
                     currentPointer = glm::vec2(floatFrom(static_cast<uint32_t>(x)),
                                                floatFrom(static_cast<uint32_t>(y)));
+                } else if (segment == "view") {
+                    if (value == "-") {
+                        currentHasViewport = false;
+                        currentViewportMin = glm::vec2(0.0f);
+                        currentViewportSize = glm::vec2(0.0f);
+                        currentPointerOverGame = false;
+                    } else {
+                        std::string fields[5];
+                        size_t count = 0;
+                        size_t at = 0;
+                        while (count < 5) {
+                            const size_t comma = value.find(',', at);
+                            fields[count++] = value.substr(
+                                at, comma == std::string::npos ? std::string::npos : comma - at);
+                            if (comma == std::string::npos) break;
+                            at = comma + 1;
+                            if (count == 5) {
+                                return fail(lineNumber, "'" + value + "' is not a viewport");
+                            }
+                        }
+                        if (count != 5) {
+                            return fail(lineNumber, "'" + value + "' is not a viewport");
+                        }
+                        uint64_t bits[4] = {0, 0, 0, 0};
+                        for (int i = 0; i < 4; ++i) {
+                            if (!parseHex(fields[static_cast<size_t>(i)], 8, bits[i])) {
+                                return fail(lineNumber, "'" + value + "' is not a viewport");
+                            }
+                        }
+                        if (fields[4] != "0" && fields[4] != "1") {
+                            return fail(lineNumber,
+                                        "'" + fields[4] + "' is not whether the pointer was over "
+                                        "the game");
+                        }
+                        currentHasViewport = true;
+                        currentViewportMin = glm::vec2(floatFrom(static_cast<uint32_t>(bits[0])),
+                                                       floatFrom(static_cast<uint32_t>(bits[1])));
+                        currentViewportSize = glm::vec2(floatFrom(static_cast<uint32_t>(bits[2])),
+                                                        floatFrom(static_cast<uint32_t>(bits[3])));
+                        currentPointerOverGame = fields[4] == "1";
+                    }
                 } else if (segment == "touch") {
                     if (!parseContacts(value, entry.contacts)) {
                         return fail(lineNumber, "'" + value + "' is not a list of contacts");
@@ -562,6 +635,10 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
             entry.down = currentDown;
             entry.axes = currentAxis;
             entry.pointer = currentPointer;
+            entry.hasViewport = currentHasViewport;
+            entry.viewportMin = currentViewportMin;
+            entry.viewportSize = currentViewportSize;
+            entry.pointerOverGame = currentPointerOverGame;
             pending.push_back(std::move(entry));
             continue;
         }
@@ -666,6 +743,10 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
     std::vector<uint64_t> down;
     std::unordered_map<uint64_t, uint32_t> axes;
     glm::vec2 pointer{0.0f};
+    bool hasViewport = false;
+    glm::vec2 viewportMin{0.0f};
+    glm::vec2 viewportSize{0.0f};
+    bool pointerOverGame = false;
     size_t next = 0;
 
     for (uint64_t index = 0; index < declaredTicks; ++index) {
@@ -675,6 +756,10 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
             down = line->down;
             axes = line->axes;
             pointer = line->pointer;
+            hasViewport = line->hasViewport;
+            viewportMin = line->viewportMin;
+            viewportSize = line->viewportSize;
+            pointerOverGame = line->pointerOverGame;
             ++next;
         }
 
@@ -685,6 +770,10 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
         // and unlike the contacts below, which are an edge in every sense that
         // matters: a tick with no touch line had no touches.
         tick.mousePosition = pointer;
+        tick.hasViewport = hasViewport;
+        tick.viewportMin = viewportMin;
+        tick.viewportSize = viewportSize;
+        tick.pointerOverGame = pointerOverGame;
 
         tick.axes.reserve(axes.size());
         for (size_t axisIdx = 0; axisIdx < axisNames.size(); ++axisIdx) {
