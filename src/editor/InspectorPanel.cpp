@@ -643,6 +643,21 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             ImGui::DragFloat("Angular Damping", &rb.angularDamping, 0.01f, 0.0f, 1.0f);
             ImGui::Checkbox("Freeze Rotation", &rb.freezeRotation);
             ImGui::TextDisabled("Frozen bodies are pushed around but never tip over.");
+            ImGui::TextUnformatted("Lock Position");
+            ImGui::SameLine();
+            ImGui::Checkbox("X##LockPositionX", &rb.lockPosition.x);
+            ImGui::SameLine();
+            ImGui::Checkbox("Y##LockPositionY", &rb.lockPosition.y);
+            ImGui::SameLine();
+            ImGui::Checkbox("Z##LockPositionZ", &rb.lockPosition.z);
+            ImGui::TextUnformatted("Lock Rotation");
+            ImGui::SameLine();
+            ImGui::Checkbox("X##LockRotationX", &rb.lockRotation.x);
+            ImGui::SameLine();
+            ImGui::Checkbox("Y##LockRotationY", &rb.lockRotation.y);
+            ImGui::SameLine();
+            ImGui::Checkbox("Z##LockRotationZ", &rb.lockRotation.z);
+            ImGui::TextDisabled("World axes. A 2D game locks position Z and rotation X and Y.");
             ImGui::Checkbox("Is Kinematic", &rb.isKinematic);
 
             ImGui::Checkbox("Allow Sleep", &rb.allowSleep);

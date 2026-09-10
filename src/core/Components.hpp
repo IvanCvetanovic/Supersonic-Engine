@@ -869,6 +869,25 @@ struct RigidBodyComponent {
     // is a number nobody can pick correctly.
     bool freezeRotation{false};
 
+    // Per-axis locks, in WORLD axes: a locked axis is one this body neither
+    // moves along (lockPosition) nor turns about (lockRotation), whatever hits
+    // it. freezeRotation is lockRotation on all three, kept because scenes and
+    // the inspector already say it.
+    //
+    // The case that asked for them is a 2D game on this 3D solver, where every
+    // body must stay in its plane and turn about z only. Unlocked, a resting
+    // crate in the Magic Portals spike left its plane by 30 px in a minute; and
+    // freezing ALL rotation, which held a capsule at exactly z = 0, would stop a
+    // crate from rolling.
+    //
+    // Dynamic bodies only. A kinematic body is moved by code and a collider
+    // with no rigid body is not moved at all, so neither reads these.
+    //
+    // A lock holds a body where it IS. It zeroes motion along the axis; it does
+    // not return the body to a plane it has already left, so lock from creation.
+    glm::bvec3 lockPosition{false};
+    glm::bvec3 lockRotation{false};
+
     // ---- Sleeping ----
     //
     // A body that has been still for long enough stops being simulated: no

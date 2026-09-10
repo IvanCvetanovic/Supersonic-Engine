@@ -1366,6 +1366,31 @@ characters, which usually freeze rotation anyway. `freezeRotation`,
 produce a zero tensor, which falls out of the arithmetic as “infinitely hard to
 turn” without a branch at every use.
 
+**Per-axis locks** (`lockPosition`, `lockRotation`) are the partial version, in
+world axes: a locked axis is one the body neither moves along nor turns about.
+The case that asked for them is a 2D game on this 3D solver. The Magic Portals
+port locks position z and rotation x and y; unlocked, a resting crate left its
+plane by 30 px in a minute (`docs/planning/2026-09-10-magic-portals-spike.md`).
+
+- **Rotation lock:** the inverse inertia with the locked axes projected out,
+  P I⁻¹ P, built once where the tensor is.
+- **Position lock:** a factor on every linear impulse and positional
+  correction, contacts and joints alike. The inverse mass a body presents along
+  a direction counts only its free axes.
+- **Integration:** zeroes the locked components of both velocities.
+- **Joints:** where a lock leaves a row of zeros in an effective mass, the joint
+  drops that row rather than the whole constraint.
+
+Two properties are tested:
+- a locked axis is held exactly, not nearly;
+- a scene with no locks steps bit for bit as it did before. That holds because
+  the two places a lock changes the arithmetic, an effective mass and the
+  tensor, branch on whether there is one.
+
+A lock holds a body where it is. It does not return the body to a plane it has
+already left. Locks apply to dynamic bodies only: a kinematic body is moved by
+code, and a static collider not at all.
+
 ### 7f. Joints
 
 A constraint holding one body to another, or to a fixed point in the world.

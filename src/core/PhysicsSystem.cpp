@@ -179,6 +179,13 @@ struct Body {
     // a branch at every use.
     glm::mat3 inverseInertia{0.0f};
 
+    // The rigid body's per-axis locks as factors - 1 on a free axis, 0 on a
+    // locked one - and whether any is set. See linearFactorOf.
+    glm::vec3 linearFactor{1.0f};
+    glm::vec3 angularFactor{1.0f};
+    bool hasLinearLock{false};
+    bool hasAngularLock{false};
+
     // Converts a world-space displacement into the entity's local space. A
     // parented body stores its position relative to its parent, so applying a
     // world-space push to it directly moves it by the wrong amount and in the
@@ -223,6 +230,58 @@ float inverseMassOf(const RigidBodyComponent* rigidBody) {
     if (rigidBody->isKinematic) return 0.0f;
     if (rigidBody->mass <= 0.0f) return 0.0f;
     return 1.0f / rigidBody->mass;
+}
+
+// ---- Per-axis locks ----
+//
+// RigidBodyComponent::lockPosition and lockRotation as the solver uses them: 1
+// on an axis the body may move along or turn about, 0 on one it may not.
+//
+// Multiplying an impulse by one of these is exact on a free axis - x * 1 is x -
+// so the apply sites multiply unconditionally. The two places a lock would
+// otherwise change the arithmetic of a body that has none, an effective mass and
+// the inverse inertia, branch on the Body's flags instead, so a scene with no
+// locks steps bit for bit as it did before they existed (test_determinism).
+glm::vec3 linearFactorOf(const RigidBodyComponent* rigidBody) {
+    if (!rigidBody) return glm::vec3(1.0f);
+    return glm::vec3(rigidBody->lockPosition.x ? 0.0f : 1.0f, rigidBody->lockPosition.y ? 0.0f : 1.0f,
+                     rigidBody->lockPosition.z ? 0.0f : 1.0f);
+}
+
+glm::vec3 angularFactorOf(const RigidBodyComponent* rigidBody) {
+    if (!rigidBody) return glm::vec3(1.0f);
+    return glm::vec3(rigidBody->lockRotation.x ? 0.0f : 1.0f, rigidBody->lockRotation.y ? 0.0f : 1.0f,
+                     rigidBody->lockRotation.z ? 0.0f : 1.0f);
+}
+
+void setLocks(Body& body, const RigidBodyComponent* rigidBody) {
+    body.linearFactor = linearFactorOf(rigidBody);
+    body.angularFactor = angularFactorOf(rigidBody);
+    body.hasLinearLock = rigidBody && glm::any(rigidBody->lockPosition);
+    body.hasAngularLock = rigidBody && glm::any(rigidBody->lockRotation);
+}
+
+// The world inverse inertia with the locked world axes taken out - P I^-1 P,
+// for P the diagonal of the angular factor. No torque turns the body about a
+// locked axis, and no effective mass counts a turn it cannot make. Applied once,
+// where the tensor is built, so everything downstream - contacts and joints -
+// sees the locked tensor without being told.
+glm::mat3 withLocks(const Body& body, const glm::mat3& inverseInertia) {
+    if (!body.hasAngularLock) return inverseInertia;
+    glm::mat3 locked = inverseInertia;
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 3; ++row) locked[column][row] *= body.angularFactor[column] * body.angularFactor[row];
+    }
+    return locked;
+}
+
+// The inverse mass a body presents along a unit direction: the scalar, unless an
+// axis is locked, and then only the part of the direction it can move along.
+// Branched rather than multiplied through, because the dot product rounds and an
+// unlocked body must see exactly the number it always did.
+float linearInverseMass(const Body& body, const glm::vec3& direction) {
+    if (!body.hasLinearLock) return body.inverseMass;
+    return body.inverseMass * glm::dot(direction * direction, body.linearFactor);
 }
 
 
@@ -500,9 +559,16 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                                            deltaTime);
         }
 
+        // Per-axis locks. The solver never pushes along a locked axis; this takes
+        // out what gravity, damping and anything written from outside put there.
+        // Skipped outright for a body with no lock, which is every body in every
+        // scene written before they existed.
+        if (glm::any(rigidBody.lockPosition)) rigidBody.velocity *= linearFactorOf(&rigidBody);
+
         if (rigidBody.freezeRotation) {
             rigidBody.angularVelocity = glm::vec3(0.0f);
         } else {
+            if (glm::any(rigidBody.lockRotation)) rigidBody.angularVelocity *= angularFactorOf(&rigidBody);
             if (rigidBody.angularDamping > 0.0f) {
                 rigidBody.angularVelocity *=
                     DetMath::pow(std::max(0.0f, 1.0f - rigidBody.angularDamping), deltaTime);
@@ -629,6 +695,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         body.inverseMass = (rigid && rigid->isSleeping)
                                ? 0.0f
                                : inverseMassOf(rigid);
+        setLocks(body, rigid);
 
         const glm::mat4 parentWorld = parentWorldMatrix(registry, entity);
         const glm::mat4 world = parentWorld * transform->getModelMatrix();
@@ -718,9 +785,9 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // different masses, decided by which way it happened to be facing.
         //
         // A sphere is isotropic, so this costs it nothing either way.
-        body.inverseInertia = worldInverseInertia(
+        body.inverseInertia = withLocks(body, worldInverseInertia(
             inverseInertiaLocal(rigid, shape, body.localHalfExtent, body.radius),
-            body.axes);
+            body.axes));
 
         // How far this body travels in one step. The broadphase bound is
         // expanded by it so a pair that will meet during the step is found
@@ -807,6 +874,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         body.hullBasis = glm::mat3(world);
         body.worldToLocal = glm::inverse(glm::mat3(parentWorld));
         body.inverseMass = (rigid && rigid->isSleeping) ? 0.0f : inverseMassOf(rigid);
+        setLocks(body, rigid);
 
         // The hull's own origin is wherever the asset had it, which is not
         // necessarily its middle - so the bounds go through the world matrix
@@ -829,8 +897,8 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                                              : glm::vec3(axis == 0, axis == 1, axis == 2);
             body.localHalfExtent[axis] = (localMax[axis] - localMin[axis]) * 0.5f * length;
         }
-        body.inverseInertia = worldInverseInertia(
-            inverseInertiaLocal(rigid, Shape::Box, body.localHalfExtent, body.radius), body.axes);
+        body.inverseInertia = withLocks(body, worldInverseInertia(
+            inverseInertiaLocal(rigid, Shape::Box, body.localHalfExtent, body.radius), body.axes));
 
         glm::vec3 sweep(0.0f);
         if (rigid && body.inverseMass > 0.0f) sweep = glm::abs(rigid->velocity) * deltaTime;
@@ -1014,9 +1082,9 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // give a woken body a different inertia from an identical one that
         // never slept, and nothing would ever report it.
         sleeper.inverseMass = inverseMassOf(rigid);
-        sleeper.inverseInertia = worldInverseInertia(
+        sleeper.inverseInertia = withLocks(sleeper, worldInverseInertia(
             inverseInertiaLocal(rigid, sleeper.shape, sleeper.localHalfExtent, sleeper.radius),
-            sleeper.axes);
+            sleeper.axes));
     };
 
     for (const auto& [pi, pj] : pairs) {
@@ -1419,17 +1487,23 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // Positional correction, shared out by inverse mass so the heavier body
         // moves less and an immovable one does not move at all.
         // Never for a speculative contact: there is nothing to push out of.
-        const float correctable = speculative ? 0.0f : std::max(penetration - kSlop, 0.0f);
+        //
+        // A locked axis takes no share: each body presents its inverse mass ALONG
+        // the normal, and its push is masked by its factor - position and the
+        // cached centre both, or the bounds disagree with the body.
+        const float alongSum = linearInverseMass(a, normal) + linearInverseMass(b, normal);
+        const float correctable =
+            (speculative || alongSum <= 0.0f) ? 0.0f : std::max(penetration - kSlop, 0.0f);
         if (correctable > 0.0f) {
-            const glm::vec3 push = normal * (correctable * kCorrection / inverseSum);
-            transformA->position -= a.worldToLocal * (push * a.inverseMass);
-            transformB->position += b.worldToLocal * (push * b.inverseMass);
+            const glm::vec3 push = normal * (correctable * kCorrection / alongSum);
+            transformA->position -= a.worldToLocal * (push * a.inverseMass * a.linearFactor);
+            transformB->position += b.worldToLocal * (push * b.inverseMass * b.linearFactor);
 
             // Keep the cached bounds honest for the pairs still to be resolved
             // this step, or a body wedged between two others gets pushed twice
             // as far as it should be.
-            const glm::vec3 shiftA = -normal * (correctable * kCorrection / inverseSum) * a.inverseMass;
-            const glm::vec3 shiftB = normal * (correctable * kCorrection / inverseSum) * b.inverseMass;
+            const glm::vec3 shiftA = -normal * (correctable * kCorrection / alongSum) * a.inverseMass * a.linearFactor;
+            const glm::vec3 shiftB = normal * (correctable * kCorrection / alongSum) * b.inverseMass * b.linearFactor;
             a.centre += shiftA;
             b.centre += shiftB;
         }
@@ -1475,8 +1549,9 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 a.inverseInertia * glm::cross(constraint.armA, constraint.normal), constraint.armA);
             const glm::vec3 angularB = glm::cross(
                 b.inverseInertia * glm::cross(constraint.armB, constraint.normal), constraint.armB);
-            const float effectiveMass =
-                inverseSum + glm::dot(angularA + angularB, constraint.normal);
+            const float effectiveMass = linearInverseMass(a, constraint.normal) +
+                                        linearInverseMass(b, constraint.normal) +
+                                        glm::dot(angularA + angularB, constraint.normal);
             if (effectiveMass <= 1e-9f) continue;
             constraint.normalMass = effectiveMass;
 
@@ -1575,10 +1650,15 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             if (found != byEntity.end()) {
                 end.state.inverseMass = bodies[found->second].inverseMass;
                 end.state.inverseInertia = bodies[found->second].inverseInertia;
+                end.state.linearFactor = bodies[found->second].linearFactor;
+                end.state.hasLinearLock = bodies[found->second].hasLinearLock;
+                end.state.hasAngularLock = bodies[found->second].hasAngularLock;
             } else {
                 end.state.inverseMass = (end.rigid && end.rigid->isSleeping)
                                             ? 0.0f
                                             : inverseMassOf(end.rigid);
+                end.state.linearFactor = linearFactorOf(end.rigid);
+                end.state.hasLinearLock = end.rigid && glm::any(end.rigid->lockPosition);
                 // No collider means no extent, and no extent means no lever for
                 // a torque to act on. Zero inverse inertia is the convention the
                 // contact solver already uses for anything that must not turn.
@@ -1912,11 +1992,11 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
             const glm::vec3 normalImpulse = constraint.normal * lambda;
             if (movableA) {
-                rigidA->velocity -= normalImpulse * bodyA.inverseMass;
+                rigidA->velocity -= normalImpulse * bodyA.inverseMass * bodyA.linearFactor;
                 rigidA->angularVelocity -= bodyA.inverseInertia * glm::cross(constraint.armA, normalImpulse);
             }
             if (movableB) {
-                rigidB->velocity += normalImpulse * bodyB.inverseMass;
+                rigidB->velocity += normalImpulse * bodyB.inverseMass * bodyB.linearFactor;
                 rigidB->angularVelocity += bodyB.inverseInertia * glm::cross(constraint.armB, normalImpulse);
             }
 
@@ -1941,7 +2021,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                 glm::cross(bodyA.inverseInertia * glm::cross(constraint.armA, tangent), constraint.armA);
             const glm::vec3 tangentialB =
                 glm::cross(bodyB.inverseInertia * glm::cross(constraint.armB, tangent), constraint.armB);
-            const float tangentMass = bodyA.inverseMass + bodyB.inverseMass
+            const float tangentMass = linearInverseMass(bodyA, tangent) + linearInverseMass(bodyB, tangent)
                                     + glm::dot(tangentialA + tangentialB, tangent);
             if (tangentMass <= 1e-9f) continue;
 
@@ -1958,11 +2038,11 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
 
             const glm::vec3 frictionImpulse = tangent * frictionLambda;
             if (movableA) {
-                rigidA->velocity -= frictionImpulse * bodyA.inverseMass;
+                rigidA->velocity -= frictionImpulse * bodyA.inverseMass * bodyA.linearFactor;
                 rigidA->angularVelocity -= bodyA.inverseInertia * glm::cross(constraint.armA, frictionImpulse);
             }
             if (movableB) {
-                rigidB->velocity += frictionImpulse * bodyB.inverseMass;
+                rigidB->velocity += frictionImpulse * bodyB.inverseMass * bodyB.linearFactor;
                 rigidB->angularVelocity += bodyB.inverseInertia * glm::cross(constraint.armB, frictionImpulse);
             }
         }

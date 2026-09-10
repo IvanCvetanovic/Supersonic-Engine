@@ -112,6 +112,19 @@ glm::vec3 readVec3(const Json::Value& value, const glm::vec3& fallback) {
                      arr[2].AsFloat(fallback.z));
 }
 
+void writeBool3(std::ostream& os, const glm::bvec3& v) {
+    os << "[" << (v.x ? "true" : "false") << ", " << (v.y ? "true" : "false") << ", "
+       << (v.z ? "true" : "false") << "]";
+}
+
+// All false when the key is missing, which is every scene written before the
+// per-axis locks existed: they must load with nothing locked.
+glm::bvec3 readBool3(const Json::Value& value) {
+    const auto& arr = value.AsArray();
+    if (arr.size() != 3) return glm::bvec3(false);
+    return glm::bvec3(arr[0].AsBool(false), arr[1].AsBool(false), arr[2].AsBool(false));
+}
+
 glm::vec2 readVec2(const Json::Value& value, const glm::vec2& fallback) {
     const auto& arr = value.AsArray();
     if (arr.size() != 2) return fallback;
@@ -267,6 +280,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"AngularVelocity\": "; writeVec3(out, body->angularVelocity); out << ",\n";
         out << indent << "  \"AngularDamping\": " << body->angularDamping << ",\n";
         out << indent << "  \"FreezeRotation\": " << (body->freezeRotation ? "true" : "false") << ",\n";
+        out << indent << "  \"LockPosition\": "; writeBool3(out, body->lockPosition); out << ",\n";
+        out << indent << "  \"LockRotation\": "; writeBool3(out, body->lockRotation); out << ",\n";
         // Only the authored half. isSleeping, the timer and the position it
         // slept at are re-derived within half a second of the scene loading,
         // and writing them would let a scene be saved with a body asleep in
@@ -819,6 +834,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         body.angularVelocity = readVec3(r["AngularVelocity"], glm::vec3(0.0f));
         body.angularDamping = r["AngularDamping"].AsFloat(0.05f);
         body.freezeRotation = r["FreezeRotation"].AsBool(false);
+        body.lockPosition = readBool3(r["LockPosition"]);
+        body.lockRotation = readBool3(r["LockRotation"]);
         // A scene written before sleeping existed has no key and must keep
         // being allowed to sleep, which is the default for a new body too.
         body.allowSleep = r["AllowSleep"].AsBool(true);

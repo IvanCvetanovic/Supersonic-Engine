@@ -11,6 +11,14 @@ namespace {
 
 constexpr float kEpsilon = 1.0e-8f;
 
+// The inverse mass a body presents along a unit direction: all of it unless a
+// position lock takes some axes away. Branched, so an unlocked body sees exactly
+// the number it always did - the rule PhysicsSystem's contacts follow.
+float linearInverseMass(const Body& body, const glm::vec3& direction) {
+    if (!body.hasLinearLock) return body.inverseMass;
+    return body.inverseMass * glm::dot(direction * direction, body.linearFactor);
+}
+
 // The matrix M for which M * v is cross(r, v).
 //
 // glm is column-major, so each triple below is a COLUMN. Written out rather
@@ -35,9 +43,26 @@ glm::mat3 effectiveMass(const Body& a, const Body& b,
                         const glm::vec3& armA, const glm::vec3& armB) {
     const glm::mat3 crossA = skew(armA);
     const glm::mat3 crossB = skew(armB);
-    return glm::mat3(a.inverseMass + b.inverseMass) -
-           crossA * a.inverseInertia * crossA -
-           crossB * b.inverseInertia * crossB;
+    if (!a.hasLinearLock && !b.hasLinearLock) {
+        return glm::mat3(a.inverseMass + b.inverseMass) -
+               crossA * a.inverseInertia * crossA -
+               crossB * b.inverseInertia * crossB;
+    }
+
+    // A position lock makes the linear term diagonal rather than a multiple of
+    // I: along a locked axis only the other body's mass counts. An axis NEITHER
+    // end can move along leaves a row of zeros, which would make the whole
+    // matrix uninvertible and drop the joint - a plane-locked pendulum would
+    // fall off its pivot. That row's impulse is masked off when it is applied,
+    // so any finite diagonal serves; 1 keeps the rest of the constraint intact.
+    glm::mat3 mass(0.0f);
+    for (int axis = 0; axis < 3; ++axis)
+        mass[axis][axis] = a.inverseMass * a.linearFactor[axis] + b.inverseMass * b.linearFactor[axis];
+    mass = mass - crossA * a.inverseInertia * crossA - crossB * b.inverseInertia * crossB;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (mass[0][axis] == 0.0f && mass[1][axis] == 0.0f && mass[2][axis] == 0.0f) mass[axis][axis] = 1.0f;
+    }
+    return mass;
 }
 
 // Velocity of the anchor, which is the body's own velocity plus whatever the
@@ -50,9 +75,9 @@ void applyImpulse(Constraint& joint, Body& a, Body& b,
                   const glm::vec3& armA, const glm::vec3& armB, const glm::vec3& impulse) {
     // Equal and opposite, always. This is the one place linear momentum can be
     // created out of nothing, and a test asserts it is not.
-    a.velocity -= impulse * a.inverseMass;
+    a.velocity -= impulse * a.inverseMass * a.linearFactor;
     a.angularVelocity -= a.inverseInertia * glm::cross(armA, impulse);
-    b.velocity += impulse * b.inverseMass;
+    b.velocity += impulse * b.inverseMass * b.linearFactor;
     b.angularVelocity += b.inverseInertia * glm::cross(armB, impulse);
 
     joint.appliedLinear += impulse;
@@ -134,7 +159,7 @@ void solveDistanceVelocity(Constraint& joint, Body& a, Body& b) {
 
     const glm::vec3 angularA = glm::cross(joint.armA, direction);
     const glm::vec3 angularB = glm::cross(joint.armB, direction);
-    const float mass = a.inverseMass + b.inverseMass +
+    const float mass = linearInverseMass(a, direction) + linearInverseMass(b, direction) +
                        glm::dot(angularA, a.inverseInertia * angularA) +
                        glm::dot(angularB, b.inverseInertia * angularB);
     if (mass < kEpsilon) return;
@@ -209,7 +234,17 @@ void solveAxisVelocity(Constraint& joint, Body& a, Body& b) {
 // which accumulates far too slowly to see. A weld that had to survive being
 // left alone for an hour would need its rest orientation stored.
 void solveAngularLock(Constraint& joint, Body& a, Body& b) {
-    const glm::mat3 inertia = a.inverseInertia + b.inverseInertia;
+    glm::mat3 inertia = a.inverseInertia + b.inverseInertia;
+    // A rotation lock leaves rows of zeros: axes neither body may turn about.
+    // Inverting the whole would drop the weld. The impulse about a locked axis
+    // goes through the locked tensor when it is applied and comes to nothing,
+    // so a unit diagonal there keeps the free axes held.
+    if (a.hasAngularLock || b.hasAngularLock) {
+        for (int axis = 0; axis < 3; ++axis) {
+            if (inertia[0][axis] == 0.0f && inertia[1][axis] == 0.0f && inertia[2][axis] == 0.0f)
+                inertia[axis][axis] = 1.0f;
+        }
+    }
     if (!invertible(inertia)) return;
 
     const glm::vec3 relative = b.angularVelocity - a.angularVelocity;
@@ -455,8 +490,10 @@ bool SolvePosition(const Constraint& joint, const Body& a, const Body& b, float 
     }
 
     const glm::vec3 scaled = correction * factor;
-    outShiftA = scaled * (a.inverseMass / total);
-    outShiftB = -scaled * (b.inverseMass / total);
+    // A position lock takes its axes out of the share, as it does out of every
+    // impulse.
+    outShiftA = scaled * (a.inverseMass / total) * a.linearFactor;
+    outShiftB = -scaled * (b.inverseMass / total) * b.linearFactor;
     return true;
 }
 

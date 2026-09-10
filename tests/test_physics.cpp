@@ -1146,6 +1146,112 @@ static void testAHullThatIsNotASolidCollidesWithNothing() {
     CHECK_MSG(bare.valid(nothing), "and an entity with no mesh is simply skipped");
 }
 
+// ---- Per-axis locks --------------------------------------------------------
+//
+// A 2D game on this solver: every body stays in its plane and turns about z
+// only. Unlocked, a resting crate in the Magic Portals spike left the plane by
+// 30 px in a minute. These check what a lock has to be: exact on its axis,
+// transparent on the others, and obeyed by joints, which must neither pull a
+// body off its plane nor let go of it.
+
+// How far a body's own z axis has turned from the world's. Not the Euler x and
+// y, which are not unique once the body has turned far about z.
+static float tiltOutOfPlane(const TransformComponent& transform) {
+    const glm::vec3 z = glm::vec3(transform.getModelMatrix()[2]);
+    return std::atan2(std::sqrt(z.x * z.x + z.y * z.y), std::fabs(z.z));
+}
+
+static void lockToPlane(RigidBodyComponent& body) {
+    body.lockPosition = glm::bvec3(false, false, true);
+    body.lockRotation = glm::bvec3(true, true, false);
+}
+
+static void testALockedBodyNeverLeavesItsPlane() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+
+    // Thrown at the floor moving along all three axes and spinning about all
+    // three - everything a lock has to take out.
+    const auto crate = makeBox(registry, glm::vec3(0.0f, 3.0f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(crate);
+    lockToPlane(body);
+    body.allowSleep = false;
+    body.velocity = glm::vec3(1.0f, -2.0f, 3.0f);
+    body.angularVelocity = glm::vec3(4.0f, 5.0f, 2.0f);
+
+    bool zExact = true;
+    bool turned = false;
+    float worstTilt = 0.0f;
+    for (int i = 0; i < 600; ++i) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f);
+        const auto& transform = registry.get<TransformComponent>(crate);
+        zExact = zExact && transform.position.z == 0.0f;
+        turned = turned || std::fabs(transform.rotation.z) > 0.01f;
+        worstTilt = std::max(worstTilt, tiltOutOfPlane(transform));
+    }
+    CHECK_MSG(zExact, "a body locked along z never moves along it - exactly, not nearly");
+    CHECK_MSG(worstTilt < 1e-4f, "and never tips out of its plane: worst " + std::to_string(worstTilt) + " rad");
+    const auto& after = registry.get<RigidBodyComponent>(crate);
+    CHECK(after.velocity.z == 0.0f && after.angularVelocity.x == 0.0f && after.angularVelocity.y == 0.0f);
+
+    // The free axes are untouched: it fell, landed, moved along x and turned.
+    const auto& transform = registry.get<TransformComponent>(crate);
+    CHECK_MSG(test::nearly(transform.position.y, 1.0f, 0.05f), "it lands on the floor as an unlocked box would");
+    CHECK_MSG(transform.position.x > 0.1f, "and still moves along x");
+    CHECK_MSG(turned, "and still turns about z");
+}
+
+static void testAJointCannotPullALockedBodyOutOfItsPlane() {
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(100.0f, 0.0f, 0.0f)); // so the step has two colliders
+
+    const auto bob = makeSphere(registry, glm::vec3(0.0f, 3.0f, 0.0f), 0.25f);
+    auto& body = registry.get<RigidBodyComponent>(bob);
+    lockToPlane(body);
+    body.allowSleep = false;
+
+    // Anchored a metre OUT of the plane, too short to reach it.
+    auto& joint = registry.emplace<JointComponent>(bob);
+    joint.type = JointComponent::Type::Distance;
+    joint.connectedAnchor = glm::vec3(1.0f, 5.0f, 1.0f);
+    joint.distance = 1.5f;
+
+    stepFor(registry, 3.0f);
+    const auto& transform = registry.get<TransformComponent>(bob);
+    CHECK_MSG(transform.position.z == 0.0f, "a joint anchored out of the plane cannot pull a locked body into it");
+    CHECK_MSG(transform.position.x > 0.1f, "and still pulls along the axes that are free");
+}
+
+static void testAPointJointStillHoldsAPlaneLockedBody() {
+    // A point joint's 3x3 effective mass loses its z row when the body cannot
+    // move along z and the anchor is the world. Inverted whole, that matrix is
+    // singular and the joint was dropped - the bob fell off its pivot.
+    entt::registry registry;
+    makeStaticBox(registry, glm::vec3(100.0f, 0.0f, 0.0f));
+
+    const auto bob = makeSphere(registry, glm::vec3(1.0f, 3.0f, 0.0f), 0.25f);
+    auto& body = registry.get<RigidBodyComponent>(bob);
+    lockToPlane(body);
+    body.allowSleep = false;
+
+    auto& joint = registry.emplace<JointComponent>(bob);
+    joint.type = JointComponent::Type::Point;
+    joint.anchor = glm::vec3(-1.0f, 0.0f, 0.0f); // the pivot, a metre to its left
+    joint.connectedAnchor = glm::vec3(0.0f, 3.0f, 0.0f);
+
+    float lowest = 3.0f;
+    float worstArm = 0.0f;
+    for (int i = 0; i < 120; ++i) {
+        PhysicsSystem::Update(registry, 1.0f / 60.0f);
+        const glm::vec3 p = registry.get<TransformComponent>(bob).position;
+        lowest = std::min(lowest, p.y);
+        worstArm = std::max(worstArm, std::fabs(glm::length(p - glm::vec3(0.0f, 3.0f, 0.0f)) - 1.0f));
+    }
+    CHECK_MSG(registry.get<TransformComponent>(bob).position.z == 0.0f, "the bob stays in its plane");
+    CHECK_MSG(worstArm < 0.05f, "on its one-metre arm: worst stretch " + std::to_string(worstArm));
+    CHECK_MSG(lowest < 2.2f, "and swings through the bottom rather than hanging frozen");
+}
+
 static void testQueriesSeeAHull() {
     // A hull is solid to the narrowphase, so the queries have to find it too.
     // The terrain comment at the top of this file names what happens otherwise,
@@ -3196,6 +3302,9 @@ static void runTests() {
     testAHullThatIsNotASolidCollidesWithNothing();
     testAHullRestsOnTerrain();
     testQueriesSeeAHull();
+    testALockedBodyNeverLeavesItsPlane();
+    testAJointCannotPullALockedBodyOutOfItsPlane();
+    testAPointJointStillHoldsAPlaneLockedBody();
 
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();

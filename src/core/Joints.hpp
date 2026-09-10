@@ -35,6 +35,15 @@ struct Body {
     glm::vec3 angularVelocity{0.0f};
     float inverseMass{0.0f};
     glm::mat3 inverseInertia{0.0f};
+
+    // The rigid body's per-axis locks (RigidBodyComponent::lockPosition and
+    // lockRotation). The position lock arrives as a factor, 1 on a free axis
+    // and 0 on a locked one, and a joint never moves a body along a locked axis
+    // either. The rotation lock is already in inverseInertia, which the caller
+    // builds locked; the flag only says the tensor may have rows of zeros.
+    glm::vec3 linearFactor{1.0f};
+    bool hasLinearLock{false};
+    bool hasAngularLock{false};
 };
 
 enum class Type {
