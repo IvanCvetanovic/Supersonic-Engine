@@ -142,6 +142,26 @@ Damageable* Selection::EnemyAt(const glm::vec2& worldPos) const {
     return nullptr;
 }
 
+ResourceNode* Selection::ResourceAt(const glm::vec2& worldPos) const {
+    const float pickRadius = m_match->WorldLayout().pickRadius;
+
+    ResourceNode* best = nullptr;
+    float bestDistance = 0.0f;
+
+    for (const auto& node : m_match->Nodes()) {
+        if (node->IsEmpty()) continue;
+
+        const glm::vec2 centre = node->position + glm::vec2(0.0f, -30.0f);
+        const float distance = glm::length(worldPos - centre);
+
+        if (distance <= pickRadius && (best == nullptr || distance < bestDistance)) {
+            best = node.get();
+            bestDistance = distance;
+        }
+    }
+    return best;
+}
+
 void Selection::Add(Unit* unit) {
     if (unit == nullptr) return;
     if (std::find(m_units.begin(), m_units.end(), unit) != m_units.end()) return;

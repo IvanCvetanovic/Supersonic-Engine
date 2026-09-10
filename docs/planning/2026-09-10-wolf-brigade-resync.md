@@ -256,3 +256,88 @@ should.
 
 **Result (GCC, 10 September):** data 126/0, snapshot 160/0, and nothing
 regressed. The five red suites are the same five, for the same reasons.
+
+## Slice 3: the band, 2D movement and parking
+
+**The band.** `world.json` sets `ground_y` 590 and `lane.depth` 280, so the
+walkable band is [590, 870]. A unit reads it through `GameState::Data()`, where
+the original's static `_clamp_to_band` reads `DataLoader`. A level override
+would therefore reach it too.
+
+**What became 2D, and what did not.**
+- Move orders take both axes, with y clamped onto the band.
+- A worker walks to the actual tree, deposit, site and flee destination, and
+  melee closes on the target's actual position. All of it goes through one
+  `ApproachTo`, from `_approach`.
+- Every scan stays x-only: nearest node, deposit, site, enemy unit and enemy
+  building. So do ranged attacks and a raider's march. `verify_units` pins the
+  lane's half of this, and the port now does too.
+
+**Parking.**
+- A move order parks a worker: once it arrives, it holds instead of seeking
+  work.
+- A gather, build or attack order unparks it. `CommandGather` is new.
+- `parked` is saved. A save without it loads as unparked.
+
+**Build assist is a data flag.** `economy.auto_assist_build` ships on. When it
+is off, an idle worker ignores unfinished sites and only an explicit build
+order resumes one. The off case reads a scratch `economy.json`, because the
+shipped data is shared.
+
+**Placement** takes the pointer's row, clamped onto the band. A site is valid
+unless a player building overlaps it in x *and* stands on a row closer than
+`lane.building_row_gap` (115). `IsValidAt(x, y)` stays a pure predicate,
+because the harness probes y = 950, which is below the band.
+
+**Commands** gains the original's work-before-walking branches:
+- A right-click on an unfinished site builds it, and on a tree gathers it. So
+  does a tap with workers in hand.
+- A selection without workers falls through to its usual handling.
+- Group moves stagger their rows by half a spacing.
+- `Selection::ResourceAt` is new.
+- Rally points wait for slice 5, with production.
+
+**Numbers reproduced** (Godot at `50741d1`, re-run 10 September):
+
+| harness case | the original printed | port |
+|---|---|---|
+| `verify_units` FSM | y clamped onto the band (590.0) | same |
+| `verify_units` lane | sky click to the band top; in-band moves change rows; nearest enemy by x | same |
+| `verify_economy` 2d | closest 32 to the tree, 106 to the deposit, +20 banked | same |
+| `verify_economy` 2e | parked, tree still 100; 90/100 after a gather order | same |
+| `verify_combat` 4b | closest 91 ≤ 100, dy 64, damaged | same |
+| `verify_buildings` placement | same row invalid, y 950 valid, y 860 invalid | same |
+| `verify_buildings` 6 | assist on: joins and completes; off: ignores; `command_build` assigns | same |
+
+**Three fixtures had to change:**
+- `test_wb_worker`'s move case asserted that an order's y is dropped. It now
+  asserts the clamp, as the harness does.
+- Its long-step case reached idle through a move order. A parked worker never
+  seeks work, so the case could no longer tell one tick from forty. It now
+  reaches idle from a flee.
+- `test_wb_snapshot` put a worker on the farther tree with a move order and let
+  it pick the tree up. It now sends a gather order.
+
+**The HUD case had been passing vacuously.** Slice 0 blamed the band clamp,
+but the real cause is the fixture:
+1. A tap 120 px along the unit's row lands on the third starting worker and
+   selects it.
+2. At `ebf3d27` the first worker then walked to the tree at 1900 on its own,
+   so "it moved" held anyway.
+3. At `50741d1` a tree stands at 1650, inside its gather range, so the worker
+   stays put.
+
+The case now taps a row down, asserts that the target is empty ground, and
+asserts that the unit ends up parked.
+
+**Found for slice 5:** `verify_combat`'s soldier now ends on **38**/60, not 36.
+The fight is on one row, so the 2D approach is not the cause. Passive regen is:
+`hp_regen`, with `hp_regen_delay_s` 4. `test_wb_combat` still pins 36, and
+moves to 38 when regen lands.
+
+**Result (GCC, 10 September):** worker 90/0, combat 60/0, buildings 97/0,
+placement 91/0, hud 129/0 and snapshot 160/0. Still red:
+- audio 5 (slice 11);
+- match 33 (slice 10);
+- selection 5: the hall probes at y = 720, which wait for the Town Hall's row
+  at 640.4 (slice 10).

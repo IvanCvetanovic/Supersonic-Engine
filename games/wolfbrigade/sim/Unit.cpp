@@ -154,7 +154,9 @@ void Unit::TickWorker() {
         break;
 
     case State::Idle:
-        SeekWork();
+        // A worker the player moved holds where it was put. Only a gather,
+        // build or attack order takes it off park.
+        if (!m_parked) SeekWork();
         break;
 
     case State::Gathering:
@@ -218,12 +220,19 @@ void Unit::SeekWork() {
 
     // Construction BEFORE gathering, and the order is the point. A worker that
     // preferred a tree would leave a half-built barracks standing until every
-    // node on the map ran dry - and since any idle worker picks a site up, the
-    // whole village would walk past it together.
-    if (Building* site = m_world->NearestUnfinishedBuilding(m_stats.faction, m_position.x)) {
-        m_buildTarget = site;
-        SetState(State::Building);
-        return;
+    // node on the map ran dry.
+    //
+    // Only when the economy lets workers volunteer. `auto_assist_build` ships
+    // ON: the hero places a site and the village builds it unprompted. OFF,
+    // only the worker placement sent, or one the player orders onto the site,
+    // builds it. Read on the tick, as the original reads it, so a level that
+    // overrides it takes effect at once.
+    if (m_state->Data().Economy()["auto_assist_build"].AsBool(false)) {
+        if (Building* site = m_world->NearestUnfinishedBuilding(m_stats.faction, m_position.x)) {
+            m_buildTarget = site;
+            SetState(State::Building);
+            return;
+        }
     }
 
     if (ResourceNode* node = m_world->NearestHarvestable(m_position.x)) {
@@ -238,14 +247,34 @@ void Unit::StepToward(const glm::vec2& target, double delta) {
     m_position = moveToward(m_position, target, static_cast<double>(m_stats.moveSpeed) * delta);
 }
 
+// Walk toward a thing's ACTUAL position; true once within `range` of it in 2D.
+// From `_approach`.
+//
+// Worker economy and melee are the deliberate exception to the lane's x-only
+// rule. A worker walks up to the real tree and the real Town Hall door, not to
+// a spot on its own row beside them. A raider converges on the building rather
+// than stopping on its own row at the building's x. Every SCAN stays x-only -
+// which thing is nearest is still measured along the lane - and so do ranged
+// attacks and a raider's march.
+bool Unit::ApproachTo(const glm::vec2& target, float range, double delta) {
+    if (glm::distance(m_position, target) <= range) return true;
+    StepToward(target, delta);
+    return false;
+}
+
+// The walkable band, [ground_y, ground_y + lane.depth], from the world data,
+// so a click on the sky or the dirt still lands a unit on real ground.
+float Unit::ClampToBand(float y) const {
+    const Supersonic::Json::Value& world = m_state->Data().World();
+    const double top = world["ground_y"].AsNumber(800.0);
+    const double depth = world["lane"]["depth"].AsNumber(0.0);
+    return static_cast<float>(std::clamp(static_cast<double>(y), top, top + depth));
+}
+
 void Unit::StepGather(double delta) {
     if (!HasLiveNode()) return;   // the tick transitions out of here
 
-    const float nodeX = m_targetNode->position.x;
-    if (std::fabs(m_position.x - nodeX) > m_stats.gatherRange) {
-        StepToward(glm::vec2(nodeX, m_position.y), delta);
-        return;
-    }
+    if (!ApproachTo(m_targetNode->position, m_stats.gatherRange, delta)) return;
 
     // Fractional accumulation, integer extraction. gather_rate is a rate per
     // second and wood is a whole number, so the remainder has to be kept: a
@@ -272,9 +301,7 @@ void Unit::StepGather(double delta) {
 void Unit::StepDeliver(double delta) {
     if (!m_world->DepositExists(m_depositIndex)) return;   // the tick re-acquires
 
-    const float depositX = m_world->DepositPosition(m_depositIndex).x;
-    if (std::fabs(m_position.x - depositX) > m_stats.depositRange) {
-        StepToward(glm::vec2(depositX, m_position.y), delta);
+    if (!ApproachTo(m_world->DepositPosition(m_depositIndex), m_stats.depositRange, delta)) {
         return;
     }
 
@@ -287,7 +314,8 @@ void Unit::StepDeliver(double delta) {
 
 void Unit::StepFlee(double delta) {
     if (!m_world->DepositExists(m_fleeIndex)) return;
-    StepToward(glm::vec2(m_world->DepositPosition(m_fleeIndex).x, m_position.y), delta);
+    // To the real deposit, in 2D, the way a delivery walks there.
+    StepToward(m_world->DepositPosition(m_fleeIndex), delta);
 }
 
 // Close to reach, then hit once per attack interval.
@@ -316,11 +344,11 @@ void Unit::StepAttack(double delta) {
         return;
     }
 
+    // Melee closes in 2D, on the target's actual position, so attackers
+    // converge on the thing rather than lining up top to bottom at its x
+    // (the game's e2b5208). The ranged branch above stays on its own row.
     const float reach = m_stats.attackRange + m_attackTarget->HitHalfWidth();
-    if (std::fabs(m_position.x - targetX) > reach) {
-        StepToward(glm::vec2(targetX, m_position.y), delta);
-        return;
-    }
+    if (!ApproachTo(m_attackTarget->Position(), reach, delta)) return;
     if (m_attackCooldown <= 0.0) {
         m_attackCooldown = 1.0 / std::max(static_cast<double>(m_stats.attacksPerSec), 0.01);
         m_attackTarget->TakeDamage(m_stats.damage);
@@ -364,11 +392,7 @@ void Unit::StepBuild(double delta) {
     }
 
     const float reach = m_buildTarget->Stats().bodySize.x * 0.5f + m_stats.gatherRange;
-    const float siteX = m_buildTarget->Position().x;
-    if (std::fabs(m_position.x - siteX) > reach) {
-        StepToward(glm::vec2(siteX, m_position.y), delta);
-        return;
-    }
+    if (!ApproachTo(m_buildTarget->Position(), reach, delta)) return;
 
     // A second of a worker's time is a second of build time. The building
     // clamps at its total and announces its own completion.
@@ -382,7 +406,7 @@ void Unit::FleeCheck() {
     // a worker cowering forever next to a Town Hall that was destroyed is a
     // player watching their economy stop for no visible reason.
     if (m_fleeIndex < 0 ||
-        std::fabs(m_position.x - m_world->DepositPosition(m_fleeIndex).x) <= m_stats.depositRange) {
+        glm::distance(m_position, m_world->DepositPosition(m_fleeIndex)) <= m_stats.depositRange) {
         SetState(State::Idle);
     }
 }
@@ -407,7 +431,13 @@ void Unit::CommandMoveTo(const glm::vec2& target) {
     // then told to go somewhere else is not still under orders to fight.
     ClearAttack();
 
-    m_moveTarget = glm::vec2(target.x, m_position.y);
+    // A worker sent to open ground holds there rather than wandering back to
+    // the nearest tree, which read as the unit ignoring the order.
+    m_parked = true;
+
+    // Both axes, y clamped onto the walkable band (the game's 2d38d9e). Only
+    // the ORDER is 2D: which enemy is nearest stays measured along the lane.
+    m_moveTarget = glm::vec2(target.x, ClampToBand(target.y));
     SetState(State::Moving);
 }
 
@@ -417,15 +447,28 @@ void Unit::CommandBuild(Building* site) {
     // Re-task: drop any attack order, so a worker sent from a fight to a
     // building has its flee reflex back.
     ClearAttack();
+    m_parked = false;   // an explicit build order takes the worker off park
 
     m_buildTarget = site;
     SetState(State::Building);
+}
+
+void Unit::CommandGather(ResourceNode* node) {
+    if (m_phase == State::Dead || node == nullptr || node->IsEmpty()) return;
+
+    // How a parked worker is put back to work: a right-click or a tap on a
+    // tree. Drops any attack order, as every re-task does.
+    ClearAttack();
+    m_parked = false;
+    m_targetNode = node;
+    SetState(State::Gathering);
 }
 
 void Unit::CommandAttack(Damageable* target) {
     if (m_phase == State::Dead || target == nullptr) return;
     m_attackTarget = target;
     m_orderedToAttack = true;
+    m_parked = false;   // an attack order takes a worker off park
     SetState(State::Attacking);
 }
 
@@ -485,6 +528,7 @@ Supersonic::Json::Value Unit::ToSave(const SidTable& ids) const {
     out["carry_resource"] = Supersonic::Json::Value(m_carryResource);
     out["attack_cd"] = Supersonic::Json::Value(m_attackCooldown);
     out["ordered_to_attack"] = Supersonic::Json::Value(m_orderedToAttack);
+    out["parked"] = Supersonic::Json::Value(m_parked);
 
     // The upcast is deliberate and load-bearing - see SaveIds.hpp. A build
     // target is a Building and is upcast the same way its own entry was keyed.
@@ -518,6 +562,10 @@ void Unit::FromSave(const Supersonic::Json::Value& saved) {
     m_carryResource = saved["carry_resource"].AsString("");
     m_attackCooldown = saved["attack_cd"].AsNumber(0.0);
     m_orderedToAttack = saved["ordered_to_attack"].AsBool(false);
+
+    // Absent from a save written before parking existed, and false then: that
+    // worker goes back to work, as it would have.
+    m_parked = saved["parked"].AsBool(false);
 }
 
 void Unit::Relink(const Supersonic::Json::Value& saved, const SidResolver& resolver,

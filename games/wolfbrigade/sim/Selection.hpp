@@ -10,6 +10,7 @@ class Building;
 class Damageable;
 class Match;
 class Unit;
+struct ResourceNode;
 
 // What the player currently has picked, from `scripts/systems/selection.gd`.
 //
@@ -77,6 +78,11 @@ public:
     // then a building by footprint. Polymorphic, because an attack order does
     // not care which it got.
     Damageable* EnemyAt(const glm::vec2& worldPos) const;
+
+    // The nearest node with anything left in it whose body is under the point,
+    // for a gather order. By the authored pick radius alone, measured to a
+    // point 30 px up the node, since its origin is at its base.
+    ResourceNode* ResourceAt(const glm::vec2& worldPos) const;
 
 private:
     void Add(Unit* unit);

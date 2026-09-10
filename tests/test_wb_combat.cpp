@@ -48,6 +48,7 @@
 #include "sim/Unit.hpp"
 #include "sim/World.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -63,8 +64,9 @@ constexpr float kGroundY = 800.0f;
 // width, which is all `building.gd` brings to a fight.
 class StubBuilding final : public Damageable {
 public:
-    StubBuilding(const std::string& owner, float x, int hitPoints, float width)
-        : m_faction(owner), m_position(x, kGroundY), m_hp(hitPoints), m_width(width) {}
+    StubBuilding(const std::string& owner, float x, int hitPoints, float width,
+                 float y = kGroundY)
+        : m_faction(owner), m_position(x, y), m_hp(hitPoints), m_width(width) {}
 
     void TakeDamage(int amount) override {
         if (m_hp <= 0) return;
@@ -168,8 +170,9 @@ public:
 
     std::vector<float> deposits;
 
-    StubBuilding* AddBuilding(const std::string& owner, float x, int hp, float width) {
-        buildings.push_back(std::make_unique<StubBuilding>(owner, x, hp, width));
+    StubBuilding* AddBuilding(const std::string& owner, float x, int hp, float width,
+                              float y = kGroundY) {
+        buildings.push_back(std::make_unique<StubBuilding>(owner, x, hp, width, y));
         return buildings.back().get();
     }
 };
@@ -183,10 +186,10 @@ struct Fight {
 
     Fight() { state.Reset(); }
 
-    Unit* Spawn(const std::string& id, float x) {
+    Unit* Spawn(const std::string& id, float x, float y = kGroundY) {
         auto unit = std::make_unique<Unit>(
             UnitStats::FromJson(id, wb::Shipped().Unit(id)), state, bus, field);
-        unit->SetPosition(glm::vec2(x, kGroundY));
+        unit->SetPosition(glm::vec2(x, y));
         Unit* raw = unit.get();
         units.push_back(std::move(unit));
 
@@ -237,6 +240,21 @@ void testTheLaneIsSymmetricBetweenFactions() {
     // And a unit never finds itself, or anything on its own side.
     CHECK_EQ(fight.field.lane.CountOf(Factions::kPlayer), 1);
     CHECK_EQ(fight.field.lane.CountOf(Factions::kEnemy), 1);
+}
+
+void testTheLaneMeasuresAlongXAndIgnoresTheRow() {
+    // verify_units' _check_lane_stays_1d, the targeting half, at the game's
+    // 50741d1. A raider closer in x on the far side of the band beats one on a
+    // nearer row further along. Movement is 2D; which enemy is NEAREST is not,
+    // and a range check "improved" to a 2D distance would let the band's
+    // scenery decide fights.
+    //   ok  : nearest_enemy picks the nearest in X, ignoring the row (y)
+    Fight fight;
+    Unit* nearInX = fight.Spawn(Ids::kRaider, 1200.0f, 900.0f);
+    Unit* sameRow = fight.Spawn(Ids::kRaider, 1400.0f, 700.0f);
+    (void)sameRow;
+
+    CHECK(fight.field.lane.NearestEnemy(Factions::kPlayer, 1000.0f, 600.0f) == nearInX);
 }
 
 // --- 2. Soldier versus raider, to the original's own hit points ----------
@@ -324,6 +342,38 @@ void testARaiderPrefersWhateverIsActuallyNearer() {
         fight.Step(0.2);
         CHECK_MSG(raider->AttackTarget() == hall, "and the hall wins when it is the closer one");
     }
+}
+
+void testAMeleeRaiderClosesOnABuildingOnAnotherRow() {
+    // verify_combat 4b at the game's 50741d1: the hall on the back row, the
+    // raider 220 px right of it and 220 px below, 160 steps of 0.1s. It
+    // printed:
+    //
+    //   ok  : raider reached melee reach of the building in 2D (closest 91 <= 100)
+    //   ok  : raider converged toward the building's row (dy 64, not stuck 220 away)
+    //   ok  : and damaged it once close
+    //
+    // With the old x-only approach the raider stops on its own row at the
+    // hall's x, 220 px below it and never within reach. The 91 is one step of
+    // walking past the 100 threshold, on the diagonal.
+    Fight fight;
+    StubBuilding* hall =
+        fight.field.AddBuilding(Factions::kPlayer, 1500.0f, 1000, 120.0f, 640.0f);
+    Unit* raider = fight.Spawn(Ids::kRaider, 1720.0f, 860.0f);
+
+    const float reach = raider->Stats().attackRange + hall->HitHalfWidth();
+    CHECK_NEAR(reach, 100.0f);
+
+    float closest = 1.0e9f;
+    for (int i = 0; i < 160; ++i) {
+        fight.Step(0.1);
+        closest = std::min(closest, glm::distance(raider->Position(), hall->Position()));
+    }
+
+    CHECK_EQ(static_cast<int>(std::lround(closest)), 91);
+    CHECK_EQ(static_cast<int>(std::lround(std::fabs(raider->Position().y - hall->Position().y))),
+             64);
+    CHECK_MSG(hall->Hp() < 1000, "and damaged it once close");
 }
 
 // --- 4. Orders beat instincts --------------------------------------------
@@ -560,6 +610,7 @@ void testFiringAtNothingIsHarmless() {
 static void runTests() {
     testTheLaneFindsTheNearestLivingEnemyInRange();
     testTheLaneIsSymmetricBetweenFactions();
+    testTheLaneMeasuresAlongXAndIgnoresTheRow();
 
     testASoldierKillsARaiderAndKeepsTheHealthTheOriginalSaidItWould();
     testAWinnerStopsSwingingOnceThereIsNothingToHit();
@@ -568,6 +619,7 @@ static void runTests() {
     testARaiderWithNothingLeftToFightWalksLeft();
     testARaiderPrefersWhateverIsActuallyNearer();
     testARaiderWalksToADistantTownHallRatherThanAttackingItFromAfar();
+    testAMeleeRaiderClosesOnABuildingOnAnotherRow();
 
     testAMoveOrderPullsASoldierOffALiveTarget();
     testAnOrderedWorkerFightsInsteadOfFleeing();

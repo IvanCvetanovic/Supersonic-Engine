@@ -81,8 +81,10 @@ public:
     // move order a way to pull a unit OUT of a fight rather than a suggestion
     // it ignores while something is in range.
     //
-    // Only x is taken. This is a single-lane game and a unit that left its
-    // ground row would be walking through the sky.
+    // Both axes, with y clamped onto the walkable band, so a click on the sky
+    // still lands on real ground. It PARKS a worker: once arrived, the worker
+    // holds there instead of seeking work, until a gather, build or attack
+    // order.
     void CommandMoveTo(const glm::vec2& target);
 
     // Attack a specific thing, because the player said so.
@@ -98,6 +100,10 @@ public:
     // Clears any attack the way a move order does, so a worker pulled off a
     // fight to build gets its flee reflex back with it.
     void CommandBuild(Building* site);
+
+    // Send a worker to gather this node, and take it off park. A null or
+    // empty node is ignored.
+    void CommandGather(ResourceNode* node);
 
     // --- Damage ------------------------------------------------------------
 
@@ -164,6 +170,8 @@ public:
     const Building* BuildTarget() const { return m_buildTarget; }
     const Damageable* AttackTarget() const { return m_attackTarget; }
     bool OrderedToAttack() const { return m_orderedToAttack; }
+    bool Parked() const { return m_parked; }
+    const glm::vec2& MoveTarget() const { return m_moveTarget; }
 
 private:
     void TickAi();
@@ -174,6 +182,7 @@ private:
     void BeginDelivering();
 
     void StepToward(const glm::vec2& target, double delta);
+    bool ApproachTo(const glm::vec2& target, float range, double delta);
     void StepGather(double delta);
     void StepDeliver(double delta);
     void StepFlee(double delta);
@@ -187,6 +196,7 @@ private:
     void AfterGathering();
     bool HasLiveNode() const;
     bool Arrived() const;
+    float ClampToBand(float y) const;
     void SetState(State next);
 
     UnitStats m_stats;
@@ -213,6 +223,10 @@ private:
     ResourceNode* m_targetNode{nullptr};
     Building* m_buildTarget{nullptr};
     int m_depositIndex{-1};
+
+    // Set by a move order, cleared by a gather, build or attack order. A
+    // parked worker that goes idle stays idle.
+    bool m_parked{false};
 
     // Combat. Only the parts the worker needs are used here: an ordered worker
     // fights instead of fleeing, and that flag is what remembers it.

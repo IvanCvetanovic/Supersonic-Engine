@@ -1085,22 +1085,38 @@ static void testATapOnEmptyGroundOrdersTheSelectionThere() {
     CHECK_MSG(tapAtSim(registry, layer, start), "the unit is on screen");
     CHECK_MSG(match->Picked().HasSelection(), "selected first");
 
-    // Somewhere along the lane with nothing on it, and inside the camera's
-    // window so the conversion is not being asked about off-screen ground.
-    const glm::vec2 target(start.x + 120.0f, start.y);
+    // Ground with genuinely NOTHING under it, inside the camera's window so the
+    // conversion is not being asked about off-screen ground: a row down the
+    // band from the unit, 120 px along.
+    //
+    // Not along the unit's own row. There, 120 px on, stands the third
+    // starting worker (1680 + 2 x 60), which a tap SELECTS. This case passed
+    // anyway until the game's 50741d1 only because the first worker then
+    // walked off to the tree at 1900 by itself; now a tree stands at 1650,
+    // within its gather range, and it no longer walks anywhere. Asserted, so
+    // the next data change cannot make the case vacuous again.
+    const glm::vec2 target(start.x + 120.0f, start.y + 150.0f);
+    CHECK_MSG(match->Picked().UnitAt(target) == nullptr &&
+                  match->Picked().BuildingAt(target) == nullptr &&
+                  match->Picked().ResourceAt(target) == nullptr,
+              "the target is empty ground");
     CHECK_MSG(tapAtSim(registry, layer, target), "and so is the ground it is sent to");
 
-    // ASSERTED BY WALKING, because there is no move-target accessor and
-    // because the order having been recorded is a weaker claim than the unit
-    // acting on it. Twenty ticks is two thirds of a second at this game's
-    // rate, which is plenty to leave the spot it was standing on.
+    // ASSERTED BY WALKING, because the order having been recorded is a weaker
+    // claim than the unit acting on it. Twenty ticks is two thirds of a second
+    // at this game's rate, which is plenty to leave the spot it was standing
+    // on.
     for (int i = 0; i < 20; ++i) layer.OnFixedUpdate(registry, kTick);
 
     const glm::vec2 moved = unit->Position();
-    CHECK_MSG(moved.x > start.x + 1.0f,
+    CHECK_MSG(moved.x > start.x + 1.0f && moved.y > start.y + 1.0f,
               "a second tap on empty ground sends the selection there, and it goes: "
               "started at " + std::to_string(start.x) + ", reached " +
                   std::to_string(moved.x));
+
+    // And it went because it was ORDERED, not because it found work: only a
+    // move order parks a worker.
+    CHECK_MSG(unit->Parked(), "the tap was a move order");
 }
 
 static void testAClickTheEditorOwnsIsNotTheGamesToActutOn() {

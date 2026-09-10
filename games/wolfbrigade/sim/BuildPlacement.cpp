@@ -22,30 +22,34 @@ void BuildPlacement::Begin(const std::string& buildingId) {
                                    buildingId);
     m_active = true;
 
-    // The ghost is created at the middle of the world, and the original's
-    // update runs immediately on it - so a placement that is confirmed without
-    // the pointer ever moving lands at the centre rather than at the origin.
-    Update(m_match->WorldLayout().width * 0.5f);
+    // The ghost is created at the middle of the world on the band's top row,
+    // and the original's update runs immediately on it - so a placement that
+    // is confirmed without the pointer ever moving lands there rather than at
+    // the origin.
+    const Match::Layout& layout = m_match->WorldLayout();
+    Update(glm::vec2(layout.width * 0.5f, layout.groundY));
 
     m_match->Bus().placementActiveChanged.Emit(true);
 }
 
-void BuildPlacement::Update(float worldX) {
+void BuildPlacement::Update(const glm::vec2& worldPos) {
     if (!m_active) return;
 
     const float half = m_stats.bodySize.x * 0.5f;
-    const float width = m_match->WorldLayout().width;
+    const Match::Layout& layout = m_match->WorldLayout();
 
-    m_candidateX = std::min(std::max(worldX, half), width - half);
-    m_valid = IsValidAt(m_candidateX);
+    m_candidate.x = std::min(std::max(worldPos.x, half), layout.width - half);
+    m_candidate.y =
+        std::min(std::max(worldPos.y, layout.groundY), layout.groundY + layout.laneDepth);
+    m_valid = IsValidAt(m_candidate.x, m_candidate.y);
 }
 
-void BuildPlacement::Confirm(float worldX) {
+void BuildPlacement::Confirm(const glm::vec2& worldPos) {
     if (!m_active) return;
 
     // Re-clamped and re-validated BEFORE anything is spent, so the price is
     // paid for the spot the building actually lands on.
-    Update(worldX);
+    Update(worldPos);
 
     // An invalid spot leaves placement RUNNING. The player slides over and
     // tries again; cancelling here would make a mistap cost them the menu.
@@ -62,7 +66,7 @@ void BuildPlacement::Confirm(float worldX) {
         return;
     }
 
-    Place(m_candidateX);
+    Place(m_candidate);
     Cancel();
 }
 
@@ -74,17 +78,21 @@ void BuildPlacement::Cancel() {
     m_match->Bus().placementActiveChanged.Emit(false);
 }
 
-bool BuildPlacement::IsValidAt(float x) const {
+bool BuildPlacement::IsValidAt(float x, float y) const {
     const float half = m_stats.bodySize.x * 0.5f;
     const float lo = x - half;
     const float hi = x + half;
+    const float gap = m_match->WorldLayout().buildingRowGap;
 
     for (const auto& building : m_match->Buildings()) {
         if (building->Faction() != Factions::kPlayer) continue;
         if (!building->IsAlive()) continue;
 
         const Building::Rect footprint = building->Footprint();
-        if (hi > footprint.min.x && lo < footprint.max.x) return false;
+        if (hi > footprint.min.x && lo < footprint.max.x &&
+            std::fabs(y - building->Position().y) < gap) {
+            return false;
+        }
     }
     return true;
 }
@@ -116,18 +124,16 @@ Unit* BuildPlacement::NearestWorker(float x) const {
     return bestIdle != nullptr ? bestIdle : bestAny;
 }
 
-void BuildPlacement::Place(float x) {
+void BuildPlacement::Place(const glm::vec2& at) {
     // Not pre-placed: it starts as a site with no progress in it, which is what
     // gives a worker something to pour time into.
-    Building* site = m_match->PlaceBuilding(m_stats, false,
-                                            glm::vec2(x, m_match->WorldLayout().groundY));
+    Building* site = m_match->PlaceBuilding(m_stats, false, at);
 
     m_match->Bus().buildingPlaced.Emit(site);
 
-    // Sent, not assigned: any idle worker will resume an abandoned site later,
-    // which is the anti-deadlock rule the worker slice already carries. This
-    // only decides who starts.
-    if (Unit* worker = NearestWorker(x)) worker->CommandBuild(site);
+    // Sent, not assigned: while the economy's auto_assist_build is on, any idle
+    // worker resumes an abandoned site later. This only decides who starts.
+    if (Unit* worker = NearestWorker(at.x)) worker->CommandBuild(site);
 }
 
 } // namespace WolfBrigade

@@ -28,6 +28,10 @@ Match::Layout Match::Layout::FromData(const GameData& data) {
     layout.width = world["width"].AsFloat(6000.0f);
     layout.groundY = world["ground_y"].AsFloat(800.0f);
 
+    const Value& lane = world["lane"];
+    layout.laneDepth = lane["depth"].AsFloat(0.0f);
+    layout.buildingRowGap = lane["building_row_gap"].AsFloat(115.0f);
+
     // The width FIRST, because the enemy edge falls back to it. A world.json
     // that sets a width and omits the spawn edge gets a spawn edge that moved
     // with the wall.

@@ -13,13 +13,24 @@ void Commands::OnCommandAt(const glm::vec2& worldPos) {
         AttackSelected(enemy);
         return;
     }
+
+    // Work before walking. The build order is also the only way to resume a
+    // stalled site while idle workers do not volunteer (economy.json's
+    // auto_assist_build).
+    Building* building = m_selection->BuildingAt(worldPos);
+    if (building != nullptr && !building->IsComplete() && BuildSelected(building)) return;
+
+    ResourceNode* node = m_selection->ResourceAt(worldPos);
+    if (node != nullptr && GatherSelected(node)) return;
+
     MoveSelectedTo(worldPos);
 }
 
 void Commands::ContextTap(const glm::vec2& worldPos) {
     // A building first: they are the interactive landmarks, and a tap on one is
-    // never an order.
+    // an order only when it is a site and there are workers to send.
     if (Building* building = m_selection->BuildingAt(worldPos)) {
+        if (!building->IsComplete() && BuildSelected(building)) return;
         m_selection->SelectBuilding(building);
         return;
     }
@@ -39,6 +50,10 @@ void Commands::ContextTap(const glm::vec2& worldPos) {
         AttackSelected(enemy);
         return;
     }
+
+    ResourceNode* node = m_selection->ResourceAt(worldPos);
+    if (node != nullptr && GatherSelected(node)) return;
+
     MoveSelectedTo(worldPos);
 }
 
@@ -50,6 +65,30 @@ void Commands::AttackSelected(Damageable* target) {
         ordered = true;
     }
     if (ordered) m_match->Bus().attackOrdered.Emit(target->Position());
+}
+
+bool Commands::BuildSelected(Building* site) {
+    bool ordered = false;
+    for (Unit* unit : m_selection->Units()) {
+        if (unit == nullptr || !unit->IsAlive()) continue;
+        if (unit->Stats().behavior != Unit::kWorker) continue;
+        unit->CommandBuild(site);
+        ordered = true;
+    }
+    if (ordered) m_match->Bus().moveOrdered.Emit(site->Position());
+    return ordered;
+}
+
+bool Commands::GatherSelected(ResourceNode* node) {
+    bool ordered = false;
+    for (Unit* unit : m_selection->Units()) {
+        if (unit == nullptr || !unit->IsAlive()) continue;
+        if (unit->Stats().behavior != Unit::kWorker) continue;
+        unit->CommandGather(node);
+        ordered = true;
+    }
+    if (ordered) m_match->Bus().moveOrdered.Emit(node->position);
+    return ordered;
 }
 
 void Commands::MoveSelectedTo(const glm::vec2& worldPos) {
@@ -66,7 +105,8 @@ void Commands::MoveSelectedTo(const glm::vec2& worldPos) {
 
         const float offset =
             (static_cast<float>(i) - static_cast<float>(count - 1) * 0.5f) * spacing;
-        unit->CommandMoveTo(glm::vec2(worldPos.x + offset, worldPos.y));
+        const float row = (static_cast<float>(i % 3) - 1.0f) * spacing * 0.5f;
+        unit->CommandMoveTo(glm::vec2(worldPos.x + offset, worldPos.y + row));
         ordered = true;
     }
 

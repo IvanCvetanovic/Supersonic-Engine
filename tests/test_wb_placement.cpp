@@ -13,15 +13,19 @@
 //   "$GODOT" --headless --path . res://tools/verify_buildings.tscn
 //   tools\godot.bat --path . res://tools/verify_input.tscn    # NEEDS A DISPLAY
 //
-// verify_buildings prints, on 27 August 2026:
+// verify_buildings prints, at the game's 50741d1 (re-run 10 September 2026):
 //
 //   ok  : placement active after begin
-//   ok  : overlapping an existing building is INVALID
+//   ok  : overlapping a SAME-ROW building is INVALID
 //   ok  : clear ground is VALID
+//   ok  : same x on a far row is VALID (>= building_row_gap)
+//   ok  : same x on a NEARBY row is INVALID (< gap)
 //   ok  : cancel exits placement
 //
-// with a Town Hall at x=2000 and a Barracks ghost - a footprint of [1940, 2060]
-// against a 110-wide body, so 2000 overlaps and 4000 does not.
+// with a Town Hall at (2000, 800) and a Barracks ghost - a footprint of
+// [1940, 2060] against a 110-wide body, so 2000 overlaps and 4000 does not -
+// and a building_row_gap of 115, so a base row 150 below the hall's is clear
+// and one 60 below it is not.
 //
 // verify_input adds the four that only it makes:
 //
@@ -100,8 +104,16 @@ void testPlacementOpensAndClosesAndKnowsWhatGroundIsClear() {
     placement.Begin(Ids::kBarracks);
     CHECK_MSG(placement.IsActive(), "placement active after begin");
 
-    CHECK_MSG(!placement.IsValidAt(2000.0f), "overlapping an existing building is INVALID");
-    CHECK_MSG(placement.IsValidAt(4000.0f), "clear ground is VALID");
+    CHECK_MSG(!placement.IsValidAt(2000.0f, 800.0f), "overlapping a SAME-ROW building is INVALID");
+    CHECK_MSG(placement.IsValidAt(4000.0f, 800.0f), "clear ground is VALID");
+    CHECK_MSG(placement.IsValidAt(2000.0f, 950.0f),
+              "same x on a far row is VALID (>= building_row_gap)");
+    CHECK_MSG(!placement.IsValidAt(2000.0f, 860.0f), "same x on a NEARBY row is INVALID (< gap)");
+
+    // The boundary, which the harness does not probe: exactly the gap apart is
+    // clear, because the original's test is a strict `<`.
+    CHECK_MSG(placement.IsValidAt(2000.0f, 915.0f), "exactly building_row_gap apart is clear");
+    CHECK_MSG(!placement.IsValidAt(2000.0f, 914.0f), "and a pixel closer is not");
 
     placement.Cancel();
     CHECK_MSG(!placement.IsActive(), "cancel exits placement");
@@ -143,7 +155,7 @@ void testConfirmingOnClearGroundBuildsASiteAndPaysForIt() {
     match.Bus().buildingPlaced.Connect([&placed](Building* b) { placed = b; });
 
     match.Placement().Begin(Ids::kBarracks);
-    match.Placement().Confirm(3000.0f);
+    match.Placement().Confirm(glm::vec2(3000.0f, 800.0f));
 
     CHECK_MSG(!match.Placement().IsActive(), "a confirmed placement closes");
     CHECK_EQ(liveBuildings(match), 2);
@@ -172,14 +184,17 @@ void testConfirmingOnAnOccupiedSpotChangesNothingAndStaysOpen() {
     const int woodBefore = match.Run().Amount(Ids::kWood);
 
     match.Placement().Begin(Ids::kBarracks);
-    match.Placement().Confirm(match.WorldLayout().townHallX);   // straight onto the hall
+    Building* hall = match.FindBuilding(Ids::kTownHall);
+    CHECK_MSG(hall != nullptr, "the hall is there");
+    if (hall == nullptr) return;
+    match.Placement().Confirm(hall->Position());   // straight onto the hall
 
     CHECK_MSG(match.Placement().IsActive(), "an invalid spot leaves placement RUNNING");
     CHECK_EQ(liveBuildings(match), 1);
     CHECK_MSG(match.Run().Amount(Ids::kWood) == woodBefore, "and costs nothing");
 
     // And the player slides over and it works.
-    match.Placement().Confirm(3000.0f);
+    match.Placement().Confirm(glm::vec2(3000.0f, 800.0f));
     CHECK_MSG(!match.Placement().IsActive(), "the second attempt lands");
     CHECK_EQ(liveBuildings(match), 2);
 }
@@ -200,7 +215,7 @@ void testAPlacementThatBecameUnaffordableCancelsRatherThanBuilding() {
     everything[Ids::kWood] = match.Run().Amount(Ids::kWood);
     CHECK_MSG(match.Run().TrySpend(everything), "the wood is gone");
 
-    match.Placement().Confirm(3000.0f);
+    match.Placement().Confirm(glm::vec2(3000.0f, 800.0f));
 
     CHECK_MSG(!match.Placement().IsActive(), "an unaffordable confirm CANCELS");
     CHECK_EQ(liveBuildings(match), 1);
@@ -220,15 +235,46 @@ void testTheGhostIsClampedByItsFootprintNotByTheWorldEdge() {
     const float width = match.WorldLayout().width;
     match.Placement().Begin(Ids::kBarracks);
 
-    match.Placement().Update(-1000.0f);
+    match.Placement().Update(glm::vec2(-1000.0f, 800.0f));
     CHECK_NEAR(match.Placement().CandidateX(), kBarracksHalf);
 
-    match.Placement().Update(99999.0f);
+    match.Placement().Update(glm::vec2(99999.0f, 800.0f));
     CHECK_NEAR(match.Placement().CandidateX(), width - kBarracksHalf);
 
-    // And an ordinary point is left alone.
-    match.Placement().Update(3000.0f);
+    // And an ordinary point is left alone, on both axes.
+    match.Placement().Update(glm::vec2(3000.0f, 800.0f));
     CHECK_NEAR(match.Placement().CandidateX(), 3000.0f);
+    CHECK_NEAR(match.Placement().Candidate().y, 800.0f);
+}
+
+void testTheGhostsRowIsClampedOntoTheBand() {
+    // The pointer's y is taken and clamped onto the walkable band, the rule a
+    // move order follows: over the sky the ghost lands on the back row, over
+    // the dirt on the front one. The band is world.json's ground_y and
+    // lane.depth.
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.BootFresh();
+
+    const float top = match.WorldLayout().groundY;
+    const float depth = match.WorldLayout().laneDepth;
+    CHECK_NEAR(top, 590.0f);
+    CHECK_NEAR(depth, 280.0f);
+    CHECK_NEAR(match.WorldLayout().buildingRowGap, 115.0f);
+
+    match.Placement().Begin(Ids::kBarracks);
+    match.Placement().Update(glm::vec2(3000.0f, 120.0f));
+    CHECK_NEAR(match.Placement().Candidate().y, top);
+    match.Placement().Update(glm::vec2(3000.0f, 5000.0f));
+    CHECK_NEAR(match.Placement().Candidate().y, top + depth);
+
+    // And a confirm puts the site on the clamped row.
+    Building* placed = nullptr;
+    match.Bus().buildingPlaced.Connect([&placed](Building* b) { placed = b; });
+    match.Placement().Confirm(glm::vec2(3000.0f, 5000.0f));
+    CHECK_MSG(placed != nullptr, "the site went up");
+    if (placed == nullptr) return;
+    CHECK_NEAR(placed->Position().y, top + depth);
 }
 
 void testBeginningPlacementPutsTheGhostInTheMiddleOfTheWorld() {
@@ -241,6 +287,7 @@ void testBeginningPlacementPutsTheGhostInTheMiddleOfTheWorld() {
 
     match.Placement().Begin(Ids::kBarracks);
     CHECK_NEAR(match.Placement().CandidateX(), match.WorldLayout().width * 0.5f);
+    CHECK_NEAR(match.Placement().Candidate().y, match.WorldLayout().groundY);
     CHECK_MSG(match.Placement().IsValidHere(), "the middle of an empty map is clear");
 }
 
@@ -259,8 +306,9 @@ void testEdgeToEdgeIsBuildableAndOverlapIsNot() {
     const float right = hall->Footprint().max.x;
 
     match.Placement().Begin(Ids::kBarracks);
-    CHECK_MSG(match.Placement().IsValidAt(right + kBarracksHalf), "edge to edge is buildable");
-    CHECK_MSG(!match.Placement().IsValidAt(right + kBarracksHalf - 1.0f),
+    const float row = hall->Position().y;
+    CHECK_MSG(match.Placement().IsValidAt(right + kBarracksHalf, row), "edge to edge is buildable");
+    CHECK_MSG(!match.Placement().IsValidAt(right + kBarracksHalf - 1.0f, row),
               "and one pixel into it is not");
 }
 
@@ -279,10 +327,10 @@ void testRubbleDoesNotReserveTheGroundItFellOn() {
         glm::vec2(3000.0f, 800.0f));
 
     match.Placement().Begin(Ids::kBarracks);
-    CHECK_MSG(!match.Placement().IsValidAt(3000.0f), "a standing barracks blocks the spot");
+    CHECK_MSG(!match.Placement().IsValidAt(3000.0f, 800.0f), "a standing barracks blocks the spot");
 
     barracks->Destroy();
-    CHECK_MSG(match.Placement().IsValidAt(3000.0f), "its rubble does not");
+    CHECK_MSG(match.Placement().IsValidAt(3000.0f, 800.0f), "its rubble does not");
 }
 
 void testAnEnemyBuildingIsNotInTheWay() {
@@ -299,7 +347,7 @@ void testAnEnemyBuildingIsNotInTheWay() {
     match.PlaceBuilding(enemyHall, true, glm::vec2(3000.0f, 800.0f));
 
     match.Placement().Begin(Ids::kBarracks);
-    CHECK_MSG(match.Placement().IsValidAt(3000.0f),
+    CHECK_MSG(match.Placement().IsValidAt(3000.0f, 800.0f),
               "placement only asks about the player's own buildings");
 }
 
@@ -333,7 +381,7 @@ void testAnIdleWorkerIsPreferredOverACloserBusyOne() {
 
     // Right beside the busy ones.
     match.Placement().Begin(Ids::kBarracks);
-    match.Placement().Confirm(1900.0f);
+    match.Placement().Confirm(glm::vec2(1900.0f, 800.0f));
 
     CHECK_MSG(placed != nullptr, "the site went up");
     if (placed == nullptr) return;
@@ -352,7 +400,7 @@ void testWithNoIdleWorkerTheNearestOneOfAnyKindGoes() {
     match.Bus().buildingPlaced.Connect([&placed](Building* b) { placed = b; });
 
     match.Placement().Begin(Ids::kBarracks);
-    match.Placement().Confirm(1900.0f);
+    match.Placement().Confirm(glm::vec2(1900.0f, 800.0f));
     CHECK_MSG(placed != nullptr, "the site went up");
     if (placed == nullptr) return;
 
@@ -394,14 +442,14 @@ void testACorpseIsNotSentToBuild() {
     CHECK_MSG(nearest != nullptr, "there are workers");
     if (nearest == nullptr) return;
     nearest->Kill();
-    const float corpseX = nearest->Position().x;
+    const glm::vec2 corpseAt = nearest->Position();
 
     Building* placed = nullptr;
     match.Bus().buildingPlaced.Connect([&placed](Building* b) { placed = b; });
 
     // Right on top of the corpse, so distance cannot be the reason it loses.
     match.Placement().Begin(Ids::kBarracks);
-    match.Placement().Confirm(corpseX);
+    match.Placement().Confirm(corpseAt);
     CHECK_MSG(placed != nullptr, "the site went up");
     if (placed == nullptr) return;
 
@@ -438,7 +486,7 @@ void testAnEnemyWorkerWillNotBuildForThePlayer() {
     match.Bus().buildingPlaced.Connect([&placed](Building* b) { placed = b; });
 
     match.Placement().Begin(Ids::kBarracks);
-    match.Placement().Confirm(3000.0f);
+    match.Placement().Confirm(glm::vec2(3000.0f, 800.0f));
     CHECK_MSG(placed != nullptr, "the site went up");
     if (placed == nullptr) return;
 
@@ -467,7 +515,7 @@ void testABoardWithNoWorkersLeavesTheSiteStanding() {
     match.Bus().buildingPlaced.Connect([&placed](Building* b) { placed = b; });
 
     match.Placement().Begin(Ids::kBarracks);
-    match.Placement().Confirm(3000.0f);
+    match.Placement().Confirm(glm::vec2(3000.0f, 800.0f));
 
     CHECK_MSG(placed != nullptr, "the site still goes up with nobody to build it");
     CHECK_EQ(liveBuildings(match), 2);
@@ -583,6 +631,7 @@ static void runTests() {
     testAPlacementThatBecameUnaffordableCancelsRatherThanBuilding();
 
     testTheGhostIsClampedByItsFootprintNotByTheWorldEdge();
+    testTheGhostsRowIsClampedOntoTheBand();
     testBeginningPlacementPutsTheGhostInTheMiddleOfTheWorld();
     testEdgeToEdgeIsBuildableAndOverlapIsNot();
     testRubbleDoesNotReserveTheGroundItFellOn();

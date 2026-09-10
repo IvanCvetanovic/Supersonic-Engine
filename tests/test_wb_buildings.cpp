@@ -52,7 +52,9 @@
 #include "sim/World.hpp"
 
 #include <cmath>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -130,14 +132,16 @@ public:
 
 struct Site {
     EventBus bus;
-    GameState state{wb::Shipped(), bus};
+    GameState state;
     Town town;
 
     std::vector<std::string> trained;
     std::vector<const Building*> completed;
     std::vector<const Building*> destroyed;
 
-    Site() {
+    // The run reads `data`, which is the shipped files unless a case needs a
+    // flag the shipped files do not set.
+    explicit Site(const GameData& data = wb::Shipped()) : state(data, bus) {
         state.Reset();
         bus.unitTrained.Connect(
             [this](const std::string& id, const glm::vec2&) { trained.push_back(id); });
@@ -739,6 +743,59 @@ void testABuildingDestroyedUnderItsBuilderReleasesTheWorker() {
               "a worker must not keep building a ruin");
 }
 
+void testBuildAssistFollowsTheEconomysFlag() {
+    // verify_buildings 6 at the game's 50741d1:
+    //
+    //   ok  : auto_assist_build defaults ON (hero-placed sites build themselves)
+    //   ok  : idle worker auto-joins the new site
+    //   ok  : the volunteer completes it (no stuck construction)
+    //   ok  : flag off -> idle worker ignores the site
+    //   ok  : command_build still assigns explicitly
+    CHECK_MSG(wb::Shipped().Economy()["auto_assist_build"].AsBool(false),
+              "auto_assist_build defaults ON (hero-placed sites build themselves)");
+    {
+        Site site;
+        Building* barracks = site.Place(Ids::kBarracks, 2000.0f, false);
+        Unit* worker = site.SpawnUnit(Ids::kWorker, 2400.0f);
+
+        worker->Step(0.2);   // one thinking tick: the idle decision
+        CHECK_MSG(worker->CurrentState() == Unit::State::Building &&
+                      worker->BuildTarget() == barracks,
+                  "idle worker auto-joins the new site");
+        for (int i = 0; i < 160; ++i) worker->Step(0.2);
+        CHECK_MSG(barracks->IsComplete(), "the volunteer completes it (no stuck construction)");
+    }
+
+    // Flag OFF. The original flips its loaded dictionary in place. The port's
+    // shipped data is shared and const, so this case reads a scratch copy.
+    std::ifstream in(std::string(WOLFBRIGADE_DATA_DIR) + "/economy.json", std::ios::binary);
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    std::string economy = buffer.str();
+    const std::string on = "\"auto_assist_build\": true";
+    const size_t at = economy.find(on);
+    CHECK_MSG(at != std::string::npos, "the shipped economy states the flag");
+    if (at == std::string::npos) return;
+    economy.replace(at, on.size(), "\"auto_assist_build\": false");
+
+    wb::ScratchData scratch("assist", "economy.json", economy);
+    GameData manual;
+    CHECK_MSG(manual.LoadAll(scratch.Path()), "the scratch data loads");
+    CHECK_MSG(!manual.Economy()["auto_assist_build"].AsBool(true), "with the flag off");
+
+    Site site(manual);
+    Building* barracks = site.Place(Ids::kBarracks, 2600.0f, false);
+    Unit* worker = site.SpawnUnit(Ids::kWorker, 2900.0f);
+
+    worker->Step(0.2);
+    CHECK_MSG(worker->CurrentState() != Unit::State::Building,
+              "flag off -> idle worker ignores the site");
+    worker->CommandBuild(barracks);
+    CHECK_MSG(worker->CurrentState() == Unit::State::Building &&
+                  worker->BuildTarget() == barracks,
+              "command_build still assigns explicitly");
+}
+
 } // namespace
 
 static void runTests() {
@@ -777,6 +834,7 @@ static void runTests() {
     testAWorkerBuildsBeforeItGathersAndBanksBeforeEither();
     testAWorkerBuildsFromItsGatherRangeNotItsAttackRange();
     testABuildingDestroyedUnderItsBuilderReleasesTheWorker();
+    testBuildAssistFollowsTheEconomysFlag();
 }
 
 TEST_MAIN("test_wb_buildings", 55)

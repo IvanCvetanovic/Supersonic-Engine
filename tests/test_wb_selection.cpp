@@ -495,6 +495,119 @@ void testATapIsContextSensitiveInTheOriginalsOrder() {
     CHECK_MSG(!match.Picked().HasSelection(), "an empty tap on empty ground is a let-go");
 }
 
+void testAnOrderOnATreeSendsTheWorkersToGatherIt() {
+    // The game's commands.gd at 50741d1: work outranks walking. A right-click
+    // on a tree gathers it and takes the worker off park, which is how a
+    // parked worker goes back to work. A selection with no workers in it falls
+    // through to a move.
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.Run().Reset();
+
+    ResourceNode prototype;
+    prototype.resource = Ids::kWood;
+    prototype.maxAmount = 100;
+    prototype.amount = 100;
+    prototype.position = glm::vec2(3000.0f, 800.0f);
+    ResourceNode* tree = match.AddResourceNode(prototype);
+
+    Unit* worker = spawnWorker(match, 2000.0f);
+    worker->CommandMoveTo(glm::vec2(2000.0f, 800.0f));
+    CHECK_MSG(worker->Parked(), "parked where it stands");
+    match.Picked().SelectOnly(worker);
+
+    glm::vec2 pinged(0.0f);
+    int pings = 0;
+    match.Bus().moveOrdered.Connect([&](const glm::vec2& at) {
+        pinged = at;
+        ++pings;
+    });
+
+    // At the tree's body, 30 px up from its base.
+    match.Orders().OnCommandAt(glm::vec2(3000.0f, 770.0f));
+    CHECK_MSG(worker->CurrentState() == Unit::State::Gathering, "a right-click on a tree gathers");
+    CHECK_MSG(worker->TargetNode() == tree, "that tree");
+    CHECK_MSG(!worker->Parked(), "and takes the worker off park");
+    CHECK_EQ(pings, 1);
+    CHECK_NEAR(pinged.x, 3000.0f);
+
+    // A soldier cannot gather, so the same click walks it there.
+    Unit* soldier = match.SpawnUnit(
+        UnitStats::FromJson(Ids::kSoldier, wb::Shipped().Unit(Ids::kSoldier)),
+        glm::vec2(2000.0f, 800.0f));
+    match.Picked().SelectOnly(soldier);
+    match.Orders().OnCommandAt(glm::vec2(3000.0f, 770.0f));
+    CHECK_MSG(soldier->CurrentState() == Unit::State::Moving, "a soldier walks to it instead");
+
+    // And a tap with a worker in hand is the same gather order.
+    Unit* second = spawnWorker(match, 2200.0f);
+    match.Picked().SelectOnly(second);
+    match.Orders().ContextTap(glm::vec2(3000.0f, 770.0f));
+    CHECK_MSG(second->TargetNode() == tree, "a tap on a tree gathers too");
+}
+
+void testAnOrderOnAnUnfinishedSiteBuildsItRatherThanSelectingIt() {
+    // A tap on an unfinished site with a worker in hand is a BUILD order -
+    // touch parity with the right-click - and the build order is the only way
+    // to resume a stalled site when idle workers do not volunteer.
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.Run().Reset();
+
+    Building* site = match.PlaceBuilding(
+        Upgrades::ForBuilding(wb::Shipped(), match.Run(), profile, Ids::kBarracks), false,
+        glm::vec2(3000.0f, 800.0f));
+    CHECK_MSG(site != nullptr && !site->IsComplete(), "a site under construction");
+    if (site == nullptr) return;
+
+    Unit* worker = spawnWorker(match, 2000.0f);
+    match.Picked().SelectOnly(worker);
+
+    match.Orders().ContextTap(glm::vec2(3000.0f, 760.0f));
+    CHECK_MSG(worker->CurrentState() == Unit::State::Building && worker->BuildTarget() == site,
+              "the worker is sent to build it");
+    CHECK_MSG(match.Picked().SelectedBuilding() == nullptr, "and the site is not selected");
+    CHECK_MSG(match.Picked().HasSelection(), "the worker stays in hand");
+
+    // With only a soldier in hand the same tap selects the site.
+    Unit* soldier = match.SpawnUnit(
+        UnitStats::FromJson(Ids::kSoldier, wb::Shipped().Unit(Ids::kSoldier)),
+        glm::vec2(2100.0f, 800.0f));
+    match.Picked().SelectOnly(soldier);
+    match.Orders().ContextTap(glm::vec2(3000.0f, 760.0f));
+    CHECK_MSG(match.Picked().SelectedBuilding() == site, "a soldier's tap selects the site");
+
+    // And a right-click with a worker is the same build order.
+    Unit* second = spawnWorker(match, 2200.0f);
+    match.Picked().SelectOnly(second);
+    match.Orders().OnCommandAt(glm::vec2(3000.0f, 760.0f));
+    CHECK_MSG(second->BuildTarget() == site, "a right-click builds too");
+}
+
+void testAGroupMoveStaggersItsRowsSoTheGroupDoesNotStack() {
+    // A move order carries y, so without a stagger a group lands on the one
+    // clicked row. The original's `(i % 3 - 1) * spacing * 0.5`: half a
+    // spacing behind, on, and in front of the row, repeating.
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.Run().Reset();
+
+    Unit* a = spawnWorker(match, 1000.0f);
+    Unit* b = spawnWorker(match, 1010.0f);
+    Unit* c = spawnWorker(match, 1020.0f);
+    match.Picked().BoxSelect(glm::vec2(900.0f, 700.0f), glm::vec2(1100.0f, 900.0f));
+    CHECK_EQ(static_cast<int>(match.Picked().Units().size()), 3);
+
+    match.Orders().MoveSelectedTo(glm::vec2(3000.0f, 700.0f));
+
+    CHECK_NEAR(a->MoveTarget().x, 2954.0f);
+    CHECK_NEAR(b->MoveTarget().x, 3000.0f);
+    CHECK_NEAR(c->MoveTarget().x, 3046.0f);
+    CHECK_NEAR(a->MoveTarget().y, 677.0f);
+    CHECK_NEAR(b->MoveTarget().y, 700.0f);
+    CHECK_NEAR(c->MoveTarget().y, 723.0f);
+}
+
 void testAnEnemyUnitIsPickedBeforeAnEnemyBuilding() {
     // A raider standing in front of its own wall is what the player meant to
     // hit. Units are scanned first, and only then buildings.
@@ -569,6 +682,9 @@ static void runTests() {
     testAnOrderToAnEmptySelectionPingsNothing();
     testARightClickOnAnEnemyAttacksAndOnGroundMoves();
     testATapIsContextSensitiveInTheOriginalsOrder();
+    testAnOrderOnATreeSendsTheWorkersToGatherIt();
+    testAnOrderOnAnUnfinishedSiteBuildsItRatherThanSelectingIt();
+    testAGroupMoveStaggersItsRowsSoTheGroupDoesNotStack();
     testAnEnemyUnitIsPickedBeforeAnEnemyBuilding();
     testTheEnemyPickIgnoresThePlayersOwnArmy();
 

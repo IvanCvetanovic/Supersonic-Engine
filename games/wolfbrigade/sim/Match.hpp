@@ -79,6 +79,14 @@ public:
         float width{6000.0f};
         float groundY{800.0f};
 
+        // The walkable band runs from groundY down laneDepth pixels (world.json's
+        // `lane` block). Units and placed buildings stand on any row inside it.
+        float laneDepth{0.0f};
+
+        // Two buildings may share a stretch of lane only when their base rows
+        // are at least this far apart; any closer and they stack into mush.
+        float buildingRowGap{115.0f};
+
         // Where enemies come in. The key is optional and the original's
         // fallback is `width - 40`, NOT the shipped 5960 - so a world.json with
         // a different width moves the spawn edge with it, and a port that

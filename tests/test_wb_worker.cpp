@@ -22,10 +22,12 @@
 //   ok  : food banked at the deposit (+20)
 //   ok  : food conserved (extracted == banked + carried)
 //
-// And from `verify_units`, the FSM half:
+// And from `verify_units`, the FSM half. Since the game's 2d38d9e a move
+// order's y is clamped onto the walkable band rather than dropped, so an order
+// aimed at the sky lands on world.json's ground_y:
 //
 //   ok  : spawns at full hp (30)      ok  : arrives at target x (got 1500.0)
-//   ok  : spawns IDLE                 ok  : stays on lane y=800 (got 800.0)
+//   ok  : spawns IDLE                 ok  : y clamped onto the band (got 590.0)
 //   ok  : MOVING after move order     ok  : returns to IDLE on arrival
 //
 // And from `verify_combat`, the flee reflex:
@@ -33,6 +35,21 @@
 //   ok  : attacked worker enters FLEEING
 //   ok  : worker flees toward the Town Hall (leftward)
 //   ok  : ordered worker fights instead of fleeing
+//
+// Re-run on 10 September 2026 at the game's 50741d1, the band and the parking
+// cases, from verify_units and verify_economy:
+//
+//   ok  : a sky-clicked move clamps y onto the band
+//   ok  : arrives on the band's top row
+//   ok  : ...and x reached the ordered point
+//   ok  : an in-band move CHANGES rows (2-D)
+//   ok  : worker reached the tree in 2D (closest 32 <= range 46)
+//   ok  : worker reached the deposit in 2D (closest 106 <= range 110)
+//   ok  : cross-row gather still banks wood (+20)
+//   ok  : parked worker settles to IDLE (state 0)
+//   ok  : parked worker does NOT auto-gather (tree still 100)
+//   ok  : parked worker holds where it was sent
+//   ok  : a gather order resumes work (tree 90/100)
 
 #include "TestHarness.hpp"
 #include "WolfBrigadeFixture.hpp"
@@ -44,6 +61,7 @@
 #include "sim/Unit.hpp"
 #include "sim/World.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -57,6 +75,11 @@ constexpr float kGroundY = 800.0f;
 constexpr float kDepositX = 1000.0f;
 constexpr float kNodeX = 1300.0f;
 constexpr float kWorkerX = 1100.0f;
+// The walkable band's top row: world.json's ground_y. The band runs lane.depth
+// (280) below it. The worker fixtures above all stand on 800, inside it, and
+// on ONE row - so their 2D distances are their x distances, which is why the
+// original's 79/20/1 survive 2D pathing unchanged.
+constexpr float kBandTop = 590.0f;
 // The harness's dt, as a DOUBLE. `0.2f` is 0.20000000298023224 once widened,
 // which is not the number the GDScript steps by - and over 140 steps that is
 // the difference between reproducing the original and nearly reproducing it.
@@ -75,18 +98,18 @@ public:
     // whole reason a worker holds an index rather than a position.
     std::vector<bool> alive;
 
-    ResourceNode* Add(const std::string& resource, float x, int amount) {
+    ResourceNode* Add(const std::string& resource, float x, int amount, float y = kGroundY) {
         auto node = std::make_unique<ResourceNode>();
         node->resource = resource;
         node->maxAmount = amount;
         node->amount = amount;
-        node->position = glm::vec2(x, kGroundY);
+        node->position = glm::vec2(x, y);
         nodes.push_back(std::move(node));
         return nodes.back().get();
     }
 
-    void AddDeposit(float x) {
-        deposits.emplace_back(x, kGroundY);
+    void AddDeposit(float x, float y = kGroundY) {
+        deposits.emplace_back(x, y);
         alive.push_back(true);
     }
 
@@ -150,9 +173,9 @@ struct Site {
         return UnitStats::FromJson(Ids::kWorker, wb::Shipped().Unit(Ids::kWorker));
     }
 
-    std::unique_ptr<Unit> Worker(float x = kWorkerX) {
+    std::unique_ptr<Unit> Worker(float x = kWorkerX, float y = kGroundY) {
         auto unit = std::make_unique<Unit>(WorkerStats(), state, bus, world);
-        unit->SetPosition(glm::vec2(x, kGroundY));
+        unit->SetPosition(glm::vec2(x, y));
         return unit;
     }
 };
@@ -256,22 +279,129 @@ void testAUnitSpawnsIdleAtFullHealth() {
 }
 
 void testAMoveOrderTakesItThereAndThenReleasesIt() {
+    // verify_units' FSM case: from (1000, 800), an order aimed at the sky at
+    // y=200, then 80 steps of 0.1s.
     Site site;   // no nodes, no deposits: nothing to distract it
     auto worker = site.Worker(1000.0f);
 
-    worker->CommandMoveTo(glm::vec2(1500.0f, 0.0f));
+    worker->CommandMoveTo(glm::vec2(1500.0f, 200.0f));
     CHECK(worker->CurrentState() == Unit::State::Moving);
 
-    for (int i = 0; i < kSteps; ++i) worker->Step(kStep);
+    for (int i = 0; i < 80; ++i) worker->Step(0.1);
 
     CHECK_NEAR(worker->Position().x, 1500.0f);
 
-    // The y in the order was ZERO and the worker must have ignored it. This is
-    // a single-lane game; a unit that took the order's y would walk into the
-    // sky, and the original strips it in command_move_to for that reason.
-    CHECK_NEAR(worker->Position().y, kGroundY);
+    // The order's y is TAKEN, and clamped onto the walkable band, so the sky
+    // click lands on the band's top row. Dropping it instead - the port's rule
+    // until the game's 2d38d9e - would leave the worker on 800, and a move that
+    // refuses to change rows reads as broken once workers cross rows to reach
+    // their trees.
+    CHECK_NEAR(worker->Position().y, kBandTop);
 
     CHECK(worker->CurrentState() == Unit::State::Idle);
+}
+
+void testAMoveOrderChangesRowsButNeverLeavesTheBand() {
+    // verify_units' _check_lane_stays_1d, the movement half: from (1000, 700),
+    // a sky click at (1400, 120), then an order to a row inside the band.
+    Site site;
+    auto worker = site.Worker(1000.0f, 700.0f);
+
+    worker->CommandMoveTo(glm::vec2(1400.0f, 120.0f));
+    CHECK_MSG(std::fabs(worker->MoveTarget().y - kBandTop) < 0.001f,
+              "a sky-clicked move clamps y onto the band");
+    for (int i = 0; i < 40; ++i) worker->Step(0.2);
+    CHECK_MSG(std::fabs(worker->Position().y - kBandTop) < 0.001f, "arrives on the band's top row");
+    CHECK_MSG(std::fabs(worker->Position().x - 1400.0f) < 4.0f,
+              "...and x reached the ordered point");
+
+    worker->CommandMoveTo(glm::vec2(1000.0f, kBandTop + 150.0f));
+    for (int i = 0; i < 40; ++i) worker->Step(0.2);
+    CHECK_MSG(std::fabs(worker->Position().y - (kBandTop + 150.0f)) < 4.0f,
+              "an in-band move CHANGES rows (2-D)");
+
+    // And the band has a floor: lane.depth, 280 below the top. A click on the
+    // dirt cross-section lands on the front row.
+    worker->CommandMoveTo(glm::vec2(1000.0f, 5000.0f));
+    CHECK_NEAR(worker->MoveTarget().y, kBandTop + 280.0f);
+}
+
+void testAWorkerWalksUpToTheRealTreeAndDepositAcrossRows() {
+    // verify_economy 2d: the deposit on the back row, the tree on the front
+    // row 250 px below it, the worker on a third row; 200 steps of 0.2s.
+    //
+    // Worker pathing is 2D, so the worker stands AT the tree and at the Town
+    // Hall's door. With x-only pathing it would stop gather_range away in x but
+    // a whole row off in y, and never come within range of either.
+    Site site;
+    const glm::vec2 deposit(1000.0f, 610.0f);
+    site.world.AddDeposit(deposit.x, deposit.y);
+    ResourceNode* tree = site.world.Add(Ids::kWood, 1300.0f, 100, 860.0f);
+    auto worker = site.Worker(1100.0f, 700.0f);
+
+    const int before = site.state.Amount(Ids::kWood);
+    float closestTree = 1.0e9f;
+    float closestDeposit = 1.0e9f;
+    for (int i = 0; i < 200; ++i) {
+        worker->Step(kStep);
+        closestTree = std::min(closestTree, glm::distance(worker->Position(), tree->position));
+        closestDeposit = std::min(closestDeposit, glm::distance(worker->Position(), deposit));
+    }
+
+    // The original prints each closest approach to the pixel.
+    CHECK_EQ(static_cast<int>(std::lround(closestTree)), 32);
+    CHECK_EQ(static_cast<int>(std::lround(closestDeposit)), 106);
+    CHECK_MSG(closestTree <= worker->Stats().gatherRange + 1.0f, "it reached the tree in 2D");
+    CHECK_MSG(closestDeposit <= worker->Stats().depositRange + 1.0f,
+              "and the deposit in 2D");
+    CHECK_EQ(site.state.Amount(Ids::kWood) - before, 20);
+}
+
+void testAMovedWorkerParksUntilItIsToldToGather() {
+    // verify_economy 2e. A worker the player sends to open ground holds there,
+    // with a full tree 250 px away. A gather order is what puts it back to
+    // work, and this board has no deposit, so it fills one load and keeps it.
+    Site site;
+    ResourceNode* tree = site.world.Add(Ids::kWood, kNodeX, 100);
+    auto worker = site.Worker();
+
+    worker->CommandMoveTo(glm::vec2(1550.0f, kGroundY));
+    for (int i = 0; i < 100; ++i) worker->Step(kStep);
+
+    CHECK_MSG(worker->CurrentState() == Unit::State::Idle, "parked worker settles to IDLE");
+    CHECK_MSG(worker->Parked(), "and is parked");
+    CHECK_EQ(tree->amount, 100);
+    CHECK_MSG(std::fabs(worker->Position().x - 1550.0f) < 5.0f,
+              "parked worker holds where it was sent");
+
+    worker->CommandGather(tree);
+    CHECK_MSG(!worker->Parked(), "a gather order takes it off park");
+    CHECK(worker->CurrentState() == Unit::State::Gathering);
+    for (int i = 0; i < 120; ++i) worker->Step(kStep);
+    CHECK_EQ(tree->amount, 90);
+}
+
+void testEveryWorkOrderUnparksAndAMoveParks() {
+    // The three ways off park, one each. A worker left parked by an order that
+    // should have released it would stand beside the job it was just given.
+    Site site;
+    ResourceNode* tree = site.world.Add(Ids::kWood, kNodeX, 100);
+    auto worker = site.Worker();
+    CHECK_MSG(!worker->Parked(), "a fresh worker is not parked");
+
+    auto target = site.Worker(1600.0f);   // something to be told to hit
+
+    worker->CommandMoveTo(glm::vec2(1550.0f, kGroundY));
+    CHECK_MSG(worker->Parked(), "a move order parks it");
+    worker->CommandAttack(target.get());
+    CHECK_MSG(!worker->Parked(), "an attack order unparks it");
+
+    worker->CommandMoveTo(glm::vec2(1550.0f, kGroundY));
+    worker->CommandGather(nullptr);
+    CHECK_MSG(worker->Parked(), "a gather order with no tree changes nothing");
+    tree->amount = 0;
+    worker->CommandGather(tree);
+    CHECK_MSG(worker->Parked(), "and neither does one at an empty tree");
 }
 
 void testADeadUnitStopsAndIgnoresOrders() {
@@ -285,7 +415,7 @@ void testADeadUnitStopsAndIgnoresOrders() {
     CHECK_MSG(!worker->IsAlive(), "a killed unit is not alive");
 
     const glm::vec2 where = worker->Position();
-    worker->CommandMoveTo(glm::vec2(5000.0f, 0.0f));
+    worker->CommandMoveTo(glm::vec2(5000.0f, kGroundY));
     for (int i = 0; i < kSteps; ++i) worker->Step(kStep);
 
     CHECK(worker->CurrentState() == Unit::State::Dead);
@@ -382,7 +512,7 @@ void testDecisionsRunOnTheTickAndMovementRunsEveryStep() {
     // that only shows up on the device it was written for.
     Site site;
     auto worker = site.Worker(1000.0f);
-    worker->CommandMoveTo(glm::vec2(1500.0f, 0.0f));
+    worker->CommandMoveTo(glm::vec2(1500.0f, kGroundY));
 
     // One step far shorter than the tick interval. It has to MOVE.
     worker->Step(0.01);
@@ -497,20 +627,31 @@ void testAnEmptiedTreeSendsTheWorkerHomeOnTheSameStep() {
 }
 
 void testALongStepDoesNotChainDecisions() {
-    // One tick per step, not one per interval elapsed. With catch-up, a single
-    // long step arrives, goes idle, seeks work and starts gathering all at
-    // once - acting three times on one view of the world, two of them stale.
+    // One tick per step, not one per interval elapsed. A worker that has just
+    // reached safety needs two ticks to be back at work: the first calms it
+    // (FLEEING to IDLE), the second finds it a tree. With catch-up, one long
+    // step does both - acting twice on one view of the world.
+    //
+    // This case used to arrive by a move order. Since parking, an arrived
+    // worker holds and never seeks work at all, so that path could no longer
+    // tell one tick from forty. A flee ends in an UNPARKED idle, so it can.
     Site site;
     site.world.AddDeposit(kDepositX);
     site.world.Add(Ids::kWood, kNodeX, 100);
 
-    auto worker = site.Worker(kNodeX - 300.0f);
-    worker->CommandMoveTo(glm::vec2(kNodeX, 0.0f));
+    auto worker = site.Worker(kDepositX);   // already at the Town Hall
+    worker->TakeDamage(1);
+    CHECK(worker->CurrentState() == Unit::State::Fleeing);
 
-    // Long enough to cover the distance AND eight thinking intervals.
+    // Forty thinking intervals' worth.
     worker->Step(5.0);
     CHECK_MSG(worker->CurrentState() == Unit::State::Idle,
-              "arriving releases the order and nothing else happens this step");
+              "reaching safety releases the flee and nothing else happens this step");
+
+    // And the next step does find it work, so the idle above was one tick
+    // short of it rather than a worker that had given up.
+    worker->Step(0.2);
+    CHECK(worker->CurrentState() == Unit::State::Gathering);
 }
 
 } // namespace
@@ -523,6 +664,10 @@ static void runTests() {
 
     testAUnitSpawnsIdleAtFullHealth();
     testAMoveOrderTakesItThereAndThenReleasesIt();
+    testAMoveOrderChangesRowsButNeverLeavesTheBand();
+    testAWorkerWalksUpToTheRealTreeAndDepositAcrossRows();
+    testAMovedWorkerParksUntilItIsToldToGather();
+    testEveryWorkOrderUnparksAndAMoveParks();
     testADeadUnitStopsAndIgnoresOrders();
     testTheBoardFreezesOnceTheRunIsDecided();
 

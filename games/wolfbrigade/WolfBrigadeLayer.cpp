@@ -2100,13 +2100,14 @@ void WolfBrigadeLayer::applyGestures(entt::registry& registry, float fixedDelta)
 
     // THE GHOST FOLLOWS THE POINTER while placement is armed, which is the
     // difference between choosing where a building goes and confirming one
-    // blind. Only x, because the lane has one ground line and it is not the
-    // pointer's to choose - and it is driven from the raw pointer rather than
-    // from a gesture, because a finger hovering has committed to nothing yet.
+    // blind. Both axes: a building stands on whichever row of the band the
+    // pointer is over, and placement clamps it onto the band. Driven from the
+    // raw pointer rather than from a gesture, because a finger hovering has
+    // committed to nothing yet.
     if (m_match->Placement().IsActive() && ours) {
         glm::vec2 hover(0.0f);
         if (screenToSim(registry, Supersonic::Input::MousePosition(), hover)) {
-            m_match->Placement().Update(hover.x);
+            m_match->Placement().Update(hover);
         }
     }
 
@@ -2119,7 +2120,7 @@ void WolfBrigadeLayer::applyGestures(entt::registry& registry, float fixedDelta)
             // decision across the caller would be a second copy of the rule
             // the port exists to reproduce.
             if (m_match->Placement().IsActive()) {
-                m_match->Placement().Confirm(sim.x);
+                m_match->Placement().Confirm(sim);
             } else {
                 m_match->Orders().ContextTap(sim);
             }

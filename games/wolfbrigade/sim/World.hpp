@@ -52,6 +52,9 @@ public:
     // may have fled, died or been re-tasked, and without this the half-built
     // barracks it left behind stands there for the rest of the run with the
     // player unable to see why.
+    //
+    // Asked only while `economy.auto_assist_build` is on, which is how it
+    // ships. Off, a stalled site waits for an explicit build order.
     virtual Building* NearestUnfinishedBuilding(const std::string& faction,
                                                 float x) const = 0;
 

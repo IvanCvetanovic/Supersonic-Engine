@@ -40,6 +40,10 @@ public:
 
     GameState(const GameData& data, EventBus& bus) : m_data(&data), m_bus(&bus) {}
 
+    // The data this run reads, level overrides applied. A unit reads the band
+    // and the economy's flags through it, where the original reads DataLoader.
+    const GameData& Data() const { return *m_data; }
+
     // Back to the initial data-driven state: on boot, and on Restart.
     //
     // Starting resources are the file's numbers scaled by difficulty and then

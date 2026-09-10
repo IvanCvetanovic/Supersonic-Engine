@@ -647,8 +647,11 @@ static void testAGatheringUnitComesBackOnTheTreeItChoseNotTheNearestOne() {
     ResourceNode* farther = board.AddNode(Ids::kWood, 2600.0f, 200);
     board.Place(Ids::kTownHall, 1500.0f);
 
+    // Sent to the farther tree by a GATHER order. A move order used to put it
+    // there and let it pick the tree up on its own; since parking, a moved
+    // worker holds where it is put, as the original's does.
     Unit* worker = board.Spawn(Ids::kWorker, 1950.0f);
-    worker->CommandMoveTo(glm::vec2(2600.0f, kGroundY));
+    worker->CommandGather(farther);
     for (int i = 0; i < 60; ++i) worker->Step(0.2);
 
     // Precondition, asserted so a later edit cannot quietly make the board
