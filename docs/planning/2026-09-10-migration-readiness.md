@@ -121,6 +121,11 @@ drift over 3,600 ticks, landing on polygon geometry, hinge limits and motor
 speed, riders on a mover, trigger events for the player, and velocity through a
 portal.
 
+*Running since 10 September: `2026-09-10-magic-portals-spike.md`. Correction
+from it: no level enables a hinge motor, so the motor half of the hinge argument
+above is moot for this data. What matters is the limits, which all ten hinges
+set.*
+
 ---
 
 ## What the first build on a second machine found

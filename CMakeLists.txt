@@ -491,6 +491,11 @@ add_subdirectory(games/wolfbrigade)
 option(SUPERSONIC_BUILD_HUSK "Build the HUSK executable" OFF)
 add_subdirectory(games/husk)
 
+# Magic Portals, from the Godot remake. Only the simulation side exists yet: the
+# spike that measures the physics gaps before the port commits to a body model
+# (docs/planning/2026-09-10-magic-portals-spike.md).
+add_subdirectory(games/magicportals/sim)
+
 option(SUPERSONIC_BUILD_TESTS "Build engine unit tests" ON)
 if (SUPERSONIC_BUILD_TESTS)
     enable_testing()

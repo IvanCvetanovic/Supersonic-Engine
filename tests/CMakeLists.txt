@@ -124,6 +124,23 @@ add_husk_test(test_husk_scenarios)
 add_husk_test(test_husk_layer)
 target_link_libraries(test_husk_layer PRIVATE HuskGame)
 
+# Magic Portals, from the Godot remake. The weakest oracle of the three: the
+# remake's harnesses assert behaviour over Godot's 2D solver, which is not being
+# reimplemented, so only what the converter and the role table decide is pinned
+# exactly. The acceptance rule is in docs/planning/2026-09-10-magic-portals-spike.md.
+function(add_mp_test name)
+    add_engine_test(${name})
+    target_link_libraries(${name} PRIVATE MagicPortalsSim)
+endfunction()
+
+add_mp_test(test_mp_tscn)
+add_mp_test(test_mp_levels)
+
+# test_mp_levels reads the converted levels from outside this repository, so on
+# a build machine they can simply be absent. It exits 77 then, which ctest
+# reports as SKIPPED with the path it looked in - never as a pass.
+set_tests_properties(test_mp_levels PROPERTIES SKIP_RETURN_CODE 77)
+
 # The simulation's own sin, cos, asin, atan2 and pow, pinned bit for bit so the
 # determinism claim holds across C runtimes (DetMath.hpp).
 add_engine_test(test_detmath)

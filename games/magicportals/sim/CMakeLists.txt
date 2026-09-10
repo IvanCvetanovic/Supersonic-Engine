@@ -1,0 +1,33 @@
+# Magic Portals' simulation side, ported from the Godot remake.
+#
+# A library rather than part of an executable, and unconditional, for the reason
+# Wolf Brigade's and HUSK's are: the tests link it. Deliberately free of the
+# renderer. See docs/planning/2026-09-10-magic-portals-spike.md.
+
+add_library(MagicPortalsSim STATIC
+    Tscn.cpp
+)
+
+# Where the converted levels live - which is NOT in this repository.
+#
+# They are the original game's level data, decoded by the remake's converter
+# into its gitignored out/ directory, and they stay on the machine that
+# converted them. The default assumes the remake is cloned beside the engine;
+# anywhere else is one -D away. Baked in as an absolute path for the reason
+# WOLFBRIGADE_DATA_DIR is: ctest runs from the build tree, so a relative path
+# would be right for nobody. The suites that read levels skip, and say where
+# they looked, when it is not there - see tests/CMakeLists.txt.
+set(SUPERSONIC_MAGICPORTALS_LEVELS "${CMAKE_SOURCE_DIR}/../Magic-Portals-Remake/out/levels"
+    CACHE PATH "The remake's converted levels (Magic-Portals-Remake/out/levels)")
+
+target_compile_definitions(MagicPortalsSim PUBLIC
+    MAGICPORTALS_LEVELS_DIR="${SUPERSONIC_MAGICPORTALS_LEVELS}")
+
+target_include_directories(MagicPortalsSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(MagicPortalsSim PUBLIC SupersonicCore)
+
+if (MSVC)
+    target_compile_options(MagicPortalsSim PRIVATE /W4)
+else()
+    target_compile_options(MagicPortalsSim PRIVATE -Wall -Wextra)
+endif()
