@@ -9,8 +9,8 @@
 // To re-derive:
 //
 //   cd /d/The-Wolf-Brigade
-//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-//       --headless --path . res://tools/verify_upgrades.tscn
+//   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+//   "$GODOT" --headless --path . res://tools/verify_upgrades.tscn
 //   ...same with res://tools/verify_meta.tscn
 //
 // They printed, on 26 August 2026:

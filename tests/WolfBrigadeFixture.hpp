@@ -46,8 +46,17 @@ public:
                       ("wb_" + tag + "_" + file + std::to_string(contents.size()));
         std::filesystem::remove_all(m_directory);
         std::filesystem::create_directories(m_directory);
+
+        // Recursive, although the directory is flat. The standard copies a
+        // directory's contents only when the options are exactly `none` or
+        // include `recursive`, and libstdc++ holds it to that: under GCC this
+        // copied nothing, every authored fixture ran against its one file and
+        // nine missing ones, and a unit whose row was absent came back with
+        // every default - 1 HP, no train time. MSVC's library copied the files
+        // anyway, which is why only a Linux build ever saw it.
         std::filesystem::copy(WOLFBRIGADE_DATA_DIR, m_directory,
-                              std::filesystem::copy_options::overwrite_existing);
+                              std::filesystem::copy_options::overwrite_existing |
+                                  std::filesystem::copy_options::recursive);
 
         std::ofstream out(m_directory / file, std::ios::binary);
         out << contents;

@@ -1762,9 +1762,14 @@ inspector checkbox:
   trigger volume only reports against a body with mass.** A trigger volume is
   usually a bare collider with no rigid body, and a character controller is
   usually kinematic — that pairing produces nothing at all.
-- There is no dispatch. Contacts reach `EditorLayer` as a count and stop there.
-  There is no `OnTriggerEnter`, no per-entity event and no enter/stay/exit
-  distinction, so a script cannot currently learn that a trigger fired.
+- Contacts are dispatched per tick by `ContactTracker`
+  (`src/core/ContactTracker.hpp`): both entities of a pair get an Enter, Stay or
+  Exit event naming the other, with the normal pointing away from the reader and
+  whether a trigger was involved. A layer finds it in `registry.ctx()` as a
+  `ContactTracker*`, which `SupersonicApp` inserts; a script reaches it through
+  the ABI's `contactCount` and `contactAt`. This bullet used to say there was no
+  dispatch at all, which stopped being true when the tracker landed - the limit
+  above is the one that still bites.
 
 ### 7l. World queries
 
@@ -2230,10 +2235,14 @@ itself perfectly and passes all of them — reproducibility that holds within a
 binary and not between two, which is the same failure one level up. So
 `test_determinism` pins the hash of four seconds of the fixture scene as a
 constant. It holds across MSVC 2022 and GCC 15.2, Debug and Release: two
-backends, two standard libraries, two optimisation levels, byte for byte.
+backends, two standard libraries, two optimisation levels, byte for byte - and
+on MSVC 14.50 too.
 
-Both link the UCRT, so that pair does not vary `asin` or `pow` — a glibc build
-would, and has not been run. When the constant fails it is a decision rather
+All of those link the UCRT, so none of them varies `asin` or `pow`. A glibc
+build does, and the first one, run on 10 September, disagreed: GCC 13.3, GCC
+14.2 and clang 18.1 on glibc 2.39 all give `7854318744396420989`. Five
+toolchains split cleanly by C runtime and by nothing else, so **the hash crosses
+compilers and does not cross C runtimes**. When the constant fails it is a decision rather
 than a chore: either the simulation changed, and every recording on disk has
 stopped comparing, or the toolchain did, and a replay does not cross that
 boundary. Updating the number without deciding which is how the test stops

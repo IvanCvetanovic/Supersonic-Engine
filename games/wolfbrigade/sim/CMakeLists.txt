@@ -55,3 +55,14 @@ if (MSVC)
 else()
     target_compile_options(WolfBrigadeSim PRIVATE -Wall -Wextra)
 endif()
+
+# GCC 13's -Wdangling-reference guesses that a function returning a reference
+# may be handing back one into a temporary argument. In DataValidator.cpp it is
+# wrong six times over: AsObject, AsArray and field return a reference into the
+# JSON document or to a function-local static, and the temporaries it sees are
+# only a key or the context string an issue is reported under. GCC 14 can be
+# told that per declaration with [[gnu::no_dangling]]; Ubuntu 24.04 - and so
+# CI - has 13, so the one file is exempted rather than the whole library.
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 13)
+    set_source_files_properties(DataValidator.cpp PROPERTIES COMPILE_OPTIONS -Wno-dangling-reference)
+endif()

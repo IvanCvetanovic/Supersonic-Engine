@@ -13,8 +13,8 @@
 // To re-derive:
 //
 //   cd /d/The-Wolf-Brigade
-//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-//       --headless --path . res://tools/verify_waves.tscn
+//   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+//   "$GODOT" --headless --path . res://tools/verify_waves.tscn
 //
 // It printed, on 26 August 2026:
 //
@@ -358,8 +358,8 @@ void testTheShippedEndlessBlockGeneratesWhatTheOriginalCounted() {
     //   ok  : endless adds brutes beyond the single scripted one (got 4)
     //
     //   cd /d/The-Wolf-Brigade
-    //   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-    //       --headless --path . res://tools/verify_endless.tscn
+    //   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+    //   "$GODOT" --headless --path . res://tools/verify_endless.tscn
     //
     // FIVE HUNDRED STEPS OF 2.0 IS PART OF THE SPECIFICATION, not a round
     // number. t=1000 falls between the seventh endless wave at 960 and the
@@ -471,13 +471,14 @@ void testSecondsToNextWaveCountsDownAndEndsAtMinusOne() {
     Field field;
     field.Begin();
 
-    // Wave 1 is at t=60.
-    CHECK_NEAR(field.director.SecondsToNextWave(), 60.0f);
+    // Wave 1 is at t=60. Compared as the double it is - CHECK_NEAR takes
+    // floats, and the clock this port keeps is deliberately not one.
+    CHECK(std::fabs(field.director.SecondsToNextWave() - 60.0) < 1e-4);
     field.director.Step(10.0);
-    CHECK_NEAR(field.director.SecondsToNextWave(), 50.0f);
+    CHECK(std::fabs(field.director.SecondsToNextWave() - 50.0) < 1e-4);
 
     field.Run();
-    CHECK_NEAR(field.director.SecondsToNextWave(), -1.0f);
+    CHECK(std::fabs(field.director.SecondsToNextWave() - -1.0) < 1e-4);
 }
 
 void testEndlessAlwaysHasANextWave() {

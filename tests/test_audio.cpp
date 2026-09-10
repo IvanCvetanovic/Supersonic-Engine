@@ -564,4 +564,8 @@ static void runTests() {
     testAnUnregisteredNameStillFailsRatherThanInventingSilence();
 }
 
-TEST_MAIN("test_audio", 62)
+// The floor is what runs WITHOUT an output device: 47 checks, where a machine
+// with one runs 62. The voice cases above say they are not counted in it, and
+// until this number agreed with them a machine with no sound card - a Linux CI
+// runner, WSL - failed the suite for skipping exactly what it was told it may.
+TEST_MAIN("test_audio", 47)

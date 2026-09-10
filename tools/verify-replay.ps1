@@ -42,11 +42,15 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$exe = Join-Path $root "build/$Config/SupersonicEngine.exe"
-if (-not (Test-Path $exe)) {
-    $exe = Join-Path $root "build/SupersonicEngine"      # single-config generators
-}
-if (-not (Test-Path $exe)) {
+# Multi-config generators put the binary under build/<Config>/. Single-config
+# ones (Ninja, Makefiles) put it straight in build/ - with the .exe still on it
+# under Windows, which the bare name alone never matched, so a Ninja build on
+# Windows was reported as no build at all.
+$exe = @("build/$Config/SupersonicEngine.exe", "build/SupersonicEngine.exe", "build/SupersonicEngine") |
+    ForEach-Object { Join-Path $root $_ } |
+    Where-Object { Test-Path $_ -PathType Leaf } |
+    Select-Object -First 1
+if (-not $exe) {
     Write-Error "No engine binary. Build first: cmake --build build --config $Config"
 }
 

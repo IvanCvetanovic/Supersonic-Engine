@@ -109,23 +109,28 @@ build from the same tree.
 **Android and iOS do not work, and the scripts under `platform/` do not change
 that.** This section used to say those targets "configure and compile but are not
 yet soak-tested". That was wrong in the worst direction — it read as *nearly
-there* when neither gets past CMake configure:
+there* when neither got past CMake configure. Android now does, and stops at the
+first file that needs a window:
 
-- GLFW is added unconditionally (`CMakeLists.txt:136`) and has no Android
-  backend. `GLFW_BUILD_X11` defaults ON for any UNIX-not-APPLE
-  (`third_party/glfw-3.4/CMakeLists.txt:37`), and the NDK toolchain sets
-  `UNIX=1` — so `find_package(X11 REQUIRED)` fires against a sysroot with no X11
-  and the configure dies before a line of engine code is compiled.
-- `AndroidManifest.xml:21` expects a NativeActivity to `dlopen`
+- GLFW, its ImGui backend and its link are behind `if (NOT ANDROID)`
+  (`CMakeLists.txt:147`, `:174`, `:319`), so an NDK configure no longer dies on
+  X11 and Wayland. The compile then fails at `src/platform/Window.hpp`, which
+  includes `GLFW/glfw3.h`, and at `vulkan/vulkan.hpp`, which the NDK sysroot
+  does not ship — measured on 27 August and recorded under Phase 5 of
+  [the Wolf Brigade port plan](docs/planning/2026-08-25-wolf-brigade-port.md).
+  Nothing yet stands where GLFW would: no `ANativeWindow` surface path.
+- `AndroidManifest.xml` expects a NativeActivity to `dlopen`
   `libSupersonicEngine.so`. CMake produces a static library and an *executable*
-  (`CMakeLists.txt:186-187`), and there is no `android_main` or
+  (`CMakeLists.txt:209-210`), and there is no `android_main` or
   `ANativeActivity_onCreate` anywhere in the tree.
 - `src/platform/AndroidNativeApp.cpp` has zero callers and is filtered OUT of
-  every non-Android build (`CMakeLists.txt:166`).
-- Audio is routed to the documented no-op on Android (`CMakeLists.txt:308`), so
-  a port that booted would be silent.
-- There is no touch input of any kind. `RawInputState` (`src/core/Input.hpp`) is
-  keys, mouse buttons, one cursor, scroll and one gamepad.
+  every non-Android build (`CMakeLists.txt:188-189`).
+- Audio has no Android branch (`CMakeLists.txt:334-347`), so Android gets the
+  documented no-op and a port that booted would be silent.
+- No platform delivers touch. `RawInputState` carries up to eight contacts and
+  `Input` derives Began, Moved and Ended from them (`src/core/Input.hpp`), but
+  the only thing that ever fills one in is the mouse — as contact 0 while the
+  left button is held, which is how a gesture machine gets tested on a desktop.
 
 [ARCHITECTURE.md](ARCHITECTURE.md) has said **"Not functional"** for both all
 along, and so does the header of `platform/android/build_android.sh`. This file
@@ -311,7 +316,7 @@ verified by a screenshot of geometry it never touched.
 | `test_pointshadow` | Cube-face view matrices, slot assignment, per-light indices |
 | `test_uicanvas` | Canvas layout, anchoring, rect resolution |
 | `test_uiinput` | UI hit testing, press and release routing |
-| `test_mixer` | Bus gain, listener-relative panning, distance attenuation |
+| `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
 | `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths |
 | `test_launchoptions` | Argument parsing, missing values, malformed counts |
 | `test_json` | Depth limit, trailing content, duplicate keys, malformed input |
@@ -968,15 +973,19 @@ HUSK's nineteen animated models. What is left is here.
   checkpoint is necessary and not sufficient: a scene edited in a way the hash
   cannot see still replays wrongly and says nothing until the difference reaches
   a transform.
-- **Cross-toolchain determinism is measured; cross-*platform* is not.**
+- **Determinism crosses compilers and does not cross C runtimes.**
   `test_determinism` pins the hash of four seconds of the fixture scene as a
   constant, and that constant holds byte-for-byte across MSVC 2022 (MSVC STL)
-  and GCC 15.2 (libstdc++), Debug and Release, x64 — two compiler backends, two
-  standard libraries, two optimisation levels. What that pair does **not** vary
-  is the C runtime: both link the UCRT, so `asin` in the Euler conversion and
-  `pow` in the damping curve are the same implementations either way. A glibc
-  build would vary those and has not been run, so a Windows→Linux replay is
-  still untested.
+  and GCC 15.2 (libstdc++), Debug and Release, x64, and on MSVC 14.50 — every
+  one of them linking the UCRT. The first glibc run, on 10 September, disagreed:
+  GCC 13.3, GCC 14.2 and clang 18.1 on glibc 2.39 all hash the scene to
+  `7854318744396420989` instead. Two compiler families on each side, split by
+  nothing but the C runtime, so a replay recorded on Windows does not reproduce
+  on Linux and lockstep between the two would desync. `asin` in the Euler
+  conversion and `pow` in the damping curve are the suspects, not yet the
+  measured culprits. Whether to own those functions or scope the claim to one
+  runtime is open; see
+  [the 10 September record](docs/planning/2026-09-10-migration-readiness.md).
 
 **Deliberate, and not gaps**
 

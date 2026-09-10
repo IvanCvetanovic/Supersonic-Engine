@@ -143,8 +143,19 @@ std::filesystem::path UserDataDirectory(const std::string& application) {
     std::filesystem::path base;
 
 #if defined(_WIN32)
-    if (const char* appData = std::getenv("APPDATA"); appData != nullptr && *appData != '\0') {
-        base = std::filesystem::path(appData);
+    // Read wide, not through getenv. The narrow environment is the wide one
+    // converted to the ANSI code page, so a profile folder with a character
+    // that page lacks - the c-acute of a Serbian surname on a Western European
+    // system - comes back best-fitted or as '?', and the save goes to a folder
+    // that is not the player's.
+    const DWORD needed = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
+    if (needed > 1) {
+        std::wstring appData(needed, L'\0');
+        const DWORD written = GetEnvironmentVariableW(L"APPDATA", appData.data(), needed);
+        if (written > 0 && written < needed) {
+            appData.resize(written);
+            base = std::filesystem::path(appData);
+        }
     }
 #elif defined(__APPLE__)
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {

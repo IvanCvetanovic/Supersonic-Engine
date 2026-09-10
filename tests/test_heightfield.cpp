@@ -657,7 +657,7 @@ void testTheDualIsWhatCatchesARidge() {
     CHECK_MSG(manifold.count > 0, "the ridge must be reported through the slab's underside");
 
     int pushedUp = 0;
-    for (uint32_t i = 0; i < manifold.count; ++i) {
+    for (int i = 0; i < manifold.count; ++i) {
         if (manifold.points[i].normal.y > 0.5f) ++pushedUp;
     }
     CHECK_MSG(pushedUp > 0, "and the slab must be pushed UP off it, not sideways");

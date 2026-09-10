@@ -9,8 +9,8 @@
 // To re-derive:
 //
 //   cd /d/The-Wolf-Brigade
-//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-//       --headless --path . res://tools/verify_buildings.tscn
+//   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+//   "$GODOT" --headless --path . res://tools/verify_buildings.tscn
 //   tools\godot.bat --path . res://tools/verify_input.tscn    # NEEDS A DISPLAY
 //
 // verify_buildings prints, on 27 August 2026:

@@ -189,8 +189,12 @@ void Input::ClearBindings() {
     g_tickPress.clear();
     g_tickRelease.clear();
     g_hasPrevious = false;
+    // One temporary, copied, rather than a second `RawInputState{}`. GCC 13.3 -
+    // Ubuntu 24.04's compiler, and so what CI's ubuntu-latest runner has - dies
+    // on that second assignment with an internal compiler error in
+    // gimple_add_tmp_var. The copy is the same zeroed state either way.
     g_current = RawInputState{};
-    g_previous = RawInputState{};
+    g_previous = g_current;
     g_mouseDelta = glm::vec2(0.0f);
     g_contacts.clear();
 

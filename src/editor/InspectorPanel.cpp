@@ -1398,7 +1398,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             // than only once the scene is running.
             ImGui::DragFloat("Time", &animator.time, 0.01f, 0.0f, 120.0f);
 
-            if (const auto* skin = registry.try_get<SkinnedMeshComponent>(entity)) {
+            if (skin) {
                 ImGui::TextDisabled("Rig: %zu joints", skin->jointMatrices.size());
             } else {
                 ImGui::TextDisabled("No rig: this mesh has no glTF skin.");
@@ -1946,9 +1946,10 @@ void InspectorPanel::decomposeToTransform(const glm::mat4& model, TransformCompo
     if (scale.x != 0.0f && scale.y != 0.0f && scale.z != 0.0f) {
         transform.scale = scale;
 
-        glm::mat3 rot(glm::vec3(model[0]) / scale.x,
-                      glm::vec3(model[1]) / scale.y,
-                      glm::vec3(model[2]) / scale.z);
+        // Copy-initialised for the reason TransformSystem's decomposition gives.
+        glm::mat3 rot = glm::mat3(glm::vec3(model[0]) / scale.x,
+                                  glm::vec3(model[1]) / scale.y,
+                                  glm::vec3(model[2]) / scale.z);
 
         // For R = Rx(a)Ry(b)Rz(c), in glm's column-major storage rot[col][row]:
         //   b = asin(rot[2][0])

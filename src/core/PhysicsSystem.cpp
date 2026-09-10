@@ -1224,7 +1224,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
                     }
                     const Heightfield::Manifold pieceManifold =
                         terrain.field->CollideHull(instance, pairMargin * inverseScale);
-                    for (uint32_t i = 0; i < pieceManifold.count; ++i) {
+                    for (int i = 0; i < pieceManifold.count; ++i) {
                         local.Add(pieceManifold.points[i]);
                     }
                     // Speculative only while NOTHING is really touching: one

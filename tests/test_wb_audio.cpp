@@ -22,10 +22,10 @@
 // it, and the rest was measured directly from Godot:
 //
 //   cd <scratchpad>/synthprobe
-//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-//       --headless --path . --script res://probe.gd     # the eleven shipped
-//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-//       --headless --path . --script res://probe2.gd    # the authored branches
+//   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+//   "$GODOT" --headless --path . --script res://probe.gd     # the eleven shipped
+//   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+//   "$GODOT" --headless --path . --script res://probe2.gd    # the authored branches
 //
 // probe.gd carries `_synth_tone` VERBATIM and reads the real
 // D:/The-Wolf-Brigade/data/audio.json. The game repository is the oracle and is
@@ -1008,4 +1008,8 @@ void runTests() {
 
 } // namespace
 
-TEST_MAIN("test_wb_audio", 282)
+// The floor is what runs WITHOUT an output device: 260 checks, where a machine
+// with one runs 282. The layer's half says its guarded checks are not counted
+// in it, and until this number agreed a machine with no sound card failed the
+// suite for skipping exactly what it was told it may.
+TEST_MAIN("test_wb_audio", 260)

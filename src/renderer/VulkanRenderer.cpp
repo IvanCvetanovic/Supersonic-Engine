@@ -27,8 +27,8 @@ namespace Supersonic {
 
 VulkanRenderer::VulkanRenderer(VulkanDevice& device, VulkanSwapchain& swapchain, Window& window,
                                UiStyleCallback styleUi)
-    : m_deviceRef(device), m_swapchainRef(swapchain), m_windowRef(window),
-      m_styleUi(std::move(styleUi)) {
+    : m_styleUi(std::move(styleUi)), m_deviceRef(device), m_swapchainRef(swapchain),
+      m_windowRef(window) {
 
     createRenderPass();
     createFramebuffers();
@@ -896,20 +896,6 @@ void VulkanRenderer::createDescriptorSets() {
 
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Allocated and updated " << m_descriptorSets.size() << " scene DescriptorSets." << std::endl;
 }
-
-namespace {
-
-glm::vec3 lightWorldPosition(const entt::registry& registry, entt::entity entity) {
-    if (const auto* world = registry.try_get<WorldTransformComponent>(entity)) {
-        return glm::vec3(world->matrix[3]);
-    }
-    if (const auto* local = registry.try_get<TransformComponent>(entity)) {
-        return local->position;
-    }
-    return glm::vec3(0.0f);
-}
-
-} // namespace
 
 glm::vec3 VulkanRenderer::gatherLights(entt::registry& registry, UniformBufferObject& ubo,
                                        std::vector<GpuLight>& outLights,

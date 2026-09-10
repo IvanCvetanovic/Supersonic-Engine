@@ -112,11 +112,17 @@ static void testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild() {
     // which of those happened is how this stops meaning anything.
     //
     // Verified across MSVC 2022 (MSVC STL) and GCC 15.2 (libstdc++), both x64
-    // Release, on 29 August 2026. Note what that pair does and does not vary:
-    // different compiler backends and different standard libraries, but the
-    // same UCRT - so `asin` in the Euler conversion and `pow` in the damping
-    // curve are the SAME implementations in both. A glibc build would vary
-    // those too, and has not been run.
+    // Release, on 29 August 2026, and on MSVC 14.50 on 10 September. Note what
+    // that set does and does not vary: different compiler backends and
+    // different standard libraries, but the same UCRT - so `asin` in the Euler
+    // conversion and `pow` in the damping curve are the SAME implementations in
+    // all of them.
+    //
+    // A glibc build varies those, and on 10 September one was run: GCC 13.3,
+    // GCC 14.2 and clang 18.1 against glibc 2.39 all give 7854318744396420989.
+    // So on Linux this check fails, and it is left failing until somebody
+    // decides what the claim is - one C runtime, or every platform - rather
+    // than until somebody writes down a second number.
     constexpr uint64_t kCanonical = 8818694387102185031ull;
 
     const uint64_t actual = runFor(240);
@@ -339,7 +345,7 @@ static void testAnEntityWithNoPlaceInTheWorldIsStillState() {
     // position yet must still move the number, or a replay that diverged by one
     // spawn says nothing until the spawned thing is placed.
     entt::registry bare;
-    bare.create();
+    (void)bare.create();
     CHECK_MSG(StateHash::Compute(bare) != StateHash::Compute(empty),
               "spawning an entity that carries nothing is still a change");
 }

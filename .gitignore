@@ -13,6 +13,11 @@ third_party/tools/
 
 imgui.ini
 
+# What ctest writes into the directory it is run from. Run from the project
+# root instead of with --test-dir, it lands here, and one run's log and cost
+# table went into a commit before this line existed.
+Testing/
+
 # Packaged games. Build output, not source - and a full copy of the engine
 # binary plus every asset, which has no business in the repository.
 /dist/

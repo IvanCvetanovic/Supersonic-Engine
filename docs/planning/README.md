@@ -23,6 +23,8 @@ directory and that section disagree, that section is right.
 | [2026-08-27-engine-roadmap.md](2026-08-27-engine-roadmap.md) | 27 Aug 2026 | What to build next and what not to, ordered by the finding that the determinism work was nearly done. Its Phase 5 table is the list of things deliberately not being built, with a reason per line |
 | [2026-08-28-determinism-audit.md](2026-08-28-determinism-audit.md) | 28 Aug 2026 | What the determinism story was actually missing. Falsifies the premise the 27 August roadmap is ordered by, with the test that says so |
 | [2026-08-28-competing-with-godot.md](2026-08-28-competing-with-godot.md) | 28 Aug 2026 | What it would take to compete with Godot on versatility and performance, costed in one-person weeks. Led by the finding that the engine's differentiator is unenforced by CI and blind to the only game in the tree |
+| [2026-09-10-migration-readiness.md](2026-09-10-migration-readiness.md) | 10 Sep 2026 | Whether Wolf Brigade, HUSK and Magic Portals Remake can start moving onto the engine, read from all four trees - and what a first Linux build on a second machine found: a compiler crash, a fixture that only worked on MSVC, and determinism that does not cross to glibc |
+| [2026-09-10-husk-port.md](2026-09-10-husk-port.md) | 10 Sep 2026 | The HUSK simulation port, written as it runs: pinned commit, the Rust oracle and the bit-for-bit standard, the order of work and its one gate, and the traps listed before they bite |
 
 ## What the two-games document changed
 

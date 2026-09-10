@@ -13,8 +13,8 @@
 // To re-derive the original's side:
 //
 //   cd /d/The-Wolf-Brigade
-//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-//       --headless --path . res://tools/verify_snapshot.tscn
+//   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+//   "$GODOT" --headless --path . res://tools/verify_snapshot.tscn
 //
 // It printed, on 27 August 2026:
 //

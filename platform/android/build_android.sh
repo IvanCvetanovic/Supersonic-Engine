@@ -2,8 +2,10 @@
 #
 # Android build.
 #
-# STATUS: NOT FUNCTIONAL YET. This configures and builds, but the result is not
-# a runnable app. Two things are missing and neither is a small change:
+# STATUS: NOT FUNCTIONAL YET. This configures - GLFW is kept out of an Android
+# build - and the compile then stops at src/platform/Window.hpp, the first file
+# that includes GLFW. Past that the result would still not be a runnable app.
+# Two things are missing and neither is a small change:
 #
 #   1. Windowing. The engine creates its surface through GLFW
 #      (Window::Window -> glfwCreateWindow, VulkanDevice::createSurface ->

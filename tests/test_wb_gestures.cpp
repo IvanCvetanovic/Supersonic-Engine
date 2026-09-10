@@ -5,8 +5,8 @@
 // harness prints. To re-derive them:
 //
 //   cd /d/The-Wolf-Brigade
-//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-//       --headless --path . res://tools/verify_touch.tscn
+//   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+//   "$GODOT" --headless --path . res://tools/verify_touch.tscn
 //
 // It printed, on 26 August 2026, before a line of this was written:
 //

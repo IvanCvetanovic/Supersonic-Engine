@@ -22,8 +22,8 @@
 // To re-derive the original's side:
 //
 //   cd /d/The-Wolf-Brigade
-//   "D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe" \
-//       --headless --path . res://tools/verify_snapshot.tscn
+//   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
+//   "$GODOT" --headless --path . res://tools/verify_snapshot.tscn
 //
 // It printed, on 26 August 2026:
 //
@@ -423,7 +423,7 @@ static void testTheStatsBlockCarriesEveryUpgradableFieldAndNoOther() {
 
     // And the other way: every upgradable field except train_time, which is a
     // building's business and is never baked onto a unit.
-    for (const std::string& field :
+    for (const char* field :
          {"max_hp", "damage", "carry_capacity", "attacks_per_sec", "attack_range",
           "aggro_range", "move_speed", "projectile_speed", "gather_rate", "gather_range",
           "deposit_range"}) {

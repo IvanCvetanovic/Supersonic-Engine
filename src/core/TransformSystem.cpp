@@ -26,9 +26,12 @@ void decomposeToLocal(const glm::mat4& m, TransformComponent& out) {
     }
     out.scale = scale;
 
-    const glm::mat3 rot(glm::vec3(m[0]) / scale.x,
-                        glm::vec3(m[1]) / scale.y,
-                        glm::vec3(m[2]) / scale.z);
+    // Copy-initialised: with parentheses GCC first tries to read this line as
+    // a function declaration taking `glm::vec3 m[0]`, and -Wpedantic reports
+    // the zero-size array it imagined on the way to rejecting that reading.
+    const glm::mat3 rot = glm::mat3(glm::vec3(m[0]) / scale.x,
+                                    glm::vec3(m[1]) / scale.y,
+                                    glm::vec3(m[2]) / scale.z);
 
     const float sy = glm::clamp(rot[2][0], -1.0f, 1.0f);
     const float b = std::asin(sy);

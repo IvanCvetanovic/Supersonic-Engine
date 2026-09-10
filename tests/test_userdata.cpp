@@ -27,6 +27,19 @@ using namespace Supersonic;
 
 namespace {
 
+#if defined(_WIN32)
+// Read wide, the way UserDataDirectory reads it, so the comparisons below
+// cannot disagree with it about a name the ANSI code page cannot spell.
+std::filesystem::path environmentPath(const wchar_t* name) {
+    wchar_t* raw = nullptr;
+    std::size_t length = 0;
+    if (_wdupenv_s(&raw, &length, name) != 0 || raw == nullptr) return {};
+    std::filesystem::path value(raw);
+    std::free(raw);
+    return value;
+}
+#endif
+
 // --- The sanitiser -------------------------------------------------------
 
 void testAnOrdinaryNameIsLeftAlone() {
@@ -107,14 +120,15 @@ void testItSitsUnderThePlatformsOwnRootRatherThanBesideTheExecutable() {
     // Compared against the environment this machine actually has, not against a
     // path written down here - a literal would pass only where it was written.
 #if defined(_WIN32)
-    const char* base = std::getenv("APPDATA");
+    const std::filesystem::path root = environmentPath(L"APPDATA");
 #else
-    const char* base = std::getenv("HOME");
+    const char* home = std::getenv("HOME");
+    const std::filesystem::path root = home ? std::filesystem::path(home) : std::filesystem::path();
 #endif
-    CHECK_MSG(base != nullptr, "the platform names a root");
-    if (base == nullptr) return;
+    CHECK_MSG(!root.empty(), "the platform names a root");
+    if (root.empty()) return;
 
-    const std::string prefix = std::filesystem::path(base).string();
+    const std::string prefix = root.string();
     CHECK_MSG(directory.string().rfind(prefix, 0) == 0,
               "the save goes under the user's own root: got " + directory.string());
 
@@ -161,6 +175,37 @@ void testASeparatorInTheNameDoesNotNestTheSaveFolder() {
     std::filesystem::remove(plain, ec);
 }
 
+void testAProfileFolderOutsideTheCodePageIsFoundByItsRealName() {
+#if defined(_WIN32)
+    // The narrow environment is the wide one pushed through the ANSI code
+    // page, so on a Western European system a c-acute comes back from getenv
+    // as a plain c and a CJK character as '?' - and the save goes to a folder
+    // that is not the player's, or to none. Pointing APPDATA at such a folder
+    // for one call is the only way to see it: the real profile on a build
+    // machine is almost always plain ASCII, where the narrow and wide reads
+    // agree. Built from code points because the build names no source charset,
+    // and MSVC would read a raw UTF-8 literal through the code page under test.
+    const std::filesystem::path original = environmentPath(L"APPDATA");
+    std::error_code ec;
+    const std::wstring folder =
+        std::wstring(L"Supersonic Cvetanovi") + wchar_t{0x0107} + L' ' + wchar_t{0x96EA};
+    const std::filesystem::path root = std::filesystem::temp_directory_path(ec) / folder;
+    std::filesystem::create_directories(root, ec);
+    CHECK_MSG(!ec, "the stand-in profile folder can be made");
+    if (ec) return;
+
+    _wputenv_s(L"APPDATA", root.c_str());
+    const std::filesystem::path directory = UserDataDirectory("Supersonic Test Suite");
+    _wputenv_s(L"APPDATA", original.c_str());
+
+    CHECK_MSG(directory.parent_path() == root,
+              "the save goes under the folder the profile is really called");
+    CHECK_MSG(std::filesystem::is_directory(directory, ec), "and it is really there");
+
+    std::filesystem::remove_all(root, ec);
+#endif
+}
+
 void testAGameWithNoUsableNameGetsNoDirectory() {
     // It must not fall back to the root itself. Creating %APPDATA% and handing
     // it back would put one game's save beside every other application's data.
@@ -192,6 +237,7 @@ static void runTests() {
     testItSitsUnderThePlatformsOwnRootRatherThanBesideTheExecutable();
     testTwoGamesDoNotShareASaveFolder();
     testASeparatorInTheNameDoesNotNestTheSaveFolder();
+    testAProfileFolderOutsideTheCodePageIsFoundByItsRealName();
     testAGameWithNoUsableNameGetsNoDirectory();
     testTheSameNameGivesTheSamePlaceTwice();
 }
