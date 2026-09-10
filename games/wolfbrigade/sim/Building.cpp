@@ -52,6 +52,11 @@ BuildingStats BuildingStats::FromJson(const std::string& id,
 
     stats.bodySize = toVec2(row["body_size"], glm::vec2(120.0f, 160.0f));
     stats.color = row["color"].AsString("#3b6fa0");
+
+    stats.autoTrainDefault = toIds(row["auto_train_default"]);
+    stats.supply = static_cast<int>(row["supply"].AsNumber(0.0));
+    stats.hpRegen = row["hp_regen"].AsNumber(0.0);
+    stats.heroRespawn = row["hero_respawn"].AsBool(false);
     return stats;
 }
 

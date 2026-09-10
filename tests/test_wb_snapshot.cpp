@@ -430,19 +430,21 @@ static void testTheStatsBlockCarriesEveryUpgradableFieldAndNoOther() {
     // And the other way: every upgradable field except train_time, which is a
     // building's business and is never baked onto a unit.
     for (const char* field :
-         {"max_hp", "damage", "carry_capacity", "attacks_per_sec", "attack_range",
-          "aggro_range", "move_speed", "projectile_speed", "gather_rate", "gather_range",
-          "deposit_range"}) {
+         {"max_hp", "damage", "carry_capacity", "heal_amount", "attacks_per_sec",
+          "attack_range", "aggro_range", "move_speed", "projectile_speed", "gather_rate",
+          "gather_range", "deposit_range"}) {
         CHECK_MSG(std::find(block.begin(), block.end(), field) != block.end(),
                   std::string(field) + " is upgradable but not in the saved block");
     }
-    CHECK_EQ(static_cast<int>(block.size()), 11);
+    // Twelve since the priest (the game's da0d66f) added heal_amount.
+    CHECK_EQ(static_cast<int>(block.size()), 12);
 }
 
 static void testEverySavedStatIsAlsoRead() {
-    // ToBlock and ApplyBlock are separate lists, and a reader that handles ten
-    // of eleven passes a round trip: re-reading the restored unit produces the
-    // same stale default on both sides. Eleven distinct sentinels catch it.
+    // ToBlock and ApplyBlock are separate lists, and a reader that handles
+    // eleven of twelve passes a round trip: re-reading the restored unit
+    // produces the same stale default on both sides. Twelve distinct sentinels
+    // catch it.
     UnitStats source = UnitStats::FromJson(Ids::kWorker, wb::Shipped().Unit(Ids::kWorker));
     source.maxHp = 101;
     source.damage = 102;
@@ -455,6 +457,7 @@ static void testEverySavedStatIsAlsoRead() {
     source.gatherRate = 109.5f;
     source.gatherRange = 110.5f;
     source.depositRange = 111.5f;
+    source.healAmount = 112;
 
     UnitStats target = UnitStats::FromJson(Ids::kWorker, wb::Shipped().Unit(Ids::kWorker));
     target.ApplyBlock(source.ToBlock());
@@ -470,6 +473,7 @@ static void testEverySavedStatIsAlsoRead() {
     CHECK_NEAR(target.gatherRate, 109.5f);
     CHECK_NEAR(target.gatherRange, 110.5f);
     CHECK_NEAR(target.depositRange, 111.5f);
+    CHECK_EQ(target.healAmount, 112);
 }
 
 static void testAScaledEnemyComesBackScaledRatherThanRebuiltFromData() {

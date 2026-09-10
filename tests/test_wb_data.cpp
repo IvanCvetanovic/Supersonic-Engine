@@ -41,9 +41,12 @@
 #include "TestHarness.hpp"
 #include "WolfBrigadeFixture.hpp"
 
+#include "sim/Building.hpp"
 #include "sim/DataValidator.hpp"
 #include "sim/GameData.hpp"
+#include "sim/UnitStats.hpp"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -440,6 +443,66 @@ void testTheShippedCampaignIsOneLevelWithTwoCapturePoints() {
     CHECK_MSG(empty.DefaultLevel() == "level_1", "an empty order still names level_1");
 }
 
+// --- 5. the hero-first stat fields, read from the shipped rows --------------
+
+void testTheHeroFirstStatFieldsReadFromTheShippedRows() {
+    // verify_casters A, verify_squads A and verify_hero A, and the supply
+    // numbers verify_buildings computes with: what each new field says on the
+    // rows that carry it, and the original's default on the rows that do not.
+    const GameData& data = shipped();
+    const auto unit = [&data](const char* id) { return UnitStats::FromJson(id, data.Unit(id)); };
+
+    const UnitStats priest = unit(Ids::kPriest);
+    CHECK_EQ(priest.healAmount, 8);
+    CHECK_EQ(priest.damage, 0);
+    CHECK_MSG(priest.behavior == "healer", "the priest is a healer");
+    CHECK_MSG(priest.trainedAt == Ids::kTemple, "trained at the temple");
+    CHECK_MSG(!priest.controllable, "and nobody takes direct control of one");
+    CHECK_MSG(priest.ToBlock().Has("heal_amount"), "its heal amount is baked into a save");
+
+    CHECK_MSG(unit(Ids::kSoldier).canFollow && unit(Ids::kArcher).canFollow && priest.canFollow,
+              "soldiers, archers and priests can join a squad");
+    CHECK_MSG(!unit(Ids::kWorker).canFollow, "workers have the shelter bell instead");
+    CHECK_MSG(!unit(Ids::kHero).canFollow, "and the hero leads rather than follows");
+
+    const UnitStats hero = unit(Ids::kHero);
+    CHECK_MSG(hero.controllable, "the hero is controllable");
+    CHECK_MSG(!unit(Ids::kWorker).controllable, "a worker is not");
+    CHECK_MSG(hero.abilities.size() == 2 && hero.abilities[0] == "cleave" &&
+                  hero.abilities[1] == "dash",
+              "the hero's abilities, in hotkey order");
+    CHECK_EQ(hero.supply, 2);
+    CHECK_NEAR(hero.hpRegen, 1.5f);
+
+    CHECK_MSG(unit(Ids::kWorker).canBuild, "a worker can build");
+    CHECK_MSG(!unit(Ids::kSoldier).canBuild, "a soldier cannot");
+    CHECK_EQ(unit(Ids::kWorker).supply, 1);
+    // Unauthored, a unit occupies one and does not regenerate - the
+    // original's defaults. Raiders never check supply, but the default is
+    // still what a new row would get.
+    CHECK_EQ(unit(Ids::kRaider).supply, 1);
+    CHECK_NEAR(unit(Ids::kRaider).hpRegen, 0.0f);
+
+    const auto building = [&data](const char* id) {
+        return BuildingStats::FromJson(id, data.Building(id));
+    };
+    const BuildingStats hall = building(Ids::kTownHall);
+    // verify_buildings: the cap is Town Hall 8 + farm 4 = 12.
+    CHECK_EQ(hall.supply, 8);
+    CHECK_EQ(building(Ids::kFarm).supply, 4);
+    CHECK_EQ(building(Ids::kBarracks).supply, 0);
+    CHECK_MSG(hall.heroRespawn && building(Ids::kWaystone).heroRespawn,
+              "the hero respawns at a Town Hall or a Waystone");
+    CHECK_MSG(!building(Ids::kBarracks).heroRespawn, "and nowhere else");
+    CHECK(std::fabs(hall.hpRegen - 0.5) < 1e-9);
+    CHECK_MSG(hall.autoTrainDefault.size() == 1 && hall.autoTrainDefault[0] == Ids::kWorker,
+              "the Town Hall auto-trains workers");
+    const BuildingStats temple = building(Ids::kTemple);
+    CHECK_MSG(temple.autoTrainDefault.size() == 1 && temple.autoTrainDefault[0] == Ids::kPriest,
+              "and the temple priests");
+    CHECK_MSG(building(Ids::kStorehouse).isDepositPoint, "a storehouse takes deposits");
+}
+
 void testAbilitiesSkipTheCommentKey() {
     // `_comment` is the first key of abilities.json, and the original filters
     // underscore keys precisely so it is never read as an ability.
@@ -472,6 +535,7 @@ static void runTests() {
     testALevelOverridesTopLevelKeysAndNeverStacks();
     testTheShippedCampaignIsOneLevelWithTwoCapturePoints();
     testAbilitiesSkipTheCommentKey();
+    testTheHeroFirstStatFieldsReadFromTheShippedRows();
 }
 
-TEST_MAIN("test_wb_data", 98)
+TEST_MAIN("test_wb_data", 126)

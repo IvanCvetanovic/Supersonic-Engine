@@ -40,6 +40,16 @@ UnitStats UnitStats::FromJson(const std::string& unitId, const Supersonic::Json:
     stats.carryCapacity = static_cast<int>(row["carry_capacity"].AsNumber(0.0));
     stats.gatherRange = row["gather_range"].AsFloat(46.0f);
     stats.depositRange = row["deposit_range"].AsFloat(110.0f);
+
+    stats.canBuild = row["can_build"].AsBool(false);
+    stats.supply = static_cast<int>(row["supply"].AsNumber(1.0));
+    stats.hpRegen = row["hp_regen"].AsFloat(0.0f);
+    stats.controllable = row["controllable"].AsBool(false);
+    stats.healAmount = static_cast<int>(row["heal_amount"].AsNumber(0.0));
+    for (const auto& ability : row["abilities"].AsArray()) {
+        stats.abilities.push_back(ability.AsString());
+    }
+    stats.canFollow = row["can_follow"].AsBool(false);
     return stats;
 }
 
@@ -62,6 +72,9 @@ bool UnitStats::ApplyDelta(const std::string& field, double delta) {
     if (field == "max_hp") return applyInt(maxHp, delta);
     if (field == "damage") return applyInt(damage, delta);
     if (field == "carry_capacity") return applyInt(carryCapacity, delta);
+    // The original's upgrades set any stat by name, so a heal upgrade needs no
+    // code there. It needs this line here, and the saved block relies on it.
+    if (field == "heal_amount") return applyInt(healAmount, delta);
 
     if (field == "attacks_per_sec") { attacksPerSec += static_cast<float>(delta); return true; }
     if (field == "attack_range") { attackRange += static_cast<float>(delta); return true; }
@@ -85,7 +98,9 @@ namespace {
 // drift apart. Splitting them is how a field gets written and never read - which
 // round-trip equivalence cannot see, because both captures re-read the same
 // stale default.
-constexpr const char* kIntBlockFields[] = {"max_hp", "damage", "carry_capacity"};
+// heal_amount joined the block with the priest (da0d66f), where the original
+// added it to _SAVE_INT_FIELDS.
+constexpr const char* kIntBlockFields[] = {"max_hp", "damage", "carry_capacity", "heal_amount"};
 constexpr const char* kFloatBlockFields[] = {
     "attacks_per_sec", "attack_range", "aggro_range", "move_speed",
     "projectile_speed", "gather_rate", "gather_range", "deposit_range",
@@ -98,6 +113,7 @@ Supersonic::Json::Value UnitStats::ToBlock() const {
     block["max_hp"] = Supersonic::Json::Value(static_cast<double>(maxHp));
     block["damage"] = Supersonic::Json::Value(static_cast<double>(damage));
     block["carry_capacity"] = Supersonic::Json::Value(static_cast<double>(carryCapacity));
+    block["heal_amount"] = Supersonic::Json::Value(static_cast<double>(healAmount));
     block["attacks_per_sec"] = Supersonic::Json::Value(static_cast<double>(attacksPerSec));
     block["attack_range"] = Supersonic::Json::Value(static_cast<double>(attackRange));
     block["aggro_range"] = Supersonic::Json::Value(static_cast<double>(aggroRange));
@@ -125,6 +141,7 @@ void UnitStats::ApplyBlock(const Supersonic::Json::Value& block) {
     readInt("max_hp", maxHp);
     readInt("damage", damage);
     readInt("carry_capacity", carryCapacity);
+    readInt("heal_amount", healAmount);
     readFloat("attacks_per_sec", attacksPerSec);
     readFloat("attack_range", attackRange);
     readFloat("aggro_range", aggroRange);

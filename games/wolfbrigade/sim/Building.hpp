@@ -56,6 +56,25 @@ struct BuildingStats {
     glm::vec2 bodySize{120.0f, 160.0f};
     std::string color{"#3b6fa0"};
 
+    // --- The hero-first game (the game's 50741d1) ----------------------------
+    // (`sprite` joined these in the original; it is display-only and belongs
+    // with the layer.)
+
+    // The unit ids automatic production starts ENABLED for - direction B, the
+    // village runs itself. Only the seed: the per-building toggle state lives
+    // on the Building, and a save carries it.
+    std::vector<std::string> autoTrainDefault;
+
+    // The population this building PROVIDES once complete.
+    int supply{0};
+
+    // Passive hit points a second while complete; zero for none.
+    double hpRegen{0.0};
+
+    // The fallen hero respawns at the nearest COMPLETE building with this flag
+    // - the Town Hall, the Waystone. None standing at respawn time loses the run.
+    bool heroRespawn{false};
+
     static BuildingStats FromJson(const std::string& id, const Supersonic::Json::Value& row);
 
     // The same explicit field mapping the units have, and for the same reason.

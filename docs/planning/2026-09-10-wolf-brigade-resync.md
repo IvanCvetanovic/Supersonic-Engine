@@ -228,3 +228,31 @@ still red belong to the band, audio and match slices.
 - **Research is paid when it is queued, not when it completes.**
 - **The `attack` tone is now noise:**
   `fposmod(sin(i·12.9898)·43758.5453, 1)·2−1`, mixed 0.65 with 0.35 of a sine.
+
+## Slice 2: the stat fields
+
+**`UnitStats`** reads the seven fields the hero-first game added to
+`units.json`: `can_build`, `supply` (default 1), `hp_regen`, `controllable`,
+`heal_amount`, `abilities` (in order) and `can_follow`.
+
+**`BuildingStats`** reads four: `auto_train_default`, `supply` (default 0),
+`hp_regen` and `hero_respawn`. `sprite` stays with the layer.
+
+**`heal_amount` joins the saved stats block, and becomes upgradable.** The
+original added it to `_SAVE_INT_FIELDS` with the priest. Its upgrades set any
+stat by name (`stats.set(field, cur + delta)`), so a heal upgrade needs no code
+there. The port's explicit `ApplyDelta` table gains the line. Without it, the
+snapshot suite's rule that every saved field is upgradable fails, and it
+should.
+
+**Pinned in `test_wb_data`**, from the shipped rows:
+- The priest heals 8, deals no damage, is trained at the temple, and is not
+  controllable.
+- The hero is controllable, casts Cleave then Dash, and costs 2 supply.
+- Only soldier, archer and priest can follow.
+- The Town Hall and the Waystone respawn the hero; the barracks does not.
+- The hall auto-trains workers and the temple auto-trains priests.
+- Supply: the hall gives 8 and a farm 4.
+
+**Result (GCC, 10 September):** data 126/0, snapshot 160/0, and nothing
+regressed. The five red suites are the same five, for the same reasons.

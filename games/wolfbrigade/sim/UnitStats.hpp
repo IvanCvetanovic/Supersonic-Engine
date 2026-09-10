@@ -24,8 +24,8 @@ inline constexpr const char* kEnemy = "enemy";
 // compile error here instead of a zero somewhere in combat.
 //
 // Built per spawn, deliberately. Difficulty scales an enemy's HP and damage,
-// endless growth multiplies on top of that, and in-run upgrades add to a
-// player unit's - all onto THIS instance. Sharing one block between spawns
+// the spawn's own queued multipliers apply on top of that, and in-run upgrades
+// add to a player unit's - all onto THIS instance. Sharing one block between spawns
 // would make the tenth raider inherit the ninth's scaling.
 struct UnitStats {
     std::string id;
@@ -65,6 +65,40 @@ struct UnitStats {
     float gatherRange{46.0f};
     float depositRange{110.0f};
 
+    // --- The hero-first game (the game's 50741d1) ----------------------------
+    //
+    // The art fields the original added beside these - sprite, art_size,
+    // anim_sheet, anim_frame, anim_cols, gather_hit_col - are display-only by
+    // the game's own rule (body_size is every gameplay measurement) and belong
+    // with the layer, not here.
+
+    // Can it place and construct buildings? Drives the builder-gated Build
+    // menu - a data flag rather than "is this a worker".
+    bool canBuild{false};
+
+    // The population this unit OCCUPIES. Farms and the Town Hall provide it.
+    int supply{1};
+
+    // Passive hit points a second, once it has been out of combat for
+    // economy.hp_regen_delay_s.
+    float hpRegen{0.0f};
+
+    // Can the player take direct control of it? The hero, and only the hero.
+    bool controllable{false};
+
+    // Hit points a healer restores per cast. Deliberately separate from
+    // damage, so an army-damage bonus or a weapon upgrade never inflates it.
+    int healAmount{0};
+
+    // Active abilities, as abilities.json ids, castable only under direct
+    // control. The ORDER is the hotkey and on-screen button order.
+    std::vector<std::string> abilities;
+
+    // Can it be put in the hero's warband or the garrison? Soldiers, archers
+    // and priests. Workers have the shelter bell instead, and the hero leads
+    // rather than follows.
+    bool canFollow{false};
+
     // Reads a row. Every field has a fallback, so a partially-authored unit is
     // a weak unit rather than a crash - which is what lets a designer add a
     // unit and fill it in over an afternoon.
@@ -87,8 +121,8 @@ struct UnitStats {
     // The numeric fields that are BAKED at spawn and cannot be recovered from
     // the unit's id alone.
     //
-    // Difficulty scales an enemy's hit points, endless growth multiplies on top,
-    // and in-run research plus owned meta levels add to a player unit - all onto
+    // Difficulty scales an enemy's hit points, the spawn's own multipliers apply
+    // on top, and in-run research plus owned meta levels add to a player unit - all onto
     // the block handed to that one spawn. Units are never retroactively
     // re-upgraded, so a saved unit cannot be rebuilt by asking the data what a
     // raider is; it has to carry its own numbers.
