@@ -34,6 +34,11 @@ struct ResourceNode {
     glm::vec2 bodySize{44.0f, 96.0f};
     std::string color{"#3f6b34"};
 
+    // The art, a res:// path from the economy file, or "" for the flat colour.
+    // Carried through the save because a restore bypasses the spawn that set
+    // it. Display only: nothing in the simulation reads it.
+    std::string sprite;
+
     bool IsEmpty() const { return amount <= 0; }
 
     // Whether a worker may target this.
@@ -62,6 +67,12 @@ struct ResourceNode {
     // and no round-trip check would notice.
     Supersonic::Json::Value ToSave() const;
     static ResourceNode FromSave(const Supersonic::Json::Value& saved);
+
+    // The sprite the economy file gives this resource today, or "". A save
+    // written before art existed carries none, and a restore adopts this
+    // rather than bringing a lone flat rectangle back into a world of sprites:
+    // the save carries an override, and the data stays the truth.
+    static std::string SpriteFor(const GameData& data, const std::string& resource);
 };
 
 } // namespace WolfBrigade

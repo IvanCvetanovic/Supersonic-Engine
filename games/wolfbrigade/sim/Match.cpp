@@ -178,6 +178,7 @@ void Match::SpawnResourceNodes() {
         prototype.amount = prototype.maxAmount;
         prototype.bodySize = toVec2(group["body_size"], glm::vec2(44.0f, 96.0f));
         prototype.color = group["color"].AsString("#3f6b34");
+        prototype.sprite = group["sprite"].AsString("");
 
         for (const Value& x : group["positions"].AsArray()) {
             prototype.position = glm::vec2(x.AsFloat(), m_layout.groundY);
@@ -298,6 +299,13 @@ Unit* Match::CreateUnit(const UnitStats& stats, const glm::vec2& position) {
     return raw;
 }
 
+std::vector<CapturePoint*> Match::CapturePointsToRestore() {
+    std::vector<CapturePoint*> out;
+    out.reserve(m_capturePoints.size());
+    for (const auto& point : m_capturePoints) out.push_back(point.get());
+    return out;
+}
+
 // --- The run file ----------------------------------------------------------
 
 bool Match::AutosaveRun() {
@@ -319,6 +327,7 @@ Snapshot::Scene Match::View() {
     for (const auto& unit : m_units) scene.units.push_back(unit.get());
     for (const auto& building : m_buildings) scene.buildings.push_back(building.get());
     for (const auto& node : m_nodes) scene.resourceNodes.push_back(node.get());
+    for (const auto& point : m_capturePoints) scene.capturePoints.push_back(point.get());
     return scene;
 }
 

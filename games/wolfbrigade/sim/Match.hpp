@@ -413,6 +413,11 @@ private:
     ResourceNode* CreateResourceNode(const ResourceNode& fromSave) override;
     Unit* CreateUnit(const UnitStats& stats, const glm::vec2& position) override;
 
+    // The level's points, which BootFromSave has already spawned from the
+    // level's data by the time Restore asks: only their tug state is the
+    // save's.
+    std::vector<CapturePoint*> CapturePointsToRestore() override;
+
     // `_apply_world`, minus every line with a pixel in it. Runs on BOTH boot
     // paths, because it runs before the fork in the original - and a port that
     // only filled the layout in on a fresh boot would leave a restored match

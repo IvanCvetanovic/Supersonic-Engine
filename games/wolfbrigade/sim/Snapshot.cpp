@@ -1,11 +1,13 @@
 #include "sim/Snapshot.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
 
 #include "sim/Building.hpp"
+#include "sim/CapturePoint.hpp"
 #include "sim/EventBus.hpp"
 #include "sim/GameData.hpp"
 #include "sim/GameState.hpp"
@@ -180,6 +182,14 @@ Value Capture(const Scene& scene, const GameState& state, const WaveDirector& di
         nodesOut.push_back(std::move(record));
     }
 
+    // Capture-point tug state, index-aligned to the level's list. Their
+    // geometry comes back from the level's data on every boot; only progress
+    // and holder are the run's.
+    Array pointsOut;
+    for (const CapturePoint* point : scene.capturePoints) {
+        if (point != nullptr) pointsOut.push_back(point->ToSave());
+    }
+
     Object out;
     out["version"] = Value(static_cast<double>(kVersion));
     out["game_state"] = state.ToSave();
@@ -187,6 +197,11 @@ Value Capture(const Scene& scene, const GameState& state, const WaveDirector& di
     out["units"] = Value(std::move(unitsOut));
     out["buildings"] = Value(std::move(buildingsOut));
     out["resource_nodes"] = Value(std::move(nodesOut));
+
+    // Read back with an empty default, so a save from before capture points
+    // restores with neutral ones rather than being refused - no version bump,
+    // exactly as the original added it.
+    out["capture_points"] = Value(std::move(pointsOut));
     return Value(std::move(out));
 }
 
@@ -264,10 +279,27 @@ bool Restore(const Value& snapshot, const GameData& data, GameState& state,
         ++counts.buildings;
     }
 
+    // 2b. Capture points already exist - the boot spawned them from the
+    //     level's data on both paths - so only their tug state comes back,
+    //     index-aligned. A save from before points has none, and they stay
+    //     neutral; a level that has since lost a point ignores the extra.
+    const std::vector<CapturePoint*> points = sink.CapturePointsToRestore();
+    const auto& savedPoints = snapshot["capture_points"].AsArray();
+    for (size_t i = 0; i < std::min(savedPoints.size(), points.size()); ++i) {
+        if (points[i] != nullptr) points[i]->FromSave(savedPoints[i]);
+    }
+
     // 3. Resource nodes before units, for the same reason: a gather target has
     //    to exist before a worker can be pointed back at it.
     for (const Value& record : snapshot["resource_nodes"].AsArray()) {
-        const ResourceNode restored = ResourceNode::FromSave(record);
+        ResourceNode restored = ResourceNode::FromSave(record);
+
+        // A save from before art has no sprite, and takes today's from the
+        // economy file rather than restoring a flat rectangle into a world of
+        // sprites (verify_snapshot 11).
+        if (restored.sprite.empty()) {
+            restored.sprite = ResourceNode::SpriteFor(data, restored.resource);
+        }
         ResourceNode* node = sink.CreateResourceNode(restored);
         if (node == nullptr) continue;
         resolver.Bind(static_cast<int>(record["sid"].AsNumber(-1.0)), node);

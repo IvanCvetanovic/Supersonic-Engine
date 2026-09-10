@@ -1156,6 +1156,89 @@ static void testTheFrameAndTheHarnessOrderAgreeOnEveryOracleNumber() {
 
 } // namespace
 
+// =========================================================================
+// What the save gained with the restructure
+// =========================================================================
+
+// verify_snapshot 11 through a real boot: every node the economy file spawns
+// has art, and a save written before art existed takes it back.
+//
+//   ok  : a pre-art save re-adopts today's sprites (22/22 textured)
+static void testAPreArtSaveReAdoptsTodaysSpritesThroughARealBoot() {
+    Profile profile;
+    Match first(wb::Shipped(), profile, "");
+    first.BootFresh();
+    CHECK_MSG(!first.Nodes().empty() && first.Nodes()[0]->sprite == "res://assets/world/tree.png",
+              "a fresh boot's nodes carry the economy file's art");
+
+    Value captured = first.Capture();
+    Supersonic::Json::Array nodes = captured["resource_nodes"].AsArray();
+    for (Value& node : nodes) node.Set("sprite", Value());
+    captured.Set("resource_nodes", Value(std::move(nodes)));
+
+    Profile secondProfile;
+    Match second(wb::Shipped(), secondProfile, "");
+    CHECK(second.BootFromSave(captured));
+    int textured = 0;
+    for (const auto& node : second.Nodes()) {
+        if (!node->sprite.empty()) ++textured;
+    }
+    CHECK_EQ(static_cast<int>(second.Nodes().size()), 22);
+    CHECK_MSG(textured == 22, "a pre-art save re-adopts today's sprites (22/22 textured)");
+}
+
+// Added by the port. The original's harness digests the capture points but
+// never takes one, so nothing there shows a tug surviving a restore. Here the
+// Lumber Camp is part-way to the enemy and the War Banner is held, and both
+// come back - the banner with its bonus, on the restored run.
+static void testCapturePointsComeBackWithTheirTug() {
+    Profile profile;
+    Match first(wb::Shipped(), profile, "");
+    first.BootFresh();
+    CHECK_EQ(static_cast<int>(first.CapturePoints().size()), 2);
+    if (first.CapturePoints().size() < 2) return;
+    first.CapturePoints()[0]->ForceProgress(-0.4);
+    first.CapturePoints()[1]->ForceProgress(1.0);
+    CHECK_MSG(first.Run().ArmyDamageMult() == 1.25, "precondition: the held banner counts");
+
+    const Value captured = Snapshot::FromText(Snapshot::ToText(first.Capture()));
+    CHECK_EQ(static_cast<int>(captured["capture_points"].AsArray().size()), 2);
+
+    Profile secondProfile;
+    Match second(wb::Shipped(), secondProfile, "");
+    CHECK(second.BootFromSave(captured));
+    CHECK_EQ(static_cast<int>(second.CapturePoints().size()), 2);
+    if (second.CapturePoints().size() < 2) return;
+    CHECK_EQ(second.CapturePoints()[0]->Progress(), -0.4);
+    CHECK(second.CapturePoints()[0]->Holder().empty());
+    CHECK_EQ(second.CapturePoints()[1]->Progress(), 1.0);
+    CHECK(second.CapturePoints()[1]->Holder() == Factions::kPlayer);
+    CHECK_MSG(second.Run().ArmyDamageMult() == 1.25, "and the banner's bonus is the restored run's");
+}
+
+// A save from before capture points is still a save: it restores with neutral
+// points rather than being refused. No version bump, as the original added
+// the field.
+static void testASaveFromBeforeCapturePointsRestoresThemNeutral() {
+    Profile profile;
+    Match first(wb::Shipped(), profile, "");
+    first.BootFresh();
+    if (first.CapturePoints().size() < 2) return;
+    first.CapturePoints()[1]->ForceProgress(1.0);
+
+    Value captured = first.Capture();
+    captured.Set("capture_points", Value());
+
+    Profile secondProfile;
+    Match second(wb::Shipped(), secondProfile, "");
+    CHECK_MSG(second.BootFromSave(captured), "still a valid save");
+    for (const auto& point : second.CapturePoints()) {
+        CHECK_EQ(point->Progress(), 0.0);
+        CHECK(point->Holder().empty());
+    }
+    CHECK_EQ(second.Run().ArmyDamageMult(), 1.0);
+}
+
 static void runTests() {
     testTheWholeMatchNumbersTheOraclePrints();
     testATrainedUnitIsBornWhereTheBuildingPutsIt();
@@ -1184,6 +1267,10 @@ static void runTests() {
     testARestoredRunResumesItsScheduleRatherThanReplayingIt();
     testARestoredMatchStillKnowsHowWideTheWorldIs();
     testAHalfBuiltBuildingComesBackHalfBuilt();
+
+    testAPreArtSaveReAdoptsTodaysSpritesThroughARealBoot();
+    testCapturePointsComeBackWithTheirTug();
+    testASaveFromBeforeCapturePointsRestoresThemNeutral();
 
     testADeadEntityStaysOnTheBoardAndStopsBeingFound();
     testACachedDepositIndexNeverChangesItsMind();

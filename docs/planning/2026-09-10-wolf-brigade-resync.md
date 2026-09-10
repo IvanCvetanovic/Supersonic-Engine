@@ -707,3 +707,48 @@ and unchanged: audio 5, selection 5 and match 44. The build also carried
 slice 9's resource-node sprite, which left one extra red each in snapshot and
 match; with `sprite` stripped from their digests, the captures matched line
 for line, so this slice is clean and the difference is slice 9's to close.
+
+## Slice 9: the save
+
+Most of the restructure's save fields arrived with the slices that brought
+them:
+- the unit's squad, post and heal target (7a) and ability cooldowns (8);
+- the building's auto-train, recruit squad, research and rally (5);
+- the run's shelter bell and pending respawn (1).
+
+This slice adds the two the snapshot itself had to learn.
+
+**Capture points.** Capture writes each point's tug and holder as
+`capture_points`, index-aligned to the level's list. Restore puts them back
+into the points the boot already spawned. The Match hands those over through
+a new `RestoreSink::CapturePointsToRestore`. It is empty by default, so a sink
+with no level furniture restores as before. A save without the field
+restores with neutral points rather than being refused: there is no version
+bump, which is how the original added it too.
+
+**Resource-node art.** A node carries its `sprite` from the economy file at
+spawn and through the save. A save written before art has none, and the
+restore takes today's from the economy file (`ResourceNode::SpriteFor`). A
+saved sprite is an override and wins. The fallback lives in the restore
+rather than in `FromSave`, because only the restore has the data.
+
+**Found while porting.** The first build with the fallback turned two round
+trips red: a node spawned with no sprite came back with one. The original's
+nodes always spawn with the economy's sprite. The Match now does too, and so
+does the snapshot suite's hand-built board.
+
+**Reproduced** at `50741d1`: `verify_snapshot` 11, "a pre-art save re-adopts
+today's sprites (22/22 textured)", through a real boot in `test_wb_match`.
+The rest of `verify_snapshot`'s numbers (8 units, 220 wood, 3 or 4
+gathering) come from a real boot of HEAD's board, and they are slice 10's.
+
+**Added by the port:**
+- the fallback and the override on a hand-built board;
+- a resource with no art stays flat;
+- the two level_1 camps' tug and holder, and the War Banner's bonus, survive
+  a restore;
+- a save without capture points restores them neutral.
+
+**Result (GCC, 10 September):** snapshot 168/0 and the three new match
+tests green, with nothing regressed. Still red, and unchanged: audio 5,
+selection 5 and match 44, all of them slices 10 and 11.

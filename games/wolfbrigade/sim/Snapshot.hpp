@@ -12,6 +12,7 @@
 
 namespace WolfBrigade {
 
+class CapturePoint;
 class GameData;
 class Lane;
 class Profile;
@@ -60,6 +61,11 @@ struct Scene {
     std::vector<Unit*> units;
     std::vector<Building*> buildings;
     std::vector<ResourceNode*> resourceNodes;
+
+    // In the level's order. Only their tug state is saved: the points
+    // themselves are level furniture, rebuilt from the level's data on every
+    // boot, and a save is index-aligned to that list.
+    std::vector<CapturePoint*> capturePoints;
 };
 
 // What a capture noticed on the way past.
@@ -98,6 +104,13 @@ public:
                                      const glm::vec2& position) = 0;
     virtual ResourceNode* CreateResourceNode(const ResourceNode& fromSave) = 0;
     virtual Unit* CreateUnit(const UnitStats& stats, const glm::vec2& position) = 0;
+
+    // The capture points already on the board, in the level's order. NOT
+    // created by the restore: the boot spawns them from the level's data on
+    // both paths, as the original's main does, and a restore only puts their
+    // tug state back. Empty by default, so a sink with no level furniture
+    // restores the way it always has.
+    virtual std::vector<CapturePoint*> CapturePointsToRestore() { return {}; }
 };
 
 struct RestoreReport {

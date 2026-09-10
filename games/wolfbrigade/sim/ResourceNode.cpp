@@ -25,6 +25,7 @@ Supersonic::Json::Value ResourceNode::ToSave() const {
     out["size"] = Supersonic::Json::Value(std::move(size));
 
     out["color"] = Supersonic::Json::Value(color);
+    out["sprite"] = Supersonic::Json::Value(sprite);
 
     Supersonic::Json::Array pos;
     pos.push_back(Supersonic::Json::Value(static_cast<double>(position.x)));
@@ -47,9 +48,20 @@ ResourceNode ResourceNode::FromSave(const Supersonic::Json::Value& saved) {
     if (size.size() >= 2) node.bodySize = glm::vec2(size[0].AsFloat(), size[1].AsFloat());
     node.color = saved["color"].AsString("#3f6b34");
 
+    // "" when absent. Only the restore, which has the data, can fill in
+    // today's sprite for a save written before art - see SpriteFor.
+    node.sprite = saved["sprite"].AsString("");
+
     const auto& pos = saved["pos"].AsArray();
     if (pos.size() >= 2) node.position = glm::vec2(pos[0].AsFloat(), pos[1].AsFloat());
     return node;
+}
+
+std::string ResourceNode::SpriteFor(const GameData& data, const std::string& resource) {
+    for (const Supersonic::Json::Value& config : data.Economy()["resource_nodes"].AsArray()) {
+        if (config["resource"].AsString("") == resource) return config["sprite"].AsString("");
+    }
+    return "";
 }
 
 float ResourceNode::Fraction() const {

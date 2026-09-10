@@ -260,6 +260,11 @@ struct Board final : public World, public Snapshot::RestoreSink {
         node->maxAmount = amount;
         node->amount = amount;
         node->position = glm::vec2(x, kGroundY);
+
+        // As a node spawned from the economy file carries it. One without
+        // would come back from a restore with today's sprite, and the round
+        // trip would differ by exactly that.
+        node->sprite = ResourceNode::SpriteFor(wb::Shipped(), resource);
         nodes.push_back(std::move(node));
         return nodes.back().get();
     }
@@ -1307,6 +1312,55 @@ static void testTheSinkIsToldWhetherEachBuildingWasFinished() {
     CHECK_MSG(!sink.completeFlags[1], "and the barracks was not");
 }
 
+// --- Resource-node art -------------------------------------------------------
+
+// A copy of a capture with every node's sprite blanked, or replaced: a save as
+// a build from before the art would have written it.
+static Value withNodeSprites(const Value& captured, const Value& sprite) {
+    Value out = captured;
+    Supersonic::Json::Array nodes = captured["resource_nodes"].AsArray();
+    for (Value& node : nodes) node.Set("sprite", sprite);
+    out.Set("resource_nodes", Value(std::move(nodes)));
+    return out;
+}
+
+// verify_snapshot 11, on a board built by hand: a save written before art
+// existed carries no sprite, and a restore takes today's from the economy
+// file rather than bringing back a flat rectangle into a world of sprites.
+static void testAPreArtSaveReAdoptsTodaysSprites() {
+    Board board;
+    board.AddNode(Ids::kWood, 1900.0f, 200);
+    board.AddNode(Ids::kFood, 1350.0f, 120);
+    const Value saved =
+        withNodeSprites(Snapshot::Capture(board.View(), board.state, board.director), Value());
+
+    Board rebuilt;
+    CHECK(Snapshot::Restore(saved, wb::Shipped(), rebuilt.state, rebuilt.profile,
+                            rebuilt.director, rebuilt, rebuilt.lane, rebuilt.projectiles));
+    CHECK_EQ(static_cast<int>(rebuilt.nodes.size()), 2);
+    if (rebuilt.nodes.size() < 2) return;
+    CHECK(rebuilt.nodes[0]->sprite == "res://assets/world/tree.png");
+    CHECK(rebuilt.nodes[1]->sprite == "res://assets/world/food_bush.png");
+}
+
+// Added by the port: the save's own sprite is an override and wins - only an
+// ABSENT one falls back - and a resource the economy gives no art stays flat.
+static void testASavedSpriteWinsAndOnlyAMissingOneFallsBack() {
+    Board board;
+    board.AddNode(Ids::kWood, 1900.0f, 200);
+    const Value saved =
+        withNodeSprites(Snapshot::Capture(board.View(), board.state, board.director),
+                        Value(std::string("res://assets/world/stump.png")));
+
+    Board rebuilt;
+    CHECK(Snapshot::Restore(saved, wb::Shipped(), rebuilt.state, rebuilt.profile,
+                            rebuilt.director, rebuilt, rebuilt.lane, rebuilt.projectiles));
+    CHECK_EQ(static_cast<int>(rebuilt.nodes.size()), 1);
+    if (!rebuilt.nodes.empty()) CHECK(rebuilt.nodes[0]->sprite == "res://assets/world/stump.png");
+
+    CHECK(ResourceNode::SpriteFor(wb::Shipped(), "gold").empty());
+}
+
 static void runTests() {
     testADoubleSurvivesTheTripExactly();
     testANonFiniteNumberIsWrittenAsSomethingThatParses();
@@ -1350,6 +1404,9 @@ static void runTests() {
     testTheRunFileIsWrittenReadAndCleared();
     testACorruptRunStillCountsAsARunAndStillFailsToLoad();
     testAStaleVersionIsRefusedHavingCreatedNothing();
+
+    testAPreArtSaveReAdoptsTodaysSprites();
+    testASavedSpriteWinsAndOnlyAMissingOneFallsBack();
 }
 
 TEST_MAIN("test_wb_snapshot", 90)
