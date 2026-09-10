@@ -1790,8 +1790,11 @@ because a character's visual mesh and its collider are routinely different sizes
 | For | editor picking | gameplay |
 
 The queries do not share the solver's narrowphase. A rotated box is queried as
-the box that holds it and so is a capsule, which over-reports: a ray can graze a
-capsule's shoulder and be told it hit. That is the right direction to be wrong in
+the box that holds it, and so are a capsule and a convex hull, which
+over-reports: a ray can graze a capsule's shoulder, or a chamfered hull's cut
+corner, and be told it hit. Hulls were missing from the queries altogether until
+the Magic Portals spike found a body at rest on one that `IsGrounded` said was
+standing on nothing. That is the right direction to be wrong in
 for "what am I looking at" and the wrong one for a bullet that has to be fair,
 and it is the same approximation the solver itself used before SAT landed.
 

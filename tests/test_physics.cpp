@@ -1146,6 +1146,40 @@ static void testAHullThatIsNotASolidCollidesWithNothing() {
     CHECK_MSG(bare.valid(nothing), "and an entity with no mesh is simply skipped");
 }
 
+static void testQueriesSeeAHull() {
+    // A hull is solid to the narrowphase, so the queries have to find it too.
+    // The terrain comment at the top of this file names what happens otherwise,
+    // and the Magic Portals spike hit it: a body at rest on a hull platform that
+    // IsGrounded said was standing on nothing. Queried as the box that holds
+    // it, the way a rotated box and a capsule already are.
+    entt::registry registry;
+    const auto floor = makeHullBody(registry, glm::vec3(0.0f), "Cube", 0.0f, glm::vec3(6.0f, 1.0f, 6.0f));
+
+    const auto hit = PhysicsSystem::Raycast(registry, glm::vec3(1.0f, 5.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f));
+    CHECK_MSG(hit.hit && hit.entity == floor, "a ray finds a hull");
+    CHECK_MSG(hit.hit && test::nearly(hit.point.y, 0.5f, 1e-3f), "at its top face");
+
+    CHECK_MSG(PhysicsSystem::IsGrounded(registry, glm::vec3(1.0f, 0.55f, 1.0f), 0.15f),
+              "something standing on a hull is grounded");
+    CHECK_MSG(!PhysicsSystem::IsGrounded(registry, glm::vec3(1.0f, 3.0f, 1.0f), 0.15f),
+              "and something well above it is not");
+
+    std::vector<entt::entity> touching;
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(2.5f, 0.7f, 2.5f), 0.3f, touching);
+    CHECK_MSG(std::find(touching.begin(), touching.end(), floor) != touching.end(), "an overlap finds it");
+    touching.clear();
+    PhysicsSystem::OverlapSphere(registry, glm::vec3(2.5f, 5.0f, 2.5f), 0.3f, touching);
+    CHECK_MSG(touching.empty(), "and not from above");
+
+    // A trigger hull follows the trigger rule: skipped by a ray unless asked for.
+    registry.get<ConvexHullColliderComponent>(floor).isTrigger = true;
+    CHECK_MSG(!PhysicsSystem::Raycast(registry, glm::vec3(1.0f, 5.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f)).hit,
+              "a trigger hull does not stop a ray");
+    CHECK_MSG(PhysicsSystem::Raycast(registry, glm::vec3(1.0f, 5.0f, 1.0f), glm::vec3(0.0f, -1.0f, 0.0f), 1000.0f,
+                                     entt::null, true).hit,
+              "unless the ray asks for triggers");
+}
+
 static void testAHullRestsOnTerrain() {
     // Named rather than implied: a hull against a HEIGHTFIELD collides as the
     // box that contains it, because the heightfield's contact model is written
@@ -3161,6 +3195,7 @@ static void runTests() {
     testAHullAndABoxMeet();
     testAHullThatIsNotASolidCollidesWithNothing();
     testAHullRestsOnTerrain();
+    testQueriesSeeAHull();
 
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();

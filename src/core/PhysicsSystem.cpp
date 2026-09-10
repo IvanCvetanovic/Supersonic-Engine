@@ -2226,6 +2226,30 @@ void gatherShapes(entt::registry& registry, std::vector<QueryShape>& out) {
                 sphere.center, sphere.layer);
     }
 
+    // Hulls, as the box that holds them - the rule a rotated box and a capsule
+    // already follow here, and the bounds the solver's broadphase uses for them.
+    //
+    // They were missing, and that is the failure the terrain comment below
+    // describes: a hull is solid to the narrowphase, so a character lands on
+    // one, and IsGrounded's ray found nothing under it. Found by the Magic
+    // Portals spike, whose platforms are all hulls: a player at rest on one,
+    // 0.28 px from where it should be, reported as never having landed.
+    for (auto entity : registry.view<ConvexHullColliderComponent>()) {
+        if (registry.any_of<BoxColliderComponent, CapsuleColliderComponent, SphereColliderComponent,
+                            HeightfieldColliderComponent>(entity)) {
+            continue;
+        }
+        const auto& authored = registry.get<ConvexHullColliderComponent>(entity);
+        // Only the bounds are copied out, so no pointer into the cache outlives
+        // this call and the step's Trim cannot leave one dangling.
+        const ConvexDecomposition* hull = ConvexHullCache::For(registry).Get(registry, entity, authored);
+        if (!hull) continue;
+        const glm::vec3 localMin = hull->boundsMin();
+        const glm::vec3 localMax = hull->boundsMax();
+        collect(entity, QueryShape::Kind::Box, (localMax - localMin) * 0.5f, authored.isTrigger,
+                (localMin + localMax) * 0.5f, authored.layer);
+    }
+
     // Terrain last, which is the order the solver gathers in.
     //
     // Same rule as the solver's gather: trimmed before the loop, because the
