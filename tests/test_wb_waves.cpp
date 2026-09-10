@@ -313,156 +313,33 @@ void testDifficultyScalesTheScheduleAndTheEnemiesInIt() {
     }
 }
 
-// --- 5. Endless, which never wins ---------------------------------------
+// --- 5. Endless is gone ---------------------------------------------------
 
-void testEndlessKeepsGeneratingAndNeverDeclaresVictory() {
-    Field field;
-    field.state.SetMode(GameState::kEndless);
+void testALeftoverEndlessBlockIsIgnored() {
+    // The game removed Endless mode (73999ce), and the port with it. A
+    // waves.json still carrying the old block - a file from before the
+    // removal, or a mod - must not bring it back: the schedule ends, the
+    // countdown ends, and clearing the field wins. Every other endless case
+    // this section held went with the mode; this one is what is left to say.
+    const wb::ScratchData old("waves", "waves.json", R"({
+      "spawn_edge": "right", "spawn_interval": 0.8,
+      "waves": [ { "index": 1, "time": 1, "spawns": [ { "unit": "raider", "count": 2 } ] } ],
+      "endless": { "start_delay": 1, "interval": 1, "unit": "raider", "base_count": 5 }
+    })");
+    GameData data;
+    data.LoadAll(old.Path());
+
+    Field field(data);
     field.Begin();
-    CHECK_MSG(field.director.IsEndless(), "the mode is read at setup");
+    field.Run(100, 0.5);   // t=50, far past where an endless wave would have started
 
-    field.Run();
+    CHECK_EQ(field.CountOf(Ids::kRaider), 2);
+    CHECK_EQ(field.state.CurrentWave(), 1);
+    CHECK(std::fabs(field.director.SecondsToNextWave() - -1.0) < 1e-4);
 
-    // The scripted five, then endless waves from t=510 every 75s. At ~600s
-    // that is two of them, numbered 6 and 7.
-    CHECK_MSG(field.state.CurrentWave() > 5, "endless carries on past the schedule");
-    CHECK_MSG(field.CountOf(Ids::kRaider) > 30, "and sends more than the schedule did");
-
-    // Clearing the field wins nothing. Endless never finishes spawning, so
-    // there is no "all waves cleared" to reach - only the Town Hall ends it.
     const int alive = field.director.AliveEnemies();
     for (int i = 0; i < alive; ++i) field.director.OnEnemyDied();
-    CHECK_EQ(field.wonCount, 0);
-    CHECK_MSG(field.state.IsPlaying(), "an empty field is not a victory in endless");
-
-    field.director.OnTownHallDestroyed();
-    CHECK_EQ(field.lostCount, 1);
-}
-
-void testTheShippedEndlessBlockGeneratesWhatTheOriginalCounted() {
-    // THE SHIPPED ENDLESS BLOCK, STEPPED. Everything else in this section runs
-    // against an authored waves.json, because authored values are the only way
-    // to reach a branch shipped data cannot - and the cost of that, unnoticed
-    // until it was looked for, is that `start_delay 90`, `interval 75`,
-    // `base_count 8`, `count_growth 2`, `hp_growth 0.08` and `brute_every 2`
-    // were READ by the data suite and SIMULATED by nothing. The case above
-    // exercises them and then asserts only inequalities - "past 5", "more than
-    // 30" - which a port that got the cadence wrong by a factor of two would
-    // still pass.
-    //
-    // These are the numbers the original prints for the same run:
-    //
-    //   ok  : wave number climbs past 5 (got 12)
-    //   ok  : endless spawned more than the 31 scripted (got 132)
-    //   ok  : endless raiders grow tougher than base (59 > 40)
-    //   ok  : endless adds brutes beyond the single scripted one (got 4)
-    //
-    //   cd /d/The-Wolf-Brigade
-    //   GODOT="D:/SteamLibrary/steamapps/common/Godot Engine/godot.windows.opt.tools.64.exe"
-    //   "$GODOT" --headless --path . res://tools/verify_endless.tscn
-    //
-    // FIVE HUNDRED STEPS OF 2.0 IS PART OF THE SPECIFICATION, not a round
-    // number. t=1000 falls between the seventh endless wave at 960 and the
-    // eighth at 1035, and the seventh's twenty raiders finish leaving the spawn
-    // edge around t=977 at an interval of 0.8. Twenty more steps would be eight
-    // waves and a half-drained queue; twenty fewer would be six. The window is
-    // load-bearing in both directions, which is the trap this suite has now hit
-    // three times.
-    //
-    // Difficulty is set to "normal" explicitly, as the harness does. It
-    // resolves to the same 1.0 multipliers as leaving it unset, and saying it
-    // out loud is the point: what is being measured is endless growth, with
-    // difficulty scaling held at identity so the two cannot be confused.
-    Field field;
-    field.state.SetMode(GameState::kEndless);
-    field.state.SetDifficulty("normal");
-    field.state.Reset();
-    field.Begin();
-
-    field.Run(500, 2.0);
-
-    CHECK_MSG(field.state.CurrentWave() == 12, "seven endless waves after the scripted five");
-    CHECK_MSG(static_cast<int>(field.spawned.size()) == 132,
-              "the scripted 31, plus 8+10+12+14+16+18+20 raiders and three more brutes");
-    CHECK_EQ(field.CountOf(Ids::kBrute), 4);
-    CHECK_EQ(field.CountOf(Ids::kRaider), 128);
-
-    // The toughest raider the run produced, against the row it was built from.
-    // Growth is measured from the FIRST endless wave rather than compounded, so
-    // the seventh is 40 x (1 + 0.08 x 6) = 59.2, truncated.
-    int toughest = 0;
-    for (const UnitStats& stats : field.spawned) {
-        if (stats.id == Ids::kRaider) toughest = std::max(toughest, stats.maxHp);
-    }
-    const int base = UnitStats::FromJson(Ids::kRaider, wb::Shipped().Unit(Ids::kRaider)).maxHp;
-    CHECK_EQ(base, 40);
-    CHECK_EQ(toughest, 59);
-}
-
-void testEndlessRampsCountAndToughnessPerWave() {
-    // base_count 8, +2 a wave; hp_growth 0.08 and damage_growth 0.05, both
-    // measured from the FIRST endless wave rather than compounding.
-    const wb::ScratchData quick("waves", "waves.json", R"({
-      "spawn_edge": "right", "spawn_interval": 0.8,
-      "waves": [ { "index": 1, "time": 1, "spawns": [] } ],
-      "endless": { "start_delay": 1, "interval": 30, "unit": "raider",
-                   "base_count": 8, "count_growth": 2,
-                   "hp_growth": 0.08, "damage_growth": 0.05,
-                   "heavy_unit": "brute", "brute_every": 2, "brute_count": 1 }
-    })");
-    GameData data;
-    data.LoadAll(quick.Path());
-
-    Field field(data);
-    field.state.SetMode(GameState::kEndless);
-    field.Begin();
-
-    // The first endless wave fires at t=2 (a t=1 schedule plus a 1s delay) and
-    // its eight raiders are out by t=8.4 at one every 0.8. Stepping to t=20
-    // leaves the queue empty and the second wave still 12s away - the window
-    // matters, and the first version of this case picked one where three waves
-    // had started and read the partial drain as a wrong count.
-    field.Run(80, 0.25);   // t=20
-    CHECK_EQ(field.CountOf(Ids::kRaider), 8);
-    CHECK_EQ(field.CountOf(Ids::kBrute), 0);
-    CHECK_EQ(field.director.QueuedSpawns(), 0);
-
-    // Growth counts from ZERO, so the first endless wave is unmultiplied. A
-    // port that started at one would make wave six 8% tougher than the data
-    // says, and every wave after it wrong by the same step.
-    CHECK_EQ(field.spawned.front().maxHp, 40);
-
-    // The second fires at t=32 and brings the heavy with it.
-    field.Run(120, 0.25);   // t=50
-    CHECK_EQ(field.CountOf(Ids::kRaider), 18);
-    CHECK_MSG(field.CountOf(Ids::kBrute) == 1, "brute_every 2 means the SECOND wave, not the first");
-
-    // 40 HP at 1.08 is 43. Checked on the first raider OF THE SECOND WAVE
-    // rather than on the last thing spawned, which is the brute.
-    CHECK_EQ(field.spawned[8].maxHp, 43);
-}
-
-void testEndlessCannotGenerateUnboundedWavesInOneStep() {
-    // A step that skipped an hour would otherwise generate every wave that
-    // hour contains, all at once, and the queue would explode. The cap turns
-    // it into a backlog that drains over the next few steps.
-    const wb::ScratchData quick("waves", "waves.json", R"({
-      "spawn_interval": 0.8,
-      "waves": [ { "index": 1, "time": 1, "spawns": [] } ],
-      "endless": { "start_delay": 1, "interval": 1, "unit": "raider",
-                   "base_count": 1, "count_growth": 0 }
-    })");
-    GameData data;
-    data.LoadAll(quick.Path());
-
-    Field field(data);
-    field.state.SetMode(GameState::kEndless);
-    field.Begin();
-
-    // One step of an hour. Without the cap this is 3600 waves.
-    field.director.Step(3600.0);
-    CHECK_MSG(field.state.CurrentWave() <= 1 + 8,
-              "no more than the per-step cap of endless waves may start at once");
+    CHECK_EQ(field.wonCount, 1);
 }
 
 // --- 6. Setup reads the data rather than assuming it --------------------
@@ -481,16 +358,6 @@ void testSecondsToNextWaveCountsDownAndEndsAtMinusOne() {
     CHECK(std::fabs(field.director.SecondsToNextWave() - -1.0) < 1e-4);
 }
 
-void testEndlessAlwaysHasANextWave() {
-    Field field;
-    field.state.SetMode(GameState::kEndless);
-    field.Begin();
-    field.Run();
-
-    CHECK_MSG(field.director.SecondsToNextWave() >= 0.0f,
-              "endless never runs out of waves, so it never reports -1");
-}
-
 } // namespace
 
 static void runTests() {
@@ -506,13 +373,9 @@ static void runTests() {
 
     testDifficultyScalesTheScheduleAndTheEnemiesInIt();
 
-    testEndlessKeepsGeneratingAndNeverDeclaresVictory();
-    testTheShippedEndlessBlockGeneratesWhatTheOriginalCounted();
-    testEndlessRampsCountAndToughnessPerWave();
-    testEndlessCannotGenerateUnboundedWavesInOneStep();
+    testALeftoverEndlessBlockIsIgnored();
 
     testSecondsToNextWaveCountsDownAndEndsAtMinusOne();
-    testEndlessAlwaysHasANextWave();
 }
 
 TEST_MAIN("test_wb_waves", 60)

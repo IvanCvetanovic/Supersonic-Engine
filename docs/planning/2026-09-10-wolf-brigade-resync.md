@@ -115,3 +115,116 @@ every failure traces to the data rather than to broken code:
 None of these gets fixed by editing the expected number. Each belongs to a
 slice below and returns to green when that slice reproduces what its harness
 prints at `50741d1`.
+
+## The survey, and the order it gives
+
+A read-only survey mapped every new and changed harness to the game
+functions it exercises, with the values it asserts. It covered every changed
+simulation file and the port file each maps to. Its dependency order is the
+plan. Each slice names the harnesses that pin it:
+
+1. **Data, and Endless out.** `GameData` levels, abilities and merge;
+   `DataValidator`; `WaveDirector` without the generator; `GameState`, where
+   the mode becomes the level; `Progression`, where `mode` becomes
+   `control_scheme`. Pins: `verify_data`, `verify_levels` (the data half) and
+   `verify_waves` (unchanged).
+2. **Stats structs.** New unit fields: `supply`, `hp_regen`, `controllable`,
+   `heal_amount`, `abilities`, `can_follow`, `can_build`. New building fields:
+   `auto_train_default`, `supply`, `hp_regen`, `hero_respawn`.
+3. **The band and 2D movement.** `ground_y` 590 with a 280 px-deep lane:
+   - moves clamped to the band;
+   - 2D approach for gather, deliver, build, flee and melee;
+   - parking, and `command_gather`;
+   - the placement row gap (115 px).
+
+   Pins: `verify_units`, the cross-row parts of `verify_economy` and
+   `verify_combat`, and `verify_buildings` placement.
+4. **Lane queries.** `enemies_within`, `nearest_wounded_ally`.
+5. **Supply and production.** Supply, auto-train with a reserve,
+   research taking time, rally points, recruit squad, passive regen, and
+   `unit_trained`'s four arguments. Pins: `verify_buildings`' new checks and
+   `verify_casters` D.
+6. **Capture points.** A new `CapturePoint`, and army damage through
+   `_effective_damage`. Pins: `verify_economy` capture and army cases, and
+   `verify_levels` capture config.
+7. **Healers, squads, the hero under control.** New states `CONTROLLED` and
+   `HEALING`, warband and garrison, the leash, the shelter bell,
+   `HeroControl`. Pins: `verify_casters`, `verify_squads`, and `verify_hero`
+   B and F.
+8. **Abilities.** Cleave and Dash, with i-frames. Pins: `verify_hero` G.
+9. **Save.** The new unit, building and game-state fields, capture points,
+   and the resource-node sprite fallback. Pins: `verify_snapshot`, and the
+   save parts of the others.
+10. **Match (`main.gd`).** Level applied, capture points spawned, the
+    starting hero possessed, the respawn flow, the Town Hall row at 640.4.
+    Pins: `verify_respawn` (the only new harness needing a real boot),
+    `verify_snapshot`, and `verify_meta`'s award wiring.
+11. **Presentation-adjacent.** `AudioTones` (the noise wave, new tones,
+    `falloff_linear`), `GestureMachine`'s hero mode, and a control-scheme
+    resolver. Pins: `verify_audio`, `verify_hero` A and D.
+
+**Left out, by the port's own rule** (`Match.hpp` names camera and UI as
+presentation): camera follow (`verify_hero` C), the joystick and on-screen
+buttons (E), the level-select screen, `verify_fx`, and the menu clicks in
+`verify_input`.
+
+## Slice 1: Endless out, the level in
+
+**`WaveDirector` loses the generator.** Gone: its configuration, the per-step
+cap, the endless-only victory rule, and `endless_index` in the save. Kept, as
+the original keeps them, are the per-spawn health and damage multipliers on
+queued entries. A save written while Endless existed still loads, because its
+extra key is not read.
+
+**`GameState`: the mode becomes the level.**
+- `SetLevel` / `Level()` hold the choice as made. `CurrentLevel()` resolves an
+  unset or unknown one to the data default, as `current_level()` does.
+- `workers_sheltered` (the shelter bell) and `hero_down_x` join the save in the
+  original's shapes (`[]` or `[x]`).
+- `Reset` clears both, and keeps the difficulty and the level.
+
+**`Progression`'s `mode` becomes `control_scheme`,** under the original's key,
+as `save.gd` changed.
+
+**The layer:**
+- No mode radio. The difficulty row stays; the level is chosen on a campaign
+  screen this port has not built.
+- No Endless line on the HUD.
+- `applySavedRules` applies the run's level to the data before the boot,
+  where `main._ready` applies it.
+
+**`GameData::ApplyLevel` assigns each section in place** rather than clearing
+and rebuilding them. A reference to `data.World()` held across a level change
+therefore stays valid.
+
+**The Endless tests are gone.** In their place are three cases:
+- a waves file still carrying an `endless` block is ignored;
+- a restored run keeps its level and runs its schedule to the fifth wave, then
+  reports no next wave;
+- an unknown level resolves to level 1.
+
+The snapshot suite now sets the shelter bell and the hero's death spot before
+it captures. The digest therefore covers both new fields, which is exactly
+what the game's own review found `verify_snapshot` had missed.
+
+**Result (GCC, 10 September):** waves 78/0 (was 3 failures), economy 59/0,
+snapshot 157/0, persistence 178/0 and progression 130/0. The five suites
+still red belong to the band, audio and match slices.
+
+**Traps, written down before they bite:**
+- **State numbers.** `CONTROLLED` must be 8 and `HEALING` 9. They come after
+  `DEAD` so that a saved state number keeps its meaning.
+- **Formation slots are keyed on `get_instance_id()`.** `verify_squads`
+  therefore asserts them loosely (x > 2000, within 300 of the hero), and the
+  port must not pin exact slot coordinates either.
+- **A freshly spawned unit's row is `randf()`.** Its y is not deterministic
+  in the original, so nothing here may assert one.
+- **The capture point's scan accumulator resets to zero.** It does not
+  subtract the tick, so at 0.1 s steps it scans every 0.2 s. The port has to
+  copy that exactly.
+- **The capture army-damage registry is global** in the original. The port's
+  copy must be per-match, or reset between tests, or one test's banner
+  changes another's combat numbers.
+- **Research is paid when it is queued, not when it completes.**
+- **The `attack` tone is now noise:**
+  `fposmod(sin(i·12.9898)·43758.5453, 1)·2−1`, mixed 0.65 with 0.35 of a sine.

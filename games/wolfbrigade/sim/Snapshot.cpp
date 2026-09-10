@@ -276,7 +276,7 @@ bool Restore(const Value& snapshot, const GameData& data, GameState& state,
 
     // 4. Units. Their stats are the base row plus the BAKED block, never
     //    Upgrades::ForUnit: units are not retroactively upgraded, and an enemy
-    //    carries difficulty and endless scaling that re-deriving would either
+    //    carries difficulty and per-spawn scaling that re-deriving would either
     //    lose or apply twice.
     std::vector<std::pair<Unit*, const Value*>> relinkable;
     for (const Value& record : snapshot["units"].AsArray()) {

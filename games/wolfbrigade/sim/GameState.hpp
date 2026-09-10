@@ -38,12 +38,6 @@ class GameState {
 public:
     enum class Phase { Playing, Won, Lost };
 
-    // String-valued, as in the original, because these persist into the JSON
-    // save and an enum's integer would silently change meaning if the order
-    // ever did.
-    static constexpr const char* kCampaign = "campaign";
-    static constexpr const char* kEndless = "endless";
-
     GameState(const GameData& data, EventBus& bus) : m_data(&data), m_bus(&bus) {}
 
     // Back to the initial data-driven state: on boot, and on Restart.
@@ -53,9 +47,10 @@ public:
     // a Continue restores balances that already banked it, and adding it again
     // on resume would double it every time the player reloaded.
     //
-    // Deliberately does NOT clear the chosen difficulty or mode. A Restart
+    // Deliberately does NOT clear the chosen difficulty or level. A Restart
     // keeps both - the player picked Hard once, and rebuilding the run is not
-    // them changing their mind.
+    // them changing their mind. It DOES ring the shelter bell off and forget a
+    // pending respawn, which belong to the run.
     void Reset();
 
     // --- Resources ---------------------------------------------------------
@@ -71,12 +66,24 @@ public:
 
     const std::map<std::string, int>& Resources() const { return m_resources; }
 
-    // --- Difficulty and mode -----------------------------------------------
+    // --- Difficulty and level ----------------------------------------------
+    //
+    // The game mode is gone with Endless (73999ce). What a run is now is a
+    // campaign LEVEL, and it replaces the mode everywhere the mode was: chosen
+    // before the run, kept by Restart, and carried in the save so a Continue
+    // resumes the right map.
 
     void SetDifficulty(const std::string& id) { m_difficulty = id; }
-    void SetMode(const std::string& mode) { m_mode = mode; }
-    bool IsEndless() const { return m_mode == kEndless; }
-    const std::string& Mode() const { return m_mode; }
+
+    void SetLevel(const std::string& id) { m_level = id; }
+
+    // The choice as made, "" when none was.
+    const std::string& Level() const { return m_level; }
+
+    // The active level, resolving an unset or unknown choice to the data's
+    // default - so a harness that boots a match directly plays level 1, and a
+    // save naming a level that no longer ships still opens.
+    std::string CurrentLevel() const;
 
     // The active preset, resolving an unset or unknown choice to the data
     // default - so every consumer always has a valid preset and a harness that
@@ -129,6 +136,27 @@ public:
     // thing that has to be able to explain the number a player starts with.
     int StartingResourceBonus(const std::string& resource) const;
 
+    // --- The village's two run-wide switches (the restructure, b6c73fb) -----
+
+    // The shelter bell: while it is rung, every worker abandons its task and
+    // holes up at the nearest drop-off until it is rung again.
+    bool WorkersSheltered() const { return m_workersSheltered; }
+    void SetWorkersSheltered(bool sheltered) { m_workersSheltered = sheltered; }
+
+    // Where the hero fell while a respawn is pending, or nothing when he is
+    // alive. Carried in the save so a run suspended mid-respawn still revives
+    // him at the respawn building nearest to where he actually died.
+    bool HeroDown() const { return m_heroDown; }
+    double HeroDownX() const { return m_heroDownX; }
+    void SetHeroDown(double x) {
+        m_heroDown = true;
+        m_heroDownX = x;
+    }
+    void ClearHeroDown() {
+        m_heroDown = false;
+        m_heroDownX = 0.0;
+    }
+
     // --- Save --------------------------------------------------------------
 
     void SetCurrentWave(int wave) { m_currentWave = wave; }
@@ -141,9 +169,12 @@ public:
     // persistent starting bonus on top of balances that already contain it.
     // Reloading twice would double a player's Deeper Coffers.
     //
-    // Difficulty and mode are set FIRST because everything downstream reads
-    // them: WaveDirector::Setup re-derives its schedule from the mode, and
-    // enemy stat scaling reads the difficulty.
+    // Difficulty and level are set FIRST because everything downstream reads
+    // them: the level decides which merged data the world is rebuilt from, and
+    // enemy stat scaling reads the difficulty. A save written before levels
+    // existed has no "level" and resolves to the default, as the original's
+    // own from_save arranges; one written before Endless went still carries a
+    // "mode", which is not read.
     //
     // Meta levels are NOT read from the file. They belong to the profile, which
     // outlives the run - and a snapshot that could resurrect them would let a
@@ -164,7 +195,11 @@ private:
     // Empty means nothing chosen, which resolves to the data default rather
     // than to a hardcoded one.
     std::string m_difficulty;
-    std::string m_mode{kCampaign};
+    std::string m_level;
+
+    bool m_workersSheltered{false};
+    bool m_heroDown{false};
+    double m_heroDownX{0.0};
 };
 
 } // namespace WolfBrigade

@@ -45,8 +45,8 @@ std::string Profile::Difficulty(const std::string& fallback) const {
     return m_difficulty.empty() ? fallback : m_difficulty;
 }
 
-std::string Profile::Mode(const std::string& fallback) const {
-    return m_mode.empty() ? fallback : m_mode;
+std::string Profile::ControlScheme(const std::string& fallback) const {
+    return m_controlScheme.empty() ? fallback : m_controlScheme;
 }
 
 void Profile::SetMasterVolume(float volume) {
@@ -70,7 +70,7 @@ std::string Profile::ToJson() const {
     std::ostringstream out;
     out << "{\n  \"renown\": " << m_renown << ",\n  \"best_wave\": " << m_bestWave
         << ",\n  \"difficulty\": \"" << Supersonic::Json::Escape(m_difficulty) << "\""
-        << ",\n  \"mode\": \"" << Supersonic::Json::Escape(m_mode) << "\""
+        << ",\n  \"control_scheme\": \"" << Supersonic::Json::Escape(m_controlScheme) << "\""
         << ",\n  \"muted\": " << (m_muted ? "true" : "false")
         << ",\n  \"master_volume\": " << m_masterVolume
         << ",\n  \"meta_levels\": {";
@@ -98,7 +98,7 @@ bool Profile::FromJson(const std::string& text) {
     // Absent means never chosen, which is what an empty string says here and
     // what the menu turns into the data's own default.
     m_difficulty = parsed["difficulty"].AsString("");
-    m_mode = parsed["mode"].AsString("");
+    m_controlScheme = parsed["control_scheme"].AsString("");
     m_muted = parsed["muted"].AsBool(false);
 
     // Clamped on READ as well as on write, because the file is a text document

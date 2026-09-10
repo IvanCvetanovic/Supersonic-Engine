@@ -488,8 +488,8 @@ void testAMissingProfileIsANewPlayerRatherThanAFailure() {
     // difficulty, so the caller's fallback is what the menu must show.
     CHECK_MSG(profile.Difficulty("normal") == "normal",
               "got " + profile.Difficulty("normal"));
-    CHECK_MSG(profile.Mode("campaign") == "campaign",
-              "got " + profile.Mode("campaign"));
+    CHECK_MSG(profile.ControlScheme("auto") == "auto",
+              "got " + profile.ControlScheme("auto"));
     CHECK_MSG(!profile.Muted(), "a new player is not muted");
     CHECK_MSG(profile.MasterVolume() == 1.0f, "and is at full volume");
 }
@@ -507,7 +507,7 @@ void testEveryPreferenceSurvivesBeingWrittenAndReadBack() {
     {
         Profile profile;
         profile.SetDifficulty("hard");
-        profile.SetMode("endless");
+        profile.SetControlScheme("touch");
         profile.SetMuted(true);
         profile.SetMasterVolume(0.25f);
         profile.AddRenown(70);
@@ -520,7 +520,7 @@ void testEveryPreferenceSurvivesBeingWrittenAndReadBack() {
     // The fallback is passed and IGNORED, which is the half of the contract a
     // test that only ever asks a fresh profile would never reach.
     CHECK_MSG(loaded.Difficulty("normal") == "hard", "got " + loaded.Difficulty("normal"));
-    CHECK_MSG(loaded.Mode("campaign") == "endless", "got " + loaded.Mode("campaign"));
+    CHECK_MSG(loaded.ControlScheme("auto") == "touch", "got " + loaded.ControlScheme("auto"));
     CHECK_MSG(loaded.Muted(), "mute survives");
     CHECK_MSG(loaded.MasterVolume() == 0.25f, "and so does the volume");
     CHECK_EQ(loaded.Renown(), 70);
@@ -537,7 +537,7 @@ void testResettingProgressKeepsThePreferences() {
     profile.SetMetaLevel("veteran_soldiers", 3);
     profile.RecordWave(11);
     profile.SetDifficulty("hard");
-    profile.SetMode("endless");
+    profile.SetControlScheme("touch");
     profile.SetMuted(true);
     profile.SetMasterVolume(0.5f);
 
@@ -548,7 +548,7 @@ void testResettingProgressKeepsThePreferences() {
     CHECK_EQ(profile.BestWave(), 0);
 
     CHECK_MSG(profile.Difficulty("normal") == "hard", "got " + profile.Difficulty("normal"));
-    CHECK_MSG(profile.Mode("campaign") == "endless", "got " + profile.Mode("campaign"));
+    CHECK_MSG(profile.ControlScheme("auto") == "touch", "got " + profile.ControlScheme("auto"));
     CHECK_MSG(profile.Muted(), "starting over does not un-mute the game");
     CHECK_MSG(profile.MasterVolume() == 0.5f, "nor move the volume slider");
 }
@@ -595,8 +595,8 @@ void testNothingIsWrittenUntilSomethingChanges() {
     CHECK_MSG(profile.IsDirty(), "so does the difficulty");
     profile.Save(path.string());
 
-    profile.SetMode("endless");
-    CHECK_MSG(profile.IsDirty(), "and the mode");
+    profile.SetControlScheme("touch");
+    CHECK_MSG(profile.IsDirty(), "and the control scheme");
     profile.Save(path.string());
 
     profile.SetMuted(true);

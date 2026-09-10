@@ -222,7 +222,7 @@ static void testTheWholeMatchNumbersTheOraclePrints() {
     // balance - and is also the reason a boot is a call rather than something
     // the constructor did.
     match.Run().SetDifficulty("hard");
-    match.Run().SetMode(GameState::kEndless);
+    match.Run().SetLevel("level_1");
     match.BootFresh();
 
     CHECK_MSG(match.Units().size() == 3, "a fresh board is three workers and nothing else");
@@ -298,7 +298,7 @@ static void testCaptureRestoreCaptureIsEquivalentThroughARealBoot() {
     Profile profile;
     Match first(wb::Shipped(), profile, "");
     first.Run().SetDifficulty("hard");
-    first.Run().SetMode(GameState::kEndless);
+    first.Run().SetLevel("level_1");
     first.BootFresh();
     enrichLikeTheHarness(first);
     driveLikeTheHarness(first, 80);
@@ -329,7 +329,7 @@ static void testCaptureRestoreCaptureIsEquivalentThroughARealBoot() {
     // documents - which is how the original's own harness says the building
     // cooldown gap first hid.
     CHECK_EQ(second.Run().Amount(Ids::kWood), 270);
-    CHECK_MSG(second.Run().IsEndless(), "the mode came back");
+    CHECK_MSG(second.Run().Level() == "level_1", "the level came back");
     CHECK(second.Run().CurrentDifficulty() == "hard");
     CHECK_EQ(static_cast<int>(second.Units().size()), 6);
     CHECK_EQ(second.Director().AliveEnemies(), 1);
@@ -800,37 +800,36 @@ static void testTheForkTakesTheDocumentOrElseStartsOver() {
 // The director across a restore - both arming calls
 // =========================================================================
 
-static void testARestoredEndlessRunIsStillEndless() {
-    // The one this slice was written to fix. The port's Snapshot::Restore sets
-    // the mode at its own first step and arms nothing; the original's restore
-    // calls setup() itself, right after from_save and before the entities,
-    // precisely so the mode is re-read. Without the second arming a Continue of
-    // an endless run comes back with a director that will never generate
-    // another endless wave - and the run silently becomes "survive the five
-    // scripted waves and then nothing forever".
+static void testARestoredRunKeepsItsLevelAndItsSchedule() {
+    // Once this was the endless case: the port's Snapshot::Restore sets the
+    // run's choices at its own first step and arms nothing, and without the
+    // second arming a Continue of an endless run came back with a director
+    // that would never generate another wave. Endless is gone (73999ce); what
+    // the restore still has to carry is the LEVEL, and a director armed to run
+    // the schedule to its end.
     Profile profile;
     Match source(wb::Shipped(), profile, "");
-    source.Run().SetMode(GameState::kEndless);
+    source.Run().SetLevel("level_1");
     source.BootFresh();
-    CHECK_MSG(source.Director().IsEndless(), "the run it saved was endless");
+    CHECK_MSG(source.Run().Level() == "level_1", "the run it saved chose its level");
 
     const Value document = source.Capture();
 
-    // A destination whose own mode is the default, which is the situation a
-    // Continue from the main menu is always in.
+    // A destination that has chosen nothing, which is the situation a Continue
+    // from the main menu is always in.
     Profile secondProfile;
     Match restored(wb::Shipped(), secondProfile, "");
-    CHECK_MSG(!restored.Run().IsEndless(), "and the destination is not, before the restore");
+    CHECK_MSG(restored.Run().Level().empty(), "and the destination has not, before the restore");
     CHECK_MSG(restored.BootFromSave(document), "it restores");
 
-    CHECK_MSG(restored.Run().IsEndless(), "the run's mode came back");
-    CHECK_MSG(restored.Director().IsEndless(), "and so did the director's");
+    CHECK_MSG(restored.Run().Level() == "level_1", "the run's level came back");
 
-    // Behaviourally, not just as a flag: the scripted schedule ends at wave
-    // five, and only an endless director goes past it.
+    // Behaviourally: an armed director runs the schedule to its last wave and
+    // then reports that none is left.
     for (int i = 0; i < 14; ++i) restored.StepDirector(60.0);
-    CHECK_MSG(restored.Run().CurrentWave() > 5,
-              "a restored endless run keeps generating waves past the schedule");
+    CHECK_EQ(restored.Run().CurrentWave(), 5);
+    CHECK_MSG(restored.Director().SecondsToNextWave() < 0.0,
+              "and after the fifth there is no next wave");
 }
 
 static void testARestoredRunResumesItsScheduleRatherThanReplayingIt() {
@@ -1143,7 +1142,7 @@ static void testTheFrameAndTheHarnessOrderAgreeOnEveryOracleNumber() {
     Profile profile;
     Match match(wb::Shipped(), profile, "");
     match.Run().SetDifficulty("hard");
-    match.Run().SetMode(GameState::kEndless);
+    match.Run().SetLevel("level_1");
     match.BootFresh();
     enrichLikeTheHarness(match);
 
@@ -1181,7 +1180,7 @@ static void runTests() {
     testAWarmMatchDoesNotInheritTheRunBeforeIt();
     testTheForkTakesTheDocumentOrElseStartsOver();
 
-    testARestoredEndlessRunIsStillEndless();
+    testARestoredRunKeepsItsLevelAndItsSchedule();
     testARestoredRunResumesItsScheduleRatherThanReplayingIt();
     testARestoredMatchStillKnowsHowWideTheWorldIs();
     testAHalfBuiltBuildingComesBackHalfBuilt();

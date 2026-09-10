@@ -782,8 +782,6 @@ void testTheChosenRulesReachTheRunAndSurviveTheLaunch() {
 
         press(registry, "Menu Difficulty Hard");
         tickOnce(layer, registry);
-        press(registry, "Menu Mode Endless");
-        tickOnce(layer, registry);
 
         press(registry, "Menu New Game");
         tickOnce(layer, registry);
@@ -797,7 +795,8 @@ void testTheChosenRulesReachTheRunAndSurviveTheLaunch() {
         CHECK_MSG(started->Run().CurrentDifficulty() == "hard",
                   "the run is on the chosen difficulty, got " +
                       started->Run().CurrentDifficulty());
-        CHECK_MSG(started->Run().IsEndless(), "and in the chosen mode");
+        CHECK_MSG(started->Run().CurrentLevel() == "level_1",
+                  "and on the default level, there being no campaign screen yet");
 
         // AND IT REACHED THE BOOT, not just the field. Hard scales starting
         // resources by 0.8, so the opening balance is the check that the order
@@ -826,7 +825,7 @@ void testTheChosenRulesReachTheRunAndSurviveTheLaunch() {
         CHECK_MSG(match->Run().CurrentDifficulty() == "hard",
                   "and opens on the difficulty last chosen, got " +
                       match->Run().CurrentDifficulty());
-        CHECK_MSG(match->Run().IsEndless(), "and the mode");
+        CHECK_MSG(match->Run().CurrentLevel() == "level_1", "and the level");
         CHECK_EQ(match->Run().Amount("wood"), hardWood);
 
         layer.OnDetach(registry);

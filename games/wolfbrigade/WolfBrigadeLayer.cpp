@@ -113,21 +113,26 @@ WolfBrigadeLayer::WolfBrigadeLayer(std::string saveDir) : m_saveDir(std::move(sa
 void WolfBrigadeLayer::applySavedRules() {
     if (!m_match || !m_profile || !m_data) return;
 
-    // `main_menu.gd:32-33` writing the chosen mode and difficulty into
-    // GameState, which in Godot survives the scene change so `main._ready`
-    // finds it. Here the GameState is built WITH the Match, so every place that
-    // builds one has to push them in - and this is that one place, because
-    // there are three such sites and the third is the one that gets forgotten.
+    // The chosen difficulty into GameState, which in Godot survives the scene
+    // change so `main._ready` finds it. Here the GameState is built WITH the
+    // Match, so every place that builds one has to push it in - and this is
+    // that one place, because there are three such sites and the third is the
+    // one that gets forgotten.
     //
     // BEFORE Boot, and the order is the whole of whether it takes effect:
-    // GameState::Reset scales the opening resources by the difficulty and
-    // WaveDirector::Setup reads IsEndless to pick the schedule. Applied after,
-    // it gives a run that says "hard" and was dealt an easy hand.
+    // GameState::Reset scales the opening resources by the difficulty, and the
+    // world is built from the data the active LEVEL merges - which is why the
+    // level is applied to the data here as well, where `main._ready` applies it
+    // before building the world. Applied after, either gives a run that says
+    // one thing and was dealt another.
+    //
+    // The level is the run's own choice, and nothing in this port makes it yet
+    // - there is no level-select screen - so it resolves to the data's default.
     //
     // The fallbacks are the caller's, as everywhere: never chosen means the
     // difficulty the DATA declares, not one this layer invented.
-    m_match->Run().SetMode(m_profile->Mode(GameState::kCampaign));
     m_match->Run().SetDifficulty(m_profile->Difficulty(m_data->DifficultyDefault()));
+    m_data->ApplyLevel(m_match->Run().CurrentLevel());
 }
 
 void WolfBrigadeLayer::saveProfileIfDirty() {
@@ -311,10 +316,7 @@ void WolfBrigadeLayer::updateHud(entt::registry& registry) {
     // on its final wave.
     const int number = state.CurrentWave();
     const double seconds = director.SecondsToNextWave();
-    if (director.IsEndless()) {
-        std::snprintf(buffer, sizeof(buffer), "Wave %d - Endless\nNext in %ds", number,
-                      static_cast<int>(std::ceil(seconds)));
-    } else if (seconds >= 0.0) {
+    if (seconds >= 0.0) {
         std::snprintf(buffer, sizeof(buffer), "Wave %d / %d\nNext in %ds", number,
                       director.TotalWaves(), static_cast<int>(std::ceil(seconds)));
     } else {
@@ -1270,12 +1272,8 @@ void WolfBrigadeLayer::buildMenu(entt::registry& registry) {
         return Radio{entity, id};
     };
 
-    m_menu.modeRow = radioRow("Menu Mode Row", "Menu Mode Label", "Mode");
-    optionOrder = 0;
-    m_menu.modes.push_back(radio(m_menu.modeRow, "Menu Mode Campaign", "Campaign",
-                                 GameState::kCampaign, glm::vec2(230.0f, 96.0f)));
-    m_menu.modes.push_back(radio(m_menu.modeRow, "Menu Mode Endless", "Endless",
-                                 GameState::kEndless, glm::vec2(230.0f, 96.0f)));
+    // No mode row: the game mode went with Endless (73999ce), and the level
+    // it gave way to is chosen on a campaign screen this port has not built.
 
     // IN DATA ORDER, from `difficulty.json`'s own "order" array, which is what
     // `DataLoader.difficulty_order()` is for. Iterating the presets object
@@ -1452,7 +1450,6 @@ void WolfBrigadeLayer::refreshMenu(entt::registry& registry) {
     // frame the screen is visible, and the player sees a menu with nothing
     // selected before it corrects itself.
     if (m_data) {
-        paintRadios(registry, m_menu.modes, m_profile->Mode(GameState::kCampaign));
         paintRadios(registry, m_menu.difficulties,
                     m_profile->Difficulty(m_data->DifficultyDefault()));
     }
@@ -1640,18 +1637,14 @@ void WolfBrigadeLayer::updateMenu(entt::registry& registry) {
         return;
     }
 
-    // The radio rows, read before anything that leaves the screen so a mode
-    // chosen and a New Game pressed in the same tick take effect in that order.
+    // The difficulty row, read before anything that leaves the screen so a
+    // difficulty chosen and a New Game pressed in the same tick take effect in
+    // that order.
     //
-    // BOTH HOMES, exactly as `_on_mode` and `_on_difficulty` write both: the
-    // profile is where the choice persists, and it is pushed into the run's
-    // GameState by startGame. Writing only the profile would remember a setting
-    // that never reached a match; writing only the state would lose it on exit.
-    for (const Radio& option : m_menu.modes) {
-        if (registry.get<UIButtonComponent>(option.entity).clickedThisTick) {
-            m_profile->SetMode(option.id);
-        }
-    }
+    // BOTH HOMES, exactly as `_on_difficulty` writes both: the profile is where
+    // the choice persists, and it is pushed into the run's GameState by
+    // startGame. Writing only the profile would remember a setting that never
+    // reached a match; writing only the state would lose it on exit.
     for (const Radio& option : m_menu.difficulties) {
         if (registry.get<UIButtonComponent>(option.entity).clickedThisTick) {
             m_profile->SetDifficulty(option.id);
@@ -1659,8 +1652,7 @@ void WolfBrigadeLayer::updateMenu(entt::registry& registry) {
     }
 
     // Repainted every tick, which is what makes a selection a look rather than
-    // a component field. Cheap: six buttons, three colours each.
-    paintRadios(registry, m_menu.modes, m_profile->Mode(GameState::kCampaign));
+    // a component field. Cheap: three buttons, three colours each.
     paintRadios(registry, m_menu.difficulties,
                 m_profile->Difficulty(m_data->DifficultyDefault()));
 

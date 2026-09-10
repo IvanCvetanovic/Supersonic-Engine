@@ -332,8 +332,14 @@ std::string digest(const Value& snapshot) {
 // built by hand because the port has no match boot yet.
 void enrich(Board& board) {
     board.state.SetDifficulty("hard");
-    board.state.SetMode(GameState::kEndless);
+    board.state.SetLevel("level_1");
     board.state.Reset();
+
+    // The restructure's two run-wide switches (b6c73fb), set AFTER Reset,
+    // which clears both. They are here so the digest covers them: the game's
+    // own review of that commit found verify_snapshot had digested neither.
+    board.state.SetWorkersSheltered(true);
+    board.state.SetHeroDown(2210.5);
 
     board.Place(Ids::kTownHall, 1500.0f);
     board.Place(Ids::kBarracks, 2600.0f);
@@ -413,7 +419,7 @@ static void testGarbageIsRefusedRatherThanHalfRead() {
 
 static void testTheStatsBlockCarriesEveryUpgradableFieldAndNoOther() {
     // The block exists because these numbers are BAKED at spawn - difficulty,
-    // endless growth, research, owned meta - and cannot be recovered from the
+    // the spawn's own multipliers, research, owned meta - and cannot be recovered from the
     // unit's id. If the two lists drift, a stat is silently unsaved.
     const std::vector<std::string> block = UnitStats::BlockFields();
 
@@ -793,8 +799,11 @@ static void testARichBoardRoundTripsThroughTextExactly() {
                   "and its training progress exactly");
     }
 
-    CHECK_MSG(rebuilt.state.IsEndless(), "the mode came back");
+    CHECK_MSG(rebuilt.state.Level() == "level_1", "the level came back");
     CHECK(rebuilt.state.CurrentDifficulty() == "hard");
+    CHECK_MSG(rebuilt.state.WorkersSheltered(), "the shelter bell came back rung");
+    CHECK_MSG(rebuilt.state.HeroDown() && rebuilt.state.HeroDownX() == 2210.5,
+              "and where the hero fell, exactly");
 }
 
 static void testEverySidIsUniqueAcrossAllThreeKinds() {

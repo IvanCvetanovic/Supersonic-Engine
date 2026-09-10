@@ -62,7 +62,7 @@ public:
 
     // --- Preferences -------------------------------------------------------
     //
-    // `save.gd`'s other half: difficulty, mode, mute and volume. They live HERE
+    // `save.gd`'s other half: difficulty, control scheme, mute and volume. They live HERE
     // rather than in a store of their own because the original is one file with
     // one dictionary and seven keys, and a second file would mean a second
     // path, a second load, a second corruption policy and a second thing every
@@ -72,8 +72,10 @@ public:
     // what erases them, and that is `ResetProgress` below rather than a file
     // boundary.
     //
-    // The key names are the original's - "difficulty", "mode", "muted",
-    // "master_volume" - so the two games read each other's save.
+    // The key names are the original's - "difficulty", "control_scheme",
+    // "muted", "master_volume" - so the two games read each other's save. (The
+    // game mode went with Endless; a profile still carrying "mode" is read
+    // without it.)
     //
     // The getters take the caller's fallback exactly as `save.gd:49-67` do,
     // because "never chosen" is a state the menu has to be able to see: on a
@@ -86,9 +88,12 @@ public:
         m_dirty = true;
     }
 
-    std::string Mode(const std::string& fallback) const;
-    void SetMode(std::string mode) {
-        m_mode = std::move(mode);
+    // The preferred control scheme: "auto", "desktop" or "touch". Only STORED
+    // here, as `save.gd:56` stores it; what "auto" resolves to is the input
+    // layer's business.
+    std::string ControlScheme(const std::string& fallback) const;
+    void SetControlScheme(std::string scheme) {
+        m_controlScheme = std::move(scheme);
         m_dirty = true;
     }
 
@@ -145,7 +150,7 @@ private:
 
     // Empty means never chosen; see Difficulty/Mode above.
     std::string m_difficulty;
-    std::string m_mode;
+    std::string m_controlScheme;
     bool m_muted{false};
     float m_masterVolume{1.0f};
 

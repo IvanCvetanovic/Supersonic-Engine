@@ -28,24 +28,25 @@ namespace WolfBrigade {
 //
 // It only advances while the run is playing. A director that kept spawning
 // through a defeat would bury a player who had already lost.
+//
+// Endless mode is gone, with the game's 73999ce. The schedule is the whole of
+// what this runs: the waves the active level's waves.json names.
 class WaveDirector {
 public:
     // What a spawn asks for: a stat block already scaled by difficulty and by
-    // endless growth, and where to put it.
+    // the queued entry's own multipliers, and where to put it.
     using SpawnFn = std::function<void(const UnitStats&, const glm::vec2&)>;
 
     WaveDirector(const GameData& data, GameState& state, EventBus& bus)
         : m_data(&data), m_state(&state), m_bus(&bus) {}
 
-    // Reads the schedule and the endless configuration, and remembers where
-    // enemies come in. Called once before the first step, and again after a
-    // load - the schedule is re-derived from data rather than saved, so only
-    // the live counters below are restored.
+    // Reads the schedule and remembers where enemies come in. Called once
+    // before the first step, and again after a load - the schedule is
+    // re-derived from data rather than saved, so only the live counters below
+    // are restored.
     //
-    // Deliberately touches NO counter. That is what lets a restore call it
-    // twice - once before, to give FromSave a schedule to clamp the saved wave
-    // index against, and once after, to re-read a mode that did not exist yet
-    // the first time - without rewinding the run it just put back.
+    // Deliberately touches NO counter, so a restore can call it twice without
+    // rewinding the run it just put back.
     void Setup(SpawnFn spawn, float enemyX, float groundY);
 
     // Back to the start of a run: no time elapsed, no wave reached, nothing
@@ -72,10 +73,8 @@ public:
     // --- What the HUD asks ------------------------------------------------
 
     int TotalWaves() const { return static_cast<int>(m_waves.size()); }
-    bool IsEndless() const { return m_endless; }
 
-    // Seconds until the next wave, or -1 when none is scheduled. Endless
-    // always has a next one, so it never returns -1.
+    // Seconds until the next wave, or -1 once every wave has started.
     double SecondsToNextWave() const;
 
     // --- What the rest of the simulation tells it -------------------------
@@ -94,9 +93,10 @@ public:
 
     Supersonic::Json::Value ToSave() const;
 
-    // Restores the live counters. Setup must have run FIRST: the schedule and
-    // the endless configuration are re-derived from the data and the mode
-    // rather than saved, so only progress comes back through here.
+    // Restores the live counters. Setup must have run FIRST: the schedule is
+    // re-derived from the data rather than saved, so only progress comes back
+    // through here. A save written while Endless existed still loads - its
+    // `endless_index` is simply not read.
     //
     // The alive count is a PARAMETER rather than a saved number. The original
     // recounts the enemy group after every unit is rebuilt, and says why: the
@@ -110,10 +110,10 @@ public:
 private:
     // One enemy waiting its turn at the spawn edge.
     //
-    // The multipliers ride ALONG with the queued entry rather than being
-    // applied when it is queued, because an endless wave's growth is a property
-    // of the wave and the stat block does not exist until the spawn actually
-    // happens.
+    // The multipliers ride ALONG with the queued entry, as the original's queue
+    // still carries them: difficulty scales the stat block when the spawn
+    // actually happens, and these multiply on top of that. The shipped
+    // schedule queues everything at 1.0.
     struct Queued {
         std::string unit;
         float hpMultiplier{1.0f};
@@ -121,10 +121,8 @@ private:
     };
 
     void StartWave(size_t index);
-    void StartEndlessWave();
     void SpawnNext();
     void CheckVictory();
-    double NextEndlessTime() const;
 
     const GameData* m_data{nullptr};
     GameState* m_state{nullptr};
@@ -143,20 +141,6 @@ private:
     double m_spawnAccumulator{0.0};
     int m_aliveEnemies{0};
     bool m_allSpawned{false};
-
-    bool m_endless{false};
-    Supersonic::Json::Value m_endlessConfig;
-    int m_endlessIndex{0};
-    double m_endlessBaseTime{0.0};
-    double m_endlessInterval{75.0};
-
-    // Never generate more than this many endless waves in one step.
-    //
-    // A step with a large delta - a load hitch, or a harness stepping two
-    // seconds at a time - would otherwise generate every wave the elapsed time
-    // has passed, all at once, and the queue would explode. The cap turns that
-    // into a backlog that drains over the next few steps.
-    static constexpr int kEndlessPerStepCap = 8;
 };
 
 } // namespace WolfBrigade

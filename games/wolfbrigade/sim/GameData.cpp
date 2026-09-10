@@ -134,7 +134,10 @@ void GameData::ApplyLevel(const std::string& id) {
     m_levelId = Levels().Has(id) ? id : DefaultLevel();
     const Value& level = Level(m_levelId);
 
-    m_merged.clear();
+    // Assigned per section rather than cleared and rebuilt. A caller holding
+    // `data.World()` across an ApplyLevel - the layer applies the chosen level
+    // just before a boot - keeps a reference to the same node, which a clear()
+    // would have freed underneath it.
     for (const char* section : kLevelSections) {
         // From the PRISTINE base every time - the original duplicates the base
         // dictionary on each call - so applying level B after level A is level

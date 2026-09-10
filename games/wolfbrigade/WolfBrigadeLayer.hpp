@@ -314,10 +314,9 @@ private:
         entt::entity settings{entt::null};
         entt::entity quit{entt::null};
 
-        // The two radio rows, each a horizontal stack nested in the column.
-        entt::entity modeRow{entt::null};
+        // The difficulty radio row, a horizontal stack nested in the column.
+        // There was a mode row beside it until Endless went.
         entt::entity difficultyRow{entt::null};
-        std::vector<Radio> modes;
         std::vector<Radio> difficulties;
 
         // The New Game confirmation, from `main_menu.gd:73-89`.

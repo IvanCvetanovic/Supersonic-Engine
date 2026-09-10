@@ -28,6 +28,8 @@ void GameState::Reset() {
 
     m_currentWave = 0;
     m_phase = Phase::Playing;
+    m_workersSheltered = false;
+    ClearHeroDown();
 
     // Announced rather than assumed. A HUD built before this runs shows the
     // boot defaults until something tells it otherwise, and nothing polls.
@@ -78,6 +80,14 @@ std::string GameState::CurrentDifficulty() const {
         return m_difficulty;
     }
     return m_data->DifficultyDefault();
+}
+
+std::string GameState::CurrentLevel() const {
+    if (!m_level.empty() && m_data->Level(m_level).IsObject() &&
+        !m_data->Level(m_level).AsObject().empty()) {
+        return m_level;
+    }
+    return m_data->DefaultLevel();
 }
 
 float GameState::DifficultyMultiplier(const std::string& key) const {
@@ -142,13 +152,28 @@ Supersonic::Json::Value GameState::ToSave() const {
     out["current_wave"] = Supersonic::Json::Value(static_cast<double>(m_currentWave));
     out["phase"] = Supersonic::Json::Value(static_cast<double>(static_cast<int>(m_phase)));
     out["difficulty"] = Supersonic::Json::Value(m_difficulty);
-    out["mode"] = Supersonic::Json::Value(m_mode);
+    out["level"] = Supersonic::Json::Value(m_level);
+    out["workers_sheltered"] = Supersonic::Json::Value(m_workersSheltered);
+
+    // [] while the hero stands, [x] while a respawn is pending - the
+    // original's shape, so the two saves read the same.
+    Supersonic::Json::Array heroDown;
+    if (m_heroDown) heroDown.push_back(Supersonic::Json::Value(m_heroDownX));
+    out["hero_down_x"] = Supersonic::Json::Value(std::move(heroDown));
     return Supersonic::Json::Value(std::move(out));
 }
 
 void GameState::FromSave(const Supersonic::Json::Value& saved, const MetaLevels& fromProfile) {
     m_difficulty = saved["difficulty"].AsString("");
-    m_mode = saved["mode"].AsString(kCampaign);
+    m_level = saved["level"].AsString("");
+
+    m_workersSheltered = saved["workers_sheltered"].AsBool(false);
+    const Supersonic::Json::Array& heroDown = saved["hero_down_x"].AsArray();
+    if (!heroDown.empty() && heroDown.front().IsNumber()) {
+        SetHeroDown(heroDown.front().AsNumber());
+    } else {
+        ClearHeroDown();
+    }
 
     m_resources.clear();
     for (const auto& [resource, amount] : saved["resources"].AsObject()) {

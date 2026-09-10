@@ -306,24 +306,40 @@ void testWinningAndLosingAreOneWayAndFireOnce() {
     CHECK(run.state.CurrentPhase() == GameState::Phase::Won);
 }
 
-void testResetKeepsTheChosenDifficultyAndMode() {
+void testResetKeepsTheChosenDifficultyAndLevel() {
     // Restart rebuilds the run, not the player's choices. Clearing these would
-    // silently put a player who picked Hard and Endless back on Normal
-    // Campaign the first time they died.
+    // silently put a player who picked Hard back on Normal, and back on the
+    // first level, the first time they died.
     Run run;
     run.state.SetDifficulty("hard");
-    run.state.SetMode(GameState::kEndless);
+    run.state.SetLevel("level_1");
 
     run.state.Reset();
     CHECK(run.state.CurrentDifficulty() == "hard");
-    CHECK_MSG(run.state.IsEndless(), "and still endless");
+    CHECK_MSG(run.state.Level() == "level_1", "and still on its level");
 
-    // What Reset DOES clear.
+    // What Reset DOES clear - including the restructure's two run-wide
+    // switches, which belong to the run as much as the wave does.
     run.state.MarkResearched("sharper_arrows");
     run.state.SetCurrentWave(4);
+    run.state.SetWorkersSheltered(true);
+    run.state.SetHeroDown(1800.0);
     run.state.Reset();
     CHECK_MSG(!run.state.IsResearched("sharper_arrows"), "researched upgrades are a run's, not a player's");
     CHECK_EQ(run.state.CurrentWave(), 0);
+    CHECK_MSG(!run.state.WorkersSheltered(), "a restart rings the shelter bell off");
+    CHECK_MSG(!run.state.HeroDown(), "and forgets a pending respawn");
+}
+
+void testAnUnknownLevelResolvesToTheDefault() {
+    // `game_state.gd` current_level(): an unset or unknown choice is the data
+    // default, so a harness booting a match directly plays level 1, and a save
+    // naming a level that no longer ships still opens.
+    Run run;
+    CHECK_MSG(run.state.CurrentLevel() == "level_1", "nothing chosen is level 1");
+    run.state.SetLevel("level_42");
+    CHECK_MSG(run.state.CurrentLevel() == "level_1", "an unknown level is level 1");
+    CHECK_MSG(run.state.Level() == "level_42", "without rewriting what was chosen");
 }
 
 // --- 6. Persistent meta --------------------------------------------------
@@ -378,7 +394,8 @@ static void runTests() {
     testWaveCountsScaleAndNeverRoundAGroupAway();
 
     testWinningAndLosingAreOneWayAndFireOnce();
-    testResetKeepsTheChosenDifficultyAndMode();
+    testResetKeepsTheChosenDifficultyAndLevel();
+    testAnUnknownLevelResolvesToTheDefault();
     testOwnedMetaAddsToTheStartingBalanceOnceAndPerLevel();
 }
 

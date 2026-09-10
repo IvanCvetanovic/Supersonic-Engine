@@ -170,13 +170,14 @@ public:
     // m_waves is only ever filled by Setup - so a restore into a never-armed
     // director clamps a wave-four run back to zero and replays the whole match.
     //
-    // The second, after Restore, is what makes the MODE stick. Setup reads
-    // GameState::IsEndless, and on the restore path the mode does not exist yet
-    // when the first Setup runs - Snapshot::Restore sets it at its own step 1.
-    // The original has no such problem because `snapshot.gd` calls setup from
-    // INSIDE restore, after from_save and before the entities. This port's
-    // Snapshot deliberately knows nothing about a Match, so the Match brackets
-    // it instead.
+    // The second, after Restore, re-reads the schedule once the run's own state
+    // is back. It is what made Endless stick while there was a mode for Setup
+    // to read; with the mode gone (73999ce) it re-derives the same schedule,
+    // and it stays because Setup is the director's one "read the data" step
+    // and a restore is exactly when that data has to be the restored run's.
+    // The original calls setup from INSIDE restore, after from_save and before
+    // the entities, for the same reason. This port's Snapshot deliberately
+    // knows nothing about a Match, so the Match brackets it instead.
     //
     // That this is safe is a fact about Setup and is asserted rather than
     // assumed: Setup writes the schedule and the configuration, FromSave writes
@@ -542,7 +543,7 @@ private:
     // WHAT IT COSTS, plainly. Memory grows with total spawns rather than with
     // what is standing, and the scans walk the corpses: Lane::CountOf counts
     // them, and every fighter and every tower walks the full lane list at 8 Hz
-    // for the rest of the run. Over a long endless run that is O(everything
+    // for the rest of the run. Over a long run that is O(everything
     // ever spawned) per fighter per tick. The original does not have the
     // problem because Godot frees a unit behind its death fade and the lane
     // unregisters on the way out. DeadUnits() exists so a test can say what the
