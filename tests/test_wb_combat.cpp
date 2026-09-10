@@ -174,6 +174,11 @@ public:
     std::vector<Building*> PlayerBuildings() const override { return {}; }
     std::vector<Unit*> PlayerUnits() const override { return {}; }
 
+    Unit* NearestWoundedAlly(const Unit* me, float maxRange) const override {
+        return lane.NearestWoundedAlly(me, maxRange);
+    }
+    Unit* Hero() const override { return nullptr; }
+
     std::vector<float> deposits;
 
     StubBuilding* AddBuilding(const std::string& owner, float x, int hp, float width,

@@ -374,7 +374,13 @@ public:
     Damageable* NearestEnemyBuilding(const std::string& faction, float x) const override;
     std::vector<Building*> PlayerBuildings() const override;
     std::vector<Unit*> PlayerUnits() const override;
+    Unit* NearestWoundedAlly(const Unit* me, float maxRange) const override;
     ProjectilePool* Projectiles() override { return &m_projectiles; }
+
+    // Null until a hero is possessed, which is the next slice's. Held per
+    // match rather than as the original's static, so a new match never
+    // inherits the last one's hero.
+    Unit* Hero() const override { return m_hero; }
 
 private:
     // --- Snapshot::RestoreSink ---------------------------------------------
@@ -533,6 +539,9 @@ private:
     std::vector<std::unique_ptr<Unit>> m_units;
     std::vector<std::unique_ptr<Building>> m_buildings;
     std::vector<std::unique_ptr<ResourceNode>> m_nodes;
+
+    // Points into m_units, so ClearBoard drops it with them.
+    Unit* m_hero{nullptr};
 
     // -----------------------------------------------------------------------
     // REMOVAL: NOTHING IS EVER ERASED FROM THE THREE VECTORS ABOVE.

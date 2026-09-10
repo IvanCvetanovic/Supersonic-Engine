@@ -160,7 +160,7 @@ Value Capture(const Scene& scene, const GameState& state, const WaveDirector& di
         // and a nonzero count is what makes the second one visible at all -
         // a capture-restore-capture comparison cannot see an entity that is
         // missing from both sides.
-        for (const char* key : {"ref_tree", "ref_build", "ref_attack"}) {
+        for (const char* key : {"ref_tree", "ref_build", "ref_attack", "ref_heal"}) {
             if (static_cast<int>(record[key].AsNumber(-1.0)) < 0) ++counts.unresolvedReferences;
         }
         unitsOut.push_back(std::move(record));

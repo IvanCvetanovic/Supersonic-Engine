@@ -90,6 +90,8 @@ static_assert(static_cast<int>(Unit::State::Building) == 4, "unit.gd:11 enum Sta
 static_assert(static_cast<int>(Unit::State::Attacking) == 5, "unit.gd:11 enum State");
 static_assert(static_cast<int>(Unit::State::Fleeing) == 6, "unit.gd:11 enum State");
 static_assert(static_cast<int>(Unit::State::Dead) == 7, "unit.gd:11 enum State");
+static_assert(static_cast<int>(Unit::State::Controlled) == 8, "unit.gd:14 enum State");
+static_assert(static_cast<int>(Unit::State::Healing) == 9, "unit.gd:14 enum State");
 
 static_assert(static_cast<int>(Building::State::Constructing) == 0, "building.gd:8 enum State");
 static_assert(static_cast<int>(Building::State::Complete) == 1, "building.gd:8 enum State");
@@ -207,6 +209,8 @@ struct Board final : public World, public Snapshot::RestoreSink {
         }
         return out;
     }
+    Unit* NearestWoundedAlly(const Unit*, float) const override { return nullptr; }
+    Unit* Hero() const override { return nullptr; }
 
     // --- RestoreSink ---
     Building* CreateBuilding(const BuildingStats& stats, bool complete,
@@ -310,7 +314,7 @@ std::string recordKey(const Value& record) {
     // record are exact duplicates whose order cannot matter.
     Value copy = record;
     copy.Set("sid", Value());
-    for (const char* key : {"ref_tree", "ref_build", "ref_attack"}) copy.Set(key, Value());
+    for (const char* key : {"ref_tree", "ref_build", "ref_attack", "ref_heal"}) copy.Set(key, Value());
     return Snapshot::ToText(copy);
 }
 
@@ -318,7 +322,7 @@ std::vector<std::string> digestSection(const Value& snapshot, const char* sectio
     std::vector<std::string> rows;
     for (const Value& record : snapshot[section].AsArray()) {
         std::string row = recordKey(record);
-        for (const char* key : {"ref_tree", "ref_build", "ref_attack"}) {
+        for (const char* key : {"ref_tree", "ref_build", "ref_attack", "ref_heal"}) {
             if (!record.Has(key)) continue;
             row += "|" + std::string(key) + "=" +
                    translateRef(snapshot, static_cast<int>(record[key].AsNumber(-1.0)));

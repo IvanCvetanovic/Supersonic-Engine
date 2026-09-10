@@ -163,6 +163,8 @@ public:
     // Nothing here counts toward supply: the units are owned by the cases.
     std::vector<Building*> PlayerBuildings() const override { return {}; }
     std::vector<Unit*> PlayerUnits() const override { return {}; }
+    Unit* NearestWoundedAlly(const Unit*, float) const override { return nullptr; }
+    Unit* Hero() const override { return nullptr; }
 };
 
 // A run with one worker in it.

@@ -141,8 +141,10 @@ void Match::ClearBoard() {
     // the resources it was priced against.
     m_placement.Cancel();
 
-    // A selection cannot survive the board it pointed at.
+    // A selection cannot survive the board it pointed at, and nor can the
+    // hero: both point into the units about to go.
     m_selection.Clear();
+    m_hero = nullptr;
 
     m_lane.Clear();
     m_projectiles.Clear();
@@ -282,6 +284,10 @@ Unit* Match::CreateUnit(const UnitStats& stats, const glm::vec2& position) {
     auto unit = std::make_unique<Unit>(stats, m_state, m_bus, *this);
     unit->SetPosition(position);
 
+    // Its index on the board, standing in for the instance id the original
+    // fans the warband out by. Deterministic, which Godot's is not.
+    unit->SetFormationKey(static_cast<int>(m_units.size()));
+
     Unit* raw = unit.get();
     m_units.push_back(std::move(unit));
 
@@ -327,11 +333,22 @@ void Match::OnUnitTrained(const std::string& unitId, const glm::vec2& spawnPoint
     const float x = std::min(std::max(spawnPoint.x, 0.0f), m_layout.width);
 
     Unit* unit = SpawnUnit(stats, glm::vec2(x, m_layout.groundY));
+    if (unit == nullptr) return;
 
-    // A rally point is an order to walk there, as the original's main gives
-    // it. The squad is carried for the squads the port does not have yet.
-    (void)squad;
-    if (unit != nullptr && Building::IsRally(rally)) unit->CommandMoveTo(rally);
+    // A follower joins the squad its building recruits for. A unit that
+    // cannot follow - a worker - stays in the garrison, where the squad means
+    // nothing.
+    if (unit->Stats().canFollow) unit->SetSquad(squad);
+
+    // Its post is the rally point, else where it appeared. The rally IS the
+    // post: the original once pinned the spawn point instead, and a unit
+    // walked to its rally and straight back one tick after arriving.
+    const bool rallied = Building::IsRally(rally);
+    unit->SetHomePost(rallied ? rally : unit->Position());
+
+    // And a rally point is an order to walk there, as the original's main
+    // gives it.
+    if (rallied) unit->CommandMoveTo(rally);
 }
 
 void Match::OnUnitSpawned(Unit* unit) {
@@ -412,6 +429,10 @@ Building* Match::NearestUnfinishedBuilding(const std::string& faction, float x) 
 
 Unit* Match::NearestEnemyUnit(const std::string& faction, float x, float maxRange) const {
     return m_lane.NearestEnemy(faction, x, maxRange);
+}
+
+Unit* Match::NearestWoundedAlly(const Unit* me, float maxRange) const {
+    return m_lane.NearestWoundedAlly(me, maxRange);
 }
 
 Damageable* Match::NearestEnemyBuilding(const std::string& faction, float x) const {

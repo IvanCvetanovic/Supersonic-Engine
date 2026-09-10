@@ -516,3 +516,90 @@ restore their tug. That is slice 9.
 
 **Result (GCC, 10 September):** economy 79/0, combat 74/0 and data 131/0, and
 nothing regressed. Still red, and unchanged: audio 5, selection 5 and match 44.
+
+## Slice 7a: squads, the leash, priests and the shelter bell
+
+Slice 7 is split in two. 7a is everything a unit decides for itself; 7b is
+the hero under the player's hand (`CONTROLLED` and `HeroControl`). 7a's cases
+set the world's hero directly, as the harnesses set `HeroControl.hero`, so
+7b is not a prerequisite.
+
+**The unit** gains the army layer of `unit.gd`:
+- **States.** `CONTROLLED` = 8 and `HEALING` = 9 are appended after `DEAD`,
+  where the original appends them, because the ordinal is a save format;
+  `test_wb_snapshot` pins both. `FromSave` now takes states up to 9 and maps
+  `CONTROLLED` to `IDLE`. That is two edits, and both are needed: widening
+  the range alone would restore a unit that thinks nothing.
+- **The defender.** The garrison holds, acquires in aggro while idle, and
+  walks back to its post (`_return_home`, not within 60 px, no post means
+  hold). The warband keeps station on the hero, engages on the march, and
+  breaks off a fight past the leash (500 px, lane `|dx|` from the hero).
+- **The scan is leash-aware.** A warband unit past the leash sees nothing, so
+  the break-off cannot flip-flop at the tick rate.
+- **An AI march stays combat-aware; a player's order does not.** The two
+  are one `MOVING` state, told apart by `_ai_march`, which `CommandMoveTo`
+  clears.
+- **The priest.** Healing outranks following. The cast shares the attack
+  cooldown; `ReceiveHeal` clamps, announces what actually came back on the
+  new `EventBus::healed`, and does not touch the regen clock. A priest gives
+  up a chase past its leash, measured from the hero in the warband and from
+  its post in the garrison. `CommandAttack` is a no-op for a healer.
+- **The shelter bell.** A worker's tick checks `WorkersSheltered()` first,
+  runs for the nearest drop-off, and stands there until the bell rings off.
+- **Facing** is now simulation state, because the warband's slots hang
+  behind the hero's facing. It turns where the original calls `_face`: on
+  every step, and toward the tree, the site, the target and the patient.
+  Enemies start facing left.
+
+**Formation slots are not reproduced.** The original fans the warband out by
+`get_instance_id()`. The port puts the same arithmetic on a formation key,
+the unit's index on the board. No test pins a slot, and neither does the
+harness: it asserts "marches to the hero's side" and "closed most of the
+gap".
+
+**The world** answers two new questions: `Hero()`, per world rather than
+the original's static, and `NearestWoundedAlly`, off the lane.
+
+**The match** gives a trained follower its building's squad (a worker stays
+in the garrison) and a post at its rally point, else where it appeared, and
+drops the hero with the board.
+
+**The save** carries `squad`, `home` (`[]` for none) and `ref_heal`. Snapshot
+counts `ref_heal` among the references it reports, and the digests in
+`test_wb_match` and `test_wb_snapshot` blank it along with the other refs,
+because a raw sid changes between a capture and its recapture.
+
+**`Squads.hpp`** ports the horns: `RallyAll`, `SendHome` and `Counts`, over
+living `can_follow` player units.
+
+**Reproduced** at `50741d1`, in a new suite, `test_wb_squads`:
+- `verify_squads`: all 30 lines, A to E;
+- `verify_casters` C, D and E: 16 lines. A is `test_wb_data`'s and B is
+  `test_wb_combat`'s.
+
+**Found while porting.** My first mid-march case started the follower 1000 px
+from the hero. That is past the leash, so the leash-aware scan saw nothing
+and it did not engage. The harness walks the follower to the hero first. The
+port was right and the test was wrong; the case now asserts both halves.
+
+**Added by the port:**
+- the horns skip a worker, the hero and the dead;
+- a player's move order interrupting a march home does not fight;
+- no post, near the post, a warband with no hero, and a dead hero all hold;
+- with no post and no hero a priest has no leash;
+- zero heals and corpses are no-ops;
+- a heal does not pause passive regen (the healed soldier stays exactly the
+  heal ahead of an unhealed one);
+- a heal target nobody rebuilt is counted as unresolved;
+- state 9 loads as `HEALING`, 8 as `IDLE` and 10 as `IDLE`;
+- a save from before squads loads as a garrison with no post;
+- a trained unit's squad and post, through a real `Match`;
+- the sheltered worker refuses a tree beside it, and ringing the bell off
+  sends it back to gather.
+
+**Not yet:** the heal sound (the original plays it from the priest; the layer
+has no listener until slice 11), and a hero in the match (7b possesses one,
+slice 10 spawns it at boot).
+
+**Result (GCC, 10 September):** squads 99/0, and nothing regressed. Still
+red, and unchanged: audio 5, selection 5 and match 44.

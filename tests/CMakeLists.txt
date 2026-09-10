@@ -80,6 +80,7 @@ add_port_test(test_wb_match)
 add_port_test(test_wb_audio)
 add_port_test(test_wb_placement)
 add_port_test(test_wb_selection)
+add_port_test(test_wb_squads)
 
 # The LAYER, not the simulation - so this one also links WolfBrigadeGame. It is
 # the only suite that touches the seam between the ported game and the picture,

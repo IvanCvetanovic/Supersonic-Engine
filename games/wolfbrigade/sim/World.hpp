@@ -74,6 +74,11 @@ public:
     // raider heads for the left edge instead.
     virtual Damageable* NearestEnemyBuilding(const std::string& faction, float x) const = 0;
 
+    // The nearest OTHER living unit of `me`'s faction that is missing hit
+    // points, within range along the lane - a priest's target scan, off the
+    // lane index. Null when nobody nearby is hurt.
+    virtual Unit* NearestWoundedAlly(const Unit* me, float maxRange) const = 0;
+
     // Where arrows come from. Null in a world with no ranged units in it,
     // which is a legitimate configuration and not an error - an archer that
     // cannot find a pool simply does not shoot, exactly as the original
@@ -88,6 +93,16 @@ public:
     // slow auto-train tick, never per frame.
     virtual std::vector<Building*> PlayerBuildings() const = 0;
     virtual std::vector<Unit*> PlayerUnits() const = 0;
+
+    // --- The hero -----------------------------------------------------------
+
+    // The hero the warband follows, or null when there is none - the
+    // original's `HeroControl.hero`. That is a static on an autoload, so one
+    // harness's hero is still the next one's unless it remembers to null it;
+    // here it belongs to the world, for the reason the army bonus belongs to
+    // the run. A fallen hero may still be returned: a follower asks IsAlive
+    // itself, as the original does.
+    virtual Unit* Hero() const = 0;
 };
 
 } // namespace WolfBrigade

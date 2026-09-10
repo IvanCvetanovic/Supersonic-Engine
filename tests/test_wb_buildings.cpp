@@ -142,6 +142,10 @@ public:
         }
         return out;
     }
+    Unit* NearestWoundedAlly(const Unit* me, float maxRange) const override {
+        return lane.NearestWoundedAlly(me, maxRange);
+    }
+    Unit* Hero() const override { return nullptr; }
 
     std::vector<std::unique_ptr<Building>> buildings;
 };

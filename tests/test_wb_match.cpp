@@ -183,7 +183,7 @@ std::string translateRef(const Value& snapshot, int sid) {
 std::string recordKey(const Value& record) {
     Value copy = record;
     copy.Set("sid", Value());
-    for (const char* key : {"ref_tree", "ref_build", "ref_attack"}) copy.Set(key, Value());
+    for (const char* key : {"ref_tree", "ref_build", "ref_attack", "ref_heal"}) copy.Set(key, Value());
     return Snapshot::ToText(copy);
 }
 
@@ -193,7 +193,7 @@ std::string digest(const Value& snapshot) {
         std::vector<std::string> rows;
         for (const Value& record : snapshot[section].AsArray()) {
             std::string row = recordKey(record);
-            for (const char* key : {"ref_tree", "ref_build", "ref_attack"}) {
+            for (const char* key : {"ref_tree", "ref_build", "ref_attack", "ref_heal"}) {
                 if (!record.Has(key)) continue;
                 row += "|" + std::string(key) + "=" +
                        translateRef(snapshot, static_cast<int>(record[key].AsNumber(-1.0)));

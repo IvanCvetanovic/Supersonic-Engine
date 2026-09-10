@@ -79,6 +79,12 @@ struct EventBus {
     // killing blow still shows its number.
     Signal<const glm::vec2&, int, const std::string&> damageDealt;
 
+    // A friendly cast restored hit points: where (over the patient's head)
+    // and how many ACTUALLY came back, which is less than the heal on a unit
+    // that was nearly full. The green "+N". A heal that restores nothing
+    // emits nothing.
+    Signal<const glm::vec2&, int> healed;
+
     // The selection was ordered somewhere, and a ground ping confirms the tap.
     // Emitted only when an order actually issues.
     Signal<const glm::vec2&> moveOrdered;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+#include <limits>
 #include <string>
 
 #include <glm/glm.hpp>
@@ -51,15 +53,26 @@ namespace WolfBrigade {
 // original dispatches both to _tick_defender and branches inside the attack
 // step, and why doing it the other way round would duplicate the acquisition
 // logic twice with one copy quietly drifting.
+//
+// The priest is the fifth behaviour and the fourth routine. It heals rather
+// than fights, and it is the only unit a player's attack order is refused by.
 class Unit final : public Damageable {
 public:
-    enum class State { Idle, Moving, Gathering, Delivering, Building, Attacking, Fleeing, Dead };
+    // The values are a SAVE FORMAT: `state: 2` in a file is Gathering. The
+    // original appended CONTROLLED and HEALING after DEAD rather than slotting
+    // them in where they read best, and so does this, so every save written
+    // before they existed still means what it said.
+    enum class State {
+        Idle, Moving, Gathering, Delivering, Building, Attacking, Fleeing, Dead,
+        Controlled, Healing
+    };
 
     // Behaviours, as authored in units.json.
     static constexpr const char* kWorker = "worker";
     static constexpr const char* kSoldier = "soldier";
     static constexpr const char* kRanged = "ranged";
     static constexpr const char* kAggressor = "aggressor";
+    static constexpr const char* kHealer = "healer";
 
     // ~8 Hz. A performance knob, not a game stat - which is why it is a
     // constant here and not a number in the data files.
@@ -70,7 +83,8 @@ public:
     static constexpr float kArriveThreshold = 3.0f;
 
     Unit(const UnitStats& stats, GameState& state, EventBus& bus, World& world)
-        : m_stats(stats), m_state(&state), m_bus(&bus), m_world(&world), m_hp(stats.maxHp) {}
+        : m_stats(stats), m_state(&state), m_bus(&bus), m_world(&world), m_hp(stats.maxHp),
+          m_facing(stats.faction == Factions::kEnemy ? -1.0 : 1.0) {}
 
     // One step. `delta` is seconds, in double - see the note above.
     void Step(double delta);
@@ -93,6 +107,9 @@ public:
     // instead of running: a worker told to attack has been told, and taking a
     // hit does not change the order. Any other order clears it, so the flee
     // reflex comes back the moment the player re-tasks them.
+    //
+    // A healer has no attack at all, so for it the order is a no-op: in a
+    // mixed selection the soldiers take it and the priest keeps healing.
     void CommandAttack(Damageable* target);
 
     // Send a worker to finish a building.
@@ -104,6 +121,50 @@ public:
     // Send a worker to gather this node, and take it off park. A null or
     // empty node is ignored.
     void CommandGather(ResourceNode* node);
+
+    // --- Thinking ----------------------------------------------------------
+
+    // The ~8 Hz decision, taken once, now. Public because the original's
+    // harnesses call _tick_ai() by hand between moves they make themselves,
+    // and the squad and healer numbers cannot be reproduced any other way.
+    // Step calls it on its own clock; nothing in the game calls it from
+    // outside.
+    void TickAi();
+
+    // --- Squads ------------------------------------------------------------
+
+    // Squads::kGarrison or kWarband. Only a can_follow unit's squad means
+    // anything, and everyone starts in the garrison.
+    const std::string& Squad() const { return m_squad; }
+    void SetSquad(const std::string& squad) { m_squad = squad; }
+
+    // Where a garrison unit belongs: its rally point, else where it was
+    // trained. NoPost() for none - the original's Vector2.INF - which is what
+    // every unit the boot or a wave spawns has, and such a unit holds where
+    // it stands.
+    const glm::vec2& HomePost() const { return m_homePost; }
+    void SetHomePost(const glm::vec2& post) { m_homePost = post; }
+    static glm::vec2 NoPost() { return glm::vec2(std::numeric_limits<float>::infinity()); }
+    static bool HasPost(const glm::vec2& post) { return std::isfinite(post.x); }
+
+    // What spreads a warband's slots so it does not stack on one point. The
+    // original uses get_instance_id(); FollowSlot says why that is not
+    // reproduced. Whoever owns the unit sets it - the Match uses its index.
+    void SetFormationKey(int key) { m_formationKey = key; }
+
+    // +1 facing right, -1 left. Presentation almost everywhere, but a
+    // follower's slot hangs behind the hero's facing, so the sim reads it.
+    double Facing() const { return m_facing; }
+
+    // --- Healing -----------------------------------------------------------
+
+    // A friendly cast. Clamped at max hp, a no-op on a full or dead unit, and
+    // announced on `healed` with what ACTUALLY came back. Deliberately does
+    // NOT touch the regen clock: being healed is not being hit.
+    void ReceiveHeal(int amount);
+
+    // The ally a priest is channelling on, or null.
+    const Unit* HealTarget() const { return m_healTarget; }
 
     // --- Damage ------------------------------------------------------------
 
@@ -184,12 +245,22 @@ public:
     const glm::vec2& MoveTarget() const { return m_moveTarget; }
 
 private:
-    void TickAi();
     void TickWorker();
+    void TickSheltered();
     void TickDefender();
     void TickAggressor();
+    void TickHealer();
     void SeekWork();
     void BeginDelivering();
+
+    Unit* AcquireEnemy() const;
+    bool FollowingHero() const;
+    bool WarbandLeashBroken() const;
+    bool HealerLeashed() const;
+    double LeashPx() const;
+    void FollowHero();
+    glm::vec2 FollowSlot() const;
+    void ReturnHome();
 
     void StepToward(const glm::vec2& target, double delta);
     bool ApproachTo(const glm::vec2& target, float range, double delta);
@@ -198,7 +269,10 @@ private:
     void StepFlee(double delta);
     void StepAttack(double delta);
     void StepBuild(double delta);
+    void StepHeal(double delta);
+    bool ValidHealTarget() const;
     void FireProjectile();
+    void Face(double dx);
 
     void StepRegen(double delta);
 
@@ -208,7 +282,7 @@ private:
     void AfterGathering();
     bool HasLiveNode() const;
     bool Arrived() const;
-    float ClampToBand(float y) const;
+    float ClampToBand(double y) const;
     void SetState(State next);
 
     UnitStats m_stats;
@@ -251,6 +325,23 @@ private:
     // the fraction of a hit point owed. Neither is saved, as in the original.
     double m_sinceDamage{1.0e9};
     double m_regenAccumulator{0.0};
+
+    // Squads. The squad and the post are saved; the march flag and the
+    // formation key are not, as in the original.
+    std::string m_squad{Squads::kGarrison};
+    glm::vec2 m_homePost{NoPost()};
+
+    // MOVING because the AI sent it - home, or after the hero - rather than
+    // the player. Such a march stays combat-aware; a player's order keeps its
+    // no-auto-acquire contract, which is why CommandMoveTo clears this.
+    bool m_aiMarch{false};
+    int m_formationKey{0};
+
+    // The priest's patient. Saved, as ref_heal.
+    Unit* m_healTarget{nullptr};
+
+    // Set in the constructor: a raider comes in facing left.
+    double m_facing{1.0};
 };
 
 } // namespace WolfBrigade

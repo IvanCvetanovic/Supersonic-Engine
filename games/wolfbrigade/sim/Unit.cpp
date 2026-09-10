@@ -39,6 +39,7 @@ void Unit::Step(double delta) {
     case State::Fleeing:    StepFlee(delta); break;
     case State::Attacking:  StepAttack(delta); break;
     case State::Building:   StepBuild(delta); break;
+    case State::Healing:    StepHeal(delta); break;
     default: break;
     }
 
@@ -57,26 +58,43 @@ void Unit::Step(double delta) {
 }
 
 void Unit::TickAi() {
-    // Dispatched by behaviour. Anything that is not a fighter thinks like a
-    // worker, which is the original's fallback and means a unit authored with
-    // no behaviour still does something useful rather than standing still.
+    // The player is steering: no decision of any kind, not even a scan.
+    if (m_phase == State::Controlled) return;
+
+    // Dispatched by behaviour. Anything that is not a fighter or a healer
+    // thinks like a worker, which is the original's fallback and means a unit
+    // authored with no behaviour still does something useful rather than
+    // standing still.
     if (m_stats.behavior == kSoldier || m_stats.behavior == kRanged) {
         TickDefender();
     } else if (m_stats.behavior == kAggressor) {
         TickAggressor();
+    } else if (m_stats.behavior == kHealer) {
+        TickHealer();
     } else {
         TickWorker();
     }
 }
 
-// Soldiers and archers hold their ground and pick up whatever comes into aggro.
+// Soldiers and archers. The GARRISON holds its post: it picks up whatever
+// comes into aggro while idle and walks back to its post after a fight. The
+// WARBAND keeps station on the hero, engages anything in aggro even on the
+// march, and breaks off a fight that drags it past the leash.
 //
-// A player's move order takes priority: there is no auto-acquire while MOVING,
-// so ordering a soldier out of a fight actually gets it out. That is one `case`
-// away from the opposite behaviour, where a retreat order is ignored by
-// anything with a target in range.
+// A player's move order still takes priority: there is no auto-acquire while
+// MOVING under orders, so ordering a soldier out of a fight gets it out. That
+// is one `case` away from the opposite behaviour, where a retreat order is
+// ignored by anything with a target in range. A march the AI gave itself is
+// different and stays combat-aware - the original's first build had a
+// garrison walk home straight past the raiders hitting it.
 void Unit::TickDefender() {
     if (HasValidTarget()) {
+        if (WarbandLeashBroken()) {
+            // Too far from the hero: drop the fight and run back.
+            ClearAttack();
+            FollowHero();
+            return;
+        }
         if (m_phase != State::Attacking) SetState(State::Attacking);
         return;
     }
@@ -87,7 +105,20 @@ void Unit::TickDefender() {
 
     switch (m_phase) {
     case State::Moving:
-        if (Arrived()) SetState(State::Idle);
+        if (FollowingHero()) {
+            if (Unit* enemy = AcquireEnemy()) {
+                m_attackTarget = enemy;
+                SetState(State::Attacking);
+            } else {
+                FollowHero();   // the hero moves, so the slot does
+            }
+        } else if (Unit* threat = m_aiMarch ? AcquireEnemy() : nullptr) {
+            m_attackTarget = threat;
+            SetState(State::Attacking);
+        } else if (Arrived()) {
+            m_aiMarch = false;
+            SetState(State::Idle);
+        }
         break;
 
     case State::Attacking:
@@ -97,16 +128,28 @@ void Unit::TickDefender() {
         break;
 
     case State::Idle:
-        if (Unit* enemy = m_world->NearestEnemyUnit(m_stats.faction, m_position.x,
-                                                    m_stats.aggroRange)) {
+        if (Unit* enemy = AcquireEnemy()) {
             m_attackTarget = enemy;
             SetState(State::Attacking);
+        } else if (FollowingHero()) {
+            FollowHero();
+        } else {
+            ReturnHome();
         }
         break;
 
     default:
         break;
     }
+}
+
+// The defender's scan, LEASH-AWARE: a warband unit past the leash sees nothing
+// until it is back at the hero's side. Without this the break-off and the
+// re-acquire alternated at the tick rate and the unit never disengaged - the
+// original's review measured it at 93% of its speed lost.
+Unit* Unit::AcquireEnemy() const {
+    if (WarbandLeashBroken()) return nullptr;
+    return m_world->NearestEnemyUnit(m_stats.faction, m_position.x, m_stats.aggroRange);
 }
 
 // Raiders hit whatever is in aggro and otherwise walk at the Town Hall.
@@ -149,6 +192,12 @@ void Unit::TickAggressor() {
 }
 
 void Unit::TickWorker() {
+    // The shelter bell outranks everything a worker was doing.
+    if (m_state->WorkersSheltered()) {
+        TickSheltered();
+        return;
+    }
+
     switch (m_phase) {
     case State::Moving:
         if (Arrived()) SetState(State::Idle);
@@ -244,7 +293,185 @@ void Unit::SeekWork() {
 
 void Unit::BeginDelivering() { SetState(State::Delivering); }
 
+// The shelter bell: drop the task in hand and hole up at the nearest drop-off
+// until the bell rings again. It reuses the flee movement. Once there the
+// worker just stands - nothing here seeks work, so it is the ordinary tick,
+// after the bell is released, that restarts the economy. A load in hand is
+// kept, and banked on the first delivery after.
+void Unit::TickSheltered() {
+    if (m_phase == State::Fleeing) {
+        FleeCheck();
+        return;
+    }
+    const int safe = m_world->NearestDeposit(m_position.x);
+    if (safe < 0 ||
+        glm::distance(m_position, m_world->DepositPosition(safe)) <= m_stats.depositRange) {
+        if (m_phase != State::Idle) SetState(State::Idle);
+        return;
+    }
+    m_fleeIndex = safe;
+    SetState(State::Fleeing);
+}
+
+// Priests. Healing outranks everything; after it a warband priest keeps
+// station on the hero, a battle medic, and a garrison priest goes back to its
+// post. Never an attack - CommandAttack refuses them.
+void Unit::TickHealer() {
+    switch (m_phase) {
+    case State::Moving:
+        if (Unit* hurt = m_world->NearestWoundedAlly(this, m_stats.aggroRange)) {
+            m_healTarget = hurt;
+            SetState(State::Healing);
+        } else if (FollowingHero()) {
+            FollowHero();
+        } else if (Arrived()) {
+            SetState(State::Idle);
+        }
+        break;
+
+    case State::Idle:
+        if (Unit* hurt = m_world->NearestWoundedAlly(this, m_stats.aggroRange)) {
+            m_healTarget = hurt;
+            SetState(State::Healing);
+        } else if (FollowingHero()) {
+            FollowHero();
+        } else {
+            ReturnHome();
+        }
+        break;
+
+    case State::Healing:
+        // The patient is well, or gone, or has dragged the priest past its
+        // leash. Idle, and the next tick decides what comes next.
+        if (!ValidHealTarget() || HealerLeashed()) {
+            m_healTarget = nullptr;
+            SetState(State::Idle);
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+// --- Squads ----------------------------------------------------------------
+
+double Unit::LeashPx() const {
+    return m_state->Data().Economy()["warband_leash_px"].AsNumber(500.0);
+}
+
+// In the warband AND there is a living hero to follow. A warband unit whose
+// hero is down is a garrison with no post: it holds where it stands.
+bool Unit::FollowingHero() const {
+    if (m_squad != Squads::kWarband) return false;
+    const Unit* hero = m_world->Hero();
+    return hero != nullptr && hero->IsAlive();
+}
+
+// Measured along the lane from the hero, as every range in this game is. The
+// follow DESTINATION is 2D; the leash is not, and the two are not unified.
+bool Unit::WarbandLeashBroken() const {
+    if (!FollowingHero()) return false;
+    const double dx = static_cast<double>(m_position.x) -
+                      static_cast<double>(m_world->Hero()->Position().x);
+    return std::fabs(dx) > LeashPx();
+}
+
+// A priest mid-chase gives up past its leash. Without this a priest glued to a
+// faster wounded target - usually the hero - trailed it across the map, and
+// the home horn could never recall one that was channelling. The warband
+// measures from the hero and the garrison from its post; both use the same
+// leash.
+bool Unit::HealerLeashed() const {
+    if (FollowingHero()) return WarbandLeashBroken();
+    if (m_squad == Squads::kGarrison && HasPost(m_homePost)) {
+        const double dx = static_cast<double>(m_position.x) - static_cast<double>(m_homePost.x);
+        return std::fabs(dx) > LeashPx();
+    }
+    return false;
+}
+
+// Keep station on the hero: walk to this unit's slot when out of slack, stand
+// once inside it.
+void Unit::FollowHero() {
+    const glm::vec2 slot = FollowSlot();
+    const double slack = m_state->Data().Economy()["warband_follow_slack_px"].AsNumber(46.0);
+    if (glm::distance(m_position, slot) <= slack) {
+        if (m_phase != State::Idle) SetState(State::Idle);
+        return;
+    }
+    m_moveTarget = slot;
+    if (m_phase != State::Moving) SetState(State::Moving);
+}
+
+// A slot behind the hero's facing, fanned over three columns 38 px apart and
+// three rows 42 px apart, so the band does not stack on one point.
+//
+// THE SLOT IS NOT REPRODUCED, and no test may pin one. The original keys the
+// fan-out on get_instance_id(), an allocation counter nobody can predict or
+// replay; this puts the same arithmetic on the formation key. The original's
+// harness asserts only that a follower marches to the hero's side and closes
+// most of the gap, and that is what the port reproduces.
+glm::vec2 Unit::FollowSlot() const {
+    const Unit* hero = m_world->Hero();
+    const double gap = m_state->Data().Economy()["warband_follow_gap_px"].AsNumber(70.0);
+    const double col = static_cast<double>(m_formationKey % 3) * 38.0;
+    const double row = (static_cast<double>((m_formationKey >> 2) % 3) - 1.0) * 42.0;
+    const glm::vec2 at = hero->Position();
+    return glm::vec2(static_cast<float>(static_cast<double>(at.x) - hero->Facing() * (gap + col)),
+                     ClampToBand(static_cast<double>(at.y) + row));
+}
+
+// A garrison unit that has wandered - chased something, was horn-recalled -
+// walks back to its post, combat-aware on the way. No post, or already within
+// 60 px of it, and it holds. The 60 is the original's own constant.
+void Unit::ReturnHome() {
+    if (m_squad != Squads::kGarrison || !HasPost(m_homePost)) return;
+    const double dx = static_cast<double>(m_position.x) - static_cast<double>(m_homePost.x);
+    if (std::fabs(dx) <= 60.0) return;
+    m_moveTarget = m_homePost;
+    m_aiMarch = true;
+    SetState(State::Moving);
+}
+
+// --- Healing ---------------------------------------------------------------
+
+// Walk to cast reach - attack_range doubles as it - then restore heal_amount
+// once per 1/attacks_per_sec. The cadence shares the attack cooldown, so a
+// save and a pause treat it exactly as they treat combat.
+void Unit::StepHeal(double delta) {
+    if (!ValidHealTarget()) return;   // the tick transitions out
+    Face(static_cast<double>(m_healTarget->Position().x) - static_cast<double>(m_position.x));
+
+    const float reach = m_stats.attackRange + m_healTarget->HitHalfWidth();
+    if (!ApproachTo(m_healTarget->Position(), reach, delta)) return;
+    if (m_attackCooldown <= 0.0) {
+        m_attackCooldown = 1.0 / std::max(static_cast<double>(m_stats.attacksPerSec), 0.01);
+        m_healTarget->ReceiveHeal(m_stats.healAmount);
+    }
+}
+
+bool Unit::ValidHealTarget() const {
+    return m_healTarget != nullptr && m_healTarget->IsAlive() &&
+           m_healTarget->Hp() < m_healTarget->Stats().maxHp;
+}
+
+void Unit::ReceiveHeal(int amount) {
+    if (m_phase == State::Dead || amount <= 0 || m_hp >= m_stats.maxHp) return;
+    const int restored = std::min(amount, m_stats.maxHp - m_hp);
+    m_hp += restored;
+    if (m_bus) m_bus->healed.Emit(m_position + glm::vec2(0.0f, -m_stats.bodySize.y), restored);
+}
+
+// Turn toward where it is heading, or what it is working on. A dead zone of a
+// pixel keeps a unit from flickering at a target dead ahead.
+void Unit::Face(double dx) {
+    if (std::fabs(dx) < 1.0) return;
+    m_facing = dx > 0.0 ? 1.0 : -1.0;
+}
+
 void Unit::StepToward(const glm::vec2& target, double delta) {
+    Face(static_cast<double>(target.x) - static_cast<double>(m_position.x));
     m_position = moveToward(m_position, target, static_cast<double>(m_stats.moveSpeed) * delta);
 }
 
@@ -265,15 +492,19 @@ bool Unit::ApproachTo(const glm::vec2& target, float range, double delta) {
 
 // The walkable band, [ground_y, ground_y + lane.depth], from the world data,
 // so a click on the sky or the dirt still lands a unit on real ground.
-float Unit::ClampToBand(float y) const {
+float Unit::ClampToBand(double y) const {
     const Supersonic::Json::Value& world = m_state->Data().World();
     const double top = world["ground_y"].AsNumber(800.0);
     const double depth = world["lane"]["depth"].AsNumber(0.0);
-    return static_cast<float>(std::clamp(static_cast<double>(y), top, top + depth));
+    return static_cast<float>(std::clamp(y, top, top + depth));
 }
 
 void Unit::StepGather(double delta) {
     if (!HasLiveNode()) return;   // the tick transitions out of here
+
+    // Toward the tree even when already in reach, where ApproachTo does not
+    // step and so does not turn.
+    Face(static_cast<double>(m_targetNode->position.x) - static_cast<double>(m_position.x));
 
     if (!ApproachTo(m_targetNode->position, m_stats.gatherRange, delta)) return;
 
@@ -329,6 +560,7 @@ void Unit::StepAttack(double delta) {
     if (!HasValidTarget()) return;   // the tick transitions out
 
     const float targetX = m_attackTarget->Position().x;
+    Face(static_cast<double>(targetX) - static_cast<double>(m_position.x));
 
     if (m_stats.behavior == kRanged) {
         if (std::fabs(m_position.x - targetX) > m_stats.attackRange) {
@@ -397,6 +629,7 @@ void Unit::StepBuild(double delta) {
     if (m_buildTarget == nullptr || m_buildTarget->IsComplete() || !m_buildTarget->IsAlive()) {
         return;   // the tick clears it
     }
+    Face(static_cast<double>(m_buildTarget->Position().x) - static_cast<double>(m_position.x));
 
     const float reach = m_buildTarget->Stats().bodySize.x * 0.5f + m_stats.gatherRange;
     if (!ApproachTo(m_buildTarget->Position(), reach, delta)) return;
@@ -442,6 +675,10 @@ void Unit::CommandMoveTo(const glm::vec2& target) {
     // the nearest tree, which read as the unit ignoring the order.
     m_parked = true;
 
+    // A player's order keeps its no-auto-acquire contract, even when it
+    // interrupts a march home that was combat-aware.
+    m_aiMarch = false;
+
     // Both axes, y clamped onto the walkable band (the game's 2d38d9e). Only
     // the ORDER is 2D: which enemy is nearest stays measured along the lane.
     m_moveTarget = glm::vec2(target.x, ClampToBand(target.y));
@@ -472,7 +709,7 @@ void Unit::CommandGather(ResourceNode* node) {
 }
 
 void Unit::CommandAttack(Damageable* target) {
-    if (m_phase == State::Dead || target == nullptr) return;
+    if (m_phase == State::Dead || target == nullptr || m_stats.behavior == kHealer) return;
     m_attackTarget = target;
     m_orderedToAttack = true;
     m_parked = false;   // an attack order takes a worker off park
@@ -554,6 +791,15 @@ Supersonic::Json::Value Unit::ToSave(const SidTable& ids) const {
     out["attack_cd"] = Supersonic::Json::Value(m_attackCooldown);
     out["ordered_to_attack"] = Supersonic::Json::Value(m_orderedToAttack);
     out["parked"] = Supersonic::Json::Value(m_parked);
+    out["squad"] = Supersonic::Json::Value(m_squad);
+
+    // [] for no post, as the original writes Vector2.INF.
+    Supersonic::Json::Array home;
+    if (HasPost(m_homePost)) {
+        home.push_back(Supersonic::Json::Value(static_cast<double>(m_homePost.x)));
+        home.push_back(Supersonic::Json::Value(static_cast<double>(m_homePost.y)));
+    }
+    out["home"] = Supersonic::Json::Value(std::move(home));
 
     // The upcast is deliberate and load-bearing - see SaveIds.hpp. A build
     // target is a Building and is upcast the same way its own entry was keyed.
@@ -561,6 +807,8 @@ Supersonic::Json::Value Unit::ToSave(const SidTable& ids) const {
     out["ref_build"] = Supersonic::Json::Value(
         static_cast<double>(ids.Of(static_cast<const Damageable*>(m_buildTarget))));
     out["ref_attack"] = Supersonic::Json::Value(static_cast<double>(ids.Of(m_attackTarget)));
+    out["ref_heal"] = Supersonic::Json::Value(
+        static_cast<double>(ids.Of(static_cast<const Damageable*>(m_healTarget))));
     return Supersonic::Json::Value(std::move(out));
 }
 
@@ -570,8 +818,15 @@ void Unit::FromSave(const Supersonic::Json::Value& saved) {
     // Assigned directly rather than through SetState, which would announce a
     // transition that did not happen - and NOT through a command, which would
     // clear the very targets Relink is about to restore.
+    //
+    // Up to Healing, the last state there is. CONTROLLED comes back as IDLE:
+    // steering is input rather than state, and a load never resumes it. Two
+    // edits, and both are needed - widening the range alone would restore a
+    // unit that thinks nothing, waiting for a player who is not holding it.
     const int state = static_cast<int>(saved["state"].AsNumber(0.0));
-    m_phase = (state >= 0 && state <= 7) ? static_cast<State>(state) : State::Idle;
+    m_phase = (state >= 0 && state <= static_cast<int>(State::Healing)) ? static_cast<State>(state)
+                                                                        : State::Idle;
+    if (m_phase == State::Controlled) m_phase = State::Idle;
 
     const auto& target = saved["move_target"].AsArray();
     if (target.size() >= 2) {
@@ -591,6 +846,11 @@ void Unit::FromSave(const Supersonic::Json::Value& saved) {
     // Absent from a save written before parking existed, and false then: that
     // worker goes back to work, as it would have.
     m_parked = saved["parked"].AsBool(false);
+
+    // A save from before squads is a garrison with no post, which holds.
+    m_squad = saved["squad"].AsString(Squads::kGarrison);
+    const auto& home = saved["home"].AsArray();
+    m_homePost = home.size() >= 2 ? glm::vec2(home[0].AsFloat(), home[1].AsFloat()) : NoPost();
 }
 
 void Unit::Relink(const Supersonic::Json::Value& saved, const SidResolver& resolver,
@@ -616,6 +876,9 @@ void Unit::Relink(const Supersonic::Json::Value& saved, const SidResolver& resol
     // may be a Unit or a Building and the file carries no type tag.
     m_attackTarget =
         resolve("ref_attack", [&resolver](int sid) { return resolver.AsDamageable(sid); });
+
+    // Absent from a save older than priests, which is -1 and re-seeks.
+    m_healTarget = resolve("ref_heal", [&resolver](int sid) { return resolver.AsUnit(sid); });
 }
 
 void Unit::SetState(State next) {

@@ -409,6 +409,8 @@ public:
     ProjectilePool* Projectiles() override { return nullptr; }
     std::vector<Building*> PlayerBuildings() const override { return {}; }
     std::vector<Unit*> PlayerUnits() const override { return {}; }
+    Unit* NearestWoundedAlly(const Unit*, float) const override { return nullptr; }
+    Unit* Hero() const override { return nullptr; }
 };
 
 Supersonic::Json::Value parse(const std::string& text) {
