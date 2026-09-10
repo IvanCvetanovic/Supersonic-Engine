@@ -21,6 +21,7 @@
 #include "sim/Unit.hpp"
 #include "sim/Building.hpp"
 #include "sim/BuildPlacement.hpp"
+#include "sim/Supply.hpp"
 #include "sim/GameState.hpp"
 #include "sim/Progression.hpp"
 #include "sim/Selection.hpp"
@@ -412,11 +413,21 @@ std::string WolfBrigadeLayer::barLabel(const BarButton& button) const {
     }
     case BarAction::Train: {
         const auto& data = m_data->Unit(button.id);
+        // A full town says why rather than only greying out - the original's
+        // words.
+        if (!Supply::HasRoomFor(*m_match, *m_data, button.id)) {
+            return "Train " + data["display_name"].AsString(button.id) +
+                   "\n(no space - build a Farm)";
+        }
         return "Train " + data["display_name"].AsString(button.id) + "\n(" +
                formatCost(data["cost"]) + ")";
     }
     case BarAction::Research: {
         const auto& data = m_data->Upgrade(button.id);
+        const Building* selected = m_match->Picked().SelectedBuilding();
+        if (selected != nullptr && selected->HasResearch(button.id)) {
+            return "Researching " + data["display_name"].AsString(button.id) + "...";
+        }
         return "Research " + data["display_name"].AsString(button.id) + "\n(" +
                formatCost(data["cost"]) + ")";
     }
@@ -432,9 +443,13 @@ bool WolfBrigadeLayer::barEnabled(const BarButton& button) const {
     case BarAction::Build:
         return m_match->Run().CanAfford(toCost(m_data->Building(button.id)["cost"]));
     case BarAction::Train:
-        return m_match->Run().CanAfford(toCost(m_data->Unit(button.id)["cost"]));
-    case BarAction::Research:
-        return Upgrades::CanResearch(*m_data, m_match->Run(), button.id);
+        return m_match->Run().CanAfford(toCost(m_data->Unit(button.id)["cost"])) &&
+               Supply::HasRoomFor(*m_match, *m_data, button.id);
+    case BarAction::Research: {
+        const Building* selected = m_match->Picked().SelectedBuilding();
+        return Upgrades::CanResearch(*m_data, m_match->Run(), button.id) && selected != nullptr &&
+               !selected->HasResearch(button.id);
+    }
     }
     return false;
 }
@@ -504,6 +519,9 @@ void WolfBrigadeLayer::applyBarClicks(entt::registry& registry) {
         case BarAction::Train: {
             Building* selected = m_match->Picked().SelectedBuilding();
             if (selected == nullptr || !selected->IsComplete()) break;
+            // A full town: the button says so, and the money stays put. The
+            // building would refuse the order anyway, AFTER it was paid for.
+            if (!Supply::HasRoomFor(*m_match, *m_data, button.id)) break;
             // Paid here, enqueued after - Building::EnqueueTraining says it
             // does not check the cost because whoever enqueues has paid.
             if (m_match->Run().TrySpend(toCost(m_data->Unit(button.id)["cost"]))) {
@@ -512,18 +530,17 @@ void WolfBrigadeLayer::applyBarClicks(entt::registry& registry) {
             break;
         }
         case BarAction::Research: {
-            std::vector<Building*> existing;
-            existing.reserve(m_match->Buildings().size());
-            for (const auto& building : m_match->Buildings()) existing.push_back(building.get());
-            // AND ANNOUNCE IT. `EventBus::upgradeResearched` was declared and
-            // never emitted by anything - EventBus.hpp says outright that a
-            // signal nothing emits is declared anyway, which is what let this
-            // sit unnoticed. Upgrades::Research takes no bus, so the emit
-            // belongs to whoever called it, and this is the only caller.
-            //
-            // Only on success, because a refused research is not a research.
-            if (Upgrades::Research(*m_data, m_match->Run(), button.id, existing)) {
-                m_match->Bus().upgradeResearched.Emit(button.id);
+            // Research takes TIME: paid up front and queued on the building the
+            // bar belongs to, which lands it - and announces it - when it
+            // finishes. The original's bottom bar does exactly this.
+            Building* selected = m_match->Picked().SelectedBuilding();
+            if (selected == nullptr || !selected->IsComplete()) break;
+            if (!Upgrades::CanResearch(*m_data, m_match->Run(), button.id) ||
+                selected->HasResearch(button.id)) {
+                break;
+            }
+            if (m_match->Run().TrySpend(toCost(m_data->Upgrade(button.id)["cost"]))) {
+                selected->EnqueueResearch(button.id);
             }
             break;
         }
@@ -718,7 +735,9 @@ void WolfBrigadeLayer::connectAudioEvents() {
     m_audioSubscriptions.clear();
 
     m_audioSubscriptions.push_back(bus.unitTrained.Connect(
-        [this](const std::string&, const glm::vec2&) { playSfx("train"); }));
+        [this](const std::string&, const glm::vec2&, const glm::vec2&, const std::string&) {
+            playSfx("train");
+        }));
     m_audioSubscriptions.push_back(
         bus.buildingPlaced.Connect([this](Building*) { playSfx("place"); }));
     m_audioSubscriptions.push_back(

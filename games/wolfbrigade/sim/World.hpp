@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -78,6 +79,15 @@ public:
     // cannot find a pool simply does not shoot, exactly as the original
     // returns null from _acquire when nothing has set a parent.
     virtual ProjectilePool* Projectiles() = 0;
+
+    // --- Counting -----------------------------------------------------------
+
+    // The player's own buildings and units, standing or not - the original's
+    // two faction groups. Supply counts off them, and a finished research
+    // raises every standing building through them. Asked on clicks and on the
+    // slow auto-train tick, never per frame.
+    virtual std::vector<Building*> PlayerBuildings() const = 0;
+    virtual std::vector<Unit*> PlayerUnits() const = 0;
 };
 
 } // namespace WolfBrigade

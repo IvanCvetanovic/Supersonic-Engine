@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -134,11 +136,55 @@ public:
     // The cost is NOT checked here. Whoever enqueues has already paid - which
     // is the original's split, and it is what lets a queue be restored from a
     // save without charging the player twice.
+    //
+    // SUPPLY IS. A full population refuses the order: the button checks first
+    // and refuses politely, and this is the backstop. So whoever pays asks
+    // Supply::HasRoomFor before taking the money, as the original's bar does.
     bool CanTrain(const std::string& unitId) const;
     void EnqueueTraining(const std::string& unitId);
 
     int QueueLength() const { return static_cast<int>(m_queue.size()); }
+    const std::vector<std::string>& TrainQueue() const { return m_queue; }
     double TrainProgress() const { return m_trainProgress; }
+
+    // Empties the queue without refunding it or touching the progress - what
+    // the original's harnesses do to its public list.
+    void ClearTrainQueue() { m_queue.clear(); }
+
+    // --- Auto-production (the village runs itself) -------------------------
+
+    // The units this building keeps its queue fed with, one at a time and
+    // round-robin, paying the normal price and holding back economy.json's
+    // auto_train_reserve so production never starves the player's building.
+    // Seeded from the data's auto_train_default, filtered to what it trains;
+    // the player's toggles then live here, and a save carries them.
+    bool IsAutoTraining(const std::string& unitId) const;
+    void SetAutoTrain(const std::string& unitId, bool on);
+    const std::vector<std::string>& AutoTrain() const { return m_autoTrain; }
+
+    // --- Research (the Armory, the Storehouse) ------------------------------
+
+    // Research takes TIME: queued here, one at a time from the front, and
+    // landed when it finishes. The cost is paid by whoever queues it, at queue
+    // time - so a building destroyed mid-research has cost the player the
+    // price, which is the original's rule too.
+    void EnqueueResearch(const std::string& upgradeId);
+    bool HasResearch(const std::string& upgradeId) const;
+    const std::vector<std::string>& ResearchQueue() const { return m_researchQueue; }
+    double ResearchProgress() const { return m_researchProgress; }
+
+    // --- Where the trained go -----------------------------------------------
+
+    // A rally point, or none. A unit trained here is ordered to it. The
+    // original's "none" is Vector2.INF, and so is this one's.
+    static glm::vec2 NoRally() { return glm::vec2(std::numeric_limits<float>::infinity()); }
+    static bool IsRally(const glm::vec2& point) { return std::isfinite(point.x); }
+    const glm::vec2& RallyPoint() const { return m_rally; }
+    void SetRallyPoint(const glm::vec2& point) { m_rally = point; }
+
+    // The squad a unit trained here joins: the garrison or the warband.
+    const std::string& RecruitSquad() const { return m_recruitSquad; }
+    void SetRecruitSquad(const std::string& squad) { m_recruitSquad = squad; }
 
     // Where a trained unit appears: past the building's own edge, plus the
     // authored offset.
@@ -202,8 +248,12 @@ public:
 
 private:
     void CompleteConstruction();
+    void StepAutoTrain(double delta);
+    bool AffordableOverReserve(const Cost& cost) const;
     void StepTraining(double delta);
+    void StepResearch(double delta);
     void StepCombat(double delta);
+    void StepRegen(double delta);
 
     BuildingStats m_stats;
 
@@ -228,6 +278,24 @@ private:
 
     double m_attackCooldown{0.0};
     double m_combatAccumulator{0.0};
+
+    // Auto-production: the enabled ids, a round-robin cursor over them, and a
+    // ~2 Hz decision clock. The clock RESETS to zero rather than carrying the
+    // remainder, as the original's does, and it is not saved.
+    std::vector<std::string> m_autoTrain;
+    int m_autoIndex{0};
+    double m_autoAccumulator{0.0};
+
+    std::vector<std::string> m_researchQueue;
+    double m_researchProgress{0.0};
+
+    glm::vec2 m_rally{NoRally()};
+    std::string m_recruitSquad{Squads::kGarrison};
+
+    // Passive repair: seconds since the last hit, starting out of combat, and
+    // the fraction of a hit point owed.
+    double m_sinceDamage{1.0e9};
+    double m_regenAccumulator{0.0};
 };
 
 } // namespace WolfBrigade

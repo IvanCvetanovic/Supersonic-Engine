@@ -185,6 +185,23 @@ bool CanResearch(const GameData& data, const GameState& state, const std::string
     return state.CanAfford(cost);
 }
 
+namespace {
+
+// RETROACTIVE for buildings, and only for buildings. A structure the player
+// already paid for is the thing they are upgrading; a soldier already in the
+// field is not - they train new ones.
+void applyToStanding(const Value& definition, const std::vector<Building*>& existing) {
+    for (Building* building : existing) {
+        if (building == nullptr || !building->IsAlive()) continue;
+        for (const auto& [field, delta] :
+             effectsFor(definition, building->Stats().id).AsObject()) {
+            building->ApplyUpgradeEffect(field, delta.AsNumber());
+        }
+    }
+}
+
+} // namespace
+
 bool Research(const GameData& data, GameState& state, const std::string& id,
               const std::vector<Building*>& existing) {
     if (!CanResearch(data, state, id)) return false;
@@ -200,17 +217,20 @@ bool Research(const GameData& data, GameState& state, const std::string& id,
     if (!state.TrySpend(cost)) return false;
 
     state.MarkResearched(id);
+    applyToStanding(definition, existing);
+    return true;
+}
 
-    // RETROACTIVE for buildings, and only for buildings. A structure the player
-    // already paid for is the thing they are upgrading; a soldier already in
-    // the field is not - they train new ones.
-    for (Building* building : existing) {
-        if (building == nullptr || !building->IsAlive()) continue;
-        for (const auto& [field, delta] :
-             effectsFor(definition, building->Stats().id).AsObject()) {
-            building->ApplyUpgradeEffect(field, delta.AsNumber());
-        }
-    }
+bool CompleteResearch(const GameData& data, GameState& state, const std::string& id,
+                      const std::vector<Building*>& existing) {
+    // Idempotent, as the original's is: a research already done, or one nobody
+    // authored, lands nothing.
+    if (state.IsResearched(id)) return false;
+    const Value& definition = data.Upgrade(id);
+    if (!definition.IsObject() || definition.AsObject().empty()) return false;
+
+    state.MarkResearched(id);
+    applyToStanding(definition, existing);
     return true;
 }
 

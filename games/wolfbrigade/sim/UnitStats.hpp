@@ -17,6 +17,13 @@ inline constexpr const char* kPlayer = "player";
 inline constexpr const char* kEnemy = "enemy";
 } // namespace Factions
 
+// Squad ids, from `scripts/systems/squads.gd`: where a trained follower goes.
+// The garrison holds its post; the warband keeps station on the hero.
+namespace Squads {
+inline constexpr const char* kGarrison = "garrison";
+inline constexpr const char* kWarband = "warband";
+} // namespace Squads
+
 // One unit's numbers, from `scripts/entities/unit_stats.gd`.
 //
 // A row of units.json, read once at spawn and handed to the unit. The point is
@@ -81,7 +88,11 @@ struct UnitStats {
 
     // Passive hit points a second, once it has been out of combat for
     // economy.hp_regen_delay_s.
-    float hpRegen{0.0f};
+    //
+    // A DOUBLE, unlike its neighbours, because it feeds an accumulator: the
+    // original's 0.8 is a 64-bit float, and 0.8f times a tenth crosses each
+    // whole hit point on a different step than 0.8 does.
+    double hpRegen{0.0};
 
     // Can the player take direct control of it? The hero, and only the hero.
     bool controllable{false};

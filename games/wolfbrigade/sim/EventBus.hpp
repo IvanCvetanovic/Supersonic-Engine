@@ -123,7 +123,11 @@ struct EventBus {
     // A building finished training something; whoever owns the world spawns it
     // at the point given. The building deliberately does NOT create the unit
     // itself - it has no way to, and should not learn one.
-    Signal<const std::string&, const glm::vec2&> unitTrained;
+    //
+    // Four arguments since the hero-first game: the spawn point, the
+    // building's rally point (Building::NoRally() for none, the original's
+    // Vector2.INF), and the squad the recruit joins.
+    Signal<const std::string&, const glm::vec2&, const glm::vec2&, const std::string&> unitTrained;
 
     // A unit entered the world, and a unit left it.
     //

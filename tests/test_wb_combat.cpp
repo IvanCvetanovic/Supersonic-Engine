@@ -20,7 +20,8 @@
 //   ok  : dead enemy is skipped, next nearest returned
 //   ok  : raider dies to the soldier
 //   ok  : soldier survives
-//   ok  : soldier took damage in the fight (hp 36/60)
+//   ok  : soldier took damage in the fight (hp 36/60)   [45/60 at 50741d1: regen;
+//                                                          see the case for the 38]
 //   ok  : attacked worker enters FLEEING
 //   ok  : ordered worker fights instead of fleeing
 //   ok  : raider damages the Town Hall (hp 934/1000)
@@ -167,6 +168,10 @@ public:
     }
 
     ProjectilePool* Projectiles() override { return &arrows; }
+
+    // A fight trains nothing, so nothing is counted.
+    std::vector<Building*> PlayerBuildings() const override { return {}; }
+    std::vector<Unit*> PlayerUnits() const override { return {}; }
 
     std::vector<float> deposits;
 
@@ -329,10 +334,21 @@ void testASoldierKillsARaiderAndKeepsTheHealthTheOriginalSaidItWould() {
     CHECK_MSG(!raider->IsAlive(), "the raider must die to the soldier");
     CHECK_MSG(soldier->IsAlive(), "and the soldier must survive it");
 
-    // 36 of 60. A soldier hits for 8 at 1/sec against 40 hit points, and takes
-    // 6 a second back while it does - the number is what those two rates come
-    // to once the closing walk and the attack cooldowns are accounted for.
-    CHECK_EQ(soldier->Hp(), 36);
+    // 45 of 60 at the game's 50741d1, and 36 before it. A soldier hits for 8
+    // at 1/sec against 40 hit points and takes 6 a second back while it does:
+    // four blows, at 0.8, 1.9, 3.0 and 4.1 s, leave it on 36 when the raider
+    // dies at 5.2. The other nine are passive regen - 0.8 hp a second from four
+    // seconds after the last blow, one whole point every 1.25 s to the end of
+    // the twenty.
+    //
+    // THE HARNESS PRINTS 45 OR 38, and which is a coin toss. The original
+    // staggers each unit's first thinking tick by randf(); when the draw lets
+    // the raider's fifth blow land at 5.1, a step before the soldier's killing
+    // one, the soldier ends on 30 + 8 = 38 (two runs of seven on 10 September).
+    // The port starts both clocks at zero, and so did a probe of the original's
+    // own code with the stagger zeroed - which gave 45 on every run, on exactly
+    // the timeline above.
+    CHECK_MSG(soldier->Hp() == 45, "the original ends on 45; got " + std::to_string(soldier->Hp()));
     CHECK_EQ(soldier->Stats().maxHp, 60);
 }
 
@@ -346,7 +362,9 @@ void testAWinnerStopsSwingingOnceThereIsNothingToHit() {
     const int after = soldier->Hp();
     for (int i = 0; i < 100; ++i) fight.Step(0.1);
 
-    CHECK_EQ(soldier->Hp(), after);
+    // Never LOWER: nothing is hitting it. Not equal, because since the game's
+    // 50741d1 a soldier left alone regenerates.
+    CHECK_MSG(soldier->Hp() >= after, "nothing hits a soldier with nothing to fight");
     CHECK_MSG(soldier->CurrentState() == Unit::State::Idle,
               "with nothing in aggro it goes back to idle rather than fighting a corpse");
     CHECK_MSG(soldier->AttackTarget() == nullptr, "and lets the dead target go");

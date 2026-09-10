@@ -51,8 +51,10 @@ Match::Match(const GameData& data, Profile& profile, std::string runPath)
     : m_data(data), m_profile(profile), m_runPath(std::move(runPath)) {
     m_bus.unitSpawned.Connect([this](Unit* unit) { OnUnitSpawned(unit); });
     m_bus.unitDied.Connect([this](Unit* unit) { OnUnitDied(unit); });
-    m_bus.unitTrained.Connect(
-        [this](const std::string& id, const glm::vec2& at) { OnUnitTrained(id, at); });
+    m_bus.unitTrained.Connect([this](const std::string& id, const glm::vec2& at,
+                                     const glm::vec2& rally, const std::string& squad) {
+        OnUnitTrained(id, at, rally, squad);
+    });
     m_bus.buildingDestroyed.Connect([this](Building* building) { OnBuildingDestroyed(building); });
     m_bus.waveStarted.Connect([this](int index) { OnWaveStarted(index); });
     m_bus.gameWon.Connect([this] { OnGameOver(true); });
@@ -291,14 +293,20 @@ Snapshot::Scene Match::View() {
 
 // --- Bus handlers ----------------------------------------------------------
 
-void Match::OnUnitTrained(const std::string& unitId, const glm::vec2& spawnPoint) {
+void Match::OnUnitTrained(const std::string& unitId, const glm::vec2& spawnPoint,
+                          const glm::vec2& rally, const std::string& squad) {
     const UnitStats stats = Upgrades::ForUnit(m_data, m_state, m_profile, unitId);
 
     // The width EXACTLY, not the width minus half a body. A unit trained by a
     // building at the right-hand edge stands on the edge.
     const float x = std::min(std::max(spawnPoint.x, 0.0f), m_layout.width);
 
-    SpawnUnit(stats, glm::vec2(x, m_layout.groundY));
+    Unit* unit = SpawnUnit(stats, glm::vec2(x, m_layout.groundY));
+
+    // A rally point is an order to walk there, as the original's main gives
+    // it. The squad is carried for the squads the port does not have yet.
+    (void)squad;
+    if (unit != nullptr && Building::IsRally(rally)) unit->CommandMoveTo(rally);
 }
 
 void Match::OnUnitSpawned(Unit* unit) {
@@ -396,6 +404,22 @@ Damageable* Match::NearestEnemyBuilding(const std::string& faction, float x) con
         }
     }
     return best;
+}
+
+std::vector<Building*> Match::PlayerBuildings() const {
+    std::vector<Building*> out;
+    for (const auto& building : m_buildings) {
+        if (building->Faction() == Factions::kPlayer) out.push_back(building.get());
+    }
+    return out;
+}
+
+std::vector<Unit*> Match::PlayerUnits() const {
+    std::vector<Unit*> out;
+    for (const auto& unit : m_units) {
+        if (unit->IsPlayer()) out.push_back(unit.get());
+    }
+    return out;
 }
 
 // --- Odds and ends ---------------------------------------------------------

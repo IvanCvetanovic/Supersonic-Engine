@@ -193,6 +193,20 @@ struct Board final : public World, public Snapshot::RestoreSink {
         return best;
     }
     ProjectilePool* Projectiles() override { return &projectiles; }
+    std::vector<Building*> PlayerBuildings() const override {
+        std::vector<Building*> out;
+        for (const auto& building : buildings) {
+            if (building->Faction() == Factions::kPlayer) out.push_back(building.get());
+        }
+        return out;
+    }
+    std::vector<Unit*> PlayerUnits() const override {
+        std::vector<Unit*> out;
+        for (const auto& unit : units) {
+            if (unit->IsPlayer()) out.push_back(unit.get());
+        }
+        return out;
+    }
 
     // --- RestoreSink ---
     Building* CreateBuilding(const BuildingStats& stats, bool complete,
@@ -971,6 +985,7 @@ static void testARestoredQueueTrainsAgainstItsRealTrainTime() {
     // and pops a free soldier on the next step - and the round trip passes,
     // because the queue is identical on both sides.
     Board board;
+    board.Place(Ids::kTownHall, 1500.0f);   // the supply the soldier occupies
     Building* barracks = board.Place(Ids::kBarracks, 2600.0f);
     barracks->EnqueueTraining(Ids::kSoldier);
     for (int i = 0; i < 8; ++i) barracks->Step(0.25);   // 2.0s of 8.0
@@ -983,7 +998,9 @@ static void testARestoredQueueTrainsAgainstItsRealTrainTime() {
 
     int trained = 0;
     rebuilt.bus.unitTrained.Connect(
-        [&trained](const std::string&, const glm::vec2&) { ++trained; });
+        [&trained](const std::string&, const glm::vec2&, const glm::vec2&, const std::string&) {
+            ++trained;
+        });
 
     Building* restored = rebuilt.FindBuilding(Ids::kBarracks);
     CHECK_MSG(restored != nullptr, "it came back");
@@ -1040,7 +1057,9 @@ static void testARestoreAnnouncesNothingItDidNotActuallyDo() {
     int trained = 0;
     rebuilt.bus.buildingCompleted.Connect([&completed](Building*) { ++completed; });
     rebuilt.bus.unitTrained.Connect(
-        [&trained](const std::string&, const glm::vec2&) { ++trained; });
+        [&trained](const std::string&, const glm::vec2&, const glm::vec2&, const std::string&) {
+            ++trained;
+        });
 
     Snapshot::Restore(document, wb::Shipped(), rebuilt.state, rebuilt.profile, rebuilt.director,
                       rebuilt, rebuilt.lane, rebuilt.projectiles);
@@ -1228,6 +1247,7 @@ struct BareSink final : public Snapshot::RestoreSink {
 
 static void testRestoreSetsTheTrainTimesSoASinkNeedNot() {
     Board board;
+    board.Place(Ids::kTownHall, 1500.0f);   // the supply the soldier occupies
     Building* barracks = board.Place(Ids::kBarracks, 2600.0f);
     barracks->EnqueueTraining(Ids::kSoldier);
     const Value document = Snapshot::Capture(board.View(), board.state, board.director);
@@ -1239,7 +1259,9 @@ static void testRestoreSetsTheTrainTimesSoASinkNeedNot() {
 
     int trained = 0;
     rebuilt.bus.unitTrained.Connect(
-        [&trained](const std::string&, const glm::vec2&) { ++trained; });
+        [&trained](const std::string&, const glm::vec2&, const glm::vec2&, const std::string&) {
+            ++trained;
+        });
 
     Building* restored = rebuilt.FindBuilding(Ids::kBarracks);
     CHECK_MSG(restored != nullptr, "it came back");

@@ -195,6 +195,8 @@ private:
     void StepBuild(double delta);
     void FireProjectile();
 
+    void StepRegen(double delta);
+
     void FleeCheck();
     bool HasValidTarget() const;
     void ClearAttack();
@@ -239,6 +241,11 @@ private:
     bool m_orderedToAttack{false};
     int m_fleeIndex{-1};
     double m_attackCooldown{0.0};
+
+    // Passive regen: seconds since the last hit, starting out of combat, and
+    // the fraction of a hit point owed. Neither is saved, as in the original.
+    double m_sinceDamage{1.0e9};
+    double m_regenAccumulator{0.0};
 };
 
 } // namespace WolfBrigade

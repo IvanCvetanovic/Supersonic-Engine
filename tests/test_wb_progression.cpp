@@ -75,6 +75,8 @@ public:
     Unit* NearestEnemyUnit(const std::string&, float, float) const override { return nullptr; }
     Damageable* NearestEnemyBuilding(const std::string&, float) const override { return nullptr; }
     ProjectilePool* Projectiles() override { return nullptr; }
+    std::vector<Building*> PlayerBuildings() const override { return {}; }
+    std::vector<Unit*> PlayerUnits() const override { return {}; }
 };
 
 struct Run {

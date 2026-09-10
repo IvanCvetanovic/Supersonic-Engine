@@ -472,7 +472,7 @@ void testTheHeroFirstStatFieldsReadFromTheShippedRows() {
                   hero.abilities[1] == "dash",
               "the hero's abilities, in hotkey order");
     CHECK_EQ(hero.supply, 2);
-    CHECK_NEAR(hero.hpRegen, 1.5f);
+    CHECK(std::fabs(hero.hpRegen - 1.5) < 1e-9);
 
     CHECK_MSG(unit(Ids::kWorker).canBuild, "a worker can build");
     CHECK_MSG(!unit(Ids::kSoldier).canBuild, "a soldier cannot");
@@ -481,7 +481,7 @@ void testTheHeroFirstStatFieldsReadFromTheShippedRows() {
     // original's defaults. Raiders never check supply, but the default is
     // still what a new row would get.
     CHECK_EQ(unit(Ids::kRaider).supply, 1);
-    CHECK_NEAR(unit(Ids::kRaider).hpRegen, 0.0f);
+    CHECK(unit(Ids::kRaider).hpRegen == 0.0);
 
     const auto building = [&data](const char* id) {
         return BuildingStats::FromJson(id, data.Building(id));

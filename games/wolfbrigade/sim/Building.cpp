@@ -2,12 +2,26 @@
 
 #include <algorithm>
 
+#include "sim/Progression.hpp"
 #include "sim/Projectiles.hpp"
+#include "sim/Supply.hpp"
 #include "sim/Unit.hpp"
 
 namespace WolfBrigade {
 
 namespace {
+
+Cost costOf(const Supersonic::Json::Value& row) {
+    Cost cost;
+    for (const auto& [resource, amount] : row.AsObject()) {
+        cost[resource] = static_cast<int>(amount.AsNumber());
+    }
+    return cost;
+}
+
+bool contains(const std::vector<std::string>& ids, const std::string& id) {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
 
 glm::vec2 toVec2(const Supersonic::Json::Value& value, const glm::vec2& fallback) {
     const auto& array = value.AsArray();
@@ -73,6 +87,12 @@ Building::Building(const BuildingStats& stats, bool prePlaced, GameState& state,
     } else {
         m_state = State::Constructing;
     }
+
+    // Auto-production starts at the data's default, and only for what this
+    // building trains. A restore overrides it, since FromSave runs after.
+    for (const std::string& unitId : m_stats.autoTrainDefault) {
+        if (contains(m_stats.trains, unitId)) m_autoTrain.push_back(unitId);
+    }
 }
 
 void Building::SetTrainTimes(const Supersonic::Json::Value& units) {
@@ -88,8 +108,13 @@ void Building::Step(double delta) {
     // half-built would let a player skip the whole build time by queuing early.
     if (m_state != State::Complete) return;
 
+    // The original's order: production decides before training advances, so a
+    // queue fed this step starts its clock this step.
+    StepAutoTrain(delta);
     StepTraining(delta);
+    StepResearch(delta);
     StepCombat(delta);
+    StepRegen(delta);
 }
 
 void Building::AddBuildProgress(double amount) {
@@ -111,7 +136,107 @@ bool Building::CanTrain(const std::string& unitId) const {
 }
 
 void Building::EnqueueTraining(const std::string& unitId) {
-    if (CanTrain(unitId)) m_queue.push_back(unitId);
+    if (CanTrain(unitId) && Supply::HasRoomFor(*m_world, m_run->Data(), unitId)) {
+        m_queue.push_back(unitId);
+    }
+}
+
+bool Building::IsAutoTraining(const std::string& unitId) const {
+    return contains(m_autoTrain, unitId);
+}
+
+void Building::SetAutoTrain(const std::string& unitId, bool on) {
+    const auto it = std::find(m_autoTrain.begin(), m_autoTrain.end(), unitId);
+    if (on && contains(m_stats.trains, unitId) && it == m_autoTrain.end()) {
+        m_autoTrain.push_back(unitId);
+    } else if (!on && it != m_autoTrain.end()) {
+        m_autoTrain.erase(it);
+    }
+}
+
+void Building::StepAutoTrain(double delta) {
+    // The player's only. Supply and the treasury are the player's, so an enemy
+    // building that auto-trained would spend the player's wood; waves are how
+    // enemies arrive.
+    //
+    // And one unit at a time: a queue with anything in it is left alone, so a
+    // manual order always slots in next and resources drain gradually rather
+    // than into one building's backlog.
+    if (m_stats.faction != Factions::kPlayer || m_autoTrain.empty() || !m_queue.empty()) return;
+
+    m_autoAccumulator += delta;
+    if (m_autoAccumulator < 0.5) return;
+    m_autoAccumulator = 0.0;
+
+    const int count = static_cast<int>(m_autoTrain.size());
+    for (int i = 0; i < count; ++i) {
+        const std::string unitId = m_autoTrain[static_cast<size_t>((m_autoIndex + i) % count)];
+        if (!CanTrain(unitId) || !Supply::HasRoomFor(*m_world, m_run->Data(), unitId)) continue;
+
+        const Cost cost = costOf(m_run->Data().Unit(unitId)["cost"]);
+        if (!AffordableOverReserve(cost)) continue;
+
+        // The first candidate that passes decides this tick, bought or not -
+        // the original returns here either way.
+        if (m_run->TrySpend(cost)) {
+            EnqueueTraining(unitId);
+            m_autoIndex = (m_autoIndex + i + 1) % count;
+        }
+        return;
+    }
+}
+
+bool Building::AffordableOverReserve(const Cost& cost) const {
+    // A resource the reserve does not name is held back by nothing.
+    const Supersonic::Json::Value& reserve = m_run->Data().Economy()["auto_train_reserve"];
+    for (const auto& [resource, amount] : cost) {
+        const int keep = static_cast<int>(reserve[resource].AsNumber(0.0));
+        if (m_run->Amount(resource) - amount < keep) return false;
+    }
+    return true;
+}
+
+void Building::EnqueueResearch(const std::string& upgradeId) {
+    if (m_state == State::Complete && contains(m_stats.researches, upgradeId)) {
+        m_researchQueue.push_back(upgradeId);
+    }
+}
+
+bool Building::HasResearch(const std::string& upgradeId) const {
+    return contains(m_researchQueue, upgradeId);
+}
+
+void Building::StepResearch(double delta) {
+    if (m_researchQueue.empty()) return;
+
+    const std::string upgradeId = m_researchQueue.front();
+    const double researchTime =
+        std::max(m_run->Data().Upgrade(upgradeId)["research_time"].AsNumber(10.0), 0.01);
+
+    m_researchProgress += delta;
+    if (m_researchProgress < researchTime) return;
+
+    m_researchQueue.erase(m_researchQueue.begin());
+    m_researchProgress = 0.0;
+
+    // Paid when it was queued; this only lands it, and announces it when it
+    // was not already done.
+    if (Upgrades::CompleteResearch(m_run->Data(), *m_run, upgradeId, m_world->PlayerBuildings())) {
+        m_bus->upgradeResearched.Emit(upgradeId);
+    }
+}
+
+void Building::StepRegen(double delta) {
+    m_sinceDamage += delta;
+    if (m_stats.hpRegen <= 0.0 || m_hp >= m_stats.maxHp) return;
+    if (m_sinceDamage < m_run->Data().Economy()["hp_regen_delay_s"].AsNumber(4.0)) return;
+
+    m_regenAccumulator += m_stats.hpRegen * delta;
+    if (m_regenAccumulator >= 1.0) {
+        const int whole = static_cast<int>(m_regenAccumulator);
+        m_regenAccumulator -= static_cast<double>(whole);
+        m_hp = std::min(m_hp + whole, m_stats.maxHp);
+    }
 }
 
 void Building::StepTraining(double delta) {
@@ -137,7 +262,7 @@ void Building::StepTraining(double delta) {
     // bar in the HUD is drawing.
     m_trainProgress = 0.0;
 
-    m_bus->unitTrained.Emit(finished, SpawnPoint());
+    m_bus->unitTrained.Emit(finished, SpawnPoint(), m_rally, m_recruitSquad);
 }
 
 void Building::StepCombat(double delta) {
@@ -184,6 +309,7 @@ glm::vec2 Building::SpawnPoint() const {
 
 void Building::TakeDamage(int amount) {
     if (m_state == State::Dead) return;
+    m_sinceDamage = 0.0;   // a hit pauses passive repair
 
     m_hp = std::max(m_hp - amount, 0);
 
@@ -218,6 +344,26 @@ Supersonic::Json::Value Building::ToSave() const {
     for (const std::string& unitId : m_queue) queue.push_back(Supersonic::Json::Value(unitId));
     out["train_queue"] = Supersonic::Json::Value(std::move(queue));
 
+    Supersonic::Json::Array autoTrain;
+    for (const std::string& unitId : m_autoTrain) autoTrain.push_back(Supersonic::Json::Value(unitId));
+    out["auto_train"] = Supersonic::Json::Value(std::move(autoTrain));
+    out["recruit_squad"] = Supersonic::Json::Value(m_recruitSquad);
+
+    Supersonic::Json::Array research;
+    for (const std::string& upgradeId : m_researchQueue) {
+        research.push_back(Supersonic::Json::Value(upgradeId));
+    }
+    out["research_queue"] = Supersonic::Json::Value(std::move(research));
+    out["research_progress"] = Supersonic::Json::Value(m_researchProgress);
+
+    // [] for none, as the original writes it.
+    Supersonic::Json::Array rally;
+    if (IsRally(m_rally)) {
+        rally.push_back(Supersonic::Json::Value(static_cast<double>(m_rally.x)));
+        rally.push_back(Supersonic::Json::Value(static_cast<double>(m_rally.y)));
+    }
+    out["rally"] = Supersonic::Json::Value(std::move(rally));
+
     Supersonic::Json::Array pos;
     pos.push_back(Supersonic::Json::Value(static_cast<double>(m_position.x)));
     pos.push_back(Supersonic::Json::Value(static_cast<double>(m_position.y)));
@@ -250,6 +396,26 @@ void Building::FromSave(const Supersonic::Json::Value& saved) {
     for (const Supersonic::Json::Value& entry : saved["train_queue"].AsArray()) {
         m_queue.push_back(entry.AsString());
     }
+
+    m_researchQueue.clear();
+    for (const Supersonic::Json::Value& entry : saved["research_queue"].AsArray()) {
+        m_researchQueue.push_back(entry.AsString());
+    }
+    m_researchProgress = saved["research_progress"].AsNumber(0.0);
+    m_recruitSquad = saved["recruit_squad"].AsString(Squads::kGarrison);
+
+    // The save's word is final - an empty list is a player who turned
+    // production off. A save from before auto-production keeps the data's
+    // seed from the constructor.
+    if (saved.Has("auto_train")) {
+        m_autoTrain.clear();
+        for (const Supersonic::Json::Value& entry : saved["auto_train"].AsArray()) {
+            m_autoTrain.push_back(entry.AsString());
+        }
+    }
+
+    const auto& rally = saved["rally"].AsArray();
+    m_rally = rally.size() >= 2 ? glm::vec2(rally[0].AsFloat(), rally[1].AsFloat()) : NoRally();
 }
 
 Building::Rect Building::Footprint() const {

@@ -186,6 +186,14 @@ bool IsAvailable(const GameData& data, const GameState& state, const std::string
 bool Research(const GameData& data, GameState& state, const std::string& id,
               const std::vector<Building*>& existing);
 
+// Lands a research whose cost was paid when it entered a building's research
+// queue - the Armory path, where research takes time. Marks it and raises the
+// building effects exactly as Research does, without charging. False when it
+// was already researched or nobody authored it, which is when nothing should
+// be announced.
+bool CompleteResearch(const GameData& data, GameState& state, const std::string& id,
+                      const std::vector<Building*>& existing);
+
 // A unit's stats with every researched effect and every owned meta level
 // applied. THE spawn path for player units.
 //

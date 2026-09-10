@@ -42,6 +42,7 @@ void Unit::Step(double delta) {
     default: break;
     }
 
+    StepRegen(delta);
     if (m_attackCooldown > 0.0) m_attackCooldown -= delta;
 
     // Once per interval, not once per step, and NOT a while loop: a step longer
@@ -472,7 +473,25 @@ void Unit::CommandAttack(Damageable* target) {
     SetState(State::Attacking);
 }
 
+// Passive regeneration, from `_process_regen`: once out of combat for
+// economy.hp_regen_delay_s, hit points trickle back at hp_regen a second.
+// Sim time, accumulated from the step, so a paused game regenerates nothing.
+void Unit::StepRegen(double delta) {
+    m_sinceDamage += delta;
+    if (m_stats.hpRegen <= 0.0 || m_hp >= m_stats.maxHp) return;
+    if (m_sinceDamage < m_state->Data().Economy()["hp_regen_delay_s"].AsNumber(4.0)) return;
+
+    m_regenAccumulator += m_stats.hpRegen * delta;
+    if (m_regenAccumulator >= 1.0) {
+        const int whole = static_cast<int>(m_regenAccumulator);
+        m_regenAccumulator -= static_cast<double>(whole);
+        m_hp = std::min(m_hp + whole, m_stats.maxHp);
+    }
+}
+
 void Unit::TakeDamage(int amount) {
+    // Before the dead check, as the original has it: any hit pauses regen.
+    m_sinceDamage = 0.0;
     if (m_phase == State::Dead) return;
 
     m_hp = std::max(m_hp - amount, 0);

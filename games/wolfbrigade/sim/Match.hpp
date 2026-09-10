@@ -366,6 +366,8 @@ public:
     Building* NearestUnfinishedBuilding(const std::string& faction, float x) const override;
     Unit* NearestEnemyUnit(const std::string& faction, float x, float maxRange) const override;
     Damageable* NearestEnemyBuilding(const std::string& faction, float x) const override;
+    std::vector<Building*> PlayerBuildings() const override;
+    std::vector<Unit*> PlayerUnits() const override;
     ProjectilePool* Projectiles() override { return &m_projectiles; }
 
 private:
@@ -424,7 +426,8 @@ private:
     // world width EXACTLY, not the width minus half a body - so a unit trained
     // by a building at the right-hand edge stands ON the edge, forty pixels
     // past the enemy spawn line.
-    void OnUnitTrained(const std::string& unitId, const glm::vec2& spawnPoint);
+    void OnUnitTrained(const std::string& unitId, const glm::vec2& spawnPoint,
+                       const glm::vec2& rally, const std::string& squad);
 
     // The enemy tally. The port's WaveDirector takes these as CALLS rather than
     // as subscriptions and its header says why, so the Match does the

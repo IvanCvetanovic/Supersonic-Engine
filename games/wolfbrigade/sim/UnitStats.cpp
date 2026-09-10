@@ -43,7 +43,7 @@ UnitStats UnitStats::FromJson(const std::string& unitId, const Supersonic::Json:
 
     stats.canBuild = row["can_build"].AsBool(false);
     stats.supply = static_cast<int>(row["supply"].AsNumber(1.0));
-    stats.hpRegen = row["hp_regen"].AsFloat(0.0f);
+    stats.hpRegen = row["hp_regen"].AsNumber(0.0);
     stats.controllable = row["controllable"].AsBool(false);
     stats.healAmount = static_cast<int>(row["heal_amount"].AsNumber(0.0));
     for (const auto& ability : row["abilities"].AsArray()) {

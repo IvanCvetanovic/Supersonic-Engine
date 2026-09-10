@@ -48,6 +48,7 @@
 #include "sim/GameState.hpp"
 #include "sim/Lane.hpp"
 #include "sim/Projectiles.hpp"
+#include "sim/Supply.hpp"
 #include "sim/Unit.hpp"
 #include "sim/World.hpp"
 
@@ -127,6 +128,21 @@ public:
     Damageable* NearestEnemyBuilding(const std::string&, float) const override { return nullptr; }
     ProjectilePool* Projectiles() override { return &bolts; }
 
+    std::vector<Building*> PlayerBuildings() const override {
+        std::vector<Building*> out;
+        for (const auto& building : buildings) {
+            if (building->Faction() == Factions::kPlayer) out.push_back(building.get());
+        }
+        return out;
+    }
+    std::vector<Unit*> PlayerUnits() const override {
+        std::vector<Unit*> out;
+        for (const auto& unit : units) {
+            if (unit->IsPlayer()) out.push_back(unit.get());
+        }
+        return out;
+    }
+
     std::vector<std::unique_ptr<Building>> buildings;
 };
 
@@ -136,6 +152,8 @@ struct Site {
     Town town;
 
     std::vector<std::string> trained;
+    std::vector<glm::vec2> rallies;
+    std::vector<std::string> squads;
     std::vector<const Building*> completed;
     std::vector<const Building*> destroyed;
 
@@ -143,8 +161,12 @@ struct Site {
     // flag the shipped files do not set.
     explicit Site(const GameData& data = wb::Shipped()) : state(data, bus) {
         state.Reset();
-        bus.unitTrained.Connect(
-            [this](const std::string& id, const glm::vec2&) { trained.push_back(id); });
+        bus.unitTrained.Connect([this](const std::string& id, const glm::vec2&,
+                                       const glm::vec2& rally, const std::string& squad) {
+            trained.push_back(id);
+            rallies.push_back(rally);
+            squads.push_back(squad);
+        });
         bus.buildingCompleted.Connect([this](Building* b) { completed.push_back(b); });
         bus.buildingDestroyed.Connect([this](Building* b) { destroyed.push_back(b); });
     }
@@ -275,8 +297,12 @@ void testAHalfBuiltDepositIsNotADeposit() {
 // --- 2. Training ---------------------------------------------------------
 
 void testABarracksTrainsOneUnitPerTrainTime() {
+    // A hall for supply, and the barracks' own production off, which is how
+    // the original's harness isolates the manual path.
     Site site;
+    site.Place(Ids::kTownHall, 1200.0f, true);
     Building* barracks = site.Place(Ids::kBarracks, 2600.0f, true);
+    barracks->SetAutoTrain(Ids::kSoldier, false);
     barracks->EnqueueTraining(Ids::kSoldier);
     CHECK_EQ(barracks->QueueLength(), 1);
 
@@ -293,7 +319,9 @@ void testAQueueOfTwoTakesTwoFullTrainTimes() {
     // The remainder is reset rather than carried, so five soldiers take five
     // full train times - which is what the training bar in the HUD draws.
     Site site;
+    site.Place(Ids::kTownHall, 1200.0f, true);
     Building* barracks = site.Place(Ids::kBarracks, 2600.0f, true);
+    barracks->SetAutoTrain(Ids::kSoldier, false);
     barracks->EnqueueTraining(Ids::kSoldier);   // 8.0s
     barracks->EnqueueTraining(Ids::kArcher);    // 7.0s
 
@@ -467,8 +495,10 @@ void testADestroyedTownHallStopsBeingSomewhereToBank() {
 
 void testTheBoardFreezesForBuildingsToo() {
     Site site;
+    site.Place(Ids::kTownHall, 1200.0f, true);   // the supply the soldier occupies
     Building* barracks = site.Place(Ids::kBarracks, 2600.0f, true);
     barracks->EnqueueTraining(Ids::kSoldier);
+    CHECK_EQ(barracks->QueueLength(), 1);
 
     site.state.Win();
     for (int i = 0; i < 100; ++i) barracks->Step(0.25);
@@ -550,11 +580,22 @@ void testTrainingStartsTheNextUnitFromZeroRatherThanFromTheOvershoot() {
     GameState state(data, bus);
     Town town;
     int trained = 0;
-    bus.unitTrained.Connect([&trained](const std::string&, const glm::vec2&) { ++trained; });
+    bus.unitTrained.Connect(
+        [&trained](const std::string&, const glm::vec2&, const glm::vec2&, const std::string&) {
+            ++trained;
+        });
 
     Building barracks(BuildingStats::FromJson(Ids::kBarracks, data.Building(Ids::kBarracks)),
                       true, state, bus, town);
     barracks.SetTrainTimes(data.Units());
+
+    // A hall for the supply four archers occupy, and the manual path only, as
+    // the original's harness pins training.
+    town.buildings.push_back(std::make_unique<Building>(
+        BuildingStats::FromJson(Ids::kTownHall, data.Building(Ids::kTownHall)), true, state, bus,
+        town));
+    barracks.SetAutoTrain(Ids::kSoldier, false);
+
     for (int i = 0; i < 4; ++i) barracks.EnqueueTraining(Ids::kArcher);
 
     // Reset finishes them on steps 61, 122, 183 and 244. Carry finishes them on
@@ -796,6 +837,244 @@ void testBuildAssistFollowsTheEconomysFlag() {
               "command_build still assigns explicitly");
 }
 
+// --- 9. The village that runs itself (the game's 50741d1) ------------------
+//
+// verify_buildings re-run on 10 September 2026 printed, among the rest:
+//
+//   ok  : no rally set -> emits INF (spawn stands at the door)
+//   ok  : trained unit carries the rally point
+//   ok  : rally point round-trips through save
+//   ok  : affords the research
+//   ok  : research queued on the armory
+//   ok  : NOT researched after 1s (it takes time now)
+//   ok  : researched once the time elapses
+//   ok  : research queue empties
+//   ok  : cap = town hall + farm (12)
+//   ok  : a living unit uses its supply
+//   ok  : a queued soldier reserves its space
+//   ok  : a FULL town refuses to queue more
+//   ok  : storehouse joins the deposit points
+//   ok  : town hall seeds auto-train from data (worker)
+//   ok  : auto-train queues a worker
+//   ok  : auto-train pays the normal cost
+//   ok  : one at a time: a fed queue is left alone
+//   ok  : a wood reserve is configured (economy.json)
+//   ok  : auto-train never dips into the reserve
+//   ok  : exactly cost+reserve -> trains
+//   ok  : toggled off -> no auto production
+//   ok  : auto-train OFF round-trips through save
+//   ok  : round-robin alternates soldier -> archer
+//   ok  : auto-train respects the supply cap
+
+Cost costOf(const Supersonic::Json::Value& row) {
+    Cost cost;
+    for (const auto& [resource, amount] : row.AsObject()) {
+        cost[resource] = static_cast<int>(amount.AsNumber());
+    }
+    return cost;
+}
+
+void setResource(GameState& state, const std::string& resource, int amount) {
+    state.Add(resource, amount - state.Amount(resource));
+}
+
+void testTrainingCarriesTheRallyPointAndTheSaveKeepsIt() {
+    Site site;
+    site.Place(Ids::kTownHall, 1200.0f, true);   // the supply provider
+    Building* barracks = site.Place(Ids::kBarracks, 2600.0f, true);
+    barracks->SetAutoTrain(Ids::kSoldier, false);   // the manual path
+
+    // Paid by the caller, as the bar pays.
+    const Cost cost = costOf(wb::Shipped().Unit(Ids::kSoldier)["cost"]);
+    const int woodBefore = site.state.Amount(Ids::kWood);
+    const int foodBefore = site.state.Amount(Ids::kFood);
+    CHECK_MSG(site.state.TrySpend(cost), "affords a soldier");
+    barracks->EnqueueTraining(Ids::kSoldier);
+    CHECK_EQ(site.state.Amount(Ids::kWood), woodBefore - cost.at(Ids::kWood));
+    CHECK_EQ(site.state.Amount(Ids::kFood), foodBefore - cost.at(Ids::kFood));
+    CHECK_EQ(barracks->QueueLength(), 1);
+
+    const int steps = static_cast<int>(8.0 / 0.25) + 4;
+    for (int i = 0; i < steps; ++i) barracks->Step(0.25);
+    CHECK_EQ(static_cast<int>(site.trained.size()), 1);
+    CHECK_EQ(barracks->QueueLength(), 0);
+    CHECK_MSG(site.rallies.size() == 1 && !Building::IsRally(site.rallies[0]),
+              "no rally set -> emits INF (spawn stands at the door)");
+    CHECK_MSG(site.squads.size() == 1 && site.squads[0] == Squads::kGarrison,
+              "and the recruit joins the garrison");
+
+    barracks->SetRallyPoint(glm::vec2(3100.0f, 700.0f));
+    site.state.Add(Ids::kWood, 200);
+    site.state.Add(Ids::kFood, 200);
+    site.state.TrySpend(cost);
+    barracks->EnqueueTraining(Ids::kSoldier);
+    for (int i = 0; i < steps; ++i) barracks->Step(0.25);
+    CHECK_MSG(site.rallies.size() == 2 && site.rallies[1] == glm::vec2(3100.0f, 700.0f),
+              "trained unit carries the rally point");
+
+    const Supersonic::Json::Value saved = barracks->ToSave();
+    barracks->SetRallyPoint(Building::NoRally());
+    barracks->FromSave(saved);
+    CHECK_MSG(barracks->RallyPoint() == glm::vec2(3100.0f, 700.0f),
+              "rally point round-trips through save");
+}
+
+void testSupplyIsWhatTheTownProvidesLessWhatItHoldsAndQueues() {
+    Site site;
+    site.Place(Ids::kTownHall, 1200.0f, true);
+    Building* farm = site.Place(Ids::kFarm, 1600.0f, true);
+
+    const int hallSupply = static_cast<int>(wb::Shipped().Building(Ids::kTownHall)["supply"].AsNumber());
+    const int farmSupply = static_cast<int>(wb::Shipped().Building(Ids::kFarm)["supply"].AsNumber());
+    CHECK_EQ(Supply::Cap(site.town), hallSupply + farmSupply);
+    CHECK_EQ(Supply::Cap(site.town), 12);
+
+    Unit* worker = site.SpawnUnit(Ids::kWorker, 1400.0f);
+    CHECK_EQ(Supply::Used(site.town, wb::Shipped()), worker->Stats().supply);
+
+    // A queued unit reserves its space; a full town refuses more.
+    Building* barracks = site.Place(Ids::kBarracks, 2600.0f, true);
+    const int usedBefore = Supply::Used(site.town, wb::Shipped());
+    barracks->EnqueueTraining(Ids::kSoldier);
+    CHECK_EQ(Supply::Used(site.town, wb::Shipped()), usedBefore + 1);
+
+    // Losing the farm shrinks the cap below the need. Bounded, so a gate that
+    // never closed fails here rather than hanging.
+    farm->Destroy();
+    for (int i = 0; i < 50 && Supply::HasRoomFor(site.town, wb::Shipped(), Ids::kSoldier); ++i) {
+        barracks->EnqueueTraining(Ids::kSoldier);
+    }
+    CHECK_MSG(!Supply::HasRoomFor(site.town, wb::Shipped(), Ids::kSoldier), "the town filled");
+    const int queued = barracks->QueueLength();
+    barracks->EnqueueTraining(Ids::kSoldier);
+    CHECK_MSG(barracks->QueueLength() == queued, "a FULL town refuses to queue more");
+
+    // A dead unit gives its space back.
+    const int usedFull = Supply::Used(site.town, wb::Shipped());
+    worker->Kill();
+    CHECK_EQ(Supply::Used(site.town, wb::Shipped()), usedFull - 1);
+
+    Building* store = site.Place(Ids::kStorehouse, 3400.0f, true);
+    CHECK_MSG(store->IsDepositPoint(), "storehouse joins the deposit points");
+}
+
+void testTheVillageFeedsItsOwnQueuesAboveTheReserve() {
+    // The original drives `_process_auto_train(0.6)` alone. Step(0.6) runs the
+    // training clock too, and the worker's five seconds are never reached
+    // across these steps, so the queue reads the same.
+    Site site;
+    Building* hall = site.Place(Ids::kTownHall, 1200.0f, true);
+    CHECK_MSG(hall->IsAutoTraining(Ids::kWorker), "town hall seeds auto-train from data (worker)");
+
+    const int workerCost = costOf(wb::Shipped().Unit(Ids::kWorker)["cost"]).at(Ids::kWood);
+    const int woodBefore = site.state.Amount(Ids::kWood);
+    hall->Step(0.6);   // one ~2 Hz decision tick
+    CHECK_MSG(hall->QueueLength() == 1 && hall->TrainQueue()[0] == Ids::kWorker,
+              "auto-train queues a worker");
+    CHECK_EQ(site.state.Amount(Ids::kWood), woodBefore - workerCost);
+    hall->Step(0.6);
+    CHECK_MSG(hall->QueueLength() == 1, "one at a time: a fed queue is left alone");
+    hall->ClearTrainQueue();
+
+    // The reserve floor: a wood short of cost plus reserve refuses; exactly
+    // that trains.
+    const int reserve = static_cast<int>(
+        wb::Shipped().Economy()["auto_train_reserve"][Ids::kWood].AsNumber(0.0));
+    CHECK_MSG(reserve > 0, "a wood reserve is configured (economy.json)");
+    setResource(site.state, Ids::kWood, workerCost + reserve - 1);
+    hall->Step(0.6);
+    CHECK_MSG(hall->QueueLength() == 0, "auto-train never dips into the reserve");
+    setResource(site.state, Ids::kWood, workerCost + reserve);
+    hall->Step(0.6);
+    CHECK_MSG(hall->QueueLength() == 1, "exactly cost+reserve -> trains");
+    hall->ClearTrainQueue();
+
+    // Off is silent, even when rich - and the OFF survives a save.
+    hall->SetAutoTrain(Ids::kWorker, false);
+    setResource(site.state, Ids::kWood, 1000);
+    hall->Step(0.6);
+    CHECK_MSG(hall->QueueLength() == 0, "toggled off -> no auto production");
+    const Supersonic::Json::Value saved = hall->ToSave();
+    hall->SetAutoTrain(Ids::kWorker, true);
+    hall->FromSave(saved);
+    CHECK_MSG(!hall->IsAutoTraining(Ids::kWorker), "auto-train OFF round-trips through save");
+    hall->SetAutoTrain(Ids::kWorker, true);
+
+    // Round-robin over two enabled ids: the barracks' soldier default plus
+    // the archer.
+    Building* barracks = site.Place(Ids::kBarracks, 2600.0f, true);
+    barracks->SetAutoTrain(Ids::kArcher, true);
+    setResource(site.state, Ids::kWood, 2000);
+    setResource(site.state, Ids::kFood, 2000);
+    barracks->Step(0.6);
+    const std::string first = barracks->QueueLength() == 1 ? barracks->TrainQueue()[0] : "";
+    barracks->ClearTrainQueue();
+    barracks->Step(0.6);
+    const std::string second = barracks->QueueLength() == 1 ? barracks->TrainQueue()[0] : "";
+    CHECK_MSG(first == Ids::kSoldier && second == Ids::kArcher,
+              "round-robin alternates soldier -> archer");
+    barracks->ClearTrainQueue();
+
+    // Supply-gated like the button. The original fills the cap with queued
+    // reservations; living workers count the same.
+    hall->ClearTrainQueue();
+    for (int i = 0; i < 20 && Supply::HasRoomFor(site.town, wb::Shipped(), Ids::kSoldier); ++i) {
+        site.SpawnUnit(Ids::kWorker, 1300.0f);
+    }
+    barracks->Step(0.6);
+    CHECK_MSG(barracks->QueueLength() == 0, "auto-train respects the supply cap");
+}
+
+void testResearchTakesTimeAndLandsOnlyWhenItFinishes() {
+    Site site;
+    Building* armory = site.Place(Ids::kArmory, 3000.0f, true);
+    site.state.Add(Ids::kWood, 500);
+    site.state.Add(Ids::kFood, 500);
+
+    int announced = 0;
+    site.bus.upgradeResearched.Connect([&announced](const std::string&) { ++announced; });
+
+    const std::string id = "iron_swords";   // an Armory tech
+    CHECK_MSG(site.state.TrySpend(costOf(wb::Shipped().Upgrade(id)["cost"])), "affords the research");
+    armory->EnqueueResearch(id);
+    CHECK_MSG(armory->HasResearch(id), "research queued on the armory");
+
+    armory->Step(1.0);
+    CHECK_MSG(!site.state.IsResearched(id), "NOT researched after 1s (it takes time now)");
+
+    const double researchTime = wb::Shipped().Upgrade(id)["research_time"].AsNumber(10.0);
+    for (int i = 0; i < static_cast<int>(researchTime / 0.5) + 2; ++i) armory->Step(0.5);
+    CHECK_MSG(site.state.IsResearched(id), "researched once the time elapses");
+    CHECK_MSG(armory->ResearchQueue().empty(), "research queue empties");
+    CHECK_EQ(announced, 1);
+
+    // A building does not research what it does not offer.
+    armory->EnqueueResearch("sharper_axes");   // a Storehouse tech
+    CHECK_MSG(armory->ResearchQueue().empty(), "the armory refuses a storehouse tech");
+}
+
+void testATownHallRepairsItselfOnceLeftAlone() {
+    // buildings.json's hp_regen, which the original's harness does not probe
+    // for a building: the Town Hall's 0.5 a second, after economy.json's four
+    // seconds of peace. The bounds are loose on purpose - the boundary step
+    // is the unit case's to pin.
+    Site site;
+    Building* hall = site.Place(Ids::kTownHall, 1500.0f, true);
+    hall->TakeDamage(100);
+    const int hurt = hall->Hp();
+
+    for (int i = 0; i < 30; ++i) hall->Step(0.1);   // three seconds
+    CHECK_MSG(hall->Hp() == hurt, "no repair inside the delay");
+
+    for (int i = 0; i < 100; ++i) hall->Step(0.1);   // ten more
+    CHECK_MSG(hall->Hp() > hurt && hall->Hp() <= hurt + 5, "then half a hit point a second");
+
+    const int before = hall->Hp();
+    hall->TakeDamage(1);
+    for (int i = 0; i < 30; ++i) hall->Step(0.1);
+    CHECK_MSG(hall->Hp() == before - 1, "a hit pauses it again");
+}
+
 } // namespace
 
 static void runTests() {
@@ -835,6 +1114,12 @@ static void runTests() {
     testAWorkerBuildsFromItsGatherRangeNotItsAttackRange();
     testABuildingDestroyedUnderItsBuilderReleasesTheWorker();
     testBuildAssistFollowsTheEconomysFlag();
+
+    testTrainingCarriesTheRallyPointAndTheSaveKeepsIt();
+    testSupplyIsWhatTheTownProvidesLessWhatItHoldsAndQueues();
+    testTheVillageFeedsItsOwnQueuesAboveTheReserve();
+    testResearchTakesTimeAndLandsOnlyWhenItFinishes();
+    testATownHallRepairsItselfOnceLeftAlone();
 }
 
 TEST_MAIN("test_wb_buildings", 55)

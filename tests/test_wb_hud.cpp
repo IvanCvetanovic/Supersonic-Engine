@@ -530,8 +530,8 @@ static void testStartingAPlacementRebuildsTheBarToCancel() {
 // A run STARTS with 300 wood and 100 food against a 150-wood barracks and a
 // 120-wood tower, so everything is affordable and an earlier draft of this test
 // asserted otherwise and failed. The state has to be arranged: selecting the
-// town hall turns the bar into its Train buttons, and a worker costs 50 wood,
-// so six of them empty the treasury.
+// town hall turns the bar into its Train buttons, a worker costs 50 wood, and
+// what the town's supply will not let it spend is spent directly.
 static void testUnaffordableButtonsAreDisabledRatherThanRemoved() {
     entt::registry registry;
     WolfBrigadeLayer layer;
@@ -566,9 +566,15 @@ static void testUnaffordableButtonsAreDisabledRatherThanRemoved() {
                   "every button is visible before anything is spent");
     }
 
-    // Drain it. Pressing Train is the game's own path to spending, so this
-    // exercises the click routing at the same time.
-    for (int attempt = 0; attempt < 8; ++attempt) {
+    // Drain it. Two workers through the game's own path, which exercises the
+    // click routing, and then the rest spent directly.
+    //
+    // Clicking alone can no longer empty it. Since the game's 50741d1 the
+    // hall's 8 supply stops the queue at five more workers, 50 wood short -
+    // and a button greyed for want of SPACE would pass the check below for
+    // the wrong reason.
+    const int woodBefore = match->Run().Amount("wood");
+    for (int attempt = 0; attempt < 2; ++attempt) {
         buttons = barButtons(registry);
         entt::entity train = entt::null;
         for (entt::entity button : buttons) {
@@ -580,6 +586,12 @@ static void testUnaffordableButtonsAreDisabledRatherThanRemoved() {
         layer.OnFixedUpdate(registry, kTick);
         if (registry.valid(train)) registry.get<UIButtonComponent>(train).clickedThisTick = false;
     }
+    CHECK_MSG(match->Run().Amount("wood") <= woodBefore - 100,
+              "two workers were bought through the bar");
+
+    const int left = match->Run().Amount("wood");
+    CHECK_MSG(match->Run().TrySpend(Cost{{"wood", left}}), "and the rest spent");
+    layer.OnFixedUpdate(registry, kTick);
 
     CHECK_MSG(match->Run().Amount("wood") < 50,
               "the treasury is actually empty, or nothing below is being tested; wood is " +
@@ -589,7 +601,8 @@ static void testUnaffordableButtonsAreDisabledRatherThanRemoved() {
     bool sawDisabled = false;
     for (entt::entity button : buttons) {
         const auto& widget = registry.get<UIButtonComponent>(button);
-        if (!widget.enabled) sawDisabled = true;
+        // Greyed on COST: a full town greys it too, and says "no space".
+        if (!widget.enabled && !has(widget.label, "no space")) sawDisabled = true;
         CHECK_MSG(widget.visible,
                   "a button nobody can afford is greyed, not gone - removing it would "
                   "move every button beside it out from under the player's finger");

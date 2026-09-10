@@ -159,6 +159,10 @@ public:
     Unit* NearestEnemyUnit(const std::string&, float, float) const override { return nullptr; }
     Damageable* NearestEnemyBuilding(const std::string&, float) const override { return nullptr; }
     ProjectilePool* Projectiles() override { return nullptr; }
+
+    // Nothing here counts toward supply: the units are owned by the cases.
+    std::vector<Building*> PlayerBuildings() const override { return {}; }
+    std::vector<Unit*> PlayerUnits() const override { return {}; }
 };
 
 // A run with one worker in it.
@@ -480,6 +484,34 @@ void testAWorkerWithNowhereToRunGoesBackToWorkInstead() {
               "with nowhere to flee to, it must resume rather than freeze");
 }
 
+void testAWoundedWorkerRegeneratesOnlyOnceOutOfCombat() {
+    // verify_buildings 3d at the game's 50741d1:
+    //
+    //   ok  : no regen inside the out-of-combat delay
+    //   ok  : hp regenerates once out of combat (20 -> 23)
+    //   ok  : taking a hit pauses regen again
+    //
+    // The worker's 0.5 a second, after economy.json's four seconds. The
+    // original drives `_process_regen(0.1)` alone; a whole step runs the same
+    // regen, and nothing else here touches the hit points.
+    Site site;
+    auto worker = site.Worker();
+    worker->TakeDamage(10);
+    const int hurt = worker->Hp();
+    CHECK_EQ(hurt, 20);
+
+    for (int i = 0; i < 20; ++i) worker->Step(0.1);   // two seconds, inside the delay
+    CHECK_MSG(worker->Hp() == hurt, "no regen inside the out-of-combat delay");
+
+    for (int i = 0; i < 80; ++i) worker->Step(0.1);   // eight more
+    CHECK_EQ(worker->Hp(), 23);
+
+    worker->TakeDamage(1);
+    const int again = worker->Hp();
+    for (int i = 0; i < 10; ++i) worker->Step(0.1);
+    CHECK_MSG(worker->Hp() == again, "taking a hit pauses regen again");
+}
+
 void testAKillingBlowStillAnnouncesItsDamage() {
     // Emitted before the death check, so the number that mattered still floats.
     Site site;
@@ -675,6 +707,7 @@ static void runTests() {
     testAFleeingWorkerGoesBackToWorkOnceItIsSafe();
     testAWorkerWithNowhereToRunGoesBackToWorkInstead();
     testAKillingBlowStillAnnouncesItsDamage();
+    testAWoundedWorkerRegeneratesOnlyOnceOutOfCombat();
 
     testDecisionsRunOnTheTickAndMovementRunsEveryStep();
     testAStepLongerThanTheTickThinksOnceRatherThanCatchingUp();

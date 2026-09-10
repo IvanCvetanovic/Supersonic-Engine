@@ -333,7 +333,8 @@ asserts that the unit ends up parked.
 **Found for slice 5:** `verify_combat`'s soldier now ends on **38**/60, not 36.
 The fight is on one row, so the 2D approach is not the cause. Passive regen is:
 `hp_regen`, with `hp_regen_delay_s` 4. `test_wb_combat` still pins 36, and
-moves to 38 when regen lands.
+moves to 38 when regen lands. *(Slice 5 found that 38 is only one side of a
+race in the harness. The deterministic answer is 45; see there.)*
 
 **Result (GCC, 10 September):** worker 90/0, combat 60/0, buildings 97/0,
 placement 91/0, hud 129/0 and snapshot 160/0. Still red:
@@ -363,3 +364,102 @@ targets itself. The Cleave list is pinned on its inclusive edge, a corpse, the
 caller's own side and registration order.
 
 **Result (GCC, 10 September):** combat 69/0. Nothing else moved.
+
+## Slice 5: supply and production
+
+**Supply is derived, never stored**, as `game_state.gd` derives it:
+- The cap is what the player's complete buildings provide: the Town Hall 8,
+  and 4 for each farm.
+- The use is every living player unit plus every unit waiting in a player
+  building's queue. A queued unit reserves its space.
+- The original counts off its scene-tree groups. `World` gains the same two
+  lists, `PlayerBuildings()` and `PlayerUnits()`, and `Supply::Cap`, `Used` and
+  `HasRoomFor` count off them.
+- `EnqueueTraining` refuses a full town. The bar asks first, and neither greys
+  out silently nor takes the money: a full town's button reads "no space -
+  build a Farm".
+
+**Buildings feed their own queues.**
+- Auto-train is seeded from `auto_train_default`, filtered to what the building
+  trains.
+- It runs on a ~2 Hz clock that resets to zero rather than carrying the
+  remainder, as the original's does.
+- It queues one unit at a time, and only into an empty queue, so a manual order
+  always goes next.
+- It is round-robin over the enabled ids.
+- It pays the normal price but never dips into `economy.auto_train_reserve`.
+- It is the player's only, and the toggles are saved.
+
+**Research takes time.**
+- It is paid when it is queued on the building, and landed when it finishes by
+  `Upgrades::CompleteResearch`. That marks it, raises the standing buildings,
+  and is idempotent.
+- The building announces `upgradeResearched` itself.
+- The bar pays and queues instead of researching instantly, and shows
+  "Researching..." while it runs.
+
+**Rally points and recruit squads.** `unitTrained` carries the original's four
+arguments. `Match` orders a trained unit to its building's rally point. The
+squad is carried, unused, until squads exist (slice 7). Both are saved.
+
+**Passive regen**, for units and buildings: after `hp_regen_delay_s` of peace,
+`hp_regen` a second, accumulated in whole points, and a hit pauses it.
+`UnitStats::hpRegen` is a double, unlike its neighbours. It feeds an
+accumulator, and 0.8f crosses each whole point on a different step than the
+original's 64-bit 0.8 does.
+
+**Save:** a building's `auto_train`, `recruit_squad`, `research_queue`,
+`research_progress` and `rally` (`[]` for none), in the original's shapes. A
+save without `auto_train` keeps the data's seed.
+
+**Reproduced** (`verify_buildings` at `50741d1`, re-run 10 September):
+- **3**: no rally emits INF; a trained unit carries the rally; the rally
+  round-trips through a save.
+- **3b**: research is not done after 1 s, is done once its time elapses, and
+  the queue empties.
+- **3c**: the cap is hall plus farm (12); a living unit and a queued soldier
+  use their space; a full town refuses; the storehouse is a deposit point.
+- **3e**: all eleven auto-train lines, including the reserve floor at exactly
+  cost plus reserve, the round-robin, and the supply cap.
+- **3d**: a worker regenerates "20 -> 23", not inside the delay, and a hit
+  pauses it.
+
+**The soldier's hit points are a race in the oracle.** `verify_combat` prints
+45 on some runs and 38 on others, on the same machine and project.
+- A probe ran the harness's fight in a scratch copy of the game, with the
+  soldier's hit points logged per step.
+- The original staggers each unit's first thinking tick by `randf()`. When the
+  draw lets the raider's fifth blow land at 5.1 s, a step before the soldier's
+  killing blow, the soldier ends on 30 + 8 = 38. Otherwise it ends on 36 + 9 =
+  45.
+- It printed 38 in two runs of seven.
+- With the stagger zeroed, as the port runs, the original's own code gives 45
+  on every run, on exactly the port's hit timeline. `test_wb_combat` pins 45.
+- The harness asserts only "hp < max", so it passes either way.
+
+**Fixtures that had to change:**
+- Every manual training case gains a hall for supply and turns its barracks'
+  production off, exactly as the original's harness clears `auto_train` for
+  the manual path.
+- The snapshot suite's training boards gain a hall.
+- `test_wb_hud`'s drain can no longer empty the treasury by clicking. Supply
+  stops it at five workers, 50 wood short. It now buys two through the bar and
+  spends the rest directly, and counts only a button greyed on cost, not for
+  want of space.
+- "A winner stops swinging" asserted that the winner's hit points stay equal.
+  They now rise, so it asserts they never drop.
+
+**What auto-production did to `test_wb_match`:** eleven new failures. The Town
+Hall now trains workers from the first half-second of a boot, which moves the
+wood, unit-count and gathering baselines. They belong to slice 10's re-pin of
+the match against `main.gd`, which auto-trains the same way.
+
+**Not yet in the bar:** the per-building auto-train toggles, the recruit-squad
+switch and rally placement. They are presentation, and the simulation calls
+under them exist.
+
+**Result (GCC, 10 September):** buildings 137/0, combat 69/0 (the soldier on
+45), worker 94/0, hud 131/0 and snapshot 160/0. Still red:
+- audio 5 (slice 11);
+- selection 5 (slice 10);
+- match 44 (slice 10): slice 0's 33, plus the eleven auto-production moved.

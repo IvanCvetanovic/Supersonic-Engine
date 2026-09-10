@@ -674,7 +674,7 @@ void testEachGameplaySignalPlaysItsOwnSound() {
         void (*emit)(WolfBrigade::EventBus&);
     };
     const Edge edges[] = {
-        { "train",    [](WolfBrigade::EventBus& b) { b.unitTrained.Emit("soldier", glm::vec2(0.0f)); } },
+        { "train",    [](WolfBrigade::EventBus& b) { b.unitTrained.Emit("soldier", glm::vec2(0.0f), glm::vec2(0.0f), "garrison"); } },
         { "place",    [](WolfBrigade::EventBus& b) { b.buildingPlaced.Emit(nullptr); } },
         { "build",    [](WolfBrigade::EventBus& b) { b.buildingCompleted.Emit(nullptr); } },
         { "death",    [](WolfBrigade::EventBus& b) { b.unitDied.Emit(nullptr); } },
