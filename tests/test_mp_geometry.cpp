@@ -249,6 +249,8 @@ void BuilderPlacesEveryBodyType() {
     CHECK(sphere && Close(sphere->radius, 0.5, 1e-6));
     const auto* rigid = registry.try_get<RigidBodyComponent>(ball);
     CHECK(rigid && rigid->friction == LevelBuilder::kBodyFriction && rigid->restitution == LevelBuilder::kBodyRestitution);
+    CHECK(rigid && rigid->lockPosition == LevelBuilder::kPlaneLockPosition &&
+          rigid->lockRotation == LevelBuilder::kPlaneLockRotation);
 
     const auto* pad = registry.try_get<BoxColliderComponent>(built.entities.at("pad"));
     CHECK(pad && pad->isTrigger && Close(pad->size.x, 0.4, 1e-6) && Close(pad->size.y, 0.6, 1e-6));
@@ -257,10 +259,14 @@ void BuilderPlacesEveryBodyType() {
     // The landing mutation: statics left out, everything else as it was.
     entt::registry bare;
     options.withStatics = false;
+    options.lockToPlane = false;
     CHECK_MSG(LevelBuilder::Build(scene, bare, options, built, error), error);
     CHECK_EQ(built.statics, 0);
     CHECK_EQ(built.entities.size(), std::size_t{2});
     CHECK(built.entities.count("ball") == 1 && built.entities.count("pad") == 1);
+    // The locks are the builder's to give: asked not to, it locks nothing.
+    CHECK(!glm::any(bare.get<RigidBodyComponent>(built.entities.at("ball")).lockPosition) &&
+          !glm::any(bare.get<RigidBodyComponent>(built.entities.at("ball")).lockRotation));
 
     // A trigger from metadata: the box LevelRuntime builds, at its offset.
     const entt::entity trigger = LevelBuilder::AddTriggerFromMetadata(scene, "pad", registry, error);

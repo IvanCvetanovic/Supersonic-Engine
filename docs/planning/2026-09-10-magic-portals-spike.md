@@ -268,18 +268,29 @@ and every platform in these levels is a hull.
 - **The test:** `test_physics` gained `testQueriesSeeAHull`.
 - **Why the port needed it:** it is the ground check every character needs.
 
-**F1 does not bite this game.** A kinematic slab that slides sideways leaves its
-rider where it was, which is F1 exactly. But every mover in the 128 levels
-travels vertically:
+**F1 bites in one direction only.** A kinematic slab that slides sideways leaves
+its rider where it was (carried -0.007), which is F1 exactly. That half never
+arises here, because every mover in the 128 levels travels vertically:
 - **14 lifts:** their `a` and `b` markers differ only in y;
 - **15 moving platforms;**
 - **46 switched doors.**
 
 This was counted from the converted levels against `entity_roles.json`.
-Vertical motion carries by displacement: 0.996 of the way when rising. What is
-left is the daylight when a platform starts downward, up to 5 px at 1 m/s. Whether
-that matters depends on the player's body, and a controller that snaps to the
-floor would not show it. F1 is not needed before the port.
+
+The vertical half does arise:
+- **Rising:** carries by displacement, 0.996 of the way.
+- **Descending:** a slab going down at 1 m/s left up to 5.07 px of daylight
+  under its rider, where free fall alone allows about 2.5 px (v²/2g). With the S1
+  locks on (below) it left 10.11 px.
+
+The likely mechanism, not yet confirmed: the solver leaves a kinematic body's
+velocity out of the contact (ARCHITECTURE.md §7m), so a descending platform
+looks stationary to it. Each contact stops the rider dead, and then it falls
+again, a sawtooth.
+
+Riding a lift down is something the player does, so this part of F1 is in scope
+for the port. It is a velocity term in the contact solve, not the general case
+the readiness doc costed at 2-4 days.
 
 **F2 is real, and it shapes the choice of player body.** A kinematic player
 never trips a trigger, so the port has two options:
@@ -294,11 +305,38 @@ platform that is going down.
 **Portals need no engine work.** A velocity written at the exit survives the
 solver exactly.
 
+### S1 - built, 10 September
+
+`RigidBodyComponent` has `lockPosition` and `lockRotation` (ARCHITECTURE.md
+§7e). `LevelBuilder` locks every body it builds: position z, and rotation x and
+y (`kPlaneLockPosition/Rotation`). The spike's player and crates get the same.
+
+Rerun on GCC 13.3 and MSVC 14.50, with the same numbers on both:
+- **Drift:** every row reads exactly z 0.0000 px and tilt 0.00000 rad, sleep on
+  and off, the pushed crate across the seam included. No threshold fails, where
+  four did.
+- **Landing, triggers and portal:** unchanged.
+- **Riders:** sideways carry is 0.000, and a slab descending under its rider
+  leaves 10.11 px of daylight (above).
+- **`MagicPortalsSpike --unlocked`:** reproduces the first table to the last
+  printed digit. So a body with no locks steps exactly as it did before, which
+  is also what `test_determinism` keeping its constant says.
+
+Tests:
+- **`test_physics`** gains three tests, 263 checks in all:
+  - a locked axis is held exactly, not nearly;
+  - a joint anchored out of the plane cannot pull a locked body into it;
+  - a point joint still holds a plane-locked bob. Its effective mass loses a
+    row to the lock, and it used to be dropped whole.
+- **`test_serialize`** round-trips both fields.
+- **The full suite:** 79 of 79 pass under GCC. Every suite the locks touch
+  passes under MSVC.
+
 ### Next
 
-1. **S1: the per-axis lock.** It locks translation along z and rotation about x
-   and y, with rotation about z left free, and gets its own engine tests.
-   Afterwards the spike is rerun: the drift rows are the acceptance test.
+1. **F1's descending half.** Give a kinematic body's velocity to the contact
+   solve, then rerun the spike's rider rows: a slab going down must take its
+   rider with it.
 2. **The port proper, on level30.** A dynamic player with rotation frozen,
    driven by the remake's `player.json` (as data), with the portal system on
    `Portal.hpp`.

@@ -27,6 +27,7 @@
 #include <unordered_map>
 
 #include <entt/entt.hpp>
+#include <glm/glm.hpp>
 
 namespace MagicPortals::LevelBuilder {
 
@@ -44,11 +45,21 @@ inline constexpr double kBodyDepthMetres = 1.0;
 inline constexpr float kBodyFriction = 1.0f;
 inline constexpr float kBodyRestitution = 0.0f;
 
+// The 2D port's locks: every rigid body stays in the plane - no motion along z -
+// and turns about z only. Unlocked, the spike measured a resting crate 30 px out
+// of the plane in a minute and a pushed one leaving the level. S1, recorded in
+// the spike doc.
+inline const glm::bvec3 kPlaneLockPosition{false, false, true};
+inline const glm::bvec3 kPlaneLockRotation{true, true, false};
+
 struct Options {
     std::filesystem::path prismDirectory;
     // False leaves out every StaticBody2D: the mutation a landing check must
     // fail, since a body over no geometry has nothing to land on.
     bool withStatics = true;
+    // Every rigid body locked to the plane (kPlaneLock*). Off only to measure
+    // what the solver does without the locks: MagicPortalsSpike --unlocked.
+    bool lockToPlane = true;
 };
 
 struct Built {

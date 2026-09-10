@@ -7,7 +7,12 @@
 // before the port - not a regression, which is why this is not a ctest suite: a
 // red test here would only ever mean "not built yet".
 //
-//   MagicPortalsSpike [levels-dir] [data-dir]
+//   MagicPortalsSpike [--unlocked] [levels-dir] [data-dir]
+//
+// Every body is locked to the plane (S1, LevelBuilder::kPlaneLock*) unless
+// --unlocked is given, which measures the solver as it was before the locks -
+// and, since an unlocked body's arithmetic is unchanged, must reproduce the
+// first table in the doc to the digit.
 //
 // Built with -DSUPERSONIC_BUILD_MAGICPORTALS=ON. The level is read from outside
 // the repository (SUPERSONIC_MAGICPORTALS_LEVELS); the player's size and the
@@ -74,6 +79,7 @@ struct PlayerBody {
 };
 
 int g_failures = 0;
+bool g_lockToPlane = true;
 
 [[noreturn]] void Die(const std::string& why) {
     std::fprintf(stderr, "MagicPortalsSpike: %s\n", why.c_str());
@@ -176,6 +182,7 @@ LevelBuilder::Built LoadLevel(entt::registry& registry, const Tscn::Scene& scene
     LevelBuilder::Options options;
     options.prismDirectory = paths.prisms;
     options.withStatics = withStatics;
+    options.lockToPlane = g_lockToPlane;
     LevelBuilder::Built built;
     std::string error;
     if (!LevelBuilder::Build(scene, registry, options, built, error)) Die(error);
@@ -205,6 +212,7 @@ entt::entity AddPlayer(entt::registry& registry, const glm::dvec2& atPx, const P
     rigid.allowSleep = allowSleep;
     rigid.friction = LevelBuilder::kBodyFriction;
     rigid.restitution = LevelBuilder::kBodyRestitution;
+    if (g_lockToPlane) rigid.lockPosition = LevelBuilder::kPlaneLockPosition; // rotation is frozen already
     registry.emplace<TagComponent>(entity, TagComponent{"player"});
     return entity;
 }
@@ -219,6 +227,10 @@ entt::entity AddCrate(entt::registry& registry, const glm::dvec2& atPx, const gl
     rigid.allowSleep = allowSleep;
     rigid.friction = LevelBuilder::kBodyFriction;
     rigid.restitution = LevelBuilder::kBodyRestitution;
+    if (g_lockToPlane) {
+        rigid.lockPosition = LevelBuilder::kPlaneLockPosition;
+        rigid.lockRotation = LevelBuilder::kPlaneLockRotation;
+    }
     return entity;
 }
 
@@ -476,8 +488,14 @@ Traversal MeasurePortal(const Tscn::Scene& scene, const Paths& paths, const Port
 
 int main(int argc, char** argv) {
     Paths paths;
-    paths.levels = argc > 1 ? argv[1] : MAGICPORTALS_LEVELS_DIR;
-    paths.data = argc > 2 ? argv[2] : MAGICPORTALS_DATA_DIR;
+    std::vector<std::string> positional;
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--unlocked") g_lockToPlane = false;
+        else positional.push_back(arg);
+    }
+    paths.levels = positional.size() > 0 ? positional[0] : MAGICPORTALS_LEVELS_DIR;
+    paths.data = positional.size() > 1 ? positional[1] : MAGICPORTALS_DATA_DIR;
     paths.prisms = std::filesystem::temp_directory_path() / "supersonic-mp-spike";
 
     Tscn::Scene scene;
@@ -503,6 +521,8 @@ int main(int argc, char** argv) {
                 body.widthPx, body.heightPx);
     std::printf("  portals   %s, speed x%.2f, exit offset %.1f px (portals.json, every value marked _guess)\n",
                 transit.momentumMode.c_str(), transit.exitSpeedScale, transit.exitOffsetPx);
+    std::printf("  locks     %s\n", g_lockToPlane ? "every body locked to the plane: position z, rotation x and y (S1)"
+                                                  : "NONE - --unlocked, the solver as the first run measured it");
 
     std::printf("\n1. Out-of-plane drift over %d ticks\n", kDriftTicks);
     const char* drives[] = {"resting bodies", "crate pushed across the seam", "player walking"};

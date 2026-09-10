@@ -127,6 +127,10 @@ bool Build(const Tscn::Scene& scene, entt::registry& registry, const Options& op
             auto& rigid = registry.emplace<RigidBodyComponent>(entity);
             rigid.friction = kBodyFriction;
             rigid.restitution = kBodyRestitution;
+            if (options.lockToPlane) {
+                rigid.lockPosition = kPlaneLockPosition;
+                rigid.lockRotation = kPlaneLockRotation;
+            }
             ++out.rigids;
         } else if (isArea) {
             ++out.areas;
