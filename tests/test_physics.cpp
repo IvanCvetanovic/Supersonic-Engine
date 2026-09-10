@@ -1286,6 +1286,42 @@ static void testQueriesSeeAHull() {
               "unless the ray asks for triggers");
 }
 
+static void testACrateDroppedFlatOnAHullLandsFlat() {
+    // Caught by its whole bottom face from the step it comes inside the margin.
+    // It was caught by ONE point on the approach - apart, an edge axis of the
+    // two boxes won the face axis's tie (test_convexhull says why) - and a crate
+    // held by one point at its edge is turned by being held. Free, it wobbles;
+    // locked to a plane, every kick lands on the one axis left and they add up:
+    // the Magic Portals spike saw a crate on a sinking platform tip 0.44 rad.
+    for (const bool locked : {false, true}) {
+        entt::registry registry;
+        makeHullBody(registry, glm::vec3(0.0f), "Cube", 0.0f, glm::vec3(6.0f, 1.0f, 6.0f));
+        const auto crate = makeBox(registry, glm::vec3(0.0f, 1.5f, 0.0f));
+        auto& body = registry.get<RigidBodyComponent>(crate);
+        body.allowSleep = false;
+        body.restitution = 0.0f;
+        if (locked) lockToPlane(body);
+
+        // TIPPING, about the two level axes. A hard landing can still yaw a free
+        // crate a little - the solver meets the four corners one at a time, and
+        // friction at each answers the others - but that turns it about the
+        // vertical, on its face, and is the solver's rather than this.
+        float worstTip = 0.0f;
+        for (int i = 0; i < 90; ++i) {
+            PhysicsSystem::Update(registry, 1.0f / 60.0f);
+            const glm::vec3 spin = registry.get<RigidBodyComponent>(crate).angularVelocity;
+            worstTip = std::max(worstTip, std::sqrt(spin.x * spin.x + spin.z * spin.z));
+        }
+        const std::string which = locked ? "locked to a plane" : "free";
+        CHECK_MSG(worstTip < 0.05f, which + ": a flat landing tips nothing, and it tipped at " +
+                                        std::to_string(worstTip) + " rad/s");
+        const auto& transform = registry.get<TransformComponent>(crate);
+        const glm::vec3 up = glm::normalize(glm::vec3(transform.getModelMatrix()[1]));
+        CHECK_MSG(up.y > std::cos(0.01f), which + ": and it is still flat");
+        CHECK_MSG(test::nearly(transform.position.y, 1.0f, 0.02f), which + ": on the top face");
+    }
+}
+
 static void testAHullRestsOnTerrain() {
     // Named rather than implied: a hull against a HEIGHTFIELD collides as the
     // box that contains it, because the heightfield's contact model is written
@@ -3305,6 +3341,7 @@ static void runTests() {
     testALockedBodyNeverLeavesItsPlane();
     testAJointCannotPullALockedBodyOutOfItsPlane();
     testAPointJointStillHoldsAPlaneLockedBody();
+    testACrateDroppedFlatOnAHullLandsFlat();
 
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();

@@ -96,6 +96,24 @@ static void testNormalAlwaysPointsFromAtowardB() {
     CHECK(right.normal.x > 0.9f);
 }
 
+static void testAGapInsideTheMarginIsReportedAsItIs() {
+    // A crate one centimetre above a slab, inside a margin of five. Apart, an
+    // edge axis of two axis-aligned boxes points exactly where a face axis does
+    // - x crossed with z is y - and the face bias used to MULTIPLY the overlap:
+    // a negative one came out more negative and the edge took the tie. The gap
+    // was reported two percent wide, from an axis that was never the face's.
+    const auto ground = makeBox(glm::vec3(0.0f), glm::vec3(2.0f, 0.25f, 2.0f));
+    const auto crate = makeBox(glm::vec3(0.0f, 0.66f, 0.0f), glm::vec3(0.4f));
+
+    const auto manifold = CollideObbObb(ground, crate, 0.05f);
+    CHECK(manifold.colliding);
+    CHECK_MSG(manifold.speculative, "a centimetre apart is apart");
+    // The point itself: MaxPenetration() floors at zero, so it never says "apart".
+    CHECK_MSG(manifold.pointCount == 1 && ::test::nearly(manifold.points[0].penetration, -0.01f, 1e-5f),
+              "the gap is a centimetre, not " + std::to_string(-manifold.points[0].penetration));
+    CHECK_MSG(::test::nearly(manifold.normal.y, 1.0f, 1e-5f), "and it is straight up");
+}
+
 static void testRotationChangesTheAnswer() {
     // The whole point. A box rotated 45 degrees about Z reaches sqrt(2)/2 along
     // its diagonal - about 0.707 - where its unrotated extent is 0.5. Two boxes
@@ -456,6 +474,7 @@ static void runTests() {
     testAxisAlignedOverlapMatchesTheOldAabbAnswer();
     testFaceContactProducesAManifoldNotAPoint();
     testNormalAlwaysPointsFromAtowardB();
+    testAGapInsideTheMarginIsReportedAsItIs();
     testRotationChangesTheAnswer();
     testAnAabbTestWouldHaveBeenWrong();
     testSphereAgainstARotatedBox();

@@ -286,7 +286,8 @@ The vertical half does arise:
 The likely mechanism, not yet confirmed: the solver leaves a kinematic body's
 velocity out of the contact (ARCHITECTURE.md §7m), so a descending platform
 looks stationary to it. Each contact stops the rider dead, and then it falls
-again, a sawtooth.
+again, a sawtooth. (Confirmed, and not the whole story - the locked number was
+mostly a narrowphase bug: *F1, diagnosed* below.)
 
 Riding a lift down is something the player does, so this part of F1 is in scope
 for the port. It is a velocity term in the contact solve, not the general case
@@ -332,6 +333,110 @@ Tests:
 - **The full suite:** 79 of 79 pass under GCC. Every suite the locks touch
   passes under MSVC.
 
+### F1, diagnosed - and a narrowphase bug it was hiding
+
+Before changing the contact solve, the rider rig got the rows that tell the
+mechanisms apart: three sinking speeds, the slab's velocity left unwritten, and
+the slab given the level's material or left on the engine's defaults. The first
+run's rig had left it on the defaults (friction 0.4, bounce 0.3); `LevelBuilder`
+gives a mover friction 1 and bounce 0.
+
+| Sinking slab | Locked | Unlocked | Free fall, v²/2g |
+|---|---|---|---|
+| 0.5 m/s | carried 0.736, up to 6.38 px | 0.965, 0.93 px | 0.62 px |
+| 1 m/s | 0.919, 8.50 px | 0.917, 3.86 px | 2.50 px |
+| 2 m/s | 0.835, 16.26 px, fell off | 0.858, 15.71 px | 10.00 px |
+| 1 m/s, velocity unwritten | same as 1 m/s, every digit | same | |
+| 1 m/s, default slab (bounce 0.3) | 0.842, 10.11 px | 0.895, 5.07 px | |
+
+Three findings:
+- **The velocity field is not read.** Writing it or not changes nothing, to
+  the last digit. That half of the hypothesis holds.
+- **Part of the first run's gap was the rig.** The earlier 10.11 and 5.07 px
+  came from the slab's default bounce; with the level's material they are 8.50
+  and 3.86.
+- **The locked excess was something else.** A tick-by-tick trace at 0.5 m/s
+  showed the locked crate TIPPING: its in-plane rotation reached -0.44 rad by
+  tick 44, one same-signed kick each time it caught up with the slab. Unlocked,
+  the kicks landed about x, alternated, and cancelled, which is why the unlocked
+  gap looked tame.
+
+The kicks came from the narrowphase. SAT prefers a face axis to an edge axis
+unless the edge beats it by `kFaceBias` (2%), and the bias MULTIPLIED the
+overlap. For shapes a hair apart the overlap is negative, so the multiply made
+the edge's number more negative, and the edge won the tie it was meant to lose.
+For two level boxes an edge axis points exactly where the face axis does (x
+crossed with z is y), so a crate coming in to land was caught by one edge-edge
+point instead of its four-corner face, and the catch turned it.
+
+**Fixed in both narrowphases** (`CollisionSAT` for box-box, `CollisionHull` for
+everything with a hull). The handicap now multiplies an overlap and divides a
+gap, and a winner's depth is reported as measured rather than un-biased back
+(ARCHITECTURE.md, the SAT details). Tests:
+- **`test_convexhull`:** a crate one centimetre above a slab is caught by four
+  points under its middle, in both orders.
+- **`test_physics`:** a crate dropped flat onto a hull lands without tipping,
+  free and plane-locked.
+- **`test_sat`:** the gap is reported as one centimetre, not two percent more.
+
+With the old comparison patched back in, the first two fail: one point, off
+centre; and landings that tip at 1.97 rad/s free and 1.67 locked. The third
+sees only the reported depth - for two level boxes the edge axis and the face
+axis give the same normal and point - and fails against the old file whole,
+with a gap of 0.0102.
+
+Riders afterwards, the same on GCC 13.3 and MSVC 14.50, locked and unlocked
+identical to the digit:
+
+| Sinking slab | Carried | Gap | Free fall |
+|---|---|---|---|
+| 0.5 m/s | 0.961 | -0.01 to 0.83 px | 0.62 px |
+| 1 m/s | 0.936 | 0.41 to 3.05 px | 2.50 px |
+| 2 m/s | 0.893 | 1.24 to 11.80 px | 10.00 px |
+| 1 m/s, default slab | 0.860 | 0.45 to 8.46 px | 2.50 px |
+
+What is left over free fall is the sawtooth the solver makes by treating the
+slab as still, which is the kinematic-velocity half of F1. Drift, landing,
+triggers and portal are unchanged, with 0 thresholds failed.
+
+**The unlocked table moved too, and says the same thing more sharply.** Rerun
+with `--unlocked`:
+- **Resting crates, asleep:** they now hold at 0.24 px and 0.0055 rad, and
+  pass. The first table's 0.0118 rad was the tilt their landing gave them at
+  tick 7, and that tilt was this bug.
+- **Resting crates, awake:** they still drift, 22.98 px and 0.65 rad, over the
+  threshold by tick 61.
+- **The pushed crate:** it still leaves the plane, at 5,352 px.
+
+So S1 is still needed. `--unlocked` no longer reproduces the first table,
+because the narrowphase under it changed.
+
+**Verified:**
+- **GCC 13.3:** the full suite passes, 79 of 79.
+- **MSVC 14.50:** `test_sat`, `test_convexhull`, `test_physics`,
+  `test_determinism`, `test_mp_geometry` and `test_mp_levels` all pass.
+- **The spike:** its tables, locked and unlocked, match to the digit on both.
+
+**`test_determinism` moved, deliberately, from 881310125714727098 to
+6794834318059694172**, on both toolchains. The canonical scene has boxes coming
+in to land, so its trajectory changed. To check that the fix was the only
+cause, the one other number the fix touched was put back: the old arithmetic for
+an overlapping edge contact's depth. The hash stayed where it was.
+
+Two more findings, recorded and not fixed:
+- **A hard landing yaws a free box.** A crate dropping flat onto a hull at 2.8
+  m/s, with the static's bounce, comes off turning 0.21 rad/s about the vertical
+  and drifting 0.2 m/s sideways. The cause is sequential impulses meeting the
+  four corners one at a time, with friction at each answering the others. It is
+  flat throughout, and a plane-locked body cannot yaw, so the port does not see
+  it.
+- **A collider with no rigid body bounces at 0.3.** Such colliders take
+  `kRestitution` (0.3), and restitution combines as the larger of the two. So
+  every static in a level returns 0.3 of an impact whatever the body's own
+  restitution is. A body resting on one also re-bounces a little every tick,
+  because g·dt (0.16 m/s) is above `kRestVelocity` (0.1). The port has to decide
+  what the original's static fixtures bounced at, and give the statics that.
+
 ### Next
 
 1. **F1's descending half.** Give a kinematic body's velocity to the contact
@@ -339,4 +444,4 @@ Tests:
    rider with it.
 2. **The port proper, on level30.** A dynamic player with rotation frozen,
    driven by the remake's `player.json` (as data), with the portal system on
-   `Portal.hpp`.
+   `Portal.hpp`. Settle what the statics bounce at (above) as part of it.

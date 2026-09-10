@@ -350,7 +350,15 @@ struct Rider {
 // level30's own shapes on a rig of the spike's: its 256 x 32 slab as the moving
 // platform and its small crate as the rider. level30's three lifts are doors
 // that rise into the ceiling and carry nothing, so they cannot answer F1.
-Rider MeasureRider(const Tscn::Scene& scene, const Paths& paths, const glm::vec3& velocity) {
+//
+// Two switches, for the diagnosis. builderMaterial gives the slab what a level
+// mover gets from LevelBuilder (friction 1, bounce 0); off, it keeps the
+// engine's RigidBodyComponent defaults (friction 0.4, bounce 0.3), which is
+// what the first run's rig had. writeVelocity says whether the slab's velocity
+// field is written each tick at all - if nothing reads it, it makes no
+// difference.
+Rider MeasureRider(const Tscn::Scene& scene, const Paths& paths, const glm::vec3& velocity,
+                   bool builderMaterial, bool writeVelocity) {
     const Tscn::Node* shape = scene.FindNode("platform_ent_966/Body/Shape");
     const Tscn::Value* polygon = shape != nullptr ? shape->Find("polygon") : nullptr;
     if (polygon == nullptr) Die("platform_ent_966 has no polygon");
@@ -372,7 +380,12 @@ Rider MeasureRider(const Tscn::Scene& scene, const Paths& paths, const glm::vec3
     const entt::entity platform = registry.create();
     registry.emplace<TransformComponent>(platform);
     registry.emplace<ConvexHullColliderComponent>(platform).sourcePath = prism;
-    registry.emplace<RigidBodyComponent>(platform).isKinematic = true;
+    auto& slab = registry.emplace<RigidBodyComponent>(platform);
+    slab.isKinematic = true;
+    if (builderMaterial) {
+        slab.friction = LevelBuilder::kBodyFriction;
+        slab.restitution = LevelBuilder::kBodyRestitution;
+    }
     const entt::entity crate = AddCrate(registry, {0.0, topPx - size.y * 0.5}, size, false);
 
     // Positive: daylight under the crate. Negative: sunk into the slab.
@@ -391,9 +404,10 @@ Rider MeasureRider(const Tscn::Scene& scene, const Paths& paths, const glm::vec3
     rider.highGapPx = -std::numeric_limits<double>::infinity();
     for (int i = 0; i < 60; ++i) {
         registry.get<TransformComponent>(platform).position += velocity * kStep;
-        // Written, and ignored: the contact solve leaves a kinematic body's
-        // velocity out (ARCHITECTURE.md 7m). That is F1.
-        registry.get<RigidBodyComponent>(platform).velocity = velocity;
+        // Written - and, as of 4764d94, not read by the contact solve, which
+        // leaves a kinematic body's velocity out (ARCHITECTURE.md 7m). That is
+        // F1. The diagnostic row leaves it unwritten to show exactly that.
+        if (writeVelocity) registry.get<RigidBodyComponent>(platform).velocity = velocity;
         PhysicsSystem::Update(registry, kStep);
         const double gap = gapPx();
         rider.lowGapPx = std::min(rider.lowGapPx, gap);
@@ -558,21 +572,28 @@ int main(int argc, char** argv) {
         "must not land", stripped.tick < 0 ? "PASS" : "FAIL");
 
     std::printf("\n3. Riders on a kinematic mover (F1) - measured, not judged\n");
-    const struct {
-        const char* what;
-        glm::vec3 velocity;
-    } moves[] = {
-        {"rider, slab rising 1 m/s for 1 s", glm::vec3(0.0f, kDriveSpeed, 0.0f)},
-        {"rider, slab sinking 1 m/s for 1 s", glm::vec3(0.0f, -kDriveSpeed, 0.0f)},
-        {"rider, slab sliding sideways 1 m/s for 1 s", glm::vec3(kDriveSpeed, 0.0f, 0.0f)},
+    // A rider left behind by a slab that starts down at v falls freely until it
+    // catches up: at most v^2 / 2g of daylight. More than that means something
+    // threw it upward.
+    const auto freeFallPx = [](float speed) {
+        return static_cast<double>(speed) * speed / (2.0 * Units::kGravity) * Units::kPixelsPerMetre;
     };
-    for (const auto& move : moves) {
-        const Rider rider = MeasureRider(scene, paths, move.velocity);
-        Row(move.what,
+    const auto riderRow = [&](const std::string& what, const glm::vec3& velocity, bool builderMaterial,
+                              bool writeVelocity) {
+        const Rider rider = MeasureRider(scene, paths, velocity, builderMaterial, writeVelocity);
+        Row(what,
             "carried " + Fixed(rider.carried, 3) + ", gap " + Fixed(rider.lowGapPx, 2) + ".." +
                 Fixed(rider.highGapPx, 2) + " px" + (rider.onTop ? "" : ", fell off"),
-            "1.0 is carried", "measured");
-    }
+            velocity.y < 0.0f ? "free fall " + Fixed(freeFallPx(-velocity.y), 2) + " px" : "1.0 is carried",
+            "measured");
+    };
+    riderRow("rider, slab rising 1 m/s for 1 s", glm::vec3(0.0f, kDriveSpeed, 0.0f), true, true);
+    riderRow("rider, slab sinking 0.5 m/s", glm::vec3(0.0f, -0.5f * kDriveSpeed, 0.0f), true, true);
+    riderRow("rider, slab sinking 1 m/s", glm::vec3(0.0f, -kDriveSpeed, 0.0f), true, true);
+    riderRow("rider, slab sinking 2 m/s", glm::vec3(0.0f, -2.0f * kDriveSpeed, 0.0f), true, true);
+    riderRow("rider, sinking 1 m/s, velocity unwritten", glm::vec3(0.0f, -kDriveSpeed, 0.0f), true, false);
+    riderRow("rider, sinking 1 m/s, default slab (bounce 0.3)", glm::vec3(0.0f, -kDriveSpeed, 0.0f), false, true);
+    riderRow("rider, slab sliding sideways 1 m/s for 1 s", glm::vec3(kDriveSpeed, 0.0f, 0.0f), true, true);
 
     std::printf("\n4. Triggers against the player (F2)\n");
     const int dynamicTicks = MeasureTrigger(scene, paths, body, false);

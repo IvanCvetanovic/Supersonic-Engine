@@ -419,6 +419,61 @@ void testTheReferenceFaceIsTheOneFacingTheOtherShape() {
     CHECK_NEAR(downward.MaxPenetration(), 0.1f);
 }
 
+void testACrateJustAboveASlabIsCaughtByItsWholeFace() {
+    // The same pair a centimetre apart, inside the speculative margin: a crate
+    // about to land. It has to be caught by its whole bottom face. Caught at one
+    // point it is turned by the catch, and the Magic Portals spike watched a
+    // crate riding a sinking platform tip a quarter of a radian that way, a kick
+    // at a time.
+    //
+    // Apart, an edge axis of two axis-aligned hulls points exactly where the
+    // face axis does - the crate's x edge crossed with the slab's z edge is y -
+    // and the face bias used to MULTIPLY the overlap, so a negative one came out
+    // more negative and the edge took the tie. Edge against edge is one point,
+    // at whichever pair of edges the loop reached first.
+    ConvexHull cube;
+    CHECK(cube.Build(cubeCorners(0.5f)));
+
+    glm::mat3 slabBasis(1.0f);
+    slabBasis[0] = glm::vec3(6.0f, 0.0f, 0.0f);
+    slabBasis[2] = glm::vec3(0.0f, 0.0f, 6.0f);
+
+    CollisionHull::Instance slab;
+    CHECK(CollisionHull::MakeInstance(cube, glm::vec3(0.0f), slabBasis, slab));
+
+    CollisionHull::Instance crate;
+    CHECK(CollisionHull::MakeInstance(cube, glm::vec3(0.0f, 1.01f, 0.0f), glm::mat3(1.0f), crate));
+
+    // Both orders, as above.
+    const struct {
+        const CollisionHull::Instance& a;
+        const CollisionHull::Instance& b;
+        float up;
+        const char* what;
+    } orders[] = {{slab, crate, 1.0f, "slab then crate"}, {crate, slab, -1.0f, "crate then slab"}};
+    for (const auto& order : orders) {
+        const CollisionSAT::Manifold hovering = CollisionHull::CollideHullHull(order.a, order.b, 0.05f);
+        CHECK_MSG(hovering.colliding && hovering.speculative,
+                  std::string(order.what) + ": inside the margin and apart");
+        CHECK_MSG(hovering.pointCount == 4,
+                  std::string(order.what) + ": four points, the face, not " +
+                      std::to_string(hovering.pointCount));
+        CHECK(nearlyVec(hovering.normal, glm::vec3(0.0f, order.up, 0.0f)));
+        // Every point, rather than MaxPenetration(), which floors at zero.
+        bool allAtTheGap = hovering.pointCount > 0;
+        for (int i = 0; i < hovering.pointCount; ++i) {
+            allAtTheGap = allAtTheGap && test::nearly(hovering.points[i].penetration, -0.01f, 1e-5f);
+        }
+        CHECK_MSG(allAtTheGap, std::string(order.what) + ": every point a centimetre apart");
+
+        glm::vec3 centroid(0.0f);
+        for (int i = 0; i < hovering.pointCount; ++i) centroid += hovering.points[i].position;
+        if (hovering.pointCount > 0) centroid /= static_cast<float>(hovering.pointCount);
+        CHECK_MSG(std::fabs(centroid.x) < 1e-4f && std::fabs(centroid.z) < 1e-4f,
+                  std::string(order.what) + ": held under its middle, not at an edge");
+    }
+}
+
 void testAWedgeRestsOnItsSlope() {
     // The shape hulls exist for. A ramp is one convex solid and was three or
     // four boxes that never quite fit.
@@ -584,6 +639,7 @@ void runTests() {
     testAHullOfACubeCollidesLikeABox();
     testAFaceContactIsAPatchAndNotAPoint();
     testTheReferenceFaceIsTheOneFacingTheOtherShape();
+    testACrateJustAboveASlabIsCaughtByItsWholeFace();
     testAWedgeRestsOnItsSlope();
     testAHullSquashedOnOneAxisCollidesAsWhatItLooksLike();
     testACapsuleLyingOnAFaceIsHeldAtBothEnds();

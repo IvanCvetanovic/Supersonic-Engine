@@ -19,6 +19,15 @@ constexpr float kEpsilon = 1.0e-6f;
 // flips with them, and a stack shivers.
 constexpr float kFaceBias = 1.02f;
 
+// An axis's overlap as the contest sees it: handicapped by `bias` toward losing.
+// The winner is the SMALLEST overlap, so the handicap makes the number bigger -
+// a multiply when the shapes overlap, a divide when they are apart. A plain
+// multiply made a negative overlap MORE negative, and two shapes a hair apart
+// gave the tie to exactly the edge axis the bias is there to stop.
+float handicapped(float overlap, float bias) {
+    return overlap >= 0.0f ? overlap * bias : overlap / bias;
+}
+
 // Enough for a clipped face. A hull face can have many vertices and each clip
 // plane can add one; sixty-four is far past anything a capped hull produces.
 constexpr int kClipCapacity = 64;
@@ -44,7 +53,8 @@ glm::vec3 worldSupport(const Instance& instance, const glm::vec3& direction) {
 }
 
 struct AxisResult {
-    float overlap{std::numeric_limits<float>::max()};
+    float overlap{std::numeric_limits<float>::max()}; // the winner's, as measured
+    float score{std::numeric_limits<float>::max()};   // and as compared - see handicapped()
     glm::vec3 normal{0.0f, 1.0f, 0.0f};
     int owner{-1};          // 0 = a's face, 1 = b's face, 2 = an edge pair
     uint32_t face{0};
@@ -78,8 +88,10 @@ bool measureAxis(const glm::vec3& axis, const Instance& a, const Instance& b,
     const float overlap = maxA - minB;
     if (overlap < -margin) return false;
 
-    if (overlap * bias < best.overlap) {
-        best.overlap = overlap * bias;
+    const float score = handicapped(overlap, bias);
+    if (score < best.score) {
+        best.overlap = overlap;
+        best.score = score;
         best.normal = normal;
         best.owner = owner;
         best.face = face;
@@ -287,7 +299,7 @@ CollisionSAT::Manifold CollideHullHull(const Instance& a, const Instance& b,
 
         manifold.pointCount = 1;
         manifold.points[0].position = (onA + onB) * 0.5f;
-        manifold.points[0].penetration = best.overlap / kFaceBias;
+        manifold.points[0].penetration = best.overlap;
         return manifold;
     }
 

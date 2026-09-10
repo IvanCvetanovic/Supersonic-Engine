@@ -975,8 +975,10 @@ HUSK's nineteen animated models. What is left is here.
   a transform.
 - **Determinism crosses compilers and C runtimes, measured on x64.**
   `test_determinism` pins the hash of four seconds of the fixture scene as one
-  constant: `881310125714727098`. It holds on MSVC 14.50 against the UCRT and
-  on GCC 13.3 against glibc 2.39.
+  constant: `6794834318059694172`. It holds on MSVC 14.50 against the UCRT and
+  on GCC 13.3 against glibc 2.39. It was `881310125714727098` until the
+  narrowphase's face-bias fix changed how the scene's boxes come in to land;
+  the test's comment says how that move was checked to be only that.
 
   Until 10 September the two runtimes gave different numbers. The whole
   difference was libm: an `atan2f` one ulp apart on tick 29, found by logging

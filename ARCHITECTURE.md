@@ -1154,7 +1154,15 @@ loudly if it is wrong:
 - **Near-ties between a face axis and an edge axis.** Two axes within
   floating-point noise of each other flip between steps, and the contact normal
   flips with them, which reads as a stack that shivers. An edge axis has to beat
-  the best face axis by `kFaceBias` (1.02) before it is taken.
+  the best face axis by `kFaceBias` (1.02) before it is taken - by 2% whichever
+  way the shapes are: the handicap multiplies an overlap and DIVIDES a gap.
+  It used to multiply both, which made a gap wider and handed the tie to the
+  edge exactly when the shapes were apart. Apart, an edge axis of two level
+  boxes points where the face axis does (x crossed with z is y), so a crate
+  coming in to land was caught by one edge-edge point instead of its face and
+  was turned by the catch; locked to a plane, the kicks added up to a crate
+  tipping 0.44 rad on a sinking platform (the Magic Portals spike). The hull
+  path has the same contest and the same fix.
 - **The clip.** Sutherland–Hodgman decides whether an edge crosses the plane by
   comparing the *signs* of the two endpoint distances, not the sign of their
   product: two distances small enough that their product underflows to zero lose
@@ -2263,7 +2271,9 @@ itself perfectly and passes all of them — reproducibility that holds within a
 binary and not between two, which is the same failure one level up. So
 `test_determinism` pins the hash of four seconds of the fixture scene as a
 constant, and **it is one number across C runtimes**: MSVC 14.50 on the UCRT
-and GCC 13.3 on glibc 2.39 both give `881310125714727098`.
+and GCC 13.3 on glibc 2.39 both give `6794834318059694172` (`881310125714727098`
+before the face-bias fix in the SAT details, which changed how the scene's boxes
+come in to land).
 
 It used to be one number per runtime. The Windows toolchains all linked the
 UCRT and agreed with each other, while GCC and clang on glibc gave

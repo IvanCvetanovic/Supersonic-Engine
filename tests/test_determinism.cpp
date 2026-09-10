@@ -127,7 +127,15 @@ static void testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild() {
     // Verified on 10 September on MSVC 14.50 against the UCRT and GCC 13.3
     // against glibc 2.39, both x64 Release. A platform that disagrees now is a
     // finding about that platform, not a second number to write down.
-    constexpr uint64_t kCanonical = 881310125714727098ull;
+    //
+    // Moved once more the same day, and deliberately, from 881310125714727098.
+    // The narrowphase's face bias multiplied a NEGATIVE overlap too, so two
+    // shapes a hair apart gave the tie to an edge axis (ARCHITECTURE.md, the SAT
+    // details), and the canonical scene has such approaches. Checked that the
+    // move is that and nothing else: putting back the old arithmetic for an
+    // overlapping edge contact's depth - the one other number the fix touched -
+    // leaves this value exactly where it is.
+    constexpr uint64_t kCanonical = 6794834318059694172ull;
 
     const uint64_t actual = runFor(240);
     CHECK_MSG(actual == kCanonical,

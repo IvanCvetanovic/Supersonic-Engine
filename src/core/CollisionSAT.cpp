@@ -25,8 +25,18 @@ constexpr float kParallelEpsilon = 1.0e-5f;
 // stack that shivers.
 constexpr float kFaceBias = 1.02f;
 
+// An axis's overlap as the contest sees it: handicapped by `bias` toward losing.
+// The winner is the SMALLEST overlap, so the handicap makes the number bigger -
+// a multiply when the shapes overlap, a divide when they are apart. A plain
+// multiply made a negative overlap MORE negative, and two shapes a hair apart
+// gave the tie to exactly the edge axis the bias is there to stop.
+float handicapped(float overlap, float bias) {
+    return overlap >= 0.0f ? overlap * bias : overlap / bias;
+}
+
 struct AxisResult {
-    float overlap{0.0f};
+    float overlap{0.0f}; // the winner's, as measured
+    float score{0.0f};   // and as it was compared - see handicapped()
     int index{-1};       // 0..2 A faces, 3..5 B faces, 6..14 edge pairs
     bool valid{false};
 };
@@ -58,8 +68,10 @@ bool testAxis(const glm::vec3& axis, const Obb& a, const Obb& b, const glm::vec3
     // can stop a fast body before it crosses the gap.
     if (overlap < -margin) return false;
 
-    if (!best.valid || overlap * bias < best.overlap) {
-        best.overlap = overlap * bias;
+    const float score = handicapped(overlap, bias);
+    if (!best.valid || score < best.score) {
+        best.overlap = overlap;
+        best.score = score;
         best.index = index;
         best.valid = true;
     }
@@ -189,7 +201,7 @@ Manifold CollideObbObb(const Obb& a, const Obb& b, float speculativeMargin) {
     if (best.index >= 6) {
         manifold.pointCount = 1;
         manifold.points[0].position = a.centre + toB * 0.5f;
-        manifold.points[0].penetration = best.overlap / kFaceBias;
+        manifold.points[0].penetration = best.overlap;
         return manifold;
     }
 
