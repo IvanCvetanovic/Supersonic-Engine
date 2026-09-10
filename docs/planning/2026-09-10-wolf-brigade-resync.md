@@ -845,3 +845,64 @@ workers only.
 **Result (GCC, 10 September):** match 317/0 (was 44 red), selection 93/0
 (was 5) and placement 92/0, and nothing else moved. The only red left is
 audio 5, which is slice 11.
+
+## Slice 11a: the eighteen sounds
+
+Slice 11 was three unrelated things in one line: audio, the hero-mode
+pointer and the control scheme. They share no code and no oracle, so it is
+two slices. This one is the audio, and it closes the last red.
+
+**The measurement.** A second probe runs inside a copy of the game project
+and calls the game's own `Audio.stream_for` for every sfx in `audio.json`,
+printing the suite's row: samples, bytes, three landmarks, the peak, and the
+sum and sum of squares over the whole buffer. The ten rows that did not
+change reproduced the 27 August table to the byte. `attack` changed: it is
+now a 50 ms noise tone of 2,205 samples. The seven new sounds are gather,
+hammer, capture, gather_food, heal, cleave and dash.
+
+**The noise wave.** Each sample hashes its index through
+`fposmod(sin(i * 12.9898) * 43758.5453, 1.0)` and mixes 0.65 of that with
+0.35 of a sine at the spec's frequency. `fposmod` is a helper rather than a
+bare `fmod`: the hash is negative about half the time, and Godot's
+correction is the whole of the branch. All five noise rows matched Godot's
+Windows build to the byte under GCC and glibc, sums included. That was not a
+given, because the hash asks two C libraries to agree about the sine of
+arguments up to about 355,000 radians, amplified before a truncation.
+
+**The truncation trap moved.** It had been pinned on `attack` at 55 ms,
+which is now a whole 2,205 samples. Fourteen of the eighteen durations
+divide evenly. The four that do not are shoot and gather_food at 45 ms,
+hammer at 55 ms and gather at 75 ms, and those are the ones pinned now.
+
+**`falloff_linear`** is a pure function, `Audio::FalloffLinear`, pinned at
+seven distances against the game's own function. The guard that keeps
+`silent_px` at least a pixel past `full_px` is unreachable at shipped values,
+so it has a scratch-data case.
+
+**The layer.** It registered a fixed list of the original's eleven
+constants, so the seven new sounds were synthesised and never reached the
+mixer. It now registers every id the data names, as `stream_for` resolves
+any. Three new edges come from signals that already existed:
+- `captureChanged` plays capture;
+- `healed` plays heal, throttled like the combat sounds, as the original
+  throttles it;
+- `abilityUsed` plays the ability's own `sfx` from `abilities.json`.
+
+**Not ported, and written into the layer's header:**
+- **Gather:** it fires on a sprite's impact frame, and there is no frame
+  clock to hang it on.
+- **Hammer:** it is a per-frame build tick throttled to 380 ms, a per-frame
+  emission for a cosmetic.
+- **Positional falloff:** it needs the camera's centre in sim space.
+
+**Found while porting:**
+- The research test failed because it looked for a researching building on
+  the boot board. The restructure moved research from the Town Hall to the
+  Armory and the Storehouse, so the test now places an Armory.
+- Research also takes time now. The announcement is asserted when the
+  research lands, and asserted absent at the click.
+- The unknown-waveform case had used "noise" as its made-up name.
+
+**Result (GCC, 10 September):** audio 419/0 with a device and 393/0
+without one (was 5 red); the suite's floor is now 393. **Every one of the 17
+suites is green.**

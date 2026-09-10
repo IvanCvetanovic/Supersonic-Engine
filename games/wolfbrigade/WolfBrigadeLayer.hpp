@@ -347,9 +347,24 @@ private:
     // register those samples with the engine once and play them.
     void attachAudio(entt::registry& registry);
 
-    // Subscribes the nine gameplay signals `connect_events` wires. Re-run on
-    // every new Match, because a Match owns its own EventBus and the old one
-    // died with the run it belonged to.
+    // Subscribes the ten gameplay signals `connect_events` wires, and the four
+    // sounds the original plays from its entities whose trigger is already a
+    // signal here: a blow, an arrow, a heal and an ability. Re-run on every
+    // new Match, because a Match owns its own EventBus and the old one died
+    // with the run it belonged to.
+    //
+    // NOT YET, and each for a reason:
+    //   - `gather` and `gather_food` fire when a worker's swing VISUALLY
+    //     lands - on the gather clip's impact frame, or on a tween where there
+    //     is no clip. The trigger is a sprite, and the port has no frame clock
+    //     to hang it on until presentation does.
+    //   - `hammer` fires every frame a builder adds progress, throttled to
+    //     380ms. The trigger is real simulation, but porting it is a
+    //     per-frame emission for a throttled cosmetic; it waits with gather.
+    //   - positional falloff. `play_sfx_at` attenuates world sounds by their
+    //     distance from the camera, and Audio::FalloffLinear ports the curve.
+    //     Applying it needs the camera's centre in sim space, and every sound
+    //     here plays at full volume until the layer's camera does that.
     void connectAudioEvents();
 
     // One sfx, rate-limited per id.

@@ -8,6 +8,26 @@ namespace Audio {
 
 using Supersonic::Json::Value;
 
+namespace {
+
+// Godot's `fposmod`: fmod, and then the divisor added back when the result's
+// sign disagrees with it.
+//
+// A helper rather than a bare std::fmod because the correction IS the branch.
+// The noise hash below takes fmod of a sine times 43758.5453, which is
+// negative about half the time; std::fmod keeps the sign of the dividend, and
+// without the `+= y` half the noise samples would sit in [-1, 0) instead of
+// [0, 1) and the waveform would be a different sound. The trailing `+ 0.0` is
+// Godot's too - it turns a negative zero into a positive one.
+double fposmod(double x, double y) {
+    double value = std::fmod(x, y);
+    if ((value < 0.0 && y > 0.0) || (value > 0.0 && y < 0.0)) value += y;
+    value += 0.0;
+    return value;
+}
+
+} // namespace
+
 Tone Tone::FromJson(const Value& spec) {
     Tone tone;
     tone.freq = spec["freq"].AsNumber(440.0);
@@ -16,7 +36,7 @@ Tone Tone::FromJson(const Value& spec) {
     tone.vol = spec["vol"].AsNumber(0.5);
 
     // Absent means TRUE. Nothing in the shipped file sets it, so every shipped
-    // sound reaches this default and the other reading would change all eleven.
+    // sound reaches this default and the other reading would change all of them.
     tone.decay = spec.Has("decay") ? spec["decay"].AsBool(true) : true;
     return tone;
 }
@@ -49,6 +69,15 @@ std::vector<int16_t> Synthesise(const Tone& tone) {
             s = 2.0 * frac - 1.0;
         } else if (tone.wave == "triangle") {
             s = 4.0 * std::fabs(frac - 0.5) - 1.0;
+        } else if (tone.wave == "noise") {
+            // Percussive: a hash of the sample index rather than an RNG, so the
+            // same spec is the same buffer on every run, mixed with a sine at
+            // `freq` so the frequency still shapes the character - low is a
+            // wooden thud, high is a clink. The constants are the classic
+            // shader hash, and they are the GDScript's to the digit.
+            const double h =
+                fposmod(std::sin(static_cast<double>(i) * 12.9898) * 43758.5453, 1.0) * 2.0 - 1.0;
+            s = 0.65 * h + 0.35 * std::sin(phase * kTau);
         } else {
             // Anything unrecognised is a sine, matching the GDScript's `_`
             // branch. A typo in a waveform name is a sound that still plays.
@@ -107,6 +136,16 @@ Sound SoundFor(const GameData& data, const std::string& id) {
     // caches a null stream for it and plays nothing, and a port that invented
     // a 440Hz sine would make a typo audible instead of visible.
     return sound;
+}
+
+double FalloffLinear(const GameData& data, double distance) {
+    const Value& falloff = data.Audio()["falloff"];
+    const double full = falloff["full_px"].AsNumber(480.0);
+
+    // At least a pixel past `full`, so an authored file with the two equal (or
+    // crossed) divides by one rather than by zero or a negative.
+    const double silent = std::max(falloff["silent_px"].AsNumber(1500.0), full + 1.0);
+    return std::clamp(1.0 - (distance - full) / (silent - full), 0.0, 1.0);
 }
 
 } // namespace Audio

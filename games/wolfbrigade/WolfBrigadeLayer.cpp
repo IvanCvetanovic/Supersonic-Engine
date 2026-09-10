@@ -616,15 +616,6 @@ void WolfBrigadeLayer::buildPauseMenu(entt::registry& registry) {
 
 namespace {
 
-// The eleven event ids `audio.gd` declares, as its own constants do. Nine of
-// them are reached through the bus below; `attack` and `shoot` are called
-// directly from the original's entity scripts rather than wired to a signal,
-// and there is no bus edge here to hang them on - see connectAudioEvents.
-constexpr const char* kSfxIds[] = {
-    "train", "build", "death", "destroy", "wave", "victory",
-    "defeat", "research", "place", "attack", "shoot",
-};
-
 // The name a synthesised sound is registered under.
 //
 // Prefixed, because AudioEngine's clip cache is keyed by string and shared with
@@ -658,7 +649,13 @@ void WolfBrigadeLayer::attachAudio(entt::registry& registry) {
     // reload_data() that drops its cache because Godot re-enters main._ready on
     // every scene change and DataLoader can be re-read; nothing here re-reads
     // GameData, so there is no transition for an invalidation to fire on.
-    for (const char* id : kSfxIds) {
+    //
+    // EVERY id the data names, as `stream_for` resolves any key of the file's
+    // `sfx` block. A fixed list of the original's eleven constants once stood
+    // here, and the seven sounds the restructure added were synthesised to the
+    // byte and never reached the mixer.
+    for (const auto& [id, entry] : m_data->Audio()["sfx"].AsObject()) {
+        (void)entry;
         const Audio::Sound sound = Audio::SoundFor(*m_data, id);
 
         // A FILE is not silently substituted. The original asks Godot's
@@ -723,9 +720,10 @@ void WolfBrigadeLayer::playSfxThrottled(const std::string& id, double minimumGap
 void WolfBrigadeLayer::connectAudioEvents() {
     if (!m_match) return;
 
-    // ELEVEN EDGES. Nine are `connect_events`; the last two are the combat
-    // sounds, which the original plays directly from unit.gd and building.gd
-    // because a Godot script can reach an autoload from anywhere.
+    // FOURTEEN EDGES. Ten are `connect_events`; the other four are sounds the
+    // original plays directly from unit.gd and building.gd - a blow, an arrow,
+    // a heal and an ability - because a Godot script can reach an autoload
+    // from anywhere.
     //
     // Here they arrive as signals instead, because the simulation is the half
     // verified against twenty-two harnesses and it stays free of a device, a
@@ -733,6 +731,24 @@ void WolfBrigadeLayer::connectAudioEvents() {
     // left; what that sounds like, and how often, is this layer's answer.
     EventBus& bus = m_match->Bus();
     m_audioSubscriptions.clear();
+
+    m_audioSubscriptions.push_back(bus.captureChanged.Connect(
+        [this](CapturePoint*, const std::string&) { playSfx("capture"); }));
+
+    // A priest's heal lands at the priest's attack rate, so it takes the
+    // combat window too: the original throttles it with the same seventy.
+    m_audioSubscriptions.push_back(bus.healed.Connect(
+        [this](const glm::vec2&, int) { playSfxThrottled("heal", kCombatThrottle); }));
+
+    // An ability's sound is its data's: abilities.json names an sfx per
+    // ability, and one that names none is silent. Unthrottled, as the
+    // original's play is - an ability has a cooldown of its own.
+    m_audioSubscriptions.push_back(bus.abilityUsed.Connect(
+        [this](const std::string& abilityId, Unit*) {
+            if (!m_match) return;
+            const std::string sfx = m_match->Data().Ability(abilityId)["sfx"].AsString("");
+            if (!sfx.empty()) playSfx(sfx);
+        }));
 
     m_audioSubscriptions.push_back(bus.unitTrained.Connect(
         [this](const std::string&, const glm::vec2&, const glm::vec2&, const std::string&) {

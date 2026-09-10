@@ -163,6 +163,17 @@ struct Row {
 //
 // The lesson generalises past this suite: SPOT CHECKS MEASURE WHERE YOU LOOKED.
 // When the thing under test produces a buffer, assert the buffer.
+//
+// THE NOISE ROWS ARE A PLATFORM CHECK AS WELL, and they passed it. The noise
+// waveform hashes each sample index through `sin(i * 12.9898) * 43758.5453`,
+// so its buffer depends on two C libraries agreeing about the sine of
+// arguments up to about 355,000 radians, amplified forty-thousand-fold before
+// a truncation. The sine tones never asked that - their phases are small. On
+// 10 September all five noise rows - attack, gather, hammer, gather_food and
+// dash - matched Godot's Windows build to the byte, sums and sums of squares
+// included, under GCC and glibc. Had they not,
+// a checksum off by a handful of counts beside landmarks that matched would
+// have been the platform's sine rather than this port's arithmetic.
 struct Checksums {
     long long sum{0};
     long long sumOfSquares{0};
@@ -178,25 +189,40 @@ Checksums checksum(const std::vector<int16_t>& samples) {
     return sums;
 }
 
-// The eleven shipped sounds, exactly as probe.gd printed them.
+// The eighteen shipped sounds.
+//
+// Ten rows are the 27 August probe's, unchanged at the game's 50741d1. The
+// other eight - `attack`, which became a 50ms noise tone, and the seven sounds
+// the restructure added - were printed on 10 September by a second probe that
+// goes one better than a verbatim copy: it runs INSIDE a copy of the game
+// project and calls the game's own `Audio.stream_for`, so the synthesiser it
+// measures is the game's rather than a transcription of it. It reproduced the
+// ten unchanged rows to the byte.
 //
 // Ordered as audio.json orders them so a reader can hold the two side by side.
 // `bytes` is twice `samples` in every row and is carried anyway, because the
 // harness reports the train sound in BYTES and a port asserting only samples
 // would be comparing against half the oracle's number without saying so.
 constexpr Row kShipped[] = {
-    // id          samples  bytes    s[0]     s[1]    s[n/2]    peak
-    {"train",       3969,    7938,   11468,   11465,   -5735,   11468, 236206LL, 174051024140LL},
-    {"build",       7497,   14994,       0,     597,    6185,   13044, 286907LL, 214615700091LL},
-    {"death",       8820,   17640,  -13106,  -13004,   -6553,   13106, -578249LL, 168438565129LL},
-    {"destroy",    14994,   29988,  -16383,  -16315,   -3276,   16383, -1590780LL, 447358930706LL},
-    {"wave",       18522,   37044,   14745,   14744,    7372,   14745, 773062LL, 1342319861210LL},
-    {"victory",    22932,   45864,       0,    2048,   -7790,   16345, 130543LL, 1025778296219LL},
-    {"defeat",     27342,   54684,  -16383,  -16301,   -6553,   16383, -1166072LL, 815514343900LL},
-    {"research",    6615,   13230,   13106,   11928,     294,   13106, 6705LL, 126333109311LL},
-    {"place",       4851,    9702,       0,     718,    5396,   11409, 182519LL, 106318822013LL},
-    {"attack",      2425,    4850,    6553,    6550,   -3278,    6553, 165238LL, 34729063518LL},
-    {"shoot",       1984,    3968,       0,     670,    3089,    6500, 63599LL, 14196627301LL},
+    // id             samples  bytes    s[0]     s[1]    s[n/2]    peak
+    {"train",          3969,    7938,   11468,   11465,   -5735,   11468, 236206LL, 174051024140LL},
+    {"build",          7497,   14994,       0,     597,    6185,   13044, 286907LL, 214615700091LL},
+    {"death",          8820,   17640,  -13106,  -13004,   -6553,   13106, -578249LL, 168438565129LL},
+    {"destroy",       14994,   29988,  -16383,  -16315,   -3276,   16383, -1590780LL, 447358930706LL},
+    {"wave",          18522,   37044,   14745,   14744,    7372,   14745, 773062LL, 1342319861210LL},
+    {"victory",       22932,   45864,       0,    2048,   -7790,   16345, 130543LL, 1025778296219LL},
+    {"defeat",        27342,   54684,  -16383,  -16301,   -6553,   16383, -1166072LL, 815514343900LL},
+    {"research",       6615,   13230,   13106,   11928,     294,   13106, 6705LL, 126333109311LL},
+    {"place",          4851,    9702,       0,     718,    5396,   11409, 182519LL, 106318822013LL},
+    {"attack",         2205,    4410,   -5963,    5219,    1662,    8795, 149097LL, 12719748047LL},
+    {"shoot",          1984,    3968,       0,     670,    3089,    6500, 63599LL, 14196627301LL},
+    {"gather",         3307,    6614,   -8519,    7294,   -2152,   12215, 324311LL, 36152360823LL},
+    {"hammer",         2425,    4850,   -8519,    7755,    5312,   12946, 173377LL, 27143839777LL},
+    {"capture",       10584,   21168,   14745,   13914,   -4423,   14745, 7461LL, 255755555375LL},
+    {"gather_food",    1984,    3968,   -5537,    4812,    1515,    8207, 149855LL, 9627599043LL},
+    {"heal",           7056,   14112,   10485,    9685,    1048,   10485, 8714LL, 86248898924LL},
+    {"cleave",        10143,   20286,  -14745,  -14643,   -3711,   14745, -976817LL, 245149427877LL},
+    {"dash",           5733,   11466,   -6389,    5642,   -1972,    9507, 154039LL, 36373719863LL},
 };
 
 // ---------------------------------------------------------------------------
@@ -262,13 +288,17 @@ void testOneCountAnywhereInTheBufferMovesBothChecksums() {
 
 // The first truncation trap, isolated so its failure names itself.
 //
-// 44100 * 55 / 1000 is 2425.5 and 44100 * 45 / 1000 is 1984.5. Nine of the
-// eleven shipped durations divide evenly into the mix rate and say nothing
-// about rounding; these two are the entire evidence, and they are why the
-// original writes `int(...)` rather than `roundi(...)`.
+// 44100 * ms / 1000 is whole only when ms is a multiple of ten. Fourteen of
+// the eighteen shipped durations are, and say nothing about rounding; the
+// other four are the entire evidence - 45ms (shoot, gather_food) is 1984.5
+// samples, 55ms (hammer) is 2425.5 and 75ms (gather) is 3307.5 - and they are
+// why the original writes `int(...)` rather than `roundi(...)`. `attack` was
+// the 55ms case until it became a 50ms noise tone, and would pin nothing now.
 void testSampleCountsTruncateRatherThanRound() {
-    CHECK_EQ(static_cast<int>(samplesFor("attack").size()), 2425);   // not 2426
-    CHECK_EQ(static_cast<int>(samplesFor("shoot").size()), 1984);    // not 1985
+    CHECK_EQ(static_cast<int>(samplesFor("hammer").size()), 2425);        // not 2426
+    CHECK_EQ(static_cast<int>(samplesFor("shoot").size()), 1984);         // not 1985
+    CHECK_EQ(static_cast<int>(samplesFor("gather_food").size()), 1984);   // not 1985
+    CHECK_EQ(static_cast<int>(samplesFor("gather").size()), 3307);        // not 3308
 
     // The even case, so a port that truncated the WRONG quantity is still seen.
     CHECK_EQ(static_cast<int>(samplesFor("train").size()), 3969);
@@ -394,14 +424,17 @@ void testDecayDefaultsToOnAndTurningItOffHoldsTheAmplitude() {
 // Measured, not assumed: a spec identical to `build` but naming a waveform that
 // does not exist produces `build` byte for byte. A typo in a waveform name is a
 // sound that still plays.
+//
+// The made-up name used to be "noise", which the restructure made real - so a
+// name no version of the game has ever had stands in for it now.
 void testAnUnrecognisedWaveformFallsBackToASine() {
-    Audio::Tone noise;
-    noise.freq = 320.0;
-    noise.ms = 170;
-    noise.wave = "noise";
-    noise.vol = 0.4;
+    Audio::Tone typo;
+    typo.freq = 320.0;
+    typo.ms = 170;
+    typo.wave = "hum";
+    typo.vol = 0.4;
 
-    const std::vector<int16_t> fallback = Audio::Synthesise(noise);
+    const std::vector<int16_t> fallback = Audio::Synthesise(typo);
     CHECK_MSG(fallback == samplesFor("build"), "an unknown waveform is the sine `build` is");
     CHECK_EQ(static_cast<int>(fallback.size()), 7497);
     CHECK_EQ(at(fallback, 1), 597);
@@ -469,20 +502,20 @@ void testAnEmptySpecIsTheGDScriptsFourDefaults() {
 // ---------------------------------------------------------------------------
 // The lookup, which is where the port's SHAPE differs from the original's.
 
-// Every shipped sfx id resolves to a tone, and there are eleven of them.
+// Every shipped sfx id resolves to a tone, and there are eighteen of them.
 //
 // The count matters as much as the kinds: audio.json is the one data file whose
 // contents are an inventory of sounds rather than a schema, and a file that
 // arrived here truncated would show up as a missing id rather than a bad value.
-void testEveryShippedSoundIsASynthesisedToneAndThereAreEleven() {
+void testEveryShippedSoundIsASynthesisedToneAndThereAreEighteen() {
     int tones = 0;
     for (const Row& row : kShipped) {
         const Audio::Sound sound = Audio::SoundFor(shipped(), row.id);
         CHECK_MSG(sound.kind == Audio::Sound::Kind::Tone, std::string("tone for ") + row.id);
         if (sound.kind == Audio::Sound::Kind::Tone) ++tones;
     }
-    CHECK_EQ(tones, 11);
-    CHECK_EQ(static_cast<int>(shipped().Audio()["sfx"].AsObject().size()), 11);
+    CHECK_EQ(tones, 18);
+    CHECK_EQ(static_cast<int>(shipped().Audio()["sfx"].AsObject().size()), 18);
 }
 
 // A FILE WINS OVER A TONE, and this assertion is the only thing holding it.
@@ -605,6 +638,45 @@ void testEverySynthesisedSoundCanReachTheMixer() {
     }
 }
 
+// --- 9. The distance falloff ----------------------------------------------
+//
+// verify_audio pins the curve's shape - "full volume at the camera", "silent
+// far away", "partial in between (0.49)" - and the probe that printed the
+// table printed the curve through the game's own `Audio.falloff_linear` at
+// 50741d1:
+//
+//   0 -> 1   480 -> 1   481 -> 0.99901960784313726   1000 -> 0.49019607843137258
+//   1499 -> 0.00098039215686274   1500 -> 0   99999 -> 0
+//
+// Exact where the probe's digits round-trip a double, and within 1e-15 for
+// 1499, where fourteen significant digits do not.
+void testTheFalloffIsFullThenALineThenSilence() {
+    CHECK_MSG(Audio::FalloffLinear(shipped(), 0.0) == 1.0, "falloff: full volume at the camera");
+    CHECK_MSG(Audio::FalloffLinear(shipped(), 480.0) == 1.0, "and to the edge of full_px");
+    CHECK_MSG(Audio::FalloffLinear(shipped(), 481.0) == 0.99901960784313726,
+              "a pixel past it, a pixel's worth quieter");
+    CHECK_MSG(Audio::FalloffLinear(shipped(), 1000.0) == 0.49019607843137258,
+              "falloff: partial in between (0.49)");
+    CHECK_MSG(std::fabs(Audio::FalloffLinear(shipped(), 1499.0) - 0.00098039215686274) < 1e-15,
+              "a pixel short of silent_px, a pixel's worth left");
+    CHECK_MSG(Audio::FalloffLinear(shipped(), 1500.0) == 0.0, "silent at silent_px");
+    CHECK_MSG(Audio::FalloffLinear(shipped(), 99999.0) == 0.0, "falloff: silent far away");
+}
+
+// Added by the port, and unreachable at shipped values: the original keeps
+// silent_px at least a pixel past full_px, so an authored file with the two
+// crossed divides by one rather than by a negative. A crossed pair would
+// otherwise turn the curve upside down - loud far away, silent up close.
+void testACrossedFalloffStillDividesByAPixel() {
+    wb::ScratchData crossed("falloff", "audio.json",
+                            R"({ "falloff": { "full_px": 500, "silent_px": 400 } })");
+    GameData data;
+    data.LoadAll(crossed.Path());
+    CHECK_MSG(Audio::FalloffLinear(data, 500.0) == 1.0, "full at full_px");
+    CHECK_MSG(Audio::FalloffLinear(data, 500.5) == 0.5, "half a pixel on, half volume");
+    CHECK_MSG(Audio::FalloffLinear(data, 501.0) == 0.0, "and silent a pixel past it");
+}
+
 
 // --- The layer's half: registration, the pool, mute and the nine edges -----
 //
@@ -649,10 +721,11 @@ void testEveryShippedSoundIsRegisteredWithTheEngineOnce() {
     // which is the seam the suite could not see until the layer had one.
     SoundedLayer sounded;
 
-    for (const char* id : { "train", "build", "death", "destroy", "wave", "victory",
-                            "defeat", "research", "place", "attack", "shoot" }) {
-        CHECK_MSG(sounded.engine.HasClip(clipName(id)),
-                  std::string(id) + " is registered as " + clipName(id));
+    // Every row of the oracle's table, so a sound added to audio.json and to
+    // the table cannot be forgotten here.
+    for (const Row& row : kShipped) {
+        CHECK_MSG(sounded.engine.HasClip(clipName(row.id)),
+                  std::string(row.id) + " is registered as " + clipName(row.id));
     }
 
     // PREFIXED, not bare. The cache is keyed by string and shared with the
@@ -663,9 +736,10 @@ void testEveryShippedSoundIsRegisteredWithTheEngineOnce() {
 }
 
 void testEachGameplaySignalPlaysItsOwnSound() {
-    // The nine edges `connect_events` wires. Driven by emitting on the Match's
-    // own bus, which is what the simulation does - so this tests the wiring
-    // rather than a function the test called itself.
+    // The ten edges `connect_events` wires, and three of the sounds the
+    // original plays from the unit itself: a heal and the two abilities. Driven
+    // by emitting on the Match's own bus, which is what the simulation does -
+    // so this tests the wiring rather than a function the test called itself.
     SoundedLayer sounded;
     WolfBrigade::EventBus& bus = sounded.Match().Bus();
 
@@ -683,6 +757,12 @@ void testEachGameplaySignalPlaysItsOwnSound() {
         { "victory",  [](WolfBrigade::EventBus& b) { b.gameWon.Emit(); } },
         { "defeat",   [](WolfBrigade::EventBus& b) { b.gameLost.Emit(); } },
         { "research", [](WolfBrigade::EventBus& b) { b.upgradeResearched.Emit("iron_swords"); } },
+        { "capture",  [](WolfBrigade::EventBus& b) { b.captureChanged.Emit(nullptr, "player"); } },
+        { "heal",     [](WolfBrigade::EventBus& b) { b.healed.Emit(glm::vec2(0.0f), 12); } },
+        // An ability sounds its data's sfx, which for both shipped abilities is
+        // a sound of the same name.
+        { "cleave",   [](WolfBrigade::EventBus& b) { b.abilityUsed.Emit("cleave", nullptr); } },
+        { "dash",     [](WolfBrigade::EventBus& b) { b.abilityUsed.Emit("dash", nullptr); } },
     };
 
     for (const Edge& edge : edges) {
@@ -802,19 +882,18 @@ void testResearchingAnUpgradeAnnouncesIt() {
     match.Bus().upgradeResearched.Connect(
         [&announced](const std::string& id) { announced.push_back(id); });
 
-    // Select a completed building that researches something, and make it
-    // affordable. Arranging the WORLD is testing; what would make this
-    // worthless is arranging the answer.
-    Building* researcher = nullptr;
-    for (const auto& building : match.Buildings()) {
-        if (building->IsAlive() && building->IsComplete() &&
-            !building->Stats().researches.empty()) {
-            researcher = building.get();
-            break;
-        }
-    }
-    CHECK_MSG(researcher != nullptr, "the board has a building that researches");
-    if (researcher == nullptr) return;
+    // A completed building that researches something, made affordable.
+    // Arranging the WORLD is testing; what would make this worthless is
+    // arranging the answer.
+    //
+    // PLACED, where it used to be found. The boot's Town Hall researched until
+    // the restructure moved research to the Armory and the Storehouse, and a
+    // fresh board has neither - so the board stopped providing one and the
+    // test builds it.
+    Building* researcher = match.PlaceBuilding(
+        Upgrades::ForBuilding(match.Data(), match.Run(), match.PlayerProfile(), Ids::kArmory),
+        true, glm::vec2(2300.0f, match.WorldLayout().groundY));
+    CHECK_MSG(!researcher->Stats().researches.empty(), "the Armory researches");
 
     match.Picked().SelectBuilding(researcher);
     match.Run().Add("wood", 5000);
@@ -830,6 +909,18 @@ void testResearchingAnUpgradeAnnouncesIt() {
 
     sounded.registry.get<Supersonic::UIButtonComponent>(button).clickedThisTick = true;
     sounded.layer.OnFixedUpdate(sounded.registry, 1.0f / 30.0f);
+
+    // Research takes TIME since the restructure: the click pays and queues,
+    // and the upgrade lands - and is announced - when the building finishes
+    // it. An announcement at the click would be a sound for something that
+    // has not happened, and a building lost mid-research would have played it.
+    CHECK_MSG(announced.empty(), "nothing is announced at the click");
+    CHECK_MSG(researcher->ResearchQueue().size() == 1, "the click queued one research");
+    if (!researcher->ResearchQueue().empty()) {
+        const double time =
+            match.Data().Upgrade(researcher->ResearchQueue().front())["research_time"].AsNumber(10.0);
+        for (double t = 0.0; t < time + 0.2; t += 0.1) match.StepBuildings(0.1);
+    }
 
     CHECK_EQ(announced.size(), size_t{1});
     if (!announced.empty()) {
@@ -986,11 +1077,13 @@ void runTests() {
     testAToneShorterThanASingleSampleStillProducesOne();
     testAVolumeAboveOneIsClampedRatherThanWrapped();
     testAnEmptySpecIsTheGDScriptsFourDefaults();
-    testEveryShippedSoundIsASynthesisedToneAndThereAreEleven();
+    testEveryShippedSoundIsASynthesisedToneAndThereAreEighteen();
     testAFileWinsOverAToneEvenWhenBothAreAuthored();
     testAnUnknownIdResolvesToSilenceRatherThanADefaultTone();
     testPcmBytesArePairedLowByteFirst();
     testEverySynthesisedSoundCanReachTheMixer();
+    testTheFalloffIsFullThenALineThenSilence();
+    testACrossedFalloffStillDividesByAPixel();
 
     testEveryShippedSoundIsRegisteredWithTheEngineOnce();
     testEachGameplaySignalPlaysItsOwnSound();
@@ -1008,8 +1101,9 @@ void runTests() {
 
 } // namespace
 
-// The floor is what runs WITHOUT an output device: 260 checks, where a machine
-// with one runs 282. The layer's half says its guarded checks are not counted
-// in it, and until this number agreed a machine with no sound card failed the
-// suite for skipping exactly what it was told it may.
-TEST_MAIN("test_wb_audio", 260)
+// The floor is what runs WITHOUT an output device: 393 checks, where a machine
+// with one runs 419 (both measured under GCC on 10 September, the first with
+// ALSA's configuration moved out of reach). The layer's half says its guarded
+// checks are not counted in it, and until this number agreed a machine with no
+// sound card failed the suite for skipping exactly what it was told it may.
+TEST_MAIN("test_wb_audio", 393)

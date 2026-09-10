@@ -45,7 +45,7 @@ inline constexpr double kTau = 6.283185307179586476925286766559;
 // The defaults are the GDScript's, and they matter: a spec that omits `wave`
 // is a sine, and one that omits `decay` DECAYS. Nothing in the shipped file
 // sets `decay` at all, so every shipped sound fades - and a port that defaulted
-// it the other way would produce eleven sounds that end abruptly and eleven
+// it the other way would produce eighteen sounds that end abruptly and eighteen
 // sample values that all still match at index zero.
 struct Tone {
     double freq{440.0};
@@ -59,9 +59,10 @@ struct Tone {
     // How many samples this spec produces.
     //
     // TRUNCATED TOWARD ZERO, not rounded, and that is observable in the shipped
-    // data twice: 55ms is 2425.5 samples and 45ms is 1984.5, and both come out
-    // one sample SHORTER than a `round` would give. A port that rounded would
-    // agree with the original on nine of the eleven sounds.
+    // data four times: 45ms is 1984.5 samples (shoot, gather_food), 55ms is
+    // 2425.5 (hammer) and 75ms is 3307.5 (gather), and each comes out one
+    // sample SHORTER than a `round` would give. A port that rounded would
+    // agree with the original on fourteen of the eighteen sounds.
     //
     // At least one sample, however short the spec. A zero-length buffer is not
     // a quiet sound, it is a sound that cannot be played.
@@ -128,6 +129,15 @@ struct Sound {
 };
 
 Sound SoundFor(const GameData& data, const std::string& id);
+
+// `audio.gd::falloff_linear`: a distance from the camera turned into a linear
+// volume factor. 1 inside `falloff.full_px`, 0 at `silent_px` and beyond, and
+// a straight line between - 480 and 1500 in the shipped file.
+//
+// Pure and data-driven, as the original's is, so the curve can be pinned
+// without a camera. Applying it is the layer's business, because only the
+// layer knows where the camera is.
+double FalloffLinear(const GameData& data, double distance);
 
 } // namespace Audio
 
