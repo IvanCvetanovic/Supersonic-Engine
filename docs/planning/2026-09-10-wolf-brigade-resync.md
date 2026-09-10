@@ -341,3 +341,25 @@ placement 91/0, hud 129/0 and snapshot 160/0. Still red:
 - match 33 (slice 10);
 - selection 5: the hall probes at y = 720, which wait for the Town Hall's row
   at 640.4 (slice 10).
+
+## Slice 4: the lane's two new queries
+
+`Lane` gains the two scans the hero-first game added. Both are 1-D, like every
+combat query:
+- **`EnemiesWithin`** is every living enemy with |dx| within range, in
+  registration order. It is the hero's Cleave list.
+- **`NearestWoundedAlly`** is the nearest other living unit of the caller's
+  own faction that is below max hp. It is the priest's target scan. The caller
+  is excluded, and the later-registered unit wins a tie, as in `NearestEnemy`.
+
+`Unit::SetHp` is a raw write, as the original's public `hp` field takes one.
+The harnesses wound and restore units through it. Healing proper arrives with
+slice 7.
+
+**Reproduced:** `verify_casters` B's four lines at `50741d1`: the nearest
+wounded ally is picked, a full ally and an enemy are skipped, the range gate
+holds, the widened range finds the far ally, and a wounded priest never
+targets itself. The Cleave list is pinned on its inclusive edge, a corpse, the
+caller's own side and registration order.
+
+**Result (GCC, 10 September):** combat 69/0. Nothing else moved.

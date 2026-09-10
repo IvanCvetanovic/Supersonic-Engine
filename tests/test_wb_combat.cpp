@@ -257,6 +257,66 @@ void testTheLaneMeasuresAlongXAndIgnoresTheRow() {
     CHECK(fight.field.lane.NearestEnemy(Factions::kPlayer, 1000.0f, 600.0f) == nearInX);
 }
 
+void testEnemiesWithinIsEveryLivingEnemyInReachAlongTheLane() {
+    // `enemies_within`, the hero's Cleave target list at the game's 50741d1:
+    // every LIVING unit of the other side with |dx| <= range. The row does not
+    // count, the edge is inclusive, and the caster's own side never appears.
+    Fight fight;
+    fight.Spawn(Ids::kSoldier, 2000.0f);
+    Unit* farRow = fight.Spawn(Ids::kRaider, 2050.0f, 860.0f);
+    Unit* atEdge = fight.Spawn(Ids::kRaider, 1900.0f);
+    Unit* outside = fight.Spawn(Ids::kRaider, 2101.0f);
+    Unit* corpse = fight.Spawn(Ids::kRaider, 2010.0f);
+    corpse->Kill();
+    (void)outside;
+
+    const std::vector<Unit*> hit = fight.field.lane.EnemiesWithin(Factions::kPlayer, 2000.0f, 100.0f);
+    CHECK_EQ(static_cast<int>(hit.size()), 2);
+    if (hit.size() != 2) return;
+
+    // In registration order, which is the order the original's list keeps.
+    CHECK(hit[0] == farRow);
+    CHECK(hit[1] == atEdge);
+
+    CHECK(fight.field.lane.EnemiesWithin(Factions::kEnemy, 2000.0f, 100.0f).size() == 1);
+}
+
+void testTheWoundedAllyScanFindsTheNearestHurtFriendAndNeverItself() {
+    // verify_casters B at the game's 50741d1, the priest's target scan. It
+    // printed:
+    //
+    //   ok  : scan picks the nearest wounded ALLY (full-hp + enemies skipped)
+    //   ok  : no wounded ally in range -> null (far one is out of range)
+    //   ok  : range widened -> the far wounded ally is found
+    //   ok  : a wounded priest never targets itself
+    Fight fight;
+    Unit* priest = fight.Spawn(Ids::kPriest, 1000.0f, 640.0f);
+    fight.Spawn(Ids::kWorker, 1050.0f, 640.0f);   // near, but at full health
+    Unit* nearHurt = fight.Spawn(Ids::kWorker, 1120.0f, 640.0f);
+    Unit* farHurt = fight.Spawn(Ids::kSoldier, 1400.0f, 640.0f);
+    Unit* enemyHurt = fight.Spawn(Ids::kRaider, 1010.0f, 640.0f);
+
+    nearHurt->SetHp(10);
+    farHurt->SetHp(10);
+    enemyHurt->SetHp(5);
+    CHECK_MSG(fight.field.lane.NearestWoundedAlly(priest, 320.0f) == nearHurt,
+              "scan picks the nearest wounded ALLY (full-hp + enemies skipped)");
+
+    nearHurt->SetHp(nearHurt->Stats().maxHp);
+    CHECK_MSG(fight.field.lane.NearestWoundedAlly(priest, 200.0f) == nullptr,
+              "no wounded ally in range -> null (far one is out of range)");
+    CHECK_MSG(fight.field.lane.NearestWoundedAlly(priest, 3000.0f) == farHurt,
+              "range widened -> the far wounded ally is found");
+
+    priest->SetHp(1);
+    CHECK_MSG(fight.field.lane.NearestWoundedAlly(priest, 320.0f) == nullptr,
+              "a wounded priest never targets itself");
+
+    // And a dead ally is not a patient.
+    farHurt->Kill();
+    CHECK(fight.field.lane.NearestWoundedAlly(priest, 3000.0f) == nullptr);
+}
+
 // --- 2. Soldier versus raider, to the original's own hit points ----------
 
 void testASoldierKillsARaiderAndKeepsTheHealthTheOriginalSaidItWould() {
@@ -611,6 +671,8 @@ static void runTests() {
     testTheLaneFindsTheNearestLivingEnemyInRange();
     testTheLaneIsSymmetricBetweenFactions();
     testTheLaneMeasuresAlongXAndIgnoresTheRow();
+    testEnemiesWithinIsEveryLivingEnemyInReachAlongTheLane();
+    testTheWoundedAllyScanFindsTheNearestHurtFriendAndNeverItself();
 
     testASoldierKillsARaiderAndKeepsTheHealthTheOriginalSaidItWould();
     testAWinnerStopsSwingingOnceThereIsNothingToHit();

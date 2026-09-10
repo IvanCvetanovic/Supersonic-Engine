@@ -37,6 +37,17 @@ public:
     // engagement start a fraction of a pixel later.
     Unit* NearestEnemy(const std::string& faction, float x, float maxRange) const;
 
+    // Every LIVING unit of the opposing faction within range, in registration
+    // order - the hero's Cleave hits all of them. The same 1-D measurement as
+    // NearestEnemy, inclusive at the edge.
+    std::vector<Unit*> EnemiesWithin(const std::string& faction, float x, float maxRange) const;
+
+    // The nearest OTHER living unit of `me`'s own faction that is missing hit
+    // points, within range along the lane - the priest's target scan. `me` is
+    // excluded, so a priest never heals itself (passive regen covers it). Ties
+    // go to the later-registered unit, as NearestEnemy's do.
+    Unit* NearestWoundedAlly(const Unit* me, float maxRange) const;
+
     int CountOf(const std::string& faction) const;
 
 private:

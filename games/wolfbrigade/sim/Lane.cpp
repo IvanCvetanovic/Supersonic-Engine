@@ -58,4 +58,35 @@ Unit* Lane::NearestEnemy(const std::string& faction, float x, float maxRange) co
     return best;
 }
 
+std::vector<Unit*> Lane::EnemiesWithin(const std::string& faction, float x,
+                                       float maxRange) const {
+    const std::string enemy = (faction == Factions::kPlayer) ? Factions::kEnemy : Factions::kPlayer;
+
+    std::vector<Unit*> out;
+    for (Unit* candidate : ListOf(enemy)) {
+        if (candidate == nullptr || !candidate->IsAlive()) continue;
+        if (std::fabs(candidate->Position().x - x) <= maxRange) out.push_back(candidate);
+    }
+    return out;
+}
+
+Unit* Lane::NearestWoundedAlly(const Unit* me, float maxRange) const {
+    if (me == nullptr) return nullptr;
+
+    Unit* best = nullptr;
+    float bestDistance = maxRange;
+
+    for (Unit* candidate : ListOf(me->Faction())) {
+        if (candidate == nullptr || candidate == me || !candidate->IsAlive()) continue;
+        if (candidate->Hp() >= candidate->Stats().maxHp) continue;
+
+        const float distance = std::fabs(candidate->Position().x - me->Position().x);
+        if (distance <= bestDistance) {
+            bestDistance = distance;
+            best = candidate;
+        }
+    }
+    return best;
+}
+
 } // namespace WolfBrigade

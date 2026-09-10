@@ -128,6 +128,11 @@ public:
 
     State CurrentState() const { return m_phase; }
     int Hp() const { return m_hp; }
+
+    // A raw write, as the original's public `hp` field takes one. Its
+    // harnesses wound and restore units this way; nothing here is announced
+    // and nothing dies of it.
+    void SetHp(int hp) { m_hp = hp; }
     const UnitStats& Stats() const { return m_stats; }
     const std::string& Faction() const { return m_stats.faction; }
     bool IsPlayer() const { return m_stats.faction == Factions::kPlayer; }
