@@ -8,7 +8,7 @@
 
 namespace WolfBrigade {
 
-class EventBus;
+struct EventBus;
 class GameState;
 class Lane;
 
