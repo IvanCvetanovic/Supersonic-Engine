@@ -364,8 +364,11 @@ void testAnIdleWorkerIsPreferredOverACloserBusyOne() {
     // Let the three starting workers find work and stop being idle.
     for (int i = 0; i < 20; ++i) match.Step(0.1);
 
+    // Workers only: the boot's hero is never Idle either - he is Controlled -
+    // and he is not someone placement could send.
     int busyNearby = 0;
     for (const auto& unit : match.Units()) {
+        if (unit->Stats().id != Ids::kWorker) continue;
         if (unit->CurrentState() != Unit::State::Idle) ++busyNearby;
     }
     CHECK_MSG(busyNearby == 3, "the starting workers are all busy");

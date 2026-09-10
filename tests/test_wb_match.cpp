@@ -46,6 +46,16 @@
 //   963 hp    = the Town Hall's authored 1000, less the 37 the harness deals.
 //               Difficulty scales enemies only, so hard does not touch it.
 //
+// THOSE WERE THE NUMBERS BEFORE THE RESTRUCTURE. At the game's 50741d1 the
+// same harness prints 8 units and 220 wood, and 3 or 4 gathering depending
+// on the run. A probe of its board (the resync plan, slice 10) gives the
+// ledger: the boot adds the hero, possessed at 1860; the Town Hall
+// auto-trains a worker for 50 on step 3, born at 1600 on step 27; and three
+// deliveries of ten bank 30. So 240 - 50 + 30 = 220, and 8 is four workers,
+// the hero, the raider and the two soldiers. The gathering count moves
+// because the original deals every spawn a random row and the port does
+// not, so the port asserts the range the oracle can hold.
+//
 // ELAPSED IS NOT 16.0, and the tolerance is not decoration. Eighty additions of
 // the double nearest 0.2 come to 15.999999999999975, and the harness itself
 // compares elapsed within 0.5 for exactly this reason. Both sides do the same
@@ -225,19 +235,60 @@ static void testTheWholeMatchNumbersTheOraclePrints() {
     match.Run().SetLevel("level_1");
     match.BootFresh();
 
-    CHECK_MSG(match.Units().size() == 3, "a fresh board is three workers and nothing else");
+    CHECK_MSG(match.Units().size() == 4, "a fresh board is three workers and the hero");
     CHECK_EQ(match.Run().Amount(Ids::kWood), 240);
+
+    // Where each new worker is born. The hall auto-trains one, and where it
+    // appears is the building's spawn point rather than anything the drive
+    // does to it afterwards.
+    std::vector<float> workerBirths;
+    match.Bus().unitSpawned.Connect([&workerBirths](Unit* unit) {
+        if (unit != nullptr && unit->Stats().id == Ids::kWorker) {
+            workerBirths.push_back(unit->Position().x);
+        }
+    });
 
     enrichLikeTheHarness(match);
     driveLikeTheHarness(match, 80);
 
     // The four the harness prints.
-    CHECK_MSG(match.Run().Amount(Ids::kWood) == 270,
-              "300 x 0.8 hard, plus three workers banking ten each in sixteen seconds");
-    CHECK_MSG(match.Units().size() == 6,
-              "three workers, one raider, and two soldiers the barracks finished");
-    CHECK_EQ(countInState(match, Unit::State::Gathering), 3);
+    CHECK_MSG(match.Run().Amount(Ids::kWood) == 220,
+              "240 on hard, less the 50 the hall's auto-trained worker cost, plus three "
+              "deliveries of ten");
+    CHECK_MSG(match.Units().size() == 8,
+              "four workers, the hero, one raider, and two soldiers the barracks finished");
     CHECK_EQ(match.Director().AliveEnemies(), 1);
+
+    // 3 or 4, and deliberately not one of them. The original deals every spawn
+    // a random row, so its workers walk different distances run to run; seven
+    // runs of HEAD's board gave 4 four times and 3 three times. The port does
+    // not draw, so its answer is fixed - but it is pinned only to what the
+    // oracle can hold steady.
+    const int gathering = countInState(match, Unit::State::Gathering);
+    CHECK_MSG(gathering >= 3 && gathering <= 4, "gathering is one of the oracle's two answers");
+
+    // The ledger by id, which is what makes the 8 a count of the right things.
+    int workers = 0;
+    int heroes = 0;
+    int soldiers = 0;
+    int raiders = 0;
+    for (const auto& unit : match.Units()) {
+        const std::string& id = unit->Stats().id;
+        workers += id == Ids::kWorker;
+        heroes += id == Ids::kHero;
+        soldiers += id == Ids::kSoldier;
+        raiders += id == Ids::kRaider;
+    }
+    CHECK_EQ(workers, 4);
+    CHECK_EQ(heroes, 1);
+    CHECK_EQ(soldiers, 2);
+    CHECK_EQ(raiders, 1);
+
+    // The auto-trained worker, where the probe saw it born: 1500 plus half the
+    // hall's 120 plus its spawn offset of 40. One, not two - the probe's hall
+    // trained exactly one in the sixteen seconds.
+    CHECK_EQ(static_cast<int>(workerBirths.size()), 1);
+    if (!workerBirths.empty()) CHECK_NEAR(workerBirths[0], 1600.0f);
 
     // Elapsed, both ways: within the harness's own tolerance, and exactly, so a
     // change in how the director accumulates is a failure rather than a drift.
@@ -291,7 +342,7 @@ static void testATrainedUnitIsBornWhereTheBuildingPutsIt() {
     // 2300, plus half the barracks' 110-wide body, plus its authored spawn
     // offset of 40.
     CHECK_NEAR(born[0].x, 2395.0f);
-    CHECK_NEAR(born[0].y, 800.0f);
+    CHECK_NEAR(born[0].y, 590.0f);   // forced to the ground line
 }
 
 static void testCaptureRestoreCaptureIsEquivalentThroughARealBoot() {
@@ -328,10 +379,10 @@ static void testCaptureRestoreCaptureIsEquivalentThroughARealBoot() {
     // And the ground truth, off the LIVE restored board rather than off the
     // documents - which is how the original's own harness says the building
     // cooldown gap first hid.
-    CHECK_EQ(second.Run().Amount(Ids::kWood), 270);
+    CHECK_EQ(second.Run().Amount(Ids::kWood), 220);
     CHECK_MSG(second.Run().Level() == "level_1", "the level came back");
     CHECK(second.Run().CurrentDifficulty() == "hard");
-    CHECK_EQ(static_cast<int>(second.Units().size()), 6);
+    CHECK_EQ(static_cast<int>(second.Units().size()), 8);
     CHECK_EQ(second.Director().AliveEnemies(), 1);
 
     Building* restoredHall = second.FindBuilding(Ids::kTownHall);
@@ -339,7 +390,7 @@ static void testCaptureRestoreCaptureIsEquivalentThroughARealBoot() {
     if (restoredHall != nullptr) CHECK_EQ(restoredHall->Hp(), 963);
 
     // Every gathering worker is pointed at a real tree again, which is the
-    // harness's 3/3.
+    // harness's 3/3 or 4/4 - see the oracle test for why it is either.
     int gathering = 0;
     int relinked = 0;
     for (const auto& unit : second.Units()) {
@@ -347,8 +398,15 @@ static void testCaptureRestoreCaptureIsEquivalentThroughARealBoot() {
         ++gathering;
         if (unit->TargetNode() != nullptr) ++relinked;
     }
-    CHECK_EQ(gathering, 3);
+    CHECK_MSG(gathering >= 3 && gathering <= 4, "gathering is one of the oracle's two answers");
     CHECK_EQ(relinked, gathering);
+
+    // The restore hands the hero back: saved as an ordinary unit, possessed
+    // again on the way in, and with no respawn pending.
+    Unit* hero = second.Control().Hero();
+    CHECK_MSG(hero != nullptr && hero->Stats().id == Ids::kHero, "the restored hero is possessed");
+    CHECK_MSG(hero != nullptr && hero->IsControlled(), "and under the player's hand");
+    CHECK_MSG(!second.RespawnPending() && !second.Run().HeroDown(), "and nobody is waiting to respawn");
 }
 
 // =========================================================================
@@ -366,12 +424,16 @@ static void testAFreshBootBuildsTheBoardTheDataDescribes() {
     CHECK_MSG(hall != nullptr, "and it is the Town Hall");
     if (hall == nullptr) return;
     CHECK_NEAR(hall->Position().x, 1500.0f);
-    CHECK_NEAR(hall->Position().y, 800.0f);
+    // `_building_y`'s row, 590 + 280 x 0.18, where the probe of HEAD's board
+    // found it.
+    CHECK_NEAR(hall->Position().y, 640.4f);
     CHECK_MSG(hall->IsComplete(), "pre-placed means finished, not a building site");
     CHECK_MSG(hall->IsDepositPoint(), "and a place to bank wood");
 
-    // Twelve nodes: eight trees at 200 and four berry bushes at 120.
-    CHECK_EQ(static_cast<int>(match.Nodes().size()), 12);
+    // Twenty-two nodes: fifteen trees at 200 and seven berry bushes at 120.
+    // On the ground line, where the original draws each a random row - the
+    // row policy in the resync plan's slice 10.
+    CHECK_EQ(static_cast<int>(match.Nodes().size()), 22);
     int wood = 0;
     int food = 0;
     for (const auto& node : match.Nodes()) {
@@ -384,10 +446,10 @@ static void testAFreshBootBuildsTheBoardTheDataDescribes() {
             CHECK_EQ(node->amount, 120);
             CHECK_NEAR(node->bodySize.y, 50.0f);
         }
-        CHECK_NEAR(node->position.y, 800.0f);
+        CHECK_NEAR(node->position.y, 590.0f);
     }
-    CHECK_EQ(wood, 8);
-    CHECK_EQ(food, 4);
+    CHECK_EQ(wood, 15);
+    CHECK_EQ(food, 7);
 
     // The colours come through, which nothing else would notice: the original's
     // own equivalence digest throws them away, and a node rebuilt without one
@@ -395,14 +457,24 @@ static void testAFreshBootBuildsTheBoardTheDataDescribes() {
     CHECK(match.Nodes()[0]->color == "#3f6b34");
 
     // Three workers, spaced, on the ground.
-    CHECK_EQ(static_cast<int>(match.Units().size()), 3);
+    CHECK_EQ(static_cast<int>(match.Units().size()), 4);
     for (int i = 0; i < 3; ++i) {
         CHECK_NEAR(match.Units()[static_cast<size_t>(i)]->Position().x,
                    1680.0f + 60.0f * static_cast<float>(i));
-        CHECK_NEAR(match.Units()[static_cast<size_t>(i)]->Position().y, 800.0f);
+        CHECK_NEAR(match.Units()[static_cast<size_t>(i)]->Position().y, 590.0f);
         CHECK(match.Units()[static_cast<size_t>(i)]->Stats().id == Ids::kWorker);
     }
-    CHECK_EQ(match.LaneIndex().CountOf(Factions::kPlayer), 3);
+
+    // And the hero, a hundred and eighty ahead of the worker line and already
+    // in the player's hand - verify_respawn A, "boot possesses the hero
+    // automatically".
+    const Unit* hero = match.Units()[3].get();
+    CHECK(hero->Stats().id == Ids::kHero);
+    CHECK_NEAR(hero->Position().x, 1860.0f);
+    CHECK_NEAR(hero->Position().y, 590.0f);
+    CHECK_MSG(match.Control().Hero() == hero && hero->IsControlled(),
+              "boot possesses the hero automatically");
+    CHECK_EQ(match.LaneIndex().CountOf(Factions::kPlayer), 4);
 }
 
 static void testAFreshBootBanksTheArmoryBonusItWasBoughtWith() {
@@ -489,11 +561,16 @@ static void testAFreshBootGivesTheBoardTheResearchItWasBootedWith() {
 static void testTheLayoutIsTheShippedWorldFile() {
     const Match::Layout layout = Match::Layout::FromData(wb::Shipped());
     CHECK_NEAR(layout.width, 6000.0f);
-    CHECK_NEAR(layout.groundY, 800.0f);
+    CHECK_NEAR(layout.groundY, 590.0f);
+    CHECK_NEAR(layout.laneDepth, 280.0f);
+    CHECK_EQ(layout.buildingRow, 0.18);
     CHECK_NEAR(layout.enemyX, 5960.0f);
     CHECK_NEAR(layout.townHallX, 1500.0f);
     CHECK_NEAR(layout.playerSpawnX, 1680.0f);
     CHECK_NEAR(layout.playerSpawnSpacing, 60.0f);
+
+    // `_building_y`, 590 + 280 x 0.18: the row the boot stands the hall on.
+    CHECK_NEAR(layout.BuildingY(), 640.4f);
 }
 
 static void testTheEnemyEdgeFollowsTheWallRatherThanANumber() {
@@ -518,6 +595,8 @@ static void testTheEnemyEdgeFollowsTheWallRatherThanANumber() {
         const Match::Layout layout = Match::Layout::FromData(data);
         CHECK_NEAR(layout.width, 6000.0f);
         CHECK_NEAR(layout.groundY, 800.0f);
+        CHECK_EQ(layout.buildingRow, 0.18);
+        CHECK_NEAR(layout.BuildingY(), 800.0f);   // no band, so the row is the line
         CHECK_NEAR(layout.enemyX, 5960.0f);
         CHECK_NEAR(layout.townHallX, 1500.0f);
         CHECK_NEAR(layout.playerSpawnX, 1680.0f);
@@ -574,7 +653,7 @@ static void testATrainedUnitCannotInheritAHeightFromWhatMadeIt() {
     barracks->EnqueueTraining(Ids::kSoldier);
     for (int i = 0; i < 41; ++i) match.StepBuildings(0.2);
 
-    CHECK_MSG(std::fabs(born.y - 800.0f) < 0.001f,
+    CHECK_MSG(std::fabs(born.y - 590.0f) < 0.001f,
               "the ground line, not the 500 the building was standing at");
 }
 
@@ -631,11 +710,11 @@ static void testASpawnAnnouncesItselfAndARestoreNeverDoes() {
     match.Bus().unitSpawned.Connect([&spawned](Unit*) { ++spawned; });
 
     match.BootFresh();
-    CHECK_MSG(spawned == 3, "a fresh boot announces its three workers");
+    CHECK_MSG(spawned == 4, "a fresh boot announces its three workers and the hero");
 
     match.SpawnUnit(UnitStats::FromJson(Ids::kRaider, wb::Shipped().Unit(Ids::kRaider)),
                     glm::vec2(4200.0f, 800.0f));
-    CHECK_EQ(spawned, 4);
+    CHECK_EQ(spawned, 5);
     CHECK_EQ(match.Director().AliveEnemies(), 1);
 
     const Value document = match.Capture();
@@ -648,12 +727,12 @@ static void testASpawnAnnouncesItselfAndARestoreNeverDoes() {
     CHECK_MSG(second.BootFromSave(document), "it restores");
     CHECK_MSG(restoredSpawns == 0, "and announces nothing, because nothing was spawned");
     CHECK_EQ(second.Director().AliveEnemies(), 1);
-    CHECK_EQ(static_cast<int>(second.Units().size()), 4);
+    CHECK_EQ(static_cast<int>(second.Units().size()), 5);
 
     // And they are in the lane, which nothing else here would notice: a restore
     // clears it, so a unit that never rejoins looks perfectly alive on the
     // board and is invisible to every scan in the game.
-    CHECK_EQ(second.LaneIndex().CountOf(Factions::kPlayer), 3);
+    CHECK_EQ(second.LaneIndex().CountOf(Factions::kPlayer), 4);
     CHECK_EQ(second.LaneIndex().CountOf(Factions::kEnemy), 1);
 }
 
@@ -744,11 +823,15 @@ static void testAWarmMatchDoesNotInheritTheRunBeforeIt() {
 
     match.BootFresh();
 
-    CHECK_EQ(static_cast<int>(match.Units().size()), 3);
+    CHECK_EQ(static_cast<int>(match.Units().size()), 4);
     CHECK_EQ(static_cast<int>(match.Buildings().size()), 1);
-    CHECK_EQ(static_cast<int>(match.Nodes().size()), 12);
-    CHECK_MSG(match.LaneIndex().CountOf(Factions::kPlayer) == 3,
-              "three workers in the lane, not six");
+    CHECK_EQ(static_cast<int>(match.Nodes().size()), 22);
+    CHECK_MSG(match.LaneIndex().CountOf(Factions::kPlayer) == 4,
+              "three workers and the hero in the lane, not eight");
+
+    // And the hero in hand is this run's, not the one the first run spawned.
+    CHECK_MSG(match.Control().Hero() == match.Units()[3].get(),
+              "the hero possessed is the one this boot spawned");
     CHECK_EQ(match.LaneIndex().CountOf(Factions::kEnemy), 0);
     CHECK_EQ(match.Pool().PoolSize(), 0);
 
@@ -761,7 +844,7 @@ static void testAWarmMatchDoesNotInheritTheRunBeforeIt() {
     CHECK_EQ(match.Run().CurrentWave(), 0);
 
     match.StepDirector(1.0);
-    CHECK_MSG(match.Units().size() == 3, "one second in, no wave has arrived");
+    CHECK_MSG(match.Units().size() == 4, "one second in, no wave has arrived");
 }
 
 static void testTheForkTakesTheDocumentOrElseStartsOver() {
@@ -770,7 +853,7 @@ static void testTheForkTakesTheDocumentOrElseStartsOver() {
     {
         Match match(wb::Shipped(), profile, "");
         CHECK_MSG(!match.Boot(Value()), "nothing pending is a fresh run");
-        CHECK_EQ(static_cast<int>(match.Units().size()), 3);
+        CHECK_EQ(static_cast<int>(match.Units().size()), 4);
     }
     {
         // A stale-version document is refused rather than half-read, and the
@@ -781,7 +864,7 @@ static void testTheForkTakesTheDocumentOrElseStartsOver() {
 
         Match match(wb::Shipped(), profile, "");
         CHECK_MSG(!match.Boot(stale), "a document from another schema is not a run");
-        CHECK_EQ(static_cast<int>(match.Units().size()), 3);
+        CHECK_EQ(static_cast<int>(match.Units().size()), 4);
     }
     {
         Match source(wb::Shipped(), profile, "");
@@ -792,7 +875,7 @@ static void testTheForkTakesTheDocumentOrElseStartsOver() {
 
         Match match(wb::Shipped(), profile, "");
         CHECK_MSG(match.Boot(document), "a valid one is restored");
-        CHECK_EQ(static_cast<int>(match.Units().size()), 4);
+        CHECK_EQ(static_cast<int>(match.Units().size()), 5);
     }
 }
 
@@ -964,7 +1047,7 @@ static void testADeadEntityStaysOnTheBoardAndStopsBeingFound() {
 
     raider->Kill();
 
-    CHECK_MSG(match.Units().size() == 4, "the corpse is still owned");
+    CHECK_MSG(match.Units().size() == 5, "the corpse is still owned");
     CHECK_EQ(match.DeadUnits(), 1);
     CHECK_MSG(match.NearestEnemyUnit(Factions::kPlayer, 1700.0f, 300.0f) == nullptr,
               "and stops being found the moment it dies");
@@ -1109,8 +1192,17 @@ static void testAUnitTrainedMidFrameWaitsForTheNextOne() {
         glm::vec2(2300.0f, 800.0f));
     barracks->EnqueueTraining(Ids::kSoldier);
 
+    // Soldiers by id, not the board's size: the hall auto-trains workers on
+    // its own clock, so the size says nothing about the barracks.
+    const auto soldierOnBoard = [&match]() -> const Unit* {
+        for (const auto& unit : match.Units()) {
+            if (unit->Stats().id == Ids::kSoldier) return unit.get();
+        }
+        return nullptr;
+    };
+
     for (int i = 0; i < 39; ++i) match.Step(0.2);
-    CHECK_MSG(match.Units().size() == 3, "no soldier yet, at 7.8 seconds of an 8.0 train time");
+    CHECK_MSG(soldierOnBoard() == nullptr, "no soldier yet, at 7.8 seconds of an 8.0 train time");
 
     // Something for a newborn to notice, placed so that "did it think this
     // frame" is the ONLY question the assertion below can be answering. The
@@ -1123,11 +1215,10 @@ static void testAUnitTrainedMidFrameWaitsForTheNextOne() {
 
     match.Step(0.2);
 
-    CHECK_MSG(match.Units().size() == 5, "the soldier is on the board");
-    if (match.Units().size() != 5) return;
+    const Unit* soldier = soldierOnBoard();
+    CHECK_MSG(soldier != nullptr, "the soldier is on the board");
+    if (soldier == nullptr) return;
 
-    const Unit* soldier = match.Units()[4].get();
-    CHECK_MSG(soldier->Stats().id == Ids::kSoldier, "and it is the soldier");
     CHECK_MSG(soldier->CurrentState() == Unit::State::Idle,
               "which has not thought yet, because its frame had already been decided");
     CHECK_MSG(soldier->AttackTarget() == nullptr, "and so has acquired nothing");
@@ -1148,9 +1239,10 @@ static void testTheFrameAndTheHarnessOrderAgreeOnEveryOracleNumber() {
 
     for (int i = 0; i < 80; ++i) match.Step(0.2);
 
-    CHECK_EQ(match.Run().Amount(Ids::kWood), 270);
-    CHECK_EQ(static_cast<int>(match.Units().size()), 6);
-    CHECK_EQ(countInState(match, Unit::State::Gathering), 3);
+    CHECK_EQ(match.Run().Amount(Ids::kWood), 220);
+    CHECK_EQ(static_cast<int>(match.Units().size()), 8);
+    const int gathering = countInState(match, Unit::State::Gathering);
+    CHECK_MSG(gathering >= 3 && gathering <= 4, "gathering is one of the oracle's two answers");
     CHECK_EQ(match.Director().AliveEnemies(), 1);
 }
 
@@ -1239,6 +1331,228 @@ static void testASaveFromBeforeCapturePointsRestoresThemNeutral() {
     CHECK_EQ(second.Run().ArmyDamageMult(), 1.0);
 }
 
+// =========================================================================
+// The hero: at boot, at a death, and through a save
+// =========================================================================
+//
+// verify_respawn at the game's 50741d1 printed, on 10 September 2026:
+//
+//   ok  : boot possesses the hero automatically
+//   ok  : death releases possession
+//   ok  : the hero respawns and is repossessed
+//   ok  : respawn lands beside the Town Hall (nearest respawn building to 1860)
+//   ok  : standing at the Town Hall latches its panel
+//   ok  : walking away releases the panel
+//   ok  : the Build menu slows time to 0.15
+//   ok  : closing the menu restores full speed
+//   ok  : a pending respawn is marked in GameState (rides saves)
+//   ok  : a hero-less restore re-arms the respawn flow
+//   ok  : the saved death position drives the re-armed respawn
+//
+// A is in the fresh-board test; B and E are here. C and D - the proximity
+// panel and the build menu's slow-motion - are the bottom bar's, and the port
+// has no bottom bar yet.
+
+static void testAFallenHeroRespawnsBesideTheNearestRespawnBuilding() {
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.BootFresh();
+
+    Unit* first = match.Control().Hero();
+    CHECK_MSG(first != nullptr, "precondition: a hero in hand");
+    if (first == nullptr) return;
+
+    first->Kill();
+    CHECK_MSG(match.Control().Hero() == nullptr, "death releases possession");
+    CHECK_MSG(match.RespawnPending(), "and a respawn is pending");
+    CHECK_MSG(match.Run().HeroDown() && match.Run().HeroDownX() == 1860.0,
+              "marked in the run where he fell");
+
+    // The harness shortens the delay to 0.1 and waits frames; the authored ten
+    // seconds is asserted here instead, from both sides. 9.5 and then 0.5
+    // lands on zero exactly, which is the edge Godot's timer fires on.
+    CHECK_EQ(wb::Shipped().Economy()["hero_respawn_delay_s"].AsNumber(), 10.0);
+    match.StepRespawn(9.5);
+    CHECK_MSG(match.Control().Hero() == nullptr, "nobody at nine and a half seconds");
+    match.StepRespawn(0.5);
+
+    Unit* reborn = match.Control().Hero();
+    CHECK_MSG(reborn != nullptr && reborn != first && reborn->IsControlled(),
+              "the hero respawns and is repossessed");
+    if (reborn == nullptr) return;
+
+    // The harness's "within 400 of the Town Hall", and the number behind it:
+    // the hall's 1500, plus half its 120-wide body, plus its spawn offset of 40.
+    CHECK_MSG(std::fabs(reborn->Position().x - 1500.0f) < 400.0f,
+              "respawn lands beside the Town Hall (nearest respawn building to 1860)");
+    CHECK_NEAR(reborn->Position().x, 1600.0f);
+    CHECK_NEAR(reborn->Position().y, 590.0f);
+    CHECK_MSG(!match.RespawnPending() && !match.Run().HeroDown(), "and nothing is pending");
+}
+
+// Added by the port: the harness's hero dies beside the Town Hall, so it never
+// has two sites to choose between.
+static void testTheRespawnBuildingIsTheOneNearestWhereHeFell() {
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.BootFresh();
+
+    const BuildingStats waystone =
+        Upgrades::ForBuilding(wb::Shipped(), match.Run(), profile, Ids::kWaystone);
+    CHECK_MSG(waystone.heroRespawn, "precondition: the data flags the Waystone");
+
+    // The finished one is the furthest of three from where he falls. The two
+    // nearer are unfinished and in ruins, and neither counts.
+    match.PlaceBuilding(waystone, true, glm::vec2(4000.0f, 700.0f));
+    match.PlaceBuilding(waystone, false, glm::vec2(3900.0f, 700.0f));
+    Building* ruin = match.PlaceBuilding(waystone, true, glm::vec2(3800.0f, 700.0f));
+    ruin->Destroy();
+
+    Unit* hero = match.Control().Hero();
+    if (hero == nullptr) return;
+    hero->SetPosition(glm::vec2(3850.0f, 700.0f));
+    hero->Kill();
+    match.StepRespawn(10.0);
+
+    Unit* reborn = match.Control().Hero();
+    CHECK_MSG(reborn != nullptr, "he came back");
+    if (reborn == nullptr) return;
+    CHECK_NEAR(reborn->Position().x, 4000.0f + waystone.bodySize.x * 0.5f +
+                                         static_cast<float>(waystone.spawnOffset));
+}
+
+// Added by the port, and unreachable at shipped values: the Town Hall is a
+// respawn site, and its fall already loses the run. A board with a hero and
+// no hall is the only way here, and it has to be built by hand.
+static void testWithNowhereToRespawnTheRunIsLost() {
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.Run().Reset();
+
+    Unit* hero = match.SpawnUnit(Upgrades::ForUnit(wb::Shipped(), match.Run(), profile, Ids::kHero),
+                                 glm::vec2(2000.0f, 590.0f));
+    match.Control().Possess(hero);
+    CHECK_MSG(match.Control().Hero() == hero, "precondition: possessed");
+
+    int lost = 0;
+    match.Bus().gameLost.Connect([&lost] { ++lost; });
+
+    hero->Kill();
+    CHECK_MSG(match.RespawnPending(), "the respawn is armed as ever");
+    match.StepRespawn(10.0);
+    CHECK_EQ(lost, 1);
+    CHECK_MSG(!match.Run().IsPlaying(), "the run is over");
+    CHECK_MSG(match.Control().Hero() == nullptr, "with nobody brought back");
+    CHECK_MSG(match.Run().HeroDown(), "and the mark left where it was, as the original leaves it");
+}
+
+// Added by the port. Both halves of the original's is_playing guard: a run
+// that ends while he waits brings nobody back, and a death after the end arms
+// nothing.
+static void testARunThatIsOverBringsNobodyBack() {
+    {
+        Profile profile;
+        Match match(wb::Shipped(), profile, "");
+        match.BootFresh();
+        Unit* hero = match.Control().Hero();
+        if (hero == nullptr) return;
+
+        hero->Kill();
+        match.Run().Win();
+        match.StepRespawn(10.0);
+        CHECK_MSG(match.Control().Hero() == nullptr, "a run won while he waits brings nobody back");
+        CHECK_MSG(!match.RespawnPending(), "and the timer is spent");
+        CHECK_EQ(static_cast<int>(match.Units().size()), 4);
+    }
+    {
+        Profile profile;
+        Match match(wb::Shipped(), profile, "");
+        match.BootFresh();
+        Unit* hero = match.Control().Hero();
+        if (hero == nullptr) return;
+
+        match.Run().Win();
+        hero->Kill();
+        CHECK_MSG(!match.RespawnPending(), "a death after the end arms nothing");
+        CHECK_MSG(!match.Run().HeroDown(), "and marks nothing");
+    }
+}
+
+// verify_respawn E through a real save, where the harness calls the restore's
+// half by hand on a live board. The death is at the harness's own 4321, and a
+// Waystone beside it makes the saved x the thing that decides where he comes
+// back.
+static void testAHeroLessSaveReArmsTheRespawnAtTheSavedDeathX() {
+    Profile profile;
+    Match first(wb::Shipped(), profile, "");
+    first.BootFresh();
+
+    const BuildingStats waystone =
+        Upgrades::ForBuilding(wb::Shipped(), first.Run(), profile, Ids::kWaystone);
+    first.PlaceBuilding(waystone, true, glm::vec2(4000.0f, 700.0f));
+
+    Unit* hero = first.Control().Hero();
+    if (hero == nullptr) return;
+    hero->SetPosition(glm::vec2(4321.0f, 700.0f));
+    hero->Kill();
+    first.StepRespawn(4.0);   // part-way through the wait
+
+    const Value captured = Snapshot::FromText(Snapshot::ToText(first.Capture()));
+    const Supersonic::Json::Array& mark = captured["game_state"]["hero_down_x"].AsArray();
+    CHECK_MSG(mark.size() == 1 && mark[0].AsNumber() == 4321.0,
+              "a pending respawn is marked in GameState (rides saves)");
+
+    Profile secondProfile;
+    Match second(wb::Shipped(), secondProfile, "");
+    CHECK(second.BootFromSave(captured));
+    CHECK_MSG(second.Control().Hero() == nullptr, "the save has no hero to hand back");
+    CHECK_MSG(second.RespawnPending(), "a hero-less restore re-arms the respawn flow");
+    CHECK_MSG(second.Run().HeroDown() && second.Run().HeroDownX() == 4321.0,
+              "the saved death position drives the re-armed respawn");
+    CHECK_MSG(second.RespawnLeft() == 10.0,
+              "with the full delay, as the original's fresh timer gives it");
+
+    second.StepRespawn(10.0);
+    Unit* reborn = second.Control().Hero();
+    CHECK_MSG(reborn != nullptr, "and he comes back");
+    if (reborn != nullptr) {
+        CHECK_NEAR(reborn->Position().x, 4000.0f + waystone.bodySize.x * 0.5f +
+                                             static_cast<float>(waystone.spawnOffset));
+    }
+}
+
+// Added by the port: the other half of the restore. A mark beside a living
+// hero is stale by definition, and keeping it would respawn a second one.
+static void testARestoredHeroClearsAStaleDeathMark() {
+    Profile profile;
+    Match first(wb::Shipped(), profile, "");
+    first.BootFresh();
+    first.Run().SetHeroDown(1234.0);
+
+    Profile secondProfile;
+    Match second(wb::Shipped(), secondProfile, "");
+    CHECK(second.BootFromSave(first.Capture()));
+    CHECK_MSG(second.Control().Hero() != nullptr, "he is up, and possessed");
+    CHECK_MSG(!second.Run().HeroDown(), "so the stale mark is cleared");
+    CHECK_MSG(!second.RespawnPending(), "and nothing is waiting to bring back a second");
+}
+
+// Added by the port. Both of the original's early returns: no hero named, and
+// a name units.json does not have.
+static void testAnUnauthoredHeroSpawnsNobody() {
+    for (const char* economy : {R"({ "starting_hero": "" })", R"({ "starting_hero": "nobody" })"}) {
+        wb::ScratchData scratch("hero", "economy.json", economy);
+        GameData data;
+        data.LoadAll(scratch.Path());
+
+        Profile profile;
+        Match match(data, profile, "");
+        match.BootFresh();
+        CHECK_MSG(match.Control().Hero() == nullptr, "no hero in hand");
+        CHECK_EQ(static_cast<int>(match.Units().size()), 0);
+    }
+}
+
 static void runTests() {
     testTheWholeMatchNumbersTheOraclePrints();
     testATrainedUnitIsBornWhereTheBuildingPutsIt();
@@ -1271,6 +1585,14 @@ static void runTests() {
     testAPreArtSaveReAdoptsTodaysSpritesThroughARealBoot();
     testCapturePointsComeBackWithTheirTug();
     testASaveFromBeforeCapturePointsRestoresThemNeutral();
+
+    testAFallenHeroRespawnsBesideTheNearestRespawnBuilding();
+    testTheRespawnBuildingIsTheOneNearestWhereHeFell();
+    testWithNowhereToRespawnTheRunIsLost();
+    testARunThatIsOverBringsNobodyBack();
+    testAHeroLessSaveReArmsTheRespawnAtTheSavedDeathX();
+    testARestoredHeroClearsAStaleDeathMark();
+    testAnUnauthoredHeroSpawnsNobody();
 
     testADeadEntityStaysOnTheBoardAndStopsBeingFound();
     testACachedDepositIndexNeverChangesItsMind();

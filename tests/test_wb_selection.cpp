@@ -211,13 +211,18 @@ void testTheNearestUnitWinsAPointPick() {
 void testABuildingUnderThePointWinsOverAUnitStandingOnIt() {
     // The interactive landmarks win. A worker standing in the Town Hall's
     // doorway must not steal the tap that was meant to open its panel.
+    //
+    // The harness's own fixture: a finished Town Hall at (1500, 800), built
+    // for the purpose rather than taken from a boot. The boot's hall stands
+    // wherever world.json puts the band, and that moved from under these
+    // probes once already, when the ground line went from 800 to 590.
     Profile profile;
     Match match(wb::Shipped(), profile, "");
-    match.BootFresh();
+    match.Run().Reset();
 
-    Building* hall = match.FindBuilding(Ids::kTownHall);
-    CHECK_MSG(hall != nullptr, "the hall is there");
-    if (hall == nullptr) return;
+    Building* hall = match.PlaceBuilding(
+        Upgrades::ForBuilding(wb::Shipped(), match.Run(), profile, Ids::kTownHall), true,
+        glm::vec2(1500.0f, 800.0f));
 
     // The harness's own probe: a point inside the Town Hall's body.
     CHECK_MSG(match.Picked().BuildingAt(glm::vec2(1500.0f, 720.0f)) == hall,
@@ -468,9 +473,12 @@ void testATapIsContextSensitiveInTheOriginalsOrder() {
     Match match(wb::Shipped(), profile, "");
     match.BootFresh();
 
-    Building* hall = match.FindBuilding(Ids::kTownHall);
+    // The harness's hall at (1500, 800), for the reason the contest above
+    // gives: the boot's stands wherever the band does.
+    Building* hall = match.PlaceBuilding(
+        Upgrades::ForBuilding(wb::Shipped(), match.Run(), profile, Ids::kTownHall), true,
+        glm::vec2(1500.0f, 800.0f));
     Unit* worker = spawnWorker(match, 3000.0f);
-    if (hall == nullptr) return;
 
     // A building selects it, whatever was in hand.
     match.Picked().SelectOnly(worker);

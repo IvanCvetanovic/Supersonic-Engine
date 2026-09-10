@@ -31,6 +31,7 @@ Match::Layout Match::Layout::FromData(const GameData& data) {
     const Value& lane = world["lane"];
     layout.laneDepth = lane["depth"].AsFloat(0.0f);
     layout.buildingRowGap = lane["building_row_gap"].AsFloat(115.0f);
+    layout.buildingRow = lane["building_row"].AsNumber(0.18);
 
     // The width FIRST, because the enemy edge falls back to it. A world.json
     // that sets a width and omits the spawn edge gets a spawn edge that moved
@@ -59,6 +60,7 @@ Match::Match(const GameData& data, Profile& profile, std::string runPath)
     m_bus.waveStarted.Connect([this](int index) { OnWaveStarted(index); });
     m_bus.gameWon.Connect([this] { OnGameOver(true); });
     m_bus.gameLost.Connect([this] { OnGameOver(false); });
+    m_heroControl.heroLost.Connect([this](const glm::vec2& at) { OnHeroLost(at.x); });
 
     // Last, so the selection's own prune handlers run after the director has
     // been told - the order does not matter today, and saying which one it is
@@ -94,6 +96,7 @@ void Match::BootFresh() {
     SpawnResourceNodes();
     SpawnCapturePoints();
     SpawnStartingWorkers();
+    SpawnStartingHero();
 }
 
 bool Match::BootFromSave(const Supersonic::Json::Value& snapshot,
@@ -125,6 +128,10 @@ bool Match::BootFromSave(const Supersonic::Json::Value& snapshot,
     // and the configuration; FromSave wrote the counters; the two sets are
     // disjoint, so this re-derives without rewinding.
     m_director.Setup(spawn, m_layout.enemyX, m_layout.groundY);
+
+    // After the run's state is back, because a hero-less save re-arms the
+    // respawn from the death x the run carried.
+    PossessHeroOnBoard();
     return true;
 }
 
@@ -145,6 +152,9 @@ void Match::ClearBoard() {
     // hero: both point into the units about to go.
     m_selection.Clear();
     m_heroControl.Forget();
+    m_respawnPending = false;
+    m_respawnLeft = 0.0;
+    m_respawnDeathX = 0.0f;
 
     m_lane.Clear();
     m_projectiles.Clear();
@@ -166,8 +176,11 @@ void Match::ClearBoard() {
 void Match::SpawnTownHall() {
     // Through Upgrades, not straight off the data row: a Town Hall reflects the
     // research and the owned Armory levels the player brought into the run.
+    //
+    // On `_building_y`'s row, near the back of the band: a formula rather than
+    // a draw, so it is reproduced where the units' random rows are not.
     PlaceBuilding(Upgrades::ForBuilding(m_data, m_state, m_profile, Ids::kTownHall), true,
-                  glm::vec2(m_layout.townHallX, m_layout.groundY));
+                  glm::vec2(m_layout.townHallX, m_layout.BuildingY()));
 }
 
 void Match::SpawnResourceNodes() {
@@ -212,6 +225,95 @@ void Match::SpawnStartingWorkers() {
     }
 }
 
+// --- The hero --------------------------------------------------------------
+
+std::string Match::StartingHeroId() const {
+    const std::string id = m_data.Economy()["starting_hero"].AsString("");
+    if (id.empty()) return "";
+    const Value& row = m_data.Unit(id);
+    return (row.IsObject() && !row.AsObject().empty()) ? id : "";
+}
+
+void Match::SpawnStartingHero() {
+    const std::string heroId = StartingHeroId();
+    if (heroId.empty()) return;
+
+    // A bit ahead of the worker line. Through Upgrades like every other fresh
+    // spawn, so a hero reflects the research the run was booted with.
+    const float x = m_layout.playerSpawnX + 180.0f;
+    m_heroControl.Possess(SpawnUnit(Upgrades::ForUnit(m_data, m_state, m_profile, heroId),
+                                    glm::vec2(x, m_layout.groundY)));
+}
+
+void Match::PossessHeroOnBoard() {
+    for (const auto& unit : m_units) {
+        if (unit->IsPlayer() && unit->Stats().controllable && unit->IsAlive()) {
+            m_state.ClearHeroDown();   // he is up; a stale mark would respawn a second
+            m_heroControl.Possess(unit.get());
+            return;
+        }
+    }
+
+    // Nobody to possess: the save was taken mid-respawn. Re-armed at where he
+    // fell, so he still revives at the building he fell beside rather than
+    // wherever the Town Hall happens to be.
+    const float x = m_state.HeroDown() ? static_cast<float>(m_state.HeroDownX())
+                                       : m_layout.townHallX;
+    OnHeroLost(x);
+}
+
+void Match::OnHeroLost(float deathX) {
+    if (!m_state.IsPlaying() || m_respawnPending) return;
+    m_respawnPending = true;
+    m_respawnDeathX = deathX;
+    m_state.SetHeroDown(deathX);   // rides the save: a suspended run resumes here
+
+    // Sim time, as the original's timer is: it stops with the frame.
+    m_respawnLeft = m_data.Economy()["hero_respawn_delay_s"].AsNumber(10.0);
+}
+
+void Match::RespawnHero() {
+    m_respawnPending = false;
+    m_respawnLeft = 0.0;
+    if (!m_state.IsPlaying()) return;
+
+    Building* site = NearestRespawnBuilding(m_respawnDeathX);
+    if (site == nullptr) {
+        m_state.Lose();
+        return;
+    }
+
+    const std::string heroId = StartingHeroId();
+    if (heroId.empty()) return;
+
+    // Beside the site, as a building puts what it trains: its x, plus half its
+    // body, plus its spawn offset - summed in double, as the original's
+    // expression is, before the position rounds it.
+    const double x = static_cast<double>(site->Position().x) +
+                     static_cast<double>(site->Stats().bodySize.x) * 0.5 +
+                     site->Stats().spawnOffset;
+    m_state.ClearHeroDown();
+    m_heroControl.Possess(SpawnUnit(Upgrades::ForUnit(m_data, m_state, m_profile, heroId),
+                                    glm::vec2(static_cast<float>(x), m_layout.groundY)));
+}
+
+Building* Match::NearestRespawnBuilding(float x) const {
+    Building* best = nullptr;
+    double bestDistance = 0.0;
+    for (const auto& building : m_buildings) {
+        if (building->Faction() != Factions::kPlayer) continue;
+        if (!building->IsAlive() || !building->IsComplete()) continue;
+        if (!building->Stats().heroRespawn) continue;
+        const double distance =
+            std::fabs(static_cast<double>(building->Position().x) - static_cast<double>(x));
+        if (best == nullptr || distance < bestDistance) {
+            best = building.get();
+            bestDistance = distance;
+        }
+    }
+    return best;
+}
+
 // --- Stepping --------------------------------------------------------------
 
 void Match::Step(double delta) {
@@ -227,6 +329,16 @@ void Match::Step(double delta) {
 
     m_projectiles.Step(delta, m_state.IsPlaying());
     m_director.Step(delta);
+    StepRespawn(delta);
+}
+
+void Match::StepRespawn(double delta) {
+    if (!m_respawnPending) return;
+
+    // Godot's own test: the timer fires on the frame its time reaches zero or
+    // passes it.
+    m_respawnLeft -= delta;
+    if (m_respawnLeft <= 0.0) RespawnHero();
 }
 
 void Match::StepBuildings(double delta) {

@@ -89,6 +89,18 @@ public:
         // are at least this far apart; any closer and they stack into mush.
         float buildingRowGap{115.0f};
 
+        // Where in the band a PRE-PLACED building stands, as a fraction of its
+        // depth from the back edge. A double, the one exception to the rule
+        // below: it is a fraction rather than a position, and the original
+        // multiplies it out in double before a Vector2 rounds the result.
+        double buildingRow{0.18};
+
+        // `main.gd::_building_y`: the Town Hall's row, 640.4 at shipped values.
+        float BuildingY() const {
+            return static_cast<float>(static_cast<double>(groundY) +
+                                      static_cast<double>(laneDepth) * buildingRow);
+        }
+
         // Where enemies come in. The key is optional and the original's
         // fallback is `width - 40`, NOT the shipped 5960 - so a world.json with
         // a different width moves the spawn edge with it, and a port that
@@ -250,6 +262,11 @@ public:
     void StepProjectiles(double delta);
     void StepDirector(double delta);
 
+    // The hero's respawn timer. The original's is a SceneTreeTimer, which
+    // Godot runs after the nodes, so Step runs it last. A harness that drives
+    // _process by hand never ticks one, which is why it is a phase of its own.
+    void StepRespawn(double delta);
+
     // --- Putting things on the board ---------------------------------------
 
     // THE spawn path, `main.gd::spawn_unit`. Public because training, waves and
@@ -260,6 +277,13 @@ public:
     // difference between this and the restore path's CreateUnit, and it is the
     // whole reason the director hears about an enemy by listening rather than
     // by being told.
+    //
+    // THE ROW IS THE CALLER'S, and that is a decision rather than a gap. The
+    // original ignores the caller's y and deals every fresh spawn a random row
+    // in the band. This port does not draw - a draw is the one thing that
+    // would make a replay diverge from its run - and every fresh-spawn caller
+    // in this file passes the ground line. The resync plan's slice 10 has the
+    // whole argument.
     Unit* SpawnUnit(const UnitStats& stats, const glm::vec2& position);
 
     // A building placed by the boot or, later, by the player. `building.gd`'s
@@ -320,9 +344,15 @@ public:
     const class Selection& Picked() const { return m_selection; }
     class Commands& Orders() { return m_orders; }
 
-    // Who the player is steering. The boot possesses nobody until slice 10
-    // spawns the starting hero; a caller that spawns one possesses it here.
+    // Who the player is steering. A fresh boot possesses the starting hero and
+    // a restore possesses the one it rebuilt; after a death, nobody until the
+    // respawn.
     HeroControl& Control() { return m_heroControl; }
+
+    // The respawn in flight: `main.gd`'s _respawn_pending, and what is left on
+    // the timer it started.
+    bool RespawnPending() const { return m_respawnPending; }
+    double RespawnLeft() const { return m_respawnLeft; }
 
     // `main.gd::_back_cancels_placement`, ported whole because it is a PURE
     // PREDICATE and the original says it was kept that way on purpose - so a
@@ -429,6 +459,35 @@ private:
     void SpawnResourceNodes();
     void SpawnCapturePoints();
     void SpawnStartingWorkers();
+
+    // `_spawn_starting_hero`: ahead of the worker line, and possessed at once,
+    // so the player is the hero from the first frame.
+    void SpawnStartingHero();
+
+    // `_possess_hero_on_board`, the restore's half. The hero is just another
+    // rebuilt unit: the first living controllable one is possessed and any
+    // stale death mark cleared. A save with none was taken mid-respawn, and
+    // the flow is re-armed at the SAVED death x - the full delay again, as the
+    // original's fresh timer gives it, rather than whatever was left.
+    void PossessHeroOnBoard();
+
+    // The authored starting hero, or "" when economy.json names none or names
+    // a unit units.json does not have. Either way nobody spawns, at boot or at
+    // a respawn.
+    std::string StartingHeroId() const;
+
+    // `_on_hero_lost`: mark the death and start the timer, unless the run is
+    // over or a respawn is already pending.
+    void OnHeroLost(float deathX);
+
+    // `_respawn_hero`: the nearest respawn building to where he fell brings
+    // him back. None standing loses the run - the wolves have nowhere to bring
+    // him back to.
+    void RespawnHero();
+
+    // `_nearest_respawn_building`: complete, alive and flagged hero_respawn,
+    // by |x| from the death, first of two equidistant ones winning.
+    Building* NearestRespawnBuilding(float x) const;
 
     // Drops everything and resets the derived indexes. Only a boot calls this.
     //
@@ -543,6 +602,14 @@ private:
     // it forget.
     HeroControl m_heroControl{m_bus};
 
+    // The respawn in flight. A boot clears it; a restore does not save the
+    // timer and re-arms it from the saved death x instead, as the original
+    // does. The death x is the one the original binds to its timer, and the
+    // respawn building is chosen against it.
+    bool m_respawnPending{false};
+    double m_respawnLeft{0.0};
+    float m_respawnDeathX{0.0f};
+
     // unique_ptr, and it is load-bearing twice over.
     //
     // Snapshot.hpp requires stable addresses for the life of a capture: a
@@ -612,7 +679,10 @@ private:
     //   / play_music; FloatingNumbers.setup / connect_events; Commands.setup,
     //   BuildPlacement.setup and the HUD's pause edge; _wire_input's thirteen
     //   input signal connections; BottomBar.setup;
-    //   _on_building_destroyed_shake; and the presentation half of
+    //   _on_building_destroyed_shake; the camera's glide to the respawn site
+    //   in _on_hero_lost; the random row spawn_unit and the resource nodes
+    //   are dealt (the row is the caller's here - see SpawnUnit); and the
+    //   presentation half of
     //   _apply_world - the clear colour, the ground rectangle, the camera
     //   bounds, focus and edge-push margin, the drag threshold, the touch hold
     //   time, the unit pick radius and the formation spacing.

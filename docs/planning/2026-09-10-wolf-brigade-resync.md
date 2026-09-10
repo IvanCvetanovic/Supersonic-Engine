@@ -752,3 +752,96 @@ gathering) come from a real boot of HEAD's board, and they are slice 10's.
 **Result (GCC, 10 September):** snapshot 168/0 and the three new match
 tests green, with nothing regressed. Still red, and unchanged: audio 5,
 selection 5 and match 44, all of them slices 10 and 11.
+
+## Slice 10: the match boot, the hero and the respawn
+
+**The row policy comes first, because the rest depends on it.** HEAD's
+`spawn_unit` ignores the caller's y. It deals every fresh spawn a random row
+in the band, `_ground_y + randf() * _lane_depth`, and does the same for every
+resource node. The port does not draw. A fresh unit and a node stand on the
+ground line, as before. There are three reasons:
+- **A draw would break replay.** It is the one thing that makes a replay
+  diverge from the run it replays, which is why the AI stagger is zero
+  (`Unit.hpp`). An RNG in the sim becomes save state, and a Continue that
+  failed to restore it would diverge from a session that never suspended.
+- **The row is presentation.** HEAD's comment says the scatter exists so
+  y-sorting draws near units in front of far ones. Its one effect on the
+  sim, the length of a 2D walk, follows from a drawing decision.
+- **The oracle cannot hold it steady.** Over seven runs of HEAD's board
+  (four of `verify_snapshot`, three of a probe of it), the gathering count
+  was 4 four times and 3 three times. The unit count, the wood and the hall's
+  hit points never moved.
+
+A hashed row, like HEAD's decor scatter, was the tempting middle ground. It
+is rejected: it is deterministic, but it reproduces nothing, and every 2D
+walk would become a port artefact with no oracle behind it. The port
+reproduces the decision and declines the draw, the same rule slice 3 (the
+band) and 7a (formation slots) already follow.
+
+What the port does reproduce is the Town Hall's row. A pre-placed building
+stands at `groundY + laneDepth * building_row` = 590 + 280 × 0.18 = 640.4.
+That is a formula, not a draw. Placed buildings keep the pointer's row, as
+before.
+
+**The starting hero.** `economy.starting_hero` spawns at
+`player_spawn_x + 180` = 1860 and is possessed at boot, so the player is the
+hero from the first frame. If the id is empty or has no row in `units.json`,
+the boot spawns nobody.
+
+**The respawn.** When HeroControl's `heroLost` fires:
+1. The Match marks the respawn pending and records `hero_down_x`.
+2. A sim-time timer runs for `hero_respawn_delay_s` (10 seconds).
+3. The Match takes the complete, living `hero_respawn` building nearest the
+   death x: the Town Hall or a Waystone.
+4. The hero spawns at that building's x plus half its body plus its
+   `spawn_offset`, and is possessed. If no such building is standing, the
+   run is lost.
+
+The timer is an accumulator the Match steps after the director. Godot runs
+scene-tree timers after the nodes, and that order is argued from the engine,
+not measured. On a restore, the Match finds the living controllable unit,
+possesses it and clears any stale mark. A save with no such unit re-arms the
+full delay at the saved death x.
+
+**The selection reds were not about the row.** `verify_buildings` builds its
+own hall at (1500, 800). The port's suite reused the boot's hall, which the
+new ground line moved from under its probes. The suite now builds the
+harness's hall.
+
+**The ledger, from a probe of HEAD's board.** The probe runs
+`verify_snapshot`'s boot and drive, logs every birth and every change in
+resources, and was run three times:
+- **Boot:** 240 wood (300 × 0.8 on hard) and 80 food; three workers; the
+  hero, possessed, at 1860; the hall at (1500, 640.4); 22 nodes.
+- **Step 3:** the Town Hall auto-trains a worker for 50 wood. It is born at
+  step 27, at x 1600 (1500 + 60 + 40).
+- **Steps 40 and 80:** the barracks' two soldiers, at 2395.
+- **Wood:** three deliveries of ten, so 240 − 50 + 30 = 220.
+- **Units:** 8 = three workers, the auto-trained one, the hero, the raider
+  and two soldiers.
+- **Gathering:** 4, 4 and 3.
+
+**Not ported here:** `verify_respawn` C and D, the proximity panel and the
+build menu's slow-motion, belong to the bottom bar, which is UI. The camera's
+glide to the respawn site is presentation.
+
+**Reproduced** at `50741d1`:
+- `verify_respawn` A, B and E. The harness passes 11/0; C and D are the
+  bottom bar's.
+- `verify_snapshot`'s 8 units, 220 wood and 3-or-4 gathering, through a real
+  boot, with the auto-trained worker born at 1600.
+
+**Added by the port:**
+- the nearest site wins, and an unfinished or ruined one does not count;
+- no site standing loses the run;
+- a run that is over brings nobody back and arms nothing;
+- a restore with a living hero clears a stale mark;
+- an empty or unknown `starting_hero` spawns nobody.
+
+**Found while porting.** The placement suite counted every non-idle unit as
+a busy worker. The boot's hero is Controlled, not Idle, so it now counts
+workers only.
+
+**Result (GCC, 10 September):** match 317/0 (was 44 red), selection 93/0
+(was 5) and placement 92/0, and nothing else moved. The only red left is
+audio 5, which is slice 11.
