@@ -625,6 +625,10 @@ MissionDef loadMissionDef(const std::filesystem::path& root, std::string_view na
     return def;
 }
 
+MissionDef parseMissionDefFile(const std::filesystem::path& path) {
+    return missionDef(ron::parseFile(path), path.generic_string());
+}
+
 MapDef mapDefFromSpec(const MapSpec& spec) {
     auto rects = [](const std::vector<std::array<float, 4>>& list) {
         std::vector<Rect2> out;

@@ -1,15 +1,22 @@
-// HUSK's port, whole ticks: each scripted scenario in games/husk/golden runs
+// HUSK's port, whole ticks: every scripted scenario in games/husk/golden runs
 // here and in the Rust original, and the SimHash after every tick must agree
 // bit for bit. The hash covers every unit, building, source and item, the
 // economy, the RNG stream and the mission state, so one tick in agreement is
 // the whole sim in agreement.
 //
+// The scenarios mirror the setups of HUSK's own 96 Rust tests - the leash, the
+// taunt, the chain arc, the balance doctrine, loot, research, the tower, the
+// hero kit, missions and their triggers, terrain, and saves restored mid-run -
+// so each of those becomes a bit-exact comparison rather than a rephrased
+// assertion. Adding a scenario is adding a .scn file and its golden: this
+// suite runs whatever it finds.
+//
 // The goldens come from games/husk/oracle (see test_husk_foundation.cpp):
 //
-//   target/release/husk-oracle run ../golden/m0.scn > ../golden/m0.hashes
+//   for s in ../golden/*.scn; do target/release/husk-oracle run $s > ${s%.scn}.hashes; done
 //
-// and likewise for each scenario. When one diverges, this suite prints the
-// port's per-domain hashes and entities at the first bad tick, and
+// When one diverges, this suite prints the port's per-domain hashes and
+// entities at the first bad tick, and
 //
 //   husk-oracle run ../golden/<name>.scn --domains --entities <tick>
 //
@@ -21,7 +28,9 @@
 #include "sim/Scenario.hpp"
 #include "sim/World.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <exception>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -61,9 +70,9 @@ Run runAgainstGolden(const std::string& name) {
     const std::vector<std::string> golden = readLines(goldenDir() / (name + ".hashes"));
     run.expected = golden.size();
     run.world = startScenario(s, sharedCatalogs());
-    World& w = *run.world;
     for (uint64_t t = 0; t < s.ticks; ++t) {
-        pushScriptedOrders(w, s, t);
+        applyScriptTick(run.world, s, t);
+        World& w = *run.world;
         step(w);
         const std::string line = std::to_string(w.tick) + " " + hex16(w.hash);
         if (t >= golden.size() || golden[t] != line) {
@@ -81,7 +90,15 @@ Run runAgainstGolden(const std::string& name) {
 }
 
 void checkScenario(const std::string& name) {
-    const Run run = runAgainstGolden(name);
+    // A scenario the port cannot even start is one failure, not the end of
+    // the suite: the rest still say what they say.
+    Run run;
+    try {
+        run = runAgainstGolden(name);
+    } catch (const std::exception& e) {
+        CHECK_MSG(false, name + " threw: " + e.what());
+        return;
+    }
     CHECK_MSG(run.divergence.empty(), run.divergence);
     CHECK_MSG(run.expected > 0 && run.matched == run.expected,
               name + ": " + std::to_string(run.matched) + " of " + std::to_string(run.expected) + " ticks agree");
@@ -111,7 +128,7 @@ void testTheM0MarchMatchesTickForTick() {
 }
 
 // Same seed, same hash; another seed, another hash - determinism.rs's first
-// two cases, which the golden comparison already implies but does not state.
+// two cases, which the golden comparison implies but does not state.
 void testTheSeedAndOnlyTheSeedDecides() {
     auto run = [](uint64_t seed) {
         World w(sharedCatalogs(), seed);
@@ -126,19 +143,28 @@ void testTheSeedAndOnlyTheSeedDecides() {
     CHECK(run(7) != run(8));
 }
 
+std::vector<std::string> allScenarios() {
+    std::vector<std::string> names;
+    for (const auto& entry : std::filesystem::directory_iterator(goldenDir())) {
+        if (entry.path().extension() == ".scn") names.push_back(entry.path().stem().string());
+    }
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
 } // namespace
 
 void runTests() {
     testTheM0MarchMatchesTickForTick();
     testTheSeedAndOnlyTheSeedDecides();
-    // The 20v20: acquisition, taunt, the chain arc, damage order.
-    checkScenario("battle");
-    // The macro sandbox: extraction, production, placement, the hero kit,
-    // loot, death and revival.
-    checkScenario("macro");
-    // The missions, from their RON: triggers, objectives, raiders, rotation.
-    checkScenario("heartwood");
-    checkScenario("first_light");
+
+    const std::vector<std::string> names = allScenarios();
+    // A floor, so a golden directory that went missing is a failure rather
+    // than a suite that quietly checked nothing.
+    CHECK_MSG(names.size() >= 50, "only " + std::to_string(names.size()) + " scenarios found");
+    for (const std::string& name : names) {
+        if (name != "m0") checkScenario(name); // the gate ran above
+    }
 }
 
-TEST_MAIN("test_husk_scenarios", 14)
+TEST_MAIN("test_husk_scenarios", 100)

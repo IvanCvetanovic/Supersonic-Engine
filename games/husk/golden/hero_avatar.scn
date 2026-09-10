@@ -1,0 +1,9 @@
+# hero.rs: avatar at level 6 raises thralls from two husks; all of it expires.
+seed 25
+ticks 500
+hero 8.0 -30.0
+source tree 10.0 -30.0 husk
+source tree 6.0 -32.0 husk
+herolevel 0 6 0.0 1
+0 learn hero=0 ability=3
+2 cast hero=0 ability=3 target=none queued=0

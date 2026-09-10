@@ -1,0 +1,12 @@
+# hero.rs: a poultice heals and is spent, a passive charm cannot be used, and a
+# stim grants haste and is spent.
+seed 19
+ticks 100
+hero 8.0 -30.0
+inventory 0 0 field_poultice
+inventory 0 1 rebar_knuckles
+hp 0 100.0
+0 use hero=0 slot=0
+1 use hero=0 slot=1
+2 inventory 0 2 adrenal_stim
+2 use hero=0 slot=2

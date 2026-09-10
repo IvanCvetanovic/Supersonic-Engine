@@ -1,0 +1,11 @@
+# research.rs: one research at a time, and Munitions caps at its max level.
+seed 7
+ticks 3400
+building forge 0 0.0 0.0
+essence 1000000.0
+0 research building=0 upgrade=munitions
+1 research building=0 upgrade=extraction
+700 research building=0 upgrade=munitions
+1400 research building=0 upgrade=munitions
+2100 research building=0 upgrade=munitions
+2800 research building=0 upgrade=munitions

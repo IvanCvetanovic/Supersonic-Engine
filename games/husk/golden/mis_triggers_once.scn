@@ -1,0 +1,4 @@
+# mission.rs: a once-trigger pays once; a repeating one re-fires.
+seed 44
+ticks 40
+install missions/triggers_once.ron

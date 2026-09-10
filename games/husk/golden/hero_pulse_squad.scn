@@ -1,0 +1,7 @@
+# hero.rs hero_scenario_is_deterministic: pulse into a jittered squad, then fight.
+seed 31
+ticks 2000
+hero 8.0 -30.0
+squad team=1 x=12.0 y=-29.0 comp=siphon:6
+0 learn hero=0 ability=2
+0 cast hero=0 ability=2 target=none queued=0

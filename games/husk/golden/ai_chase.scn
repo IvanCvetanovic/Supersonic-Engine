@@ -1,0 +1,8 @@
+# ai.rs: an idle golem acquires a stalker, which flees to y=18 -
+# inside the leash, so the chase goes on.
+seed 3
+ticks 400
+map 60
+unit golem 1 0.0 0.0
+unit stalker 0 0.0 8.0
+1 point units=1 attack=0 x=0.0 y=18.0 queued=0

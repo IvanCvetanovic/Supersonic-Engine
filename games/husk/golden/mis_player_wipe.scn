@@ -1,0 +1,8 @@
+# mission.rs: a lone stalker is overrun, and the wipe is Defeat.
+seed 47
+ticks 600
+unit stalker 0 8.0 -30.0
+unit golem 1 9.5 -30.0
+unit golem 1 6.5 -29.7
+unit golem 1 8.0 -28.4
+install missions/wipe.ron

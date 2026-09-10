@@ -1,0 +1,7 @@
+# hero.rs: overcharge buffs a friendly stalker, burns it, and expires.
+seed 23
+ticks 300
+hero 8.0 -30.0
+unit stalker 0 10.0 -30.0
+0 learn hero=0 ability=1
+0 cast hero=0 ability=1 target=id:1 queued=0

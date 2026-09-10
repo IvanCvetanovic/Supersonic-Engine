@@ -16,11 +16,21 @@
 //! text means bit-identical values, not values that happen to print alike.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use bevy::prelude::*;
+use project_husk::sim::building::{Building, spawn_building};
 use project_husk::sim::data::{
-    self, AbilityKind, ActiveEffect, ArmorType, AttackDef, AttackType, UnitPassive, UpgradeEffect,
+    self, AbilityKind, ActiveEffect, Affinity, ArmorType, AttackDef, AttackType, UnitPassive,
+    UpgradeEffect,
 };
+use project_husk::sim::economy::spawn_source;
+use project_husk::sim::flow::FlowFields;
+use project_husk::sim::hero::{spawn_hero, spawn_item};
+use project_husk::sim::map::{MapDef, NavGrid, Rect2};
+use project_husk::sim::mission::{MissionDef, MissionHook, MissionHooks};
+use project_husk::sim::snapshot::{self, CampaignState};
+use project_husk::sim::unit::{SimIndex, spawn_unit};
 use project_husk::sim::difficulty::{self, Difficulty};
 use project_husk::sim::economy::{
     AffinityState, EssenceSource, PlayerEconomy, ResearchState, WillState,
@@ -596,6 +606,15 @@ fn flag(m: &HashMap<String, String>, k: &str) -> bool {
     m.get(k).is_some_and(|v| v == "1")
 }
 
+/// A catalog name, or `@N` for a raw id - which is how a scenario asks for an
+/// out-of-range kind (the malformed-order case). Not `#`: that starts a comment.
+fn kind_of(v: &str, lookup: impl Fn(&str) -> u16) -> u16 {
+    match v.strip_prefix('@') {
+        Some(n) => n.parse().unwrap(),
+        None => lookup(&name(v)),
+    }
+}
+
 fn order_msg(world: &World, words: &[String]) -> OrderMsg {
     let m = kv(&words[1..]);
     let units = || ids(&m["units"]);
@@ -615,12 +634,12 @@ fn order_msg(world: &World, words: &[String]) -> OrderMsg {
         "build" => OrderMsg::Build { units: units(), site: u(&m, "site"), queued: flag(&m, "queued") },
         "place" => OrderMsg::PlaceBuilding {
             builder: u(&m, "builder"),
-            kind: world.resource::<data::BuildingCatalog>().id(&name(&m["kind"])),
+            kind: kind_of(&m["kind"], |n| world.resource::<data::BuildingCatalog>().id(n)),
             center: Vec2::new(f(&m, "x"), f(&m, "y")),
         },
         "produce" => OrderMsg::Produce {
             building: u(&m, "building"),
-            kind: world.resource::<data::UnitCatalog>().id(&name(&m["kind"])),
+            kind: kind_of(&m["kind"], |n| world.resource::<data::UnitCatalog>().id(n)),
         },
         "cancel" => OrderMsg::CancelProduce { building: u(&m, "building") },
         "rally" => OrderMsg::SetRally { building: u(&m, "building"), target: Vec2::new(f(&m, "x"), f(&m, "y")) },
@@ -645,7 +664,7 @@ fn order_msg(world: &World, words: &[String]) -> OrderMsg {
         "use" => OrderMsg::UseItem { hero: u(&m, "hero"), slot: u(&m, "slot") as u8 },
         "research" => OrderMsg::Research {
             building: u(&m, "building"),
-            upgrade: world.resource::<data::UpgradeCatalog>().id(&name(&m["upgrade"])),
+            upgrade: kind_of(&m["upgrade"], |n| world.resource::<data::UpgradeCatalog>().id(n)),
         },
         other => panic!("unknown order {other}"),
     }
@@ -671,6 +690,189 @@ fn setup(world: &mut World, words: &[String]) {
             spawn_squad(world, u(&m, "team") as u8, Vec2::new(f(&m, "x"), f(&m, "y")), &comp);
         }
         other => panic!("unknown setup line {other}"),
+    }
+}
+
+/// The verbs that are orders, pushed onto the queue; every other line is a
+/// change made to the world directly, between ticks, as the game's own tests
+/// make them.
+const ORDER_VERBS: &[&str] = &[
+    "point", "attack", "patrol", "hold", "stop", "extract", "repair", "build", "place", "produce",
+    "cancel", "rally", "cast", "learn", "revive", "pickup", "drop", "use", "research",
+];
+
+/// A scenario's world, and the map its `map` lines are building up.
+struct Run {
+    app: App,
+    map: Option<MapDef>,
+}
+
+fn fw(w: &[String], i: usize) -> f32 {
+    w[i].parse().unwrap_or_else(|_| panic!("bad float {:?}", w[i]))
+}
+
+fn uw(w: &[String], i: usize) -> u32 {
+    w[i].parse().unwrap_or_else(|_| panic!("bad integer {:?}", w[i]))
+}
+
+fn entity(world: &World, id: u32) -> Entity {
+    *world
+        .resource::<SimIndex>()
+        .0
+        .get(&id)
+        .unwrap_or_else(|| panic!("no entity with SimId {id}"))
+}
+
+fn affinity_named(n: &str) -> Affinity {
+    match n {
+        "Steel" => Affinity::Steel,
+        "Flora" => Affinity::Flora,
+        "Volt" => Affinity::Volt,
+        "Stone" => Affinity::Stone,
+        "Pyre" => Affinity::Pyre,
+        "Aqua" => Affinity::Aqua,
+        other => panic!("unknown affinity {other}"),
+    }
+}
+
+/// tests/mission.rs's EssenceDrip: +1 essence per tick, mission or not.
+struct EssenceDrip;
+
+impl MissionHook for EssenceDrip {
+    fn on_tick(&mut self, world: &mut World) {
+        world.resource_mut::<PlayerEconomy>().essence += 1.0;
+    }
+}
+
+fn apply_map(world: &mut World, map: &MapDef) {
+    world.insert_resource(NavGrid::from_def(map));
+    world.insert_resource(map.clone());
+    world.resource_mut::<FlowFields>().0.clear();
+}
+
+fn mutate(run: &mut Run, w: &[String], dir: &Path) {
+    // Save, write, read back and restore into a fresh app with another seed -
+    // exactly the round trip the game's snapshot tests make.
+    if w[0] == "snapshot" {
+        let save = snapshot::capture(run.app.world_mut(), CampaignState::default());
+        let path = std::env::temp_dir().join(format!("husk-oracle-{}.husk.ron", std::process::id()));
+        snapshot::write_save(&save, &path).expect("save written");
+        let loaded = snapshot::read_save(&path).expect("save read");
+        let _ = std::fs::remove_file(&path);
+        let mut fresh = App::new();
+        fresh.add_plugins(SimPlugin { seed: 999 });
+        snapshot::restore(fresh.world_mut(), loaded);
+        run.app = fresh;
+        return;
+    }
+    let world = run.app.world_mut();
+    match w[0].as_str() {
+        "setup" | "mission" | "squad" => setup(world, w),
+        "install" => {
+            let path = dir.join(&w[1]);
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let def: MissionDef = ron::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            mission::install_mission(world, def).unwrap_or_else(|e| panic!("{e}"));
+        }
+        "map" => {
+            let map = MapDef {
+                half: fw(w, 1),
+                obstacles: Vec::new(),
+                roads: Vec::new(),
+                plateaus: Vec::new(),
+                plateau_polys: Vec::new(),
+                ramps: Vec::new(),
+                bumps: Vec::new(),
+            };
+            apply_map(world, &map);
+            run.map = Some(map);
+        }
+        "plateau" | "ramp" | "obstacle" | "poly" => {
+            let map = run.map.as_mut().expect("a `map` line must come first");
+            match w[0].as_str() {
+                "plateau" => map
+                    .plateaus
+                    .push((Rect2::new(fw(w, 1), fw(w, 2), fw(w, 3), fw(w, 4)), uw(w, 5) as u8)),
+                "ramp" => map.ramps.push(Rect2::new(fw(w, 1), fw(w, 2), fw(w, 3), fw(w, 4))),
+                "obstacle" => map.obstacles.push(Rect2::new(fw(w, 1), fw(w, 2), fw(w, 3), fw(w, 4))),
+                _ => {
+                    let verts = w[2..]
+                        .iter()
+                        .map(|p| {
+                            let (x, y) = p.split_once(',').unwrap();
+                            Vec2::new(x.parse().unwrap(), y.parse().unwrap())
+                        })
+                        .collect();
+                    map.plateau_polys.push((verts, uw(w, 1) as u8));
+                }
+            }
+            apply_map(world, map);
+        }
+        "unit" => {
+            let kind = world.resource::<data::UnitCatalog>().id(&name(&w[1]));
+            spawn_unit(world, kind, uw(w, 2) as u8, Vec2::new(fw(w, 3), fw(w, 4)));
+        }
+        "building" => {
+            let kind = world.resource::<data::BuildingCatalog>().id(&name(&w[1]));
+            let complete = w.get(5).map(String::as_str) != Some("site");
+            spawn_building(world, kind, uw(w, 2) as u8, Vec2::new(fw(w, 3), fw(w, 4)), complete);
+        }
+        "source" => {
+            let kind = world.resource::<data::SourceCatalog>().id(&name(&w[1]));
+            let e = spawn_source(world, kind, Vec2::new(fw(w, 2), fw(w, 3)));
+            if w.get(4).map(String::as_str) == Some("husk") {
+                world.get_mut::<EssenceSource>(e).unwrap().essence = 0.0;
+            }
+        }
+        "item" => {
+            let kind = world.resource::<data::ItemCatalog>().id(&name(&w[1]));
+            spawn_item(world, kind, Vec2::new(fw(w, 2), fw(w, 3)));
+        }
+        "hero" => {
+            spawn_hero(world, Vec2::new(fw(w, 1), fw(w, 2)));
+        }
+        "essence" => world.resource_mut::<PlayerEconomy>().essence = fw(w, 1),
+        "anima" => world.resource_mut::<PlayerEconomy>().anima = fw(w, 1),
+        "affinity" => {
+            world.resource_mut::<AffinityState>().cumulative[affinity_named(&w[1]) as usize] = fw(w, 2)
+        }
+        "researched" => {
+            let (id, n) = {
+                let catalog = world.resource::<data::UpgradeCatalog>();
+                (catalog.id(&name(&w[1])), catalog.defs.len())
+            };
+            let mut r = world.resource_mut::<ResearchState>();
+            if r.levels.len() < n {
+                r.levels.resize(n, 0);
+            }
+            r.levels[id as usize] = uw(w, 2) as u8;
+        }
+        "hp" => {
+            let e = entity(world, uw(w, 1));
+            world.get_mut::<Health>(e).unwrap().cur = fw(w, 2);
+        }
+        "herolevel" => {
+            let e = entity(world, uw(w, 1));
+            let mut h = world.get_mut::<Hero>(e).unwrap();
+            h.level = uw(w, 2) as u8;
+            h.xp = fw(w, 3);
+            h.points = uw(w, 4) as u8;
+        }
+        "inventory" => {
+            let item = world.resource::<data::ItemCatalog>().id(&name(&w[3]));
+            let e = entity(world, uw(w, 1));
+            world.get_mut::<Hero>(e).unwrap().inventory[uw(w, 2) as usize] = Some(item);
+        }
+        "queue" => {
+            let kind = world.resource::<data::UnitCatalog>().id(&name(&w[2]));
+            let e = entity(world, uw(w, 1));
+            world.get_mut::<Building>(e).unwrap().queue.push(kind);
+        }
+        "hook" => match w[1].as_str() {
+            "essence_drip" => world.resource_mut::<MissionHooks>().0.push(Box::new(EssenceDrip)),
+            other => panic!("unknown hook {other}"),
+        },
+        other => panic!("unknown line {other}"),
     }
 }
 
@@ -1001,24 +1203,28 @@ fn dump_entities(world: &mut World) {
 
 fn run(path: &str, domains: bool, entities_every: u64) {
     let scenario = parse_scenario(path);
+    let dir = Path::new(path).parent().map(Path::to_path_buf).unwrap_or_default();
     let mut app = App::new();
     app.add_plugins(SimPlugin { seed: scenario.seed });
-    let world = app.world_mut();
-    world.insert_resource(scenario.difficulty);
+    app.world_mut().insert_resource(scenario.difficulty);
+    let mut run = Run { app, map: None };
     for line in &scenario.setup {
-        setup(world, line);
+        mutate(&mut run, line, &dir);
     }
-    let script: Vec<(u64, OrderMsg)> = scenario
-        .script
-        .iter()
-        .map(|(at, words)| (*at, order_msg(world, words)))
-        .collect();
     for tick in 0..scenario.ticks {
-        for (at, msg) in &script {
-            if *at == tick {
-                world.resource_mut::<OrderQueue>().0.push(msg.clone());
+        // in file order: orders queue up, world changes land at once
+        for (at, words) in &scenario.script {
+            if *at != tick {
+                continue;
+            }
+            if ORDER_VERBS.contains(&words[0].as_str()) {
+                let msg = order_msg(run.app.world(), words);
+                run.app.world_mut().resource_mut::<OrderQueue>().0.push(msg);
+            } else {
+                mutate(&mut run, words, &dir);
             }
         }
+        let world = run.app.world_mut();
         world.run_schedule(SimStep);
         let t = world.resource::<SimTick>().0;
         let hash = world.resource::<SimHash>().0;

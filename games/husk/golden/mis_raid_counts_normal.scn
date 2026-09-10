@@ -1,0 +1,5 @@
+# mission.rs: normal fields its enemy squad; player squads never scale.
+seed 70
+ticks 40
+difficulty normal
+install missions/raid_counts.ron

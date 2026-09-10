@@ -1,0 +1,6 @@
+# hero.rs: a heal used at full health is refused, not wasted.
+seed 19
+ticks 20
+hero 8.0 -30.0
+inventory 0 0 field_poultice
+1 use hero=0 slot=0

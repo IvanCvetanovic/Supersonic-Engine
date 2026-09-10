@@ -1,0 +1,8 @@
+# hero.rs: pulse damages and slows inside its radius, not beyond.
+seed 24
+ticks 200
+hero 8.0 -30.0
+unit siphon 1 12.5 -30.0
+unit siphon 1 20.0 -30.0
+0 learn hero=0 ability=2
+0 cast hero=0 ability=2 target=none queued=0

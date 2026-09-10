@@ -1,0 +1,7 @@
+# economy.rs: a siphon drains a tree to a husk and auto-continues to the next.
+seed 3
+ticks 4000
+unit siphon 0 -24.0 -6.0
+source tree -22.0 -6.0
+source tree -20.0 -8.0
+0 extract units=0 source=1 queued=0

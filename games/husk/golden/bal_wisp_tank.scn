@@ -1,0 +1,7 @@
+# balance.rs: arcane cracks military vehicles (the harness's squads and a-move, seed 7).
+seed 7
+ticks 1500
+squad team=0 x=-12.0 y=32.0 comp=wisp:9
+squad team=1 x=12.0 y=32.0 comp=tank:3
+0 point units=0-8 attack=1 x=12.0 y=32.0 queued=0
+0 point units=9-11 attack=1 x=-12.0 y=32.0 queued=0

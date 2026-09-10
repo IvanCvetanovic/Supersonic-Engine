@@ -1,0 +1,11 @@
+# economy.rs full_macro_loop_ends_with_an_army: four siphons extract flora, one
+# places and builds a Forge (id 49), which rallies and produces three stalkers.
+seed 7
+ticks 2100
+setup macro
+0 extract units=1-4 source=11 queued=0
+160 place builder=1 kind=forge x=-26.0 y=-30.0
+1060 rally building=49 x=-20.0 y=-28.0
+1060 produce building=49 kind=stalker
+1060 produce building=49 kind=stalker
+1060 produce building=49 kind=stalker

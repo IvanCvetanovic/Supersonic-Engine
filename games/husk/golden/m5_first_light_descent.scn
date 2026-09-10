@@ -1,0 +1,5 @@
+# m5.rs: the hero walks down the reshaped First Light mountain to the bench.
+seed 91
+ticks 1200
+mission first_light
+0 point units=15 attack=0 x=0.0 y=-18.0 queued=0

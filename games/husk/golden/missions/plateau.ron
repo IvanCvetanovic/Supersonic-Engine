@@ -1,0 +1,9 @@
+(
+    name: "terrain test",
+    map: Some((
+        half: 30.0,
+        obstacles: [],
+        plateaus: [(0.0, -30.0, 30.0, 30.0, 1)],
+        ramps: [(-4.0, -6.0, 4.0, 6.0)],
+    )),
+)

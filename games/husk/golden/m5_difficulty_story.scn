@@ -1,0 +1,8 @@
+# m5.rs: story scales enemy hp and fire, never the player's.
+seed 62
+ticks 60
+difficulty story
+unit golem 1 0.0 -30.0
+unit golem 0 10.0 -30.0
+unit siphon 0 0.0 -34.0
+unit officer 1 2.0 -34.0

@@ -1,0 +1,16 @@
+(
+    name: "test",
+    objectives: [
+        (name: "a", text: "first", optional: false),
+        (name: "opt", text: "side", optional: true),
+    ],
+    triggers: [
+        (name: "twist", when: [TimeAtLeast(0.25)], actions: [
+            CompleteObjective("a"),
+            AddObjective(name: "survive", text: "hold", optional: false),
+        ]),
+        (name: "held", when: [ObjectiveActiveForAtLeast("survive", 1.0)], actions: [CompleteObjective("survive")]),
+        (name: "win", when: [AllRequiredObjectivesComplete], actions: [Victory]),
+        (name: "too late", when: [TimeAtLeast(2.0)], actions: [Defeat]),
+    ],
+)

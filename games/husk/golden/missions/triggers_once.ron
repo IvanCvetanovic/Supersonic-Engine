@@ -1,0 +1,7 @@
+(
+    name: "test",
+    triggers: [
+        (name: "drop", when: [TimeAtLeast(0.5)], actions: [Message("contact"), GrantEssence(100.0), GrantAnima(5.0)]),
+        (name: "drip", once: false, when: [TimeAtLeast(0.5)], actions: [Message("tick")]),
+    ],
+)

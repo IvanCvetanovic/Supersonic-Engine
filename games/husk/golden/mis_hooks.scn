@@ -1,0 +1,4 @@
+# mission.rs: a mission hook runs every tick, mission or not.
+seed 48
+ticks 10
+hook essence_drip

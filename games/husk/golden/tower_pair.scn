@@ -1,0 +1,6 @@
+# tower.rs: a Tower against two enemies.
+seed 13
+ticks 200
+building tower 0 0.0 -30.0
+unit stalker 1 6.0 -30.0
+unit stalker 1 -5.0 -28.0

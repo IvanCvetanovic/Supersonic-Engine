@@ -1,0 +1,11 @@
+# ai.rs: six stalkers plain-moved to one point spread into a formation.
+seed 5
+ticks 250
+map 60
+unit stalker 0 -20.0 0.0
+unit stalker 0 -19.6 0.0
+unit stalker 0 -19.2 0.0
+unit stalker 0 -18.8 0.0
+unit stalker 0 -18.4 0.0
+unit stalker 0 -18.0 0.0
+0 point units=0-5 attack=0 x=10.0 y=0.0 queued=0

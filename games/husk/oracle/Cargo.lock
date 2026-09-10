@@ -2023,6 +2023,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "project-husk",
+ "ron",
 ]
 
 [[package]]

@@ -1,0 +1,8 @@
+# hero.rs: an out-of-range ability and kinds are refused, and spend nothing.
+seed 7
+ticks 30
+hero 8.0 -30.0
+building forge 0 6.0 -28.0
+0 cast hero=0 ability=99 target=none queued=0
+0 produce building=1 kind=@65535
+0 place builder=0 kind=@65535 x=6.0 y=-30.0

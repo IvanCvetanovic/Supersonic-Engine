@@ -20,6 +20,8 @@ publish = false
 [dependencies]
 project-husk = { path = "../../../../Test-Game", default-features = false, features = ["headless"] }
 bevy = { version = "=0.18.1", default-features = false, features = ["std", "serialize"] }
+# For the `install` verb: a scenario's own mission file, parsed as the game does.
+ron = "0.12.1"
 
 # Standalone: never part of a workspace above it.
 [workspace]

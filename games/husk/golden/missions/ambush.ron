@@ -1,0 +1,9 @@
+(
+    name: "test",
+    triggers: [
+        (name: "ambush", when: [TimeAtLeast(0.25)], actions: [
+            SpawnSquad(unit: "officer", count: 4, x: 30.0, y: -30.0, aggressive: false),
+            GrantHeroXp(250.0),
+        ]),
+    ],
+)

@@ -1,0 +1,28 @@
+# depth_stack.rs: loot, the affinity payoff and research exercised together -
+# a funded Forge researching Munitions while tier-2 Flora stalkers overrun
+# enemy soldiers that roll the loot table.
+seed 9
+ticks 680
+map 60
+affinity Flora 300.0
+building forge 0 0.0 20.0
+essence 100000.0
+unit stalker 0 -3.0 -4.0
+unit stalker 0 -1.8 -4.0
+unit stalker 0 -0.6 -4.0
+unit stalker 0 0.6 -4.0
+unit stalker 0 1.8 -4.0
+unit stalker 0 3.0 -4.0
+unit stalker 0 -3.0 -2.8
+unit stalker 0 -1.8 -2.8
+unit stalker 0 -0.6 -2.8
+unit stalker 0 0.6 -2.8
+unit stalker 0 1.8 -2.8
+unit stalker 0 3.0 -2.8
+unit soldier 1 -2.5 -1.0
+unit soldier 1 -1.5 -1.0
+unit soldier 1 -0.5 -1.0
+unit soldier 1 0.5 -1.0
+unit soldier 1 1.5 -1.0
+unit soldier 1 2.5 -1.0
+0 research building=0 upgrade=munitions

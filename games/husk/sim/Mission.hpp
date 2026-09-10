@@ -19,6 +19,9 @@ namespace husk {
 // Throws ron::Error on a missing or malformed file.
 MissionDef loadMissionDef(const std::filesystem::path& root, std::string_view name);
 
+// One MissionDef from one file, no sidecars - a test's own mission.
+MissionDef parseMissionDefFile(const std::filesystem::path& path);
+
 // Validate and install. An unknown catalog name is an error returned before the
 // world is touched, as the game's Err. A mission with its own map needs a fresh
 // world; installing one into a used world is a programming error and throws.
