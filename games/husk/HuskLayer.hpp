@@ -35,12 +35,12 @@ namespace husk {
 //    ticks. Nothing the view does reaches the World except an OrderMsg on its
 //    queue - which is exactly how the Rust client talks to its sim.
 //
-//  - Clicks are read on the TICK, through bound actions and Input's per-tick
-//    pointer, so a recorded session replays its orders. The camera is not: it
-//    is view state, moved per frame for smoothness, and the renderer reads the
-//    CameraComponent directly, so the engine cannot interpolate it on the tick.
-//    A replay therefore reproduces an order only if the camera stands where it
-//    stood. Recorded in the port plan as an engine gap.
+//  - Input is read on the TICK, and that includes the camera. Clicks arrive
+//    through bound actions and Input's per-tick pointer; the camera pans on
+//    bound keys, the same pointer and Input::TickScroll, and the engine draws
+//    it between ticks through InterpolatedCameraComponent. So a click is always
+//    resolved against the camera its tick had, and a recorded session replays
+//    its orders exactly - which a camera moved per frame could not promise.
 class HuskLayer final : public Supersonic::EngineLayer {
 public:
     static constexpr const char* kDefaultMission = "first_light";
@@ -55,6 +55,13 @@ public:
     static constexpr const char* kQueue = "husk.queue";     // shift: queue the order
     static constexpr const char* kStop = "husk.stop";       // S
     static constexpr const char* kHold = "husk.hold";       // H
+    // camera.rs pans on the arrows (WASD is the order hotkeys') and drags on
+    // the middle button.
+    static constexpr const char* kPanLeft = "husk.pan.left";
+    static constexpr const char* kPanRight = "husk.pan.right";
+    static constexpr const char* kPanUp = "husk.pan.up";
+    static constexpr const char* kPanDown = "husk.pan.down";
+    static constexpr const char* kDrag = "husk.drag";
 
     explicit HuskLayer(std::string mission = kDefaultMission, uint64_t seed = kDefaultSeed);
 
@@ -141,6 +148,9 @@ private:
     void drainEvents();
     void updateHud(entt::registry& registry);
 
+    // camera.rs's input, on the tick: pan, edge, drag and zoom, then the rig.
+    void moveCamera(entt::registry& registry);
+
     // The rig into the CameraComponent: distance and pitch from the zoom,
     // looking at the focus, yaw locked north.
     void placeCamera(entt::registry& registry);
@@ -171,6 +181,9 @@ private:
     float m_zoom{0.45f};
     // The pivot height, smoothed so a cliff edge does not kick the camera.
     float m_focusHeight{0.0f};
+    // A middle-drag in progress, and where the pointer was on the last tick.
+    bool m_dragging{false};
+    glm::vec2 m_dragLast{0.0f};
 
     std::vector<uint32_t> m_selection;
     bool m_selectHeld{false};

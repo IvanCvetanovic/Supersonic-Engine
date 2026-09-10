@@ -228,6 +228,56 @@ static void testAClickOnTheTickOrdersTheUnit() {
     }
 }
 
+// The camera moves on the TICK, from input the tick owns, so a replay puts it
+// back where it stood and every click resolves against the same view.
+static void testTheCameraMovesOnTheTickFromReplayableInput() {
+    entt::registry registry;
+    HuskLayer layer(HuskLayer::kSandbox, 7);
+    layer.OnAttach(registry);
+    publishViewport(registry);
+    const glm::vec2 centre(640.0f, 360.0f); // clear of the edge-pan margins
+
+    const entt::entity camera = primaryCamera(registry);
+    CHECK_MSG(camera != entt::null && registry.all_of<InterpolatedCameraComponent>(camera),
+              "the engine draws the camera between ticks");
+
+    // One notch of the wheel, replayed: one zoom step, exactly.
+    Input::TickInput zoom;
+    zoom.mousePosition = centre;
+    zoom.scroll = 1.0f;
+    Input::BeginReplayedTick(zoom);
+    layer.OnFixedUpdate(registry, kTick);
+    Input::EndReplayedTick();
+    CHECK_NEAR(layer.CameraZoom(), 0.45f - 0.07f);
+
+    // A pan key held for four ticks: four steps of camera.rs's pan.
+    const glm::vec2 before = layer.CameraFocus();
+    Input::TickInput pan;
+    pan.mousePosition = centre;
+    pan.down = {HuskLayer::kPanRight};
+    for (int t = 0; t < 4; ++t) {
+        Input::BeginReplayedTick(pan);
+        layer.OnFixedUpdate(registry, kTick);
+        Input::EndReplayedTick();
+    }
+    const float dist = 16.0f + (80.0f - 16.0f) * layer.CameraZoom();
+    const float expected = 4.0f * 1.1f * dist * husk::kSimDt;
+    CHECK_MSG(std::fabs((layer.CameraFocus().x - before.x) - expected) < 1e-3f,
+              "four ticks of the pan key move four steps: got " +
+                  std::to_string(layer.CameraFocus().x - before.x) + ", expected " + std::to_string(expected));
+
+    // And a FRAME moves nothing: the arrow held on the live device, a frame
+    // drawn, and no tick run.
+    const glm::vec2 held = layer.CameraFocus();
+    RawInputState arrow{};
+    arrow.keys[Key::Right] = true;
+    arrow.mousePosition = centre;
+    Input::Update(arrow);
+    layer.OnUpdate(registry, 1.0f / 60.0f);
+    CHECK_MSG(layer.CameraFocus() == held, "a frame alone does not move the camera");
+    Input::Update(RawInputState{});
+}
+
 static void testAMissionThatDoesNotLoadIsReportedNotThrown() {
     entt::registry registry;
     HuskLayer layer("no_such_mission", 7);
@@ -243,7 +293,8 @@ void runTests() {
     testTheLayerStepsExactlyTheSim();
     testDrawablesStandWhereTheSimSays();
     testAClickOnTheTickOrdersTheUnit();
+    testTheCameraMovesOnTheTickFromReplayableInput();
     testAMissionThatDoesNotLoadIsReportedNotThrown();
 }
 
-TEST_MAIN("test_husk_layer", 26)
+TEST_MAIN("test_husk_layer", 30)

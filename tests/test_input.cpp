@@ -942,7 +942,54 @@ static void testDiscardingLeavesTheRunningTicksOwnEdgesAlone() {
     CHECK_MSG(Input::TickWasPressed("Fire"), "and still owns it after the drop");
 }
 
+// The wheel on the tick. Input::Scroll() is the frame's wheel, and it fails a
+// tick in the two ways WasPressed does: a notch turned in a frame that ran no
+// tick is never seen, and one turned in a frame that ran three is seen three
+// times - a zoom that jumps by however far behind the machine happened to be.
+
+static RawInputState withScroll(float notches) {
+    RawInputState state{};
+    state.scroll = notches;
+    return state;
+}
+
+static void testTheWheelIsHandedToOneTickLikeAPress() {
+    reset();
+    frame(RawInputState{});
+    Input::BeginTickInput();
+
+    // Two frames turn it and no tick runs between them.
+    frame(withScroll(1.0f));
+    frame(withScroll(2.0f));
+    frame(RawInputState{});
+
+    Input::BeginTickInput();
+    CHECK_NEAR(Input::TickScroll(), 3.0f);   // every notch since the last tick
+    Input::BeginTickInput();
+    CHECK_NEAR(Input::TickScroll(), 0.0f);   // and only one tick gets them
+}
+
+static void testAWheelTurnedWhileNothingTicksIsDropped() {
+    // The editor, a menu, a paused game: nothing is ticking, so nothing is
+    // coming for the notches, and the first tick after Play must not be handed
+    // a zoom made a minute earlier.
+    reset();
+    frame(RawInputState{});
+    Input::BeginTickInput();
+
+    frame(withScroll(4.0f));
+    Input::DiscardPendingTickInput();
+    Input::BeginTickInput();
+    CHECK_NEAR(Input::TickScroll(), 0.0f);
+
+    frame(withScroll(-1.0f));
+    Input::BeginTickInput();
+    CHECK_NEAR(Input::TickScroll(), -1.0f);
+}
+
 static void runTests() {
+    testTheWheelIsHandedToOneTickLikeAPress();
+    testAWheelTurnedWhileNothingTicksIsDropped();
     testEdgesNobodyIsComingForAreDropped();
     testDiscardingLeavesTheRunningTicksOwnEdgesAlone();
     testAPressSurvivesUntilATickConsumesIt();
@@ -990,4 +1037,4 @@ static void runTests() {
     testTheHostOwningThePointerMeansNoContacts();
 }
 
-TEST_MAIN("test_input", 135)
+TEST_MAIN("test_input", 139)

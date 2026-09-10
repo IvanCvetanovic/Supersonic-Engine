@@ -42,6 +42,11 @@ std::unordered_set<std::string> g_pendingRelease;
 std::unordered_set<std::string> g_tickPress;
 std::unordered_set<std::string> g_tickRelease;
 
+// The wheel's latch, beside the edges': summed per frame into the pending
+// value, handed whole to the next tick.
+float g_pendingScroll = 0.0f;
+float g_tickScroll = 0.0f;
+
 // A recorded tick, standing in for the devices while it runs.
 //
 // Separate storage rather than writing over g_actionCurrent and g_tickPress,
@@ -55,6 +60,7 @@ std::unordered_set<std::string> g_replayDown;
 std::unordered_set<std::string> g_replayPress;
 std::unordered_set<std::string> g_replayRelease;
 std::unordered_map<std::string, float> g_replayAxes;
+float g_replayScroll = 0.0f;
 glm::vec2 g_replayMouseDelta{0.0f};
 glm::vec2 g_replayMousePosition{0.0f};
 std::vector<Contact> g_replayContacts;
@@ -188,6 +194,8 @@ void Input::ClearBindings() {
     g_pendingRelease.clear();
     g_tickPress.clear();
     g_tickRelease.clear();
+    g_pendingScroll = 0.0f;
+    g_tickScroll = 0.0f;
     g_hasPrevious = false;
     // One temporary, copied, rather than a second `RawInputState{}`. GCC 13.3 -
     // Ubuntu 24.04's compiler, and so what CI's ubuntu-latest runner has - dies
@@ -402,6 +410,10 @@ void Input::Update(const RawInputState& state) {
         if (!down && wasDown) g_pendingRelease.insert(name);
     }
 
+    // And the wheel, summed rather than assigned for the same reason: the
+    // notches of every frame since the last tick belong to the next one.
+    g_pendingScroll += state.scroll;
+
     // Nothing special happens when the keyboard changes hands, and that is the
     // decision rather than the omission.
     //
@@ -431,6 +443,8 @@ void Input::BeginTickInput() {
     g_tickRelease = std::move(g_pendingRelease);
     g_pendingPress.clear();
     g_pendingRelease.clear();
+    g_tickScroll = g_pendingScroll;
+    g_pendingScroll = 0.0f;
 }
 
 void Input::DiscardPendingTickInput() {
@@ -439,6 +453,7 @@ void Input::DiscardPendingTickInput() {
     // ones are edges waiting for a tick that is not coming.
     g_pendingPress.clear();
     g_pendingRelease.clear();
+    g_pendingScroll = 0.0f;
 }
 
 bool Input::TickWasPressed(const std::string& action) {
@@ -454,6 +469,8 @@ bool Input::TickWasReleased(const std::string& action) {
     }
     return g_tickRelease.find(action) != g_tickRelease.end();
 }
+
+float Input::TickScroll() { return g_replayingTick ? g_replayScroll : g_tickScroll; }
 
 bool Input::WasPressed(const std::string& action) {
     const auto current = g_actionCurrent.find(action);
@@ -544,7 +561,7 @@ bool Input::TickInput::operator==(const TickInput& other) const {
            mousePosition == other.mousePosition && contacts == other.contacts &&
            clicked == other.clicked && hasViewport == other.hasViewport &&
            viewportMin == other.viewportMin && viewportSize == other.viewportSize &&
-           pointerOverGame == other.pointerOverGame;
+           pointerOverGame == other.pointerOverGame && scroll == other.scroll;
 }
 
 Input::TickInput Input::CaptureTickInput() {
@@ -572,6 +589,7 @@ Input::TickInput Input::CaptureTickInput() {
 
     captured.mouseDelta = MouseDelta();
     captured.mousePosition = MousePosition();
+    captured.scroll = TickScroll();
 
     // The pointer's contacts, which is what a game that reads taps and drags
     // is actually handed. Without these a recording of a session played with
@@ -593,6 +611,7 @@ void Input::BeginReplayedTick(const TickInput& input) {
     for (const auto& [name, value] : input.axes) g_replayAxes[name] = value;
     g_replayMouseDelta = input.mouseDelta;
     g_replayMousePosition = input.mousePosition;
+    g_replayScroll = input.scroll;
     g_replayContacts = input.contacts;
 
     // Raised last, so a query that somehow ran during the copy above would read
@@ -613,6 +632,7 @@ void Input::EndReplayedTick() {
     g_replayAxes.clear();
     g_replayMouseDelta = glm::vec2(0.0f);
     g_replayMousePosition = glm::vec2(0.0f);
+    g_replayScroll = 0.0f;
     g_replayContacts.clear();
 }
 

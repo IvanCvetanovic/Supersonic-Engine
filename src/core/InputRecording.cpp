@@ -15,7 +15,10 @@ namespace {
 // rather than failing on some later line for a reason that reads like a bug in
 // the parser.
 constexpr const char* kMagic = "SUPERSONICREPLAY";
-constexpr int kFormatVersion = 1;
+// 2 added the wheel (`scroll`). A version 1 file is a version 2 file that never
+// turned it, so both are read; anything newer is refused.
+constexpr int kFormatVersion = 2;
+constexpr int kOldestReadableVersion = 1;
 
 // --- floats, by their bits -------------------------------------------------
 //
@@ -305,6 +308,10 @@ std::string InputRecording::Write(const InputRecording& recording) {
                  << hex(bitsOf(tick.mouseDelta.y), 8);
         }
 
+        // The wheel, an edge like the delta above: absent is zero, and the
+        // BITS decide whether to write it, for the same negative-zero reason.
+        if (bitsOf(tick.scroll) != 0u) line << " scroll " << hex(bitsOf(tick.scroll), 8);
+
         // THE POINTER IS A LEVEL AND THE RULE ABOVE IS THE WRONG ONE FOR IT.
         // The delta skips itself whenever it is zero, because a mouse that did
         // not move contributes nothing. A mouse that is not moving still has a
@@ -437,6 +444,7 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
         std::vector<uint64_t> released;
         std::vector<uint64_t> clicked;
         glm::vec2 mouse{0.0f};
+        float scroll{0.0f};
         glm::vec2 pointer{0.0f};
         std::vector<Contact> contacts;
         bool hasViewport{false};
@@ -467,9 +475,10 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
             }
             int version = 0;
             if (!(line >> version)) return fail(lineNumber, "the magic line carries no version");
-            if (version != kFormatVersion) {
+            if (version < kOldestReadableVersion || version > kFormatVersion) {
                 return fail(lineNumber, "this is a version " + std::to_string(version) +
-                                            " replay and this build reads version " +
+                                            " replay and this build reads versions " +
+                                            std::to_string(kOldestReadableVersion) + " to " +
                                             std::to_string(kFormatVersion));
             }
             sawMagic = true;
@@ -571,6 +580,12 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
                     }
                     entry.mouse = glm::vec2(floatFrom(static_cast<uint32_t>(x)),
                                             floatFrom(static_cast<uint32_t>(y)));
+                } else if (segment == "scroll") {
+                    uint64_t bits = 0;
+                    if (!parseHex(value, 8, bits)) {
+                        return fail(lineNumber, "'" + value + "' is not a wheel movement");
+                    }
+                    entry.scroll = floatFrom(static_cast<uint32_t>(bits));
                 } else if (segment == "pointer") {
                     const size_t comma = value.find(',');
                     uint64_t x = 0;
@@ -790,6 +805,7 @@ InputRecording InputRecording::Parse(const std::string& text, const std::string&
                 tick.clicked.push_back(static_cast<uint32_t>(id));
             }
             tick.mouseDelta = line->mouse;
+            tick.scroll = line->scroll;
             tick.contacts = line->contacts;
         }
     }

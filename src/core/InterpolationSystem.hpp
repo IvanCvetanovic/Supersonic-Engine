@@ -27,6 +27,14 @@ namespace Supersonic {
 // OPT-IN, by adding the component. An entity without it draws at its simulated
 // position exactly as before, which is the right default for scenery, for a UI
 // element, and for anything a script moves per frame rather than per tick.
+//
+// A CAMERA is the one thing drawn from something other than its transform: the
+// renderer builds the view from CameraComponent's position, yaw and pitch. So a
+// game that moves its camera on the tick - which it must, if a click resolved
+// against that camera is to replay - adds InterpolatedCameraComponent, and the
+// same three calls restore, capture and lerp the camera's pose. Without it the
+// only smooth camera was one moved per frame, outside the tick and outside the
+// replay.
 class InterpolationSystem {
 public:
     // Start of a tick, BEFORE anything moves. Restores the authoritative

@@ -546,6 +546,35 @@ struct InterpolatedTransformComponent {
     bool captured{false};
 };
 
+// The camera's counterpart, for a game that moves its camera on the TICK.
+//
+// A camera is drawn from CameraComponent - position, yaw, pitch, and the
+// projection - and not from its entity's transform, so interpolating the
+// transform cannot smooth it. The only smooth camera used to be one moved per
+// frame, which puts it outside the tick: a click resolved against it could not
+// be replayed, and its transform (which StateHash reads) moved at the frame
+// rate. Moved on the tick with this beside it, the camera is state like
+// anything else and is still drawn between the last two ticks.
+//
+// Runtime-only, like InterpolatedTransformComponent: a game adds it to the
+// camera it drives, and nothing saves it.
+struct InterpolatedCameraComponent {
+    struct Pose {
+        glm::vec3 position{0.0f};
+        float yaw{0.0f};   // degrees, as CameraComponent keeps them
+        float pitch{0.0f};
+        float fov{45.0f};
+        float orthoHeight{10.0f};
+    };
+
+    Pose previous;
+    Pose current;
+
+    // False until the camera has run one whole tick, for the reason the
+    // transform's flag gives: there is no previous pose to come from yet.
+    bool captured{false};
+};
+
 struct MaterialComponent {
     glm::vec4 albedoColor{1.0f, 1.0f, 1.0f, 1.0f};
 

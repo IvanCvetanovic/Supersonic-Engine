@@ -1149,7 +1149,76 @@ static void testLoadingAFileThatIsNotThereSaysSo() {
               "and the message names it: " + loaded.error);
 }
 
+// --- the wheel --------------------------------------------------------------
+//
+// Version 2 of the format. A game that zooms on the wheel from inside the tick
+// could not be replayed before it: the wheel was per frame and not in the file.
+
+static void testTheWheelIsWrittenAsAnEdgeAndReadBackBitForBit() {
+    // An EDGE, like the mouse delta: the notches belong to the tick that was
+    // handed them. A reader that carried them forward would zoom on every tick
+    // after one turn of the wheel.
+    InputRecording original = emptyRun(5);
+    original.ticks[1].scroll = 1.5f;
+    original.ticks[3].scroll = -0.0f; // written, because its bits are not zero
+
+    const InputRecording parsed = roundTrip(original);
+    if (parsed.ticks.size() != 5) {
+        CHECK_MSG(false, "five ticks came back");
+        return;
+    }
+    CHECK_MSG(bitsOf(parsed.ticks[1].scroll) == bitsOf(1.5f), "the notches come back bit for bit");
+    CHECK_MSG(bitsOf(parsed.ticks[2].scroll) == 0u, "and are not carried to the next tick");
+    CHECK_MSG(bitsOf(parsed.ticks[3].scroll) == bitsOf(-0.0f), "negative zero stays negative zero");
+    CHECK_MSG(sameTick(parsed.ticks[1], original.ticks[1]), "the whole tick is the tick written");
+
+    const std::string quiet = InputRecording::Write(emptyRun(50));
+    CHECK_MSG(quiet.find(" scroll ") == std::string::npos, "a wheel nobody turned is never written");
+}
+
+static void testAReplayedTickAnswersTheWheel() {
+    // Where the field becomes real: a game calls TickScroll, not the struct.
+    resetDevices();
+    InputRecording recording = emptyRun(1);
+    recording.ticks[0].scroll = 2.0f;
+
+    Input::BeginReplayedTick(recording.ticks[0]);
+    CHECK_NEAR(Input::TickScroll(), 2.0f);
+    Input::EndReplayedTick();
+    CHECK_NEAR(Input::TickScroll(), 0.0f);
+    resetDevices();
+}
+
+static void testACaptureCarriesTheWheel() {
+    resetDevices();
+    RawInputState turned{};
+    turned.scroll = 3.0f;
+    Input::Update(turned);
+    Input::BeginTickInput();
+    CHECK_NEAR(Input::CaptureTickInput().scroll, 3.0f);
+    resetDevices();
+}
+
+static void testAVersionOneRecordingStillReads() {
+    // Version 2 only ADDED the wheel, so a version 1 file is a version 2 file
+    // that never turned it. Refusing one would throw away every recording made
+    // before this build for nothing. Made by writing a real file and turning
+    // its magic line back, so it has every line a real one has.
+    std::string text = InputRecording::Write(emptyRun(2));
+    const std::string current = "SUPERSONICREPLAY 2";
+    CHECK_MSG(text.rfind(current, 0) == 0, "this build writes version 2");
+    if (text.rfind(current, 0) == 0) text.replace(0, current.size(), "SUPERSONICREPLAY 1");
+
+    const InputRecording parsed = InputRecording::Parse(text, "v1.replay");
+    CHECK_MSG(parsed.ok, "a version 1 replay still parses: " + parsed.error);
+    CHECK_MSG(parsed.ticks.size() == 2 && parsed.ticks[0].scroll == 0.0f, "with no wheel in it");
+}
+
 static void runTests() {
+    testTheWheelIsWrittenAsAnEdgeAndReadBackBitForBit();
+    testAReplayedTickAnswersTheWheel();
+    testACaptureCarriesTheWheel();
+    testAVersionOneRecordingStillReads();
     testAnEmptyRunSurvivesTheRoundTrip();
     testEveryTickComesBackExactlyAsItWentIn();
     testALevelCarriesAndAnEdgeDoesNot();
@@ -1185,4 +1254,4 @@ static void runTests() {
     testLoadingAFileThatIsNotThereSaysSo();
 }
 
-TEST_MAIN("test_replay", 230)
+TEST_MAIN("test_replay", 242)

@@ -926,7 +926,113 @@ static void testARotationTakesTheShortWayRound() {
               + std::to_string(y));
 }
 
+// --- the camera, drawn between two ticks ------------------------------------
+//
+// The renderer draws a camera from CameraComponent, not from its transform, so
+// everything above does nothing for it. A game that moves its camera on the
+// tick - HUSK does, so a click resolved against the camera replays - needs the
+// same guarantees for the camera's pose.
+
+static entt::entity makeTickedCamera(entt::registry& registry) {
+    const entt::entity camera = registry.create();
+    registry.emplace<CameraComponent>(camera);
+    registry.emplace<InterpolatedCameraComponent>(camera);
+    return camera;
+}
+
+static void tickCamera(entt::registry& registry, entt::entity camera, const glm::vec3& position,
+                       float yaw, float pitch) {
+    InterpolationSystem::BeginTick(registry);
+    auto& c = registry.get<CameraComponent>(camera);
+    c.position = position;
+    c.yaw = yaw;
+    c.pitch = pitch;
+    c.updateCameraVectors();
+    InterpolationSystem::EndTick(registry);
+}
+
+static void testACameraMovedOnTheTickIsDrawnBetweenTicks() {
+    entt::registry registry;
+    const entt::entity camera = makeTickedCamera(registry);
+    tickCamera(registry, camera, glm::vec3(0.0f, 10.0f, 0.0f), -90.0f, -50.0f);
+    tickCamera(registry, camera, glm::vec3(8.0f, 10.0f, 0.0f), -80.0f, -60.0f);
+
+    InterpolationSystem::Apply(registry, 0.5f);
+    const auto& c = registry.get<CameraComponent>(camera);
+    CHECK_NEAR(c.position.x, 4.0f);
+    CHECK_NEAR(c.yaw, -85.0f);
+    CHECK_NEAR(c.pitch, -55.0f);
+
+    // And the direction it LOOKS, which is what the view matrix is built from.
+    // A pose written without rebuilding the basis would move the camera and
+    // leave it facing where it faced before.
+    const float expected = std::cos(glm::radians(-85.0f)) * std::cos(glm::radians(-55.0f));
+    CHECK_NEAR(c.front.x, expected);
+}
+
+static void testTheDrawnCameraNeverReachesTheTick() {
+    // As for transforms, the one that matters: a tick that read the drawn pose
+    // would make the camera - and every click resolved against it - depend on
+    // the frame rate.
+    entt::registry registry;
+    const entt::entity camera = makeTickedCamera(registry);
+    tickCamera(registry, camera, glm::vec3(0.0f), -90.0f, -50.0f);
+    tickCamera(registry, camera, glm::vec3(8.0f, 0.0f, 0.0f), -80.0f, -50.0f);
+    InterpolationSystem::Apply(registry, 0.5f);
+
+    InterpolationSystem::BeginTick(registry);
+    const auto& c = registry.get<CameraComponent>(camera);
+    CHECK_MSG(std::fabs(c.position.x - 8.0f) < 1e-4f,
+              "the tick starts from the ticked camera, not the drawn one: got " +
+                  std::to_string(c.position.x));
+    CHECK_NEAR(c.yaw, -80.0f);
+}
+
+static void testACamerasFirstTickDoesNotSwingInFromNowhere() {
+    entt::registry registry;
+    const entt::entity camera = makeTickedCamera(registry);
+    auto& c = registry.get<CameraComponent>(camera);
+    c.position = glm::vec3(-32.0f, 40.0f, -10.0f);
+
+    // Drawn before it has ever ticked: left exactly where the game put it.
+    InterpolationSystem::Apply(registry, 0.5f);
+    CHECK_NEAR(registry.get<CameraComponent>(camera).position.x, -32.0f);
+}
+
+static void testACameraTurnsTheShortWayRound() {
+    entt::registry registry;
+    const entt::entity camera = makeTickedCamera(registry);
+    tickCamera(registry, camera, glm::vec3(0.0f), 179.0f, 0.0f);
+    tickCamera(registry, camera, glm::vec3(0.0f), -179.0f, 0.0f);
+
+    InterpolationSystem::Apply(registry, 0.5f);
+    const float yaw = registry.get<CameraComponent>(camera).yaw;
+    // Half way across a two-degree turn is 180; what it must not be is near
+    // zero, which is the view swinging all the way round for a frame.
+    CHECK_MSG(std::fabs(yaw) > 170.0f, "the short way round: got " + std::to_string(yaw));
+}
+
+static void testACameraWithoutTheComponentIsLeftAlone() {
+    entt::registry registry;
+    const entt::entity camera = registry.create();
+    auto& c = registry.emplace<CameraComponent>(camera);
+    c.position = glm::vec3(1.0f, 2.0f, 3.0f);
+    c.yaw = -45.0f;
+
+    InterpolationSystem::BeginTick(registry);
+    InterpolationSystem::EndTick(registry);
+    InterpolationSystem::Apply(registry, 0.5f);
+
+    CHECK_NEAR(registry.get<CameraComponent>(camera).position.z, 3.0f);
+    CHECK_NEAR(registry.get<CameraComponent>(camera).yaw, -45.0f);
+}
+
 static void runTests() {
+    testACameraMovedOnTheTickIsDrawnBetweenTicks();
+    testTheDrawnCameraNeverReachesTheTick();
+    testACamerasFirstTickDoesNotSwingInFromNowhere();
+    testACameraTurnsTheShortWayRound();
+    testACameraWithoutTheComponentIsLeftAlone();
     testAFrameIsDrawnBetweenTheLastTwoTicks();
     testTheDrawnValueNeverReachesTheSimulation();
     testAnEntitysFirstTickDoesNotStreakInFromNowhere();
@@ -958,4 +1064,4 @@ static void runTests() {
     testTheClockIsDerivedRatherThanAccumulated();
 }
 
-TEST_MAIN("test_determinism", 40)
+TEST_MAIN("test_determinism", 50)

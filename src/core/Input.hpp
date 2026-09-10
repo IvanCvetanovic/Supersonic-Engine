@@ -268,6 +268,12 @@ public:
     static bool TickWasPressed(const std::string& action);
     static bool TickWasReleased(const std::string& action);
 
+    // The wheel, latched the same way: the notches turned since the last tick
+    // asked, handed whole to exactly one tick. Scroll() below is the FRAME's
+    // wheel - right for the editor camera, and wrong on the tick in both of the
+    // ways WasPressed is. Replayed like the edges.
+    static float TickScroll();
+
     // Throw away edges nothing is going to consume.
     //
     // The latch above holds a press until a tick asks for it, and the only
@@ -328,6 +334,12 @@ public:
         // and borrowing that rule would snap it to the origin on the first
         // still tick and aim every gesture after it somewhere else.
         glm::vec2 mousePosition{0.0f};
+
+        // The wheel, as this tick OWNS it: every notch turned since the tick
+        // before, summed. Latched like the presses and for the same reason - a
+        // frame can run no tick or several, and a notch turned in any frame
+        // still happened, once. A DELTA like mouseDelta, so absent means zero.
+        float scroll{0.0f};
 
         // The touches this tick was handed, in the order Input reports them.
         //
@@ -392,7 +404,7 @@ public:
     // Replace the devices with a recorded tick, for the duration of that tick.
     //
     // Only the queries a simulation makes are diverted: IsDown, the two tick
-    // edges, GetAxis and MouseDelta. The raw key and button queries are NOT,
+    // edges, TickScroll, GetAxis, MouseDelta, MousePosition and the contacts. The raw key and button queries are NOT,
     // and that is deliberate - the editor camera, the UI canvas and ImGui all
     // read input once per frame, from OUTSIDE the tick, and a replay that fed
     // them recorded values would stop the person watching it from being able to

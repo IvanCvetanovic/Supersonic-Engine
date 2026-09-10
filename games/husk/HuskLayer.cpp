@@ -141,6 +141,11 @@ void HuskLayer::bindInput() {
     Input::BindActionKey(kQueue, Key::LeftShift);
     Input::BindActionKey(kStop, Key::S);
     Input::BindActionKey(kHold, Key::H);
+    Input::BindActionKey(kPanLeft, Key::Left);
+    Input::BindActionKey(kPanRight, Key::Right);
+    Input::BindActionKey(kPanUp, Key::Up);
+    Input::BindActionKey(kPanDown, Key::Down);
+    Input::BindActionMouseButton(kDrag, MouseButton::Middle);
 }
 
 entt::entity HuskLayer::makeBox(entt::registry& registry, const char* tag, const glm::vec3& centre,
@@ -265,6 +270,8 @@ void HuskLayer::buildCamera(entt::registry& registry) {
     // The editor's flycam would read WASD while the player's hotkeys do.
     camera.flyControlsEnabled = false;
     registry.emplace<TransformComponent>(m_camera);
+    // Moved on the tick and drawn between ticks, like the units it looks at.
+    registry.emplace<InterpolatedCameraComponent>(m_camera);
 
     // Start over the player: the hero if there is one, else the middle of
     // the player's units, else the middle of their buildings.
@@ -333,8 +340,10 @@ void HuskLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     (void)fixedDelta;
     if (!m_world) return;
 
-    // Input first, as in the Rust client: its Update systems push orders and
-    // the next SimStep drains them.
+    // The camera before the clicks, so a click resolves against where the view
+    // ended up this tick. Then input, as in the Rust client: its Update
+    // systems push orders and the next SimStep drains them.
+    moveCamera(registry);
     applyInput(registry);
 
     // SimPaused gates the host, not step(); this layer is the host.
@@ -727,51 +736,78 @@ entt::entity HuskLayer::DrawableFor(uint32_t simId) const {
     return it == m_drawables.end() ? entt::null : it->second;
 }
 
-// ---- per frame: the camera, and nothing that touches the sim -------------------------
+// ---- the camera, on the tick ---------------------------------------------------------
 
-void HuskLayer::OnUpdate(entt::registry& registry, float deltaTime) {
+// camera.rs's rig, moved from input the tick owns: the pan keys and the drag
+// button through bound actions, the edge and the drag through the per-tick
+// pointer, the zoom through TickScroll. Each is recorded and replayed, so the
+// camera a click is resolved against is the same camera in a replay - and the
+// engine draws it between ticks, so moving it at 20 Hz does not look like it.
+void HuskLayer::moveCamera(entt::registry& registry) {
     using namespace Supersonic;
-    if (!m_world || m_camera == entt::null || !registry.valid(m_camera)) return;
+    if (m_camera == entt::null || !registry.valid(m_camera)) return;
     const auto* viewport = registry.ctx().find<ViewportInfo>();
     const bool overGame = viewport != nullptr && viewport->pointerOverGame;
 
     if (overGame) {
-        const float scroll = Input::Scroll();
+        const float scroll = Input::TickScroll();
         if (scroll != 0.0f) m_zoom = std::clamp(m_zoom - scroll * kWheelZoomStep, 0.0f, 1.0f);
     }
     const float dist = kDistMin + (kDistMax - kDistMin) * m_zoom;
 
     glm::vec2 pan(0.0f);
-    if (Input::IsKeyDown(Key::Left)) pan.x -= 1.0f;
-    if (Input::IsKeyDown(Key::Right)) pan.x += 1.0f;
-    if (Input::IsKeyDown(Key::Up)) pan.y -= 1.0f; // screen-up is north, -Z
-    if (Input::IsKeyDown(Key::Down)) pan.y += 1.0f;
+    if (Input::IsDown(kPanLeft)) pan.x -= 1.0f;
+    if (Input::IsDown(kPanRight)) pan.x += 1.0f;
+    if (Input::IsDown(kPanUp)) pan.y -= 1.0f; // screen-up is north, -Z
+    if (Input::IsDown(kPanDown)) pan.y += 1.0f;
+
+    const glm::vec2 pointer = Input::MousePosition();
     if (overGame) {
-        const glm::vec2 cursor = Input::MousePosition();
         const UIRect& rect = viewport->rect;
-        if (cursor.x <= rect.min.x + kEdgeMarginPx) {
+        if (pointer.x <= rect.min.x + kEdgeMarginPx) {
             pan.x -= 1.0f;
-        } else if (cursor.x >= rect.max.x - kEdgeMarginPx) {
+        } else if (pointer.x >= rect.max.x - kEdgeMarginPx) {
             pan.x += 1.0f;
         }
-        if (cursor.y <= rect.min.y + kEdgeMarginPx) {
+        if (pointer.y <= rect.min.y + kEdgeMarginPx) {
             pan.y -= 1.0f;
-        } else if (cursor.y >= rect.max.y - kEdgeMarginPx) {
+        } else if (pointer.y >= rect.max.y - kEdgeMarginPx) {
             pan.y += 1.0f;
         }
-        if (Input::IsMouseButtonDown(MouseButton::Middle)) m_focus -= Input::MouseDelta() * dist * kDragPan;
     }
-    if (pan != glm::vec2(0.0f)) m_focus += glm::normalize(pan) * kPanSpeed * dist * deltaTime;
+
+    // The drag is the pointer's movement since the LAST TICK, which is the sum
+    // of every frame's movement in between - so one drag moves the map the
+    // same distance at any frame rate. A per-frame delta read on the tick
+    // would be counted once, zero times or three times.
+    if (overGame && Input::IsDown(kDrag)) {
+        if (m_dragging) m_focus -= (pointer - m_dragLast) * dist * kDragPan;
+        m_dragLast = pointer;
+        m_dragging = true;
+    } else {
+        m_dragging = false;
+    }
+
+    if (pan != glm::vec2(0.0f)) m_focus += glm::normalize(pan) * kPanSpeed * dist * kSimDt;
 
     const float half = m_world->grid.halfExtent();
     m_focus = glm::clamp(m_focus, glm::vec2(-half), glm::vec2(half));
     const float target = groundHeight(Vec2(m_focus.x, m_focus.y));
-    m_focusHeight += (target - m_focusHeight) * std::min(deltaTime * 7.0f, 1.0f);
-
-    if (viewport != nullptr && viewport->Size().y > 0.0f) {
-        registry.get<CameraComponent>(m_camera).aspect = viewport->Size().x / viewport->Size().y;
-    }
+    m_focusHeight += (target - m_focusHeight) * std::min(kSimDt * 7.0f, 1.0f);
     placeCamera(registry);
+}
+
+// ---- per frame: nothing the sim or a replay depends on -------------------------------
+
+void HuskLayer::OnUpdate(entt::registry& registry, float deltaTime) {
+    (void)deltaTime;
+    // Only the camera's SHAPE, for the viewport this frame is drawn into.
+    // Where the camera stands is the tick's business, so a replay puts it back.
+    if (m_camera == entt::null || !registry.valid(m_camera)) return;
+    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
+    if (viewport != nullptr && viewport->Size().y > 0.0f) {
+        registry.get<Supersonic::CameraComponent>(m_camera).aspect = viewport->Size().x / viewport->Size().y;
+    }
 }
 
 // ---- the HUD -------------------------------------------------------------------------

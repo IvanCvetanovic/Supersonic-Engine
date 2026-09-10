@@ -35,10 +35,43 @@ float shortestAngleDelta(float from, float to) {
     return delta;
 }
 
+// The same, in DEGREES, which is what CameraComponent keeps its yaw in. A
+// camera yawed from 179 to -179 has turned two degrees, and a straight lerp
+// would swing the whole view round through zero for a frame.
+float shortestDegreesDelta(float from, float to) {
+    float delta = std::fmod(to - from, 360.0f);
+    if (delta > 180.0f) delta -= 360.0f;
+    if (delta < -180.0f) delta += 360.0f;
+    return delta;
+}
+
 glm::vec3 lerpEuler(const glm::vec3& from, const glm::vec3& to, float alpha) {
     return glm::vec3(from.x + shortestAngleDelta(from.x, to.x) * alpha,
                      from.y + shortestAngleDelta(from.y, to.y) * alpha,
                      from.z + shortestAngleDelta(from.z, to.z) * alpha);
+}
+
+InterpolatedCameraComponent::Pose poseOf(const CameraComponent& camera) {
+    InterpolatedCameraComponent::Pose pose;
+    pose.position = camera.position;
+    pose.yaw = camera.yaw;
+    pose.pitch = camera.pitch;
+    pose.fov = camera.fov;
+    pose.orthoHeight = camera.orthoHeight;
+    return pose;
+}
+
+// Writes a pose back AND rebuilds the basis. The renderer's view matrix is
+// built from position and `front`, not from yaw and pitch, so a pose written
+// without updateCameraVectors would move the camera and leave it looking the
+// way it looked before.
+void applyPose(CameraComponent& camera, const InterpolatedCameraComponent::Pose& pose) {
+    camera.position = pose.position;
+    camera.yaw = pose.yaw;
+    camera.pitch = pose.pitch;
+    camera.fov = pose.fov;
+    camera.orthoHeight = pose.orthoHeight;
+    camera.updateCameraVectors();
 }
 
 } // namespace
@@ -62,6 +95,15 @@ void InterpolationSystem::BeginTick(entt::registry& registry) {
         interp.previousRotation = transform.rotation;
         interp.previousScale = transform.scale;
     }
+
+    // The camera, by the same rule: a tick that moves the camera starts from
+    // where the last TICK left it, not from wherever the last frame drew it.
+    for (auto entity : registry.view<InterpolatedCameraComponent, CameraComponent>()) {
+        auto& interp = registry.get<InterpolatedCameraComponent>(entity);
+        auto& camera = registry.get<CameraComponent>(entity);
+        if (interp.captured) applyPose(camera, interp.current);
+        interp.previous = poseOf(camera);
+    }
 }
 
 void InterpolationSystem::EndTick(entt::registry& registry) {
@@ -84,6 +126,15 @@ void InterpolationSystem::EndTick(entt::registry& registry) {
             interp.captured = true;
         }
     }
+
+    for (auto entity : registry.view<InterpolatedCameraComponent, CameraComponent>()) {
+        auto& interp = registry.get<InterpolatedCameraComponent>(entity);
+        interp.current = poseOf(registry.get<CameraComponent>(entity));
+        if (!interp.captured) {
+            interp.previous = interp.current;
+            interp.captured = true;
+        }
+    }
 }
 
 void InterpolationSystem::Apply(entt::registry& registry, float alpha) {
@@ -99,6 +150,23 @@ void InterpolationSystem::Apply(entt::registry& registry, float alpha) {
         transform.rotation = lerpEuler(interp.previousRotation, interp.currentRotation, t);
         transform.scale = interp.previousScale
                         + (interp.currentScale - interp.previousScale) * t;
+    }
+
+    for (auto entity : registry.view<InterpolatedCameraComponent, CameraComponent>()) {
+        const auto& interp = registry.get<InterpolatedCameraComponent>(entity);
+        if (!interp.captured) continue;
+
+        const InterpolatedCameraComponent::Pose& from = interp.previous;
+        const InterpolatedCameraComponent::Pose& to = interp.current;
+        InterpolatedCameraComponent::Pose drawn;
+        drawn.position = from.position + (to.position - from.position) * t;
+        drawn.yaw = from.yaw + shortestDegreesDelta(from.yaw, to.yaw) * t;
+        // Pitch is clamped short of straight up and down, so it never wraps
+        // and a straight lerp is the short way.
+        drawn.pitch = from.pitch + (to.pitch - from.pitch) * t;
+        drawn.fov = from.fov + (to.fov - from.fov) * t;
+        drawn.orthoHeight = from.orthoHeight + (to.orthoHeight - from.orthoHeight) * t;
+        applyPose(registry.get<CameraComponent>(entity), drawn);
     }
 }
 
