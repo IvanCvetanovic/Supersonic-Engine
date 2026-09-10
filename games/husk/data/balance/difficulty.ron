@@ -1,0 +1,10 @@
+// Difficulty multipliers (brief §8). Enemy-side only: hp at spawn, weapon
+// damage, and squad SIZE at spawn (Hard fields more bodies — the fight
+// changes shape, not just per-unit toughness). Normal is the P1 baseline
+// (finish missions bloodied, not pristine); Story is for learning; Hard is
+// for veterans. Normal stays 1.0 so it is the canonical experience. All [TUNE].
+(
+    story:  (enemy_hp: 0.70, enemy_damage: 0.65, enemy_count: 1.0),
+    normal: (enemy_hp: 1.00, enemy_damage: 1.00, enemy_count: 1.0),
+    hard:   (enemy_hp: 1.25, enemy_damage: 1.25, enemy_count: 1.5),
+)

@@ -1,0 +1,26 @@
+// M1 placeholder for the Monolith (STONE): slow siege engine. Bad against
+// field units by design — it exists to crack fortifications.
+// Anima-gated top of the M2 tech curve. All numbers [TUNE].
+(
+    name: "Monolith",
+    will: 5,
+    hp: 550.0,
+    speed: 3.4,
+    radius: 0.62,
+    armor: Fortified,
+    attack: Some((
+        kind: Siege,
+        damage: 46.0,
+        cooldown: 3.0,
+        range: 9.0,
+        acquire: 10.5,
+        ranged: true,
+    )),
+    color: (1.0, 0.7, 0.25), // STONE amber (brief §9)
+    size: (0.9, 1.7),
+    cost_essence: 240.0,
+    cost_anima: 3.0,
+    build_time: 30.0,
+    requires: Some((Stone, 2)),
+    xp_value: 110.0,
+)

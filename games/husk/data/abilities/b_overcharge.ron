@@ -1,0 +1,15 @@
+// A2 OVERCHARGE (brief §6): buff a friendly construct — attack speed and
+// move speed up, but it burns its own HP for the duration.
+// All numbers [TUNE].
+(
+    name: "Overcharge",
+    description: "Supercharge a construct: +attack speed and move speed, but it burns its own HP.",
+    kind: TargetFriendlyUnit,
+    cast_range: 8.0,
+    max_level_gate: [1, 3, 5],
+    ranks: [
+        (cooldown: 12.0, atk_speed: 0.40, move_speed: 0.15, duration: 10.0, burn: 7.0),
+        (cooldown: 12.0, atk_speed: 0.55, move_speed: 0.20, duration: 10.0, burn: 9.0),
+        (cooldown: 12.0, atk_speed: 0.70, move_speed: 0.25, duration: 10.0, burn: 11.0),
+    ],
+)

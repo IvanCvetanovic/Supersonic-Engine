@@ -1,0 +1,23 @@
+// Composite building visuals (M5 art pass). Same part format as units.ron.
+{
+    "sanctum": [
+        (size: (3.40, 1.10, 3.40), offset: (0.0, 0.55, 0.0), role: Body),     // base slab
+        (size: (2.30, 1.10, 2.30), offset: (0.0, 1.65, 0.0), role: Body),     // mid tier
+        (size: (0.95, 1.10, 0.95), offset: (0.0, 2.65, 0.0), role: Dark),     // spire
+        (size: (0.45, 0.45, 0.45), offset: (0.0, 3.25, 0.0), role: Emissive), // the seat
+        (size: (0.16, 1.60, 0.16), offset: (1.05, 1.20, 1.05), role: Emissive),// corner seams
+        (size: (0.16, 1.60, 0.16), offset: (-1.05, 1.20, -1.05), role: Emissive),
+    ],
+    "forge": [
+        (size: (2.50, 1.30, 2.10), offset: (0.0, 0.65, 0.0), role: Body),     // works
+        (size: (0.60, 1.40, 0.60), offset: (0.80, 1.60, 0.55), role: Dark),   // stack
+        (size: (0.80, 0.55, 0.12), offset: (0.0, 0.62, 1.06), role: Emissive),// the maw
+        (size: (1.90, 0.30, 1.60), offset: (0.0, 1.45, -0.15), role: Dark),   // roofline
+    ],
+    "anchor": [
+        (size: (0.95, 0.30, 0.95), offset: (0.0, 0.15, 0.0), role: Dark),     // footing
+        (size: (0.60, 2.30, 0.60), offset: (0.0, 1.45, 0.0), role: Body),     // pillar
+        (size: (1.15, 0.22, 1.15), offset: (0.0, 2.25, 0.0), role: Dark),     // collar
+        (size: (0.34, 0.34, 0.34), offset: (0.0, 2.95, 0.0), role: Emissive), // will-light
+    ],
+}

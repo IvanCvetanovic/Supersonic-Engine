@@ -1,0 +1,6 @@
+// Item (brief §6): humming copper talisman. [TUNE]
+(
+    name: "Live Wire Charm",
+    regen_add: 1.5,
+    move_mult_add: 0.06,
+)

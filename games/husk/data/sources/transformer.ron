@@ -1,0 +1,8 @@
+// Power transformer (brief §4.1 example: Volt 120). [TUNE]
+(
+    name: "Transformer",
+    affinity: Volt,
+    essence: 1200.0,
+    footprint: (2, 2),
+    size: (1.5, 1.4),
+)

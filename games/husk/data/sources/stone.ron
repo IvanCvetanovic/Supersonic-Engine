@@ -1,0 +1,8 @@
+// Building section (brief §4.1 example: Stone 200). [TUNE]
+(
+    name: "Stone Section",
+    affinity: Stone,
+    essence: 2000.0,
+    footprint: (2, 2),
+    size: (1.9, 2.0),
+)

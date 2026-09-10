@@ -1,0 +1,8 @@
+// A consumable (Alt+slot): a short burst of attack + move speed with no
+// downside (unlike the Overcharge ability, which burns hp). Modest and brief so
+// it complements the ability rather than replacing it. Filename sorts last so
+// the other item ids stay stable. All [TUNE].
+(
+    name: "Adrenal Stim",
+    active: Some(Haste(atk_speed: 0.25, move_speed: 0.25, secs: 6.0)),
+)

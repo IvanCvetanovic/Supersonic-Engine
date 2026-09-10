@@ -1,0 +1,24 @@
+// Husk Thrall — temporary fodder animated from husks by AVATAR OF ESSENCE
+// (brief §6). Spawned by the ultimate only; crumbles when the timer ends.
+// All numbers [TUNE].
+(
+    name: "Thrall",
+    will: 0,
+    hp: 180.0,
+    speed: 6.0,
+    radius: 0.4,
+    armor: Unarmored,
+    attack: Some((
+        kind: Normal,
+        damage: 12.0,
+        cooldown: 1.1,
+        range: 0.5,
+        acquire: 10.0,
+        ranged: false,
+    )),
+    color: (0.6, 0.7, 0.75), // dull husk-grey with a faint glow
+    size: (0.65, 0.9),
+    cost_essence: 0.0,
+    build_time: 1.0,
+    xp_value: 5.0,
+)

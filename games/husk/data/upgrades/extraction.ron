@@ -1,0 +1,11 @@
+// Extraction: faster essence GATHER per level. An economic upgrade, distinct
+// from the combat-stat systems. Note it compounds: extracting more per second
+// also fills affinity tiers sooner (which then buff via the A115 payoff). All
+// [TUNE].
+(
+    name: "Extraction",
+    max_level: 3,
+    cost_essence: 120.0,
+    time: 30.0,
+    effect: GatherRate(pct_per_level: 0.12),
+)

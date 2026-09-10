@@ -1,0 +1,15 @@
+// A1 SIPHON SURGE (brief §6): targeted drain. Damages an enemy or drains a
+// source; refunds essence; heals the hero for a fraction of the amount.
+// All numbers [TUNE].
+(
+    name: "Siphon Surge",
+    description: "Drain a target: hit an enemy or tap a source. Refunds essence and heals you for part of it.",
+    kind: TargetEnemyOrSource,
+    cast_range: 8.0,
+    max_level_gate: [1, 3, 5], // hero level required per rank (WC3 cadence)
+    ranks: [
+        (cooldown: 10.0, damage: 75.0, refund: 25.0, drain: 50.0, heal_frac: 0.6),
+        (cooldown: 9.0, damage: 130.0, refund: 40.0, drain: 75.0, heal_frac: 0.6),
+        (cooldown: 8.0, damage: 185.0, refund: 55.0, drain: 100.0, heal_frac: 0.6),
+    ],
+)

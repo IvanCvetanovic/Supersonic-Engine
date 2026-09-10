@@ -1,0 +1,31 @@
+// FIRST LIGHT — Act 1 / Mission 1. The protagonist's origin (DESIGN_BRIEF §:
+// "gains the extraction power in Mission 1"). A hike with father + younger
+// brother; a storm; a cave with ancient stone doors; a burst of energy. He
+// wakes alone on a burning mountain, descends past anonymous dead, a voice in
+// his skull tells him to run, then to fight back by taking FLORA energy and
+// making reinforcements (the core gather → build → fight loop).
+//
+// PHASE 1 (this file): playable skeleton using REUSED art — the hero is the
+// stand-in Extractor, the "fiery monsters" are placeholder golems, the cave/
+// doors/corpses/fire are narrated, not yet modelled. Bespoke models + music +
+// FX land in later phases. Combat counts are deliberately gentle (under-tuned
+// = winnable) pending a balance pass.
+(
+    name: "First Light",
+    briefing: "A hike with your father and your little brother. A storm came down like a fist, and you took cover in a cave - where a door of old stone stood that no hand had carved.\n\nYour brother touched it. The world turned white.\n\nYou wake alone on a burning mountain, green light under your skin and a voice in your skull that is not yours. Get down. Stay alive. And when there is nothing left but to fight - take the living world in your hands and make it answer.",
+    biome: "forest",
+    night: false,
+    // Authored mountain-in-the-north, but rotated 180° at load so the peak
+    // reads at the TOP of the screen (the yaw-locked camera views from +Z).
+    rotate180: true,
+    // Terrain lives in first_light.map.ron (canonical, editor-owned) - the
+    // level editor round-trips it; the design rationale for the two-tier
+    // mountain (peak/bench/spine/flank ramps) is commented THERE and logged
+    // in TECH_NOTES A84/A86/A87.
+    map: None,
+    // Initial spawns live in first_light.spawns.ron (canonical, editor-owned,
+    // STORED frame) - the level editor's spawn layer round-trips it.
+    spawns: None,
+    // Objectives + triggers live in the editor-owned canonical
+    // <name>.triggers.ron; cutscenes in <name>.scenes.ron (D2/D3).
+)

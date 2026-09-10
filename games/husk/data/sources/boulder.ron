@@ -1,0 +1,8 @@
+// Glacial boulder (forest STONE source). [TUNE]
+(
+    name: "Boulder",
+    affinity: Stone,
+    essence: 1800.0,
+    footprint: (2, 2),
+    size: (1.8, 1.4),
+)

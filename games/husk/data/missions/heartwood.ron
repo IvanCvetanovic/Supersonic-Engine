@@ -1,0 +1,26 @@
+// HEARTWOOD — the forest level built around Ivan's hero-centric design:
+// the Extractor is the heart of army and base. He gathers, he fights, he
+// raises the Sanctum himself; everything else grows outward from him.
+// No attack waves — the only hostiles are wild constructs guarding places
+// worth taking. All numbers [TUNE].
+//
+// Terrain: rolling forest floor (bumps), winding trails, and a two-tier
+// MOUNTAIN in the north-east. The summit grove (the Heartwood itself) is
+// reachable only by the southern switchback ramps.
+(
+    name: "Heartwood",
+    briefing: "Deep timber, three days' walk from the nearest road. Nobody will hear this one.\n\nYou are the heart now - the gathering hand, the builder of the first stone, the blade when the wild things object. Take what the forest offers, raise a Sanctum from it, and climb to the old tree on the mountain. Everything you will ever build starts with you.",
+    biome: "forest",
+    night: false,
+    // sandbox showcases the day/night cycle (A90) + rain (A91); First Light
+    // stays static (its storm/burning mood is authored). HUSK_TIME=<0..1> and
+    // HUSK_WEATHER=<0..1> scrub either in any mission.
+    day_cycle: true,
+    rainy: true,
+    map: None,  // canonical terrain lives in heartwood.map.ron (editor-owned, A93)
+    // Initial spawns live in heartwood.spawns.ron (canonical, editor-owned) -
+    // the level editor's spawn layer round-trips it.
+    spawns: None,
+    // Objectives + triggers live in the editor-owned canonical
+    // <name>.triggers.ron; cutscenes in <name>.scenes.ron (D2/D3).
+)

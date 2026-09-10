@@ -1,0 +1,19 @@
+# The M2 macro sandbox (sim/scenario.rs spawn_m2_macro_scenario), driven
+# through the economy, the hero kit, production and a battle. SimIds follow
+# spawn order: sanctum 0, siphons 1-4, stalkers 5-6, hero 7, items 8-10,
+# sources 11-32, the hostile camp 33-48.
+seed 7
+ticks 4000
+setup macro
+0 extract units=1-4 source=11 queued=0
+0 produce building=0 kind=siphon
+0 learn hero=7 ability=0
+1 rally building=0 x=-30.0 y=-25.0
+5 pickup hero=7 item=8 queued=0
+300 cast hero=7 ability=0 target=id:12 queued=0
+500 extract units=7 source=13 queued=0
+900 place builder=2 kind=forge x=-22.0 y=-44.0
+1600 point units=5,6,7 attack=1 x=28.0 y=28.0 queued=0
+2400 learn hero=7 ability=2
+2500 cast hero=7 ability=2 target=none queued=0
+3000 revive

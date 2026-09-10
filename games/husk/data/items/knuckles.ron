@@ -1,0 +1,5 @@
+// Item (brief §6): scavenged melee augment. [TUNE]
+(
+    name: "Rebar Knuckles",
+    damage_add: 12.0,
+)

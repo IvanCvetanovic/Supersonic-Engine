@@ -455,6 +455,10 @@ endif()
 # translation units.
 add_subdirectory(games/wolfbrigade/sim)
 
+# HUSK's simulation, ported from Rust and held to the original's per-tick
+# hashes. Unconditional for the same reason: the tests link it.
+add_subdirectory(games/husk/sim)
+
 option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike executable" OFF)
 
 # Added unconditionally, and the option now gates only the EXECUTABLE inside it.

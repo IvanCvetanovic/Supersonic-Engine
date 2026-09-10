@@ -1,0 +1,24 @@
+// Bulwark Tower (Ivan's request): a defensive structure that auto-fires at
+// the nearest enemy in range. Free-build (no affinity gate — BuildingDef has
+// none; flagged A72), Siphon/Extractor-channelled like any building. The
+// `tower_attacks` sim system drives the gun; `attack` here is the same shape
+// as a unit's. All numbers [TUNE].
+(
+    name: "Tower",
+    hp: 700.0,
+    armor: Fortified,
+    cost_essence: 120.0,
+    build_time: 19.6,
+    will_provided: 0,
+    footprint: (2, 2),
+    size: (1.4, 4.2),
+    color: (0.7, 0.95, 1.0),
+    attack: Some((
+        kind: Normal,
+        damage: 30.0,
+        cooldown: 1.1,
+        range: 11.0,
+        acquire: 12.0,
+        ranged: true,
+    )),
+)

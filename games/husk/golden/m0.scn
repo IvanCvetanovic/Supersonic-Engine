@@ -1,0 +1,10 @@
+# HUSK's M0 determinism script, as tests/determinism.rs runs it: thirty
+# stalkers a-move across the walled test map, then a second leg and a
+# shift-queued third. Flow fields, separation, arrival propagation, queueing.
+# THE GATE: the port holds this tick for tick before anything else counts.
+seed 7
+ticks 10000
+setup m0
+0 point units=0-29 attack=1 x=38.0 y=38.0 queued=0
+3500 point units=0-29 attack=0 x=-38.0 y=25.0 queued=0
+3500 point units=0-29 attack=0 x=30.0 y=-35.0 queued=1

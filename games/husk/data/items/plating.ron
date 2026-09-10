@@ -1,0 +1,5 @@
+// Item (brief §6): bonded street armor. [TUNE]
+(
+    name: "Asphalt Plating",
+    hp_add: 200.0,
+)

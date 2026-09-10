@@ -1,0 +1,25 @@
+// ACT 1 — main battle tank (brief §7.1): the sustained-assault hammer.
+// Siege shells crack the player's fortified buildings; heavy plate shrugs
+// small arms and construct claws — arcane (Wisps) is the counter.
+// All numbers [TUNE].
+(
+    name: "Tank",
+    will: 6,
+    hp: 950.0,
+    speed: 5.0,
+    radius: 0.8,
+    armor: Heavy,
+    attack: Some((
+        kind: Siege,
+        damage: 70.0,
+        cooldown: 2.5,
+        range: 9.5,
+        acquire: 12.0,
+        ranged: true,
+    )),
+    color: (1.0, 0.55, 0.25),
+    size: (2.0, 1.0),
+    cost_essence: 380.0,
+    build_time: 28.0,
+    xp_value: 90.0,
+)

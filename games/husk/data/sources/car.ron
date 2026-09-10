@@ -1,0 +1,8 @@
+// Abandoned car (brief §4.1 example: Steel 80). [TUNE]
+(
+    name: "Car",
+    affinity: Steel,
+    essence: 800.0,
+    footprint: (2, 1),
+    size: (1.8, 0.7),
+)

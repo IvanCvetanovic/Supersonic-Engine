@@ -1,0 +1,15 @@
+// Construct production (brief §4.4): all combat units are forged here,
+// gated by affinity unlocks. All numbers [TUNE].
+(
+    name: "Forge",
+    hp: 900.0,
+    armor: Fortified,
+    cost_essence: 150.0,
+    build_time: 24.5,
+    will_provided: 0,
+    footprint: (3, 3),
+    size: (2.6, 2.2),
+    color: (1.0, 0.6, 0.3),
+    produces: ["stalker", "golem", "wisp", "monolith"],
+    researches: ["munitions", "extraction"],
+)

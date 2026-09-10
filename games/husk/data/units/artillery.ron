@@ -1,0 +1,24 @@
+// ACT 1 — towed artillery (brief §7.1): extreme range, slow shells, paper
+// armor. It outranges everything the player owns — the counterplay is to
+// sortie out and kill the gun. All numbers [TUNE].
+(
+    name: "Artillery",
+    will: 4,
+    hp: 280.0,
+    speed: 3.6,
+    radius: 0.7,
+    armor: Light,
+    attack: Some((
+        kind: Siege,
+        damage: 95.0,
+        cooldown: 4.0,
+        range: 14.0,
+        acquire: 14.0,
+        ranged: true,
+    )),
+    color: (1.0, 0.5, 0.2),
+    size: (1.5, 0.9),
+    cost_essence: 260.0,
+    build_time: 22.0,
+    xp_value: 70.0,
+)

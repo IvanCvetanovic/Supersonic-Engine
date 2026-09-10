@@ -1,0 +1,23 @@
+// ACT 1 — infantry fighting vehicle (brief §7.1): autocannon platform,
+// fast and armored — "armored late". All numbers [TUNE].
+(
+    name: "IFV",
+    will: 4,
+    hp: 520.0,
+    speed: 7.0,
+    radius: 0.7,
+    armor: Heavy,
+    attack: Some((
+        kind: Pierce,
+        damage: 30.0,
+        cooldown: 1.0,
+        range: 8.5,
+        acquire: 12.0,
+        ranged: true,
+    )),
+    color: (1.0, 0.7, 0.4),
+    size: (1.6, 1.0),
+    cost_essence: 220.0,
+    build_time: 20.0,
+    xp_value: 60.0,
+)

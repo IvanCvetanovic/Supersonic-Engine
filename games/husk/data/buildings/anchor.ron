@@ -1,0 +1,13 @@
+// Will anchor (brief §4.2): +8 Will each, the supply structure.
+// All numbers [TUNE].
+(
+    name: "Anchor",
+    hp: 450.0,
+    armor: Fortified,
+    cost_essence: 80.0,
+    build_time: 14.0,
+    will_provided: 8,
+    footprint: (2, 2),
+    size: (1.2, 3.2),
+    color: (0.55, 0.75, 1.0),
+)

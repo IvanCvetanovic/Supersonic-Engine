@@ -1,0 +1,11 @@
+(
+intro: [
+    (at: 0.0, camera: Some((0.0, 10.0, 0.95)), subtitle: "The deep timber. Three days from any road."),
+    (at: 5.0, camera: Some((38.0, 32.0, 0.55)), subtitle: "Above the canopy: the Heartwood. The oldest living essence you have ever felt."),
+    (at: 11.0, camera: Some((-36.0, -38.0, 0.25)), subtitle: "And you - the gathering hand, the first stone, the blade. The heart of whatever comes next."),
+],
+outro: [
+    (at: 0.0, camera: Some((40.0, 37.0, 0.25)), subtitle: "The grove is yours. The forest does not forgive - but it remembers a strong hand."),
+    (at: 6.0, camera: Some((-36.0, -38.0, 0.6)), subtitle: "A heart, a Sanctum, a pack of made things. Next time it will not be trees that object."),
+],
+)

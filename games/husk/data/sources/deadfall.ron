@@ -1,0 +1,8 @@
+// Fallen trunk, half-returned to the soil (fast FLORA). [TUNE]
+(
+    name: "Deadfall",
+    affinity: Flora,
+    essence: 400.0,
+    footprint: (2, 1),
+    size: (1.9, 0.6),
+)

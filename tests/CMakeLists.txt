@@ -101,6 +101,20 @@ target_link_libraries(test_wb_persistence PRIVATE WolfBrigadeGame)
 # those samples with a real engine and playing them, which is the seam the
 # synthesis tests could not see.
 target_link_libraries(test_wb_audio PRIVATE WolfBrigadeGame)
+
+# HUSK's simulation, ported from Rust. Stricter than the Wolf Brigade suites:
+# the goldens are the Rust sim's own SimHash after every tick of each scripted
+# scenario, printed by games/husk/oracle, and the port must match them bit for
+# bit. The oracle is not run by ctest - it needs the game's repository and a
+# Rust toolchain - so its output is checked in beside the scenarios.
+function(add_husk_test name)
+    add_engine_test(${name})
+    target_link_libraries(${name} PRIVATE HuskSim)
+endfunction()
+
+add_husk_test(test_husk_foundation)
+add_husk_test(test_husk_scenarios)
+
 add_engine_test(test_environmentmap)
 add_engine_test(test_assetdatabase)
 add_engine_test(test_serialize)

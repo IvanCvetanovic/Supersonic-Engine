@@ -1,0 +1,10 @@
+// Damage multiplier matrix (brief §5): attack type vs armor type.
+// Columns: (UNARMORED, LIGHT, HEAVY, FORTIFIED). [TUNE] range 0.5–1.5.
+// Intent: pierce shreds soft targets, arcane cracks heavy plate,
+// siege exists to level fortifications, normal is the baseline.
+(
+    normal: (1.0, 1.0, 1.0, 0.7),
+    pierce: (1.5, 1.25, 0.75, 0.5),
+    siege: (1.0, 0.85, 0.75, 1.5),
+    arcane: (1.0, 1.25, 1.5, 0.5),
+)

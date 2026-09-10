@@ -1,0 +1,7 @@
+// A consumable charm (brief §6): unlike the passive charms, this one is USED
+// (Alt+slot) for an instant effect and then spent. Filename sorts after the
+// passive items so their catalog ids stay stable. All [TUNE].
+(
+    name: "Field Poultice",
+    active: Some(Heal(amount: 250.0)),
+)

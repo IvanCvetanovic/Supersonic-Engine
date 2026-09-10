@@ -1,0 +1,24 @@
+// THE EXTRACTOR — the protagonist hero (brief §6). Base stats; per-level
+// growth and abilities live in assets/balance/hero.ron. Not producible.
+// All numbers [TUNE].
+(
+    name: "Extractor",
+    will: 0,
+    hp: 700.0,
+    speed: 6.2,
+    radius: 0.5,
+    armor: Heavy,
+    attack: Some((
+        kind: Normal,
+        damage: 30.0,
+        cooldown: 1.3,
+        range: 1.0,
+        acquire: 9.0,
+        ranged: false,
+    )),
+    color: (0.95, 0.9, 0.55), // hero glow: pale gold over essence cyan
+    size: (0.8, 1.55),
+    cost_essence: 0.0,
+    build_time: 1.0,
+    xp_value: 200.0,
+)
