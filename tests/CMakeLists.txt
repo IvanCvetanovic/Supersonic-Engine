@@ -121,6 +121,9 @@ add_husk_test(test_husk_scenarios)
 add_husk_test(test_husk_layer)
 target_link_libraries(test_husk_layer PRIVATE HuskGame)
 
+# The simulation's own sin, cos, asin, atan2 and pow, pinned bit for bit so the
+# determinism claim holds across C runtimes (DetMath.hpp).
+add_engine_test(test_detmath)
 add_engine_test(test_environmentmap)
 add_engine_test(test_assetdatabase)
 add_engine_test(test_serialize)

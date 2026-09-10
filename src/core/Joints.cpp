@@ -1,4 +1,5 @@
 #include "core/Joints.hpp"
+#include "core/DetMath.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -374,7 +375,7 @@ float HingeAngle(const Constraint& joint) {
     // A relative to B, so a door hinged to the world reads as the DOOR's angle:
     // the world is B and never moves. The other convention is just as correct
     // and reads backwards to everyone who has to author one.
-    return std::atan2(glm::dot(glm::cross(fromB, fromA), axis), glm::dot(fromB, fromA));
+    return DetMath::atan2(glm::dot(glm::cross(fromB, fromA), axis), glm::dot(fromB, fromA));
 }
 
 float LimitOvershoot(const Constraint& joint) {

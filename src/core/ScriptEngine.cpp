@@ -10,6 +10,7 @@
 #include "core/Input.hpp"
 #include "core/PhysicsSystem.hpp"
 #include "core/Components.hpp"
+#include "core/DetMath.hpp"
 #include "core/ScriptRegistry.hpp"
 
 #include <cmath>
@@ -503,7 +504,7 @@ extern "C" void builtinOscillator(SupersonicScriptContext* ctx) {
     // amplitude and the phase the name implies, and accumulate float error.
     const float now = ctx->elapsed;
     const float previous = now - ctx->deltaTime;
-    ctx->position[1] += (std::sin(now * 2.0f) - std::sin(previous * 2.0f)) * 0.5f;
+    ctx->position[1] += (DetMath::sin(now * 2.0f) - DetMath::sin(previous * 2.0f)) * 0.5f;
 }
 
 extern "C" void builtinSpinner(SupersonicScriptContext* ctx) {
@@ -513,7 +514,7 @@ extern "C" void builtinSpinner(SupersonicScriptContext* ctx) {
 }
 
 extern "C" void builtinPulse(SupersonicScriptContext* ctx) {
-    const float s = 1.0f + 0.15f * std::sin(ctx->elapsed * 3.0f);
+    const float s = 1.0f + 0.15f * DetMath::sin(ctx->elapsed * 3.0f);
     ctx->scale[0] = s;
     ctx->scale[1] = s;
     ctx->scale[2] = s;
@@ -577,8 +578,8 @@ void ScriptEngine::Update(entt::registry& registry, float deltaTime) {
                     script.baseIntensity = light->intensity;
                     script.baselineCaptured = true;
                 }
-                const float flicker = 0.85f + 0.15f * std::sin(script.elapsed * 11.0f)
-                                                   * std::sin(script.elapsed * 3.7f);
+                const float flicker = 0.85f + 0.15f * DetMath::sin(script.elapsed * 11.0f)
+                                                   * DetMath::sin(script.elapsed * 3.7f);
                 light->intensity = script.baseIntensity * flicker;
             }
             continue;

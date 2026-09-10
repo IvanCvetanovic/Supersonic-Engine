@@ -11,6 +11,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include "core/Components.hpp"
+#include "core/DetMath.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -495,7 +496,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // would damp twice as hard at 120Hz as at 60Hz, so the same scene
         // would behave differently on a faster machine.
         if (rigidBody.linearDamping > 0.0f) {
-            rigidBody.velocity *= std::pow(std::max(0.0f, 1.0f - rigidBody.linearDamping),
+            rigidBody.velocity *= DetMath::pow(std::max(0.0f, 1.0f - rigidBody.linearDamping),
                                            deltaTime);
         }
 
@@ -504,7 +505,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         } else {
             if (rigidBody.angularDamping > 0.0f) {
                 rigidBody.angularVelocity *=
-                    std::pow(std::max(0.0f, 1.0f - rigidBody.angularDamping), deltaTime);
+                    DetMath::pow(std::max(0.0f, 1.0f - rigidBody.angularDamping), deltaTime);
             }
 
             // Integrated as a rotation MATRIX and written back as Euler
@@ -532,7 +533,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             if (speed > 1e-6f) {
                 // The spin is in WORLD space, so it multiplies on the left.
                 const glm::mat3 spin = glm::mat3_cast(
-                    glm::angleAxis(speed * deltaTime, rigidBody.angularVelocity / speed));
+                    DetMath::angleAxis(speed * deltaTime, rigidBody.angularVelocity / speed));
                 transform.rotation =
                     TransformComponent::EulerFromRotation(spin * transform.getRotationMatrix());
             }
@@ -1783,7 +1784,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     const auto turnBack = [](JointEnd& end, const glm::vec3& axis, float radians) {
         if (!end.transform || std::fabs(radians) < 1.0e-6f) return glm::mat3(1.0f);
 
-        const glm::mat3 spin = glm::mat3_cast(glm::angleAxis(radians, axis));
+        const glm::mat3 spin = glm::mat3_cast(DetMath::angleAxis(radians, axis));
         end.transform->rotation =
             TransformComponent::EulerFromRotation(spin * end.transform->getRotationMatrix());
         end.basis = spin * end.basis;

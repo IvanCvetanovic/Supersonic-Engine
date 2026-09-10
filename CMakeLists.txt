@@ -276,6 +276,23 @@ else()
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
+# THE ARITHMETIC IS SPELLED OUT, not left to the compiler: no contraction.
+#
+# The engine's determinism claim is cross-platform (decided 10 September 2026,
+# docs/planning/2026-09-10-cross-platform-determinism.md), and DetMath.hpp gets
+# it by using only operations IEEE 754 rounds the same way everywhere. An FMA
+# fusing a*b+c rounds ONCE where the source says twice, and whether one is
+# emitted depends on the target: GCC's GNU mode contracts by default whenever
+# the target has FMA, and clang contracts within a statement. So it is off,
+# PUBLIC so the inline math in the headers obeys it in every target that
+# includes them. MSVC's /fp:precise already does not contract; it is written
+# down so nobody wonders.
+if (MSVC)
+    target_compile_options(SupersonicCore PUBLIC /fp:precise)
+else()
+    target_compile_options(SupersonicCore PUBLIC -ffp-contract=off)
+endif()
+
 # Validation layers, decoupled from the build type.
 #
 # AUTO reproduces the old behaviour: on in Debug, off in Release. The reason it

@@ -2234,19 +2234,33 @@ computed in one process, so a build whose floats behave differently agrees with
 itself perfectly and passes all of them — reproducibility that holds within a
 binary and not between two, which is the same failure one level up. So
 `test_determinism` pins the hash of four seconds of the fixture scene as a
-constant. It holds across MSVC 2022 and GCC 15.2, Debug and Release: two
-backends, two standard libraries, two optimisation levels, byte for byte - and
-on MSVC 14.50 too.
+constant, and **it is one number across C runtimes**: MSVC 14.50 on the UCRT
+and GCC 13.3 on glibc 2.39 both give `881310125714727098`.
 
-All of those link the UCRT, so none of them varies `asin` or `pow`. A glibc
-build does, and the first one, run on 10 September, disagreed: GCC 13.3, GCC
-14.2 and clang 18.1 on glibc 2.39 all give `7854318744396420989`. Five
-toolchains split cleanly by C runtime and by nothing else, so **the hash crosses
-compilers and does not cross C runtimes**. When the constant fails it is a decision rather
-than a chore: either the simulation changed, and every recording on disk has
-stopped comparing, or the toolchain did, and a replay does not cross that
-boundary. Updating the number without deciding which is how the test stops
-meaning anything.
+It used to be one number per runtime. The Windows toolchains all linked the
+UCRT and agreed with each other, while GCC and clang on glibc gave
+`7854318744396420989`.
+
+Measuring the split found it was entirely libm, one ulp at a time: the first
+disagreement was an `atan2f` in `EulerFromRotation` on tick 29. On every
+sampled case the UCRT was correctly rounded and glibc was not. Nothing in the
+C standard asks either to be.
+
+So the simulation path stopped calling libm. `DetMath.hpp` computes sin, cos,
+asin, atan2 and pow in double from + - * / and sqrt and the exact functions,
+rounds once to float, and is correctly rounded on every input sampled.
+Contraction is off engine-wide. `test_detmath` pins DetMath's bits against a
+table produced independently of any C++ compiler, so a toolchain that
+reorders or fuses an operation fails a named row instead of a replay.
+
+When the constant fails it is a decision rather than a chore:
+- **The simulation changed**, and every recording on disk has stopped
+  comparing.
+- **The platform differs**, and that is now a finding about the platform, not
+  a second number to write down.
+
+Updating the number without deciding which is how the test stops meaning
+anything.
 
 One measured caveat worth keeping. Replaying the demo scene reproduces, and that
 proves less than it looks: **nothing in `MainScene` reads input inside a tick**,

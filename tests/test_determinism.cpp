@@ -111,19 +111,23 @@ static void testTheCanonicalSceneHashesToTheSameNumberOnEveryBuild() {
     // knowing. Updating the number to make the suite green without deciding
     // which of those happened is how this stops meaning anything.
     //
-    // Verified across MSVC 2022 (MSVC STL) and GCC 15.2 (libstdc++), both x64
-    // Release, on 29 August 2026, and on MSVC 14.50 on 10 September. Note what
-    // that set does and does not vary: different compiler backends and
-    // different standard libraries, but the same UCRT - so `asin` in the Euler
-    // conversion and `pow` in the damping curve are the SAME implementations in
-    // all of them.
+    // ONE NUMBER ON EVERY PLATFORM, since 10 September 2026.
     //
-    // A glibc build varies those, and on 10 September one was run: GCC 13.3,
-    // GCC 14.2 and clang 18.1 against glibc 2.39 all give 7854318744396420989.
-    // So on Linux this check fails, and it is left failing until somebody
-    // decides what the claim is - one C runtime, or every platform - rather
-    // than until somebody writes down a second number.
-    constexpr uint64_t kCanonical = 8818694387102185031ull;
+    // Before that it was one number per C runtime. MSVC and GCC on Windows
+    // share the UCRT and agreed on 8818694387102185031; GCC 13.3, GCC 14.2 and
+    // clang 18.1 against glibc 2.39 all gave 7854318744396420989. The owner
+    // decided the claim is cross-platform, and measuring the difference found
+    // it was entirely libm: an atan2f one ulp apart on tick 29, then asinf,
+    // sinf and cosf. So the simulation stopped calling libm - DetMath.hpp
+    // builds those functions from operations IEEE 754 fixes everywhere, and
+    // contraction is off - and this constant moved ONCE, deliberately, to the
+    // value both runtimes now produce
+    // (docs/planning/2026-09-10-cross-platform-determinism.md).
+    //
+    // Verified on 10 September on MSVC 14.50 against the UCRT and GCC 13.3
+    // against glibc 2.39, both x64 Release. A platform that disagrees now is a
+    // finding about that platform, not a second number to write down.
+    constexpr uint64_t kCanonical = 881310125714727098ull;
 
     const uint64_t actual = runFor(240);
     CHECK_MSG(actual == kCanonical,

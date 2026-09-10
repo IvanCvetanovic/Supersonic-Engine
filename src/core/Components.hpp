@@ -19,6 +19,7 @@
 #include <glm/glm.hpp>
 
 #include "core/UICanvas.hpp"
+#include "core/DetMath.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <vulkan/vulkan.hpp>
@@ -162,9 +163,14 @@ struct TransformComponent {
     // which is the only sane way to trust an expansion like this - the
     // derivation is not the kind of thing to check by reading.
     glm::mat4 getModelMatrix() const {
-        const float cx = std::cos(rotation.x), sx = std::sin(rotation.x);
-        const float cy = std::cos(rotation.y), sy = std::sin(rotation.y);
-        const float cz = std::cos(rotation.z), sz = std::sin(rotation.z);
+        // DetMath rather than libm. This is the matrix the physics collides
+        // and integrates with, and a C runtime's last bit is its own: glibc and
+        // the UCRT disagree by an ulp often enough to part a replay
+        // (docs/planning/2026-09-10-cross-platform-determinism.md).
+        float sx = 0.0f, cx = 1.0f, sy = 0.0f, cy = 1.0f, sz = 0.0f, cz = 1.0f;
+        DetMath::sincos(rotation.x, sx, cx);
+        DetMath::sincos(rotation.y, sy, cy);
+        DetMath::sincos(rotation.z, sz, cz);
 
         glm::mat4 mat(1.0f);
 
@@ -229,20 +235,22 @@ struct TransformComponent {
     // other two come out of ratios that cancel cy.
     static glm::vec3 EulerFromRotation(const glm::mat3& rotation) {
         const float sy = std::clamp(rotation[2][0], -1.0f, 1.0f);
-        const float y = std::asin(sy);
+        // DetMath, for the reason getModelMatrix gives. The first call measured
+        // to differ between platforms was the atan2 below, on tick 29.
+        const float y = DetMath::asin(sy);
 
         // Gimbal lock: cy is zero, so x and z stop being separable - every
         // (x, z) with the same sum describes the same orientation. Pinning z
         // at zero and putting the whole turn into x is the standard choice and
         // the only one that is continuous as the pole is approached.
         if (std::fabs(sy) > 0.99999f) {
-            const float xz = std::atan2(rotation[0][1], rotation[1][1]);
+            const float xz = DetMath::atan2(rotation[0][1], rotation[1][1]);
             return glm::vec3(sy > 0.0f ? xz : -xz, y, 0.0f);
         }
 
-        return glm::vec3(std::atan2(-rotation[2][1], rotation[2][2]),
+        return glm::vec3(DetMath::atan2(-rotation[2][1], rotation[2][2]),
                          y,
-                         std::atan2(-rotation[1][0], rotation[0][0]));
+                         DetMath::atan2(-rotation[1][0], rotation[0][0]));
     }
 
 };

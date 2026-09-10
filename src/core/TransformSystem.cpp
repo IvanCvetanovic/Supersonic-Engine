@@ -1,4 +1,5 @@
 #include "core/TransformSystem.hpp"
+#include "core/DetMath.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -34,14 +35,16 @@ void decomposeToLocal(const glm::mat4& m, TransformComponent& out) {
                                     glm::vec3(m[2]) / scale.z);
 
     const float sy = glm::clamp(rot[2][0], -1.0f, 1.0f);
-    const float b = std::asin(sy);
+    // DetMath rather than libm, so a reparented body lands on the same angles
+    // on every platform (docs/planning/2026-09-10-cross-platform-determinism.md).
+    const float b = DetMath::asin(sy);
     float a = 0.0f;
     float c = 0.0f;
     if (std::fabs(sy) < 0.99999f) {
-        a = std::atan2(-rot[2][1], rot[2][2]);
-        c = std::atan2(-rot[1][0], rot[0][0]);
+        a = DetMath::atan2(-rot[2][1], rot[2][2]);
+        c = DetMath::atan2(-rot[1][0], rot[0][0]);
     } else {
-        a = std::atan2(rot[1][2], rot[1][1]);
+        a = DetMath::atan2(rot[1][2], rot[1][1]);
     }
     out.rotation = glm::vec3(a, b, c);
 }

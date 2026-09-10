@@ -973,19 +973,22 @@ HUSK's nineteen animated models. What is left is here.
   checkpoint is necessary and not sufficient: a scene edited in a way the hash
   cannot see still replays wrongly and says nothing until the difference reaches
   a transform.
-- **Determinism crosses compilers and does not cross C runtimes.**
-  `test_determinism` pins the hash of four seconds of the fixture scene as a
-  constant, and that constant holds byte-for-byte across MSVC 2022 (MSVC STL)
-  and GCC 15.2 (libstdc++), Debug and Release, x64, and on MSVC 14.50 — every
-  one of them linking the UCRT. The first glibc run, on 10 September, disagreed:
-  GCC 13.3, GCC 14.2 and clang 18.1 on glibc 2.39 all hash the scene to
-  `7854318744396420989` instead. Two compiler families on each side, split by
-  nothing but the C runtime, so a replay recorded on Windows does not reproduce
-  on Linux and lockstep between the two would desync. `asin` in the Euler
-  conversion and `pow` in the damping curve are the suspects, not yet the
-  measured culprits. Whether to own those functions or scope the claim to one
-  runtime is open; see
-  [the 10 September record](docs/planning/2026-09-10-migration-readiness.md).
+- **Determinism crosses compilers and C runtimes, measured on x64.**
+  `test_determinism` pins the hash of four seconds of the fixture scene as one
+  constant: `881310125714727098`. It holds on MSVC 14.50 against the UCRT and
+  on GCC 13.3 against glibc 2.39.
+
+  Until 10 September the two runtimes gave different numbers. The whole
+  difference was libm: an `atan2f` one ulp apart on tick 29, found by logging
+  every libm call on Linux and replaying each through the UCRT. So the
+  simulation no longer calls libm. `DetMath.hpp` builds sin, cos, asin, atan2
+  and pow from operations IEEE 754 fixes everywhere, and contraction is off
+  ([the record](docs/planning/2026-09-10-cross-platform-determinism.md)).
+
+  Two limits remain:
+  - ARM64 and macOS have not been run.
+  - A game's own code that calls `std::sin` inside its tick gets its C
+    runtime's last bit. The engine's own path does not.
 
 **Deliberate, and not gaps**
 

@@ -25,6 +25,7 @@ directory and that section disagree, that section is right.
 | [2026-08-28-competing-with-godot.md](2026-08-28-competing-with-godot.md) | 28 Aug 2026 | What it would take to compete with Godot on versatility and performance, costed in one-person weeks. Led by the finding that the engine's differentiator is unenforced by CI and blind to the only game in the tree |
 | [2026-09-10-migration-readiness.md](2026-09-10-migration-readiness.md) | 10 Sep 2026 | Whether Wolf Brigade, HUSK and Magic Portals Remake can start moving onto the engine, read from all four trees - and what a first Linux build on a second machine found: a compiler crash, a fixture that only worked on MSVC, and determinism that does not cross to glibc |
 | [2026-09-10-husk-port.md](2026-09-10-husk-port.md) | 10 Sep 2026 | The HUSK simulation port, written as it runs: pinned commit, the Rust oracle and the bit-for-bit standard, the order of work and its one gate, and the traps listed before they bite |
+| [2026-09-10-cross-platform-determinism.md](2026-09-10-cross-platform-determinism.md) | 10 Sep 2026 | Making the determinism claim hold across C runtimes. It measures which libm call parts Windows from Linux first (an `atan2f` on tick 29, where glibc is the one an ulp off), then replaces libm on the simulation path with functions IEEE pins down everywhere |
 
 ## What the two-games document changed
 
