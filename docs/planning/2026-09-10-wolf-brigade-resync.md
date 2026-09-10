@@ -906,3 +906,65 @@ any. Three new edges come from signals that already existed:
 **Result (GCC, 10 September):** audio 419/0 with a device and 393/0
 without one (was 5 red); the suite's floor is now 393. **Every one of the 17
 suites is green.**
+
+## Slice 11b: the control scheme and hero-mode routing
+
+**`ControlScheme`** is header-only, from `control_scheme.gd`. `Resolve`
+works like this:
+- An explicit desktop or touch preference wins.
+- Anything else is detected: AUTO, an empty value, or a value a hand-edited
+  save invented.
+- Detection gives touch on Android and iOS and desktop everywhere else, from
+  the engine's platform macros, which stand in for Godot's
+  `OS.has_feature("mobile")`.
+
+`Label` spells out what AUTO detected, for example "Auto (PC)". The
+preference itself was already the Profile's `control_scheme`.
+
+**`HeroInput`** is the hero-mode half of `input_controller.gd`. It is a
+stateless router that sits above `GestureMachine` rather than inside it. The
+original's `_handle_hero_input` is a three-branch dispatch that remembers
+nothing, and the gesture machine's value is being a touch state machine
+testable without a viewport. Folding a mouse and a keyboard into it would
+spend that for nothing. The routing:
+- **Placement outranks hero mode.** A primary click confirms, and a
+  secondary click or Escape cancels.
+- **In hero mode:** Q and E cast slots 0 and 1, and Escape backs out. A
+  primary click strikes, on the desktop scheme only. Everything else is
+  inert, including right clicks, touches and releases.
+- **Outside hero mode:** events pass through to the gesture path, except
+  Escape, which deselects.
+- **The scheme is cached when hero mode is entered,** as the original caches
+  it.
+- **`SteerFromKeys`** is `_keyboard_dir` plus the one line that shapes it for
+  the hero: a diagonal is normalised only when longer than one, dividing by
+  the length in single precision the way Godot does.
+
+**Reproduced** at `50741d1`, in the new `test_wb_controls`:
+- `verify_hero` A's four scheme lines;
+- all six of D's routing lines;
+- G's "Q outside hero mode is inert" and "hero mode: Q -> slot 0, E -> slot
+  1".
+
+The harness passes 72/0. "After hero mode, a tap is a context tap again" is
+followed through the real `GestureMachine` rather than asserted of a
+pass-through flag.
+
+**Added by the port:**
+- placement's secondary click and Escape both cancel, and a touch during
+  placement is the gesture path's;
+- outside hero mode, only Escape is answered;
+- the scheme is taken at entry;
+- keyboard steering: one key is exactly one, opposite keys cancel, and a
+  diagonal is exactly 1/√2 per axis.
+
+**Not yet:** the layer does not route keys or clicks to the hero at all.
+There is no WASD steering, no strike on click and no Q/E. So the router is
+pinned, but it is not yet wired into the layer. That wiring belongs to the
+presentation work, along with the camera follow and the on-screen joystick
+(`verify_hero` C and E).
+
+**Result (GCC, 10 September):** controls 48/0, and nothing else moved. All
+**18 suites are green**, so `wb-resync` is ready to merge into
+`engine-roadmap`. That branch has not moved since `a6472b8`, so the merge
+is a fast-forward.
