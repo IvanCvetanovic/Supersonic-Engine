@@ -7,6 +7,7 @@ namespace WolfBrigade {
 
 namespace {
 
+using Supersonic::Json::Object;
 using Supersonic::Json::Value;
 
 // Logical key -> filename, and the ORDER data_loader.gd's FILES dictionary
@@ -25,8 +26,18 @@ const std::vector<std::pair<std::string, std::string>>& fileTable() {
         {"audio", "audio.json"},
         {"meta", "meta.json"},
         {"fx", "fx.json"},
+        {"levels", "levels.json"},
+        {"abilities", "abilities.json"},
     };
     return table;
+}
+
+// The sections a level may override, in the order apply_level walks them.
+constexpr const char* kLevelSections[] = {"world", "economy", "waves"};
+
+const Value& null() {
+    static const Value kNull;
+    return kNull;
 }
 
 } // namespace
@@ -48,6 +59,8 @@ const std::vector<std::string>& GameData::FileKeys() {
 
 bool GameData::LoadAll(const std::string& directory) {
     m_documents.clear();
+    m_merged.clear();
+    m_levelId.clear();
     m_loadErrors.clear();
 
     // A trailing separator either way, so callers can pass "data" or "data/".
@@ -64,7 +77,7 @@ bool GameData::LoadAll(const std::string& directory) {
             // type, so a missing file reads as "this file says nothing" and the
             // validator reports the cross-references it breaks - instead of the
             // first caller to index into it getting a null and going quiet.
-            m_documents[key] = Value(Supersonic::Json::Object{});
+            m_documents[key] = Value(Object{});
             continue;
         }
 
@@ -81,20 +94,28 @@ bool GameData::LoadAll(const std::string& directory) {
         Supersonic::Json::Parser parser(text);
         if (!parser.Parse(parsed)) {
             m_loadErrors.push_back("JSON error in " + path);
-            m_documents[key] = Value(Supersonic::Json::Object{});
+            m_documents[key] = Value(Object{});
             continue;
         }
 
         m_documents[key] = std::move(parsed);
     }
 
+    // The default level, straight away, as load_all does: validation and any
+    // match booted without a menu see a fully merged configuration.
+    ApplyLevel(DefaultLevel());
+
     return m_loadErrors.empty();
 }
 
 const Value& GameData::Raw(const std::string& key) const {
-    static const Value kNull;
     const auto it = m_documents.find(key);
-    return it == m_documents.end() ? kNull : it->second;
+    return it == m_documents.end() ? null() : it->second;
+}
+
+const Value& GameData::Section(const std::string& key) const {
+    const auto it = m_merged.find(key);
+    return it == m_merged.end() ? Raw(key) : it->second;
 }
 
 std::string GameData::DifficultyDefault() const {
@@ -102,6 +123,37 @@ std::string GameData::DifficultyDefault() const {
     // the menu gets - and the original spells the same fallback in the same
     // place rather than leaving it to the caller.
     return Difficulty()["default"].AsString("normal");
+}
+
+std::string GameData::DefaultLevel() const {
+    const auto& order = LevelsOrder();
+    return order.empty() ? std::string("level_1") : order.front().AsString();
+}
+
+void GameData::ApplyLevel(const std::string& id) {
+    m_levelId = Levels().Has(id) ? id : DefaultLevel();
+    const Value& level = Level(m_levelId);
+
+    m_merged.clear();
+    for (const char* section : kLevelSections) {
+        // From the PRISTINE base every time - the original duplicates the base
+        // dictionary on each call - so applying level B after level A is level
+        // B, not A with B on top.
+        const Value& base = Raw(section);
+        Object merged = base.IsObject() ? base.AsObject() : Object{};
+
+        const Value& overrides = level[section];
+        if (overrides.IsObject()) {
+            for (const auto& [key, value] : overrides.AsObject()) merged[key] = value;
+        }
+        m_merged[section] = Value(std::move(merged));
+    }
+}
+
+const Value& GameData::Ability(const std::string& id) const {
+    if (!id.empty() && id.front() == '_') return null();
+    const Value& ability = Abilities()[id];
+    return ability.IsObject() ? ability : null();
 }
 
 } // namespace WolfBrigade

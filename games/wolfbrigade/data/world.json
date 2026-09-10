@@ -1,9 +1,33 @@
 {
   "width": 6000,
   "height": 1080,
-  "ground_y": 800,
-  "background_color": "#161a22",
-  "ground_color": "#3a2f22",
+  "ground_y": 590,
+  "background_color": "#ab6a8c",
+  "background_layers": [
+    { "sprite": "res://assets/world/bg/parallax-mountain-bg.png", "scroll": 0.05, "scale": 4.0 },
+    { "sprite": "res://assets/world/bg/parallax-mountain-montain-far.png", "scroll": 0.15, "scale": 4.0 },
+    { "sprite": "res://assets/world/bg/parallax-mountain-mountains.png", "scroll": 0.3, "scale": 4.0 },
+    { "sprite": "res://assets/world/bg/parallax-mountain-trees.png", "scroll": 0.5, "scale": 4.0 },
+    { "sprite": "res://assets/world/bg/parallax-mountain-foreground-trees.png", "scroll": 0.68, "scale": 4.0 }
+  ],
+  "decor": {
+    "count": 48,
+    "scale": 2.0,
+    "sprites": [
+      "res://assets/world/decor_tuft.png",
+      "res://assets/world/decor_stone.png",
+      "res://assets/world/decor_tuft.png",
+      "res://assets/world/decor_flowers.png",
+      "res://assets/world/decor_tuft.png",
+      "res://assets/world/decor_mushroom.png"
+    ]
+  },
+  "ground_color": "#43503a",
+  "lane": {
+    "depth": 280,
+    "building_row": 0.18,
+    "building_row_gap": 115
+  },
   "town_hall_spawn_x": 1500,
   "player_spawn_x": 1680,
   "player_spawn_spacing": 60,
@@ -11,12 +35,31 @@
   "camera": {
     "pan_speed": 1400,
     "edge_push_margin": 28,
-    "start_x": 1500
+    "start_x": 1500,
+    "zoom": 1.7,
+    "start_y": 670,
+    "hero_follow_lerp": 5.0
   },
   "input": {
     "drag_threshold_px": 12,
     "touch_hold_select_ms": 300,
     "unit_pick_radius": 52,
-    "formation_spacing": 46
-  }
+    "formation_spacing": 46,
+    "interact_range": 150,
+    "build_time_scale": 0.15,
+    "hero_controls": {
+      "joystick_radius": 120,
+      "knob_radius": 46,
+      "deadzone": 0.22,
+      "joystick_margin": [60, 150],
+      "attack_size": [190, 190],
+      "attack_margin": [70, 150],
+      "ability_size": [150, 150],
+      "button_gap": 14
+    }
+  },
+  "ground_sprite": "res://assets/world/grass_top.png",
+  "ground_cap_height": 26,
+  "ground_fill_sprite": "res://assets/world/dirt.png",
+  "ground_band_sprite": "res://assets/world/grass_field.png"
 }

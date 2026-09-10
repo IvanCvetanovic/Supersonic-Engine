@@ -2,22 +2,59 @@
   "spawn_edge": "right",
   "spawn_interval": 0.8,
   "waves": [
-    { "index": 1, "time": 60,  "spawns": [ { "unit": "raider", "count": 2 } ] },
-    { "index": 2, "time": 150, "spawns": [ { "unit": "raider", "count": 4 } ] },
-    { "index": 3, "time": 240, "spawns": [ { "unit": "raider", "count": 6 } ] },
-    { "index": 4, "time": 330, "spawns": [ { "unit": "raider", "count": 8 } ] },
-    { "index": 5, "time": 420, "spawns": [ { "unit": "raider", "count": 10 }, { "unit": "brute", "count": 1 } ] }
-  ],
-  "endless": {
-    "start_delay": 90,
-    "interval": 75,
-    "unit": "raider",
-    "base_count": 8,
-    "count_growth": 2,
-    "hp_growth": 0.08,
-    "damage_growth": 0.05,
-    "heavy_unit": "brute",
-    "brute_every": 2,
-    "brute_count": 1
-  }
+    {
+      "index": 1,
+      "time": 60,
+      "spawns": [
+        {
+          "unit": "raider",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "time": 150,
+      "spawns": [
+        {
+          "unit": "raider",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "time": 240,
+      "spawns": [
+        {
+          "unit": "raider",
+          "count": 6
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "time": 330,
+      "spawns": [
+        {
+          "unit": "raider",
+          "count": 8
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "time": 420,
+      "spawns": [
+        {
+          "unit": "raider",
+          "count": 10
+        },
+        {
+          "unit": "brute",
+          "count": 1
+        }
+      ]
+    }
+  ]
 }

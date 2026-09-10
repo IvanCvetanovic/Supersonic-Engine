@@ -7,30 +7,82 @@
     "max_hp": 1000,
     "pre_placed": true,
     "is_deposit_point": true,
-    "trains": ["worker"],
-    "researches": ["sharper_axes", "iron_swords", "fletching", "masterwork_bows", "reinforced_walls"],
+    "trains": [
+      "worker"
+    ],
+    "auto_train_default": [
+      "worker"
+    ],
     "spawn_offset": 40,
-    "body_size": [120, 160],
-    "color": "#3b6fa0"
+    "body_size": [
+      120,
+      160
+    ],
+    "color": "#3b6fa0",
+    "sprite": "res://assets/buildings/town_hall.png",
+    "supply": 8,
+    "hp_regen": 0.5,
+    "hero_respawn": true
   },
   "barracks": {
     "display_name": "Barracks",
     "faction": "player",
-    "cost": { "wood": 150 },
+    "cost": {
+      "wood": 150
+    },
     "build_time": 10.0,
     "max_hp": 500,
     "pre_placed": false,
     "is_deposit_point": false,
     "buildable": true,
-    "trains": ["soldier", "archer"],
+    "trains": [
+      "soldier",
+      "archer"
+    ],
+    "auto_train_default": [
+      "soldier"
+    ],
     "spawn_offset": 40,
-    "body_size": [110, 130],
-    "color": "#355f88"
+    "body_size": [
+      110,
+      130
+    ],
+    "color": "#355f88",
+    "sprite": "res://assets/buildings/barracks.png"
+  },
+  "armory": {
+    "display_name": "Armory",
+    "faction": "player",
+    "cost": {
+      "wood": 100
+    },
+    "build_time": 10.0,
+    "max_hp": 350,
+    "pre_placed": false,
+    "is_deposit_point": false,
+    "buildable": true,
+    "trains": [],
+    "researches": [
+      "iron_swords",
+      "fletching",
+      "masterwork_bows",
+      "reinforced_walls"
+    ],
+    "spawn_offset": 40,
+    "body_size": [
+      110,
+      120
+    ],
+    "color": "#7a6a4a",
+    "sprite": "res://assets/buildings/armory.png"
   },
   "tower": {
     "display_name": "Tower",
     "faction": "player",
-    "cost": { "wood": 120, "food": 30 },
+    "cost": {
+      "wood": 120,
+      "food": 30
+    },
     "build_time": 8.0,
     "max_hp": 400,
     "pre_placed": false,
@@ -41,7 +93,107 @@
     "attacks_per_sec": 0.7,
     "attack_range": 300,
     "projectile_speed": 760,
-    "body_size": [64, 150],
-    "color": "#6b6f7a"
+    "body_size": [
+      64,
+      150
+    ],
+    "color": "#6b6f7a",
+    "sprite": "res://assets/buildings/tower.png"
+  },
+  "temple": {
+    "display_name": "Temple",
+    "faction": "player",
+    "cost": {
+      "wood": 100,
+      "food": 40
+    },
+    "build_time": 10.0,
+    "max_hp": 350,
+    "pre_placed": false,
+    "is_deposit_point": false,
+    "buildable": true,
+    "trains": [
+      "priest"
+    ],
+    "auto_train_default": [
+      "priest"
+    ],
+    "researches": [],
+    "spawn_offset": 40,
+    "body_size": [
+      110,
+      130
+    ],
+    "color": "#cdd6e2",
+    "sprite": "res://assets/buildings/temple.png"
+  },
+  "storehouse": {
+    "display_name": "Storehouse",
+    "faction": "player",
+    "cost": {
+      "wood": 120
+    },
+    "build_time": 10.0,
+    "max_hp": 400,
+    "pre_placed": false,
+    "is_deposit_point": true,
+    "buildable": true,
+    "trains": [],
+    "researches": [
+      "sharper_axes",
+      "carry_baskets",
+      "swift_boots"
+    ],
+    "spawn_offset": 40,
+    "body_size": [
+      90,
+      100
+    ],
+    "color": "#8a7a52",
+    "sprite": "res://assets/buildings/storehouse.png"
+  },
+  "waystone": {
+    "display_name": "Waystone",
+    "faction": "player",
+    "cost": {
+      "wood": 60
+    },
+    "build_time": 6.0,
+    "max_hp": 200,
+    "pre_placed": false,
+    "is_deposit_point": false,
+    "buildable": true,
+    "trains": [],
+    "researches": [],
+    "hero_respawn": true,
+    "spawn_offset": 40,
+    "body_size": [
+      56,
+      90
+    ],
+    "color": "#9aa7c0",
+    "sprite": "res://assets/buildings/waystone.png"
+  },
+  "farm": {
+    "display_name": "Farm",
+    "faction": "player",
+    "cost": {
+      "wood": 80
+    },
+    "build_time": 8.0,
+    "max_hp": 250,
+    "pre_placed": false,
+    "is_deposit_point": false,
+    "buildable": true,
+    "trains": [],
+    "researches": [],
+    "supply": 4,
+    "spawn_offset": 40,
+    "body_size": [
+      90,
+      80
+    ],
+    "color": "#7a8a52",
+    "sprite": "res://assets/buildings/farm.png"
   }
 }

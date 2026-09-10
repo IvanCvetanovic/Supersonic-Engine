@@ -1,0 +1,22 @@
+{
+  "_comment": "Active hero abilities (units.json -> abilities lists ids in hotkey/button order). kind: aoe_damage = damage_mult x caster damage to every enemy within radius on the LANE (|dx|); dash = burst `distance` px at `speed` px/s along the steer/facing direction with `invuln_s` seconds of i-frames. Cosmetics: sfx id (audio.json) + optional shake.",
+  "cleave": {
+    "display_name": "Cleave",
+    "kind": "aoe_damage",
+    "cooldown": 8.0,
+    "radius": 120,
+    "damage_mult": 1.6,
+    "sfx": "cleave",
+    "shake_magnitude": 8,
+    "shake_duration": 0.22
+  },
+  "dash": {
+    "display_name": "Dash",
+    "kind": "dash",
+    "cooldown": 5.0,
+    "distance": 260,
+    "speed": 950,
+    "invuln_s": 0.25,
+    "sfx": "dash"
+  }
+}

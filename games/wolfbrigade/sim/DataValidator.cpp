@@ -212,7 +212,8 @@ Issues Check(const GameData& data) {
                            entityIds, context + " effects"));
     }
 
-    // Waves: every spawn, and the endless configuration.
+    // Waves: every spawn names a known unit. (Endless mode, and its own
+    // configuration check, went with the game's 73999ce.)
     for (const Value& entry : AsArray(data.WaveConfig()["waves"], "waves.json waves", out)) {
         const Object& wave = AsObject(entry, "wave entry", out);
 
@@ -229,15 +230,6 @@ Issues Check(const GameData& data) {
         }
     }
 
-    const Object& endless = AsObject(data.WaveConfig()["endless"], "waves.endless", out);
-    if (!endless.empty()) {
-        appendAll(out, MissingRefs(one(field(endless, "unit").AsString()), unitIds, "endless.unit"));
-        if (endless.find("heavy_unit") != endless.end()) {
-            appendAll(out, MissingRefs(one(field(endless, "heavy_unit").AsString()), unitIds,
-                                       "endless.heavy_unit"));
-        }
-    }
-
     // Economy: where workers deposit, and what the nodes produce.
     if (economy.find("deposit_building") != economy.end()) {
         appendAll(out, MissingRefs(one(field(economy, "deposit_building").AsString()), buildingIds,
@@ -248,6 +240,44 @@ Issues Check(const GameData& data) {
         const Object& fields = AsObject(node, "economy.resource_node", out);
         appendAll(out, MissingRefs(one(field(fields, "resource").AsString()), resources,
                                    "economy.resource_node"));
+    }
+
+    // Levels: the order names real levels, and every capture point's bonus is
+    // well formed - an income bonus needs a real resource, and an unknown kind
+    // fails loud instead of silently doing nothing.
+    const Object& levels = AsObject(data.Levels(), "levels.json levels", out);
+    std::vector<std::string> order;
+    for (const Value& id : AsArray(data.Raw("levels")["order"], "levels.order", out)) {
+        order.push_back(id.AsString());
+    }
+    appendAll(out, MissingRefs(order, keysOf(levels), "levels.order"));
+    for (const auto& [id, definition] : levels) {
+        const std::string context = "level '" + id + "'";
+        const Object& level = AsObject(definition, context, out);
+        for (const Value& point :
+             AsArray(field(level, "capture_points"), context + " capture_points", out)) {
+            const Object& capture = AsObject(point, context + " capture_point", out);
+            const Object& bonus =
+                AsObject(field(capture, "bonus"), context + " capture_point bonus", out);
+            // An absent bonus is an income bonus, as the original reads it.
+            const std::string kind =
+                bonus.empty() ? std::string("income") : field(bonus, "kind").AsString("income");
+            if (kind == "income") {
+                const Value& resource = bonus.find("resource") != bonus.end()
+                                            ? field(bonus, "resource")
+                                            : field(capture, "resource");
+                appendAll(out, MissingRefs(one(resource.AsString()), resources,
+                                           context + " capture_point income"));
+            } else if (kind != "army_damage") {
+                out.push_back(context + " capture_point has unknown bonus kind '" + kind + "'");
+            }
+        }
+    }
+
+    // Economy: the starting hero, if there is one, is a real unit.
+    const std::string startingHero = field(economy, "starting_hero").AsString();
+    if (!startingHero.empty()) {
+        appendAll(out, MissingRefs(one(startingHero), unitIds, "economy.starting_hero"));
     }
 
     checkMeta(data, entityIds, resources, out);
