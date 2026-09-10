@@ -135,6 +135,8 @@ endfunction()
 
 add_mp_test(test_mp_tscn)
 add_mp_test(test_mp_levels)
+add_mp_test(test_mp_geometry)
+add_mp_test(test_mp_portal)
 
 # test_mp_levels reads the converted levels from outside this repository, so on
 # a build machine they can simply be absent. It exits 77 then, which ctest

@@ -18,13 +18,18 @@
 
 #include "TestHarness.hpp"
 
+#include "core/ConvexHullCache.hpp"
+#include "sim/Prism.hpp"
 #include "sim/Tscn.hpp"
+#include "sim/Units.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <initializer_list>
 #include <map>
+#include <set>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -35,6 +40,9 @@ using Kind = Tscn::Value::Kind;
 namespace {
 
 const std::string kLevels = MAGICPORTALS_LEVELS_DIR;
+
+// Every distinct collision polygon across the levels, gathered by AllLevels.
+std::set<std::vector<double>> g_polygons;
 
 struct Inventory {
     std::map<std::string, int> nodes;
@@ -233,6 +241,9 @@ void AllLevels() {
         }
         ++parsed;
         Tally(scene, total);
+        for (const Tscn::Node& node : scene.nodes)
+            if (const Tscn::Value* polygon = node.type == "CollisionPolygon2D" ? node.Find("polygon") : nullptr)
+                g_polygons.insert(polygon->numbers);
         // Godot's load_steps is the resource count plus one. Holding it in every
         // level says no resource line was lost or doubled on the way in.
         if (scene.loadSteps == static_cast<int>(scene.external.size() + scene.embedded.size()) + 1) ++stepsAgree;
@@ -282,9 +293,39 @@ void AllLevels() {
     CHECK_EQ(total.polygonPoints.size(), std::size_t{2});
 }
 
+// The S2 route across every level. Each distinct collision polygon becomes an
+// OBJ prism, and each prism a hull that must be exactly the prism: one piece,
+// every point a vertex, the polygon's area times the depth for a volume, and
+// nothing invented. A wrong axis, winding or scale in Prism.hpp fails here, on
+// the converter's own shapes rather than on ones written to pass.
+void EveryPolygonIsAnExactHull() {
+    CHECK_EQ(g_polygons.size(), std::size_t{13});
+    const std::filesystem::path directory = std::filesystem::temp_directory_path() / "supersonic-test-mp-levels";
+    constexpr double depth = 2.0;
+    Supersonic::ConvexHullCache cache;
+    int exact = 0;
+    for (const std::vector<double>& points : g_polygons) {
+        std::string error;
+        const std::string path = Prism::Write(points, depth, directory, error);
+        if (path.empty()) {
+            CHECK_MSG(false, error);
+            continue;
+        }
+        const Supersonic::ConvexDecomposition* hull = cache.Get("", path);
+        const double volume = Prism::AreaPx(points) / (Units::kPixelsPerMetre * Units::kPixelsPerMetre) * depth;
+        const bool ok = hull != nullptr && hull->pieces().size() == 1 &&
+                        hull->pieces().front().vertices().size() == points.size() &&
+                        std::fabs(hull->meshVolume() - volume) <= 1e-4 * volume && hull->invented() <= 1e-4 * volume;
+        CHECK_MSG(ok, path + ": not exactly its prism");
+        if (ok) ++exact;
+    }
+    CHECK_EQ(exact, 13);
+}
+
 void runTests() {
     Level30();
     AllLevels();
+    EveryPolygonIsAnExactHull();
 }
 
 } // namespace
@@ -300,5 +341,5 @@ int main() {
         return 77;
     }
     runTests();
-    return ::test::summary("test_mp_levels", 110);
+    return ::test::summary("test_mp_levels", 125);
 }

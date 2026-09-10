@@ -142,7 +142,7 @@ This also corrects the readiness doc. Its argument for hinges rested partly on
 the motor that Godot's `PinJoint2D` drops. No level uses a motor, so the part
 that matters is the limits.
 
-## Step 2 - the physics spike (next)
+## Step 2 - the physics spike
 
 The spike runs on level30, at 50 px per metre. Its thresholds were set before
 running:
@@ -173,3 +173,132 @@ Hinges are out of the spike (see above).
 frozen. That is a spike instrument, not the port's answer. The remake's player
 is a kinematic `CharacterBody2D` that slides, and the engine has no character
 controller. The player's real body type is decided after these measurements.
+
+### The tool, and what it was run with
+
+The spike is an executable, `MagicPortalsSpike` in `games/magicportals/spike/`,
+built with `-DSUPERSONIC_BUILD_MAGICPORTALS=ON`. It is not a ctest suite: a
+failed threshold here is a finding about the engine, and a red test would only
+ever say "not built yet". It prints each measurement beside its threshold and a
+verdict.
+
+The code it stands on is in `games/magicportals/sim/`:
+- **`LevelBuilder`** turns a level into engine bodies: boxes, spheres, hull
+  prisms and triggers.
+- **`Prism`** writes each polygon as an OBJ prism, the S2 route.
+- **`Portal`** is the traversal arithmetic.
+
+Three new suites hold what must not regress:
+- **`test_mp_geometry`** (61 checks) covers prisms, hulls and the builder, on
+  hand-written shapes.
+- **`test_mp_portal`** (26 checks) covers the traversal, against answers worked
+  by hand.
+- **`test_mp_levels`** (128 checks) now also turns all 13 distinct polygons in
+  the 128 levels into prisms. Every one is exactly its own hull: one piece,
+  every point a vertex, the right volume, and nothing invented.
+
+The spike runs with these settings:
+- **Scale and gravity:** 50 px per metre, and gravity 10 m/s², the original's
+  Box2D (`Units.hpp`). Gravity is set through `PhysicsSettings`, over the
+  engine's 9.81.
+- **Step:** 1/60 s.
+- **Depth:** static geometry is 2 m deep and moving bodies 1 m.
+- **Materials:** friction 1 and restitution 0, Godot's `PhysicsMaterial`
+  defaults, which the remake's crates run with.
+- **Player instrument:** a 20 × 44 px capsule, dynamic, with rotation frozen.
+- **Push speed:** 1 m/s.
+
+The player's size and the portal numbers are read from the remake's JSON at run
+time, never copied into code.
+
+It was run on 10 September with MSVC 14.50 and with GCC 13.3 on glibc. The two
+agree to the last printed digit in every row below.
+
+### Result
+
+| | Measurement | Threshold | Verdict |
+|---|---|---|---|
+| Drift, resting, sleep off | 30.51 px out of the plane, tilt 0.050 rad (`crate_ent_968`); over by tick 7 | < 1 px, < 0.01 rad | **FAIL** |
+| Drift, resting, sleep on | 0.35 px, tilt 0.0118 rad; all four bodies asleep | same | **FAIL** |
+| Drift, crate pushed across the seam | 2,890 px (sleep on) and 3,865 px (sleep off) along z, tilted 90°: it left the plane and fell out of the level | same | **FAIL** |
+| Drift, player walking | 0.0000 px, 0.0000 rad, sleep on and off | same | PASS |
+| Landing at `main_char` | lands on tick 1, rests at 202.28 px against 202.00 | by tick 45, within 1 px | PASS |
+| Landing, every `StaticBody2D` removed | never lands (1,211 px down by tick 120) | must not land | PASS |
+| Rider, slab rising 1 m/s | carried 0.996, sunk 0.44-0.48 px | measured | - |
+| Rider, slab sinking 1 m/s | carried 0.895, up to 5.07 px of daylight | measured | - |
+| Rider, slab sliding sideways 1 m/s | carried -0.007 | measured | - |
+| Exit trigger, player dynamic | reported on 10 of 10 ticks | > 0 | PASS |
+| Exit trigger, player kinematic | reported on 0 of 10 ticks | 0 if F2 holds | confirms F2 |
+| Portal, solver keeps the written velocity | error 0 m/s after one tick | < 1e-4 m/s | PASS |
+
+The traversal itself, run on `portals.json`'s guessed numbers, sent a traveller
+arriving at (100, 0) px/s out at (500, 72) px with (0, 100) px/s. That matches
+the answer worked by hand.
+
+### What the numbers decide
+
+**S1 comes before the port.** A resting crate leaves the plane by 30 px in a
+minute, and a pushed one leaves it entirely.
+
+Sleep is not the answer:
+- **What it does:** it froze the resting bodies at 0.35 px, only because they
+  stopped being simulated. The tilt still broke the threshold, from the landing
+  at tick 7.
+- **Why that isn't enough:** the first push wakes a body, and the pushed-crate
+  row shows what follows.
+
+The player row shows the drift comes in through rotation. The same solver, with
+rotation frozen, held a capsule at exactly z = 0 for a minute of walking.
+
+So the lock S1 needs covers two things:
+- translation along z;
+- rotation about x and y.
+
+Rotation about z stays free, because the port's crates are `RigidBody2D` bodies
+that turn in the plane. The readiness doc costs S1 at 3-5 days.
+
+**An engine gap was found and fixed along the way: world queries could not see
+hull colliders.** The first run's player rested 0.28 px from the right place and
+was reported as never having landed. The cause was that `gatherShapes` collected
+boxes, capsules, spheres and heightfields, but no hulls. So `Raycast`,
+`IsGrounded` and `OverlapSphere` found nothing under a body standing on a hull,
+and every platform in these levels is a hull.
+- **The fix:** hulls are now queried as the box that holds them, as rotated
+  boxes and capsules already were (ARCHITECTURE.md §7l).
+- **The test:** `test_physics` gained `testQueriesSeeAHull`.
+- **Why the port needed it:** it is the ground check every character needs.
+
+**F1 does not bite this game.** A kinematic slab that slides sideways leaves its
+rider where it was, which is F1 exactly. But every mover in the 128 levels
+travels vertically:
+- **14 lifts:** their `a` and `b` markers differ only in y;
+- **15 moving platforms;**
+- **46 switched doors.**
+
+This was counted from the converted levels against `entity_roles.json`.
+Vertical motion carries by displacement: 0.996 of the way when rising. What is
+left is the daylight when a platform starts downward, up to 5 px at 1 m/s. Whether
+that matters depends on the player's body, and a controller that snaps to the
+floor would not show it. F1 is not needed before the port.
+
+**F2 is real, and it shapes the choice of player body.** A kinematic player
+never trips a trigger, so the port has two options:
+- a kinematic player, which requires building F2 (0.5-1 day);
+- a dynamic player.
+
+The dynamic, rotation-frozen instrument held the plane, landed, and tripped the
+exit on every tick. That makes it the cheaper starting point. What it leaves open
+is feel: walking by velocity rather than by `move_and_slide`, and holding on to a
+platform that is going down.
+
+**Portals need no engine work.** A velocity written at the exit survives the
+solver exactly.
+
+### Next
+
+1. **S1: the per-axis lock.** It locks translation along z and rotation about x
+   and y, with rotation about z left free, and gets its own engine tests.
+   Afterwards the spike is rerun: the drift rows are the acceptance test.
+2. **The port proper, on level30.** A dynamic player with rotation frozen,
+   driven by the remake's `player.json` (as data), with the portal system on
+   `Portal.hpp`.

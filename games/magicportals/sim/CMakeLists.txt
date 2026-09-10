@@ -5,6 +5,9 @@
 # renderer. See docs/planning/2026-09-10-magic-portals-spike.md.
 
 add_library(MagicPortalsSim STATIC
+    LevelBuilder.cpp
+    Portal.cpp
+    Prism.cpp
     Tscn.cpp
 )
 
@@ -20,8 +23,16 @@ add_library(MagicPortalsSim STATIC
 set(SUPERSONIC_MAGICPORTALS_LEVELS "${CMAKE_SOURCE_DIR}/../Magic-Portals-Remake/out/levels"
     CACHE PATH "The remake's converted levels (Magic-Portals-Remake/out/levels)")
 
+# And the remake's own tuning data - its portals.json and player.json, which are
+# the remake's authored files rather than the original's. Only the spike tool
+# reads them, because every number the port takes from them is marked _guess
+# there and the tests pin none.
+set(SUPERSONIC_MAGICPORTALS_DATA "${CMAKE_SOURCE_DIR}/../Magic-Portals-Remake/game/data"
+    CACHE PATH "The remake's data directory (Magic-Portals-Remake/game/data)")
+
 target_compile_definitions(MagicPortalsSim PUBLIC
-    MAGICPORTALS_LEVELS_DIR="${SUPERSONIC_MAGICPORTALS_LEVELS}")
+    MAGICPORTALS_LEVELS_DIR="${SUPERSONIC_MAGICPORTALS_LEVELS}"
+    MAGICPORTALS_DATA_DIR="${SUPERSONIC_MAGICPORTALS_DATA}")
 
 target_include_directories(MagicPortalsSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(MagicPortalsSim PUBLIC SupersonicCore)
