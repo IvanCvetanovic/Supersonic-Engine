@@ -39,6 +39,7 @@ void Unit::Step(double delta) {
     case State::Fleeing:    StepFlee(delta); break;
     case State::Attacking:  StepAttack(delta); break;
     case State::Building:   StepBuild(delta); break;
+    case State::Controlled: StepControlled(delta); break;
     case State::Healing:    StepHeal(delta); break;
     default: break;
     }
@@ -468,6 +469,94 @@ void Unit::ReceiveHeal(int amount) {
 void Unit::Face(double dx) {
     if (std::fabs(dx) < 1.0) return;
     m_facing = dx > 0.0 ? 1.0 : -1.0;
+}
+
+// --- Direct control --------------------------------------------------------
+
+void Unit::SetControlled(bool on) {
+    if (m_phase == State::Dead || on == (m_phase == State::Controlled)) return;
+    m_controlDir = glm::vec2(0.0f);
+    if (on) {
+        ClearAttack();
+        SetState(State::Controlled);
+    } else {
+        SetState(State::Idle);
+    }
+}
+
+// Godot's Vector2.normalized divides by the length rather than multiplying by
+// an inverse square root, and the last bit can differ - which a steered
+// hero's position then accumulates. So this divides too.
+void Unit::SetControlDir(const glm::vec2& dir) {
+    const float length = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+    m_controlDir = length > 1.0f ? glm::vec2(dir.x / length, dir.y / length) : dir;
+}
+
+// Full 2D inside the walkable band at the unit's own move_speed - the clamp a
+// move order uses. Combat stays on the lane: the strike measures |dx| only.
+// (A dash in flight will override the steering here; that is slice 8's.)
+void Unit::StepControlled(double delta) {
+    if (m_controlDir == glm::vec2(0.0f)) return;
+    Face(static_cast<double>(m_controlDir.x));
+    MoveClamped(m_controlDir *
+                static_cast<float>(static_cast<double>(m_stats.moveSpeed) * delta));
+}
+
+// One clamped displacement: x inside the world, y inside the band.
+void Unit::MoveClamped(const glm::vec2& step) {
+    glm::vec2 next = m_position + step;
+    const double width = m_state->Data().World()["width"].AsNumber(6000.0);
+    next.x = static_cast<float>(std::clamp(static_cast<double>(next.x), 0.0, width));
+    next.y = ClampToBand(static_cast<double>(next.y));
+    m_position = next;
+}
+
+// A click: face the point first, so the swing lands on the side the player
+// aimed at. IsPlaying because keys leak through the game-over overlay, and the
+// board is frozen.
+void Unit::ControlledAttackAt(const glm::vec2& worldPos) {
+    if (m_phase != State::Controlled || m_attackCooldown > 0.0 || !m_state->IsPlaying()) return;
+    Face(static_cast<double>(worldPos.x) - static_cast<double>(m_position.x));
+    ControlledStrike();
+}
+
+// The touch button: face the nearest enemy in reach first, so the button
+// works whichever side the threat is on.
+void Unit::ControlledAttackAuto() {
+    if (m_phase != State::Controlled || m_attackCooldown > 0.0 || !m_state->IsPlaying()) return;
+    if (const Unit* target = StrikeTarget()) {
+        Face(static_cast<double>(target->Position().x) - static_cast<double>(m_position.x));
+    }
+    ControlledStrike();
+}
+
+// One cooldown-gated swing.
+void Unit::ControlledStrike() {
+    m_attackCooldown = 1.0 / std::max(static_cast<double>(m_stats.attacksPerSec), 0.01);
+    Unit* target = StrikeTarget();
+    if (target != nullptr && m_stats.behavior == kRanged) {
+        m_attackTarget = target;   // an arrow in flight needs something to fly at
+        FireProjectile();
+        return;
+    }
+
+    // BEFORE the damage and whether or not anything is hit, as the original
+    // plays it: the swing is what the player asked for, and it must be heard.
+    if (m_bus) m_bus->unitAttacked.Emit(m_position);
+    if (target != nullptr) target->TakeDamage(EffectiveDamage());
+}
+
+// The nearest enemy within melee reach on the LANE: probed 80 px wider than
+// the reach, then held to the reach plus the target's half-width, as AI melee
+// is. Symmetric - facing is where the unit looks, not what it can hit.
+Unit* Unit::StrikeTarget() const {
+    Unit* probe =
+        m_world->NearestEnemyUnit(m_stats.faction, m_position.x, m_stats.attackRange + 80.0f);
+    if (probe == nullptr) return nullptr;
+    const double dx = static_cast<double>(probe->Position().x) - static_cast<double>(m_position.x);
+    const double reach =
+        static_cast<double>(m_stats.attackRange) + static_cast<double>(probe->HitHalfWidth());
+    return std::fabs(dx) > reach ? nullptr : probe;
 }
 
 void Unit::StepToward(const glm::vec2& target, double delta) {

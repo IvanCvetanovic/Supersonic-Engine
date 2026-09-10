@@ -144,7 +144,7 @@ void Match::ClearBoard() {
     // A selection cannot survive the board it pointed at, and nor can the
     // hero: both point into the units about to go.
     m_selection.Clear();
-    m_hero = nullptr;
+    m_heroControl.Forget();
 
     m_lane.Clear();
     m_projectiles.Clear();

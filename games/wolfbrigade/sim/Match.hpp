@@ -14,6 +14,7 @@
 #include "sim/EventBus.hpp"
 #include "sim/GameData.hpp"
 #include "sim/GameState.hpp"
+#include "sim/HeroControl.hpp"
 #include "sim/Lane.hpp"
 #include "sim/Progression.hpp"
 #include "sim/Projectiles.hpp"
@@ -319,6 +320,10 @@ public:
     const class Selection& Picked() const { return m_selection; }
     class Commands& Orders() { return m_orders; }
 
+    // Who the player is steering. The boot possesses nobody until slice 10
+    // spawns the starting hero; a caller that spawns one possesses it here.
+    HeroControl& Control() { return m_heroControl; }
+
     // `main.gd::_back_cancels_placement`, ported whole because it is a PURE
     // PREDICATE and the original says it was kept that way on purpose - so a
     // harness could verify the gate without tripping the `quit()` in the other
@@ -377,10 +382,10 @@ public:
     Unit* NearestWoundedAlly(const Unit* me, float maxRange) const override;
     ProjectilePool* Projectiles() override { return &m_projectiles; }
 
-    // Null until a hero is possessed, which is the next slice's. Held per
-    // match rather than as the original's static, so a new match never
-    // inherits the last one's hero.
-    Unit* Hero() const override { return m_hero; }
+    // Whoever this match's HeroControl has possessed; null from a death until
+    // a respawn. Per match rather than the original's static, so a new match
+    // never inherits the last one's hero.
+    Unit* Hero() const override { return m_heroControl.Hero(); }
 
 private:
     // --- Snapshot::RestoreSink ---------------------------------------------
@@ -526,6 +531,11 @@ private:
     Selection m_selection{*this};
     Commands m_orders{*this, m_selection};
 
+    // After the bus it listens to for the hero's death, which therefore
+    // outlives it. The hero it holds points into m_units, so ClearBoard makes
+    // it forget.
+    HeroControl m_heroControl{m_bus};
+
     // unique_ptr, and it is load-bearing twice over.
     //
     // Snapshot.hpp requires stable addresses for the life of a capture: a
@@ -539,9 +549,6 @@ private:
     std::vector<std::unique_ptr<Unit>> m_units;
     std::vector<std::unique_ptr<Building>> m_buildings;
     std::vector<std::unique_ptr<ResourceNode>> m_nodes;
-
-    // Points into m_units, so ClearBoard drops it with them.
-    Unit* m_hero{nullptr};
 
     // -----------------------------------------------------------------------
     // REMOVAL: NOTHING IS EVER ERASED FROM THE THREE VECTORS ABOVE.

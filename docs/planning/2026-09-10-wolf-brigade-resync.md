@@ -603,3 +603,58 @@ slice 10 spawns it at boot).
 
 **Result (GCC, 10 September):** squads 99/0, and nothing regressed. Still
 red, and unchanged: audio 5, selection 5 and match 44.
+
+## Slice 7b: the hero under the player's hand
+
+**The unit's `CONTROLLED` state** ports `set_controlled`, `set_control_dir`,
+`_step_controlled`, `_move_clamped` and the manual strike:
+- **Taking control drops the fight in hand.** Letting go returns to `IDLE`,
+  so the AI re-acquires on its next tick. A dead unit refuses, and asking for
+  the state it is already in does nothing.
+- **The AI does not think at all** while controlled. That guard landed with
+  7a, at the top of `TickAi`.
+- **Steering** is clamped to unit length, dividing by the length the way
+  Godot's `normalized` does. Movement is 2D at `move_speed`, with x held
+  inside the world and y inside the band.
+- **The strike** probes the lane at `attack_range + 80` and holds to
+  `attack_range` plus the target's half-width. It faces the click, or the
+  target in reach, spends the cooldown, and is heard even on a whiff. Damage
+  lands only in reach, and a frozen board takes no strike. A ranged unit
+  under control fires an arrow instead.
+- **Nothing here is saved.** The steering is input, and 7a's load already
+  maps `CONTROLLED` to `IDLE`.
+
+**`HeroControl`** ports `hero_control.gd`, minus the camera. Possession
+refuses the null, the dead and the uncontrollable. The stick outranks the
+keyboard while held. The hero's death ends control and emits `heroLost`
+with where it fell. The original's two node signals are members.
+
+**The match** owns one, answers `World::Hero()` from it, and makes it forget
+the hero when the board is cleared. Nothing possesses a hero at boot yet:
+slice 10 spawns and possesses the starting hero and runs the respawn.
+
+**Reproduced** at `50741d1`, in a new suite, `test_wb_hero`:
+- `verify_hero` B (13 lines) and F (13 lines);
+- A's two data lines.
+
+The harness zeroes `_attack_cd` by hand between strikes. The port steps a
+second instead, which under control and with no steering does nothing else.
+
+**Added by the port:**
+- a diagonal is normalised and a half deflection is kept;
+- the world's left edge holds;
+- taking control drops the fight in hand;
+- a strike turns to a threat behind. The harness's hero already faces
+  right, so its "strike faces its target" holds before the strike runs;
+- a whiff is heard;
+- a frozen board takes no strikes;
+- every intent is a no-op with nobody possessed;
+- the attack button and the click reach the unit through `HeroControl`;
+- a `Match`'s warband follows the possessed hero, and a fallen hero leads
+  nobody.
+
+**Not yet:** abilities (slice 8), the respawn flow (slice 10), and input
+routing and the camera (slice 11 and presentation).
+
+**Result (GCC, 10 September):** hero 52/0, and nothing regressed. Still red,
+and unchanged: audio 5, selection 5 and match 44.

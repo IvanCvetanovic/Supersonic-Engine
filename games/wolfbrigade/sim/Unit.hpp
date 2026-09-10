@@ -166,6 +166,34 @@ public:
     // The ally a priest is channelling on, or null.
     const Unit* HealTarget() const { return m_healTarget; }
 
+    // --- Direct control ----------------------------------------------------
+    //
+    // The hero, steered by the player. HeroControl drives it and nothing else
+    // should. It is transient input: never saved, and a load of CONTROLLED
+    // comes back IDLE.
+
+    // On; or off, back to IDLE so the AI re-acquires on its next tick. A dead
+    // unit stays dead, and asking for the state it is already in does
+    // nothing.
+    void SetControlled(bool on);
+    bool IsControlled() const { return m_phase == State::Controlled; }
+
+    // The steering intent, clamped to unit length so a diagonal never outruns
+    // move_speed. Zero stands still.
+    void SetControlDir(const glm::vec2& dir);
+    const glm::vec2& ControlDir() const { return m_controlDir; }
+
+    // A manual strike: toward a point (a click), or at the nearest enemy in
+    // reach (the touch button). Cooldown-gated, and refused on a frozen
+    // board. It swings even with nothing in reach, so the input always reads
+    // back; damage lands only on an enemy within lane reach.
+    void ControlledAttackAt(const glm::vec2& worldPos);
+    void ControlledAttackAuto();
+
+    // Seconds until the next swing or cast. Read-only: the original's harness
+    // zeroes it by hand, and the port's cases step past it instead.
+    double AttackCooldown() const { return m_attackCooldown; }
+
     // --- Damage ------------------------------------------------------------
 
     void TakeDamage(int amount) override;
@@ -274,6 +302,11 @@ private:
     void FireProjectile();
     void Face(double dx);
 
+    void StepControlled(double delta);
+    void MoveClamped(const glm::vec2& step);
+    void ControlledStrike();
+    Unit* StrikeTarget() const;
+
     void StepRegen(double delta);
 
     void FleeCheck();
@@ -342,6 +375,9 @@ private:
 
     // Set in the constructor: a raider comes in facing left.
     double m_facing{1.0};
+
+    // The player's steering while CONTROLLED. Input, not state: never saved.
+    glm::vec2 m_controlDir{0.0f};
 };
 
 } // namespace WolfBrigade

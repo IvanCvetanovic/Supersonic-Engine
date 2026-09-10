@@ -1,0 +1,398 @@
+// The hero under the player's hand, against the original's harness.
+//
+// `verify_hero` covers seven things, and three are this suite's: B, the
+// unit's CONTROLLED state; F, HeroControl's possession lifecycle; and the two
+// lines of A that are data. The rest of A (the control scheme), C (the camera
+// follow), D (input routing) and E (the joystick) are presentation and input;
+// G, the abilities, is slice 8's.
+//
+// To re-derive, from the game's directory:
+//
+//   & .\tools\godot.bat --headless --path . res://tools/verify_hero.tscn
+//
+// At the game's 50741d1, on 10 September 2026, it printed 72 ok lines and no
+// failures. The ones reproduced here:
+//
+//   ok  : hero is data-flagged controllable
+//   ok  : worker is NOT controllable
+//   ok  : set_controlled(true) -> CONTROLLED
+//   ok  : steering right moves at move_speed
+//   ok  : steering down stops at the band's bottom edge
+//   ok  : AI tick makes no decisions while CONTROLLED (no auto-acquire)
+//   ok  : manual strike damages the enemy in reach
+//   ok  : strike faces its target
+//   ok  : cooldown gates manual strikes
+//   ok  : a strike out of lane reach whiffs (no damage)
+//   ok  : a whiff still swings (faces + spends cooldown)
+//   ok  : set_controlled(false) -> IDLE
+//   ok  : after release, the AI re-acquires (defender)
+//   ok  : from_save maps CONTROLLED -> IDLE
+//   ok  : a DEAD unit cannot be controlled
+//   ok  : possess(hero) begins control
+//   ok  : the possessed hero is published (active_unit + the static leader ref)
+//   ok  : active_changed(true) fired once
+//   ok  : stick steering reaches the unit
+//   ok  : keyboard steers when the stick is idle
+//   ok  : a non-controllable unit is refused (hero keeps control)
+//   ok  : the hero dying ends control
+//   ok  : hero_lost fires once with the death position
+//   ok  : active_changed(false) fired on death
+//   ok  : a DEAD hero cannot be re-possessed
+//   ok  : a respawn delay is configured (economy.json)
+//   ok  : the Town Hall is a respawn point
+//   ok  : the Waystone is a buildable respawn point
+//
+// The harness zeroes `_attack_cd` by hand between strikes. The port has no
+// setter for it and steps the unit a second instead. Under control, with no
+// steering, a step does nothing else: the AI does not think and the hero is
+// at full health.
+
+#include "TestHarness.hpp"
+#include "WolfBrigadeFixture.hpp"
+
+#include "sim/Building.hpp"
+#include "sim/EventBus.hpp"
+#include "sim/GameState.hpp"
+#include "sim/HeroControl.hpp"
+#include "sim/Lane.hpp"
+#include "sim/Match.hpp"
+#include "sim/Projectiles.hpp"
+#include "sim/Unit.hpp"
+#include "sim/World.hpp"
+
+#include <cmath>
+#include <memory>
+#include <string>
+#include <vector>
+
+using namespace WolfBrigade;
+using Supersonic::Json::Value;
+
+namespace {
+
+// Somewhere to stand and something to hit. Nothing to gather, build or heal.
+class Arena final : public World {
+public:
+    Lane lane;
+    ProjectilePool arrows;
+
+    ResourceNode* NearestHarvestable(float) const override { return nullptr; }
+    int NearestDeposit(float) const override { return -1; }
+    bool DepositExists(int) const override { return false; }
+    glm::vec2 DepositPosition(int) const override { return glm::vec2(0.0f); }
+    Building* NearestUnfinishedBuilding(const std::string&, float) const override {
+        return nullptr;
+    }
+    Unit* NearestEnemyUnit(const std::string& faction, float x, float maxRange) const override {
+        return lane.NearestEnemy(faction, x, maxRange);
+    }
+    Damageable* NearestEnemyBuilding(const std::string&, float) const override { return nullptr; }
+    Unit* NearestWoundedAlly(const Unit* me, float maxRange) const override {
+        return lane.NearestWoundedAlly(me, maxRange);
+    }
+    ProjectilePool* Projectiles() override { return &arrows; }
+    std::vector<Building*> PlayerBuildings() const override { return {}; }
+    std::vector<Unit*> PlayerUnits() const override { return {}; }
+    Unit* Hero() const override { return nullptr; }
+};
+
+struct Field {
+    EventBus bus;
+    GameState state{wb::Shipped(), bus};
+    Arena arena;
+    std::vector<std::unique_ptr<Unit>> units;
+
+    Field() { state.Reset(); }
+
+    Unit* Spawn(const std::string& id, float x, float y) {
+        auto unit = std::make_unique<Unit>(UnitStats::FromJson(id, wb::Shipped().Unit(id)), state,
+                                           bus, arena);
+        unit->SetPosition(glm::vec2(x, y));
+        Unit* raw = unit.get();
+        units.push_back(std::move(unit));
+        arena.lane.Register(raw);
+        return raw;
+    }
+};
+
+float groundY() { return wb::Shipped().World()["ground_y"].AsFloat(0.0f); }
+float laneDepth() { return wb::Shipped().World()["lane"]["depth"].AsFloat(0.0f); }
+
+// --- A. Who can be steered ---------------------------------------------------
+
+void testOnlyTheHeroIsDataFlaggedControllable() {
+    CHECK_MSG(UnitStats::FromJson(Ids::kHero, wb::Shipped().Unit(Ids::kHero)).controllable,
+              "hero is data-flagged controllable");
+    CHECK_MSG(!UnitStats::FromJson(Ids::kWorker, wb::Shipped().Unit(Ids::kWorker)).controllable,
+              "worker is NOT controllable");
+}
+
+// --- B. The CONTROLLED state -------------------------------------------------
+
+void testAControlledHeroSteersInTwoDimensionsInsideTheBand() {
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 1500.0f, groundY() + 40.0f);
+    f.Spawn(Ids::kRaider, 1560.0f, groundY() + 40.0f);
+
+    hero->SetControlled(true);
+    CHECK_MSG(hero->IsControlled() && hero->CurrentState() == Unit::State::Controlled,
+              "set_controlled(true) -> CONTROLLED");
+
+    const float x0 = hero->Position().x;
+    hero->SetControlDir(glm::vec2(1.0f, 0.0f));
+    hero->Step(0.5);
+    CHECK_MSG(std::fabs(hero->Position().x - (x0 + hero->Stats().moveSpeed * 0.5f)) < 1.0f,
+              "steering right moves at move_speed");
+
+    hero->SetControlDir(glm::vec2(0.0f, 1.0f));
+    for (int i = 0; i < 60; ++i) hero->Step(0.25);
+    CHECK_MSG(std::fabs(hero->Position().y - (groundY() + laneDepth())) < 0.5f,
+              "steering down stops at the band's bottom edge");
+    hero->SetControlDir(glm::vec2(0.0f));
+
+    // A raider stands inside the hero's aggro, and must not be taken.
+    hero->TickAi();
+    CHECK_MSG(hero->CurrentState() == Unit::State::Controlled && hero->AttackTarget() == nullptr,
+              "AI tick makes no decisions while CONTROLLED (no auto-acquire)");
+}
+
+void testSteeringIsClampedToUnitLengthAndToTheWorld() {
+    // Added by the port. A diagonal is normalised so it never outruns
+    // move_speed; a half deflection is kept as it is, for half speed; and
+    // the world's left edge holds a hero steering into it.
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 10.0f, 700.0f);
+    hero->SetControlled(true);
+
+    hero->SetControlDir(glm::vec2(1.0f, 1.0f));
+    CHECK(std::fabs(glm::length(hero->ControlDir()) - 1.0f) < 1e-6f);
+    hero->SetControlDir(glm::vec2(0.5f, 0.0f));
+    CHECK(hero->ControlDir() == glm::vec2(0.5f, 0.0f));
+
+    hero->SetControlDir(glm::vec2(-1.0f, 0.0f));
+    hero->Step(1.0);
+    CHECK_EQ(hero->Position().x, 0.0f);
+    CHECK_MSG(hero->Facing() < 0.0, "steering left turns it left");
+}
+
+void testTakingControlDropsTheFightInHand() {
+    // Added by the port: set_controlled clears the attack, so a hero picked
+    // up mid-swing does not keep swinging on its own.
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 1500.0f, 640.0f);
+    f.Spawn(Ids::kRaider, 1560.0f, 640.0f);
+    hero->TickAi();
+    CHECK_MSG(hero->CurrentState() == Unit::State::Attacking, "precondition: fighting");
+    hero->SetControlled(true);
+    CHECK(hero->AttackTarget() == nullptr);
+    CHECK(hero->CurrentState() == Unit::State::Controlled);
+}
+
+void testAManualStrikeHitsOnlyWhatIsInLaneReach() {
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 1500.0f, groundY() + laneDepth());
+    Unit* raider = f.Spawn(Ids::kRaider, 1560.0f, groundY());
+    int swings = 0;
+    f.bus.unitAttacked.Connect([&swings](const glm::vec2&) { ++swings; });
+    hero->SetControlled(true);
+
+    // Sixty px along the lane, inside 46 plus half a raider - and the whole
+    // band's depth away in y, which is the lane rule: combat is |dx|.
+    const int hp0 = raider->Hp();
+    hero->ControlledAttackAuto();
+    CHECK_MSG(raider->Hp() == hp0 - hero->EffectiveDamage(),
+              "manual strike damages the enemy in reach");
+    CHECK_MSG(hero->Facing() > 0.0, "strike faces its target");
+    const int hp1 = raider->Hp();
+    hero->ControlledAttackAuto();
+    CHECK_MSG(raider->Hp() == hp1, "cooldown gates manual strikes");
+
+    hero->Step(1.0);   // the harness zeroes _attack_cd here
+    CHECK_MSG(hero->AttackCooldown() <= 0.0, "precondition: the cooldown has run out");
+    raider->SetPosition(glm::vec2(hero->Position().x + 400.0f, groundY()));
+    const int before = swings;
+    hero->ControlledAttackAt(raider->Position());
+    CHECK_MSG(raider->Hp() == hp1, "a strike out of lane reach whiffs (no damage)");
+    CHECK_MSG(hero->Facing() > 0.0 && hero->AttackCooldown() > 0.0,
+              "a whiff still swings (faces + spends cooldown)");
+
+    // Added by the port: the whiff is heard, so the input always reads back.
+    CHECK_EQ(swings, before + 1);
+}
+
+void testAManualStrikeTurnsToAThreatBehind() {
+    // Added by the port. The harness's hero already faces right, so its
+    // "strike faces its target" holds before the strike runs. A raider on
+    // the left is the case where the turn is the strike's doing.
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 1500.0f, 640.0f);
+    Unit* raider = f.Spawn(Ids::kRaider, 1440.0f, 640.0f);
+    hero->SetControlled(true);
+    CHECK_MSG(hero->Facing() > 0.0, "precondition: facing right");
+    const int hp0 = raider->Hp();
+    hero->ControlledAttackAuto();
+    CHECK(hero->Facing() < 0.0);
+    CHECK(raider->Hp() < hp0);
+}
+
+void testReleasedTheAiTakesOverAndASaveNeverResumesControl() {
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 1500.0f, groundY() + laneDepth());
+    Unit* raider = f.Spawn(Ids::kRaider, 3000.0f, groundY());
+    hero->SetControlled(true);
+
+    hero->SetControlled(false);
+    CHECK_MSG(hero->CurrentState() == Unit::State::Idle, "set_controlled(false) -> IDLE");
+    raider->SetPosition(glm::vec2(hero->Position().x + 100.0f, groundY()));
+    hero->TickAi();
+    CHECK_MSG(hero->CurrentState() == Unit::State::Attacking,
+              "after release, the AI re-acquires (defender)");
+
+    Supersonic::Json::Object record;
+    record["state"] = Value(static_cast<double>(static_cast<int>(Unit::State::Controlled)));
+    hero->FromSave(Value(std::move(record)));
+    CHECK_MSG(hero->CurrentState() == Unit::State::Idle, "from_save maps CONTROLLED -> IDLE");
+
+    hero->Kill();
+    hero->SetControlled(true);
+    CHECK_MSG(hero->CurrentState() == Unit::State::Dead, "a DEAD unit cannot be controlled");
+}
+
+void testAFrozenBoardTakesNoStrikes() {
+    // Added by the port, from the original's own guard: keys leak through
+    // the game-over overlay, and the board is frozen.
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 1500.0f, 640.0f);
+    Unit* raider = f.Spawn(Ids::kRaider, 1560.0f, 640.0f);
+    hero->SetControlled(true);
+    f.state.Lose();
+    const int hp0 = raider->Hp();
+    hero->ControlledAttackAuto();
+    hero->ControlledAttackAt(raider->Position());
+    CHECK_EQ(raider->Hp(), hp0);
+    CHECK_EQ(hero->AttackCooldown(), 0.0);
+}
+
+// --- F. HeroControl ----------------------------------------------------------
+
+void testHeroControlPossessesTheHeroAndLetsGoWhenItFalls() {
+    Field f;
+    HeroControl control(f.bus);
+    std::vector<bool> actives;
+    std::vector<glm::vec2> losses;
+    control.activeChanged.Connect([&actives](bool on) { actives.push_back(on); });
+    control.heroLost.Connect([&losses](const glm::vec2& at) { losses.push_back(at); });
+
+    Unit* hero = f.Spawn(Ids::kHero, 1500.0f, 640.0f);
+    Unit* worker = f.Spawn(Ids::kWorker, 1600.0f, 640.0f);
+
+    control.Possess(hero);
+    CHECK_MSG(control.IsActive() && hero->IsControlled(), "possess(hero) begins control");
+    CHECK_MSG(control.ActiveUnit() == hero && control.Hero() == hero,
+              "the possessed hero is published (active_unit + the leader ref)");
+    CHECK_MSG(actives == std::vector<bool>{true}, "active_changed(true) fired once");
+
+    control.SetStickDir(glm::vec2(1.0f, 0.0f));
+    CHECK_MSG(hero->ControlDir() == glm::vec2(1.0f, 0.0f), "stick steering reaches the unit");
+    control.SetStickDir(glm::vec2(0.0f));
+    control.SetKeyboardDir(glm::vec2(-1.0f, 0.0f));
+    CHECK_MSG(hero->ControlDir() == glm::vec2(-1.0f, 0.0f), "keyboard steers when the stick is idle");
+
+    // Added by the port: while the stick is held it outranks the keys.
+    control.SetStickDir(glm::vec2(0.0f, 1.0f));
+    CHECK(hero->ControlDir() == glm::vec2(0.0f, 1.0f));
+    control.SetStickDir(glm::vec2(0.0f));
+    CHECK(hero->ControlDir() == glm::vec2(-1.0f, 0.0f));
+
+    control.Possess(worker);
+    CHECK_MSG(control.ActiveUnit() == hero && !worker->IsControlled(),
+              "a non-controllable unit is refused (hero keeps control)");
+
+    const float deathX = hero->Position().x;
+    hero->Kill();
+    CHECK_MSG(!control.IsActive() && control.Hero() == nullptr, "the hero dying ends control");
+    CHECK_MSG(losses.size() == 1 && std::fabs(losses[0].x - deathX) < 1.0f,
+              "hero_lost fires once with the death position");
+    CHECK_MSG(actives == (std::vector<bool>{true, false}), "active_changed(false) fired on death");
+    control.Possess(hero);
+    CHECK_MSG(!control.IsActive(), "a DEAD hero cannot be re-possessed");
+
+    // Added by the port: with nobody possessed, every intent is a no-op.
+    control.AttackPressed();
+    control.AttackAt(glm::vec2(1500.0f, 640.0f));
+    control.SetStickDir(glm::vec2(1.0f, 0.0f));
+    CHECK(actives.size() == 2);
+}
+
+void testTheAttackButtonStrikesThroughHeroControl() {
+    // Added by the port: the two strike intents reach the unit.
+    Field f;
+    HeroControl control(f.bus);
+    Unit* hero = f.Spawn(Ids::kHero, 1500.0f, 640.0f);
+    Unit* raider = f.Spawn(Ids::kRaider, 1560.0f, 640.0f);
+    control.Possess(hero);
+    const int hp0 = raider->Hp();
+    control.AttackPressed();
+    CHECK_EQ(raider->Hp(), hp0 - hero->EffectiveDamage());
+    // Two blows of 22 are more than a raider's 40: the click finishes it.
+    hero->Step(1.0);
+    control.AttackAt(raider->Position());
+    CHECK_EQ(raider->Hp(), 0);
+    CHECK(!raider->IsAlive());
+}
+
+void testTheRespawnIsConfigured() {
+    CHECK_MSG(wb::Shipped().Economy()["hero_respawn_delay_s"].AsNumber(0.0) > 0.0,
+              "a respawn delay is configured (economy.json)");
+    CHECK_MSG(BuildingStats::FromJson(Ids::kTownHall, wb::Shipped().Building(Ids::kTownHall))
+                  .heroRespawn,
+              "the Town Hall is a respawn point");
+    const BuildingStats waystone =
+        BuildingStats::FromJson(Ids::kWaystone, wb::Shipped().Building(Ids::kWaystone));
+    CHECK_MSG(waystone.heroRespawn && waystone.buildable,
+              "the Waystone is a buildable respawn point");
+}
+
+void testTheMatchsWarbandFollowsWhoeverIsPossessed() {
+    // Added by the port: World::Hero() in a real Match is its HeroControl's
+    // hero, and it goes with the board.
+    Profile profile;
+    Match match(wb::Shipped(), profile, "");
+    match.BootFresh();
+    Unit* hero = match.SpawnUnit(
+        UnitStats::FromJson(Ids::kHero, wb::Shipped().Unit(Ids::kHero)), glm::vec2(3000.0f, 640.0f));
+    match.Control().Possess(hero);
+    CHECK(match.Hero() == hero);
+
+    Unit* follower = match.SpawnUnit(
+        UnitStats::FromJson(Ids::kSoldier, wb::Shipped().Unit(Ids::kSoldier)),
+        glm::vec2(2700.0f, 640.0f));
+    follower->SetSquad(Squads::kWarband);
+    follower->TickAi();
+    CHECK(follower->CurrentState() == Unit::State::Moving);
+    CHECK(follower->MoveTarget().x > 2700.0f);
+
+    hero->Kill();
+    CHECK_MSG(match.Hero() == nullptr, "a fallen hero leads nobody");
+}
+
+} // namespace
+
+static void runTests() {
+    testOnlyTheHeroIsDataFlaggedControllable();
+
+    testAControlledHeroSteersInTwoDimensionsInsideTheBand();
+    testSteeringIsClampedToUnitLengthAndToTheWorld();
+    testTakingControlDropsTheFightInHand();
+    testAManualStrikeHitsOnlyWhatIsInLaneReach();
+    testAManualStrikeTurnsToAThreatBehind();
+    testReleasedTheAiTakesOverAndASaveNeverResumesControl();
+    testAFrozenBoardTakesNoStrikes();
+
+    testHeroControlPossessesTheHeroAndLetsGoWhenItFalls();
+    testTheAttackButtonStrikesThroughHeroControl();
+    testTheRespawnIsConfigured();
+    testTheMatchsWarbandFollowsWhoeverIsPossessed();
+}
+
+TEST_MAIN("test_wb_hero", 50)
