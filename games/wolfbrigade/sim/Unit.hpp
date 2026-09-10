@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <map>
 #include <string>
 
 #include <glm/glm.hpp>
@@ -194,6 +195,25 @@ public:
     // zeroes it by hand, and the port's cases step past it instead.
     double AttackCooldown() const { return m_attackCooldown; }
 
+    // --- Abilities ---------------------------------------------------------
+    //
+    // abilities.json, by slot: stats.abilities lists the ids in hotkey and
+    // button order. Only a directly controlled unit casts; the AI never
+    // touches these.
+
+    // Cast slot `index`. Refused under AI, out of range, on a frozen board,
+    // while that ability cools down, and for an id the data does not define.
+    void UseAbility(int index);
+
+    // Seconds left, 0 when ready or unknown. Cooldowns tick in every state,
+    // so leaving and re-entering control never resets one, and they ride the
+    // save, so a reload cannot skip one.
+    double AbilityCooldownLeft(const std::string& abilityId) const;
+
+    // Dash i-frames: while they last a hit is dodged entirely - it neither
+    // hurts nor pauses regen.
+    bool IsInvulnerable() const { return m_invuln > 0.0; }
+
     // --- Damage ------------------------------------------------------------
 
     void TakeDamage(int amount) override;
@@ -306,6 +326,8 @@ private:
     void MoveClamped(const glm::vec2& step);
     void ControlledStrike();
     Unit* StrikeTarget() const;
+    void CastAoeDamage(const Supersonic::Json::Value& def);
+    void CastDash(const Supersonic::Json::Value& def);
 
     void StepRegen(double delta);
 
@@ -378,6 +400,14 @@ private:
 
     // The player's steering while CONTROLLED. Input, not state: never saved.
     glm::vec2 m_controlDir{0.0f};
+
+    // Abilities. The cooldowns are saved; a dash in flight and its i-frames
+    // are not, as in the original.
+    std::map<std::string, double> m_abilityCds;
+    double m_invuln{0.0};
+    double m_dashLeft{0.0};
+    glm::vec2 m_dashDir{1.0f, 0.0f};
+    double m_dashSpeed{900.0};
 };
 
 } // namespace WolfBrigade

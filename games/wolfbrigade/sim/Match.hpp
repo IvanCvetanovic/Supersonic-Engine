@@ -380,6 +380,8 @@ public:
     std::vector<Building*> PlayerBuildings() const override;
     std::vector<Unit*> PlayerUnits() const override;
     Unit* NearestWoundedAlly(const Unit* me, float maxRange) const override;
+    std::vector<Unit*> EnemiesWithin(const std::string& faction, float x,
+                                     float maxRange) const override;
     ProjectilePool* Projectiles() override { return &m_projectiles; }
 
     // Whoever this match's HeroControl has possessed; null from a death until

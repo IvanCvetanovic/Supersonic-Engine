@@ -56,6 +56,14 @@ public:
     // gated by the unit, so holding it attacks at the unit's own rate.
     void AttackPressed();
 
+    // Q and E, or the on-screen buttons: cast ability slot `index`.
+    void UseAbility(int index);
+
+    // Seconds of cooldown left on slot `index`; 0 when ready, when nobody is
+    // possessed, or when there is no such slot. The ability buttons poll this
+    // to paint themselves.
+    double AbilityCooldownLeft(int index) const;
+
     // --- Possession --------------------------------------------------------
 
     // Take control of `unit` - at boot, on a restore, on a respawn. Refuses

@@ -32,6 +32,17 @@ void HeroControl::AttackPressed() {
     if (IsActive()) m_unit->ControlledAttackAuto();
 }
 
+void HeroControl::UseAbility(int index) {
+    if (IsActive()) m_unit->UseAbility(index);
+}
+
+double HeroControl::AbilityCooldownLeft(int index) const {
+    if (!IsActive()) return 0.0;
+    const auto& slots = m_unit->Stats().abilities;
+    if (index < 0 || index >= static_cast<int>(slots.size())) return 0.0;
+    return m_unit->AbilityCooldownLeft(slots[static_cast<size_t>(index)]);
+}
+
 void HeroControl::PushDir() {
     if (!IsActive()) return;
     m_unit->SetControlDir(m_stickDir != glm::vec2(0.0f) ? m_stickDir : m_keyboardDir);

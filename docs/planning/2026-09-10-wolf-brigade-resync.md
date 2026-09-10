@@ -658,3 +658,52 @@ routing and the camera (slice 11 and presentation).
 
 **Result (GCC, 10 September):** hero 52/0, and nothing regressed. Still red,
 and unchanged: audio 5, selection 5 and match 44.
+
+## Slice 8: abilities
+
+**`Unit::UseAbility`** ports `use_ability`, `_cast_aoe_damage` and
+`_cast_dash`:
+- **Casting is refused** unless the unit is under control. It is also refused
+  for a slot out of range, on a frozen board, while that ability cools down,
+  and for an id `abilities.json` does not define. A cast starts the
+  ability's cooldown and announces `abilityUsed` with the id. The sound and
+  the screen shake are the listener's, looked up by that id.
+- **Cleave** hits every living enemy within its radius along the lane, on
+  both sides, for `damage_mult` times the effective damage, rounded. A held
+  banner therefore strengthens it. The world answers a new
+  `EnemiesWithin` off the lane, which every fixture now implements.
+- **Dash** flies `distance` at `speed` along the steering, or along the
+  facing when standing. It overrides the steering until spent, stays inside
+  the world and the band, and grants `invuln_s` of i-frames. Letting go of
+  control drops a dash in flight; only the i-frames run on.
+- **I-frames.** `TakeDamage` returns before anything else while they last:
+  a dodged hit neither hurts nor pauses regen.
+- **Cooldowns** tick in every state and ride the save as `ability_cds`. A
+  dash in flight and its i-frames do not, as in the original.
+
+**`HeroControl`** routes `UseAbility(slot)` and reports each slot's cooldown
+for the buttons.
+
+**Reproduced** at `50741d1`: `verify_hero` G's fifteen simulation lines,
+from "hero has two ability slots" to "dash clamps to the band", in
+`test_wb_hero`. The Q/E routing and the on-screen buttons are input and
+presentation, and belong with slice 11 and the layer.
+
+**Added by the port:**
+- nothing is hit and nothing is announced when a cast is refused;
+- a cleave's damage is pinned (22 × 1.6 rounds to 35), and so is its
+  cooldown after half a second (7.5);
+- a banner makes one cleave kill a raider that a plain one leaves on 5;
+- the dash lands within a hundredth of 260 px, not just the harness's two;
+- a standing dash follows the facing;
+- releasing control ends a dash in flight;
+- a dodged hit does not pause regen;
+- an undefined ability and a frozen board cast nothing;
+- `HeroControl` casts and reports by slot, and answers 0 out of range or
+  with nobody possessed.
+
+**Result (GCC, 10 September):** hero 89/0, and nothing regressed. Still red,
+and unchanged: audio 5, selection 5 and match 44. The build also carried
+slice 9's resource-node sprite, which left one extra red each in snapshot and
+match; with `sprite` stripped from their digests, the captures matched line
+for line, so this slice is clean and the difference is slice 9's to close.

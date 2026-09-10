@@ -146,6 +146,10 @@ public:
         return lane.NearestWoundedAlly(me, maxRange);
     }
     Unit* Hero() const override { return nullptr; }
+    std::vector<Unit*> EnemiesWithin(const std::string& faction, float x,
+                                     float maxRange) const override {
+        return lane.EnemiesWithin(faction, x, maxRange);
+    }
 
     std::vector<std::unique_ptr<Building>> buildings;
 };

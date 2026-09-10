@@ -1,10 +1,10 @@
 // The hero under the player's hand, against the original's harness.
 //
-// `verify_hero` covers seven things, and three are this suite's: B, the
-// unit's CONTROLLED state; F, HeroControl's possession lifecycle; and the two
-// lines of A that are data. The rest of A (the control scheme), C (the camera
-// follow), D (input routing) and E (the joystick) are presentation and input;
-// G, the abilities, is slice 8's.
+// `verify_hero` covers seven things, and four are this suite's: B, the unit's
+// CONTROLLED state; F, HeroControl's possession lifecycle; G, the abilities,
+// less its Q/E routing and on-screen buttons; and the two lines of A that are
+// data. The rest of A (the control scheme), C (the camera follow), D (input
+// routing) and E (the joystick) are presentation and input.
 //
 // To re-derive, from the game's directory:
 //
@@ -41,6 +41,21 @@
 //   ok  : a respawn delay is configured (economy.json)
 //   ok  : the Town Hall is a respawn point
 //   ok  : the Waystone is a buildable respawn point
+//   ok  : hero has two ability slots
+//   ok  : cleave + dash defs exist in abilities.json
+//   ok  : the _comment key is not an ability
+//   ok  : no cast while under AI (hero-mode only)
+//   ok  : cleave hits every enemy in radius, both sides (lane |dx|)
+//   ok  : cleave spares enemies beyond its radius
+//   ok  : cleave starts its cooldown
+//   ok  : cooldown blocks a second cleave
+//   ok  : cooldowns tick down
+//   ok  : ability cooldowns ride the save
+//   ok  : dash grants i-frames
+//   ok  : a hit during dash i-frames is dodged entirely
+//   ok  : dash travels its configured distance (260px)
+//   ok  : after the i-frames, hits land again
+//   ok  : dash clamps to the band
 //
 // The harness zeroes `_attack_cd` by hand between strikes. The port has no
 // setter for it and steps the unit a second instead. Under control, with no
@@ -94,6 +109,10 @@ public:
     std::vector<Building*> PlayerBuildings() const override { return {}; }
     std::vector<Unit*> PlayerUnits() const override { return {}; }
     Unit* Hero() const override { return nullptr; }
+    std::vector<Unit*> EnemiesWithin(const std::string& faction, float x,
+                                     float maxRange) const override {
+        return lane.EnemiesWithin(faction, x, maxRange);
+    }
 };
 
 struct Field {
@@ -107,6 +126,16 @@ struct Field {
     Unit* Spawn(const std::string& id, float x, float y) {
         auto unit = std::make_unique<Unit>(UnitStats::FromJson(id, wb::Shipped().Unit(id)), state,
                                            bus, arena);
+        unit->SetPosition(glm::vec2(x, y));
+        Unit* raw = unit.get();
+        units.push_back(std::move(unit));
+        arena.lane.Register(raw);
+        return raw;
+    }
+
+    // A unit from a hand-edited block, for the case a data file cannot reach.
+    Unit* Spawn(const UnitStats& stats, float x, float y) {
+        auto unit = std::make_unique<Unit>(stats, state, bus, arena);
         unit->SetPosition(glm::vec2(x, y));
         Unit* raw = unit.get();
         units.push_back(std::move(unit));
@@ -376,6 +405,200 @@ void testTheMatchsWarbandFollowsWhoeverIsPossessed() {
     CHECK_MSG(match.Hero() == nullptr, "a fallen hero leads nobody");
 }
 
+// --- G. Abilities --------------------------------------------------------------
+
+const Value& ability(const char* id) { return wb::Shipped().Ability(id); }
+
+void testTheHeroCarriesCleaveAndDash() {
+    CHECK_MSG(UnitStats::FromJson(Ids::kHero, wb::Shipped().Unit(Ids::kHero)).abilities.size() == 2,
+              "hero has two ability slots");
+    CHECK_MSG(ability("cleave").IsObject() && ability("dash").IsObject(),
+              "cleave + dash defs exist in abilities.json");
+    CHECK_MSG(!ability("_comment").IsObject(), "the _comment key is not an ability");
+}
+
+void testCleaveHitsEveryEnemyInItsRadiusAlongTheLane() {
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 3000.0f, 640.0f);
+    Unit* near1 = f.Spawn(Ids::kRaider, 3080.0f, 700.0f);   // |dx| 80, another row
+    Unit* near2 = f.Spawn(Ids::kRaider, 2920.0f, 600.0f);   // |dx| 80, the other side
+    Unit* far = f.Spawn(Ids::kRaider, 3400.0f, 640.0f);     // |dx| 400, past the radius
+    std::vector<std::string> casts;
+    f.bus.abilityUsed.Connect([&casts](const std::string& id, Unit*) { casts.push_back(id); });
+
+    hero->UseAbility(0);
+    CHECK_MSG(hero->AbilityCooldownLeft("cleave") == 0.0, "no cast while under AI (hero-mode only)");
+    CHECK(near1->Hp() == near1->Stats().maxHp && casts.empty());
+
+    hero->SetControlled(true);
+    const int damage = static_cast<int>(
+        std::round(hero->EffectiveDamage() * ability("cleave")["damage_mult"].AsNumber(0.0)));
+    CHECK_EQ(damage, 35);   // 22 x 1.6, rounded
+    const int farHp = far->Hp();
+    hero->UseAbility(0);
+    CHECK_MSG(near1->Hp() == near1->Stats().maxHp - damage &&
+                  near2->Hp() == near2->Stats().maxHp - damage,
+              "cleave hits every enemy in radius, both sides (lane |dx|)");
+    CHECK_MSG(far->Hp() == farHp, "cleave spares enemies beyond its radius");
+    CHECK_MSG(hero->AbilityCooldownLeft("cleave") > 0.0, "cleave starts its cooldown");
+    CHECK(casts == std::vector<std::string>{"cleave"});
+    const int after = near1->Hp();
+    hero->UseAbility(0);
+    CHECK_MSG(near1->Hp() == after, "cooldown blocks a second cleave");
+
+    const double cd0 = hero->AbilityCooldownLeft("cleave");
+    hero->Step(0.5);
+    CHECK_MSG(hero->AbilityCooldownLeft("cleave") < cd0, "cooldowns tick down");
+    CHECK_EQ(hero->AbilityCooldownLeft("cleave"), 7.5);   // added by the port: 8 - 0.5
+
+    // The harness clears the hero's table and loads it back; a fresh hero is
+    // the same question with nothing left over.
+    const Value saved = hero->ToSave(SidTable());
+    Unit* restored = f.Spawn(Ids::kHero, 3000.0f, 640.0f);
+    restored->FromSave(saved);
+    CHECK_MSG(restored->AbilityCooldownLeft("cleave") == hero->AbilityCooldownLeft("cleave"),
+              "ability cooldowns ride the save");
+}
+
+void testAHeldBannerStrengthensTheCleave() {
+    // Added by the port, from the harness's own header: banners boost the
+    // cleave as they boost any blow. 22 x 1.5 is 33, and 33 x 1.6 is 52.8,
+    // which kills a raider a plain cleave leaves on 5.
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 3000.0f, 640.0f);
+    Unit* raider = f.Spawn(Ids::kRaider, 3080.0f, 640.0f);
+    f.state.SetArmyBonus(&f, 1.5);
+    hero->SetControlled(true);
+    hero->UseAbility(0);
+    CHECK(!raider->IsAlive());
+}
+
+void testADashTravelsItsDistanceBehindIFrames() {
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 3000.0f, 640.0f);
+    hero->SetControlled(true);
+    const double distance = ability("dash")["distance"].AsNumber(0.0);
+    CHECK_EQ(distance, 260.0);
+
+    hero->SetControlDir(glm::vec2(1.0f, 0.0f));
+    const float x0 = hero->Position().x;
+    hero->UseAbility(1);
+    hero->SetControlDir(glm::vec2(0.0f));   // the stick let go mid-dash; the dash still flies
+    CHECK_MSG(hero->IsInvulnerable(), "dash grants i-frames");
+    const int hp0 = hero->Hp();
+    hero->TakeDamage(50);
+    CHECK_MSG(hero->Hp() == hp0, "a hit during dash i-frames is dodged entirely");
+
+    for (int i = 0; i < 30; ++i) hero->Step(0.033);   // about a second
+    CHECK_MSG(std::fabs(hero->Position().x - (x0 + static_cast<float>(distance))) < 2.0f,
+              "dash travels its configured distance (260px)");
+    CHECK(std::fabs(hero->Position().x - (x0 + static_cast<float>(distance))) < 0.01f);
+    hero->TakeDamage(10);
+    CHECK_MSG(hero->Hp() == hp0 - 10, "after the i-frames, hits land again");
+}
+
+void testADashNeverLeavesTheBand() {
+    Field f;
+    const float bottom = groundY() + laneDepth();
+    Unit* hero = f.Spawn(Ids::kHero, 3000.0f, bottom - 5.0f);
+    hero->SetControlled(true);
+    hero->SetControlDir(glm::vec2(0.0f, 1.0f));
+    hero->UseAbility(1);
+    hero->SetControlDir(glm::vec2(0.0f));
+    for (int i = 0; i < 20; ++i) hero->Step(0.05);
+    CHECK_MSG(std::fabs(hero->Position().y - bottom) < 0.5f, "dash clamps to the band");
+}
+
+void testAStandingDashGoesTheWayTheHeroFaces() {
+    // Added by the port: with no steering the dash flies along the facing.
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 3000.0f, 640.0f);
+    hero->SetControlled(true);
+    hero->SetControlDir(glm::vec2(-1.0f, 0.0f));
+    hero->Step(0.1);
+    hero->SetControlDir(glm::vec2(0.0f));
+    CHECK_MSG(hero->Facing() < 0.0, "precondition: facing left");
+    const float x0 = hero->Position().x;
+    hero->UseAbility(1);
+    for (int i = 0; i < 20; ++i) hero->Step(0.05);
+    CHECK(std::fabs(hero->Position().x - (x0 - 260.0f)) < 0.01f);
+}
+
+void testLettingGoOfTheHeroEndsADashInFlight() {
+    // Added by the port: set_controlled drops the dash; only the i-frames run on.
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 3000.0f, 640.0f);
+    hero->SetControlled(true);
+    hero->SetControlDir(glm::vec2(1.0f, 0.0f));
+    hero->UseAbility(1);
+    hero->Step(0.05);   // 47.5 px of the 260
+    const float midway = hero->Position().x;
+    hero->SetControlled(false);
+    hero->SetControlled(true);
+    for (int i = 0; i < 20; ++i) hero->Step(0.05);
+    CHECK_EQ(hero->Position().x, midway);
+}
+
+void testADodgedHitDoesNotPauseRegen() {
+    // Added by the port, from take_damage's own comment. A wounded hero
+    // regenerates 1.5 hp a second; a hit landing would pause that for four
+    // seconds, and a dodged one must not.
+    Field f;
+    Unit* hero = f.Spawn(Ids::kHero, 3000.0f, 640.0f);
+    hero->SetControlled(true);
+    hero->SetHp(100);
+    hero->Step(1.0);
+    const int before = hero->Hp();
+    CHECK_MSG(before > 100, "precondition: regenerating");
+    hero->UseAbility(1);
+    hero->TakeDamage(50);
+    hero->Step(1.0);
+    CHECK(hero->Hp() > before);
+}
+
+void testAnAbilityTheDataDoesNotDefineCastsNothing() {
+    // Added by the port: a slot naming an id abilities.json does not have
+    // spends no cooldown and announces nothing. Only a hand-edited block can
+    // reach it.
+    Field f;
+    UnitStats stats = UnitStats::FromJson(Ids::kHero, wb::Shipped().Unit(Ids::kHero));
+    stats.abilities = {"meteor"};
+    Unit* hero = f.Spawn(stats, 3000.0f, 640.0f);
+    int casts = 0;
+    f.bus.abilityUsed.Connect([&casts](const std::string&, Unit*) { ++casts; });
+    hero->SetControlled(true);
+    hero->UseAbility(0);
+    hero->UseAbility(1);   // no second slot at all
+    CHECK_EQ(hero->AbilityCooldownLeft("meteor"), 0.0);
+    CHECK_EQ(casts, 0);
+
+    // And a frozen board casts nothing either.
+    Unit* real = f.Spawn(Ids::kHero, 3500.0f, 640.0f);
+    real->SetControlled(true);
+    f.state.Lose();
+    real->UseAbility(0);
+    CHECK_EQ(real->AbilityCooldownLeft("cleave"), 0.0);
+}
+
+void testHeroControlCastsAndReportsBySlot() {
+    // Added by the port: the Q/E and button intents, and the cooldown the
+    // buttons paint.
+    Field f;
+    HeroControl control(f.bus);
+    Unit* hero = f.Spawn(Ids::kHero, 3000.0f, 640.0f);
+    CHECK_EQ(control.AbilityCooldownLeft(0), 0.0);
+    control.UseAbility(0);   // nobody possessed: nothing
+    CHECK_EQ(hero->AbilityCooldownLeft("cleave"), 0.0);
+
+    control.Possess(hero);
+    control.UseAbility(0);
+    CHECK(hero->AbilityCooldownLeft("cleave") > 0.0);
+    CHECK_EQ(control.AbilityCooldownLeft(0), hero->AbilityCooldownLeft("cleave"));
+    CHECK_EQ(control.AbilityCooldownLeft(1), 0.0);
+    CHECK_EQ(control.AbilityCooldownLeft(2), 0.0);
+    CHECK_EQ(control.AbilityCooldownLeft(-1), 0.0);
+}
+
 } // namespace
 
 static void runTests() {
@@ -393,6 +616,17 @@ static void runTests() {
     testTheAttackButtonStrikesThroughHeroControl();
     testTheRespawnIsConfigured();
     testTheMatchsWarbandFollowsWhoeverIsPossessed();
+
+    testTheHeroCarriesCleaveAndDash();
+    testCleaveHitsEveryEnemyInItsRadiusAlongTheLane();
+    testAHeldBannerStrengthensTheCleave();
+    testADashTravelsItsDistanceBehindIFrames();
+    testADashNeverLeavesTheBand();
+    testAStandingDashGoesTheWayTheHeroFaces();
+    testLettingGoOfTheHeroEndsADashInFlight();
+    testADodgedHitDoesNotPauseRegen();
+    testAnAbilityTheDataDoesNotDefineCastsNothing();
+    testHeroControlCastsAndReportsBySlot();
 }
 
-TEST_MAIN("test_wb_hero", 50)
+TEST_MAIN("test_wb_hero", 80)

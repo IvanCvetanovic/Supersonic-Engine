@@ -79,6 +79,12 @@ public:
     // lane index. Null when nobody nearby is hurt.
     virtual Unit* NearestWoundedAlly(const Unit* me, float maxRange) const = 0;
 
+    // Every LIVING unit of the other faction within range along the lane, in
+    // registration order - what the hero's Cleave hits. Inclusive at the edge,
+    // as NearestEnemyUnit is.
+    virtual std::vector<Unit*> EnemiesWithin(const std::string& faction, float x,
+                                             float maxRange) const = 0;
+
     // Where arrows come from. Null in a world with no ranged units in it,
     // which is a legitimate configuration and not an error - an archer that
     // cannot find a pool simply does not shoot, exactly as the original

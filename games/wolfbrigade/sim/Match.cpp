@@ -435,6 +435,11 @@ Unit* Match::NearestWoundedAlly(const Unit* me, float maxRange) const {
     return m_lane.NearestWoundedAlly(me, maxRange);
 }
 
+std::vector<Unit*> Match::EnemiesWithin(const std::string& faction, float x,
+                                        float maxRange) const {
+    return m_lane.EnemiesWithin(faction, x, maxRange);
+}
+
 Damageable* Match::NearestEnemyBuilding(const std::string& faction, float x) const {
     const std::string enemy =
         (faction == Factions::kPlayer) ? Factions::kEnemy : Factions::kPlayer;

@@ -211,6 +211,10 @@ struct Board final : public World, public Snapshot::RestoreSink {
     }
     Unit* NearestWoundedAlly(const Unit*, float) const override { return nullptr; }
     Unit* Hero() const override { return nullptr; }
+    std::vector<Unit*> EnemiesWithin(const std::string& faction, float x,
+                                     float range) const override {
+        return lane.EnemiesWithin(faction, x, range);
+    }
 
     // --- RestoreSink ---
     Building* CreateBuilding(const BuildingStats& stats, bool complete,

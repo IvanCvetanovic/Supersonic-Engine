@@ -411,6 +411,9 @@ public:
     std::vector<Unit*> PlayerUnits() const override { return {}; }
     Unit* NearestWoundedAlly(const Unit*, float) const override { return nullptr; }
     Unit* Hero() const override { return nullptr; }
+    std::vector<Unit*> EnemiesWithin(const std::string&, float, float) const override {
+        return {};
+    }
 };
 
 Supersonic::Json::Value parse(const std::string& text) {

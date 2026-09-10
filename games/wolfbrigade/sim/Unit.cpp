@@ -24,6 +24,16 @@ glm::vec2 moveToward(const glm::vec2& from, const glm::vec2& to, double distance
     return from + offset * (travel / length);
 }
 
+// Godot's Vector2.normalized divides by the length rather than multiplying by
+// an inverse square root, and the last bit can differ - which a steered or
+// dashing hero's position then accumulates. So this divides too.
+glm::vec2 godotNormalized(const glm::vec2& v) {
+    const float lengthSq = v.x * v.x + v.y * v.y;
+    if (lengthSq == 0.0f) return v;
+    const float length = std::sqrt(lengthSq);
+    return glm::vec2(v.x / length, v.y / length);
+}
+
 } // namespace
 
 void Unit::Step(double delta) {
@@ -46,6 +56,8 @@ void Unit::Step(double delta) {
 
     StepRegen(delta);
     if (m_attackCooldown > 0.0) m_attackCooldown -= delta;
+    if (m_invuln > 0.0) m_invuln -= delta;
+    for (auto& [id, left] : m_abilityCds) left = std::max(0.0, left - delta);
 
     // Once per interval, not once per step, and NOT a while loop: a step longer
     // than the interval thinks once rather than catching up. That is the
@@ -476,6 +488,7 @@ void Unit::Face(double dx) {
 void Unit::SetControlled(bool on) {
     if (m_phase == State::Dead || on == (m_phase == State::Controlled)) return;
     m_controlDir = glm::vec2(0.0f);
+    m_dashLeft = 0.0;   // a dash in flight dies with the mode; i-frames just expire
     if (on) {
         ClearAttack();
         SetState(State::Controlled);
@@ -484,18 +497,22 @@ void Unit::SetControlled(bool on) {
     }
 }
 
-// Godot's Vector2.normalized divides by the length rather than multiplying by
-// an inverse square root, and the last bit can differ - which a steered
-// hero's position then accumulates. So this divides too.
 void Unit::SetControlDir(const glm::vec2& dir) {
     const float length = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-    m_controlDir = length > 1.0f ? glm::vec2(dir.x / length, dir.y / length) : dir;
+    m_controlDir = length > 1.0f ? godotNormalized(dir) : dir;
 }
 
 // Full 2D inside the walkable band at the unit's own move_speed - the clamp a
 // move order uses. Combat stays on the lane: the strike measures |dx| only.
-// (A dash in flight will override the steering here; that is slice 8's.)
 void Unit::StepControlled(double delta) {
+    // A dash in flight overrides the steering until its distance is spent.
+    if (m_dashLeft > 0.0) {
+        const double step = std::min(m_dashLeft, m_dashSpeed * delta);
+        m_dashLeft -= step;
+        Face(static_cast<double>(m_dashDir.x));
+        MoveClamped(m_dashDir * static_cast<float>(step));
+        return;
+    }
     if (m_controlDir == glm::vec2(0.0f)) return;
     Face(static_cast<double>(m_controlDir.x));
     MoveClamped(m_controlDir *
@@ -557,6 +574,58 @@ Unit* Unit::StrikeTarget() const {
     const double reach =
         static_cast<double>(m_stats.attackRange) + static_cast<double>(probe->HitHalfWidth());
     return std::fabs(dx) > reach ? nullptr : probe;
+}
+
+// --- Abilities -------------------------------------------------------------
+
+void Unit::UseAbility(int index) {
+    // IsPlaying: Q and E leak through the game-over overlay, and the board is
+    // frozen.
+    if (m_phase != State::Controlled || index < 0 ||
+        index >= static_cast<int>(m_stats.abilities.size()) || !m_state->IsPlaying()) {
+        return;
+    }
+    const std::string& id = m_stats.abilities[static_cast<size_t>(index)];
+    if (AbilityCooldownLeft(id) > 0.0) return;
+    const Supersonic::Json::Value& def = m_state->Data().Ability(id);
+    if (!def.IsObject() || def.AsObject().empty()) return;
+
+    m_abilityCds[id] = def["cooldown"].AsNumber(5.0);
+    const std::string kind = def["kind"].AsString("");
+    if (kind == "aoe_damage") {
+        CastAoeDamage(def);
+    } else if (kind == "dash") {
+        CastDash(def);
+    }
+    if (m_bus) m_bus->abilityUsed.Emit(id, this);
+}
+
+double Unit::AbilityCooldownLeft(const std::string& abilityId) const {
+    const auto it = m_abilityCds.find(abilityId);
+    return it == m_abilityCds.end() ? 0.0 : it->second;
+}
+
+// Cleave: one heavy swing that hits EVERY enemy within the radius along the
+// lane, on both sides - |dx|, the combat invariant. Scaled off the effective
+// damage, so a held banner strengthens it like any other blow.
+void Unit::CastAoeDamage(const Supersonic::Json::Value& def) {
+    const int damage = std::max(
+        1, static_cast<int>(std::round(static_cast<double>(EffectiveDamage()) *
+                                       def["damage_mult"].AsNumber(1.5))));
+    const float radius = static_cast<float>(def["radius"].AsNumber(100.0));
+    for (Unit* enemy : m_world->EnemiesWithin(m_stats.faction, m_position.x, radius)) {
+        enemy->TakeDamage(damage);
+    }
+}
+
+// Dash: a burst of distance along the steering, or along the facing when
+// standing, with brief i-frames - the dodge. The travel is StepControlled's.
+void Unit::CastDash(const Supersonic::Json::Value& def) {
+    m_dashDir = m_controlDir != glm::vec2(0.0f) ? godotNormalized(m_controlDir)
+                                                : glm::vec2(static_cast<float>(m_facing), 0.0f);
+    m_dashLeft = def["distance"].AsNumber(240.0);
+    m_dashSpeed = std::max(def["speed"].AsNumber(900.0), 1.0);
+    m_invuln = def["invuln_s"].AsNumber(0.2);
 }
 
 void Unit::StepToward(const glm::vec2& target, double delta) {
@@ -822,6 +891,9 @@ void Unit::StepRegen(double delta) {
 }
 
 void Unit::TakeDamage(int amount) {
+    // Dash i-frames: a dodged hit neither hurts nor pauses regen.
+    if (m_invuln > 0.0) return;
+
     // Before the dead check, as the original has it: any hit pauses regen.
     m_sinceDamage = 0.0;
     if (m_phase == State::Dead) return;
@@ -890,6 +962,11 @@ Supersonic::Json::Value Unit::ToSave(const SidTable& ids) const {
     }
     out["home"] = Supersonic::Json::Value(std::move(home));
 
+    // Cooldowns ride the save, so a reload cannot be used to skip one.
+    Supersonic::Json::Object cds;
+    for (const auto& [id, left] : m_abilityCds) cds[id] = Supersonic::Json::Value(left);
+    out["ability_cds"] = Supersonic::Json::Value(std::move(cds));
+
     // The upcast is deliberate and load-bearing - see SaveIds.hpp. A build
     // target is a Building and is upcast the same way its own entry was keyed.
     out["ref_tree"] = Supersonic::Json::Value(static_cast<double>(ids.Of(m_targetNode)));
@@ -940,6 +1017,11 @@ void Unit::FromSave(const Supersonic::Json::Value& saved) {
     m_squad = saved["squad"].AsString(Squads::kGarrison);
     const auto& home = saved["home"].AsArray();
     m_homePost = home.size() >= 2 ? glm::vec2(home[0].AsFloat(), home[1].AsFloat()) : NoPost();
+
+    m_abilityCds.clear();
+    for (const auto& entry : saved["ability_cds"].AsObject()) {
+        m_abilityCds[entry.first] = entry.second.AsNumber(0.0);
+    }
 }
 
 void Unit::Relink(const Supersonic::Json::Value& saved, const SidResolver& resolver,

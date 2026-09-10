@@ -85,6 +85,11 @@ struct EventBus {
     // emits nothing.
     Signal<const glm::vec2&, int> healed;
 
+    // The hero cast an ability. Cosmetic listeners only - the sound, the
+    // ping, the screen shake - and each finds its numbers in the ability's
+    // own definition by the id.
+    Signal<const std::string&, class Unit*> abilityUsed;
+
     // The selection was ordered somewhere, and a ground ping confirms the tap.
     // Emitted only when an order actually issues.
     Signal<const glm::vec2&> moveOrdered;
