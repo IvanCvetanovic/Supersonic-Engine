@@ -96,6 +96,36 @@ static void testQuadIsFlatAndWhite() {
     CHECK_MSG(cubeColoured > 0, "the cube is meant to be rainbow; that is why the quad exists");
 }
 
+static void testBoxIsTheCubeInWhite() {
+    // The 3D counterpart of the quad: a game drawing flat-coloured boxes got
+    // the cube's rainbow on every face. Same geometry exactly - every corner,
+    // normal and index - and only the colour differs.
+    MeshData box;
+    MeshData cube;
+    CHECK(ModelLoader::GenerateBox(2.0f, box));
+    CHECK(ModelLoader::GenerateCube(2.0f, cube));
+    CHECK_EQ(box.vertices.size(), cube.vertices.size());
+    CHECK_MSG(box.indices == cube.indices, "the box winds exactly as the cube does");
+
+    int differs = 0;
+    int coloured = 0;
+    const size_t n = std::min(box.vertices.size(), cube.vertices.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (box.vertices[i].pos != cube.vertices[i].pos || box.vertices[i].normal != cube.vertices[i].normal ||
+            box.vertices[i].texCoord != cube.vertices[i].texCoord) {
+            ++differs;
+        }
+        if (box.vertices[i].color != glm::vec3(1.0f)) ++coloured;
+    }
+    CHECK_MSG(differs == 0, "the box's geometry must be the cube's");
+    CHECK_MSG(coloured == 0, "every box vertex must be white, or a flat colour is a gradient");
+    CHECK_NEAR(box.boundsMin.x, -1.0f);
+    CHECK_NEAR(box.boundsMax.y, 1.0f);
+
+    MeshData bad;
+    CHECK_MSG(!ModelLoader::GenerateBox(0.0f, bad), "zero size must be rejected");
+}
+
 static void testQuadFacesTheViewerAndIsTheSizeAsked() {
     // XY facing +Z, not XZ like GeneratePlane. A floor seen by a side-on 2D
     // camera is a line.
@@ -612,6 +642,7 @@ static void runTests() {
     testCube();
     testSphereRejectsDegenerateParameters();
     testQuadIsFlatAndWhite();
+    testBoxIsTheCubeInWhite();
     testQuadFacesTheViewerAndIsTheSizeAsked();
     testPlane();
     testPlaneFacesUpward();
@@ -630,4 +661,4 @@ static void runTests() {
     testFaceWindingAgreesWithNormals();
 }
 
-TEST_MAIN("test_meshgen", 295)
+TEST_MAIN("test_meshgen", 304)

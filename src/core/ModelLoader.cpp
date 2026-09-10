@@ -153,6 +153,14 @@ bool ModelLoader::GenerateCube(float size, MeshData& out) {
     return true;
 }
 
+bool ModelLoader::GenerateBox(float size, MeshData& out) {
+    // Built FROM the cube rather than written out beside it, so the two can
+    // never disagree about a corner, a normal or a winding - only the colour.
+    if (!GenerateCube(size, out)) return false;
+    for (Vertex& vertex : out.vertices) vertex.color = glm::vec3(1.0f);
+    return true;
+}
+
 bool ModelLoader::GenerateQuad(float width, float height, MeshData& out) {
     out.clear();
 

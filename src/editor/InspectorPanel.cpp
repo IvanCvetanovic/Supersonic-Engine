@@ -331,7 +331,7 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
             auto& mesh = registry.get<MeshComponent>(entity);
 
-            static const char* kPrimitives[] = { "Cube", "Sphere", "Plane", "Terrain" };
+            static const char* kPrimitives[] = { "Cube", "Box", "Sphere", "Plane", "Terrain" };
             int current = 0;
             for (int i = 0; i < IM_ARRAYSIZE(kPrimitives); ++i) {
                 if (mesh.primitiveType == kPrimitives[i]) { current = i; break; }

@@ -65,6 +65,8 @@ bool loadPoints(const std::string& primitive, const std::string& path,
     bool ok = false;
     if (primitive == "Cube") {
         ok = ModelLoader::GenerateCube(ModelLoader::kCubeSize, mesh);
+    } else if (primitive == "Box") {
+        ok = ModelLoader::GenerateBox(ModelLoader::kBoxSize, mesh);
     } else if (primitive == "Sphere") {
         ok = ModelLoader::GenerateSphere(ModelLoader::kSphereRadius, ModelLoader::kSphereRings,
                                          ModelLoader::kSphereSectors, mesh);

@@ -19,6 +19,9 @@ public:
     // symptom - a shape you can see through or stand on the air beside - gets
     // blamed on the narrowphase.
     static constexpr float kCubeSize = 1.0f;
+    // The box is the cube's geometry, one unit on a side, so a transform scale
+    // reads directly as a size in world units.
+    static constexpr float kBoxSize = 1.0f;
     static constexpr float kSphereRadius = 0.5f;
     static constexpr uint32_t kSphereRings = 32;
     static constexpr uint32_t kSphereSectors = 32;
@@ -34,6 +37,17 @@ public:
     static bool GenerateSphere(float radius, uint32_t rings, uint32_t sectors, MeshData& out);
     static bool GenerateCube(float size, MeshData& out);
     static bool GeneratePlane(float width, float height, MeshData& out);
+
+    // The cube's geometry with WHITE vertex colours: a box that is the colour
+    // of its material and nothing else.
+    //
+    // The quad below exists for the same reason in 2D. GenerateCube is the
+    // engine's debug primitive and rainbow on purpose, and the shader multiplies
+    // albedo by vertex colour, so a game drawing its units as flat-coloured
+    // boxes got a pink-to-green gradient on every face (HUSK's first view,
+    // caught by its first screenshot). Changing the cube would restyle every
+    // scene that uses it, so the plain box is a primitive of its own.
+    static bool GenerateBox(float size, MeshData& out);
 
     // A flat rectangle in the XY plane facing +Z, for 2D.
     //
