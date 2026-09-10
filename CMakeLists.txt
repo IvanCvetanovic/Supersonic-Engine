@@ -455,10 +455,6 @@ endif()
 # translation units.
 add_subdirectory(games/wolfbrigade/sim)
 
-# HUSK's simulation, ported from Rust and held to the original's per-tick
-# hashes. Unconditional for the same reason: the tests link it.
-add_subdirectory(games/husk/sim)
-
 option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike executable" OFF)
 
 # Added unconditionally, and the option now gates only the EXECUTABLE inside it.
@@ -470,6 +466,13 @@ option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike executabl
 # captures the offscreen 3D target and the UI is drawn over that, in ImGui's
 # draw list, on its way to the swapchain.
 add_subdirectory(games/wolfbrigade)
+
+# HUSK, split the same way. games/husk/sim is the simulation, ported from Rust
+# and held to the original's per-tick hashes; HuskGame is the layer that draws
+# it. Both are unconditional because tests link them, and the option gates only
+# the executable.
+option(SUPERSONIC_BUILD_HUSK "Build the HUSK executable" OFF)
+add_subdirectory(games/husk)
 
 option(SUPERSONIC_BUILD_TESTS "Build engine unit tests" ON)
 if (SUPERSONIC_BUILD_TESTS)

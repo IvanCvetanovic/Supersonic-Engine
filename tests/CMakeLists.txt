@@ -115,6 +115,12 @@ endfunction()
 add_husk_test(test_husk_foundation)
 add_husk_test(test_husk_scenarios)
 
+# The layer that draws it, attached to a bare registry: no window, no Vulkan.
+# Its first job is to prove the view leaves the sim alone - the layer's world
+# must hash exactly as a bare World stepped beside it.
+add_husk_test(test_husk_layer)
+target_link_libraries(test_husk_layer PRIVATE HuskGame)
+
 add_engine_test(test_environmentmap)
 add_engine_test(test_assetdatabase)
 add_engine_test(test_serialize)
