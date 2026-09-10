@@ -352,7 +352,7 @@ void Unit::StepAttack(double delta) {
     if (!ApproachTo(m_attackTarget->Position(), reach, delta)) return;
     if (m_attackCooldown <= 0.0) {
         m_attackCooldown = 1.0 / std::max(static_cast<double>(m_stats.attacksPerSec), 0.01);
-        m_attackTarget->TakeDamage(m_stats.damage);
+        m_attackTarget->TakeDamage(EffectiveDamage());
 
         // AFTER the damage, as `unit.gd:384-386` does: the blow is what makes
         // the sound, so announcing it before would be a claim about something
@@ -368,9 +368,15 @@ void Unit::FireProjectile() {
     // From the middle of the body rather than its feet, so an arrow leaves the
     // archer's chest.
     const glm::vec2 from = m_position + glm::vec2(0.0f, -m_stats.bodySize.y * 0.5f);
-    pool->Spawn(from, m_attackTarget, m_stats.damage, m_stats.projectileSpeed);
+    pool->Spawn(from, m_attackTarget, EffectiveDamage(), m_stats.projectileSpeed);
 
     if (m_bus) m_bus->projectileFired.Emit(from);
+}
+
+int Unit::EffectiveDamage() const {
+    if (m_stats.faction != Factions::kPlayer) return m_stats.damage;
+    return std::max(1, static_cast<int>(std::round(static_cast<double>(m_stats.damage) *
+                                                   m_state->ArmyDamageMult())));
 }
 
 bool Unit::HasValidTarget() const {

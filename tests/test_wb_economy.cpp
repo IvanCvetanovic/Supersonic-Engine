@@ -29,11 +29,17 @@
 #include "TestHarness.hpp"
 #include "WolfBrigadeFixture.hpp"
 
+#include "core/Json.hpp"
+#include "sim/CapturePoint.hpp"
 #include "sim/EventBus.hpp"
 #include "sim/GameData.hpp"
 #include "sim/GameState.hpp"
+#include "sim/Lane.hpp"
 #include "sim/ResourceNode.hpp"
+#include "sim/Unit.hpp"
+#include "sim/World.hpp"
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -373,6 +379,177 @@ void testOwnedMetaAddsToTheStartingBalanceOnceAndPerLevel() {
     CHECK_EQ(run.state.Amount(Ids::kFood), 100);
 }
 
+// --- 8. Capture points (the game's 50741d1) --------------------------------
+//
+// verify_economy re-run on 10 September 2026 printed:
+//
+//   ok  : player presence captures the point
+//   ok  : tug reaches +1
+//   ok  : held point trickles wood (+4)
+//   ok  : tug state round-trips through save
+//   ok  : enemy presence takes the point back
+//   ok  : no bonus while neutral
+//   ok  : banner flips to the player at +1
+//   ok  : held banner multiplies damage x1.5
+//   ok  : losing the banner clears the bonus
+
+// A world with nothing in it. The capture cases' units stand still and are
+// never stepped; they exist to be counted.
+class StillWorld final : public World {
+public:
+    ResourceNode* NearestHarvestable(float) const override { return nullptr; }
+    int NearestDeposit(float) const override { return -1; }
+    bool DepositExists(int) const override { return false; }
+    glm::vec2 DepositPosition(int) const override { return glm::vec2(0.0f); }
+    Building* NearestUnfinishedBuilding(const std::string&, float) const override {
+        return nullptr;
+    }
+    Unit* NearestEnemyUnit(const std::string&, float, float) const override { return nullptr; }
+    Damageable* NearestEnemyBuilding(const std::string&, float) const override { return nullptr; }
+    ProjectilePool* Projectiles() override { return nullptr; }
+    std::vector<Building*> PlayerBuildings() const override { return {}; }
+    std::vector<Unit*> PlayerUnits() const override { return {}; }
+};
+
+Supersonic::Json::Value parse(const std::string& text) {
+    Supersonic::Json::Value value;
+    std::string error;
+    Supersonic::Json::Parse(text, value, error);
+    return value;
+}
+
+void testPlayerPresenceCapturesThePointAndItPaysWood() {
+    // The harness's point: 2 wood a second, a 150 radius, a two-second flip.
+    Run run;
+    StillWorld world;
+    Lane lane;
+    CapturePoint point(run.state, run.bus);
+    point.Setup(parse(R"({"resource": "wood", "rate": 2.0, "radius": 150.0, "capture_time": 2.0})"));
+    point.SetPosition(glm::vec2(3000.0f, 700.0f));
+
+    std::vector<std::string> holders;
+    run.bus.captureChanged.Connect(
+        [&holders](CapturePoint*, const std::string& holder) { holders.push_back(holder); });
+
+    // Inside the radius on x, and a row off in y: the lane rule decides.
+    Unit worker(UnitStats::FromJson(Ids::kWorker, shipped().Unit(Ids::kWorker)), run.state,
+                run.bus, world);
+    worker.SetPosition(glm::vec2(3050.0f, 760.0f));
+    lane.Register(&worker);
+
+    const int woodBefore = run.state.Amount(Ids::kWood);
+    for (int i = 0; i < 40; ++i) point.Step(0.1, lane);   // a 2 s flip and ~2 s of income
+
+    CHECK_MSG(point.Holder() == Factions::kPlayer, "player presence captures the point");
+    CHECK_MSG(point.Progress() >= 1.0, "tug reaches +1");
+    const int banked = run.state.Amount(Ids::kWood) - woodBefore;
+    CHECK_MSG(banked == 4, "held point trickles wood (+4); got +" + std::to_string(banked));
+    CHECK_MSG(holders.size() == 1 && holders[0] == Factions::kPlayer, "announced once");
+
+    const Supersonic::Json::Value saved = point.ToSave();
+    point.ForceProgress(0.0);
+    CHECK_MSG(point.Holder().empty(), "knocked back to neutral");
+    point.FromSave(saved);
+    CHECK_MSG(point.Holder() == Factions::kPlayer && point.Progress() >= 1.0,
+              "tug state round-trips through save");
+
+    // The worker leaves - the original frees it - and a raider walks in.
+    lane.Unregister(&worker);
+    Unit raider(UnitStats::FromJson(Ids::kRaider, shipped().Unit(Ids::kRaider)), run.state,
+                run.bus, world);
+    raider.SetPosition(glm::vec2(2900.0f, 720.0f));
+    lane.Register(&raider);
+
+    holders.clear();
+    for (int i = 0; i < 60; ++i) point.Step(0.1, lane);
+    CHECK_MSG(point.Holder() != Factions::kPlayer, "enemy presence takes the point back");
+
+    // Through neutral on the way, as every flip goes, and all the way over.
+    CHECK_MSG(holders.size() == 2 && holders[0].empty() && holders[1] == Factions::kEnemy,
+              "player -> neutral -> enemy");
+}
+
+void testAContestedPointHoldsStill() {
+    // Both sides inside the radius: the tug freezes where it is.
+    Run run;
+    StillWorld world;
+    Lane lane;
+    CapturePoint point(run.state, run.bus);
+    point.Setup(parse(R"({"resource": "wood", "rate": 2.0, "radius": 150.0, "capture_time": 2.0})"));
+    point.SetPosition(glm::vec2(3000.0f, 700.0f));
+
+    Unit worker(UnitStats::FromJson(Ids::kWorker, shipped().Unit(Ids::kWorker)), run.state,
+                run.bus, world);
+    worker.SetPosition(glm::vec2(3050.0f, 760.0f));
+    lane.Register(&worker);
+    for (int i = 0; i < 10; ++i) point.Step(0.1, lane);
+    const double halfway = point.Progress();
+    CHECK_MSG(halfway > 0.0 && halfway < 1.0, "part of the way over");
+
+    Unit raider(UnitStats::FromJson(Ids::kRaider, shipped().Unit(Ids::kRaider)), run.state,
+                run.bus, world);
+    raider.SetPosition(glm::vec2(2900.0f, 720.0f));
+    lane.Register(&raider);
+    for (int i = 0; i < 30; ++i) point.Step(0.1, lane);
+    CHECK_MSG(std::fabs(point.Progress() - halfway) < 0.06, "contested: the tug freezes");
+    CHECK_MSG(point.Holder().empty(), "and nobody holds it");
+}
+
+void testAHeldBannerMultipliesTheArmyAndLosingItClearsTheBonus() {
+    Run run;
+    CapturePoint banner(run.state, run.bus);
+    banner.Setup(parse(R"({"radius": 150.0, "capture_time": 1.0,
+                           "bonus": {"kind": "army_damage", "mult": 1.5}})"));
+    banner.SetPosition(glm::vec2(4000.0f, 700.0f));
+
+    CHECK_MSG(run.state.ArmyDamageMult() == 1.0, "no bonus while neutral");
+    banner.ForceProgress(1.0);
+    CHECK_MSG(banner.Holder() == Factions::kPlayer, "banner flips to the player at +1");
+    CHECK_MSG(std::fabs(run.state.ArmyDamageMult() - 1.5) < 1e-12, "held banner multiplies damage x1.5");
+    banner.ForceProgress(0.0);
+    CHECK_MSG(run.state.ArmyDamageMult() == 1.0, "losing the banner clears the bonus");
+
+    // PER RUN, where the original's registry is global - one harness's banner
+    // there changes the next one's combat. Another run never sees this one.
+    banner.ForceProgress(1.0);
+    Run other;
+    CHECK_MSG(other.state.ArmyDamageMult() == 1.0, "a second run has no banner");
+
+    // Two held banners multiply; a point that goes away takes its bonus with
+    // it, as the original's _exit_tree does.
+    {
+        CapturePoint second(run.state, run.bus);
+        second.Setup(parse(R"({"bonus": {"kind": "army_damage", "mult": 1.5}})"));
+        second.ForceProgress(1.0);
+        CHECK_MSG(std::fabs(run.state.ArmyDamageMult() - 2.25) < 1e-12, "two banners multiply");
+    }
+    CHECK_MSG(std::fabs(run.state.ArmyDamageMult() - 1.5) < 1e-12,
+              "a destroyed point takes its bonus with it");
+
+    // An income point is never an army bonus, however firmly held.
+    CapturePoint camp(run.state, run.bus);
+    camp.Setup(parse(R"({"resource": "wood", "rate": 1.2})"));
+    camp.ForceProgress(1.0);
+    CHECK_MSG(std::fabs(run.state.ArmyDamageMult() - 1.5) < 1e-12, "a lumber camp adds nothing");
+}
+
+void testTheBoardFreezesCapturePointsToo() {
+    Run run;
+    StillWorld world;
+    Lane lane;
+    CapturePoint point(run.state, run.bus);
+    point.Setup(parse(R"({"resource": "wood", "rate": 2.0, "radius": 150.0, "capture_time": 2.0})"));
+    point.SetPosition(glm::vec2(3000.0f, 700.0f));
+    Unit worker(UnitStats::FromJson(Ids::kWorker, shipped().Unit(Ids::kWorker)), run.state,
+                run.bus, world);
+    worker.SetPosition(glm::vec2(3000.0f, 700.0f));
+    lane.Register(&worker);
+
+    run.state.Lose();
+    for (int i = 0; i < 40; ++i) point.Step(0.1, lane);
+    CHECK(point.Progress() == 0.0);
+}
+
 } // namespace
 
 static void runTests() {
@@ -397,6 +574,11 @@ static void runTests() {
     testResetKeepsTheChosenDifficultyAndLevel();
     testAnUnknownLevelResolvesToTheDefault();
     testOwnedMetaAddsToTheStartingBalanceOnceAndPerLevel();
+
+    testPlayerPresenceCapturesThePointAndItPaysWood();
+    testAContestedPointHoldsStill();
+    testAHeldBannerMultipliesTheArmyAndLosingItClearsTheBonus();
+    testTheBoardFreezesCapturePointsToo();
 }
 
 TEST_MAIN("test_wb_economy", 45)

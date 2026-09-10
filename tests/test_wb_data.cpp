@@ -46,6 +46,7 @@
 #include "sim/GameData.hpp"
 #include "sim/UnitStats.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -435,6 +436,28 @@ void testTheShippedCampaignIsOneLevelWithTwoCapturePoints() {
     CHECK_MSG(data.DefaultLevel() == "level_1", "the shipped default level is level_1");
     CHECK_MSG(data.CurrentLevelId() == "level_1", "and it is the one applied at load");
     CHECK_EQ(static_cast<int>(data.LevelCapturePoints().size()), 2);
+
+    // verify_levels' capture point config at 50741d1:
+    //   ok  : default level defines capture points (2)
+    //   ok  : point at x=2600.0 has a radius
+    //   ok  : income point at x=2600.0 has a rate
+    //   ok  : point at x=4700.0 has a radius
+    //   ok  : army point at x=4700.0 multiplies damage (>1)
+    //   ok  : the level's points carry DIFFERENT bonuses (2 kinds)
+    std::vector<std::string> kinds;
+    for (const auto& point : data.LevelCapturePoints()) {
+        const auto& bonus = point["bonus"];
+        const std::string kind = bonus["kind"].AsString("income");
+        if (std::find(kinds.begin(), kinds.end(), kind) == kinds.end()) kinds.push_back(kind);
+        CHECK_MSG(point["radius"].AsNumber(0.0) > 0.0, "every point has a radius");
+        if (kind == "income") {
+            CHECK_MSG(bonus["rate"].AsNumber(point["rate"].AsNumber(0.0)) > 0.0,
+                      "an income point has a rate");
+        } else if (kind == "army_damage") {
+            CHECK_MSG(bonus["mult"].AsNumber(0.0) > 1.0, "an army point multiplies damage");
+        }
+    }
+    CHECK_MSG(kinds.size() == 2, "the level's points carry DIFFERENT bonuses");
 
     // With no order at all the original falls back to "level_1".
     const wb::ScratchData scratch("data", "levels.json", R"({ "order": [], "levels": {} })");

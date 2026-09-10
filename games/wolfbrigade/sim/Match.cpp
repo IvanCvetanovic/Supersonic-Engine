@@ -92,6 +92,7 @@ void Match::BootFresh() {
 
     SpawnTownHall();
     SpawnResourceNodes();
+    SpawnCapturePoints();
     SpawnStartingWorkers();
 }
 
@@ -109,6 +110,10 @@ bool Match::BootFromSave(const Supersonic::Json::Value& snapshot,
     // First arming: the schedule, so FromSave has something to clamp the saved
     // wave index against.
     m_director.Setup(spawn, m_layout.enemyX, m_layout.groundY);
+
+    // Level furniture exists on a restored boot as on a fresh one; its tug
+    // state is the save's business.
+    SpawnCapturePoints();
 
     const bool restored =
         Snapshot::Restore(snapshot, m_data, m_state, m_profile, m_director,
@@ -148,6 +153,9 @@ void Match::ClearBoard() {
     // both paths and load-bearing on only one.
     m_director.Reset();
 
+    // Before anything else goes: each point takes its army bonus with it.
+    m_capturePoints.clear();
+
     m_units.clear();
     m_buildings.clear();
     m_nodes.clear();
@@ -176,6 +184,18 @@ void Match::SpawnResourceNodes() {
     }
 }
 
+void Match::SpawnCapturePoints() {
+    // Geometry from the level's data, on the band's middle row: landmarks, not
+    // traffic.
+    for (const Value& config : m_data.LevelCapturePoints()) {
+        auto point = std::make_unique<CapturePoint>(m_state, m_bus);
+        point->Setup(config);
+        point->SetPosition(glm::vec2(config["x"].AsFloat(0.0f),
+                                     m_layout.groundY + m_layout.laneDepth * 0.5f));
+        m_capturePoints.push_back(std::move(point));
+    }
+}
+
 void Match::SpawnStartingWorkers() {
     const int count = static_cast<int>(m_data.Economy()["starting_workers"].AsNumber(0.0));
 
@@ -198,6 +218,7 @@ void Match::Step(double delta) {
     const size_t buildings = m_buildings.size();
     const size_t units = m_units.size();
 
+    for (const auto& point : m_capturePoints) point->Step(delta, m_lane);
     for (size_t i = 0; i < buildings; ++i) m_buildings[i]->Step(delta);
     for (size_t i = 0; i < units; ++i) m_units[i]->Step(delta);
 
@@ -218,6 +239,10 @@ void Match::StepUnits(double delta) {
 void Match::StepProjectiles(double delta) { m_projectiles.Step(delta, m_state.IsPlaying()); }
 
 void Match::StepDirector(double delta) { m_director.Step(delta); }
+
+void Match::StepCapturePoints(double delta) {
+    for (const auto& point : m_capturePoints) point->Step(delta, m_lane);
+}
 
 // --- Putting things on the board -------------------------------------------
 

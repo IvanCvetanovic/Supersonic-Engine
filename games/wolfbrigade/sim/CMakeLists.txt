@@ -18,6 +18,7 @@ add_library(WolfBrigadeSim STATIC
     AudioTones.cpp
     BuildPlacement.cpp
     Building.cpp
+    CapturePoint.cpp
     Commands.cpp
     DataValidator.cpp
     GameData.cpp

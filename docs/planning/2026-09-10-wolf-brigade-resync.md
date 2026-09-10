@@ -463,3 +463,56 @@ under them exist.
 - audio 5 (slice 11);
 - selection 5 (slice 10);
 - match 44 (slice 10): slice 0's 33, plus the eleven auto-production moved.
+
+## Slice 6: capture points
+
+**`CapturePoint`** ports `capture_point.gd`:
+- **A tug of war on presence.** Presence is scanned at about 8 Hz and measured
+  along the lane. The scan clock resets to zero rather than subtracting the
+  tick (the trap recorded above), so at 0.1 s steps it scans every other step.
+- **Progress** runs toward +1 (the player) or −1 (the enemy), and freezes while
+  both sides stand in it. The holder changes only at the extremes, or to
+  neutral when the tug crosses 0. Every change is announced on
+  `captureChanged`.
+- **Two bonus kinds.** An income point trickles its resource while the player
+  holds it. An army_damage point multiplies the player's unit damage. The
+  legacy flat `{resource, rate}` form reads as income.
+- **`ToSave` and `FromSave`** carry the tug and the holder. They are wired into
+  the snapshot in slice 9.
+
+**The army bonus is per run.** The original keeps a static registry on the
+class, which outlives the scene, so one harness's banner changes the next
+one's combat. The port keeps the product on `GameState`, in the order the
+points were taken.
+- A point deregisters itself when it is destroyed, as the original's
+  `_exit_tree` does, and `Match` destroys its points with the board.
+- `Unit::EffectiveDamage()` is damage times the product, rounded, never under
+  1, and for player units only. It feeds melee blows and arrows alike, as
+  `_effective_damage` does.
+
+**`Match`** spawns the level's points on both boot paths, as level furniture,
+on the band's middle row: 590 + 280 / 2 = 730. It ticks them first, because
+`main.tscn` lists CapturePoints before Resources, Buildings, Units and
+Projectiles.
+
+**Reproduced** at `50741d1`:
+- `verify_economy` 8: player presence captures the point, the tug reaches +1,
+  "held point trickles wood (+4)", the save round trip, and the enemy taking
+  it back.
+- `verify_economy` 9: the four banner lines.
+- `verify_levels`' six capture-config lines.
+
+**Added by the port:**
+- a contested point freezes;
+- a flip passes through neutral;
+- two banners multiply;
+- a destroyed point takes its bonus with it;
+- a second run never sees the first run's banner;
+- the shipped War Banner turns a soldier's 8 into 10 and leaves a raider's 6,
+  and arrows carry it too.
+
+**Not yet:** the layer does not draw the points, and a Continue does not
+restore their tug. That is slice 9.
+
+**Result (GCC, 10 September):** economy 79/0, combat 74/0 and data 131/0, and
+nothing regressed. Still red, and unchanged: audio 5, selection 5 and match 44.

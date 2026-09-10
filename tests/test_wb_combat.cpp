@@ -41,6 +41,7 @@
 #include "TestHarness.hpp"
 #include "WolfBrigadeFixture.hpp"
 
+#include "sim/CapturePoint.hpp"
 #include "sim/Damageable.hpp"
 #include "sim/EventBus.hpp"
 #include "sim/GameState.hpp"
@@ -673,6 +674,44 @@ void testAnArrowThatLandsOnALiveTargetDoesDealItsDamage() {
     CHECK_EQ(target.total, 6);
 }
 
+void testAHeldBannerStrengthensThePlayersBlowsAndOnlyTheirs() {
+    // `_effective_damage` at the game's 50741d1: damage times the held
+    // points' product, rounded, never under one. The shipped War Banner's 1.25
+    // turns a soldier's 8 into 10. A raider's 6 stays 6: holding a point is
+    // denial for the enemy, never a buff.
+    Fight fight;
+    const auto& points = fight.state.Data().LevelCapturePoints();
+    CHECK_EQ(static_cast<int>(points.size()), 2);
+    if (points.size() < 2) return;
+
+    CapturePoint banner(fight.state, fight.bus);
+    banner.Setup(points[1]);
+    CHECK_MSG(banner.BonusKind() == CapturePoint::kBonusArmyDamage, "the second is the War Banner");
+    banner.ForceProgress(1.0);
+
+    Unit* soldier = fight.Spawn(Ids::kSoldier, 2000.0f);
+    CountingTarget struck(2020.0f);
+    soldier->CommandAttack(&struck);
+    fight.Step(0.1);
+    CHECK_EQ(struck.total, 10);
+
+    Unit* raider = fight.Spawn(Ids::kRaider, 3000.0f);
+    CountingTarget other(3020.0f);
+    raider->CommandAttack(&other);
+    fight.Step(0.1);
+    CHECK_EQ(other.total, 6);
+
+    // And an archer's arrow carries the bonus too: the original's
+    // _fire_projectile passes _effective_damage, not the base.
+    Unit* archer = fight.Spawn(Ids::kArcher, 1000.0f);
+    CountingTarget far(1150.0f);
+    archer->CommandAttack(&far);
+    for (int i = 0; i < 20; ++i) fight.Step(0.1);
+    const int arrow = static_cast<int>(std::round(archer->Stats().damage * 1.25));
+    CHECK_MSG(far.hits >= 1 && far.total == far.hits * std::max(1, arrow),
+              "every arrow lands for the boosted damage");
+}
+
 void testFiringAtNothingIsHarmless() {
     // A pool asked for an arrow at a null target. It fizzles where it started
     // rather than dereferencing it - which is the same check that stops it
@@ -711,6 +750,7 @@ static void runTests() {
     testAnArrowArrivingAtACorpseDealsNothing();
     testAnArrowThatLandsOnALiveTargetDoesDealItsDamage();
     testFiringAtNothingIsHarmless();
+    testAHeldBannerStrengthensThePlayersBlowsAndOnlyTheirs();
     testArrowsFreezeWithTheRestOfTheBoard();
     testThePoolSettlesAtTheMostArrowsEverInTheAirAtOnce();
 }

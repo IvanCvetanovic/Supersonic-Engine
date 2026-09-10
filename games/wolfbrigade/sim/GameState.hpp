@@ -4,6 +4,10 @@
 #include <string>
 
 #include "sim/EventBus.hpp"
+#include <algorithm>
+#include <utility>
+#include <vector>
+
 #include "sim/GameData.hpp"
 #include "sim/UnitStats.hpp"
 
@@ -161,6 +165,35 @@ public:
         m_heroDownX = 0.0;
     }
 
+    // --- The army bonus from held capture points ----------------------------
+
+    // The product of every player-held army point's multiplier, in the order
+    // they were taken - the original's `CapturePoint.army_damage_mult()`.
+    //
+    // PER RUN, where the original's registry is a static on the class. There
+    // it outlives the scene, so one harness's banner changes the next one's
+    // combat; here each run has its own, and a point deregisters itself when
+    // its board goes.
+    double ArmyDamageMult() const {
+        double mult = 1.0;
+        for (const auto& bonus : m_armyBonuses) mult *= bonus.second;
+        return mult;
+    }
+    void SetArmyBonus(const void* source, double mult) {
+        for (auto& bonus : m_armyBonuses) {
+            if (bonus.first == source) {
+                bonus.second = mult;
+                return;
+            }
+        }
+        m_armyBonuses.emplace_back(source, mult);
+    }
+    void ClearArmyBonus(const void* source) {
+        m_armyBonuses.erase(std::remove_if(m_armyBonuses.begin(), m_armyBonuses.end(),
+                                           [source](const auto& bonus) { return bonus.first == source; }),
+                            m_armyBonuses.end());
+    }
+
     // --- Save --------------------------------------------------------------
 
     void SetCurrentWave(int wave) { m_currentWave = wave; }
@@ -204,6 +237,8 @@ private:
     bool m_workersSheltered{false};
     bool m_heroDown{false};
     double m_heroDownX{0.0};
+
+    std::vector<std::pair<const void*, double>> m_armyBonuses;
 };
 
 } // namespace WolfBrigade

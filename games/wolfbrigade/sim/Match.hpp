@@ -8,6 +8,7 @@
 
 #include "core/Json.hpp"
 #include "sim/BuildPlacement.hpp"
+#include "sim/CapturePoint.hpp"
 #include "sim/Commands.hpp"
 #include "sim/Building.hpp"
 #include "sim/EventBus.hpp"
@@ -203,10 +204,11 @@ public:
     // One frame, in the order Godot's scene tree runs it.
     //
     // `main.tscn` declares World before WaveDirector, and World's children in
-    // the order Resources, Buildings, Units, Projectiles, FloatingText. No
-    // script sets process_priority anywhere in the game, and at equal priority
-    // Godot walks the tree depth-first. So the game's order is
-    // Buildings -> Units -> Projectiles -> WaveDirector, and that is this.
+    // the order CapturePoints, Resources, Buildings, Units, Projectiles,
+    // FloatingText. No script sets process_priority anywhere in the game, and
+    // at equal priority Godot walks the tree depth-first. So the game's order
+    // is CapturePoints -> Buildings -> Units -> Projectiles -> WaveDirector,
+    // and that is this.
     //
     // THE ENTITY COUNTS ARE TAKEN ONCE, AT FRAME ENTRY, and that is not a
     // micro-optimisation. Godot builds the list of nodes to process before any
@@ -241,6 +243,7 @@ public:
     // units without the director, buildings without the units they train. The
     // real game never does; the harness this port is verified against does
     // exactly that, and there is no way to reproduce its numbers without it.
+    void StepCapturePoints(double delta);
     void StepBuildings(double delta);
     void StepUnits(double delta);
     void StepProjectiles(double delta);
@@ -296,6 +299,9 @@ public:
     const std::vector<std::unique_ptr<Unit>>& Units() const { return m_units; }
     const std::vector<std::unique_ptr<Building>>& Buildings() const { return m_buildings; }
     const std::vector<std::unique_ptr<ResourceNode>>& Nodes() const { return m_nodes; }
+    const std::vector<std::unique_ptr<CapturePoint>>& CapturePoints() const {
+        return m_capturePoints;
+    }
 
     const Layout& WorldLayout() const { return m_layout; }
 
@@ -403,6 +409,7 @@ private:
 
     void SpawnTownHall();
     void SpawnResourceNodes();
+    void SpawnCapturePoints();
     void SpawnStartingWorkers();
 
     // Drops everything and resets the derived indexes. Only a boot calls this.
@@ -495,6 +502,11 @@ private:
     WaveDirector m_director{m_data, m_state, m_bus};
     Lane m_lane;
     ProjectilePool m_projectiles;
+
+    // Level furniture, rebuilt from the level's data on every boot. Declared
+    // after m_state because each one deregisters its army bonus from it on the
+    // way out, so it has to go first.
+    std::vector<std::unique_ptr<CapturePoint>> m_capturePoints;
 
     Layout m_layout;
 

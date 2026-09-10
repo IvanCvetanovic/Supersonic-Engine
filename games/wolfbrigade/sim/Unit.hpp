@@ -134,6 +134,11 @@ public:
     // and nothing dies of it.
     void SetHp(int hp) { m_hp = hp; }
     const UnitStats& Stats() const { return m_stats; }
+
+    // What a blow or an arrow of this unit deals: its damage times the army
+    // bonus from held capture points, rounded, and never under one. The
+    // player's units only - an enemy holding a point is denial, not a buff.
+    int EffectiveDamage() const;
     const std::string& Faction() const { return m_stats.faction; }
     bool IsPlayer() const { return m_stats.faction == Factions::kPlayer; }
 

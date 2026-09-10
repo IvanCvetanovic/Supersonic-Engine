@@ -110,6 +110,9 @@ struct EventBus {
     Signal<class Building*> buildingCompleted;
     Signal<class Building*> buildingDestroyed;
 
+    // A capture point changed hands: to a faction, or "" for neutral.
+    Signal<class CapturePoint*, const std::string&> captureChanged;
+
     // Placement mode opened or closed.
     //
     // This is the edge the gesture machine has been waiting for.
