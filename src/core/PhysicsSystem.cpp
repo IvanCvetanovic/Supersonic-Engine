@@ -284,6 +284,18 @@ float linearInverseMass(const Body& body, const glm::vec3& direction) {
     return body.inverseMass * glm::dot(direction * direction, body.linearFactor);
 }
 
+// Whether a contact reads this body's velocity and spin: yes for what the solver
+// moves, and yes for a kinematic body, whose owner moves it and writes the
+// velocity that says so. Read, never written - the impulses stay gated on
+// inverse mass, so nothing here pushes a kinematic body.
+//
+// Left out, a platform looks still to the solve. A crate on one sliding sideways
+// feels no friction and is left behind; on one going down it is caught, stopped
+// dead and dropped again, a step at a time.
+bool presentsVelocity(const RigidBodyComponent* rigidBody, const Body& body) {
+    return rigidBody && (body.inverseMass > 0.0f || rigidBody->isKinematic);
+}
+
 
 // Inverse inertia, in the body's own axes, as a diagonal.
 //
@@ -795,7 +807,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         // never a candidate pair otherwise, and nothing downstream gets a chance
         // to stop it.
         glm::vec3 sweep(0.0f);
-        if (rigid && body.inverseMass > 0.0f) {
+        if (presentsVelocity(rigid, body)) {
             sweep = glm::abs(rigid->velocity) * deltaTime;
         }
         body.sweep = sweep;
@@ -901,7 +913,7 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             inverseInertiaLocal(rigid, Shape::Box, body.localHalfExtent, body.radius), body.axes));
 
         glm::vec3 sweep(0.0f);
-        if (rigid && body.inverseMass > 0.0f) sweep = glm::abs(rigid->velocity) * deltaTime;
+        if (presentsVelocity(rigid, body)) sweep = glm::abs(rigid->velocity) * deltaTime;
         body.sweep = sweep;
 
         body.min = body.centre - body.halfExtent;
@@ -1054,11 +1066,11 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
         if (!otherRigid) return;
 
         if (otherRigid->isKinematic) {
-            // A kinematic body is moved by code the solver cannot see: there is
-            // no velocity to test and no way to know it is about to slide out
-            // from under whatever is standing on it. So nothing resting on one
-            // is allowed to sleep at all - the timer below is reset every step
-            // the contact lasts.
+            // A kinematic body is moved by code the solver cannot see. The
+            // contact reads the velocity its owner writes, but nothing here can
+            // know that velocity is about to change - a lift stops, a platform
+            // turns back - so nothing resting on one is allowed to sleep at all:
+            // the timer below is reset every step the contact lasts.
         } else {
             if (otherRigid->isSleeping) return;
 
@@ -1558,13 +1570,15 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // Restitution from the velocities as they are NOW, before any
             // impulse. Recomputing it inside the iteration would feed the
             // solver its own output, and a resting stack climbs.
-            const glm::vec3 spinA = (rigidA && a.inverseMass > 0.0f) ? rigidA->angularVelocity : glm::vec3(0.0f);
-            const glm::vec3 spinB = (rigidB && b.inverseMass > 0.0f) ? rigidB->angularVelocity : glm::vec3(0.0f);
+            const bool surfaceA = presentsVelocity(rigidA, a);
+            const bool surfaceB = presentsVelocity(rigidB, b);
+            const glm::vec3 spinA = surfaceA ? rigidA->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 spinB = surfaceB ? rigidB->angularVelocity : glm::vec3(0.0f);
             const glm::vec3 velocityA =
-                ((rigidA && a.inverseMass > 0.0f) ? rigidA->velocity : glm::vec3(0.0f))
+                (surfaceA ? rigidA->velocity : glm::vec3(0.0f))
                 + glm::cross(spinA, constraint.armA);
             const glm::vec3 velocityB =
-                ((rigidB && b.inverseMass > 0.0f) ? rigidB->velocity : glm::vec3(0.0f))
+                (surfaceB ? rigidB->velocity : glm::vec3(0.0f))
                 + glm::cross(spinB, constraint.armB);
             const float alongNormal = glm::dot(velocityB - velocityA, constraint.normal);
 
@@ -1970,12 +1984,17 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             const bool movableB = rigidB && bodyB.inverseMass > 0.0f;
             if (!movableA && !movableB) continue;
 
-            const glm::vec3 spinA = movableA ? rigidA->angularVelocity : glm::vec3(0.0f);
-            const glm::vec3 spinB = movableB ? rigidB->angularVelocity : glm::vec3(0.0f);
+            // Read from whatever moves, pushed only where the solver moves it:
+            // a kinematic body's velocity is part of the contact, and nothing
+            // below writes to one.
+            const bool surfaceA = presentsVelocity(rigidA, bodyA);
+            const bool surfaceB = presentsVelocity(rigidB, bodyB);
+            const glm::vec3 spinA = surfaceA ? rigidA->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 spinB = surfaceB ? rigidB->angularVelocity : glm::vec3(0.0f);
             const glm::vec3 velocityA =
-                (movableA ? rigidA->velocity : glm::vec3(0.0f)) + glm::cross(spinA, constraint.armA);
+                (surfaceA ? rigidA->velocity : glm::vec3(0.0f)) + glm::cross(spinA, constraint.armA);
             const glm::vec3 velocityB =
-                (movableB ? rigidB->velocity : glm::vec3(0.0f)) + glm::cross(spinB, constraint.armB);
+                (surfaceB ? rigidB->velocity : glm::vec3(0.0f)) + glm::cross(spinB, constraint.armB);
 
             const glm::vec3 relative = velocityB - velocityA;
 
@@ -2006,11 +2025,11 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             // included: friction acts on the SURFACE speed, which is zero for a
             // ball rolling without slipping and is the entire reason a ball
             // rolls rather than slides.
-            const glm::vec3 postSpinA = movableA ? rigidA->angularVelocity : glm::vec3(0.0f);
-            const glm::vec3 postSpinB = movableB ? rigidB->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 postSpinA = surfaceA ? rigidA->angularVelocity : glm::vec3(0.0f);
+            const glm::vec3 postSpinB = surfaceB ? rigidB->angularVelocity : glm::vec3(0.0f);
             const glm::vec3 postRelative =
-                ((movableB ? rigidB->velocity : glm::vec3(0.0f)) + glm::cross(postSpinB, constraint.armB)) -
-                ((movableA ? rigidA->velocity : glm::vec3(0.0f)) + glm::cross(postSpinA, constraint.armA));
+                ((surfaceB ? rigidB->velocity : glm::vec3(0.0f)) + glm::cross(postSpinB, constraint.armB)) -
+                ((surfaceA ? rigidA->velocity : glm::vec3(0.0f)) + glm::cross(postSpinA, constraint.armA));
 
             glm::vec3 tangent = postRelative - constraint.normal * glm::dot(postRelative, constraint.normal);
             const float tangentLength = glm::length(tangent);

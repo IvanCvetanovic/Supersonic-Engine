@@ -437,11 +437,57 @@ Two more findings, recorded and not fixed:
   because g·dt (0.16 m/s) is above `kRestVelocity` (0.1). The port has to decide
   what the original's static fixtures bounced at, and give the statics that.
 
+### F1 - built, 10 September
+
+The contact solve now reads a kinematic body's velocity and spin
+(ARCHITECTURE.md §7m). It reads them in four places:
+- restitution, when the constraint is built;
+- the normal term in the solve;
+- the friction term in the solve;
+- the sweep.
+
+It never writes them: impulses are still gated on inverse mass. A scene with no
+kinematic body, or none whose velocity is written, steps exactly as before, and
+`test_determinism` keeps its constant.
+
+Riders, measured on GCC 13.3 and MSVC 14.50, locked and unlocked alike:
+
+| Rider | Carried | Gap | Free fall |
+|---|---|---|---|
+| Slab rising 1 m/s | 1.000 (was 0.996) | -0.45 to -0.28 px | |
+| Sinking 0.5 m/s | 1.000 (was 0.961) | -0.28 to 0.13 px | 0.62 px |
+| Sinking 1 m/s | 1.000 (was 0.936) | -0.28 to 1.80 px | 2.50 px |
+| Sinking 2 m/s | 1.000 (was 0.893) | -0.28 to 8.88 px | 10.00 px |
+| Sinking 1 m/s, velocity unwritten | 0.936, unchanged | 0.41 to 3.05 px | 2.50 px |
+| Sinking 1 m/s, default slab | 1.000 (was 0.860) | -0.28 to 2.00 px | 2.50 px |
+| Sliding sideways 1 m/s | 0.942 (was 0.000) | -0.28 to -0.25 px | |
+
+The criterion written before the fix was that a slab going down must take its
+rider with it, and every sinking row now does. The one drop left is physics, not
+the solver. The slab starts at full speed, so its rider falls free until it
+catches up, and the gap stays under v²/2g.
+
+Sideways, friction brings the rider up to the slab's speed in about a tenth of
+a second at μ = 1, which leaves it 0.058 of the way behind. The unwritten row is
+the contract's other half: a platform moved without its velocity is still only
+a displacement.
+
+Drift, landing, triggers and portal are unchanged, and the unlocked table is as
+it was after the narrowphase fix. 0 thresholds fail.
+
+Tests: `test_physics` gains two, 274 checks in all.
+- **A crate rides a platform that slides.** The same platform, moved without
+  its velocity written, carries nothing.
+- **A crate rides a lift down,** with no daylight once it has caught up.
+
+With the old rule put back, both fail. The first carries its crate 0.000016 m,
+and the second leaves 0.071 m of daylight in the second half-second. The
+unwritten control passes either way.
+
 ### Next
 
-1. **F1's descending half.** Give a kinematic body's velocity to the contact
-   solve, then rerun the spike's rider rows: a slab going down must take its
-   rider with it.
-2. **The port proper, on level30.** A dynamic player with rotation frozen,
+1. **The port proper, on level30.** A dynamic player with rotation frozen,
    driven by the remake's `player.json` (as data), with the portal system on
-   `Portal.hpp`. Settle what the statics bounce at (above) as part of it.
+   `Portal.hpp`. Movers write their velocity along with their transform, which
+   is what makes them carry. Settle what the statics bounce at (above) as part
+   of it.

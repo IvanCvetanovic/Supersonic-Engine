@@ -1749,8 +1749,9 @@ Four things wake a body, and the fourth is a rule about not sleeping at all:
 | It is touching a kinematic body | it is never allowed to sleep in the first place |
 
 The kinematic rule is the conservative one. A kinematic body is moved by code the
-solver cannot see, so there is no velocity to read and no way to know it is about
-to slide out from under whatever is standing on it — a lift would arrive at the
+solver cannot see: the contact reads the velocity that code writes, but there is
+no way to know the velocity is about to change, or that it was written at all -
+no way to know the body is about to slide out from under whatever is standing on it — a lift would arrive at the
 top floor with its cargo left behind in the air. Anything resting on one
 therefore has its sleep timer reset every step the contact lasts. A *static*
 collider, which is what an ordinary floor is, wakes nothing: resting on the floor
@@ -1895,12 +1896,16 @@ Listed rather than hidden, in the same spirit as the rest of this document.
   A pair that touches along a face is therefore separated along the average of
   where it touches, not per corner.
 - **Kinematic bodies are not simulated.** Integration skips them and their
-  inverse mass is zero, so nothing pushes them. What they do to what they touch
-  is narrower than it sounds: their velocity and spin are excluded from the
-  contact solve, so a moving one shoves a body out of its way through the
-  positional correction but imparts no impulse. A crate does not ride a moving
-  platform, it is only displaced by it. Moving one is the script's job, and
-  moving one quickly moves it through things.
+  inverse mass is zero, so nothing pushes them. Their velocity and spin ARE
+  part of every contact they make: the solve reads them (and never writes
+  them), friction acts on the surface speed between the two, and a moving one
+  sweeps its gap like anything else. So a crate rides a sliding platform and
+  goes down with a lift. Moving one is the script's job, and the job has two
+  halves: the transform, and the velocity that says how fast it is moving. A
+  platform moved without its velocity is only a displacement - it shoves what
+  it meets through the positional correction and carries nothing, which is how
+  every kinematic body behaved before this was fixed (the Magic Portals spike,
+  F1). Joints are unchanged: a joint's end reads no kinematic velocity.
 - **Single-threaded, on purpose.** Contacts are resolved in sequence and each one
   writes the velocity the next one reads; splitting that across workers changes
   the answer rather than speeding it up. The job system is spent where the work

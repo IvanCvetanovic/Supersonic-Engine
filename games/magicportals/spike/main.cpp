@@ -10,9 +10,10 @@
 //   MagicPortalsSpike [--unlocked] [levels-dir] [data-dir]
 //
 // Every body is locked to the plane (S1, LevelBuilder::kPlaneLock*) unless
-// --unlocked is given, which measures the solver as it was before the locks -
-// and, since an unlocked body's arithmetic is unchanged, must reproduce the
-// first table in the doc to the digit.
+// --unlocked is given, which measures the solver with no locks. An unlocked
+// body's arithmetic is what it was before the locks, so this reproduced the
+// doc's first table to the digit - until the narrowphase fix under it
+// (df48b20) changed how bodies land. The doc records both tables.
 //
 // Built with -DSUPERSONIC_BUILD_MAGICPORTALS=ON. The level is read from outside
 // the repository (SUPERSONIC_MAGICPORTALS_LEVELS); the player's size and the
@@ -355,8 +356,8 @@ struct Rider {
 // mover gets from LevelBuilder (friction 1, bounce 0); off, it keeps the
 // engine's RigidBodyComponent defaults (friction 0.4, bounce 0.3), which is
 // what the first run's rig had. writeVelocity says whether the slab's velocity
-// field is written each tick at all - if nothing reads it, it makes no
-// difference.
+// field is written each tick at all: the contact solve reads it, and a slab moved
+// without one is only a displacement.
 Rider MeasureRider(const Tscn::Scene& scene, const Paths& paths, const glm::vec3& velocity,
                    bool builderMaterial, bool writeVelocity) {
     const Tscn::Node* shape = scene.FindNode("platform_ent_966/Body/Shape");
@@ -404,9 +405,9 @@ Rider MeasureRider(const Tscn::Scene& scene, const Paths& paths, const glm::vec3
     rider.highGapPx = -std::numeric_limits<double>::infinity();
     for (int i = 0; i < 60; ++i) {
         registry.get<TransformComponent>(platform).position += velocity * kStep;
-        // Written - and, as of 4764d94, not read by the contact solve, which
-        // leaves a kinematic body's velocity out (ARCHITECTURE.md 7m). That is
-        // F1. The diagnostic row leaves it unwritten to show exactly that.
+        // Written, and read: the contact solve takes a kinematic body's
+        // velocity (ARCHITECTURE.md 7m). The diagnostic row leaves it
+        // unwritten, which is how a platform behaved before F1.
         if (writeVelocity) registry.get<RigidBodyComponent>(platform).velocity = velocity;
         PhysicsSystem::Update(registry, kStep);
         const double gap = gapPx();

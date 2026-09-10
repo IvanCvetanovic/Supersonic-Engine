@@ -2539,6 +2539,88 @@ static void testABodyOnAKinematicPlatformNeverSleeps() {
               "the same body on a static floor must sleep");
 }
 
+// A platform the tests move the way a script moves a lift: the transform by a
+// step's worth, and - when `writeVelocity` - the velocity that says so, which is
+// the half the contact solve reads.
+static entt::entity makeKinematicPlatform(entt::registry& registry) {
+    const auto platform = registry.create();
+    registry.emplace<TransformComponent>(platform, glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(6.0f, 1.0f, 6.0f));
+    registry.emplace<BoxColliderComponent>(platform);
+    auto& body = registry.emplace<RigidBodyComponent>(platform);
+    body.isKinematic = true;
+    body.friction = 1.0f;
+    body.restitution = 0.0f;
+    return platform;
+}
+
+static entt::entity makeCargo(entt::registry& registry) {
+    const auto cargo = makeBox(registry, glm::vec3(0.0f, 1.0f, 0.0f));
+    auto& body = registry.get<RigidBodyComponent>(cargo);
+    body.friction = 1.0f;
+    body.restitution = 0.0f;
+    body.allowSleep = false;
+    return cargo;
+}
+
+static void stepPlatform(entt::registry& registry, entt::entity platform, const glm::vec3& velocity,
+                         bool writeVelocity = true) {
+    registry.get<TransformComponent>(platform).position += velocity * (1.0f / 60.0f);
+    if (writeVelocity) registry.get<RigidBodyComponent>(platform).velocity = velocity;
+    PhysicsSystem::Update(registry, 1.0f / 60.0f);
+}
+
+static void testACrateRidesAPlatformThatSlides() {
+    // Friction acts on the SURFACE speed, and a kinematic platform's velocity
+    // was left out of it: the solver saw a crate at rest on a floor at rest,
+    // and the platform slid out from under its cargo.
+    for (const bool writeVelocity : {true, false}) {
+        entt::registry registry;
+        const auto platform = makeKinematicPlatform(registry);
+        const auto cargo = makeCargo(registry);
+        stepFor(registry, 0.5f);
+
+        const float start = registry.get<TransformComponent>(cargo).position.x;
+        for (int i = 0; i < 60; ++i) stepPlatform(registry, platform, glm::vec3(1.0f, 0.0f, 0.0f), writeVelocity);
+        const float carried = registry.get<TransformComponent>(cargo).position.x - start;
+
+        if (writeVelocity) {
+            CHECK_MSG(carried > 0.9f, "carried " + std::to_string(carried) + " m of the platform's 1 m");
+            CHECK_MSG(test::nearly(registry.get<RigidBodyComponent>(cargo).velocity.x, 1.0f, 0.02f),
+                      "and moving with it by the end");
+        } else {
+            // The contract's other half. Moved WITHOUT its velocity written, a
+            // kinematic body is only a displacement, exactly as before.
+            CHECK_MSG(std::fabs(carried) < 0.01f,
+                      "a platform moved without its velocity carries nothing, and it carried " +
+                          std::to_string(carried) + " m");
+        }
+    }
+}
+
+static void testACrateRidesALiftDown() {
+    // A lift going down at 1 m/s. Its velocity left out, the solver saw a floor
+    // at rest: each catch stopped the crate dead and the lift dropped away again,
+    // a sawtooth that never ends. Now the first drop is the only one - the lift
+    // starts at full speed, so the crate falls free until it catches up, which is
+    // physics - and from then on it rides.
+    entt::registry registry;
+    const auto platform = makeKinematicPlatform(registry);
+    const auto cargo = makeCargo(registry);
+    stepFor(registry, 0.5f);
+
+    float worstLateGap = 0.0f;
+    for (int i = 0; i < 60; ++i) {
+        stepPlatform(registry, platform, glm::vec3(0.0f, -1.0f, 0.0f));
+        const float gap = (registry.get<TransformComponent>(cargo).position.y - 0.5f) -
+                          (registry.get<TransformComponent>(platform).position.y + 0.5f);
+        if (i >= 30) worstLateGap = std::max(worstLateGap, gap);
+    }
+    CHECK_MSG(worstLateGap < 0.005f, "once caught it rides: " + std::to_string(worstLateGap) +
+                                         " m of daylight at worst in the second half-second");
+    CHECK_MSG(test::nearly(registry.get<RigidBodyComponent>(cargo).velocity.y, -1.0f, 0.02f),
+              "and it goes down at the lift's speed");
+}
+
 static void testASleepingBodyStillReportsItsContacts() {
     // Sleeping removes the RESPONSE, not the report. A trigger volume must not
     // forget about something that fell asleep inside it, and anything diffing
@@ -3274,6 +3356,8 @@ static void runTests() {
     testWritingVelocityWakesASleepingBody();
     testMovingASleepingBodyWakesIt();
     testABodyOnAKinematicPlatformNeverSleeps();
+    testACrateRidesAPlatformThatSlides();
+    testACrateRidesALiftDown();
     testASleepingBodyStillReportsItsContacts();
     testSleepCanBeTurnedOff();
     testAStackOfBoxesSettlesInsteadOfSinking();
