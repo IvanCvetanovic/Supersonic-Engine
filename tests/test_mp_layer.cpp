@@ -377,6 +377,62 @@ void ABrokenWallTakesItsBoxWithIt() {
     layer.OnDetach(registry);
 }
 
+void ARetryTakesTheThrownStonesAway() {
+    // level23's launcher throws on its own. After its first stone, R: the level
+    // comes back as it loaded, with no thrown stone, no box for one and the
+    // launcher's count at nothing. Its next throw is a whole first delay from
+    // the retry.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level23");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    if (layer.SimLevel() == nullptr || layer.SimLevel()->launchers.launchers.size() != 1) return;
+    const auto spheres = [&registry] {
+        int count = 0;
+        for (const entt::entity entity : registry.view<SphereColliderComponent>()) {
+            (void)entity;
+            ++count;
+        }
+        return count;
+    };
+    const auto thrownBoxes = [&registry] {
+        int count = 0;
+        for (auto [entity, tag] : registry.view<TagComponent>().each()) {
+            (void)entity;
+            if (tag.tag == "Magic Portals Thrown") ++count;
+        }
+        return count;
+    };
+    const auto thrown = [&layer] { return layer.SimLevel()->launchers.launchers.front().thrown; };
+    const int loadedSpheres = spheres();
+    int first = 0;
+    while (first < 400 && thrown() < 1) {
+        tickWith(layer, registry, kRest, {}, {});
+        ++first;
+    }
+    CHECK_EQ(layer.SimLevel()->launchers.live.size(), std::size_t{1});
+    CHECK_EQ(thrownBoxes(), 1);
+    CHECK_EQ(spheres(), loadedSpheres + 1);
+
+    press(layer, registry, MagicPortalsLayer::kRetry);
+    CHECK(IsAt(layer, "level23"));
+    if (layer.SimLevel() == nullptr) return;
+    CHECK(layer.SimLevel()->launchers.live.empty());
+    CHECK_EQ(thrown(), 0);
+    CHECK_EQ(thrownBoxes(), 0);
+    CHECK_EQ(spheres(), loadedSpheres);
+    // The tick that pressed R played the reloaded level's first tick.
+    int again = 1;
+    while (again < 400 && thrown() < 1) {
+        tickWith(layer, registry, kRest, {}, {});
+        ++again;
+    }
+    CHECK_MSG(again == first, "first thrown " + std::to_string(first) + " ticks in, and " + std::to_string(again) +
+                                  " after the retry");
+    layer.OnDetach(registry);
+}
+
 void TheChapterEnds() {
     entt::registry registry;
     publishViewport(registry);
@@ -410,6 +466,7 @@ void runTests() {
     NSkipsWhatThePortRefuses();
     DeathIsAnInstantRetry();
     ABrokenWallTakesItsBoxWithIt();
+    ARetryTakesTheThrownStonesAway();
     TheChapterEnds();
     AStartThatIsNoLevelSaysSo();
 }

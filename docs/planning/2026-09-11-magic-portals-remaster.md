@@ -648,11 +648,18 @@ score counts.
   - A destroyier takes a stone back on the tick. With the despawners removed,
     the same stone stays.
   - Just inside the cull box's bottom edge a stone stays, and just past it the
-    stone goes.
+    stone goes. Only the bottom edge is tested. In level23 the other three sit
+    behind the level's own walls, which push a stone back inside before the
+    cull looks.
 - **Through a portal pair.**
   - Level23's wall and level24's wall are each broken by the first thrown
     stone, at 1.98 s and 1.95 s.
   - Level25's button is pressed by it at 2.90 s, and its door rises.
+
+`test_mp_layer` adds a retry in level23 after its first throw. The retry takes
+every thrown stone and its box away and sets the launcher's count back to
+nothing. The next throw comes a whole first delay after the retry, on the same
+tick as the first did.
 
 The inventory after step 7: chapter 1 has 32 levels starting and 24 playing.
 Chapters 2 to 4 are unchanged. What is left in chapter 1:
@@ -672,7 +679,7 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_hazards | 19 | 0 |
 | test_mp_movers | 53 | 0 |
 | test_mp_timed | 50 | 0 |
-| test_mp_layer | 52 | 0 |
+| test_mp_layer | 62 | 0 |
 | test_mp_camera | 15 | 0 |
 | test_mp_chapters | 39 | 0 |
 | test_mp_statics | 65 | 0 |
