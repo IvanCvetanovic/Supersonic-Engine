@@ -26,6 +26,7 @@
 #include "core/SimulationClock.hpp"
 #include "core/ViewportInfo.hpp"
 
+#include "sim/Art.hpp"
 #include "sim/Units.hpp"
 
 #include <cmath>
@@ -574,7 +575,10 @@ void TheLevelsArtIsDrawn() {
     const int bodies = Tagged(registry, "Magic Portals Body");
     CHECK(bodies > 0);
     CHECK_MSG(Shown(registry, "Magic Portals Body") == 0, "the art stands in for the bodies' boxes");
-    CHECK_MSG(Shown(registry, "Magic Portals Player") == 1, "and the player, which no level pictures, is a box");
+    // No level pictures the player: it is the original's character when those
+    // images are there (9d), and its box when they are not - one or the other.
+    CHECK_MSG(Shown(registry, "Magic Portals Player") + Shown(registry, "Magic Portals Player Sprite") == 1,
+              "and the player is drawn once, as the character or as its box");
     press(layer, registry, MagicPortalsLayer::kBoxes);
     CHECK(layer.ShowingBoxes());
     CHECK_MSG(Shown(registry, "Magic Portals Body") == bodies, "B shows every body's box");
@@ -712,6 +716,63 @@ void WithoutTheOriginalThePortalIsABox() {
     layer.OnDetach(registry);
 }
 
+void ThePlayerIsTheDarkMage() {
+    // dark_mage.ent's sheet. A level starts on its start frame, standing. It
+    // walks through a row of four while a direction is held, on the row that
+    // direction reads, turns when it turns, and stands on the idle column of
+    // the way it last walked. Which row and column are art.json's; only the
+    // start frame is pinned here.
+    if (!OriginalArtIsThere("ThePlayerIsTheDarkMage")) return;
+    MagicPortals::Art::Rules rules;
+    std::string error;
+    CHECK_MSG(MagicPortals::Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", rules, error),
+              error);
+    const MagicPortals::Art::Character& mage = rules.character;
+    const auto rowStart = [&mage](int row) { return static_cast<uint32_t>(row * mage.columns); };
+
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level8");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    entt::entity mageQuad = entt::null;
+    for (auto [entity, tag] : registry.view<TagComponent>().each()) {
+        if (tag.tag == "Magic Portals Player Sprite") mageQuad = entity;
+    }
+    CHECK(mageQuad != entt::null);
+    if (mageQuad == entt::null) return;
+    const auto animation = [&registry, mageQuad]() -> const SpriteAnimationComponent& {
+        return registry.get<SpriteAnimationComponent>(mageQuad);
+    };
+    const MaterialComponent& material = registry.get<MaterialComponent>(mageQuad);
+    CHECK_MSG(material.albedoTexturePath.find("magic_portals_hd.png") != std::string::npos &&
+                  material.blend == MaterialComponent::BlendMode::Alpha && animation().columns == 4 &&
+                  animation().rows == 4,
+              "dark_mage.ent's sheet, cut 4 x 4, mixed");
+    CHECK_MSG(animation().firstFrame == 4 && animation().frameCount == 1 && !animation().playing,
+              "standing on the start frame");
+    CHECK_MSG(Shown(registry, "Magic Portals Player") == 0, "and its box stands behind it");
+    const glm::dvec2 drawn = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(mageQuad).position);
+    const glm::dvec2 body = playerPx(registry, layer);
+    CHECK_MSG(std::fabs(drawn.x - body.x) < 0.01 && std::fabs(drawn.y - (body.y - 2.0)) < 0.01,
+              "its pivot, 2 px below the middle, on the body: " + Point(drawn) + " for " + Point(body));
+
+    tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+    CHECK_MSG(animation().firstFrame == rowStart(mage.rightRow) && animation().frameCount == 4 &&
+                  animation().playing,
+              "walking right, through the right row");
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(animation().firstFrame == rowStart(mage.rightRow) + static_cast<uint32_t>(mage.idleColumn) &&
+                  animation().frameCount == 1 && !animation().playing,
+              "standing, still facing right");
+    tickWith(layer, registry, kRest, {MagicPortalsLayer::kLeft}, {});
+    CHECK_MSG(animation().firstFrame == rowStart(mage.leftRow) && animation().frameCount == 4,
+              "and turned to walk left");
+    layer.OnDetach(registry);
+    CHECK_EQ(Tagged(registry, "Magic Portals Player Sprite"), 0);
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     ATapLandsWhereItPoints();
@@ -724,6 +785,7 @@ void runTests() {
     WithoutTheArtTheLevelIsBoxes();
     APortalAndAShotAreTheOriginals();
     WithoutTheOriginalThePortalIsABox();
+    ThePlayerIsTheDarkMage();
     ABrokenWallTakesItsBoxWithIt();
     ARetryTakesTheThrownStonesAway();
     TheChapterEnds();

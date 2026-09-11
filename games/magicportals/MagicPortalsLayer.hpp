@@ -53,7 +53,7 @@ namespace MagicPortals {
 //  - What the levels do not picture, the game draws as the original's own
 //    entities draw it (Art.hpp): the portals a shot opens, and the shot. Their
 //    images are read from the original's extracted assets; without them they
-//    are boxes. The player is still a box.
+//    are boxes. So is the player: dark_mage.ent's sheet, turned as it walks.
 class MagicPortalsLayer final : public Supersonic::EngineLayer {
 public:
     // The port's tick: the remake's physics runs at Godot's default 60 Hz.
@@ -253,6 +253,9 @@ private:
     Art::Rules m_artRules;                  // the port's art.json
     std::vector<entt::entity> m_portalQuads; // one per placed portal, when its image is there
     entt::entity m_shotQuad{entt::null};    // the shot in flight, when its image is there
+    entt::entity m_playerQuad{entt::null};  // the player, when its image is there
+    float m_direction{0.0f};                // this tick's walk: -1 left, 1 right, 0 standing
+    bool m_facingRight{false};              // which way the player last walked
 
     struct Hud {
         entt::entity status{entt::null};

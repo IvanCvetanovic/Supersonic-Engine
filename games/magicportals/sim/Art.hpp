@@ -26,9 +26,21 @@ struct Picture {
     int Frames() const { return columns * rows; }
 };
 
+// The player, as dark_mage.ent draws it: a sheet whose rows are directions and
+// whose columns are a walk.
+struct Character : Picture {
+    int startFrame = 0;    // the .ent's startFrame
+    double pivotXPx = 0.0; // its PivotAdjust: the point of the image, from its
+    double pivotYPx = 0.0; // centre, that stands on the entity
+    int leftRow = 0;       // derived from the decoded DIRECTION enum, not testimony
+    int rightRow = 0;
+    int idleColumn = 0;    // _guess
+};
+
 struct Rules {
-    Picture portal; // portal.ent
-    Picture shot;   // projectile.ent
+    Picture portal;      // portal.ent
+    Picture shot;        // projectile.ent
+    Character character; // dark_mage.ent, the player
 };
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error);

@@ -12,6 +12,14 @@ namespace {
 
 namespace Json = Supersonic::Json;
 
+bool WholeBelow(const Json::Value& value, int below, int& out) {
+    if (!value.IsNumber()) return false;
+    const double n = value.AsNumber();
+    if (n < 0.0 || n != std::floor(n) || n >= below) return false;
+    out = static_cast<int>(n);
+    return true;
+}
+
 bool WholeAtLeastOne(const Json::Value& value, int& out) {
     if (!value.IsNumber()) return false;
     const double n = value.AsNumber();
@@ -66,17 +74,36 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         error = path + ": " + parser.Error();
         return false;
     }
-    if (!root.IsObject() || !root.Has("portal") || !root.Has("shot")) {
-        error = path + ": portal and shot are each an object";
+    if (!root.IsObject() || !root.Has("portal") || !root.Has("shot") || !root.Has("character")) {
+        error = path + ": portal, shot and character are each an object";
         return false;
     }
     Rules read;
     std::string why;
     if (!ReadPicture(root["portal"], "portal", read.portal, why) ||
-        !ReadPicture(root["shot"], "shot", read.shot, why)) {
+        !ReadPicture(root["shot"], "shot", read.shot, why) ||
+        !ReadPicture(root["character"], "character", static_cast<Picture&>(read.character), why)) {
         error = path + ": " + why;
         return false;
     }
+    // What the player's sheet adds: where it starts, where it stands, which row
+    // walks which way, and which column it stands on.
+    const Json::Value& character = root["character"];
+    Character& mage = read.character;
+    const Json::Value& pivot = character["pivot_px"];
+    const Json::Value& rowsBy = character["rows_by_direction"];
+    if (!character.Has("start_frame") || !WholeBelow(character["start_frame"], mage.Frames(), mage.startFrame) ||
+        !pivot.IsArray() || pivot.AsArray().size() != 2 || !pivot.AsArray()[0].IsNumber() ||
+        !pivot.AsArray()[1].IsNumber() || !rowsBy.IsObject() || !rowsBy.Has("left") ||
+        !WholeBelow(rowsBy["left"], mage.rows, mage.leftRow) || !rowsBy.Has("right") ||
+        !WholeBelow(rowsBy["right"], mage.rows, mage.rightRow) || !character["animation"].Has("idle_column") ||
+        !WholeBelow(character["animation"]["idle_column"], mage.columns, mage.idleColumn)) {
+        error = path + ": character needs start_frame, pivot_px, rows_by_direction.left and .right, and "
+                       "animation.idle_column, each inside its sheet";
+        return false;
+    }
+    mage.pivotXPx = pivot.AsArray()[0].AsNumber();
+    mage.pivotYPx = pivot.AsArray()[1].AsNumber();
     out = std::move(read);
     return true;
 }

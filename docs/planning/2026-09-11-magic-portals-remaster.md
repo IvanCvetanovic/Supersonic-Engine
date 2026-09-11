@@ -1002,3 +1002,54 @@ digit:
 | test_mp_start | 496 | 0 |
 
 The other MP suites are unchanged from 9b.
+
+### 9d - the player (built)
+
+The owner said on 11 September that the character turns as it walks in
+different directions. The rest comes from the original's data and code.
+- **What draws it.** `dark_mage.ent`: `magic_portals_hd.png`, cut 4 x 4 into
+  cells of 40x56, mixed. It starts on frame 4, with `PivotAdjust` (0, 2).
+  - Ethanon puts an image's pivot on its entity
+    (`ETHSpriteEntity::ComputeInScreenSpriteCenter`), so the character is
+    drawn 2 px above its body's centre.
+  - These are the `.ent`'s facts, and `test_mp_sprites` pins them.
+- **Which row walks which way.** This is derived, not testimony:
+  - The original's `DIRECTION` enum decodes to `MOVING_DOWN` 0, `MOVING_LEFT`
+    1, `MOVING_RIGHT` 2 and `MOVING_UP` 3.
+  - Ethanon's own sample picks a character's row by its direction and its
+    column by a frame timer (`Sample-project/main.angelscript:102`). The
+    original's character has the same parts: `frameStride`, `idleColumn` and
+    `findCharacterDirection`.
+  - The sheet's row 1 faces left and row 2 right. The start frame, 4, is on
+    the left row, so a level starts with the character facing left.
+
+  If the walk looks wrong when the owner plays, this is the line to revisit.
+- **How it moves.**
+  - While a direction is held, it walks through that row's four columns.
+  - When the key is let go, it stands on the idle column of the way it last
+    walked.
+  - It turns when the direction turns.
+  - The animation runs on `SpriteAnimationComponent`, on the tick.
+- **Guessed.**
+  - How fast it walks: 10 frames a second, for the original's `frameStride`.
+  - Which column it stands on: 0, for `idleColumn`. The start frame is the
+    only anchor for that.
+- **Not used.** Rows 0 and 3, the arm-out poses. The character's `pushing`
+  suggests them, and nothing says when.
+- **Walking into a wall** still walks in place, because the walk follows the
+  key, not the speed.
+
+Two 9b checks were brought up to date. One is the hand-written `art.json`
+that must be refused for a sheet with no frame rate; it now needs a
+character too. The other said the player is a box; now the player is drawn
+exactly once, as the character or as its box.
+
+Rendered on the laptop's AMD Radeon 780M, levels 1-1 and 1-9 show the
+character standing on the floor, facing left on its start frame.
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_sprites | 82 | 0 |
+| test_mp_layer | 120 | 0 |
+
+The other MP suites are unchanged.

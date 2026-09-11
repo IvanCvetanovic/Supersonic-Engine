@@ -26,5 +26,38 @@
       "_guess": true,
       "frames_per_second": 15.0
     }
+  },
+
+  "character": {
+    "_source": "the original's dark_mage.ent: Sprite magic_portals_hd.png, blendMode 0, SpriteCut 4 x 4, startFrame 4, PivotAdjust (0, 2)",
+    "sprite": "magic_portals_hd.png",
+    "additive": false,
+    "columns": 4,
+    "rows": 4,
+    "start_frame": 4,
+    "pivot_px": [0, 2],
+    "rows_by_direction": {
+      "_note": [
+        "Which row of the sheet walks which way: derived, not testimony. The original's",
+        "DIRECTION enum decodes to MOVING_DOWN 0, MOVING_LEFT 1, MOVING_RIGHT 2, MOVING_UP 3",
+        "(the remake's tools/asbc), and Ethanon's own sample picks a character's row by its",
+        "direction and its column by a frame timer (Sample-project/main.angelscript:102). The",
+        "sheet's row 1 faces left and row 2 right. The owner confirmed on 11 September that the",
+        "character turns as it walks; not which rows do it. Rows 0 and 3, arm out, are not",
+        "used: the character's `pushing` suggests them, and nothing says when."
+      ],
+      "left": 1,
+      "right": 2
+    },
+    "animation": {
+      "_note": [
+        "How fast it walks through its four columns (the original's frameStride), and which",
+        "column it stands on (idleColumn). Neither value is decoded. The start frame, 4, is",
+        "column 0 of the left row, the only anchor for the second."
+      ],
+      "_guess": true,
+      "frames_per_second": 10.0,
+      "idle_column": 0
+    }
   }
 }

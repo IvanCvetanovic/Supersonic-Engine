@@ -253,12 +253,25 @@ void ThePortalAndTheShotAreTheirEnts() {
     CHECK_MSG(rules.shot.sprite == "projectile.png" && rules.shot.additive, "projectile.ent: its sheet, added");
     CHECK_MSG(rules.shot.columns == 6 && rules.shot.rows == 1, "cut 6 x 1, as its SpriteCut says");
     CHECK_MSG(rules.shot.framesPerSecond > 0.0, "and a six-frame sheet says how fast it plays");
+
+    const Art::Character& mage = rules.character;
+    CHECK_MSG(mage.sprite == "magic_portals_hd.png" && !mage.additive && mage.columns == 4 && mage.rows == 4,
+              "dark_mage.ent: its sheet, cut 4 x 4, mixed");
+    CHECK_MSG(mage.startFrame == 4 && mage.pivotXPx == 0.0 && mage.pivotYPx == 2.0,
+              "starting on frame 4, its pivot 2 px below the middle");
+    CHECK_MSG(mage.leftRow == 1 && mage.rightRow == 2, "the rows the decoded DIRECTION enum gives left and right");
+    CHECK_MSG(mage.startFrame / mage.columns == mage.leftRow, "and the start frame stands on the left row");
 }
 
 void ASheetThatDoesNotSayHowFastIsRefused() {
     const std::filesystem::path path = Scratch() / "art.json";
+    // Everything else in order, so the shot's missing rate is what is refused.
     const std::string text = R"({"portal": {"sprite": "a.png", "additive": true},
-                                 "shot": {"sprite": "b.png", "additive": true, "columns": 6}})";
+                                 "shot": {"sprite": "b.png", "additive": true, "columns": 6},
+                                 "character": {"sprite": "c.png", "additive": false, "columns": 4, "rows": 4,
+                                               "start_frame": 4, "pivot_px": [0, 2],
+                                               "rows_by_direction": {"left": 1, "right": 2},
+                                               "animation": {"frames_per_second": 10, "idle_column": 0}}})";
     Write(path, std::vector<unsigned char>(text.begin(), text.end()));
     Art::Rules rules;
     std::string error;
@@ -275,6 +288,8 @@ void TheOriginalsImagesAreCutAsTheEntsSay() {
     CHECK_MSG(halo && w == 64 && h == 64, "portal_halo.png: " + error);
     const bool sheet = Sprites::ImageSize(kOriginal + "/entities/projectile.png", w, h, error);
     CHECK_MSG(sheet && w == 6 * 64 && h == 64, "projectile.png is six frames of 64 x 64: " + error);
+    const bool mage = Sprites::ImageSize(kOriginal + "/entities/magic_portals_hd.png", w, h, error);
+    CHECK_MSG(mage && w == 4 * 40 && h == 4 * 56, "magic_portals_hd.png is sixteen frames of 40 x 56: " + error);
 }
 
 // ---- the converted levels -----------------------------------------------------

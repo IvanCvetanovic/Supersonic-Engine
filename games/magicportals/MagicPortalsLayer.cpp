@@ -246,6 +246,7 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     for (auto& e : m_portalQuads) destroy(e);
     m_portalQuads.clear();
     destroy(m_shotQuad);
+    destroy(m_playerQuad);
     destroy(m_shot);
     destroy(m_player);
     destroy(m_exit);
@@ -439,6 +440,24 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
         m_hazards.push_back(makeBox(registry, "Magic Portals Hazard", glm::vec3(0.0f), glm::vec3(1.0f), kHazardColour));
     }
     buildSprites(registry);
+
+    // The player, as dark_mage.ent draws it, facing as its start frame faces
+    // (Art.hpp): each level starts on it.
+    const Art::Character& mage = m_artRules.character;
+    const std::string sheet = originalImage(mage.sprite);
+    m_facingRight = mage.startFrame / mage.columns == mage.rightRow;
+    m_direction = 0.0f;
+    if (m_artReady && imageSizePx(sheet) != glm::dvec2(0.0)) {
+        m_playerQuad = makeSprite(registry, "Magic Portals Player Sprite", sheet, mage.additive);
+        registry.emplace<InterpolatedTransformComponent>(m_playerQuad);
+        auto& animation = registry.emplace<SpriteAnimationComponent>(m_playerQuad);
+        animation.columns = static_cast<uint32_t>(mage.columns);
+        animation.rows = static_cast<uint32_t>(mage.rows);
+        animation.framesPerSecond = static_cast<float>(mage.framesPerSecond);
+        animation.firstFrame = static_cast<uint32_t>(mage.startFrame);
+        animation.frameCount = 1;
+        animation.playing = false;
+    }
 }
 
 // ---- the level's art ----------------------------------------------------------
@@ -635,6 +654,31 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         const glm::dvec2 at = Units::ToPixels(registry.get<TransformComponent>(m_level.player).position);
         placeBox(registry, m_player, at, glm::dvec2(m_data.tuning.widthPx, m_data.tuning.heightPx),
                  artOnly ? SlotZ(m_playerSlot) : 0.1f, artOnly ? 0.5f * kSpriteSlotZ : 0.4f, 0.0f);
+        if (m_playerQuad != entt::null) {
+            const Art::Character& mage = m_artRules.character;
+            // It turns as it walks, which is the owner's word; the row each way
+            // walks is read from the original's DIRECTION enum (art.json).
+            if (m_direction > 0.0f) m_facingRight = true;
+            if (m_direction < 0.0f) m_facingRight = false;
+            const int row = m_facingRight ? mage.rightRow : mage.leftRow;
+            const bool walking = m_direction != 0.0f;
+            const uint32_t first = static_cast<uint32_t>(row * mage.columns + (walking ? 0 : mage.idleColumn));
+            const uint32_t count = walking ? static_cast<uint32_t>(mage.columns) : 1u;
+            auto& animation = registry.get<SpriteAnimationComponent>(m_playerQuad);
+            if (animation.firstFrame != first || animation.frameCount != count) {
+                animation.firstFrame = first;
+                animation.frameCount = count;
+                animation.frame = 0;
+                animation.elapsed = 0.0f;
+            }
+            animation.playing = walking;
+            const glm::dvec2 cellPx =
+                imageSizePx(originalImage(mage.sprite)) / glm::dvec2(mage.columns, mage.rows);
+            // The image stands with its pivot on the entity, as Ethanon draws it
+            // (ETHSpriteEntity::ComputeInScreenSpriteCenter).
+            placeSprite(registry, m_playerQuad, at - glm::dvec2(mage.pivotXPx, mage.pivotYPx), cellPx,
+                        SlotZ(m_playerSlot), 0.0f);
+        }
     }
 
     const auto boxPx = [](const Trigger::Box& box, glm::dvec2& centrePx, glm::dvec2& sizePx) {
@@ -794,6 +838,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     // stand in for them.
     for (const entt::entity e : m_portals) show(e, !(artOnly && haloReady));
     show(m_shot, !(artOnly && m_shotQuad != entt::null));
+    show(m_player, !(artOnly && m_playerQuad != entt::null));
 }
 
 void MagicPortalsLayer::buildHud(entt::registry& registry) {
@@ -895,6 +940,7 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
     if (m_loaded) {
         // Then this tick's input, and what comes before the next step.
         const float direction = readInput(registry);
+        m_direction = direction; // for the picture: which way the player walks this tick
         Game::BeforeStep(m_data, registry, m_level, direction, fixedDelta);
         m_aspect = viewportAspect(registry);
         const glm::dvec2 playerPx =
