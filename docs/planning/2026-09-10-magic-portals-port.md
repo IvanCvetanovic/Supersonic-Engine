@@ -497,3 +497,58 @@ onto buttons, crystals and the exit, and portals.
   player where needed.
 - **What comes next:** step 7, a drawing layer, which turns taps into
   `Portals::State::TryPlace` through the camera.
+
+## Step 7 - the layer: decisions, before the code
+
+**One tick for the suites and the layer (`sim/Game`).**
+- **What moved:** `test_mp_play`'s start-up and tick moved into `sim/Game`,
+  split around the physics step. Before the step come the buttons and doors,
+  then the player's steering. After it come the crystals and the exit, then the
+  portals.
+- **Why the split:** the app steps physics itself, before each layer's
+  `OnFixedUpdate`. So the layer runs `AfterStep` then `BeforeStep`, with the
+  app's step between. That is the suites' sequence, begun half a tick later.
+- **The step matches exactly:** the app's `kFixedPhysicsStep` is 1/60, and so
+  is the port's tick, so the app takes one step of 1/60 per tick, as
+  `Game::Tick` does. If the layer and the suites ever disagree, it will be
+  something other than the tick.
+
+**Input is read on the tick.** Left and right, or A and D, are the remake's
+two-button pad, and a tap places a portal. There is one tap per tick at most,
+so a fast frame cannot spend the budget twice in one step.
+
+**The camera is orthographic and fixed, fitted to level30's bounds** with a 5%
+margin. The level fits on one screen, so camera follow, pan and zoom stay out
+of scope, as the list at the top already says.
+
+**The seam test goes through the camera.**
+- **Two paths:** a tap is aimed with the camera's forward matrices, the
+  renderer's path. The layer reads it back through `ScreenPointToRay` and the
+  plane z = 0, a different path. A flip or an offset between them shows.
+- **Absolute checks:** the level's centre must land at the viewport's centre,
+  and its top edge up the screen.
+
+**level30 is played from the spawn with taps and walking alone.** The route is
+a portal on the floor ahead, its partner above `platform_ent_966`, and right
+held. This is not the designed solve: a pair of portals skips the doors,
+because the remake refuses a portal only inside a no-portal zone, and level30
+has none. The exit's switch is off by default.
+
+**The drawing is boxes, deliberately plain,** as HUSK's first view is. It draws
+the bodies at their shapes' bounds, the buttons in their pressed colour, the
+crystals still out, the exit, the placed portals, and two lines of text.
+
+**Built and verified.** The code is `sim/Game`, the layer in the
+`MagicPortalsGame` library, and the `MagicPortals` executable.
+- **`test_mp_play`** now runs on `Game::Tick`, and is unchanged at 131 checks.
+- **`test_mp_layer`,** 10 checks:
+  - the layer builds level30 at 60 Hz;
+  - the level's centre shows at the viewport's centre, with its top up the
+    screen;
+  - two taps put portals within half a pixel of where they pointed;
+  - level30 is played from the spawn to the exit with taps and walking alone.
+    The exit is reached 0.43 s after right goes down, with 1 of 5 crystals and
+    2 portals.
+
+GCC 13.3 and MSVC 14.50 agree to the digit, and the executable builds clean on
+both.

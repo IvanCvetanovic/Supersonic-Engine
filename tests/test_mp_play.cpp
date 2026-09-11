@@ -11,6 +11,7 @@
 #include "core/Components.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/PhysicsSystem.hpp"
+#include "sim/Game.hpp"
 #include "sim/Goals.hpp"
 #include "sim/LevelBuilder.hpp"
 #include "sim/Mover.hpp"
@@ -40,37 +41,29 @@ const std::string kLevels = MAGICPORTALS_LEVELS_DIR;
 const std::string kData = MAGICPORTALS_DATA_DIR;
 constexpr float kStep = 1.0f / 60.0f;
 
-Tscn::Scene g_level30;
-Roles::Table g_roles;
-Player::Tuning g_tuning;
-Goals::Rules g_rules;
-Portals::Rules g_portalRules;
-std::filesystem::path g_prisms;
+// Read once: level30 and the remake's data, as Game::LoadData reads them for the
+// layer. The short names are the suite's own.
+Game::Data g_data;
+const Tscn::Scene& g_level30 = g_data.scene;
+const Roles::Table& g_roles = g_data.roles;
+const Player::Tuning& g_tuning = g_data.tuning;
+const Portals::Rules& g_portalRules = g_data.portals;
 
 bool LoadInputs(std::string& error) {
-    if (!Tscn::Load(kLevels + "/level30.tscn", g_level30, error)) return false;
-    if (!Roles::Load(kData + "/entity_roles.json", g_roles, error)) return false;
-    if (!Player::LoadTuning(kData + "/player.json", g_tuning, error)) return false;
-    if (!Goals::LoadRules(kData + "/portals.json", g_rules, error)) return false;
-    if (!Portals::LoadRules(kData + "/portals.json", g_portalRules, error)) return false;
-    g_prisms = std::filesystem::temp_directory_path() / "supersonic-test-mp-play";
-    std::error_code ec;
-    std::filesystem::create_directories(g_prisms, ec);
-    return true;
+    return Game::LoadData(kLevels + "/level30.tscn", kData,
+                          std::filesystem::temp_directory_path() / "supersonic-test-mp-play", g_data, error);
 }
 
 LevelBuilder::Options PortOptions() {
     LevelBuilder::Options options;
-    options.prismDirectory = g_prisms;
+    options.prismDirectory = g_data.prisms;
     options.roles = &g_roles;
     return options;
 }
 
 // The port's world: the remake's gravity, 980 px/s^2 (Units.hpp says why).
 void UseRemakeGravity(entt::registry& registry) {
-    PhysicsSettings settings;
-    settings.gravity = glm::vec3(0.0f, -Units::ToMetres(Units::kRemakeWorldGravityPx), 0.0f);
-    registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
+    Game::UseRemakeGravity(registry);
 }
 
 // level30's small crate, its size off its RectangleShape2D.
@@ -244,45 +237,19 @@ void ACrateRidesADoorUpAndDown() {
 
 // ---- The player -------------------------------------------------------------
 
-// level30 as the port plays it: built with the role table, at the remake's
-// gravity, with the player at main_char.
-struct Play {
+// level30 as the port plays it, started and ticked by Game: the same code the
+// layer runs.
+struct Play : Game::Level {
     entt::registry registry;
-    LevelBuilder::Built built;
-    Puzzle::Channels channels;
-    Goals::State goals;
-    Portals::State portals;
-    entt::entity player = entt::null;
 };
 
 bool StartLevel30(Play& play, bool withStatics, std::string& error) {
-    UseRemakeGravity(play.registry);
-    LevelBuilder::Options options = PortOptions();
-    options.withStatics = withStatics;
-    if (!LevelBuilder::Build(g_level30, play.registry, options, play.built, error)) return false;
-    // Without its statics the level has no doors to wire.
-    if (withStatics && !Puzzle::Wire(g_level30, g_roles, play.built, play.channels, error)) return false;
-    const Tscn::Node* spawn = g_level30.FindNode("main_char_29");
-    const Tscn::Value* at = spawn != nullptr ? spawn->Find("position") : nullptr;
-    if (at == nullptr || at->kind != Tscn::Value::Kind::Vector2) {
-        error = "main_char_29 has no position";
-        return false;
-    }
-    play.player = Player::Spawn(play.registry, glm::dvec2(at->numbers[0], at->numbers[1]), g_tuning);
-    if (!Goals::Find(g_level30, g_roles, g_rules, play.goals, error)) return false;
-    return Portals::Find(g_level30, g_roles, play.built, play.registry, play.player, g_portalRules, play.portals,
-                         error);
+    return Game::Start(g_data, play.registry, play, error, withStatics);
 }
 
-// One tick as the port runs it: the buttons and their doors, then the player
-// steered, then the physics step, then the crystals and the exit on where the
-// step left the player, and then the portals.
+// One tick as the port runs it (Game.hpp says in what order).
 void Tick(Play& play, float direction) {
-    play.channels.Tick(play.registry, kStep);
-    Player::Steer(play.registry, play.player, g_tuning, direction, kStep);
-    PhysicsSystem::Update(play.registry, kStep);
-    play.goals.Tick(play.registry, play.player);
-    play.portals.Tick(play.registry, kStep);
+    Game::Tick(g_data, play.registry, play, direction, kStep);
 }
 
 glm::dvec2 PlayerPx(Play& play) {
