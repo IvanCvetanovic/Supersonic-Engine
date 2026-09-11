@@ -256,3 +256,66 @@ writes the offscreen scene image (`SupersonicApp.cpp:952-959`), so it never
 holds the UI. HUSK's and Wolf Brigade's screenshots lack their HUDs for the same
 reason. The HUD's text is checked through the layer's accessors, not by a
 picture. Its look waits for someone at the window.
+
+## Step 3 - timed crystals (built)
+
+What `behaviours.gd`'s `TimedCollectible` does, now in `Goals`:
+- **The rule.** An inline `crystal` with a `time` goes that long after the
+  level starts. `crystal.ent` never has one. Chapter 1 has eight timed
+  crystals, from 5 to 12 s:
+  - level14 and level26 have one each;
+  - level23 has three;
+  - level24 has two;
+  - level28 has one.
+- **A gone crystal** cannot be collected, and it still counts against the
+  exit's switch, because the remake's `crystals_remaining` never drops for one.
+  So with `exit_requires_all_crystals` on, a level whose timed crystal went can
+  no longer be finished. The switch is off in `portals.json`, and marked
+  UNVERIFIED.
+- **Order within a tick.** The player collects before the timers run down, as
+  Godot runs a frame's physics before its `_process`.
+- **The blink.** In its last two seconds a timed crystal dims and brightens, on
+  the remake's formula, as brightness rather than alpha. It is a guess, as the
+  remake's is, and nothing depends on it.
+- **Not crystals.** Three later levels' `end_delay` nodes also carry a `time`.
+  They are not crystals, and not part of this step.
+
+`test_mp_timed`, 50 checks:
+- **The files.** Chapter 1's eight timed crystals are pinned to them.
+- **Expiry.** level14's crystal is there at 11.9 s and gone by 12.05 s. Once
+  gone, it cannot be collected.
+- **Collected first,** it stays collected.
+- **The exit switch** is run both ways.
+
+The inventory after step 3:
+
+| Chapter | Start | Play |
+|---|---|---|
+| 1 | 31 of 32 | 16 |
+| 2 | 32 of 32 | 0 |
+| 3 | 31 of 32 | 0 |
+| 4 | 2 of 32 | 0 |
+
+That is 96 of 128 levels starting, up from 79. What is left in chapter 1:
+
+| What | Levels |
+|---|---|
+| Moving no-portal zone | 10 |
+| Hazards | 5, 23, 24 |
+| Rolling stones | 8, 12, 18, 19, 21, 22 |
+| Launchers | 23, 24, 25 |
+| Projectile blocker | 6 |
+| Reflectors | 11, 12, 19, 20, 22, 28 |
+| Boss | 31 |
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_timed | 50 | 0 |
+| test_mp_layer | 42 | 0 |
+| test_mp_camera | 15 | 0 |
+| test_mp_chapters | 39 | 0 |
+| test_mp_statics | 65 | 0 |
+| test_mp_play | 131 | 0 |
+| test_mp_start | 363 | 0 |

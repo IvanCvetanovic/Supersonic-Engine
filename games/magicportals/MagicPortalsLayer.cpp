@@ -462,7 +462,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     for (std::size_t i = 0; i < m_crystals.size() && i < m_level.goals.crystals.size(); ++i) {
         if (m_crystals[i] == entt::null) continue;
         const Goals::Crystal& crystal = m_level.goals.crystals[i];
-        if (crystal.collected) {
+        if (crystal.collected || crystal.expired) {
             registry.destroy(m_crystals[i]);
             m_crystals[i] = entt::null;
             continue;
@@ -470,6 +470,16 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         glm::dvec2 centrePx, sizePx;
         boxPx(crystal.box, centrePx, sizePx);
         placeBox(registry, m_crystals[i], centrePx, glm::dvec2(14.0), kMarkerZ, kMarkerDepth, 0.785398f);
+        // A timed crystal dims and brightens as it runs out: the remake's fade,
+        // 0.4 + 0.6 |sin(12 t)| over its last two seconds, as brightness over the
+        // dark ground rather than as alpha. A guess, as the remake's is
+        // (behaviours.gd:227-230). The original has crystal_temp_alert.mp3, so it
+        // warns somehow, but not necessarily like this. Nothing depends on it.
+        float brightness = 1.0f;
+        if (crystal.timed && crystal.leftS < 2.0) {
+            brightness = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
+        }
+        registry.get<MaterialComponent>(m_crystals[i]).albedoColor = glm::vec4(kCrystalColour * brightness, 1.0f);
     }
     {
         glm::dvec2 centrePx, sizePx;

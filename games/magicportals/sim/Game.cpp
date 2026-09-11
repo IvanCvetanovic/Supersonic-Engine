@@ -78,7 +78,7 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
 }
 
 void AfterStep(entt::registry& registry, Level& level, float dt) {
-    level.goals.Tick(registry, level.player);
+    level.goals.Tick(registry, level.player, dt);
     level.portals.Tick(registry, dt);
 }
 

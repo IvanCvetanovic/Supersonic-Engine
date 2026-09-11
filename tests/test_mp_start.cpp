@@ -50,9 +50,9 @@ struct Chapter {
     int playFloor;  // levels that play today
 };
 const Chapter kChapters[] = {
-    {"", "chapter 1", 26, 14},
-    {"a", "chapter 2", 23, 0},
-    {"b", "chapter 3", 28, 0},
+    {"", "chapter 1", 31, 16},
+    {"a", "chapter 2", 32, 0},
+    {"b", "chapter 3", 31, 0},
     {"c", "chapter 4", 2, 0},
 };
 

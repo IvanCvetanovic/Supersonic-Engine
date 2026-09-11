@@ -14,6 +14,13 @@
 //   So with that switch on, a player already standing in the exit when the last
 //   crystal goes does not finish. It has to leave and come back in, as in the
 //   remake.
+// - A crystal the level times goes that long after the level starts, as the
+//   remake's TimedCollectible frees it (behaviours.gd:209-230). Only the inline
+//   `crystal` carries a `time`, 3.9 to 25 s in the data; `crystal.ent` never
+//   does. A gone crystal cannot be collected, and it still counts against the
+//   exit's switch, as in the remake, whose crystals_remaining never drops for
+//   one. Within a tick a crystal is collected before its time runs down, as
+//   Godot runs a frame's physics before its _process.
 
 #include "sim/Roles.hpp"
 #include "sim/Trigger.hpp"
@@ -40,6 +47,10 @@ struct Crystal {
     std::string name;
     Trigger::Box box;
     bool collected = false;
+    bool timed = false;
+    double lifeS = 0.0; // the level's `time`, in seconds
+    double leftS = 0.0; // counting down from lifeS
+    bool expired = false;
 };
 
 struct State {
@@ -53,18 +64,17 @@ struct State {
     int Remaining() const;
     bool ExitOpen() const;
 
-    // One tick, after the physics step, covering what the player has come into.
-    // The remake does not define the order of two triggers in one frame. Crystals
-    // go first here, so an entry on the tick the last crystal goes finds the exit
-    // open.
-    void Tick(entt::registry& registry, entt::entity player);
+    // One tick, after the physics step, covering what the player has come into,
+    // then how long the timed crystals have left. The remake does not define the
+    // order of two triggers in one frame. Crystals go first here, so an entry on
+    // the tick the last crystal goes finds the exit open.
+    void Tick(entt::registry& registry, entt::entity player, float dt);
 
     const Crystal* FindCrystal(const std::string& name) const;
 };
 
 // Every collectible and the exit_door of a level. False, with `error`, when there
-// is not exactly one exit, or when a crystal carries a `time`. The remake's timed
-// crystals expire, those are not ported, and level30 has none.
+// is not exactly one exit.
 bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const Rules& rules, State& out, std::string& error);
 
 } // namespace MagicPortals::Goals

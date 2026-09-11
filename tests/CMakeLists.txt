@@ -145,6 +145,8 @@ add_mp_test(test_mp_statics)
 # The level order (chapters.json), and the camera's arithmetic.
 add_mp_test(test_mp_chapters)
 add_mp_test(test_mp_camera)
+# Timed crystals, which go a set time after a level starts.
+add_mp_test(test_mp_timed)
 
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.
@@ -155,8 +157,8 @@ target_link_libraries(test_mp_layer PRIVATE MagicPortalsGame)
 # repository - and test_mp_play the remake's role table - so on a build machine
 # they can simply be absent. Each exits 77 then, which ctest reports as SKIPPED
 # with the path it looked in - never as a pass.
-set_tests_properties(test_mp_levels test_mp_play test_mp_start test_mp_statics test_mp_chapters test_mp_layer
-                     PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(test_mp_levels test_mp_play test_mp_start test_mp_statics test_mp_chapters test_mp_timed
+                     test_mp_layer PROPERTIES SKIP_RETURN_CODE 77)
 
 # The simulation's own sin, cos, asin, atan2 and pow, pinned bit for bit so the
 # determinism claim holds across C runtimes (DetMath.hpp).

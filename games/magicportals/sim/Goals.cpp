@@ -49,17 +49,27 @@ bool State::ExitOpen() const {
     return !rules.exitRequiresAllCrystals || Remaining() == 0;
 }
 
-void State::Tick(entt::registry& registry, entt::entity player) {
-    if (player == entt::null || !registry.valid(player)) return;
+void State::Tick(entt::registry& registry, entt::entity player, float dt) {
+    if (player != entt::null && registry.valid(player)) {
+        for (Crystal& crystal : crystals) {
+            if (!crystal.collected && !crystal.expired && Trigger::Overlaps(registry, player, crystal.box)) {
+                crystal.collected = true;
+            }
+        }
+        const bool inExit = Trigger::Overlaps(registry, player, exit);
+        if (inExit && !playerInExit) {
+            ++exitEntries;
+            if (ExitOpen()) completed = true;
+        }
+        playerInExit = inExit;
+    }
+    // Then the timed crystals run down (behaviours.gd:219-225). One with no time
+    // left to begin with never goes, as in the remake.
     for (Crystal& crystal : crystals) {
-        if (!crystal.collected && Trigger::Overlaps(registry, player, crystal.box)) crystal.collected = true;
+        if (!crystal.timed || crystal.collected || crystal.expired || crystal.leftS <= 0.0) continue;
+        crystal.leftS -= dt;
+        if (crystal.leftS <= 0.0) crystal.expired = true;
     }
-    const bool inExit = Trigger::Overlaps(registry, player, exit);
-    if (inExit && !playerInExit) {
-        ++exitEntries;
-        if (ExitOpen()) completed = true;
-    }
-    playerInExit = inExit;
 }
 
 const Crystal* State::FindCrystal(const std::string& name) const {
@@ -77,12 +87,18 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const Rules& rule
         if (node.parent != ".") continue;
         const std::string role = Roles::RoleOf(roles, node);
         if (role == Roles::kCollectible) {
-            if (node.Meta("time") != nullptr) {
-                error = node.name + " is a timed crystal, and those are not ported";
-                return false;
-            }
             Crystal crystal;
             crystal.name = node.name;
+            if (const Tscn::Value* time = node.Meta("time")) {
+                double ms = 0.0;
+                if (!time->AsNumber(ms)) {
+                    error = node.name + "'s time is not a number";
+                    return false;
+                }
+                crystal.timed = true;
+                crystal.lifeS = ms / 1000.0;
+                crystal.leftS = crystal.lifeS;
+            }
             if (!Trigger::FromNode(node, crystal.box, error)) return false;
             out.crystals.push_back(crystal);
         } else if (role == Roles::kExitDoor) {
