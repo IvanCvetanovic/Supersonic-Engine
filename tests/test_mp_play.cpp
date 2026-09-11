@@ -14,6 +14,7 @@
 #include "sim/LevelBuilder.hpp"
 #include "sim/Mover.hpp"
 #include "sim/Player.hpp"
+#include "sim/Puzzle.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Tscn.hpp"
 #include "sim/Units.hpp"
@@ -242,6 +243,7 @@ void ACrateRidesADoorUpAndDown() {
 struct Play {
     entt::registry registry;
     LevelBuilder::Built built;
+    Puzzle::Channels channels;
     entt::entity player = entt::null;
 };
 
@@ -250,6 +252,8 @@ bool StartLevel30(Play& play, bool withStatics, std::string& error) {
     LevelBuilder::Options options = PortOptions();
     options.withStatics = withStatics;
     if (!LevelBuilder::Build(g_level30, play.registry, options, play.built, error)) return false;
+    // Without its statics the level has no doors to wire.
+    if (withStatics && !Puzzle::Wire(g_level30, g_roles, play.built, play.channels, error)) return false;
     const Tscn::Node* spawn = g_level30.FindNode("main_char_29");
     const Tscn::Value* at = spawn != nullptr ? spawn->Find("position") : nullptr;
     if (at == nullptr || at->kind != Tscn::Value::Kind::Vector2) {
@@ -260,8 +264,10 @@ bool StartLevel30(Play& play, bool withStatics, std::string& error) {
     return true;
 }
 
-// One tick as the port runs it: the player steered, then the physics step.
+// One tick as the port runs it: the buttons and their doors, then the player
+// steered, then the physics step.
 void Tick(Play& play, float direction) {
+    play.channels.Tick(play.registry, kStep);
     Player::Steer(play.registry, play.player, g_tuning, direction, kStep);
     PhysicsSystem::Update(play.registry, kStep);
 }
@@ -377,6 +383,230 @@ void ThePlayerWalksAcrossTheSeam() {
     }
 }
 
+// ---- Buttons and doors ------------------------------------------------------
+
+// A body the level built, put somewhere else by the test, at rest.
+void PutBody(Play& play, const std::string& entity, const glm::dvec2& atPx) {
+    const entt::entity body = play.built.entities.at(entity);
+    play.registry.get<TransformComponent>(body).position = Units::ToWorld(atPx.x, atPx.y);
+    play.registry.get<RigidBodyComponent>(body).velocity = glm::vec3(0.0f);
+}
+
+glm::dvec2 BodyPx(Play& play, const std::string& entity) {
+    return Units::ToPixels(play.registry.get<TransformComponent>(play.built.entities.at(entity)).position);
+}
+
+bool DoorShut(Play& play, const std::string& name) {
+    const Puzzle::SwitchedDoor* door = play.channels.FindDoor(name);
+    return door != nullptr && door->motion.progress == 0.0f &&
+           play.registry.get<TransformComponent>(door->entity).position == door->motion.closed;
+}
+
+void Level30sButtonsAreWiredToItsDoors() {
+    // Off level30.tscn:
+    // - button_975 is idx 0 at (94, 220), button_980 idx 1 at (64, 108), and
+    //   button_982 idx 2 at (256, 60);
+    // - door_lift_976 is switchIdx 0, 978 is 1, and 977 is 2.
+    // None of the buttons has a trigger_size, so each is pressed through the
+    // remake's 16 px fallback at its node.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    CHECK_EQ(static_cast<int>(play.channels.buttons.size()), 3);
+    CHECK_EQ(static_cast<int>(play.channels.doors.size()), 3);
+    const struct {
+        const char* name;
+        int channel;
+        double x;
+        double y;
+    } buttons[] = {{"button_975", 0, 94.0, 220.0}, {"button_980", 1, 64.0, 108.0}, {"button_982", 2, 256.0, 60.0}};
+    for (const auto& expected : buttons) {
+        const Puzzle::Button* button = play.channels.FindButton(expected.name);
+        const glm::vec3 at = Units::ToWorld(expected.x, expected.y);
+        CHECK_MSG(button != nullptr && button->channel == expected.channel &&
+                      button->box.centre == glm::vec2(at.x, at.y) &&
+                      button->box.half == glm::vec2(Units::ToMetres(Trigger::kFallbackSizePx * 0.5)),
+                  std::string(expected.name) + " is channel " + std::to_string(expected.channel) +
+                      ", a 16 px box at its node");
+    }
+    const struct {
+        const char* name;
+        int channel;
+    } doors[] = {{"door_lift_976", 0}, {"door_lift_978", 1}, {"door_lift_977", 2}};
+    for (const auto& expected : doors) {
+        const Puzzle::SwitchedDoor* door = play.channels.FindDoor(expected.name);
+        CHECK_MSG(door != nullptr && door->channel == expected.channel,
+                  std::string(expected.name) + " is on channel " + std::to_string(expected.channel));
+    }
+    // What Trigger::Overlaps can see: every dynamic body in the level has a box,
+    // sphere or capsule. The crates have boxes and the player a capsule.
+    int unseen = 0;
+    for (const entt::entity entity : play.registry.view<RigidBodyComponent>()) {
+        if (play.registry.get<RigidBodyComponent>(entity).isKinematic) continue;
+        if (!play.registry.any_of<BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent>(entity)) {
+            ++unseen;
+        }
+    }
+    CHECK_EQ(unseen, 0);
+}
+
+void NothingStaticPressesAButton() {
+    // The remake, probed. Each of level30's button triggers reaches 4 px into the
+    // static beneath it, yet in 120 frames with nothing dynamic nearby none is
+    // pressed and no door moves. So the geometry is checked here first: what
+    // keeps the buttons up must be the rule that only dynamic bodies press, not a
+    // gap under them.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    const struct {
+        const char* button;
+        const char* under;
+    } pairs[] = {{"button_975", "platform_ent_895"},
+                 {"button_980", "double_block_plat_ent_971"},
+                 {"button_982", "block00_ent_981"}};
+    for (const auto& pair : pairs) {
+        const Puzzle::Button* button = play.channels.FindButton(pair.button);
+        const double topPx =
+            button != nullptr ? -(button->box.centre.y + button->box.half.y) * Units::kPixelsPerMetre : 0.0;
+        const double bottomPx =
+            button != nullptr ? -(button->box.centre.y - button->box.half.y) * Units::kPixelsPerMetre : 0.0;
+        const double staticTopPx = PlatformTopPx(pair.under);
+        CHECK_MSG(button != nullptr && staticTopPx > topPx && staticTopPx < bottomPx,
+                  std::string(pair.under) + "'s top, at " + std::to_string(staticTopPx) + " px, is inside " +
+                      pair.button + "'s trigger");
+    }
+    bool anyPressed = false;
+    for (int tick = 0; tick < 120; ++tick) {
+        Tick(play, 0.0f);
+        for (const Puzzle::Button& button : play.channels.buttons) anyPressed = anyPressed || button.pressed;
+    }
+    CHECK_MSG(!anyPressed, "and in 120 ticks none of them is pressed");
+    for (const char* door : {"door_lift_976", "door_lift_977", "door_lift_978"}) {
+        CHECK_MSG(DoorShut(play, door), std::string(door) + " stays shut");
+    }
+}
+
+void ACrateOnAButtonOpensItsDoor() {
+    // The probe's control, ported. level30's small crate, 30 px like the probe's,
+    // is dropped at (94, 190) onto button_975. In the remake, channel 0 was
+    // pressed 8 frames after the drop, and door_lift_976 rose its full 126 px
+    // while 977 and 978 stayed shut. Here it is the whole level, with all three
+    // doors present.
+    // - Pressed within 8 +- 3 ticks, and held every tick after: a crate
+    //   chattering on the plate would flicker its door.
+    // - That door open, and the other two shut.
+    // - The crate taken away: the plate lets go at once, since it is not a latch,
+    //   and the door comes back down.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    PutBody(play, "crate_small_ent_973", glm::dvec2(94.0, 190.0));
+    int pressedAt = -1;
+    bool held = true;
+    for (int tick = 1; tick <= 120; ++tick) {
+        Tick(play, 0.0f);
+        const bool pressed = play.channels.Pressed(0);
+        if (pressed && pressedAt < 0) pressedAt = tick;
+        if (pressedAt > 0 && !pressed) held = false;
+    }
+    CHECK_MSG(pressedAt >= 5 && pressedAt <= 11,
+              "channel 0 pressed at tick " + std::to_string(pressedAt) + " after the drop; the remake took 8");
+    CHECK_MSG(held, "and held every tick after");
+    const double doorY = BodyPx(play, "door_lift_976").y;
+    CHECK_MSG(std::fabs(doorY - (192.0 - Mover::kDoorRisePx)) < 0.5,
+              "door_lift_976 open, at y " + std::to_string(doorY) + " px");
+    CHECK_MSG(DoorShut(play, "door_lift_977") && DoorShut(play, "door_lift_978") && !play.channels.Pressed(1) &&
+                  !play.channels.Pressed(2),
+              "977 and 978 shut, their channels up");
+
+    play.registry.destroy(play.built.entities.at("crate_small_ent_973"));
+    Tick(play, 0.0f);
+    CHECK_MSG(!play.channels.Pressed(0), "with the crate gone, the plate lets go the next tick");
+    for (int tick = 0; tick < 70; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(DoorShut(play, "door_lift_976"), "and door_lift_976 comes back down");
+}
+
+void ThePlayerPressesAButtonAndItLetsGo() {
+    // A button counts the player too, since in the remake a CharacterBody2D is not
+    // a static, and it lets go when the player walks off. From the spawn the
+    // player walks left onto button_975, stands on it, and walks back off.
+    //
+    // The capsule's core runs down to y 214 and the trigger's top is at 212, so
+    // side on the capsule reaches the trigger's right edge, x 102, with its centre
+    // at x 112. The button counts a tick's positions before it moves, so that is
+    // where the player must be standing when it presses, and again when it lets
+    // go.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    for (int i = 0; i < 30; ++i) Tick(play, 0.0f);
+
+    double pressedX = -1.0;
+    for (int tick = 1; tick <= 90 && pressedX < 0.0; ++tick) {
+        const double before = PlayerPx(play).x;
+        Tick(play, -1.0f);
+        if (play.channels.Pressed(0)) pressedX = before;
+    }
+    CHECK_MSG(pressedX > 109.0 && pressedX < 112.01,
+              "the player presses button_975 as it reaches it: counted at x " + std::to_string(pressedX));
+
+    bool standing = true;
+    for (int i = 0; i < 30; ++i) {
+        Tick(play, 0.0f);
+        standing = standing && play.channels.Pressed(0);
+    }
+    CHECK_MSG(standing, "held while the player stands on it");
+
+    double releasedX = -1.0;
+    for (int tick = 1; tick <= 60 && releasedX < 0.0; ++tick) {
+        const double before = PlayerPx(play).x;
+        Tick(play, 1.0f);
+        if (!play.channels.Pressed(0)) releasedX = before;
+    }
+    CHECK_MSG(releasedX > 111.99 && releasedX < 115.0,
+              "and lets go as it walks off: counted at x " + std::to_string(releasedX));
+}
+
+void ThePlayerPushesACrateOntoAButton() {
+    // Acceptance item 3, with level30's own crate.ent, crate_ent_968 (58 px),
+    // moved to the floor left of the spawn at x 140. The player walks left into it
+    // and pushes until it covers button_975. Then the player walks away, and the
+    // crate holds the plate, and door_lift_976, by itself. With friction 0 the
+    // player can push only through the contact. This is the measurement step 3
+    // left for step 4.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    PutBody(play, "crate_ent_968", glm::dvec2(140.0, 194.0));
+    for (int i = 0; i < 30; ++i) Tick(play, 0.0f);
+    const double startX = BodyPx(play, "crate_ent_968").x;
+
+    int pushedFor = -1;
+    for (int tick = 1; tick <= 180 && pushedFor < 0; ++tick) {
+        Tick(play, -1.0f);
+        if (play.channels.Pressed(0)) pushedFor = tick;
+    }
+    std::printf("  crate push: button_975 pressed after %.3f s of pushing, the crate %.1f px along\n",
+                pushedFor * static_cast<double>(kStep), startX - BodyPx(play, "crate_ent_968").x);
+    CHECK_MSG(pushedFor > 0, "the player pushes the crate onto button_975");
+
+    // Away to the right for 40 ticks, about 100 px and well short of crate_969,
+    // then stand.
+    bool held = true;
+    for (int tick = 0; tick < 80; ++tick) {
+        Tick(play, tick < 40 ? 1.0f : 0.0f);
+        held = held && play.channels.Pressed(0);
+    }
+    CHECK_MSG(held, "and the crate holds it by itself once the player has walked away");
+    const Puzzle::SwitchedDoor* door = play.channels.FindDoor("door_lift_976");
+    CHECK_MSG(door != nullptr && door->motion.progress == 1.0f, "with door_lift_976 open");
+}
+
 void runTests() {
     Level30HasTheRolesItsPuzzleNeeds();
     TheMoversAreKinematic();
@@ -384,6 +614,11 @@ void runTests() {
     ACrateRidesADoorUpAndDown();
     ThePlayerLandsOnLevel30();
     ThePlayerWalksAcrossTheSeam();
+    Level30sButtonsAreWiredToItsDoors();
+    NothingStaticPressesAButton();
+    ACrateOnAButtonOpensItsDoor();
+    ThePlayerPressesAButtonAndItLetsGo();
+    ThePlayerPushesACrateOntoAButton();
 }
 
 } // namespace
@@ -406,5 +641,5 @@ int main() {
         return 1;
     }
     runTests();
-    return ::test::summary("test_mp_play", 40);
+    return ::test::summary("test_mp_play", 70);
 }

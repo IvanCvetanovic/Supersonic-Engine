@@ -287,6 +287,72 @@ GCC 13.3 and MSVC 14.50 agree to the digit: 42 checks and 0 failures.
 The door rider's flight is now checked at the new gravity, and the other Magic
 Portals suites are unchanged.
 
+## Step 4 - buttons and doors: decisions, before the code
+
+**Only dynamic bodies press a button. That was measured in the remake.**
+- **What looked likely, and was wrong.** Each of level30's three button
+  triggers overlaps the static beneath it by 4 px, and a Godot `Area2D` can
+  report static bodies. So the floor looked as if it would hold every door open
+  from the first frame.
+- **The probe.** A scene in a scratch copy of the remake ran the remake's own
+  `LevelRuntime` on level30.
+  - **The triggers:** 16×16 at their nodes.
+  - **The geometry:** a shape query with each trigger's own shape finds the
+    static beneath it.
+  - **What the areas report:** nothing. In 120 frames no channel changed and no
+    door moved.
+- **The control, so the empty answer means something.** A 30×30 rigid body
+  dropped at (94, 190) did register. Channel 0 was pressed 8 frames later, and
+  `door_lift_976` rose its 126 px to y 66 while 977 and 978 stayed shut.
+- **The original agrees.** Box2D pairs a sensor only with a dynamic body.
+- **So a button counts rigid bodies that are not kinematic.** A door moving
+  over a button would not press it either. level30 has no such case to measure.
+
+**The trigger is the remake's 16 px fallback, not the converter's 26×16 area.**
+- **Why the fallback:** `_attach_trigger` gives a role entity with no
+  `trigger_size` a 16 px box, and level30's buttons have no `trigger_size`.
+- **What the remake ignores:** the switch listens only to that `Trigger`. It
+  never reads the converter's `Body` area, which is 26×16, the original's own
+  fixture.
+- **Treatment:** ported the way the remake does it, and recorded beside the
+  materials as a remake finding.
+
+**The overlap test is the port's own, not a new engine query.**
+- **What the engine offers:** `OverlapSphere` and no box query. Its queries test
+  anything but a sphere by its bounding box.
+- **Why not add `OverlapBox`:** it would be no more exact than a test in the
+  port, and it would still count a crate tipped on a corner as covering its
+  whole bounding box.
+- **What was built instead:** `sim/Trigger` is exact in the plane for a turned
+  box, a sphere and a capsule. Crystals and the exit will use it too, so the
+  engine needs no change.
+
+**A change on a channel sets its doors, and the last change wins,** as with the
+remake's `EventBus`. With two buttons on one channel, the door follows whichever
+changed last, not whichever is held. level30 has one button per channel.
+
+**Built and verified.** The code is `sim/Trigger` and `sim/Puzzle`. Five new
+checks in `test_mp_play` run in the whole level with all three doors present:
+- **Wiring:** the three buttons' channels and 16 px boxes, and the doors'
+  `switchIdx`.
+- **The floor presses nothing.** The static top under each trigger is checked
+  to reach into it first, so the empty result is the rule's doing, not a gap.
+- **A dropped crate.** The small crate, dropped where the probe dropped its
+  control, presses channel 0 inside the remake's 8 ± 3 ticks. It holds every
+  tick after, `door_lift_976` opens while 977 and 978 stay shut, and the plate
+  lets go the tick after the crate is removed. Then the door closes.
+- **The player presses and lets go.** It presses, and lets go, with its centre
+  at x 112, where its capsule's edge meets the trigger's.
+- **A pushed crate.** The frictionless player pushes level30's `crate.ent` onto
+  `button_975` in 0.233 s, moving it 11.3 px. The crate then holds the plate on
+  its own, and the door fully opens.
+
+GCC 13.3 and MSVC 14.50 agree to the digit: 75 checks and 0 failures. The other
+Magic Portals suites are unchanged.
+
+**What step 4 did not do.** No crate rides a rising door in the full level, and
+no crate is sent to the raised buttons 1 and 2. Both need portals (step 6).
+
 **Item 2 is not done until the full level agrees.** The rider test built
 `door_lift_976` on its own, because in the level it rises into the space under
 977 and 978. Before buttons count as working, step 4 has to push a crate onto
