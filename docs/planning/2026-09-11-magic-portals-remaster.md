@@ -825,9 +825,9 @@ Split in three, so that what needs nobody's word lands first:
 
 ### 9a - additive blending in the engine (built, fa28d7d)
 
-- **The need.** 98 sprites across the levels carry Godot's
+- **The need.** 99 sprites across the levels carry Godot's
   `BLEND_MODE_ADD`: 71 anti-portal zones, 19 spirals, 7 static portals, a key
-  and a satellite. `portal_halo.png` and `projectile.png` are RGB with no alpha
+  and a satellite. (9a's commit message says 98; the sweep below counts 99.) `portal_halo.png` and `projectile.png` are RGB with no alpha
   channel, so mixed they would be black squares.
 - **The engine.** `MaterialComponent::blend` is `Alpha` or `Additive`, and
   means something only on a transparent material. The renderer has a third

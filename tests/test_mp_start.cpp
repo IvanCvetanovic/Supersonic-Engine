@@ -22,6 +22,8 @@
 #include "sim/Game.hpp"
 #include "sim/Player.hpp"
 #include "sim/Roles.hpp"
+#include "sim/Sprites.hpp"
+#include "sim/Tscn.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -170,9 +172,42 @@ void Level30StillPlays() {
     CHECK(outcome.Plays());
 }
 
+// Every level's art, read as the layer reads it (Sprites.hpp). The reader is
+// strict, and a level whose art it refuses is drawn as boxes while this
+// inventory still counts it as playing - so every level is read here, whether
+// or not it starts. The totals are the converter's, pinned.
+void EveryLevelsArtReads() {
+    int sprites = 0;
+    int added = 0;
+    int read = 0;
+    for (const Chapter& chapter : kChapters) {
+        for (int i = 0; i < kLevelsPerChapter; ++i) {
+            const std::string name = "level" + std::to_string(i) + chapter.suffix;
+            Tscn::Scene scene;
+            std::vector<Sprites::Sprite> found;
+            std::string error;
+            const bool ok = Tscn::Load(kLevels + "/" + name + ".tscn", scene, error) &&
+                            Sprites::Find(scene, kLevels + "/..", found, error);
+            CHECK_MSG(ok, name + "'s art: " + error);
+            if (!ok) continue;
+            ++read;
+            sprites += static_cast<int>(found.size());
+            for (const Sprites::Sprite& sprite : found) {
+                if (sprite.additive) ++added;
+            }
+        }
+    }
+    std::printf("  art: %d of %d levels read, %d sprites, %d of them added\n", read, kLevelsPerChapter * 4, sprites,
+                added);
+    CHECK_EQ(read, kLevelsPerChapter * 4);
+    CHECK_EQ(sprites, 2883);
+    CHECK_EQ(added, 99);
+}
+
 void runTests() {
     Level30StillPlays();
     EveryLevelStartsOrSaysWhy();
+    EveryLevelsArtReads();
 }
 
 } // namespace
