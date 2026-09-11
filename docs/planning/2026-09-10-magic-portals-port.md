@@ -571,3 +571,24 @@ the editor's demo scene sat above it: rainbow debug cubes, a box and a light.
   Both mains now clear the scene, both log "No startup scene", and both renders
   changed. Wolf Brigade's builds clean under MSVC too. HUSK is off in the MSVC
   tree, so its one line is checked by GCC only.
+
+**One crystal glowed white, and the engine did it.** In both renders
+crystal_1031 was a cream diamond with a bloom halo, crystal_1032 and the exit
+were dark, and the other three crystals were the teal the layer asks for.
+Nothing in level30 sets those three apart.
+- **The cause:** halfway through any `--frames` run, the app's self-check
+  marks the first two materials in the registry transparent at alpha 0.5, and
+  gives the next one a warm emissive at strength 4. The registry is walked
+  newest first, and the layer made the exit last, after crystals 1031 and 1032.
+  The logs of all three games carried the "Marked 2 material(s) transparent"
+  and "Set 1 material(s) emissive" lines.
+- **The fix:** the two material checks now run only when the app is not a
+  game. So CI's `SupersonicEngine --frames 120`, and the engine's --scene runs,
+  still send something through both pipelines. The mid-run texture and mesh
+  invalidation stays in every run, because it alters nothing a game drew.
+- **After the fix:** the engine's run still logs both checks, and the games'
+  runs log neither. Level30's five crystals are all teal and its exit is green.
+  HUSK's render lost a glowing cream block in the middle of the view: it had
+  looked like one of HUSK's own emissive parts, but it was the self-check too.
+  Wolf Brigade's render is unchanged, because the altered materials were not
+  in its view.

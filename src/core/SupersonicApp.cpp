@@ -1094,34 +1094,46 @@ void SupersonicApp::Run() {
                 << ", mesh=" << (mesh ? "dropped" : "absent")
                 << "; both will be re-acquired next frame.";
 
-            // Drive something through the transparent pipeline as well. It has
-            // its own blend state, its own depth-write setting and its own
-            // sort, and none of that is reachable from a test without a device
-            // - so the headless run is where it gets exercised.
-            size_t madeTransparent = 0;
-            for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
-                if (madeTransparent >= 2) break;
-                material.transparent = true;
-                material.albedoColor.a = 0.5f;
-                ++madeTransparent;
-            }
-            SUPERSONIC_LOG_INFO("SelfCheck")
-                << "Marked " << madeTransparent << " material(s) transparent; "
-                << "the blended pass draws from the next frame on.";
+            // The two material checks below run in the ENGINE's own --frames
+            // run, never in a game's. They rewrite whatever materials the
+            // registry holds, and in a game binary those are the game's: a
+            // headless Magic Portals render showed its exit and one crystal
+            // half transparent and another crystal glowing white, and HUSK and
+            // Wolf Brigade were altered the same way. A game's smoke run is
+            // there to show the game as it draws itself, and a screenshot of
+            // one is only worth taking if it does. The engine's run - CI's
+            // `SupersonicEngine --frames 120`, and --scene runs of it - still
+            // exercises both pipelines.
+            if (!m_manifest.isGame) {
+                // Drive something through the transparent pipeline as well. It
+                // has its own blend state, its own depth-write setting and its
+                // own sort, and none of that is reachable from a test without a
+                // device - so the headless run is where it gets exercised.
+                size_t madeTransparent = 0;
+                for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
+                    if (madeTransparent >= 2) break;
+                    material.transparent = true;
+                    material.albedoColor.a = 0.5f;
+                    ++madeTransparent;
+                }
+                SUPERSONIC_LOG_INFO("SelfCheck")
+                    << "Marked " << madeTransparent << " material(s) transparent; "
+                    << "the blended pass draws from the next frame on.";
 
-            // And drive one material through the emissive path above 1.0, so
-            // the bright pass has something to find. Like the blend state, this
-            // is only reachable with a device.
-            size_t madeEmissive = 0;
-            for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
-                if (material.transparent) continue;
-                material.emissiveColor = glm::vec3(1.0f, 0.55f, 0.15f);
-                material.emissiveStrength = 4.0f;
-                ++madeEmissive;
-                break;
+                // And drive one material through the emissive path above 1.0,
+                // so the bright pass has something to find. Like the blend
+                // state, this is only reachable with a device.
+                size_t madeEmissive = 0;
+                for (auto [entity, material] : m_registry.view<MaterialComponent>().each()) {
+                    if (material.transparent) continue;
+                    material.emissiveColor = glm::vec3(1.0f, 0.55f, 0.15f);
+                    material.emissiveStrength = 4.0f;
+                    ++madeEmissive;
+                    break;
+                }
+                SUPERSONIC_LOG_INFO("SelfCheck")
+                    << "Set " << madeEmissive << " material(s) emissive above 1.0.";
             }
-            SUPERSONIC_LOG_INFO("SelfCheck")
-                << "Set " << madeEmissive << " material(s) emissive above 1.0.";
         }
 
         m_window->PollEvents();
