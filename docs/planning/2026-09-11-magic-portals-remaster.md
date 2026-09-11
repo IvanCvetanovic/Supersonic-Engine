@@ -18,6 +18,21 @@ inferred from identifiers.
   remake's reading of `dragMoveCamera` (`original-gameplay.md` §4).
 - **The screen showed part of a level, and scrolled** as the player walked
   (asked the same day). How much it showed is read from the levels in step 2a.
+- **Stones broke the sandy walls** (asked in step 6), including the eight the
+  data leaves unflagged.
+- **Portals are fired** (asked in step 7).
+  - Tapping sends a shot from the character toward the tap, and the portal
+    opens where the shot arrives.
+  - A wall in between means no portal: the shot fails.
+  - Reflectors bounce the shot.
+
+  This overrides the remake, which opens a portal at the tap at once. The
+  original's script names the parts: `portal_launch`,
+  `computeProjectileOrigin`, `projectileDestiny`, `computePortalFinalPos`,
+  `destroyOnStaticHit`, `computeReflectVector`, `portal_reflect`,
+  `ETHCallback_anti_projectile_wall`.
+- **A destroyier kills the character** (asked in step 7). This was the
+  remake's reading, and is now testimony.
 
 ## The rules carried over
 
@@ -82,13 +97,17 @@ inventory.
 4. **Moving no-portal zones.** level10.
 5. **Hazards, and death.**
 6. **Rolling stones** and the walls they break.
-7. **Launchers**, and the projectile blocker.
-8. **The original's sprites.**
-9. **Reflectors.** The remake marks what they reflect a guess. They stay inert
-   until something in the data says, rather than being given an invented rule:
-   the remake's own worst bug of this kind was `bounce`, built as a trampoline
-   that threw the player out of level 4-7.
-10. **Chapter 1's boss** (level31). The remake has its structure only.
+7. **Launchers.**
+8. **The portal shot, and the projectile blocker.** Added on 11 September,
+   when step 7 found that portals are fired (see the owner's answers). Level
+   1-7's blocker can only stop a portal shot, so it moved here from step 7.
+9. **The original's sprites.**
+10. **Reflectors.** The remake marks what they reflect a guess. The owner said
+    on 11 September that they bounce the portal shot, so they come after it.
+    Where a bounced shot opens its portal is still to be asked. Nothing is to
+    be invented: the remake's own worst bug of this kind was `bounce`, built as
+    a trampoline that threw the player out of level 4-7.
+11. **Chapter 1's boss** (level31). The remake has its structure only.
 
 ## Step 1 - static portals (built)
 
@@ -435,6 +454,9 @@ What `level_runtime.gd` does with a hazard, now in `Hazards`:
   launcher only announces what it would throw, because the converter emits
   levels, not entities a game could spawn. Until step 7, a `destroyier` here is
   only a hazard.
+  - *Update, step 7.* The owner confirmed that a destroyier kills the
+    character, so that is testimony now. The port's launchers throw, and a
+    destroyier also takes back what they throw.
 - **Drawn** at the box that kills.
 
 `test_mp_hazards`, 19 checks:
@@ -519,9 +541,11 @@ What the remake's Demolisher does (`hazards.gd:97-120`), now in `Demolish`:
   standing where it was last drawn.
 - **Left for step 7.**
   - Levels 23 and 24 have a breakable wall and no stone, because their launcher
-    throws `rolling_stone.ent`.
+    throws `rolling_stone.ent`. Step 7 built that.
   - 22 of the game's 27 stones carry a `destroyable` flag, and nothing reads it
-    yet. `rolling_stone_destroy.ent` exists beside `rolling_stone.ent`.
+    yet. `rolling_stone_destroy.ent` exists beside `rolling_stone.ent`. Step 7
+    found `isDestroyableByClaw` in the original's script, so the flag may
+    belong to the boss's claw rather than to launchers.
 
 `test_mp_demolish`, 132 checks:
 - **The files.** Chapter 1's stones and breakables are pinned: each wall's box,
@@ -554,6 +578,96 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 
 | Suite | Checks | Failures |
 |---|---|---|
+| test_mp_demolish | 132 | 0 |
+| test_mp_hazards | 19 | 0 |
+| test_mp_movers | 53 | 0 |
+| test_mp_timed | 50 | 0 |
+| test_mp_layer | 52 | 0 |
+| test_mp_camera | 15 | 0 |
+| test_mp_chapters | 39 | 0 |
+| test_mp_statics | 65 | 0 |
+| test_mp_play | 131 | 0 |
+| test_mp_start | 365 | 0 |
+
+## Step 7 - launchers (built)
+
+What an `entity_launcher` does, now in `Launchers`. The remake's launcher only
+announces what it would throw, so this part is the port's own:
+- **A throw.** Every `stride` ms, a launcher throws the entity its `entity`
+  names, at its node. All three in the game throw `rolling_stone.ent` from
+  above the level: every 1.5 s in levels 23 and 24, and every 2.5 s in level 25.
+- **What a thrown stone is.** `launchers.json` records it from
+  `rolling_stone.ent`: a rigid circle of 30 px that demolishes and travels. So
+  from the tick it is thrown, it breaks walls and goes through portals as a
+  placed stone does.
+- **When the first comes.** One stride after the level starts, as the remake's
+  launcher waits. The original has a `LAUNCH_TIME` constant whose value is not
+  decoded, so `launchers.json` carries the delay as a guess.
+- **Taking back.**
+  - A launcher's min/max is a cull box, as the remake reads it. A thrown stone
+    whose centre leaves the box is removed.
+  - So is one that touches a `destroyier`, in the box the port gives it as a
+    hazard.
+  - Only thrown stones are removed.
+
+  In level23, a minute of throwing leaves nothing behind: 41 thrown and 41
+  taken back.
+- **The tick.** Throws come before the step, so a new stone is in the next one.
+  Taking back comes after the stones break things and before the portals.
+- **Drawn** grey: a box for each thrown stone, made and unmade with it.
+
+**What step 7 found: portals are fired.**
+- Level 1-7's `anti_projectile_wall` stands in a level with no turret and no
+  launcher. In chapter 1, the only thing it could stop is a portal shot.
+- The original's script has the shot's parts: `portal_launch`,
+  `computeProjectileOrigin`, `projectileDestiny`, `computePortalFinalPos`,
+  `destroyOnStaticHit`, `computeReflectVector`, `portal_reflect`.
+- The owner confirmed it: a shot flies from the character to the tap and opens
+  the portal where it arrives. A wall in between fails it, and reflectors
+  bounce it.
+
+So the remake's placement, a portal at the tap at once, is wrong. The shot and
+the projectile blocker are now step 8. Two questions go to the owner before it
+is built:
+- whether crates and stones stop a shot;
+- whether a failed shot costs a portal.
+
+The first decides which routes solve. The second decides what the golden
+score counts.
+
+`test_mp_launchers`, 90 checks:
+- **The files.** The three launchers are pinned: each one's place, what it
+  throws, its stride and its cull box. The destroyiers under them are pinned
+  too.
+- **Throwing.** The first stone comes on tick 90, which is the one stride that
+  `launchers.json` holds. It appears at its launcher, and is at once a stone and
+  a traveller. After that, one comes every stride.
+- **Taking back.**
+  - The first stone falls out of level23 and is taken back within a stride, and
+    nothing still holds it. A minute later none are left.
+  - A destroyier takes a stone back on the tick. With the despawners removed,
+    the same stone stays.
+  - Just inside the cull box's bottom edge a stone stays, and just past it the
+    stone goes.
+- **Through a portal pair.**
+  - Level23's wall and level24's wall are each broken by the first thrown
+    stone, at 1.98 s and 1.95 s.
+  - Level25's button is pressed by it at 2.90 s, and its door rises.
+
+The inventory after step 7: chapter 1 has 32 levels starting and 24 playing.
+Chapters 2 to 4 are unchanged. What is left in chapter 1:
+
+| What | Levels |
+|---|---|
+| The portal shot, and the projectile blocker | 6, and every level's placement |
+| Reflectors | 11, 12, 19, 20, 22, 28 |
+| Boss | 31 |
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_launchers | 90 | 0 |
 | test_mp_demolish | 132 | 0 |
 | test_mp_hazards | 19 | 0 |
 | test_mp_movers | 53 | 0 |

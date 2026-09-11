@@ -1,0 +1,42 @@
+{
+  "_about": [
+    "The Magic Portals port's launchers: what an entity_launcher throws, what removes a",
+    "thrown body, and when the first is thrown. The remake's launcher only announces what",
+    "it would throw (hazards.gd:416-455), so these are the port's. See",
+    "docs/planning/2026-09-11-magic-portals-remaster.md, step 7."
+  ],
+
+  "throwables": {
+    "rolling_stone.ent": {
+      "_note": [
+        "The body a thrown rolling_stone.ent gets: the one the converter gives every",
+        "rolling_stone.ent a level places, a rigid circle of 30 px, and the flags its .ent",
+        "sets, so a thrown stone breaks walls and travels as a placed one does."
+      ],
+      "_source": "the original's rolling_stone.ent: shape 2 (a circle), collision 60 x 60, CustomData demolisher 1 and teleportable 1",
+      "radius_px": 30.0,
+      "demolisher": true,
+      "teleportable": true
+    }
+  },
+
+  "despawners": {
+    "_note": [
+      "Entities whose box removes a thrown body on contact. destroyier.ent is the remake's",
+      "reading (hazards.gd:420-422): an invisible sensor under a launcher's drop, which the",
+      "owner confirmed on 11 September also kills the player. Its box is the one the port",
+      "gives it as a hazard."
+    ],
+    "names": ["destroyier.ent"]
+  },
+
+  "first_throw": {
+    "_note": [
+      "How many strides after a level starts the first body is thrown. The remake's",
+      "launcher waits one (hazards.gd:435). The original has a LAUNCH_TIME constant, whose",
+      "value is not decoded."
+    ],
+    "_guess": true,
+    "after_strides": 1.0
+  }
+}

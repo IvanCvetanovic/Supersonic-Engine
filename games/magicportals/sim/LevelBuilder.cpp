@@ -47,6 +47,17 @@ entt::entity Place(entt::registry& registry, const Tscn::Node& node, const std::
 
 bool IsEntityNode(const Tscn::Node& node) { return node.parent == "." && node.type == "Node2D"; }
 
+// A RigidBody2D's body: Godot's default material, and the plane's locks.
+void MakeRigid(entt::registry& registry, entt::entity entity, const Options& options) {
+    auto& rigid = registry.emplace<RigidBodyComponent>(entity);
+    rigid.friction = kBodyFriction;
+    rigid.restitution = kBodyRestitution;
+    if (options.lockToPlane) {
+        rigid.lockPosition = kPlaneLockPosition;
+        rigid.lockRotation = kPlaneLockRotation;
+    }
+}
+
 // One entity node. `built` is false when it is skipped: scenery or a marker (no
 // Body), or a static that withStatics leaves out.
 bool BuildNode(const Tscn::Scene& scene, const Tscn::Node& node, entt::registry& registry, const Options& options,
@@ -127,13 +138,7 @@ bool BuildNode(const Tscn::Scene& scene, const Tscn::Node& node, entt::registry&
     }
 
     if (isRigid) {
-        auto& rigid = registry.emplace<RigidBodyComponent>(entity);
-        rigid.friction = kBodyFriction;
-        rigid.restitution = kBodyRestitution;
-        if (options.lockToPlane) {
-            rigid.lockPosition = kPlaneLockPosition;
-            rigid.lockRotation = kPlaneLockRotation;
-        }
+        MakeRigid(registry, entity, options);
         ++out.rigids;
     } else if (isMover) {
         // Moved by the port and carrying what stands on it: kinematic, so the
@@ -206,6 +211,16 @@ bool ShapeBoundsPx(const Tscn::Scene& scene, const Tscn::Node& node, glm::dvec2&
         return true;
     }
     return false;
+}
+
+entt::entity BuildRigidCircle(entt::registry& registry, const std::string& tag, const glm::dvec2& atPx,
+                              double radiusPx, const Options& options) {
+    const entt::entity entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = Units::ToWorld(atPx.x, atPx.y);
+    registry.emplace<TagComponent>(entity, TagComponent{tag});
+    registry.emplace<SphereColliderComponent>(entity).radius = Units::ToMetres(radiusPx);
+    MakeRigid(registry, entity, options);
+    return entity;
 }
 
 entt::entity BuildEntity(const Tscn::Scene& scene, const std::string& nodeName, entt::registry& registry,

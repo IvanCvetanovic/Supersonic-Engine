@@ -128,6 +128,12 @@ private:
         float depth{0.4f};
     };
 
+    // A body a launcher threw, and the box standing for it.
+    struct ThrownBox {
+        entt::entity body{entt::null};
+        entt::entity box{entt::null};
+    };
+
     void bindInput();
     void buildCamera(entt::registry& registry);
     void buildDrawables(entt::registry& registry);
@@ -185,6 +191,7 @@ private:
     std::vector<entt::entity> m_statics;  // one per static portal, null once spent
     std::vector<entt::entity> m_zones;    // one per no-portal zone
     std::vector<entt::entity> m_hazards;  // one per hazard, at the box that kills
+    std::vector<ThrownBox> m_thrown;      // one per thrown body not yet taken back
 
     struct Hud {
         entt::entity status{entt::null};

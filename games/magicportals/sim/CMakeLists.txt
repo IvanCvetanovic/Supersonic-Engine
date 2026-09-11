@@ -11,6 +11,7 @@ add_library(MagicPortalsSim STATIC
     Game.cpp
     Goals.cpp
     Hazards.cpp
+    Launchers.cpp
     LevelBuilder.cpp
     Mover.cpp
     Player.cpp

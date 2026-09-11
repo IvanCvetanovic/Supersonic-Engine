@@ -100,6 +100,12 @@ entt::entity BuildEntity(const Tscn::Scene& scene, const std::string& nodeName, 
 // a node with no Body/Shape.
 bool ShapeBoundsPx(const Tscn::Scene& scene, const Tscn::Node& node, glm::dvec2& offsetPx, glm::dvec2& sizePx);
 
+// A rigid circle with no node behind it, built as a RigidBody2D with a
+// CircleShape2D is: what a launcher throws (Launchers.hpp). Not added to any
+// Built; the caller owns it.
+entt::entity BuildRigidCircle(entt::registry& registry, const std::string& tag, const glm::dvec2& atPx,
+                              double radiusPx, const Options& options);
+
 // A trigger box from an entity's metadata/trigger_size and trigger_offset, the
 // way LevelRuntime._attach_trigger builds one (level_runtime.gd:243-265).
 // entt::null, with `error` set, when the entity has no trigger_size.

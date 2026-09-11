@@ -221,11 +221,17 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     m_zones.clear();
     for (auto& e : m_hazards) destroy(e);
     m_hazards.clear();
+    for (ThrownBox& thrown : m_thrown) destroy(thrown.box);
+    m_thrown.clear();
     destroy(m_player);
     destroy(m_exit);
-    // And the level's own bodies.
+    // And the level's own bodies, with what its launchers threw.
     for (auto& [name, entity] : m_level.built.entities) {
         entt::entity e = entity;
+        destroy(e);
+    }
+    for (const Launchers::Thrown& thrown : m_level.launchers.live) {
+        entt::entity e = thrown.body;
         destroy(e);
     }
     destroy(m_level.player);
@@ -428,6 +434,30 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
                                offset.x * std::sin(angle) + offset.y * std::cos(angle));
         const glm::dvec2 centrePx = Units::ToPixels(glm::vec3(body.position.x + turned.x, body.position.y + turned.y, 0.0f));
         placeBox(registry, drawn.box, centrePx, drawn.sizePx, 0.0f, drawn.depth, angle);
+    }
+
+    // One box per body a launcher threw, made and unmade to match.
+    for (ThrownBox& drawn : m_thrown) {
+        if (registry.valid(drawn.body)) continue;
+        if (drawn.box != entt::null && registry.valid(drawn.box)) registry.destroy(drawn.box);
+        drawn.box = entt::null;
+    }
+    std::erase_if(m_thrown, [](const ThrownBox& drawn) { return drawn.box == entt::null; });
+    for (const Launchers::Thrown& thrown : m_level.launchers.live) {
+        if (!registry.valid(thrown.body)) continue;
+        auto drawn = std::find_if(m_thrown.begin(), m_thrown.end(),
+                                  [&thrown](const ThrownBox& d) { return d.body == thrown.body; });
+        if (drawn == m_thrown.end()) {
+            ThrownBox made;
+            made.body = thrown.body;
+            made.box = makeBox(registry, "Magic Portals Thrown", glm::vec3(0.0f), glm::vec3(1.0f), kStoneColour);
+            registry.emplace<InterpolatedTransformComponent>(made.box);
+            m_thrown.push_back(made);
+            drawn = m_thrown.end() - 1;
+        }
+        const auto& body = registry.get<TransformComponent>(thrown.body);
+        placeBox(registry, drawn->box, Units::ToPixels(body.position), glm::dvec2(thrown.is.radiusPx * 2.0), 0.0f,
+                 0.4f, body.rotation.z);
     }
 
     if (m_level.player != entt::null && registry.valid(m_level.player)) {
