@@ -23,6 +23,13 @@ inline constexpr double kPixelsPerMetre = 50.0;
 // remake's 1200 px/s^2 player gravity, which its own player.json marks _guess.
 inline constexpr double kGravity = 10.0;
 
+// The remake's world gravity, which is what its bodies fall at: Godot 4's
+// physics/2d/default_gravity, since the remake's project.godot sets none. The
+// port plays like the remake, so its world runs at this; the spike measured the
+// solver against the original, and runs at kGravity. The remake's player falls
+// at its own player.json gravity, not at either.
+inline constexpr double kRemakeWorldGravityPx = 980.0;
+
 inline float ToMetres(double px) {
     return static_cast<float>(px / kPixelsPerMetre);
 }

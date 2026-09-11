@@ -13,6 +13,7 @@
 #include "core/PhysicsSystem.hpp"
 #include "sim/LevelBuilder.hpp"
 #include "sim/Mover.hpp"
+#include "sim/Player.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Tscn.hpp"
 #include "sim/Units.hpp"
@@ -21,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <string>
 #include <system_error>
@@ -37,11 +39,13 @@ constexpr float kStep = 1.0f / 60.0f;
 
 Tscn::Scene g_level30;
 Roles::Table g_roles;
+Player::Tuning g_tuning;
 std::filesystem::path g_prisms;
 
 bool LoadInputs(std::string& error) {
     if (!Tscn::Load(kLevels + "/level30.tscn", g_level30, error)) return false;
     if (!Roles::Load(kData + "/entity_roles.json", g_roles, error)) return false;
+    if (!Player::LoadTuning(kData + "/player.json", g_tuning, error)) return false;
     g_prisms = std::filesystem::temp_directory_path() / "supersonic-test-mp-play";
     std::error_code ec;
     std::filesystem::create_directories(g_prisms, ec);
@@ -55,9 +59,10 @@ LevelBuilder::Options PortOptions() {
     return options;
 }
 
-void UseOriginalGravity(entt::registry& registry) {
+// The port's world: the remake's gravity, 980 px/s^2 (Units.hpp says why).
+void UseRemakeGravity(entt::registry& registry) {
     PhysicsSettings settings;
-    settings.gravity = glm::vec3(0.0f, -static_cast<float>(Units::kGravity), 0.0f);
+    settings.gravity = glm::vec3(0.0f, -Units::ToMetres(Units::kRemakeWorldGravityPx), 0.0f);
     registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
 }
 
@@ -149,7 +154,7 @@ void ACrateRidesADoorUpAndDown() {
     // crush its rider and measure the level instead of the door - with level30's
     // small crate on top.
     entt::registry registry;
-    UseOriginalGravity(registry);
+    UseRemakeGravity(registry);
     LevelBuilder::Built built;
     std::string error;
     const entt::entity door =
@@ -207,7 +212,7 @@ void ACrateRidesADoorUpAndDown() {
     CHECK_MSG(worstGap < 2.0, "the crate rode the door up: worst gap " + std::to_string(worstGap) + " px");
 
     const double speedPx = Mover::kDoorRisePx / motion.durationS;
-    const double flightPx = speedPx * speedPx / (2.0 * Units::kGravity * Units::kPixelsPerMetre);
+    const double flightPx = speedPx * speedPx / (2.0 * Units::kRemakeWorldGravityPx);
     double highestGap = 0.0;
     for (int i = 0; i < 90; ++i) {
         step();
@@ -230,11 +235,155 @@ void ACrateRidesADoorUpAndDown() {
                   std::to_string(gapPx()) + " px");
 }
 
+// ---- The player -------------------------------------------------------------
+
+// level30 as the port plays it: built with the role table, at the remake's
+// gravity, with the player at main_char.
+struct Play {
+    entt::registry registry;
+    LevelBuilder::Built built;
+    entt::entity player = entt::null;
+};
+
+bool StartLevel30(Play& play, bool withStatics, std::string& error) {
+    UseRemakeGravity(play.registry);
+    LevelBuilder::Options options = PortOptions();
+    options.withStatics = withStatics;
+    if (!LevelBuilder::Build(g_level30, play.registry, options, play.built, error)) return false;
+    const Tscn::Node* spawn = g_level30.FindNode("main_char_29");
+    const Tscn::Value* at = spawn != nullptr ? spawn->Find("position") : nullptr;
+    if (at == nullptr || at->kind != Tscn::Value::Kind::Vector2) {
+        error = "main_char_29 has no position";
+        return false;
+    }
+    play.player = Player::Spawn(play.registry, glm::dvec2(at->numbers[0], at->numbers[1]), g_tuning);
+    return true;
+}
+
+// One tick as the port runs it: the player steered, then the physics step.
+void Tick(Play& play, float direction) {
+    Player::Steer(play.registry, play.player, g_tuning, direction, kStep);
+    PhysicsSystem::Update(play.registry, kStep);
+}
+
+glm::dvec2 PlayerPx(Play& play) {
+    return Units::ToPixels(play.registry.get<TransformComponent>(play.player).position);
+}
+
+// The top of one of level30's polygon platforms, in the remake's pixels.
+double PlatformTopPx(const std::string& entity) {
+    const Tscn::Node* node = g_level30.FindNode(entity);
+    const Tscn::Node* shape = g_level30.FindNode(entity + "/Body/Shape");
+    const Tscn::Value* polygon = shape != nullptr ? shape->Find("polygon") : nullptr;
+    const Tscn::Value* at = node != nullptr ? node->Find("position") : nullptr;
+    if (polygon == nullptr || at == nullptr || at->kind != Tscn::Value::Kind::Vector2) return 0.0;
+    double least = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 1; i < polygon->numbers.size(); i += 2) least = std::min(least, polygon->numbers[i]);
+    return at->numbers[1] + least;
+}
+
+// Landed: something solid under the feet and the fall stopped, within 45 ticks -
+// verify_gameplay's window. -1 when it never did.
+int LandingTick(Play& play) {
+    for (int tick = 1; tick <= 45; ++tick) {
+        Tick(play, 0.0f);
+        const bool grounded = Player::Grounded(play.registry, play.player, g_tuning);
+        const float fall = play.registry.get<RigidBodyComponent>(play.player).velocity.y;
+        if (grounded && std::fabs(fall) < 0.05f) return tick;
+    }
+    return -1;
+}
+
+void ThePlayerLandsOnLevel30() {
+    // The remake's own check (verify_gameplay.gd:259): the player comes to rest
+    // on geometry. It spawns with its feet a pixel into platform_ent_895, as the
+    // level places it, and settles on the top - and with every static taken
+    // away it must not, which is what makes the first half mean something.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    const int landed = LandingTick(play);
+    const double restY = PlayerPx(play).y;
+    const double wantY = PlatformTopPx("platform_ent_895") - g_tuning.heightPx * 0.5;
+    CHECK_MSG(landed > 0, "the player landed within 45 ticks");
+    CHECK_MSG(std::fabs(restY - wantY) < 1.0,
+              "on platform_ent_895's top: at " + std::to_string(restY) + " px, want " + std::to_string(wantY));
+
+    Play bare;
+    CHECK_MSG(StartLevel30(bare, false, error), error);
+    if (bare.player == entt::null) return;
+    CHECK_MSG(LandingTick(bare) < 0, "and with every static removed it lands on nothing");
+}
+
+// Past the seam and short of crate_969, whose 58 px face is at x 323 - which the
+// capsule's reaches with its centre at 313.
+constexpr double kSeamWalkEndPx = 300.0;
+
+struct Walk {
+    double reachedAtS = -1.0; // when x first reached kSeamWalkEndPx
+    double slowestPx = 0.0;   // the slowest tick after it reached walking speed, button held
+    double endXPx = 0.0;
+};
+
+Walk WalkTheSeam(float friction) {
+    Walk walk;
+    Play play;
+    std::string error;
+    if (!StartLevel30(play, true, error)) {
+        CHECK_MSG(false, error);
+        return walk;
+    }
+    play.registry.get<RigidBodyComponent>(play.player).friction = friction;
+    for (int i = 0; i < 30; ++i) Tick(play, 0.0f); // land and settle
+
+    bool atSpeed = false;
+    walk.slowestPx = std::numeric_limits<double>::infinity();
+    for (int tick = 1; tick <= 120 && walk.reachedAtS < 0.0; ++tick) {
+        Tick(play, 1.0f);
+        const double vx = play.registry.get<RigidBodyComponent>(play.player).velocity.x * Units::kPixelsPerMetre;
+        if (vx >= 0.95 * g_tuning.walkSpeedPx) atSpeed = true;
+        if (atSpeed) walk.slowestPx = std::min(walk.slowestPx, vx);
+        if (PlayerPx(play).x >= kSeamWalkEndPx) walk.reachedAtS = tick * static_cast<double>(kStep);
+    }
+    if (!atSpeed) walk.slowestPx = 0.0;
+    walk.endXPx = PlayerPx(play).x;
+    return walk;
+}
+
+void ThePlayerWalksAcrossTheSeam() {
+    // From the spawn (x 182) right across x 256, where platform_ent_895 and
+    // platform_ent_785 meet in a 3.2 px notch, to x 300. Two things: it gets
+    // there, and no tick after it reaches walking speed drops near zero while
+    // the button is held. A capsule that catches for a fifth of a second and pops
+    // free gets there too.
+    //
+    // "Near zero" is under half walking speed. The notch's chamfers slope 26.6
+    // degrees, and sliding up one keeps cos^2 of the speed - 128 of 160 px/s, what
+    // Godot's own move_and_slide would keep - so a threshold near that would fail
+    // the geometry rather than a catch, and a catch reads 0.
+    //
+    // Walked gripping the floor (friction 1) and not (0), the two readings a
+    // CharacterBody2D's missing friction leaves open. The port is judged on
+    // Player::kFriction; the other is printed for the planning doc.
+    for (const float friction : {0.0f, 1.0f}) {
+        const Walk walk = WalkTheSeam(friction);
+        std::printf("  seam walk, friction %.0f: x %.0f reached at %.3f s, slowest held tick %.1f px/s, ended at x %.1f\n",
+                    static_cast<double>(friction), kSeamWalkEndPx, walk.reachedAtS, walk.slowestPx, walk.endXPx);
+        if (friction != Player::kFriction) continue;
+        CHECK_MSG(walk.reachedAtS > 0.0, "the player gets across the seam");
+        CHECK_MSG(walk.slowestPx > 0.5 * g_tuning.walkSpeedPx,
+                  "without catching: the slowest held tick was " + std::to_string(walk.slowestPx) + " px/s");
+    }
+}
+
 void runTests() {
     Level30HasTheRolesItsPuzzleNeeds();
     TheMoversAreKinematic();
     DoorsTakeTheirStrideFromTheLevel();
     ACrateRidesADoorUpAndDown();
+    ThePlayerLandsOnLevel30();
+    ThePlayerWalksAcrossTheSeam();
 }
 
 } // namespace
@@ -242,9 +391,10 @@ void runTests() {
 int main() {
     std::error_code ec;
     const std::string roles = kData + "/entity_roles.json";
-    if (!std::filesystem::is_directory(kLevels, ec) || !std::filesystem::is_regular_file(roles, ec)) {
+    if (!std::filesystem::is_directory(kLevels, ec) || !std::filesystem::is_regular_file(roles, ec) ||
+        !std::filesystem::is_regular_file(kData + "/player.json", ec)) {
         std::printf("test_mp_play: SKIPPED - needs the converted levels at %s\n"
-                    "  and the remake's role table at %s.\n"
+                    "  and the remake's role table and player.json at %s.\n"
                     "  Both live outside this repository; configure with\n"
                     "  -DSUPERSONIC_MAGICPORTALS_LEVELS=... and -DSUPERSONIC_MAGICPORTALS_DATA=...\n",
                     kLevels.c_str(), roles.c_str());
@@ -256,5 +406,5 @@ int main() {
         return 1;
     }
     runTests();
-    return ::test::summary("test_mp_play", 32);
+    return ::test::summary("test_mp_play", 40);
 }

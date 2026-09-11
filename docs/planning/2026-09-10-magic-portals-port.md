@@ -212,3 +212,83 @@ remake's data. It pins:
 the other Magic Portals suites are unchanged. The first build refused a
 temporary string handed to `Json::Parser`. Its constructor from an rvalue is
 deleted, because the parser keeps a reference to what it reads.
+
+## Step 3 - the player: decisions, before the code
+
+**World gravity is the remake's: 980 px/s², or 19.6 m/s².**
+- **Where 980 comes from:** the remake's `project.godot` sets no gravity, so its
+  crates fall at Godot 4's default, `physics/2d/default_gravity`.
+- **Why the spike differed:** it ran at the original's decoded Box2D constant,
+  10 m/s², because its job was to measure the solver against the original. The
+  port's job is to play like the remake, the same argument that gave statics
+  Godot's material.
+- **Two constants, two jobs.** `Units::kGravity` stays the decoded constant it
+  documents, and the spike keeps using it. The port's world gravity is its own
+  constant, `Units::kRemakeWorldGravityPx`.
+- **What moves because of it.** `test_mp_play` switches to the port's gravity,
+  so the rider's flight after the door stops becomes v²/2g at 980 px/s²:
+  8.1 px, where it was 15.9 px at the spike's gravity. The test still derives
+  the number from whatever gravity it sets.
+
+**The player falls at its own gravity.**
+- **The rate:** `player.json`'s 1200 px/s², marked `_guess` and carried as data,
+  capped at its 900 px/s. That is what the remake's player does, independently
+  of the world's gravity.
+- **Every tick, not only in the air.** `move_and_slide` snaps a character to
+  the floor, and a dynamic body has no such snap. A body that stopped applying
+  gravity when grounded would hover off a lift going down, which is the F1 bug
+  in another form. On the floor, the contact takes the gravity back out.
+
+**How hard the player grips was measured, not argued: it grips nothing.** A
+`CharacterBody2D` feels no friction, which argues for 0. But acceptance item 3
+is pushing a crate, and the seam is a 3.2 px notch that a gripping capsule and
+a sliding one may cross differently. So the first player test walked the seam
+at both, traced tick by tick.
+- **At friction 1 the player fights its own steering.** The controller writes
+  velocity each tick, and the contact then takes most of it back, with
+  friction up to the player's weight. On flat ground 1400 px/s² of
+  acceleration comes out at about 200 px/s², 3.3 px/s a tick. In the notch, the
+  far chamfer holds the player at vx 0 for 26 ticks before it crawls out.
+- **At friction 0 the notch costs one tick.** The player drops to 112 px/s for
+  a tick, hops about a pixel, and is back at 160 px/s three ticks later.
+  Sliding up a 26.6° chamfer keeps cos² of the speed, 128 px/s, so Godot's own
+  `move_and_slide` would dip nearly as far. The rest is the first chamfer's
+  contact, met at speed.
+- **So `Player::kFriction` is 0.** Whether a frictionless player still pushes a
+  crate hard enough is step 4's to measure.
+
+**The seam test checks two things.** The walk is right from the spawn (x 182),
+across the notch at x 256 where `platform_ent_895` meets `platform_ent_785`, to
+x 300.
+- **The player gets there.**
+- **It never catches.** No tick after it reaches walking speed may drop below
+  half of it while the button is held. A capsule that catches for a fifth of a
+  second and then pops free still gets there, and is still broken. The line is
+  at half because the chamfer's geometry alone takes a fifth, and a catch
+  reads 0.
+
+**The first draft walked into the crate.** It walked to x 320, taken to be
+short of `crate_969`. But the crate is 58 px wide at x 352, so its face is at
+x 323, and the capsule's face meets it with the capsule's centre at x 313. The
+lowest speed that draft reported, 59.6 px/s at friction 0, was the player
+starting to push the crate, not the seam.
+
+**Built and verified.** The player is `games/magicportals/sim/Player`, with
+two new checks in `test_mp_play`.
+- **Landing:** the player comes to rest on `platform_ent_895` within
+  `verify_gameplay`'s 45 ticks, and does not land with every static removed.
+- **The seam:** the player walks across without catching.
+
+GCC 13.3 and MSVC 14.50 agree to the digit: 42 checks and 0 failures.
+- **Friction 0:** the player reaches x 300 at 0.800 s, with its slowest held
+  tick at 112.0 px/s.
+- **Friction 1:** it takes 1.717 s, and stops dead in the notch.
+
+The door rider's flight is now checked at the new gravity, and the other Magic
+Portals suites are unchanged.
+
+**Item 2 is not done until the full level agrees.** The rider test built
+`door_lift_976` on its own, because in the level it rises into the space under
+977 and 978. Before buttons count as working, step 4 has to push a crate onto
+`button_975` (idx 0) and open `door_lift_976` (switchIdx 0) in the whole level,
+with all three doors present.

@@ -7,6 +7,7 @@
 add_library(MagicPortalsSim STATIC
     LevelBuilder.cpp
     Mover.cpp
+    Player.cpp
     Portal.cpp
     Prism.cpp
     Roles.cpp
