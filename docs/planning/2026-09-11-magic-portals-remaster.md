@@ -16,6 +16,8 @@ inferred from identifiers.
   (`portal_system.gd:14-17`). portals.json's `static_portals_persist` is true.
 - **The camera follows the player, with no dragging.** This overrides the
   remake's reading of `dragMoveCamera` (`original-gameplay.md` §4).
+- **The screen showed part of a level, and scrolled** as the player walked
+  (asked the same day). How much it showed is read from the levels in step 2a.
 
 ## The rules carried over
 
@@ -135,3 +137,61 @@ GCC 13.3 and MSVC 14.50 agree to the digit on every Magic Portals suite:
 | test_mp_layer | 10 | 0 |
 
 On both, level0 plays through in the same 3.07 s.
+
+## Step 2a - the level order and the camera's arithmetic (built)
+
+Step 2 is split, on review. The level order and the camera land first, with
+suites of their own. The layer then uses them, so a failure there has one
+cause.
+
+**The level order.**
+- **What reads it:** `Chapters` reads `chapters.json`, the converter's reading
+  of `goldenScores.enml`: four worlds of 32, each level with its golden score.
+- **Where from:** beside the levels (`SUPERSONIC_MAGICPORTALS_CHAPTERS`),
+  because it is converter output.
+- **`Next`** stays within a world, as the remake's `advance_level` does. What a
+  finished chapter means is left to its caller.
+- **A finding for the remake:** its `original-gameplay.md` §3 says seven levels
+  ship a golden score of 0. The file has eight: level0, level14, level0a,
+  level1a, level6a, level27a, level1b and level5c. `test_mp_chapters` pins what
+  the file says.
+
+**The view.** The owner remembers the screen scrolling. How much it showed is
+read from the levels:
+- **Height:** 73 of the 128 levels are exactly 256 px tall, and none is
+  shorter.
+- **Width:** the narrowest level is 456 px wide, against the original's
+  455x256 background art.
+- **So:** a view 256 px tall at the window's shape, 455 px wide at 16:9. At
+  that size no level fits whole, and most scroll by one or two screens.
+- **The remake's 1280x720** is marked a placeholder in its own
+  `project.godot`. At that size 127 of 128 levels would fit whole, and a
+  following camera would never move.
+
+The number goes into the port's own data with the layer, so play can retune it.
+
+**The camera's arithmetic.** `Camera`, pure and without data:
+- **Where it starts:** at `camera_start`, which sits near a level's exit. It
+  holds there for `hold_time_s`.
+- **Easing:** it then eases to the player, closing `dt / follow_lag_s` of the
+  gap each tick. Both numbers are `portals.json` guesses.
+- **Per tick:** the remake eases per frame. The port eases per tick, so a tap
+  meets the camera a replay meets.
+- **Bounds:** it never shows past (0, 0) or `level_bounds`.
+
+Two of these are the port's, not the remake's: the remake's camera reads
+neither the hold nor any limits. Both come from the original. `cameraHoldTime`
+and `clampCameraPos` are identifiers in its bytecode, and the `level_bounds`
+role note pairs the marker with `clampCameraPos`.
+
+`camera_start` is read as the view's centre, as the remake reads it. Read as the
+top-left corner, the way Ethanon places its camera, the view comes out nearly the
+same once it is held inside the level: every `camera_start` sits at or near y 0,
+and near a level's far end.
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_chapters | 39 | 0 |
+| test_mp_camera | 13 | 0 |
+
+Both pass on GCC 13.3 and MSVC 14.50.

@@ -5,6 +5,8 @@
 # renderer. See docs/planning/2026-09-10-magic-portals-spike.md.
 
 add_library(MagicPortalsSim STATIC
+    Camera.cpp
+    Chapters.cpp
     Game.cpp
     Goals.cpp
     LevelBuilder.cpp
@@ -39,9 +41,15 @@ set(SUPERSONIC_MAGICPORTALS_LEVELS "${CMAKE_SOURCE_DIR}/../Magic-Portals-Remake/
 set(SUPERSONIC_MAGICPORTALS_DATA "${CMAKE_SOURCE_DIR}/../Magic-Portals-Remake/game/data"
     CACHE PATH "The remake's data directory (Magic-Portals-Remake/game/data)")
 
+# And the level order, chapters.json: the converter's reading of the original's
+# goldenScores.enml, written beside the levels in the same gitignored out/.
+set(SUPERSONIC_MAGICPORTALS_CHAPTERS "${SUPERSONIC_MAGICPORTALS_LEVELS}/../data/chapters.json"
+    CACHE FILEPATH "The remake's converted level order (Magic-Portals-Remake/out/data/chapters.json)")
+
 target_compile_definitions(MagicPortalsSim PUBLIC
     MAGICPORTALS_LEVELS_DIR="${SUPERSONIC_MAGICPORTALS_LEVELS}"
-    MAGICPORTALS_DATA_DIR="${SUPERSONIC_MAGICPORTALS_DATA}")
+    MAGICPORTALS_DATA_DIR="${SUPERSONIC_MAGICPORTALS_DATA}"
+    MAGICPORTALS_CHAPTERS_FILE="${SUPERSONIC_MAGICPORTALS_CHAPTERS}")
 
 target_include_directories(MagicPortalsSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(MagicPortalsSim PUBLIC SupersonicCore)
