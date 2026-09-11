@@ -260,6 +260,156 @@ void ExactInThePlane() {
     if (through) CHECK_MSG(std::fabs(through->along - 70.0 / 200.0) < 1e-4, std::to_string(through->along));
 }
 
+// ---- Reflectors ------------------------------------------------------------------
+
+std::string Where(const glm::dvec2& p) { return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) + ")"; }
+
+void TheReflectorsAreTheLevelsOwn() {
+    // Pinned to the files: level 1-12's three, all horizontal, and 1-13's one,
+    // vertical.
+    Run eleven;
+    if (Begin("level11", eleven)) {
+        const std::vector<Portals::Reflector>& reflectors = eleven.level.portals.reflectors;
+        CHECK_EQ(reflectors.size(), std::size_t{3});
+        struct Expected {
+            const char* name;
+            double x;
+            double y;
+        };
+        bool pinned = reflectors.size() == 3;
+        for (const Expected& e : {Expected{"reflect_agent_675", 638.0, 26.0}, Expected{"reflect_agent_761", 180.0, 140.0},
+                                  Expected{"reflect_agent_623", 422.0, 115.0}}) {
+            bool found = false;
+            for (const Portals::Reflector& r : reflectors) {
+                if (r.name == e.name && r.centrePx == glm::dvec2(e.x, e.y) && !r.vertical) found = true;
+            }
+            if (!found) pinned = false;
+        }
+        CHECK_MSG(pinned, "level11's three reflectors, horizontal, where the file puts them");
+    }
+    Run twelve;
+    if (Begin("level12", twelve)) {
+        const std::vector<Portals::Reflector>& reflectors = twelve.level.portals.reflectors;
+        CHECK_MSG(reflectors.size() == 1 && reflectors[0].name == "reflect_agent_584" &&
+                      reflectors[0].centrePx == glm::dvec2(248.0, 149.0) && reflectors[0].vertical,
+                  "level12's one, vertical");
+    }
+}
+
+// A shot in an empty plane from (100, 200), with the rules a level loads and the
+// reflectors a test puts down.
+struct Rig {
+    entt::registry registry;
+    Portals::State state;
+};
+
+bool MakeRig(Rig& rig) {
+    Run run;
+    if (!Begin("level1", run)) return false;
+    rig.state.rules = run.data.portals;
+    rig.state.shot = run.data.shot;
+    rig.state.budget = 2;
+    rig.state.shooter = rig.registry.create();
+    rig.registry.emplace<TransformComponent>(rig.state.shooter).position = Units::ToWorld(100.0, 200.0);
+    return true;
+}
+
+void FlyOut(Rig& rig) {
+    for (int tick = 0; tick < 600 && rig.state.flight; ++tick) rig.state.Tick(rig.registry, kStep);
+}
+
+void AReflectorTurnsAShotMirrored() {
+    // A horizontal reflector at (200, 100), on the line from (100, 200) to a tap
+    // at (300, 0). The shot comes within the catch radius at E, turns its y back,
+    // and goes on for the rest of its way: the portal opens at the tap mirrored
+    // across the line through E, at the end of a way as long as the one fired.
+    Rig rig;
+    if (!MakeRig(rig)) return;
+    rig.state.shot.maxReflections = 1;
+    rig.state.reflectors.push_back({"mirror", glm::dvec2(200.0, 100.0), false});
+    CHECK(rig.state.Shoot(rig.registry, glm::dvec2(300.0, 0.0)));
+    FlyOut(rig);
+    const double k = rig.state.shot.reflectRadiusPx / std::sqrt(2.0);
+    const glm::dvec2 entry(200.0 - k, 100.0 + k);
+    const glm::dvec2 expected(300.0, 2.0 * entry.y);
+    CHECK_EQ(rig.state.reflections, 1);
+    CHECK_MSG(rig.state.placed.size() == 1, "it opened a portal: " + rig.state.lastFailure);
+    if (rig.state.placed.empty()) return;
+    const glm::dvec2 at = rig.state.placed[0].atPx;
+    CHECK_MSG(glm::distance(at, expected) < 1e-6, Where(at) + " for " + Where(expected));
+    const double way = glm::distance(glm::dvec2(100.0, 200.0), entry) + glm::distance(entry, at);
+    const double fired = glm::distance(glm::dvec2(100.0, 200.0), glm::dvec2(300.0, 0.0));
+    CHECK_MSG(std::fabs(way - fired) < 1e-6, "a way of " + std::to_string(way) + " for " + std::to_string(fired));
+
+    // Without the reflector, the same tap opens at the tap.
+    Rig bare;
+    if (!MakeRig(bare)) return;
+    CHECK(bare.state.Shoot(bare.registry, glm::dvec2(300.0, 0.0)));
+    FlyOut(bare);
+    CHECK_MSG(bare.state.placed.size() == 1 && glm::distance(bare.state.placed[0].atPx, glm::dvec2(300.0, 0.0)) < 1e-6,
+              "no reflector, no turn");
+}
+
+void AShotComesOffOneReflectorAtMost() {
+    // Two vertical reflectors on one line, at x 200 and 60, and a shot from 100
+    // toward 400. The first turns it back toward the second. Allowed one
+    // reflection - shot.json's reading of hasBeenReflected - it passes the second
+    // and opens at x -32. Allowed two, the second turns it again, and it opens at
+    // x 184, where its way runs out.
+    for (const int allowed : {1, 2}) {
+        Rig rig;
+        if (!MakeRig(rig)) return;
+        rig.state.shot.reflectRadiusPx = 16.0;
+        rig.state.shot.maxReflections = allowed;
+        rig.state.reflectors.push_back({"first", glm::dvec2(200.0, 200.0), true});
+        rig.state.reflectors.push_back({"second", glm::dvec2(60.0, 200.0), true});
+        CHECK(rig.state.Shoot(rig.registry, glm::dvec2(400.0, 200.0)));
+        FlyOut(rig);
+        CHECK_EQ(rig.state.reflections, allowed);
+        const double expectedX = allowed == 1 ? -32.0 : 184.0;
+        const bool landed = rig.state.placed.size() == 1 &&
+                            glm::distance(rig.state.placed[0].atPx, glm::dvec2(expectedX, 200.0)) < 1e-6;
+        CHECK_MSG(landed, std::to_string(allowed) + " allowed: " +
+                              (rig.state.placed.empty() ? rig.state.lastFailure : Where(rig.state.placed[0].atPx)));
+    }
+    // shot.json allows one, as its note says; the test above holds either way.
+    Rig rig;
+    if (MakeRig(rig)) CHECK(rig.state.shot.maxReflections >= 0 && rig.state.shot.reflectRadiusPx > 0.0);
+}
+
+void AReflectorWithNoPlaneTakesTheDefault() {
+    // level26a's reflect_agent_ent_961 is the one placement in the game that
+    // gives no plane. The level starts, and the reflector takes shot.json's
+    // default, whichever way it is set.
+    for (const bool vertical : {true, false}) {
+        Run run;
+        std::string error;
+        bool ok = Game::LoadData(kLevels + "/level26a.tscn", kData,
+                                 std::filesystem::temp_directory_path() / "supersonic-test-mp-shot", run.data, error);
+        if (ok) {
+            run.data.shot.defaultPlaneVertical = vertical;
+            ok = Game::Start(run.data, run.registry, run.level, error);
+        }
+        CHECK_MSG(ok, "level26a: " + error);
+        if (!ok) continue;
+        const Portals::Reflector* found = nullptr;
+        for (const Portals::Reflector& r : run.level.portals.reflectors) {
+            if (r.name == "reflect_agent_ent_961") found = &r;
+        }
+        CHECK_MSG(found != nullptr && found->vertical == vertical,
+                  std::string("the default, ") + (vertical ? "vertical" : "horizontal"));
+    }
+}
+
+void EnteringACircle() {
+    const auto across = Shot::EntersCircle({0.0, 0.0}, {100.0, 0.0}, {50.0, 0.0}, 10.0);
+    CHECK_MSG(across && std::fabs(*across - 0.4) < 1e-12, "met where it first comes within 10 px");
+    CHECK_MSG(!Shot::EntersCircle({0.0, 0.0}, {100.0, 0.0}, {50.0, 11.0}, 10.0), "passing 11 px off, never");
+    CHECK_MSG(!Shot::EntersCircle({0.0, 0.0}, {30.0, 0.0}, {50.0, 0.0}, 10.0), "stopping short, never");
+    const auto inside = Shot::EntersCircle({50.0, 5.0}, {100.0, 0.0}, {50.0, 0.0}, 10.0);
+    CHECK_MSG(inside && *inside == 0.0, "starting within it, at once");
+}
+
 void runTests() {
     Level6sBlocker();
     AShotOpensAPortalWhereItArrives();
@@ -269,6 +419,11 @@ void runTests() {
     ANoPortalZoneAtTheTapFailsIt();
     NoPortalsNoShot();
     ExactInThePlane();
+    TheReflectorsAreTheLevelsOwn();
+    AReflectorTurnsAShotMirrored();
+    AShotComesOffOneReflectorAtMost();
+    EnteringACircle();
+    AReflectorWithNoPlaneTakesTheDefault();
 }
 
 } // namespace

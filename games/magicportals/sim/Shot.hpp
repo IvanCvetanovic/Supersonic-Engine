@@ -30,7 +30,10 @@ namespace MagicPortals::Shot {
 
 // The port's shot.json.
 struct Rules {
-    double speedPx = 0.0; // _guess
+    double speedPx = 0.0;         // _guess
+    double reflectRadiusPx = 0.0; // _guess: how near a reflector a shot has to pass
+    int maxReflections = 0;       // _guess: how many reflectors one shot comes off
+    bool defaultPlaneVertical = true; // _guess: the plane of a reflector whose level gives none
 };
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
@@ -48,5 +51,10 @@ std::optional<Hit> FirstBody(entt::registry& registry, const glm::dvec2& fromPx,
 
 // How far along the segment it first enters the box, or none.
 std::optional<double> Enters(const glm::dvec2& fromPx, const glm::dvec2& toPx, const Trigger::Box& box);
+
+// How far along the segment it first comes within `radiusPx` of `centrePx`, or
+// none. Zero for a segment that starts within it.
+std::optional<double> EntersCircle(const glm::dvec2& fromPx, const glm::dvec2& toPx, const glm::dvec2& centrePx,
+                                   double radiusPx);
 
 } // namespace MagicPortals::Shot

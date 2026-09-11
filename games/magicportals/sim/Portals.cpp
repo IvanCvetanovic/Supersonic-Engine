@@ -136,31 +136,69 @@ void State::Tick(entt::registry& registry, float dt) {
     }
 
     // The shot flies on, through this tick's stretch of its way, against the
-    // world as the step left it. The first body or blocker on the stretch ends
-    // it; reaching the tap opens a portal there, or fails where none may open.
+    // world as the step left it. What the stretch meets first decides: a body or
+    // a blocker ends it, and a reflector turns it, mirrored across its plane, for
+    // the rest of its way. Reaching the end of its way opens a portal there, or
+    // fails where none may open.
     if (flight) {
         const glm::dvec2 left = flight->toPx - flight->atPx;
         const double remaining = glm::length(left);
         const double reach = shot.speedPx * static_cast<double>(dt);
         const bool arrives = remaining <= reach;
         const glm::dvec2 next = arrives ? flight->toPx : flight->atPx + left * (reach / remaining);
+        double first = 2.0; // along the stretch, from 0 to 1: past its end until something is met
         std::string stoppedBy;
         if (const auto hit = Shot::FirstBody(registry, flight->atPx, next, shooter)) {
             const auto* tag = registry.try_get<Supersonic::TagComponent>(hit->body);
             stoppedBy = tag != nullptr ? tag->tag : std::string("a body");
+            first = hit->along;
         }
         for (const Blocker& blocker : blockers) {
-            if (stoppedBy.empty() && Shot::Enters(flight->atPx, next, blocker.box)) stoppedBy = blocker.name;
+            if (const auto along = Shot::Enters(flight->atPx, next, blocker.box); along && *along < first) {
+                stoppedBy = blocker.name;
+                first = *along;
+            }
         }
-        if (stoppedBy.empty() && arrives && !TryPlace(flight->toPx)) stoppedBy = "the tap, where no portal may open";
-        if (!stoppedBy.empty()) {
-            ++shotsFailed;
-            lastFailure = stoppedBy;
-            flight.reset();
-        } else if (arrives) {
-            flight.reset();
+        int turnedBy = -1;
+        if (flight->reflections < shot.maxReflections) {
+            for (std::size_t i = 0; i < reflectors.size(); ++i) {
+                if (static_cast<int>(i) == flight->lastReflector) continue;
+                const auto along =
+                    Shot::EntersCircle(flight->atPx, next, reflectors[i].centrePx, shot.reflectRadiusPx);
+                if (along && *along < first) {
+                    turnedBy = static_cast<int>(i);
+                    first = *along;
+                }
+            }
+        }
+        if (turnedBy >= 0) {
+            // Off the reflector where the shot reached it, mirrored, for the rest
+            // of its way.
+            const glm::dvec2 at = flight->atPx + (next - flight->atPx) * first;
+            glm::dvec2 onward = flight->toPx - at;
+            if (reflectors[static_cast<std::size_t>(turnedBy)].vertical) {
+                onward.x = -onward.x;
+            } else {
+                onward.y = -onward.y;
+            }
+            flight->atPx = at;
+            flight->toPx = at + onward;
+            flight->lastReflector = turnedBy;
+            ++flight->reflections;
+            ++reflections;
         } else {
-            flight->atPx = next;
+            if (stoppedBy.empty() && arrives && !TryPlace(flight->toPx)) {
+                stoppedBy = "the tap, where no portal may open";
+            }
+            if (!stoppedBy.empty()) {
+                ++shotsFailed;
+                lastFailure = stoppedBy;
+                flight.reset();
+            } else if (arrives) {
+                flight.reset();
+            } else {
+                flight->atPx = next;
+            }
         }
     }
 
@@ -311,6 +349,24 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilde
             blocker.name = node.name;
             if (!Trigger::FromNode(node, blocker.box, error)) return false;
             out.blockers.push_back(blocker);
+            continue;
+        }
+        if (role == Roles::kReflector) {
+            Reflector reflector;
+            reflector.name = node.name;
+            const Tscn::Value* position = node.Find("position");
+            const Tscn::Value* plane = node.Meta("plane");
+            if (position == nullptr || position->kind != Tscn::Value::Kind::Vector2 ||
+                (plane != nullptr && (plane->kind != Tscn::Value::Kind::String ||
+                                      (plane->text != "vertical" && plane->text != "horizontal")))) {
+                error = node.name + " needs a position, and a plane that is vertical or horizontal";
+                return false;
+            }
+            reflector.centrePx = glm::dvec2(position->numbers[0], position->numbers[1]);
+            // One placement in the game gives no plane (level26a's); it takes
+            // shot.json's default, the remake's reading.
+            reflector.vertical = plane != nullptr ? plane->text == "vertical" : shot.defaultPlaneVertical;
+            out.reflectors.push_back(reflector);
             continue;
         }
         if (role == Roles::kLevelProperties) {

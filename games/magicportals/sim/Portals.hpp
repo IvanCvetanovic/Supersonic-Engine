@@ -108,11 +108,24 @@ struct Blocker {
     Trigger::Box box;
 };
 
+// A reflector: reflect_agent, a marker with no body that a portal shot comes
+// off, mirrored across its plane (the owner, 11 September). How near a shot has
+// to pass, and how many reflectors one shot comes off, are shot.json's guesses.
+// The shot goes on for the rest of the distance it was fired, so a flat
+// reflector sends it to the tap mirrored across it.
+struct Reflector {
+    std::string name;
+    glm::dvec2 centrePx{0.0};
+    bool vertical = false; // its plane: a vertical one turns a shot's x back, a horizontal one its y
+};
+
 // A portal shot on its way.
 struct Flight {
     glm::dvec2 fromPx{0.0}; // the player's centre when it was fired
-    glm::dvec2 toPx{0.0};   // the tap
+    glm::dvec2 toPx{0.0};   // where it opens a portal: the tap, mirrored by each reflector it came off
     glm::dvec2 atPx{0.0};   // where it is now
+    int reflections = 0;    // how many reflectors it has come off
+    int lastReflector = -1; // the last of them, which cannot turn it again at once
 };
 
 struct State {
@@ -122,6 +135,7 @@ struct State {
     entt::entity shooter = entt::null; // the player: where a shot leaves from, and what it passes through
     std::vector<NoPortalZone> zones;
     std::vector<Blocker> blockers;
+    std::vector<Reflector> reflectors;
     std::vector<entt::entity> travellers; // the player, and every teleportable body
     std::vector<Static> statics;          // in the level's order
     std::vector<Placed> placed;           // oldest first
@@ -131,6 +145,7 @@ struct State {
     std::optional<Flight> flight;
     int shotsFired = 0;
     int shotsFailed = 0;
+    int reflections = 0;     // every time a shot came off a reflector
     std::string lastFailure; // what stopped the last failed shot
 
     // A tap at a point in the level: a shot fired toward it. False when none

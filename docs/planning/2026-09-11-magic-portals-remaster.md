@@ -113,7 +113,8 @@ inventory.
      the character's frames.
 10. **Reflectors.** The remake marks what they reflect a guess. The owner said
     on 11 September that they bounce the portal shot, so they come after it.
-    Where a bounced shot opens its portal is still to be asked. Nothing is to
+    The owner said it bounces "under an angle" and did not know how far it
+    goes on; they will judge that by playing (see step 10). Nothing is to
     be invented: the remake's own worst bug of this kind was `bounce`, built as
     a trampoline that threw the player out of level 4-7.
 11. **Chapter 1's boss** (level31). The remake has its structure only.
@@ -1053,3 +1054,73 @@ character standing on the floor, facing left on its start frame.
 | test_mp_layer | 120 | 0 |
 
 The other MP suites are unchanged.
+
+## Step 10 - reflectors (built)
+
+What the owner said on 11 September: a reflector reflects the shot "under an
+angle". They did not know how far it goes on, and will tell by playing the
+levels. So the rule below is data in `shot.json`, and each part of it is
+marked a guess.
+- **The turn.** A shot that comes within the catch radius of a reflector comes
+  off it, mirrored across the reflector's plane. A vertical plane turns back
+  its x, and a horizontal plane its y.
+- **How far it goes on.** It goes on for the rest of the distance it was fired.
+  A flat reflector therefore sends it to the tap, mirrored across the line
+  where it met the reflector. The two readings offered earlier - "the tap
+  mirrored" and "it goes on" - are this one rule.
+- **How near is near.** `reflect_agent.ent` has no collision (shape 0) and no
+  size, so the original tested the distance in script. The catch radius is
+  half its 32 px sprite: 16 px, a guess.
+- **How many.** The original's script keeps a `hasBeenReflected` flag, not a
+  count. So a shot comes off at most one reflector, and `max_reflections` is
+  1. This also rules out a shot bouncing between two reflectors forever. The
+  reflector a shot last came off cannot turn it again at once, whatever the
+  limit.
+- **What comes first.** Along each tick's stretch of flight, the first thing
+  met decides: a body or a blocker ends the shot, and a reflector turns it.
+- **Reaching them.** All nine of chapter 1's reflectors lie inside their
+  level's bounds, so the camera, following the player, can show each of them.
+  Level 1-20's is 8 px from the left edge, and level 1-21's is at y 360 of
+  512. Whether 16 px is enough to hit them in play is the owner's to judge.
+
+`Portals::Find` reads each `reflect_agent`'s position and plane. The reflector
+role is now ported.
+- **A reflector with no plane.** The game has 22 reflectors: 13 vertical, 8
+  horizontal, and one with no plane. That one is `reflect_agent_ent_961`, on
+  level 2-27 (`level26a`). `reflect_agent.ent` carries no default, and the
+  remake reads a missing plane as vertical. So `shot.json` gives
+  `default_plane` "vertical", as a guess, and `test_mp_shot` tests it both
+  ways.
+- **Found by the inventory.** The first run of this step refused that whole
+  level over its one missing plane, and chapter 2 fell to 31 levels starting.
+  Its floor caught the drop.
+
+`test_mp_shot`, now 90 checks:
+- **The files.** The reflectors of level 1-12 (three, horizontal) and level
+  1-13 (one, vertical) are pinned.
+- **In an empty plane.**
+  - A shot off a horizontal reflector opens its portal at the tap mirrored
+    across the line where it met the reflector. Its way is exactly as long as
+    the one fired. With the reflector taken away, the same shot opens its
+    portal at the tap.
+  - Two facing reflectors are tested with one reflection allowed and with
+    two. The shot lands where each rule says: at x -32, and at x 184.
+- **The circle test on its own.** It meets a circle where the arithmetic says,
+  never passing 11 px off a 10 px circle or stopping short of one, and at once
+  when it starts inside.
+- **Level 2-27's plane-less reflector** takes the default either way.
+
+The inventory after step 10: chapter 1 has 32 levels starting and **31
+playing**. Levels 11, 12, 19, 20, 22 and 28 all play now, and only the boss,
+level 31, is left. That counts roles, not routes: none of the six has been
+played through, and the owner will play them to judge the reflection rule.
+Chapter 1's floor rises to 31. Chapters 2 to 4 are unchanged.
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_shot | 90 | 0 |
+| test_mp_start | 496 | 0 |
+
+The other MP suites are unchanged from 9d.

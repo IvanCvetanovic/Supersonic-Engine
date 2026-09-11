@@ -122,6 +122,22 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         error = path + ": flight.speed_px_s is not above 0";
         return false;
     }
+    const Json::Value& reflection = root["reflection"];
+    if (!reflection.IsObject() || !reflection.Has("catch_radius_px") || !reflection["catch_radius_px"].IsNumber() ||
+        reflection["catch_radius_px"].AsNumber() <= 0.0 || !reflection.Has("max_reflections") ||
+        !reflection["max_reflections"].IsNumber() || reflection["max_reflections"].AsNumber() < 0.0 ||
+        reflection["max_reflections"].AsNumber() != std::floor(reflection["max_reflections"].AsNumber())) {
+        error = path + ": reflection needs catch_radius_px above 0 and a whole max_reflections from 0";
+        return false;
+    }
+    read.reflectRadiusPx = reflection["catch_radius_px"].AsNumber();
+    read.maxReflections = static_cast<int>(reflection["max_reflections"].AsNumber());
+    const Json::Value& plane = reflection["default_plane"];
+    if (!plane.IsString() || (plane.AsString("") != "vertical" && plane.AsString("") != "horizontal")) {
+        error = path + ": reflection.default_plane is vertical or horizontal";
+        return false;
+    }
+    read.defaultPlaneVertical = plane.AsString("") == "vertical";
     out = read;
     return true;
 }
@@ -165,6 +181,22 @@ std::optional<double> Enters(const glm::dvec2& fromPx, const glm::dvec2& toPx, c
     const dvec2 lo = dvec2(box.centre) - dvec2(box.half);
     const dvec2 hi = dvec2(box.centre) + dvec2(box.half);
     return IntoPolygon(Metres(fromPx), Metres(toPx), {lo, dvec2(hi.x, lo.y), hi, dvec2(lo.x, hi.y)});
+}
+
+std::optional<double> EntersCircle(const glm::dvec2& fromPx, const glm::dvec2& toPx, const glm::dvec2& centrePx,
+                                   double radiusPx) {
+    const glm::dvec2 d = toPx - fromPx;
+    const glm::dvec2 f = fromPx - centrePx;
+    const double c = glm::dot(f, f) - radiusPx * radiusPx;
+    if (c <= 0.0) return 0.0;
+    const double a = glm::dot(d, d);
+    if (a <= 0.0) return std::nullopt;
+    const double b = 2.0 * glm::dot(f, d);
+    const double discriminant = b * b - 4.0 * a * c;
+    if (discriminant < 0.0) return std::nullopt;
+    const double along = (-b - std::sqrt(discriminant)) / (2.0 * a);
+    if (along < 0.0 || along > 1.0) return std::nullopt;
+    return along;
 }
 
 } // namespace MagicPortals::Shot

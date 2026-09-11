@@ -38,6 +38,7 @@ inline constexpr const char* kHazard = "hazard";
 inline constexpr const char* kDemolisher = "demolisher";
 inline constexpr const char* kLauncher = "launcher";
 inline constexpr const char* kProjectileBlocker = "projectile_blocker";
+inline constexpr const char* kReflector = "reflector";
 
 // Roles whose body moves and has to carry what stands on it, so the builder makes
 // them kinematic rather than static: the remake's MOVING_ROLES
