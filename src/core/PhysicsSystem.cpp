@@ -1535,10 +1535,15 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
             for (int i = 0; i < manifoldCount; ++i) manifoldNormals[i] = normal;
         }
 
-        const float bounceA = rigidA ? rigidA->restitution : kRestitution;
-        const float bounceB = rigidB ? rigidB->restitution : kRestitution;
-        const float gripA = rigidA ? rigidA->friction : kFriction;
-        const float gripB = rigidB ? rigidB->friction : kFriction;
+        // A rigid body carries its own material. A collider without one takes
+        // its PhysicsMaterialComponent's, and the constants only when it has
+        // neither - so a scene that uses none steps exactly as it did.
+        const auto* materialA = rigidA ? nullptr : registry.try_get<PhysicsMaterialComponent>(a.entity);
+        const auto* materialB = rigidB ? nullptr : registry.try_get<PhysicsMaterialComponent>(b.entity);
+        const float bounceA = rigidA ? rigidA->restitution : (materialA ? materialA->restitution : kRestitution);
+        const float bounceB = rigidB ? rigidB->restitution : (materialB ? materialB->restitution : kRestitution);
+        const float gripA = rigidA ? rigidA->friction : (materialA ? materialA->friction : kFriction);
+        const float gripB = rigidB ? rigidB->friction : (materialB ? materialB->friction : kFriction);
         const float grip = combineFriction(gripA, gripB);
 
         // A speculative pair is apart; the allowance is how fast it may still

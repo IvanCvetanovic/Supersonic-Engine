@@ -1353,6 +1353,15 @@ applied at a distance also spins.
 | Restitution | the larger of the two, clamped to 0.99 | a superball dropped on concrete has to bounce; the smaller or the average would let any dead surface kill every ball that touched it |
 | Friction | geometric mean, each side clamped to 4 | a zero on either side takes the result to zero, so ice stays slippery against anything; an average would let a rough floor grip a puck |
 
+Each side's number comes from one place. A rigid body carries its own
+`restitution` and `friction`. A collider with no rigid body - level geometry -
+takes them from its `PhysicsMaterialComponent`, and from `kRestitution` (0.3)
+and `kFriction` (0.4) when it has none; on an entity with a rigid body the
+component is ignored, so the two never compete. Until the component existed
+every floor bounced at 0.3 and gripped at 0.4 with no way to say otherwise, and
+a port whose original's floors do not bounce could not be matched. Its defaults
+are the two constants, so a scene without one steps as it always did.
+
 Inertia is built in the body's **own** axes and rotated into the world by them.
 A box about its centre and a solid sphere both have no products of inertia, so
 the local tensor stays three floats rather than a matrix, and the rotation is

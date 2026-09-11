@@ -341,6 +341,12 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     body.lockPosition = glm::bvec3(false, false, true);
     body.lockRotation = glm::bvec3(true, true, false);
 
+    // Ignored by the solver on an entity that has a rigid body, but the codec
+    // does not care whose it is: it has to come back either way.
+    auto& surface = registry.emplace<PhysicsMaterialComponent>(entity);
+    surface.friction = 0.9f;
+    surface.restitution = 0.05f;
+
     auto& box = registry.emplace<BoxColliderComponent>(entity);
     box.size = glm::vec3(3.0f, 1.0f, 2.0f);
     box.isTrigger = true;
@@ -813,6 +819,13 @@ static void testPrefabRoundTripsEveryField() {
                       "a body locked to its plane has to come back locked to it");
             CHECK_MSG(body->lockRotation == glm::bvec3(true, true, false),
                       "and turning about z only");
+        }
+
+        const auto* surface = registry.try_get<PhysicsMaterialComponent>(clone);
+        CHECK_MSG(surface != nullptr, "prefab lost its PhysicsMaterialComponent");
+        if (surface) {
+            CHECK_NEAR(surface->friction, 0.9f);
+            CHECK_NEAR(surface->restitution, 0.05f);
         }
 
         const auto* box = registry.try_get<BoxColliderComponent>(clone);

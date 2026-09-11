@@ -45,6 +45,13 @@ inline constexpr double kBodyDepthMetres = 1.0;
 inline constexpr float kBodyFriction = 1.0f;
 inline constexpr float kBodyRestitution = 0.0f;
 
+// Statics get the same, through PhysicsMaterialComponent: the remake's
+// StaticBody2D floors carry no material either, so they run on Godot's defaults.
+// Left without one they would take the engine's fallback for a collider with no
+// rigid body - bounce 0.3, grip 0.4 - and every landing would come back up.
+inline constexpr float kStaticFriction = 1.0f;
+inline constexpr float kStaticRestitution = 0.0f;
+
 // The 2D port's locks: every rigid body stays in the plane - no motion along z -
 // and turns about z only. Unlocked, the spike measured a resting crate 30 px out
 // of the plane in a minute and a pushed one leaving the level. S1, recorded in

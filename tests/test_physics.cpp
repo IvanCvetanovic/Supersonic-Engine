@@ -1322,6 +1322,71 @@ static void testACrateDroppedFlatOnAHullLandsFlat() {
     }
 }
 
+// A static floor, the kind a level is made of. `surface` is null for the
+// engine's fallback material.
+static entt::entity makeFloorWithMaterial(entt::registry& registry, const PhysicsMaterialComponent* surface) {
+    const auto floor = makeStaticBox(registry, glm::vec3(0.0f), glm::vec3(20.0f, 1.0f, 20.0f));
+    if (surface) registry.emplace<PhysicsMaterialComponent>(floor, *surface);
+    return floor;
+}
+
+static void testAFloorWithNoBounceKillsALanding() {
+    // A collider with no rigid body used to bounce at 0.3 whatever landed on it,
+    // because restitution combines as the larger of the two. A dead box on a dead
+    // floor has to stay down.
+    const auto bestRebound = [](const PhysicsMaterialComponent* surface) {
+        entt::registry registry;
+        makeFloorWithMaterial(registry, surface);
+        const auto box = makeBox(registry, glm::vec3(0.0f, 2.5f, 0.0f));
+        registry.get<RigidBodyComponent>(box).restitution = 0.0f;
+        float best = 0.0f;
+        for (int i = 0; i < 90; ++i) {
+            PhysicsSystem::Update(registry, 1.0f / 60.0f);
+            best = std::max(best, registry.get<RigidBodyComponent>(box).velocity.y);
+        }
+        return best;
+    };
+    PhysicsMaterialComponent dead;
+    dead.restitution = 0.0f;
+    const float withFallback = bestRebound(nullptr);
+    const float onDeadFloor = bestRebound(&dead);
+    CHECK_MSG(withFallback > 0.5f,
+              "the fallback floor has to bounce, or this proves nothing: " + std::to_string(withFallback));
+    CHECK_MSG(onDeadFloor < 0.05f,
+              "a dead box on a dead floor stays down, and it came up at " + std::to_string(onDeadFloor) + " m/s");
+}
+
+static void testAGrippyFloorStopsASlideSooner() {
+    // The other half. The fallback's 0.4 was the grip of every floor, so a box
+    // with friction 1 still slid on the geometric mean with 0.4. Rotation frozen,
+    // so the slide cannot turn into a tumble.
+    const auto slide = [](const PhysicsMaterialComponent* surface) {
+        entt::registry registry;
+        makeFloorWithMaterial(registry, surface);
+        const auto box = makeBox(registry, glm::vec3(0.0f, 0.7f, 0.0f), 1.0f, glm::vec3(1.0f, 0.4f, 1.0f));
+        auto& body = registry.get<RigidBodyComponent>(box);
+        body.friction = 1.0f;
+        body.restitution = 0.0f;
+        body.freezeRotation = true;
+        body.allowSleep = false;
+        stepFor(registry, 0.5f);
+        const float start = registry.get<TransformComponent>(box).position.x;
+        registry.get<RigidBodyComponent>(box).velocity.x = 3.0f;
+        stepFor(registry, 1.5f);
+        return registry.get<TransformComponent>(box).position.x - start;
+    };
+    PhysicsMaterialComponent grippy;
+    grippy.friction = 1.0f;
+    const float withFallback = slide(nullptr);
+    const float onGrippyFloor = slide(&grippy);
+    CHECK_MSG(onGrippyFloor < 0.8f * withFallback,
+              "a grippy floor stops it sooner: " + std::to_string(onGrippyFloor) + " m against " +
+                  std::to_string(withFallback) + " m on the fallback");
+    // v^2 / 2 mu g, at mu = 1: 0.459 m.
+    CHECK_MSG(test::nearly(onGrippyFloor, 9.0f / (2.0f * 9.81f), 0.08f),
+              "and about where mu = 1 says: " + std::to_string(onGrippyFloor) + " m");
+}
+
 static void testAHullRestsOnTerrain() {
     // Named rather than implied: a hull against a HEIGHTFIELD collides as the
     // box that contains it, because the heightfield's contact model is written
@@ -3426,6 +3491,8 @@ static void runTests() {
     testAJointCannotPullALockedBodyOutOfItsPlane();
     testAPointJointStillHoldsAPlaneLockedBody();
     testACrateDroppedFlatOnAHullLandsFlat();
+    testAFloorWithNoBounceKillsALanding();
+    testAGrippyFloorStopsASlideSooner();
 
     testASphereIsTheSameSizeWhicheverWayItIsTurned();
     testABallLandsOnTheTerrainInsteadOfFallingThroughIt();

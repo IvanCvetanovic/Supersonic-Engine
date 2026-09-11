@@ -291,6 +291,11 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    if (const auto* surface = registry.try_get<PhysicsMaterialComponent>(entity)) {
+        out << indent << "\"PhysicsMaterial\": { \"Friction\": " << surface->friction
+            << ", \"Restitution\": " << surface->restitution << " },\n";
+    }
+
     if (const auto* box = registry.try_get<BoxColliderComponent>(entity)) {
         out << indent << "\"BoxCollider\": { \"Size\": ";
         writeVec3(out, box->size);
@@ -839,6 +844,13 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // A scene written before sleeping existed has no key and must keep
         // being allowed to sleep, which is the default for a new body too.
         body.allowSleep = r["AllowSleep"].AsBool(true);
+    }
+
+    if (node.Has("PhysicsMaterial")) {
+        const auto& m = node["PhysicsMaterial"];
+        auto& surface = registry.emplace_or_replace<PhysicsMaterialComponent>(entity);
+        surface.friction = m["Friction"].AsFloat(0.4f);
+        surface.restitution = m["Restitution"].AsFloat(0.3f);
     }
 
     if (node.Has("BoxCollider")) {

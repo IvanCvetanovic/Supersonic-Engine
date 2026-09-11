@@ -238,6 +238,10 @@ void BuilderPlacesEveryBodyType() {
           Close(box->size.z, LevelBuilder::kStaticDepthMetres, 1e-6));
     CHECK(box && Close(box->center.x, 0.2, 1e-6) && Close(box->center.y, 0.1, 1e-6) && !box->isTrigger);
     CHECK(!registry.all_of<RigidBodyComponent>(wall));
+    // The oracle's material, not the engine's fallback for a collider with no body.
+    const auto* surface = registry.try_get<PhysicsMaterialComponent>(wall);
+    CHECK(surface && surface->friction == LevelBuilder::kStaticFriction &&
+          surface->restitution == LevelBuilder::kStaticRestitution);
     CHECK(registry.get<TagComponent>(wall).tag == "wall");
 
     const auto* hull = registry.try_get<ConvexHullColliderComponent>(built.entities.at("ledge"));

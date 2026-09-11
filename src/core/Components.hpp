@@ -916,6 +916,23 @@ struct RigidBodyComponent {
     glm::vec3 sleepPosition{0.0f};
 };
 
+// The surface a collider presents when it has no rigid body: level geometry.
+//
+// A RigidBodyComponent carries its own friction and restitution, and on an
+// entity that has one THAT is the material - this component is then ignored,
+// so there is never a question of which of the two applies. A collider with no
+// rigid body used to take kFriction and kRestitution with no way to say
+// otherwise, so every floor in a level returned 0.3 of each landing (restitution
+// combines as the larger of the two) and gripped at the geometric mean with 0.4.
+// A game whose floors do not bounce could not be built.
+//
+// The defaults ARE those constants, so an absent component and a default one
+// make the same world, bit for bit.
+struct PhysicsMaterialComponent {
+    float friction{0.4f};
+    float restitution{0.3f};
+};
+
 // Collision layers.
 //
 // Without them everything collides with everything, which is not a tuning

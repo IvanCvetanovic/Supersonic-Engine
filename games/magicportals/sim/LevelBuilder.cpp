@@ -10,6 +10,7 @@ namespace MagicPortals::LevelBuilder {
 
 using Supersonic::BoxColliderComponent;
 using Supersonic::ConvexHullColliderComponent;
+using Supersonic::PhysicsMaterialComponent;
 using Supersonic::RigidBodyComponent;
 using Supersonic::SphereColliderComponent;
 using Supersonic::TagComponent;
@@ -135,6 +136,9 @@ bool Build(const Tscn::Scene& scene, entt::registry& registry, const Options& op
         } else if (isArea) {
             ++out.areas;
         } else {
+            auto& surface = registry.emplace<PhysicsMaterialComponent>(entity);
+            surface.friction = kStaticFriction;
+            surface.restitution = kStaticRestitution;
             ++out.statics;
         }
         out.entities[node.name] = entity;

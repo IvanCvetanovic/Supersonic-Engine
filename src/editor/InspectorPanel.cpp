@@ -672,6 +672,20 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
         }
     }
 
+    // 3b. PhysicsMaterialComponent - the surface of a collider with no rigid body.
+    if (registry.all_of<PhysicsMaterialComponent>(entity)) {
+        if (ImGui::CollapsingHeader("Physics Material", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& surface = registry.get<PhysicsMaterialComponent>(entity);
+            ImGui::SliderFloat("Restitution##Surface", &surface.restitution, 0.0f, 0.99f);
+            ImGui::SliderFloat("Friction##Surface", &surface.friction, 0.0f, 2.0f);
+            if (registry.all_of<RigidBodyComponent>(entity)) {
+                ImGui::TextDisabled("Ignored: this entity's RigidBody carries its own material.");
+            } else {
+                ImGui::TextDisabled("The surface this collider presents to whatever lands on it.");
+            }
+        }
+    }
+
     ImGui::Spacing();
 
     // 4. BoxColliderComponent
@@ -1766,6 +1780,10 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
 
         if (!registry.all_of<RigidBodyComponent>(entity) && ImGui::MenuItem("RigidBody Physics")) {
             registry.emplace<RigidBodyComponent>(entity);
+            ImGui::CloseCurrentPopup();
+        }
+        if (!registry.all_of<PhysicsMaterialComponent>(entity) && ImGui::MenuItem("Physics Material")) {
+            registry.emplace<PhysicsMaterialComponent>(entity);
             ImGui::CloseCurrentPopup();
         }
         if (!registry.all_of<BoxColliderComponent>(entity) && ImGui::MenuItem("Box Collider")) {
