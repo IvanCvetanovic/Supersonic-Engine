@@ -10,13 +10,15 @@
 namespace MagicPortals::Game {
 
 bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
-              const std::filesystem::path& prismDirectory, Data& out, std::string& error) {
+              const std::filesystem::path& prismDirectory, Data& out, std::string& error,
+              const std::string& portDataDirectory) {
     Data read;
     if (!Tscn::Load(levelPath, read.scene, error)) return false;
     if (!Roles::Load(dataDirectory + "/entity_roles.json", read.roles, error)) return false;
     if (!Player::LoadTuning(dataDirectory + "/player.json", read.tuning, error)) return false;
     if (!Goals::LoadRules(dataDirectory + "/portals.json", read.goals, error)) return false;
     if (!Portals::LoadRules(dataDirectory + "/portals.json", read.portals, error)) return false;
+    if (!Mover::LoadRules(portDataDirectory + "/movers.json", read.movers, error)) return false;
     std::error_code ec;
     std::filesystem::create_directories(prismDirectory, ec);
     read.prisms = prismDirectory;
@@ -53,6 +55,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     out = Level{};
     if (!LevelBuilder::Build(data.scene, registry, options, out.built, error)) return false;
     if (withStatics && !Puzzle::Wire(data.scene, data.roles, out.built, out.channels, error)) return false;
+    if (withStatics && !Mover::Wire(data.scene, data.roles, out.built, data.movers, out.movers, error)) return false;
 
     const Tscn::Node* spawn = nullptr;
     for (const Tscn::Node& node : data.scene.nodes) {
@@ -69,11 +72,13 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     out.player = Player::Spawn(registry, glm::dvec2(at->numbers[0], at->numbers[1]), data.tuning);
 
     if (!Goals::Find(data.scene, data.roles, data.goals, out.goals, error)) return false;
-    return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, out.portals, error);
+    return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers,
+                         out.portals, error);
 }
 
 void BeforeStep(const Data& data, entt::registry& registry, Level& level, float direction, float dt) {
     level.channels.Tick(registry, dt);
+    level.movers.Tick(registry, dt);
     if (level.player != entt::null) Player::Steer(registry, level.player, data.tuning, direction, dt);
 }
 

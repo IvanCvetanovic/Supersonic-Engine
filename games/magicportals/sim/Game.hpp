@@ -4,8 +4,8 @@
 // the suites and the layer run the same thing.
 //
 // The tick is in two halves around the physics step:
-//   before the step: the buttons and their doors (Puzzle), then the player's
-//                    steering (Player);
+//   before the step: the buttons and their doors (Puzzle), the moving platforms
+//                    and lifts (Mover), then the player's steering (Player);
 //   after the step:  the crystals and the exit, where the step left the player
 //                    (Goals), then the portals (Portals).
 // A test runs Tick, which is the two halves with the step between them. The
@@ -37,14 +37,17 @@ struct Data {
     Player::Tuning tuning;
     Goals::Rules goals;
     Portals::Rules portals;
+    Mover::Rules movers;          // the port's own movers.json
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
 
-// A converted level (.tscn), and the remake's data directory with its
-// entity_roles.json, player.json and portals.json. False, with `error`, when
-// any of them is missing or malformed.
+// A converted level (.tscn), the remake's data directory with its
+// entity_roles.json, player.json and portals.json, and the port's own data with
+// its movers.json. False, with `error`, when any of them is missing or
+// malformed.
 bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
-              const std::filesystem::path& prismDirectory, Data& out, std::string& error);
+              const std::filesystem::path& prismDirectory, Data& out, std::string& error,
+              const std::string& portDataDirectory = MAGICPORTALS_PORT_DATA_DIR);
 
 // The remake's world gravity, 980 px/s^2, as the registry's PhysicsSettings.
 // Units.hpp says why it is that value.
@@ -53,6 +56,7 @@ void UseRemakeGravity(entt::registry& registry);
 struct Level {
     LevelBuilder::Built built;
     Puzzle::Channels channels;
+    Mover::Movers movers;
     Goals::State goals;
     Portals::State portals;
     entt::entity player = entt::null;

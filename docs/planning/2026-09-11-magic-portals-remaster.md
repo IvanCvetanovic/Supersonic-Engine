@@ -319,3 +319,95 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_statics | 65 | 0 |
 | test_mp_play | 131 | 0 |
 | test_mp_start | 363 | 0 |
+
+## Step 4 - what moves: platforms, lifts and patrolling zones (built)
+
+**First, a correction to the inventory.** Step 1's `Roles::IsPorted` counted
+lifts and moving platforms as played. They were not:
+- the builder makes their bodies kinematic, so they could carry a rider;
+- but nothing moved them. Only doors moved.
+So levels 26 and 27 were counted as playing while their lifts stood still. The
+roles came off the list until this step, and this step puts them back.
+
+What `behaviours.gd`'s `Mover` does, now in `Mover`:
+- **Moving platforms** swing vertically about where the level places them, by
+  half their stride either way: `sin(k × speed × t) × stride / 2`.
+  - `speed` is a frequency, by the remake's reading of the data.
+  - `k` is the remake's guess (`RATE_SCALE_K` = 2), which it keeps in a script.
+    The port carries it in its own `games/magicportals/data/movers.json`.
+  - The sine is `DetMath`'s, so a swing comes out the same on every C runtime.
+- **Lifts** go from the marker their `a` names toward the one `b` names, and
+  back, turning the moment they arrive. No lift in chapter 1 has a speed of its
+  own, so all run at the remake's default, 120 px/s. That is also carried in
+  `movers.json`.
+- **Both move through `MoveKinematic`,** which writes the velocity with the
+  position, so they carry what stands on them as doors do.
+- **Patrolling no-portal zones.** An `anti_portal_agent` with a speed and a
+  stride swings like a platform, on the axis its `direction` names. A tap is
+  tested against where the zone is now. Zones are now drawn as well, behind
+  everything, so they never cover the player.
+
+**A finding for the remake.** Each of the game's three patrolling agents, two
+in level10 and one in level13b, stands on a static `antiportal` of its own:
+- each field (scale 3.5, or 5 in level13b) holds the agent's whole swing and its
+  own 16 px radius;
+- so in the remake the patrol never changes where a tap is refused.
+
+The pairing suggests the original's field travels with its agent. The port keeps
+the remake's two zones as they are. Whether the field moves is a question for
+playing the original, not something to invent.
+
+**Noted, not changed.** `Trigger.cpp`'s exact overlap test turns a box with the
+platform's `std::cos` and `std::sin`. The rest of the simulation's trigonometry
+uses `DetMath`. This is the simulation's one call left to libm, and it is noted
+here for the determinism work.
+
+`test_mp_movers`, 53 checks:
+- **The files.** Chapter 1's movers are pinned to them:
+  - level5's and level10's platforms;
+  - the four lifts in levels 26, 27 and 28, with their markers;
+  - level10's three agents and the fields they stand on.
+- **The platform.** level5's platform swings exactly its 64 px stride over its
+  4.49 s period, at the place the swing says, with the velocity that gets it
+  there.
+- **The lift.** level27's lift is at its far marker after 64 ticks (128 px at
+  120 px/s) and back after 128.
+- **A patrolling zone** refuses a tap where it is and not where it has left. In
+  level10 itself, the field keeps that spot refused.
+
+`test_mp_layer`'s skip check moves to level26c, a dark level the port still
+refuses, since level10 now plays.
+
+The inventory after step 4:
+
+| Chapter | Start | Play |
+|---|---|---|
+| 1 | 32 of 32 | 17 |
+| 2 | 32 of 32 | 0 |
+| 3 | 32 of 32 | 0 |
+| 4 | 2 of 32 | 0 |
+
+That is 98 of 128 levels starting. Every level of chapters 1 to 3 starts. What is
+left in chapter 1:
+
+| What | Levels |
+|---|---|
+| Hazards | 5, 23, 24 |
+| Rolling stones | 8, 12, 18, 19, 21, 22 |
+| Launchers | 23, 24, 25 |
+| Projectile blocker | 6 |
+| Reflectors | 11, 12, 19, 20, 22, 28 |
+| Boss | 31 |
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_movers | 53 | 0 |
+| test_mp_timed | 50 | 0 |
+| test_mp_layer | 42 | 0 |
+| test_mp_camera | 15 | 0 |
+| test_mp_chapters | 39 | 0 |
+| test_mp_statics | 65 | 0 |
+| test_mp_play | 131 | 0 |
+| test_mp_start | 365 | 0 |

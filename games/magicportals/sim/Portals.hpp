@@ -19,6 +19,7 @@
 //   traveller put down inside its exit does not go back until it has left.
 
 #include "sim/LevelBuilder.hpp"
+#include "sim/Mover.hpp"
 #include "sim/Portal.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Trigger.hpp"
@@ -50,10 +51,24 @@ struct Rules {
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
 
 // An antiportal. A tap within collision_radius_px times its `scale` is refused
-// (portal_system.gd:136-146).
+// (portal_system.gd:136-146). An anti_portal_agent with a speed and a stride
+// patrols: it swings as a moving platform does, on the axis its `direction`
+// names, vertical where it names none (behaviours.gd:48-51, 113-127). Three in
+// the game do, two in level10 and one in level13b.
+//
+// In level10 every agent stands on a static antiportal of its own, whose field
+// holds the agent's whole swing. So there the patrol never changes where a tap
+// is refused. The port keeps the remake's two zones as they are; that the
+// original may carry the field with its agent is recorded in the remaster doc,
+// not guessed at here.
 struct NoPortalZone {
-    glm::dvec2 centrePx{0.0};
+    glm::dvec2 centrePx{0.0}; // where the level places it
     double scale = 1.0;
+    bool moving = false;
+    Mover::Oscillation motion; // when it patrols
+    std::string name;          // last, so {centre, scale} still makes a zone
+
+    glm::dvec2 CentreNowPx() const { return moving ? motion.AtPx() : centrePx; }
 };
 
 struct Placed {
@@ -93,14 +108,17 @@ struct State {
     // A tap at a point in the level. False when refused.
     bool TryPlace(const glm::dvec2& atPx);
 
-    // One tick, after the physics step. The lockout runs down, and a traveller
-    // newly inside a portal goes out of its partner.
+    const NoPortalZone* FindZone(const std::string& name) const;
+
+    // One tick, after the physics step. The lockout runs down, a patrolling zone
+    // swings on, and a traveller newly inside a portal goes out of its partner.
     void Tick(entt::registry& registry, float dt);
 };
 
-// A built level's portals. False, with `error`, for what is not ported: no-portal
-// zones that move.
+// A built level's portals and no-portal zones; a patrolling zone swings at
+// movers.json's rate scale. False, with `error`, for data that does not read.
 bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilder::Built& built,
-          entt::registry& registry, entt::entity player, const Rules& rules, State& out, std::string& error);
+          entt::registry& registry, entt::entity player, const Rules& rules, const Mover::Rules& movers, State& out,
+          std::string& error);
 
 } // namespace MagicPortals::Portals

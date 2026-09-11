@@ -179,6 +179,7 @@ private:
     entt::entity m_exit{entt::null};
     std::vector<entt::entity> m_portals;  // one per placed portal
     std::vector<entt::entity> m_statics;  // one per static portal, null once spent
+    std::vector<entt::entity> m_zones;    // one per no-portal zone
 
     struct Hud {
         entt::entity status{entt::null};

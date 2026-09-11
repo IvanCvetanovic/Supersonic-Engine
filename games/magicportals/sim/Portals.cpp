@@ -95,7 +95,7 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
 bool State::TryPlace(const glm::dvec2& atPx) {
     if (budget <= 0) return false;
     for (const NoPortalZone& zone : zones) {
-        if (glm::distance(atPx, zone.centrePx) <= rules.collisionRadiusPx * zone.scale) return false;
+        if (glm::distance(atPx, zone.CentreNowPx()) <= rules.collisionRadiusPx * zone.scale) return false;
     }
     if (static_cast<int>(placed.size()) >= budget) {
         if (!rules.recycleOldestAtCap) return false;
@@ -111,8 +111,18 @@ bool State::TryPlace(const glm::dvec2& atPx) {
     return true;
 }
 
+const NoPortalZone* State::FindZone(const std::string& name) const {
+    for (const NoPortalZone& zone : zones) {
+        if (zone.name == name) return &zone;
+    }
+    return nullptr;
+}
+
 void State::Tick(entt::registry& registry, float dt) {
     lockoutS = std::max(0.0f, lockoutS - dt);
+    for (NoPortalZone& zone : zones) {
+        if (zone.moving) zone.motion.t += dt;
+    }
 
     // An end of a traversal: a static portal by its place in `statics`, which
     // never moves, or a placed one by its id, since placed portals come and go.
@@ -204,7 +214,8 @@ void State::Tick(entt::registry& registry, float dt) {
 }
 
 bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilder::Built& built,
-          entt::registry& registry, entt::entity player, const Rules& rules, State& out, std::string& error) {
+          entt::registry& registry, entt::entity player, const Rules& rules, const Mover::Rules& movers, State& out,
+          std::string& error) {
     out = State{};
     out.rules = rules;
     int maxPortals = rules.defaultMaxPortals;
@@ -264,11 +275,8 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilde
                 maxPortals = static_cast<int>(number);
             }
         } else if (role == Roles::kNoPortalZone) {
-            if (node.Meta("speed") != nullptr && node.Meta("stride") != nullptr) {
-                error = node.name + " is a moving no-portal zone, and those are not ported";
-                return false;
-            }
             NoPortalZone zone;
+            zone.name = node.name;
             if (const Tscn::Value* position = node.Find("position");
                 position != nullptr && position->kind == Tscn::Value::Kind::Vector2) {
                 zone.centrePx = glm::dvec2(position->numbers[0], position->numbers[1]);
@@ -276,6 +284,18 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilde
             if (const Tscn::Value* scale = node.Meta("scale"); scale != nullptr && !scale->AsNumber(zone.scale)) {
                 error = node.name + "'s scale is not a number";
                 return false;
+            }
+            // Only a zone with both a speed and a stride patrols; a plain antiportal
+            // stands still (behaviours.gd:48-51).
+            if (node.Meta("speed") != nullptr && node.Meta("stride") != nullptr) {
+                const Tscn::Value* direction = node.Meta("direction");
+                const bool sideways = direction != nullptr && direction->kind == Tscn::Value::Kind::String &&
+                                      direction->text == "horizontal";
+                zone.moving = true;
+                if (!Mover::OscillationFromNode(node, sideways ? glm::dvec2(1.0, 0.0) : glm::dvec2(0.0, 1.0),
+                                                movers.oscillationRateScale, zone.motion, error)) {
+                    return false;
+                }
             }
             out.zones.push_back(zone);
         }

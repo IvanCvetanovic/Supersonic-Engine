@@ -33,6 +33,12 @@ constexpr float kDefaultAspect = 16.0f / 9.0f;
 constexpr float kMarkerZ = 0.5f;
 constexpr float kMarkerDepth = 0.1f;
 
+// No-portal zones lie behind everything, thin: shown where nothing covers them,
+// and never over the player.
+constexpr float kZoneZ = -0.35f;
+constexpr float kZoneDepth = 0.02f;
+const glm::vec3 kZoneColour(0.45f, 0.14f, 0.16f);
+
 const glm::vec3 kStaticColour(0.42f, 0.44f, 0.50f);
 const glm::vec3 kDoorColour(0.30f, 0.45f, 0.75f);
 const glm::vec3 kCrateColour(0.72f, 0.50f, 0.26f);      // teleportable
@@ -197,7 +203,7 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     if (index != m_dataIndex) {
         m_dataIndex = -1;
         if (!Game::LoadData(m_paths.levels + "/" + entry.name + ".tscn", m_paths.data, m_paths.prisms, m_data,
-                            error)) {
+                            error, m_paths.portData)) {
             m_loadError = error;
             return false;
         }
@@ -253,6 +259,8 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     m_portals.clear();
     for (auto& e : m_statics) destroy(e);
     m_statics.clear();
+    for (auto& e : m_zones) destroy(e);
+    m_zones.clear();
     destroy(m_player);
     destroy(m_exit);
     // And the level's own bodies.
@@ -425,6 +433,9 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
         m_statics.push_back(makeBox(registry, "Magic Portals Static Portal", glm::vec3(0.0f), glm::vec3(1.0f),
                                     portal.colour == "red" ? kStaticRedColour : kStaticBlueColour));
     }
+    for (std::size_t i = 0; i < m_level.portals.zones.size(); ++i) {
+        m_zones.push_back(makeBox(registry, "Magic Portals No-Portal Zone", glm::vec3(0.0f), glm::vec3(1.0f), kZoneColour));
+    }
 }
 
 void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
@@ -516,6 +527,14 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         glm::dvec2 centrePx, sizePx;
         boxPx(statics[i].trigger, centrePx, sizePx);
         placeBox(registry, m_statics[i], centrePx, sizePx, kMarkerZ, kMarkerDepth, 0.0f);
+    }
+
+    // No-portal zones, as the square round the circle a tap is refused in, where
+    // each is now: a patrolling one moves.
+    const std::vector<Portals::NoPortalZone>& zones = m_level.portals.zones;
+    for (std::size_t i = 0; i < m_zones.size() && i < zones.size(); ++i) {
+        const double sizePx = m_level.portals.rules.collisionRadiusPx * zones[i].scale * 2.0;
+        placeBox(registry, m_zones[i], zones[i].CentreNowPx(), glm::dvec2(sizePx), kZoneZ, kZoneDepth, 0.0f);
     }
 }
 

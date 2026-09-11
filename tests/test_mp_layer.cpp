@@ -299,19 +299,23 @@ void LevelsFollowInOrderAndRetryIsInstant() {
 }
 
 void NSkipsWhatThePortRefuses() {
+    // level26c is one of chapter 4's dark levels, which the port refuses, and
+    // level27c after it starts.
     entt::registry registry;
     publishViewport(registry);
-    MagicPortalsLayer layer(TestPaths(), "level10");
+    MagicPortalsLayer layer(TestPaths(), "level26c");
     layer.OnAttach(registry);
-    CHECK(IsAt(layer, "level10"));
+    CHECK(IsAt(layer, "level26c"));
     CHECK(layer.SimLevel() == nullptr);
-    CHECK_MSG(layer.LoadError().find("moving no-portal zone") != std::string::npos, layer.LoadError());
-    // Game::Start built level10 before it refused; nothing of it is left. The
-    // camera is the one thing with a transform.
+    CHECK_MSG(layer.LoadError().find("darkest") != std::string::npos, layer.LoadError());
+    // Nothing of a refused level is left: the camera is the one thing with a
+    // transform. Every refusal in the data now comes before anything is built,
+    // so this holds for the later ones too only because unloadLevel runs on
+    // every refusal.
     CHECK_EQ(registry.view<TransformComponent>().size(), std::size_t{1});
 
     press(layer, registry, MagicPortalsLayer::kSkip);
-    CHECK(IsAt(layer, "level11"));
+    CHECK(IsAt(layer, "level27c"));
     CHECK_MSG(layer.SimLevel() != nullptr && layer.LoadError().empty(), layer.LoadError());
     layer.OnDetach(registry);
 }

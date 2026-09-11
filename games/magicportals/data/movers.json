@@ -1,0 +1,29 @@
+{
+  "_about": [
+    "The Magic Portals port's movers: two numbers the remake keeps in behaviours.gd",
+    "rather than in its data, moved here so they can be retuned without touching code",
+    "(the remake's own CLAUDE.md rule 1). Both are the remake's guesses, carried.",
+    "See docs/planning/2026-09-11-magic-portals-remaster.md, step 4."
+  ],
+
+  "oscillation": {
+    "_note": [
+      "RATE_SCALE_K (behaviours.gd:22-26). An oscillating mover - a moving platform, a",
+      "patrolling no-portal zone - swings by sin(rate_scale * speed * t) * stride / 2 about",
+      "where the level places it. `speed` is a frequency: across the moving_platform",
+      "placements speed x stride clusters in a narrow band while each alone varies widely.",
+      "The absolute scale is the remake's guess; the bytecode constant is not decoded."
+    ],
+    "_guess": true,
+    "rate_scale": 2.0
+  },
+
+  "lift": {
+    "_note": [
+      "speed_px_s's default (behaviours.gd:93, 137). No lift in chapter 1 carries a speed",
+      "of its own, so every one of them runs at this."
+    ],
+    "_guess": true,
+    "speed_px_s": 120.0
+  }
+}

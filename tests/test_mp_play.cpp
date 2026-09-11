@@ -797,7 +797,11 @@ void ANoPortalZoneRefusesATap() {
     std::string error;
     CHECK_MSG(StartLevel30(play, true, error), error);
     if (play.player == entt::null) return;
-    play.portals.zones.push_back(Portals::NoPortalZone{glm::dvec2(300.0, 100.0), 2.0});
+    Portals::NoPortalZone zone;
+    zone.name = "test_zone";
+    zone.centrePx = glm::dvec2(300.0, 100.0);
+    zone.scale = 2.0;
+    play.portals.zones.push_back(zone);
     const double reach = g_portalRules.collisionRadiusPx * 2.0;
     CHECK_MSG(!play.portals.TryPlace(glm::dvec2(300.0 + reach - 1.0, 100.0)), "a tap just inside it is refused");
     CHECK_MSG(play.portals.TryPlace(glm::dvec2(300.0 + reach + 1.0, 100.0)) && play.portals.portalsUsed == 1,
