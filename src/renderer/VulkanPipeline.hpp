@@ -249,6 +249,13 @@ struct ShadowPushConstantData {
 struct VulkanPipelineOptions {
     bool depthWrite{true};
     bool blendEnable{false};
+
+    // With blendEnable: ADD the source to what is there, src * srcAlpha + dst,
+    // instead of mixing it over. MaterialComponent::blend says what wants it.
+    // The destination's alpha is left as it was, since a glow does not make
+    // what is behind it any more or less opaque.
+    bool additive{false};
+
     vk::CullModeFlags cullMode{vk::CullModeFlagBits::eBack};
     bool useVertexInput{true};
 
@@ -305,6 +312,13 @@ struct VulkanPipelineOptions {
     vk::ShaderStageFlags pushConstantStages{
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment};
 };
+
+// The colour attachment's blend state the options above ask for.
+//
+// Out here and pure so a test can read the factors without a device: which of
+// two blend equations a pipeline uses is otherwise visible only in a picture,
+// and a swapped factor draws a glow as a dark square rather than failing.
+vk::PipelineColorBlendAttachmentState ColorBlendFor(const VulkanPipelineOptions& options);
 
 class VulkanPipeline {
 public:

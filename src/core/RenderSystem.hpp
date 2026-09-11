@@ -108,6 +108,9 @@ public:
         entt::registry& registry,
         VulkanPipeline& pipeline,
         VulkanPipeline& transparentPipeline,
+        // The blended pipeline that adds rather than mixes, for materials
+        // whose blend is Additive. Bound per run - see BlendRun.
+        VulkanPipeline& additivePipeline,
         VulkanPipeline* skyPipeline,
         MeshRegistry& meshes,
         TextureRegistry& textures,
@@ -357,6 +360,10 @@ public:
         // this pins them to the order they were found in rather than leaving it
         // to the sort. Stable input, stable frame.
         uint32_t gathered{0};
+
+        // Added to what is behind it rather than mixed over it
+        // (MaterialComponent::blend). Not a sort key: see BlendRun.
+        bool additive{false};
     };
 
     // Orders blended draws back to front, then by sort key, then by gather
@@ -366,6 +373,24 @@ public:
     // no mesh registry. The same reason SortOpaqueDraws and ShadowAlphaFor are
     // exposed.
     static void SortTransparentDraws(std::vector<TransparentDraw>& draws);
+
+    // A run of consecutive blended draws, in the SORTED order, sharing a blend.
+    //
+    // The blend is pipeline state, so each run is one pipeline bind. The runs
+    // are cut from the sorted list rather than the list being grouped by blend
+    // first: grouping would save binds and draw every glow after every pane, or
+    // before it, whatever their depths - right in most frames, and wrong in
+    // exactly the one where a halo sits between two sprites.
+    struct BlendRun {
+        uint32_t first{0};
+        uint32_t count{0};
+        bool additive{false};
+    };
+
+    // The runs of `sorted`, in order. None for an empty list, and one for a
+    // frame in which every blended surface blends alike - which records what
+    // the pass recorded before there was more than one blend.
+    static std::vector<BlendRun> BlendRuns(const std::vector<TransparentDraw>& sorted);
 
     // One live particle, gathered from every emitter before any of them is
     // recorded. Out here beside TransparentDraw for the same reason: the

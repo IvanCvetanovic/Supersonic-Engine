@@ -165,6 +165,17 @@ void RenderSystem::SortTransparentDraws(std::vector<TransparentDraw>& draws) {
               });
 }
 
+std::vector<RenderSystem::BlendRun> RenderSystem::BlendRuns(const std::vector<TransparentDraw>& sorted) {
+    std::vector<BlendRun> runs;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(sorted.size()); ++i) {
+        if (runs.empty() || runs.back().additive != sorted[i].additive) {
+            runs.push_back(BlendRun{i, 0, sorted[i].additive});
+        }
+        ++runs.back().count;
+    }
+    return runs;
+}
+
 void RenderSystem::SortParticleDraws(std::vector<ParticleDraw>& draws) {
     std::sort(draws.begin(), draws.end(),
               [](const ParticleDraw& lhs, const ParticleDraw& rhs) {
@@ -877,6 +888,7 @@ void RenderSystem::Render(
     entt::registry& registry,
     VulkanPipeline& pipeline,
     VulkanPipeline& transparentPipeline,
+    VulkanPipeline& additivePipeline,
     VulkanPipeline* skyPipeline,
     MeshRegistry& meshes,
     TextureRegistry& textures,
@@ -1074,7 +1086,8 @@ void RenderSystem::Render(
                 renderable.ormTextureID,
                 glm::dot(centre - viewPosition, frustum.ViewDirection()),
                 renderable.sortKey,
-                static_cast<uint32_t>(transparent.size())});
+                static_cast<uint32_t>(transparent.size()),
+                material->blend == MaterialComponent::BlendMode::Additive});
             continue;
         }
 
@@ -1246,67 +1259,78 @@ void RenderSystem::Render(
     if (!transparent.empty()) {
         SortTransparentDraws(transparent);
 
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                   transparentPipeline.GetPipeline());
-        ++stats.pipelineBinds;
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                         transparentPipeline.GetLayout(),
-                                         VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
+        // ONE PIPELINE PER RUN of equal blend, taken in the sorted order - see
+        // BlendRun for why the list is not grouped by blend instead. A frame
+        // with no additive surface is one run, and records what it did before
+        // there was a second blend.
+        for (const BlendRun& run : BlendRuns(transparent)) {
+            VulkanPipeline& runPipeline = run.additive ? additivePipeline : transparentPipeline;
 
-        // BATCHED, CONSECUTIVELY, and the back-to-front order survives it - see
-        // the particle pass below for the clause of Vulkan's primitive order
-        // that says so. This pass refused batching on the grounds that an
-        // instanced draw has no internal order; it has one, by instance index,
-        // and the records are appended in the sorted order already.
-        //
-        // Consecutive only, and for a stricter reason than the opaque pass has:
-        // there, re-sorting would lose an authored sortKey. Here it would lose
-        // the depth order itself, which is not a preference but the difference
-        // between a correct frame and a wrong one. That rule is PlanPass's now,
-        // and it is the same rule - which is the point of there being one.
-        std::vector<PassItem> blendedItems;
-        blendedItems.reserve(transparent.size());
+            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                       runPipeline.GetPipeline());
+            ++stats.pipelineBinds;
+            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                             runPipeline.GetLayout(),
+                                             VulkanPipeline::kSceneSet, 1, &sceneSet, 0, nullptr);
 
-        for (const auto& draw : transparent) {
-            if (draw.mesh->indexCount == 0) continue;
-
-            const vk::DescriptorSet blendedSet =
-                textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID,
-                                            draw.ormTextureID);
-
-            PassItem item;
-
-            // KEYED ON THE MESH POINTER, which is what this pass batches on -
-            // the opaque pass has an id and this one does not, and the two
-            // are equally good identities inside one frame because a GpuMesh
-            // does not move while a frame is being recorded.
+            // BATCHED, CONSECUTIVELY, and the back-to-front order survives it -
+            // see the particle pass below for the clause of Vulkan's primitive
+            // order that says so. This pass refused batching on the grounds
+            // that an instanced draw has no internal order; it has one, by
+            // instance index, and the records are appended in the sorted order
+            // already.
             //
-            // The index range is the WHOLE mesh, not a section: this pass has
-            // never walked sections, so a multi-surface blended mesh draws
-            // every index under one material. Reproducing that is the point;
-            // giving it sections here would be a behaviour change wearing a
-            // refactor's clothes.
-            item.key = PassDraw{ HandleKey(draw.mesh), 0, draw.mesh->indexCount,
-                                 HandleKey(static_cast<VkDescriptorSet>(blendedSet)) };
-            item.vertexBuffer = draw.mesh->vertexBuffer->GetBuffer();
-            item.indexBuffer = draw.mesh->indexBuffer->GetBuffer();
-            item.materialSet = blendedSet;
-            item.entity = draw.entity;
-            item.matrix = &draw.matrix;
-            blendedItems.push_back(item);
+            // Consecutive only, and for a stricter reason than the opaque pass
+            // has: there, re-sorting would lose an authored sortKey. Here it
+            // would lose the depth order itself, which is not a preference but
+            // the difference between a correct frame and a wrong one. That rule
+            // is PlanPass's now, and it is the same rule - which is the point of
+            // there being one.
+            std::vector<PassItem> blendedItems;
+            blendedItems.reserve(run.count);
+
+            for (uint32_t i = run.first; i < run.first + run.count; ++i) {
+                const TransparentDraw& draw = transparent[i];
+                if (draw.mesh->indexCount == 0) continue;
+
+                const vk::DescriptorSet blendedSet =
+                    textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID,
+                                                draw.ormTextureID);
+
+                PassItem item;
+
+                // KEYED ON THE MESH POINTER, which is what this pass batches
+                // on - the opaque pass has an id and this one does not, and the
+                // two are equally good identities inside one frame because a
+                // GpuMesh does not move while a frame is being recorded.
+                //
+                // The index range is the WHOLE mesh, not a section: this pass
+                // has never walked sections, so a multi-surface blended mesh
+                // draws every index under one material. Reproducing that is the
+                // point; giving it sections here would be a behaviour change
+                // wearing a refactor's clothes.
+                item.key = PassDraw{ HandleKey(draw.mesh), 0, draw.mesh->indexCount,
+                                     HandleKey(static_cast<VkDescriptorSet>(blendedSet)) };
+                item.vertexBuffer = draw.mesh->vertexBuffer->GetBuffer();
+                item.indexBuffer = draw.mesh->indexBuffer->GetBuffer();
+                item.materialSet = blendedSet;
+                item.entity = draw.entity;
+                item.matrix = &draw.matrix;
+                blendedItems.push_back(item);
+            }
+
+            std::vector<PassDraw> keys;
+            keys.reserve(blendedItems.size());
+            for (const PassItem& item : blendedItems) keys.push_back(item.key);
+
+            // Starting where the pass before stopped, in the buffer they all
+            // share. Nothing is bound: the pipeline bind above invalidates
+            // whatever the last pass or run left, which is why this pass used
+            // to reset its own rebind-avoidance state by hand.
+            const PassPlan plan =
+                PlanPass(keys, static_cast<uint32_t>(instances.size()), maxInstances);
+            recordPass(blendedItems, plan, runPipeline);
         }
-
-        std::vector<PassDraw> keys;
-        keys.reserve(blendedItems.size());
-        for (const PassItem& item : blendedItems) keys.push_back(item.key);
-
-        // Starting where the opaque pass stopped, in the buffer they share.
-        // Nothing is bound: the pipeline bind above invalidates whatever the
-        // opaque pass left, which is why this pass used to reset its own
-        // rebind-avoidance state by hand.
-        const PassPlan plan =
-            PlanPass(keys, static_cast<uint32_t>(instances.size()), maxInstances);
-        recordPass(blendedItems, plan, transparentPipeline);
     }
 
     // ---- Particles -------------------------------------------------------

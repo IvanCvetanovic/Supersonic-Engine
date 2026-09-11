@@ -520,6 +520,15 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
             if (material.transparent) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("(alpha from Albedo, drawn back to front)");
+
+                // Mixed over what is behind it, or added to it - a glow wants
+                // the second. See MaterialComponent::blend.
+                const char* kBlends[] = {"Alpha", "Additive"};
+                int blend = material.blend == MaterialComponent::BlendMode::Additive ? 1 : 0;
+                if (ImGui::Combo("Blend", &blend, kBlends, 2)) {
+                    material.blend = blend == 1 ? MaterialComponent::BlendMode::Additive
+                                                : MaterialComponent::BlendMode::Alpha;
+                }
             }
 
             // The other half of transparency, and the one foliage wants. Zero

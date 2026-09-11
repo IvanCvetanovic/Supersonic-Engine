@@ -662,6 +662,23 @@ struct MaterialComponent {
 
     bool transparent{false};
 
+    // How the blended pass composites a transparent surface: mixed over what is
+    // behind it (Alpha), or added to it (Additive).
+    //
+    // Additive is how a glow is drawn - a halo, a spark, a portal - and for the
+    // art such things are usually made of it is the only blend that works: an
+    // RGB image on a black ground with no alpha channel at all, which alpha
+    // blending draws as an opaque black square. Added, the black adds nothing
+    // and the light adds light. It is what Godot's BLEND_MODE_ADD and Ethanon's
+    // blendMode 1 mean, which is where the first art that needed it came from.
+    //
+    // Meaningless unless `transparent` is set, and deliberately so. Every place
+    // that asks whether a surface is blended - the gather, the shadow passes -
+    // already asks `transparent`, and a second way to be blended would be a
+    // second question each of them could forget to ask.
+    enum class BlendMode : uint8_t { Alpha, Additive };
+    BlendMode blend{BlendMode::Alpha};
+
     // Discard any fragment whose alpha falls below this, and zero means do not.
     //
     // The other half of transparency, and the half most world content actually

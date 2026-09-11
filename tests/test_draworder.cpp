@@ -18,6 +18,7 @@
 #include "TestHarness.hpp"
 #include "core/RenderSystem.hpp"
 #include "renderer/MeshRegistry.hpp"
+#include "renderer/VulkanPipeline.hpp"
 
 #include <algorithm>
 #include <string>
@@ -185,6 +186,98 @@ void testTwoDrawsAgreeingOnEverythingKeepGatherOrder() {
         CHECK_MSG(draws[i].gathered == i,
                   "draw " + std::to_string(i) + " is where it was gathered");
     }
+}
+
+// --- blends ----------------------------------------------------------------
+//
+// A glow is added rather than mixed, and that is a different pipeline, so the
+// sorted blended list is recorded as runs of one blend. What must not happen is
+// the list being grouped by blend: that saves binds, and draws a halo over a
+// sprite nearer than it.
+
+RenderSystem::TransparentDraw blendedAs(float viewDepth, uint32_t gathered, bool additive) {
+    RenderSystem::TransparentDraw draw = blended(viewDepth, 0, gathered);
+    draw.additive = additive;
+    return draw;
+}
+
+void testAHaloBetweenTwoSpritesIsThreeRuns() {
+    // Gathered out of order so the sort has work to do. A sort that grouped by
+    // blend would put the two mixed ones together and the halo at an end.
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blendedAs(2.0f, 0, false), blendedAs(9.0f, 1, false), blendedAs(5.0f, 2, true)};
+
+    RenderSystem::SortTransparentDraws(draws);
+    CHECK_NEAR(draws[0].viewDepth, 9.0f);
+    CHECK_MSG(draws[1].additive, "the halo stays between the two sprites, at its depth");
+    CHECK_NEAR(draws[2].viewDepth, 2.0f);
+
+    const std::vector<RenderSystem::BlendRun> runs = RenderSystem::BlendRuns(draws);
+    CHECK_EQ(runs.size(), size_t{3});
+    if (runs.size() == 3) {
+        CHECK(!runs[0].additive && runs[0].first == 0 && runs[0].count == 1);
+        CHECK_MSG(runs[1].additive && runs[1].first == 1 && runs[1].count == 1, "one bind for the halo alone");
+        CHECK(!runs[2].additive && runs[2].first == 2 && runs[2].count == 1);
+    }
+}
+
+void testNeighboursThatBlendAlikeShareARun() {
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blendedAs(9.0f, 0, true), blendedAs(8.0f, 1, true), blendedAs(7.0f, 2, false),
+        blendedAs(6.0f, 3, false), blendedAs(5.0f, 4, false)};
+    RenderSystem::SortTransparentDraws(draws);
+
+    const std::vector<RenderSystem::BlendRun> runs = RenderSystem::BlendRuns(draws);
+    CHECK_EQ(runs.size(), size_t{2});
+    if (runs.size() == 2) {
+        CHECK(runs[0].additive && runs[0].first == 0 && runs[0].count == 2);
+        CHECK(!runs[1].additive && runs[1].first == 2 && runs[1].count == 3);
+    }
+}
+
+void testAFrameWithNoGlowIsOneRun() {
+    // Every scene written before the blend existed: one run, one bind, and the
+    // pass it always recorded.
+    std::vector<RenderSystem::TransparentDraw> draws{blended(3.0f, 0, 0), blended(2.0f, 0, 1),
+                                                     blended(1.0f, 0, 2)};
+    const std::vector<RenderSystem::BlendRun> runs = RenderSystem::BlendRuns(draws);
+    CHECK_EQ(runs.size(), size_t{1});
+    if (!runs.empty()) {
+        CHECK(!runs[0].additive);
+        CHECK_EQ(runs[0].first, uint32_t{0});
+        CHECK_EQ(runs[0].count, uint32_t{3});
+    }
+}
+
+void testNothingBlendedIsNoRuns() {
+    CHECK(RenderSystem::BlendRuns({}).empty());
+}
+
+void testAGlowAddsAndAPaneMixes() {
+    VulkanPipelineOptions pane;
+    pane.blendEnable = true;
+    const vk::PipelineColorBlendAttachmentState mixed = ColorBlendFor(pane);
+    CHECK(mixed.blendEnable == VK_TRUE);
+    CHECK(mixed.srcColorBlendFactor == vk::BlendFactor::eSrcAlpha);
+    CHECK_MSG(mixed.dstColorBlendFactor == vk::BlendFactor::eOneMinusSrcAlpha,
+              "a pane mixes over what is behind it");
+
+    VulkanPipelineOptions glow = pane;
+    glow.additive = true;
+    const vk::PipelineColorBlendAttachmentState added = ColorBlendFor(glow);
+    CHECK(added.blendEnable == VK_TRUE);
+    CHECK(added.srcColorBlendFactor == vk::BlendFactor::eSrcAlpha);
+    CHECK_MSG(added.dstColorBlendFactor == vk::BlendFactor::eOne,
+              "a glow keeps all of what is behind it, and adds");
+    CHECK(added.colorBlendOp == vk::BlendOp::eAdd);
+    CHECK_MSG(added.srcAlphaBlendFactor == vk::BlendFactor::eZero &&
+                  added.dstAlphaBlendFactor == vk::BlendFactor::eOne,
+              "and leaves the destination's alpha as it was");
+
+    // Without blendEnable the switch means nothing.
+    VulkanPipelineOptions solid;
+    solid.additive = true;
+    CHECK(ColorBlendFor(solid).blendEnable == VK_FALSE);
 }
 
 // --- particles -------------------------------------------------------------
@@ -380,6 +473,11 @@ void runTests() {
     testCoplanarQuadsAreOrderedByTheirSortKey();
     testDepthStillBeatsTheSortKey();
     testTwoDrawsAgreeingOnEverythingKeepGatherOrder();
+    testAHaloBetweenTwoSpritesIsThreeRuns();
+    testNeighboursThatBlendAlikeShareARun();
+    testAFrameWithNoGlowIsOneRun();
+    testNothingBlendedIsNoRuns();
+    testAGlowAddsAndAPaneMixes();
     testNoKeysMeansNoReorderAtAll();
     testAHigherKeyIsSubmittedLater();
     testEqualKeysKeepTheOrderTheyArrivedIn();

@@ -32,6 +32,30 @@ private:
 
 } // namespace
 
+vk::PipelineColorBlendAttachmentState ColorBlendFor(const VulkanPipelineOptions& options) {
+    vk::PipelineColorBlendAttachmentState state{};
+    state.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+    if (!options.blendEnable) {
+        state.blendEnable = VK_FALSE;
+        return state;
+    }
+    state.blendEnable = VK_TRUE;
+    state.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
+    state.colorBlendOp = vk::BlendOp::eAdd;
+    state.alphaBlendOp = vk::BlendOp::eAdd;
+    if (options.additive) {
+        state.dstColorBlendFactor = vk::BlendFactor::eOne;
+        state.srcAlphaBlendFactor = vk::BlendFactor::eZero;
+        state.dstAlphaBlendFactor = vk::BlendFactor::eOne;
+    } else {
+        state.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        state.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+        state.dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    }
+    return state;
+}
+
 VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
                                const std::string& vertPath, const std::string& fragPath,
                                const Options& options)
@@ -134,22 +158,7 @@ VulkanPipeline::VulkanPipeline(vk::Device device, vk::RenderPass renderPass,
         depthStencil.depthBoundsTestEnable = VK_FALSE;
         depthStencil.stencilTestEnable = VK_FALSE;
 
-        vk::PipelineColorBlendAttachmentState colorBlendAttachment{};
-        colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR |
-                                              vk::ColorComponentFlagBits::eG |
-                                              vk::ColorComponentFlagBits::eB |
-                                              vk::ColorComponentFlagBits::eA;
-        if (options.blendEnable) {
-            colorBlendAttachment.blendEnable = VK_TRUE;
-            colorBlendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
-            colorBlendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
-            colorBlendAttachment.colorBlendOp = vk::BlendOp::eAdd;
-            colorBlendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
-            colorBlendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
-            colorBlendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
-        } else {
-            colorBlendAttachment.blendEnable = VK_FALSE;
-        }
+        const vk::PipelineColorBlendAttachmentState colorBlendAttachment = ColorBlendFor(options);
 
         vk::PipelineColorBlendStateCreateInfo colorBlending{};
         colorBlending.logicOpEnable = VK_FALSE;

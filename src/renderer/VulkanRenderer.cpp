@@ -344,6 +344,18 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/frag.spv",
         blendOptions);
 
+    // The blended pipeline once more, adding instead of mixing. Everything else
+    // - no depth write, both faces - holds for a glow for the same reasons.
+    VulkanPipeline::Options additiveOptions = blendOptions;
+    additiveOptions.additive = true;
+
+    m_additivePipeline = std::make_unique<VulkanPipeline>(
+        m_deviceRef.GetDevice(),
+        m_offscreenRenderPass,
+        "assets/shaders/vert.spv",
+        "assets/shaders/frag.spv",
+        additiveOptions);
+
     // Sky. No vertex input - the triangle comes from gl_VertexIndex - and no
     // depth write, because nothing is ever behind it. The depth TEST stays on:
     // it is drawn at z = 1.0 with the existing lessOrEqual compare, so it fills
@@ -1733,7 +1745,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // The sky goes in with the scene rather than after it. It has to be drawn
     // between the opaque and transparent passes, and only RenderSystem knows
     // where the boundary is - see the note on Render.
-    RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline,
+    RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline, *m_additivePipeline,
                          drawSky ? m_skyPipeline.get() : nullptr,
                          *m_meshRegistry, *m_textureRegistry,
                          cmd, m_descriptorSets[m_currentFrame],

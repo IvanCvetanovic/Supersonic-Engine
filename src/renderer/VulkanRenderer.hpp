@@ -196,6 +196,10 @@ private:
     // dynamic in core Vulkan 1.2 without EXT_extended_dynamic_state3.
     std::unique_ptr<VulkanPipeline> m_transparentPipeline;
 
+    // And the same again, adding rather than mixing, for the surfaces a
+    // material marks additive (MaterialComponent::blend).
+    std::unique_ptr<VulkanPipeline> m_additivePipeline;
+
     // The sky, drawn at the far plane after opaque geometry.
     std::unique_ptr<VulkanPipeline> m_skyPipeline;
     std::unique_ptr<VulkanPipeline> m_gridPipeline;

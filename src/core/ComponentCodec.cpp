@@ -234,6 +234,8 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << ",\n";
         out << indent << "  \"EmissiveStrength\": " << jsonSafe(mat->emissiveStrength, "emissiveStrength") << ",\n";
         out << indent << "  \"Transparent\": " << (mat->transparent ? "true" : "false") << ",\n";
+        out << indent << "  \"Blend\": \""
+            << (mat->blend == MaterialComponent::BlendMode::Additive ? "Additive" : "Alpha") << "\",\n";
         out << indent << "  \"AlphaCutoff\": " << jsonSafe(mat->alphaCutoff, "alphaCutoff") << ",\n";
         // The three authored numbers, and not uvSlot - that is renderer scratch
         // and means nothing outside the frame that wrote it.
@@ -793,6 +795,10 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // Absent in every scene written before the blended pass existed, and
         // false is what those scenes rendered as.
         material.transparent = m["Transparent"].AsBool(false);
+        // Absent in every scene written before a surface could be added, and
+        // mixing is what those scenes blended with.
+        material.blend = m["Blend"].AsString("Alpha") == "Additive" ? MaterialComponent::BlendMode::Additive
+                                                                    : MaterialComponent::BlendMode::Alpha;
         // Absent means zero means no cutout, so a scene written before this
         // existed loads as the opaque material it was.
         material.alphaCutoff = m["AlphaCutoff"].AsFloat(0.0f);

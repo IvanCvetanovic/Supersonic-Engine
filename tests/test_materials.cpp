@@ -893,6 +893,60 @@ static void testAMaterialWrittenBeforeThisExistedLoadsUntransformed() {
     cleanup();
 }
 
+static void testTheBlendSurvivesASaveAndLoad() {
+    // A glow saved and loaded as a pane is a black square where a portal was,
+    // so the write is asserted by name, as the UV transform's is.
+    cleanup();
+    entt::registry registry;
+    const auto entity = makeEntity(registry, "Halo");
+    auto& material = registry.get<MaterialComponent>(entity);
+    material.transparent = true;
+    material.blend = MaterialComponent::BlendMode::Additive;
+
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("\"Blend\": \"Additive\"") != std::string::npos, "the blend was written, by name");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+
+    bool found = false;
+    for (auto e : loaded.view<MaterialComponent>()) {
+        const auto& m = loaded.get<MaterialComponent>(e);
+        found = true;
+        CHECK(m.transparent);
+        CHECK_MSG(m.blend == MaterialComponent::BlendMode::Additive, "and read back");
+    }
+    CHECK_MSG(found, "the entity came back");
+    cleanup();
+}
+
+static void testAMaterialWrittenBeforeTheBlendMixes() {
+    cleanup();
+    entt::registry registry;
+    const auto entity = makeEntity(registry, "Pane");
+    registry.get<MaterialComponent>(entity).transparent = true;
+
+    std::string text = SceneSerializer::SerializeToString(registry);
+    const size_t at = text.find("\"Blend\"");
+    CHECK_MSG(at != std::string::npos, "a mixing material writes its blend too");
+    if (at != std::string::npos) {
+        const size_t lineStart = text.rfind('\n', at);
+        const size_t lineEnd = text.find('\n', at);
+        if (lineStart != std::string::npos && lineEnd != std::string::npos) {
+            text.erase(lineStart, lineEnd - lineStart);
+        }
+    }
+    CHECK_MSG(text.find("\"Blend\"") == std::string::npos, "the field really is gone");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+    for (auto e : loaded.view<MaterialComponent>()) {
+        CHECK_MSG(loaded.get<MaterialComponent>(e).blend == MaterialComponent::BlendMode::Alpha,
+                  "a scene from before the blend loads mixing, as it drew");
+    }
+    cleanup();
+}
+
 static void testTheShaderAgreesAboutWhereTheSlotLives() {
     // TWO DESCRIPTIONS OF ONE PACKING: kUvSlotShift and kUvSlotMask here,
     // UV_SLOT_SHIFT and UV_SLOT_MASK in shader.frag. Nothing links them.
@@ -1098,6 +1152,8 @@ static void runTests() {
     testTheShaderAgreesAboutWhereTheSlotLives();
     testAUvTransformSurvivesASaveAndLoad();
     testAMaterialWrittenBeforeThisExistedLoadsUntransformed();
+    testTheBlendSurvivesASaveAndLoad();
+    testAMaterialWrittenBeforeTheBlendMixes();
     testTheIdentityAlwaysOccupiesSlotZero();
     testOnlyMaterialsThatActuallyScrollTakeASlot();
     testAFlipbookFrameComposesTheWayItsSourceDid();
@@ -1133,4 +1189,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 201)
+TEST_MAIN("test_materials", 210)
