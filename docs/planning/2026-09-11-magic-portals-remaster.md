@@ -748,6 +748,15 @@ What changed because of it:
     three crystals.
 
   That this is the designed route is not claimed.
+- **Known gaps.**
+  - Level30's designed solve has never been played through by the port,
+    either before this step or after it. That solve puts crates onto buttons
+    to open the doors. `test_mp_play` covers the crate-onto-button capstone on
+    its own, so the pieces are tested, but the whole route is not.
+  - The inventory counts roles, not routes. "Plays" means every role in the
+    level is ported and the player lands. Of the 25 levels that play, only
+    1-9's route has been played with shots. If a later level turns out to have
+    no route under the shot rule, the inventory will not show it.
 
 `test_mp_shot`, 58 checks:
 - **The files.** Level 1-7's blocker is pinned with its box.
