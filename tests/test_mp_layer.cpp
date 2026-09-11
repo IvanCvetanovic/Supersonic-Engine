@@ -151,6 +151,17 @@ int Tagged(entt::registry& registry, const char* tag) {
     return count;
 }
 
+// The original's extracted images - what no level pictures is drawn with - are
+// outside this repository like the levels, but a machine can have the levels and
+// not them. What needs them says so and is skipped.
+bool OriginalArtIsThere(const char* test) {
+    std::error_code ec;
+    const std::string entities = std::string(MAGICPORTALS_ORIGINAL_DIR) + "/entities";
+    if (std::filesystem::is_directory(entities, ec)) return true;
+    std::printf("  %s SKIPPED - needs the original's extracted assets at %s\n", test, MAGICPORTALS_ORIGINAL_DIR);
+    return false;
+}
+
 // How many entities with this tag are drawn.
 int Shown(entt::registry& registry, const char* tag) {
     int count = 0;
@@ -629,6 +640,78 @@ void WithoutTheArtTheLevelIsBoxes() {
     layer.OnDetach(registry);
 }
 
+void APortalAndAShotAreTheOriginals() {
+    // What no level pictures is drawn as the original's own entities draw it:
+    // the shot as projectile.ent's six frames, added, and the portal it opens as
+    // portal.ent's halo, added. Their boxes stand behind them.
+    if (!OriginalArtIsThere("APortalAndAShotAreTheOriginals")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    const glm::dvec2 target = playerPx(registry, layer) + glm::dvec2(0.0, -48.0);
+    CHECK(onScreen(registry, target));
+    tap(layer, registry, screenOf(registry, target));
+    CHECK_MSG(layer.SimLevel()->portals.flight.has_value(), "the tap fired: " + lastFailure(layer));
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Sprite"), 1);
+    bool shotIsTheOriginal = false;
+    for (auto [entity, tag, material, animation] :
+         registry.view<TagComponent, MaterialComponent, SpriteAnimationComponent>().each()) {
+        (void)entity;
+        if (tag.tag != "Magic Portals Shot Sprite") continue;
+        shotIsTheOriginal = material.blend == MaterialComponent::BlendMode::Additive &&
+                            material.albedoTexturePath.find("projectile.png") != std::string::npos &&
+                            animation.columns == 6 && animation.rows == 1 && animation.loop;
+    }
+    CHECK_MSG(shotIsTheOriginal, "projectile.ent's six frames, added, played round");
+    CHECK_MSG(Shown(registry, "Magic Portals Shot") == 0, "and its box stands behind it");
+
+    landShot(layer, registry);
+    CHECK_MSG(layer.SimLevel()->portals.placed.size() == 1, "it landed: " + lastFailure(layer));
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Sprite"), 0);
+    CHECK_EQ(Tagged(registry, "Magic Portals Portal Sprite"), 1);
+    bool haloIsTheOriginal = false;
+    for (auto [entity, tag, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        (void)entity;
+        if (tag.tag == "Magic Portals Portal Sprite") {
+            haloIsTheOriginal = material.blend == MaterialComponent::BlendMode::Additive &&
+                                material.albedoTexturePath.find("portal_halo.png") != std::string::npos;
+        }
+    }
+    CHECK_MSG(haloIsTheOriginal, "portal.ent's halo, added");
+    CHECK_EQ(Shown(registry, "Magic Portals Portal"), 0);
+    press(layer, registry, MagicPortalsLayer::kBoxes);
+    CHECK_MSG(Shown(registry, "Magic Portals Portal") == 1, "B shows the portal's box too");
+    layer.OnDetach(registry);
+    CHECK_EQ(Tagged(registry, "Magic Portals Portal Sprite"), 0);
+}
+
+void WithoutTheOriginalThePortalIsABox() {
+    // The level's art is there and the original's is not: the portal a shot
+    // opens is its box, shown.
+    const std::filesystem::path empty =
+        std::filesystem::temp_directory_path() / "supersonic-test-mp-layer-no-original";
+    std::error_code ec;
+    std::filesystem::create_directories(empty, ec);
+    MagicPortalsLayer::Paths paths = TestPaths();
+    paths.original = empty.string();
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(paths, "level1");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    if (layer.SimLevel() == nullptr) return;
+    tap(layer, registry, screenOf(registry, playerPx(registry, layer) + glm::dvec2(0.0, -48.0)));
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Sprite"), 0);
+    landShot(layer, registry);
+    CHECK_MSG(layer.SimLevel()->portals.placed.size() == 1, "it landed: " + lastFailure(layer));
+    CHECK_EQ(Tagged(registry, "Magic Portals Portal Sprite"), 0);
+    CHECK_MSG(Shown(registry, "Magic Portals Portal") == 1, "the portal is its box");
+    layer.OnDetach(registry);
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     ATapLandsWhereItPoints();
@@ -639,6 +722,8 @@ void runTests() {
     TheLevelsArtIsDrawn();
     AStaticPortalGlows();
     WithoutTheArtTheLevelIsBoxes();
+    APortalAndAShotAreTheOriginals();
+    WithoutTheOriginalThePortalIsABox();
     ABrokenWallTakesItsBoxWithIt();
     ARetryTakesTheThrownStonesAway();
     TheChapterEnds();

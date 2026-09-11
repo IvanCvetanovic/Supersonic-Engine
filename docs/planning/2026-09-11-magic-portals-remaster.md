@@ -950,3 +950,55 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_statics | 65 | 0 |
 | test_mp_play | 131 | 0 |
 | test_mp_start | 365 | 0 |
+
+**Every level's art, read (c467272).** `test_mp_start` now runs the reader
+over all 128 levels, whether or not they start. A refusal would draw a level
+as boxes while the inventory still counted it as playing. All 128 read: 2,883
+sprites, 99 of them added. The totals are pinned.
+
+### 9c - the portals a shot opens, and the shot (built)
+
+- **What draws them.** The original's own entities:
+  - `portal.ent` draws `portal_halo.png`, added.
+  - `projectile.ent` draws `projectile.png`, added, cut 6 x 1.
+
+  The new port data file `art.json` names each one, and `sim/Art` reads it.
+  `test_mp_sprites` pins these as the `.ent` files' facts. It checks that the
+  images are cut as the `.ent` says: 64x64, and six frames of 64x64.
+- **Where the images are.**
+  - They are in the original's extracted assets beside the remake, read and
+    never committed. `SUPERSONIC_MAGICPORTALS_ORIGINAL` names the directory,
+    and its default follows the levels.
+  - Without the images, the portal and the shot are boxes. A test that needs
+    them skips, and says where it looked.
+- **Drawing.**
+  - Each placed portal gets a halo, just behind the player's slot, since the
+    player walks into it. The shot goes just in front.
+  - The shot's sheet plays on the engine's `SpriteAnimationComponent`, on the
+    tick.
+  - Their boxes stay behind them, and B shows them.
+- **Guessed.** How fast the shot's frames play: 15 a second.
+  `_projectileFrameTimer`'s stride is not decoded.
+- **Not reproduced.**
+  - The particles both entities carry, and the shot's light.
+  - The shot's `PivotAdjust` (4, 0), and any turn toward its flight. The
+    sheet is drawn upright at the shot's point.
+  - What tells the two placed portals apart. They look alike; the original
+    coloured them with particles (`portal_red.par`, `portal_blue.par`).
+
+`test_mp_layer` now has 109 checks:
+- A shot fired on level 1-2 is drawn as `projectile.ent`'s sheet: six frames,
+  added, looping, with its box hidden.
+- The portal it opens is the halo, added, with its box hidden until B.
+- Without the original's images, the portal is its box.
+
+`test_mp_sprites` now has 77 checks. GCC 13.3 and MSVC 14.50 agree to the
+digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_sprites | 77 | 0 |
+| test_mp_layer | 109 | 0 |
+| test_mp_start | 496 | 0 |
+
+The other MP suites are unchanged from 9b.

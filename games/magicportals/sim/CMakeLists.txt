@@ -5,6 +5,7 @@
 # renderer. See docs/planning/2026-09-10-magic-portals-spike.md.
 
 add_library(MagicPortalsSim STATIC
+    Art.cpp
     Camera.cpp
     Chapters.cpp
     Demolish.cpp
@@ -53,7 +54,17 @@ set(SUPERSONIC_MAGICPORTALS_CHAPTERS "${SUPERSONIC_MAGICPORTALS_LEVELS}/../data/
 
 # The port's own data, which IS in this repository: numbers authored for the
 # port, such as how much of a level the view shows (view.json).
+# And the original's own assets, extracted from its APK beside the remake: the
+# images of what no level places - the portals a shot opens, the shot, the
+# player (Art.hpp). Like the levels they are the original's, and stay outside
+# this repository; drawn without them, those are boxes.
+# The default follows the levels, which the converter writes to the same
+# remake's out/levels.
+set(SUPERSONIC_MAGICPORTALS_ORIGINAL "${SUPERSONIC_MAGICPORTALS_LEVELS}/../../reference/extracted/assets"
+    CACHE PATH "The original's extracted assets (Magic-Portals-Remake/reference/extracted/assets)")
+
 target_compile_definitions(MagicPortalsSim PUBLIC
+    MAGICPORTALS_ORIGINAL_DIR="${SUPERSONIC_MAGICPORTALS_ORIGINAL}"
     MAGICPORTALS_LEVELS_DIR="${SUPERSONIC_MAGICPORTALS_LEVELS}"
     MAGICPORTALS_DATA_DIR="${SUPERSONIC_MAGICPORTALS_DATA}"
     MAGICPORTALS_CHAPTERS_FILE="${SUPERSONIC_MAGICPORTALS_CHAPTERS}"

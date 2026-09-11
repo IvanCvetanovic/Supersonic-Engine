@@ -12,6 +12,7 @@
 
 #include "TestHarness.hpp"
 
+#include "sim/Art.hpp"
 #include "sim/Sprites.hpp"
 #include "sim/Tscn.hpp"
 
@@ -29,6 +30,7 @@ using namespace MagicPortals;
 namespace {
 
 const std::string kLevels = MAGICPORTALS_LEVELS_DIR;
+const std::string kOriginal = MAGICPORTALS_ORIGINAL_DIR;
 
 std::filesystem::path Scratch() {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "supersonic-test-mp-sprites";
@@ -237,6 +239,44 @@ void WhatTheReaderDoesNotDrawIsNamed() {
             "wall_1/Body", "a sprite under a body is refused");
 }
 
+// ---- art.json: what no level pictures ------------------------------------------
+
+void ThePortalAndTheShotAreTheirEnts() {
+    // The .ent files' facts, pinned. How fast the shot's sheet plays is a guess
+    // and only has to be something.
+    Art::Rules rules;
+    std::string error;
+    const bool ok = Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", rules, error);
+    CHECK_MSG(ok, error);
+    CHECK_MSG(rules.portal.sprite == "portal_halo.png" && rules.portal.additive && rules.portal.Frames() == 1,
+              "portal.ent: its halo, added");
+    CHECK_MSG(rules.shot.sprite == "projectile.png" && rules.shot.additive, "projectile.ent: its sheet, added");
+    CHECK_MSG(rules.shot.columns == 6 && rules.shot.rows == 1, "cut 6 x 1, as its SpriteCut says");
+    CHECK_MSG(rules.shot.framesPerSecond > 0.0, "and a six-frame sheet says how fast it plays");
+}
+
+void ASheetThatDoesNotSayHowFastIsRefused() {
+    const std::filesystem::path path = Scratch() / "art.json";
+    const std::string text = R"({"portal": {"sprite": "a.png", "additive": true},
+                                 "shot": {"sprite": "b.png", "additive": true, "columns": 6}})";
+    Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+    Art::Rules rules;
+    std::string error;
+    const bool ok = Art::LoadRules(path.string(), rules, error);
+    CHECK(!ok);
+    CHECK_MSG(error.find("frames_per_second") != std::string::npos, error);
+}
+
+void TheOriginalsImagesAreCutAsTheEntsSay() {
+    int w = 0;
+    int h = 0;
+    std::string error;
+    const bool halo = Sprites::ImageSize(kOriginal + "/entities/portal_halo.png", w, h, error);
+    CHECK_MSG(halo && w == 64 && h == 64, "portal_halo.png: " + error);
+    const bool sheet = Sprites::ImageSize(kOriginal + "/entities/projectile.png", w, h, error);
+    CHECK_MSG(sheet && w == 6 * 64 && h == 64, "projectile.png is six frames of 64 x 64: " + error);
+}
+
 // ---- the converted levels -----------------------------------------------------
 
 bool LoadLevel(const std::string& level, std::vector<Sprites::Sprite>& out) {
@@ -345,6 +385,16 @@ int main() {
     AnythingElseIsRefusedByName();
     TheCanvasOrderIsZThenTheFile();
     WhatTheReaderDoesNotDrawIsNamed();
+    ThePortalAndTheShotAreTheirEnts();
+    ASheetThatDoesNotSayHowFastIsRefused();
+
+    std::error_code original;
+    if (std::filesystem::is_directory(kOriginal + "/entities", original)) {
+        TheOriginalsImagesAreCutAsTheEntsSay();
+    } else {
+        std::printf("test_mp_sprites: the original's images SKIPPED - needs its extracted assets at %s.\n",
+                    kOriginal.c_str());
+    }
 
     std::error_code ec;
     if (!std::filesystem::is_directory(kLevels, ec)) {

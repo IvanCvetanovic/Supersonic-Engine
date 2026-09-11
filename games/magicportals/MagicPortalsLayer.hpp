@@ -15,6 +15,7 @@
 #include "sim/Camera.hpp"
 #include "sim/Chapters.hpp"
 #include "sim/Game.hpp"
+#include "sim/Art.hpp"
 #include "sim/Sprites.hpp"
 
 namespace MagicPortals {
@@ -49,8 +50,10 @@ namespace MagicPortals {
 //    and goes when that goes. The bodies are also boxes in the colour of what
 //    they are, hidden behind the art until B shows them - and shown anyway when
 //    the art cannot be read, which is a level still played, drawn plainly.
-//  - What the levels do not picture - the player, the portals a shot opens, the
-//    shot - is still a box.
+//  - What the levels do not picture, the game draws as the original's own
+//    entities draw it (Art.hpp): the portals a shot opens, and the shot. Their
+//    images are read from the original's extracted assets; without them they
+//    are boxes. The player is still a box.
 class MagicPortalsLayer final : public Supersonic::EngineLayer {
 public:
     // The port's tick: the remake's physics runs at Godot's default 60 Hz.
@@ -78,6 +81,9 @@ public:
         // What res:// stands for: the converter writes the levels' art beside
         // the levels, so the directory above them (Sprites.hpp).
         std::string art = MAGICPORTALS_LEVELS_DIR "/..";
+        // The original's extracted assets, whose entities/ holds the images of
+        // what no level places (Art.hpp).
+        std::string original = MAGICPORTALS_ORIGINAL_DIR;
     };
 
     // The last level cleared: the portals spent against its golden score, which
@@ -200,6 +206,8 @@ private:
     // An image's size, read once per file (Sprites::ImageSize); zero when it
     // cannot be read.
     glm::dvec2 imageSizePx(const std::string& path);
+    // An image among the original's entities.
+    std::string originalImage(const std::string& sprite) const;
 
     Paths m_paths;
     std::string m_startLevel;
@@ -242,6 +250,9 @@ private:
     bool m_showBoxes{false};
     int m_playerSlot{0}; // the drawing slot the player takes among the sprites
     std::map<std::string, glm::dvec2> m_imageSizes;
+    Art::Rules m_artRules;                  // the port's art.json
+    std::vector<entt::entity> m_portalQuads; // one per placed portal, when its image is there
+    entt::entity m_shotQuad{entt::null};    // the shot in flight, when its image is there
 
     struct Hud {
         entt::entity status{entt::null};

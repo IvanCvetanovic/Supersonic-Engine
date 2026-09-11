@@ -120,7 +120,8 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
     std::string error;
     if (!Chapters::Load(m_paths.chapters, m_chapters, error) ||
         !Camera::LoadRules(m_paths.data + "/portals.json", m_cameraRules, error) ||
-        !Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error)) {
+        !Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error) ||
+        !Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error)) {
         m_loadError = error;
     } else if (const int start = m_chapters.Find(m_startLevel); start < 0) {
         m_loadError = m_startLevel + " is not a level of " + m_paths.chapters;
@@ -242,6 +243,9 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     for (DrawnSprite& drawn : m_sprites) destroy(drawn.quad);
     m_sprites.clear();
     m_artReady = false;
+    for (auto& e : m_portalQuads) destroy(e);
+    m_portalQuads.clear();
+    destroy(m_shotQuad);
     destroy(m_shot);
     destroy(m_player);
     destroy(m_exit);
@@ -478,6 +482,10 @@ glm::dvec2 MagicPortalsLayer::imageSizePx(const std::string& path) {
     return size;
 }
 
+std::string MagicPortalsLayer::originalImage(const std::string& sprite) const {
+    return m_paths.original + "/entities/" + sprite;
+}
+
 void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     using namespace Supersonic;
     std::vector<Sprites::Sprite> sprites;
@@ -684,17 +692,54 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     for (std::size_t i = 0; i < placed.size(); ++i) {
         placeBox(registry, m_portals[i], placed[i].atPx, glm::dvec2(diameterPx), kMarkerZ, kMarkerDepth, 0.0f);
     }
+    // And one picture per placed portal, portal.ent's halo, when the original's
+    // image is there: just behind the player, which walks into it.
+    const std::string halo = originalImage(m_artRules.portal.sprite);
+    const glm::dvec2 haloPx = imageSizePx(halo);
+    const bool haloReady = m_artReady && haloPx != glm::dvec2(0.0);
+    while (m_portalQuads.size() > (haloReady ? placed.size() : 0)) {
+        if (registry.valid(m_portalQuads.back())) registry.destroy(m_portalQuads.back());
+        m_portalQuads.pop_back();
+    }
+    while (haloReady && m_portalQuads.size() < placed.size()) {
+        m_portalQuads.push_back(makeSprite(registry, "Magic Portals Portal Sprite", halo, m_artRules.portal.additive));
+    }
+    for (std::size_t i = 0; i < m_portalQuads.size(); ++i) {
+        placeSprite(registry, m_portalQuads[i], placed[i].atPx, haloPx, SlotZ(m_playerSlot) - 0.25f * kSpriteSlotZ,
+                    0.0f);
+    }
 
-    // The shot in flight, made when one is fired and unmade when it lands or fails.
+    // The shot in flight, made when one is fired and unmade when it lands or fails:
+    // a box, and projectile.ent's sheet played round when the original's image is
+    // there, just in front of the player it leaves.
     if (m_level.portals.flight) {
         if (m_shot == entt::null) {
             m_shot = makeBox(registry, "Magic Portals Shot", glm::vec3(0.0f), glm::vec3(1.0f), kShotColour);
         }
         placeBox(registry, m_shot, m_level.portals.flight->atPx, glm::dvec2(kShotSizePx), kMarkerZ, kMarkerDepth,
                  0.0f);
-    } else if (m_shot != entt::null) {
-        if (registry.valid(m_shot)) registry.destroy(m_shot);
+        const Art::Picture& bolt = m_artRules.shot;
+        const std::string sheet = originalImage(bolt.sprite);
+        const glm::dvec2 sheetPx = imageSizePx(sheet);
+        if (m_shotQuad == entt::null && m_artReady && sheetPx != glm::dvec2(0.0)) {
+            m_shotQuad = makeSprite(registry, "Magic Portals Shot Sprite", sheet, bolt.additive);
+            // Played on the tick by the engine's SpriteAnimationSystem.
+            auto& animation = registry.emplace<SpriteAnimationComponent>(m_shotQuad);
+            animation.columns = static_cast<uint32_t>(bolt.columns);
+            animation.rows = static_cast<uint32_t>(bolt.rows);
+            animation.framesPerSecond = static_cast<float>(bolt.framesPerSecond);
+            animation.loop = true;
+        }
+        if (m_shotQuad != entt::null) {
+            placeSprite(registry, m_shotQuad, m_level.portals.flight->atPx,
+                        glm::dvec2(sheetPx.x / bolt.columns, sheetPx.y / bolt.rows),
+                        SlotZ(m_playerSlot) + 0.25f * kSpriteSlotZ, 0.0f);
+        }
+    } else {
+        if (m_shot != entt::null && registry.valid(m_shot)) registry.destroy(m_shot);
         m_shot = entt::null;
+        if (m_shotQuad != entt::null && registry.valid(m_shotQuad)) registry.destroy(m_shotQuad);
+        m_shotQuad = entt::null;
     }
 
     // Static portals, at their trigger boxes. One that is spent - only when
@@ -745,6 +790,10 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     for (const entt::entity e : m_zones) show(e, !artOnly);
     for (const entt::entity e : m_hazards) show(e, !artOnly);
     show(m_exit, !artOnly);
+    // A placed portal and the shot, behind the original's pictures once they
+    // stand in for them.
+    for (const entt::entity e : m_portals) show(e, !(artOnly && haloReady));
+    show(m_shot, !(artOnly && m_shotQuad != entt::null));
 }
 
 void MagicPortalsLayer::buildHud(entt::registry& registry) {

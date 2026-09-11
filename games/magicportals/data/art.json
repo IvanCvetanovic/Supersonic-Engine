@@ -1,0 +1,30 @@
+{
+  "_about": [
+    "What the port draws for what no level pictures - the portals a shot opens, and the",
+    "shot - as the original's own entities draw them. Their images are read from the",
+    "extracted APK beside the remake and never committed. See",
+    "docs/planning/2026-09-11-magic-portals-remaster.md, step 9c."
+  ],
+
+  "portal": {
+    "_source": "the original's portal.ent: Sprite portal_halo.png, blendMode 1 (added), SpriteCut 1 x 1",
+    "sprite": "portal_halo.png",
+    "additive": true
+  },
+
+  "shot": {
+    "_source": "the original's projectile.ent: Sprite projectile.png, blendMode 1 (added), SpriteCut 6 x 1, PivotAdjust (4, 0)",
+    "sprite": "projectile.png",
+    "additive": true,
+    "columns": 6,
+    "rows": 1,
+    "animation": {
+      "_note": [
+        "How fast the six frames play. The original keeps a _projectileFrameTimer, whose",
+        "stride is not decoded."
+      ],
+      "_guess": true,
+      "frames_per_second": 15.0
+    }
+  }
+}
