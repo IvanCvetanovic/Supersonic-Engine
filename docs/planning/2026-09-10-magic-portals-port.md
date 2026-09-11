@@ -562,7 +562,12 @@ the editor's demo scene sat above it: rainbow debug cubes, a box and a light.
 - **The fix:** `main.cpp` now clears it. The app then logs "No startup scene;
   the game builds its own world", which is the shape it was written for, and
   the second render shows level30 alone.
-- **The other ports:** HUSK's and Wolf Brigade's mains leave the same default.
-  Wolf Brigade's comment even says it has no startup scene. Run from the
-  repository root, both likely open the demo scene too. They are not changed
-  here.
+- **The other ports:** HUSK's and Wolf Brigade's mains left the same default,
+  and Wolf Brigade's comment said it had no startup scene. A render of each
+  from the repository root logged "Loaded 18 entities from
+  assets/scenes/MainScene.scene". The cubes sat outside both cameras, but the
+  demo light did not: HUSK's terrain was lit brighter than its layer lights it,
+  and Wolf Brigade's background was the demo's neutral grey instead of its own.
+  Both mains now clear the scene, both log "No startup scene", and both renders
+  changed. Wolf Brigade's builds clean under MSVC too. HUSK is off in the MSVC
+  tree, so its one line is checked by GCC only.

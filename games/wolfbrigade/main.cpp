@@ -54,7 +54,10 @@ int main(int argc, char** argv) {
     Supersonic::GameManifest manifest;
     manifest.isGame = true;
     manifest.title = "Wolf Brigade";
-    // No startup scene: the board is built by the simulation, not placed.
+    // No startup scene: the board is built by the simulation, not placed. The
+    // manifest defaults to the editor's demo scene, so saying so is not enough;
+    // a run from the repository root loaded its 18 entities beside the board.
+    manifest.startupScene.clear();
 
     // WHERE THIS GAME MAY WRITE, resolved once, here, and handed down.
     //

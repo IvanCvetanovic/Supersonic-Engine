@@ -57,6 +57,10 @@ int main(int argc, char** argv) {
     Supersonic::GameManifest manifest;
     manifest.isGame = true;
     manifest.title = "HUSK";
+    // No startup scene: the layer builds the mission. Left at the manifest's
+    // default, a run from the repository root opens the editor's demo scene
+    // beside it.
+    manifest.startupScene.clear();
 
     try {
         Supersonic::SupersonicApp app(options, &manifest);
