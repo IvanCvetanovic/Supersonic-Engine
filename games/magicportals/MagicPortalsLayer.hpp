@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -10,28 +11,37 @@
 #include "core/Components.hpp"
 #include "core/EngineLayer.hpp"
 
+#include "sim/Camera.hpp"
+#include "sim/Chapters.hpp"
 #include "sim/Game.hpp"
 
 namespace MagicPortals {
 
-// Magic Portals' first view: level30 as the port plays it, drawn as boxes.
+// Magic Portals as the port plays it: the levels in the original's order, drawn
+// as boxes.
 //
 // Deliberately plain, like HUSK's first view. It draws a box for each body in
-// the colour of what it is, the placed portals, the crystals still out, the
-// buttons and the exit, and a few lines of text. What it has to get right is
-// the seam:
+// the colour of what it is, the portals, the crystals still out, the buttons and
+// the exit, and a few lines of text. What it has to get right is the seam:
 //
 //  - The level is the layer's (Game::Level), and it runs on the port's 60 Hz
 //    tick, set on the engine's clock. The app steps physics before each
 //    OnFixedUpdate, so the layer runs Game::AfterStep then Game::BeforeStep.
 //    That is the suites' tick, with the app's step between the halves.
 //  - Input is read on the tick. Left and right held are the remake's two-button
-//    pad, and a tap places a portal at the point in the level under it. There
-//    is one tap per tick at most, so a frame cannot spend the budget twice in
-//    one step.
-//  - The camera is orthographic and fixed, fitted to the level's bounds. level30
-//    fits on one screen, so there is no follow, pan or zoom; the port's planning
-//    doc lists those as out of scope.
+//    pad, and a tap places a portal at the point in the level under it. There is
+//    one tap per tick at most, so a frame cannot spend the budget twice in one
+//    step. R retries and N skips, on the tick as well.
+//  - The levels come in chapters.json's order. Reaching the exit loads the next
+//    level of the world at once, as the remake advances (main.gd:161-168). Retry
+//    is instant: the level is rebuilt from what was read when it loaded, and the
+//    disk is not touched (level_manager.gd:5-13). A level the port refuses says
+//    why, and N skips it, the remake's own development shortcut. At a world's end
+//    the remake opens its menu; the port has none yet, so it says the chapter is
+//    complete.
+//  - The camera is orthographic and follows the player, as the owner remembers
+//    it: Camera::Follow, moved on the tick and drawn between ticks. It shows
+//    view.json's height of the level, 256 px, at the window's shape.
 class MagicPortalsLayer final : public Supersonic::EngineLayer {
 public:
     // The port's tick: the remake's physics runs at Godot's default 60 Hz.
@@ -44,8 +54,34 @@ public:
     static constexpr const char* kRight = "mp.right";        // Right arrow
     static constexpr const char* kRightAlt = "mp.right.alt"; // D
     static constexpr const char* kTap = "mp.tap";            // left mouse: place a portal
+    static constexpr const char* kRetry = "mp.retry";        // R
+    static constexpr const char* kSkip = "mp.skip";          // N
 
-    MagicPortalsLayer(std::string levelPath, std::string dataDirectory, std::filesystem::path prismDirectory);
+    // Where the port reads from. The defaults are where the build was told the
+    // remake's files are, and the port's own data beside its source.
+    struct Paths {
+        std::string levels = MAGICPORTALS_LEVELS_DIR;
+        std::string chapters = MAGICPORTALS_CHAPTERS_FILE;
+        std::string data = MAGICPORTALS_DATA_DIR;
+        std::string portData = MAGICPORTALS_PORT_DATA_DIR;
+        std::filesystem::path prisms; // where LevelBuilder may write
+    };
+
+    // The last level cleared: the portals spent against its golden score, which
+    // is what the remake records (level_manager.gd:116-121).
+    struct Cleared {
+        std::string name;
+        std::string label;
+        int portalsUsed = 0;
+        int goldenScore = 0;
+        int traversals = 0;
+        int crystals = 0;
+        int crystalsTotal = 0;
+
+        bool Gold() const { return goldenScore >= 0 && portalsUsed <= goldenScore; }
+    };
+
+    MagicPortalsLayer(Paths paths, std::string startLevel);
 
     const char* Name() const override { return "Magic Portals"; }
 
@@ -54,12 +90,25 @@ public:
     void OnFixedUpdate(entt::registry& registry, float fixedDelta) override;
     void OnUpdate(entt::registry& registry, float deltaTime) override;
 
-    // Why the level did not load; empty when it did. A level that fails leaves
-    // the layer showing that, rather than throwing out of OnAttach.
+    // Why the level being shown did not load, or why nothing could start; empty
+    // when it did. A level that fails leaves the layer saying so, rather than
+    // throwing out of OnAttach.
     const std::string& LoadError() const { return m_loadError; }
 
     // The level being played, or null when it did not load.
     const Game::Level* SimLevel() const { return m_loaded ? &m_level : nullptr; }
+
+    // The entry in chapters.json being shown, or null when nothing could start.
+    const Chapters::Level* Current() const;
+
+    bool ChapterComplete() const { return m_chapterComplete; }
+    const std::optional<Cleared>& LastCleared() const { return m_lastCleared; }
+
+    // The camera as the last tick left it, and what it shows, in the level's
+    // pixels; and the level's extent.
+    glm::dvec2 CameraCentrePx() const { return m_follow.centrePx; }
+    glm::dvec2 ViewPx() const;
+    glm::dvec2 BoundsPx() const { return m_boundsPx; }
 
     // A screen point (Input's coordinates) as the point in the level under it,
     // in the remake's pixels. False when there is no viewport or camera.
@@ -76,10 +125,6 @@ private:
         float depth{0.4f};
     };
 
-    // The camera's shape for a viewport: its aspect, and an orthoHeight that fits
-    // the whole level with a margin.
-    void fitCamera(Supersonic::CameraComponent& camera, const glm::vec2& viewportSize) const;
-
     void bindInput();
     void buildCamera(entt::registry& registry);
     void buildDrawables(entt::registry& registry);
@@ -88,16 +133,38 @@ private:
     void syncDrawables(entt::registry& registry);
     void updateHud(entt::registry& registry);
 
+    // The level at `index` in chapters.json, in place of whatever was there.
+    // False, with LoadError, when it is refused; nothing of it is left then.
+    bool loadLevel(entt::registry& registry, int index);
+    void unloadLevel(entt::registry& registry);
+    // The level at `next`, or the chapter's end when it is -1.
+    void goTo(entt::registry& registry, int next);
+    // The exit reached: recorded, and on to the next level.
+    void clearLevel(entt::registry& registry);
+
+    float viewportAspect(const entt::registry& registry) const;
+    void placeCamera(entt::registry& registry);
+
     entt::entity makeBox(entt::registry& registry, const char* tag, const glm::vec3& centre, const glm::vec3& size,
                          const glm::vec3& colour);
     void placeBox(entt::registry& registry, entt::entity box, const glm::dvec2& centrePx, const glm::dvec2& sizePx,
                   float z, float depth, float rotation) const;
 
-    std::string m_levelPath;
-    std::string m_dataDirectory;
-    std::filesystem::path m_prismDirectory;
+    Paths m_paths;
+    std::string m_startLevel;
+
+    Chapters::Table m_chapters;
+    int m_current{-1}; // the entry in m_chapters being shown
+    bool m_chapterComplete{false};
+    std::optional<Cleared> m_lastCleared;
+
+    Camera::Rules m_cameraRules;
+    double m_viewHeightPx{0.0};
+    float m_aspect{16.0f / 9.0f}; // the window's shape as of the last tick
+    Camera::Follow m_follow;
 
     Game::Data m_data;
+    int m_dataIndex{-1}; // whose level m_data holds, so a retry reuses it
     Game::Level m_level;
     bool m_loaded{false};
     std::string m_loadError;
@@ -115,6 +182,7 @@ private:
 
     struct Hud {
         entt::entity status{entt::null};
+        entt::entity result{entt::null};
         entt::entity controls{entt::null};
     };
     Hud m_hud;

@@ -43,6 +43,31 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     return true;
 }
 
+bool LoadViewHeight(const std::string& path, double& heightPx, std::string& error) {
+    namespace Json = Supersonic::Json;
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        error = path + ": cannot open";
+        return false;
+    }
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string text = buffer.str();
+    Json::Parser parser(text);
+    Json::Value root;
+    if (!parser.Parse(root)) {
+        error = path + ": " + parser.Error();
+        return false;
+    }
+    if (!root.IsObject() || !root.Has("view") || !root["view"].IsObject() || !root["view"].Has("height_px") ||
+        !root["view"]["height_px"].IsNumber() || root["view"]["height_px"].AsNumber() <= 0.0) {
+        error = path + ": view.height_px is missing, not a number, or not above 0";
+        return false;
+    }
+    heightPx = root["view"]["height_px"].AsNumber();
+    return true;
+}
+
 glm::dvec2 Clamp(const glm::dvec2& wantPx, const glm::dvec2& viewPx, const glm::dvec2& boundsPx) {
     glm::dvec2 centre(0.0);
     for (int axis = 0; axis < 2; ++axis) {

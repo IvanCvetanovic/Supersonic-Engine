@@ -1,0 +1,23 @@
+{
+  "_about": [
+    "The Magic Portals port's own numbers: authored for the port, not read from the",
+    "original's files or the remake's. Committed, because nothing here is Asantee's.",
+    "See docs/planning/2026-09-11-magic-portals-remaster.md, step 2a."
+  ],
+
+  "view": {
+    "_note": [
+      "How much of a level the screen shows, in the level's pixels. The width follows the",
+      "window's shape: 455 px at 16:9.",
+      "",
+      "INFERRED, not measured. The owner remembers the screen showing part of a level and",
+      "scrolling as the player walked. How much: 73 of the 128 levels are exactly 256 px",
+      "tall and none is shorter, the narrowest is 456 px wide against the original's",
+      "455x256 background art, and the level_bounds marker's role note pairs it with the",
+      "original's clampCameraPos. The remake's 1280x720 is a placeholder by its own",
+      "project.godot. Settle this by playing against the original."
+    ],
+    "_inferred": true,
+    "height_px": 256
+  }
+}

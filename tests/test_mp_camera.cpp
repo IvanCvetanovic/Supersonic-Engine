@@ -86,7 +86,18 @@ void ItNeverShowsPastTheLevel() {
     CHECK(follow.centrePx.x <= 540.5);
 }
 
+void ThePortsViewIsTwoHundredFiftySixTall() {
+    // view.json is the port's own and committed, so it is always there. Its
+    // number is an inference its note gives the evidence for, so it is pinned
+    // here: a change to it is a decision, and should be seen.
+    double height = 0.0;
+    std::string error;
+    CHECK_MSG(Camera::LoadViewHeight(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/view.json", height, error), error);
+    CHECK(height == 256.0);
+}
+
 void runTests() {
+    ThePortsViewIsTwoHundredFiftySixTall();
     TheViewStaysInsideTheLevel();
     ItHoldsThenEasesToThePlayer();
     ItNeverShowsPastTheLevel();

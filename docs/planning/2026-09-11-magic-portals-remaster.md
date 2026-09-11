@@ -195,3 +195,64 @@ and near a level's far end.
 | test_mp_camera | 13 | 0 |
 
 Both pass on GCC 13.3 and MSVC 14.50.
+
+## Step 2b - the game around a level (built)
+
+The layer now plays the game, not one level:
+- **Order.** It starts at a level named on the command line (`--level`,
+  default `level0`), in `chapters.json`'s order. Reaching the exit records the
+  level and loads the next one at once, as the remake advances.
+- **Retry.** R rebuilds the level from what was read when it loaded, so a retry
+  never touches the disk. The remake caches its level scene for the same reason.
+- **Skip.** A level the port refuses says why, and N skips it. N is the remake's
+  development shortcut, kept while levels are refused. Start may have built part
+  of a refused level before it refused, and none of it is left.
+- **A world's end** is the chapter's end. The remake opens its menu there; the
+  port has none yet, so it says so.
+- **The camera** is `Camera::Follow`, moved on the tick and drawn between ticks
+  (`InterpolatedCameraComponent`, as HUSK's is). A new level is a cut, not a pan.
+- **The view** is the port's own data: `games/magicportals/data/view.json`,
+  committed because it is the port's and not Asantee's. Its note carries the
+  evidence for 256.
+- **The HUD** shows the level, its crystals, the portals spent against the golden
+  score, and the last level cleared, marked gold where it earned it.
+
+`test_mp_layer` is rewritten around what a player can see. A tap is only made
+where the screen shows the spot. So level30's play-through now waits for the
+camera:
+- the far portal is tapped at the start, while the camera is over the exit end;
+- the near portal is tapped once the camera has come to the player.
+The route depends on what is on screen, not on how long the camera holds, which
+is a guess. It clears level30 in the same 0.43 s and loads level31.
+
+The new checks:
+- **Order and retry.** level0 walked right clears as 1-1 with no portal, which
+  is gold, and loads level1 with the player at its spawn. A portal placed and
+  then R gives level1 as it loaded.
+- **The camera.** It never shows past level0 on the way.
+- **Skip.** level10 says it has a moving no-portal zone, and leaves nothing
+  behind; N loads level11.
+- **The chapter's end.** N on level31 ends the chapter, and R does nothing
+  there.
+- **A bad start.** A start that is no level says so.
+
+GCC 13.3 and MSVC 14.50 agree to the digit on every Magic Portals suite:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_layer | 42 | 0 |
+| test_mp_camera | 15 | 0 |
+| test_mp_chapters | 39 | 0 |
+| test_mp_statics | 65 | 0 |
+| test_mp_play | 131 | 0 |
+| test_mp_start | 346 | 0 |
+
+The headless renders of level0 and level30 show the 256 px view following the
+player.
+
+**The HUD is not in them, and never has been in any game's.** `UISystem` draws
+text through ImGui's draw list over the game, after the scene. `--screenshot`
+writes the offscreen scene image (`SupersonicApp.cpp:952-959`), so it never
+holds the UI. HUSK's and Wolf Brigade's screenshots lack their HUDs for the same
+reason. The HUD's text is checked through the layer's accessors, not by a
+picture. Its look waits for someone at the window.

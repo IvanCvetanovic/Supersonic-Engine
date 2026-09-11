@@ -1,5 +1,5 @@
-// Magic Portals' first view. MagicPortalsLayer.hpp says what it is and what it
-// is not.
+// Magic Portals as the port plays it. MagicPortalsLayer.hpp says what it is and
+// what it is not.
 
 #include "MagicPortalsLayer.hpp"
 
@@ -14,18 +14,20 @@
 #include "core/SimulationClock.hpp"
 #include "core/ViewportInfo.hpp"
 
+#include "sim/Roles.hpp"
 #include "sim/Units.hpp"
 
 namespace MagicPortals {
 
 namespace {
 
-// The level fills the viewport one way, with this much to spare.
-constexpr double kFitMargin = 1.05;
-
 // How far in front of the level the camera stands. It is orthographic, so only
 // the ordering matters: everything drawn lies between it and the far plane.
 constexpr float kCameraDistance = 20.0f;
+
+// The window's shape until a viewport says otherwise: the 16:9 at which the
+// view is 455 px wide.
+constexpr float kDefaultAspect = 16.0f / 9.0f;
 
 // Markers - buttons, crystals, the exit, portals - stand in front of the bodies.
 constexpr float kMarkerZ = 0.5f;
@@ -100,13 +102,33 @@ bool IsTrigger(const entt::registry& registry, entt::entity entity) {
 
 std::string Count(int n) { return std::to_string(n); }
 
+// The first top-level node of a role, or null.
+const Tscn::Node* FirstOfRole(const Game::Data& data, const char* role) {
+    for (const Tscn::Node& node : data.scene.nodes) {
+        if (node.parent == "." && Roles::RoleOf(data.roles, node) == role) return &node;
+    }
+    return nullptr;
+}
+
+bool PositionOf(const Tscn::Node* node, glm::dvec2& out) {
+    const Tscn::Value* at = node != nullptr ? node->Find("position") : nullptr;
+    if (at == nullptr || at->kind != Tscn::Value::Kind::Vector2) return false;
+    out = glm::dvec2(at->numbers[0], at->numbers[1]);
+    return true;
+}
+
 } // namespace
 
-MagicPortalsLayer::MagicPortalsLayer(std::string levelPath, std::string dataDirectory,
-                                     std::filesystem::path prismDirectory)
-    : m_levelPath(std::move(levelPath)),
-      m_dataDirectory(std::move(dataDirectory)),
-      m_prismDirectory(std::move(prismDirectory)) {}
+MagicPortalsLayer::MagicPortalsLayer(Paths paths, std::string startLevel)
+    : m_paths(std::move(paths)), m_startLevel(std::move(startLevel)) {}
+
+const Chapters::Level* MagicPortalsLayer::Current() const {
+    return m_current >= 0 ? &m_chapters.levels[static_cast<std::size_t>(m_current)] : nullptr;
+}
+
+glm::dvec2 MagicPortalsLayer::ViewPx() const {
+    return glm::dvec2(m_viewHeightPx * static_cast<double>(m_aspect), m_viewHeightPx);
+}
 
 // ---- attach and detach ------------------------------------------------------
 
@@ -118,39 +140,105 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       : registry.ctx().emplace<Supersonic::SimulationClock>();
     clock.fixedDelta = kTick;
 
-    std::string error;
-    if (!Game::LoadData(m_levelPath, m_dataDirectory, m_prismDirectory, m_data, error) ||
-        !Game::Start(m_data, registry, m_level, error)) {
-        m_loadError = error;
-    } else {
-        for (const Tscn::Node& node : m_data.scene.nodes) {
-            if (node.parent != "." || Roles::RoleOf(m_data.roles, node) != Roles::kLevelBounds) continue;
-            if (const Tscn::Value* at = node.Find("position");
-                at != nullptr && at->kind == Tscn::Value::Kind::Vector2) {
-                m_boundsPx = glm::dvec2(at->numbers[0], at->numbers[1]);
-            }
-        }
-        if (m_boundsPx.x <= 0.0 || m_boundsPx.y <= 0.0) {
-            m_loadError = m_levelPath + " has no level_bounds";
-        } else {
-            m_loaded = true;
-        }
-    }
-    if (!m_loadError.empty()) {
-        SUPERSONIC_LOG_ERROR("Magic Portals") << "The level did not load: " << m_loadError << std::endl;
-    }
-
     bindInput();
-    if (m_loaded) {
+    std::string error;
+    if (!Chapters::Load(m_paths.chapters, m_chapters, error) ||
+        !Camera::LoadRules(m_paths.data + "/portals.json", m_cameraRules, error) ||
+        !Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error)) {
+        m_loadError = error;
+    } else if (const int start = m_chapters.Find(m_startLevel); start < 0) {
+        m_loadError = m_startLevel + " is not a level of " + m_paths.chapters;
+    } else {
         buildCamera(registry);
-        buildDrawables(registry);
-        syncDrawables(registry);
+        loadLevel(registry, start);
+    }
+    if (m_current < 0) {
+        SUPERSONIC_LOG_ERROR("Magic Portals") << "Could not start: " << m_loadError << std::endl;
     }
     buildHud(registry);
     updateHud(registry);
 }
 
 void MagicPortalsLayer::OnDetach(entt::registry& registry) {
+    unloadLevel(registry);
+    auto destroy = [&registry](entt::entity& e) {
+        if (e != entt::null && registry.valid(e)) registry.destroy(e);
+        e = entt::null;
+    };
+    destroy(m_camera);
+    destroy(m_light);
+    destroy(m_hud.status);
+    destroy(m_hud.result);
+    destroy(m_hud.controls);
+    m_current = -1;
+}
+
+void MagicPortalsLayer::bindInput() {
+    using namespace Supersonic;
+    Input::BindActionKey(kLeft, Key::Left);
+    Input::BindActionKey(kLeftAlt, Key::A);
+    Input::BindActionKey(kRight, Key::Right);
+    Input::BindActionKey(kRightAlt, Key::D);
+    Input::BindActionMouseButton(kTap, MouseButton::Left);
+    Input::BindActionKey(kRetry, Key::R);
+    Input::BindActionKey(kSkip, Key::N);
+}
+
+// ---- levels -----------------------------------------------------------------
+
+bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
+    unloadLevel(registry);
+    m_current = index;
+    m_chapterComplete = false;
+    m_loadError.clear();
+    const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(index)];
+
+    std::string error;
+    if (index != m_dataIndex) {
+        m_dataIndex = -1;
+        if (!Game::LoadData(m_paths.levels + "/" + entry.name + ".tscn", m_paths.data, m_paths.prisms, m_data,
+                            error)) {
+            m_loadError = error;
+            return false;
+        }
+        m_dataIndex = index;
+    }
+    if (!Game::Start(m_data, registry, m_level, error)) {
+        m_loadError = error;
+        // Start may have built some of the level before it refused.
+        unloadLevel(registry);
+        return false;
+    }
+    if (!PositionOf(FirstOfRole(m_data, Roles::kLevelBounds), m_boundsPx) || m_boundsPx.x <= 0.0 ||
+        m_boundsPx.y <= 0.0) {
+        m_loadError = entry.name + " has no level_bounds";
+        unloadLevel(registry);
+        return false;
+    }
+    // Where the camera starts, or the spawn in a level that places none
+    // (level_runtime.gd:214-215).
+    glm::dvec2 cameraStartPx(0.0);
+    if (!PositionOf(FirstOfRole(m_data, "camera_start"), cameraStartPx)) {
+        PositionOf(FirstOfRole(m_data, Roles::kPlayerSpawn), cameraStartPx);
+    }
+
+    m_loaded = true;
+    buildDrawables(registry);
+    m_aspect = viewportAspect(registry);
+    m_follow.Start(m_cameraRules, cameraStartPx, ViewPx(), m_boundsPx);
+    placeCamera(registry);
+    // A new level is a cut, not a pan: there is nothing to draw the camera
+    // coming from.
+    if (m_camera != entt::null && registry.valid(m_camera)) {
+        if (auto* interpolated = registry.try_get<Supersonic::InterpolatedCameraComponent>(m_camera)) {
+            interpolated->captured = false;
+        }
+    }
+    syncDrawables(registry);
+    return true;
+}
+
+void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     auto destroy = [&registry](entt::entity& e) {
         if (e != entt::null && registry.valid(e)) registry.destroy(e);
         e = entt::null;
@@ -167,10 +255,6 @@ void MagicPortalsLayer::OnDetach(entt::registry& registry) {
     m_statics.clear();
     destroy(m_player);
     destroy(m_exit);
-    destroy(m_camera);
-    destroy(m_light);
-    destroy(m_hud.status);
-    destroy(m_hud.controls);
     // And the level's own bodies.
     for (auto& [name, entity] : m_level.built.entities) {
         entt::entity e = entity;
@@ -181,21 +265,37 @@ void MagicPortalsLayer::OnDetach(entt::registry& registry) {
     m_loaded = false;
 }
 
-void MagicPortalsLayer::bindInput() {
-    using namespace Supersonic;
-    Input::BindActionKey(kLeft, Key::Left);
-    Input::BindActionKey(kLeftAlt, Key::A);
-    Input::BindActionKey(kRight, Key::Right);
-    Input::BindActionKey(kRightAlt, Key::D);
-    Input::BindActionMouseButton(kTap, MouseButton::Left);
+void MagicPortalsLayer::goTo(entt::registry& registry, int next) {
+    if (next >= 0) {
+        loadLevel(registry, next);
+        return;
+    }
+    unloadLevel(registry);
+    m_loadError.clear();
+    m_chapterComplete = true;
+}
+
+void MagicPortalsLayer::clearLevel(entt::registry& registry) {
+    const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(m_current)];
+    Cleared cleared;
+    cleared.name = entry.name;
+    cleared.label = Chapters::Label(entry);
+    cleared.portalsUsed = m_level.portals.portalsUsed;
+    cleared.goldenScore = entry.goldenScore;
+    cleared.traversals = m_level.portals.traversals;
+    cleared.crystalsTotal = static_cast<int>(m_level.goals.crystals.size());
+    cleared.crystals = cleared.crystalsTotal - m_level.goals.Remaining();
+    m_lastCleared = cleared;
+    goTo(registry, m_chapters.Next(m_current));
 }
 
 // ---- the camera -------------------------------------------------------------
 
-void MagicPortalsLayer::fitCamera(Supersonic::CameraComponent& camera, const glm::vec2& viewportSize) const {
-    camera.aspect = viewportSize.x / viewportSize.y;
-    const double fitPx = std::max(m_boundsPx.y, m_boundsPx.x / static_cast<double>(camera.aspect)) * kFitMargin;
-    camera.orthoHeight = Units::ToMetres(fitPx);
+float MagicPortalsLayer::viewportAspect(const entt::registry& registry) const {
+    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
+    if (viewport == nullptr) return kDefaultAspect;
+    const glm::vec2 size = viewport->Size();
+    return size.x > 0.0f && size.y > 0.0f ? size.x / size.y : kDefaultAspect;
 }
 
 void MagicPortalsLayer::buildCamera(entt::registry& registry) {
@@ -208,15 +308,15 @@ void MagicPortalsLayer::buildCamera(entt::registry& registry) {
     camera.farPlane = 100.0f;
     camera.isPrimary = true;
     camera.flyControlsEnabled = false;
-    // Over the level's centre, looking down -z at the plane the level lies in,
-    // with the engine's +y up the screen.
-    const glm::vec3 centre = Units::ToWorld(m_boundsPx.x * 0.5, m_boundsPx.y * 0.5);
-    camera.position = glm::vec3(centre.x, centre.y, kCameraDistance);
+    // Looking down -z at the plane the level lies in, with the engine's +y up
+    // the screen. Where it looks is the tick's (placeCamera).
     camera.yaw = -90.0f;
     camera.pitch = 0.0f;
     camera.updateCameraVectors();
-    fitCamera(camera, glm::vec2(1280.0f, 720.0f)); // until a viewport says otherwise
-    registry.emplace<TransformComponent>(m_camera).position = camera.position;
+    camera.aspect = kDefaultAspect;
+    registry.emplace<TransformComponent>(m_camera);
+    // Moved on the tick and drawn between ticks, as HUSK's is.
+    registry.emplace<InterpolatedCameraComponent>(m_camera);
 
     m_light = registry.create();
     registry.emplace<TagComponent>(m_light, "Magic Portals Light");
@@ -224,6 +324,16 @@ void MagicPortalsLayer::buildCamera(entt::registry& registry) {
     light.type = 0;
     light.direction = glm::vec3(0.35f, 0.6f, 1.0f);
     light.intensity = 1.3f;
+}
+
+void MagicPortalsLayer::placeCamera(entt::registry& registry) {
+    if (m_camera == entt::null || !registry.valid(m_camera)) return;
+    auto& camera = registry.get<Supersonic::CameraComponent>(m_camera);
+    const glm::vec3 centre = Units::ToWorld(m_follow.centrePx.x, m_follow.centrePx.y);
+    camera.position = glm::vec3(centre.x, centre.y, kCameraDistance);
+    camera.aspect = m_aspect;
+    camera.orthoHeight = Units::ToMetres(m_viewHeightPx);
+    registry.get<Supersonic::TransformComponent>(m_camera).position = camera.position;
 }
 
 bool MagicPortalsLayer::ScreenToLevelPx(const entt::registry& registry, const glm::vec2& screenPoint,
@@ -234,7 +344,7 @@ bool MagicPortalsLayer::ScreenToLevelPx(const entt::registry& registry, const gl
     if (size.x <= 0.0f || size.y <= 0.0f) return false;
     // The camera as THIS viewport would draw it, whatever shape it last had.
     Supersonic::CameraComponent camera = registry.get<Supersonic::CameraComponent>(m_camera);
-    fitCamera(camera, size);
+    camera.aspect = size.x / size.y;
     const Supersonic::Ray ray = Supersonic::Raycast::ScreenPointToRay(viewport->ToLocal(screenPoint), size, camera);
     // The level is the plane z = 0. The ray is met there, rather than trusting
     // its origin to lie on it.
@@ -412,6 +522,7 @@ void MagicPortalsLayer::buildHud(entt::registry& registry) {
         return e;
     };
     m_hud.status = label("Magic Portals Status", UIAnchor::TopLeft, glm::vec2(24.0f, 18.0f), 26.0f);
+    m_hud.result = label("Magic Portals Result", UIAnchor::TopLeft, glm::vec2(24.0f, 56.0f), 20.0f);
     m_hud.controls = label("Magic Portals Controls", UIAnchor::BottomLeft, glm::vec2(24.0f, 24.0f), 20.0f);
 }
 
@@ -420,20 +531,34 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
     auto set = [&registry](entt::entity e, std::string text) {
         if (e != entt::null && registry.valid(e)) registry.get<UITextComponent>(e).text = std::move(text);
     };
-    if (!m_loaded) {
-        set(m_hud.status, "The level did not load: " + m_loadError);
-        set(m_hud.controls, "");
-        return;
+    std::string status;
+    if (m_current < 0) {
+        status = "Magic Portals could not start: " + m_loadError;
+    } else {
+        const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(m_current)];
+        if (m_chapterComplete) {
+            status = "Chapter " + Count(entry.world + 1) + " complete";
+        } else if (!m_loaded) {
+            status = Chapters::Label(entry) + " is not playable yet: " + m_loadError;
+        } else {
+            const Goals::State& goals = m_level.goals;
+            const int total = static_cast<int>(goals.crystals.size());
+            status = Chapters::Label(entry) + "     Crystals " + Count(total - goals.Remaining()) + "/" +
+                     Count(total) + "     Portals " + Count(m_level.portals.portalsUsed) + "     Gold: " +
+                     Count(entry.goldenScore) + " or fewer";
+        }
     }
-    const Goals::State& goals = m_level.goals;
-    const Portals::State& portals = m_level.portals;
-    std::string status = "Crystals " + Count(static_cast<int>(goals.crystals.size()) - goals.Remaining()) + "/" +
-                         Count(static_cast<int>(goals.crystals.size())) + "     Portals placed " +
-                         Count(portals.portalsUsed) + "     Live " + Count(static_cast<int>(portals.placed.size())) +
-                         "/" + Count(portals.budget);
-    if (goals.completed) status += "     EXIT REACHED";
     set(m_hud.status, status);
-    set(m_hud.controls, "Left/Right or A/D to walk.  Click to place a portal.");
+
+    std::string result;
+    if (m_lastCleared) {
+        const Cleared& c = *m_lastCleared;
+        result = c.label + " cleared with " + Count(c.portalsUsed) + (c.portalsUsed == 1 ? " portal" : " portals") +
+                 (c.crystalsTotal > 0 ? ", " + Count(c.crystals) + "/" + Count(c.crystalsTotal) + " crystals" : "") +
+                 (c.Gold() ? " - gold" : "");
+    }
+    set(m_hud.result, result);
+    set(m_hud.controls, "Left/Right or A/D to walk.  Click to place a portal.  R retries.  N skips a level.");
 }
 
 // ---- the tick ----------------------------------------------------------------
@@ -454,13 +579,31 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
 }
 
 void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
-    if (!m_loaded) return;
-    // The app has just stepped physics. So first what follows a step, then this
-    // tick's input, then what comes before the next step.
-    Game::AfterStep(registry, m_level, fixedDelta);
-    const float direction = readInput(registry);
-    Game::BeforeStep(m_data, registry, m_level, direction, fixedDelta);
-    syncDrawables(registry);
+    using Supersonic::Input;
+    // Skip and retry first, so the tick that asks plays the level it lands on.
+    if (m_current >= 0 && Input::TickWasPressed(kSkip)) {
+        goTo(registry, m_chapters.Next(m_current));
+    } else if (m_current >= 0 && !m_chapterComplete && Input::TickWasPressed(kRetry)) {
+        loadLevel(registry, m_current);
+    }
+
+    if (m_loaded) {
+        // The app has just stepped physics. So first what follows a step...
+        Game::AfterStep(registry, m_level, fixedDelta);
+        // ...and the moment the exit reports, the next level (main.gd:161-168).
+        if (m_level.goals.completed) clearLevel(registry);
+    }
+    if (m_loaded) {
+        // Then this tick's input, and what comes before the next step.
+        const float direction = readInput(registry);
+        Game::BeforeStep(m_data, registry, m_level, direction, fixedDelta);
+        m_aspect = viewportAspect(registry);
+        const glm::dvec2 playerPx =
+            Units::ToPixels(registry.get<Supersonic::TransformComponent>(m_level.player).position);
+        m_follow.Tick(m_cameraRules, playerPx, ViewPx(), m_boundsPx, fixedDelta);
+        placeCamera(registry);
+        syncDrawables(registry);
+    }
     updateHud(registry);
 }
 
@@ -470,10 +613,7 @@ void MagicPortalsLayer::OnUpdate(entt::registry& registry, float deltaTime) {
     (void)deltaTime;
     // Only the camera's SHAPE, for the viewport this frame is drawn into.
     if (m_camera == entt::null || !registry.valid(m_camera)) return;
-    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
-    if (viewport != nullptr && viewport->Size().x > 0.0f && viewport->Size().y > 0.0f) {
-        fitCamera(registry.get<Supersonic::CameraComponent>(m_camera), viewport->Size());
-    }
+    registry.get<Supersonic::CameraComponent>(m_camera).aspect = viewportAspect(registry);
 }
 
 } // namespace MagicPortals

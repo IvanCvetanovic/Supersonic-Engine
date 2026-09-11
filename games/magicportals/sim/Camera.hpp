@@ -35,6 +35,11 @@ struct Rules {
 // From portals.json's camera block, strictly.
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
 
+// How much of a level the view shows, as its height in the level's pixels: the
+// port's own view.json, whose note gives the evidence. The width follows the
+// window's shape.
+bool LoadViewHeight(const std::string& path, double& heightPx, std::string& error);
+
 // The centre a view of `viewPx` may take in a level running from (0, 0) to
 // `boundsPx`: as near `wantPx` as keeps the whole view inside, or the level's
 // centre on an axis the view is wider than.

@@ -46,10 +46,13 @@ set(SUPERSONIC_MAGICPORTALS_DATA "${CMAKE_SOURCE_DIR}/../Magic-Portals-Remake/ga
 set(SUPERSONIC_MAGICPORTALS_CHAPTERS "${SUPERSONIC_MAGICPORTALS_LEVELS}/../data/chapters.json"
     CACHE FILEPATH "The remake's converted level order (Magic-Portals-Remake/out/data/chapters.json)")
 
+# The port's own data, which IS in this repository: numbers authored for the
+# port, such as how much of a level the view shows (view.json).
 target_compile_definitions(MagicPortalsSim PUBLIC
     MAGICPORTALS_LEVELS_DIR="${SUPERSONIC_MAGICPORTALS_LEVELS}"
     MAGICPORTALS_DATA_DIR="${SUPERSONIC_MAGICPORTALS_DATA}"
-    MAGICPORTALS_CHAPTERS_FILE="${SUPERSONIC_MAGICPORTALS_CHAPTERS}")
+    MAGICPORTALS_CHAPTERS_FILE="${SUPERSONIC_MAGICPORTALS_CHAPTERS}"
+    MAGICPORTALS_PORT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../data")
 
 target_include_directories(MagicPortalsSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(MagicPortalsSim PUBLIC SupersonicCore)

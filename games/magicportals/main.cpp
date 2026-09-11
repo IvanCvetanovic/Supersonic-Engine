@@ -1,10 +1,11 @@
-// Magic Portals on the Supersonic Engine: level30 of the Godot remake, as the
-// port plays it.
+// Magic Portals on the Supersonic Engine: the Godot remake's levels, in the
+// original's order, as the port plays them.
 //
-// The level and the remake's data are read from outside this repository, from
-// where the build was told they are (SUPERSONIC_MAGICPORTALS_LEVELS and _DATA),
-// or from --level and --data. Deliberately plain: boxes and a line of text. See
-// docs/planning/2026-09-10-magic-portals-port.md.
+// The levels, their order and the remake's data are read from outside this
+// repository, from where the build was told they are
+// (SUPERSONIC_MAGICPORTALS_LEVELS, _CHAPTERS and _DATA), or from --levels and
+// --data. Deliberately plain: boxes and a few lines of text. See
+// docs/planning/2026-09-11-magic-portals-remaster.md.
 
 #include <cstdlib>
 #include <exception>
@@ -23,20 +24,21 @@
 #include "MagicPortalsLayer.hpp"
 
 int main(int argc, char** argv) {
-    // --level and --data are the game's own flags. LaunchOptions refuses
-    // anything it does not know, which is right for the engine, so the game
-    // takes its flags out first and hands on the rest untouched.
-    std::string level = std::string(MAGICPORTALS_LEVELS_DIR) + "/level30.tscn";
-    std::string data = MAGICPORTALS_DATA_DIR;
+    // --level, --levels and --data are the game's own flags. LaunchOptions
+    // refuses anything it does not know, which is right for the engine, so the
+    // game takes its flags out first and hands on the rest untouched.
+    MagicPortals::MagicPortalsLayer::Paths paths;
+    paths.prisms = std::filesystem::temp_directory_path() / "supersonic-magicportals";
+    std::string start = "level0";
     std::vector<char*> engineArgs{argv[0]};
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        if (arg == "--level" || arg == "--data") {
+        if (arg == "--level" || arg == "--levels" || arg == "--data") {
             if (i + 1 >= argc) {
-                std::cerr << arg << " needs a path\n";
+                std::cerr << arg << " needs a value\n";
                 return EXIT_FAILURE;
             }
-            (arg == "--level" ? level : data) = argv[++i];
+            (arg == "--level" ? start : arg == "--levels" ? paths.levels : paths.data) = argv[++i];
             continue;
         }
         engineArgs.push_back(argv[i]);
@@ -45,8 +47,10 @@ int main(int argc, char** argv) {
     const auto options = Supersonic::LaunchOptions::Parse(static_cast<int>(engineArgs.size()), engineArgs.data());
     if (options.helpRequested) {
         std::cout << Supersonic::LaunchOptions::Usage()
-                  << "  --level <path>    a converted level (default " << level << ")\n"
-                  << "  --data <dir>      the remake's game/data directory (default " << data << ")\n";
+                  << "  --level <name>    the level to start at, as chapters.json names it (default " << start
+                  << ")\n"
+                  << "  --levels <dir>    the converted levels (default " << paths.levels << ")\n"
+                  << "  --data <dir>      the remake's game/data directory (default " << paths.data << ")\n";
         return EXIT_SUCCESS;
     }
     if (!options.ok) {
@@ -66,8 +70,7 @@ int main(int argc, char** argv) {
 
     try {
         Supersonic::SupersonicApp app(options, &manifest);
-        app.PushLayer(std::make_unique<MagicPortals::MagicPortalsLayer>(
-            level, data, std::filesystem::temp_directory_path() / "supersonic-magicportals"));
+        app.PushLayer(std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start));
         app.Run();
     } catch (const std::exception& e) {
         std::cerr << "[Magic Portals] fatal: " << e.what() << std::endl;
