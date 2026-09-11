@@ -111,6 +111,7 @@ private:
     std::vector<entt::entity> m_crystals; // one per crystal, null once collected
     entt::entity m_exit{entt::null};
     std::vector<entt::entity> m_portals;  // one per placed portal
+    std::vector<entt::entity> m_statics;  // one per static portal, null once spent
 
     struct Hud {
         entt::entity status{entt::null};

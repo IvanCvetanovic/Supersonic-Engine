@@ -2,13 +2,26 @@
 
 #include "core/Json.hpp"
 
+#include <algorithm>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 
 namespace MagicPortals::Roles {
 
 bool Moves(const std::string& role) {
     return role == kMovingPlatform || role == kLift || role == kSwitchedDoor;
+}
+
+bool IsPorted(const std::string& role) {
+    static const char* const kPorted[] = {
+        kPlayerSpawn, kLevelBounds, kLevelProperties, kExitDoor, kCollectible,
+        kSwitch, kSwitchedDoor, kLift, kMovingPlatform, kNoPortalZone, kStaticPortal,
+        // Nothing to play: drawn, or read by another role.
+        "lift_marker", "camera_start", "scenery_hint", "scenery_fx",
+    };
+    if (role.empty()) return true;
+    return std::find(std::begin(kPorted), std::end(kPorted), role) != std::end(kPorted);
 }
 
 bool Load(const std::string& path, Table& out, std::string& error) {

@@ -42,6 +42,8 @@ const glm::vec3 kCrystalColour(0.35f, 0.90f, 1.00f);
 const glm::vec3 kExitColour(0.25f, 0.70f, 0.35f);
 const glm::vec3 kExitReachedColour(0.60f, 1.00f, 0.60f);
 const glm::vec3 kPortalColour(0.90f, 0.30f, 0.90f);
+const glm::vec3 kStaticRedColour(0.90f, 0.30f, 0.25f);  // a static portal the level colours red
+const glm::vec3 kStaticBlueColour(0.30f, 0.50f, 1.00f); // and blue
 
 // The box a body's shape takes up, relative to its entity node, in the remake's
 // pixels: a rectangle's size, a circle's diameter, or a polygon's bounds. False
@@ -161,6 +163,8 @@ void MagicPortalsLayer::OnDetach(entt::registry& registry) {
     m_crystals.clear();
     for (auto& e : m_portals) destroy(e);
     m_portals.clear();
+    for (auto& e : m_statics) destroy(e);
+    m_statics.clear();
     destroy(m_player);
     destroy(m_exit);
     destroy(m_camera);
@@ -307,6 +311,10 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
         m_crystals.push_back(makeBox(registry, "Magic Portals Crystal", glm::vec3(0.0f), glm::vec3(1.0f), kCrystalColour));
     }
     m_exit = makeBox(registry, "Magic Portals Exit", glm::vec3(0.0f), glm::vec3(1.0f), kExitColour);
+    for (const Portals::Static& portal : m_level.portals.statics) {
+        m_statics.push_back(makeBox(registry, "Magic Portals Static Portal", glm::vec3(0.0f), glm::vec3(1.0f),
+                                    portal.colour == "red" ? kStaticRedColour : kStaticBlueColour));
+    }
 }
 
 void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
@@ -373,6 +381,21 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     const double diameterPx = m_level.portals.rules.collisionRadiusPx * 2.0;
     for (std::size_t i = 0; i < placed.size(); ++i) {
         placeBox(registry, m_portals[i], placed[i].atPx, glm::dvec2(diameterPx), kMarkerZ, kMarkerDepth, 0.0f);
+    }
+
+    // Static portals, at their trigger boxes. One that is spent - only when
+    // portals.json says static portals do not persist - goes.
+    const std::vector<Portals::Static>& statics = m_level.portals.statics;
+    for (std::size_t i = 0; i < m_statics.size() && i < statics.size(); ++i) {
+        if (m_statics[i] == entt::null) continue;
+        if (!statics[i].live) {
+            registry.destroy(m_statics[i]);
+            m_statics[i] = entt::null;
+            continue;
+        }
+        glm::dvec2 centrePx, sizePx;
+        boxPx(statics[i].trigger, centrePx, sizePx);
+        placeBox(registry, m_statics[i], centrePx, sizePx, kMarkerZ, kMarkerDepth, 0.0f);
     }
 }
 

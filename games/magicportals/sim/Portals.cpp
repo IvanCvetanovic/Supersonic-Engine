@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 namespace MagicPortals::Portals {
@@ -101,6 +102,7 @@ bool State::TryPlace(const glm::dvec2& atPx) {
         placed.erase(placed.begin());
     }
     Placed portal;
+    portal.id = portalsUsed;
     portal.atPx = atPx;
     const glm::vec3 centre = Units::ToWorld(atPx.x, atPx.y);
     portal.trigger = Trigger::Circle{glm::vec2(centre.x, centre.y), Units::ToMetres(rules.collisionRadiusPx)};
@@ -112,37 +114,92 @@ bool State::TryPlace(const glm::dvec2& atPx) {
 void State::Tick(entt::registry& registry, float dt) {
     lockoutS = std::max(0.0f, lockoutS - dt);
 
-    // Every portal's entries are found before any is acted on, as a physics step
-    // finds its overlaps before it reports them.
+    // An end of a traversal: a static portal by its place in `statics`, which
+    // never moves, or a placed one by its id, since placed portals come and go.
+    struct End {
+        bool isStatic = false;
+        int key = 0;
+    };
     struct Entry {
-        std::size_t portal;
+        End end;
         entt::entity body;
     };
+
+    // Every portal's entries are found before any is acted on, as a physics step
+    // finds its overlaps before it reports them.
     std::vector<Entry> entries;
-    for (std::size_t i = 0; i < placed.size(); ++i) {
+    const auto sweep = [&](std::vector<entt::entity>& inside, const auto& trigger, End end) {
         std::vector<entt::entity> now;
         for (const entt::entity body : travellers) {
-            if (registry.valid(body) && Trigger::Overlaps(registry, body, placed[i].trigger)) now.push_back(body);
+            if (registry.valid(body) && Trigger::Overlaps(registry, body, trigger)) now.push_back(body);
         }
         for (const entt::entity body : now) {
-            if (std::find(placed[i].inside.begin(), placed[i].inside.end(), body) == placed[i].inside.end()) {
-                entries.push_back({i, body});
-            }
+            if (std::find(inside.begin(), inside.end(), body) == inside.end()) entries.push_back({end, body});
         }
-        placed[i].inside = std::move(now);
+        inside = std::move(now);
+    };
+    for (std::size_t i = 0; i < statics.size(); ++i) {
+        if (statics[i].live) sweep(statics[i].inside, statics[i].trigger, End{true, static_cast<int>(i)});
     }
+    for (Placed& portal : placed) sweep(portal.inside, portal.trigger, End{false, portal.id});
+
+    const auto placedWithId = [this](int id) -> const Placed* {
+        for (const Placed& portal : placed) {
+            if (portal.id == id) return &portal;
+        }
+        return nullptr;
+    };
 
     for (const Entry& entry : entries) {
         // portal_system.gd:183-191: nothing goes through while the lockout runs,
-        // and a portal with no partner leads nowhere. A spent pair leaves nothing
-        // for the entries after it.
-        if (lockoutS > 0.0f || placed.size() < 2) continue;
-        const Placed& exit = placed[entry.portal == 0 ? 1 : 0];
-        Teleport(registry, entry.body, exit.atPx, rules.transit);
+        // an end a traversal before it spent leads nowhere, and neither does a
+        // portal with no partner.
+        if (lockoutS > 0.0f) continue;
+        std::optional<End> exit;
+        if (entry.end.isStatic) {
+            const Static& from = statics[static_cast<std::size_t>(entry.end.key)];
+            if (!from.live) continue;
+            // By destiny first (:216-223). A static portal that names itself
+            // leads nowhere (:189), and a spent one is no partner.
+            bool named = false;
+            for (std::size_t i = 0; i < statics.size() && from.hasDestiny; ++i) {
+                if (statics[i].index != from.destiny) continue;
+                named = true;
+                if (static_cast<int>(i) != entry.end.key && statics[i].live) exit = End{true, static_cast<int>(i)};
+                break;
+            }
+            // Then the placed set (:224-227), when no static portal has the index.
+            if (!named && !placed.empty()) exit = End{false, placed.front().id};
+        } else {
+            if (placedWithId(entry.end.key) == nullptr) continue;
+            // Placed portals pair with each other (:208-214): with a pair, the other.
+            for (const Placed& portal : placed) {
+                if (portal.id != entry.end.key) {
+                    exit = End{false, portal.id};
+                    break;
+                }
+            }
+        }
+        if (!exit) continue;
+
+        const glm::dvec2 exitPx =
+            exit->isStatic ? statics[static_cast<std::size_t>(exit->key)].atPx : placedWithId(exit->key)->atPx;
+        Teleport(registry, entry.body, exitPx, rules.transit);
         ++traversals;
         lockoutS = static_cast<float>(rules.transit.reentryLockoutS);
-        // Both ends go: they are one pair (portal_system.gd:270-280).
-        if (rules.consumeOnTraverse) placed.clear();
+
+        // Both ends of a pair go (:270-282), except a static end, which stays
+        // unless portals.json says static portals do not persist.
+        if (!rules.consumeOnTraverse) continue;
+        for (const End& end : {entry.end, *exit}) {
+            if (end.isStatic) {
+                if (!rules.staticPortalsPersist) statics[static_cast<std::size_t>(end.key)].live = false;
+            } else {
+                placed.erase(std::remove_if(placed.begin(), placed.end(),
+                                            [&end](const Placed& portal) { return portal.id == end.key; }),
+                             placed.end());
+            }
+        }
     }
 }
 
@@ -157,8 +214,44 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilde
         if (node.parent != ".") continue;
         const std::string role = Roles::RoleOf(roles, node);
         if (role == Roles::kStaticPortal) {
-            error = node.name + " is a static portal, and those are not ported";
-            return false;
+            // portal_system.gd:79-87. An inactive one is not a portal, and one with
+            // no index cannot be named, so the remake passes both over.
+            double active = 1.0;
+            if (const Tscn::Value* value = node.Meta("active"); value != nullptr && !value->AsNumber(active)) {
+                error = node.name + "'s active is not a number";
+                return false;
+            }
+            const Tscn::Value* index = node.Meta("index");
+            if (active == 0.0 || index == nullptr) continue;
+            Static portal;
+            portal.name = node.name;
+            double number = 0.0;
+            if (!index->AsNumber(number)) {
+                error = node.name + "'s index is not a number";
+                return false;
+            }
+            portal.index = static_cast<int>(number);
+            if (const Tscn::Value* destiny = node.Meta("destiny")) {
+                if (!destiny->AsNumber(number)) {
+                    error = node.name + "'s destiny is not a number";
+                    return false;
+                }
+                portal.destiny = static_cast<int>(number);
+                portal.hasDestiny = true;
+            }
+            if (const Tscn::Value* colour = node.Meta("color");
+                colour != nullptr && colour->kind == Tscn::Value::Kind::String) {
+                portal.colour = colour->text;
+            }
+            const Tscn::Value* position = node.Find("position");
+            if (position == nullptr || position->kind != Tscn::Value::Kind::Vector2) {
+                error = node.name + " has no position";
+                return false;
+            }
+            portal.atPx = glm::dvec2(position->numbers[0], position->numbers[1]);
+            if (!Trigger::FromNode(node, portal.trigger, error)) return false;
+            out.statics.push_back(std::move(portal));
+            continue;
         }
         if (role == Roles::kLevelProperties) {
             // An absent max_portals is the default; an explicit 0 grants none.

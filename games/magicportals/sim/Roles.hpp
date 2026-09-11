@@ -40,6 +40,13 @@ inline constexpr const char* kNoPortalZone = "no_portal_zone";
 // (level_runtime.gd:27), which it turns into AnimatableBody2D for the same reason.
 bool Moves(const std::string& role);
 
+// A role the port plays, or one with nothing to play: scenery (no role at all),
+// hints and decoration, the camera's start and the lifts' end markers. A level
+// that carries any other role still starts, but the port leaves those entities
+// inert, and test_mp_start lists them against each level. The one list to extend
+// as roles land.
+bool IsPorted(const std::string& role);
+
 struct Table {
     std::unordered_map<std::string, std::string> roleOf; // entity name -> role
 };

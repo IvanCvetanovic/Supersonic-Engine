@@ -31,6 +31,20 @@ void UseRemakeGravity(entt::registry& registry) {
 }
 
 bool Start(const Data& data, entt::registry& registry, Level& out, std::string& error, bool withStatics) {
+    // Level flags the port does not play yet. Started without them, a zero-gravity
+    // level would drop everything in it and a dark one would be lit, and either
+    // would look like a level that works.
+    for (const Tscn::Node& node : data.scene.nodes) {
+        if (node.parent != "." || Roles::RoleOf(data.roles, node) != Roles::kLevelProperties) continue;
+        for (const char* flag : {"no_gravity", "darkest"}) {
+            double on = 0.0;
+            if (const Tscn::Value* value = node.Meta(flag); value != nullptr && value->AsNumber(on) && on != 0.0) {
+                error = node.name + " sets " + flag + ", and that is not ported";
+                return false;
+            }
+        }
+    }
+
     UseRemakeGravity(registry);
     LevelBuilder::Options options;
     options.prismDirectory = data.prisms;
