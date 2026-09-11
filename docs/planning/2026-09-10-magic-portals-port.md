@@ -552,3 +552,17 @@ crystals still out, the exit, the placed portals, and two lines of text.
 
 GCC 13.3 and MSVC 14.50 agree to the digit, and the executable builds clean on
 both.
+
+**The first headless render caught what the tests could not.** It was taken
+under xvfb with lavapipe, and level30 was drawn where the level puts it. But
+the editor's demo scene sat above it: rainbow debug cubes, a box and a light.
+- **The cause:** `GameManifest::startupScene` defaults to
+  `assets/scenes/MainScene.scene`, and a run from the repository root finds
+  that file.
+- **The fix:** `main.cpp` now clears it. The app then logs "No startup scene;
+  the game builds its own world", which is the shape it was written for, and
+  the second render shows level30 alone.
+- **The other ports:** HUSK's and Wolf Brigade's mains leave the same default.
+  Wolf Brigade's comment even says it has no startup scene. Run from the
+  repository root, both likely open the demo scene too. They are not changed
+  here.
