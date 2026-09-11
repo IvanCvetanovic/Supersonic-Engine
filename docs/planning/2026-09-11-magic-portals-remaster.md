@@ -504,9 +504,14 @@ What the remake's Demolisher does (`hazards.gd:97-120`), now in `Demolish`:
     not overlapping it.
   - The box is the shape's bounds, so an octagonal wall is met at most its
     1.5 x 6.3 px chamfer early.
+  - The margin grows the box on all four sides, so at a corner a stone reaches
+    the margin times the square root of 2, not the margin. At 1 px that is
+    noise. Anyone who raises the margin should know it.
 - **Quarter turns only.** A breakable turned by any other angle is refused,
   with a named error. Every breakable in the game is turned by 0 or by a
-  quarter turn.
+  quarter turn, and `test_mp_start` still starts all the levels it did. So only
+  new data can reach this refusal, and it stops the whole level from starting.
+  If a later census turns up a level refused for this reason, this rule is why.
 - **The tick.** After the step: goals, then hazards, then stones, then
   portals. The portals are last because they move what goes through them.
 - **Drawn.** Breakables are sandy and stones grey. A broken wall's box goes
