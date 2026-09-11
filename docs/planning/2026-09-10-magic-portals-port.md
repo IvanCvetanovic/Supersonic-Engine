@@ -287,6 +287,12 @@ GCC 13.3 and MSVC 14.50 agree to the digit: 42 checks and 0 failures.
 The door rider's flight is now checked at the new gravity, and the other Magic
 Portals suites are unchanged.
 
+**Item 2 is not done until the full level agrees.** The rider test built
+`door_lift_976` on its own, because in the level it rises into the space under
+977 and 978. Before buttons count as working, step 4 has to push a crate onto
+`button_975` (idx 0) and open `door_lift_976` (switchIdx 0) in the whole level,
+with all three doors present. Step 4 did this.
+
 ## Step 4 - buttons and doors: decisions, before the code
 
 **Only dynamic bodies press a button. That was measured in the remake.**
@@ -353,8 +359,61 @@ Magic Portals suites are unchanged.
 **What step 4 did not do.** No crate rides a rising door in the full level, and
 no crate is sent to the raised buttons 1 and 2. Both need portals (step 6).
 
-**Item 2 is not done until the full level agrees.** The rider test built
-`door_lift_976` on its own, because in the level it rises into the space under
-977 and 978. Before buttons count as working, step 4 has to push a crate onto
-`button_975` (idx 0) and open `door_lift_976` (switchIdx 0) in the whole level,
-with all three doors present.
+## Step 5 - crystals and the exit: decisions, before the code
+
+**Only the player triggers them,** as in the remake (`level_runtime.gd:270-274`).
+There, crates are pushed through crystals and must not collect them. level30
+tests this without a rig, because `crate_ent_968` stands on `crystal_ent_999`
+and `crystal_ent_1001` from the first frame.
+
+**Both fire on entry, not while the player is inside.** In the remake they are
+an `Area2D`'s `body_entered`.
+- **The exit:** it reports each entry. `main.gd` completes the level on an
+  entry only if `exit_is_open()`.
+- **With the exit gated:** a player already standing in the exit when the last
+  crystal goes does not finish, and has to leave and come back in. A port that
+  checked "is inside now" would pass every other test and still get this wrong,
+  so one test is exactly this case.
+- **A crystal:** the edge does not show, because the crystal is gone after the
+  first time.
+
+**The exit's switch is UNVERIFIED, not `_guess`, and is tested both ways.**
+- **The rule it doesn't fit:** the acceptance rule carries `_guess` numbers as
+  data. `level.exit_requires_all_crystals` is a different kind of unknown: no
+  one knows whether the original has the behaviour at all.
+- **How it is handled:** carried the same way, with a test for each setting.
+  That gives the gate test something to check, rather than only a `false`.
+- **Strictness:** a missing key is an error, where the remake falls back to
+  `false`.
+
+**Within a tick, crystals go before the exit.** The remake does not define the
+order of two triggers in one frame.
+
+**Timed crystals are refused, not ported.** The inline `crystal` with a `time`
+expires in the remake. level30 has none.
+
+**Built and verified.** The code is `sim/Goals`. Five new checks in
+`test_mp_play`:
+- **Where they are:** the five crystals and the exit sit where level30 puts
+  them. The crystals are 28×24 boxes, and the exit is 8×24 at (712, 125).
+- **Only the player:** `crate_ent_968` covers crystals 999 and 1001 for two
+  seconds and collects neither.
+- **Collecting:** the player, put on `platform_ent_966`, collects
+  `crystal_ent_998` on the first tick, and nothing else.
+- **The exit, switch off:** walking right, the player enters with its centre
+  just past x 698, where its capsule's edge meets the trigger's, and the level
+  completes with 4 crystals out.
+- **The exit, switch on:** standing in the exit with one crystal out, the entry
+  reports but does not complete. Taking the last crystal while the player
+  stands there changes nothing. Out and back in, the level completes.
+
+No test stands the player near crystal 1031. From the top of `block00_ent_967`,
+the capsule's cap would reach exactly to that crystal's lower edge, so the
+result would come down to float rounding.
+
+GCC 13.3 and MSVC 14.50 agree to the digit: 98 checks and 0 failures. The other
+Magic Portals suites are unchanged.
+
+**What step 5 did not do.** The player is put near the crystals and the exit by
+the tests. Reaching them by play needs portals (step 6), as do the crate
+covering 999 and 1001 and the crystals above the floor.

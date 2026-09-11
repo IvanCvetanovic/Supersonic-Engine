@@ -11,6 +11,7 @@
 #include "core/Components.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/PhysicsSystem.hpp"
+#include "sim/Goals.hpp"
 #include "sim/LevelBuilder.hpp"
 #include "sim/Mover.hpp"
 #include "sim/Player.hpp"
@@ -41,12 +42,14 @@ constexpr float kStep = 1.0f / 60.0f;
 Tscn::Scene g_level30;
 Roles::Table g_roles;
 Player::Tuning g_tuning;
+Goals::Rules g_rules;
 std::filesystem::path g_prisms;
 
 bool LoadInputs(std::string& error) {
     if (!Tscn::Load(kLevels + "/level30.tscn", g_level30, error)) return false;
     if (!Roles::Load(kData + "/entity_roles.json", g_roles, error)) return false;
     if (!Player::LoadTuning(kData + "/player.json", g_tuning, error)) return false;
+    if (!Goals::LoadRules(kData + "/portals.json", g_rules, error)) return false;
     g_prisms = std::filesystem::temp_directory_path() / "supersonic-test-mp-play";
     std::error_code ec;
     std::filesystem::create_directories(g_prisms, ec);
@@ -244,6 +247,7 @@ struct Play {
     entt::registry registry;
     LevelBuilder::Built built;
     Puzzle::Channels channels;
+    Goals::State goals;
     entt::entity player = entt::null;
 };
 
@@ -261,15 +265,17 @@ bool StartLevel30(Play& play, bool withStatics, std::string& error) {
         return false;
     }
     play.player = Player::Spawn(play.registry, glm::dvec2(at->numbers[0], at->numbers[1]), g_tuning);
-    return true;
+    return Goals::Find(g_level30, g_roles, g_rules, play.goals, error);
 }
 
 // One tick as the port runs it: the buttons and their doors, then the player
-// steered, then the physics step.
+// steered, then the physics step, and then the crystals and the exit, on where
+// the step left the player.
 void Tick(Play& play, float direction) {
     play.channels.Tick(play.registry, kStep);
     Player::Steer(play.registry, play.player, g_tuning, direction, kStep);
     PhysicsSystem::Update(play.registry, kStep);
+    play.goals.Tick(play.registry, play.player);
 }
 
 glm::dvec2 PlayerPx(Play& play) {
@@ -607,6 +613,141 @@ void ThePlayerPushesACrateOntoAButton() {
     CHECK_MSG(door != nullptr && door->motion.progress == 1.0f, "with door_lift_976 open");
 }
 
+// ---- Crystals and the exit --------------------------------------------------
+
+// The player put somewhere by the test, at rest. Reaching most of level30 needs
+// portals, which come in step 6.
+void PutPlayer(Play& play, const glm::dvec2& atPx) {
+    play.registry.get<TransformComponent>(play.player).position = Units::ToWorld(atPx.x, atPx.y);
+    play.registry.get<RigidBodyComponent>(play.player).velocity = glm::vec3(0.0f);
+}
+
+// A pixel above standing on platform_ent_966, whose top is y 136: under
+// crystal_ent_998 at x 664, with the exit to the right.
+glm::dvec2 On966(double x) {
+    return glm::dvec2(x, PlatformTopPx("platform_ent_966") - g_tuning.heightPx * 0.5 - 1.0);
+}
+
+void Level30sCrystalsAndExitAreWhereItPutsThem() {
+    // Off level30.tscn: five crystal.ent, each with a 28x24 trigger_size at its
+    // node, and door.ent's 8x24 trigger at trigger_offset (0, 37) from (712, 88).
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    CHECK_EQ(static_cast<int>(play.goals.crystals.size()), 5);
+    const struct {
+        const char* name;
+        double x;
+        double y;
+    } crystals[] = {{"crystal_ent_998", 664.0, 118.0},
+                    {"crystal_ent_999", 400.0, 208.0},
+                    {"crystal_ent_1001", 432.0, 208.0},
+                    {"crystal_ent_1031", 482.0, 106.0},
+                    {"crystal_ent_1032", 480.0, 146.0}};
+    for (const auto& expected : crystals) {
+        const Goals::Crystal* crystal = play.goals.FindCrystal(expected.name);
+        const glm::vec3 at = Units::ToWorld(expected.x, expected.y);
+        CHECK_MSG(crystal != nullptr && crystal->box.centre == glm::vec2(at.x, at.y) &&
+                      crystal->box.half == glm::vec2(Units::ToMetres(14.0), Units::ToMetres(12.0)),
+                  std::string(expected.name) + " is a 28x24 box at its node");
+    }
+    const glm::vec3 exitAt = Units::ToWorld(712.0, 125.0);
+    CHECK_MSG(play.goals.exit.centre == glm::vec2(exitAt.x, exitAt.y) &&
+                  play.goals.exit.half == glm::vec2(Units::ToMetres(4.0), Units::ToMetres(12.0)),
+              "the exit is an 8x24 box at (712, 125)");
+    CHECK_MSG(play.goals.Remaining() == 5 && play.goals.exitEntries == 0 && !play.goals.completed,
+              "nothing collected or entered before the first tick");
+}
+
+void OnlyThePlayerCollects() {
+    // level30 has the case itself: crate_ent_968 stands on crystal_ent_999 and
+    // crystal_ent_1001 from the first frame. In the remake only the player
+    // triggers a crystal, so after two seconds both are still there. The crate is
+    // checked to cover them, so what keeps them is the rule, not a gap.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    const entt::entity crate = play.built.entities.at("crate_ent_968");
+    for (int tick = 0; tick < 120; ++tick) Tick(play, 0.0f);
+    for (const char* name : {"crystal_ent_999", "crystal_ent_1001"}) {
+        const Goals::Crystal* crystal = play.goals.FindCrystal(name);
+        CHECK_MSG(crystal != nullptr && Trigger::Overlaps(play.registry, crate, crystal->box) && !crystal->collected,
+                  std::string("crate_ent_968 covers ") + name + ", and it stays uncollected");
+    }
+}
+
+void ThePlayerCollectsACrystal() {
+    // The player is put on platform_ent_966 under crystal_ent_998, at x 664. The
+    // crystal is collected on the first tick, and nothing else is: no other
+    // crystal is within reach there, and neither is the exit.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    PutPlayer(play, On966(664.0));
+    Tick(play, 0.0f);
+    const Goals::Crystal* crystal = play.goals.FindCrystal("crystal_ent_998");
+    CHECK_MSG(crystal != nullptr && crystal->collected, "crystal_ent_998 collected on the first tick");
+    for (int tick = 0; tick < 30; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(play.goals.Remaining() == 4 && play.goals.exitEntries == 0,
+              "and only it: 4 remain, and the exit is not entered");
+}
+
+void TheExitReportsTheEntry() {
+    // From under crystal_ent_998 the player walks right into the exit. With the
+    // switch off, the remake's default, the entry completes the level with
+    // crystals still out.
+    //
+    // Standing on platform_ent_966 the capsule's core spans the trigger's height,
+    // so its side meets the trigger's left edge, x 708, with its centre at 698.
+    // The exit sees where the step left the player, so the entry is counted
+    // between x 698 and one tick's walk past it.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    play.goals.rules.exitRequiresAllCrystals = false;
+    PutPlayer(play, On966(664.0));
+    for (int tick = 0; tick < 20; ++tick) Tick(play, 0.0f);
+    double enteredX = -1.0;
+    for (int tick = 1; tick <= 60 && enteredX < 0.0; ++tick) {
+        Tick(play, 1.0f);
+        if (play.goals.exitEntries > 0) enteredX = PlayerPx(play).x;
+    }
+    CHECK_MSG(enteredX > 697.99 && enteredX < 701.0, "the player enters the exit at x " + std::to_string(enteredX));
+    CHECK_MSG(play.goals.completed && play.goals.Remaining() == 4,
+              "and, switched off, that completes the level with 4 crystals out");
+}
+
+void AClosedExitWaitsForANewEntry() {
+    // The switch on. The player stands in the exit with one crystal out, so the
+    // entry reports and does not complete. Then the last crystal goes. The test
+    // takes it, since reaching it needs portals. Still the level does not
+    // complete, because the remake completes on an entry, not on standing there.
+    // The player walks out and back in, and the level completes.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    play.goals.rules.exitRequiresAllCrystals = true;
+    for (Goals::Crystal& crystal : play.goals.crystals) crystal.collected = crystal.name != "crystal_ent_1031";
+    PutPlayer(play, On966(712.0));
+    for (int tick = 0; tick < 20; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(play.goals.exitEntries == 1 && !play.goals.completed,
+              "in the exit with a crystal out: entered, not completed");
+
+    for (Goals::Crystal& crystal : play.goals.crystals) crystal.collected = true;
+    for (int tick = 0; tick < 30; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(play.goals.exitEntries == 1 && !play.goals.completed,
+              "the last crystal gone while it stands there: still not completed");
+
+    for (int tick = 0; tick < 20; ++tick) Tick(play, -1.0f);
+    CHECK_MSG(!play.goals.playerInExit, "it walks out");
+    for (int tick = 0; tick < 60 && !play.goals.completed; ++tick) Tick(play, 1.0f);
+    CHECK_MSG(play.goals.exitEntries == 2 && play.goals.completed, "and back in, and the level completes");
+}
+
 void runTests() {
     Level30HasTheRolesItsPuzzleNeeds();
     TheMoversAreKinematic();
@@ -619,6 +760,11 @@ void runTests() {
     ACrateOnAButtonOpensItsDoor();
     ThePlayerPressesAButtonAndItLetsGo();
     ThePlayerPushesACrateOntoAButton();
+    Level30sCrystalsAndExitAreWhereItPutsThem();
+    OnlyThePlayerCollects();
+    ThePlayerCollectsACrystal();
+    TheExitReportsTheEntry();
+    AClosedExitWaitsForANewEntry();
 }
 
 } // namespace
@@ -627,7 +773,8 @@ int main() {
     std::error_code ec;
     const std::string roles = kData + "/entity_roles.json";
     if (!std::filesystem::is_directory(kLevels, ec) || !std::filesystem::is_regular_file(roles, ec) ||
-        !std::filesystem::is_regular_file(kData + "/player.json", ec)) {
+        !std::filesystem::is_regular_file(kData + "/player.json", ec) ||
+        !std::filesystem::is_regular_file(kData + "/portals.json", ec)) {
         std::printf("test_mp_play: SKIPPED - needs the converted levels at %s\n"
                     "  and the remake's role table and player.json at %s.\n"
                     "  Both live outside this repository; configure with\n"
@@ -641,5 +788,5 @@ int main() {
         return 1;
     }
     runTests();
-    return ::test::summary("test_mp_play", 70);
+    return ::test::summary("test_mp_play", 90);
 }

@@ -5,6 +5,7 @@
 # renderer. See docs/planning/2026-09-10-magic-portals-spike.md.
 
 add_library(MagicPortalsSim STATIC
+    Goals.cpp
     LevelBuilder.cpp
     Mover.cpp
     Player.cpp
