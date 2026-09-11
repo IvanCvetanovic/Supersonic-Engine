@@ -1116,6 +1116,11 @@ level 31, is left. That counts roles, not routes: none of the six has been
 played through, and the owner will play them to judge the reflection rule.
 Chapter 1's floor rises to 31. Chapters 2 to 4 are unchanged.
 
+**The floor of 31 rests on the reflection guess.** Six of those levels depend
+on a rule the owner has not confirmed. If the owner finds the rule wrong, they
+may have no route at all, and this floor will still pass: the inventory counts
+roles, not routes (step 8's known gaps).
+
 GCC 13.3 and MSVC 14.50 agree to the digit:
 
 | Suite | Checks | Failures |
