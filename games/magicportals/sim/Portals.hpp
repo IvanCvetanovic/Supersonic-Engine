@@ -12,10 +12,11 @@
 //   a no-portal zone fails too. A failed shot costs nothing. One shot flies at
 //   a time.
 // - A level may also ship static portals (portal_static), which pair by index.
-// - Whatever comes into a portal goes out of its partner. Its velocity is
-//   carried through (Portal::ExitVelocity), and it is put clear of the exit
-//   (Portal::ExitPosition). Placed ends are then spent; static ends stay. For a
-//   while after each traversal, entries are ignored.
+// - Whatever comes into a portal goes out of its partner, as the original sends
+//   it (transit.json, decoded): at the partner itself, its velocity turned back,
+//   a body's whole and the player's in y only (Portal::ExitVelocity). Placed
+//   ends are then spent; static ends stay. For a while after each traversal,
+//   entries are ignored.
 // - Only the player travels, and bodies whose entity says `teleportable` 1. The
 //   inline crate says 0.
 // - Entries are per portal and per body, like an Area2D's body_entered. So a

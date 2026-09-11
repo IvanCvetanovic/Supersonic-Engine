@@ -54,10 +54,14 @@ bool LoadTransit(const std::string& path, Transit& out, std::string& error) {
 }
 
 glm::dvec2 ExitVelocity(const glm::dvec2& velocity, double entryRotation, double exitRotation,
-                        const Transit& transit) {
+                        const Transit& transit, bool character) {
     glm::dvec2 out = velocity;
     if (transit.momentumMode == "reset") {
         out = glm::dvec2(0.0);
+    } else if (transit.momentumMode == "invert") {
+        // invertLinearVelocity (Portal.angelscript, bytes 360172..360571): a
+        // character's velocity times (1, -1), anything else's times -1.
+        out = character ? glm::dvec2(velocity.x, -velocity.y) : -velocity;
     } else if (transit.momentumMode == "rotate_to_exit") {
         // Godot's Vector2.rotated: x cos - y sin, x sin + y cos.
         float s = 0.0f, c = 1.0f;

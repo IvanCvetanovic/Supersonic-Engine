@@ -70,6 +70,12 @@ glm::dvec2 PxOf(const Run& run, entt::entity body) {
     return Units::ToPixels(run.registry.get<TransformComponent>(body).position);
 }
 
+// A body's velocity in the remake's pixels per second, +y down.
+glm::dvec2 VelocityPx(const Run& run, entt::entity body) {
+    const glm::vec3 v = run.registry.get<RigidBodyComponent>(body).velocity;
+    return glm::dvec2(v.x * Units::kPixelsPerMetre, -v.y * Units::kPixelsPerMetre);
+}
+
 std::string Px(const glm::dvec2& at) {
     char text[48];
     std::snprintf(text, sizeof text, "(%.1f, %.1f)", at.x, at.y);
@@ -246,20 +252,38 @@ void OutOfTheCullBoxIsTakenBack() {
 
 void AThrownStoneBreaksTheWall(const char* levelName, const char* wallName, const glm::dvec2& inPx,
                                const glm::dvec2& outPx) {
-    // One portal in the launcher's drop, one over the wall: the first stone falls
-    // in, comes out still falling, and lands on the wall.
+    // One portal in the launcher's drop, one over the wall. Under the original's
+    // rule (transit.json) the first stone falls in and comes out of the other,
+    // at it, turned back: rising, as fast as it fell. It goes up, comes down again
+    // past where it came out, and lands on the wall.
     Run run;
     if (!Begin(levelName, run)) return;
     CHECK(run.level.portals.TryPlace(inPx));
     CHECK(run.level.portals.TryPlace(outPx));
     int tick = 0;
     std::string trace;
+    std::string turned = "it never went through";
+    bool turnedBack = false;
     for (; tick < 600 && run.level.demolish.Broken() == 0; ++tick) {
+        const int traversed = run.level.portals.traversals;
+        const entt::entity body = run.level.launchers.live.empty() ? entt::null : run.level.launchers.live.front().body;
+        const glm::dvec2 before = body != entt::null ? VelocityPx(run, body) : glm::dvec2(0.0);
         Tick(run);
+        if (traversed == 0 && run.level.portals.traversals == 1 && body != entt::null && run.registry.valid(body)) {
+            // What it fell at as it went in: this tick's gravity on top, as the
+            // step added it before the portals were judged.
+            const glm::dvec2 in = before + glm::dvec2(0.0, Units::kRemakeWorldGravityPx * kStep);
+            const glm::dvec2 out = VelocityPx(run, body);
+            const glm::dvec2 at = PxOf(run, body);
+            turnedBack = in.y > 0.0 && out.y < 0.0 && glm::length(out + in) < 0.01 * glm::length(in) + 1.0 &&
+                         glm::distance(at, outPx) < 0.01;
+            turned = "in " + Px(in) + ", out " + Px(out) + " at " + Px(at);
+        }
         if (!run.level.launchers.live.empty() && tick % 10 == 0) {
             trace += " " + std::to_string(tick) + ":" + Px(PxOf(run, run.level.launchers.live.front().body));
         }
     }
+    CHECK_MSG(turnedBack, std::string(levelName) + ": the stone comes out of " + Px(outPx) + " turned back: " + turned);
     const Demolish::Breakable* wall = run.level.demolish.FindBreakable(wallName);
     CHECK(wall != nullptr);
     if (wall == nullptr) return;

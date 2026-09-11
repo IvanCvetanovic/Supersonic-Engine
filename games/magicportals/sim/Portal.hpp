@@ -11,6 +11,12 @@
 // are every one marked _guess in its portals.json, so they arrive as data
 // (Transit) and no test pins them.
 //
+// One mode is the original's own, decoded from its script (step 11a): "invert".
+// The traveller comes out at its partner with its velocity turned back - the
+// whole of it for a body, and only its y for a character - as
+// invertLinearVelocity does. The port plays that, from its transit.json, with
+// no offset and no scale.
+//
 // Godot does this in single precision; this does it in double, with the angle's
 // sine and cosine from DetMath for the reason the transform uses it. The two
 // agree to far better than a pixel, and the tests allow for the difference.
@@ -22,9 +28,10 @@
 namespace MagicPortals::Portal {
 
 struct Transit {
-    // "reset" zeroes the velocity and "rotate_to_exit" turns it. Anything else
-    // keeps it as it was - including "clamp", which portals.json offers as an
-    // option and the remake's match statement has no arm for.
+    // "reset" zeroes the velocity, "rotate_to_exit" turns it, and "invert" turns
+    // it back as the original does. Anything else keeps it as it was - including
+    // "clamp", which portals.json offers as an option and the remake's match
+    // statement has no arm for.
     std::string momentumMode;
     double exitSpeedScale = 0.0;
     double exitOffsetPx = 0.0;
@@ -36,9 +43,10 @@ struct Transit {
 // be guesses written into code.
 bool LoadTransit(const std::string& path, Transit& out, std::string& error);
 
-// portal_system.gd:237-245.
+// portal_system.gd:237-245, and the original's "invert". `character` says
+// whether the traveller is the player, which "invert" turns in y only.
 glm::dvec2 ExitVelocity(const glm::dvec2& velocity, double entryRotation, double exitRotation,
-                        const Transit& transit);
+                        const Transit& transit, bool character = false);
 
 // portal_system.gd:249-252: out along the exit velocity, or straight down (+y,
 // the remake's down) for a traveller that arrives still.

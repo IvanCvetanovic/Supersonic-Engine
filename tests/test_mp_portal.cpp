@@ -6,6 +6,10 @@
 // remake feeds it - mode, scale, offset, lockout - are every one marked _guess
 // in its portals.json, so each Transit below is written for the test and none
 // is the remake's.
+//
+// The original's own rule is decoded (step 11a): "invert", which turns a body
+// back and a character back in y only, and puts it at the exit itself. The
+// port plays it from its transit.json, and that file is pinned here.
 
 #include "TestHarness.hpp"
 
@@ -84,6 +88,37 @@ void ComesOutAlongItsVelocity() {
     CHECK(Near(Portal::ExitPosition({500, 60}, {0, 100}, Make("rotate_to_exit", 1.0, 0.0)), 500, 60));
 }
 
+// invertLinearVelocity: a body turns back whole, a character in y only. The
+// rotations do not enter into it.
+void InvertTurnsTravellersBack() {
+    const Portal::Transit t = Make("invert", 1.0, 0.0);
+    glm::dvec2 v = Portal::ExitVelocity({30, 400}, 0.0, 0.0, t);
+    CHECK_MSG(Near(v, -30, -400), Show(v));
+    v = Portal::ExitVelocity({30, 400}, 0.0, 0.0, t, true);
+    CHECK_MSG(Near(v, 30, -400), Show(v));
+    v = Portal::ExitVelocity({30, 400}, 0.0, kQuarter, t);
+    CHECK_MSG(Near(v, -30, -400), Show(v));
+    // A scale still applies after, though the original has none.
+    CHECK(Near(Portal::ExitVelocity({30, 400}, 0.0, 0.0, Make("invert", 0.5, 0.0)), -15, -200));
+    // The other modes treat a character as they treat a body.
+    CHECK(Near(Portal::ExitVelocity({30, -40}, 0.0, 0.0, Make("preserve", 1.0, 0.0), true), 30, -40));
+    // With no offset it comes out at the exit itself, whichever way it goes.
+    CHECK(Near(Portal::ExitPosition({500, 60}, {-30, -400}, t), 500, 60));
+    CHECK(Near(Portal::ExitPosition({500, 60}, {0, 0}, t), 500, 60));
+}
+
+// The port's transit.json is the original's rule. Its lockout is the remake's
+// guess, and is not pinned.
+void ThePortsTransitIsTheOriginals() {
+    Portal::Transit transit;
+    std::string error;
+    const bool read = Portal::LoadTransit(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/transit.json", transit, error);
+    CHECK_MSG(read, error);
+    CHECK_MSG(transit.momentumMode == "invert", "momentum_mode " + transit.momentumMode);
+    CHECK(transit.exitSpeedScale == 1.0);
+    CHECK(transit.exitOffsetPx == 0.0);
+}
+
 void LoadsTransitAndRefusesGaps() {
     const std::filesystem::path directory = std::filesystem::temp_directory_path() / "supersonic-test-mp-portal";
     std::filesystem::create_directories(directory);
@@ -128,9 +163,11 @@ void runTests() {
     TurnsThroughTheDifference();
     ModesAndScale();
     ComesOutAlongItsVelocity();
+    InvertTurnsTravellersBack();
+    ThePortsTransitIsTheOriginals();
     LoadsTransitAndRefusesGaps();
 }
 
 } // namespace
 
-TEST_MAIN("test_mp_portal", 24)
+TEST_MAIN("test_mp_portal", 35)

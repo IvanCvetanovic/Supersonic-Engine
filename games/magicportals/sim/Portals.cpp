@@ -18,12 +18,15 @@ using Supersonic::TransformComponent;
 namespace {
 
 // portal_system.gd:230-261, in the remake's space: pixels, +y down. Placed
-// portals are never turned, so rotate_to_exit turns through nothing here.
-void Teleport(entt::registry& registry, entt::entity body, const glm::dvec2& exitPx, const Portal::Transit& transit) {
+// portals are never turned, so rotate_to_exit would turn through nothing here.
+// The port plays the original's invert (transit.json): the traveller comes out
+// at the exit itself, turned back, and the player in y only.
+void Teleport(entt::registry& registry, entt::entity body, const glm::dvec2& exitPx, const Portal::Transit& transit,
+              bool character) {
     auto& transform = registry.get<TransformComponent>(body);
     auto& rigid = registry.get<RigidBodyComponent>(body);
     const glm::dvec2 velocityPx(rigid.velocity.x * Units::kPixelsPerMetre, -rigid.velocity.y * Units::kPixelsPerMetre);
-    const glm::dvec2 exitVelocityPx = Portal::ExitVelocity(velocityPx, 0.0, 0.0, transit);
+    const glm::dvec2 exitVelocityPx = Portal::ExitVelocity(velocityPx, 0.0, 0.0, transit, character);
     const glm::dvec2 destinationPx = Portal::ExitPosition(exitPx, exitVelocityPx, transit);
     const glm::vec3 destination = Units::ToWorld(destinationPx.x, destinationPx.y);
     transform.position = glm::vec3(destination.x, destination.y, transform.position.z);
@@ -272,7 +275,7 @@ void State::Tick(entt::registry& registry, float dt) {
 
         const glm::dvec2 exitPx =
             exit->isStatic ? statics[static_cast<std::size_t>(exit->key)].atPx : placedWithId(exit->key)->atPx;
-        Teleport(registry, entry.body, exitPx, rules.transit);
+        Teleport(registry, entry.body, exitPx, rules.transit, entry.body == shooter);
         ++traversals;
         lockoutS = static_cast<float>(rules.transit.reentryLockoutS);
 

@@ -117,7 +117,11 @@ inventory.
     goes on; they will judge that by playing (see step 10). Nothing is to
     be invented: the remake's own worst bug of this kind was `bounce`, built as
     a trampoline that threw the player out of level 4-7.
-11. **Chapter 1's boss** (level31). The remake has its structure only.
+11. **Chapter 1's boss** (level31). The remake has its structure only. Split
+    in two when the original's script turned out to be readable whole:
+    - 11a, the portal traversal as the original does it, which the boss is won
+      by;
+    - 11b, the beholder.
 
 ## Step 1 - static portals (built)
 
@@ -1129,3 +1133,95 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_start | 496 | 0 |
 
 The other MP suites are unchanged from 9d.
+
+## Step 11a - the portal traversal, as the original does it (built)
+
+The boss (step 11b) is won by the owner's own move: "I would put a portal under
+him and then one under the falling rock and if the rock enter my portal, it
+would exit under the beholder and hit him from under." Under the port's rule,
+which was the remake's, a rock that fell in came out still falling. The remake's
+portals.json marks that rule a guess, every field of its transit block.
+
+**The original's script can now be read whole.** The remake's tools/asbc stops
+at byte 13,028 of android_game.bin's 523,826. Its encoded-integer reader shifts
+the leading bits twice. as_restore.cpp:1310 takes `(b & 0x3F) << 8` and adds the
+next byte; the remake's reader shifts those bits and then shifts them again. So
+every value from 64 up comes out wrong, and the first one desynchronises the
+stream. With that one line fixed, in a copy outside both repositories, the
+reader gets through the whole module to its last byte:
+- 2,096 functions;
+- 1,278 used functions;
+- 878 strings;
+- 174 globals.
+
+The remake's tool is the owner's to fix; this records the bug and its line.
+Neither the decoder nor its listings are committed: the listings are the
+original's compiled code.
+
+What it says of a traversal:
+- **teleportToOther** (PortalManager.angelscript, bytes 144944..145873) puts the
+  traveller at its partner's own position, `SetPositionXY(other.GetPositionXY())`.
+  There is no offset.
+- **invertLinearVelocity** (Portal.angelscript, bytes 360172..360571) then turns
+  its velocity back. A body's is multiplied by -1. A character's is multiplied by
+  (1, -1): it keeps its x.
+- There is no speed scale.
+
+So a rock that falls into one portal comes out of the other rising, as fast as
+it fell. That is the owner's move, and it confirms the reading.
+
+Also read, and not changed here:
+- **computePortalFinalPos** (Portal.angelscript, bytes 355236..356384). The
+  portal opens at the tap when the ray there is clear, 10 px into a teleportable
+  body in the way, and not at all past a static one. That is what the port does.
+- **The entry.** An EntityGrabber at the portal, g_portalCollisionRadius wide,
+  meets a circle by its radius and any other shape by overlap. The port's trigger
+  circle is the same test.
+- **Two differences, for a later step.** Neither gates the boss, and both touch
+  every level.
+  - g_portalCollisionRadius is 14 px; the port reads the remake's guess, 16.
+  - ETHCallback_portal kills a placed portal 20,000 ms after it opens, unless it
+    is marked dontPerish. The port keeps it.
+
+**What the port does now.**
+- The port's own transit.json carries the original's rule: momentum_mode
+  "invert", exit_speed_scale 1, exit_offset_px 0. Game::LoadData reads it in place
+  of the remake's transit block.
+- Portal::ExitVelocity has the invert mode, and is told whether the traveller is
+  the player.
+- The lockout, 0.2 s, stays the remake's guess. Nothing in teleportToOther
+  waits, and whatever else stops a traveller going straight back is not decoded.
+- The port's entries are edges, so a traveller put down inside its exit does not
+  go back until it has left.
+
+Tests:
+- **test_mp_portal** pins the invert arithmetic: a body turned back whole, a
+  character in y only, out at the exit itself. It pins transit.json's three
+  decoded values too.
+- **test_mp_launchers** now checks, on levels 23 and 24, that the stone comes out
+  of the far portal at it, rising, as fast as it fell in. Each wall still breaks:
+  the stone goes up, and comes down again past where it came out.
+- **test_mp_play**: the player comes out at the exit itself, still walking right.
+- **test_mp_statics**: a stone through level0's static pair goes once and does
+  not come back. Static portals stay, so that is where a traveller could go back
+  and forth; a placed pair is spent at once and could not show it.
+
+Everything else passed unchanged, with times moved. level0 holding right now
+completes in 3.20 s; it was 3.07. Level 1-9 (level8) with two shots completes in
+4.00 s; it was 3.88.
+
+**Routes are not re-proved.** The inventory is unchanged: 31 playing in chapter
+1. It counts roles, not routes. A level whose designed solve needed a body to
+come out still falling may now need another. None of the suites' routes broke,
+and the rest are unplayed. This joins the reflection caveat.
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_portal | 37 | 0 |
+| test_mp_launchers | 95 | 0 |
+| test_mp_statics | 68 | 0 |
+| test_mp_play | 133 | 0 |
+
+The other MP suites are unchanged in count.

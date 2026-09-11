@@ -811,9 +811,9 @@ void ANoPortalZoneRefusesATap() {
 void ThePlayerGoesThroughAndThePairIsSpent() {
     // A portal on the floor ahead of the spawn at (230, 208), and its partner in
     // the air at (300, 120). The player walks right into the first and comes out
-    // of the second. Its velocity is carried through, and it is put clear of the
-    // exit along that velocity, by Portal::ExitVelocity and ExitPosition on
-    // portals.json's _guess numbers. Then both portals are gone.
+    // of the second, at it: the original puts a traveller at the exit itself and
+    // has a character keep its walk and turn its fall back (transit.json, step
+    // 11a). Then both portals are gone.
     Play play;
     std::string error;
     CHECK_MSG(StartLevel30(play, true, error), error);
@@ -829,8 +829,10 @@ void ThePlayerGoesThroughAndThePairIsSpent() {
                                     -rigid.velocity.y * Units::kPixelsPerMetre);
     const glm::dvec2 expected = Portal::ExitPosition(glm::dvec2(300.0, 120.0), exitVelocityPx, g_portalRules.transit);
     const glm::dvec2 at = PlayerPx(play);
-    CHECK_MSG(glm::length(at - expected) < 0.01, "out of the second portal, clear of it along its velocity: at (" +
+    CHECK_MSG(glm::length(at - expected) < 0.01, "out of the second portal, as transit.json puts it: at (" +
                                                      std::to_string(at.x) + ", " + std::to_string(at.y) + ")");
+    CHECK_MSG(glm::length(at - glm::dvec2(300.0, 120.0)) < 0.01, "and that is the exit itself");
+    CHECK_MSG(exitVelocityPx.x > 0.0, "still walking right, at " + std::to_string(exitVelocityPx.x) + " px/s");
     const double speedPx = glm::length(exitVelocityPx);
     const double wantPx = g_portalRules.transit.momentumMode == "reset"
                               ? 0.0

@@ -34,8 +34,8 @@ const std::string kLevels = MAGICPORTALS_LEVELS_DIR;
 const std::string kData = MAGICPORTALS_DATA_DIR;
 constexpr float kStep = 1.0f / 60.0f;
 
-// Where a traveller comes out: portals.json's exit_offset_px (12, a guess) from
-// the exit, plus what one physics step moves it. Judged, not pinned.
+// Where a traveller comes out: at the exit itself, under the original's rule
+// (transit.json), plus what one physics step moves it. Judged, not pinned.
 constexpr double kArrivalPx = 20.0;
 
 struct Run {
@@ -142,6 +142,32 @@ void AStaticPortalSendsThePlayerToItsPartnerAndStays() {
     CHECK_EQ(run.level.portals.traversals, 1);
 }
 
+void AStoneThroughAStaticPairGoesOnce() {
+    // The original puts a traveller down at its exit itself, so a stone comes out
+    // of a static portal inside it. Entries are edges, and the lockout covers the
+    // tick it arrives in, so it does not go back: it drops out of the exit and
+    // stays gone. Static portals stay, so this is where a traveller could go back
+    // and forth, and a placed pair, spent at once, could not show it.
+    Run run;
+    if (!Begin("level0", run)) return;
+    const Portals::Static* from = StaticWithIndex(run, 0);
+    const Portals::Static* to = StaticWithIndex(run, 1);
+    if (from == nullptr || to == nullptr) return;
+    const glm::dvec2 toPx = to->atPx;
+    const entt::entity stone =
+        LevelBuilder::BuildRigidCircle(run.registry, "test_stone", from->atPx, 30.0, LevelBuilder::Options{});
+    run.level.portals.travellers.push_back(stone);
+    Tick(run);
+    const glm::dvec2 at = Units::ToPixels(run.registry.get<TransformComponent>(stone).position);
+    const bool through = run.level.portals.traversals == 1 && glm::distance(at, toPx) < kArrivalPx;
+    CHECK_MSG(through, "the stone is at " + Px(at) + " after " + std::to_string(run.level.portals.traversals) +
+                           " traversal(s); the exit is at " + Px(toPx));
+    for (int tick = 0; tick < 180; ++tick) Tick(run);
+    const glm::dvec2 settled = Units::ToPixels(run.registry.get<TransformComponent>(stone).position);
+    CHECK_MSG(run.level.portals.traversals == 1,
+              std::to_string(run.level.portals.traversals) + " traversals; the stone is at " + Px(settled));
+}
+
 void WithStaticPortalsSpentBothEndsGo() {
     Run run;
     if (!Begin("level0", run)) return;
@@ -222,6 +248,7 @@ void Level0FromTheSpawnHoldingRight() {
 void runTests() {
     Level0ShipsTwoPairs();
     AStaticPortalSendsThePlayerToItsPartnerAndStays();
+    AStoneThroughAStaticPairGoesOnce();
     WithStaticPortalsSpentBothEndsGo();
     Level1sPortalLeadsToThePlacedOne();
     Level0FromTheSpawnHoldingRight();

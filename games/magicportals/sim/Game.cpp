@@ -33,6 +33,9 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Player::LoadTuning(dataDirectory + "/player.json", read.tuning, error)) return false;
     if (!Goals::LoadRules(dataDirectory + "/portals.json", read.goals, error)) return false;
     if (!Portals::LoadRules(dataDirectory + "/portals.json", read.portals, error)) return false;
+    // The remake's portals.json marks its transit block a guess. The port plays
+    // the original's rule, decoded, from its own transit.json.
+    if (!Portal::LoadTransit(portDataDirectory + "/transit.json", read.portals.transit, error)) return false;
     if (!Mover::LoadRules(portDataDirectory + "/movers.json", read.movers, error)) return false;
     if (!Demolish::LoadRules(portDataDirectory + "/demolish.json", read.demolish, error)) return false;
     if (!Launchers::LoadRules(portDataDirectory + "/launchers.json", read.launchers, error)) return false;

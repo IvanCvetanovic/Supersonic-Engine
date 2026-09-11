@@ -44,7 +44,7 @@ struct Data {
     Roles::Table roles;
     Player::Tuning tuning;
     Goals::Rules goals;
-    Portals::Rules portals;
+    Portals::Rules portals;       // the remake's portals.json, with the port's transit.json
     Mover::Rules movers;          // the port's own movers.json
     Demolish::Rules demolish;     // and demolish.json
     Launchers::Rules launchers;   // and launchers.json
@@ -54,7 +54,7 @@ struct Data {
 
 // A converted level (.tscn), the remake's data directory with its
 // entity_roles.json, player.json and portals.json, and the port's own data with
-// its movers.json, demolish.json, launchers.json and shot.json. False, with
+// its movers.json, demolish.json, launchers.json, shot.json and transit.json. False, with
 // `error`, when any of them is missing or malformed.
 bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
               const std::filesystem::path& prismDirectory, Data& out, std::string& error,
