@@ -6,8 +6,10 @@
 
 add_library(MagicPortalsSim STATIC
     LevelBuilder.cpp
+    Mover.cpp
     Portal.cpp
     Prism.cpp
+    Roles.cpp
     Tscn.cpp
 )
 
@@ -23,10 +25,11 @@ add_library(MagicPortalsSim STATIC
 set(SUPERSONIC_MAGICPORTALS_LEVELS "${CMAKE_SOURCE_DIR}/../Magic-Portals-Remake/out/levels"
     CACHE PATH "The remake's converted levels (Magic-Portals-Remake/out/levels)")
 
-# And the remake's own tuning data - its portals.json and player.json, which are
-# the remake's authored files rather than the original's. Only the spike tool
-# reads them, because every number the port takes from them is marked _guess
-# there and the tests pin none.
+# And the remake's own data - its entity_roles.json, portals.json and
+# player.json, which are the remake's authored files rather than the original's.
+# The tests read the role table and pin what it says of a level (test_mp_play);
+# the numbers in portals.json and player.json are marked _guess there, so they
+# are carried as data and nothing pins them.
 set(SUPERSONIC_MAGICPORTALS_DATA "${CMAKE_SOURCE_DIR}/../Magic-Portals-Remake/game/data"
     CACHE PATH "The remake's data directory (Magic-Portals-Remake/game/data)")
 

@@ -1,0 +1,72 @@
+#include "sim/Roles.hpp"
+
+#include "core/Json.hpp"
+
+#include <fstream>
+#include <sstream>
+
+namespace MagicPortals::Roles {
+
+bool Moves(const std::string& role) {
+    return role == kMovingPlatform || role == kLift || role == kSwitchedDoor;
+}
+
+bool Load(const std::string& path, Table& out, std::string& error) {
+    namespace Json = Supersonic::Json;
+    out = Table{};
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        error = path + ": cannot read";
+        return false;
+    }
+    std::ostringstream text;
+    text << file.rdbuf();
+
+    // Named, not a temporary: the parser keeps a reference to what it reads,
+    // and its constructor from an rvalue is deleted for exactly that reason.
+    const std::string content = text.str();
+    Json::Parser parser(content);
+    Json::Value root;
+    if (!parser.Parse(root)) {
+        error = path + ": " + parser.Error();
+        return false;
+    }
+    const Json::Value& roles = root["roles"];
+    if (!roles.IsObject()) {
+        error = path + ": no \"roles\" object";
+        return false;
+    }
+
+    for (const auto& [role, entry] : roles.AsObject()) {
+        const Json::Value& names = entry["names"];
+        if (!names.IsArray()) {
+            error = path + ": role " + role + " has no \"names\" array";
+            return false;
+        }
+        for (const Json::Value& name : names.AsArray()) {
+            if (!name.IsString()) {
+                error = path + ": role " + role + " lists a name that is not a string";
+                return false;
+            }
+            const auto [it, inserted] = out.roleOf.emplace(name.AsString(), role);
+            if (!inserted && it->second != role) {
+                error = path + ": " + name.AsString() + " is listed as both " + it->second + " and " + role;
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+std::string EntityName(const Tscn::Node& node) {
+    const Tscn::Value* name = node.Meta("entity_name");
+    return name != nullptr && name->kind == Tscn::Value::Kind::String ? name->text : std::string();
+}
+
+std::string RoleOf(const Table& table, const Tscn::Node& node) {
+    const auto found = table.roleOf.find(EntityName(node));
+    return found == table.roleOf.end() ? std::string() : found->second;
+}
+
+} // namespace MagicPortals::Roles

@@ -137,11 +137,13 @@ add_mp_test(test_mp_tscn)
 add_mp_test(test_mp_levels)
 add_mp_test(test_mp_geometry)
 add_mp_test(test_mp_portal)
+add_mp_test(test_mp_play)
 
-# test_mp_levels reads the converted levels from outside this repository, so on
-# a build machine they can simply be absent. It exits 77 then, which ctest
-# reports as SKIPPED with the path it looked in - never as a pass.
-set_tests_properties(test_mp_levels PROPERTIES SKIP_RETURN_CODE 77)
+# test_mp_levels and test_mp_play read the converted levels from outside this
+# repository - and test_mp_play the remake's role table - so on a build machine
+# they can simply be absent. Each exits 77 then, which ctest reports as SKIPPED
+# with the path it looked in - never as a pass.
+set_tests_properties(test_mp_levels test_mp_play PROPERTIES SKIP_RETURN_CODE 77)
 
 # The simulation's own sin, cos, asin, atan2 and pow, pinned bit for bit so the
 # determinism claim holds across C runtimes (DetMath.hpp).

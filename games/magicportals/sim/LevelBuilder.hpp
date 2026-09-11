@@ -15,11 +15,13 @@
 // shape's own offset (30 of them, all on carranca and wood_piece_small) goes
 // into the collider - a box's or sphere's centre, or the prism's points.
 //
-// This is the SPIKE's builder. It does not do what the remake's LevelRuntime
-// does on top - roles, movers, the trigger boxes it builds from metadata -
-// except where a measurement needs one, and then the caller asks for it by
-// name (AddTriggerFromMetadata).
+// Given the role table, it also does the one thing the remake's LevelRuntime
+// does to a body: a StaticBody2D whose role moves (Roles::Moves) becomes a
+// kinematic body, as the remake makes it an AnimatableBody2D, so it can carry
+// what stands on it. Without the table - the spike - every StaticBody2D stays
+// static. The rest of LevelRuntime (triggers, behaviours) is the caller's.
 
+#include "sim/Roles.hpp"
 #include "sim/Tscn.hpp"
 
 #include <filesystem>
@@ -41,7 +43,8 @@ inline constexpr double kStaticDepthMetres = 2.0;
 inline constexpr double kBodyDepthMetres = 1.0;
 
 // Rigid bodies get Godot's PhysicsMaterial defaults, which is what the remake's
-// RigidBody2D crates run with: friction 1, bounce 0.
+// RigidBody2D crates run with: friction 1, bounce 0. Its movers, AnimatableBody2D
+// with no material either, get the same.
 inline constexpr float kBodyFriction = 1.0f;
 inline constexpr float kBodyRestitution = 0.0f;
 
@@ -61,12 +64,16 @@ inline const glm::bvec3 kPlaneLockRotation{true, true, false};
 
 struct Options {
     std::filesystem::path prismDirectory;
-    // False leaves out every StaticBody2D: the mutation a landing check must
-    // fail, since a body over no geometry has nothing to land on.
+    // False leaves out every StaticBody2D, movers included: the mutation a
+    // landing check must fail, since a body over no geometry has nothing to
+    // land on.
     bool withStatics = true;
     // Every rigid body locked to the plane (kPlaneLock*). Off only to measure
     // what the solver does without the locks: MagicPortalsSpike --unlocked.
     bool lockToPlane = true;
+    // The role table, when the level is to be played rather than measured: its
+    // movers are then built kinematic. Not owned.
+    const Roles::Table* roles = nullptr;
 };
 
 struct Built {
@@ -74,11 +81,18 @@ struct Built {
     int statics = 0;
     int rigids = 0;
     int areas = 0;
+    int movers = 0;
     int hulls = 0;
 };
 
 bool Build(const Tscn::Scene& scene, entt::registry& registry, const Options& options, Built& out,
            std::string& error);
+
+// One entity node, by name, added to `out` - a level's piece on its own, for a
+// rig that must not have the rest of the level in the way. entt::null, with
+// `error` set, when the node is not an entity with a body.
+entt::entity BuildEntity(const Tscn::Scene& scene, const std::string& nodeName, entt::registry& registry,
+                         const Options& options, Built& out, std::string& error);
 
 // A trigger box from an entity's metadata/trigger_size and trigger_offset, the
 // way LevelRuntime._attach_trigger builds one (level_runtime.gd:243-265).

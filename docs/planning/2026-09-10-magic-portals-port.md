@@ -162,3 +162,53 @@ has no rigid body.
   suites pass. The first MSVC build caught two things GCC did not: a missing
   using-declaration, and the new material pointers shadowing F1's `surfaceA`
   and `surfaceB` flags (C4456). They are now `materialA` and `materialB`.
+
+## Step 2 - movers (built)
+
+**The role table.** `Roles` reads the remake's `entity_roles.json` at run time,
+from `SUPERSONIC_MAGICPORTALS_DATA`. That file is the remake's own design table
+of what each of the original's entity names does. `Roles` refuses a name listed
+under two different roles, where the remake lets the last one read win.
+
+**Movers in the builder.** Given the table, `LevelBuilder` builds the moving
+roles as kinematic bodies with the oracle's material, as the remake makes them
+`AnimatableBody2D`. The moving roles are `moving_platform`, `lift` and
+`switched_door`, the remake's `MOVING_ROLES`.
+- **Without the table,** as the spike builds, nothing changes, and the spike's
+  tables came out the same to the digit.
+- **`BuildEntity`** builds one piece of a level on its own.
+
+**Moving them.**
+- **`Mover::MoveKinematic`** is the only thing that moves a kinematic body, and
+  it writes the velocity along with the transform.
+- **`Mover::Door`** is `behaviours.gd`'s gated door: up 126 px over its
+  `stride`, back the same way. Reversed mid-travel, it resumes from where it is.
+
+**`test_mp_play`**, 35 checks. It skips without the converted levels and the
+remake's data. It pins:
+- **level30's roles:** three buttons and the three `door_lift`s they open, five
+  crystals, the exit, the spawn and the bounds; no static portals and no
+  `properties` entity.
+- **its movers:** the three `door_lift`s, built kinematic, which leaves 12
+  statics; and their strides (1000, 3000 and 3000 ms) and poses.
+- **a rider:** a crate rides `door_lift_976` up, flies on when the door stops,
+  comes to rest on it, and rides it back down.
+
+**A finding about the door.** The door starts and stops dead, because
+`behaviours.gd` lerps it at one speed (126 px/s for `door_lift_976`).
+- **What happens:** when the door stops, a crate riding it is still rising at
+  126 px/s. It flies on by v²/2g, 15.9 px at the spike's 10 m/s², then lands
+  back on the door.
+- **What the first test got wrong:** it expected the crate to stop with the
+  door, and read the flight as a 13 px gap.
+- **Why the flight counts:** it is the evidence the crate was carried. A crate
+  that was only shoved along has no speed of its own to fly with. So the test
+  now checks the flight, to within 3 px of v²/2g.
+- **The remake and the original:** the remake's `AnimatableBody2D` stops the
+  same way, so its crates should fly too. Whether the original's doors ease in
+  and out is not known.
+
+**Verified.** GCC 13.3 and MSVC 14.50 alike give 35 checks and 0 failures, and
+the other Magic Portals suites are unchanged. The first build refused a
+temporary string handed to `Json::Parser`. Its constructor from an rvalue is
+deleted, because the parser keeps a reference to what it reads.
