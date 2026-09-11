@@ -30,6 +30,13 @@ struct Box {
     glm::vec2 half{0.0f};
 };
 
+// A circle in the plane, in world metres: a placed portal's trigger
+// (portal_system.gd:155-162).
+struct Circle {
+    glm::vec2 centre{0.0f};
+    float radius = 0.0f;
+};
+
 // The trigger LevelRuntime._attach_trigger gives a role node
 // (level_runtime.gd:243-265): metadata/trigger_size at metadata/trigger_offset,
 // or kFallbackSizePx at the node. False, with `error`, for a rotated node, whose
@@ -39,6 +46,9 @@ bool FromNode(const Tscn::Node& node, Box& out, std::string& error);
 // Whether an entity's collider overlaps the box. Touching is not overlapping. False
 // for an entity with no box, sphere or capsule.
 bool Overlaps(entt::registry& registry, entt::entity entity, const Box& box);
+
+// The same for a circle, and just as exact: a turned box is met in its own frame.
+bool Overlaps(entt::registry& registry, entt::entity entity, const Circle& circle);
 
 // How many dynamic bodies overlap the box: rigid bodies that are not kinematic.
 // This is what presses a button. The remake was probed, and its triggers report a

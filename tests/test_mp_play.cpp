@@ -15,6 +15,7 @@
 #include "sim/LevelBuilder.hpp"
 #include "sim/Mover.hpp"
 #include "sim/Player.hpp"
+#include "sim/Portals.hpp"
 #include "sim/Puzzle.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Tscn.hpp"
@@ -43,6 +44,7 @@ Tscn::Scene g_level30;
 Roles::Table g_roles;
 Player::Tuning g_tuning;
 Goals::Rules g_rules;
+Portals::Rules g_portalRules;
 std::filesystem::path g_prisms;
 
 bool LoadInputs(std::string& error) {
@@ -50,6 +52,7 @@ bool LoadInputs(std::string& error) {
     if (!Roles::Load(kData + "/entity_roles.json", g_roles, error)) return false;
     if (!Player::LoadTuning(kData + "/player.json", g_tuning, error)) return false;
     if (!Goals::LoadRules(kData + "/portals.json", g_rules, error)) return false;
+    if (!Portals::LoadRules(kData + "/portals.json", g_portalRules, error)) return false;
     g_prisms = std::filesystem::temp_directory_path() / "supersonic-test-mp-play";
     std::error_code ec;
     std::filesystem::create_directories(g_prisms, ec);
@@ -248,6 +251,7 @@ struct Play {
     LevelBuilder::Built built;
     Puzzle::Channels channels;
     Goals::State goals;
+    Portals::State portals;
     entt::entity player = entt::null;
 };
 
@@ -265,17 +269,20 @@ bool StartLevel30(Play& play, bool withStatics, std::string& error) {
         return false;
     }
     play.player = Player::Spawn(play.registry, glm::dvec2(at->numbers[0], at->numbers[1]), g_tuning);
-    return Goals::Find(g_level30, g_roles, g_rules, play.goals, error);
+    if (!Goals::Find(g_level30, g_roles, g_rules, play.goals, error)) return false;
+    return Portals::Find(g_level30, g_roles, play.built, play.registry, play.player, g_portalRules, play.portals,
+                         error);
 }
 
 // One tick as the port runs it: the buttons and their doors, then the player
-// steered, then the physics step, and then the crystals and the exit, on where
-// the step left the player.
+// steered, then the physics step, then the crystals and the exit on where the
+// step left the player, and then the portals.
 void Tick(Play& play, float direction) {
     play.channels.Tick(play.registry, kStep);
     Player::Steer(play.registry, play.player, g_tuning, direction, kStep);
     PhysicsSystem::Update(play.registry, kStep);
     play.goals.Tick(play.registry, play.player);
+    play.portals.Tick(play.registry, kStep);
 }
 
 glm::dvec2 PlayerPx(Play& play) {
@@ -748,6 +755,170 @@ void AClosedExitWaitsForANewEntry() {
     CHECK_MSG(play.goals.exitEntries == 2 && play.goals.completed, "and back in, and the level completes");
 }
 
+// ---- Portals ----------------------------------------------------------------
+
+void TriggersAreExactAgainstATurnedBox() {
+    // A 1 m box turned 45 degrees about the origin reaches its bounding box's
+    // corners nowhere. A test against the bounding box would find (0.6, 0.6) m
+    // inside it; in the box's own frame that point is 0.85 m out along an axis,
+    // 0.35 m past the face. level30's crates stand square, so only a rig shows
+    // this.
+    entt::registry registry;
+    const entt::entity box = registry.create();
+    registry.emplace<TransformComponent>(box).rotation.z = 0.785398163f;
+    registry.emplace<BoxColliderComponent>(box).size = glm::vec3(1.0f);
+    CHECK_MSG(!Trigger::Overlaps(registry, box, Trigger::Box{glm::vec2(0.6f), glm::vec2(0.05f)}),
+              "a box trigger inside the turned box's bounding box, off its face, is outside it");
+    CHECK_MSG(Trigger::Overlaps(registry, box, Trigger::Box{glm::vec2(0.3f), glm::vec2(0.05f)}),
+              "and one within it is inside");
+    CHECK_MSG(!Trigger::Overlaps(registry, box, Trigger::Circle{glm::vec2(0.6f), 0.1f}),
+              "a circle there is outside too");
+    CHECK_MSG(Trigger::Overlaps(registry, box, Trigger::Circle{glm::vec2(0.4f), 0.1f}),
+              "and a circle reaching over the face is inside");
+}
+
+void Level30sPortalsAndWhoTravels() {
+    // level30 has no properties entity, so its budget is portals.json's default,
+    // capped at a pair: 2. It has no no-portal zones. Of its bodies, the player
+    // travels, and so do crate.ent and crate_small.ent, which say teleportable 1.
+    // The inline crate says 0 and does not.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    CHECK_EQ(play.portals.budget, 2);
+    CHECK_EQ(static_cast<int>(play.portals.zones.size()), 0);
+    const auto travels = [&](entt::entity entity) {
+        return std::find(play.portals.travellers.begin(), play.portals.travellers.end(), entity) !=
+               play.portals.travellers.end();
+    };
+    CHECK_MSG(travels(play.player) && travels(play.built.entities.at("crate_ent_968")) &&
+                  travels(play.built.entities.at("crate_small_ent_973")) &&
+                  !travels(play.built.entities.at("crate_969")) && play.portals.travellers.size() == 3u,
+              "the player, crate_ent_968 and crate_small_ent_973 travel, and crate_969 does not");
+}
+
+void AtTheCapTheOldestGivesWay() {
+    // Three taps in open air. At the cap the oldest portal gives way, which
+    // portals.json marks _guess, so this runs both ways. Recycling: two live, and
+    // the first gone. Refusing: the third tap is turned down. The golden score's
+    // count rises only with portals actually placed.
+    for (const bool recycle : {true, false}) {
+        Play play;
+        std::string error;
+        CHECK_MSG(StartLevel30(play, true, error), error);
+        if (play.player == entt::null) return;
+        play.portals.rules.recycleOldestAtCap = recycle;
+        const bool first = play.portals.TryPlace(glm::dvec2(300.0, 40.0));
+        const bool second = play.portals.TryPlace(glm::dvec2(400.0, 40.0));
+        const bool third = play.portals.TryPlace(glm::dvec2(500.0, 40.0));
+        const std::string how = recycle ? "recycling: " : "refusing: ";
+        CHECK_MSG(first && second && third == recycle,
+                  how + "the first two placed, the third " + (recycle ? "placed" : "refused"));
+        CHECK_MSG(play.portals.placed.size() == 2u && play.portals.placed[0].atPx.x == (recycle ? 400.0 : 300.0) &&
+                      play.portals.portalsUsed == (recycle ? 3 : 2),
+                  how + "two live, the oldest " + (recycle ? "gone" : "kept"));
+    }
+}
+
+void ANoPortalZoneRefusesATap() {
+    // level30 has no no-portal zone, so this one is the test's: at (300, 100) with
+    // scale 2, refusing taps within twice collision_radius_px. The rule is ported
+    // from the remake's code (portal_system.gd:136-146). It is not checked here
+    // against a level that has a zone.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    play.portals.zones.push_back(Portals::NoPortalZone{glm::dvec2(300.0, 100.0), 2.0});
+    const double reach = g_portalRules.collisionRadiusPx * 2.0;
+    CHECK_MSG(!play.portals.TryPlace(glm::dvec2(300.0 + reach - 1.0, 100.0)), "a tap just inside it is refused");
+    CHECK_MSG(play.portals.TryPlace(glm::dvec2(300.0 + reach + 1.0, 100.0)) && play.portals.portalsUsed == 1,
+              "and one just outside is placed");
+}
+
+void ThePlayerGoesThroughAndThePairIsSpent() {
+    // A portal on the floor ahead of the spawn at (230, 208), and its partner in
+    // the air at (300, 120). The player walks right into the first and comes out
+    // of the second. Its velocity is carried through, and it is put clear of the
+    // exit along that velocity, by Portal::ExitVelocity and ExitPosition on
+    // portals.json's _guess numbers. Then both portals are gone.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    for (int tick = 0; tick < 30; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(play.portals.TryPlace(glm::dvec2(230.0, 208.0)) && play.portals.TryPlace(glm::dvec2(300.0, 120.0)),
+              "both placed");
+    for (int tick = 1; tick <= 90 && play.portals.traversals == 0; ++tick) Tick(play, 1.0f);
+    CHECK_EQ(play.portals.traversals, 1);
+
+    const auto& rigid = play.registry.get<RigidBodyComponent>(play.player);
+    const glm::dvec2 exitVelocityPx(rigid.velocity.x * Units::kPixelsPerMetre,
+                                    -rigid.velocity.y * Units::kPixelsPerMetre);
+    const glm::dvec2 expected = Portal::ExitPosition(glm::dvec2(300.0, 120.0), exitVelocityPx, g_portalRules.transit);
+    const glm::dvec2 at = PlayerPx(play);
+    CHECK_MSG(glm::length(at - expected) < 0.01, "out of the second portal, clear of it along its velocity: at (" +
+                                                     std::to_string(at.x) + ", " + std::to_string(at.y) + ")");
+    const double speedPx = glm::length(exitVelocityPx);
+    const double wantPx = g_portalRules.transit.momentumMode == "reset"
+                              ? 0.0
+                              : g_tuning.walkSpeedPx * g_portalRules.transit.exitSpeedScale;
+    CHECK_MSG(std::fabs(speedPx - wantPx) < 2.0,
+              "its walk carried through: " + std::to_string(speedPx) + " px/s, want " + std::to_string(wantPx));
+    CHECK_MSG(play.portals.placed.empty() && play.portals.portalsUsed == 2, "and the pair is spent");
+}
+
+void OnlyTeleportablesTravel() {
+    // A portal over the inline crate, crate_969, which says teleportable 0, with a
+    // partner in the air. For a second nothing happens: the crate does not go
+    // through, and the pair is not spent.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    const glm::dvec2 crateAt = BodyPx(play, "crate_969");
+    CHECK_MSG(play.portals.TryPlace(glm::dvec2(300.0, 40.0)) && play.portals.TryPlace(crateAt), "both placed");
+    for (int tick = 0; tick < 60; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(play.portals.traversals == 0 && play.portals.placed.size() == 2u,
+              "crate_969 does not go through, and the pair stays");
+    CHECK_MSG(glm::length(BodyPx(play, "crate_969") - crateAt) < 4.0, "crate_969 stays where it was");
+}
+
+void ACratePortalledOntoAButtonOpensItsDoor() {
+    // The move level30 is built around, as far as step 6 goes. One portal goes
+    // over crate_ent_968, and its partner in the air above button_980, which
+    // stands on a block the floor cannot reach. The crate comes out still, so
+    // straight down, falls onto the block, and presses button_980: channel 1.
+    // That opens door_lift_978, while 977 on channel 2 stays shut. This is the
+    // whole level, with every door present.
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    for (int tick = 0; tick < 30; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(play.portals.TryPlace(glm::dvec2(64.0, 60.0)) && play.portals.TryPlace(BodyPx(play, "crate_ent_968")),
+              "a portal above button_980, and one over crate_ent_968");
+    Tick(play, 0.0f);
+    CHECK_MSG(play.portals.traversals == 1 && play.portals.placed.empty(),
+              "the crate goes through on the next tick, and the pair is spent");
+
+    int pressedAt = -1;
+    for (int tick = 1; tick <= 60 && pressedAt < 0; ++tick) {
+        Tick(play, 0.0f);
+        if (play.channels.Pressed(1)) pressedAt = tick;
+    }
+    CHECK_MSG(pressedAt > 0, "it lands on button_980 and presses channel 1, at tick " + std::to_string(pressedAt));
+    bool held = true;
+    for (int tick = 0; tick < 200; ++tick) {
+        Tick(play, 0.0f);
+        held = held && play.channels.Pressed(1);
+    }
+    const Puzzle::SwitchedDoor* door = play.channels.FindDoor("door_lift_978");
+    CHECK_MSG(held && door != nullptr && door->motion.progress == 1.0f, "held, and door_lift_978 opens");
+    CHECK_MSG(DoorShut(play, "door_lift_977") && DoorShut(play, "door_lift_976"), "977 and 976 stay shut");
+}
+
 void runTests() {
     Level30HasTheRolesItsPuzzleNeeds();
     TheMoversAreKinematic();
@@ -765,6 +936,13 @@ void runTests() {
     ThePlayerCollectsACrystal();
     TheExitReportsTheEntry();
     AClosedExitWaitsForANewEntry();
+    TriggersAreExactAgainstATurnedBox();
+    Level30sPortalsAndWhoTravels();
+    AtTheCapTheOldestGivesWay();
+    ANoPortalZoneRefusesATap();
+    ThePlayerGoesThroughAndThePairIsSpent();
+    OnlyTeleportablesTravel();
+    ACratePortalledOntoAButtonOpensItsDoor();
 }
 
 } // namespace
@@ -788,5 +966,5 @@ int main() {
         return 1;
     }
     runTests();
-    return ::test::summary("test_mp_play", 90);
+    return ::test::summary("test_mp_play", 125);
 }

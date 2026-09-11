@@ -10,6 +10,7 @@ add_library(MagicPortalsSim STATIC
     Mover.cpp
     Player.cpp
     Portal.cpp
+    Portals.cpp
     Prism.cpp
     Puzzle.cpp
     Roles.cpp

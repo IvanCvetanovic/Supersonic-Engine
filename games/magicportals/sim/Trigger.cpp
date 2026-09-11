@@ -146,6 +146,32 @@ bool Overlaps(entt::registry& registry, entt::entity entity, const Box& box) {
     return false;
 }
 
+bool Overlaps(entt::registry& registry, entt::entity entity, const Circle& circle) {
+    const auto* transform = registry.try_get<TransformComponent>(entity);
+    if (transform == nullptr) return false;
+    const glm::vec2 origin(transform->position.x, transform->position.y);
+    const float angle = transform->rotation.z;
+
+    if (const auto* collider = registry.try_get<BoxColliderComponent>(entity)) {
+        // In the box's own frame the box is square to the axes, and the circle's
+        // centre is only turned back.
+        const glm::vec2 centre = origin + Rotate(glm::vec2(collider->center.x, collider->center.y), angle);
+        const Box local{glm::vec2(0.0f), glm::vec2(collider->size.x, collider->size.y) * 0.5f};
+        return DistanceToBox(Rotate(circle.centre - centre, -angle), local) < circle.radius;
+    }
+    if (const auto* sphere = registry.try_get<SphereColliderComponent>(entity)) {
+        const glm::vec2 centre = origin + Rotate(glm::vec2(sphere->center.x, sphere->center.y), angle);
+        return glm::length(circle.centre - centre) < circle.radius + sphere->radius;
+    }
+    if (const auto* capsule = registry.try_get<CapsuleColliderComponent>(entity)) {
+        const float reach = std::max(capsule->height * 0.5f - capsule->radius, 0.0f);
+        const glm::vec2 centre = origin + Rotate(glm::vec2(capsule->center.x, capsule->center.y), angle);
+        const glm::vec2 along = Rotate(glm::vec2(0.0f, reach), angle);
+        return DistanceToSegment(circle.centre, centre - along, centre + along) < circle.radius + capsule->radius;
+    }
+    return false;
+}
+
 int DynamicBodiesIn(entt::registry& registry, const Box& box) {
     int count = 0;
     for (const entt::entity entity : registry.view<RigidBodyComponent>()) {

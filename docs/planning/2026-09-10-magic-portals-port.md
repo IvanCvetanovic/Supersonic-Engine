@@ -417,3 +417,83 @@ Magic Portals suites are unchanged.
 **What step 5 did not do.** The player is put near the crystals and the exit by
 the tests. Reaching them by play needs portals (step 6), as do the crate
 covering 999 and 1001 and the crystals above the floor.
+
+## Step 6 - portals: decisions, before the code
+
+**Entries are per portal and per body.** The exit's entry was one flag,
+because only the player uses it. A portal can hold the player and several
+crates at once, and a pair has two portals.
+- **How it works:** each placed portal keeps the travellers inside it as of the
+  last tick, and a traveller appearing in that set is an entry.
+- **A new portal starts empty,** so a crate that a portal is placed over comes
+  in on the next tick. That matches Godot, which reports a body already inside
+  a new area as entering it.
+
+**Placed portals are circles, so `Trigger` gained a circle.** It is as exact as
+the box: a turned box is met in its own frame. A rig in `test_mp_play` checks a
+box turned 45°, where a test against its bounding box would be wrong. level30's
+crates stand square, so the level itself would never show the difference.
+
+**level30 does not exercise the turn through `rotate_to_exit`.** Placed portals
+are never rotated, so on level30 the exit velocity is the entry velocity,
+scaled. That is indistinguishable from `preserve`. `test_mp_portal` covers the
+turn on its own.
+
+**portals.json mixes its markers within a block.** `placement` is marked
+`_guess`, but its own note says `default_max_portals` was confirmed by the
+owner.
+- **Pinned:** that one value, with the code's own cap of a pair. level30's
+  budget of 2 is pinned.
+- **Carried as data:** `collision_radius_px` beside it, and every `transit`
+  field.
+- **Run both ways:** `on_cap_recycle_oldest`, a `_guess` about behaviour, like
+  the exit's switch.
+
+**The remake leaves the portal cooldowns unmodelled.**
+`first_portal_min_time_s` and `next_portal_min_time_s` are in portals.json, and
+`portal_system.gd` never reads them. The port does not either. That is a remake
+finding, of a kind with the ignored 26×16 button area.
+
+**Static portals and moving no-portal zones are refused, not ported.** level30
+has neither. The no-portal zone rule, a tap within the radius times the zone's
+`scale`, is ported from the remake's code. It is tested only with a zone the
+test supplies, never against a level that has one.
+
+**Within a tick, portals go last.** The order is the buttons and doors, the
+player's steering, the physics step, the crystals and the exit, then the
+portals. A body put through a portal is seen by the triggers where it came out
+on the next tick. In Godot, a body moved in a signal is seen by areas on the
+next step too.
+
+**Built and verified.** The code is `sim/Portals` and the circle in
+`sim/Trigger`. Seven new checks in `test_mp_play`:
+- **The rig:** a box turned 45° is exact against both a box trigger and a
+  circle trigger.
+- **level30's portals:** a budget of 2 and no zones. The travellers are the
+  player, `crate_ent_968` and `crate_small_ent_973`. `crate_969` is not one.
+- **The cap, both ways:** recycling keeps two portals and drops the oldest.
+  Refusing turns the third tap down.
+- **A no-portal zone the test supplies:** a tap a pixel inside it is refused,
+  and one a pixel outside is placed.
+- **The player through a pair:** walking into a floor portal, the player comes
+  out of its partner, clear of it along its velocity. It keeps its walking
+  speed, and the pair is spent.
+- **The inline crate:** a pair over `crate_969` stays for a second, and the
+  crate does not go through.
+- **The capstone:** a portal over `crate_ent_968` and one above the raised
+  `button_980`.
+  - The crate goes through on the next tick, and the pair is spent.
+  - It lands on the block and presses channel 1, and holds it.
+  - `door_lift_978` opens while 977 and 976 stay shut, in the whole level.
+
+GCC 13.3 and MSVC 14.50 agree to the digit: 131 checks and 0 failures. The
+other Magic Portals suites are unchanged.
+
+**Where the port stands.** All five acceptance items have tests on level30:
+walking and landing, buttons holding doors, crates pushed onto and portalled
+onto buttons, crystals and the exit, and portals.
+- **Not yet shown:** a full solve of level30 from the spawn to the exit, played
+  through with taps and walking alone. The tests still place portals, and the
+  player where needed.
+- **What comes next:** step 7, a drawing layer, which turns taps into
+  `Portals::State::TryPlace` through the camera.
