@@ -278,17 +278,43 @@ void TheMarginIsTheEdge() {
 
 // ---- level 1-9, played -------------------------------------------------------
 
-void Level8WithTwoPortals() {
-    // The hand-drawn arrow at (30, 106) points behind the stone. A portal there and
-    // one ahead of the player: walking right through the second comes out of the
-    // first, behind the stone, and walking on pushes it off the ledge.
+// Fires a shot and waits for it to land or fail. True when a portal opened.
+bool ShootAndLand(Run& run, const glm::dvec2& atPx) {
+    const std::size_t before = run.level.portals.placed.size();
+    if (!run.level.portals.Shoot(run.registry, atPx)) return false;
+    for (int tick = 0; tick < 600 && run.level.portals.flight; ++tick) Tick(run);
+    return run.level.portals.placed.size() > before;
+}
+
+// Holds right until the player is at `x` or past it, then lets go and lets it
+// settle.
+void WalkRightTo(Run& run, double x) {
+    for (int tick = 0; tick < 180 && PxOf(run, run.level.player).x < x; ++tick) Tick(run, 1.0f);
+    for (int tick = 0; tick < 30; ++tick) Tick(run);
+}
+
+void Level8WithTwoShots() {
+    // The hand-drawn arrow at (30, 106) points behind the stone, but a shot from
+    // the spawn at it meets the stone (test_mp_shot), and so does one from the
+    // spawn to anywhere up there low enough for the player to come out of. So
+    // the player walks right onto the slope first. From there a shot to (30, 30)
+    // passes about 40 px from the stone's centre, over its 30 px. Then one more
+    // portal just ahead: walking right through it comes out behind the stone,
+    // into the gap between it and the level's edge, and walking on pushes it off
+    // the ledge.
     Run run;
     if (!Begin("level8", run)) return;
     for (int tick = 0; tick < 30; ++tick) Tick(run);
-    const glm::dvec2 spawn = PxOf(run, run.level.player);
     const entt::entity stone = run.level.demolish.stones.front().body;
-    CHECK(run.level.portals.TryPlace(glm::dvec2(30.0, 106.0)));
-    CHECK(run.level.portals.TryPlace(spawn + glm::dvec2(40.0, 0.0)));
+    WalkRightTo(run, 195.0);
+    // The results are taken before the messages are built: a check's message is
+    // built before its condition is.
+    const bool far = ShootAndLand(run, glm::dvec2(30.0, 30.0));
+    CHECK_MSG(far, "the far shot, from " + Px(PxOf(run, run.level.player)) + ", stopped at " +
+                       run.level.portals.lastFailure);
+    const bool near = ShootAndLand(run, PxOf(run, run.level.player) + glm::dvec2(40.0, 0.0));
+    CHECK_MSG(near, "the near shot stopped at " + run.level.portals.lastFailure);
+    CHECK_EQ(run.level.portals.shotsFailed, 0);
     std::string trace;
     int tick = 0;
     for (; tick < 1800 && !run.level.goals.completed && !run.level.hazards.playerDied; ++tick) {
@@ -298,7 +324,7 @@ void Level8WithTwoPortals() {
                      std::to_string(run.level.demolish.Broken());
         }
     }
-    std::printf("  level8 with two portals, holding right: %s after %.2f s, the wall %s\n",
+    std::printf("  level8 with two shots, holding right: %s after %.2f s, the wall %s\n",
                 run.level.goals.completed ? "completed" : "NOT completed", tick * kStep,
                 run.level.demolish.Broken() == 1 ? "broken" : "standing");
     CHECK_MSG(run.level.demolish.Broken() == 1, "tick:player/stone/broken" + trace);
@@ -313,7 +339,7 @@ void runTests() {
     AStoneWhereTheLevelPutsItBreaksNothing();
     ThePlayerBreaksNothing();
     TheMarginIsTheEdge();
-    Level8WithTwoPortals();
+    Level8WithTwoShots();
 }
 
 } // namespace

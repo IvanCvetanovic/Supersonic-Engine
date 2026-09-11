@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -74,6 +75,13 @@ struct Options {
     // The role table, when the level is to be played rather than measured: its
     // movers are then built kinematic. Not owned.
     const Roles::Table* roles = nullptr;
+};
+
+// A hull's polygon in the plane: its points in its entity's frame, in metres
+// with +y up, the shape's offset included. The engine's queries see a hull only
+// by its bounds, so the port's own segment test (Shot.hpp) reads this.
+struct PlanePolygon {
+    std::vector<glm::vec2> points;
 };
 
 struct Built {

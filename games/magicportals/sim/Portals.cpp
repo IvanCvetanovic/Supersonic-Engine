@@ -111,6 +111,17 @@ bool State::TryPlace(const glm::dvec2& atPx) {
     return true;
 }
 
+bool State::Shoot(entt::registry& registry, const glm::dvec2& atPx) {
+    if (budget <= 0 || flight || shooter == entt::null || !registry.valid(shooter)) return false;
+    Flight shot;
+    shot.fromPx = Units::ToPixels(registry.get<TransformComponent>(shooter).position);
+    shot.toPx = atPx;
+    shot.atPx = shot.fromPx;
+    flight = shot;
+    ++shotsFired;
+    return true;
+}
+
 const NoPortalZone* State::FindZone(const std::string& name) const {
     for (const NoPortalZone& zone : zones) {
         if (zone.name == name) return &zone;
@@ -122,6 +133,35 @@ void State::Tick(entt::registry& registry, float dt) {
     lockoutS = std::max(0.0f, lockoutS - dt);
     for (NoPortalZone& zone : zones) {
         if (zone.moving) zone.motion.t += dt;
+    }
+
+    // The shot flies on, through this tick's stretch of its way, against the
+    // world as the step left it. The first body or blocker on the stretch ends
+    // it; reaching the tap opens a portal there, or fails where none may open.
+    if (flight) {
+        const glm::dvec2 left = flight->toPx - flight->atPx;
+        const double remaining = glm::length(left);
+        const double reach = shot.speedPx * static_cast<double>(dt);
+        const bool arrives = remaining <= reach;
+        const glm::dvec2 next = arrives ? flight->toPx : flight->atPx + left * (reach / remaining);
+        std::string stoppedBy;
+        if (const auto hit = Shot::FirstBody(registry, flight->atPx, next, shooter)) {
+            const auto* tag = registry.try_get<Supersonic::TagComponent>(hit->body);
+            stoppedBy = tag != nullptr ? tag->tag : std::string("a body");
+        }
+        for (const Blocker& blocker : blockers) {
+            if (stoppedBy.empty() && Shot::Enters(flight->atPx, next, blocker.box)) stoppedBy = blocker.name;
+        }
+        if (stoppedBy.empty() && arrives && !TryPlace(flight->toPx)) stoppedBy = "the tap, where no portal may open";
+        if (!stoppedBy.empty()) {
+            ++shotsFailed;
+            lastFailure = stoppedBy;
+            flight.reset();
+        } else if (arrives) {
+            flight.reset();
+        } else {
+            flight->atPx = next;
+        }
     }
 
     // An end of a traversal: a static portal by its place in `statics`, which
@@ -214,10 +254,12 @@ void State::Tick(entt::registry& registry, float dt) {
 }
 
 bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilder::Built& built,
-          entt::registry& registry, entt::entity player, const Rules& rules, const Mover::Rules& movers, State& out,
-          std::string& error) {
+          entt::registry& registry, entt::entity player, const Rules& rules, const Mover::Rules& movers,
+          const Shot::Rules& shot, State& out, std::string& error) {
     out = State{};
     out.rules = rules;
+    out.shot = shot;
+    out.shooter = player;
     int maxPortals = rules.defaultMaxPortals;
     if (player != entt::null) out.travellers.push_back(player);
 
@@ -262,6 +304,13 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilde
             portal.atPx = glm::dvec2(position->numbers[0], position->numbers[1]);
             if (!Trigger::FromNode(node, portal.trigger, error)) return false;
             out.statics.push_back(std::move(portal));
+            continue;
+        }
+        if (role == Roles::kProjectileBlocker) {
+            Blocker blocker;
+            blocker.name = node.name;
+            if (!Trigger::FromNode(node, blocker.box, error)) return false;
+            out.blockers.push_back(blocker);
             continue;
         }
         if (role == Roles::kLevelProperties) {

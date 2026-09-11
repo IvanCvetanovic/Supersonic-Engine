@@ -24,6 +24,10 @@ inferred from identifiers.
   - Tapping sends a shot from the character toward the tap, and the portal
     opens where the shot arrives.
   - A wall in between means no portal: the shot fails.
+  - A crate or a stone in between stops it too: "it would hit them before
+    reaching the tapped location" (asked in step 8).
+  - A failed shot costs nothing, "since it would never appear" (asked in step
+    8).
   - Reflectors bounce the shot.
 
   This overrides the remake, which opens a portal at the tap at once. The
@@ -633,7 +637,7 @@ is built:
 - whether a failed shot costs a portal.
 
 The first decides which routes solve. The second decides what the golden
-score counts.
+score counts. Both were answered before step 8 was built.
 
 `test_mp_launchers`, 90 checks:
 - **The files.** The three launchers are pinned: each one's place, what it
@@ -680,6 +684,110 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_movers | 53 | 0 |
 | test_mp_timed | 50 | 0 |
 | test_mp_layer | 62 | 0 |
+| test_mp_camera | 15 | 0 |
+| test_mp_chapters | 39 | 0 |
+| test_mp_statics | 65 | 0 |
+| test_mp_play | 131 | 0 |
+| test_mp_start | 365 | 0 |
+
+## Step 8 - the portal shot, and the projectile blocker (built)
+
+What the owner described, now in `Shot` and `Portals`:
+- **A tap fires.** The shot leaves the player's centre toward the tap, at
+  `shot.json`'s speed of 600 px/s, which is a guess. One shot flies at a time;
+  a tap while one flies is ignored.
+- **What stops it.**
+  - Every solid body on its way: walls and floors, doors and platforms, crates
+    and stones, thrown stones included.
+  - A projectile blocker. Level 1-7's `anti_projectile_wall` is a 64x128 box
+    that nobody sees and the player walks through.
+
+  A trigger never stops a shot, and neither does a portal or the player.
+- **Where it opens.** At the tap, once the shot gets there. It can still fail
+  there: inside a no-portal zone, or at the cap with recycling off. The
+  original has `portal_fail_in_antiportal` for the first.
+- **What a failure costs.** Nothing. There is no portal and no count, as the
+  owner said. `shotsFired` and `shotsFailed` are counted apart from
+  `portalsUsed`, which is what the golden score reads.
+- **Exact in the plane.**
+  - The port has its own segment test. It reads box colliders turned with their
+    entity, circles, and the polygon LevelBuilder now records for each hull.
+    The engine's raycast sees boxes and hulls only by their bounds.
+  - The turn uses DetMath, so a grazing shot is judged the same on every C
+    runtime.
+- **What is guessed.**
+  - The speed.
+  - That the shot leaves from the player's centre. `computeProjectileOrigin`
+    is not decoded.
+  - That the no-portal zone is checked where the shot arrives, not along the
+    way.
+  - One shot at a time, after `hasProjectileAround`.
+  - The cooldowns, `FIRST_PORTAL_MIN_TIME` and `NEXT_PORTAL_MIN_TIME`, are
+    still not modelled.
+- **`TryPlace` stays.** It is what an arriving shot calls, and the suites use
+  it to put a portal where a test needs one:
+  - the suites for transit, buttons, movers and launchers use it;
+  - the play-throughs that claim a level is played now fire shots.
+- **Drawn.** A small blue box shows the shot in flight, in the blue of
+  `projectile.ent`'s light.
+
+What changed because of it:
+- **Level30's play-through is gone.** Its portal pair skipped the doors from
+  the spawn. With shots, the crates and the closed doors stand between the
+  spawn and everywhere past them, so only the designed solve is left.
+  - The layer's play-through is now 1-9.
+  - The level30 tap test aims over the crates. It also checks that a tap into
+    `crate_969` opens nothing and costs nothing.
+- **1-9's route changed.** From the spawn, a shot at the space behind the
+  stone meets the stone.
+  - The player walks right onto the slope first. From there, a shot to
+    (30, 30) clears the stone by about 10 px.
+  - Then one more shot goes just ahead of the player, and holding right does
+    the rest.
+  - It takes 3.88 s in the simulation, and 3.90 s through the layer, with all
+    three crystals.
+
+  That this is the designed route is not claimed.
+
+`test_mp_shot`, 58 checks:
+- **The files.** Level 1-7's blocker is pinned with its box.
+- **Flying.**
+  - A shot lands where it was aimed after the flight time `shot.json` gives:
+    5 ticks for 48 px.
+  - Nothing opens before it arrives.
+  - A second tap while it flies is refused.
+- **Stopping.**
+  - Level1's floor (`platform_ent_621`) stops a shot. It costs nothing: the
+    level's one portal is still there, and the next shot lands.
+  - Level8's stone stops the shot aimed at the hint arrow.
+  - Level 1-7's blocker stops a shot. With the blocker removed, the same shot
+    lands.
+  - A shot into a no-portal zone opens nothing.
+  - Level0 grants no portal, so a tap there fires nothing.
+- **The segment test on its own.**
+  - A segment enters a turned box's bounds but misses the box, and the test
+    finds no hit.
+  - A hull's triangle and a circle are each met where the arithmetic says.
+
+The inventory after step 8: chapter 1 has 32 levels starting and 25 playing.
+Chapters 2 to 4 are unchanged. What is left in chapter 1:
+
+| What | Levels |
+|---|---|
+| Reflectors | 11, 12, 19, 20, 22, 28 |
+| Boss | 31 |
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_shot | 58 | 0 |
+| test_mp_launchers | 90 | 0 |
+| test_mp_demolish | 133 | 0 |
+| test_mp_hazards | 19 | 0 |
+| test_mp_movers | 53 | 0 |
+| test_mp_timed | 50 | 0 |
+| test_mp_layer | 65 | 0 |
 | test_mp_camera | 15 | 0 |
 | test_mp_chapters | 39 | 0 |
 | test_mp_statics | 65 | 0 |

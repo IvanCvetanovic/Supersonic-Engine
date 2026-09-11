@@ -3,10 +3,14 @@
 // Portals: portal_system.gd's placement and traversal (:69-282), on the transit
 // arithmetic in Portal.hpp.
 //
-// - A tap places a portal, a circle, against a budget. The budget is the level's
-//   max_portals or portals.json's default, and never more than a pair. At the
-//   cap the oldest portal gives way, or with that switched off the tap is
-//   refused. A tap inside a no-portal zone is refused.
+// - A tap fires a shot (Shot.hpp) from the player's centre toward the tap. It
+//   flies at shot.json's speed, and fails on the first solid body or
+//   projectile blocker it meets. Where it arrives a portal opens, a circle,
+//   against a budget. The budget is the level's max_portals or portals.json's
+//   default, and never more than a pair. At the cap the oldest portal gives
+//   way, or with that switched off the shot fails. A shot that arrives inside
+//   a no-portal zone fails too. A failed shot costs nothing. One shot flies at
+//   a time.
 // - A level may also ship static portals (portal_static), which pair by index.
 // - Whatever comes into a portal goes out of its partner. Its velocity is
 //   carried through (Portal::ExitVelocity), and it is put clear of the exit
@@ -22,9 +26,11 @@
 #include "sim/Mover.hpp"
 #include "sim/Portal.hpp"
 #include "sim/Roles.hpp"
+#include "sim/Shot.hpp"
 #include "sim/Trigger.hpp"
 #include "sim/Tscn.hpp"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -94,31 +100,60 @@ struct Static {
     std::vector<entt::entity> inside;
 };
 
+// A projectile blocker: anti_projectile_wall.ent, an invisible box a portal shot
+// dies in (ETHCallback_anti_projectile_wall). Its box is its trigger_size, as
+// the remake's ProjectileBlocker reads it. The player walks through it.
+struct Blocker {
+    std::string name;
+    Trigger::Box box;
+};
+
+// A portal shot on its way.
+struct Flight {
+    glm::dvec2 fromPx{0.0}; // the player's centre when it was fired
+    glm::dvec2 toPx{0.0};   // the tap
+    glm::dvec2 atPx{0.0};   // where it is now
+};
+
 struct State {
     Rules rules;
+    Shot::Rules shot;
     int budget = 0;
+    entt::entity shooter = entt::null; // the player: where a shot leaves from, and what it passes through
     std::vector<NoPortalZone> zones;
+    std::vector<Blocker> blockers;
     std::vector<entt::entity> travellers; // the player, and every teleportable body
     std::vector<Static> statics;          // in the level's order
     std::vector<Placed> placed;           // oldest first
     int portalsUsed = 0;                  // every portal placed: what the golden score counts
     int traversals = 0;
     float lockoutS = 0.0f;
+    std::optional<Flight> flight;
+    int shotsFired = 0;
+    int shotsFailed = 0;
+    std::string lastFailure; // what stopped the last failed shot
 
-    // A tap at a point in the level. False when refused.
+    // A tap at a point in the level: a shot fired toward it. False when none
+    // goes, because the level allows no portal or a shot is already flying.
+    bool Shoot(entt::registry& registry, const glm::dvec2& atPx);
+
+    // A portal opened at a point at once, as an arriving shot opens one. The
+    // suites use it to put portals where a test needs them. False when refused.
     bool TryPlace(const glm::dvec2& atPx);
 
     const NoPortalZone* FindZone(const std::string& name) const;
 
     // One tick, after the physics step. The lockout runs down, a patrolling zone
-    // swings on, and a traveller newly inside a portal goes out of its partner.
+    // swings on, a shot flies on, and a traveller newly inside a portal goes out
+    // of its partner.
     void Tick(entt::registry& registry, float dt);
 };
 
-// A built level's portals and no-portal zones; a patrolling zone swings at
-// movers.json's rate scale. False, with `error`, for data that does not read.
+// A built level's portals, no-portal zones and projectile blockers. A
+// patrolling zone swings at movers.json's rate scale, and the player's shots fly
+// by shot.json. False, with `error`, for data that does not read.
 bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilder::Built& built,
-          entt::registry& registry, entt::entity player, const Rules& rules, const Mover::Rules& movers, State& out,
-          std::string& error);
+          entt::registry& registry, entt::entity player, const Rules& rules, const Mover::Rules& movers,
+          const Shot::Rules& shot, State& out, std::string& error);
 
 } // namespace MagicPortals::Portals

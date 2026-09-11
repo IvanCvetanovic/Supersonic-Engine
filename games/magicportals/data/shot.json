@@ -1,0 +1,18 @@
+{
+  "_about": [
+    "The Magic Portals port's portal shot. The owner said on 11 September that a tap fires a",
+    "shot from the character toward the tap, and the portal opens where it arrives. A wall, a",
+    "crate or a stone on the way stops it, and a shot that fails costs nothing. The remake",
+    "opens a portal at the tap at once, so this is the port's. See",
+    "docs/planning/2026-09-11-magic-portals-remaster.md, step 8."
+  ],
+
+  "flight": {
+    "_note": [
+      "How fast a shot flies. The original's script has the shot (portal_launch,",
+      "projectileDir, projectilePos) but its speed is not decoded, and nobody measured it."
+    ],
+    "_guess": true,
+    "speed_px_s": 600.0
+  }
+}

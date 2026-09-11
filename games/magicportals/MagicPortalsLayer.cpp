@@ -53,6 +53,8 @@ const glm::vec3 kCrystalColour(0.35f, 0.90f, 1.00f);
 const glm::vec3 kExitColour(0.25f, 0.70f, 0.35f);
 const glm::vec3 kExitReachedColour(0.60f, 1.00f, 0.60f);
 const glm::vec3 kPortalColour(0.90f, 0.30f, 0.90f);
+const glm::vec3 kShotColour(0.60f, 0.60f, 1.00f); // projectile.ent's light is this blue
+constexpr double kShotSizePx = 8.0;
 const glm::vec3 kStaticRedColour(0.90f, 0.30f, 0.25f);  // a static portal the level colours red
 const glm::vec3 kStaticBlueColour(0.30f, 0.50f, 1.00f); // and blue
 
@@ -223,6 +225,7 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     m_hazards.clear();
     for (ThrownBox& thrown : m_thrown) destroy(thrown.box);
     m_thrown.clear();
+    destroy(m_shot);
     destroy(m_player);
     destroy(m_exit);
     // And the level's own bodies, with what its launchers threw.
@@ -521,6 +524,18 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         placeBox(registry, m_portals[i], placed[i].atPx, glm::dvec2(diameterPx), kMarkerZ, kMarkerDepth, 0.0f);
     }
 
+    // The shot in flight, made when one is fired and unmade when it lands or fails.
+    if (m_level.portals.flight) {
+        if (m_shot == entt::null) {
+            m_shot = makeBox(registry, "Magic Portals Shot", glm::vec3(0.0f), glm::vec3(1.0f), kShotColour);
+        }
+        placeBox(registry, m_shot, m_level.portals.flight->atPx, glm::dvec2(kShotSizePx), kMarkerZ, kMarkerDepth,
+                 0.0f);
+    } else if (m_shot != entt::null) {
+        if (registry.valid(m_shot)) registry.destroy(m_shot);
+        m_shot = entt::null;
+    }
+
     // Static portals, at their trigger boxes. One that is spent - only when
     // portals.json says static portals do not persist - goes.
     const std::vector<Portals::Static>& statics = m_level.portals.statics;
@@ -619,7 +634,7 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
     const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
     if (viewport != nullptr && viewport->pointerOverGame && Input::TickWasPressed(kTap)) {
         glm::dvec2 atPx(0.0);
-        if (ScreenToLevelPx(registry, Input::MousePosition(), atPx)) m_level.portals.TryPlace(atPx);
+        if (ScreenToLevelPx(registry, Input::MousePosition(), atPx)) m_level.portals.Shoot(registry, atPx);
     }
     return direction;
 }

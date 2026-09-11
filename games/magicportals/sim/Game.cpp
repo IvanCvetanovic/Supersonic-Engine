@@ -36,6 +36,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Mover::LoadRules(portDataDirectory + "/movers.json", read.movers, error)) return false;
     if (!Demolish::LoadRules(portDataDirectory + "/demolish.json", read.demolish, error)) return false;
     if (!Launchers::LoadRules(portDataDirectory + "/launchers.json", read.launchers, error)) return false;
+    if (!Shot::LoadRules(portDataDirectory + "/shot.json", read.shot, error)) return false;
     std::error_code ec;
     std::filesystem::create_directories(prismDirectory, ec);
     read.prisms = prismDirectory;
@@ -92,7 +93,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Hazards::Find(data.scene, data.roles, out.hazards, error)) return false;
     if (!Demolish::Find(data.scene, data.roles, out.built, data.demolish, out.demolish, error)) return false;
     if (!Launchers::Find(data.scene, data.roles, data.launchers, out.launchers, error)) return false;
-    return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers,
+    return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                          out.portals, error);
 }
 

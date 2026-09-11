@@ -48,13 +48,14 @@ struct Data {
     Mover::Rules movers;          // the port's own movers.json
     Demolish::Rules demolish;     // and demolish.json
     Launchers::Rules launchers;   // and launchers.json
+    Shot::Rules shot;             // and shot.json
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
 
 // A converted level (.tscn), the remake's data directory with its
 // entity_roles.json, player.json and portals.json, and the port's own data with
-// its movers.json, demolish.json and launchers.json. False, with `error`, when
-// any of them is missing or malformed.
+// its movers.json, demolish.json, launchers.json and shot.json. False, with
+// `error`, when any of them is missing or malformed.
 bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
               const std::filesystem::path& prismDirectory, Data& out, std::string& error,
               const std::string& portDataDirectory = MAGICPORTALS_PORT_DATA_DIR);

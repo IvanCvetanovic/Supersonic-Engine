@@ -108,6 +108,10 @@ bool BuildNode(const Tscn::Scene& scene, const Tscn::Node& node, entt::registry&
         auto& hull = registry.emplace<ConvexHullColliderComponent>(entity);
         hull.sourcePath = path;
         hull.isTrigger = isArea;
+        auto& outline = registry.emplace<PlanePolygon>(entity);
+        for (std::size_t i = 0; i + 1 < points.size(); i += 2) {
+            outline.points.emplace_back(Units::ToMetres(points[i]), Units::ToMetres(-points[i + 1]));
+        }
         ++out.hulls;
     } else if (shape.type == "CollisionShape2D") {
         const Tscn::Value* ref = shape.Find("shape");

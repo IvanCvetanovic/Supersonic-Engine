@@ -4,14 +4,14 @@
 // What this suite holds is the layer's side:
 //  - it plays at the port's 60 Hz on the engine's clock, and runs the suites'
 //    tick with the app's physics step between the two halves;
-//  - a tap read on the tick becomes a portal at the point in the level under
+//  - a tap read on the tick fires a portal shot at the point in the level under
 //    it, through the camera and ScreenPointToRay, which no other suite touches;
 //  - the camera starts at camera_start, follows the player, and never shows past
 //    the level;
 //  - levels come in chapters.json's order: the exit loads the next, R retries,
 //    N skips one the port refuses, and a world's end is the chapter's end;
-//  - level30 can be played from the spawn to the exit with taps and walking
-//    alone, tapping only what the screen shows.
+//  - 1-9 (level8) can be played from the spawn to the exit with taps and
+//    walking alone, tapping only what the screen shows.
 //
 // No window and no Vulkan. The app steps physics once before each layer tick at
 // 60 Hz, so this suite does the same.
@@ -118,6 +118,17 @@ void tap(MagicPortalsLayer& layer, entt::registry& registry, const glm::vec2& po
     tickWith(layer, registry, pointer, {MagicPortalsLayer::kTap}, {MagicPortalsLayer::kTap});
 }
 
+// Ticks until the shot a tap fired has landed or failed (Portals.hpp).
+void landShot(MagicPortalsLayer& layer, entt::registry& registry) {
+    for (int tick = 0; tick < 240 && layer.SimLevel() != nullptr && layer.SimLevel()->portals.flight; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+    }
+}
+
+std::string lastFailure(const MagicPortalsLayer& layer) {
+    return layer.SimLevel() != nullptr ? layer.SimLevel()->portals.lastFailure : std::string("no level");
+}
+
 glm::dvec2 playerPx(entt::registry& registry, const MagicPortalsLayer& layer) {
     return MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position);
 }
@@ -155,8 +166,9 @@ void ATapLandsWhereItPoints() {
     // level30 is 768 x 256, so it sits at (540, 128). Its centre shows at the
     // viewport's, the level's top is up the screen - screen y grows down, as the
     // remake's does, where the engine's grows up - and a tap at a point on the
-    // screen is read on the tick, back through ScreenPointToRay, and a portal
-    // lands where it points.
+    // screen is read on the tick, back through ScreenPointToRay. Its shot flies
+    // from the player, and a portal opens where it points. A tap whose shot
+    // meets a crate on the way opens nothing and costs nothing.
     entt::registry registry;
     publishViewport(registry);
     MagicPortalsLayer layer(TestPaths(), "level30");
@@ -177,39 +189,53 @@ void ATapLandsWhereItPoints() {
                   screenOf(registry, glm::dvec2(400.0, 128.0)).x < centre.x,
               "the level's top is up the screen, and its left is to the left");
 
-    const glm::dvec2 aims[] = {glm::dvec2(600.0, 128.0), glm::dvec2(400.0, 60.0)};
+    // From the spawn, (182, 203), a shot at (600, 128) runs into crate_969.
+    const glm::dvec2 blocked(600.0, 128.0);
+    CHECK_MSG(onScreen(registry, blocked), Point(blocked) + " is on screen");
+    tap(layer, registry, screenOf(registry, blocked));
+    landShot(layer, registry);
+    CHECK(layer.SimLevel()->portals.placed.empty());
+    CHECK_MSG(lastFailure(layer) == "crate_969", "the shot stopped at " + lastFailure(layer));
+    CHECK_EQ(layer.SimLevel()->portals.portalsUsed, 0);
+
+    // Two over the crates land. Both stay on screen while the camera, after its
+    // hold, goes over to the player.
+    const glm::dvec2 aims[] = {glm::dvec2(400.0, 60.0), glm::dvec2(440.0, 60.0)};
     for (const glm::dvec2& aim : aims) {
         CHECK_MSG(onScreen(registry, aim), Point(aim) + " is on screen");
         tap(layer, registry, screenOf(registry, aim));
-        tickWith(layer, registry, kRest, {}, {});
+        landShot(layer, registry);
     }
     const auto& placed = layer.SimLevel()->portals.placed;
     CHECK_MSG(placed.size() == 2u && glm::length(placed[0].atPx - aims[0]) < 0.5 &&
                   glm::length(placed[1].atPx - aims[1]) < 0.5,
-              "each tap put a portal where it pointed: " +
+              "each tap's shot opened a portal where it pointed: " +
                   (placed.size() == 2u ? Point(placed[0].atPx) + " and " + Point(placed[1].atPx)
-                                       : std::to_string(placed.size()) + " placed"));
+                                       : std::to_string(placed.size()) + " placed, the last shot stopped at " +
+                                             lastFailure(layer)));
     layer.OnDetach(registry);
 }
 
-void Level30FromTheSpawnWithTapsAndWalking() {
-    // Played through as a player would, tapping only what the screen shows.
-    //  - The camera starts at camera_start, over the exit end of the level, so the
-    //    far portal is tapped first: above platform_ent_966, near the exit.
-    //  - The camera then goes to the player. The near portal is tapped once it is
-    //    in view: on the floor ahead of the spawn.
-    //  - Right is held. The player walks into the near portal and comes out of the
-    //    far one, over crystal_ent_998. It falls onto the platform, collecting the
-    //    crystal, and walks on into the exit.
-    // Reaching the exit clears level30 and loads level31. The route waits for
-    // what the screen shows, not for how long the camera holds, which is a guess.
+void Level8FromTheSpawnWithTapsAndWalking() {
+    // 1-9 played through as a player would, tapping only what the screen shows.
+    // test_mp_demolish plays the same route through Game::Tick.
+    //  - A shot from the spawn to behind the stone meets the stone, so the player
+    //    walks right onto the slope first and lets go.
+    //  - From there, once the camera shows it, a shot over the stone to
+    //    (30, 30), and then one just ahead of the player.
+    //  - Right is held. The player walks into the near portal and comes out of
+    //    the far one, behind the stone. It pushes the stone off the ledge, and
+    //    the stone rolls into breakable_wall_625 and breaks it. The player walks
+    //    on to the exit.
+    // Reaching the exit clears level8 and loads level9. The route waits for what
+    // the screen shows, not for how long the camera holds, which is a guess.
     //
-    // This is not the designed solve. A pair of portals skips the doors, because
-    // the remake refuses a portal only inside a no-portal zone, and level30 has
-    // none.
+    // It was level30 until the shot. There, a pair of portals skipped the doors,
+    // but the doors and crates stand between the spawn and anywhere past them,
+    // so a shot cannot reach; only the designed solve is left.
     entt::registry registry;
     publishViewport(registry);
-    MagicPortalsLayer layer(TestPaths(), "level30");
+    MagicPortalsLayer layer(TestPaths(), "level8");
     layer.OnAttach(registry);
     if (!layer.LoadError().empty()) {
         CHECK_MSG(false, layer.LoadError());
@@ -217,36 +243,46 @@ void Level30FromTheSpawnWithTapsAndWalking() {
     }
     layer.OnUpdate(registry, MagicPortalsLayer::kTick);
 
-    const glm::dvec2 far(660.0, 100.0);
-    const glm::dvec2 near(240.0, 208.0);
-    CHECK_MSG(onScreen(registry, far), "the far portal's spot shows at the start");
-    tap(layer, registry, screenOf(registry, far));
+    for (int tick = 0; tick < 180 && playerPx(registry, layer).x < 195.0; ++tick) {
+        std::vector<std::string> pressed;
+        if (tick == 0) pressed.push_back(MagicPortalsLayer::kRight);
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, std::move(pressed));
+    }
+    for (int tick = 0; tick < 30; ++tick) tickWith(layer, registry, kRest, {}, {});
+
+    const glm::dvec2 far(30.0, 30.0);
     int waited = 0;
-    while (!onScreen(registry, near) && waited < 300) {
+    while (!onScreen(registry, far) && waited < 600) {
         tickWith(layer, registry, kRest, {}, {});
         ++waited;
     }
-    CHECK_MSG(onScreen(registry, near), "the near portal's spot comes into view");
+    CHECK_MSG(onScreen(registry, far), "the spot over the stone comes into view");
+    tap(layer, registry, screenOf(registry, far));
+    landShot(layer, registry);
+    const glm::dvec2 near = playerPx(registry, layer) + glm::dvec2(40.0, 0.0);
+    CHECK_MSG(onScreen(registry, near), Point(near) + " is on screen");
     tap(layer, registry, screenOf(registry, near));
+    landShot(layer, registry);
     const MagicPortals::Game::Level* level = layer.SimLevel();
-    CHECK_MSG(level != nullptr && level->portals.placed.size() == 2u, "two portals tapped in");
+    CHECK_MSG(level != nullptr && level->portals.placed.size() == 2u,
+              "two portals shot in; the last shot stopped at " + lastFailure(layer));
 
     int clearedAt = -1;
-    for (int tick = 1; tick <= 360 && clearedAt < 0; ++tick) {
+    for (int tick = 1; tick <= 1800 && clearedAt < 0; ++tick) {
         std::vector<std::string> pressed;
         if (tick == 1) pressed.push_back(MagicPortalsLayer::kRight);
         tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, std::move(pressed));
-        if (!IsAt(layer, "level30")) clearedAt = tick;
+        if (!IsAt(layer, "level8")) clearedAt = tick;
     }
     const auto& cleared = layer.LastCleared();
-    std::printf("  played through: level30 cleared %.2f s after right went down, %d of %d crystals, %d portals\n",
+    std::printf("  played through: 1-9 cleared %.2f s after right went down, %d of %d crystals, %d portals\n",
                 clearedAt * static_cast<double>(MagicPortalsLayer::kTick), cleared ? cleared->crystals : -1,
                 cleared ? cleared->crystalsTotal : -1, cleared ? cleared->portalsUsed : -1);
     CHECK_MSG(clearedAt > 0, "the player reaches the exit");
-    CHECK_MSG(cleared && cleared->name == "level30" && cleared->traversals == 1 && cleared->portalsUsed == 2,
-              "through one pair, with two portals placed");
-    CHECK_MSG(cleared && cleared->crystals >= 1, "collecting crystal_ent_998 on the way");
-    CHECK_MSG(IsAt(layer, "level31") && layer.SimLevel() != nullptr, "and level31 is loaded");
+    CHECK_MSG(cleared && cleared->name == "level8" && cleared->label == "1-9" && cleared->portalsUsed == 2 &&
+                  cleared->traversals >= 1,
+              "through the pair the two shots opened");
+    CHECK_MSG(IsAt(layer, "level9") && layer.SimLevel() != nullptr, "and level9 is loaded");
     layer.OnDetach(registry);
 }
 
@@ -285,7 +321,8 @@ void LevelsFollowInOrderAndRetryIsInstant() {
     const glm::dvec2 aim = spawn + glm::dvec2(0.0, -48.0);
     CHECK_MSG(onScreen(registry, aim), Point(aim) + " is on screen");
     tap(layer, registry, screenOf(registry, aim));
-    CHECK_EQ(layer.SimLevel()->portals.portalsUsed, 1);
+    landShot(layer, registry);
+    CHECK_MSG(layer.SimLevel()->portals.portalsUsed == 1, "the shot stopped at " + lastFailure(layer));
     for (int tick = 0; tick < 20; ++tick) tickWith(layer, registry, kRest, {}, {});
     press(layer, registry, MagicPortalsLayer::kRetry);
     CHECK(IsAt(layer, "level1"));
@@ -461,7 +498,7 @@ void AStartThatIsNoLevelSaysSo() {
 void runTests() {
     TheLayerPlaysLevel30();
     ATapLandsWhereItPoints();
-    Level30FromTheSpawnWithTapsAndWalking();
+    Level8FromTheSpawnWithTapsAndWalking();
     LevelsFollowInOrderAndRetryIsInstant();
     NSkipsWhatThePortRefuses();
     DeathIsAnInstantRetry();

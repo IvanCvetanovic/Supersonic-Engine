@@ -192,6 +192,7 @@ private:
     std::vector<entt::entity> m_zones;    // one per no-portal zone
     std::vector<entt::entity> m_hazards;  // one per hazard, at the box that kills
     std::vector<ThrownBox> m_thrown;      // one per thrown body not yet taken back
+    entt::entity m_shot{entt::null};      // the portal shot in flight, when there is one
 
     struct Hud {
         entt::entity status{entt::null};
