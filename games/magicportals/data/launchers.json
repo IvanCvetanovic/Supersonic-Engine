@@ -13,10 +13,11 @@
         "rolling_stone.ent a level places, a rigid circle of 30 px, and the flags its .ent",
         "sets, so a thrown stone breaks walls and travels as a placed one does."
       ],
-      "_source": "the original's rolling_stone.ent: shape 2 (a circle), collision 60 x 60, CustomData demolisher 1 and teleportable 1",
+      "_source": "the original's rolling_stone.ent: shape 2 (a circle), collision 60 x 60, CustomData demolisher 1 and teleportable 1, Sprite rolling_stone.png",
       "radius_px": 30.0,
       "demolisher": true,
-      "teleportable": true
+      "teleportable": true,
+      "sprite": "rolling_stone.png"
     }
   },
 

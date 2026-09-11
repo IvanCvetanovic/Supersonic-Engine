@@ -131,6 +131,7 @@ void ChapterOnesLaunchers() {
         CHECK(launcher.throws.radiusPx == 30.0);
         CHECK(launcher.throws.demolisher);
         CHECK(launcher.throws.teleportable);
+        CHECK_MSG(launcher.throws.sprite == "rolling_stone.png", "drawn as rolling_stone.ent is: " + launcher.throws.sprite);
         CHECK_EQ(launchers.despawners.size(), e.despawners.size());
         for (std::size_t i = 0; i < launchers.despawners.size() && i < e.despawners.size(); ++i) {
             CHECK_MSG(launchers.despawners[i].name == e.despawners[i], launchers.despawners[i].name);

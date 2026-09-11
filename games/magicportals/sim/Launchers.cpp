@@ -37,14 +37,15 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         if (!name.empty() && name[0] == '_') continue;
         if (!entry.IsObject() || !entry.Has("radius_px") || !entry["radius_px"].IsNumber() ||
             !entry.Has("demolisher") || !entry["demolisher"].IsBool() || !entry.Has("teleportable") ||
-            !entry["teleportable"].IsBool()) {
-            error = path + ": throwables." + name + " needs radius_px, demolisher and teleportable";
+            !entry["teleportable"].IsBool() || !entry.Has("sprite") || !entry["sprite"].IsString()) {
+            error = path + ": throwables." + name + " needs radius_px, demolisher, teleportable and sprite";
             return false;
         }
         Throwable throwable;
         throwable.radiusPx = entry["radius_px"].AsNumber();
         throwable.demolisher = entry["demolisher"].AsBool();
         throwable.teleportable = entry["teleportable"].AsBool();
+        throwable.sprite = entry["sprite"].AsString("");
         read.throwables[name] = throwable;
     }
     const Json::Value& names = root["despawners"]["names"];

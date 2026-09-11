@@ -38,6 +38,7 @@ struct Throwable {
     double radiusPx = 0.0;
     bool demolisher = false;
     bool teleportable = false;
+    std::string sprite; // the image its .ent shows, a file among the converted entities' art
 };
 
 // The port's launchers.json.

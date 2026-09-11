@@ -40,6 +40,16 @@ constexpr float kZoneDepth = 0.02f;
 const glm::vec3 kZoneColour(0.45f, 0.14f, 0.16f);
 const glm::vec3 kHazardColour(1.00f, 0.25f, 0.10f);
 
+// The level's art, one slot per sprite from the back: flat quads a hair apart,
+// in the order Godot draws the canvas (Sprites.hpp), all of it behind the
+// markers. The player takes the slot after the last sprite at z_index 0 or
+// below, which is where the remake's player - added to the level after its
+// nodes, at z_index 0 - is drawn. A thrown stone goes just behind it.
+constexpr float kSpriteBackZ = -1.5f;
+constexpr float kSpriteSlotZ = 0.004f;
+
+float SlotZ(int slot) { return kSpriteBackZ + kSpriteSlotZ * static_cast<float>(slot); }
+
 const glm::vec3 kStaticColour(0.42f, 0.44f, 0.50f);
 const glm::vec3 kDoorColour(0.30f, 0.45f, 0.75f);
 const glm::vec3 kCrateColour(0.72f, 0.50f, 0.26f);      // teleportable
@@ -148,6 +158,7 @@ void MagicPortalsLayer::bindInput() {
     Input::BindActionMouseButton(kTap, MouseButton::Left);
     Input::BindActionKey(kRetry, Key::R);
     Input::BindActionKey(kSkip, Key::N);
+    Input::BindActionKey(kBoxes, Key::B);
 }
 
 // ---- levels -----------------------------------------------------------------
@@ -223,8 +234,14 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     m_zones.clear();
     for (auto& e : m_hazards) destroy(e);
     m_hazards.clear();
-    for (ThrownBox& thrown : m_thrown) destroy(thrown.box);
+    for (ThrownBox& thrown : m_thrown) {
+        destroy(thrown.box);
+        destroy(thrown.quad);
+    }
     m_thrown.clear();
+    for (DrawnSprite& drawn : m_sprites) destroy(drawn.quad);
+    m_sprites.clear();
+    m_artReady = false;
     destroy(m_shot);
     destroy(m_player);
     destroy(m_exit);
@@ -417,6 +434,133 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
     for (std::size_t i = 0; i < m_level.hazards.hazards.size(); ++i) {
         m_hazards.push_back(makeBox(registry, "Magic Portals Hazard", glm::vec3(0.0f), glm::vec3(1.0f), kHazardColour));
     }
+    buildSprites(registry);
+}
+
+// ---- the level's art ----------------------------------------------------------
+
+entt::entity MagicPortalsLayer::makeSprite(entt::registry& registry, const char* tag, const std::string& texture,
+                                           bool additive) {
+    using namespace Supersonic;
+    const entt::entity e = registry.create();
+    registry.emplace<TagComponent>(e, tag);
+    registry.emplace<TransformComponent>(e);
+    registry.emplace<MeshComponent>(e).primitiveType = "Quad";
+    auto& material = registry.emplace<MaterialComponent>(e);
+    // Unlit, as the remake draws its canvas. The original's lights are not
+    // ported, which the remaster's doc records.
+    material.unlit = true;
+    material.transparent = true;
+    material.blend = additive ? MaterialComponent::BlendMode::Additive : MaterialComponent::BlendMode::Alpha;
+    material.albedoTexturePath = texture;
+    registry.emplace<RenderableComponent>(e).castsShadow = false;
+    return e;
+}
+
+void MagicPortalsLayer::placeSprite(entt::registry& registry, entt::entity quad, const glm::dvec2& centrePx,
+                                    const glm::dvec2& sizePx, float z, float rotation) const {
+    auto& transform = registry.get<Supersonic::TransformComponent>(quad);
+    const glm::vec3 centre = Units::ToWorld(centrePx.x, centrePx.y);
+    transform.position = glm::vec3(centre.x, centre.y, z);
+    // The quad primitive is one unit on a side, facing the camera.
+    transform.scale = glm::vec3(Units::ToMetres(sizePx.x), Units::ToMetres(sizePx.y), 1.0f);
+    transform.rotation = glm::vec3(0.0f, 0.0f, rotation);
+}
+
+glm::dvec2 MagicPortalsLayer::imageSizePx(const std::string& path) {
+    if (const auto known = m_imageSizes.find(path); known != m_imageSizes.end()) return known->second;
+    int width = 0;
+    int height = 0;
+    std::string error;
+    const glm::dvec2 size =
+        Sprites::ImageSize(path, width, height, error) ? glm::dvec2(width, height) : glm::dvec2(0.0);
+    m_imageSizes.emplace(path, size);
+    return size;
+}
+
+void MagicPortalsLayer::buildSprites(entt::registry& registry) {
+    using namespace Supersonic;
+    std::vector<Sprites::Sprite> sprites;
+    m_artError.clear();
+    if (!Sprites::Find(m_data.scene, m_paths.art, sprites, m_artError)) {
+        // Played anyway, as boxes: the art is the original's, and a machine
+        // without it can still play the port.
+        SUPERSONIC_LOG_WARN("Magic Portals") << "Drawing the level as boxes: " << m_artError << std::endl;
+        m_playerSlot = 0;
+        return;
+    }
+    m_playerSlot = static_cast<int>(std::count_if(sprites.begin(), sprites.end(),
+                                                  [](const Sprites::Sprite& s) { return s.zIndex <= 0; }));
+    const auto indexOf = [](const auto& list, const std::string& name) {
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            if (list[i].name == name) return static_cast<int>(i);
+        }
+        return -1;
+    };
+    for (Sprites::Sprite& sprite : sprites) {
+        DrawnSprite drawn;
+        drawn.quad = makeSprite(registry, "Magic Portals Sprite", sprite.texture, sprite.additive);
+        // The player's slot is kept free.
+        drawn.z = SlotZ(sprite.order < m_playerSlot ? sprite.order : sprite.order + 1);
+        drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
+        drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
+        drawn.zone = indexOf(m_level.portals.zones, sprite.node);
+        if (const auto body = m_level.built.entities.find(sprite.node); body != m_level.built.entities.end()) {
+            drawn.body = body->second;
+            // Bodies move on the tick and are drawn between ticks, as their boxes are.
+            registry.emplace<InterpolatedTransformComponent>(drawn.quad);
+        }
+        drawn.sprite = std::move(sprite);
+        m_sprites.push_back(std::move(drawn));
+    }
+    m_artReady = true;
+}
+
+void MagicPortalsLayer::syncSprites(entt::registry& registry) {
+    using namespace Supersonic;
+    for (DrawnSprite& drawn : m_sprites) {
+        if (drawn.quad == entt::null) continue;
+        const Sprites::Sprite& sprite = drawn.sprite;
+        glm::dvec2 centrePx = Sprites::CentrePx(sprite);
+        float rotation = Units::ToWorldRotation(sprite.rotation);
+        bool gone = false;
+        if (drawn.crystal >= 0) {
+            const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
+            gone = crystal.collected || crystal.expired;
+            // A timed crystal fades as it runs out: the remake's guess, as the
+            // box's is, and here as the alpha the remake fades.
+            float alpha = 1.0f;
+            if (crystal.timed && crystal.leftS < 2.0) {
+                alpha = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
+            }
+            if (!gone) registry.get<MaterialComponent>(drawn.quad).albedoColor = glm::vec4(1.0f, 1.0f, 1.0f, alpha);
+        } else if (drawn.staticPortal >= 0) {
+            gone = !m_level.portals.statics[static_cast<std::size_t>(drawn.staticPortal)].live;
+        } else if (drawn.zone >= 0) {
+            // A patrolling zone carries its picture with it.
+            const Portals::NoPortalZone& zone = m_level.portals.zones[static_cast<std::size_t>(drawn.zone)];
+            centrePx += zone.CentreNowPx() - zone.centrePx;
+        } else if (drawn.body != entt::null) {
+            // A body the level took away - a wall a stone broke - takes its picture.
+            gone = !registry.valid(drawn.body);
+            if (!gone) {
+                const auto& body = registry.get<TransformComponent>(drawn.body);
+                rotation = body.rotation.z;
+                // The offset turned with the body, its y flipped on the way to metres.
+                const glm::vec2 offset(Units::ToMetres(sprite.offsetPx.x), Units::ToMetres(-sprite.offsetPx.y));
+                const glm::vec2 turned(offset.x * std::cos(rotation) - offset.y * std::sin(rotation),
+                                       offset.x * std::sin(rotation) + offset.y * std::cos(rotation));
+                centrePx =
+                    Units::ToPixels(glm::vec3(body.position.x + turned.x, body.position.y + turned.y, 0.0f));
+            }
+        }
+        if (gone) {
+            registry.destroy(drawn.quad);
+            drawn.quad = entt::null;
+            continue;
+        }
+        placeSprite(registry, drawn.quad, centrePx, sprite.sizePx, drawn.z, rotation);
+    }
 }
 
 void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
@@ -439,11 +583,13 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         placeBox(registry, drawn.box, centrePx, drawn.sizePx, 0.0f, drawn.depth, angle);
     }
 
-    // One box per body a launcher threw, made and unmade to match.
+    // One box and one sprite per body a launcher threw, made and unmade to match.
     for (ThrownBox& drawn : m_thrown) {
         if (registry.valid(drawn.body)) continue;
         if (drawn.box != entt::null && registry.valid(drawn.box)) registry.destroy(drawn.box);
+        if (drawn.quad != entt::null && registry.valid(drawn.quad)) registry.destroy(drawn.quad);
         drawn.box = entt::null;
+        drawn.quad = entt::null;
     }
     std::erase_if(m_thrown, [](const ThrownBox& drawn) { return drawn.box == entt::null; });
     for (const Launchers::Thrown& thrown : m_level.launchers.live) {
@@ -455,17 +601,32 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             made.body = thrown.body;
             made.box = makeBox(registry, "Magic Portals Thrown", glm::vec3(0.0f), glm::vec3(1.0f), kStoneColour);
             registry.emplace<InterpolatedTransformComponent>(made.box);
+            // Drawn as what it is, with the image the converter copied for its .ent.
+            const std::string texture = m_paths.art + "/assets/entities/" + thrown.is.sprite;
+            if (m_artReady && !thrown.is.sprite.empty() && imageSizePx(texture) != glm::dvec2(0.0)) {
+                made.quad = makeSprite(registry, "Magic Portals Thrown Sprite", texture, false);
+                registry.emplace<InterpolatedTransformComponent>(made.quad);
+            }
             m_thrown.push_back(made);
             drawn = m_thrown.end() - 1;
         }
         const auto& body = registry.get<TransformComponent>(thrown.body);
         placeBox(registry, drawn->box, Units::ToPixels(body.position), glm::dvec2(thrown.is.radiusPx * 2.0), 0.0f,
                  0.4f, body.rotation.z);
+        if (drawn->quad != entt::null) {
+            placeSprite(registry, drawn->quad, Units::ToPixels(body.position),
+                        imageSizePx(m_paths.art + "/assets/entities/" + thrown.is.sprite),
+                        SlotZ(m_playerSlot) - 0.5f * kSpriteSlotZ, body.rotation.z);
+        }
     }
 
+    // The player in its slot among the art - or, with the boxes shown or no art
+    // to show, where the boxes are.
+    const bool artOnly = m_artReady && !m_showBoxes;
     if (m_level.player != entt::null && registry.valid(m_level.player)) {
         const glm::dvec2 at = Units::ToPixels(registry.get<TransformComponent>(m_level.player).position);
-        placeBox(registry, m_player, at, glm::dvec2(m_data.tuning.widthPx, m_data.tuning.heightPx), 0.1f, 0.4f, 0.0f);
+        placeBox(registry, m_player, at, glm::dvec2(m_data.tuning.widthPx, m_data.tuning.heightPx),
+                 artOnly ? SlotZ(m_playerSlot) : 0.1f, artOnly ? 0.5f * kSpriteSlotZ : 0.4f, 0.0f);
     }
 
     const auto boxPx = [](const Trigger::Box& box, glm::dvec2& centrePx, glm::dvec2& sizePx) {
@@ -567,6 +728,23 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         boxPx(hazards[i].box, centrePx, sizePx);
         placeBox(registry, m_hazards[i], centrePx, sizePx, kMarkerZ, kMarkerDepth, 0.0f);
     }
+
+    syncSprites(registry);
+
+    // The art in place of the boxes, unless B asks for them or there is no art.
+    // What no level pictures - the player, the portals a shot opens, the shot -
+    // is a box either way.
+    const auto show = [&registry](entt::entity e, bool visible) {
+        if (e != entt::null && registry.valid(e)) registry.get<RenderableComponent>(e).isVisible = visible;
+    };
+    for (const Drawn& drawn : m_bodies) show(drawn.box, !artOnly);
+    for (const ThrownBox& drawn : m_thrown) show(drawn.box, !artOnly);
+    for (const entt::entity e : m_buttons) show(e, !artOnly);
+    for (const entt::entity e : m_crystals) show(e, !artOnly);
+    for (const entt::entity e : m_statics) show(e, !artOnly);
+    for (const entt::entity e : m_zones) show(e, !artOnly);
+    for (const entt::entity e : m_hazards) show(e, !artOnly);
+    show(m_exit, !artOnly);
 }
 
 void MagicPortalsLayer::buildHud(entt::registry& registry) {
@@ -619,7 +797,8 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
                  (c.Gold() ? " - gold" : "");
     }
     set(m_hud.result, result);
-    set(m_hud.controls, "Left/Right or A/D to walk.  Click to place a portal.  R retries.  N skips a level.");
+    set(m_hud.controls,
+        "Left/Right or A/D to walk.  Click to fire a portal.  R retries.  N skips a level.  B shows the bodies.");
 }
 
 // ---- the tick ----------------------------------------------------------------
@@ -641,6 +820,8 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
 
 void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     using Supersonic::Input;
+    // The bodies' boxes over the art, or not: the picture only.
+    if (Input::TickWasPressed(kBoxes)) m_showBoxes = !m_showBoxes;
     // Skip and retry first, so the tick that asks plays the level it lands on.
     if (m_current >= 0 && Input::TickWasPressed(kSkip)) {
         goTo(registry, m_chapters.Next(m_current));

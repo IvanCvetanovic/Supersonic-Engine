@@ -157,6 +157,10 @@ add_mp_test(test_mp_demolish)
 add_mp_test(test_mp_launchers)
 # The portal shot: a tap fires, and the portal opens where the shot arrives.
 add_mp_test(test_mp_shot)
+# A level's own art: the sprites the converter wrote, their order and blend.
+# Its reader is tested on files it writes, so it runs anywhere; only the part
+# that reads the converted levels is skipped without them, and never with 77.
+add_mp_test(test_mp_sprites)
 
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.

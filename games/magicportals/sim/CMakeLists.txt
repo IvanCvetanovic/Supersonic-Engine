@@ -21,6 +21,7 @@ add_library(MagicPortalsSim STATIC
     Puzzle.cpp
     Roles.cpp
     Shot.cpp
+    Sprites.cpp
     Trigger.cpp
     Tscn.cpp
 )

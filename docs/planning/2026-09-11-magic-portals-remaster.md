@@ -105,7 +105,12 @@ inventory.
 8. **The portal shot, and the projectile blocker.** Added on 11 September,
    when step 7 found that portals are fired (see the owner's answers). Level
    1-7's blocker can only stop a portal shot, so it moved here from step 7.
-9. **The original's sprites.**
+9. **The original's sprites.** Split in three (see step 9):
+   - 9a, additive blending in the engine;
+   - 9b, the levels' own art;
+   - 9c, the original's art for what no level pictures: the player, the
+     portals a shot opens, and the shot. It waits on the owner's word about
+     the character's frames.
 10. **Reflectors.** The remake marks what they reflect a guess. The owner said
     on 11 September that they bounce the portal shot, so they come after it.
     Where a bounced shot opens its portal is still to be asked. Nothing is to
@@ -797,6 +802,149 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_movers | 53 | 0 |
 | test_mp_timed | 50 | 0 |
 | test_mp_layer | 65 | 0 |
+| test_mp_camera | 15 | 0 |
+| test_mp_chapters | 39 | 0 |
+| test_mp_statics | 65 | 0 |
+| test_mp_play | 131 | 0 |
+| test_mp_start | 365 | 0 |
+
+## Step 9 - the art (9a and 9b built; 9c waits on the owner)
+
+Split in three, so that what needs nobody's word lands first:
+- **9a, the engine.** Additive blending, which the levels' glows need.
+- **9b, the levels' own art.** Every sprite the converter wrote, drawn from
+  its `out/assets`. Every texture path is one a level file names.
+- **9c, the original's art for what no level pictures.** The player is
+  `dark_mage.ent`, whose sheet `magic_portals_hd.png` holds sixteen 40x56
+  frames. The portals a shot opens are `portal.ent`, drawing
+  `portal_halo.png`. The shot is `projectile.ent`, drawing `projectile.png` in
+  six frames. These are in the extracted original, not in the converter's
+  output. Which of the sheet's frames are standing and walking, and which way
+  they face, is the owner's to say. Composing a walk cycle from the sheet
+  would be inventing it.
+
+### 9a - additive blending in the engine (built, fa28d7d)
+
+- **The need.** 98 sprites across the levels carry Godot's
+  `BLEND_MODE_ADD`: 71 anti-portal zones, 19 spirals, 7 static portals, a key
+  and a satellite. `portal_halo.png` and `projectile.png` are RGB with no alpha
+  channel, so mixed they would be black squares.
+- **The engine.** `MaterialComponent::blend` is `Alpha` or `Additive`, and
+  means something only on a transparent material. The renderer has a third
+  scene pipeline, which adds.
+- **The order.** The blended pass records the sorted draws in runs of one
+  blend. A halo between two sprites stays between them. Grouping by blend
+  would save binds and put the halo in front.
+- **Tests.** `test_draworder` (85 checks) and `test_materials` (210). GCC's
+  ctest passes 91 of 91. MSVC builds everything, and the blend suites and
+  their neighbours pass.
+
+### 9b - the levels' art (built)
+
+`Sprites` reads every `Sprite2D`:
+- **What it reads.**
+  - The texture. It is a `res://` path, resolved against the directory above
+    the levels, where the converter writes the art.
+  - The sprite's offset.
+  - The entity node's position, rotation and `z_index`.
+  - A `CanvasItemMaterial`. With `blend_mode` 1 it adds; 0 mixes.
+- **Size.** Godot draws a `Sprite2D` centred, at its image's size, and the
+  converter never writes a scale. The size is read from the image's header.
+  The converter copies PNGs and one BMP, `black.bmp`, a doorway's black at
+  40x100.
+- **Order.** Godot's canvas order: `z_index`, then the file.
+- **Strict,** like the reader under it. These are errors naming the line:
+  - a sprite that is not an entity's own;
+  - a texture that is not a `res://` image;
+  - an image that cannot be sized;
+  - a blend the port does not draw.
+
+The layer draws each sprite as a quad, unlit, blended as the level says:
+- **What a sprite follows.**
+  - Its node's body: platforms, lifts, doors, crates and stones.
+  - Or the crystal, static portal or patrolling no-portal zone it pictures.
+
+  It goes when that goes: a crystal taken, a wall a stone broke, a static
+  portal spent. A timed crystal fades by alpha, as the remake's guess fades it.
+- **Thrown stones** are drawn as `rolling_stone.ent` is, with
+  `rolling_stone.png`. `launchers.json` now names each throwable's sprite,
+  taken from its `.ent`.
+- **Depth.** Each sprite gets a slot from the back, a hair apart. The player
+  takes the slot after the last sprite at `z_index` 0 or below. That is where
+  the remake draws its player: added after the level's nodes, at `z_index` 0.
+- **Boxes.**
+  - The bodies' boxes are kept, hidden behind the art, and B shows them.
+  - The player, the portals a shot opens and the shot stay boxes until 9c.
+  - Without the art, on a machine without the remake's `out/`, the level is
+    still played, drawn as boxes, and the layer says why.
+- **Where the art is.** `--art` names the directory. `--levels` elsewhere
+  brings its art with it.
+- **A C4458 from step 8 is fixed.** `Portals::Shoot`'s local `shot` hid the
+  member. MSVC warned; GCC does not.
+
+What is not drawn, named here rather than found later:
+- **Light.** The original lit its levels, with torches, `applyLight` and
+  emissive colours. The remake draws unlit, and so does the port.
+- **Particles.** Portals, crystals and the shot have particle systems (`.par`)
+  in the original. None is drawn.
+- **Tint.** `portal_static.ent`'s emissive colour (0.5, 0.4, 1.0) is not
+  applied. Static portals are not tinted red and blue, as the level data
+  calls them.
+- **Scale.** An anti-portal zone's sprite is its image's size, while the zone
+  refuses taps within `scale` times the radius. The converter writes no scale
+  on the sprite, and the converter is the oracle.
+- **Buttons** show no pressed state. The original's frames for it are not
+  known.
+
+`test_mp_sprites`, 68 checks. It is not skipped without the levels; only its
+second half is:
+- **Without the levels.**
+  - The header reader, on files the suite writes: a PNG, a top-down BMP, an
+    old OS/2 BMP.
+  - It refuses a GIF, a cut header, a zero size and a missing file, naming
+    them.
+  - A hand-written scene, out of order, comes back in canvas order with every
+    property. Its turned offset lands where the arithmetic says.
+  - A missing image, a subtracting blend and a sprite under a body are each
+    refused, by name.
+- **With them.**
+  - Level8's 23 sprites, in order, each image present, the sky first; six
+    pinned with their image, size, place and `z_index`.
+  - Level0's four static portals, the halo, added.
+  - The one sideways offset, on level 4-32's dragon.
+  - A turned block on level 1-2.
+
+`test_mp_layer`, now 91 checks:
+- level8's 23 quads, unlit, mixed, each with its image. The sky is the
+  farthest back, at its own size.
+- The bodies' boxes are hidden, B shows every one, and the player stays a box.
+- A crystal taken takes its picture, and nothing outlives the layer.
+- Level0's four halos are added.
+- Without the art the level plays as boxes and says why.
+- A broken wall takes its picture, and a thrown stone is drawn as a rolling
+  stone and goes on a retry.
+
+Rendered on both toolchains, 120 frames each:
+- under GCC on lavapipe, with validation on, which reports nothing;
+- under MSVC on the laptop's AMD Radeon 780M.
+
+Level 1-1 shows its static portals as white halos over the arches, added.
+Level 1-9 shows the stone, the three crystals, the hint arrow, the sandy wall
+and the slope. The player is the one box left in either.
+
+The inventory is unchanged: chapter 1 has 32 levels starting and 25 playing.
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_sprites | 68 | 0 |
+| test_mp_layer | 91 | 0 |
+| test_mp_launchers | 93 | 0 |
+| test_mp_shot | 58 | 0 |
+| test_mp_demolish | 133 | 0 |
+| test_mp_hazards | 19 | 0 |
+| test_mp_movers | 53 | 0 |
+| test_mp_timed | 50 | 0 |
 | test_mp_camera | 15 | 0 |
 | test_mp_chapters | 39 | 0 |
 | test_mp_statics | 65 | 0 |

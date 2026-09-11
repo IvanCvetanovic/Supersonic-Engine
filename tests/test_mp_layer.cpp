@@ -28,6 +28,7 @@
 
 #include "sim/Units.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -139,6 +140,25 @@ std::string Point(const glm::dvec2& p) {
 
 bool IsAt(const MagicPortalsLayer& layer, const char* name) {
     return layer.Current() != nullptr && layer.Current()->name == name;
+}
+
+int Tagged(entt::registry& registry, const char* tag) {
+    int count = 0;
+    for (auto [entity, t] : registry.view<TagComponent>().each()) {
+        (void)entity;
+        if (t.tag == tag) ++count;
+    }
+    return count;
+}
+
+// How many entities with this tag are drawn.
+int Shown(entt::registry& registry, const char* tag) {
+    int count = 0;
+    for (auto [entity, t, renderable] : registry.view<TagComponent, RenderableComponent>().each()) {
+        (void)entity;
+        if (t.tag == tag && renderable.isVisible) ++count;
+    }
+    return count;
 }
 
 // ---- One level --------------------------------------------------------------
@@ -401,6 +421,7 @@ void ABrokenWallTakesItsBoxWithIt() {
         return count;
     };
     const int before = boxes();
+    const int pictures = Tagged(registry, "Magic Portals Sprite");
     const entt::entity stone = layer.SimLevel()->demolish.stones.front().body;
     auto& transform = registry.get<TransformComponent>(stone);
     const glm::vec3 at = MagicPortals::Units::ToWorld(305.0 - 30.0 - 6.0, 95.0);
@@ -411,6 +432,7 @@ void ABrokenWallTakesItsBoxWithIt() {
     }
     CHECK_EQ(layer.SimLevel()->demolish.Broken(), 1);
     CHECK_EQ(boxes(), before - 1);
+    CHECK_MSG(Tagged(registry, "Magic Portals Sprite") == pictures - 1, "and its picture with it");
     layer.OnDetach(registry);
 }
 
@@ -450,6 +472,7 @@ void ARetryTakesTheThrownStonesAway() {
     }
     CHECK_EQ(layer.SimLevel()->launchers.live.size(), std::size_t{1});
     CHECK_EQ(thrownBoxes(), 1);
+    CHECK_MSG(Tagged(registry, "Magic Portals Thrown Sprite") == 1, "drawn as the rolling stone it is");
     CHECK_EQ(spheres(), loadedSpheres + 1);
 
     press(layer, registry, MagicPortalsLayer::kRetry);
@@ -458,6 +481,7 @@ void ARetryTakesTheThrownStonesAway() {
     CHECK(layer.SimLevel()->launchers.live.empty());
     CHECK_EQ(thrown(), 0);
     CHECK_EQ(thrownBoxes(), 0);
+    CHECK_EQ(Tagged(registry, "Magic Portals Thrown Sprite"), 0);
     CHECK_EQ(spheres(), loadedSpheres);
     // The tick that pressed R played the reloaded level's first tick.
     int again = 1;
@@ -495,6 +519,116 @@ void AStartThatIsNoLevelSaysSo() {
     layer.OnDetach(registry);
 }
 
+// ---- The level's art ----------------------------------------------------------
+
+void TheLevelsArtIsDrawn() {
+    // level8's 23 sprites, each a quad drawn unlit and blended with the image the
+    // level names, the sky farthest back. The bodies' boxes are hidden behind
+    // them and B shows them; the player, which no level pictures, stays a box.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level8");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    CHECK_MSG(layer.ArtError().empty(), layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    CHECK_EQ(Tagged(registry, "Magic Portals Sprite"), 23);
+
+    bool drawnAsArt = true;
+    bool skyFound = false;
+    float skyZ = 0.0f;
+    float farthest = 1e9f;
+    glm::vec3 skyScale(0.0f);
+    for (auto [entity, tag, material, transform] :
+         registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
+        (void)entity;
+        if (tag.tag != "Magic Portals Sprite") continue;
+        std::error_code ec;
+        if (!material.unlit || !material.transparent || material.blend != MaterialComponent::BlendMode::Alpha ||
+            !std::filesystem::is_regular_file(material.albedoTexturePath, ec)) {
+            drawnAsArt = false;
+        }
+        if (material.albedoTexturePath.find("icy_sky.png") != std::string::npos) {
+            skyFound = true;
+            skyZ = transform.position.z;
+            skyScale = transform.scale;
+        }
+        if (transform.position.z < farthest) farthest = transform.position.z;
+    }
+    CHECK_MSG(drawnAsArt, "each unlit, mixed as level8 says, with an image that is there");
+    CHECK_MSG(skyFound && skyZ == farthest, "the sky is the farthest back");
+    CHECK_MSG(std::fabs(skyScale.x - 455.0f / 50.0f) < 1e-4f && std::fabs(skyScale.y - 256.0f / 50.0f) < 1e-4f,
+              "at its image's own size");
+
+    const int bodies = Tagged(registry, "Magic Portals Body");
+    CHECK(bodies > 0);
+    CHECK_MSG(Shown(registry, "Magic Portals Body") == 0, "the art stands in for the bodies' boxes");
+    CHECK_MSG(Shown(registry, "Magic Portals Player") == 1, "and the player, which no level pictures, is a box");
+    press(layer, registry, MagicPortalsLayer::kBoxes);
+    CHECK(layer.ShowingBoxes());
+    CHECK_MSG(Shown(registry, "Magic Portals Body") == bodies, "B shows every body's box");
+    press(layer, registry, MagicPortalsLayer::kBoxes);
+    CHECK_EQ(Shown(registry, "Magic Portals Body"), 0);
+
+    // A crystal taken takes its picture with it.
+    const int pictures = Tagged(registry, "Magic Portals Sprite");
+    const MagicPortals::Goals::Crystal* crystal = nullptr;
+    for (const MagicPortals::Goals::Crystal& c : layer.SimLevel()->goals.crystals) {
+        if (c.name == "crystal_ent_790") crystal = &c;
+    }
+    CHECK(crystal != nullptr);
+    if (crystal == nullptr) return;
+    auto& transform = registry.get<TransformComponent>(layer.SimLevel()->player);
+    transform.position = glm::vec3(crystal->box.centre, transform.position.z);
+    tickWith(layer, registry, kRest, {}, {});
+    const bool taken = crystal->collected;
+    CHECK_MSG(taken, "the player put in crystal_ent_790 takes it");
+    CHECK_MSG(Tagged(registry, "Magic Portals Sprite") == pictures - 1, "and its picture goes");
+    layer.OnDetach(registry);
+    CHECK_MSG(Tagged(registry, "Magic Portals Sprite") == 0, "and none outlives the layer");
+}
+
+void AStaticPortalGlows() {
+    // level0's four static portals are the halo, added: the one blend besides
+    // mixing that the levels use.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    int added = 0;
+    for (auto [entity, tag, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        (void)entity;
+        if (tag.tag == "Magic Portals Sprite" && material.blend == MaterialComponent::BlendMode::Additive &&
+            material.albedoTexturePath.find("portal_halo.png") != std::string::npos) {
+            ++added;
+        }
+    }
+    CHECK_EQ(Tagged(registry, "Magic Portals Sprite"), 18);
+    CHECK_EQ(added, 4);
+    layer.OnDetach(registry);
+}
+
+void WithoutTheArtTheLevelIsBoxes() {
+    // The art is the original's and lives outside the repository. Where it
+    // cannot be read, the level is still played, drawn as boxes, and says why.
+    const std::filesystem::path empty = std::filesystem::temp_directory_path() / "supersonic-test-mp-layer-no-art";
+    std::error_code ec;
+    std::filesystem::create_directories(empty, ec);
+    MagicPortalsLayer::Paths paths = TestPaths();
+    paths.art = empty.string();
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(paths, "level8");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    CHECK_MSG(!layer.ArtError().empty(), "the missing art is reported");
+    CHECK_EQ(Tagged(registry, "Magic Portals Sprite"), 0);
+    const int bodies = Tagged(registry, "Magic Portals Body");
+    CHECK_MSG(bodies > 0 && Shown(registry, "Magic Portals Body") == bodies, "and every body is a box");
+    layer.OnDetach(registry);
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     ATapLandsWhereItPoints();
@@ -502,6 +636,9 @@ void runTests() {
     LevelsFollowInOrderAndRetryIsInstant();
     NSkipsWhatThePortRefuses();
     DeathIsAnInstantRetry();
+    TheLevelsArtIsDrawn();
+    AStaticPortalGlows();
+    WithoutTheArtTheLevelIsBoxes();
     ABrokenWallTakesItsBoxWithIt();
     ARetryTakesTheThrownStonesAway();
     TheChapterEnds();

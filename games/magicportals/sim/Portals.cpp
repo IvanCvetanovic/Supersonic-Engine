@@ -113,11 +113,11 @@ bool State::TryPlace(const glm::dvec2& atPx) {
 
 bool State::Shoot(entt::registry& registry, const glm::dvec2& atPx) {
     if (budget <= 0 || flight || shooter == entt::null || !registry.valid(shooter)) return false;
-    Flight shot;
-    shot.fromPx = Units::ToPixels(registry.get<TransformComponent>(shooter).position);
-    shot.toPx = atPx;
-    shot.atPx = shot.fromPx;
-    flight = shot;
+    Flight fired;
+    fired.fromPx = Units::ToPixels(registry.get<TransformComponent>(shooter).position);
+    fired.toPx = atPx;
+    fired.atPx = fired.fromPx;
+    flight = fired;
     ++shotsFired;
     return true;
 }
