@@ -102,6 +102,9 @@ public:
     const Chapters::Level* Current() const;
 
     bool ChapterComplete() const { return m_chapterComplete; }
+
+    // How many times the player has died this session. Each death is a retry.
+    int Deaths() const { return m_deaths; }
     const std::optional<Cleared>& LastCleared() const { return m_lastCleared; }
 
     // The camera as the last tick left it, and what it shows, in the level's
@@ -157,6 +160,7 @@ private:
     int m_current{-1}; // the entry in m_chapters being shown
     bool m_chapterComplete{false};
     std::optional<Cleared> m_lastCleared;
+    int m_deaths{0};
 
     Camera::Rules m_cameraRules;
     double m_viewHeightPx{0.0};
@@ -180,6 +184,7 @@ private:
     std::vector<entt::entity> m_portals;  // one per placed portal
     std::vector<entt::entity> m_statics;  // one per static portal, null once spent
     std::vector<entt::entity> m_zones;    // one per no-portal zone
+    std::vector<entt::entity> m_hazards;  // one per hazard, at the box that kills
 
     struct Hud {
         entt::entity status{entt::null};

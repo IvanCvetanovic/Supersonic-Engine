@@ -7,7 +7,7 @@
 //   before the step: the buttons and their doors (Puzzle), the moving platforms
 //                    and lifts (Mover), then the player's steering (Player);
 //   after the step:  the crystals and the exit, where the step left the player
-//                    (Goals), then the portals (Portals).
+//                    (Goals), the hazards (Hazards), then the portals (Portals).
 // A test runs Tick, which is the two halves with the step between them. The
 // engine's app steps physics itself, before each layer's OnFixedUpdate. So a
 // layer runs AfterStep and then BeforeStep, and the app's step falls between
@@ -15,6 +15,7 @@
 // later.
 
 #include "sim/Goals.hpp"
+#include "sim/Hazards.hpp"
 #include "sim/LevelBuilder.hpp"
 #include "sim/Player.hpp"
 #include "sim/Portals.hpp"
@@ -58,6 +59,7 @@ struct Level {
     Puzzle::Channels channels;
     Mover::Movers movers;
     Goals::State goals;
+    Hazards::State hazards;
     Portals::State portals;
     entt::entity player = entt::null;
 };

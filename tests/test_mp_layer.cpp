@@ -320,6 +320,32 @@ void NSkipsWhatThePortRefuses() {
     layer.OnDetach(registry);
 }
 
+void DeathIsAnInstantRetry() {
+    // Into level5's death_area, and on that same tick the level is as it loaded:
+    // the player at its spawn, one death counted, no load in between.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level5");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    if (layer.SimLevel() == nullptr) return;
+    const glm::dvec2 spawn = playerPx(registry, layer);
+    const MagicPortals::Hazards::Hazard* hazard = layer.SimLevel()->hazards.FindHazard("death_area_ent_800");
+    CHECK(hazard != nullptr);
+    if (hazard == nullptr) return;
+    auto& transform = registry.get<TransformComponent>(layer.SimLevel()->player);
+    transform.position = glm::vec3(hazard->box.centre, transform.position.z);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_EQ(layer.Deaths(), 1);
+    CHECK(IsAt(layer, "level5"));
+    CHECK(layer.SimLevel() != nullptr);
+    if (layer.SimLevel() == nullptr) return;
+    CHECK(!layer.SimLevel()->hazards.playerDied);
+    CHECK_MSG(glm::distance(playerPx(registry, layer), spawn) < 1.0,
+              "back at the spawn: " + Point(playerPx(registry, layer)));
+    layer.OnDetach(registry);
+}
+
 void TheChapterEnds() {
     entt::registry registry;
     publishViewport(registry);
@@ -351,6 +377,7 @@ void runTests() {
     Level30FromTheSpawnWithTapsAndWalking();
     LevelsFollowInOrderAndRetryIsInstant();
     NSkipsWhatThePortRefuses();
+    DeathIsAnInstantRetry();
     TheChapterEnds();
     AStartThatIsNoLevelSaysSo();
 }

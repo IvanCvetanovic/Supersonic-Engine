@@ -9,6 +9,7 @@ add_library(MagicPortalsSim STATIC
     Chapters.cpp
     Game.cpp
     Goals.cpp
+    Hazards.cpp
     LevelBuilder.cpp
     Mover.cpp
     Player.cpp

@@ -38,6 +38,7 @@ constexpr float kMarkerDepth = 0.1f;
 constexpr float kZoneZ = -0.35f;
 constexpr float kZoneDepth = 0.02f;
 const glm::vec3 kZoneColour(0.45f, 0.14f, 0.16f);
+const glm::vec3 kHazardColour(1.00f, 0.25f, 0.10f);
 
 const glm::vec3 kStaticColour(0.42f, 0.44f, 0.50f);
 const glm::vec3 kDoorColour(0.30f, 0.45f, 0.75f);
@@ -261,6 +262,8 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     m_statics.clear();
     for (auto& e : m_zones) destroy(e);
     m_zones.clear();
+    for (auto& e : m_hazards) destroy(e);
+    m_hazards.clear();
     destroy(m_player);
     destroy(m_exit);
     // And the level's own bodies.
@@ -436,6 +439,9 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
     for (std::size_t i = 0; i < m_level.portals.zones.size(); ++i) {
         m_zones.push_back(makeBox(registry, "Magic Portals No-Portal Zone", glm::vec3(0.0f), glm::vec3(1.0f), kZoneColour));
     }
+    for (std::size_t i = 0; i < m_level.hazards.hazards.size(); ++i) {
+        m_hazards.push_back(makeBox(registry, "Magic Portals Hazard", glm::vec3(0.0f), glm::vec3(1.0f), kHazardColour));
+    }
 }
 
 void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
@@ -536,6 +542,15 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         const double sizePx = m_level.portals.rules.collisionRadiusPx * zones[i].scale * 2.0;
         placeBox(registry, m_zones[i], zones[i].CentreNowPx(), glm::dvec2(sizePx), kZoneZ, kZoneDepth, 0.0f);
     }
+
+    // Hazards, at the box that kills: the remake's trigger, not the shape the
+    // converter gives them (Hazards.hpp).
+    const std::vector<Hazards::Hazard>& hazards = m_level.hazards.hazards;
+    for (std::size_t i = 0; i < m_hazards.size() && i < hazards.size(); ++i) {
+        glm::dvec2 centrePx, sizePx;
+        boxPx(hazards[i].box, centrePx, sizePx);
+        placeBox(registry, m_hazards[i], centrePx, sizePx, kMarkerZ, kMarkerDepth, 0.0f);
+    }
 }
 
 void MagicPortalsLayer::buildHud(entt::registry& registry) {
@@ -575,6 +590,7 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
             status = Chapters::Label(entry) + "     Crystals " + Count(total - goals.Remaining()) + "/" +
                      Count(total) + "     Portals " + Count(m_level.portals.portalsUsed) + "     Gold: " +
                      Count(entry.goldenScore) + " or fewer";
+            if (m_deaths > 0) status += "     Deaths " + Count(m_deaths);
         }
     }
     set(m_hud.status, status);
@@ -619,8 +635,16 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
     if (m_loaded) {
         // The app has just stepped physics. So first what follows a step...
         Game::AfterStep(registry, m_level, fixedDelta);
-        // ...and the moment the exit reports, the next level (main.gd:161-168).
-        if (m_level.goals.completed) clearLevel(registry);
+        // ...and the moment the exit reports, the next level (main.gd:161-168). A
+        // death is a retry, at once (main.gd:155-158). Should both come on one
+        // tick, reaching the exit wins: the remake's order of two triggers in a
+        // frame is not defined.
+        if (m_level.goals.completed) {
+            clearLevel(registry);
+        } else if (m_level.hazards.playerDied) {
+            ++m_deaths;
+            loadLevel(registry, m_current);
+        }
     }
     if (m_loaded) {
         // Then this tick's input, and what comes before the next step.

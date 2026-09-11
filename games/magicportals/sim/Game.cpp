@@ -72,6 +72,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     out.player = Player::Spawn(registry, glm::dvec2(at->numbers[0], at->numbers[1]), data.tuning);
 
     if (!Goals::Find(data.scene, data.roles, data.goals, out.goals, error)) return false;
+    if (!Hazards::Find(data.scene, data.roles, out.hazards, error)) return false;
     return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers,
                          out.portals, error);
 }
@@ -84,6 +85,7 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
 
 void AfterStep(entt::registry& registry, Level& level, float dt) {
     level.goals.Tick(registry, level.player, dt);
+    level.hazards.Tick(registry, level.player);
     level.portals.Tick(registry, dt);
 }
 

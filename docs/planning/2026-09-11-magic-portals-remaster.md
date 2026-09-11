@@ -411,3 +411,62 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_statics | 65 | 0 |
 | test_mp_play | 131 | 0 |
 | test_mp_start | 365 | 0 |
+
+## Step 5 - hazards, and death (built)
+
+What `level_runtime.gd` does with a hazard, now in `Hazards`:
+- **The trigger is the remake's box, not the hazard's shape.**
+  - `_attach_trigger` gives every hazard the box its `trigger_size` names, or
+    the 16 px fallback. It never reads the `Area2D` the converter builds.
+  - None of chapter 1's four hazards carries a `trigger_size`.
+  - So level5's `death_area` is a 60x16 octagon, and only its middle 16x16
+    kills. The same holds for each `destroyier`.
+
+  The port does what the remake does, as it does for buttons. The original's
+  sensor would fire on the whole shape. Which of the two is right is a question
+  for playing the original, and until then the port plays the remake's box.
+- **Who dies, and when.** Only the player, and on entry, as `body_entered`
+  fires. So a player put down inside a hazard dies on the first tick.
+- **A death is a retry, at once** (`main.gd:155-158`). The layer counts deaths
+  for the HUD. Should the exit and a hazard both report on one tick, the exit
+  wins, because the remake's order of two triggers in a frame is not defined.
+- **The launcher does nothing in the remake.** `destroyier.ent` is also what
+  despawns a launcher's throws (`hazards.gd:420-422`). But the remake's
+  launcher only announces what it would throw, because the converter emits
+  levels, not entities a game could spawn. Until step 7, a `destroyier` here is
+  only a hazard.
+- **Drawn** at the box that kills.
+
+`test_mp_hazards`, 19 checks:
+- **The files.** Chapter 1's four hazards are pinned, each the 16 px fallback at
+  its node.
+- **The edge.** Beside the box but inside the octagon, the player lives. In the
+  box, it dies on that tick, and the hazard is named.
+
+`test_mp_layer` adds a check that dying in level5 reloads it on the same tick,
+with the player at its spawn and one death counted.
+
+The inventory after step 5: chapter 1 has 32 levels starting and 18 playing.
+Chapters 2 to 4 are unchanged. What is left in chapter 1:
+
+| What | Levels |
+|---|---|
+| Rolling stones | 8, 12, 18, 19, 21, 22 |
+| Launchers | 23, 24, 25 |
+| Projectile blocker | 6 |
+| Reflectors | 11, 12, 19, 20, 22, 28 |
+| Boss | 31 |
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_hazards | 19 | 0 |
+| test_mp_movers | 53 | 0 |
+| test_mp_timed | 50 | 0 |
+| test_mp_layer | 49 | 0 |
+| test_mp_camera | 15 | 0 |
+| test_mp_chapters | 39 | 0 |
+| test_mp_statics | 65 | 0 |
+| test_mp_play | 131 | 0 |
+| test_mp_start | 365 | 0 |
