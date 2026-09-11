@@ -19,6 +19,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Goals::LoadRules(dataDirectory + "/portals.json", read.goals, error)) return false;
     if (!Portals::LoadRules(dataDirectory + "/portals.json", read.portals, error)) return false;
     if (!Mover::LoadRules(portDataDirectory + "/movers.json", read.movers, error)) return false;
+    if (!Demolish::LoadRules(portDataDirectory + "/demolish.json", read.demolish, error)) return false;
     std::error_code ec;
     std::filesystem::create_directories(prismDirectory, ec);
     read.prisms = prismDirectory;
@@ -73,6 +74,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
 
     if (!Goals::Find(data.scene, data.roles, data.goals, out.goals, error)) return false;
     if (!Hazards::Find(data.scene, data.roles, out.hazards, error)) return false;
+    if (!Demolish::Find(data.scene, data.roles, out.built, data.demolish, out.demolish, error)) return false;
     return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers,
                          out.portals, error);
 }
@@ -86,6 +88,7 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
 void AfterStep(entt::registry& registry, Level& level, float dt) {
     level.goals.Tick(registry, level.player, dt);
     level.hazards.Tick(registry, level.player);
+    level.demolish.Tick(registry);
     level.portals.Tick(registry, dt);
 }
 

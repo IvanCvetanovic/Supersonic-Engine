@@ -44,6 +44,8 @@ const glm::vec3 kStaticColour(0.42f, 0.44f, 0.50f);
 const glm::vec3 kDoorColour(0.30f, 0.45f, 0.75f);
 const glm::vec3 kCrateColour(0.72f, 0.50f, 0.26f);      // teleportable
 const glm::vec3 kFixedCrateColour(0.42f, 0.28f, 0.16f); // teleportable 0
+const glm::vec3 kStoneColour(0.58f, 0.58f, 0.62f);      // a rolling stone
+const glm::vec3 kBreakableColour(0.86f, 0.74f, 0.48f);  // what a stone breaks: sandy, as the walls are
 const glm::vec3 kPlayerColour(1.00f, 0.78f, 0.25f);
 const glm::vec3 kButtonUpColour(0.80f, 0.22f, 0.18f);
 const glm::vec3 kButtonDownColour(0.25f, 0.85f, 0.30f);
@@ -53,51 +55,6 @@ const glm::vec3 kExitReachedColour(0.60f, 1.00f, 0.60f);
 const glm::vec3 kPortalColour(0.90f, 0.30f, 0.90f);
 const glm::vec3 kStaticRedColour(0.90f, 0.30f, 0.25f);  // a static portal the level colours red
 const glm::vec3 kStaticBlueColour(0.30f, 0.50f, 1.00f); // and blue
-
-// The box a body's shape takes up, relative to its entity node, in the remake's
-// pixels: a rectangle's size, a circle's diameter, or a polygon's bounds. False
-// for a node with no Body/Shape.
-bool ShapeBoxPx(const Tscn::Scene& scene, const Tscn::Node& node, glm::dvec2& offsetPx, glm::dvec2& sizePx) {
-    const Tscn::Node* body = scene.Child(node, "Body");
-    const Tscn::Node* shape = body != nullptr ? scene.Child(*body, "Shape") : nullptr;
-    if (shape == nullptr) return false;
-    offsetPx = glm::dvec2(0.0);
-    if (const Tscn::Value* position = shape->Find("position");
-        position != nullptr && position->kind == Tscn::Value::Kind::Vector2) {
-        offsetPx = glm::dvec2(position->numbers[0], position->numbers[1]);
-    }
-    if (shape->type == "CollisionPolygon2D") {
-        const Tscn::Value* polygon = shape->Find("polygon");
-        if (polygon == nullptr || polygon->numbers.size() < 2) return false;
-        glm::dvec2 lo(polygon->numbers[0], polygon->numbers[1]);
-        glm::dvec2 hi = lo;
-        for (std::size_t i = 0; i + 1 < polygon->numbers.size(); i += 2) {
-            const glm::dvec2 point(polygon->numbers[i], polygon->numbers[i + 1]);
-            lo = glm::min(lo, point);
-            hi = glm::max(hi, point);
-        }
-        offsetPx += (lo + hi) * 0.5;
-        sizePx = hi - lo;
-        return true;
-    }
-    const Tscn::Value* ref = shape->Find("shape");
-    const Tscn::Resource* resource = ref != nullptr ? scene.Embedded(ref->text) : nullptr;
-    if (resource == nullptr) return false;
-    if (resource->type == "RectangleShape2D") {
-        const Tscn::Value* size = resource->Find("size");
-        if (size == nullptr || size->kind != Tscn::Value::Kind::Vector2) return false;
-        sizePx = glm::dvec2(size->numbers[0], size->numbers[1]);
-        return true;
-    }
-    if (resource->type == "CircleShape2D") {
-        double radius = 0.0;
-        const Tscn::Value* value = resource->Find("radius");
-        if (value == nullptr || !value->AsNumber(radius)) return false;
-        sizePx = glm::dvec2(radius * 2.0);
-        return true;
-    }
-    return false;
-}
 
 bool IsTrigger(const entt::registry& registry, entt::entity entity) {
     using namespace Supersonic;
@@ -400,7 +357,7 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
         const Tscn::Node* node = m_data.scene.FindNode(name);
         if (node == nullptr || IsTrigger(registry, entity)) continue;
         Drawn drawn;
-        if (!ShapeBoxPx(m_data.scene, *node, drawn.offsetPx, drawn.sizePx)) continue;
+        if (!LevelBuilder::ShapeBoundsPx(m_data.scene, *node, drawn.offsetPx, drawn.sizePx)) continue;
         drawn.body = entity;
         glm::vec3 colour = kStaticColour;
         drawn.depth = 0.6f;
@@ -413,6 +370,15 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
                                                entity) != m_level.portals.travellers.end();
                 colour = travels ? kCrateColour : kFixedCrateColour;
             }
+        }
+        // What a stone breaks, and the stones, told apart from the rest.
+        const Demolish::State& demolish = m_level.demolish;
+        if (std::any_of(demolish.breakables.begin(), demolish.breakables.end(),
+                        [entity](const Demolish::Breakable& b) { return b.body == entity; })) {
+            colour = kBreakableColour;
+        } else if (std::any_of(demolish.stones.begin(), demolish.stones.end(),
+                               [entity](const Demolish::Stone& s) { return s.body == entity; })) {
+            colour = kStoneColour;
         }
         drawn.box = makeBox(registry, "Magic Portals Body", glm::vec3(0.0f), glm::vec3(1.0f), colour);
         // Bodies move on the tick and are drawn between ticks.
@@ -446,8 +412,13 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
 
 void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     using namespace Supersonic;
-    for (const Drawn& drawn : m_bodies) {
-        if (!registry.valid(drawn.body)) continue;
+    for (Drawn& drawn : m_bodies) {
+        // A body the level took away - a wall a stone broke - takes its box with it.
+        if (!registry.valid(drawn.body)) {
+            if (drawn.box != entt::null && registry.valid(drawn.box)) registry.destroy(drawn.box);
+            drawn.box = entt::null;
+            continue;
+        }
         const auto& body = registry.get<TransformComponent>(drawn.body);
         const float angle = body.rotation.z;
         // The shape's offset, turned with its body. Pixels run +y down, so the

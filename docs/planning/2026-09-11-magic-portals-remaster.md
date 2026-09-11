@@ -470,3 +470,92 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_statics | 65 | 0 |
 | test_mp_play | 131 | 0 |
 | test_mp_start | 365 | 0 |
+
+## Step 6 - rolling stones, and the walls they break (built)
+
+What the remake's Demolisher does (`hazards.gd:97-120`), now in `Demolish`:
+- **A stone breaks whatever breakable thing it touches.** Breaking takes the
+  whole body away, collision included. A stone is not a hazard: it kills
+  nothing, and level 1-9 spawns the player 58 px from one.
+- **What is breakable, and the owner's ruling.**
+  - The remake breaks only what carries `metadata/breakable`.
+  - Eight `breakable_wall` placements carry no flag:
+    - chapter 1: levels 8, 12, 18, 21 (two), 23 and 24;
+    - chapter 2: level3a.
+
+    So in the remake a stone cannot break the wall in 1-9, which is the level
+    the achievement "Like a rolling stone" names.
+  - **The gap is in the original's data, not the converter.**
+    - Each of those walls is an inline entity in its `.esc`, and its CustomData
+      has no `breakable`. level8's carries only `blink`.
+    - Ethanon reads an inline entity as it stands
+      (`ETHEntityProperties.cpp:202-224`). Only a `<FileName>` reference would
+      pull in `breakable_wall.ent`, and that file does set the flag.
+
+    So the original decides by something the data does not show.
+  - The owner played the original and confirmed on 11 September that stones
+    broke those walls. The port's `demolish.json` lists `breakable_wall` as
+    breakable by name, with that note. Both readings are tested.
+- **Touching.** It is judged in the port's own tick after the step, as the
+  port's triggers are.
+  - The test is the stone's circle against the breakable's box, grown by
+    `demolish.json`'s contact margin: 1 px, and the port's own guess. The
+    margin is there because a solver leaves a resting stone touching a wall,
+    not overlapping it.
+  - The box is the shape's bounds, so an octagonal wall is met at most its
+    1.5 x 6.3 px chamfer early.
+- **Quarter turns only.** A breakable turned by any other angle is refused,
+  with a named error. Every breakable in the game is turned by 0 or by a
+  quarter turn.
+- **The tick.** After the step: goals, then hazards, then stones, then
+  portals. The portals are last because they move what goes through them.
+- **Drawn.** Breakables are sandy and stones grey. A broken wall's box goes
+  with its body. Before this, the layer would have left a destroyed body's box
+  standing where it was last drawn.
+- **Left for step 7.**
+  - Levels 23 and 24 have a breakable wall and no stone, because their launcher
+    throws `rolling_stone.ent`.
+  - 22 of the game's 27 stones carry a `destroyable` flag, and nothing reads it
+    yet. `rolling_stone_destroy.ent` exists beside `rolling_stone.ent`.
+
+`test_mp_demolish`, 132 checks:
+- **The files.** Chapter 1's stones and breakables are pinned: each wall's box,
+  and whether the level flags it. The counts are also pinned with the name rule
+  off, which is the remake's reading.
+- **Breaking.** level8's stone, thrown at its wall, breaks it, and nothing else
+  goes. The throw is 300 px/s from 6 px away, and the wall breaks on tick 16.
+  With the flag alone, the stone stops at the wall.
+- **Not breaking.** Left alone, the stone stays where it is and breaks nothing.
+  The player walking into the wall breaks nothing.
+- **The edge.** On its own, a quarter pixel either side of the margin.
+- **1-9, played.** One portal goes at the hint arrow behind the stone, and one
+  ahead of the player. Holding right takes the player through them and pushes
+  the stone off the ledge into the wall. The player reaches the exit in 3.85 s.
+
+`test_mp_layer` adds a check that a broken wall's box goes on the tick it
+breaks.
+
+The inventory after step 6: chapter 1 has 32 levels starting and 21 playing.
+Chapters 2 to 4 are unchanged. What is left in chapter 1:
+
+| What | Levels |
+|---|---|
+| Launchers | 23, 24, 25 |
+| Projectile blocker | 6 |
+| Reflectors | 11, 12, 19, 20, 22, 28 |
+| Boss | 31 |
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_demolish | 132 | 0 |
+| test_mp_hazards | 19 | 0 |
+| test_mp_movers | 53 | 0 |
+| test_mp_timed | 50 | 0 |
+| test_mp_layer | 52 | 0 |
+| test_mp_camera | 15 | 0 |
+| test_mp_chapters | 39 | 0 |
+| test_mp_statics | 65 | 0 |
+| test_mp_play | 131 | 0 |
+| test_mp_start | 365 | 0 |

@@ -7,6 +7,7 @@
 add_library(MagicPortalsSim STATIC
     Camera.cpp
     Chapters.cpp
+    Demolish.cpp
     Game.cpp
     Goals.cpp
     Hazards.cpp

@@ -346,6 +346,37 @@ void DeathIsAnInstantRetry() {
     layer.OnDetach(registry);
 }
 
+void ABrokenWallTakesItsBoxWithIt() {
+    // level8's stone thrown at its wall: on the tick the wall breaks, its box goes
+    // with its body, and no other box does.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level8");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    if (layer.SimLevel() == nullptr || layer.SimLevel()->demolish.stones.size() != 1) return;
+    const auto boxes = [&registry] {
+        int count = 0;
+        for (auto [entity, tag] : registry.view<TagComponent>().each()) {
+            (void)entity;
+            if (tag.tag == "Magic Portals Body") ++count;
+        }
+        return count;
+    };
+    const int before = boxes();
+    const entt::entity stone = layer.SimLevel()->demolish.stones.front().body;
+    auto& transform = registry.get<TransformComponent>(stone);
+    const glm::vec3 at = MagicPortals::Units::ToWorld(305.0 - 30.0 - 6.0, 95.0);
+    transform.position = glm::vec3(at.x, at.y, transform.position.z);
+    registry.get<RigidBodyComponent>(stone).velocity = glm::vec3(MagicPortals::Units::ToMetres(300.0), 0.0f, 0.0f);
+    for (int tick = 0; tick < 30 && layer.SimLevel()->demolish.Broken() == 0; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+    }
+    CHECK_EQ(layer.SimLevel()->demolish.Broken(), 1);
+    CHECK_EQ(boxes(), before - 1);
+    layer.OnDetach(registry);
+}
+
 void TheChapterEnds() {
     entt::registry registry;
     publishViewport(registry);
@@ -378,6 +409,7 @@ void runTests() {
     LevelsFollowInOrderAndRetryIsInstant();
     NSkipsWhatThePortRefuses();
     DeathIsAnInstantRetry();
+    ABrokenWallTakesItsBoxWithIt();
     TheChapterEnds();
     AStartThatIsNoLevelSaysSo();
 }

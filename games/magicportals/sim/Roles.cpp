@@ -16,7 +16,7 @@ bool Moves(const std::string& role) {
 bool IsPorted(const std::string& role) {
     static const char* const kPorted[] = {
         kPlayerSpawn, kLevelBounds, kLevelProperties, kExitDoor, kCollectible,
-        kSwitch, kSwitchedDoor, kLift, kMovingPlatform, kNoPortalZone, kStaticPortal, kHazard,
+        kSwitch, kSwitchedDoor, kLift, kMovingPlatform, kNoPortalZone, kStaticPortal, kHazard, kDemolisher,
         // Nothing to play: drawn, or read by another role.
         "lift_marker", "camera_start", "scenery_hint", "scenery_fx",
     };

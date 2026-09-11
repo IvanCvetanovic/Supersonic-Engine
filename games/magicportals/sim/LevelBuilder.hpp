@@ -94,6 +94,12 @@ bool Build(const Tscn::Scene& scene, entt::registry& registry, const Options& op
 entt::entity BuildEntity(const Tscn::Scene& scene, const std::string& nodeName, entt::registry& registry,
                          const Options& options, Built& out, std::string& error);
 
+// The box an entity's body takes up, in the remake's pixels, relative to its
+// node and before the node's rotation: a rectangle's size, a circle's diameter,
+// or a polygon's bounds, centred where the shape's own offset puts it. False for
+// a node with no Body/Shape.
+bool ShapeBoundsPx(const Tscn::Scene& scene, const Tscn::Node& node, glm::dvec2& offsetPx, glm::dvec2& sizePx);
+
 // A trigger box from an entity's metadata/trigger_size and trigger_offset, the
 // way LevelRuntime._attach_trigger builds one (level_runtime.gd:243-265).
 // entt::null, with `error` set, when the entity has no trigger_size.

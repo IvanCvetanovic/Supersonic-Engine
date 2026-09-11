@@ -170,6 +170,44 @@ bool Build(const Tscn::Scene& scene, entt::registry& registry, const Options& op
     return true;
 }
 
+bool ShapeBoundsPx(const Tscn::Scene& scene, const Tscn::Node& node, glm::dvec2& offsetPx, glm::dvec2& sizePx) {
+    const Tscn::Node* body = scene.Child(node, "Body");
+    const Tscn::Node* shape = body != nullptr ? scene.Child(*body, "Shape") : nullptr;
+    if (shape == nullptr) return false;
+    offsetPx = VectorOf(shape->Find("position"));
+    if (shape->type == "CollisionPolygon2D") {
+        const Tscn::Value* polygon = shape->Find("polygon");
+        if (polygon == nullptr || polygon->numbers.size() < 2) return false;
+        glm::dvec2 lo(polygon->numbers[0], polygon->numbers[1]);
+        glm::dvec2 hi = lo;
+        for (std::size_t i = 0; i + 1 < polygon->numbers.size(); i += 2) {
+            const glm::dvec2 point(polygon->numbers[i], polygon->numbers[i + 1]);
+            lo = glm::min(lo, point);
+            hi = glm::max(hi, point);
+        }
+        offsetPx += (lo + hi) * 0.5;
+        sizePx = hi - lo;
+        return true;
+    }
+    const Tscn::Value* ref = shape->Find("shape");
+    const Tscn::Resource* resource = ref != nullptr ? scene.Embedded(ref->text) : nullptr;
+    if (resource == nullptr) return false;
+    if (resource->type == "RectangleShape2D") {
+        const Tscn::Value* size = resource->Find("size");
+        if (size == nullptr || size->kind != Tscn::Value::Kind::Vector2) return false;
+        sizePx = VectorOf(size);
+        return true;
+    }
+    if (resource->type == "CircleShape2D") {
+        double radius = 0.0;
+        const Tscn::Value* value = resource->Find("radius");
+        if (value == nullptr || !value->AsNumber(radius)) return false;
+        sizePx = glm::dvec2(radius * 2.0);
+        return true;
+    }
+    return false;
+}
+
 entt::entity BuildEntity(const Tscn::Scene& scene, const std::string& nodeName, entt::registry& registry,
                          const Options& options, Built& out, std::string& error) {
     const Tscn::Node* node = scene.FindNode(nodeName);
