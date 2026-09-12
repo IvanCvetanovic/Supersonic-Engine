@@ -211,6 +211,43 @@ void aCarriedKeyTrailsItsOwner() {
     CHECK_MSG(std::fabs(carried->atPx.x - lyingAt.x) > 100.0, "and it has left where it was lying");
 }
 
+// The pickup filter is isCharacter OR isMinion, so a minion carries a key just as
+// the player does. Pinned because it is the one thing that separates a key from a
+// diamond, whose candidate loop tests isCharacter and stops there: the decode
+// skips a non-character at instruction 123 and never reaches the range test.
+//
+// level7b holds three minion_spawns and the nearest of them lies 34 px from the
+// key, outside the 26 px range, so none of them takes it where it lies - which is
+// what the sweep above asserts from the other side. This puts the first minion ON
+// the key and reads back who owns it. Carriers are judged player-first, so an
+// owner that is the minion is the filter being exercised rather than an accident
+// of ordering.
+void aMinionCanCarryAKey() {
+    Run run;
+    if (!Begin(kLevel, run)) return;
+
+    const Keys::Key* key = run.level.keys.FindKey(kKey);
+    CHECK(key != nullptr);
+    if (key == nullptr) return;
+    CHECK_MSG(!run.level.minions.minions.empty(), "level7b spawns a minion");
+    if (run.level.minions.minions.empty()) return;
+
+    const entt::entity minion = run.level.minions.minions[0].body;
+    CHECK(minion != entt::null);
+    if (minion == entt::null) return;
+    const glm::dvec2 lyingAt = key->atPx;
+
+    PutAt(run.registry, minion, lyingAt);
+    Tick(run);
+
+    const Keys::Key* after = run.level.keys.FindKey(kKey);
+    CHECK(after != nullptr);
+    if (after == nullptr) return;
+    CHECK_MSG(after->owner == minion, "a minion took the key");
+    CHECK_MSG(after->owner != run.level.player, "and it was not the player, which is a level away");
+    CHECK_EQ(run.level.keys.picked, 1);
+}
+
 // The whole of what unlocking does to a level: after the hold and the fade, the
 // door body is gone.
 void unlockingHoldsThenFadesThenTakesTheDoor() {
@@ -299,6 +336,7 @@ void runTests() {
     theOneRangeServesBothTests();
     aKeyIsTakenAtTwentySixPixels();
     aCarriedKeyTrailsItsOwner();
+    aMinionCanCarryAKey();
     unlockingHoldsThenFadesThenTakesTheDoor();
     twoPairsOfOneColourStillPairCorrectly();
     everyLevelWithAKeyholePairsIt();
