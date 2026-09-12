@@ -60,6 +60,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Shot::LoadRules(portDataDirectory + "/shot.json", read.shot, error)) return false;
     if (!Boss::LoadRules(portDataDirectory + "/boss.json", read.boss, error)) return false;
     if (!Turrets::LoadRules(portDataDirectory + "/turrets.json", read.turrets, error)) return false;
+    if (!Fire::LoadRules(portDataDirectory + "/fire.json", read.fire, error)) return false;
     std::error_code ec;
     std::filesystem::create_directories(prismDirectory, ec);
     read.prisms = prismDirectory;
@@ -118,6 +119,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Launchers::Find(data.scene, data.roles, data.launchers, out.launchers, error)) return false;
     if (!Boss::Find(data.scene, data.roles, data.boss, data.launchers, out.boss, error)) return false;
     if (!Turrets::Find(data.scene, data.roles, data.turrets, out.turrets, error)) return false;
+    if (!Fire::Find(data.scene, data.roles, out.built, data.fire, out.fire, error)) return false;
     return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                          out.portals, error);
 }
@@ -146,6 +148,10 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
     // as the hazards above them do.
     level.turrets.Tick(registry, level.player, dt);
     level.demolish.Tick(registry);
+    // The fire agents, what is burning down, and the bombs - before the portals,
+    // which move things. What it takes away goes through Forget as a thrown body
+    // does: a crate is teleportable, so a burning one can be in portals.travellers.
+    for (const entt::entity gone : level.fire.Tick(registry, level.player, dt)) Forget(level, gone);
     for (const entt::entity gone : level.launchers.Cull(registry)) Forget(level, gone);
     // The beholder's rocks, against what the step ran them into.
     for (const entt::entity gone : level.boss.Contacts(registry, level.player, level.portals, dt)) Forget(level, gone);
@@ -170,6 +176,10 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
     if (level.turrets.playerKilled && !level.hazards.playerDied) {
         level.hazards.playerDied = true;
         level.hazards.killedBy = level.turrets.killedBy;
+    }
+    if (level.fire.playerKilled && !level.hazards.playerDied) {
+        level.hazards.playerDied = true;
+        level.hazards.killedBy = level.fire.killedBy;
     }
 }
 

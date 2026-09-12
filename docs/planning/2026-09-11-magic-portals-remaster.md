@@ -733,7 +733,8 @@ What the owner described, now in `Shot` and `Portals`:
     way.
   - One shot at a time, after `hasProjectileAround`.
   - The cooldowns, `FIRST_PORTAL_MIN_TIME` and `NEXT_PORTAL_MIN_TIME`, are
-    still not modelled.
+    still not modelled. **No longer true - step 21 builds them**, at 300 ms and
+    400 ms with both clocks starting at zero.
 - **`TryPlace` stays.** It is what an arriving shot calls, and the suites use
   it to put a portal where a test needs one:
   - the suites for transit, buttons, movers and launchers use it;
@@ -2194,3 +2195,115 @@ what the layer places each frame and what reaches the screen - which is where
 the stale-pixel regions in the owner's screenshots pointed in the first place.
 The next reading is what `syncSprites` does with a sprite whose follower is
 gone, and what the drawn set does across a camera pan, not the frustum.
+
+## Step 21 - chapter 2: carrancas, the portal cooldowns, fire, burning and bombs (built)
+
+Chapter 2 went from 10 of 32 playing to 27, and the game from 42 of 128 to 59.
+Three pieces of work, all decoded from the original's own bytecode rather than
+taken from the remake, which marks every one of these numbers `_guess` and gets
+each of them wrong.
+
+**The carrancas** - the wall gargoyles that spit fireballs, which the role table
+calls turrets. `carrancaCallback` seeds `elapsedTime` from the node's
+`startStride`, gathers each frame, fires when it PASSES `stride`, and resets to
+zero. So level 2-1's carranca, whose `startStride` is 0 and whose `stride` is
+1500, fires its first fireball a stride in, not at once as the remake does
+(`hazards.gd:346-349`). A test that counted fireballs would pass either way, so
+the FIRST one is timed. The reset is a reset and not a subtraction: the original
+writes zero, so a long frame's overshoot is dropped rather than making a carranca
+fire twice to catch up. The fireball's numbers are its own `.ent`'s - 130 px/s
+and a 16 x 16 sensor - against the remake's invented 180.
+
+**The portal cooldowns**, which step 8 left open above. A tap is refused for the
+first 300 ms of a level and for 400 ms after the one it took, and both clocks
+start at zero. Applied with an explicit zero-means-off, because `<=` on two zeroed
+clocks silently disarmed the suites' opt-out and cost 41 assertions across two
+suites before it was read properly.
+
+Beside them, the remake's single guessed `collision_radius_px` splits into the two
+radii the original keeps apart: a portal's own entry radius, decoded as 14 and
+applied, and the quite separate radius an antiportal refuses a tap within. That
+second one decodes as 64 and is **not applied** - level 1-7's blocker data
+contradicts it and both toolchains' suites disagreed with it - so it is recorded
+as decoded-but-not-applied with what would settle it, and the remake's 16 is kept
+on purpose. Deliberately leaving a decoded number on the shelf is the unusual
+call here; the failing assertions were treated as evidence rather than as chores.
+
+**Fire, burning and bombs** are one mechanism in the original: a flag on an
+entity, set by whatever reaches it, read back by that entity's own callback. The
+port follows that shape, and the three numbers a test can tell apart all move.
+
+| | decoded | the remake |
+|---|---|---|
+| a fire agent's reach | 32 | 24 |
+| how long a crate burns | 1000 ms | 2000 ms |
+| a blast's radius | 80 | 96 |
+
+The reach is the load-bearing one. `ETHCallback_fire_agent` (bytes
+350254..351485) tests `squaredDistance(other, self) < size.x * size.x`, so
+`size.x` is a RADIUS and the test is centre to centre. `GetSize()` registers to
+`ETHSpriteEntity::GetCurrentSize`, which returns `m_pSprite->GetFrameSize()`
+times the scale - the collision box is read only by an entity with no sprite at
+all - and `fire_agent.png` is 32 x 32 at scale 1. The remake reads the entity's
+38 x 38 `<Collision>` instead and halves it, which is why a crate 28 px from a
+flame burns here and does not there. That exact distance is what the suite tests,
+because it is the only one that separates the two readings.
+
+**Fire kills the player; a blast cannot.** `explode` (bytes 342023..342895)
+grabs through `isBreakableOrExplosiveOrBurnable`, which does not include
+characters, and no `main_char` placement carries any of those three flags - so
+although `barrel_bomb` passes `killPlayer` true, the player is never in the
+grabbed set. The fire agent's own sweep has no such filter and kills outright.
+Both directions are tested, because that asymmetry is exactly what a remake
+smooths away without noticing.
+
+**Only crates burn away.** `burn()` sets a flag and plays a sound; the fade to
+black and the removal that makes burning a PUZZLE live in `manageBurnable` (bytes
+420664..421145), whose one caller is `crateCallback`. A `shock_agent` carries the
+burnable flag too and merely holds it when lit. Building "everything burnable
+dies" would have deleted three levels' shock agents and changed their puzzles, so
+`fire.json` names the ten crate spellings and nothing else fades.
+
+**A chain ripples a tick at a time.** Fire and blasts do not detonate a bomb;
+they set `explode` on it, and the bomb's own callback (bytes 339851..340212)
+reads that flag, removes itself, and only then blasts. The port takes the
+requested set before blowing any of it, so a request made during a blast waits
+its own turn. level 2-13's three bombs, 39 to 42 px apart, go off over two ticks
+and not one.
+
+The blast is a sphere against each candidate's REAL collider with a line-of-sight
+ray behind it, so a wall shields what stands behind it. No engine gap: the engine
+already had `OverlapSphere` and `Raycast`, which is what `EntityGrabber` (bytes
+23924..24990) and `getFirstContactExcept` need.
+
+**Two things are deliberately not built, and are written down rather than left to
+be noticed.** A blast also sets `destroy` on every breakable it grabs; a
+breakable wall is Demolish's body to take away, and one body with two owners is
+how a level ends up half broken. Nine chapter-2 levels place both a bomb and a
+breakable wall (11a, 12a, 13a, 15a, 16a, 18a, 20a, 23a, 28a), so that is a
+follow-up rather than a footnote. And the fire agent's fourth branch,
+`burnProjectile`, puts out a flying `projectile.ent`; the port has no such body,
+since its shot is a segment resolved within a tick, so a shot fired THROUGH a
+flame opens its portal here where the original would have snuffed it. That fix
+belongs in `Shot`'s segment test.
+
+What still stops chapter 2 is `hinge` in four of the five levels that remain -
+level27a, level28a, level29a and level30a - and in the fifth, level31a, chapter
+2's own BOSS, which wants `boss_spawn` and `waypoint`. So finishing the chapter
+is two pieces of work and not one. `hinge` has eight placements in all, the other
+four in chapter 3 (level14b, level18b, level19b, level21b), so building it pays
+twice.
+
+For the record, since the counts above are easy to misread: what stops the other
+two chapters is not roles left inert but levels refused outright - `no_gravity` in
+18 chapter-4 levels and `darkest` in 12 more, which is every one of the 30 that do
+not start. Chapter 3 starts all 32 and plays none, held by `waypoint` (30),
+`enemy_spawn` (29), `keyhole` and `locked_door` (26 each) and `key` (24).
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every suite, `test_mp_fire` 43
+checks. One suite would not run under MSVC at all - Smart App Control blocks a
+freshly linked unsigned exe with 4551, and the runner's three relink-and-retry
+attempts were exhausted - so `test_mp_turrets` was run again on its own and came
+back 25 checks, 0 failures. That is a fact about this machine and not about the
+port, written down so that a future green run which is quietly one suite short is
+not read as a pass.

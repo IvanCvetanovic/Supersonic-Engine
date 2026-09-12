@@ -167,6 +167,9 @@ add_mp_test(test_mp_movers)
 add_mp_test(test_mp_hazards)
 # Rolling stones, and the walls they break.
 add_mp_test(test_mp_demolish)
+# Fire agents, burning crates and barrel bombs - and the asymmetry between them,
+# that fire kills the player where a blast cannot reach one.
+add_mp_test(test_mp_fire)
 # Launchers, what they throw, and what takes it back.
 add_mp_test(test_mp_launchers)
 # The portal shot: a tap fires, and the portal opens where the shot arrives.

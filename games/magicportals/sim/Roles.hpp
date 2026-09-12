@@ -41,6 +41,11 @@ inline constexpr const char* kProjectileBlocker = "projectile_blocker";
 inline constexpr const char* kReflector = "reflector";
 // A carranca: the wall gargoyle that spits fireballs (Turrets.hpp).
 inline constexpr const char* kTurret = "turret";
+// An open flame, and a barrel bomb (Fire.hpp). The bombs are found by their
+// metadata/explosive flag rather than by this role, as the original tests them;
+// the role is named here so a level carrying one stops counting as inert.
+inline constexpr const char* kFireSource = "fire_source";
+inline constexpr const char* kExplosive = "explosive";
 // Played only for the boss the port has: Boss::Plays says which.
 inline constexpr const char* kBossSpawn = "boss_spawn";
 

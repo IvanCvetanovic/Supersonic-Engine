@@ -1,0 +1,89 @@
+{
+  "_about": [
+    "Fire agents, burning and barrel bombs, DECODED from the original rather than",
+    "taken from the remake's hazards.json, which marks all three _guess and gets",
+    "every one of them wrong. Fire.hpp cites the byte offsets.",
+    "",
+    "Constants inside the original pass through SGlobalScale::scale() before they",
+    "are used. The port's view is 256 px tall and scaleFactor is screenSize.y/256,",
+    "so one scale unit is one port pixel and these are written as plain pixels.",
+    "That is said once here rather than against each number."
+  ],
+  "fire": {
+    "_note": [
+      "A fire agent tests squaredDistance(other, self) < size.x * size.x, so this",
+      "is a RADIUS and the test is centre to centre, not shape against shape.",
+      "size.x is GetSize().x, the sprite's frame times its scale: fire_agent.png is",
+      "32 x 32 with SpriteCut 1 x 1 and Scale 1.0. ETHSpriteEntity::GetCurrentSize",
+      "is what GetSize registers to, and the engine hands it to IsPointOnSprite as",
+      "the sprite's extent; GetCollisionBox is a separate method.",
+      "",
+      "The remake reads the .ent's 38 x 38 <Collision> instead and halves it to 24",
+      "(hazards.json _guess). That box is not what GetSize returns, and the entity's",
+      "shape is 0 - it has no physics body at all."
+    ],
+    "reach_px": 32.0,
+    "_remake_reach_px_not_applied": 24.0,
+    "_burn_projectile_not_built": [
+      "A fire agent's fourth branch puts out a flying projectile.ent. The port has",
+      "no such body - its shot is a segment Portals resolves within a tick, not an",
+      "entity - so nothing here can reach one. A shot fired THROUGH a flame therefore",
+      "opens its portal in the port where the original would have snuffed it. The fix",
+      "belongs in Shot's segment test; Fire.hpp says so beside this."
+    ]
+  },
+  "burn": {
+    "_note": [
+      "BURN_TIME, the global the carranca script sets to 1000. A burning crate",
+      "fades to black and to nothing over this time and is then removed; the",
+      "removal is the puzzle, since burning a crate deletes a platform or a",
+      "blocker. The remake invents 2000 and marks it _guess.",
+      "",
+      "fade_names is the whole of it: burn() only sets the `burned` flag, and the",
+      "fade-and-remove lives in manageBurnable, whose ONE caller is crateCallback.",
+      "A shock_agent carries metadata/burnable too (levels 2-12, 2-14, 2-19) and",
+      "merely holds the flag when lit - it does not fade and is not removed. Every",
+      "crate spelling the 128 levels place is listed; the original writes the same",
+      "logical crate both bare and with .ent, and those are different entities."
+    ],
+    "time_ms": 1000.0,
+    "_remake_time_ms_not_applied": 2000.0,
+    "fade_names": [
+      "crate",
+      "crate.ent",
+      "crate_small",
+      "crate_small.ent",
+      "crate_low_emissive",
+      "crate_low_emissive.ent",
+      "crate_no_emissive",
+      "crate_no_emissive.ent",
+      "crate_small_no_emissive",
+      "crate_small_no_emissive.ent"
+    ]
+  },
+  "blast": {
+    "_note": [
+      "explode builds an EntityGrabber of radius 80 and tests it against each",
+      "candidate's REAL collider - circle against circle, or sphere against a box",
+      "in the box's own frame - skipping anything with no physics body. The remake",
+      "invents 96 and marks it _guess.",
+      "",
+      "kills_player is FALSE and that is the original's own answer, not a",
+      "simplification. The grabber's filter is isBreakableOrExplosiveOrBurnable,",
+      "which does not include characters, and no main_char placement carries any of",
+      "those three flags - so although barrel_bomb passes killPlayer true, the",
+      "player is never in the grabbed set. Fire kills the player; a blast does not.",
+      "test_mp_fire pins both directions, because this is the kind of asymmetry a",
+      "remake smooths away without noticing."
+    ],
+    "radius_px": 80.0,
+    "_remake_radius_px_not_applied": 96.0,
+    "_decoded_kills_player_not_read": false,
+    "_breakables_in_a_blast_not_built": [
+      "explode also sets `destroy` on every breakable it grabs, which the port does",
+      "NOT do: a breakable wall is Demolish's, and one body with two owners is how a",
+      "level ends up half-broken. Recorded rather than dropped; the remaster doc",
+      "carries it as the follow-up."
+    ]
+  }
+}

@@ -25,6 +25,7 @@
 
 #include "sim/Boss.hpp"
 #include "sim/Demolish.hpp"
+#include "sim/Fire.hpp"
 #include "sim/Goals.hpp"
 #include "sim/Hazards.hpp"
 #include "sim/Launchers.hpp"
@@ -57,6 +58,7 @@ struct Data {
     Shot::Rules shot;             // and shot.json
     Boss::Rules boss;             // and boss.json
     Turrets::Rules turrets;       // and turrets.json
+    Fire::Rules fire;             // and fire.json
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
 
@@ -83,6 +85,7 @@ struct Level {
     Portals::State portals;
     Boss::State boss;
     Turrets::State turrets;
+    Fire::State fire;
     entt::entity player = entt::null;
 };
 
