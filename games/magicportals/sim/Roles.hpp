@@ -50,6 +50,12 @@ inline constexpr const char* kExplosive = "explosive";
 // than by this role, as the original finds them; named here so a level carrying
 // one stops counting as inert.
 inline constexpr const char* kHinge = "hinge";
+// A key, the keyhole it opens and the door that vanishes with it (Keys.hpp).
+// Paired by their metadata/color rather than by proximity, and only the door is
+// solid - the other two are markers the builder gives no body.
+inline constexpr const char* kKey = "key";
+inline constexpr const char* kKeyhole = "keyhole";
+inline constexpr const char* kLockedDoor = "locked_door";
 // The invisible marker a minion is spawned from, and the markers it patrols
 // between (Minions.hpp). The marker deletes itself in the original once it has
 // spawned, and carries the patrol's PREFIX rather than a waypoint's name; the

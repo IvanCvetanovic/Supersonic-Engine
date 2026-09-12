@@ -2527,3 +2527,101 @@ been found by reading harder: the first showed up only as a guard that reached
 its post without adopting its hold, the second only as one that reached its post
 and would not stop. That is twice now, counting step 22's sign, that the decode
 looked settled and the suite disagreed - and both times the suite was right.
+
+## Step 24 - chapter 3: keys, the keyholes they open, and the doors that go with them (built)
+
+Chapter 3 goes from 7 of 32 playing to 19, and the game from 70 of 128 to 83.
+Chapter 4 gains its first playable level as well. The largest single step of the
+remaster so far, and the mechanism that held more of chapter 3 than any other.
+
+**Three roles, one of them solid.** `door_locked.ent` is shape=1, static=1, a
+30 x 126 collider. `keyhole.ent` has no collision block at all, and `key.ent` is
+density 0 with custom data holding nothing but `color`. So a key is not a body
+here - it is state with a position and an owner - and unlocking a door is the
+deletion of the only one of the three the player can walk into.
+
+| | decoded | the remake |
+|---|---|---|
+| picked up within | 26 px | 40 |
+| unlocks within | the same 26 px | a second, separate 40 |
+
+**One range, written once and read twice.** The key's init writes
+`squaredRange = scale(26)^2`; the pickup poll and the unlock test both read that
+one value. `actors.json` invents two numbers where the original has one, and
+guesses both. Pickup is a poll and not a contact - there is no contact callback
+for a key anywhere in the binary, which the remake also says and is right about -
+and the filter is `isCharacter OR isMinion`, so **a minion can carry a key**.
+
+**`unlocked` is one-way.** The string appears exactly twice in the whole binary:
+the key writes it, the keyhole reads it. Nothing re-locks a door, so the port's
+state for it is one bool. The keyhole then holds 1000 ms, fades over 500, and
+deletes both its door and itself; the door's own callback does nothing but paint
+it, so the keyhole drives the entire mechanism.
+
+**Pairing is by colour, and the port pairs level-wide.** Colour is an explicit
+`metadata/color` string on all three roles and is absent from none of them in any
+of the 128 levels. The original finds a door with `seekNeighbourEntity` over a
+3x3 block of buckets and falls back to a global `seekEntity`, so the bucket walk
+is an optimisation rather than a rule - which is why the port simply takes the
+nearest door of the keyhole's colour. Across all 41 pairs that is the same
+answer. level20b is the only level in the game holding two pairs of one colour,
+and it is the one place a nearest-door rule could have been wrong: each of its
+yellow keyholes sits 57 px from its own door and 216 px or more from the other, a
+four-fold margin, and the suite pins all three of its pairs by position.
+
+**Counts the remake gets wrong, left unexplained.** `actors.json` says the colour
+multisets are identical per level per role. Counted over all 128 they are not:
+39 keys against 41 keyholes and 41 doors. level0c, level31b and level31c each
+hold a keyhole and a door with no key, and level18c holds a red key with no lock
+at all. The red key has its own sound, its own help popup and an achievement, and
+two of those levels are boss levels - but none of that has been decoded, so it is
+recorded as measured and the explanation left open, as step 22's `motor_seesaw`
+was.
+
+**Not built, and written down instead.** The fly-in animation a spent key plays -
+some 400 instructions of timed `WaypointManager` waypoints with `smoothEnd`
+filters - is presentation, and this port has no renderer. With it: `fixKeyAngle`,
+the idle bob of an unowned key, the red key's per-frame light, the four effect
+entities, the earthquake, the pick and unlock sounds, and `setKeyColor`, which
+repaints a blue or red key by swapping its sprite - yellow being the base art,
+which is why yellow dominates every count above.
+
+**Three wrong turns, all of them in the test rather than the module.** Worth
+recording because the pattern is new: the decode was right first time and the
+harness was not.
+
+- A pointer compared against itself. `FindKey` hands back a pointer into the
+  state, so reading it again after ticking asked whether the key had moved away
+  from where it now was. Always false, and it says nothing.
+- A fixed offset invalidated by the step order. `Keys::Tick` runs AFTER the
+  physics step, and level7b's key lies between two collision polygons, so a
+  player put down 28 px away was resolved somewhere else before the keys were
+  judged - the suite reported "still 24 px from the key, and not 22". The fix was
+  not to loosen the range but to sweep six offsets, read back the distance the
+  module actually measured, and pin the decision against that; what pins the
+  number is the pair of brackets, a key taken from beyond 20 px and one left
+  lying from inside 40.
+- Two WSL runs in flight at once. `sync-wsl.sh` hard-resets `~/ss-src`, and both
+  runs share it and the build tree, so the second built against the first's
+  sources and reported the previous revision's failures while MSVC on the same
+  edits was green. Not a compiler disagreement: a concurrency mistake, and the
+  rule that only one may run at a time exists for exactly this.
+
+What stands between here and the rest of chapter 3, read off the inventory:
+`pickup` in 9 levels, `shock_field` in 7, `boss_spawn` in 2 and `gravity_well` in
+1. `pickup` is the natural next step and not because it is the largest - the
+diamonds' carry path is byte-for-byte the key's (`ByIDChooser` with a global
+fallback, the 40 px `forceFollowUpPosition` leash, `followUp(60, 20)`, the
+`shallLeave` drop), differing only in a 30 px range, an `isCharacter`-only filter
+and the payload: a carried shock diamond goes nearly invisible at alpha 0.1 and
+destroys the first minion it comes within range of, then deletes itself. So it
+generalises what is already built rather than adding machinery. `shock_field`
+does not: its agent is a one-shot builder that spawns a SECOND entity carrying
+the lethal radius, the radius is per-placement and ranges from 28 to 105 across
+21 placements, three of the agents patrol with their own speed and stride, and
+eleven are burnable.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_keys` at 96 checks, and 98 of 128 levels starting with 83 playing on
+both. Nothing under `src/` changed, so these suites are the whole verification
+surface and the engine's other games are untouched.

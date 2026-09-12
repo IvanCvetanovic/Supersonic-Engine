@@ -30,6 +30,7 @@
 #include "sim/Hazards.hpp"
 #include "sim/Hinge.hpp"
 #include "sim/Launchers.hpp"
+#include "sim/Keys.hpp"
 #include "sim/LevelBuilder.hpp"
 #include "sim/Minions.hpp"
 #include "sim/Player.hpp"
@@ -63,6 +64,7 @@ struct Data {
     Fire::Rules fire;             // and fire.json
     Hinge::Rules hinge;           // and hinge.json
     Minions::Rules minions;       // and minions.json
+    Keys::Rules keys;             // and keys.json
     Hazards::Rules hazards;       // and hazards.json, which is what the role table got wrong
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
@@ -97,6 +99,8 @@ struct Level {
     // Spawned when the level starts, not built with it: Minions.hpp says why the
     // marker is all a level places.
     Minions::State minions;
+    // Keys carried by the player or by a minion, and the doors they open.
+    Keys::State keys;
     entt::entity player = entt::null;
 };
 

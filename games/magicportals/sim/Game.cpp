@@ -63,6 +63,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Fire::LoadRules(portDataDirectory + "/fire.json", read.fire, error)) return false;
     if (!Hinge::LoadRules(portDataDirectory + "/hinge.json", read.hinge, error)) return false;
     if (!Minions::LoadRules(portDataDirectory + "/minions.json", read.minions, error)) return false;
+    if (!Keys::LoadRules(portDataDirectory + "/keys.json", read.keys, error)) return false;
     // And what the remake's role table calls a hazard but the original does not.
     if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
@@ -126,6 +127,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Fire::Find(data.scene, data.roles, out.built, data.fire, out.fire, error)) return false;
     if (!Hinge::Find(data.scene, data.roles, out.built, registry, data.hinge, out.hinge, error)) return false;
     if (!Minions::Find(data.scene, data.roles, data.minions, out.minions, error)) return false;
+    if (!Keys::Find(data.scene, data.roles, out.built, data.keys, out.keys, error)) return false;
     if (!Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                        out.portals, error)) {
         return false;
@@ -173,6 +175,20 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
     // And a minion the step left in a killer floor. Not a hazard: that floor does
     // nothing to the player, which is the correction hazards.json records.
     for (const entt::entity gone : level.minions.Cull(registry)) Forget(level, gone);
+    // The keys, on where the step left whoever carries them. Anything that is a
+    // character OR a minion can pick one up, so the carriers are the player and
+    // every minion still standing - the first place two of the port's own modules
+    // meet. What a keyhole takes away is a door the builder made, so it goes
+    // through Forget as a burnt crate does.
+    {
+        std::vector<entt::entity> carriers;
+        carriers.reserve(level.minions.minions.size() + 1);
+        if (level.player != entt::null) carriers.push_back(level.player);
+        for (const Minions::Minion& minion : level.minions.minions) {
+            if (!minion.gone && minion.body != entt::null) carriers.push_back(minion.body);
+        }
+        for (const entt::entity gone : level.keys.Tick(registry, carriers, dt)) Forget(level, gone);
+    }
     // The beholder's rocks, against what the step ran them into.
     for (const entt::entity gone : level.boss.Contacts(registry, level.player, level.portals, dt)) Forget(level, gone);
     level.portals.Tick(registry, dt);
