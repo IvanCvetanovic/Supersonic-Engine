@@ -318,7 +318,26 @@ void MagicPortalsLayer::clearLevel(entt::registry& registry) {
     cleared.crystalsTotal = static_cast<int>(m_level.goals.crystals.size());
     cleared.crystals = cleared.crystalsTotal - m_level.goals.Remaining();
     m_lastCleared = cleared;
-    goTo(registry, m_chapters.Next(m_current));
+    // The original does not go straight on: GameStateController::writeScore
+    // puts a LevelFinishedLayer up, with the medal the play earned and buttons
+    // to play it again, go on, or pick another.
+    openFinished(registry);
+}
+
+// The medal a play earns, as computeScore has it (ScoreManager.angelscript,
+// bytes 363979..364204): 3 is gold, 2 silver, anything else bronze.
+//
+//   - a level with crystals, none of them collected, is bronze whatever else;
+//   - within the golden score: gold with every crystal, silver without;
+//   - within the golden score and two more: silver;
+//   - beyond that: bronze.
+int MedalFor(const MagicPortalsLayer::Cleared& cleared) {
+    if (cleared.crystalsTotal > 0 && cleared.crystals == 0) return 1;
+    if (cleared.portalsUsed <= cleared.goldenScore) {
+        return cleared.crystals < cleared.crystalsTotal ? 2 : 3;
+    }
+    if (cleared.portalsUsed <= cleared.goldenScore + 2) return 2;
+    return 1;
 }
 
 // ---- the entities' particles --------------------------------------------------
@@ -550,12 +569,45 @@ void MagicPortalsLayer::layOutMenu() {
     const glm::dvec2 box = MenuBoxPx();
     const auto at = [&box](double nx, double ny) { return glm::dvec2(nx * box.x, ny * box.y); };
 
+    // A button is drawn at ITS OWN shape. Sizing one by the box alone stretches
+    // whatever is not square, which is how the chapter icons - 84 x 128 - first
+    // went out looking squashed.
+    const auto sized = [this, &box](const char* file, double heightFraction) {
+        const double height = box.y * heightFraction;
+        const glm::dvec2 image = imageSizePx(menuImage(file));
+        const double aspect = image.y > 0.0 ? image.x / image.y : 1.0;
+        return glm::dvec2(height * aspect, height);
+    };
+
     if (m_screen == Screen::Main) {
         MenuButton play;
         play.kind = MenuButton::Kind::Play;
         play.centrePx = at(0.5, 0.66);
-        play.sizePx = glm::dvec2(box.y * 0.62, box.y * 0.17);
+        play.sizePx = sized("main_play_game_button.png", 0.16);
         m_menuButtons.push_back(play);
+        return;
+    }
+
+    if (m_screen == Screen::Finished) {
+        // Over the level, so placed against what the CAMERA shows rather than
+        // the menu's own box: the level's own pixels are what a click maps to.
+        const glm::dvec2 view = ViewPx();
+        const glm::dvec2 centre = m_follow.centrePx;
+        const auto onView = [&view, &centre](double nx, double ny) {
+            return centre + glm::dvec2((nx - 0.5) * view.x, (ny - 0.5) * view.y);
+        };
+        // Three buttons down the right, as the owner's screenshot of the
+        // original shows them: play it again, go on, or pick another level.
+        const MenuButton::Kind kinds[] = {MenuButton::Kind::Retry, MenuButton::Kind::Next,
+                                          MenuButton::Kind::List};
+        const double ys[] = {0.30, 0.52, 0.74};
+        for (int i = 0; i < 3; ++i) {
+            MenuButton button;
+            button.kind = kinds[i];
+            button.centrePx = onView(0.82, ys[i]);
+            button.sizePx = glm::dvec2(view.y * 0.16);
+            m_menuButtons.push_back(button);
+        }
         return;
     }
 
@@ -574,16 +626,19 @@ void MagicPortalsLayer::layOutMenu() {
                                  ? 0.5 - span * 0.5 + span * (static_cast<double>(w) / static_cast<double>(worlds - 1))
                                  : 0.5;
             icon.centrePx = at(x, 0.55);
-            icon.sizePx = glm::dvec2(box.y * 0.30);
+            icon.sizePx = sized(("world_icon" + std::to_string(w) + ".png").c_str(), 0.34);
             m_menuButtons.push_back(icon);
         }
         return;
     }
 
-    // The grid, as PageProperties has it: four columns, three rows, so twelve
-    // to a page (PageManager's own buttonsPerPage = columns * rows).
+    // The grid, as the original builds it for levels: createLevelSelectState
+    // (WorldSelector.angelscript, bytes 365279..365960) sets columns 4 and rows
+    // 4, so SIXTEEN to a page. PageProperties' own defaults are 4 by 3, which
+    // is what the port first shipped and what the owner's screenshot of the
+    // original disproved - the level selector overrides them.
     constexpr int kColumns = 4;
-    constexpr int kRows = 3;
+    constexpr int kRows = 4;
     constexpr int kPerPage = kColumns * kRows;
     std::vector<int> entries;
     for (std::size_t i = 0; i < m_chapters.levels.size(); ++i) {
@@ -591,10 +646,12 @@ void MagicPortalsLayer::layOutMenu() {
     }
     const int pages = std::max(1, (static_cast<int>(entries.size()) + kPerPage - 1) / kPerPage);
     m_menuPage = std::clamp(m_menuPage, 0, pages - 1);
-    const double left = 0.20;
-    const double right = 0.80;
-    const double top = 0.28;
-    const double bottom = 0.72;
+    // Four rows need more of the box than three did, and the buttons shrink to
+    // match so sixteen of them do not touch.
+    const double left = 0.24;
+    const double right = 0.76;
+    const double top = 0.17;
+    const double bottom = 0.83;
     for (int slot = 0; slot < kPerPage; ++slot) {
         const int index = m_menuPage * kPerPage + slot;
         if (index >= static_cast<int>(entries.size())) break;
@@ -606,21 +663,22 @@ void MagicPortalsLayer::layOutMenu() {
         button.level = entries[static_cast<std::size_t>(index)];
         button.centrePx = at(left + (right - left) * (static_cast<double>(column) / (kColumns - 1)),
                              top + (bottom - top) * (static_cast<double>(row) / (kRows - 1)));
-        button.sizePx = glm::dvec2(box.y * 0.15);
+        button.sizePx = glm::dvec2(box.y * 0.14);
         m_menuButtons.push_back(button);
     }
     if (pages > 1) {
-        // The original's own page buttons. Its normalized places for them are
-        // (0.5, 0.05) and (0.5, 0.95), which on a landscape window puts half
-        // the button off the edge, so they sit just inside it.
+        // Either side of the grid, level with its middle - which is where the
+        // owner's screenshot of the original shows them. The decoded
+        // normalized pair is ambiguous about which number is x, and a picture
+        // of the game settles it better than a guess at the argument order.
         MenuButton back;
         back.kind = MenuButton::Kind::Back;
-        back.centrePx = at(0.5, 0.10);
+        back.centrePx = at(0.08, 0.5);
         back.sizePx = glm::dvec2(box.y * 0.12);
         m_menuButtons.push_back(back);
         MenuButton forward;
         forward.kind = MenuButton::Kind::Forward;
-        forward.centrePx = at(0.5, 0.90);
+        forward.centrePx = at(0.92, 0.5);
         forward.sizePx = glm::dvec2(box.y * 0.12);
         m_menuButtons.push_back(forward);
     }
@@ -640,10 +698,23 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
         return entt::entity{entt::null};
     };
 
-    m_menuBg = quadFor("Magic Portals Menu Background",
-                       menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png"));
+    // The medal screen keeps the level behind it, so it takes no background of
+    // its own; the others cover the screen with theirs.
+    if (m_screen != Screen::Finished) {
+        m_menuBg = quadFor("Magic Portals Menu Background",
+                           menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png"));
+    }
     if (m_screen == Screen::Main) {
         m_menuTitle = quadFor("Magic Portals Title", menuImage("game_main_title.png"));
+    }
+    if (m_screen == Screen::Finished && m_lastCleared) {
+        // The medal the play earned. The same slot as the title: the two
+        // screens are never up together.
+        const int medal = MedalFor(*m_lastCleared);
+        const char* file = medal == 3   ? "medal_gold_l.png"
+                           : medal == 2 ? "medal_silver_l.png"
+                                        : "medal_bronze_l.png";
+        m_menuTitle = quadFor("Magic Portals Medal", menuImage(file));
     }
 
     for (const MenuButton& button : m_menuButtons) {
@@ -668,6 +739,16 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
             break;
         case MenuButton::Kind::Forward:
             image = menuImage("level_select_forward.png");
+            break;
+        // The medal screen's three, which LevelFinishedLayer names.
+        case MenuButton::Kind::Retry:
+            image = menuImage("button_restart.png");
+            break;
+        case MenuButton::Kind::Next:
+            image = menuImage("button_right.png");
+            break;
+        case MenuButton::Kind::List:
+            image = menuImage("list_button.png");
             break;
         }
         m_menuQuads.push_back(quadFor("Magic Portals Menu Button", image));
@@ -704,6 +785,15 @@ void MagicPortalsLayer::unloadMenuDrawables(entt::registry& registry) {
 void MagicPortalsLayer::unloadMenu(entt::registry& registry) {
     unloadMenuDrawables(registry);
     m_menuButtons.clear();
+}
+
+void MagicPortalsLayer::openFinished(entt::registry& registry) {
+    // The level STAYS: it is drawn behind the medal, and stops ticking because
+    // OnFixedUpdate hands the tick to the menu whenever a screen is up.
+    m_screen = Screen::Finished;
+    m_aspect = viewportAspect(registry);
+    layOutMenu();
+    buildMenu(registry);
 }
 
 void MagicPortalsLayer::openMenu(entt::registry& registry, Screen screen) {
@@ -744,6 +834,23 @@ bool MagicPortalsLayer::PressMenu(entt::registry& registry, MenuButton button) {
         ++m_menuPage; // layOutMenu clamps it to the last page
         openMenu(registry, Screen::Levels);
         return true;
+    case MenuButton::Kind::Retry:
+        // The level is still loaded behind the medal; loadLevel rebuilds it.
+        if (m_current < 0) return false;
+        unloadMenu(registry);
+        m_screen = Screen::None;
+        loadLevel(registry, m_current);
+        return true;
+    case MenuButton::Kind::Next:
+        if (m_current < 0) return false;
+        unloadMenu(registry);
+        m_screen = Screen::None;
+        goTo(registry, m_chapters.Next(m_current));
+        return true;
+    case MenuButton::Kind::List:
+        if (m_current >= 0) m_menuWorld = m_chapters.levels[static_cast<std::size_t>(m_current)].world;
+        openMenu(registry, Screen::Levels);
+        return true;
     }
     return false;
 }
@@ -754,7 +861,9 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
     layOutMenu(); // the window may have changed shape since the last tick
     const glm::dvec2 box = MenuBoxPx();
 
-    if (m_camera != entt::null && registry.valid(m_camera)) {
+    // The medal screen leaves the camera where the level left it, so the level
+    // stays framed as it was when it was finished.
+    if (m_screen != Screen::Finished && m_camera != entt::null && registry.valid(m_camera)) {
         auto& camera = registry.get<CameraComponent>(m_camera);
         const glm::vec3 centre = Units::ToWorld(box.x * 0.5, box.y * 0.5);
         camera.position = glm::vec3(centre.x, centre.y, kCameraDistance);
@@ -771,8 +880,15 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
         placeSprite(registry, m_menuBg, box * 0.5, box, -1.0f, 0.0f);
     }
     if (m_menuTitle != entt::null && registry.valid(m_menuTitle)) {
-        placeSprite(registry, m_menuTitle, glm::dvec2(box.x * 0.5, box.y * 0.30),
-                    glm::dvec2(box.y * 1.30, box.y * 0.30), 0.4f, 0.0f);
+        if (m_screen == Screen::Finished) {
+            // Beside the buttons, over the level, in the level's own pixels.
+            const glm::dvec2 view = ViewPx();
+            placeSprite(registry, m_menuTitle, m_follow.centrePx + glm::dvec2(-view.x * 0.08, -view.y * 0.05),
+                        glm::dvec2(view.y * 0.30), 0.6f, 0.0f);
+        } else {
+            placeSprite(registry, m_menuTitle, glm::dvec2(box.x * 0.5, box.y * 0.30),
+                        glm::dvec2(box.y * 1.30, box.y * 0.30), 0.4f, 0.0f);
+        }
     }
     for (std::size_t i = 0; i < m_menuButtons.size() && i < m_menuQuads.size(); ++i) {
         const MenuButton& button = m_menuButtons[i];

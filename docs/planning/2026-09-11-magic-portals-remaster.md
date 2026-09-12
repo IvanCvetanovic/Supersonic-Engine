@@ -1614,3 +1614,155 @@ are read but unused, so nothing is culled by its own bounds.
 ticks, and their particles go with the level.
 
 GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 157.
+
+## What the sounds decode to (read, NOT built)
+
+The owner asked for sound after playing. The port has never had any. The
+original ships 46 mp3s in its `soundfx/`, and `AudioManager` names every one of
+them - so this is decoded rather than guessed, and written down here before it
+is built because getting at it took three wrong turns.
+
+**Two kinds of hook.** Twenty name their file as a literal string - the
+beholder's, the dragons', the ghosts', the shock diamonds', which is to say
+chapter 2 and after. The rest index a global array, `g_sfxNames`, which
+`loadSounds` walks to preload the lot.
+
+**`g_sfxNames`, in its own order** (35 entries):
+
+```
+ 0 button          1 explosion_small   2 portal_fail      3 portal_reflect
+ 4 demolition      5 fireball          6 portal_killed    7 teleport
+ 8 explosion_huge  9 portal_created   10 portal_launch   11 final_door_sound
+12 stone_hit      13 elevator         14 burn            15 wood01
+16 wood02         17 door_open        18 fall            19 projectile_reflect
+20 magical_sweep_08  21 dark_whoosh_17  22 wood_drag     23 crystal_gather_G
+24 crystal_gather_E  25 spike_hit     26 crystal_temp_alert  27 enemy_spotted
+28 flesh_heavy_impact_03  29 orchestral_transition_stinger_06
+30 running_with_wolves_loop_b  31 finding_wonderland_60_loop
+32 warlords_loop_a  33 rocket_space_shuttle_rocket_distant  34 back_to_nestopia
+```
+
+**How the order was checked, because the first reading was wrong by six.** The
+array's initialiser sits in a block the decoder labels `MouseCursor::getName` -
+a global init has no symbol of its own and borrowed a neighbour's - and a first
+pass swept in six strings from the blocks beside it, putting every index out by
+six. Two hooks settle it: `playDoorOpenSound` indexes 17, which is `door_open`,
+and `playCrystalPickSound` computes `rand(1) + 23`, which is the two
+`crystal_gather` variants side by side. Both land exactly, and only at this
+offset.
+
+**What chapter 1 would use**, and these read true - the hook's name and the
+file's agree:
+
+| Hook | File |
+|---|---|
+| playPortalCreatedSound | portal_created |
+| playPortalLaunchSound | portal_launch |
+| playPortalFailedSound | portal_fail |
+| playPortalKilledSound | portal_killed |
+| playTeleportSound | teleport |
+| playCrystalPickSound | crystal_gather_G or _E, at random |
+| playCrystalTempAlertSound | crystal_temp_alert |
+| playDoorOpenSound / playDoorCloseSound | door_open |
+| playFinalDoorSound | final_door_sound |
+| playElevatorSound | elevator |
+| playStoneHitSound | stone_hit |
+| playDemolitionSound | demolition |
+| playFallSound / playDieByFallSound | fall |
+| playExplosionSound | explosion_huge |
+| playDeathSound | dark_whoosh_17 |
+| playVictorySound | magical_sweep_08 |
+| playBeholderDamageSound | beholder_damage (a literal) |
+| playBeholderSpikesSound | spikes (a literal) |
+
+**NOT settled, and not to be taken from the table above.** The index was read
+from the operand on the line before the array is pushed, and a hook that both
+indexes the array AND names a literal defeats that: `playLightOffSound` reads
+as index 9 here and yet plainly plays `reverse_magical_sweep_08.mp3`. Others
+are implausible on their face - `playDoorUnlockSound` as `crystal_gather_G`,
+`playWoodDragSound` as `portal_fail`, `playCrystalVanishSound` as `spike_hit`.
+Each of those wants its own function read before it is wired.
+
+**Details worth keeping.** Volume and sample speed are set before every
+`PlaySample`; `playDoorOpenSound` scales the speed by `3000 / doorOpenStride`,
+so a slow door is a slow sound; crystal pickups are rate-limited by a 50 ms
+timer, so a run of them does not stack; `playRandomWoodSound` and
+`playCrystalPickSound` compute their index rather than stating it.
+
+Nothing of this is built. The engine has an audio system and the port has never
+used it.
+
+## Step 15 - what the second play-through asked for (built)
+
+Four reports, after playing the menu and the animated levels. Two are fixed
+here, one is decoded above and not built (the sounds), and one is still
+unexplained (below).
+
+**The chapter icons were stretched.** `world_icon0..3.png` are 84 x 128 and the
+port drew them square, because `layOutMenu` sized every button from the box's
+height alone. Each is now sized from its OWN image's aspect.
+
+**The level grid held twelve, and the original holds sixteen.** The port took
+`PageProperties`' defaults, 4 columns by 3 rows. The owner's screenshot of the
+original shows 4 by 4, and `createLevelSelectState` (WorldSelector.angelscript,
+bytes 365279..365960) settles it: it sets `columns` 4 and `rows` 4 for levels,
+overriding those defaults. The grid's box and button size changed with it so
+sixteen do not touch. The page arrows moved to the middle of either side, where
+the screenshot shows them: the decoded normalized pair is ambiguous about which
+number is x, and a picture of the game beats a guess at an argument order.
+
+**A finished level shows the medal it earned.** The original does not go
+straight on - `GameStateController::writeScore` raises a `LevelFinishedLayer` -
+so nor does the port. Reaching an exit now stops on a medal screen over the
+frozen level, with three buttons: play it again, go on, pick another.
+
+The tier is `computeScore`'s, decoded (ScoreManager.angelscript, bytes
+363979..364204): a level with crystals and none collected is BRONZE whatever
+else; within the golden score it is GOLD with every crystal and SILVER without;
+within the golden score and two more, SILVER; beyond that, BRONZE. The medal
+art is the original's own `medal_gold_l.png`, `medal_silver_l.png`,
+`medal_bronze_l.png`, and the buttons are its `button_restart.png`,
+`button_right.png` and `list_button.png`.
+
+Placed against the CAMERA's view rather than the menu's own box, because the
+level is still on screen behind it and the level's pixels are what a click maps
+to. NOT ported: the `ScoreCounter` that counts the portals up inside the medal,
+the `Matura` fonts and their text, the crystal readout beside it, and the
+plaque. The count is on the HUD line instead of in the medal.
+
+**Levels no longer advance by themselves**, which is the point of the screen and
+which four suites had encoded the other way: they detected "cleared" by the
+current level CHANGING. They now wait for the medal and dismiss it as a player
+does.
+
+**The medal's buttons were invisible, and only GCC said so.** `buildMenu` holds
+a second switch on the button kind - the one that picks each button's image -
+and the three new kinds were not in it, so they fell through with no image and
+no quad: present in the data, absent from the screen. `-Wswitch` caught it;
+MSVC said nothing. The test counted BUTTONS, which is why it passed; it now
+counts the quads drawn for them. That is the third time in two days that the
+failure was art silently missing (the menu's backgrounds, nearly the particle
+bitmaps, now these), and the lesson each time is the same: assert the thing is
+drawn, not that it was asked for.
+
+GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 168.
+
+## Still unexplained: things appear and disappear while the player moves
+
+Reported after playing, and not reproduced. Three readings have been refused by
+the evidence:
+- **Bounds culled as a point.** `RenderableComponent::localBoundsMin/Max`
+  default to -0.5 and +0.5, a real box, not zero.
+- **The orthographic frustum.** `Frustum::FromMatrix` is Gribb/Hartmann from
+  the combined matrix, which is projection-agnostic, and `IntersectsAABB`
+  rejects only a box wholly outside a plane.
+- **A buffer overflowing.** A level draws 6 to 23 drawables against a 65,536
+  instance cap and 4,095 uv slots.
+
+`RenderSystem::SyncMeshes`, which `Components.hpp` says refreshes those bounds,
+DOES NOT EXIST - the only mention of it in the tree is that comment - so every
+renderable keeps the default unit box. For a sprite quad scaled to its own size
+that is still the right extent, so it does not explain this, but the comment is
+stale and picking and culling assume a unit box for every mesh.
+
+What would settle it is a frame of the port with something missing.

@@ -115,13 +115,16 @@ public:
     // what needs state the port does not keep: no score, so no locking, no
     // page counter, no swipe. What is drawn is its art, where its own
     // normalized positions put it.
-    enum class Screen { None, Main, Worlds, Levels };
+    // `Finished` is the odd one: it sits OVER the level it finished, which
+    // stays loaded and drawn but stops ticking, so it is placed against the
+    // camera's view rather than against the menu's own box.
+    enum class Screen { None, Main, Worlds, Levels, Finished };
 
     // A button the menu drew, in the menu's pixel box (MenuBoxPx). Kept as
     // data so a click is tested against exactly what was drawn, and so a test
     // can press one without a pointer or a camera.
     struct MenuButton {
-        enum class Kind { Play, World, Level, Back, Forward };
+        enum class Kind { Play, World, Level, Back, Forward, Retry, Next, List };
         Kind kind{Kind::Play};
         glm::dvec2 centrePx{0.0};
         glm::dvec2 sizePx{0.0};
@@ -228,6 +231,9 @@ private:
     // again. A level is unloaded first, so the two are never both in the
     // registry.
     void openMenu(entt::registry& registry, Screen screen);
+    // The medal screen, over the level that was just finished: unlike every
+    // other screen this KEEPS the level, which simply stops ticking.
+    void openFinished(entt::registry& registry);
     void layOutMenu();
     void buildMenu(entt::registry& registry);
     void unloadMenu(entt::registry& registry);

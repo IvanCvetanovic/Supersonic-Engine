@@ -143,6 +143,21 @@ bool IsAt(const MagicPortalsLayer& layer, const char* name) {
     return layer.Current() != nullptr && layer.Current()->name == name;
 }
 
+// Press "go on" on the medal screen a finished level puts up. Returns false
+// when no such button is there, which is a finished level that did not finish.
+//
+// A level no longer advances on its own: reaching the exit stops on its medal,
+// as the original's LevelFinishedLayer does, so a test that walks to an exit
+// has to dismiss it exactly as a player does.
+bool GoOnFromTheMedal(MagicPortalsLayer& layer, entt::registry& registry) {
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind != MagicPortalsLayer::MenuButton::Kind::Next) continue;
+        layer.PressMenu(registry, button); // by value: pressing clears the list
+        return true;
+    }
+    return false;
+}
+
 int Tagged(entt::registry& registry, const char* tag) {
     int count = 0;
     for (auto [entity, t] : registry.view<TagComponent>().each()) {
@@ -304,7 +319,9 @@ void Level8FromTheSpawnWithTapsAndWalking() {
         std::vector<std::string> pressed;
         if (tick == 1) pressed.push_back(MagicPortalsLayer::kRight);
         tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, std::move(pressed));
-        if (!IsAt(layer, "level8")) clearedAt = tick;
+        // Reaching the exit stops on the level's medal rather than going
+        // straight on, so THAT is what says it was cleared.
+        if (layer.MenuScreen() == MagicPortalsLayer::Screen::Finished) clearedAt = tick;
     }
     const auto& cleared = layer.LastCleared();
     std::printf("  played through: 1-9 cleared %.2f s after right went down, %d of %d crystals, %d portals\n",
@@ -314,6 +331,7 @@ void Level8FromTheSpawnWithTapsAndWalking() {
     CHECK_MSG(cleared && cleared->name == "level8" && cleared->label == "1-9" && cleared->portalsUsed == 2 &&
                   cleared->traversals >= 1,
               "through the pair the two shots opened");
+    CHECK_MSG(GoOnFromTheMedal(layer, registry), "the medal screen offers to go on");
     CHECK_MSG(IsAt(layer, "level9") && layer.SimLevel() != nullptr, "and level9 is loaded");
     layer.OnDetach(registry);
 }
@@ -332,12 +350,14 @@ void LevelsFollowInOrderAndRetryIsInstant() {
     // level0 is solved by walking right, through its two static pairs
     // (test_mp_statics). The camera follows, and never shows past the level.
     bool inside = viewInside(layer);
-    for (int tick = 0; tick < 600 && IsAt(layer, "level0"); ++tick) {
+    for (int tick = 0; tick < 600 && layer.MenuScreen() == MagicPortalsLayer::Screen::None; ++tick) {
         std::vector<std::string> pressed;
         if (tick == 0) pressed.push_back(MagicPortalsLayer::kRight);
         tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, std::move(pressed));
-        if (IsAt(layer, "level0")) inside = inside && viewInside(layer);
+        if (layer.MenuScreen() == MagicPortalsLayer::Screen::None) inside = inside && viewInside(layer);
     }
+    // level0 is finished, and its medal is up; going on from it loads level1.
+    CHECK_MSG(GoOnFromTheMedal(layer, registry), "clearing level0 puts its medal up");
     CHECK_MSG(IsAt(layer, "level1"), "clearing level0 loads level1");
     CHECK_MSG(inside, "the camera never showed past level0");
     const auto& cleared = layer.LastCleared();
@@ -876,9 +896,10 @@ void TheMenuWalksToALevel() {
     }
     layer.PressMenu(registry, *world);
     CHECK(layer.MenuScreen() == Screen::Levels);
-    // Four columns and three rows to a page, as PageProperties has it, and a
-    // world of 32 levels runs to more than one page.
-    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Level), 12);
+    // Four columns and FOUR rows to a page - sixteen - which is what
+    // createLevelSelectState sets for levels and what the owner's screenshot of
+    // the original shows. PageProperties' own 4 by 3 defaults are overridden.
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Level), 16);
     CHECK_EQ(MenuButtonsOfKind(layer, Kind::Forward), 1);
 
     const MagicPortalsLayer::MenuButton* first = MenuButtonOf(layer, Kind::Level, 0);
@@ -923,7 +944,8 @@ void TheGridPagesThroughAWorld() {
     }
     layer.PressMenu(registry, *thirteenth);
     CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
-    CHECK_MSG(IsAt(layer, "level12"), std::string("the second page's first level is ") +
+    // Sixteen to a page, so the second page opens on the seventeenth level.
+    CHECK_MSG(IsAt(layer, "level16"), std::string("the second page's first level is ") +
                                           (layer.Current() != nullptr ? layer.Current()->name : "none"));
 }
 
@@ -952,7 +974,7 @@ void EscapeLeavesALevelForItsGrid() {
     press(layer, registry, MagicPortalsLayer::kBack);
     CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Levels);
     CHECK(layer.SimLevel() == nullptr);
-    CHECK_EQ(MenuButtonsOfKind(layer, MagicPortalsLayer::MenuButton::Kind::Level), 12);
+    CHECK_EQ(MenuButtonsOfKind(layer, MagicPortalsLayer::MenuButton::Kind::Level), 16);
 }
 
 // And a click lands on the button under it, through the same camera mapping a
@@ -979,6 +1001,54 @@ void AClickOnTheMenuPressesWhatIsUnderIt() {
     const glm::vec2 at = screenOf(registry, play->centrePx);
     tap(layer, registry, at);
     CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Worlds);
+}
+
+// ---- the medal a finished level earns -----------------------------------------
+
+// Finishing a level puts the medal screen up over it, rather than going
+// straight on to the next - which is what the original does
+// (GameStateController::writeScore raising a LevelFinishedLayer).
+void FinishingALevelShowsTheMedal() {
+    using Screen = MagicPortalsLayer::Screen;
+    using Kind = MagicPortalsLayer::MenuButton::Kind;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    // level0 is walked from its spawn to its exit, as test_mp_statics walks it.
+    int tick = 0;
+    for (; tick < 600 && layer.MenuScreen() == Screen::None; ++tick) {
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+    }
+    CHECK_MSG(layer.MenuScreen() == Screen::Finished,
+              "after " + std::to_string(tick) + " tick(s) the screen is not the medal");
+    CHECK(layer.LastCleared().has_value());
+    // The level stays behind the medal rather than being taken away.
+    CHECK(layer.SimLevel() != nullptr);
+    // Three buttons: play it again, go on, or pick another.
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Retry), 1);
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Next), 1);
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::List), 1);
+    // And each is DRAWN, not merely listed. A kind buildMenu's switch does not
+    // name gets no image and so no quad - an invisible button that counting
+    // the buttons themselves would never catch. GCC's -Wswitch caught it once;
+    // this catches it without a compiler's help.
+    CHECK_EQ(Tagged(registry, "Magic Portals Menu Button"), 3);
+
+    // And going on reaches the next level, with the screen gone.
+    const MagicPortalsLayer::MenuButton* next = MenuButtonOf(layer, Kind::Next);
+    if (next == nullptr) {
+        CHECK_MSG(false, "the medal screen has no next button");
+        return;
+    }
+    layer.PressMenu(registry, *next);
+    CHECK(layer.MenuScreen() == Screen::None);
+    CHECK_MSG(IsAt(layer, "level1"), std::string("it went on to ") +
+                                         (layer.Current() != nullptr ? layer.Current()->name : "none"));
 }
 
 // ---- the entities' particles --------------------------------------------------
@@ -1058,6 +1128,7 @@ void runTests() {
     AClickOnTheMenuPressesWhatIsUnderIt();
     ALevelsEntitiesEmit();
     ParticlesGoWithTheirLevel();
+    FinishingALevelShowsTheMedal();
 }
 
 } // namespace
