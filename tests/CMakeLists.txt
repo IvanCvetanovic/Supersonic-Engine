@@ -43,6 +43,10 @@ add_engine_test(test_contacts)
 add_engine_test(test_sat)
 add_engine_test(test_raycast)
 add_engine_test(test_meshgen)
+# The BMFont reader: a .fnt into glyph quads, so a game can draw text IN THE
+# WORLD. ImGui's atlas is the engine's only other text and it draws in screen
+# space, so nothing could put a glyph at a level's own coordinates before this.
+add_engine_test(test_bitmapfont)
 add_engine_test(test_heightfield)
 add_engine_test(test_joints)
 add_engine_test(test_convexhull)
