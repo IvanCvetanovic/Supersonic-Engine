@@ -67,6 +67,11 @@ const glm::vec3 kShotColour(0.60f, 0.60f, 1.00f); // projectile.ent's light is t
 constexpr double kShotSizePx = 8.0;
 const glm::vec3 kStaticRedColour(0.90f, 0.30f, 0.25f);  // a static portal the level colours red
 const glm::vec3 kStaticBlueColour(0.30f, 0.50f, 1.00f); // and blue
+const glm::vec3 kBeholderColour(0.55f, 0.20f, 0.60f);   // the beholder's reach
+const glm::vec3 kSpikeColour(0.85f, 0.85f, 0.70f);
+constexpr double kSpikeBoxPx = 6.0;
+// Where the original adds a spike: at z -4 (ETHCallback_beholder).
+constexpr int kSpikeZIndex = -4;
 
 bool IsTrigger(const entt::registry& registry, entt::entity entity) {
     using namespace Supersonic;
@@ -247,6 +252,10 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     m_portalQuads.clear();
     destroy(m_shotQuad);
     destroy(m_playerQuad);
+    destroy(m_beholderBox);
+    destroy(m_beholderQuad);
+    for (auto& e : m_spikes) destroy(e);
+    m_spikes.clear();
     destroy(m_shot);
     destroy(m_player);
     destroy(m_exit);
@@ -257,6 +266,10 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     }
     for (const Launchers::Thrown& thrown : m_level.launchers.live) {
         entt::entity e = thrown.body;
+        destroy(e);
+    }
+    for (const Boss::Rock& rock : m_level.boss.rocks) {
+        entt::entity e = rock.body;
         destroy(e);
     }
     destroy(m_level.player);
@@ -540,6 +553,24 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         drawn.sprite = std::move(sprite);
         m_sprites.push_back(std::move(drawn));
     }
+    // The beholder at its adder's z_index and a spike at -4: after the sprites
+    // drawn at or below it and before the next, the player's slot counted in.
+    const auto slotAfter = [this](int zIndex) {
+        const int below = static_cast<int>(std::count_if(
+            m_sprites.begin(), m_sprites.end(), [zIndex](const DrawnSprite& d) { return d.sprite.zIndex <= zIndex; }));
+        return SlotZ(below < m_playerSlot ? below : below + 1) - 0.5f * kSpriteSlotZ;
+    };
+    int adderZ = 0;
+    if (m_level.boss.beholder) {
+        if (const Tscn::Node* adder = m_data.scene.FindNode(m_level.boss.beholder->name)) {
+            double z = 0.0;
+            if (const Tscn::Value* value = adder->Find("z_index"); value != nullptr && value->AsNumber(z)) {
+                adderZ = static_cast<int>(z);
+            }
+        }
+    }
+    m_beholderZ = slotAfter(adderZ);
+    m_spikeZ = slotAfter(kSpikeZIndex);
     m_artReady = true;
 }
 
@@ -610,7 +641,8 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         placeBox(registry, drawn.box, centrePx, drawn.sizePx, 0.0f, drawn.depth, angle);
     }
 
-    // One box and one sprite per body a launcher threw, made and unmade to match.
+    // One box and one sprite per body a launcher threw or the beholder dropped,
+    // made and unmade to match.
     for (ThrownBox& drawn : m_thrown) {
         if (registry.valid(drawn.body)) continue;
         if (drawn.box != entt::null && registry.valid(drawn.box)) registry.destroy(drawn.box);
@@ -619,7 +651,19 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         drawn.quad = entt::null;
     }
     std::erase_if(m_thrown, [](const ThrownBox& drawn) { return drawn.box == entt::null; });
+    struct Loose {
+        entt::entity body;
+        double radiusPx;
+        std::string sprite;
+    };
+    std::vector<Loose> loose;
     for (const Launchers::Thrown& thrown : m_level.launchers.live) {
+        loose.push_back({thrown.body, thrown.is.radiusPx, thrown.is.sprite});
+    }
+    for (const Boss::Rock& rock : m_level.boss.rocks) {
+        loose.push_back({rock.body, m_level.boss.rock.radiusPx, m_level.boss.rock.sprite});
+    }
+    for (const Loose& thrown : loose) {
         if (!registry.valid(thrown.body)) continue;
         auto drawn = std::find_if(m_thrown.begin(), m_thrown.end(),
                                   [&thrown](const ThrownBox& d) { return d.body == thrown.body; });
@@ -629,8 +673,8 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             made.box = makeBox(registry, "Magic Portals Thrown", glm::vec3(0.0f), glm::vec3(1.0f), kStoneColour);
             registry.emplace<InterpolatedTransformComponent>(made.box);
             // Drawn as what it is, with the image the converter copied for its .ent.
-            const std::string texture = m_paths.art + "/assets/entities/" + thrown.is.sprite;
-            if (m_artReady && !thrown.is.sprite.empty() && imageSizePx(texture) != glm::dvec2(0.0)) {
+            const std::string texture = m_paths.art + "/assets/entities/" + thrown.sprite;
+            if (m_artReady && !thrown.sprite.empty() && imageSizePx(texture) != glm::dvec2(0.0)) {
                 made.quad = makeSprite(registry, "Magic Portals Thrown Sprite", texture, false);
                 registry.emplace<InterpolatedTransformComponent>(made.quad);
             }
@@ -638,11 +682,11 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             drawn = m_thrown.end() - 1;
         }
         const auto& body = registry.get<TransformComponent>(thrown.body);
-        placeBox(registry, drawn->box, Units::ToPixels(body.position), glm::dvec2(thrown.is.radiusPx * 2.0), 0.0f,
-                 0.4f, body.rotation.z);
+        placeBox(registry, drawn->box, Units::ToPixels(body.position), glm::dvec2(thrown.radiusPx * 2.0), 0.0f, 0.4f,
+                 body.rotation.z);
         if (drawn->quad != entt::null) {
             placeSprite(registry, drawn->quad, Units::ToPixels(body.position),
-                        imageSizePx(m_paths.art + "/assets/entities/" + thrown.is.sprite),
+                        imageSizePx(m_paths.art + "/assets/entities/" + thrown.sprite),
                         SlotZ(m_playerSlot) - 0.5f * kSpriteSlotZ, body.rotation.z);
         }
     }
@@ -680,6 +724,8 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
                         SlotZ(m_playerSlot), 0.0f);
         }
     }
+
+    syncBoss(registry);
 
     const auto boxPx = [](const Trigger::Box& box, glm::dvec2& centrePx, glm::dvec2& sizePx) {
         centrePx = Units::ToPixels(glm::vec3(box.centre, 0.0f));
@@ -839,6 +885,88 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     for (const entt::entity e : m_portals) show(e, !(artOnly && haloReady));
     show(m_shot, !(artOnly && m_shotQuad != entt::null));
     show(m_player, !(artOnly && m_playerQuad != entt::null));
+    show(m_beholderBox, !(artOnly && m_beholderQuad != entt::null));
+}
+
+void MagicPortalsLayer::syncBoss(entt::registry& registry) {
+    using namespace Supersonic;
+    const Boss::State& boss = m_level.boss;
+    auto destroy = [&registry](entt::entity& e) {
+        if (e != entt::null && registry.valid(e)) registry.destroy(e);
+        e = entt::null;
+    };
+    if (!boss.beholder || boss.beholder->gone) {
+        destroy(m_beholderBox);
+        destroy(m_beholderQuad);
+    } else {
+        const Boss::Beholder& beholder = *boss.beholder;
+        // Its reach - where a rising rock hurts it and the player dies - as a box.
+        if (m_beholderBox == entt::null) {
+            m_beholderBox =
+                makeBox(registry, "Magic Portals Beholder", glm::vec3(0.0f), glm::vec3(1.0f), kBeholderColour);
+            registry.emplace<InterpolatedTransformComponent>(m_beholderBox);
+        }
+        placeBox(registry, m_beholderBox, beholder.atPx, glm::dvec2(boss.rules.radiusPx * 2.0), kMarkerZ, kMarkerDepth,
+                 0.0f);
+        // beholder.ent's sheet: its eye open or shut, going red as it is hurt,
+        // and pulsing as bounce() has it, but for while it throws rocks (art.json).
+        const Art::Beholder& picture = m_artRules.beholder;
+        const std::string sheet = originalImage(picture.sprite);
+        const glm::dvec2 sheetPx = imageSizePx(sheet);
+        if (m_beholderQuad == entt::null && m_artReady && sheetPx != glm::dvec2(0.0)) {
+            m_beholderQuad = makeSprite(registry, "Magic Portals Beholder Sprite", sheet, picture.additive);
+            registry.emplace<InterpolatedTransformComponent>(m_beholderQuad);
+            auto& animation = registry.emplace<SpriteAnimationComponent>(m_beholderQuad);
+            animation.columns = static_cast<uint32_t>(picture.columns);
+            animation.rows = static_cast<uint32_t>(picture.rows);
+            animation.frameCount = 1;
+            animation.playing = false;
+        }
+        if (m_beholderQuad != entt::null) {
+            auto& animation = registry.get<SpriteAnimationComponent>(m_beholderQuad);
+            animation.firstFrame = static_cast<uint32_t>(beholder.frame);
+            animation.frame = 0;
+            switch (beholder.phase) {
+            case Boss::Phase::Seeking: m_beholderScale = picture.seeking.ScaleAt(beholder.pulseMs); break;
+            case Boss::Phase::GotDamage: m_beholderScale = picture.hurt.ScaleAt(beholder.pulseMs); break;
+            case Boss::Phase::Dead: m_beholderScale = picture.dead.ScaleAt(beholder.pulseMs); break;
+            case Boss::Phase::ThrowRock: break;
+            }
+            const glm::dvec2 cellPx = sheetPx / glm::dvec2(picture.columns, picture.rows);
+            placeSprite(registry, m_beholderQuad, beholder.atPx, cellPx * m_beholderScale, m_beholderZ, 0.0f);
+            const float left = static_cast<float>(std::max(beholder.hp, 0)) / static_cast<float>(boss.rules.maxHp);
+            registry.get<MaterialComponent>(m_beholderQuad).albedoColor = glm::vec4(1.0f, left, left, 1.0f);
+        }
+    }
+
+    // Its spikes: beholder_spike.ent turned to where each flies and standing on
+    // its pivot, or small boxes without the image.
+    const Art::Spike& spike = m_artRules.spike;
+    const std::string image = originalImage(spike.sprite);
+    const glm::dvec2 imagePx = imageSizePx(image);
+    const bool pictured = m_artReady && imagePx != glm::dvec2(0.0);
+    while (m_spikes.size() > boss.spikes.size()) {
+        destroy(m_spikes.back());
+        m_spikes.pop_back();
+    }
+    while (m_spikes.size() < boss.spikes.size()) {
+        m_spikes.push_back(pictured ? makeSprite(registry, "Magic Portals Spike", image, spike.additive)
+                                    : makeBox(registry, "Magic Portals Spike", glm::vec3(0.0f), glm::vec3(1.0f),
+                                              kSpikeColour));
+    }
+    for (std::size_t i = 0; i < m_spikes.size(); ++i) {
+        const Boss::Spike& flying = boss.spikes[i];
+        const glm::dvec2 d = flying.directionPx;
+        // The image's down is turned onto its way, and so its right onto
+        // (dy, -dx). The picture stands with its pivot on the spike.
+        const glm::dvec2 pivot = spike.pivotXPx * glm::dvec2(d.y, -d.x) + spike.pivotYPx * d;
+        const float rotation = std::atan2(static_cast<float>(-d.y), static_cast<float>(d.x)) + 1.5707964f;
+        if (pictured) {
+            placeSprite(registry, m_spikes[i], flying.atPx - pivot, imagePx, m_spikeZ, rotation);
+        } else {
+            placeBox(registry, m_spikes[i], flying.atPx, glm::dvec2(kSpikeBoxPx), kMarkerZ, kMarkerDepth, rotation);
+        }
+    }
 }
 
 void MagicPortalsLayer::buildHud(entt::registry& registry) {

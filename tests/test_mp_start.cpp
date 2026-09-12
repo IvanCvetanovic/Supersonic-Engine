@@ -52,7 +52,7 @@ struct Chapter {
     int playFloor;  // levels that play today
 };
 const Chapter kChapters[] = {
-    {"", "chapter 1", 32, 31},
+    {"", "chapter 1", 32, 32},
     {"a", "chapter 2", 32, 0},
     {"b", "chapter 3", 32, 0},
     {"c", "chapter 4", 2, 0},
@@ -91,7 +91,9 @@ Outcome StartAndDrop(const std::string& path) {
     for (const Tscn::Node& node : data.scene.nodes) {
         if (node.parent != ".") continue;
         const std::string role = Roles::RoleOf(data.roles, node);
-        if (!Roles::IsPorted(role)) ++outcome.ignored[role];
+        // A boss spawn plays when it is the boss the port has: level31's beholder.
+        const bool boss = role == Roles::kBossSpawn && Boss::Plays(data.boss, node);
+        if (!Roles::IsPorted(role) && !boss) ++outcome.ignored[role];
     }
     for (int tick = 0; tick < kLandingTicks && !outcome.landed; ++tick) {
         Game::Tick(data, registry, level, 0.0f, kStep);

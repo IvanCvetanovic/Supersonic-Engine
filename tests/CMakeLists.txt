@@ -157,6 +157,8 @@ add_mp_test(test_mp_demolish)
 add_mp_test(test_mp_launchers)
 # The portal shot: a tap fires, and the portal opens where the shot arrives.
 add_mp_test(test_mp_shot)
+# Chapter 1's boss, the beholder of level31, as the original's script plays it.
+add_mp_test(test_mp_boss)
 # A level's own art: the sprites the converter wrote, their order and blend.
 # Its reader is tested on files it writes, so it runs anywhere; only the part
 # that reads the converted levels is skipped without them, and never with 77.
@@ -172,7 +174,8 @@ target_link_libraries(test_mp_layer PRIVATE MagicPortalsGame)
 # they can simply be absent. Each exits 77 then, which ctest reports as SKIPPED
 # with the path it looked in - never as a pass.
 set_tests_properties(test_mp_levels test_mp_play test_mp_start test_mp_statics test_mp_chapters test_mp_timed
-                     test_mp_movers test_mp_hazards test_mp_demolish test_mp_launchers test_mp_shot test_mp_layer PROPERTIES SKIP_RETURN_CODE 77)
+                     test_mp_movers test_mp_hazards test_mp_demolish test_mp_launchers test_mp_shot test_mp_boss test_mp_layer
+                     PROPERTIES SKIP_RETURN_CODE 77)
 
 # The simulation's own sin, cos, asin, atan2 and pow, pinned bit for bit so the
 # determinism claim holds across C runtimes (DetMath.hpp).

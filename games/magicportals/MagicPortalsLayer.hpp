@@ -53,7 +53,10 @@ namespace MagicPortals {
 //  - What the levels do not picture, the game draws as the original's own
 //    entities draw it (Art.hpp): the portals a shot opens, and the shot. Their
 //    images are read from the original's extracted assets; without them they
-//    are boxes. So is the player: dark_mage.ent's sheet, turned as it walks.
+//    are boxes. So is the player: dark_mage.ent's sheet, turned as it walks. So
+//    is chapter 1's boss: beholder.ent, its eye open or shut, reddening as it
+//    is hurt and pulsing as it goes, with the spikes it fires and the rocks it
+//    drops.
 class MagicPortalsLayer final : public Supersonic::EngineLayer {
 public:
     // The port's tick: the remake's physics runs at Godot's default 60 Hz.
@@ -182,6 +185,7 @@ private:
     float readInput(entt::registry& registry);
     void syncDrawables(entt::registry& registry);
     void syncSprites(entt::registry& registry);
+    void syncBoss(entt::registry& registry);
     void updateHud(entt::registry& registry);
 
     // The level at `index` in chapters.json, in place of whatever was there.
@@ -256,6 +260,15 @@ private:
     entt::entity m_playerQuad{entt::null};  // the player, when its image is there
     float m_direction{0.0f};                // this tick's walk: -1 left, 1 right, 0 standing
     bool m_facingRight{false};              // which way the player last walked
+    // Chapter 1's boss: its reach as a box, beholder.ent's sheet when the image
+    // is there, and its spikes. The beholder is drawn at its adder's z_index
+    // among the art, and a spike at the -4 the original adds it at.
+    entt::entity m_beholderBox{entt::null};
+    entt::entity m_beholderQuad{entt::null};
+    glm::dvec2 m_beholderScale{1.0}; // its pulse as last set, which it keeps while it throws rocks
+    std::vector<entt::entity> m_spikes; // one per spike in flight
+    float m_beholderZ{0.5f};
+    float m_spikeZ{0.5f};
 
     struct Hud {
         entt::entity status{entt::null};

@@ -6,19 +6,23 @@
 // The tick is in two halves around the physics step:
 //   before the step: the buttons and their doors (Puzzle), the moving platforms
 //                    and lifts (Mover), what the launchers throw (Launchers),
-//                    then the player's steering (Player);
+//                    how fast the beholder's rocks go (Boss), then the player's
+//                    steering (Player);
 //   after the step:  the crystals and the exit, where the step left the player
 //                    (Goals), the hazards (Hazards), what the stones touched
 //                    (Demolish), the thrown bodies the launchers take back
-//                    (Launchers), then the portals (Portals). The portals come
-//                    last because they move what goes through them, and the
-//                    rest judge where the step left things.
+//                    (Launchers), what the beholder's rocks ran into (Boss),
+//                    then the portals (Portals), and last the beholder's own turn
+//                    (Boss). The portals come after what judges where the step
+//                    left things, because they move what goes through them. The
+//                    beholder looks at where they left its rocks.
 // A test runs Tick, which is the two halves with the step between them. The
 // engine's app steps physics itself, before each layer's OnFixedUpdate. So a
 // layer runs AfterStep and then BeforeStep, and the app's step falls between
 // one OnFixedUpdate and the next. It is the same sequence, begun half a tick
 // later.
 
+#include "sim/Boss.hpp"
 #include "sim/Demolish.hpp"
 #include "sim/Goals.hpp"
 #include "sim/Hazards.hpp"
@@ -49,12 +53,13 @@ struct Data {
     Demolish::Rules demolish;     // and demolish.json
     Launchers::Rules launchers;   // and launchers.json
     Shot::Rules shot;             // and shot.json
+    Boss::Rules boss;             // and boss.json
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
 
 // A converted level (.tscn), the remake's data directory with its
 // entity_roles.json, player.json and portals.json, and the port's own data with
-// its movers.json, demolish.json, launchers.json, shot.json and transit.json. False, with
+// its movers.json, demolish.json, launchers.json, shot.json, transit.json and boss.json. False, with
 // `error`, when any of them is missing or malformed.
 bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
               const std::filesystem::path& prismDirectory, Data& out, std::string& error,
@@ -73,6 +78,7 @@ struct Level {
     Demolish::State demolish;
     Launchers::State launchers;
     Portals::State portals;
+    Boss::State boss;
     entt::entity player = entt::null;
 };
 

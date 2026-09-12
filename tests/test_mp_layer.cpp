@@ -773,8 +773,56 @@ void ThePlayerIsTheDarkMage() {
     CHECK_EQ(Tagged(registry, "Magic Portals Player Sprite"), 0);
 }
 
+void Level31DrawsTheBeholder() {
+    // beholder.ent's sheet where the beholder is, its eye open and its colour
+    // whole, with the box of its reach behind the art. The player walks under
+    // it: it shuts its eye, and the rock it drops is drawn as a stone.
+    if (!OriginalArtIsThere("Level31DrawsTheBeholder")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level31");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.SimLevel()->boss.beholder) return;
+    for (int tick = 0; tick < 5; ++tick) tickWith(layer, registry, kRest, {}, {});
+    entt::entity quad = entt::null;
+    for (auto [entity, tag] : registry.view<TagComponent>().each()) {
+        if (tag.tag == "Magic Portals Beholder Sprite") quad = entity;
+    }
+    CHECK(quad != entt::null);
+    if (quad == entt::null) return;
+    const auto& material = registry.get<MaterialComponent>(quad);
+    CHECK_MSG(material.albedoTexturePath.find("beholder.png") != std::string::npos, material.albedoTexturePath);
+    CHECK(material.albedoColor == glm::vec4(1.0f));
+    const auto& animation = registry.get<SpriteAnimationComponent>(quad);
+    CHECK(animation.columns == 2u && animation.rows == 1u && animation.firstFrame == 0u);
+    const glm::dvec2 at = layer.SimLevel()->boss.beholder->atPx;
+    const glm::dvec2 drawn = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(quad).position);
+    CHECK_MSG(glm::distance(drawn, at) < 1e-3, "drawn at " + Point(drawn) + ", the beholder at " + Point(at));
+    CHECK_EQ(Shown(registry, "Magic Portals Beholder"), 0);
+
+    bool shut = false;
+    for (int tick = 0; tick < 1800 && !shut && layer.SimLevel() != nullptr; ++tick) {
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+        shut = layer.SimLevel()->boss.beholder->phase == MagicPortals::Boss::Phase::ThrowRock;
+    }
+    // The turn that shuts its eye is still a seeking turn, which draws the eye
+    // open; the frame follows on the next one.
+    tickWith(layer, registry, kRest, {}, {});
+    const uint32_t frame = registry.get<SpriteAnimationComponent>(quad).firstFrame;
+    CHECK_MSG(shut && frame == 1u, "under it, it shuts its eye: frame " + std::to_string(frame));
+    bool dropped = false;
+    for (int tick = 0; tick < 240 && !dropped && layer.SimLevel() != nullptr; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        dropped = !layer.SimLevel()->boss.rocks.empty();
+    }
+    CHECK_MSG(dropped && Tagged(registry, "Magic Portals Thrown Sprite") == 1, "its rock is drawn as a stone");
+    layer.OnDetach(registry);
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
+    Level31DrawsTheBeholder();
     ATapLandsWhereItPoints();
     Level8FromTheSpawnWithTapsAndWalking();
     LevelsFollowInOrderAndRetryIsInstant();

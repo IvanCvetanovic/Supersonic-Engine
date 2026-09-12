@@ -813,7 +813,7 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_play | 131 | 0 |
 | test_mp_start | 365 | 0 |
 
-## Step 9 - the art (9a and 9b built; 9c waits on the owner)
+## Step 9 - the art (9a to 9d built)
 
 Split in three, so that what needs nobody's word lands first:
 - **9a, the engine.** Additive blending, which the levels' glows need.
@@ -1225,3 +1225,154 @@ GCC 13.3 and MSVC 14.50 agree to the digit:
 | test_mp_play | 133 | 0 |
 
 The other MP suites are unchanged in count.
+
+## Step 11b - chapter 1's boss, the beholder of level 1-32 (built)
+
+The remake built a boss's structure and said plainly that it was a placeholder:
+its attack patterns were "bytecode we can name but not read". They can be read
+now (step 11a), so the port plays what ETHCallback_beholder
+(assets/Beholder.angelscript, bytes 374987..380209) does. boss.json carries every
+number with the bytes it came from.
+
+**What the script does.**
+- **Spawning.** level31's `adder` marker names beholder.ent in its custom data,
+  and ETHCallback_adder (Adder.angelscript, bytes 372581..372886) puts that
+  entity where the marker stands: (729, 80).
+- **Its life.** BEHOLDER_MAX_HP is 2 and it dies when its hp is -1 or less, so it
+  takes three hits. Its colour is (1, hp / 2, hp / 2): it reddens with each.
+  BEHOLDER_RADIUS is 48.
+- **Seeking** (BEHOLDER_STATE_SEEKING). It aims at its own x plus the player's
+  offset clamped to 64 px, at its start height plus 8 px times
+  cos(elapsedTime + PIb), and goes there by followUp: a PositionInterpolator over
+  2000 ms eased by smoothEnd, sin(v * PIb), taken up again from where it has got
+  to once 1000 ms have passed. When the player has been within 32 px of its x for
+  more than 400 ms it shuts its eye.
+- **Throwing rocks** (THROW_ROCK), for more than 7900 ms. overTimeEntityAdder
+  drops rolling_stone.ent at the player's x and y -32 every 2000 ms. That clock
+  is never reset between rounds, so a later round's first rock comes early and
+  the round can hold four. It is the original's, and the port keeps it.
+- **Being hurt.** A rolling stone within its radius whose velocity against
+  (0, -1) is above 0 - rising - breaks and takes an hp. That is the owner's move,
+  and step 11a is what makes it possible.
+- **Hurt** (GOT_DAMAGE), for more than 7200 ms. Every 1200 ms it fires
+  beholder_spike.ent at every 40 degrees from 0 to 360 inclusive, clockwise from
+  up, the next ring turned by 10: ten spikes, two of them the same way. Each
+  flies at 140 px/s through everything, is deleted off screen, and kills a
+  character whose size times 0.7 holds its point.
+- **Touching it.** The player within its radius has its hp set to 0.
+- **Dead** (DEAD). After more than 3550 ms it explodes - `explode`, radius 80 px,
+  which kills the player in it - level31's button is put at its `button_dest`,
+  and the beholder goes. The button starts at (565, 244), buried in the floor
+  where nothing can press it, and rises to (528, 220). It opens door_lift_748,
+  which is the only way to the exit.
+- **Its rocks.** overTimeEntityAdder marks each `destroyOnStaticHit`, and
+  ETHBeginContactCallback_rolling_stone (MiscCallbacks.angelscript, bytes
+  346486..347456) breaks such a stone on anything static it runs into and kills a
+  character it hits with an intensity above 2.5 - its velocity along the line
+  between them, in Box2D units of 50 px.
+
+**The owner's account, 11 September, against the script.** They agree but for
+the spikes.
+
+| The owner | The script |
+|---|---|
+| Three lives, and it reddens with each hit | hp 2, dead below 0: three hits; colour (1, hp/2, hp/2) |
+| Rocks sent back through portals hit it from below | a rising rolling stone within 48 px |
+| Three rocks, one at a time | 7900 ms of one every 2000 ms |
+| A button rose when it died | button put at button_dest |
+| Five spikes, at random, every 1.5 s | ten, 40 degrees apart, turned 10 every other ring, every 1.2 s |
+
+The script is followed, and the difference is written into boss.json.
+
+**What the port does.** sim/Boss.hpp and Boss.cpp, in the original's own order:
+its time, its death, the phase it began the turn with, what is around it, then
+that phase's turn. A hit changes the next turn's phase, as the original reads its
+state before it looks around.
+- **In the tick.** Before the step, where each rock is and how fast it goes.
+  After the step and before the portals, what its rocks ran into; after the
+  portals, its own turn, so it looks at where they left its rocks.
+- **Touching, for its rocks.** Judged by the port's own overlap tests, as the
+  demolish rule is: where the rock is, and where it would have got to had nothing
+  stopped it. The engine's solver stops a fast body short of what it is closing
+  on (speculative contacts), and a rock falling on the player at 571 px/s was
+  measured left 1.0 px above its head, where Box2D's BeginContact would have
+  fired. So a rock counts as touching within 2 px: a port threshold, marked a
+  guess in boss.json, and not the demolish margin.
+- **A rock a portal holds** goes through it rather than landing.
+- **The button** is raised by moving both the Puzzle box that is pressed and the
+  body the level's picture follows.
+- **Whatever the boss kills the player with** comes out as a hazard death, which
+  the layer already retries on.
+- **Its spikes** are culled at the level's extent grown by the original's 16 x 128
+  margin. The original culls on the screen; the port's level has no camera.
+- **The role.** `boss_spawn` is played when Boss::Plays says the port has that
+  boss: an adder naming beholder.ent. The other four boss markers, in chapters 2
+  to 4, stay inert.
+
+**Not ported**, and recorded rather than invented: the sounds, the earthquake,
+the smoke and the explosions' pictures, the final blast's line of sight and its
+effect on anything but the player. The crush belongs to every rolling stone in
+the original; the port gives it only to the beholder's, so that step 6's levels
+are not re-litigated on a threshold whose unit conversion is inferred. **That is
+a correction step 6 owes**, and the owner's word on whether stones crushed the
+character would settle it.
+
+**Drawn as the original draws it** (art.json). beholder.ent's two frames - the
+eye open, and shut while it throws rocks - reddening with its hp and pulsing as
+bounce() has it in each phase: (1, 1.02) and (1.02, 1) over 400 ms seeking,
+(1, 1) and (1.25, 1.25) over 600 ms hurt, (1.1, 1.1) and (1.25, 1.25) over 400 ms
+dead. Its CustomData scale, 0.75, is replaced on its first turn, because bounce()
+calls SetScale, which sets the scale outright (ETHEntity.cpp:601). Its spikes are
+turned to where they fly and stand on their pivot; its rocks are drawn as stones.
+
+Tests. **test_mp_boss** pins boss.json against the script, and level31's
+beholder, button and button_dest. On a bare rig: the glide and its wobble, the
+rounds of rocks and the clock they carry (three, then four), a rising stone
+hurting it and a falling one not, three hits and the button rising 213 turns
+later, the rings of ten and their turn, the spike kill and the safe ground under
+it, the radius kill, and its rocks breaking and crushing. Then level31 itself: a
+rock dodged breaks on the floor, one stood under crushes, and the level is won as
+the owner won it.
+
+**Level 1-32, played.** Three portal pairs in the air, three hits, the button,
+the exit. One thing the level teaches: near the door the beholder floats in front
+of wall04, which reaches down to y 106 over x 544 to 608, so a rock rising under
+it there breaks on the wall. The player has to draw it left first. The suite
+prints the run:
+
+```
+level31 as the owner won it: 3 hit(s), 3 traversal(s), 6 portal(s), the button pressed, completed
+```
+
+The inventory after step 11b: **chapter 1 has 32 levels starting and 32
+playing**, and the port plays every level of the chapter. That counts roles, and
+for level31 one played route. The other 31 levels' own routes are still unplayed,
+and the reflection caveat above still stands.
+
+GCC 13.3 and MSVC 14.50 agree to the digit:
+
+| Suite | Checks | Failures |
+|---|---|---|
+| test_mp_boss | 126 | 0 |
+| test_mp_sprites | 94 | 0 |
+| test_mp_layer | 129 | 0 |
+| test_mp_start | 496 | 0 |
+
+level31 renders on lavapipe under xvfb: the beholder's eye hangs in its archway,
+and the dark mage stands on the floor below it.
+
+## What the decode leaves for later steps
+
+The whole script reads now, so what follows is fact rather than guess, and none
+of it is changed here.
+- **g_portalCollisionRadius is 14 px.** The port reads the remake's guess, 16.
+- **A placed portal perishes 20,000 ms after it opens** unless marked
+  dontPerish (ETHCallback_portal). The port keeps its portals.
+- **Every rolling stone crushes a character** it hits hard enough, not only the
+  beholder's (step 11b, above).
+- **DEFAULT_GRAVITY_SCALE is 2**, against the remake's 980 px/s^2 world.
+- **174 named globals** are readable, among them the timings and radii that other
+  steps carry as guesses.
+
+Each touches levels that already play, so each wants its own step, with all
+fifteen suites re-run.

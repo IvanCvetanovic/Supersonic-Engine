@@ -261,6 +261,39 @@ void ThePortalAndTheShotAreTheirEnts() {
               "starting on frame 4, its pivot 2 px below the middle");
     CHECK_MSG(mage.leftRow == 1 && mage.rightRow == 2, "the rows the decoded DIRECTION enum gives left and right");
     CHECK_MSG(mage.startFrame / mage.columns == mage.leftRow, "and the start frame stands on the left row");
+
+    // Chapter 1's boss and its spikes (step 11b): the .ent files' facts, and the
+    // pulse bounce() gives it in each thing it does, decoded from its script.
+    const Art::Beholder& beholder = rules.beholder;
+    CHECK_MSG(beholder.sprite == "beholder.png" && !beholder.additive && beholder.columns == 2 && beholder.rows == 1,
+              "beholder.ent: its sheet, cut 2 x 1, mixed");
+    const auto pulse = [](const Art::Pulse& p, glm::dvec2 from, glm::dvec2 to, double strideMs) {
+        return p.fromScale == from && p.toScale == to && p.strideMs == strideMs;
+    };
+    CHECK_MSG(pulse(beholder.seeking, {1.0, 1.02}, {1.02, 1.0}, 400.0), "seeking, it breathes across");
+    CHECK_MSG(pulse(beholder.hurt, {1.0, 1.0}, {1.25, 1.25}, 600.0), "hurt, it swells");
+    CHECK_MSG(pulse(beholder.dead, {1.1, 1.1}, {1.25, 1.25}, 400.0), "dead, it throbs");
+    CHECK_MSG(rules.spike.sprite == "beholder_spike.png" && !rules.spike.additive && rules.spike.Frames() == 1 &&
+                  rules.spike.pivotXPx == 0.0 && rules.spike.pivotYPx == 10.0,
+              "beholder_spike.ent: one frame, its pivot 10 px below the middle");
+}
+
+void APulseGoesThereAndBack() {
+    // bounce(): from one scale to the other in a stride, eased by smoothEnd, and
+    // back in the next.
+    Art::Pulse p;
+    p.fromScale = glm::dvec2(1.0, 1.0);
+    p.toScale = glm::dvec2(1.25, 1.5);
+    p.strideMs = 600.0;
+    const auto near = [](const glm::dvec2& got, double x, double y) {
+        return std::fabs(got.x - x) < 1e-5 && std::fabs(got.y - y) < 1e-5;
+    };
+    const double half = std::sin(3.14159265358979 / 4.0);
+    CHECK(near(p.ScaleAt(0.0), 1.0, 1.0));
+    CHECK(near(p.ScaleAt(300.0), 1.0 + 0.25 * half, 1.0 + 0.5 * half));
+    CHECK(near(p.ScaleAt(600.0), 1.25, 1.5));
+    CHECK(near(p.ScaleAt(900.0), 1.25 - 0.25 * (1.0 - half), 1.5 - 0.5 * (1.0 - half)));
+    CHECK(near(p.ScaleAt(1200.0), 1.0, 1.0));
 }
 
 void ASheetThatDoesNotSayHowFastIsRefused() {
@@ -290,6 +323,10 @@ void TheOriginalsImagesAreCutAsTheEntsSay() {
     CHECK_MSG(sheet && w == 6 * 64 && h == 64, "projectile.png is six frames of 64 x 64: " + error);
     const bool mage = Sprites::ImageSize(kOriginal + "/entities/magic_portals_hd.png", w, h, error);
     CHECK_MSG(mage && w == 4 * 40 && h == 4 * 56, "magic_portals_hd.png is sixteen frames of 40 x 56: " + error);
+    const bool beholder = Sprites::ImageSize(kOriginal + "/entities/beholder.png", w, h, error);
+    CHECK_MSG(beholder && w == 2 * 128 && h == 128, "beholder.png is two frames of 128 x 128: " + error);
+    const bool spike = Sprites::ImageSize(kOriginal + "/entities/beholder_spike.png", w, h, error);
+    CHECK_MSG(spike && w == 16 && h == 32, "beholder_spike.png is 16 x 32: " + error);
 }
 
 // ---- the converted levels -----------------------------------------------------
@@ -401,6 +438,7 @@ int main() {
     TheCanvasOrderIsZThenTheFile();
     WhatTheReaderDoesNotDrawIsNamed();
     ThePortalAndTheShotAreTheirEnts();
+    APulseGoesThereAndBack();
     ASheetThatDoesNotSayHowFastIsRefused();
 
     std::error_code original;

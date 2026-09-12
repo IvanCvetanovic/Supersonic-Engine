@@ -1,0 +1,125 @@
+{
+  "_about": [
+    "Chapter 1's boss: the beholder of level 1-32 (level31), as the original's own script",
+    "plays it. Every number here not marked _guess is decoded from android_game.bin, the",
+    "original's compiled AngelScript: assets/Beholder.angelscript's ETHCallback_beholder",
+    "(bytes 374987..380209), its globals, and the helpers it calls. The owner's account of",
+    "the fight (11 September) agrees with it, except for the spikes: they remember five, in",
+    "random directions, every 1.5 s. The script fires ten, 40 degrees apart and turned by",
+    "10 every other time, every 1.2 s. The script is followed. See",
+    "docs/planning/2026-09-11-magic-portals-remaster.md, step 11b."
+  ],
+
+  "beholder": {
+    "_source": [
+      "An adder marker spawns the entity its custom data names, where it stands",
+      "(ETHCallback_adder, Adder.angelscript, bytes 372581..372886); level31's names",
+      "beholder.ent. BEHOLDER_MAX_HP is 2 and BEHOLDER_RADIUS 48 (SetG4 in their",
+      "initialisers, bytes 298296 and 298355). It starts with hp 2 and dies when hp is -1",
+      "or less, so it takes three hits. A rolling stone within the radius and rising (its",
+      "velocity against (0, -1) above 0) breaks and hurts it; the player within it dies."
+    ],
+    "entity": "beholder.ent",
+    "max_hp": 2,
+    "radius_px": 48.0,
+
+    "seek": {
+      "_source": [
+        "BEHOLDER_STATE_SEEKING. It aims at its own x plus the player's offset in x clamped",
+        "to 64 px, and at its start height plus 8 px times cos(elapsedTime + PIb), and goes",
+        "there by followUp: a PositionInterpolator over 2000 ms filtered by smoothEnd,",
+        "sin(v * PIb), taken up again from where it is once more than 1000 ms have passed.",
+        "When the player has been within 32 px of its x for more than 400 ms it shuts its",
+        "eye and throws rocks."
+      ],
+      "step_px": 64.0,
+      "wobble_px": 8.0,
+      "glide_ms": 2000.0,
+      "retarget_ms": 1000.0,
+      "near_px": 32.0,
+      "hold_ms": 400.0
+    },
+
+    "throw_rock": {
+      "_source": [
+        "BEHOLDER_STATE_THROW_ROCK, for more than 7900 ms. overTimeEntityAdder drops",
+        "rolling_stone.ent at the player's x and y -32 every 2000 ms, on a clock this state",
+        "never resets. So a later round's first rock can come early, and the round hold",
+        "four: that is the original's, and kept. Meanwhile linearMotion bobs it by 4 px",
+        "times cos(angle), the angle from PIb at 2 radians a second."
+      ],
+      "duration_ms": 7900.0,
+      "stride_ms": 2000.0,
+      "height_px": -32.0,
+      "entity": "rolling_stone.ent",
+      "bob_rad_s": 2.0,
+      "bob_px": 4.0
+    },
+
+    "got_damage": {
+      "_source": [
+        "BEHOLDER_STATE_GOT_DAMAGE, for more than 7200 ms. Every 1200 ms it fires",
+        "beholder_spike.ent from its centre at every 40 degrees from 0 to 360 inclusive,",
+        "clockwise from up, turned by 10 degrees every other time: ten spikes, two of them the",
+        "same way. addProjectileEntity gives each 140 px/s."
+      ],
+      "duration_ms": 7200.0,
+      "volley_ms": 1200.0,
+      "step_deg": 40.0,
+      "turn_deg": 10.0,
+      "spike_speed_px_s": 140.0
+    },
+
+    "dead": {
+      "_source": [
+        "BEHOLDER_STATE_DEAD. Once dead for more than 3550 ms it explodes (explode, with a",
+        "radius of 80 px, which kills the player in it), the level's button is put at its",
+        "button_dest, and the beholder goes."
+      ],
+      "duration_ms": 3550.0,
+      "blast_px": 80.0
+    }
+  },
+
+  "spike": {
+    "_source": [
+      "ETHCallback_beholder_spike (bytes 374024..374987). A spike flies on through",
+      "everything, is deleted once outside the screen grown by 16 x 128 px, and kills a",
+      "character whose size times 0.7, centred on it, holds the spike's point. dark_mage.ent's",
+      "frame is 40 x 56 (magic_portals_hd.png, 160 x 224, cut 4 x 4)."
+    ],
+    "hit_share": 0.7,
+    "character_px": [40.0, 56.0],
+    "cull_margin_px": [16.0, 128.0],
+    "_cull_note": [
+      "The original culls against the screen. The port's level has no camera, so it culls",
+      "against the level's extent, (0, 0) to its level_bounds marker, grown by the same",
+      "margin."
+    ]
+  },
+
+  "rock": {
+    "_source": [
+      "ETHBeginContactCallback_rolling_stone (MiscCallbacks.angelscript, bytes",
+      "346486..347456). A stone's intensity is its velocity along the line to what it",
+      "touches, divided by the global scale. Above 2.5 it kills a character, and a stone with",
+      "destroyOnStaticHit set - every one overTimeEntityAdder drops - breaks on anything",
+      "static it runs into (intensity above 0). The velocity is Box2D's, at 50 px to the unit",
+      "(ETHPhysicsSimulator.cpp:27), divided once by the global scale",
+      "(ETHPhysicsController.cpp:122)."
+    ],
+    "crush_intensity": 2.5,
+    "px_per_unit": 50.0,
+    "contact_margin_px": 2.0,
+    "_guess": true,
+    "_guess_note": [
+      "The unit, and the margin; not the threshold. The script divides by the global scale a",
+      "second time, so on a device the threshold moved with the screen. The port takes the",
+      "scale as 1, the original's 480 px reference height (DEFAULT_SCALE_HEIGHT). The margin",
+      "is how near a rock has to come to count as touching. BeginContact fires when Box2D's",
+      "shapes touch; the engine's solver stops a fast body short of what it is closing on",
+      "(speculative contacts, PhysicsSystem.cpp), and a rock falling onto the player at 571",
+      "px/s was measured left 1.0 px above its head. So 2 px, a port threshold."
+    ]
+  }
+}

@@ -1,5 +1,6 @@
 #include "sim/Art.hpp"
 
+#include "core/DetMath.hpp"
 #include "core/Json.hpp"
 
 #include <cmath>
@@ -28,7 +29,19 @@ bool WholeAtLeastOne(const Json::Value& value, int& out) {
     return true;
 }
 
-bool ReadPicture(const Json::Value& entry, const std::string& name, Picture& out, std::string& error) {
+bool Pair(const Json::Value& value, glm::dvec2& out) {
+    if (!value.IsArray() || value.AsArray().size() != 2 || !value.AsArray()[0].IsNumber() ||
+        !value.AsArray()[1].IsNumber()) {
+        return false;
+    }
+    out = glm::dvec2(value.AsArray()[0].AsNumber(), value.AsArray()[1].AsNumber());
+    return true;
+}
+
+// `plays` false for a sheet whose frames are chosen rather than played, which
+// then need not say how fast.
+bool ReadPicture(const Json::Value& entry, const std::string& name, Picture& out, std::string& error,
+                 bool plays = true) {
     if (!entry.IsObject() || !entry.Has("sprite") || !entry["sprite"].IsString() || !entry.Has("additive") ||
         !entry["additive"].IsBool()) {
         error = name + " needs sprite and additive";
@@ -43,7 +56,7 @@ bool ReadPicture(const Json::Value& entry, const std::string& name, Picture& out
         return false;
     }
     // A sheet of more than one frame plays, so it has to say how fast.
-    if (read.Frames() > 1) {
+    if (plays && read.Frames() > 1) {
         const Json::Value& animation = entry["animation"];
         if (!animation.IsObject() || !animation.Has("frames_per_second") ||
             !animation["frames_per_second"].IsNumber() || animation["frames_per_second"].AsNumber() <= 0.0) {
@@ -57,7 +70,28 @@ bool ReadPicture(const Json::Value& entry, const std::string& name, Picture& out
     return true;
 }
 
+bool ReadPulse(const Json::Value& entry, Pulse& out) {
+    Pulse read;
+    if (!entry.IsObject() || !Pair(entry["from"], read.fromScale) || !Pair(entry["to"], read.toScale) ||
+        !entry["stride_ms"].IsNumber() || entry["stride_ms"].AsNumber() <= 0.0) {
+        return false;
+    }
+    read.strideMs = entry["stride_ms"].AsNumber();
+    out = read;
+    return true;
+}
+
 } // namespace
+
+glm::dvec2 Pulse::ScaleAt(double elapsedMs) const {
+    // bounce(): the count of strides so far says which way it is going, and how
+    // far through this one it is, eased by smoothEnd, says where.
+    const double strides = std::floor(elapsedMs / strideMs);
+    double bias = (elapsedMs - strides * strideMs) / strideMs;
+    if (std::fmod(strides, 2.0) == 1.0) bias = 1.0 - bias;
+    const double eased = Supersonic::DetMath::sin(static_cast<float>(bias) * 1.570796327f);
+    return fromScale + (toScale - fromScale) * eased;
+}
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     std::ifstream file(path, std::ios::binary);
@@ -104,6 +138,30 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     }
     mage.pivotXPx = pivot.AsArray()[0].AsNumber();
     mage.pivotYPx = pivot.AsArray()[1].AsNumber();
+
+    // Chapter 1's boss and its spikes, whose frames are chosen, not played.
+    if (!root.Has("beholder") || !root.Has("spike")) {
+        error = path + ": beholder and spike are each an object";
+        return false;
+    }
+    if (!ReadPicture(root["beholder"], "beholder", static_cast<Picture&>(read.beholder), why, false) ||
+        !ReadPicture(root["spike"], "spike", static_cast<Picture&>(read.spike), why, false)) {
+        error = path + ": " + why;
+        return false;
+    }
+    const Json::Value& pulse = root["beholder"]["pulse"];
+    if (!pulse.IsObject() || !ReadPulse(pulse["seeking"], read.beholder.seeking) ||
+        !ReadPulse(pulse["hurt"], read.beholder.hurt) || !ReadPulse(pulse["dead"], read.beholder.dead)) {
+        error = path + ": beholder.pulse needs seeking, hurt and dead, each with from, to and a stride_ms above 0";
+        return false;
+    }
+    glm::dvec2 spikePivot(0.0);
+    if (!Pair(root["spike"]["pivot_px"], spikePivot)) {
+        error = path + ": spike.pivot_px is not two numbers";
+        return false;
+    }
+    read.spike.pivotXPx = spikePivot.x;
+    read.spike.pivotYPx = spikePivot.y;
     out = std::move(read);
     return true;
 }
