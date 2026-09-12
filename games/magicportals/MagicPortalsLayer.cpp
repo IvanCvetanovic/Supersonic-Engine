@@ -176,27 +176,35 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     m_loadError.clear();
     const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(index)];
 
+    // A refused level says why on the HUD, which a player reads, and in the log,
+    // which is all a run leaves behind afterwards. Without the second, a chapter
+    // that stops at its fourteenth level leaves nothing to say which one that
+    // was: the message below is the only record. It covers the first level too,
+    // which `m_current` being set above keeps out of OnAttach's own report.
+    const auto refuse = [this, &entry](std::string why) {
+        m_loadError = std::move(why);
+        SUPERSONIC_LOG_ERROR("Magic Portals") << entry.name << " refused: " << m_loadError << std::endl;
+        return false;
+    };
+
     std::string error;
     if (index != m_dataIndex) {
         m_dataIndex = -1;
         if (!Game::LoadData(m_paths.levels + "/" + entry.name + ".tscn", m_paths.data, m_paths.prisms, m_data,
                             error, m_paths.portData)) {
-            m_loadError = error;
-            return false;
+            return refuse(error);
         }
         m_dataIndex = index;
     }
     if (!Game::Start(m_data, registry, m_level, error)) {
-        m_loadError = error;
         // Start may have built some of the level before it refused.
         unloadLevel(registry);
-        return false;
+        return refuse(error);
     }
     if (!PositionOf(FirstOfRole(m_data, Roles::kLevelBounds), m_boundsPx) || m_boundsPx.x <= 0.0 ||
         m_boundsPx.y <= 0.0) {
-        m_loadError = entry.name + " has no level_bounds";
         unloadLevel(registry);
-        return false;
+        return refuse(entry.name + " has no level_bounds");
     }
     // Where the camera starts, or the spawn in a level that places none
     // (level_runtime.gd:214-215).
