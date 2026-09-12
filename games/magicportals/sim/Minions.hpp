@@ -125,6 +125,7 @@ struct State {
     std::vector<Killer> killers;
 
     int killed = 0; // minions taken by a killer floor
+    int taken = 0;  // and by something else: a shock diamond's strike
 
     // Every minion its marker asks for, built where the marker stands. Returns
     // the bodies it made, which the caller hands to the systems that carry a
@@ -141,6 +142,14 @@ struct State {
     // from Tick for the reason Launchers::Throw and ::Cull are - what moves a
     // body and what judges where the step left it are two different moments.
     std::vector<entt::entity> Cull(entt::registry& registry);
+
+    // A minion taken by something that is not a killer floor: a shock diamond's
+    // strike, which the original does with the same destroy() the floor calls.
+    // Removal lives here rather than in the module that struck it, because Tick
+    // walks this list every frame - a minion destroyed behind this one's back
+    // would sit in it with an invalid body. Returns what it destroyed, for
+    // Forget, as Cull does; a body that is not a minion of this level is ignored.
+    std::vector<entt::entity> Take(entt::registry& registry, const std::vector<entt::entity>& bodies);
 
     const Minion* FindMinion(const std::string& name) const;
 

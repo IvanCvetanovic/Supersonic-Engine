@@ -64,6 +64,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Hinge::LoadRules(portDataDirectory + "/hinge.json", read.hinge, error)) return false;
     if (!Minions::LoadRules(portDataDirectory + "/minions.json", read.minions, error)) return false;
     if (!Keys::LoadRules(portDataDirectory + "/keys.json", read.keys, error)) return false;
+    if (!Diamonds::LoadRules(portDataDirectory + "/diamonds.json", read.diamonds, error)) return false;
     // And what the remake's role table calls a hazard but the original does not.
     if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
@@ -128,6 +129,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Hinge::Find(data.scene, data.roles, out.built, registry, data.hinge, out.hinge, error)) return false;
     if (!Minions::Find(data.scene, data.roles, data.minions, out.minions, error)) return false;
     if (!Keys::Find(data.scene, data.roles, out.built, data.keys, out.keys, error)) return false;
+    if (!Diamonds::Find(data.scene, data.roles, data.diamonds, out.diamonds, error)) return false;
     if (!Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                        out.portals, error)) {
         return false;
@@ -188,6 +190,22 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
             if (!minion.gone && minion.body != entt::null) carriers.push_back(minion.body);
         }
         for (const entt::entity gone : level.keys.Tick(registry, carriers, dt)) Forget(level, gone);
+    }
+    // And the shock diamonds, which the OTHER of the two carry filters governs:
+    // only a character may take one, so the player alone is offered it and every
+    // minion is prey instead. What it strikes is destroyed by Minions rather than
+    // here - that module walks its own list every frame, and a body destroyed
+    // behind its back would still be in it.
+    {
+        std::vector<entt::entity> carriers;
+        if (level.player != entt::null) carriers.push_back(level.player);
+        std::vector<entt::entity> prey;
+        prey.reserve(level.minions.minions.size());
+        for (const Minions::Minion& minion : level.minions.minions) {
+            if (!minion.gone && minion.body != entt::null) prey.push_back(minion.body);
+        }
+        const std::vector<entt::entity> struck = level.diamonds.Tick(registry, carriers, prey, dt);
+        for (const entt::entity gone : level.minions.Take(registry, struck)) Forget(level, gone);
     }
     // The beholder's rocks, against what the step ran them into.
     for (const entt::entity gone : level.boss.Contacts(registry, level.player, level.portals, dt)) Forget(level, gone);

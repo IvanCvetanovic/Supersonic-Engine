@@ -2612,10 +2612,18 @@ What stands between here and the rest of chapter 3, read off the inventory:
 1. `pickup` is the natural next step and not because it is the largest - the
 diamonds' carry path is byte-for-byte the key's (`ByIDChooser` with a global
 fallback, the 40 px `forceFollowUpPosition` leash, `followUp(60, 20)`, the
-`shallLeave` drop), differing only in a 30 px range, an `isCharacter`-only filter
+`shallLeave` drop), differing in a 30 px range, an `isCharacter`-only filter
 and the payload: a carried shock diamond goes nearly invisible at alpha 0.1 and
 destroys the first minion it comes within range of, then deletes itself. So it
-generalises what is already built rather than adding machinery. `shock_field`
+generalises what is already built rather than adding machinery.
+
+**"Differing only in" was wrong by two, and step 25 says how.** The diamond's
+candidate loop ALSO deletes the diamond outright when a character it is
+considering `shallLeave`s - tested before any distance is measured - and the
+pickup and the strike are a whole FRAME apart rather than one tick's work.
+Neither is visible from the carry path, which is where that sentence was read
+from, and the second is precisely what a port written to the key's shape gets
+wrong. `shock_field`
 does not: its agent is a one-shot builder that spawns a SECOND entity carrying
 the lethal radius, the radius is per-placement and ranges from 28 to 105 across
 21 placements, three of the agents patrol with their own speed and stride, and
@@ -2625,3 +2633,114 @@ GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
 `test_mp_keys` at 96 checks, and 98 of 128 levels starting with 83 playing on
 both. Nothing under `src/` changed, so these suites are the whole verification
 surface and the engine's other games are untouched.
+
+## Step 25 - chapter 3: shock diamonds, and the minion that dies to one (built)
+
+**The playing count does not move, and that is the honest answer rather than a
+failure.** 98 of 128 levels start and 83 play, exactly as after step 24. The
+`pickup` role covers TWO entities - `shock_diamond.ent` and `fire_diamond.ent` -
+and only the shock one is built here, so `Roles::IsPorted` still refuses the
+role. IsPorted is per-role and cannot say "served for one entity name and not the
+other", so admitting `pickup` would mark all nine levels the inventory lists as
+played in order to be right about five of them:
+
+```
+9  pickup: level15b level16b level17b level19b level26b level28b level29b level30b level31b
+              \_____________ shock, built ______________/  \______ fire, not built ______/
+```
+
+The inventory is what tells the remaster what is left. It is worth more intact
+than flattering, and the role is admitted when the fire diamond lands.
+
+**Selected by entity name, never by role**, which is the whole reason the step
+splits that way. `entity_roles.json` files both diamonds under `pickup` and its
+own note says they are distinct callbacks - which they are: the fire diamond sets
+`hasFireDiamond` on its CARRIER, and that flag's only other reader is
+`PortalManager::computePortalFinalPos`, so holding one moves where a portal
+opens. Selecting on the role would have handed four chapter-3 levels a diamond
+that kills minions the original never lets it touch. Both names live in
+`data/diamonds.json`, and the suite asserts level28b, level29b, level30b and
+level31b each yield none.
+
+| | a key | a shock diamond |
+|---|---|---|
+| range, one value used twice | 26 px | 30 px |
+| who may carry it | `isCharacter` OR `isMinion` | `isCharacter` alone |
+| taken and acting | the same tick | a frame apart |
+| the remake's guess | 40 px, twice | a 28 x 24 box |
+
+**The pickup and the strike are a frame apart.** The callback branches on
+`ownerID` at the top. The unowned arm polls for a carrier, writes `ownerID` and
+then RETURNS - it ends in a jump straight to the function's exit - so nothing
+else happens on the frame a diamond is taken. The payload that strikes a minion
+lives in the carried arm, which that same branch reaches on the NEXT frame.
+`Keys::Tick` deliberately acquires, trails and unlocks all in one tick; this must
+not, and the suite pins it by putting a minion 8 px away - well inside the 30 -
+then asserting it is alive after one tick and struck after two.
+
+**The carry path came out first, as its own commit.** The carried arm of
+`ETHCallback_shock_diamond` is the key's instruction for instruction: alpha 0.1,
+`GetInt('ownerID')`, `ByIDChooser`, a `seekNeighbourEntity` over the buckets
+around itself with a global `SeekEntity` behind it, and the same `scale(40)`
+leash. So it moved into `Carry.hpp` before any diamond existed, as a change that
+altered nothing. `Carried` is a BASE rather than a member, so `key.atPx` and
+`key.owner` stayed where they were, `Game.cpp` and `test_mp_keys.cpp` were not
+touched at all, and the suite stood at 104 checks before the move and 104 after
+it on both toolchains - which is what makes that count a regression test rather
+than a rewritten one. Who may carry a thing needed no flag either: the CALLER
+builds the list, so a key is offered the player and every minion still standing
+and a diamond only the player.
+
+**The minion is destroyed by Minions, not by the diamond.** The original calls
+the same `destroy()` the killer floor calls, and here `Minions` walks its own
+list every frame - a body destroyed behind its back would sit in that list
+invalid, to be read on the next tick. So `Diamonds::Tick` returns what it struck
+and `Game` hands it to `Minions::Take`, which marks the minion gone, destroys it
+and returns it for `Forget` exactly as `Cull` does, under a counter of its own
+because the decode distinguishes a floor from a strike.
+
+**`bounce` is not physics, and reading it as physics would have cost the step.**
+An unowned diamond calls `bounce(0.9, 0.9, 500)`, which looks like a restitution
+and a duration. It is neither: `bounce` lives in
+`ETHFramework/utilEntityEffect.angelscript` and drives a `blinkElapsedTime`
+counter, so it is the idle pulse an unowned diamond turns with - the analogue of
+the key's idle bob, and the reason a diamond is state with a position here rather
+than a body. Taken the other way it would have become a bouncing rigid body: step
+23's rolling minion again, caught this time before any code was written.
+
+**Not built, and written down instead.** The alpha of 0.1 a carried diamond goes
+to, the idle pulse, `shock_diamond_pick.ent`, `shock_death.ent` at the minion and
+`shock_strike.ent` angled at the midpoint between the two, both sounds, and the
+two earthquakes - `startEarthquake(15, 0)` on the pickup, `(25, 100)` on the
+strike. With them the remake's `metadata/trigger_size` of 28 x 24, which the
+original never consults: it polls a RADIUS of 30 and tests no box, so this is the
+key's 26-against-40 disagreement in another shape.
+
+One branch is recorded as UNREACHABLE rather than skipped: the candidate loop
+deletes the diamond outright when a character it is considering `shallLeave`s,
+tested before any distance is measured. In this port a carrier that has ceased to
+be never reaches that list, because `Game` rebuilds it each tick from the player
+and the minions still standing. There is nothing to build, which is not the same
+as something declined.
+
+And the fire diamond entire, with `gutter_mouth.ent` beside it - the second
+role-table misclassification after `enemy_killer`. `entity_roles.json` files it
+under `scenery_fx` as a "decorative drip emitter"; its callback destroys a fire
+diamond on contact, and all three levels that place one - level29b, level30b and
+level31b - place a fire diamond too. Nothing reads it until the fire diamond is
+built, so it is recorded in `data/diamonds.json` and left alone.
+
+The census, measured: 8 shock diamonds across 6 levels, level15b and level16b
+holding two each and level17b, level19b, level26b and level29c one each; and 5
+fire diamonds across 5 levels. 7 of the 8 are in chapter 3. The eighth is
+level29c's, and `darkest` stops that level starting at all, as `no_gravity` stops
+level15c - which is why 11 levels hold a diamond and the inventory reports 9.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_diamonds` at 85 checks, `test_mp_keys` unchanged at 104 and
+`test_mp_minions` unchanged at 77, and 98 of 128 levels starting with 83 playing
+on both. Nothing under `src/` changed.
+
+What is left of chapter 3, off the same inventory: `shock_field` in 7 levels,
+`boss_spawn` in 2, `gravity_well` in 1 - and the fire diamond, which admits
+`pickup` to IsPorted when it lands and moves all nine of those levels at once.

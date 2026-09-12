@@ -25,6 +25,7 @@
 
 #include "sim/Boss.hpp"
 #include "sim/Demolish.hpp"
+#include "sim/Diamonds.hpp"
 #include "sim/Fire.hpp"
 #include "sim/Goals.hpp"
 #include "sim/Hazards.hpp"
@@ -65,6 +66,7 @@ struct Data {
     Hinge::Rules hinge;           // and hinge.json
     Minions::Rules minions;       // and minions.json
     Keys::Rules keys;             // and keys.json
+    Diamonds::Rules diamonds;     // and diamonds.json
     Hazards::Rules hazards;       // and hazards.json, which is what the role table got wrong
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
@@ -101,6 +103,8 @@ struct Level {
     Minions::State minions;
     // Keys carried by the player or by a minion, and the doors they open.
     Keys::State keys;
+    // Shock diamonds, which only the player may carry and which kill a minion.
+    Diamonds::State diamonds;
     entt::entity player = entt::null;
 };
 

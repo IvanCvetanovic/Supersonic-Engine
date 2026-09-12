@@ -11,6 +11,7 @@ add_library(MagicPortalsSim STATIC
     Carry.cpp
     Chapters.cpp
     Demolish.cpp
+    Diamonds.cpp
     Fire.cpp
     Game.cpp
     Goals.cpp
