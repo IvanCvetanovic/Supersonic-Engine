@@ -820,6 +820,161 @@ void Level31DrawsTheBeholder() {
     layer.OnDetach(registry);
 }
 
+// ---- the menu ----------------------------------------------------------------
+
+const MagicPortalsLayer::MenuButton* MenuButtonOf(const MagicPortalsLayer& layer,
+                                                  MagicPortalsLayer::MenuButton::Kind kind, int which = 0) {
+    int seen = 0;
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind != kind) continue;
+        if (seen++ == which) return &button;
+    }
+    return nullptr;
+}
+
+int MenuButtonsOfKind(const MagicPortalsLayer& layer, MagicPortalsLayer::MenuButton::Kind kind) {
+    int count = 0;
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind == kind) ++count;
+    }
+    return count;
+}
+
+// Started with no level named, the game opens its menu, and the menu walks
+// main -> chapters -> levels -> the level itself.
+void TheMenuWalksToALevel() {
+    using Screen = MagicPortalsLayer::Screen;
+    using Kind = MagicPortalsLayer::MenuButton::Kind;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.LoadError().empty(), layer.LoadError());
+    CHECK(layer.MenuScreen() == Screen::Main);
+    CHECK(layer.SimLevel() == nullptr);
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Play), 1);
+
+    const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
+    if (play == nullptr) {
+        CHECK_MSG(false, "the main screen has no play button");
+        return;
+    }
+    layer.PressMenu(registry, *play);
+    CHECK(layer.MenuScreen() == Screen::Worlds);
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::World), 4);
+
+    const MagicPortalsLayer::MenuButton* world = MenuButtonOf(layer, Kind::World, 0);
+    if (world == nullptr) {
+        CHECK_MSG(false, "the chapter screen has no world button");
+        return;
+    }
+    layer.PressMenu(registry, *world);
+    CHECK(layer.MenuScreen() == Screen::Levels);
+    // Four columns and three rows to a page, as PageProperties has it, and a
+    // world of 32 levels runs to more than one page.
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Level), 12);
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Forward), 1);
+
+    const MagicPortalsLayer::MenuButton* first = MenuButtonOf(layer, Kind::Level, 0);
+    if (first == nullptr) {
+        CHECK_MSG(false, "the grid has no level button");
+        return;
+    }
+    layer.PressMenu(registry, *first);
+    CHECK(layer.MenuScreen() == Screen::None);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    CHECK(IsAt(layer, "level0"));
+}
+
+// The second page holds what the first does not, and the page buttons reach it.
+void TheGridPagesThroughAWorld() {
+    using Kind = MagicPortalsLayer::MenuButton::Kind;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
+    if (play == nullptr) return;
+    layer.PressMenu(registry, *play);
+    const MagicPortalsLayer::MenuButton* world = MenuButtonOf(layer, Kind::World, 0);
+    if (world == nullptr) return;
+    layer.PressMenu(registry, *world);
+
+    const MagicPortalsLayer::MenuButton* forward = MenuButtonOf(layer, Kind::Forward);
+    if (forward == nullptr) {
+        CHECK_MSG(false, "the grid has no forward button");
+        return;
+    }
+    layer.PressMenu(registry, *forward);
+    const MagicPortalsLayer::MenuButton* thirteenth = MenuButtonOf(layer, Kind::Level, 0);
+    if (thirteenth == nullptr) {
+        CHECK_MSG(false, "the second page has no level button");
+        return;
+    }
+    layer.PressMenu(registry, *thirteenth);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    CHECK_MSG(IsAt(layer, "level12"), std::string("the second page's first level is ") +
+                                          (layer.Current() != nullptr ? layer.Current()->name : "none"));
+}
+
+// A named level is entered directly: --level, and every suite in this file,
+// never see the menu.
+void NamingALevelSkipsTheMenu() {
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::None);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    CHECK(layer.MenuButtons().empty());
+}
+
+// Escape leaves a level for the grid it came from.
+void EscapeLeavesALevelForItsGrid() {
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Levels);
+    CHECK(layer.SimLevel() == nullptr);
+    CHECK_EQ(MenuButtonsOfKind(layer, MagicPortalsLayer::MenuButton::Kind::Level), 12);
+}
+
+// And a click lands on the button under it, through the same camera mapping a
+// tap in a level goes through.
+void AClickOnTheMenuPressesWhatIsUnderIt() {
+    using Kind = MagicPortalsLayer::MenuButton::Kind;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    // One tick puts the camera on the menu's box, which is what a click is
+    // read through.
+    tickWith(layer, registry, kRest, {}, {});
+    const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
+    if (play == nullptr) {
+        CHECK_MSG(false, "the main screen has no play button");
+        return;
+    }
+    // Read before the press: laying the screen out again clears the button.
+    const glm::vec2 at = screenOf(registry, play->centrePx);
+    tap(layer, registry, at);
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Worlds);
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     Level31DrawsTheBeholder();
@@ -838,6 +993,11 @@ void runTests() {
     ARetryTakesTheThrownStonesAway();
     TheChapterEnds();
     AStartThatIsNoLevelSaysSo();
+    TheMenuWalksToALevel();
+    TheGridPagesThroughAWorld();
+    NamingALevelSkipsTheMenu();
+    EscapeLeavesALevelForItsGrid();
+    AClickOnTheMenuPressesWhatIsUnderIt();
 }
 
 } // namespace

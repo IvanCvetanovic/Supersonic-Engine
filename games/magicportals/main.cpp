@@ -29,7 +29,10 @@ int main(int argc, char** argv) {
     // game takes its flags out first and hands on the rest untouched.
     MagicPortals::MagicPortalsLayer::Paths paths;
     paths.prisms = std::filesystem::temp_directory_path() / "supersonic-magicportals";
-    std::string start = "level0";
+    // No --level opens the menu, which is the game's own front door. A named
+    // level is entered directly, and that is how the suites and every headless
+    // render run: neither ever sees the menu.
+    std::string start;
     std::vector<char*> engineArgs{argv[0]};
     bool artGiven = false;
     for (int i = 1; i < argc; ++i) {
@@ -61,8 +64,8 @@ int main(int argc, char** argv) {
     const auto options = Supersonic::LaunchOptions::Parse(static_cast<int>(engineArgs.size()), engineArgs.data());
     if (options.helpRequested) {
         std::cout << Supersonic::LaunchOptions::Usage()
-                  << "  --level <name>    the level to start at, as chapters.json names it (default " << start
-                  << ")\n"
+                  << "  --level <name>    the level to start at, as chapters.json names it. Without it\n"
+                  << "                    the game opens its menu.\n"
                   << "  --levels <dir>    the converted levels (default " << paths.levels << ")\n"
                   << "  --art <dir>       what their res:// stands for (default the directory above them)\n"
                   << "  --data <dir>      the remake's game/data directory (default " << paths.data << ")\n";

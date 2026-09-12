@@ -72,6 +72,7 @@ public:
     static constexpr const char* kRetry = "mp.retry";        // R
     static constexpr const char* kSkip = "mp.skip";          // N
     static constexpr const char* kBoxes = "mp.boxes";        // B: the bodies' boxes, over the art
+    static constexpr const char* kBack = "mp.back";          // Escape: out to the menu, and back through it
 
     // Where the port reads from. The defaults are where the build was told the
     // remake's files are, and the port's own data beside its source.
@@ -103,6 +104,28 @@ public:
         bool Gold() const { return goldenScore >= 0 && portalsUsed <= goldenScore; }
     };
 
+    // Which screen is up. `None` is a level, played exactly as before: a layer
+    // built with a level's name never sees the menu at all, which is how every
+    // suite, every headless render and --level enter the game.
+    //
+    // The original's own three (MainMenu, WorldSelector, LevelSelector), less
+    // what needs state the port does not keep: no score, so no locking, no
+    // page counter, no swipe. What is drawn is its art, where its own
+    // normalized positions put it.
+    enum class Screen { None, Main, Worlds, Levels };
+
+    // A button the menu drew, in the menu's pixel box (MenuBoxPx). Kept as
+    // data so a click is tested against exactly what was drawn, and so a test
+    // can press one without a pointer or a camera.
+    struct MenuButton {
+        enum class Kind { Play, World, Level, Back, Forward };
+        Kind kind{Kind::Play};
+        glm::dvec2 centrePx{0.0};
+        glm::dvec2 sizePx{0.0};
+        int world{0};  // World and Level
+        int level{-1}; // Level: its place in chapters.levels
+    };
+
     MagicPortalsLayer(Paths paths, std::string startLevel);
 
     const char* Name() const override { return "Magic Portals"; }
@@ -131,6 +154,21 @@ public:
     const Chapters::Level* Current() const;
 
     bool ChapterComplete() const { return m_chapterComplete; }
+
+    // The menu, when one is up.
+    Screen MenuScreen() const { return m_screen; }
+    const std::vector<MenuButton>& MenuButtons() const { return m_menuButtons; }
+    // The box the menu is laid out in: view.json's height at the window's
+    // shape, with (0, 0) at its top-left corner, so the original's normalized
+    // positions multiply straight into it.
+    glm::dvec2 MenuBoxPx() const;
+    // Press a button, as a click on it does. False when it led nowhere.
+    //
+    // BY VALUE, and that is not a style choice: pressing one lays the screen
+    // out again, which clears the very vector the caller's button lives in -
+    // the click loop below iterates that vector - so a reference would dangle
+    // before the level it names could be read out of it.
+    bool PressMenu(entt::registry& registry, MenuButton button);
 
     // How many times the player has died this session. Each death is a retry.
     int Deaths() const { return m_deaths; }
@@ -182,6 +220,20 @@ private:
     void buildDrawables(entt::registry& registry);
     void buildSprites(entt::registry& registry);
     void buildHud(entt::registry& registry);
+
+    // The menu: opened onto a screen, drawn from its buttons, and taken down
+    // again. A level is unloaded first, so the two are never both in the
+    // registry.
+    void openMenu(entt::registry& registry, Screen screen);
+    void layOutMenu();
+    void buildMenu(entt::registry& registry);
+    void unloadMenu(entt::registry& registry);
+    // Just the drawables, which a rebuilt screen replaces but a click on a
+    // level takes away for good.
+    void unloadMenuDrawables(entt::registry& registry);
+    void menuTick(entt::registry& registry);
+    // One of the original's own menu images, which live beside its entities.
+    std::string menuImage(const std::string& file) const;
     float readInput(entt::registry& registry);
     void syncDrawables(entt::registry& registry);
     void syncSprites(entt::registry& registry);
@@ -269,6 +321,16 @@ private:
     std::vector<entt::entity> m_spikes; // one per spike in flight
     float m_beholderZ{0.5f};
     float m_spikeZ{0.5f};
+
+    // The menu. Screen::None while a level is played.
+    Screen m_screen{Screen::None};
+    int m_menuWorld{0}; // whose levels the grid shows
+    int m_menuPage{0};  // which page of that grid
+    std::vector<MenuButton> m_menuButtons;
+    std::vector<entt::entity> m_menuQuads;  // one per button, in its order
+    std::vector<entt::entity> m_menuLabels; // one per button, null but for a level's number
+    entt::entity m_menuBg{entt::null};      // the screen's background
+    entt::entity m_menuTitle{entt::null};   // the game's title, on the main screen
 
     struct Hud {
         entt::entity status{entt::null};

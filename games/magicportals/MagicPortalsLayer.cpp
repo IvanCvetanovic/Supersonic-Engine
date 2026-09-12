@@ -128,13 +128,19 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
         !Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error) ||
         !Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error)) {
         m_loadError = error;
+    } else if (m_startLevel.empty()) {
+        // No level named: the menu, which is what the game itself opens with.
+        // A named level is entered directly, so --level and every suite reach
+        // the game exactly as they did before the menu existed.
+        buildCamera(registry);
+        openMenu(registry, Screen::Main);
     } else if (const int start = m_chapters.Find(m_startLevel); start < 0) {
         m_loadError = m_startLevel + " is not a level of " + m_paths.chapters;
     } else {
         buildCamera(registry);
         loadLevel(registry, start);
     }
-    if (m_current < 0) {
+    if (m_current < 0 && m_screen == Screen::None) {
         SUPERSONIC_LOG_ERROR("Magic Portals") << "Could not start: " << m_loadError << std::endl;
     }
     buildHud(registry);
@@ -143,6 +149,7 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
 
 void MagicPortalsLayer::OnDetach(entt::registry& registry) {
     unloadLevel(registry);
+    unloadMenu(registry);
     auto destroy = [&registry](entt::entity& e) {
         if (e != entt::null && registry.valid(e)) registry.destroy(e);
         e = entt::null;
@@ -165,6 +172,7 @@ void MagicPortalsLayer::bindInput() {
     Input::BindActionKey(kRetry, Key::R);
     Input::BindActionKey(kSkip, Key::N);
     Input::BindActionKey(kBoxes, Key::B);
+    Input::BindActionKey(kBack, Key::Escape);
 }
 
 // ---- levels -----------------------------------------------------------------
@@ -309,6 +317,295 @@ void MagicPortalsLayer::clearLevel(entt::registry& registry) {
     goTo(registry, m_chapters.Next(m_current));
 }
 
+// ---- the menu ---------------------------------------------------------------
+//
+// The original's three screens, drawn with its own art: MainMenu, then
+// WorldSelector, then LevelSelector.
+//
+// They are quads in the level's own pixel space rather than UI components,
+// because the engine's UIImageComponent takes an uploaded texture handle and
+// its UIButtonComponent is a coloured rounded rectangle with a text label -
+// neither can show a PNG named by path, which is what every button here is. So
+// the menu is drawn the way the levels are, on the same orthographic camera,
+// and clicked through the same screen-to-plane mapping.
+//
+// What the port leaves out, and why. The original locks worlds and levels
+// behind a save file its ScoreManager keeps, pages the grid by swiping
+// (Swyper), and draws a page counter. The port keeps no save, so NOTHING IS
+// LOCKED - a port decision, not the original's rule - and the grid pages with
+// the original's own two buttons instead of a swipe.
+
+std::string MagicPortalsLayer::menuImage(const std::string& file) const {
+    return m_paths.original + "/sprites/" + file;
+}
+
+glm::dvec2 MagicPortalsLayer::MenuBoxPx() const {
+    // view.json's height, at the window's shape: the same box a level is shown
+    // in, so the menu's art is the size the original drew it at.
+    const double height = m_viewHeightPx > 0.0 ? m_viewHeightPx : 256.0;
+    return glm::dvec2(height * static_cast<double>(m_aspect), height);
+}
+
+void MagicPortalsLayer::layOutMenu() {
+    m_menuButtons.clear();
+    if (m_screen == Screen::None) return;
+    const glm::dvec2 box = MenuBoxPx();
+    const auto at = [&box](double nx, double ny) { return glm::dvec2(nx * box.x, ny * box.y); };
+
+    if (m_screen == Screen::Main) {
+        MenuButton play;
+        play.kind = MenuButton::Kind::Play;
+        play.centrePx = at(0.5, 0.66);
+        play.sizePx = glm::dvec2(box.y * 0.62, box.y * 0.17);
+        m_menuButtons.push_back(play);
+        return;
+    }
+
+    if (m_screen == Screen::Worlds) {
+        // The original pages four worlds two at a time (PageProperties:
+        // numItems 4, columns 2, rows 1). A window is not a phone, so the port
+        // shows all four at once rather than carrying a swipe for one page.
+        int worlds = 0;
+        for (const Chapters::Level& level : m_chapters.levels) worlds = std::max(worlds, level.world + 1);
+        for (int w = 0; w < worlds; ++w) {
+            MenuButton icon;
+            icon.kind = MenuButton::Kind::World;
+            icon.world = w;
+            const double span = 0.66;
+            const double x = worlds > 1
+                                 ? 0.5 - span * 0.5 + span * (static_cast<double>(w) / static_cast<double>(worlds - 1))
+                                 : 0.5;
+            icon.centrePx = at(x, 0.55);
+            icon.sizePx = glm::dvec2(box.y * 0.30);
+            m_menuButtons.push_back(icon);
+        }
+        return;
+    }
+
+    // The grid, as PageProperties has it: four columns, three rows, so twelve
+    // to a page (PageManager's own buttonsPerPage = columns * rows).
+    constexpr int kColumns = 4;
+    constexpr int kRows = 3;
+    constexpr int kPerPage = kColumns * kRows;
+    std::vector<int> entries;
+    for (std::size_t i = 0; i < m_chapters.levels.size(); ++i) {
+        if (m_chapters.levels[i].world == m_menuWorld) entries.push_back(static_cast<int>(i));
+    }
+    const int pages = std::max(1, (static_cast<int>(entries.size()) + kPerPage - 1) / kPerPage);
+    m_menuPage = std::clamp(m_menuPage, 0, pages - 1);
+    const double left = 0.20;
+    const double right = 0.80;
+    const double top = 0.28;
+    const double bottom = 0.72;
+    for (int slot = 0; slot < kPerPage; ++slot) {
+        const int index = m_menuPage * kPerPage + slot;
+        if (index >= static_cast<int>(entries.size())) break;
+        const int column = slot % kColumns;
+        const int row = slot / kColumns;
+        MenuButton button;
+        button.kind = MenuButton::Kind::Level;
+        button.world = m_menuWorld;
+        button.level = entries[static_cast<std::size_t>(index)];
+        button.centrePx = at(left + (right - left) * (static_cast<double>(column) / (kColumns - 1)),
+                             top + (bottom - top) * (static_cast<double>(row) / (kRows - 1)));
+        button.sizePx = glm::dvec2(box.y * 0.15);
+        m_menuButtons.push_back(button);
+    }
+    if (pages > 1) {
+        // The original's own page buttons. Its normalized places for them are
+        // (0.5, 0.05) and (0.5, 0.95), which on a landscape window puts half
+        // the button off the edge, so they sit just inside it.
+        MenuButton back;
+        back.kind = MenuButton::Kind::Back;
+        back.centrePx = at(0.5, 0.10);
+        back.sizePx = glm::dvec2(box.y * 0.12);
+        m_menuButtons.push_back(back);
+        MenuButton forward;
+        forward.kind = MenuButton::Kind::Forward;
+        forward.centrePx = at(0.5, 0.90);
+        forward.sizePx = glm::dvec2(box.y * 0.12);
+        m_menuButtons.push_back(forward);
+    }
+}
+
+void MagicPortalsLayer::buildMenu(entt::registry& registry) {
+    using namespace Supersonic;
+    unloadMenuDrawables(registry);
+    if (m_screen == Screen::None) return;
+
+    const std::string background = menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png");
+    if (imageSizePx(background).y > 0.0) {
+        m_menuBg = makeSprite(registry, "Magic Portals Menu Background", background, false);
+    }
+    if (m_screen == Screen::Main) {
+        const std::string title = menuImage("game_main_title.png");
+        if (imageSizePx(title).y > 0.0) m_menuTitle = makeSprite(registry, "Magic Portals Title", title, false);
+    }
+
+    for (const MenuButton& button : m_menuButtons) {
+        std::string image;
+        switch (button.kind) {
+        case MenuButton::Kind::Play:
+            image = menuImage("main_play_game_button.png");
+            break;
+        case MenuButton::Kind::World:
+            image = menuImage("world_icon" + std::to_string(button.world) + ".png");
+            break;
+        case MenuButton::Kind::Level: {
+            // The last level of a world is its boss, and the original gives it
+            // its own button.
+            const Chapters::Level& level = m_chapters.levels[static_cast<std::size_t>(button.level)];
+            const bool boss = level.index == 31;
+            image = menuImage(boss ? "boss_level_button.png" : "level_button.png");
+            break;
+        }
+        case MenuButton::Kind::Back:
+            image = menuImage("level_select_back.png");
+            break;
+        case MenuButton::Kind::Forward:
+            image = menuImage("level_select_forward.png");
+            break;
+        }
+        m_menuQuads.push_back(imageSizePx(image).y > 0.0
+                                  ? makeSprite(registry, "Magic Portals Menu Button", image, false)
+                                  : entt::null);
+
+        entt::entity label = entt::null;
+        if (button.kind == MenuButton::Kind::Level) {
+            const Chapters::Level& level = m_chapters.levels[static_cast<std::size_t>(button.level)];
+            label = registry.create();
+            registry.emplace<TagComponent>(label, "Magic Portals Menu Label");
+            registry.emplace<TransformComponent>(label);
+            auto& text = registry.emplace<UITextComponent>(label);
+            text.worldSpace = true; // it follows the button it numbers
+            text.fontSize = 26.0f;
+            text.offset = glm::vec2(0.0f, 12.0f);
+            text.text = std::to_string(level.index + 1);
+        }
+        m_menuLabels.push_back(label);
+    }
+}
+
+void MagicPortalsLayer::unloadMenuDrawables(entt::registry& registry) {
+    auto destroy = [&registry](entt::entity& e) {
+        if (e != entt::null && registry.valid(e)) registry.destroy(e);
+        e = entt::null;
+    };
+    for (auto& e : m_menuQuads) destroy(e);
+    m_menuQuads.clear();
+    for (auto& e : m_menuLabels) destroy(e);
+    m_menuLabels.clear();
+    destroy(m_menuBg);
+    destroy(m_menuTitle);
+}
+
+void MagicPortalsLayer::unloadMenu(entt::registry& registry) {
+    unloadMenuDrawables(registry);
+    m_menuButtons.clear();
+}
+
+void MagicPortalsLayer::openMenu(entt::registry& registry, Screen screen) {
+    // A level and a menu are never both in the registry.
+    unloadLevel(registry);
+    m_loaded = false;
+    m_current = -1;
+    m_chapterComplete = false;
+    m_loadError.clear();
+    m_screen = screen;
+    m_aspect = viewportAspect(registry);
+    layOutMenu();
+    buildMenu(registry);
+}
+
+bool MagicPortalsLayer::PressMenu(entt::registry& registry, MenuButton button) {
+    switch (button.kind) {
+    case MenuButton::Kind::Play:
+        openMenu(registry, Screen::Worlds);
+        return true;
+    case MenuButton::Kind::World:
+        m_menuWorld = button.world;
+        m_menuPage = 0;
+        openMenu(registry, Screen::Levels);
+        return true;
+    case MenuButton::Kind::Level:
+        if (button.level < 0 || button.level >= static_cast<int>(m_chapters.levels.size())) return false;
+        unloadMenu(registry);
+        m_screen = Screen::None;
+        loadLevel(registry, button.level);
+        return true;
+    case MenuButton::Kind::Back:
+        if (m_menuPage <= 0) return false;
+        --m_menuPage;
+        openMenu(registry, Screen::Levels);
+        return true;
+    case MenuButton::Kind::Forward:
+        ++m_menuPage; // layOutMenu clamps it to the last page
+        openMenu(registry, Screen::Levels);
+        return true;
+    }
+    return false;
+}
+
+void MagicPortalsLayer::menuTick(entt::registry& registry) {
+    using namespace Supersonic;
+    m_aspect = viewportAspect(registry);
+    layOutMenu(); // the window may have changed shape since the last tick
+    const glm::dvec2 box = MenuBoxPx();
+
+    if (m_camera != entt::null && registry.valid(m_camera)) {
+        auto& camera = registry.get<CameraComponent>(m_camera);
+        const glm::vec3 centre = Units::ToWorld(box.x * 0.5, box.y * 0.5);
+        camera.position = glm::vec3(centre.x, centre.y, kCameraDistance);
+        camera.aspect = m_aspect;
+        camera.orthoHeight = Units::ToMetres(box.y);
+        registry.get<TransformComponent>(m_camera).position = camera.position;
+        // A screen is a cut, not a pan.
+        if (auto* interpolated = registry.try_get<InterpolatedCameraComponent>(m_camera)) {
+            interpolated->captured = false;
+        }
+    }
+
+    if (m_menuBg != entt::null && registry.valid(m_menuBg)) {
+        placeSprite(registry, m_menuBg, box * 0.5, box, -1.0f, 0.0f);
+    }
+    if (m_menuTitle != entt::null && registry.valid(m_menuTitle)) {
+        placeSprite(registry, m_menuTitle, glm::dvec2(box.x * 0.5, box.y * 0.30),
+                    glm::dvec2(box.y * 1.30, box.y * 0.30), 0.4f, 0.0f);
+    }
+    for (std::size_t i = 0; i < m_menuButtons.size() && i < m_menuQuads.size(); ++i) {
+        const MenuButton& button = m_menuButtons[i];
+        if (m_menuQuads[i] != entt::null && registry.valid(m_menuQuads[i])) {
+            placeSprite(registry, m_menuQuads[i], button.centrePx, button.sizePx, 0.5f, 0.0f);
+        }
+        if (i < m_menuLabels.size() && m_menuLabels[i] != entt::null && registry.valid(m_menuLabels[i])) {
+            const glm::vec3 centre = Units::ToWorld(button.centrePx.x, button.centrePx.y);
+            registry.get<TransformComponent>(m_menuLabels[i]).position = glm::vec3(centre.x, centre.y, 0.6f);
+        }
+    }
+
+    // Escape goes up a screen; from the first there is nowhere up to go.
+    if (Input::TickWasPressed(kBack)) {
+        if (m_screen == Screen::Levels) {
+            openMenu(registry, Screen::Worlds);
+        } else if (m_screen == Screen::Worlds) {
+            openMenu(registry, Screen::Main);
+        }
+        return;
+    }
+
+    const auto* viewport = registry.ctx().find<ViewportInfo>();
+    if (viewport == nullptr || !viewport->pointerOverGame || !Input::TickWasPressed(kTap)) return;
+    glm::dvec2 atPx(0.0);
+    if (!ScreenToLevelPx(registry, Input::MousePosition(), atPx)) return;
+    for (const MenuButton& button : m_menuButtons) {
+        const glm::dvec2 half = button.sizePx * 0.5;
+        if (std::fabs(atPx.x - button.centrePx.x) > half.x) continue;
+        if (std::fabs(atPx.y - button.centrePx.y) > half.y) continue;
+        PressMenu(registry, button);
+        return;
+    }
+}
+
 // ---- the camera -------------------------------------------------------------
 
 float MagicPortalsLayer::viewportAspect(const entt::registry& registry) const {
@@ -359,7 +656,9 @@ void MagicPortalsLayer::placeCamera(entt::registry& registry) {
 bool MagicPortalsLayer::ScreenToLevelPx(const entt::registry& registry, const glm::vec2& screenPoint,
                                         glm::dvec2& outPx) const {
     const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
-    if (!m_loaded || viewport == nullptr || m_camera == entt::null || !registry.valid(m_camera)) return false;
+    // Not gated on a level being loaded: the menu is drawn in this same plane
+    // and clicked through this same mapping.
+    if (viewport == nullptr || m_camera == entt::null || !registry.valid(m_camera)) return false;
     const glm::vec2 size = viewport->Size();
     if (size.x <= 0.0f || size.y <= 0.0f) return false;
     // The camera as THIS viewport would draw it, whatever shape it last had.
@@ -1000,7 +1299,13 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
         if (e != entt::null && registry.valid(e)) registry.get<UITextComponent>(e).text = std::move(text);
     };
     std::string status;
-    if (m_current < 0) {
+    if (m_screen == Screen::Main) {
+        status = "Magic Portals";
+    } else if (m_screen == Screen::Worlds) {
+        status = "Choose a chapter";
+    } else if (m_screen == Screen::Levels) {
+        status = "Chapter " + Count(m_menuWorld + 1) + " - choose a level";
+    } else if (m_current < 0) {
         status = "Magic Portals could not start: " + m_loadError;
     } else {
         const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(m_current)];
@@ -1028,7 +1333,10 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
     }
     set(m_hud.result, result);
     set(m_hud.controls,
-        "Left/Right or A/D to walk.  Click to fire a portal.  R retries.  N skips a level.  B shows the bodies.");
+        m_screen != Screen::None
+            ? "Click a button.  Escape goes back."
+            : "Left/Right or A/D to walk.  Click to fire a portal.  R retries.  N skips a level.  "
+              "B shows the bodies.  Escape for the menu.");
 }
 
 // ---- the tick ----------------------------------------------------------------
@@ -1050,8 +1358,23 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
 
 void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     using Supersonic::Input;
+    // A menu is up instead of a level: it takes the tick, and nothing below
+    // runs. The two are never both in the registry.
+    if (m_screen != Screen::None) {
+        menuTick(registry);
+        updateHud(registry);
+        return;
+    }
     // The bodies' boxes over the art, or not: the picture only.
     if (Input::TickWasPressed(kBoxes)) m_showBoxes = !m_showBoxes;
+    // Out of a level, to the grid it came from - a chapter's end included,
+    // which otherwise has nowhere to go.
+    if (m_current >= 0 && Input::TickWasPressed(kBack)) {
+        m_menuWorld = m_chapters.levels[static_cast<std::size_t>(m_current)].world;
+        openMenu(registry, Screen::Levels);
+        updateHud(registry);
+        return;
+    }
     // Skip and retry first, so the tick that asks plays the level it lands on.
     if (m_current >= 0 && Input::TickWasPressed(kSkip)) {
         goTo(registry, m_chapters.Next(m_current));

@@ -1430,3 +1430,53 @@ well as on the HUD. Only the very first failure was reported before, and only
 when nothing had loaded, so a chapter that stopped part way left no record.
 
 GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_statics` 74.
+
+## Step 13 - the menu (built)
+
+Asked for after the first play-through: the port had no front door, it started
+at whatever level it was given. The original's own three screens, drawn with its
+own art.
+
+**Where the layout comes from.** The menus are built in script, not placed in a
+scene - `level_select0.esc` holds one entity, `world_select_bg.ent` - so the
+shape is decoded rather than converted:
+- `WorldSelector`'s `PageProperties`: `numItems` 4, `columns` 2, `rows` 1, back
+  at normalized (0.5, 0.05) and forward at (0.5, 0.95), buttons named
+  `sprites/world_icon`, locked `sprites/lock_icon.png`, empty
+  `sprites/level_soon_button.png` (bytes 167326..168612).
+- `PageManager`: `buttonsPerPage = columns * rows`, `numPages =
+  ceil(numItems / buttonsPerPage)` (bytes 57749..58780); `PageProperties`' own
+  defaults are `columns` 4, `rows` 3, so the level grid is twelve to a page.
+
+The port shows all four worlds at once rather than two to a page: a window is
+not a phone, and paging two icons would need the swipe (`Swyper`) it does not
+carry. The page buttons sit just inside the edge, because the original's own
+(0.5, 0.05) and (0.5, 0.95) put half a button off a landscape window.
+
+**Drawn as quads, not UI components.** `UIImageComponent` takes an uploaded
+texture handle and `UIButtonComponent` is a coloured rounded rectangle with a
+text label; neither shows a PNG named by path, which is what every button here
+is. So the menu draws the way the levels do, on the same orthographic camera,
+and is clicked through the same screen-to-plane mapping - which is now not
+gated on a level being loaded.
+
+**Entry is unchanged.** No `--level` opens the menu; a named level is entered
+directly. Every suite, every headless render and the owner's own command line
+reach the game exactly as before, and a test pins it.
+
+**What is not the original's.** NOTHING IS LOCKED: the original gates worlds
+and levels behind a save its `ScoreManager` keeps, and the port keeps no save.
+A port decision, not a decoded rule. Also left out: the swipe, the page
+counter, the popups, the cheat button, and `Verdana64_shadow.fnt` - a level's
+number is drawn with the engine's own text.
+
+**A defect caught before building.** `PressMenu` took its button by reference,
+and pressing one lays the screen out again - clearing the vector the button
+lives in - before the level it names is read back out. It takes the button by
+value; the click loop passes exactly such a reference.
+
+`test_mp_layer` grew five: the walk from the main screen to a level, paging to
+the second page's first level (1-13), Escape out of a level to its grid, a
+named level skipping the menu, and a click landing on the button under it.
+
+GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 150.
