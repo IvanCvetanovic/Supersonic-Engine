@@ -6,10 +6,11 @@
 // The tick is in two halves around the physics step:
 //   before the step: the buttons and their doors (Puzzle), the moving platforms
 //                    and lifts (Mover), what the launchers throw (Launchers),
-//                    how fast the beholder's rocks go (Boss), then the player's
-//                    steering (Player);
+//                    what the carrancas spit (Turrets), how fast the beholder's
+//                    rocks go (Boss), then the player's steering (Player);
 //   after the step:  the crystals and the exit, where the step left the player
-//                    (Goals), the hazards (Hazards), what the stones touched
+//                    (Goals), the hazards (Hazards), where the fireballs flew
+//                    and whom they burned (Turrets), what the stones touched
 //                    (Demolish), the thrown bodies the launchers take back
 //                    (Launchers), what the beholder's rocks ran into (Boss),
 //                    then the portals (Portals), and last the beholder's own turn
@@ -33,6 +34,7 @@
 #include "sim/Puzzle.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Tscn.hpp"
+#include "sim/Turrets.hpp"
 
 #include <filesystem>
 #include <string>
@@ -54,6 +56,7 @@ struct Data {
     Launchers::Rules launchers;   // and launchers.json
     Shot::Rules shot;             // and shot.json
     Boss::Rules boss;             // and boss.json
+    Turrets::Rules turrets;       // and turrets.json
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
 
@@ -79,6 +82,7 @@ struct Level {
     Launchers::State launchers;
     Portals::State portals;
     Boss::State boss;
+    Turrets::State turrets;
     entt::entity player = entt::null;
 };
 

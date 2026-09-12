@@ -56,6 +56,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Launchers::LoadRules(portDataDirectory + "/launchers.json", read.launchers, error)) return false;
     if (!Shot::LoadRules(portDataDirectory + "/shot.json", read.shot, error)) return false;
     if (!Boss::LoadRules(portDataDirectory + "/boss.json", read.boss, error)) return false;
+    if (!Turrets::LoadRules(portDataDirectory + "/turrets.json", read.turrets, error)) return false;
     std::error_code ec;
     std::filesystem::create_directories(prismDirectory, ec);
     read.prisms = prismDirectory;
@@ -113,6 +114,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Demolish::Find(data.scene, data.roles, out.built, data.demolish, out.demolish, error)) return false;
     if (!Launchers::Find(data.scene, data.roles, data.launchers, out.launchers, error)) return false;
     if (!Boss::Find(data.scene, data.roles, data.boss, data.launchers, out.boss, error)) return false;
+    if (!Turrets::Find(data.scene, data.roles, data.turrets, out.turrets, error)) return false;
     return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                          out.portals, error);
 }
@@ -126,6 +128,10 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
         if (thrown.is.teleportable) level.portals.travellers.push_back(thrown.body);
         if (thrown.is.demolisher) level.demolish.stones.push_back(Demolish::Stone{thrown.name, thrown.body});
     }
+    // And what the carrancas spit. Their fireballs are sensors with no body, so
+    // nothing here hands them to the portals or the demolisher as a thrown stone
+    // is handed; Turrets.hpp says why that is a step of its own.
+    level.turrets.Fire(dt);
     level.boss.BeforeStep(registry);
     if (level.player != entt::null) Player::Steer(registry, level.player, data.tuning, direction, dt);
 }
@@ -133,6 +139,9 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
 void AfterStep(entt::registry& registry, Level& level, float dt) {
     level.goals.Tick(registry, level.player, dt);
     level.hazards.Tick(registry, level.player);
+    // The fireballs fly on where the step left the player, and judge it there,
+    // as the hazards above them do.
+    level.turrets.Tick(registry, level.player, dt);
     level.demolish.Tick(registry);
     for (const entt::entity gone : level.launchers.Cull(registry)) Forget(level, gone);
     // The beholder's rocks, against what the step ran them into.
@@ -154,6 +163,10 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
     if (level.boss.playerKilled && !level.hazards.playerDied) {
         level.hazards.playerDied = true;
         level.hazards.killedBy = level.boss.killedBy;
+    }
+    if (level.turrets.playerKilled && !level.hazards.playerDied) {
+        level.hazards.playerDied = true;
+        level.hazards.killedBy = level.turrets.killedBy;
     }
 }
 

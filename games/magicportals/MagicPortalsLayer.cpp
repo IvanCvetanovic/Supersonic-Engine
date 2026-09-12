@@ -74,6 +74,11 @@ const glm::vec3 kStaticBlueColour(0.30f, 0.50f, 1.00f); // and blue
 const glm::vec3 kBeholderColour(0.55f, 0.20f, 0.60f);   // the beholder's reach
 const glm::vec3 kSpikeColour(0.85f, 0.85f, 0.70f);
 constexpr double kSpikeBoxPx = 6.0;
+// A carranca's fireball, in the colour of its own Light (r 1, g 0.5, b 0.2) and
+// at the size of its own Collision (16 x 16). Both are fireball.ent's, which is
+// as close to its picture as the port can get: the entity has no sprite.
+const glm::vec3 kFireballColour(1.00f, 0.50f, 0.20f);
+constexpr double kFireballBoxPx = 16.0;
 // Where the original adds a spike: at z -4 (ETHCallback_beholder).
 constexpr int kSpikeZIndex = -4;
 
@@ -304,6 +309,8 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     destroy(m_beholderQuad);
     for (auto& e : m_spikes) destroy(e);
     m_spikes.clear();
+    for (auto& e : m_fireballs) destroy(e);
+    m_fireballs.clear();
     destroy(m_shot);
     destroy(m_player);
     destroy(m_exit);
@@ -1699,6 +1706,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     }
 
     syncBoss(registry);
+    syncTurrets(registry);
 
     const auto boxPx = [](const Trigger::Box& box, glm::dvec2& centrePx, glm::dvec2& sizePx) {
         centrePx = Units::ToPixels(glm::vec3(box.centre, 0.0f));
@@ -1859,6 +1867,35 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     show(m_shot, !(artOnly && m_shotQuad != entt::null));
     show(m_player, !(artOnly && m_playerQuad != entt::null));
     show(m_beholderBox, !(artOnly && m_beholderQuad != entt::null));
+}
+
+void MagicPortalsLayer::syncTurrets(entt::registry& registry) {
+    using namespace Supersonic;
+    const Turrets::State& turrets = m_level.turrets;
+    auto destroy = [&registry](entt::entity& e) {
+        if (e != entt::null && registry.valid(e)) registry.destroy(e);
+        e = entt::null;
+    };
+
+    // One quad per fireball in flight, grown and shrunk to match, which is how
+    // the beholder's spikes are drawn. Always a BOX: fireball.ent has no
+    // <Sprite> at all - the original shows its ParticleSystem and its Light -
+    // so unlike a spike there is no image to fall back from.
+    while (m_fireballs.size() > turrets.fireballs.size()) {
+        destroy(m_fireballs.back());
+        m_fireballs.pop_back();
+    }
+    while (m_fireballs.size() < turrets.fireballs.size()) {
+        m_fireballs.push_back(
+            makeBox(registry, "Magic Portals Fireball", glm::vec3(0.0f), glm::vec3(1.0f), kFireballColour));
+    }
+    for (std::size_t i = 0; i < m_fireballs.size(); ++i) {
+        // At the marker z, which is the port's choice and not the original's:
+        // the original states a spike's z (-4) and says nothing about a
+        // fireball's.
+        placeBox(registry, m_fireballs[i], turrets.fireballs[i].atPx, glm::dvec2(kFireballBoxPx), kMarkerZ,
+                 kMarkerDepth, 0.0f);
+    }
 }
 
 void MagicPortalsLayer::syncBoss(entt::registry& registry) {
@@ -2211,6 +2248,9 @@ void MagicPortalsLayer::latchSimSounds() {
     }
     now.wallsBroken = m_level.demolish.Broken();
     for (const Launchers::Launcher& launcher : m_level.launchers.launchers) now.stonesThrown += launcher.thrown;
+    // Summed across the carrancas, as the launchers' throws are: each keeps its
+    // own count, and what the sound wants is how many were spat in all.
+    for (const Turrets::Turret& turret : m_level.turrets.turrets) now.fireballsSpat += turret.fired;
     if (m_level.boss.beholder.has_value()) {
         now.bossHits = m_level.boss.beholder->hits;
         now.bossVolleys = m_level.boss.beholder->volleys;
@@ -2247,6 +2287,7 @@ void MagicPortalsLayer::latchSimSounds() {
     for (int i = now.staticsLive; i < m_watch.staticsLive; ++i) latch("portal_spent");
     for (int i = m_watch.wallsBroken; i < now.wallsBroken; ++i) latch("wall_broken");
     for (int i = m_watch.stonesThrown; i < now.stonesThrown; ++i) latch("stone_thrown");
+    for (int i = m_watch.fireballsSpat; i < now.fireballsSpat; ++i) latch("fireball_spat");
     for (int i = m_watch.bossHits; i < now.bossHits; ++i) latch("boss_hurt");
     for (int i = m_watch.bossVolleys; i < now.bossVolleys; ++i) latch("boss_spikes");
     for (int i = m_watch.bossRocksBroken; i < now.bossRocksBroken; ++i) latch("boss_rock_broken");

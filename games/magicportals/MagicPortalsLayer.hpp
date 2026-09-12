@@ -293,6 +293,10 @@ private:
     void syncDrawables(entt::registry& registry);
     void syncSprites(entt::registry& registry);
     void syncBoss(entt::registry& registry);
+    // The carrancas' fireballs. Its own function rather than a block inside
+    // syncBoss: they belong to a turret, not to the beholder, and every level
+    // of chapter 2 that has one has no boss at all.
+    void syncTurrets(entt::registry& registry);
     void updateHud(entt::registry& registry);
 
     // The level at `index` in chapters.json, in place of whatever was there.
@@ -377,6 +381,13 @@ private:
     float m_beholderZ{0.5f};
     float m_spikeZ{0.5f};
 
+    // The carrancas' fireballs, one quad per fireball in flight (Turrets.hpp).
+    //
+    // Always boxes: fireball.ent carries no <Sprite> at all - what the original
+    // shows is its ParticleSystem and its Light - so there is no image to draw
+    // one with, and the box is the picture rather than a stand-in for one.
+    std::vector<entt::entity> m_fireballs;
+
     // One live particle of an emitter's, and the quad standing for it.
     struct Particle {
         glm::dvec2 atPx{0.0};
@@ -459,6 +470,7 @@ private:
         int staticsLive = 0;
         int wallsBroken = 0;
         int stonesThrown = 0;
+        int fireballsSpat = 0;
         int bossHits = 0;
         int bossVolleys = 0;
         int bossRocksBroken = 0;

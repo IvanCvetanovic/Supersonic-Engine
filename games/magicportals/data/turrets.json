@@ -1,0 +1,82 @@
+{
+  "_about": [
+    "The Magic Portals port's carrancas - the wall-mounted stone gargoyles that spit",
+    "fireballs, which the remake's role table calls 'turret' (entity_roles.json:226).",
+    "The original never uses that word: its entities are carranca.ent and",
+    "carranca_right.ent, and its script is ETHCallback_carranca.angelscript.",
+    "",
+    "Every number here is DECODED except the cull margin, which is marked. The",
+    "remake's hazards.json carries its own turret block marked _guess with a speed of",
+    "180 px/s and a life of 4 s; both are inventions, and the original's own",
+    "fireball.ent states the speed outright. See",
+    "docs/planning/2026-09-11-magic-portals-remaster.md."
+  ],
+
+  "fireball": {
+    "_source": [
+      "the original's fireball.ent: CustomData speed 130 and teleportable 1,",
+      "Collision 16 x 16, shape 2, sensor 1, bullet 1, density 0, restitution 0.",
+      "Its gravityScale is 1 in the file and addFireball sets it to 0 at spawn",
+      "(bytes 417483..417923), so a fireball flies flat and never falls.",
+      "",
+      "SENSOR, so nothing stops it: it passes through walls, crates and stones and",
+      "only registers what it overlaps. Flying through the world is faithful, not a",
+      "simplification - it is what shape 2 with density 0 and sensor 1 means.",
+      "",
+      "It has no <Sprite>. What is seen is its ParticleSystem (explosion.JPG) and",
+      "its Light, so the layer has no image to draw it with."
+    ],
+    "speed_px_s": 130.0,
+    "hit_px": [16.0, 16.0]
+  },
+
+  "stride": {
+    "_source": [
+      "carrancaCallback (ETHCallback_carranca.angelscript, bytes 416779..417483).",
+      "elapsedTime is seeded from the node's startStride the first time the callback",
+      "runs, gathers getLastFrameElapsedTime every frame, and when it PASSES the",
+      "node's stride the carranca calls addFireball and resets elapsedTime to ZERO.",
+      "",
+      "So the first shot comes stride - startStride ms after the level starts, and",
+      "one every stride ms after that. The reset is to zero rather than a",
+      "subtraction, so a long frame does not carry its overshoot into the next shot.",
+      "",
+      "The remake reads startStride as an initial DELAY instead and then fires every",
+      "stride (hazards.gd:346-349), which on a node whose startStride is 0 - every",
+      "carranca in level0a is - fires at once instead of a stride later. The decoded",
+      "script wins over the remake's reading, as the acceptance rule has it.",
+      "",
+      "Both are bare uints with no speed field, which is what proves they are",
+      "milliseconds. default_ms is only for a node that names no stride; every",
+      "placement in the game names one."
+    ],
+    "default_ms": 2000.0
+  },
+
+  "direction": {
+    "_note": [
+      "A carranca fires along its node's (dirX, dirY). carrancaCallback builds",
+      "vector2(dirX, dirY) and hands it to addFireball, which stores it on the",
+      "fireball as 'dir'.",
+      "",
+      "NOT a unit vector in the data: level0a's carranca_right_ent_792 carries",
+      "dirX = 1.2. Nothing in the decoded script reads that 'dir' back - the only",
+      "GetVector2('dir') in the whole script is the lift's - so what the magnitude",
+      "means is unresolved: the fireball's own speed comes from its .ent, which",
+      "would make 1.2 either a 20% faster shot or simply a rightward direction",
+      "written loosely. The port normalises, as the remake does, and records the",
+      "question here rather than inventing an answer to it."
+    ]
+  },
+
+  "cull": {
+    "_note": [
+      "A fireball is a sensor, so nothing in the world stops it and it would fly for",
+      "ever. It is dropped once it leaves the level's bounds by this margin, which is",
+      "how the beholder's spikes are dropped (boss.json). The original relies on",
+      "Ethanon's own culling of entities outside the scene, which is not decoded."
+    ],
+    "_guess": true,
+    "margin_px": [64.0, 64.0]
+  }
+}

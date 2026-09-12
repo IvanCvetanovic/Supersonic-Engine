@@ -143,6 +143,10 @@ add_mp_test(test_mp_geometry)
 add_mp_test(test_mp_portal)
 add_mp_test(test_mp_play)
 
+# The carrancas of chapter 2, and the fireballs they spit. Reads the converted
+# levels, so it skips with 77 like the rest when they are absent.
+add_mp_test(test_mp_turrets)
+
 # The medals, kept between runs. Pure sim: a temporary directory and no window.
 # The ONE Magic Portals suite that touches a filesystem, and it touches only its
 # own scratch directory - the layer suites all build bare, which is what

@@ -1234,6 +1234,52 @@ void NoSpriteOnScreenIsCulled(const char* levelName) {
 // plays it, so a level must run identically whether or not anything can make a
 // noise. What is asserted here is the latching, which is the half that has to
 // be right for the other half to have anything to play.
+// A carranca's fireball is seen and heard.
+//
+// The sim suite already pins that one is spat and that it burns the player
+// (test_mp_turrets). What that cannot see is the half a player actually meets:
+// a fireball that kills while drawing nothing and making no sound is not a
+// missing feature, it is an invisible one, which is worse - it looks exactly
+// like a bug in the simulation.
+//
+// The ORDER here is the point. tickWith runs the fixed update only, so what the
+// ticks latch piles up; OnUpdate is the frame, and it both draws and drains that
+// queue. Read the queue first and draw second, or the assertion lands on a queue
+// the frame has already emptied and passes for the wrong reason.
+void ACarrancasFireballIsSeenAndHeard() {
+    entt::registry registry;
+    publishViewport(registry);
+    // level0a is chapter 2's first level: one carranca, a stride of 1500 ms and
+    // a startStride of 0, so its first fireball comes 90 ticks in.
+    MagicPortalsLayer layer(TestPaths(), "level0a");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+
+    // Just past the first shot, and no further: the fireball flies right from
+    // the gargoyle, and a run long enough for it to reach the player would
+    // retry the level and reset everything this asserts.
+    for (int tick = 0; tick < 100; ++tick) tickWith(layer, registry, kRest, {}, {});
+
+    const std::vector<std::string> latched = layer.LatchedSounds();
+    bool heard = false;
+    for (const std::string& name : latched) {
+        if (name == "fireball_spat") heard = true;
+    }
+    CHECK_MSG(heard, "a carranca spitting is a sound, and sounds.json names it playFireballSound");
+
+    // THEN the frame, which is what draws it.
+    layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+    CHECK_MSG(Tagged(registry, "Magic Portals Fireball") > 0,
+              "and a fireball in flight is drawn, or it kills out of nowhere");
+
+    // And it goes with the level, as every other drawable does.
+    layer.OnDetach(registry);
+    CHECK_MSG(Tagged(registry, "Magic Portals Fireball") == 0, "the fireballs go with the level");
+}
+
 void ALevelLatchesTheSoundsItEarns() {
     entt::registry registry;
     publishViewport(registry);
@@ -1685,6 +1731,7 @@ void runTests() {
     TheMedalScreenIsTheOriginals();
     TheGridShowsTheMedalsEarned();
     ALevelLatchesTheSoundsItEarns();
+    ACarrancasFireballIsSeenAndHeard();
     NothingOnScreenIsCulledWhileWalking();
     NothingBlinksWhileWalking();
 }

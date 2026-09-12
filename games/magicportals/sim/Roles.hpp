@@ -39,6 +39,8 @@ inline constexpr const char* kDemolisher = "demolisher";
 inline constexpr const char* kLauncher = "launcher";
 inline constexpr const char* kProjectileBlocker = "projectile_blocker";
 inline constexpr const char* kReflector = "reflector";
+// A carranca: the wall gargoyle that spits fireballs (Turrets.hpp).
+inline constexpr const char* kTurret = "turret";
 // Played only for the boss the port has: Boss::Plays says which.
 inline constexpr const char* kBossSpawn = "boss_spawn";
 

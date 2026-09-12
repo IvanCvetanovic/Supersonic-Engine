@@ -29,6 +29,7 @@ add_library(MagicPortalsSim STATIC
     Sprites.cpp
     Trigger.cpp
     Tscn.cpp
+    Turrets.cpp
 )
 
 # Where the converted levels live - which is NOT in this repository.

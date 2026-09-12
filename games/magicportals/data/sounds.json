@@ -273,6 +273,7 @@
     "wall_broken": "playDemolitionSound",
     "stone_thrown": "playStoneAppearSound",
     "stone_broken": "playStoneHitSound",
+    "fireball_spat": "playFireballSound",
 
     "player_died": "playDeathSound",
     "level_finished": "playLevelFinishedSound",
