@@ -981,6 +981,58 @@ void AClickOnTheMenuPressesWhatIsUnderIt() {
     CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Worlds);
 }
 
+// ---- the entities' particles --------------------------------------------------
+
+// A level's entities emit, and they emit on the FRAME rather than on the tick.
+//
+// The tick half matters as much as the drawing: a particle is a picture, and
+// the port's determinism rests on nothing of the sort reaching the simulation.
+// So a level that has ticked but never been drawn holds no particle at all.
+void ALevelsEntitiesEmit() {
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    // Ticking alone draws none of them.
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(Tagged(registry, "Magic Portals Particle") == 0,
+              "the tick drew " + std::to_string(Tagged(registry, "Magic Portals Particle")) + " particle(s)");
+
+    // Frames do. level1 places a torch, a door and a static portal, and all
+    // three carry particle systems in their .ent files.
+    for (int frame = 0; frame < 120; ++frame) layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+    const int drawn = Tagged(registry, "Magic Portals Particle");
+    CHECK_MSG(drawn > 0, "no particle was drawn after two seconds of frames");
+}
+
+// And they go when the level does, rather than piling a second pool on the
+// first - which is what a retry would otherwise do every time.
+void ParticlesGoWithTheirLevel() {
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    for (int frame = 0; frame < 120; ++frame) layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+    const int before = Tagged(registry, "Magic Portals Particle");
+    CHECK(before > 0);
+
+    // A retry rebuilds the level from what was read when it loaded.
+    press(layer, registry, MagicPortalsLayer::kRetry);
+    CHECK_MSG(Tagged(registry, "Magic Portals Particle") == 0,
+              "a retry left " + std::to_string(Tagged(registry, "Magic Portals Particle")) + " particle(s) behind");
+    for (int frame = 0; frame < 120; ++frame) layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+    CHECK_MSG(Tagged(registry, "Magic Portals Particle") <= before,
+              "the level came back with more particles than it had");
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     Level31DrawsTheBeholder();
@@ -1004,6 +1056,8 @@ void runTests() {
     NamingALevelSkipsTheMenu();
     EscapeLeavesALevelForItsGrid();
     AClickOnTheMenuPressesWhatIsUnderIt();
+    ALevelsEntitiesEmit();
+    ParticlesGoWithTheirLevel();
 }
 
 } // namespace

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <string>
 #include <utility>
 
@@ -263,6 +264,9 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     m_thrown.clear();
     for (DrawnSprite& drawn : m_sprites) destroy(drawn.quad);
     m_sprites.clear();
+    // The particles the level's entities were emitting go with them; a retry
+    // would otherwise pile a second pool on the first.
+    unloadEmitters(registry);
     m_artReady = false;
     for (auto& e : m_portalQuads) destroy(e);
     m_portalQuads.clear();
@@ -315,6 +319,192 @@ void MagicPortalsLayer::clearLevel(entt::registry& registry) {
     cleared.crystals = cleared.crystalsTotal - m_level.goals.Remaining();
     m_lastCleared = cleared;
     goTo(registry, m_chapters.Next(m_current));
+}
+
+// ---- the entities' particles --------------------------------------------------
+//
+// What makes the original's scenery move: each entity's own <ParticleSystem>
+// (sim/Particles.hpp), which the converter drops. A crystal sparkles, a torch
+// burns, a static portal turns - none of it is in the level file.
+//
+// Drawn the way everything else in this port is: one textured quad per live
+// particle, added rather than mixed because every emitter in the game is
+// AM_ADD. Carried on the FRAME, in OnUpdate, because a particle is a picture:
+// it must not reach Game::Level, the fixed tick or the state hash.
+//
+// The arithmetic is Ethanon's own (ETHParticleManager::UpdateParticleSystem,
+// ResetParticle and PositionParticle), kept in its units: a frame-speed unit
+// is a sixtieth of a second, and every rate below is per one of those.
+
+double MagicPortalsLayer::particleRandom(double from, double to) {
+    if (!(to > from)) return from;
+    std::uniform_real_distribution<double> spread(from, to);
+    return spread(m_particleRandom);
+}
+
+void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
+    unloadEmitters(registry);
+    // Without the level's art there is nothing to decorate: the level is drawn
+    // as boxes and says so.
+    if (!m_artReady) return;
+
+    std::map<std::string, std::string> entities; // node -> its entity's name
+    for (const Tscn::Node& node : m_data.scene.nodes) {
+        if (node.parent != ".") continue;
+        entities[node.name] = Roles::EntityName(node);
+    }
+
+    for (const DrawnSprite& drawn : m_sprites) {
+        const auto found = entities.find(drawn.sprite.node);
+        if (found == entities.end() || found->second.empty()) continue;
+        std::string entity = found->second;
+        // A level names its entities both ways: "portal_static" and "sky.ent".
+        if (entity.size() > 4 && entity.compare(entity.size() - 4, 4, ".ent") == 0) {
+            entity.resize(entity.size() - 4);
+        }
+        std::vector<Particles::System> systems;
+        std::string error;
+        if (!Particles::Load(m_paths.original + "/entities/" + entity + ".ent", systems, error)) continue;
+        for (const Particles::System& system : systems) {
+            const std::string image = m_paths.original + "/particles/" + system.bitmap;
+            const glm::dvec2 sheet = imageSizePx(image);
+            if (sheet.x <= 0.0 || sheet.y <= 0.0) {
+                SUPERSONIC_LOG_WARN("Magic Portals") << "particle image could not be read: " << image << std::endl;
+                continue;
+            }
+            Emitter emitter;
+            emitter.system = system;
+            emitter.atPx = Sprites::CentrePx(drawn.sprite);
+            // Just in front of the art it decorates, and behind the markers.
+            emitter.z = drawn.z + 0.01f;
+            emitter.image = image;
+            emitter.cellPx = glm::dvec2(sheet.x / system.columns, sheet.y / system.rows);
+            emitter.crystal = drawn.crystal;
+            emitter.particles.resize(static_cast<std::size_t>(std::min(system.count, kMaxParticles)));
+            m_emitters.push_back(std::move(emitter));
+        }
+    }
+}
+
+void MagicPortalsLayer::unloadEmitters(entt::registry& registry) {
+    for (Emitter& emitter : m_emitters) {
+        for (Particle& particle : emitter.particles) {
+            if (particle.quad != entt::null && registry.valid(particle.quad)) registry.destroy(particle.quad);
+            particle.quad = entt::null;
+        }
+    }
+    m_emitters.clear();
+}
+
+void MagicPortalsLayer::updateEmitters(entt::registry& registry, float deltaTime) {
+    using namespace Supersonic;
+    if (m_emitters.empty()) return;
+    // The original caps a frame at 250 ms before turning it into its own unit,
+    // so a stall does not fling every particle across the level.
+    const double elapsedMs = std::min(static_cast<double>(deltaTime) * 1000.0, 250.0);
+    const double frameSpeed = elapsedMs / 1000.0 * 60.0;
+
+    for (Emitter& emitter : m_emitters) {
+        const Particles::System& system = emitter.system;
+        // A collected crystal takes its sparkle with it.
+        bool emitting = true;
+        if (emitter.crystal >= 0 && emitter.crystal < static_cast<int>(m_level.goals.crystals.size())) {
+            const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(emitter.crystal)];
+            emitting = !crystal.collected && !crystal.expired;
+        }
+
+        const int frames = std::max(1, system.Frames());
+        const auto reset = [&](Particle& particle) {
+            particle.elapsedMs = 0.0;
+            particle.released = true;
+            particle.lifeMs = system.lifeTimeMs + particleRandom(-system.randomLifeTimeMs * 0.5,
+                                                                 system.randomLifeTimeMs * 0.5);
+            if (particle.lifeMs <= 0.0) particle.lifeMs = std::max(1.0, system.lifeTimeMs);
+            particle.size = system.size + particleRandom(-system.randomizeSize * 0.5, system.randomizeSize * 0.5);
+            particle.angleDir = system.angleDir + particleRandom(-system.randAngle * 0.5, system.randAngle * 0.5);
+            particle.angle = system.angleStart + particleRandom(0.0, system.randAngleStart);
+            particle.velocityPx =
+                system.direction + glm::dvec2(particleRandom(-system.randomizeDir.x * 0.5, system.randomizeDir.x * 0.5),
+                                              particleRandom(-system.randomizeDir.y * 0.5, system.randomizeDir.y * 0.5));
+            particle.atPx = emitter.atPx + system.startPoint +
+                            glm::dvec2(particleRandom(-system.randStartPoint.x * 0.5, system.randStartPoint.x * 0.5),
+                                       particleRandom(-system.randStartPoint.y * 0.5, system.randStartPoint.y * 0.5));
+            // PLAY_ANIMATION walks the sheet by age; PICK_RANDOM_FRAME takes one.
+            particle.frame = system.animationMode == 2
+                                 ? static_cast<int>(particleRandom(0.0, static_cast<double>(frames)))
+                                 : 0;
+            if (particle.frame >= frames) particle.frame = frames - 1;
+        };
+
+        for (std::size_t i = 0; i < emitter.particles.size(); ++i) {
+            Particle& particle = emitter.particles[i];
+            const auto hide = [&]() {
+                if (particle.quad != entt::null && registry.valid(particle.quad)) registry.destroy(particle.quad);
+                particle.quad = entt::null;
+            };
+            if (!emitting) {
+                hide();
+                continue;
+            }
+
+            particle.elapsedMs += elapsedMs;
+            if (!particle.released) {
+                // Staggered across one lifetime, in pool order, unless the
+                // system releases the lot at once.
+                const double releaseAt = (system.lifeTimeMs + system.randomLifeTimeMs) *
+                                         (static_cast<double>(i) / static_cast<double>(emitter.particles.size()));
+                if (!system.allAtOnce && particle.elapsedMs <= releaseAt) continue;
+                reset(particle);
+            }
+
+            particle.velocityPx += system.gravity * frameSpeed;
+            particle.atPx += particle.velocityPx * frameSpeed;
+            particle.angle += particle.angleDir * frameSpeed;
+            particle.size = std::clamp(particle.size + system.growth * frameSpeed, system.minSize, system.maxSize);
+
+            const double age = particle.lifeMs > 0.0 ? particle.elapsedMs / particle.lifeMs : 1.0;
+            if (particle.elapsedMs > particle.lifeMs) {
+                ++particle.repeats;
+                if (system.repeat > 0 && particle.repeats >= system.repeat) {
+                    hide();
+                    continue;
+                }
+                reset(particle);
+            }
+            if (system.animationMode == 1 && frames > 1) {
+                particle.frame = std::min(static_cast<int>(static_cast<double>(frames) * age), frames - 1);
+            }
+
+            if (particle.size <= 0.0) {
+                hide();
+                continue;
+            }
+            if (particle.quad == entt::null) {
+                particle.quad = makeSprite(registry, "Magic Portals Particle", emitter.image, system.additive);
+                if (frames > 1) {
+                    auto& animation = registry.emplace<SpriteAnimationComponent>(particle.quad);
+                    animation.columns = static_cast<uint32_t>(system.columns);
+                    animation.rows = static_cast<uint32_t>(system.rows);
+                    animation.frameCount = 1;
+                    animation.playing = false; // the frame is this loop's, by age or at random
+                }
+            }
+            if (frames > 1) {
+                registry.get<SpriteAnimationComponent>(particle.quad).firstFrame =
+                    static_cast<uint32_t>(particle.frame);
+            }
+            const glm::dvec4 colour = system.colour0 + (system.colour1 - system.colour0) * std::clamp(age, 0.0, 1.0);
+            registry.get<MaterialComponent>(particle.quad).albedoColor =
+                glm::vec4(static_cast<float>(colour.r), static_cast<float>(colour.g), static_cast<float>(colour.b),
+                          static_cast<float>(colour.a));
+            // The bitmap's own shape at the particle's size, turned as the
+            // original turns it: its angle is degrees clockwise on the screen.
+            const double height = emitter.cellPx.x > 0.0 ? particle.size * (emitter.cellPx.y / emitter.cellPx.x)
+                                                         : particle.size;
+            placeSprite(registry, particle.quad, particle.atPx, glm::dvec2(particle.size, height), emitter.z,
+                        Units::ToWorldRotation(particle.angle * 3.14159265358979323846 / 180.0));
+        }
+    }
 }
 
 // ---- the menu ---------------------------------------------------------------
@@ -891,6 +1081,8 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     m_beholderZ = slotAfter(adderZ);
     m_spikeZ = slotAfter(kSpikeZIndex);
     m_artReady = true;
+    // And what the level's own art does not show: the entities' particles.
+    buildEmitters(registry);
 }
 
 void MagicPortalsLayer::syncSprites(entt::registry& registry) {
@@ -1426,7 +1618,11 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
 // ---- per frame: nothing the level or a replay depends on --------------------
 
 void MagicPortalsLayer::OnUpdate(entt::registry& registry, float deltaTime) {
-    (void)deltaTime;
+    // The entities' particles. They belong to the FRAME and not to the tick,
+    // because a particle is a picture: nothing below may reach Game::Level,
+    // the simulation's clock or the state hash. Carried before the camera's
+    // early return, so a level drawn without one does not freeze them.
+    updateEmitters(registry, deltaTime);
     // Only the camera's SHAPE, for the viewport this frame is drawn into.
     if (m_camera == entt::null || !registry.valid(m_camera)) return;
     registry.get<Supersonic::CameraComponent>(m_camera).aspect = viewportAspect(registry);

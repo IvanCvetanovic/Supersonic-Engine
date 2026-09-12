@@ -1564,3 +1564,53 @@ size gathering `growth` clamped to its range, colour lerped from `Color0` to
 expiry until the `repeat` cap.
 
 GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_sprites` 147.
+
+## Step 14b - the surroundings move (built)
+
+The reader's systems, carried and drawn. A torch burns, a doorway glows, a
+static portal turns, a crystal sparkles.
+
+**Where it lives, and why that is the whole design.** In the layer, per FRAME,
+in `OnUpdate`. A particle is a picture: nothing here touches `Game::Level`, the
+fixed tick or the state hash, so the port's cross-platform determinism cannot
+be moved by it. The test that matters says so directly - a level that has
+ticked sixty times and never been drawn holds no particle at all. The generator
+is the layer's own and seeded, rather than the engine's single process-global
+stream that every other drawer shares, so a run looks the same twice.
+
+**Ethanon's arithmetic, in its own units** (`ETHParticleManager`'s
+`UpdateParticleSystem`, `ResetParticle` and `PositionParticle`): a frame capped
+at 250 ms and turned into sixtieths of a second; direction gathering gravity,
+position gathering direction, angle gathering `angleDir`, size gathering
+`growth` clamped between `minSize` and `maxSize`; colour lerped from `Color0`
+to `Color1` by age; release staggered across `(lifeTime + randomLifeTime) x
+id/count` in pool order unless `allAtOnce`; a reset on expiry until the
+`repeat` cap, and then that particle stops. Every spread is applied as the
+original applies it - plus or minus half, but `randAngleStart` from zero.
+
+**Drawn the way the port draws everything else:** one textured quad per live
+particle, added rather than mixed because every emitter in the game is
+`AM_ADD`, turned to its own angle, sized to its own size at its bitmap's
+shape, and given its frame through `SpriteAnimationComponent` - by age for
+`PLAY_ANIMATION`, chosen once at birth for `PICK_RANDOM_FRAME`.
+
+**Bounded.** No emitter draws more than 64 particles whatever its `.ent` asks;
+chapter 1's largest asks for 32, so it is a guard for a later chapter. A
+collected crystal takes its sparkle with it, and unloading a level takes its
+pools - a retry would otherwise stack a second on the first.
+
+**What is seen, and what is not.** level1 renders with its torch alight, its
+doorway glowing red and its static portal haloed, and the run loads three
+bitmaps out of the original's `particles/` where it loaded none before. The
+crystals of level26 are NOT resolvable by eye at 1280x720 - a 12 px sparkle
+fading to transparent - so they are pinned by counting quads rather than
+claimed from a picture.
+
+**Not done, and deliberately:** an emitter sits where its placement sits and
+does not follow a body that moves; `Luminance`/emissive and `boundingSphere`
+are read but unused, so nothing is culled by its own bounds.
+
+`test_mp_layer` grew two, to 157: a level's entities emit on frames and not on
+ticks, and their particles go with the level.
+
+GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 157.

@@ -12,10 +12,13 @@
 #include "core/Components.hpp"
 #include "core/EngineLayer.hpp"
 
+#include <random>
+
 #include "sim/Camera.hpp"
 #include "sim/Chapters.hpp"
 #include "sim/Game.hpp"
 #include "sim/Art.hpp"
+#include "sim/Particles.hpp"
 #include "sim/Sprites.hpp"
 
 namespace MagicPortals {
@@ -234,6 +237,14 @@ private:
     void menuTick(entt::registry& registry);
     // One of the original's own menu images, which live beside its entities.
     std::string menuImage(const std::string& file) const;
+
+    // The entities' particle systems: built with a level's art, carried per
+    // FRAME, and taken away with the level.
+    void buildEmitters(entt::registry& registry);
+    void unloadEmitters(entt::registry& registry);
+    void updateEmitters(entt::registry& registry, float deltaTime);
+    // A number in [from, to) from the layer's OWN generator.
+    double particleRandom(double from, double to);
     float readInput(entt::registry& registry);
     void syncDrawables(entt::registry& registry);
     void syncSprites(entt::registry& registry);
@@ -321,6 +332,48 @@ private:
     std::vector<entt::entity> m_spikes; // one per spike in flight
     float m_beholderZ{0.5f};
     float m_spikeZ{0.5f};
+
+    // One live particle of an emitter's, and the quad standing for it.
+    struct Particle {
+        glm::dvec2 atPx{0.0};
+        glm::dvec2 velocityPx{0.0}; // the original's `dir`, per frame-speed unit
+        double angle = 0.0;         // degrees, clockwise on the screen
+        double angleDir = 0.0;
+        double size = 0.0;
+        double lifeMs = 0.0; // its own, spread from the system's
+        double elapsedMs = 0.0;
+        int repeats = 0;
+        int frame = 0;
+        bool released = false;
+        entt::entity quad{entt::null};
+    };
+
+    // One <ParticleSystem> of one placement: the system as the .ent states it,
+    // where it sits, and its pool.
+    //
+    // PER FRAME, and never on the tick. Nothing here touches Game::Level, the
+    // simulation's clock or the state hash - a particle is a picture, and the
+    // port's determinism is the thing most easily broken by pretending
+    // otherwise. The generator is the layer's own for the same reason: the
+    // engine's is one process-global stream that every other drawer shares.
+    struct Emitter {
+        Particles::System system;
+        glm::dvec2 atPx{0.0}; // the placement it decorates, which does not move
+        float z = 0.0f;       // in front of that placement's own art
+        glm::dvec2 cellPx{0.0};
+        std::string image;
+        int crystal = -1; // when it decorates one: it stops with the crystal
+        std::vector<Particle> particles;
+    };
+
+    // No emitter draws more than this, whatever its .ent asks for. Chapter 1
+    // places 189 of them and the largest asks for 32, so this is a guard
+    // against a later chapter rather than a limit anything here reaches.
+    static constexpr int kMaxParticles = 64;
+
+    std::vector<Emitter> m_emitters;
+    // Seeded, so a run looks the same twice and a screenshot can be compared.
+    std::mt19937 m_particleRandom{20260912u};
 
     // The menu. Screen::None while a level is played.
     Screen m_screen{Screen::None};
