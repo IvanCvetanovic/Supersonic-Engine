@@ -99,6 +99,22 @@ int main(int argc, char** argv) {
 
     try {
         Supersonic::SupersonicApp app(options, &manifest);
+
+        // SAID OUT LOUD, because the two cases are indistinguishable otherwise.
+        //
+        // A run with the validation layers absent produces exactly the output a
+        // clean run does: none. This game was played through a Release build,
+        // where SUPERSONIC_ENABLE_VALIDATION defaults to 0, and its silent log
+        // was nearly read as evidence that the frames were clean - when in fact
+        // nothing had been watching. VulkanContext.hpp makes the same point
+        // about CI: "a green run that never loaded the layer proves nothing and
+        // looks identical to one that did".
+        SUPERSONIC_LOG_INFO("Magic Portals")
+            << "Vulkan validation layers: "
+            << (Supersonic::VulkanContext::ValidationLayersActive() ? "ACTIVE"
+                                                                    : "NOT LOADED - nothing is checking this run")
+            << std::endl;
+
         app.PushLayer(std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start));
         app.Run();
     } catch (const std::exception& e) {

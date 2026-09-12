@@ -188,6 +188,25 @@ bool ModelLoader::GenerateQuad(float width, float height, MeshData& out) {
     };
 
     out.indices = {0, 1, 2, 2, 3, 0};
+
+    // BOTH OF THESE, and the bounds are not optional.
+    //
+    // This function returned here, having called neither. MeshData's bounds
+    // default to (0,0,0)..(0,0,0) and clear() resets them to that, so every
+    // quad this engine ever generated carried a DEGENERATE point for its
+    // local AABB - which createGpuMesh copies onto the GpuMesh and RenderSystem
+    // copies onto the renderable. Frustum culling then tested each quad against
+    // its own centre: a sprite disappeared the instant its centre left the
+    // view, while the quad itself was still metres on screen. The bigger the
+    // sprite the earlier it went, which is why a level's backgrounds vanished
+    // first and small things near the middle survived.
+    //
+    // It took a game made almost entirely of quads to surface it, and it hid
+    // from every test written to find it, because those tests read the same
+    // bounds the renderer did and agreed with it. GenerateCube and
+    // GeneratePlane both call these; this one is the odd one out.
+    out.computeTangents();
+    out.computeBounds();
     return true;
 }
 

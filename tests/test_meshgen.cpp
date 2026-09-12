@@ -633,7 +633,90 @@ static void testAFileWithOneMaterialIsOneSection() {
     CHECK_EQ(sections[0].indexCount, static_cast<uint32_t>(data.indices.size()));
 }
 
+// EVERY generated primitive has real bounds, and this is not a tidiness check.
+//
+// GenerateQuad called neither computeTangents nor computeBounds. MeshData's
+// bounds default to (0,0,0)..(0,0,0) and clear() resets them there, so every
+// quad the engine ever made carried a DEGENERATE POINT as its local AABB.
+// createGpuMesh copies that onto the GpuMesh, RenderSystem copies it onto the
+// renderable, and frustum culling then tested each quad against its own centre:
+// a sprite vanished the moment its centre crossed the edge of the view while
+// the quad was still metres on screen, and the bigger the sprite the sooner it
+// went. A game made of sprites lost its backgrounds first.
+//
+// The suite had bounds assertions for the cube and the box and none for the
+// quad, which is exactly the shape of the hole it fell through. So this asks
+// the question of all of them at once rather than one more time for one of
+// them: the next primitive to forget is caught here, not by somebody watching
+// scenery disappear.
+static void testEveryPrimitiveHasNonDegenerateBounds() {
+    struct Case {
+        const char* name;
+        MeshData mesh;
+    };
+    std::vector<Case> cases;
+
+    MeshData quad;
+    CHECK(ModelLoader::GenerateQuad(3.0f, 5.0f, quad));
+    cases.push_back({"Quad", std::move(quad)});
+
+    MeshData cube;
+    CHECK(ModelLoader::GenerateCube(2.0f, cube));
+    cases.push_back({"Cube", std::move(cube)});
+
+    MeshData box;
+    CHECK(ModelLoader::GenerateBox(2.0f, box));
+    cases.push_back({"Box", std::move(box)});
+
+    MeshData plane;
+    CHECK(ModelLoader::GeneratePlane(4.0f, 6.0f, plane));
+    cases.push_back({"Plane", std::move(plane)});
+
+    MeshData sphere;
+    CHECK(ModelLoader::GenerateSphere(1.0f, 8, 8, sphere));
+    cases.push_back({"Sphere", std::move(sphere)});
+
+    for (const Case& c : cases) {
+        const glm::vec3 extent = c.mesh.boundsMax - c.mesh.boundsMin;
+        // A point is not a box. Two axes must have real extent for any of
+        // these; the quad and the plane are flat, so the THIRD is allowed to
+        // be zero and only that one.
+        int flatAxes = 0;
+        if (extent.x <= 0.0f) ++flatAxes;
+        if (extent.y <= 0.0f) ++flatAxes;
+        if (extent.z <= 0.0f) ++flatAxes;
+        CHECK_MSG(flatAxes <= 1, std::string(c.name) + " has a degenerate AABB (" +
+                                     std::to_string(extent.x) + ", " + std::to_string(extent.y) + ", " +
+                                     std::to_string(extent.z) + "): culling would test it as a point");
+
+        // And the bounds must actually contain the geometry, which is the
+        // property the renderer relies on and the one a stale default breaks.
+        for (const Vertex& v : c.mesh.vertices) {
+            const bool inside = v.pos.x >= c.mesh.boundsMin.x && v.pos.x <= c.mesh.boundsMax.x &&
+                                v.pos.y >= c.mesh.boundsMin.y && v.pos.y <= c.mesh.boundsMax.y &&
+                                v.pos.z >= c.mesh.boundsMin.z && v.pos.z <= c.mesh.boundsMax.z;
+            CHECK_MSG(inside, std::string(c.name) + " has a vertex outside its own bounds");
+            if (!inside) break;
+        }
+    }
+}
+
+// The quad's own, stated in the terms the bug appeared in: a 3 x 5 quad is
+// 3 x 5 of bounds, centred, and flat in Z.
+static void testQuadBoundsAreTheQuad() {
+    MeshData mesh;
+    CHECK(ModelLoader::GenerateQuad(3.0f, 5.0f, mesh));
+    CHECK_NEAR(mesh.boundsMin.x, -1.5f);
+    CHECK_NEAR(mesh.boundsMax.x, 1.5f);
+    CHECK_NEAR(mesh.boundsMin.y, -2.5f);
+    CHECK_NEAR(mesh.boundsMax.y, 2.5f);
+    CHECK_NEAR(mesh.boundsMin.z, 0.0f);
+    CHECK_NEAR(mesh.boundsMax.z, 0.0f);
+}
+
 static void runTests() {
+    testEveryPrimitiveHasNonDegenerateBounds();
+    testQuadBoundsAreTheQuad();
     testEachMaterialBecomesItsOwnIndexRange();
     testPrimitivesSharingAMaterialAreOneSection();
     testIndicesAreRebasedOntoTheMergedVertexBuffer();

@@ -1615,6 +1615,84 @@ ticks, and their particles go with the level.
 
 GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 157.
 
+## Step 18 - why things disappeared: every quad was culled as a POINT (fixed)
+
+`ModelLoader::GenerateQuad` filled in its vertices and indices and returned
+without calling `computeBounds()`. `MeshData` defaults its bounds to
+(0,0,0)..(0,0,0) and `clear()` - which that function calls first - resets them
+there. So every quad this engine has ever generated carried a DEGENERATE POINT
+as its local AABB. `createGpuMesh` copies it onto the `GpuMesh`;
+`RenderSystem.cpp:332` copies it onto the renderable every frame, ungated. The
+frustum then tested each quad AGAINST ITS OWN CENTRE.
+
+A sprite therefore vanished the instant its centre crossed the edge of the
+view, while the quad itself was still metres on screen - and the bigger the
+sprite, the sooner it went, because its edges reach furthest from that one
+point. `GenerateCube` and `GeneratePlane` both call `computeBounds`;
+`GenerateQuad` was the only primitive that did not. It also skipped
+`computeTangents`, which `GeneratePlane` calls.
+
+**This is an ENGINE bug, not a port one.** Any game drawing `Quad` primitives
+was affected. Magic Portals surfaced it because it draws almost nothing else.
+
+**What it explains**, including every symptom that killed an earlier theory:
+
+- scenery disappearing MID-SCREEN, which no amount of panning accounts for;
+- the largest background art going first, and small central things surviving;
+- returning depending on where the player walks - it is a pure function of
+  camera position;
+- the collision boxes blinking with the art: they are quads too;
+- validation silent, `dropped` zero, `drawn`/`culled` looking healthy - the
+  Vulkan usage was always correct; the geometry handed to the cull was not.
+
+**How it was found, and why it took so long.** Seven causes were put forward and
+the evidence killed all seven: wrong culling, the sprite reader ignoring
+`position`, a recycled entity handle, a shared instance buffer, a frame-sync
+race, pre-interpolation world matrices, and a jumping camera. Two experiments
+did the real work. One frame in flight - `MAX_FRAMES_IN_FLIGHT = 1` - did not
+stop it, which eliminated the whole frame-parallelism class in a single
+observation. The validation layer, once actually installed and genuinely
+loaded, reported nothing about this engine's rendering across a live
+reproduction, which cleared the API usage.
+
+What finally caught it was instrumenting `RenderSystem`'s own gather loop,
+where the camera, the world matrix and the draw decision are the same frame by
+construction. Every earlier diagnostic sampled the wrong moment: the layer
+reads the camera in `OnUpdate`, which runs BEFORE the world transforms are
+resolved, and printed it beside the PREVIOUS frame's counters - two frames on
+one line, which cannot show this. The instrumented run logged 17,995 culled
+sprites and every single one had IDENTICAL min and max.
+
+**Why the tests were blind to it, which is the part worth remembering.**
+`test_mp_layer`'s cull check reported "8935 sprite-ticks on screen, 0 culled"
+and was quoted as exonerating culling. It builds its own registry, never runs
+`SyncResources`, and so reads `RenderableComponent`'s own -0.5/+0.5 defaults
+rather than the mesh's bounds - it was measuring unit boxes the game never
+used. A test that shares the code under test's own wrong assumption agrees with
+it. That is also why those numbers do not move now that the bug is fixed.
+
+`test_meshgen` had bounds assertions for the cube and for the box and NONE for
+the quad, which is the exact shape of the hole this fell through. It now asks
+the question of every generated primitive at once - no primitive may have more
+than one flat axis, and every vertex must lie inside its own bounds - plus the
+quad's own numbers stated directly. Both toolchains: 447 checks, 0 failures.
+
+Three other engine defects were found on the way and fixed:
+
+- `RenderSystem::Stats` never carried `PassPlan::dropped`. Refused draws were
+  counted and thrown away, so a frame that silently declined to draw part of
+  the scene was indistinguishable from one that drew all of it.
+- Last frame's render counters were visible to the editor's statistics panel
+  and to nothing else, so a GAME could not tell whether the frame it just drew
+  had culled or refused anything. Published into the registry context now,
+  beside `MeshRegistry` and `TextureRegistry`.
+- `VulkanContext::ValidationLayersActive()` reported INTENT rather than
+  reality: it was set whenever the debug messenger was created, and
+  `VK_EXT_debug_utils` is an extension the loader provides with or without the
+  validation layer. A Release build printed "validation ACTIVE" while writing
+  "Continuing WITHOUT validation" to stderr in the same run. It checks the
+  layer itself now.
+
 ## What the sounds decode to (read here, built in step 17)
 
 The owner asked for sound after playing. The port has never had any. The

@@ -211,6 +211,25 @@ void VulkanContext::createInstance(const std::vector<const char*>& windowExtensi
 void VulkanContext::setupDebugMessenger() {
     if (!m_enableValidationLayers) return;
 
+    // THE LAYER, not the messenger. These are two different things and the
+    // difference is the whole value of the flag below.
+    //
+    // VK_EXT_debug_utils is an EXTENSION, provided by the loader and the
+    // driver, and creating a messenger through it succeeds perfectly well with
+    // no validation layer present at all - it simply has nothing to report.
+    // createInstance already declines to enable the layer when it is missing
+    // (see the warning above it), so without this guard the two disagree:
+    // the instance runs unvalidated while ValidationLayersActive() answers
+    // true.
+    //
+    // That is not hypothetical. A Release build of Magic Portals was configured
+    // with validation ON, printed "Vulkan validation layers: ACTIVE" at
+    // startup, and wrote the "Continuing WITHOUT validation" banner to stderr
+    // in the same run - and the silent log was very nearly read as evidence
+    // that its frames were clean. The comment in the header warns about exactly
+    // this misreading; the flag itself was what made it possible.
+    if (!checkValidationLayerSupport()) return;
+
     VkDebugUtilsMessengerCreateInfoEXT createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
     createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
