@@ -76,6 +76,17 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
+    // The diagnostics to a FILE as well as the console.
+    //
+    // Nothing else in the engine opens this sink, and Log.hpp says why it
+    // matters: a shipped game gets WIN32_EXECUTABLE and has no console at all,
+    // so without this its diagnostics go nowhere. That is no use at all when
+    // the thing being chased only happens while somebody else is playing.
+    const std::filesystem::path logPath = std::filesystem::temp_directory_path() / "magicportals.log";
+    if (Supersonic::Log::SetFileSink(logPath.string())) {
+        std::cout << "[Magic Portals] logging to " << logPath.string() << std::endl;
+    }
+
     // Declared, not discovered, for the reason Wolf Brigade's main gives: a
     // game binary is a game whether or not a manifest sits beside it.
     Supersonic::GameManifest manifest;

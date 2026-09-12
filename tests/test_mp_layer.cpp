@@ -22,6 +22,7 @@
 
 #include "core/Components.hpp"
 #include "core/Input.hpp"
+#include "core/InterpolationSystem.hpp"
 #include "core/PhysicsSystem.hpp"
 // For the renderer's own cull: RenderSystem.hpp carries renderer/Frustum.hpp.
 #include "core/RenderSystem.hpp"
@@ -33,6 +34,7 @@
 #include "sim/Units.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -1268,6 +1270,194 @@ void ALevelLatchesTheSoundsItEarns() {
     CHECK_MSG(layer.LatchedSounds().empty(), "a frame with no device should still clear what it cannot play");
 }
 
+// Walking, drawn the way the APP draws it - which no test here has ever done.
+//
+// The cull test above runs one OnUpdate per OnFixedUpdate and never calls
+// InterpolationSystem at all, so every frame it inspects is drawn from a raw
+// tick pose with no interpolation in it. The app's loop is not that:
+//
+//   BeginTick -> physics -> OnFixedUpdate -> EndTick     (only when a tick is due)
+//   alpha = the remainder
+//   Apply(alpha) -> OnUpdate -> world transforms         (EVERY frame)
+//
+// At any frame rate above the port's 60 Hz tick, MOST frames run no tick at
+// all and are drawn entirely by Apply from a lerped pose. That is the path the
+// owner actually watches, and until this test it was the one path nothing
+// exercised. A fault living there is invisible to the cull test by
+// construction, and would show only while things move - which is exactly the
+// report: sprites that come and go WHILE WALKING.
+//
+// So this asserts the symptom itself rather than a proxy for it: a sprite on
+// screen in one frame, gone the next, and back the frame after. Position jumps
+// are measured too but only reported - a crate or the player going through a
+// portal is entitled to jump, and an assertion that cannot tell the two apart
+// would cry wolf.
+void NoSpriteBlinksWhileWalking(const char* levelName) {
+    using namespace Supersonic;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), levelName);
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+
+    // Four frames a tick: 240 Hz against 60, so three frames in four are drawn
+    // from an interpolated pose and none of them from a tick's own.
+    constexpr int kFramesPerTick = 4;
+    constexpr float kFrameDelta = MagicPortalsLayer::kTick / static_cast<float>(kFramesPerTick);
+
+    std::vector<entt::entity> onScreen;     // this frame
+    std::vector<entt::entity> lastFrame;    // the one before
+    std::vector<entt::entity> frameBefore;  // and the one before that
+    std::vector<std::pair<entt::entity, glm::vec3>> lastCentre;
+
+    const auto has = [](const std::vector<entt::entity>& list, entt::entity e) {
+        for (const entt::entity other : list) {
+            if (other == e) return true;
+        }
+        return false;
+    };
+
+    int frames = 0;
+    int inspected = 0; // live sprite quads seen, summed over frames - the population, not the view
+    int blinked = 0;
+    int jumped = 0;
+    int entered = 0; // times a sprite came into view
+    int left = 0;    // and went out of it
+    std::string firstBlink;
+
+    // The geometry this runs in, printed because the crossing counts below
+    // cannot be read without it: a level not much wider than the view has
+    // nowhere for a sprite to go.
+    const glm::dvec2 bounds = layer.BoundsPx();
+    const glm::dvec2 viewPx = layer.ViewPx();
+    std::printf("  %s: level %.0f x %.0f px, view %.0f x %.0f px\n", levelName, bounds.x, bounds.y, viewPx.x,
+                viewPx.y);
+
+    // SWEEPING, not walking one way, and the first run of this test is why.
+    // Holding right gave level1 two crossings of the view's edge in four
+    // seconds - because the player walks into something and stops, and a
+    // stopped player is a stopped camera. Nothing crosses an edge after that,
+    // so a blink detector has almost nothing to detect and reports a
+    // comfortable zero.
+    //
+    // Two seconds each way instead. The camera pans back and forth over the
+    // same scenery, which is what the owner was doing in the dungeon, and it
+    // manufactures the one thing a blink needs: a sprite that leaves the view
+    // and comes back.
+    constexpr int kLeg = 120;
+    const char* held = MagicPortalsLayer::kRight;
+    for (int tick = 0; tick < 1200; ++tick) {
+        const bool turn = (tick % kLeg) == 0;
+        if (turn) {
+            held = ((tick / kLeg) % 2 == 0) ? MagicPortalsLayer::kRight : MagicPortalsLayer::kLeft;
+        }
+        InterpolationSystem::BeginTick(registry);
+        std::vector<std::string> pressed;
+        if (turn) pressed.emplace_back(held);
+        tickWith(layer, registry, kRest, {held}, std::move(pressed));
+        InterpolationSystem::EndTick(registry);
+        if (layer.MenuScreen() != MagicPortalsLayer::Screen::None) break; // it finished
+
+        for (int f = 1; f <= kFramesPerTick; ++f) {
+            InterpolationSystem::Apply(registry, static_cast<float>(f) / static_cast<float>(kFramesPerTick));
+            layer.OnUpdate(registry, kFrameDelta);
+            TransformSystem::UpdateWorldTransforms(registry);
+            ++frames;
+
+            const entt::entity cameraEntity = primaryCamera(registry);
+            if (cameraEntity == entt::null) continue;
+            CameraComponent camera = registry.get<CameraComponent>(cameraEntity);
+            camera.aspect = 1280.0f / 720.0f;
+            const float halfHeight = camera.orthoHeight * 0.5f;
+            const float halfWidth = halfHeight * camera.aspect;
+            const glm::vec2 viewMin(camera.position.x - halfWidth, camera.position.y - halfHeight);
+            const glm::vec2 viewMax(camera.position.x + halfWidth, camera.position.y + halfHeight);
+
+            onScreen.clear();
+            auto view = registry.view<WorldTransformComponent, RenderableComponent, TagComponent>();
+            for (auto entity : view) {
+                // The level's own art only. The boxes are shown and hidden
+                // deliberately, and the particles come and go by design.
+                if (view.get<TagComponent>(entity).tag != std::string("Magic Portals Sprite")) continue;
+                const auto& renderable = view.get<RenderableComponent>(entity);
+                if (!renderable.isVisible) continue;
+
+                glm::vec3 worldMin;
+                glm::vec3 worldMax;
+                Frustum::TransformAABB(view.get<WorldTransformComponent>(entity).matrix,
+                                       renderable.localBoundsMin, renderable.localBoundsMax, worldMin, worldMax);
+                ++inspected;
+
+                const glm::vec3 centre = (worldMin + worldMax) * 0.5f;
+                bool found = false;
+                for (auto& [known, was] : lastCentre) {
+                    if (known != entity) continue;
+                    found = true;
+                    // Half a metre is 25 px, and nothing here moves that fast:
+                    // the player walks at 112 px/s, a stone flies at 300, which
+                    // is about a pixel a frame at this rate.
+                    if (glm::length(centre - was) > 0.5f) ++jumped;
+                    was = centre;
+                    break;
+                }
+                if (!found) lastCentre.emplace_back(entity, centre);
+
+                if (worldMax.x >= viewMin.x && worldMin.x <= viewMax.x && worldMax.y >= viewMin.y &&
+                    worldMin.y <= viewMax.y) {
+                    onScreen.push_back(entity);
+                }
+            }
+
+            // HOW OFTEN A SPRITE CROSSED THE EDGE AT ALL, which decides whether
+            // the count below means anything. A blink is on-off-on, so a walk
+            // where nothing ever leaves or re-enters the view cannot produce
+            // one however broken the renderer is - and would report a
+            // reassuring zero. Counted from the second frame, because the first
+            // has nothing to be compared against and every sprite would read as
+            // having just entered.
+            if (frames > 1) {
+                for (const entt::entity entity : onScreen) {
+                    if (!has(lastFrame, entity)) ++entered;
+                }
+                for (const entt::entity entity : lastFrame) {
+                    if (!has(onScreen, entity)) ++left;
+                }
+            }
+
+            // On, off, on again: the owner's report, stated as an assertion.
+            for (const entt::entity entity : onScreen) {
+                if (has(lastFrame, entity) || !has(frameBefore, entity)) continue;
+                ++blinked;
+                if (firstBlink.empty()) {
+                    firstBlink = "entity " + std::to_string(static_cast<unsigned>(entt::to_integral(entity))) +
+                                 " on frame " + std::to_string(frames);
+                }
+            }
+            frameBefore = lastFrame;
+            lastFrame = onScreen;
+        }
+    }
+
+    std::printf("  %s: %d frame(s), %d live sprite-frame(s), %d entered, %d left, %d blink(s), %d jump(s)\n",
+                levelName, frames, inspected, entered, left, blinked, jumped);
+    CHECK_MSG(inspected > 50, std::string(levelName) + ": only " + std::to_string(inspected) +
+                                  " sprite-frame(s) were drawn");
+    // Without a crossing there is no blink to find, and a zero above would be
+    // the fixture's silence rather than the renderer's health.
+    CHECK_MSG(entered + left > 0, std::string(levelName) +
+                                      ": no sprite ever crossed the edge of the view, so this proves nothing");
+    CHECK_MSG(blinked == 0, std::string(levelName) + ": " + std::to_string(blinked) +
+                                " sprite(s) went away and came back, first " + firstBlink);
+}
+
+void NothingBlinksWhileWalking() {
+    NoSpriteBlinksWhileWalking("level1"); // 1-2, where the owner saw one go
+    NoSpriteBlinksWhileWalking("level2"); // 1-3, where several do
+}
+
 void NothingOnScreenIsCulledWhileWalking() {
     NoSpriteOnScreenIsCulled("level1"); // 1-2, where the owner saw one go
     NoSpriteOnScreenIsCulled("level2"); // 1-3, where several do
@@ -1301,6 +1491,7 @@ void runTests() {
     FinishingALevelShowsTheMedal();
     ALevelLatchesTheSoundsItEarns();
     NothingOnScreenIsCulledWhileWalking();
+    NothingBlinksWhileWalking();
 }
 
 } // namespace

@@ -82,6 +82,18 @@ public:
         uint32_t pipelineBinds{0};
         uint32_t meshBinds{0};
         uint32_t materialBinds{0};
+
+        // Draws the frame REFUSED because its instance buffer was full, summed
+        // across the passes.
+        //
+        // PassPlan has counted this since planning was split out, and nothing
+        // ever read it: the number was computed, used to skip the draw, and
+        // dropped on the floor. So a frame that silently declined to draw part
+        // of the scene was indistinguishable, in every counter the engine has,
+        // from a frame that drew all of it. That is precisely the shape of
+        // "things disappear sometimes", and it should never have been the one
+        // outcome nothing could see.
+        uint32_t dropped{0};
     };
 
     // Draws every visible entity using its own MeshComponent geometry,

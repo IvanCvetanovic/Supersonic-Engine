@@ -352,6 +352,15 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     m_registry.ctx().insert_or_assign<MeshRegistry*>(&m_renderer->GetMeshRegistry());
     m_registry.ctx().insert_or_assign<TextureRegistry*>(&m_renderer->GetTextureRegistry());
 
+    // Last frame's render counters, published the same way and for the same
+    // reason: they were visible to the editor's statistics panel and to nothing
+    // else, so a GAME could not tell whether the frame it just drew had culled
+    // or dropped anything. A game that has to explain why something did not
+    // appear on screen needs exactly that, and the editor is not available to
+    // it. A pointer into a member the renderer owns, which outlives any scene
+    // load that clears the registry.
+    m_registry.ctx().insert_or_assign<const RenderSystem::Stats*>(&m_renderer->GetRenderStats());
+
     // Asset identities, before the first scene is read.
     //
     // A SCAN, not an import: this reads the sidecars that are already there and

@@ -79,6 +79,14 @@ public:
     static constexpr const char* kSkip = "mp.skip";          // N
     static constexpr const char* kBoxes = "mp.boxes";        // B: the bodies' boxes, over the art
     static constexpr const char* kBack = "mp.back";          // Escape: out to the menu, and back through it
+    // G: write down what the game believes it is drawing, right now.
+    //
+    // A diagnostic rather than a control, and it exists because a sprite that
+    // vanishes on screen has four possible explanations that look identical to
+    // a player and to a screenshot: the layer took its quad away, the renderer
+    // culled it, a pass refused the draw, or it was drawn and produced nothing
+    // visible. This says which.
+    static constexpr const char* kDump = "mp.dump";
 
     // Where the port reads from. The defaults are where the build was told the
     // remake's files are, and the port's own data beside its source.
@@ -452,6 +460,19 @@ private:
         std::string event;
         double doorStrideMs = 0.0;
     };
+
+    // ---- the drawing diagnostic ---------------------------------------------
+    //
+    // What the game BELIEVES it is drawing, written down as it changes, so that
+    // a sprite which vanishes on screen can be told from one the game stopped
+    // drawing. If the picture loses a sprite and nothing is logged for it, the
+    // game still thinks it is drawing it - and the fault is below this layer,
+    // in the renderer or the GPU. That one distinction is what this is for.
+    void reportSprites(entt::registry& registry);
+
+    bool m_dumpRequested{false};    // G was pressed on the tick
+    std::vector<char> m_onScreenLast; // one per sprite, as of the last frame
+    bool m_reportedOnce{false};     // so the first frame states the whole set
 
     Sounds::Rules m_soundRules;
     std::string m_soundsError;      // why there is no sound, when there is none

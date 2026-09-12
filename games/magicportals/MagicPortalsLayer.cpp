@@ -12,6 +12,9 @@
 #include "core/Input.hpp"
 #include "core/Log.hpp"
 #include "core/Raycast.hpp"
+// For RenderSystem::Stats, which the app publishes into the registry context:
+// what the last frame actually drew, culled and refused.
+#include "core/RenderSystem.hpp"
 #include "core/SimulationClock.hpp"
 #include "core/ViewportInfo.hpp"
 
@@ -178,6 +181,9 @@ void MagicPortalsLayer::bindInput() {
     Input::BindActionKey(kSkip, Key::N);
     Input::BindActionKey(kBoxes, Key::B);
     Input::BindActionKey(kBack, Key::Escape);
+    // G, because Key has no function keys at all - it stops at the letters,
+    // the arrows and the modifiers.
+    Input::BindActionKey(kDump, Key::G);
 }
 
 // ---- levels -----------------------------------------------------------------
@@ -275,6 +281,11 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     // of a level would hear every counter fall back to zero as if it had
     // happened - a retry would play the whole level's sounds at once.
     m_watch = Watch{};
+    // The next level is compared against itself, not against this one. Without
+    // this, its first frame reports every sprite of the level just unloaded as
+    // having changed - the same stale-baseline fault the sound watch above has.
+    m_onScreenLast.clear();
+    m_reportedOnce = false;
     m_artReady = false;
     for (auto& e : m_portalQuads) destroy(e);
     m_portalQuads.clear();
@@ -1703,6 +1714,113 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
     return direction;
 }
 
+// ---- what the game thinks it is drawing --------------------------------------
+//
+// Written down as it CHANGES, and in full when G asks.
+//
+// The point is one distinction and nothing else. When a sprite disappears from
+// the screen there are four explanations and a player cannot tell them apart:
+//
+//   1. this layer took the quad away        - a "gone" line appears below
+//   2. the renderer culled it               - drawn falls, culled rises
+//   3. a pass refused the draw              - dropped rises
+//   4. it was drawn and produced no pixels  - nothing changes anywhere
+//
+// A screenshot cannot separate those and neither can any test in this
+// repository: every headless run agrees the transforms, the interpolation and
+// the frustum are correct. So the game says what it believes, the counters say
+// what the frame did, and the difference between them is the answer.
+void MagicPortalsLayer::reportSprites(entt::registry& registry) {
+    using namespace Supersonic;
+    if (!m_loaded || m_sprites.empty()) return;
+    if (m_camera == entt::null || !registry.valid(m_camera)) return;
+
+    // What the camera shows, in world metres, exactly as the renderer's own
+    // cull will judge it.
+    const auto& camera = registry.get<CameraComponent>(m_camera);
+    const float halfHeight = camera.orthoHeight * 0.5f;
+    const float halfWidth = halfHeight * camera.aspect;
+    const glm::vec2 viewMin(camera.position.x - halfWidth, camera.position.y - halfHeight);
+    const glm::vec2 viewMax(camera.position.x + halfWidth, camera.position.y + halfHeight);
+
+    m_onScreenLast.resize(m_sprites.size(), char{0});
+
+    const Supersonic::RenderSystem::Stats** slot =
+        registry.ctx().find<const Supersonic::RenderSystem::Stats*>();
+    const Supersonic::RenderSystem::Stats* stats = slot != nullptr ? *slot : nullptr;
+
+    const auto counters = [stats]() -> std::string {
+        if (stats == nullptr) return std::string(" (no counters)");
+        return " [drawn " + std::to_string(stats->drawn) + ", culled " + std::to_string(stats->culled) +
+               ", blended " + std::to_string(stats->transparentDrawn) + ", dropped " +
+               std::to_string(stats->dropped) + "]";
+    };
+
+    int onScreen = 0;
+    for (std::size_t i = 0; i < m_sprites.size(); ++i) {
+        const DrawnSprite& drawn = m_sprites[i];
+
+        bool showing = false;
+        glm::vec3 centre(0.0f);
+        glm::vec3 half(0.0f);
+        if (drawn.quad != entt::null && registry.valid(drawn.quad)) {
+            const auto& transform = registry.get<TransformComponent>(drawn.quad);
+            const auto* renderable = registry.try_get<RenderableComponent>(drawn.quad);
+            // The quad primitive is one unit on a side and centred, so its box
+            // is its own scale about its own position.
+            centre = transform.position;
+            half = transform.scale * 0.5f;
+            showing = renderable != nullptr && renderable->isVisible &&
+                      centre.x + half.x >= viewMin.x && centre.x - half.x <= viewMax.x &&
+                      centre.y + half.y >= viewMin.y && centre.y - half.y <= viewMax.y;
+        }
+        if (showing) ++onScreen;
+
+        const char was = m_onScreenLast[i];
+        const char now = showing ? char{1} : char{0};
+        m_onScreenLast[i] = now;
+        if (was == now && m_reportedOnce && !m_dumpRequested) continue;
+
+        // Only what changed, unless G asked for everything. A level draws
+        // twenty of these and a walk crosses an edge every few seconds, so the
+        // log stays short enough to read.
+        if (m_dumpRequested || was != now) {
+            const auto* renderable = drawn.quad != entt::null && registry.valid(drawn.quad)
+                                         ? registry.try_get<RenderableComponent>(drawn.quad)
+                                         : nullptr;
+            const auto* material = drawn.quad != entt::null && registry.valid(drawn.quad)
+                                       ? registry.try_get<MaterialComponent>(drawn.quad)
+                                       : nullptr;
+            SUPERSONIC_LOG_INFO("Magic Portals")
+                << (drawn.quad == entt::null ? "GONE    " : (showing ? "on      " : "off     "))
+                << drawn.sprite.texture
+                << "  at (" << centre.x << ", " << centre.y << ") size (" << half.x * 2.0f << " x "
+                << half.y * 2.0f << ")"
+                << "  visible=" << (renderable != nullptr && renderable->isVisible ? 1 : 0)
+                << " mesh=" << (renderable != nullptr ? renderable->meshID : 0u)
+                << " albedo=" << (renderable != nullptr ? renderable->albedoTextureID : 0u)
+                << " alpha=" << (material != nullptr ? material->albedoColor.a : -1.0f)
+                << counters() << std::endl;
+        }
+    }
+
+    // A frame that refused a draw says so once, loudly, whatever else changed:
+    // it is the one outcome that was invisible to every counter until now.
+    if (stats != nullptr && stats->dropped > 0) {
+        SUPERSONIC_LOG_ERROR("Magic Portals")
+            << "the renderer REFUSED " << stats->dropped
+            << " draw(s) this frame; its instance buffer was full." << std::endl;
+    }
+
+    if (m_dumpRequested) {
+        SUPERSONIC_LOG_INFO("Magic Portals")
+            << "-- " << onScreen << " of " << m_sprites.size() << " sprite(s) on screen"
+            << counters() << std::endl;
+    }
+    m_dumpRequested = false;
+    m_reportedOnce = true;
+}
+
 // ---- sound ------------------------------------------------------------------
 //
 // The original's AudioManager, read from the port's sounds.json
@@ -1937,6 +2055,9 @@ void MagicPortalsLayer::stopMusic(entt::registry& registry) {
 
 void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     using Supersonic::Input;
+    // Asked for on the TICK, where a key press is an edge, and answered on the
+    // frame, where the picture is.
+    if (Input::TickWasPressed(kDump)) m_dumpRequested = true;
     // A menu is up instead of a level: it takes the tick, and nothing below
     // runs. The two are never both in the registry.
     if (m_screen != Screen::None) {
@@ -2008,6 +2129,9 @@ void MagicPortalsLayer::OnUpdate(entt::registry& registry, float deltaTime) {
     // return, so a level drawn without one is not also silent.
     playLatched(registry, deltaTime);
     updateMusic(registry);
+    // And what this frame believes it is drawing. Before the camera's early
+    // return, like the rest of it.
+    reportSprites(registry);
     // Only the camera's SHAPE, for the viewport this frame is drawn into.
     if (m_camera == entt::null || !registry.valid(m_camera)) return;
     registry.get<Supersonic::CameraComponent>(m_camera).aspect = viewportAspect(registry);

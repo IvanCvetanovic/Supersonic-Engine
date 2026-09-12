@@ -1221,6 +1221,7 @@ void RenderSystem::Render(
         // rest. Said rather than assumed, because it is the one thing the
         // planner cannot see for itself.
         const PassPlan plan = PlanPass(keys, 0, maxInstances);
+        stats.dropped += plan.dropped;
         recordPass(opaqueItems, plan, pipeline);
     }
 
@@ -1329,6 +1330,7 @@ void RenderSystem::Render(
             // to reset its own rebind-avoidance state by hand.
             const PassPlan plan =
                 PlanPass(keys, static_cast<uint32_t>(instances.size()), maxInstances);
+            stats.dropped += plan.dropped;
             recordPass(blendedItems, plan, runPipeline);
         }
     }
