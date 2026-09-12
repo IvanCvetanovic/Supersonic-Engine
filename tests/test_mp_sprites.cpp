@@ -13,6 +13,7 @@
 #include "TestHarness.hpp"
 
 #include "sim/Art.hpp"
+#include "sim/Particles.hpp"
 #include "sim/Sprites.hpp"
 #include "sim/Tscn.hpp"
 
@@ -432,6 +433,128 @@ void AnOffsetAndATurn() {
 
 } // namespace
 
+// ---- the particle systems the .ent files carry --------------------------------
+
+// crystal.ent and fire32.ent, read out of the original's own files. Two
+// systems chosen because they differ in every way that matters: one sparkle on
+// a still 1x1 bitmap that plays its sheet by age, and thirty-two flames on a
+// four-frame cut that pick a frame at random and live a fixed number of times.
+void TheOriginalsParticlesAreRead() {
+    std::vector<Particles::System> systems;
+    std::string error;
+    CHECK_MSG(Particles::Load(kOriginal + "/entities/crystal.ent", systems, error), error);
+    CHECK_EQ(static_cast<int>(systems.size()), 1);
+    if (systems.size() == 1) {
+        const Particles::System& crystal = systems.front();
+        CHECK_MSG(crystal.bitmap == "sparkles.bmp", "its bitmap is " + crystal.bitmap);
+        CHECK_EQ(crystal.count, 2);
+        CHECK(crystal.additive);            // alphaMode 1, AM_ADD
+        CHECK_EQ(crystal.animationMode, 1); // PLAY_ANIMATION
+        CHECK_EQ(crystal.repeat, 0);
+        CHECK(!crystal.allAtOnce);
+        CHECK_NEAR(static_cast<float>(crystal.lifeTimeMs), 1700.0f);
+        CHECK_NEAR(static_cast<float>(crystal.randomLifeTimeMs), 1050.0f);
+        CHECK_NEAR(static_cast<float>(crystal.size), 12.0f);
+        CHECK_NEAR(static_cast<float>(crystal.randomizeSize), 5.0f);
+        CHECK_NEAR(static_cast<float>(crystal.growth), -0.05f);
+        CHECK_NEAR(static_cast<float>(crystal.maxSize), 1000.0f);
+        CHECK_NEAR(static_cast<float>(crystal.angleDir), 2.0f);
+        CHECK_NEAR(static_cast<float>(crystal.randAngle), 2.0f);
+        CHECK_NEAR(static_cast<float>(crystal.randAngleStart), 360.0f);
+        CHECK_NEAR(static_cast<float>(crystal.startPoint.y), -2.5f);
+        CHECK_NEAR(static_cast<float>(crystal.randStartPoint.x), 12.0f);
+        CHECK_NEAR(static_cast<float>(crystal.randStartPoint.y), 7.0f);
+        CHECK_NEAR(static_cast<float>(crystal.colour0.b), 1.0f);
+        CHECK_NEAR(static_cast<float>(crystal.colour1.a), 0.0f);
+        CHECK_EQ(crystal.Frames(), 1);
+    }
+
+    CHECK_MSG(Particles::Load(kOriginal + "/entities/fire32.ent", systems, error), error);
+    CHECK_EQ(static_cast<int>(systems.size()), 1);
+    if (systems.size() == 1) {
+        const Particles::System& fire = systems.front();
+        CHECK_MSG(fire.bitmap == "fire.png", "its bitmap is " + fire.bitmap);
+        CHECK_EQ(fire.count, 32);
+        CHECK_EQ(fire.animationMode, 2); // PICK_RANDOM_FRAME
+        CHECK_EQ(fire.repeat, 2);
+        CHECK_EQ(fire.columns, 4);
+        CHECK_EQ(fire.rows, 1);
+        CHECK_EQ(fire.Frames(), 4);
+        CHECK_NEAR(static_cast<float>(fire.lifeTimeMs), 450.0f);
+        CHECK_NEAR(static_cast<float>(fire.size), 64.0f);
+        CHECK_NEAR(static_cast<float>(fire.growth), -2.5f);
+        CHECK_NEAR(static_cast<float>(fire.direction.y), -2.3f);
+        CHECK_NEAR(static_cast<float>(fire.randomizeDir.x), 0.7f);
+        CHECK_NEAR(static_cast<float>(fire.randAngle), 11.8f);
+    }
+
+    // An entity may carry more than one, and a chapter-1 emitter does:
+    // portal_static holds two, so a reader that took only the first would draw
+    // half of every static portal and say nothing about the rest.
+    CHECK_MSG(Particles::Load(kOriginal + "/entities/portal_static.ent", systems, error), error);
+    CHECK_EQ(static_cast<int>(systems.size()), 2);
+    for (const Particles::System& system : systems) {
+        CHECK(!system.bitmap.empty());
+        CHECK(system.count > 0);
+    }
+}
+
+// Every .ent of the original's reads, 102 of them carry a system, and every
+// bitmap one names is really there.
+//
+// The last of those is the check worth having: the particle bitmaps live in
+// the original's `particles/` directory, a THIRD place beside its entities and
+// its sprites, and looking in the wrong one is a mistake this port has already
+// made twice with art that then went missing in silence.
+void AnEntityWithoutParticlesSaysSoWithoutFailing() {
+    int files = 0;
+    int withSystem = 0; // files carrying at least one
+    int systemsRead = 0;
+    int missingBitmaps = 0;
+    std::string firstError;
+    std::string firstMissing;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(kOriginal + "/entities", ec)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".ent") continue;
+        ++files;
+        std::vector<Particles::System> systems;
+        std::string error;
+        if (!Particles::Load(entry.path().string(), systems, error)) {
+            if (firstError.empty()) firstError = error;
+            continue;
+        }
+        if (systems.empty()) continue; // 109 of them carry none, which is no error
+        ++withSystem;
+        systemsRead += static_cast<int>(systems.size());
+        for (const Particles::System& system : systems) {
+            const std::string bitmap = kOriginal + "/particles/" + system.bitmap;
+            if (!std::filesystem::is_regular_file(bitmap, ec)) {
+                ++missingBitmaps;
+                if (firstMissing.empty()) firstMissing = system.bitmap;
+            }
+        }
+    }
+    CHECK_MSG(firstError.empty(), "an .ent would not read: " + firstError);
+    CHECK_EQ(files, 190);
+    // 81 files carry systems and there are 102 of them: 21 entities hold two,
+    // which is why the reader returns all of an entity's rather than its first.
+    CHECK_EQ(withSystem, 81);
+    CHECK_EQ(systemsRead, 102);
+    CHECK_MSG(missingBitmaps == 0,
+              "the original's particles/ is missing " + std::to_string(missingBitmaps) + " bitmap(s), first " +
+                  firstMissing);
+
+    // And a file that is not the original's is refused rather than mangled.
+    const std::filesystem::path scratch = Scratch() / "not-utf16.ent";
+    Write(scratch, {'<', 'E', 't', 'h', 'a', 'n', 'o', 'n', '>'});
+    std::vector<Particles::System> systems;
+    std::string error;
+    CHECK(!Particles::Load(scratch.string(), systems, error));
+    CHECK(!error.empty());
+    CHECK(systems.empty());
+    CHECK(!Particles::Load((Scratch() / "no-such-file.ent").string(), systems, error));
+}
+
 int main() {
     AnImageSaysItsSizeInItsHeader();
     AnythingElseIsRefusedByName();
@@ -444,6 +567,8 @@ int main() {
     std::error_code original;
     if (std::filesystem::is_directory(kOriginal + "/entities", original)) {
         TheOriginalsImagesAreCutAsTheEntsSay();
+        TheOriginalsParticlesAreRead();
+        AnEntityWithoutParticlesSaysSoWithoutFailing();
     } else {
         std::printf("test_mp_sprites: the original's images SKIPPED - needs its extracted assets at %s.\n",
                     kOriginal.c_str());

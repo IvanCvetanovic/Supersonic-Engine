@@ -16,6 +16,7 @@ add_library(MagicPortalsSim STATIC
     Launchers.cpp
     LevelBuilder.cpp
     Mover.cpp
+    Particles.cpp
     Player.cpp
     Portal.cpp
     Portals.cpp

@@ -1494,3 +1494,73 @@ shape as the refused-level message earlier in step 12: a quiet path where
 something could go missing and nothing reported it.
 
 GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 152.
+
+## Step 14a - what the entities' particle systems say (read)
+
+Asked for with the menu: nothing in the surroundings moves. It does not move
+because the levels carry nothing to move. The converter writes a level's
+sprites and drops the rest of each entity, and the motion is not sprite
+animation at all - it is a PARTICLE SYSTEM in each entity's own `.ent`, which
+the converter never read. `level1.tscn` holds no frame data of any kind.
+
+**What the files hold.** 81 of the original's 190 `.ent` files carry particle
+systems, 102 systems in all, because 21 entities hold TWO - `portal_static`
+among them, which is one of chapter 1's own emitters. A reader taking only the
+first would draw half of every static portal and say nothing about the rest, so
+`Particles::Load` returns all of an entity's, each parsed out of its own
+`<ParticleSystem>...</ParticleSystem>` chunk: read per `<Particles>` block
+instead, the first system's children answer for the second as well.
+
+Every one of the 102 states the SAME seventeen attributes and ten child
+elements, so the reader demands all of them and refuses a file missing one
+rather than taking a default.
+
+**Decoded, not guessed:**
+- `alphaMode` is gs2d's `Video::ALPHA_MODE` (Video.h): `AM_PIXEL` 0, `AM_ADD`
+  1, `AM_ALPHA_TEST` 2, `AM_NONE` 3, `AM_MODULATE` 4. Every emitter in the game
+  is 1, so EVERY PARTICLE IS ADDED - which is also why `sparkles.bmp` works at
+  all, a bitmap with no alpha channel whose black ground adds nothing.
+- `animationMode` is `ETHParticleSystem::FRAME_ANIMATION_MODE`:
+  `PLAY_ANIMATION` 1, `PICK_RANDOM_FRAME` 2. Crystals play their sheet by age;
+  fire picks a frame at random.
+- The files are UTF-16 LE with a byte-order mark, all 190 of them, so the
+  reader decodes that itself. Neither `Tscn` nor `Json` would.
+- The bitmaps live in a THIRD directory of the original's, `particles/`, beside
+  its `entities/` and its `sprites/`. The suite checks that every bitmap named
+  by all 102 systems is really there - the check that catches the mistake step
+  13 made twice with art that then went missing in silence.
+
+**What chapter 1 would animate**, by placements: crystal 114 (`sparkles.bmp`, 2
+particles, 1700 ms), door_bg 32 and light 19 (both `fire.png`, 12 particles),
+reflect_agent 9 and anti_portal_agent 8 (`onda.png`), portal_static 7
+(`portal_particle.png`). 189 in all.
+
+**Why not the engine's own particle system.** It has one, and it is the wrong
+shape for this. Its pass binds ONE mesh, ONE pipeline and ONE material set for
+every particle in the frame and deliberately bypasses `PlanPass`, with its own
+comment naming the exit condition: "If a particle ever varies its material,
+this is where the rule has to come from PlanPass rather than from here."
+Ethanon's particles vary their bitmap per emitter on the first level -
+`sparkles.bmp` and `fire.png` at once - so this would invert that pass's
+premise in a subsystem HUSK and Wolf Brigade also render through. Its emitter
+draws untextured cubes under a hardcoded gravity besides. The port already
+draws hundreds of textured, additively blended, rotated quads a level, so the
+particles will be drawn the way everything else in it is.
+
+**A count I got wrong, and the test caught.** The first sweep asserted 102
+files because the survey behind it counted `<ParticleSystem>` MATCHES rather
+than files. The reader said 81; the reader was right about files and the survey
+about systems. Both are now pinned, along with `portal_static` yielding two.
+
+**Not built yet:** the motion. That is the layer's, per frame, with its own
+generator and a capped pool per emitter - never in `sim/`, never on the tick,
+never in the state hash. Ethanon's own arithmetic is the spec
+(`ETHParticleManager::UpdateParticleSystem`, `ResetParticle`,
+`PositionParticle`): `frameSpeed = min(elapsed, 250)/1000 x 60`, direction
+gathering gravity, position gathering direction, angle gathering `angleDir`,
+size gathering `growth` clamped to its range, colour lerped from `Color0` to
+`Color1` by age, the frame by age or at random, release staggered across
+`(lifeTime + randomLifeTime) x id/count` unless `allAtOnce`, and a reset on
+expiry until the `repeat` cap.
+
+GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_sprites` 147.
