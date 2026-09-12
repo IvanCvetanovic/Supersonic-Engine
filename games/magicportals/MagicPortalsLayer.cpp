@@ -359,6 +359,20 @@ int MedalFor(const MagicPortalsLayer::Cleared& cleared) {
     return 1;
 }
 
+int MagicPortalsLayer::MedalShown() const {
+    if (!m_lastCleared) return 0;
+
+    // The SAME computeScore the final medal uses, with the counter's current
+    // value standing in for the portals spent. One implementation rather than a
+    // second that agrees with it today: the original's draw does exactly this -
+    // computeScore(golden, numCrystals, maxCrystals, counter.getCurrent()) - so
+    // the medal it shows is a function of the number on screen, not of the
+    // number the play ended on.
+    Cleared asCounted = *m_lastCleared;
+    asCounted.portalsUsed = m_counterShown;
+    return MedalFor(asCounted);
+}
+
 // ---- the entities' particles --------------------------------------------------
 //
 // What makes the original's scenery move: each entity's own <ParticleSystem>
@@ -615,15 +629,31 @@ void MagicPortalsLayer::layOutMenu() {
         const auto onView = [&view, &centre](double nx, double ny) {
             return centre + glm::dvec2((nx - 0.5) * view.x, (ny - 0.5) * view.y);
         };
-        // Three buttons down the right, as the owner's screenshot of the
-        // original shows them: play it again, go on, or pick another level.
+        // ONE COLUMN DOWN THE RIGHT, at x 0.75 and a quarter, a half and three
+        // quarters down.
+        //
+        // This briefly became a row across the bottom, and that was my error.
+        // LevelFinishedLayer's constructor calls addButton with vector2(0.25,
+        // 0.75), (0.5, 0.75) and (0.75, 0.75), and I read those pairs as (x, y).
+        // They are not: AngelScript pushes a call's arguments so that the LAST
+        // pushed is the FIRST parameter, so `PshC4 A; PshC4 B; vector2()` builds
+        // vector2(B, A) and the constant that varies here is the Y.
+        //
+        // What settles it is the veil in the same constructor (bytes 271777..,
+        // instruction 253 onward): it pushes screenSize.y and then
+        // screenSize.x * 1.5. A full-screen dimming veil is one and a half
+        // screens WIDE; there is no reading in which it is screenSize.y wide and
+        // one and a half screen-widths tall. Same rule, three corroborations:
+        // the "level finished" banner lands top-centre, the level-select arrows
+        // land on the left and right edges, and the column this port already had
+        // by eye - x 0.82 - was very nearly this one.
         const MenuButton::Kind kinds[] = {MenuButton::Kind::Retry, MenuButton::Kind::Next,
                                           MenuButton::Kind::List};
-        const double ys[] = {0.30, 0.52, 0.74};
+        const double ys[] = {0.25, 0.50, 0.75};
         for (int i = 0; i < 3; ++i) {
             MenuButton button;
             button.kind = kinds[i];
-            button.centrePx = onView(0.82, ys[i]);
+            button.centrePx = onView(0.75, ys[i]);
             button.sizePx = glm::dvec2(view.y * 0.16);
             m_menuButtons.push_back(button);
         }
@@ -727,12 +757,122 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
         m_menuTitle = quadFor("Magic Portals Title", menuImage("game_main_title.png"));
     }
     if (m_screen == Screen::Finished && m_lastCleared) {
-        // The medal the play earned. The same slot as the title: the two
-        // screens are never up together.
-        const int medal = MedalFor(*m_lastCleared);
-        const char* file = medal == 3   ? "medal_gold_l.png"
-                           : medal == 2 ? "medal_silver_l.png"
-                                        : "medal_bronze_l.png";
+        // THE WHOLE SCREEN, not just the medal, and in the order
+        // LevelFinishedLayer lays it down.
+        //
+        // Every position here is the original's own, normalized on the screen:
+        // it builds them against GetScreenSize, and the medal screen sits over
+        // the level, so the port places them on the CAMERA'S VIEW rather than
+        // in the menu's box. menuTick does the placing; this only makes them.
+        // Sized by its own aspect at a stated height, which is what everything
+        // here but the veil wants. The heights are DERIVED, not decoded: the
+        // original draws these at 1.5 x g_scale against its own reference
+        // height, and no fraction of the screen is written down anywhere - so
+        // each is its image's height against that reference, and marked here as
+        // derived for the same reason art.json marks its numbers _guess.
+        const auto byHeight = [this, &quadFor](const char* tag, const std::string& file, glm::dvec2 atView,
+                                              double heightView, float z, glm::dvec2 offsetPx = glm::dvec2(0.0),
+                                              glm::dvec2 pivot = glm::dvec2(0.5)) {
+            Decoration decoration;
+            decoration.image = menuImage(file);
+            decoration.quad = quadFor(tag, decoration.image);
+            decoration.atView = atView;
+            decoration.sizing = Decoration::Sizing::ByHeight;
+            decoration.heightView = heightView;
+            decoration.offsetPx = offsetPx;
+            decoration.pivot = pivot;
+            decoration.z = z;
+            if (decoration.quad != entt::null) m_menuDecor.push_back(decoration);
+        };
+
+        // And the one that is stretched, because it is a gradient rather than a
+        // picture of anything.
+        const auto stretched = [this, &registry, &quadFor](const char* tag, const std::string& file,
+                                                           glm::dvec2 atView, glm::dvec2 sizeView, float z) {
+            Decoration decoration;
+            decoration.image = menuImage(file);
+            decoration.quad = quadFor(tag, decoration.image);
+            decoration.atView = atView;
+            decoration.sizing = Decoration::Sizing::Stretched;
+            decoration.sizeView = sizeView;
+            decoration.z = z;
+            if (decoration.quad == entt::null) return;
+
+            // ARGB(200, 255, 255, 255), which is the veil's whole job: the
+            // original draws it at alpha 200 of 255 and the port drew it opaque
+            // white, so a gradient meant to sink the level behind the medal was
+            // barely a tint. The particles take their colour the same way
+            // (albedoColor, above), so this is the established path rather than
+            // a new one.
+            registry.get<Supersonic::MaterialComponent>(decoration.quad).albedoColor =
+                glm::vec4(1.0f, 1.0f, 1.0f, 200.0f / 255.0f);
+            m_menuDecor.push_back(decoration);
+        };
+
+        // EVERY POSITION BELOW READS THE DECODED PAIRS AS (y, x).
+        //
+        // AngelScript pushes a call's arguments last-first, so the bytecode's
+        // `PshC4 A; PshC4 B; vector2()` is vector2(B, A). The veil in this same
+        // constructor proves it: it pushes screenSize.y then screenSize.x * 1.5,
+        // and a dimming veil is one and a half screens WIDE, not that many
+        // screen-widths tall. Read the other way round, every plaque on this
+        // screen is transposed - which is how the banner came to sit out at the
+        // left instead of over the middle.
+        //
+        // The veil, first and furthest back. fade_edge.png is a 200-odd byte
+        // HORIZONTAL GRADIENT, not a flat panel, and the original stretches it
+        // one and a half screens wide at ARGB(200,255,255,255) from a top-left
+        // origin - so the light end falls off the right and what is seen is the
+        // dark-to-middle part of it. Sized explicitly for that reason: sizing
+        // this one from its own aspect, which is the rule the chapter icons
+        // needed, would draw a hairline. A top-left origin at (0,0) one and a
+        // half screens wide IS a centre of (0.75, 0.5), so this one position
+        // needed no correcting.
+        stretched("Magic Portals Finish Veil", "fade_edge.png", glm::dvec2(0.75, 0.5),
+                  glm::dvec2(1.5, 1.0), 0.55f);
+
+        // "Level finished" over the middle, and the plaque naming the portals
+        // spent BELOW the medal - addSprite puts it at medalPos + (0, 0.15) of
+        // the screen, not out to its right.
+        byHeight("Magic Portals Finish Banner", "level_finished.png", glm::dvec2(0.464, 0.278), 0.16,
+                 0.58f);
+        byHeight("Magic Portals Portals Plaque", "portals_created_plaque.png",
+                 glm::dvec2(0.47, 0.55 + 0.15), 0.12, 0.58f);
+
+        // The golden-score plaque only where the play earned one. The original
+        // guards it on the score qualifying - `if (score >= 3)`, so gold alone -
+        // and a plaque claiming a medal nobody won would be worse than no
+        // plaque. Its origin is (0.5, 0.33) rather than centred, which is the
+        // one pivot on this screen that is not the default.
+        if (MedalFor(*m_lastCleared) >= 3) {
+            byHeight("Magic Portals Golden Plaque", "golden_score_plaque.png", glm::dvec2(0.23, 0.5),
+                     0.12, 0.58f, glm::dvec2(0.0), glm::dvec2(0.5, 0.33));
+        }
+
+        // And a crystal by the medal, for a level that had any. Its place is the
+        // medal's plus (-30, 48) of the original's own pixels - left and down -
+        // which is why it rides an offset rather than a fraction of the screen:
+        // a fraction would be a different place at a different window shape.
+        if (m_lastCleared->crystalsTotal > 0) {
+            byHeight("Magic Portals Finish Crystal", "crystal.png", glm::dvec2(0.47, 0.55), 0.08, 0.60f,
+                     glm::dvec2(-30.0, 48.0));
+        }
+
+        // The medal itself, in the title's slot: the two screens are never up
+        // together. Its image follows the COUNTER rather than the final score,
+        // so it climbs as the number rises - menuTick swaps the texture when
+        // the tier changes, and m_medalDrawn remembers which one is on.
+        //
+        // The counter is NOT reset here. buildMenu runs again on every window
+        // resize, so resetting here would restart the count - and drop the
+        // medal back to bronze - because somebody dragged the window edge.
+        // openFinished owns that, because it runs once when the level is
+        // cleared. Same mistake the decoration leak was: state set up in a
+        // function that is not once per screen.
+        m_medalDrawn = MedalShown();
+        const char* file = m_medalDrawn == 3   ? "medal_gold_l.png"
+                           : m_medalDrawn == 2 ? "medal_silver_l.png"
+                                               : "medal_bronze_l.png";
         m_menuTitle = quadFor("Magic Portals Medal", menuImage(file));
     }
 
@@ -797,6 +937,12 @@ void MagicPortalsLayer::unloadMenuDrawables(entt::registry& registry) {
     m_menuQuads.clear();
     for (auto& e : m_menuLabels) destroy(e);
     m_menuLabels.clear();
+    // The medal screen's furniture goes with the rest of it. Without this every
+    // rebuild leaves its quads behind - and a rebuild is not rare: layOutMenu
+    // and buildMenu run again on every window resize, so the veils would stack
+    // one atop another and darken a shade at a time.
+    for (Decoration& decoration : m_menuDecor) destroy(decoration.quad);
+    m_menuDecor.clear();
     destroy(m_menuBg);
     destroy(m_menuTitle);
 }
@@ -808,6 +954,14 @@ void MagicPortalsLayer::unloadMenu(entt::registry& registry) {
 
 void MagicPortalsLayer::openFinished(entt::registry& registry) {
     latch("medal_shown");
+    // The count starts from nothing, HERE, because this runs once when the
+    // level is cleared. buildMenu runs again on every window resize, so a reset
+    // there would restart the count - and drop the medal back to bronze -
+    // because somebody dragged the window edge. Without a reset anywhere, the
+    // next level cleared would start counting from the last one's total and
+    // show the wrong medal from its first frame.
+    m_counterShown = 0;
+    m_counterClockMs = 0.0;
     // The level STAYS: it is drawn behind the medal, and stops ticking because
     // OnFixedUpdate hands the tick to the menu whenever a screen is up.
     m_screen = Screen::Finished;
@@ -917,12 +1071,73 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
     if (m_menuBg != entt::null && registry.valid(m_menuBg)) {
         placeSprite(registry, m_menuBg, box * 0.5, box, -1.0f, 0.0f);
     }
+    // The medal screen's furniture, and the counter the medal follows.
+    //
+    // Placed here rather than in buildMenu because these sit on the CAMERA'S
+    // view, which moves with the level behind them and changes shape with the
+    // window - the same reason the buttons are laid out every tick.
+    if (m_screen == Screen::Finished && m_lastCleared) {
+        const glm::dvec2 view = ViewPx();
+        const glm::dvec2 centre = m_follow.centrePx;
+        const auto onView = [&view, &centre](const glm::dvec2& atView) {
+            return centre + glm::dvec2((atView.x - 0.5) * view.x, (atView.y - 0.5) * view.y);
+        };
+
+        for (const Decoration& decoration : m_menuDecor) {
+            if (decoration.quad == entt::null || !registry.valid(decoration.quad)) continue;
+
+            glm::dvec2 sizePx(0.0);
+            if (decoration.sizing == Decoration::Sizing::Stretched) {
+                sizePx = glm::dvec2(view.x * decoration.sizeView.x, view.y * decoration.sizeView.y);
+            } else {
+                const double height = view.y * decoration.heightView;
+                const glm::dvec2 image = imageSizePx(decoration.image);
+                const double aspect = image.y > 0.0 ? image.x / image.y : 1.0;
+                sizePx = glm::dvec2(height * aspect, height);
+            }
+            // The pivot, as a shift of the CENTRE: placeSprite centres a quad on
+            // the point it is given, and the original places a sprite by its
+            // origin, so a sprite whose origin is p has its centre at
+            // pos + size * (0.5 - p). The default (0.5, 0.5) makes that zero,
+            // which is why only the golden-score plaque moves.
+            const glm::dvec2 fromPivot = sizePx * (glm::dvec2(0.5) - decoration.pivot);
+            placeSprite(registry, decoration.quad,
+                        onView(decoration.atView) + decoration.offsetPx + fromPivot, sizePx,
+                        decoration.z, 0.0f);
+        }
+
+        // THE COUNTER, on the frame's clock: one step of one every 100 ms,
+        // toward the portals the play spent. The original's ScoreCounter is a
+        // Timer with that stride, and its draw reads getCurrent() every frame.
+        m_counterClockMs += static_cast<double>(MagicPortalsLayer::kTick) * 1000.0;
+        while (m_counterClockMs >= kCounterStrideMs && m_counterShown < m_lastCleared->portalsUsed) {
+            m_counterClockMs -= kCounterStrideMs;
+            ++m_counterShown;
+        }
+
+        // And the medal follows it. Rewriting the texture rather than rebuilding
+        // the quad: makeSprite bakes the path into the material, and a quad
+        // rebuilt every time the tier changed would lose its place in the
+        // drawing order for a frame.
+        if (const int shown = MedalShown(); shown != m_medalDrawn && m_menuTitle != entt::null &&
+                                            registry.valid(m_menuTitle)) {
+            m_medalDrawn = shown;
+            const char* file = shown == 3   ? "medal_gold_l.png"
+                               : shown == 2 ? "medal_silver_l.png"
+                                            : "medal_bronze_l.png";
+            registry.get<Supersonic::MaterialComponent>(m_menuTitle).albedoTexturePath = menuImage(file);
+        }
+    }
+
     if (m_menuTitle != entt::null && registry.valid(m_menuTitle)) {
         if (m_screen == Screen::Finished) {
-            // Beside the buttons, over the level, in the level's own pixels.
+            // At the original's own place for it: screenSize * (0.47, 0.55),
+            // which the port reads on the camera's view. This was an eyeballed
+            // offset from the centre before the constructor was decoded, and
+            // then (0.55, 0.47) - the decoded pair read in the wrong order.
             const glm::dvec2 view = ViewPx();
-            placeSprite(registry, m_menuTitle, m_follow.centrePx + glm::dvec2(-view.x * 0.08, -view.y * 0.05),
-                        glm::dvec2(view.y * 0.30), 0.6f, 0.0f);
+            const glm::dvec2 at = m_follow.centrePx + glm::dvec2((0.47 - 0.5) * view.x, (0.55 - 0.5) * view.y);
+            placeSprite(registry, m_menuTitle, at, glm::dvec2(view.y * 0.30), 0.6f, 0.0f);
         } else {
             placeSprite(registry, m_menuTitle, glm::dvec2(box.x * 0.5, box.y * 0.30),
                         glm::dvec2(box.y * 1.30, box.y * 0.30), 0.4f, 0.0f);

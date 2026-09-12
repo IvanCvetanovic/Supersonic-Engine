@@ -500,6 +500,85 @@ private:
     entt::entity m_menuBg{entt::null};      // the screen's background
     entt::entity m_menuTitle{entt::null};   // the game's title, on the main screen
 
+    // ---- the medal screen ---------------------------------------------------
+    //
+    // LevelFinishedLayer draws a good deal more than a medal, and the port drew
+    // only the medal. Decoded from its constructor and its draw (bytes
+    // 271777..273843 and 274980..276253): a dimming veil over the frozen level,
+    // the "level finished" banner, the plaque naming the portals spent, the
+    // golden-score plaque when the play earned one, and a crystal beside the
+    // medal when the level had any.
+    //
+    // One vector rather than a member each: they differ only in image and
+    // placement, and nothing addresses an individual one.
+    struct Decoration {
+        entt::entity quad{entt::null};
+
+        // Normalized ON THE CAMERA'S VIEW, because that is how the original
+        // places them - against GetScreenSize - and the medal screen sits over
+        // the level rather than in the menu's own box.
+        glm::dvec2 atView{0.0};
+
+        // HOW IT IS SIZED, stated rather than inferred from a zero.
+        //
+        // Stretched: sizeView is the size, as a fraction of the view. Only the
+        // veil wants this - it is a gradient strip the original pulls one and a
+        // half screens wide, and sizing it from its own aspect would draw a
+        // hairline.
+        //
+        // ByHeight: heightView is its height as a fraction of the view and the
+        // width follows the IMAGE'S OWN aspect. Everything else wants this, for
+        // the reason the chapter icons needed it: an 84x128 image drawn square
+        // is an image nobody authored.
+        enum class Sizing { Stretched, ByHeight };
+        Sizing sizing{Sizing::ByHeight};
+        glm::dvec2 sizeView{0.0}; // Stretched
+        double heightView = 0.0;  // ByHeight
+        std::string image;        // resolved path, for asking its aspect
+
+        // A pixel offset from the medal, applied after atView. The crystal is
+        // placed at medalPos + (-30, 48) in the original's own pixels rather
+        // than at a fraction of the screen, and expressing that as a fraction
+        // would be a different position at a different window shape.
+        //
+        // No y flip: Units::ToWorld takes the remake's pixels with +y DOWN and
+        // flips once inside, so the original's screen-space offsets carry over
+        // verbatim. 48 is 48 further DOWN, as it is in the original.
+        glm::dvec2 offsetPx{0.0};
+
+        // WHERE ON THE SPRITE atView lands, as a fraction of it: (0.5, 0.5) is
+        // its centre, which is what almost everything here uses.
+        //
+        // The original's addSprite takes this as the sprite's origin, and the
+        // golden-score plaque is the one that does not centre: it is placed at
+        // vector2(0.23, 0.5) of the screen with an origin of vector2(0.5, 0.33),
+        // so a third of the way down rather than half. Drawing it centred put it
+        // visibly high, which is the "tiny plaque floating" in the first
+        // screenshot of this screen.
+        glm::dvec2 pivot{0.5, 0.5};
+
+        float z = 0.0f;
+    };
+    std::vector<Decoration> m_menuDecor;
+
+    // The portals-spent counter the medal is computed FROM.
+    //
+    // The original builds ScoreCounter(0, numPortals, 100): it starts at zero
+    // and steps ONE toward the play's portal count every 100 ms, and its draw
+    // recomputes the medal from getCurrent() on every frame. So the medal
+    // climbs bronze to silver to gold as the number rises, rather than being
+    // stamped at the end. That is a behaviour and not decoration - the port
+    // showing the final medal immediately was wrong in a way no screenshot
+    // would have revealed.
+    static constexpr double kCounterStrideMs = 100.0;
+    int m_counterShown = 0;        // where the count has got to
+    double m_counterClockMs = 0.0; // time owed to the next step
+    int m_medalDrawn = 0;          // which medal the quad currently wears
+
+    // The medal the counter's CURRENT value earns, by the same computeScore the
+    // final one uses. Zero when there is nothing to show.
+    int MedalShown() const;
+
     struct Hud {
         entt::entity status{entt::null};
         entt::entity result{entt::null};

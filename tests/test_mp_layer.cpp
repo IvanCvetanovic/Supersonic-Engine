@@ -172,6 +172,16 @@ int Tagged(entt::registry& registry, const char* tag) {
     return count;
 }
 
+// The first entity wearing this tag, or null. Tagged answers "how many", which
+// is the right question for furniture that must not stack; this answers "which
+// one", for the checks that need to look at what it is wearing.
+entt::entity FirstTagged(entt::registry& registry, const char* tag) {
+    for (auto [entity, t] : registry.view<TagComponent>().each()) {
+        if (t.tag == tag) return entity;
+    }
+    return entt::null;
+}
+
 // The original's extracted images - what no level pictures is drawn with - are
 // outside this repository like the levels, but a machine can have the levels and
 // not them. What needs them says so and is skipped.
@@ -1453,6 +1463,95 @@ void NoSpriteBlinksWhileWalking(const char* levelName) {
                                 " sprite(s) went away and came back, first " + firstBlink);
 }
 
+// The medal screen, as LevelFinishedLayer builds it.
+//
+// What is pinned here is the DECODE, not a preference. The port drew three
+// buttons down the right at x 0.82, read off a screenshot; the original's
+// constructor states addButton at (0.25, 0.75), (0.5, 0.75) and (0.75, 0.75) -
+// one row across the bottom. And its draw recomputes the medal from the
+// counter's current value every frame, so the medal CLIMBS as the number rises
+// rather than being stamped at the end. A static final medal is wrong in a way
+// no screenshot would show.
+void TheMedalScreenIsTheOriginals() {
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+
+    // level0 is the fixture test_mp_statics proves reaches its exit by holding
+    // right: "completed after 3.20 s, 2 traversal(s)".
+    for (int tick = 0; tick < 600; ++tick) {
+        std::vector<std::string> pressed;
+        if (tick == 0) pressed.push_back(MagicPortalsLayer::kRight);
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, std::move(pressed));
+        if (layer.MenuScreen() == MagicPortalsLayer::Screen::Finished) break;
+    }
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::Finished,
+              "holding right through level0 must finish it and raise the medal");
+    if (layer.MenuScreen() != MagicPortalsLayer::Screen::Finished) return;
+
+    // THREE BUTTONS, IN ONE COLUMN. The x is the decoded 0.75 of the view and
+    // the three y's are a quarter, a half and three quarters of it.
+    //
+    // This test asserted the OPPOSITE until the argument order was settled: it
+    // demanded a row and called the column "exactly what the column got wrong".
+    // The layout and the test were both mine and both wrong the same way -
+    // LevelFinishedLayer's addButton pairs read (y, x), because AngelScript
+    // pushes a call's arguments last-first. The veil in that same constructor
+    // is the proof: it pushes screenSize.y and then screenSize.x * 1.5, and a
+    // dimming veil is one and a half screens WIDE, not that many tall.
+    //
+    // Asserted as invariants rather than as absolute pixels: a shared x, a
+    // strictly increasing y, and an EQUAL gap between them - which is what a
+    // quarter, a half and three quarters are, and what a row cannot satisfy.
+    const std::vector<MagicPortalsLayer::MenuButton>& buttons = layer.MenuButtons();
+    CHECK_MSG(buttons.size() == std::size_t{3}, "the medal screen has three buttons, got " +
+                                                    std::to_string(buttons.size()));
+    if (buttons.size() == std::size_t{3}) {
+        CHECK_MSG(::test::nearly(static_cast<float>(buttons[0].centrePx.x),
+                                 static_cast<float>(buttons[1].centrePx.x)) &&
+                      ::test::nearly(static_cast<float>(buttons[1].centrePx.x),
+                                     static_cast<float>(buttons[2].centrePx.x)),
+                  "all three share a column, or the row is back");
+        CHECK_MSG(buttons[0].centrePx.y < buttons[1].centrePx.y &&
+                      buttons[1].centrePx.y < buttons[2].centrePx.y,
+                  "and run top to bottom: restart, next, list");
+        CHECK_MSG(::test::nearly(static_cast<float>(buttons[1].centrePx.y - buttons[0].centrePx.y),
+                                 static_cast<float>(buttons[2].centrePx.y - buttons[1].centrePx.y)),
+                  "evenly spaced, as a quarter, a half and three quarters are");
+    }
+
+    // The screen's furniture is drawn, not just the medal. The veil, the
+    // banner and the portals plaque are there whatever the play earned.
+    CHECK_MSG(Tagged(registry, "Magic Portals Finish Veil") == 1, "the dimming veil is drawn");
+    CHECK_MSG(Tagged(registry, "Magic Portals Finish Banner") == 1, "and the level-finished banner");
+    CHECK_MSG(Tagged(registry, "Magic Portals Portals Plaque") == 1, "and the portals-spent plaque");
+    CHECK_MSG(Tagged(registry, "Magic Portals Medal") == 1, "and the medal itself");
+
+    // AND THE VEIL ACTUALLY DIMS. The original draws it at ARGB(200,255,255,255)
+    // and the port drew it opaque white, so a gradient meant to sink the level
+    // behind the medal read as barely a tint - a fidelity bug that looks exactly
+    // like a deliberately subtle design and so would never be reported as one.
+    // Checked on the material rather than by eye for that reason.
+    if (const entt::entity veil = FirstTagged(registry, "Magic Portals Finish Veil");
+        veil != entt::null && registry.all_of<MaterialComponent>(veil)) {
+        CHECK_MSG(::test::nearly(registry.get<MaterialComponent>(veil).albedoColor.a, 200.0f / 255.0f),
+                  "the veil carries the original's alpha of 200, not an opaque white");
+    }
+
+    // AND THEY GO WHEN THE SCREEN DOES. buildMenu runs again on every window
+    // resize, so a screen whose decorations are not torn down stacks another
+    // veil each time and darkens a shade at a time.
+    layer.OnDetach(registry);
+    CHECK_MSG(Tagged(registry, "Magic Portals Finish Veil") == 0,
+              "the veil goes with the screen, or a resize stacks another");
+    CHECK_MSG(Tagged(registry, "Magic Portals Medal") == 0, "and so does the medal");
+}
+
 void NothingBlinksWhileWalking() {
     NoSpriteBlinksWhileWalking("level1"); // 1-2, where the owner saw one go
     NoSpriteBlinksWhileWalking("level2"); // 1-3, where several do
@@ -1489,6 +1588,7 @@ void runTests() {
     ALevelsEntitiesEmit();
     ParticlesGoWithTheirLevel();
     FinishingALevelShowsTheMedal();
+    TheMedalScreenIsTheOriginals();
     ALevelLatchesTheSoundsItEarns();
     NothingOnScreenIsCulledWhileWalking();
     NothingBlinksWhileWalking();
