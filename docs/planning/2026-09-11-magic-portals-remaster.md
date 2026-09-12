@@ -2744,3 +2744,97 @@ on both. Nothing under `src/` changed.
 What is left of chapter 3, off the same inventory: `shock_field` in 7 levels,
 `boss_spawn` in 2, `gravity_well` in 1 - and the fire diamond, which admits
 `pickup` to IsPorted when it lands and moves all nine of those levels at once.
+
+## Step 26 - chapter 3: shock fields, and the node a lethal ring swings about (built)
+
+Chapter 3 goes from 19 of 32 playing to 23, and the game from 83 of 128 to 87.
+The first movement in the count for three steps, and `shock_field` IS admitted to
+`Roles::IsPorted` where `pickup` was not - because this role covers one mechanism
+under two spellings (`shock_agent` and `shock_agent.ent`), not two mechanisms
+under one name. level23b, level24b, level25b and level27b had it as their only
+inert role; level26b and level30b still hold `pickup`, and level27c still holds
+`gravity_well`.
+
+**Two entities in the original, one point here.** A placed `shock_agent` is a
+one-shot builder guarded by an `areaAdded` flag: on its first frame it spawns a
+separate `shock_area.ent` at its own position with z -10, sizes it to the
+diameter with `scaleToSize`, and writes `currentScale`, `squaredRadius`,
+`ownerID`, `speed`, `stride` and `direction` onto it. The AREA carries the lethal
+radius; the AGENT is the sprite. Both then oscillate on the same numbers from the
+same seed, so the port models one moving point. That is safe to do and the
+ordering says why: the area is created at instruction 54 of the agent's first
+frame and the agent's own `linearMotion` runs at instruction 287 of that same
+frame, so the area captures its `originalPos` BEFORE the agent has moved. Both
+centres are the node; the only divergence is one frame of phase, which at the one
+moving placement in the game is 0.03 px on a 64 px stride.
+
+**The placed node is the CENTRE of the swing, not the starting position.** `angle`
+seeds at 0 and the displacement is `cos(angle) * stride * sign(speed)`, so
+`cos(0) = 1` puts the ring a full stride from its node on the very first frame,
+and it swings through the node to the far side. A port that read the node as the
+start would misplace level27b's ring by 64 px and pass every radius test ever
+written against it, which is why the suite asserts the DISPLACEMENT: a full stride
+away after one tick, and the far side after half a period.
+
+| | decoded | what the level file suggests |
+|---|---|---|
+| lethal radius | `areaRadius`, 28 to 105 per placement | a 30 px CircleShape2D on every agent |
+| the kill | a poll EVERY frame | an Area2D that might be entered |
+| the axis | always vertical | `metadata/direction`, which is never read |
+
+**The converter's collider is not the ring.** Every agent node carries a `Body`
+(Area2D) holding a `CollisionShape2D` whose `CircleShape2D` has `radius = 30` -
+the same 30 in every level, against radii of 28 to 105. It is sprite-sized
+geometry with nothing to do with the lethal zone, and taking it for the kill shape
+would have shrunk level30b's 94 px ring to a third of itself. `LevelBuilder` gives
+an Area2D `isTrigger`, so it is a sensor the player passes through rather than a
+platform - which is the port already being faithful, since the original's agent
+drives no physics at all. The port moves that entity with the field so the sensor
+and the sprite follow the ring, and takes the radius from `areaRadius` alone.
+
+**`direction` is copied and never read.** The agent reads `metadata/direction`
+with `GetString` and `SetString`s it onto the area - and then neither callback
+consults it: both pass a hardcoded flag to `linearMotion`. So movement is always
+vertical, and that is recorded rather than implemented. Both placements carrying
+the key say `vertical` anyway, so nothing in the game could tell the two readings
+apart.
+
+**It polls rather than being entered.** A hazard fires on `body_entered` and
+remembers whether the player was already inside; a ring tests
+`squaredDistance(player, ring) < squaredRadius` every frame and then writes
+`hp = 0`. The kill is reported here and folded into `Hazards` by
+`Game::AfterStep`, as the boss's, the carrancas' and the fire's are, so there is
+one death in the port and not five.
+
+**Burnable needed no wiring, and the check was worth making.** 11 of the 21
+placements carry `metadata/burnable`, of which only level30b's is in a level that
+starts. `Fire::Find` is flag-filtered, so that agent genuinely IS in Fire's
+burnables list and genuinely does get `burned` set - but removal is gated on
+`fire.json`'s `fade_names`, which holds only the crate spellings. `fire.json`'s
+`burn._note` already said so in as many words, two steps ago. So no ring can
+outlive its agent, and the agent's own destroy path - `deleteEntity(childID)`,
+which takes the ring with it - stays unreachable for as long as the blast's
+`destroy` remains unbuilt. When that lands, this is its second caller.
+
+The census, measured: 21 placements across 16 levels, 10 of them in the 7 levels
+that start. Only 2 move at all - level14c and level27b - and `no_gravity` stops
+level14c starting, so exactly one swinging ring is reachable in the game as the
+port plays it.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_fields` at 63 checks, `test_mp_keys` unchanged at 104, `test_mp_diamonds`
+at 85 and `test_mp_minions` at 77, and 98 of 128 levels starting with 87 playing
+on both. The swinging ring reached a player that never moved after 67 ticks on
+both toolchains - earlier than the half period, because it only has to come within
+36 px rather than travel all the way to the far end.
+
+One environment note, so the run is not read as cleaner or dirtier than it was:
+under MSVC `test_mp_demolish` returned 4551 - Smart App Control refusing a
+freshly-linked unsigned exe, which this machine does intermittently - and the
+runner's three relink-and-retry attempts did not clear it. Running the binary
+already linked gives 133 checks and 0 failures, and GCC ran the same suite green
+in the same sweep. Nothing in this step touches Demolish.
+
+What is left of chapter 3: `pickup`'s other half, the fire diamond, in 4 levels
+that start; `boss_spawn` in 2; and `gravity_well` in 1, which is chapter 4's
+mechanism appearing early in level27c.

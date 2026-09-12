@@ -65,6 +65,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Minions::LoadRules(portDataDirectory + "/minions.json", read.minions, error)) return false;
     if (!Keys::LoadRules(portDataDirectory + "/keys.json", read.keys, error)) return false;
     if (!Diamonds::LoadRules(portDataDirectory + "/diamonds.json", read.diamonds, error)) return false;
+    if (!Fields::LoadRules(portDataDirectory + "/fields.json", read.fields, error)) return false;
     // And what the remake's role table calls a hazard but the original does not.
     if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
@@ -130,6 +131,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Minions::Find(data.scene, data.roles, data.minions, out.minions, error)) return false;
     if (!Keys::Find(data.scene, data.roles, out.built, data.keys, out.keys, error)) return false;
     if (!Diamonds::Find(data.scene, data.roles, data.diamonds, out.diamonds, error)) return false;
+    if (!Fields::Find(data.scene, data.roles, out.built, data.fields, out.fields, error)) return false;
     if (!Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                        out.portals, error)) {
         return false;
@@ -207,6 +209,10 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
         const std::vector<entt::entity> struck = level.diamonds.Tick(registry, carriers, prey, dt);
         for (const entt::entity gone : level.minions.Take(registry, struck)) Forget(level, gone);
     }
+    // The shock rings swing, and judge where the step left the player. A poll
+    // every frame rather than an entry test, which is what separates one of these
+    // from a hazard.
+    level.fields.Tick(registry, level.player, dt);
     // The beholder's rocks, against what the step ran them into.
     for (const entt::entity gone : level.boss.Contacts(registry, level.player, level.portals, dt)) Forget(level, gone);
     level.portals.Tick(registry, dt);
@@ -234,6 +240,10 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
     if (level.fire.playerKilled && !level.hazards.playerDied) {
         level.hazards.playerDied = true;
         level.hazards.killedBy = level.fire.killedBy;
+    }
+    if (level.fields.playerKilled && !level.hazards.playerDied) {
+        level.hazards.playerDied = true;
+        level.hazards.killedBy = level.fields.killedBy;
     }
 }
 

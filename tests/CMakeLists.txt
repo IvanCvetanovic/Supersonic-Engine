@@ -183,6 +183,9 @@ add_mp_test(test_mp_keys)
 # first minion it comes within range of and deletes itself. Selected by entity
 # name rather than by role, because the fire diamond shares the role.
 add_mp_test(test_mp_diamonds)
+# Shock fields: a lethal ring that swings about the node that placed it, polled
+# every frame rather than entered. The node is the CENTRE of the swing.
+add_mp_test(test_mp_fields)
 # Launchers, what they throw, and what takes it back.
 add_mp_test(test_mp_launchers)
 # The portal shot: a tap fires, and the portal opens where the shot arrives.

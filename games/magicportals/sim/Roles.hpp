@@ -63,6 +63,9 @@ inline constexpr const char* kLockedDoor = "locked_door";
 // named here so a level carrying one stops counting as inert.
 inline constexpr const char* kEnemySpawn = "enemy_spawn";
 inline constexpr const char* kWaypoint = "waypoint";
+// The lethal ring of chapter 3 (Fields.hpp). One mechanism under one role - both
+// spellings name the same entity - so unlike kPickup this IS selected by role.
+inline constexpr const char* kShockField = "shock_field";
 // Played only for the boss the port has: Boss::Plays says which.
 inline constexpr const char* kBossSpawn = "boss_spawn";
 // The diamonds (Diamonds.hpp). Named here, and deliberately NOT in IsPorted: the
