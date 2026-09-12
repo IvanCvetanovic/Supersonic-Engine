@@ -1826,10 +1826,25 @@ the evidence:
 - **A buffer overflowing.** A level draws 6 to 23 drawables against a 65,536
   instance cap and 4,095 uv slots.
 
-`RenderSystem::SyncMeshes`, which `Components.hpp` says refreshes those bounds,
-DOES NOT EXIST - the only mention of it in the tree is that comment - so every
-renderable keeps the default unit box. For a sprite quad scaled to its own size
-that is still the right extent, so it does not explain this, but the comment is
-stale and picking and culling assume a unit box for every mesh.
+A correction to an earlier reading of this, recorded because it was wrong and
+was written down as though it were not: `RenderSystem::SyncMeshes` does not
+exist by that NAME - the only mention of it is the comment in `Components.hpp`
+- but the behaviour it describes does. `RenderSystem.cpp` copies
+`gpuMesh->boundsMin/boundsMax` onto the renderable as it resolves resources, so
+a renderable is culled against its MESH's bounds and not against a default box.
+The cull box and the drawn geometry come from the same mesh and agree by
+construction, which also disposes of the idea that a quad might be bounded half
+a sprite away from where it is drawn.
 
-What would settle it is a frame of the port with something missing.
+**The owner's account, 12 September.** The window neither moved nor changed
+size; it happens while WALKING, so while the camera pans; 1-2 loses one sprite
+and 1-3 several. That last part matches a number already measured and not
+weighed properly: across the 32-level sweep, level2 - which is 1-3 - swings
+from 9 drawables drawn to 14, the widest spread of any level, against 20
+sprites in the file. level1 barely moves.
+
+So the next step is not another reading of the renderer. It is to walk the
+player through 1-3 in a test and run the renderer's own cull - `Frustum`
+against each sprite's transformed bounds - tick by tick, against whether the
+sprite is really within the view. That either catches it headlessly or clears
+culling for good.
