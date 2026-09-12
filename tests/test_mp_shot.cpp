@@ -54,6 +54,28 @@ bool Begin(const std::string& levelName, Run& run) {
                                    error) &&
                     Game::Start(run.data, run.registry, run.level, error);
     CHECK_MSG(ok, levelName + ": " + error);
+
+    // THE FIRING RATE OFF, on purpose, for this whole suite.
+    //
+    // The original refuses a tap for the first 300 ms of a level and for 400 ms
+    // after the last one it took (placement.json's cooldowns), and both of its
+    // clocks start at zero - so a tap on a freshly built level is refused. That
+    // is real, and ThePortalCooldownsHoldATapOff in test_mp_play is what pins
+    // it.
+    //
+    // This suite is about the shot's GEOMETRY: what stops it, where it lands,
+    // what it costs. Every case here fires the moment the level is built, and
+    // making each one wait out 400 ms would be twelve sleeps testing nothing
+    // this file is for. Turned off here rather than worked around silently.
+    // BOTH COPIES. Game::Start takes the Level's rules from the Data's, so the
+    // one on the level is what an in-level case plays by - and MakeRig below
+    // builds its own State straight from run.data.portals, which zeroing only
+    // the level's would leave at the real 300/400. Zeroed here rather than in
+    // MakeRig so there is no second place to remember.
+    run.level.portals.rules.firstPortalMinMs = 0.0;
+    run.level.portals.rules.nextPortalMinMs = 0.0;
+    run.data.portals.firstPortalMinMs = 0.0;
+    run.data.portals.nextPortalMinMs = 0.0;
     return ok;
 }
 

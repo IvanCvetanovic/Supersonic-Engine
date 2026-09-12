@@ -26,6 +26,51 @@
     "entry_radius_px": 14.0
   },
 
+  "cooldowns": {
+    "_source": [
+      "PortalManager's constructor sets FIRST_PORTAL_MIN_TIME = 300 and",
+      "NEXT_PORTAL_MIN_TIME = 400 (bytes 137xxx, instructions 134-140). The remake's",
+      "portals.json carries 0.0 s and 0.25 s and admits them: 'The names are real; the",
+      "numbers are invented.' These are the real ones, in milliseconds.",
+      "",
+      "THEY GATE TWO DIFFERENT THINGS.",
+      "",
+      "  first_ms gates the whole tap-reading path. PortalManager::update (bytes",
+      "  138545..139692) jumps past managePortalInsertion when the game is paused, or",
+      "  finished, or gameTimer.getTime() < FIRST_PORTAL_MIN_TIME. Both timers are",
+      "  built in the PortalManager's constructor and a manager is built per level, so",
+      "  this is 300 ms from the START OF EVERY LEVEL, not once per session.",
+      "",
+      "  next_ms gates ONE TAP, inside managePortalInsertion (bytes 143178..144166),",
+      "  after hasPortalRequestInput and the touch position: the tap proceeds only when",
+      "  lastPortalTimer.getTime() > NEXT_PORTAL_MIN_TIME.",
+      "",
+      "RESET ON ACCEPTANCE, NOT ON SUCCESS. Timer::reset on lastPortalTimer runs at",
+      "instruction 78, BEFORE SeekEntity('projectile.ent') and before",
+      "computePortalFinalPos reports hasFailed. So a shot that flies off and opens",
+      "nothing still spends the 400 ms.",
+      "",
+      "That does not contradict the owner's 'a failed shot costs nothing' (11",
+      "September): that is about the portal BUDGET, which a failed shot does not spend",
+      "and the port already gets right. The firing rate is a separate thing, and the",
+      "script is unambiguous about it. Do not make one match the other."
+    ],
+    "_both_start_at_zero": [
+      "Timer's constructor calls its own reset (Timer.angelscript, bytes",
+      "38787..38883 and 39242..39299), update adds getLastFrameElapsedTime, and a",
+      "PortalManager - with both Timers - is built per level. So gameTimer and",
+      "lastPortalTimer are BOTH at zero when a level begins, and the first tap of a",
+      "level is held off by the LARGER of the two: 400 ms, not 300. That is the",
+      "original's behaviour, not an artefact of this port.",
+      "",
+      "The comparisons differ and the port copies each: update refuses while gameTimer",
+      "is BELOW first_ms, managePortalInsertion proceeds only when lastPortalTimer is",
+      "ABOVE next_ms - so it refuses on equal."
+    ],
+    "first_ms": 300.0,
+    "next_ms": 400.0
+  },
+
   "antiportal": {
     "_source": [
       "isPointInAntiPortalField (AntiPortalManager.angelscript, bytes 334800..335020):",

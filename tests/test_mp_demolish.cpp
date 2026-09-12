@@ -54,6 +54,19 @@ bool Begin(const std::string& levelName, Run& run, bool byName = true) {
     if (ok && !byName) run.data.demolish.breakableNames.clear();
     ok = ok && Game::Start(run.data, run.registry, run.level, error);
     CHECK_MSG(ok, levelName + ": " + error);
+
+    // THE FIRING RATE OFF, on purpose, and this suite is the one that most needs
+    // saying so. The original refuses a tap for the first 300 ms of a level and
+    // for 400 ms after the last one it took, and both clocks start at zero
+    // (placement.json); ThePortalCooldownsHoldATapOff in test_mp_play pins that.
+    //
+    // ShootAndLand below returns false when Shoot is REFUSED, and its callers
+    // read that as "the shot did not land". With the cooldown live, a play
+    // through 1-9 would quietly report a failed shot instead of erroring - a
+    // wrong answer that looks like a real one. This suite is about what a stone
+    // breaks, so the rate limit is turned off where it can be seen.
+    run.level.portals.rules.firstPortalMinMs = 0.0;
+    run.level.portals.rules.nextPortalMinMs = 0.0;
     return ok;
 }
 

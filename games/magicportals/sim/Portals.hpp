@@ -61,6 +61,16 @@ struct Rules {
     // GetSize().x * 0.5 on the field entity itself. placement.json says why.
     double antiportalRadiusPx = 0.0;
 
+    // How long a tap is refused for, in milliseconds, both decoded. The remake
+    // carries 0.0 s and 0.25 s and says of them "the names are real; the numbers
+    // are invented".
+    //
+    // firstMs is from the START OF THE LEVEL and gates the tap path entirely;
+    // nextMs is from the last ACCEPTED tap. placement.json says why the second
+    // is spent even by a shot that goes on to fail.
+    double firstPortalMinMs = 0.0;
+    double nextPortalMinMs = 0.0;
+
     bool consumeOnTraverse = false;    // owner-confirmed
     bool staticPortalsPersist = false; // owner-confirmed 11 September: they stay
     bool recycleOldestAtCap = false;   // _guess
@@ -174,6 +184,22 @@ struct State {
     int shotsFailed = 0;
     int reflections = 0;     // every time a shot came off a reflector
     std::string lastFailure; // what stopped the last failed shot
+
+    // THE TWO COOLDOWN CLOCKS, counting UP in milliseconds as the original's two
+    // Timers do - gameTimer and lastPortalTimer - so the comparisons here read
+    // as its own do rather than inverted into countdowns.
+    //
+    // sinceStartMs is the level's age; sinceTapMs the time since the last tap
+    // this took. BOTH START AT ZERO, as the original's do: Timer's constructor
+    // calls its own reset, and a PortalManager - with both of its Timers - is
+    // built per level.
+    //
+    // So the first tap of a level is held off by the LARGER of the two, which is
+    // nextPortalMinMs at 400 rather than firstPortalMinMs at 300. That is the
+    // original's behaviour and not an accident of this port: its lastPortalTimer
+    // is at zero too when a level begins.
+    double sinceStartMs = 0.0;
+    double sinceTapMs = 0.0;
 
     // A tap at a point in the level: a shot fired toward it. False when none
     // goes, because the level allows no portal or a shot is already flying.

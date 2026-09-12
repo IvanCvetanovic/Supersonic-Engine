@@ -131,6 +131,23 @@ bool LoadPlacement(const std::string& path, Rules& out, std::string& error) {
         return false;
     }
 
+    const Json::Value& cooldowns = root["cooldowns"];
+    if (!cooldowns.IsObject() || !cooldowns["first_ms"].IsNumber() || !cooldowns["next_ms"].IsNumber()) {
+        error = path + ": cooldowns.first_ms and cooldowns.next_ms are each a number";
+        return false;
+    }
+    const double firstMs = cooldowns["first_ms"].AsNumber(-1.0);
+    const double nextMs = cooldowns["next_ms"].AsNumber(-1.0);
+    // Zero is allowed - it means no cooldown at all, which is what the remake
+    // carried for the first one - but a negative is a file saying nothing
+    // sensible.
+    if (firstMs < 0.0 || nextMs < 0.0) {
+        error = path + ": neither cooldown is below zero";
+        return false;
+    }
+    out.firstPortalMinMs = firstMs;
+    out.nextPortalMinMs = nextMs;
+
     const double entry = portal["entry_radius_px"].AsNumber(0.0);
     const double field = antiportal["radius_px"].AsNumber(0.0);
     // A radius of nothing is a portal nobody can walk into and a field that
@@ -169,6 +186,37 @@ bool State::TryPlace(const glm::dvec2& atPx) {
 
 bool State::Shoot(entt::registry& registry, const glm::dvec2& atPx) {
     if (budget <= 0 || flight || shooter == entt::null || !registry.valid(shooter)) return false;
+
+    // THE COOLDOWNS, and they gate the TAP rather than the placement.
+    //
+    // The original holds a whole level's taps off for FIRST_PORTAL_MIN_TIME -
+    // PortalManager::update skips managePortalInsertion entirely until its
+    // gameTimer passes it - and then holds each tap off for
+    // NEXT_PORTAL_MIN_TIME since the last one it took.
+    //
+    // Here rather than in TryPlace on purpose. TryPlace is what an arriving shot
+    // calls AND what the suites call to put a portal where a test needs one; a
+    // clock there would refuse them for a reason none of them is about. The
+    // layer's only tap path is this function (readInput), so this is the seam
+    // the original gates.
+    //
+    // The comparisons are the original's own, and they differ: update refuses
+    // while gameTimer is BELOW FIRST_PORTAL_MIN_TIME (a strict less-than), while
+    // managePortalInsertion proceeds only when lastPortalTimer is ABOVE
+    // NEXT_PORTAL_MIN_TIME - so it refuses on equal.
+    // ZERO MEANS OFF, stated rather than implied. sinceTapMs starts at zero, so
+    // a bare `sinceTapMs <= nextPortalMinMs` refuses the very first tap even
+    // when the cooldown is nothing - which silently disarmed the suites that
+    // turn it off and cost a whole build to find.
+    const bool tooEarly = rules.firstPortalMinMs > 0.0 && sinceStartMs < rules.firstPortalMinMs;
+    const bool tooSoon = rules.nextPortalMinMs > 0.0 && sinceTapMs <= rules.nextPortalMinMs;
+    if (tooEarly || tooSoon) return false;
+
+    // Taken, so it is spent - even if the shot goes on to hit a wall and open
+    // nothing. The original resets lastPortalTimer before it has any idea
+    // whether the shot will land. placement.json says why that does not
+    // contradict "a failed shot costs nothing", which is about the budget.
+    sinceTapMs = 0.0;
     Flight fired;
     fired.fromPx = Units::ToPixels(registry.get<TransformComponent>(shooter).position);
     fired.toPx = atPx;
@@ -187,6 +235,10 @@ const NoPortalZone* State::FindZone(const std::string& name) const {
 
 void State::Tick(entt::registry& registry, float dt) {
     lockoutS = std::max(0.0f, lockoutS - dt);
+    // The cooldown clocks run UP, as the original's two Timers do.
+    const double elapsedMs = static_cast<double>(dt) * 1000.0;
+    sinceStartMs += elapsedMs;
+    sinceTapMs += elapsedMs;
     for (NoPortalZone& zone : zones) {
         if (zone.moving) zone.motion.t += dt;
     }

@@ -849,6 +849,49 @@ void ThePlacementRadiiAreDecodedAndDistinct() {
               "a portal's radius and an antiportal's are two numbers, not one");
 }
 
+// A tap is refused until the level is old enough, and then for a while after
+// each one taken.
+//
+// PortalManager keeps two Timers and a manager is built per level, so both start
+// at zero: update skips the whole tap path while gameTimer is below
+// FIRST_PORTAL_MIN_TIME (300), and managePortalInsertion takes a tap only when
+// lastPortalTimer is above NEXT_PORTAL_MIN_TIME (400). The remake carried 0.0 s
+// and 0.25 s and admits inventing them.
+//
+// So the FIRST tap of a level waits on the larger of the two - 400 ms, not 300 -
+// which is worth pinning because it is the surprising half and the one a reader
+// would "simplify" to 300.
+//
+// Gated on Shoot rather than TryPlace: TryPlace is what a dozen cases here call
+// to put a portal where they need one, and a clock there would refuse them for a
+// reason none of them is about.
+void ThePortalCooldownsHoldATapOff() {
+    CHECK_NEAR(static_cast<float>(g_portalRules.firstPortalMinMs), 300.0f);
+    CHECK_NEAR(static_cast<float>(g_portalRules.nextPortalMinMs), 400.0f);
+
+    Play play;
+    std::string error;
+    CHECK_MSG(StartLevel30(play, true, error), error);
+    if (play.player == entt::null) return;
+    const glm::dvec2 aim = PlayerPx(play) + glm::dvec2(0.0, -48.0);
+
+    // A level that has only just been built takes nothing.
+    CHECK_MSG(!play.portals.Shoot(play.registry, aim), "a tap on a level's first tick is refused");
+    CHECK_EQ(play.portals.shotsFired, 0);
+
+    // 400 ms of ticks - the larger gate - and then it is taken.
+    const int ticks = static_cast<int>(0.4f / kStep) + 2;
+    for (int tick = 0; tick < ticks; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(play.portals.Shoot(play.registry, aim), "and one after 400 ms is taken");
+    CHECK_EQ(play.portals.shotsFired, 1);
+
+    // And the next is held off again. Let the shot finish first, so what refuses
+    // the second tap is the cooldown and not the one-shot-at-a-time rule.
+    for (int tick = 0; tick < 240 && play.portals.flight; ++tick) Tick(play, 0.0f);
+    CHECK_MSG(!play.portals.flight, "the first shot has landed or failed");
+    CHECK_MSG(!play.portals.Shoot(play.registry, aim), "a second tap straight after the first is refused");
+}
+
 void ThePlayerGoesThroughAndThePairIsSpent() {
     // A portal on the floor ahead of the spawn at (230, 208), and its partner in
     // the air at (300, 120). The player walks right into the first and comes out
@@ -955,6 +998,7 @@ void runTests() {
     AtTheCapTheOldestGivesWay();
     ANoPortalZoneRefusesATap();
     ThePlacementRadiiAreDecodedAndDistinct();
+    ThePortalCooldownsHoldATapOff();
     ThePlayerGoesThroughAndThePairIsSpent();
     OnlyTeleportablesTravel();
     ACratePortalledOntoAButtonOpensItsDoor();

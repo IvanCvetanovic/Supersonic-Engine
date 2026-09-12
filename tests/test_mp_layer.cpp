@@ -125,11 +125,33 @@ void tap(MagicPortalsLayer& layer, entt::registry& registry, const glm::vec2& po
     tickWith(layer, registry, pointer, {MagicPortalsLayer::kTap}, {MagicPortalsLayer::kTap});
 }
 
-// Ticks until the shot a tap fired has landed or failed (Portals.hpp).
+// Ticks until the shot a tap fired has landed or failed, AND until another tap
+// would be taken (Portals.hpp).
+//
+// The second half is not padding. The original refuses a tap for 400 ms after
+// the last one it took - placement.json's next_ms, decoded - and a shot that
+// runs into something a few pixels away is over in two ticks. Without the wait,
+// every case here that taps twice in a row had its second tap refused, which
+// read as "the shot did not land" rather than "you tapped too soon".
+//
+// A player cannot tap again instantly either, so waiting is what this helper
+// always meant.
 void landShot(MagicPortalsLayer& layer, entt::registry& registry) {
     for (int tick = 0; tick < 240 && layer.SimLevel() != nullptr && layer.SimLevel()->portals.flight; ++tick) {
         tickWith(layer, registry, kRest, {}, {});
     }
+    // 400 ms and a tick over, at the port's 60 Hz.
+    for (int tick = 0; tick < 26; ++tick) tickWith(layer, registry, kRest, {}, {});
+}
+
+// Ticks until a level is old enough for its first tap to be taken.
+//
+// PortalManager holds a whole level's taps off for 300 ms, and both of its
+// timers start at zero, so the first one actually waits on the LARGER gate of
+// 400 ms (placement.json). A case that attaches a layer and taps at once is
+// refused - correctly - so the ones that mean to test the shot say so here.
+void waitForFirstTap(MagicPortalsLayer& layer, entt::registry& registry) {
+    for (int tick = 0; tick < 26; ++tick) tickWith(layer, registry, kRest, {}, {});
 }
 
 std::string lastFailure(const MagicPortalsLayer& layer) {
@@ -250,6 +272,9 @@ void ATapLandsWhereItPoints() {
     CHECK_MSG(screenOf(registry, glm::dvec2(540.0, 64.0)).y < centre.y &&
                   screenOf(registry, glm::dvec2(400.0, 128.0)).x < centre.x,
               "the level's top is up the screen, and its left is to the left");
+
+    // A level's first tap waits out the placement cooldown, as a player's does.
+    waitForFirstTap(layer, registry);
 
     // From the spawn, (182, 203), a shot at (600, 128) runs into crate_969.
     const glm::dvec2 blocked(600.0, 128.0);
@@ -385,6 +410,11 @@ void LevelsFollowInOrderAndRetryIsInstant() {
     CHECK_MSG(glm::distance(playerPx(registry, layer), spawn) < 1.0, "at " + Point(playerPx(registry, layer)));
 
     // A portal placed, then R: level1 as it loaded, again.
+    //
+    // level1 was reached by CLEARING level0, and its portal manager is as new as
+    // any other level's - the cooldown clocks start again with it. So this tap
+    // waits too, which is the same rule arriving by a different door.
+    waitForFirstTap(layer, registry);
     const glm::dvec2 aim = spawn + glm::dvec2(0.0, -48.0);
     CHECK_MSG(onScreen(registry, aim), Point(aim) + " is on screen");
     tap(layer, registry, screenOf(registry, aim));
@@ -690,6 +720,8 @@ void APortalAndAShotAreTheOriginals() {
     layer.OnAttach(registry);
     CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
     if (layer.SimLevel() == nullptr) return;
+    // A level's first tap waits out the placement cooldown, as a player's does.
+    waitForFirstTap(layer, registry);
     const glm::dvec2 target = playerPx(registry, layer) + glm::dvec2(0.0, -48.0);
     CHECK(onScreen(registry, target));
     tap(layer, registry, screenOf(registry, target));
@@ -742,6 +774,7 @@ void WithoutTheOriginalThePortalIsABox() {
     layer.OnAttach(registry);
     CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
     if (layer.SimLevel() == nullptr) return;
+    waitForFirstTap(layer, registry);
     tap(layer, registry, screenOf(registry, playerPx(registry, layer) + glm::dvec2(0.0, -48.0)));
     CHECK_EQ(Tagged(registry, "Magic Portals Shot Sprite"), 0);
     landShot(layer, registry);
