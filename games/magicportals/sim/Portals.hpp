@@ -47,15 +47,36 @@ inline constexpr int kPairSize = 2;
 // portals.json's "placement", "consumption" and "transit" objects, read strictly.
 // Their markers differ within a block, so each field says which it has.
 struct Rules {
-    int defaultMaxPortals = 0;         // owner-confirmed, despite its block's _guess
-    double collisionRadiusPx = 0.0;    // _guess
+    int defaultMaxPortals = 0; // owner-confirmed, despite its block's _guess
+
+    // TWO RADII, because the original has two and they are unrelated. The port
+    // carried one - the remake's collision_radius_px, a guess of 16 - and used
+    // it for both, which made every no-portal field a quarter of its size.
+    // Both of these are decoded, from the port's own placement.json.
+    //
+    // A placed portal's own circle: g_portalCollisionRadius, 14.
+    double entryRadiusPx = 0.0;
+    // And the circle an antiportal refuses a tap in, TIMES the node's own scale:
+    // half of white_ring.png's 128 px frame, because the original's test is
+    // GetSize().x * 0.5 on the field entity itself. placement.json says why.
+    double antiportalRadiusPx = 0.0;
+
     bool consumeOnTraverse = false;    // owner-confirmed
     bool staticPortalsPersist = false; // owner-confirmed 11 September: they stay
     bool recycleOldestAtCap = false;   // _guess
     Portal::Transit transit;           // _guess, every field
 };
 
+// The remake's portals.json: its placement, consumption and transit objects.
+// Its collision_radius_px is read and checked so a malformed file is still
+// refused, but nothing plays by it - LoadPlacement replaces it.
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
+
+// The port's own placement.json, over the top: the two decoded radii. Both must
+// be there and above zero. A missing one is an error rather than a default,
+// because a default here would be a guess written into code - which is the
+// mistake this file exists to undo.
+bool LoadPlacement(const std::string& path, Rules& out, std::string& error);
 
 // An antiportal. A tap within collision_radius_px times its `scale` is refused
 // (portal_system.gd:136-146). An anti_portal_agent with a speed and a stride

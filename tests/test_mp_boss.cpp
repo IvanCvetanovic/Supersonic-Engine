@@ -438,7 +438,9 @@ void ItsRocksBreakOnTheWorldAndCrush() {
     CHECK_MSG(rig.boss.playerKilled && rig.boss.killedBy == "gentle", "killed by '" + rig.boss.killedBy + "'");
     // One held by a portal goes through it instead of landing.
     portals.budget = 2;
-    portals.rules.collisionRadiusPx = 16.0;
+    // The PORTAL's own radius: this rig is about a rock held by a placement,
+    // not about an antiportal. Its own number, not the decoded 14.
+    portals.rules.entryRadiusPx = 16.0;
     CHECK(portals.TryPlace({700.0, 194.0}));
     const entt::entity held = rock("held", {700.0, 194.0}, {0.0, 200.0});
     rig.boss.BeforeStep(rig.registry);

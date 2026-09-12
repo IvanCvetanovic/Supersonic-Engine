@@ -221,7 +221,7 @@ void APatrollingZoneRefusesWhereItIs() {
     CHECK(agent != nullptr && agent->moving);
     CHECK(field != nullptr && !field->moving);
     if (agent == nullptr || field == nullptr) return;
-    const double radius = run.level.portals.rules.collisionRadiusPx;
+    const double radius = run.level.portals.rules.antiportalRadiusPx;
     const glm::dvec2 stood(674.0, 60.0);
 
     // It swings: a quarter of its period on, it is half its stride from where

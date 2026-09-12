@@ -1367,7 +1367,57 @@ and the dark mage stands on the floor below it.
 
 The whole script reads now, so what follows is fact rather than guess, and none
 of it is changed here.
-- **g_portalCollisionRadius is 14 px.** The port reads the remake's guess, 16.
+- **g_portalCollisionRadius is 14 px, and it is NOT the antiportal's radius.**
+  This bullet used to read "the port reads the remake's guess, 16", which
+  conflated two unrelated quantities. The port's `collisionRadiusPx` drives both
+  a placed portal's own trigger AND the radius in which an antiportal refuses a
+  tap, and only the first is what the constant governs.
+  - **A portal's own radius is 14** (`Portal.angelscript`, bytes 297250..297291;
+    `PortalManager` stores `getScale() * 14`). One scale unit is one port pixel -
+    `preLoop` calls `updateScaleFactor(256)` and the port's view is 256 px tall -
+    so it is 14 port pixels.
+  - **An antiportal's radius is half its own sprite, scaled**, and comes from the
+    entity rather than from any constant. `isPointInAntiPortalField`
+    (`AntiPortalManager.angelscript`, bytes 334800..335020) is
+    `squaredDistance(field.GetPositionXY(), p) < r*r` with
+    `r = GetSize().x * 0.5`, and a dead field refuses nothing. Read out of the
+    engine source, which is the only trustworthy spec here:
+    - the script's `GetSize` binds to `ETHScriptEntity::GetCurrentSize`
+      (`ETHScriptObjRegister.generic.cpp:222,358`) - a rename worth knowing, as
+      no `GetSize` member exists;
+    - `ETHSpriteEntity::GetCurrentSize` (`ETHSpriteEntity.cpp:652`) returns
+      `m_pSprite->GetFrameSize() * m_properties.scale`;
+    - `antiportal.ent` draws `white_ring.png` with `SpriteCut 1x1`, and that file
+      is **128 x 128**, so the frame is the whole image;
+    - `SGlobalScale::scaleEntity` multiplies `m_properties.scale` by the node's
+      own `scale` custom data, and the scene-wide pass that calls it treats an
+      entity with no `scalable` key as scalable, which every antiportal is.
+  - So the refusal radius reads as **64 x the node's scale** in the port's
+    pixels, where the port uses 16 x scale: a quarter of it, on the 45 levels
+    that carry an antiportal (64 nodes, every one carrying a `scale`, from 1.3
+    to 13).
+  - **NOT APPLIED, and the port still plays 16 x scale.** One thing in the level
+    data argues the other way and no file can settle it. level6's
+    antiportal_687 is at (288, 192) with scale 3; at 64 its field covers
+    x 96..480 of a level spanning x -64..576, and the projectile blocker
+    anti_projectile_wall_ent_743 at (313, 185) falls entirely inside it. A wall
+    that stops a shot is pointless where no portal may be placed anyway.
+    test_mp_shot's blocker case says the same as data: with the blocker removed
+    its shot must land at (380, 150), 101 px from the field - outside at 16 x 3,
+    inside at 64 x 3. Changing it turned that suite and test_mp_movers red, and
+    those assertions are evidence rather than chores, so the number stayed.
+    placement.json carries the decoded 64 beside the 16 it plays.
+  - **What would settle it** is the owner playing the original: how big the white
+    ring is on screen next to the character, and whether a portal can be placed
+    just outside the blocker in 1-7.
+  - It is also why the ring looks wrong. In the original the ring is DRAWN at
+    `128 x scale`, so the picture and the rule are the same circle: what you see
+    is the field. The remake draws it at a flat 128 px and refuses within
+    `16 x scale`, and the port followed it - which is the "Scale" item under step
+    9's "what is not drawn".
+  - Not modelled either: a destroyed antiportal (`antiportal_explosion.ent`)
+    refuses nothing, and the original's test is strict (`<`) where the port's
+    is `<=`.
 - **A placed portal perishes 20,000 ms after it opens** unless marked
   dontPerish (ETHCallback_portal). The port keeps its portals.
 - **Every rolling stone crushes a character** it hits hard enough, not only the

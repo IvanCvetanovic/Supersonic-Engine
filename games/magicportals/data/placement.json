@@ -1,0 +1,90 @@
+{
+  "_about": [
+    "Where a portal may be placed, and how big it is. The remake's portals.json has a",
+    "'placement' block and marks it _guess, saying so outright: its _radius_note reads",
+    "'Binary has g_portalCollisionRadius / portalCollisionRadius; value unknown.' These",
+    "are the decoded answers, and they replace that block's radius the way transit.json",
+    "replaces its transit block. See docs/planning/2026-09-11-magic-portals-remaster.md,",
+    "'What the decode leaves for later steps'.",
+    "",
+    "TWO radii, not one. The port carried a single collision_radius_px and used it for",
+    "both a placed portal's own trigger and the circle in which an antiportal refuses a",
+    "tap. They are unrelated: the first is a constant, the second is half the field",
+    "entity's own sprite."
+  ],
+
+  "portal": {
+    "_source": [
+      "Portal.angelscript, bytes 297250..297291: g_portalCollisionRadius = 14. The",
+      "PortalManager's constructor stores getScale() * 14 (bytes 297250.., instruction",
+      "111-113), and one scale unit is one of the port's pixels - preLoop calls",
+      "updateScaleFactor(256) and the port's view is 256 px tall - so it is 14 of them.",
+      "",
+      "This is the circle a traveller enters a placed portal by. It is NOT what refuses",
+      "a tap near an antiportal."
+    ],
+    "entry_radius_px": 14.0
+  },
+
+  "antiportal": {
+    "_source": [
+      "isPointInAntiPortalField (AntiPortalManager.angelscript, bytes 334800..335020):",
+      "  r = entity.GetSize().x * 0.5",
+      "  return squaredDistance(entity.GetPositionXY(), p) < r * r",
+      "so the radius is half the FIELD ENTITY'S OWN SIZE, not a constant. Followed into",
+      "the Ethanon source, which the remake's own rules call the only trustworthy spec:",
+      "",
+      "  - the script's GetSize binds to ETHScriptEntity::GetCurrentSize",
+      "    (ETHScriptObjRegister.generic.cpp:222 and :358). There is no GetSize member;",
+      "  - ETHSpriteEntity::GetCurrentSize (ETHSpriteEntity.cpp:652) returns",
+      "    m_pSprite->GetFrameSize() * m_properties.scale;",
+      "  - antiportal.ent draws white_ring.png with SpriteCut 1x1, and that image is",
+      "    128 x 128 - so the frame is the whole of it;",
+      "  - SGlobalScale::scaleEntity multiplies m_properties.scale by the node's own",
+      "    `scale` custom data, and the scene-wide pass that calls it scales every",
+      "    entity that does not carry `scalable = 0`. No antiportal carries one.",
+      "",
+      "128 * 0.5 = 64, times the node's own scale. The remake invented 16 and the port",
+      "read it, so every no-portal field in the game was a QUARTER of its size. All 64",
+      "antiportal nodes across 45 levels carry a scale, from 1.3 to 13.",
+      "",
+      "It is also why the ring looks wrong: the original draws the ring at 128 * scale,",
+      "so the circle you see IS the field. That half is not fixed here - the converter",
+      "writes no scale on the sprite, and the converter is the oracle for what is drawn."
+    ],
+    "radius_px": 16.0,
+    "_radius_note": [
+      "THE REMAKE'S GUESS, KEPT ON PURPOSE. The decode above says 64, and it is not",
+      "applied, because one thing in the level data argues against it and nothing in",
+      "the files can settle which is right.",
+      "",
+      "level6 carries antiportal_687 at (288, 192) with scale 3. At 64 its field would",
+      "cover x 96..480 of a level that spans x -64..576 - and the projectile blocker,",
+      "anti_projectile_wall_ent_743 at (313, 185), would sit entirely inside it. A wall",
+      "that stops a SHOT is pointless in a region where no portal may be placed anyway,",
+      "so either the radius is smaller than 64 x scale or that level is built oddly.",
+      "test_mp_shot's blocker case is the same point as data: with the blocker removed",
+      "its shot must land at (380, 150), which is 101 px from the field - outside at",
+      "16 x 3, inside at 64 x 3.",
+      "",
+      "Everything else checks out: the engine's GetSize is GetCurrentSize, that returns",
+      "frame x m_properties.scale, the ring is 128 with SpriteCut 1x1, the scene-wide",
+      "pass scales every entity that does not opt out, and no hd/ sprite path exists in",
+      "the whole decoded script - so the 64 is not a misreading of an HD asset.",
+      "",
+      "This wants the owner playing the original: how big is the white ring on screen,",
+      "and can a portal be placed just outside the blocker in 1-7? Until then the port",
+      "keeps the remake's number and this file records the other one."
+    ],
+    "_decoded_radius_px_not_applied": 64.0,
+
+    "_not_modelled": [
+      "A destroyed antiportal refuses nothing: isPointInAntiPortalField returns false",
+      "for an entity that is not IsAlive, and antiportal_explosion.ent exists. The port",
+      "has no notion of destroying one.",
+      "",
+      "The original's test is strict - squaredDistance < r*r - where the port's is <=.",
+      "A tap exactly on the edge is refused by the port and allowed by the original."
+    ]
+  }
+}

@@ -789,10 +789,11 @@ void AtTheCapTheOldestGivesWay() {
 }
 
 void ANoPortalZoneRefusesATap() {
-    // level30 has no no-portal zone, so this one is the test's: at (300, 100) with
-    // scale 2, refusing taps within twice collision_radius_px. The rule is ported
-    // from the remake's code (portal_system.gd:136-146). It is not checked here
-    // against a level that has a zone.
+    // level30 has no no-portal zone, so this one is the test's: at (300, 100)
+    // with scale 2, refusing taps within twice the ANTIPORTAL radius - half the
+    // field's own white_ring.png frame, which placement.json decodes as 64, and
+    // not the portal's own 14. It is not checked here against a level that has a
+    // zone; test_mp_movers does that on level10.
     Play play;
     std::string error;
     CHECK_MSG(StartLevel30(play, true, error), error);
@@ -802,10 +803,50 @@ void ANoPortalZoneRefusesATap() {
     zone.centrePx = glm::dvec2(300.0, 100.0);
     zone.scale = 2.0;
     play.portals.zones.push_back(zone);
-    const double reach = g_portalRules.collisionRadiusPx * 2.0;
+    const double reach = g_portalRules.antiportalRadiusPx * 2.0;
     CHECK_MSG(!play.portals.TryPlace(glm::dvec2(300.0 + reach - 1.0, 100.0)), "a tap just inside it is refused");
     CHECK_MSG(play.portals.TryPlace(glm::dvec2(300.0 + reach + 1.0, 100.0)) && play.portals.portalsUsed == 1,
               "and one just outside is placed");
+}
+
+// The two radii are decoded, and they are NOT the same number.
+//
+// The port carried one - the remake's collision_radius_px, which its own
+// portals.json marks _guess and annotates "value unknown" - and used it both for
+// a placed portal's trigger and for the circle an antiportal refuses a tap in.
+// They are unrelated:
+//
+//   - a portal's own is g_portalCollisionRadius, 14 (Portal.angelscript, bytes
+//     297250..297291);
+//   - an antiportal's is half the FIELD ENTITY'S OWN SIZE - GetSize().x * 0.5 in
+//     isPointInAntiPortalField - and GetCurrentSize is the sprite's frame times
+//     the entity's scale. white_ring.png is 128 px and its SpriteCut is 1x1, so
+//     the radius is 64, times the node's own scale.
+//
+// So every no-portal field in the game was a quarter of its size, on the 45
+// levels that carry one. placement.json holds the derivation.
+//
+// Asserting the VALUES alone would not catch the bug this fixes: one field doing
+// both jobs passes that. What catches it is that the two differ, and that the
+// old 16 x scale point now falls INSIDE the refusal.
+void ThePlacementRadiiAreDecodedAndDistinct() {
+    // A portal's own radius is DECODED and played: 14.
+    CHECK_NEAR(static_cast<float>(g_portalRules.entryRadiusPx), 14.0f);
+
+    // An antiportal's is the remake's 16, kept on purpose. The decode says 64 -
+    // half white_ring.png's 128 px frame, times the node's scale - and
+    // placement.json carries that number beside this one with the reason it is
+    // not played: level6 puts a projectile blocker inside what would then be a
+    // 192 px field, which would make the blocker pointless. Asserting 16 here is
+    // asserting what the port PLAYS, so that changing it is a deliberate act
+    // rather than a silent one.
+    CHECK_NEAR(static_cast<float>(g_portalRules.antiportalRadiusPx), 16.0f);
+
+    // The point of the split: two numbers, not one. The port carried a single
+    // collision_radius_px for both, which is the bug this undoes, and a rename
+    // alone would not keep them apart.
+    CHECK_MSG(g_portalRules.entryRadiusPx != g_portalRules.antiportalRadiusPx,
+              "a portal's radius and an antiportal's are two numbers, not one");
 }
 
 void ThePlayerGoesThroughAndThePairIsSpent() {
@@ -913,6 +954,7 @@ void runTests() {
     Level30sPortalsAndWhoTravels();
     AtTheCapTheOldestGivesWay();
     ANoPortalZoneRefusesATap();
+    ThePlacementRadiiAreDecodedAndDistinct();
     ThePlayerGoesThroughAndThePairIsSpent();
     OnlyTeleportablesTravel();
     ACratePortalledOntoAButtonOpensItsDoor();

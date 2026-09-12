@@ -83,8 +83,14 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     };
 
     double maxPortals = 0.0;
+    // READ AND CHECKED, then dropped. The remake marks its placement block
+    // _guess and its own _radius_note says the value was unknown; the decoded
+    // radii come from the port's placement.json instead (LoadPlacement). It is
+    // still required here so a malformed portals.json is refused rather than
+    // half-read.
+    double remakeRadiusPx = 0.0;
     if (!number("placement", "default_max_portals", maxPortals) ||
-        !number("placement", "collision_radius_px", read.collisionRadiusPx) ||
+        !number("placement", "collision_radius_px", remakeRadiusPx) ||
         !flag("consumption", "consume_on_traverse", read.consumeOnTraverse) ||
         !flag("consumption", "static_portals_persist", read.staticPortalsPersist) ||
         !flag("consumption", "on_cap_recycle_oldest", read.recycleOldestAtCap)) {
@@ -95,10 +101,56 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     return true;
 }
 
+bool LoadPlacement(const std::string& path, Rules& out, std::string& error) {
+    namespace Json = Supersonic::Json;
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        error = path + ": cannot open";
+        return false;
+    }
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    // Named, not a temporary: Json::Parser holds its text by reference.
+    const std::string text = buffer.str();
+
+    Json::Parser parser(text);
+    Json::Value root;
+    if (!parser.Parse(root)) {
+        error = path + ": " + parser.Error();
+        return false;
+    }
+    const Json::Value& portal = root["portal"];
+    const Json::Value& antiportal = root["antiportal"];
+    if (!portal.IsObject() || !antiportal.IsObject()) {
+        error = path + ": portal and antiportal are each an object";
+        return false;
+    }
+    if (!portal["entry_radius_px"].IsNumber() || !antiportal["radius_px"].IsNumber()) {
+        error = path + ": portal.entry_radius_px and antiportal.radius_px are each a number";
+        return false;
+    }
+
+    const double entry = portal["entry_radius_px"].AsNumber(0.0);
+    const double field = antiportal["radius_px"].AsNumber(0.0);
+    // A radius of nothing is a portal nobody can walk into and a field that
+    // refuses nothing, and each would look like a level that works.
+    if (entry <= 0.0 || field <= 0.0) {
+        error = path + ": both radii are above zero";
+        return false;
+    }
+
+    out.entryRadiusPx = entry;
+    out.antiportalRadiusPx = field;
+    return true;
+}
+
 bool State::TryPlace(const glm::dvec2& atPx) {
     if (budget <= 0) return false;
     for (const NoPortalZone& zone : zones) {
-        if (glm::distance(atPx, zone.CentreNowPx()) <= rules.collisionRadiusPx * zone.scale) return false;
+        // The ANTIPORTAL's radius, which is half its own sprite times the node's
+        // scale - not the portal's own 14. placement.json has the decode.
+        if (glm::distance(atPx, zone.CentreNowPx()) <= rules.antiportalRadiusPx * zone.scale) return false;
     }
     if (static_cast<int>(placed.size()) >= budget) {
         if (!rules.recycleOldestAtCap) return false;
@@ -108,7 +160,8 @@ bool State::TryPlace(const glm::dvec2& atPx) {
     portal.id = portalsUsed;
     portal.atPx = atPx;
     const glm::vec3 centre = Units::ToWorld(atPx.x, atPx.y);
-    portal.trigger = Trigger::Circle{glm::vec2(centre.x, centre.y), Units::ToMetres(rules.collisionRadiusPx)};
+    // And the PORTAL's own, g_portalCollisionRadius.
+    portal.trigger = Trigger::Circle{glm::vec2(centre.x, centre.y), Units::ToMetres(rules.entryRadiusPx)};
     placed.push_back(portal);
     ++portalsUsed;
     return true;

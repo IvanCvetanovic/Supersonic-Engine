@@ -1759,7 +1759,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     while (m_portals.size() < placed.size()) {
         m_portals.push_back(makeBox(registry, "Magic Portals Portal", glm::vec3(0.0f), glm::vec3(1.0f), kPortalColour));
     }
-    const double diameterPx = m_level.portals.rules.collisionRadiusPx * 2.0;
+    const double diameterPx = m_level.portals.rules.entryRadiusPx * 2.0;
     for (std::size_t i = 0; i < placed.size(); ++i) {
         placeBox(registry, m_portals[i], placed[i].atPx, glm::dvec2(diameterPx), kMarkerZ, kMarkerDepth, 0.0f);
     }
@@ -1832,7 +1832,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     // each is now: a patrolling one moves.
     const std::vector<Portals::NoPortalZone>& zones = m_level.portals.zones;
     for (std::size_t i = 0; i < m_zones.size() && i < zones.size(); ++i) {
-        const double sizePx = m_level.portals.rules.collisionRadiusPx * zones[i].scale * 2.0;
+        const double sizePx = m_level.portals.rules.antiportalRadiusPx * zones[i].scale * 2.0;
         placeBox(registry, m_zones[i], zones[i].CentreNowPx(), glm::dvec2(sizePx), kZoneZ, kZoneDepth, 0.0f);
     }
 
