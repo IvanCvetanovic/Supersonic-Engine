@@ -1675,13 +1675,35 @@ file's agree:
 | playBeholderDamageSound | beholder_damage (a literal) |
 | playBeholderSpikesSound | spikes (a literal) |
 
-**NOT settled, and not to be taken from the table above.** The index was read
-from the operand on the line before the array is pushed, and a hook that both
-indexes the array AND names a literal defeats that: `playLightOffSound` reads
-as index 9 here and yet plainly plays `reverse_magical_sweep_08.mp3`. Others
-are implausible on their face - `playDoorUnlockSound` as `crystal_gather_G`,
-`playWoodDragSound` as `portal_fail`, `playCrystalVanishSound` as `spike_hit`.
-Each of those wants its own function read before it is wired.
+**SETTLED, by reading what reaches `PlaySample`.** The table above was built by
+taking the index on the line before the array is pushed, and that is the wrong
+rule: a hook sets the sample's SPEED on one entry and PLAYS another.
+`playWoodDragSound` is the proof - it sets the speed on entry 2 and plays entry
+22, `wood_drag`, which is what its name says. Keyed on the play instead, all 61
+hooks resolve and the names agree with the files throughout.
+
+Three corrections to the table above, and one addition:
+- `playWoodDragSound` plays `wood_drag`, not `portal_fail`. A random speed
+  between 0.5 and 2.0, rate-limited by a 200 ms timer.
+- `playDoorUnlockSound` really is `crystal_gather_G` at half speed, and
+  `playCrystalVanishSound` really is `spike_hit`. Surprising, and what the
+  bytecode says.
+- Some hooks play TWO samples: `playExplosionSound` is `explosion_huge` and
+  `explosion_small` together; `playLightOffSound` is
+  `reverse_magical_sweep_08` and `portal_created`; `playLightOnSound` and
+  `playRoundaboutSound` are `magical_sweep_08` and `portal_created`.
+- Only two compute their entry: `playCrystalPickSound` takes `rand(1) + 23`,
+  the two `crystal_gather` variants, and `playRandomWoodSound` the two `wood`
+  ones.
+
+**What blocks it is the engine, not the decode.** The audio loader is WAV-only
+- `AssetDatabase` lists `.wav` alone, `AudioSystem` re-reads `.wav`, the
+default clip is `ambient.wav` - and the original ships 46 mp3s, 3.3 MB. There
+is no mp3 decoder in `third_party` and no ffmpeg, sox or anything like them on
+this machine. So wiring any of this needs a decision first: a single-header mp3
+decoder in the engine, which HUSK and Wolf Brigade would share; or converting
+the files, which needs a tool installing and leaves derived Asantee assets that
+stay outside this repository like the art; or leaving sound unported.
 
 **Details worth keeping.** Volume and sample speed are set before every
 `PlaySample`; `playDoorOpenSound` scales the speed by `3000 / doorOpenStride`,
