@@ -349,7 +349,10 @@ endif()
 # links it, so the executable gets them without the link interface advertising
 # an XAudio2 dependency to every test target.
 if (WIN32)
-    target_link_libraries(SupersonicCore PRIVATE xaudio2 ole32)
+    # Media Foundation decodes MP3 (AudioClip::LoadMp3) and, like XAudio2,
+    # ships with Windows - so recorded audio in a compressed format costs no
+    # third-party dependency either.
+    target_link_libraries(SupersonicCore PRIVATE xaudio2 ole32 mfplat mfreadwrite mfuuid)
 elseif (UNIX AND NOT APPLE AND NOT ANDROID)
     find_path(ALSA_INCLUDE_DIR alsa/asoundlib.h)
     find_library(ALSA_LIBRARY NAMES asound)

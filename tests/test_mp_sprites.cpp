@@ -12,6 +12,8 @@
 
 #include "TestHarness.hpp"
 
+#include "core/AudioClip.hpp"
+
 #include "sim/Art.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Sprites.hpp"
@@ -433,6 +435,57 @@ void AnOffsetAndATurn() {
 
 } // namespace
 
+// ---- the original's sounds, decoded -------------------------------------------
+
+// One of the original's own mp3s, through the engine's decoder.
+//
+// Here rather than in test_audio because the file is the ORIGINAL's: this suite
+// already knows where its assets are and already skips when they are absent,
+// and test_audio links the engine alone and has no path to them.
+//
+// Asserts the SHAPE rather than particular numbers - channels, a rate, 16-bit,
+// a duration above zero - because the engine's contract is what matters here
+// and a sample rate copied out of a file I had not measured would be a pin on
+// nothing. What it really proves is that the decode path runs at all: both
+// toolchains build it, and no suite in the tree had ever decoded a byte.
+void TheOriginalsMp3sDecode() {
+    const std::string path = kOriginal + "/soundfx/door_open.mp3";
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) {
+        std::printf("test_mp_sprites: the mp3 decode SKIPPED - no %s.\n", path.c_str());
+        return;
+    }
+
+    Supersonic::AudioClip clip;
+    std::string error;
+    const bool ok = Supersonic::AudioClip::Load(path, clip, error);
+
+#if defined(_WIN32)
+    CHECK_MSG(ok, "door_open.mp3 did not decode: " + error);
+    if (!ok) return;
+    CHECK(clip.valid());
+    CHECK_MSG(clip.channels >= 1 && clip.channels <= 2,
+              "channels " + std::to_string(clip.channels));
+    CHECK(clip.sampleRate > 0);
+    CHECK_EQ(static_cast<int>(clip.bitsPerSample), 16);
+    CHECK_MSG(clip.durationSeconds() > 0.0f,
+              "duration " + std::to_string(clip.durationSeconds()));
+#else
+    // Media Foundation is Windows only, so elsewhere this must fail with a
+    // reason rather than half-decode or crash.
+    CHECK_MSG(!ok, "mp3 must not decode without Media Foundation");
+    CHECK(!error.empty());
+    CHECK(!clip.valid());
+#endif
+
+    // And a sound the engine does not read is refused by name, on every
+    // platform, rather than being guessed at.
+    Supersonic::AudioClip other;
+    std::string otherError;
+    CHECK(!Supersonic::AudioClip::Load(kOriginal + "/soundfx/door_open.flac", other, otherError));
+    CHECK(!otherError.empty());
+}
+
 // ---- the particle systems the .ent files carry --------------------------------
 
 // crystal.ent and fire32.ent, read out of the original's own files. Two
@@ -569,6 +622,7 @@ int main() {
         TheOriginalsImagesAreCutAsTheEntsSay();
         TheOriginalsParticlesAreRead();
         AnEntityWithoutParticlesSaysSoWithoutFailing();
+        TheOriginalsMp3sDecode();
     } else {
         std::printf("test_mp_sprites: the original's images SKIPPED - needs its extracted assets at %s.\n",
                     kOriginal.c_str());

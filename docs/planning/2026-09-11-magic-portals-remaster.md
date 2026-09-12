@@ -1696,14 +1696,59 @@ Three corrections to the table above, and one addition:
   the two `crystal_gather` variants, and `playRandomWoodSound` the two `wood`
   ones.
 
-**What blocks it is the engine, not the decode.** The audio loader is WAV-only
-- `AssetDatabase` lists `.wav` alone, `AudioSystem` re-reads `.wav`, the
-default clip is `ambient.wav` - and the original ships 46 mp3s, 3.3 MB. There
-is no mp3 decoder in `third_party` and no ffmpeg, sox or anything like them on
-this machine. So wiring any of this needs a decision first: a single-header mp3
-decoder in the engine, which HUSK and Wolf Brigade would share; or converting
-the files, which needs a tool installing and leaves derived Asantee assets that
-stay outside this repository like the art; or leaving sound unported.
+**What blocked it was the engine, not the decode.** The audio loader was
+WAV-only - `AssetDatabase` lists `.wav` alone, `AudioSystem` re-reads `.wav`,
+the default clip is `ambient.wav` - and the original ships 46 mp3s, 3.3 MB.
+There was no mp3 decoder in `third_party` and no ffmpeg, sox or anything like
+them on this machine.
+
+## Step 16 - the engine decodes MP3 (built)
+
+The owner chose the decoder rather than converting the files. Media Foundation
+does it: it ships with Windows, so it costs no third-party dependency, and it
+mirrors the bargain `AudioEngine` already strikes - XAudio2 is a real backend
+on Windows and a documented no-op elsewhere, and now decoding is too. It also
+leaves the original's mp3s where they are, with no converted copies of somebody
+else's assets lying about, which is the rule the art has followed throughout.
+
+Vendoring `dr_mp3` or `minimp3` would have been the portable answer and was not
+available: neither is on this machine, and several thousand lines of somebody
+else's decoder is not something to type out or fetch blind.
+
+- `AudioClip::LoadMp3` reads through an `IMFSourceReader` configured for
+  interleaved 16-bit PCM, so MF inserts its own decoder and the clip contract
+  is unchanged. It holds the same limits `LoadWav` states - one or two channels
+  - and refuses a file that changes format part way through rather than mixing
+  two rates into one buffer.
+- `AudioClip::Load` picks the loader by extension, and `AudioEngine::LoadClip`
+  goes through it. A name the engine does not read is refused BY NAME, rather
+  than handed to the WAV parser to report "not a RIFF/WAVE file" and send
+  whoever reads that looking in the wrong place.
+- Media Foundation is started once per process and never shut down, which is
+  deliberate: `MFShutdown` is per-process, and one thread decoding while
+  another shuts the platform down is a crash inside somebody else's library.
+- CMake links `mfplat`, `mfreadwrite` and `mfuuid` beside `xaudio2` on Windows.
+
+**The cost, stated plainly: there is no sound on Linux.** `LoadMp3` there fails
+with a reason saying Media Foundation is Windows only. If sound on Linux is
+ever wanted, that is when a vendored decoder earns its place.
+
+**Tested on both halves of that split**, which is the whole reason both
+toolchains matter here:
+- `test_audio` gains two device-free cases - an unknown extension refused by
+  name, and a missing `.mp3` failing with a reason rather than crashing. Its
+  floor rose from 47 to 54 with them: a floor left behind by the tests it
+  guards stops guarding.
+- `test_mp_sprites` decodes one of the original's own files, `door_open.mp3`.
+  On Windows it asserts a valid clip, one or two channels, a rate, 16-bit and a
+  duration above zero; elsewhere it asserts the refusal. That difference is
+  visible in the counts: 155 checks on MSVC against 152 on GCC.
+
+GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_audio` 69 and 72
+(the voice cases need an output device), `test_mp_sprites` 152 and 155.
+
+**The port still plays nothing.** The engine can decode the original's sounds
+now; wiring the 61 hooks to the events is the next step.
 
 **Details worth keeping.** Volume and sample speed are set before every
 `PlaySample`; `playDoorOpenSound` scales the speed by `3000 / doorOpenStride`,

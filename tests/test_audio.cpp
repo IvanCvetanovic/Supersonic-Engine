@@ -538,7 +538,48 @@ static void testAClipWithNoBitDepthIsRefusedRatherThanSilent() {
               "rather than caching something that can never sound");
 }
 
+// --- Deciding a decoder by the file's name --------------------------------
+//
+// The engine reads WAV and, on Windows, MP3. What it must never do is guess:
+// a name it does not know is refused by name rather than fed to the WAV
+// parser, which would report "not a RIFF/WAVE file" and send whoever reads
+// that message looking in the wrong place.
+//
+// The real decode is proved against one of Magic Portals' own mp3s, in
+// test_mp_sprites - that suite knows where the original's assets are and skips
+// when they are absent, and this one links the engine alone.
+void testAnUnknownSoundExtensionIsRefusedByName() {
+    AudioClip clip;
+    std::string error;
+
+    CHECK_MSG(!AudioClip::Load("music/theme.flac", clip, error), "a .flac is not read");
+    CHECK_MSG(error.find("theme.flac") != std::string::npos,
+              "and the message names the file: " + error);
+    CHECK(!clip.valid());
+
+    // No extension at all is the same answer.
+    CHECK(!AudioClip::Load("music/theme", clip, error));
+    CHECK(!error.empty());
+}
+
+void testAMissingMp3FailsWithAReasonRatherThanCrashing() {
+    // The path is decided by the extension, so this reaches LoadMp3 on every
+    // platform: on Windows it is a file Media Foundation cannot open, and
+    // elsewhere it is the documented refusal. Either way it must say so and
+    // leave the clip empty.
+    AudioClip clip;
+    std::string error;
+    CHECK(!AudioClip::LoadMp3("no_such_sound_file_here.mp3", clip, error));
+    CHECK_MSG(!error.empty(), "a failed MP3 load explains itself");
+    CHECK(!clip.valid());
+
+    CHECK(!AudioClip::Load("no_such_sound_file_here.mp3", clip, error));
+    CHECK(!clip.valid());
+}
+
 static void runTests() {
+    testAnUnknownSoundExtensionIsRefusedByName();
+    testAMissingMp3FailsWithAReasonRatherThanCrashing();
     testLoadsValidWav();
     testSkipsUnknownChunks();
     testRejectsNonRiff();
@@ -564,8 +605,12 @@ static void runTests() {
     testAnUnregisteredNameStillFailsRatherThanInventingSilence();
 }
 
-// The floor is what runs WITHOUT an output device: 47 checks, where a machine
-// with one runs 62. The voice cases above say they are not counted in it, and
+// The floor is what runs WITHOUT an output device: 54 checks, where a machine
+// with one runs more. The voice cases above say they are not counted in it, and
 // until this number agreed with them a machine with no sound card - a Linux CI
 // runner, WSL - failed the suite for skipping exactly what it was told it may.
-TEST_MAIN("test_audio", 47)
+//
+// Raised from 47 with the two decoder-choice cases, which need no device: they
+// only ask AudioClip which loader a name resolves to. A floor left behind by
+// the tests it guards stops guarding, which is the one thing it is for.
+TEST_MAIN("test_audio", 54)

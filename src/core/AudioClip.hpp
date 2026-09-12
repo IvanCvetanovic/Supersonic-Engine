@@ -44,6 +44,24 @@ struct AudioClip {
     // Returns false and leaves the clip empty on anything it does not support,
     // rather than guessing.
     static bool LoadWav(const std::string& path, AudioClip& out, std::string& error);
+
+    // Decodes an MP3 to 16-bit PCM.
+    //
+    // ON WINDOWS ONLY, through Media Foundation, which ships with the system -
+    // so this adds no third-party dependency, exactly as the XAudio2 backend
+    // adds none. Everywhere else it fails with a reason saying so, which is the
+    // same bargain AudioEngine already strikes for output: a real backend on
+    // Windows, a documented no-op elsewhere.
+    //
+    // Why at all: the one game in the tree that has recorded audio is Magic
+    // Portals, and the original ships 46 mp3s. Converting them would leave
+    // derived copies of somebody else's assets lying about; decoding them where
+    // they are does not.
+    static bool LoadMp3(const std::string& path, AudioClip& out, std::string& error);
+
+    // Decodes by the file's extension: .wav through LoadWav, .mp3 through
+    // LoadMp3, anything else refused by name. Case-insensitive.
+    static bool Load(const std::string& path, AudioClip& out, std::string& error);
 };
 
 } // namespace Supersonic

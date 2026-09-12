@@ -404,7 +404,8 @@ const AudioClip* AudioEngine::LoadClip(const std::string& path) {
 
     AudioClip clip;
     std::string error;
-    if (!AudioClip::LoadWav(path, clip, error)) {
+    // By extension: a WAV and an MP3 are both clips by the time they get here.
+    if (!AudioClip::Load(path, clip, error)) {
         SUPERSONIC_LOG_ERROR("AudioEngine") << error << std::endl;
         // Cache the failure so a missing file is not re-opened every frame.
         m_clips.emplace(path, AudioClip{});
