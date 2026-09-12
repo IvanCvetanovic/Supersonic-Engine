@@ -1,0 +1,291 @@
+{
+  "_about": [
+    "The original's sounds, decoded from android_game.bin, and which of the port's own",
+    "events plays each. See docs/planning/2026-09-11-magic-portals-remaster.md.",
+    "",
+    "Three parts, all data on purpose:",
+    "  - `hooks` is the original's AudioManager, function by function: what each one",
+    "    plays, and the volume, sample speed and rate limit it sets.",
+    "  - `music` is its five tracks and the volume and looping each is started at.",
+    "  - `events` maps what the PORT can observe to one of those hooks. A port event",
+    "    with no hook plays nothing, and a hook no event names is carried anyway, so",
+    "    the table stays the original's rather than being trimmed to today's port.",
+    "",
+    "The files live in the original's soundfx/ and, like its art, stay outside this",
+    "repository. They are mp3; the engine decodes them through Media Foundation on",
+    "Windows and refuses them elsewhere, so a Linux build is silent by design.",
+    "",
+    "EVERY NAME BELOW IS DECODED, none invented. The original keeps two string",
+    "arrays, and the byte offsets are in the doc:",
+    "  g_sfxNames, 30 entries, in this order:",
+    "     0 button              1 explosion_small   2 portal_fail",
+    "     3 portal_reflect      4 demolition        5 fireball",
+    "     6 portal_killed       7 teleport          8 explosion_huge",
+    "     9 portal_created     10 portal_launch    11 final_door_sound",
+    "    12 stone_hit          13 elevator         14 burn",
+    "    15 wood01             16 wood02           17 door_open",
+    "    18 fall               19 projectile_reflect  20 magical_sweep_08",
+    "    21 dark_whoosh_17     22 wood_drag        23 crystal_gather_G",
+    "    24 crystal_gather_E   25 spike_hit        26 crystal_temp_alert",
+    "    27 enemy_spotted      28 flesh_heavy_impact_03",
+    "    29 orchestral_transition_stinger_06",
+    "  g_musicNames, 5 entries: 0 running_with_wolves_loop_b, 1 finding_wonderland_60_loop,",
+    "    2 warlords_loop_a, 3 rocket_space_shuttle_rocket_distant, 4 back_to_nestopia.",
+    "Those two arrays plus ten names written as literals account for 45 of the 46",
+    "files in soundfx/. The forty-sixth, crystal_gather.mp3, is named nowhere in the",
+    "program: a leftover beside the _G and _E variants that replaced it.",
+    "",
+    "HOW THE HOOKS WERE READ, because a first reading was wrong: a hook sets the",
+    "sample SPEED on one entry and PLAYS another. Keyed on the index that reaches",
+    "PlaySample they all resolve. Keyed on the first index pushed - the first",
+    "reading - playWoodDragSound came out as portal_fail, which is the entry it only",
+    "sets the speed on.",
+    "",
+    "ONE DIVERGENCE, STATED: in Ethanon a sample's speed and volume are persistent",
+    "state on the NAMED sample, so a hook changes the sound of every later hook that",
+    "plays the same file. That is why playVictorySound sets the speed back to 1.0 -",
+    "playLightOnSound and playRoundaboutSound leave magical_sweep_08 at 0.6 - and why",
+    "playDoorUnlockSound inherits whatever volume playCrystalPickSound last set on",
+    "crystal_gather_G. The engine's Play() takes volume and pitch per voice, so each",
+    "hook below is played with what it sets and nothing bleeds between them. The",
+    "port does not reproduce the bleed; it is a quirk of the original's mixer, not a",
+    "sound anyone designed."
+  ],
+
+  "_source": "AudioManager.angelscript, android_game.bin",
+
+  "hooks": {
+    "playPortalCreatedSound": { "files": ["portal_created.mp3"] },
+    "playPortalLaunchSound": { "files": ["portal_launch.mp3"] },
+    "playPortalFailedSound": { "files": ["portal_fail.mp3"] },
+    "playPortalKilledSound": { "files": ["portal_killed.mp3"] },
+    "playTeleportSound": { "files": ["teleport.mp3"] },
+    "playLevelFinishedSound": { "files": ["teleport.mp3"] },
+
+    "playCrystalPickSound": {
+      "files": ["crystal_gather_G.mp3", "crystal_gather_E.mp3"],
+      "pick": "random",
+      "volume": 0.8,
+      "min_interval_ms": 50,
+      "timer": "crystal",
+      "_note": "rand(1) + 23: the two gather variants, on the shared crystal timer"
+    },
+    "playCrystalTempAlertSound": {
+      "files": ["crystal_temp_alert.mp3"],
+      "min_interval_ms": 50,
+      "timer": "crystal",
+      "_note": "reads the SAME AudioManager.crystalSoundTimer as the pick above, so the two rate-limit each other rather than each its own"
+    },
+    "playCrystalVanishSound": {
+      "files": ["spike_hit.mp3"],
+      "_note": "entry 25. Surprising, and what the bytecode says"
+    },
+
+    "playDoorOpenSound": {
+      "files": ["door_open.mp3"],
+      "speed": "3000 / doorOpenStride",
+      "_note": "a slow door is a slow sound; the port passes the door's own stride"
+    },
+    "playDoorCloseSound": { "files": ["door_open.mp3"] },
+    "playDoorUnlockSound": {
+      "files": ["crystal_gather_G.mp3"],
+      "speed": 0.5,
+      "_note": "entry 23 at half speed, not a door sound at all"
+    },
+    "playFinalDoorSound": { "files": ["final_door_sound.mp3"] },
+
+    "playElevatorSound": { "files": ["elevator.mp3"] },
+    "playStoneHitSound": { "files": ["stone_hit.mp3"] },
+    "playStoneAppearSound": { "files": ["portal_created.mp3"] },
+    "playDemolitionSound": { "files": ["demolition.mp3"] },
+    "playExplosionSound": {
+      "files": ["explosion_huge.mp3", "explosion_small.mp3"],
+      "pick": "both",
+      "_note": "two samples together, not a choice between them"
+    },
+    "playBurnSound": { "files": ["burn.mp3"] },
+    "playFireballSound": { "files": ["fireball.mp3"] },
+    "playFireExtinguishSound": { "files": ["spikes.mp3"] },
+
+    "playFallSound": { "files": ["fall.mp3"] },
+    "playDieByFallSound": { "files": ["fall.mp3"] },
+    "playDeathSound": { "files": ["dark_whoosh_17.mp3"] },
+    "playVictorySound": {
+      "files": ["magical_sweep_08.mp3"],
+      "speed": 1.0,
+      "_note": "sets the speed BACK to 1.0, because the light and roundabout hooks leave this same file at 0.6"
+    },
+
+    "playReflectSound": { "files": ["projectile_reflect.mp3"] },
+    "playEnemyShootSound": { "files": ["projectile_reflect.mp3"] },
+    "playEnemyShootExplodeSound": { "files": ["portal_fail.mp3"] },
+    "playEnemySpottedSound": { "files": ["enemy_spotted.mp3"] },
+
+    "playRandomWoodSound": {
+      "files": ["wood01.mp3", "wood02.mp3"],
+      "pick": "random",
+      "_note": "computed index, the two wood entries"
+    },
+    "playWoodDragSound": {
+      "files": ["wood_drag.mp3"],
+      "speed": "random 0.5 to 2.0",
+      "min_interval_ms": 200,
+      "timer": "wood",
+      "_note": "sets the speed on entry 2 and plays entry 22; the played one is what is heard"
+    },
+
+    "playLightOnSound": {
+      "files": ["magical_sweep_08.mp3", "portal_created.mp3"],
+      "pick": "both",
+      "speed": 0.6
+    },
+    "playLightOffSound": {
+      "files": ["reverse_magical_sweep_08.mp3", "portal_created.mp3"],
+      "pick": "both",
+      "speed": 0.6,
+      "_note": "names one file as a literal and takes the other from the array"
+    },
+    "playRoundaboutSound": {
+      "files": ["magical_sweep_08.mp3", "portal_created.mp3"],
+      "pick": "both",
+      "speed": 0.6,
+      "_note": "byte for byte the same as playLightOnSound"
+    },
+    "playLightSwitchSound": {
+      "files": ["spike_hit.mp3"],
+      "_note": "its whole body is a call to playKeyUnlockSound"
+    },
+
+    "playBeholderAppearSound": { "files": ["beholder_appear.mp3"] },
+    "playBeholderCloseEyesSound": { "files": ["beholder_appear.mp3"] },
+    "playBeholderDamageSound": { "files": ["beholder_damage.mp3"] },
+    "playBeholderHitSound": { "files": ["demolition.mp3"] },
+    "playBeholderSpikesSound": { "files": ["spikes.mp3"] },
+    "playBeholderSpikeHitSound": { "files": ["spike_hit.mp3"] },
+
+    "playGhostAppearSound": {
+      "files": ["beholder_appear.mp3", "ghost_appear_whoosh.mp3"],
+      "pick": "both"
+    },
+    "playGhostDamageSound": { "files": ["beholder_appear.mp3"] },
+    "playGhostDeathSound": { "files": ["beholder_damage.mp3"] },
+    "playGhostItemAppearSound": { "files": ["portal_created.mp3"] },
+
+    "playDragonAppearSound": { "files": ["beholder_damage.mp3"] },
+    "playDragonTakeOffSound": { "files": ["dragon_lost.mp3"] },
+    "playDarkDragonAppearSound": { "files": ["beholder_damage.mp3"] },
+    "playDarkDragonDamageSound": { "files": ["beholder_damage.mp3"] },
+    "playDarkDragonDeathSound": { "files": ["dragon_lost.mp3"] },
+    "playDarkDragonOpenMouthSound": { "files": ["dragon_lost.mp3"] },
+
+    "playMinionFallSound": { "files": ["flesh_heavy_impact_03.mp3"] },
+    "playMinionSmashSound": { "files": ["flesh_heavy_impact_03.mp3"] },
+    "playMinionQuestionMarkSound": { "files": ["enemy_confused.mp3"] },
+
+    "playKeyPickSound": { "files": ["crystal_gather_E.mp3"] },
+    "playKeyUnlockSound": { "files": ["spike_hit.mp3"] },
+    "playRedKeyGotSound": { "files": ["red_key_got.mp3"] },
+    "playShockDiamondPickSound": { "files": ["shock_diamond_pick.mp3"] },
+    "playShockStrikeSound": { "files": ["shock_strike.mp3"] },
+
+    "playAchievementSound": { "files": ["orchestral_transition_stinger_06.mp3"] },
+    "playAchievementPickSound": { "files": ["button.mp3"] },
+    "playAchievementPickDeniedSound": { "files": ["portal_killed.mp3"] },
+    "playAchievementDismissButtonSound": { "files": ["portal_killed.mp3"] },
+
+    "getButtonSoundName": {
+      "files": ["button.mp3"],
+      "_note": "a getter, not a player: entry 0, which the framework's Button plays on every press. This is what a menu button sounds like"
+    },
+    "getRetryButtonSound": {
+      "files": ["teleport.mp3"],
+      "_note": "entry 7, and the same for getRestartLevelButtonSound, getExitLevelButtonSound, getSkipLevelButtonSound, getNextLevelButtonSound, getItemSelectButtonSoundName and getStartAchievementSoundName - the level's own buttons all sound like a teleport"
+    },
+    "getAchievementSoundName": { "files": ["orchestral_transition_stinger_06.mp3"] }
+  },
+
+  "_music_note": [
+    "playMusic(name, volume, loop) loads the track, sets its looping and volume and",
+    "plays it, and does NOTHING while the music switch is off. The port has no",
+    "MusicSwitchManager, so its music plays unconditionally - a divergence, stated.",
+    "setDefaultMusicVolume re-derives the same two numbers independently: 0.6 when",
+    "the current track is g_musicNames[0], 0.7 otherwise.",
+    "Game.angelscript starts playGameMusic(isBossFight) for a level unless the level",
+    "says noMusic."
+  ],
+
+  "music": {
+    "menu": {
+      "file": "warlords_loop_a.mp3",
+      "volume": 1.0,
+      "loop": true,
+      "_from": "playMenuMusic, g_musicNames[2]"
+    },
+    "game": {
+      "file": "finding_wonderland_60_loop.mp3",
+      "volume": 0.7,
+      "loop": true,
+      "_from": "playGameMusic(false), g_musicNames[1]"
+    },
+    "boss": {
+      "file": "running_with_wolves_loop_b.mp3",
+      "volume": 0.6,
+      "loop": true,
+      "_from": "playGameMusic(true), g_musicNames[0]"
+    },
+    "rocket": {
+      "file": "rocket_space_shuttle_rocket_distant.mp3",
+      "volume": 1.0,
+      "loop": false,
+      "_from": "playRocketMusic, g_musicNames[3]"
+    },
+    "back_home": {
+      "file": "back_to_nestopia.mp3",
+      "volume": 1.0,
+      "loop": false,
+      "_from": "playBackHomeMusic, g_musicNames[4]"
+    }
+  },
+
+  "_events_note": [
+    "What the port can see happen, and the hook it plays. The port watches its own",
+    "simulation across a tick - a portal placed, a shot fired, a crystal collected -",
+    "and plays the sound on the FRAME, never on the tick, so nothing here can reach",
+    "the state hash. An event whose hook is empty is silent."
+  ],
+
+  "events": {
+    "portal_placed": "playPortalCreatedSound",
+    "shot_fired": "playPortalLaunchSound",
+    "shot_failed": "playPortalFailedSound",
+    "shot_reflected": "playReflectSound",
+    "traversal": "playTeleportSound",
+    "portal_spent": "playPortalKilledSound",
+
+    "crystal_collected": "playCrystalPickSound",
+    "crystal_expired": "playCrystalVanishSound",
+
+    "door_opened": "playDoorOpenSound",
+    "door_closed": "playDoorCloseSound",
+    "button_pressed": "",
+    "lift_turned": "playElevatorSound",
+
+    "wall_broken": "playDemolitionSound",
+    "stone_thrown": "playStoneAppearSound",
+    "stone_broken": "playStoneHitSound",
+
+    "player_died": "playDeathSound",
+    "level_finished": "playLevelFinishedSound",
+    "medal_shown": "playVictorySound",
+
+    "boss_hurt": "playBeholderDamageSound",
+    "boss_eyes_shut": "playBeholderCloseEyesSound",
+    "boss_spikes": "playBeholderSpikesSound",
+    "boss_rock_broken": "playBeholderHitSound",
+    "boss_dead": "playExplosionSound",
+    "boss_button_raised": "playFinalDoorSound",
+
+    "menu_button": "getButtonSoundName",
+    "level_button": "getRetryButtonSound"
+  }
+}

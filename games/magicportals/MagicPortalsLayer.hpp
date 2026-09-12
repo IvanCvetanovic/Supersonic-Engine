@@ -14,11 +14,14 @@
 
 #include <random>
 
+#include "core/AudioEngine.hpp"
+
 #include "sim/Camera.hpp"
 #include "sim/Chapters.hpp"
 #include "sim/Game.hpp"
 #include "sim/Art.hpp"
 #include "sim/Particles.hpp"
+#include "sim/Sounds.hpp"
 #include "sim/Sprites.hpp"
 
 namespace MagicPortals {
@@ -175,6 +178,17 @@ public:
     // the click loop below iterates that vector - so a reference would dangle
     // before the level it names could be read out of it.
     bool PressMenu(entt::registry& registry, MenuButton button);
+
+    // The sound events latched and not yet played, oldest first.
+    //
+    // For the suites, and it is the only way to test this half at all: a sound
+    // is played on the FRAME, so a run with no audio device - which is every
+    // suite, every headless render, and Linux - plays nothing and would
+    // otherwise leave nothing to assert. This is what OnUpdate would play.
+    std::vector<std::string> LatchedSounds() const;
+
+    // Why there is no sound, when there is none.
+    const std::string& SoundsError() const { return m_soundsError; }
 
     // How many times the player has died this session. Each death is a retry.
     int Deaths() const { return m_deaths; }
@@ -380,6 +394,80 @@ private:
     std::vector<Emitter> m_emitters;
     // Seeded, so a run looks the same twice and a screenshot can be compared.
     std::mt19937 m_particleRandom{20260912u};
+
+    // ---- sound: the original's AudioManager, carried as data ----------------
+    //
+    // PER FRAME, exactly like the particles above and for the same reason. The
+    // TICK only latches what happened - a counter that went up, a flag that
+    // turned over - and OnUpdate plays it. Nothing below reaches Game::Level,
+    // the simulation's clock or the state hash, so a level plays identically
+    // with no audio device at all. That is not a nicety: it is how every suite
+    // and every headless render runs, and what keeps a replay a replay.
+    void loadSounds();
+    // Remember that `event` happened on this tick. Named for sounds.json's
+    // events table; one the file leaves silent costs nothing here. A door
+    // brings its own stride: its hook's speed is 3000 / it.
+    void latch(const char* event, double doorStrideMs = 0.0);
+    // What the simulation did this tick, against what it looked like last.
+    void latchSimSounds();
+    void playLatched(entt::registry& registry, float deltaTime);
+    // The track the game should be playing now - the menu's, the level's, or
+    // its boss's - started and stopped as that changes.
+    void updateMusic(entt::registry& registry);
+    void stopMusic(entt::registry& registry);
+    double soundRandom(double from, double to);
+    // A hook's sample speed as the engine's pitch: a number it states, a draw
+    // from its range, or the opening door's own 3000 / stride.
+    float pitchFor(const Sounds::Hook& hook, double doorStrideMs);
+
+    // What the simulation looked like on the previous tick, so this one can
+    // tell what changed. Counters and one-way flags only, and nothing here is
+    // ever read back into the simulation.
+    struct Watch {
+        bool valid = false;
+        int portalsUsed = 0;
+        int traversals = 0;
+        int shotsFired = 0;
+        int shotsFailed = 0;
+        int reflections = 0;
+        int crystalsCollected = 0;
+        int crystalsExpired = 0;
+        int staticsLive = 0;
+        int wallsBroken = 0;
+        int stonesThrown = 0;
+        int bossHits = 0;
+        int bossVolleys = 0;
+        int bossRocksBroken = 0;
+        int bossFrame = 0;
+        bool bossGone = false;
+        bool bossButtonRaised = false;
+        // char rather than bool: std::vector<bool> is not a container of bools,
+        // and these are only ever compared with the last tick's.
+        std::vector<char> doorsOpening;
+        std::vector<char> liftsForward;
+    };
+
+    // One event the tick saw, with what playing it needs to know.
+    struct Latched {
+        std::string event;
+        double doorStrideMs = 0.0;
+    };
+
+    Sounds::Rules m_soundRules;
+    std::string m_soundsError;      // why there is no sound, when there is none
+    std::vector<Latched> m_latched; // this tick's events, in the order they happened
+    Watch m_watch;
+    double m_soundClockMs = 0.0;               // the frames' own clock, for the shared timers
+    std::map<std::string, double> m_timerAtMs; // when each shared timer last let one through
+    // Seeded and the layer's OWN, for the reason the particles' generator is:
+    // the engine's is one process-global stream every other drawer shares, and
+    // a run has to sound the same twice.
+    std::mt19937 m_soundRandom{20260913u};
+    std::string m_track; // which of sounds.json's tracks is playing, or empty
+    // A looping voice is never "finished", so ReapFinishedVoices leaves it
+    // alone for ever: the layer holds this and stops it itself, or menu to
+    // level to menu leaves two tracks playing over each other.
+    Supersonic::AudioEngine::VoiceId m_musicVoice{Supersonic::AudioEngine::kInvalidVoice};
 
     // The menu. Screen::None while a level is played.
     Screen m_screen{Screen::None};

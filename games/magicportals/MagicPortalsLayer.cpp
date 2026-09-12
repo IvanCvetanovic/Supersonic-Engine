@@ -123,6 +123,7 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
     clock.fixedDelta = kTick;
 
     bindInput();
+    loadSounds();
     std::string error;
     if (!Chapters::Load(m_paths.chapters, m_chapters, error) ||
         !Camera::LoadRules(m_paths.data + "/portals.json", m_cameraRules, error) ||
@@ -149,6 +150,9 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
 }
 
 void MagicPortalsLayer::OnDetach(entt::registry& registry) {
+    // Before the entities go: a looping voice is never "finished", so nothing
+    // else will ever free it.
+    stopMusic(registry);
     unloadLevel(registry);
     unloadMenu(registry);
     auto destroy = [&registry](entt::entity& e) {
@@ -267,6 +271,10 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     // The particles the level's entities were emitting go with them; a retry
     // would otherwise pile a second pool on the first.
     unloadEmitters(registry);
+    // The next level starts its own comparison. Without this, the first tick
+    // of a level would hear every counter fall back to zero as if it had
+    // happened - a retry would play the whole level's sounds at once.
+    m_watch = Watch{};
     m_artReady = false;
     for (auto& e : m_portalQuads) destroy(e);
     m_portalQuads.clear();
@@ -788,6 +796,7 @@ void MagicPortalsLayer::unloadMenu(entt::registry& registry) {
 }
 
 void MagicPortalsLayer::openFinished(entt::registry& registry) {
+    latch("medal_shown");
     // The level STAYS: it is drawn behind the medal, and stops ticking because
     // OnFixedUpdate hands the tick to the menu whenever a screen is up.
     m_screen = Screen::Finished;
@@ -810,6 +819,24 @@ void MagicPortalsLayer::openMenu(entt::registry& registry, Screen screen) {
 }
 
 bool MagicPortalsLayer::PressMenu(entt::registry& registry, MenuButton button) {
+    // Every button makes a noise, and not the same one: the menu's own is the
+    // only thing in the game that plays button.mp3, while the buttons a level
+    // puts up - retry, next, the list - are all a teleport.
+    switch (button.kind) {
+    case MenuButton::Kind::Play:
+    case MenuButton::Kind::World:
+    case MenuButton::Kind::Level:
+    case MenuButton::Kind::Back:
+    case MenuButton::Kind::Forward:
+        latch("menu_button");
+        break;
+    case MenuButton::Kind::Retry:
+    case MenuButton::Kind::Next:
+    case MenuButton::Kind::List:
+        latch("level_button");
+        break;
+    }
+
     switch (button.kind) {
     case MenuButton::Kind::Play:
         openMenu(registry, Screen::Worlds);
@@ -1676,6 +1703,238 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
     return direction;
 }
 
+// ---- sound ------------------------------------------------------------------
+//
+// The original's AudioManager, read from the port's sounds.json
+// (sim/Sounds.hpp) and fired from what the port can watch its own simulation
+// do: a counter that went up, a flag that turned over.
+//
+// The division is the particles', for the particles' reason. The TICK only
+// latches an event's NAME; the FRAME plays it. So no clip, no random draw and
+// no missing file can reach Game::Level, the simulation's clock or the state
+// hash, and a run with no audio device at all takes exactly the same path
+// through the simulation - which is how every suite runs, and what keeps a
+// replay a replay.
+
+void MagicPortalsLayer::loadSounds() {
+    std::string error;
+    if (!Sounds::LoadRules(m_paths.portData + "/sounds.json", m_soundRules, error)) {
+        // A game with no sound is still a game, so this does not refuse to
+        // start - but it says so once, because the alternative is silence that
+        // looks exactly like silence nobody asked about.
+        m_soundsError = error;
+        SUPERSONIC_LOG_ERROR("Magic Portals") << "no sound: " << error << std::endl;
+    }
+}
+
+std::vector<std::string> MagicPortalsLayer::LatchedSounds() const {
+    std::vector<std::string> events;
+    events.reserve(m_latched.size());
+    for (const Latched& latched : m_latched) events.push_back(latched.event);
+    return events;
+}
+
+void MagicPortalsLayer::latch(const char* event, double doorStrideMs) {
+    // Only what the table names. An event it leaves silent, or does not know,
+    // costs nothing here and says nothing.
+    if (m_soundRules.ForEvent(event) == nullptr) return;
+    m_latched.push_back(Latched{event, doorStrideMs});
+}
+
+double MagicPortalsLayer::soundRandom(double from, double to) {
+    if (to <= from) return from;
+    std::uniform_real_distribution<double> spread(from, to);
+    return spread(m_soundRandom);
+}
+
+float MagicPortalsLayer::pitchFor(const Sounds::Hook& hook, double doorStrideMs) {
+    double speed = hook.speed;
+    if (hook.speedIsRandom) {
+        speed = soundRandom(hook.speedFrom, hook.speedTo);
+    } else if (hook.speedFromDoorStride) {
+        // playDoorOpenSound scales by 3000 / the door's own stride, so a slow
+        // door is a slow sound.
+        speed = doorStrideMs > 0.0 ? 3000.0 / doorStrideMs : 1.0;
+    }
+    // XAudio2 allows a source voice a frequency ratio of 2 unless it was
+    // created to allow more, and the engine creates them plainly. A door
+    // quicker than 1500 ms asks for more than that, so this clamps rather than
+    // letting the voice fail - a divergence, and stated: the original has no
+    // such ceiling.
+    if (speed < 0.25) speed = 0.25;
+    if (speed > 2.0) speed = 2.0;
+    return static_cast<float>(speed);
+}
+
+void MagicPortalsLayer::latchSimSounds() {
+    if (!m_loaded) return;
+
+    Watch now;
+    now.valid = true;
+    now.portalsUsed = m_level.portals.portalsUsed;
+    now.traversals = m_level.portals.traversals;
+    now.shotsFired = m_level.portals.shotsFired;
+    now.shotsFailed = m_level.portals.shotsFailed;
+    now.reflections = m_level.portals.reflections;
+    for (const Goals::Crystal& crystal : m_level.goals.crystals) {
+        if (crystal.collected) ++now.crystalsCollected;
+        if (crystal.expired) ++now.crystalsExpired;
+    }
+    for (const Portals::Static& portal : m_level.portals.statics) {
+        if (portal.live) ++now.staticsLive;
+    }
+    now.wallsBroken = m_level.demolish.Broken();
+    for (const Launchers::Launcher& launcher : m_level.launchers.launchers) now.stonesThrown += launcher.thrown;
+    if (m_level.boss.beholder.has_value()) {
+        now.bossHits = m_level.boss.beholder->hits;
+        now.bossVolleys = m_level.boss.beholder->volleys;
+        now.bossFrame = m_level.boss.beholder->frame;
+        now.bossGone = m_level.boss.beholder->gone;
+    }
+    now.bossRocksBroken = m_level.boss.rocksBroken;
+    now.bossButtonRaised = m_level.boss.buttonRaised;
+    now.doorsOpening.reserve(m_level.channels.doors.size());
+    for (const Puzzle::SwitchedDoor& door : m_level.channels.doors) {
+        now.doorsOpening.push_back(door.motion.opening ? char{1} : char{0});
+    }
+    now.liftsForward.reserve(m_level.movers.lifts.size());
+    for (const Mover::Lift& lift : m_level.movers.lifts) {
+        now.liftsForward.push_back(lift.motion.forward ? char{1} : char{0});
+    }
+
+    // The first tick of a level sets the mark rather than playing against a
+    // zeroed one: otherwise a level that begins with two static portals and a
+    // standing door would announce all of it in its opening frame.
+    if (!m_watch.valid) {
+        m_watch = std::move(now);
+        return;
+    }
+
+    for (int i = m_watch.portalsUsed; i < now.portalsUsed; ++i) latch("portal_placed");
+    for (int i = m_watch.traversals; i < now.traversals; ++i) latch("traversal");
+    for (int i = m_watch.shotsFired; i < now.shotsFired; ++i) latch("shot_fired");
+    for (int i = m_watch.shotsFailed; i < now.shotsFailed; ++i) latch("shot_failed");
+    for (int i = m_watch.reflections; i < now.reflections; ++i) latch("shot_reflected");
+    for (int i = m_watch.crystalsCollected; i < now.crystalsCollected; ++i) latch("crystal_collected");
+    for (int i = m_watch.crystalsExpired; i < now.crystalsExpired; ++i) latch("crystal_expired");
+    // A static portal goes when it is spent, so this count FALLS.
+    for (int i = now.staticsLive; i < m_watch.staticsLive; ++i) latch("portal_spent");
+    for (int i = m_watch.wallsBroken; i < now.wallsBroken; ++i) latch("wall_broken");
+    for (int i = m_watch.stonesThrown; i < now.stonesThrown; ++i) latch("stone_thrown");
+    for (int i = m_watch.bossHits; i < now.bossHits; ++i) latch("boss_hurt");
+    for (int i = m_watch.bossVolleys; i < now.bossVolleys; ++i) latch("boss_spikes");
+    for (int i = m_watch.bossRocksBroken; i < now.bossRocksBroken; ++i) latch("boss_rock_broken");
+    if (now.bossFrame == 1 && m_watch.bossFrame != 1) latch("boss_eyes_shut");
+    if (now.bossGone && !m_watch.bossGone) latch("boss_dead");
+    if (now.bossButtonRaised && !m_watch.bossButtonRaised) latch("boss_button_raised");
+
+    // A door that started moving, with its own stride: the hook's speed is
+    // 3000 / it, so a slow door sounds slow.
+    const std::size_t doors = now.doorsOpening.size() < m_watch.doorsOpening.size()
+                                  ? now.doorsOpening.size()
+                                  : m_watch.doorsOpening.size();
+    for (std::size_t i = 0; i < doors; ++i) {
+        if (now.doorsOpening[i] == m_watch.doorsOpening[i]) continue;
+        const double strideMs = static_cast<double>(m_level.channels.doors[i].motion.durationS) * 1000.0;
+        latch(now.doorsOpening[i] != 0 ? "door_opened" : "door_closed", strideMs);
+    }
+    // And a lift each time it turns, which is each end of its run.
+    const std::size_t lifts = now.liftsForward.size() < m_watch.liftsForward.size()
+                                  ? now.liftsForward.size()
+                                  : m_watch.liftsForward.size();
+    for (std::size_t i = 0; i < lifts; ++i) {
+        if (now.liftsForward[i] != m_watch.liftsForward[i]) latch("lift_turned");
+    }
+
+    m_watch = std::move(now);
+}
+
+void MagicPortalsLayer::playLatched(entt::registry& registry, float deltaTime) {
+    // The frames' own clock, which the shared timers are kept on.
+    m_soundClockMs += static_cast<double>(deltaTime) * 1000.0;
+    if (m_latched.empty()) return;
+
+    Supersonic::AudioEngine** slot = registry.ctx().find<Supersonic::AudioEngine*>();
+    Supersonic::AudioEngine* audio = slot != nullptr ? *slot : nullptr;
+    if (audio == nullptr || !audio->IsAvailable()) {
+        // No device - a suite, a headless render, or Linux, where the original's
+        // mp3s do not decode. The events are DROPPED rather than kept: a queue
+        // that grows while nothing plays it is a leak with a delay on it.
+        m_latched.clear();
+        return;
+    }
+
+    const std::string directory = Sounds::Directory(m_paths.original) + "/";
+    for (const Latched& latched : m_latched) {
+        const Sounds::Hook* hook = m_soundRules.ForEvent(latched.event);
+        if (hook == nullptr || hook->files.empty()) continue;
+
+        // The shared timers. The original keeps one Timer per group rather
+        // than one per hook, so the two crystal sounds hold EACH OTHER off -
+        // which is what stops a run of pickups from stacking into a chord.
+        if (!hook->timer.empty() && hook->minIntervalMs > 0.0) {
+            const auto at = m_timerAtMs.find(hook->timer);
+            if (at != m_timerAtMs.end() && m_soundClockMs - at->second < hook->minIntervalMs) continue;
+            m_timerAtMs[hook->timer] = m_soundClockMs;
+        }
+
+        const float volume = static_cast<float>(hook->volume);
+        const float pitch = pitchFor(*hook, latched.doorStrideMs);
+        if (hook->both || hook->files.size() == 1) {
+            // Two samples TOGETHER, which is what an explosion is.
+            for (const std::string& file : hook->files) audio->Play(directory + file, false, volume, pitch);
+        } else {
+            // Or one of the two, drawn: the crystal gathers, the wood knocks.
+            const auto which = static_cast<std::size_t>(soundRandom(0.0, static_cast<double>(hook->files.size())));
+            audio->Play(directory + hook->files[which < hook->files.size() ? which : 0], false, volume, pitch);
+        }
+    }
+    m_latched.clear();
+}
+
+void MagicPortalsLayer::updateMusic(entt::registry& registry) {
+    // Which track belongs to what is on screen. The medal screen keeps the
+    // level loaded, so it falls into the level's own branch and the music does
+    // not stop underneath it.
+    std::string wanted;
+    if (m_screen == Screen::Main || m_screen == Screen::Worlds || m_screen == Screen::Levels) {
+        wanted = "menu";
+    } else if (m_loaded) {
+        // Game.angelscript starts playGameMusic(isBossFight); the port's boss
+        // levels are the ones that built a beholder.
+        wanted = m_level.boss.beholder.has_value() ? "boss" : "game";
+    }
+    if (wanted == m_track) return;
+
+    Supersonic::AudioEngine** slot = registry.ctx().find<Supersonic::AudioEngine*>();
+    Supersonic::AudioEngine* audio = slot != nullptr ? *slot : nullptr;
+    // No device: m_track is left alone, so the right track starts if one ever
+    // appears, rather than the layer believing it already did.
+    if (audio == nullptr || !audio->IsAvailable()) return;
+
+    if (m_musicVoice != Supersonic::AudioEngine::kInvalidVoice) {
+        audio->Stop(m_musicVoice);
+        m_musicVoice = Supersonic::AudioEngine::kInvalidVoice;
+    }
+    m_track = wanted;
+    if (m_track.empty()) return;
+    const Sounds::Track* track = m_soundRules.FindTrack(m_track);
+    if (track == nullptr) return;
+    m_musicVoice = audio->Play(Sounds::Directory(m_paths.original) + "/" + track->file, track->loop,
+                               static_cast<float>(track->volume), 1.0f);
+}
+
+void MagicPortalsLayer::stopMusic(entt::registry& registry) {
+    if (m_musicVoice == Supersonic::AudioEngine::kInvalidVoice) {
+        m_track.clear();
+        return;
+    }
+    Supersonic::AudioEngine** slot = registry.ctx().find<Supersonic::AudioEngine*>();
+    if (slot != nullptr && *slot != nullptr) (*slot)->Stop(m_musicVoice);
+    m_musicVoice = Supersonic::AudioEngine::kInvalidVoice;
+    m_track.clear();
+}
+
 void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     using Supersonic::Input;
     // A menu is up instead of a level: it takes the tick, and nothing below
@@ -1705,13 +1964,18 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
     if (m_loaded) {
         // The app has just stepped physics. So first what follows a step...
         Game::AfterStep(registry, m_level, fixedDelta);
+        // What the tick just did, remembered for the frame to play. Before the
+        // two branches below, which take the level away.
+        latchSimSounds();
         // ...and the moment the exit reports, the next level (main.gd:161-168). A
         // death is a retry, at once (main.gd:155-158). Should both come on one
         // tick, reaching the exit wins: the remake's order of two triggers in a
         // frame is not defined.
         if (m_level.goals.completed) {
+            latch("level_finished");
             clearLevel(registry);
         } else if (m_level.hazards.playerDied) {
+            latch("player_died");
             ++m_deaths;
             loadLevel(registry, m_current);
         }
@@ -1739,6 +2003,11 @@ void MagicPortalsLayer::OnUpdate(entt::registry& registry, float deltaTime) {
     // the simulation's clock or the state hash. Carried before the camera's
     // early return, so a level drawn without one does not freeze them.
     updateEmitters(registry, deltaTime);
+    // And the sounds the tick latched, played here for the same reason: a
+    // sound is a picture with a speaker. Both are before the camera's early
+    // return, so a level drawn without one is not also silent.
+    playLatched(registry, deltaTime);
+    updateMusic(registry);
     // Only the camera's SHAPE, for the viewport this frame is drawn into.
     if (m_camera == entt::null || !registry.valid(m_camera)) return;
     registry.get<Supersonic::CameraComponent>(m_camera).aspect = viewportAspect(registry);

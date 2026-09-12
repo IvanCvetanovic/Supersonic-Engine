@@ -163,6 +163,10 @@ add_mp_test(test_mp_boss)
 # Its reader is tested on files it writes, so it runs anywhere; only the part
 # that reads the converted levels is skipped without them, and never with 77.
 add_mp_test(test_mp_sprites)
+# The sounds: the decoded AudioManager as data, and that every file it names is
+# really in the original's soundfx/. The reader runs anywhere; only the part
+# that opens the original's own files is skipped without them, never with 77.
+add_mp_test(test_mp_sounds)
 
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.

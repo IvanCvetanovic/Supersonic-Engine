@@ -1615,7 +1615,7 @@ ticks, and their particles go with the level.
 
 GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 157.
 
-## What the sounds decode to (read, NOT built)
+## What the sounds decode to (read here, built in step 17)
 
 The owner asked for sound after playing. The port has never had any. The
 original ships 46 mp3s in its `soundfx/`, and `AudioManager` names every one of
@@ -1627,7 +1627,7 @@ beholder's, the dragons', the ghosts', the shock diamonds', which is to say
 chapter 2 and after. The rest index a global array, `g_sfxNames`, which
 `loadSounds` walks to preload the lot.
 
-**`g_sfxNames`, in its own order** (35 entries):
+**`g_sfxNames`, in its own order** (30 entries, bytes 307518..308601):
 
 ```
  0 button          1 explosion_small   2 portal_fail      3 portal_reflect
@@ -1638,9 +1638,29 @@ chapter 2 and after. The rest index a global array, `g_sfxNames`, which
 20 magical_sweep_08  21 dark_whoosh_17  22 wood_drag     23 crystal_gather_G
 24 crystal_gather_E  25 spike_hit     26 crystal_temp_alert  27 enemy_spotted
 28 flesh_heavy_impact_03  29 orchestral_transition_stinger_06
-30 running_with_wolves_loop_b  31 finding_wonderland_60_loop
-32 warlords_loop_a  33 rocket_space_shuttle_rocket_distant  34 back_to_nestopia
 ```
+
+**CORRECTED: that array is 30 entries, not 35, and the music is a different
+array.** This section first listed five more names at 30..34 - the four music
+loops and the rocket - as though they were the tail of `g_sfxNames`. They are
+not: the initialiser allocates the array with `PshC4 30`, and the five tracks
+are built by their OWN function (bytes 308620..308853) into `g_musicNames`:
+
+```
+ 0 running_with_wolves_loop_b   1 finding_wonderland_60_loop
+ 2 warlords_loop_a              3 rocket_space_shuttle_rocket_distant
+ 4 back_to_nestopia
+```
+
+Two arrays, two initialisers, indexed by different hooks - and the mistake
+mattered, because every music index would have been read five past the end of
+the wrong array. The four `get*MusicName` getters settle which is which:
+`getBossMusicName` takes `g_musicNames[0]`, `getGameMusicName` [1],
+`getMenuMusicName` [2], `getRocketMusicName` [3].
+
+**The two arrays plus ten literal names account for 45 of the 46 files.** The
+forty-sixth is `crystal_gather.mp3`, named nowhere in the program: a leftover
+beside the `_G` and `_E` variants that replaced it.
 
 **How the order was checked, because the first reading was wrong by six.** The
 array's initialiser sits in a block the decoder labels `MouseCursor::getName` -
@@ -1747,8 +1767,8 @@ toolchains matter here:
 GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_audio` 69 and 72
 (the voice cases need an output device), `test_mp_sprites` 152 and 155.
 
-**The port still plays nothing.** The engine can decode the original's sounds
-now; wiring the 61 hooks to the events is the next step.
+**The port still played nothing at this point.** The engine could decode the
+original's sounds; wiring the hooks to the events is step 17 below.
 
 **Details worth keeping.** Volume and sample speed are set before every
 `PlaySample`; `playDoorOpenSound` scales the speed by `3000 / doorOpenStride`,
@@ -1756,14 +1776,105 @@ so a slow door is a slow sound; crystal pickups are rate-limited by a 50 ms
 timer, so a run of them does not stack; `playRandomWoodSound` and
 `playCrystalPickSound` compute their index rather than stating it.
 
-Nothing of this is built. The engine has an audio system and the port has never
-used it.
+## Step 17 - the port plays them (built)
+
+The owner asked to hook all the sounds, and said there was time to do it
+properly. So the whole `AudioManager` is carried, not the dozen hooks chapter 1
+happens to reach.
+
+**The table is data, in `games/magicportals/data/sounds.json`**, read by
+`sim/Sounds.hpp`. Three parts: `hooks` is the original's AudioManager function
+by function, with the files, volume, sample speed and rate limit each sets;
+`music` is the five tracks; `events` maps what the PORT can watch happen to one
+of those hooks. A hook no event names is carried anyway, so the table stays the
+original's rather than being trimmed to what today's port can see.
+
+**Four corrections to the decode above, all found by reading the getters** that
+the first pass skipped because they return a name instead of playing it:
+
+- `getButtonSoundName` returns entry 0, `button.mp3`. That is the framework's
+  Button sound - a MENU button, and the only thing in the game that plays that
+  file. The port had it mapped to `portal_killed`, which was a guess.
+- `getRetryButtonSound`, `getRestartLevelButtonSound`, `getExitLevelButtonSound`,
+  `getSkipLevelButtonSound`, `getNextLevelButtonSound`,
+  `getItemSelectButtonSoundName` and `getStartAchievementSoundName` all return
+  entry 7. Every button a level puts up sounds like a teleport.
+- `playCrystalTempAlertSound` reads the SAME `AudioManager.crystalSoundTimer`
+  as `playCrystalPickSound`. It is one 50 ms gate across both, not one per
+  hook, so the two hold each other off rather than each holding itself.
+- `playAchievementPickSound` plays entry 0 and `playLightSwitchSound` is a bare
+  call to `playKeyUnlockSound`. Both were missing.
+
+**The music, which the earlier pass did not mention at all.**
+`playMusic(name, volume, loop)` loads the track, sets its looping and volume,
+plays it - and does nothing at all while the music switch is off. The menu is
+`warlords_loop_a` at 1.0, looping. A level is `playGameMusic(isBossFight)`:
+`running_with_wolves_loop_b` at 0.6 for a boss, `finding_wonderland_60_loop` at
+0.7 otherwise, both looping. `setDefaultMusicVolume` derives the same two
+numbers independently, which is a clean second reading of them.
+
+**The port latches on the tick and plays on the frame**, which is the particles'
+division and for the particles' reason. `latchSimSounds` diffs the simulation
+against what it looked like last tick - counters that went up, flags that turned
+over - and pushes event NAMES; `OnUpdate` resolves each to a hook and plays it.
+So no clip, no random draw and no missing file can reach `Game::Level`, the
+simulation's clock or the state hash, and a run with no audio device takes
+exactly the same path through the simulation. That is not a nicety: it is how
+every suite runs, and it is what keeps a replay a replay. The random draws get
+the layer's own seeded generator, beside the particles' and for the same reason.
+
+**Divergences, stated rather than implied:**
+
+- In Ethanon a sample's speed and volume are persistent state on the NAMED
+  sample, so a hook changes how every later hook that plays the same file
+  sounds. That is why `playVictorySound` sets the speed back to 1.0 - the light
+  and roundabout hooks leave `magical_sweep_08` at 0.6 - and why
+  `playDoorUnlockSound` inherits whatever volume the crystal pickup last set.
+  The engine's `Play()` takes volume and pitch per voice, so each hook is played
+  with what it sets and nothing bleeds. The bleed is a quirk of the original's
+  mixer, not a sound anyone designed, and it is not reproduced.
+- XAudio2 gives a source voice a frequency ratio of 2 unless it was created to
+  allow more, so a door quicker than 1500 ms would ask for more than the voice
+  can do. The pitch is clamped rather than left to fail; the original has no
+  such ceiling.
+- The port has no `MusicSwitchManager`, so its music plays unconditionally.
+- And still, from step 16: there is no sound on Linux at all.
+
+**A looping voice is never "finished"**, so `ReapFinishedVoices` leaves it alone
+for ever by design. The layer holds the music voice and stops it itself, on
+every track change and in `OnDetach` - without which menu to level to menu would
+leave two tracks playing over each other.
+
+`test_mp_sounds` is new. It tests the reader on files it writes (refusing two
+files with no word on whether they play together or one at random, an event
+naming a hook that is not there, an unreadable speed, a rate limit with no timer
+to keep it on), then pins the decode against the port's real table - including
+every surprising entry, because those are the ones a future reader would
+"correct": the crystal VANISH is `spike_hit`, unlocking a door is a
+`crystal_gather` at half speed, a menu button is the only `button.mp3`, and
+light-on and roundabout are byte for byte the same hook. Its last case opens the
+original's own `soundfx/` and asserts every file the table names is really
+there - the assertion that would have caught three silent-missing-art bugs.
+
+`test_mp_layer` gains the other half, and it is the half that can only be
+tested with NO audio device: the layer latches, `LatchedSounds` says what, and a
+frame with nothing to play on drops them rather than piling them up. level0 is
+the fixture because `test_mp_statics` already reports it "completed after 3.20 s,
+2 traversal(s)" - so it is known to reach its exit and to go through a portal on
+the way, rather than hoped to. It latches exactly four sounds: two teleports,
+the exit, and the medal. It grew from 172 checks to 178.
+
+GCC 13.3 (19 suites) and MSVC 14.50 (17 of them - `test_mp_tscn` and
+`test_mp_levels` are GCC-only in this loop) agree: 0 failures, `test_mp_sounds`
+99 checks with all 78 files the table names present in the original's
+`soundfx/`, `test_mp_layer` 178.
 
 ## Step 15 - what the second play-through asked for (built)
 
 Four reports, after playing the menu and the animated levels. Two are fixed
-here, one is decoded above and not built (the sounds), and one is still
-unexplained (below).
+here; one is the sounds, decoded above and built in step 17; and one - things
+disappearing while the player walks - was still unexplained when this was
+written, and is picked up at the end of this document.
 
 **The chapter icons were stretched.** `world_icon0..3.png` are 84 x 128 and the
 port drew them square, because `layOutMenu` sized every button from the box's
@@ -1848,3 +1959,41 @@ player through 1-3 in a test and run the renderer's own cull - `Frustum`
 against each sprite's transformed bounds - tick by tick, against whether the
 sprite is really within the view. That either catches it headlessly or clears
 culling for good.
+
+**That test was written, and it cleared culling - but only after it was fixed,
+and the first version of it was worse than useless.**
+
+It walked the player right for 240 ticks through 1-2 and 1-3, resolved the
+world transforms, built `Frustum::FromMatrix(proj * view)` and compared each
+visible renderable's transformed AABB against the view rectangle. It reported
+6826 and 3854 sprite-ticks with none wrongly culled, and that reading was
+recorded here as "culling is exonerated".
+
+It was not. The test only inspected sprites **wholly inside** the view
+rectangle. A sprite too big to fit on screen is never wholly inside, so every
+one of them was passed over in silence - and most of a level's scenery is
+exactly that big. The suspects were the only things the test never looked at.
+It is the same failure as the invisible menu buttons: a check that passes by
+looking at the wrong population, and reports a large, reassuring number while
+doing it.
+
+Rewritten to ask the question the renderer actually asks - does the box OVERLAP
+the view at all - it inspects a third to three-quarters more, and both
+toolchains agree exactly:
+
+| level | sprite-ticks on screen | wrongly culled |
+|---|---|---|
+| level1 (1-2) | 8935 | 0 |
+| level2 (1-3) | 6824 | 0 |
+
+15,759 sprite-ticks of walking, oversized scenery included, and not one sprite
+that overlapped the view failed `IntersectsAABB`. The test also prints the
+offending sprite's own local bounds when it ever does fail, which will tell a
+stale-bounds fault from a frustum one without the test having to assume what
+the default box is.
+
+**So culling is cleared, and the fault is in presentation** - somewhere between
+what the layer places each frame and what reaches the screen - which is where
+the stale-pixel regions in the owner's screenshots pointed in the first place.
+The next reading is what `syncSprites` does with a sprite whose follower is
+gone, and what the drawn set does across a camera pan, not the frustum.

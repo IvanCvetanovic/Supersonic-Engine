@@ -23,6 +23,9 @@
 #include "core/Components.hpp"
 #include "core/Input.hpp"
 #include "core/PhysicsSystem.hpp"
+// For the renderer's own cull: RenderSystem.hpp carries renderer/Frustum.hpp.
+#include "core/RenderSystem.hpp"
+#include "core/TransformSystem.hpp"
 #include "core/SimulationClock.hpp"
 #include "core/ViewportInfo.hpp"
 
@@ -1103,6 +1106,173 @@ void ParticlesGoWithTheirLevel() {
               "the level came back with more particles than it had");
 }
 
+// ---- what the camera drops while it pans --------------------------------------
+
+// The owner reported sprites appearing and disappearing WHILE WALKING, with the
+// window never moved or resized: one sprite on 1-2, several on 1-3.
+//
+// Eight readings of the renderer have been refused by the evidence, so this
+// stops reading it and runs its OWN cull instead - the same frustum, the same
+// bounds transform, the same intersection RenderSystem gathers with - and asks
+// the one question the renderer cannot ask itself: was anything dropped while
+// it was wholly on screen?
+//
+// The second opinion is independent of the frustum code, which is what makes a
+// disagreement mean something: an orthographic camera shows a RECTANGLE, and a
+// box inside that rectangle must be drawn.
+void NoSpriteOnScreenIsCulled(const char* levelName) {
+    using namespace Supersonic;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), levelName);
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+
+    int inspected = 0;    // sprite-ticks showing on screen at all
+    int wronglyCulled = 0;
+    std::string firstWrong;
+
+    for (int tick = 0; tick < 240; ++tick) {
+        std::vector<std::string> pressed;
+        if (tick == 0) pressed.push_back(MagicPortalsLayer::kRight);
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, std::move(pressed));
+        if (layer.MenuScreen() != MagicPortalsLayer::Screen::None) break; // it finished
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+
+        // The world matrices the renderer would cull against. The app resolves
+        // these before rendering; a test has to do it itself.
+        TransformSystem::UpdateWorldTransforms(registry);
+
+        const entt::entity cameraEntity = primaryCamera(registry);
+        if (cameraEntity == entt::null) continue;
+        CameraComponent camera = registry.get<CameraComponent>(cameraEntity);
+        camera.aspect = 1280.0f / 720.0f;
+        const Frustum frustum =
+            Frustum::FromMatrix(camera.getProjectionMatrix() * camera.getViewMatrix());
+
+        // What an orthographic camera shows, in world units.
+        const float halfHeight = camera.orthoHeight * 0.5f;
+        const float halfWidth = halfHeight * camera.aspect;
+        const glm::vec2 viewMin(camera.position.x - halfWidth, camera.position.y - halfHeight);
+        const glm::vec2 viewMax(camera.position.x + halfWidth, camera.position.y + halfHeight);
+
+        auto view = registry.view<WorldTransformComponent, RenderableComponent>();
+        for (auto entity : view) {
+            const auto& world = view.get<WorldTransformComponent>(entity);
+            const auto& renderable = view.get<RenderableComponent>(entity);
+            if (!renderable.isVisible) continue;
+
+            glm::vec3 worldMin;
+            glm::vec3 worldMax;
+            Frustum::TransformAABB(world.matrix, renderable.localBoundsMin, renderable.localBoundsMax,
+                                   worldMin, worldMax);
+
+            // SHOWING AT ALL: any overlap of the view rectangle, which is what
+            // the renderer must not cull, with a margin of about a pixel at 50
+            // px to the metre so nothing on the boundary is called a fault.
+            //
+            // This asked for WHOLLY INSIDE until it was rewritten, and that was
+            // worse than useless: a sprite too big to fit on screen is never
+            // wholly inside, so every one of them was passed over silently.
+            // Most of a level's scenery is exactly that big, and scenery is
+            // what the owner watched disappear. The test reported thousands of
+            // clean sprite-ticks while never once looking at the suspects.
+            const float margin = 0.02f;
+            const bool overlaps = worldMax.x >= viewMin.x + margin && worldMin.x <= viewMax.x - margin &&
+                                  worldMax.y >= viewMin.y + margin && worldMin.y <= viewMax.y - margin;
+            if (!overlaps) continue;
+            ++inspected;
+            if (frustum.IntersectsAABB(worldMin, worldMax)) continue;
+
+            ++wronglyCulled;
+            if (firstWrong.empty()) {
+                const auto* tag = registry.try_get<TagComponent>(entity);
+                // The local bounds go in the message rather than a verdict on
+                // them: a renderable whose mesh was not ready when it was
+                // gathered keeps whatever box it was built with, and seeing the
+                // numbers tells that apart from a frustum fault without this
+                // test having to assume what the default is.
+                const auto& lo = renderable.localBoundsMin;
+                const auto& hi = renderable.localBoundsMax;
+                firstWrong = (tag != nullptr ? tag->tag : std::string("unnamed")) + " on tick " +
+                             std::to_string(tick) + ", local bounds (" + std::to_string(lo.x) + ", " +
+                             std::to_string(lo.y) + ", " + std::to_string(lo.z) + ")..(" +
+                             std::to_string(hi.x) + ", " + std::to_string(hi.y) + ", " +
+                             std::to_string(hi.z) + ")";
+            }
+        }
+    }
+
+    std::printf("  %s: %d sprite-tick(s) on screen, %d culled\n", levelName, inspected, wronglyCulled);
+    // The fixture must have looked at something, or this passes by seeing
+    // nothing - which is how the menu's invisible buttons got through.
+    CHECK_MSG(inspected > 50, std::string(levelName) + ": only " + std::to_string(inspected) +
+                                  " sprite-tick(s) were on screen");
+    CHECK_MSG(wronglyCulled == 0, std::string(levelName) + ": " + std::to_string(wronglyCulled) +
+                                      " culled while on screen, first " + firstWrong);
+}
+
+// The sounds, with no audio device anywhere in sight.
+//
+// That is not an awkward corner to test around - it is how every suite runs,
+// and it is the whole design: the TICK latches an event's name and the FRAME
+// plays it, so a level must run identically whether or not anything can make a
+// noise. What is asserted here is the latching, which is the half that has to
+// be right for the other half to have anything to play.
+void ALevelLatchesTheSoundsItEarns() {
+    entt::registry registry;
+    publishViewport(registry);
+    // No AudioEngine is ever put in the registry's context.
+    //
+    // level0 rather than level1, and not arbitrarily: test_mp_statics already
+    // reports "level0 holding right: completed after 3.20 s, 2 traversal(s)",
+    // so this fixture is known to reach its exit AND to go through a portal on
+    // the way. Asserting a teleport in a level that might not have one would be
+    // a guess dressed up as a test.
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    CHECK_MSG(layer.SoundsError().empty(), "the port's sounds.json should read: " + layer.SoundsError());
+
+    // Walk right to the exit, WITHOUT a frame in between: nothing plays, so
+    // what the ticks latched piles up to be looked at.
+    for (int tick = 0; tick < 600; ++tick) {
+        std::vector<std::string> pressed;
+        if (tick == 0) pressed.push_back(MagicPortalsLayer::kRight);
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, std::move(pressed));
+        if (layer.MenuScreen() != MagicPortalsLayer::Screen::None) break; // the medal is up
+    }
+
+    const std::vector<std::string> latched = layer.LatchedSounds();
+    const auto heard = [&latched](const char* event) {
+        for (const std::string& name : latched) {
+            if (name == event) return true;
+        }
+        return false;
+    };
+    std::printf("  level0 walked to its exit: %d sound(s) latched\n", static_cast<int>(latched.size()));
+    CHECK_MSG(!latched.empty(), "a level played through should latch something");
+    CHECK_MSG(heard("traversal"), "going through a portal is a teleport sound");
+    CHECK_MSG(heard("level_finished"), "reaching the exit is a sound");
+    CHECK_MSG(heard("medal_shown"), "the medal screen is a sound");
+
+    // And the frame drops them rather than keeping them: a queue nothing ever
+    // plays is a leak with a delay on it.
+    layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+    CHECK_MSG(layer.LatchedSounds().empty(), "a frame with no device should still clear what it cannot play");
+}
+
+void NothingOnScreenIsCulledWhileWalking() {
+    NoSpriteOnScreenIsCulled("level1"); // 1-2, where the owner saw one go
+    NoSpriteOnScreenIsCulled("level2"); // 1-3, where several do
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     Level31DrawsTheBeholder();
@@ -1129,6 +1299,8 @@ void runTests() {
     ALevelsEntitiesEmit();
     ParticlesGoWithTheirLevel();
     FinishingALevelShowsTheMedal();
+    ALevelLatchesTheSoundsItEarns();
+    NothingOnScreenIsCulledWhileWalking();
 }
 
 } // namespace
