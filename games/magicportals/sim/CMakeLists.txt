@@ -17,6 +17,7 @@ add_library(MagicPortalsSim STATIC
     Hinge.cpp
     Launchers.cpp
     LevelBuilder.cpp
+    Minions.cpp
     Mover.cpp
     Particles.cpp
     Player.cpp

@@ -173,6 +173,9 @@ add_mp_test(test_mp_fire)
 # Seesaws and spinning platforms. No tick of its own: the joint is attached when
 # the level is built and the engine's solver does the rest.
 add_mp_test(test_mp_hinge)
+# The minions of worlds 3 and 4: spawned from a marker, walking a prefix of
+# waypoints, and taken by the floor that kills them and nothing else.
+add_mp_test(test_mp_minions)
 # Launchers, what they throw, and what takes it back.
 add_mp_test(test_mp_launchers)
 # The portal shot: a tap fires, and the portal opens where the shot arrives.

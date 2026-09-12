@@ -62,6 +62,9 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Turrets::LoadRules(portDataDirectory + "/turrets.json", read.turrets, error)) return false;
     if (!Fire::LoadRules(portDataDirectory + "/fire.json", read.fire, error)) return false;
     if (!Hinge::LoadRules(portDataDirectory + "/hinge.json", read.hinge, error)) return false;
+    if (!Minions::LoadRules(portDataDirectory + "/minions.json", read.minions, error)) return false;
+    // And what the remake's role table calls a hazard but the original does not.
+    if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
     std::filesystem::create_directories(prismDirectory, ec);
     read.prisms = prismDirectory;
@@ -115,15 +118,24 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     out.player = Player::Spawn(registry, glm::dvec2(at->numbers[0], at->numbers[1]), data.tuning);
 
     if (!Goals::Find(data.scene, data.roles, data.goals, out.goals, error)) return false;
-    if (!Hazards::Find(data.scene, data.roles, out.hazards, error)) return false;
+    if (!Hazards::Find(data.scene, data.roles, data.hazards, out.hazards, error)) return false;
     if (!Demolish::Find(data.scene, data.roles, out.built, data.demolish, out.demolish, error)) return false;
     if (!Launchers::Find(data.scene, data.roles, data.launchers, out.launchers, error)) return false;
     if (!Boss::Find(data.scene, data.roles, data.boss, data.launchers, out.boss, error)) return false;
     if (!Turrets::Find(data.scene, data.roles, data.turrets, out.turrets, error)) return false;
     if (!Fire::Find(data.scene, data.roles, out.built, data.fire, out.fire, error)) return false;
     if (!Hinge::Find(data.scene, data.roles, out.built, registry, data.hinge, out.hinge, error)) return false;
-    return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
-                         out.portals, error);
+    if (!Minions::Find(data.scene, data.roles, data.minions, out.minions, error)) return false;
+    if (!Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
+                       out.portals, error)) {
+        return false;
+    }
+
+    // And the minions the markers ask for, built last: a minion is teleportable,
+    // so it joins the portals' travellers the way what a launcher throws does -
+    // after Portals::Find, which is what fills that list to begin with.
+    for (const entt::entity body : out.minions.Spawn(registry)) out.portals.travellers.push_back(body);
+    return true;
 }
 
 void BeforeStep(const Data& data, entt::registry& registry, Level& level, float direction, float dt) {
@@ -139,6 +151,9 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
     // nothing here hands them to the portals or the demolisher as a thrown stone
     // is handed; Turrets.hpp says why that is a step of its own.
     level.turrets.Fire(dt);
+    // The minions walk before the step, as the player is steered before it: what
+    // sets a velocity belongs on this side, what judges a position on the other.
+    level.minions.Tick(registry, dt);
     level.boss.BeforeStep(registry);
     if (level.player != entt::null) Player::Steer(registry, level.player, data.tuning, direction, dt);
 }
@@ -155,6 +170,9 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
     // does: a crate is teleportable, so a burning one can be in portals.travellers.
     for (const entt::entity gone : level.fire.Tick(registry, level.player, dt)) Forget(level, gone);
     for (const entt::entity gone : level.launchers.Cull(registry)) Forget(level, gone);
+    // And a minion the step left in a killer floor. Not a hazard: that floor does
+    // nothing to the player, which is the correction hazards.json records.
+    for (const entt::entity gone : level.minions.Cull(registry)) Forget(level, gone);
     // The beholder's rocks, against what the step ran them into.
     for (const entt::entity gone : level.boss.Contacts(registry, level.player, level.portals, dt)) Forget(level, gone);
     level.portals.Tick(registry, dt);

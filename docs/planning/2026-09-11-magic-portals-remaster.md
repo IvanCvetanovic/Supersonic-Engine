@@ -2414,3 +2414,116 @@ never appears. The tell is that every binary was present on disk and one of them
 passed on a plain rerun with no rebuild at all; relinked and re-run, all nine are
 green. Written down because "the engine went red after a physics change" is the
 wrong conclusion to reach, and this machine offers it twice a day.
+
+## Step 23 - chapter 3: minions, their patrols, and the floor that kills only them (built)
+
+Chapter 3 goes from 0 of 32 playing to 7, and the game from 63 of 128 to 70. The
+minions of worlds 3 and 4, and one role the remake's table gets wrong.
+
+**Nothing is placed.** No level in the game holds a `minion.ent`, a
+`ghost_minion.ent` or a `dark_mage.ent` - zero, counted across all 128. Every
+enemy is spawned from an invisible marker that stamps the patrol onto what it
+spawns and then deletes itself, and the marker's `waypointName` is a PREFIX
+rather than a name: `wayA` means the nodes `wayA0`, `wayA1`, ... The original
+counts them by seeking prefix + n until one is missing, which is why the walk can
+wrap by asking whether the next index has any data at all. 62 markers in 35
+levels; every one carries a prefix, 56 resolve two waypoints and 6 resolve one.
+
+`holdTime` is a dwell, not a travel time, and the lone-waypoint markers carry
+`999999999` - which is how the designers wrote a guard that stands. It needs no
+special case: it is a wait nothing outlasts.
+
+| | decoded | the remake |
+|---|---|---|
+| patrol speed | 39 px/s | 60 |
+| sight range | none at all | 220 |
+
+The speed is a literal 1.3 per physics step, and that step is FIXED: the game's
+`AverageFPSRateManager` calls `SetFixedTimeStep(true)` and hands it 0.0333333, so
+the divisor is 33.3333 ms and 1.3 px per step is 39 px/s. Sight has no range
+anywhere in it - what bounds the cone is a walk over 256-px buckets, not a radius
+- so the remake's 220 is not a wrong number but an invented mechanic. Its own
+`actors.json` marks both `_guess`.
+
+**The wider threshold, which took two wrong turns.** Both were caught by the
+suite rather than by reading, and both are the same mistake as step 22's sign: a
+reading that fit the evidence in front of it and nothing else.
+
+- Derived: the original advances to the next waypoint inside `minDist` (8 px) and
+  stops moving inside `minDist * 2` (16 px), so both gate the walk. Wrong.
+- What the failing check showed: the guard reached its post but never adopted its
+  sentinel hold. It could not - stopped 16 px out, it can never reach the 8 px
+  that counts as arriving, so it freezes one step short of its own waypoint for
+  good. Applied to every minion, nothing in the game would ever arrive.
+- What the branch actually says: instruction 1070 compares `numWaypoints` against
+  1 and sets the flag to a literal false when it differs. ONLY a minion with
+  exactly one waypoint evaluates the distance test. It is what stops a lone guard
+  being driven the last stretch to its post; a patrol walks all the way in.
+
+**And stopping is not a zero, which exposed the second wrong turn.** The original
+has two different behaviours and neither writes zero: a minion serving its hold
+has its velocity multiplied by `(0.3, 1)`, a brake on x that decays over a few
+frames; one inside the wider threshold is not touched at all, and is left to
+carry on and to friction. Implementing the second honestly broke the guard - it
+sailed through its post and never parked.
+
+The cause is the port's body, not the rule. `LevelBuilder` builds a rigid CIRCLE
+and `kPlaneLockRotation` leaves z free, so friction turns a slide into a ROLL and
+nothing stops. `minion.ent` is `fixedRotation="1"` and cannot do that, so the
+spawned body now locks z as the original does. The suite shoves a guard at its
+post at three times a walk and checks it still parks, because a comment claiming
+"same post, reached differently" with no case exercising it is not a claim worth
+keeping. A capsule builder would have hidden this entirely.
+
+**enemy_killer is not a hazard, and that is a correction to the role table.** The
+remake files it under `hazard` beside `death_area.ent` and `lava`, so the port
+killed the player on it. Its callback does nothing of the kind:
+`ETHBeginContactCallback_enemy_killer` is 69 instructions that open with
+`isMinion(other)` and jump to the return when that is false - the destroy, the
+earthquake, `playMinionFallSound` and the skull it drops are all inside that
+branch. The entity has no `.ent` at all; it is defined inline in each scene, and
+level0b's reads `shape=1 sensor=0 static=1` with a collision of 768 x 128 x 16.
+So it is a solid floor to stand on, below the bounds of 44 levels, and it is
+TILED - 30 of those levels lay one slab and 14 lay two, so a finder that took the
+first would leave half of them inert. `data/hazards.json` takes it out of the
+hazards by name; `sim/Minions.hpp` is what acts on it. No chapter-1 or -2 level
+places one, so nothing that already played could have caught this.
+
+**Not built, and written down instead.** The sight cone (120 degrees over three
+256-px buckets, with an occlusion ray and no range); the shot (2000 ms cadence,
+`fakeRadius` 16, and `killPortal`, which reaches into portal state nothing else
+in this port writes from outside); the `cantReach` gate, which skips the whole
+move block unless a probe towards the destination comes back null - not built
+because a ray between two points near a platform can clip the floor, and a false
+positive there freezes every minion in all seven levels that now play. A minion
+is also `breakable` and `burnable` as well as `teleportable`; only the last is
+wired, since `Fire` and `Demolish` fill their lists from the scene and a minion
+does not exist when they run. The marker's `entityName` override is read by the
+original and used exactly once in the whole game (level31b's `ghost_minion.ent`);
+`alternativeName` it also reads, and no level sets it at all.
+
+One census trap worth recording: counting markers by the prefix `minion_spawn`
+gives 63 and an apparent marker with no `waypointName`. It is `minion_spawn_point`
+in level31b, which is in no role at all - it is the world-3 boss's spawn anchor,
+sought by name so `ghost_utility_spawn.ent` can be put at its position. That
+level's unclaimed `wayA0` and `wayA1` belong to the boss, not to a patrol.
+
+**What is left of chapter 3**, read off the inventory rather than inferred:
+`keyhole` and `locked_door` in 26 levels each and `key` in 24 - one mechanism,
+paired by COLOUR rather than by proximity, and the largest single block left in
+the game; `pickup` in 9; `shock_field` in 7; `boss_spawn` in 2 (level31a, which
+is chapter 2's last, and level31b); `gravity_well` in 1. Chapter 4 is still
+stopped at the door, where `no_gravity` refuses 18 levels and `darkest` 12.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_minions` at 77 checks, and 98 of 128 levels starting with 70 playing on
+both. Nothing under `src/` changed this time - the port builds on the
+`collideConnected` step 22 added and asked nothing new of the engine - so unlike
+that step these suites are the whole verification surface, and the engine's other
+games are untouched.
+
+Both wrong turns above cost a full run of both toolchains, and neither would have
+been found by reading harder: the first showed up only as a guard that reached
+its post without adopting its hold, the second only as one that reached its post
+and would not stop. That is twice now, counting step 22's sign, that the decode
+looked settled and the suite disagreed - and both times the suite was right.

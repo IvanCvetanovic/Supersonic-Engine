@@ -31,6 +31,7 @@
 #include "sim/Hinge.hpp"
 #include "sim/Launchers.hpp"
 #include "sim/LevelBuilder.hpp"
+#include "sim/Minions.hpp"
 #include "sim/Player.hpp"
 #include "sim/Portals.hpp"
 #include "sim/Puzzle.hpp"
@@ -61,6 +62,8 @@ struct Data {
     Turrets::Rules turrets;       // and turrets.json
     Fire::Rules fire;             // and fire.json
     Hinge::Rules hinge;           // and hinge.json
+    Minions::Rules minions;       // and minions.json
+    Hazards::Rules hazards;       // and hazards.json, which is what the role table got wrong
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
 
@@ -91,6 +94,9 @@ struct Level {
     // Attached when the level is built and then left to the solver: Hinge.hpp
     // says why this one has no tick.
     Hinge::State hinge;
+    // Spawned when the level starts, not built with it: Minions.hpp says why the
+    // marker is all a level places.
+    Minions::State minions;
     entt::entity player = entt::null;
 };
 

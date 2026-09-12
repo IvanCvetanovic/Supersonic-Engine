@@ -28,6 +28,16 @@
 
 namespace MagicPortals::Hazards {
 
+// The port's hazards.json: what the remake's role table calls a hazard but the
+// original does not. enemy_killer is filed under `hazard` there, beside
+// death_area.ent and lava, and it kills no player at all - see the file, and
+// Minions.hpp, which is what does act on it.
+struct Rules {
+    std::vector<std::string> notHazardNames;
+};
+
+bool LoadRules(const std::string& path, Rules& out, std::string& error);
+
 struct Hazard {
     std::string name;
     Trigger::Box box;
@@ -47,6 +57,6 @@ struct State {
 
 // Every hazard of a level. False, with `error`, for a rotated one, whose box
 // would turn with it.
-bool Find(const Tscn::Scene& scene, const Roles::Table& roles, State& out, std::string& error);
+bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const Rules& rules, State& out, std::string& error);
 
 } // namespace MagicPortals::Hazards

@@ -50,6 +50,13 @@ inline constexpr const char* kExplosive = "explosive";
 // than by this role, as the original finds them; named here so a level carrying
 // one stops counting as inert.
 inline constexpr const char* kHinge = "hinge";
+// The invisible marker a minion is spawned from, and the markers it patrols
+// between (Minions.hpp). The marker deletes itself in the original once it has
+// spawned, and carries the patrol's PREFIX rather than a waypoint's name; the
+// waypoints are read through that prefix rather than by this role, which is
+// named here so a level carrying one stops counting as inert.
+inline constexpr const char* kEnemySpawn = "enemy_spawn";
+inline constexpr const char* kWaypoint = "waypoint";
 // Played only for the boss the port has: Boss::Plays says which.
 inline constexpr const char* kBossSpawn = "boss_spawn";
 

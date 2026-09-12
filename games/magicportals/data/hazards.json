@@ -1,0 +1,24 @@
+{
+  "_about": [
+    "What the remake's role table calls a hazard but the original does not.",
+    "",
+    "The port reads the remake's entity_roles.json for its roles, and that table is the",
+    "remake's design decision rather than the converter's. In one place it is wrong about",
+    "the original: enemy_killer sits under `hazard` beside death_area.ent, destroyier.ent",
+    "and lava, all of which kill the player on contact.",
+    "",
+    "enemy_killer does not. ETHBeginContactCallback_enemy_killer (android_game.bin, bytes",
+    "436701..437083) is 69 instructions, and instruction 7 jumps to the return when",
+    "isMinion(other) is false - so a player, a crate or a thrown stone touching it gets",
+    "nothing at all. It is sensor=0 and the converter gives it a solid StaticBody2D, which",
+    "is a floor the player can stand on, and it lies below the bounds of 44 levels across",
+    "worlds 3 and 4. Left in the hazards it would kill the player on contact in every one.",
+    "",
+    "It is not dropped, only moved: sim/Minions.hpp owns it, where destroying a minion is",
+    "what it is for. No chapter-2 level places one, so nothing that passes today changes."
+  ],
+
+  "not_hazard_names": [
+    "enemy_killer"
+  ]
+}
