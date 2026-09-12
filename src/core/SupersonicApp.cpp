@@ -2,6 +2,7 @@
 
 #include "core/WorldShapes.hpp"
 #include "renderer/ScreenCapture.hpp"
+#include "renderer/MeshRegistry.hpp"
 #include "core/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "core/Profiler.hpp"
@@ -211,6 +212,23 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
             EditorFonts::Load(dpiScale);
             Theme::ApplyEngineDarkTheme(dpiScale);
         });
+
+    // GEOMETRY A GAME BUILT, reachable by the game that built it.
+    //
+    // MeshComponent::meshKey names geometry the game uploaded, and
+    // MeshRegistry::Upload is public and documented for exactly that - "terrain
+    // from a heightfield, fog, a debug overlay, a string of text as glyph
+    // quads". But an EngineLayer is handed nothing except the registry, on
+    // purpose: it "is not a subsystem of the engine, it is a peer". So no game
+    // could reach the registry to put anything BEHIND a key, and since meshKey
+    // resolves through Find with no cube fallback, naming one drew nothing at
+    // all. A documented capability that no game could use.
+    //
+    // Published the way AudioSystem publishes its engine, and erased in the
+    // destructor beside that one, before the renderer that owns it goes.
+    // Live from here: m_meshRegistry is built in VulkanRenderer's constructor,
+    // not in SetOffscreenRenderPass.
+    m_registry.ctx().insert_or_assign<MeshRegistry*>(&m_renderer->GetMeshRegistry());
 
     // The editor's offscreen target registers a texture with the ImGui Vulkan
     // backend, so it must be created after the renderer has initialised it.
@@ -599,6 +617,11 @@ SupersonicApp::~SupersonicApp() {
     // Clearing fires the destruction hook, which stops any voice still playing.
     m_registry.clear();
     AudioSystem::Detach(m_registry);
+
+    // BEFORE m_renderer.reset() below, which owns it. A registry outliving the
+    // renderer while still holding a MeshRegistry* is a dangling pointer in a
+    // context anything can ask for - worse than the gap this closes.
+    m_registry.ctx().erase<MeshRegistry*>();
 
     // Order matters: the editor frees an ImGui descriptor set, which must
     // happen before ImGui_ImplVulkan_Shutdown runs in ~VulkanRenderer.
