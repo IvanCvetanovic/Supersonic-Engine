@@ -2307,3 +2307,110 @@ attempts were exhausted - so `test_mp_turrets` was run again on its own and came
 back 25 checks, 0 failures. That is a fact about this machine and not about the
 port, written down so that a future green run which is quietly one suite short is
 not read as a pass.
+
+## Step 22 - hinges, and the contact a joint has to win (built)
+
+Chapter 2 goes from 27 of 32 playing to 31, and the game from 59 of 128 to 63.
+Seesaws and spinning platforms - the bodies the original pins to an anchor with a
+revolute joint - and one engine gap that had to be filled before any of them
+would hold still.
+
+**The one role with no tick.** Every other system in the port ticks something;
+this one attaches a `JointComponent` when the level is built and the engine's
+solver does the rest. That is the point: a hinge driven by a script writing
+transforms is not a physical object, it is a body that ignores what it touches,
+and the player has to be able to stand on these and tip them.
+
+**Nothing had to be decoded from script, and nothing had to be added to the
+converter.** There is no hinge callback in the bytecode at all - the joint is
+Box2D data, nested in the `.ent`'s `<Collision>` beside `<Polygon>` and
+`<Compound>` - and the converter already carries it through as eight bare
+`metadata/joint_*` keys plus `metadata/revoluteJoint`, a STRING naming the other
+body by its entity name. In all ten placements that string is `anchor`, and every
+level that has one places an `anchor` node, so this is body to body and never body
+to world.
+
+The converter drops the original's `attachPointB`, and it costs nothing: Box2D's
+`Initialize` puts both ends of the joint on one world point, so B's anchor is
+simply where A's lands, expressed in B's frame. The attach points are fractions of
+the half collision box (`ETHRevoluteJoint::ComputeAnchorPosition`), and level27a
+checks out to within a pixel - the anchor at x 460 with a 256-wide box and an
+`attachPointBX` of -0.8 gives 460 - 102.4 = 357.6, where the platform stands at
+357.
+
+**The engine gap: a joint has to win against the contact.** In level27a the
+platform's compound overlaps its own anchor's box by 89 px, which is normal -
+a hinge sits inside the frame it swings on. Nothing in `PhysicsSystem` suppressed
+that pair, so the solver shoved the two apart every step while the joint pulled
+them back, and the platform climbed out of its own pivot. Box2D, PhysX and Bullet
+all carry `collideConnected` for exactly this reason, so it is the engine's gap
+and not the port's: `JointComponent::collideConnected`, defaulting false, with the
+pair dropped where the registry is in hand rather than inside `SweepAndPrune`,
+which is a pure function over proxies and is exposed for testing on that basis.
+Membership only - the pair ORDER the broadphase emits is left exactly as it was,
+which that file guards carefully for determinism. `test_physics` pins it with a
+SLACK ROPE across the overlap, ten metres of it over half a metre, so the joint
+applies no impulse in any case and the flag is the only thing that differs.
+
+**The angle, which took three attempts.** Box2D measures from the pose at
+creation, so the authored range is relative to how the level was built; the
+engine's hinge angle is zero where the two bodies' reference directions coincide,
+which its own header calls an arbitrary configuration. So the range is measured
+from the angle the joint rests at - and that rest angle is taken from the level's
+own rotations rather than from the registry, because `Find` runs before anything
+has stepped and a world transform may not be resolved. It still goes through
+`Joints::HingeAngle`, so there is one answer to the question and not two.
+
+The SIGN was got wrong twice, both times the same way: by trusting a measurement
+taken under conditions that confounded it.
+
+- Derived, the two negations cancel - Box2D reads B relative to A, the engine
+  reads A relative to B, and the y-flip negates each again - so the limits are
+  ADDED. That is correct.
+- It was then negated on the strength of a reading taken three seconds into a
+  swing WITH GRAVITY ON, by which time gravity had pulled the bar down past rest.
+  Indistinguishable from an inverted sign.
+- Read six ticks in, before the bar can reach anything, +z plainly RAISES the
+  angle. Reverted.
+
+Two things hid it. The solver ORDERS the pair itself, so swapping min and max does
+nothing at all and only a negation was ever doing anything. And a 254 px seesaw on
+a 127 px arm meets the level's own geometry before either stop - level30a settles
+at 2.11 turned one way and 1.67 the other, neither of them a limit - so "it
+stopped early" is the ordinary case and says nothing about which way the angle
+runs. The suite therefore pins the DIRECTION, read in the one window where nothing
+else has touched the bar, the clamp at both ends, and the arithmetic; it does not
+claim the bar reaches a stop, because in a real level it does not.
+
+level30a is the only level in the game that could have caught this: it swings
+1.1325 one way and 0.4382 the other, where every other placement is a symmetric
+quarter turn that passes whichever sign is used.
+
+**Not built, and written down instead.** Motors: all ten placements set
+`enable_motor` 0, and `ETHCallback_spinning_platform` fetches the joint every
+frame and zeroes its motor speed besides. `ETHCallback_spinning_cross` turns its
+body at a constant 0.6 rad/s and no level places a `spinning_cross`. And
+level21b's `motor_seesaw` is limited to 0 .. 1.5708 - pinned at one end of its own
+range - with no motor and no callback, which is recorded as unexplained rather
+than reasoned backwards into something that must work somehow.
+
+What is left of chapter 2 is one level: level31a, its BOSS, which wants
+`boss_spawn` and `waypoint` and so belongs with chapter 3's work rather than
+here.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_hinge` 28 checks, and 98 of 128 levels starting with 63 playing on both.
+Because `collideConnected` is an ENGINE change rather than a port one, the whole
+engine suite is run as well and not only these: every game here links that contact
+filter, and two green Magic Portals runs say nothing about the other two. It
+passes, 99 of 99, with `test_physics` at 282 checks and `test_joints` at 93.
+
+Nine of those ninety-nine would not START on the first sweep - `***Not Run`,
+`BAD_COMMAND`, "Process not started" - which reads exactly like a physics change
+having broken the audio, rendering and determinism suites. It is Smart App Control
+refusing freshly relinked unsigned binaries, the same thing that stopped
+`test_mp_turrets` above, and `ctest` swallows the launch code so the usual 4551
+never appears. The tell is that every binary was present on disk and one of them
+passed on a plain rerun with no rebuild at all; relinked and re-run, all nine are
+green. Written down because "the engine went red after a physics change" is the
+wrong conclusion to reach, and this machine offers it twice a day.

@@ -61,6 +61,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Boss::LoadRules(portDataDirectory + "/boss.json", read.boss, error)) return false;
     if (!Turrets::LoadRules(portDataDirectory + "/turrets.json", read.turrets, error)) return false;
     if (!Fire::LoadRules(portDataDirectory + "/fire.json", read.fire, error)) return false;
+    if (!Hinge::LoadRules(portDataDirectory + "/hinge.json", read.hinge, error)) return false;
     std::error_code ec;
     std::filesystem::create_directories(prismDirectory, ec);
     read.prisms = prismDirectory;
@@ -120,6 +121,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Boss::Find(data.scene, data.roles, data.boss, data.launchers, out.boss, error)) return false;
     if (!Turrets::Find(data.scene, data.roles, data.turrets, out.turrets, error)) return false;
     if (!Fire::Find(data.scene, data.roles, out.built, data.fire, out.fire, error)) return false;
+    if (!Hinge::Find(data.scene, data.roles, out.built, registry, data.hinge, out.hinge, error)) return false;
     return Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                          out.portals, error);
 }

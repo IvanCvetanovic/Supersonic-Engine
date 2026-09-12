@@ -3401,6 +3401,57 @@ static void testEqualSolveOrdersKeepTheOrderTheyHad() {
               "an ordered chain must differ from an unordered one");
 }
 
+// A joint is the more specific statement about how its two ends are related, so
+// a contact between them is dropped unless the joint asks for it. Jointed bodies
+// are normally built overlapping - a hinge sits inside the frame it swings on -
+// and left colliding, the solver shoves them apart every step while the joint
+// pulls them back.
+//
+// The joint here is a SLACK ROPE, ten metres of it across half a metre of
+// overlap, so it applies no impulse in any of the three cases. That is what makes
+// the flag the only thing that differs: a joint that actually held the pair would
+// move the box itself, and a body pulled by its own joint looks exactly like a
+// body pushed by the contact it was supposed to be spared.
+static void testAJointStopsItsTwoEndsColliding() {
+    const auto settle = [](entt::registry& registry, bool jointed, bool collideConnected) {
+        PhysicsSettings settings;
+        settings.gravity = glm::vec3(0.0f);
+        registry.ctx().insert_or_assign<PhysicsSettings>(std::move(settings));
+
+        const auto moving = makeBox(registry, glm::vec3(0.0f));
+        const auto fixed = makeStaticBox(registry, glm::vec3(0.5f, 0.0f, 0.0f));
+        if (jointed) {
+            auto& joint = registry.emplace<JointComponent>(moving);
+            joint.type = JointComponent::Type::Distance;
+            joint.rope = true;
+            joint.distance = 10.0f;
+            joint.connectedBody = fixed;
+            joint.anchor = glm::vec3(0.0f);
+            joint.connectedAnchor = glm::vec3(0.0f);
+            joint.collideConnected = collideConnected;
+        }
+        stepFor(registry, 0.5f);
+        return registry.get<TransformComponent>(moving).position.x;
+    };
+
+    entt::registry alone;
+    const float pushed = settle(alone, false, false);
+    CHECK_MSG(pushed < -0.05f,
+              "two overlapping boxes push apart when nothing joins them, got x " + std::to_string(pushed));
+
+    entt::registry held;
+    const float stayed = settle(held, true, false);
+    CHECK_MSG(std::fabs(stayed) < 0.01f,
+              "and stay put when a joint holds them, got x " + std::to_string(stayed));
+
+    entt::registry asked;
+    const float apart = settle(asked, true, true);
+    CHECK_MSG(apart < -0.05f, "unless the joint asks to collide, got x " + std::to_string(apart));
+    CHECK_MSG(std::fabs(pushed - apart) < 0.01f,
+              "and then it is exactly as if there were no joint, got " + std::to_string(pushed) + " and " +
+                  std::to_string(apart));
+}
+
 static void runTests() {
     testANudgedCapsuleOnItsSideSettlesInsteadOfRocking();
     testACapsuleRestsOnItsOwnBottom();
@@ -3427,6 +3478,7 @@ static void runTests() {
     testSleepCanBeTurnedOff();
     testAStackOfBoxesSettlesInsteadOfSinking();
     testLayerMasksSuppressAPair();
+    testAJointStopsItsTwoEndsColliding();
     testFilteringNeedsBothSidesToAgree();
     testColliderCenterMovesTheCollider();
     testRaycastRespectsItsLayerMask();
@@ -3527,4 +3579,4 @@ static void runTests() {
     testEqualSolveOrdersKeepTheOrderTheyHad();
 }
 
-TEST_MAIN("test_physics", 234)
+TEST_MAIN("test_physics", 238)

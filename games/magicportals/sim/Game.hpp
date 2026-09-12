@@ -28,6 +28,7 @@
 #include "sim/Fire.hpp"
 #include "sim/Goals.hpp"
 #include "sim/Hazards.hpp"
+#include "sim/Hinge.hpp"
 #include "sim/Launchers.hpp"
 #include "sim/LevelBuilder.hpp"
 #include "sim/Player.hpp"
@@ -59,6 +60,7 @@ struct Data {
     Boss::Rules boss;             // and boss.json
     Turrets::Rules turrets;       // and turrets.json
     Fire::Rules fire;             // and fire.json
+    Hinge::Rules hinge;           // and hinge.json
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
 
@@ -86,6 +88,9 @@ struct Level {
     Boss::State boss;
     Turrets::State turrets;
     Fire::State fire;
+    // Attached when the level is built and then left to the solver: Hinge.hpp
+    // says why this one has no tick.
+    Hinge::State hinge;
     entt::entity player = entt::null;
 };
 

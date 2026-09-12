@@ -1048,6 +1048,27 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     std::vector<Constraint> constraints;
     constraints.reserve(pairs.size() * 2);
 
+    // The pairs a joint holds together and does not want colliding.
+    //
+    // Gathered here rather than filtered inside SweepAndPrune because that is a
+    // pure function over proxies with no registry to ask, and is exposed for
+    // testing on exactly that basis. This changes MEMBERSHIP only: the order the
+    // broadphase emits pairs in is left as it was, which the sort up there is so
+    // careful about for determinism.
+    const auto pairKey = [](entt::entity lhs, entt::entity rhs) -> unsigned long long {
+        const auto low = static_cast<unsigned int>(lhs < rhs ? lhs : rhs);
+        const auto high = static_cast<unsigned int>(lhs < rhs ? rhs : lhs);
+        return (static_cast<unsigned long long>(high) << 32) | low;
+    };
+    std::vector<unsigned long long> jointedApart;
+    for (auto entity : registry.view<JointComponent>()) {
+        const auto& joint = registry.get<JointComponent>(entity);
+        if (!joint.enabled || joint.broken || joint.collideConnected) continue;
+        if (joint.connectedBody == entt::null || !registry.valid(joint.connectedBody)) continue;
+        jointedApart.push_back(pairKey(entity, joint.connectedBody));
+    }
+    std::sort(jointedApart.begin(), jointedApart.end());
+
     // Wakes `sleeper` if `other` is something that can disturb it, and does it
     // IN PLACE, restoring the mass properties that were zeroed while it slept.
     //
@@ -1102,6 +1123,16 @@ void PhysicsSystem::Update(entt::registry& registry, float deltaTime,
     for (const auto& [pi, pj] : pairs) {
         Body& a = bodies[proxies[pi].index];
         Body& b = bodies[proxies[pj].index];
+
+        // A joint is the more specific statement about how these two are
+        // related, so it wins over the contact. Jointed bodies are normally
+        // built overlapping - a hinge sits inside the frame it swings on - and
+        // left colliding, the solver shoves them apart every step while the
+        // joint pulls them back: a platform that climbs out of its own pivot.
+        if (!jointedApart.empty() &&
+            std::binary_search(jointedApart.begin(), jointedApart.end(), pairKey(a.entity, b.entity))) {
+            continue;
+        }
 
         glm::vec3 normal(0.0f, 1.0f, 0.0f);
         float penetration = 0.0f;

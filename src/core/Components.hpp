@@ -1200,6 +1200,20 @@ struct JointComponent {
     // order they had and a scene that never sets this solves exactly as before.
     int32_t solveOrder{0};
 
+    // Whether the two ends may also COLLIDE with each other.
+    //
+    // False, as it is in every other engine, because jointed bodies are normally
+    // built overlapping: a hinge sits inside the frame it swings on, a ragdoll's
+    // upper arm inside its shoulder. Left colliding, the contact solver spends
+    // every step shoving the pair apart while the joint pulls it back, and the
+    // result is a limb that buzzes or a platform that climbs out of its own
+    // pivot. The joint is the more specific statement about how the two are
+    // related, so it wins.
+    //
+    // True is for the case where the joint only LIMITS a pair that should still
+    // touch - a rope between two crates that must not pass through each other.
+    bool collideConnected{false};
+
     bool enabled{true};
 };
 

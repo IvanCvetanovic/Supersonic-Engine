@@ -46,6 +46,10 @@ inline constexpr const char* kTurret = "turret";
 // the role is named here so a level carrying one stops counting as inert.
 inline constexpr const char* kFireSource = "fire_source";
 inline constexpr const char* kExplosive = "explosive";
+// Seesaws and spinning platforms (Hinge.hpp). Found by their joint data rather
+// than by this role, as the original finds them; named here so a level carrying
+// one stops counting as inert.
+inline constexpr const char* kHinge = "hinge";
 // Played only for the boss the port has: Boss::Plays says which.
 inline constexpr const char* kBossSpawn = "boss_spawn";
 

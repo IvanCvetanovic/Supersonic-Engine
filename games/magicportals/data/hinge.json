@@ -1,0 +1,41 @@
+{
+  "_about": [
+    "Seesaws and spinning platforms - the bodies the original pins with a revolute",
+    "joint. Almost nothing is authored here, because almost nothing is ours: the",
+    "converter already carries the eight joint_* keys and the revoluteJoint name",
+    "through to each placement, and the engine's own solver does the rest.",
+    "Hinge.hpp says how the anchor and the angle are worked out."
+  ],
+  "joint": {
+    "_note": [
+      "How much of the joint's error the solver takes out per step. The engine's own",
+      "default, carried as data so a level that jitters can be retuned without",
+      "touching code. Zero lets a loaded hinge drift apart; above one it",
+      "over-corrects and shakes."
+    ],
+    "stiffness": 0.8
+  },
+  "_motors_not_built": [
+    "All ten placements carry joint_enable_motor 0, and ETHCallback_spinning_platform",
+    "(bytes 371942..372140) fetches the joint every frame and sets its motor speed to",
+    "zero besides. So these are free-swinging bodies with angle limits and nothing",
+    "drives them.",
+    "",
+    "level21b's motor_seesaw carries metadata/motorSpeed = -4 and joint_motor_speed",
+    "-5 with the motor disabled, and nothing in the bytecode reads either. Authored",
+    "and unread, like the carranca's dirX magnitude."
+  ],
+  "_spinning_cross_not_built": [
+    "ETHCallback_spinning_cross (bytes 371655..371816) turns its body at a constant",
+    "0.6 rad/s. No converted level places a spinning_cross, so there is nothing to",
+    "turn. Recorded rather than built, and the day a level places one this is the",
+    "note that says what it should do."
+  ],
+  "_motor_seesaw_unexplained": [
+    "level21b's motor_seesaw is limited to 0 .. 1.5708 - pinned at one end of its own",
+    "range - with no motor and no callback. A seesaw that can only fall one way is a",
+    "plausible puzzle and also plausibly means something drives it that has not been",
+    "found. It is chapter 3 and gates nothing in chapter 2; written down rather than",
+    "reasoned backwards from the assumption that it must work somehow."
+  ]
+}

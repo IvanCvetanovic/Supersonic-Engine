@@ -170,6 +170,9 @@ add_mp_test(test_mp_demolish)
 # Fire agents, burning crates and barrel bombs - and the asymmetry between them,
 # that fire kills the player where a blast cannot reach one.
 add_mp_test(test_mp_fire)
+# Seesaws and spinning platforms. No tick of its own: the joint is attached when
+# the level is built and the engine's solver does the rest.
+add_mp_test(test_mp_hinge)
 # Launchers, what they throw, and what takes it back.
 add_mp_test(test_mp_launchers)
 # The portal shot: a tap fires, and the portal opens where the shot arrives.
