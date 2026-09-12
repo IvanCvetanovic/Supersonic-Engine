@@ -17,6 +17,7 @@
 
 #include "core/GameRuntime.hpp"
 #include "core/LaunchOptions.hpp"
+#include "platform/ExecutablePath.hpp"
 #include "core/Log.hpp"
 #include "core/SupersonicApp.hpp"
 #include "renderer/VulkanContext.hpp"
@@ -96,6 +97,24 @@ int main(int argc, char** argv) {
     // default, a run from the repository root opens the editor's demo scene
     // beside it, which the first headless render showed above level30.
     manifest.startupScene.clear();
+
+    // WHERE THIS GAME MAY WRITE, resolved once, here, and handed down.
+    //
+    // The layer does not ask for itself, which is WolfBrigadeLayer's contract
+    // and exists for its reason: "where may I write" is a question about the
+    // machine rather than about this game, and a layer that resolved its own
+    // path could not be built by a test without one. Eighteen suites build this
+    // layer bare, and every one of them would otherwise be writing the same
+    // scores.json into the ctest working directory and reading each other's.
+    //
+    // Empty when the platform will not say: the medals are then not kept, which
+    // the game says out loud rather than writing somewhere unpredictable.
+    const std::filesystem::path saveDir = Supersonic::UserDataDirectory(manifest.title);
+    if (saveDir.empty()) {
+        std::cerr << "[Magic Portals] no writable user directory; "
+                     "medals earned this session will not be kept.\n";
+    }
+    paths.saveDir = saveDir.string();
 
     try {
         Supersonic::SupersonicApp app(options, &manifest);

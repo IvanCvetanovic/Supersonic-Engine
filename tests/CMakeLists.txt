@@ -142,6 +142,12 @@ add_mp_test(test_mp_levels)
 add_mp_test(test_mp_geometry)
 add_mp_test(test_mp_portal)
 add_mp_test(test_mp_play)
+
+# The medals, kept between runs. Pure sim: a temporary directory and no window.
+# The ONE Magic Portals suite that touches a filesystem, and it touches only its
+# own scratch directory - the layer suites all build bare, which is what
+# Paths::saveDir being empty by default buys.
+add_mp_test(test_mp_scores)
 # Every converted level started as the port starts one: the remaster's inventory.
 add_mp_test(test_mp_start)
 # Static portals, on the tutorial levels that ship them.

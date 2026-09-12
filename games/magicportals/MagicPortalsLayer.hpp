@@ -21,6 +21,7 @@
 #include "sim/Game.hpp"
 #include "sim/Art.hpp"
 #include "sim/Particles.hpp"
+#include "sim/Scores.hpp"
 #include "sim/Sounds.hpp"
 #include "sim/Sprites.hpp"
 
@@ -102,6 +103,21 @@ public:
         // The original's extracted assets, whose entities/ holds the images of
         // what no level places (Art.hpp).
         std::string original = MAGICPORTALS_ORIGINAL_DIR;
+
+        // WHERE THE PLAYER'S MEDALS ARE KEPT, and empty by default - which
+        // means this layer never touches the filesystem.
+        //
+        // Injected rather than resolved here, which is WolfBrigadeLayer's
+        // contract and exists for the reason its header states: "where may I
+        // write" is a question about the machine, not about this game, and a
+        // layer that resolved its own path could not be built by a test
+        // without one. Every suite builds the layer bare, and a hardcoded path
+        // would have eighteen of them writing the same filenames into the
+        // ctest working directory and reading each other's - order-dependent
+        // failure that reads as a flake.
+        //
+        // Only the shipped binary passes one, from UserDataDirectory.
+        std::string saveDir;
     };
 
     // The last level cleared: the portals spent against its golden score, which
@@ -497,6 +513,10 @@ private:
     std::vector<MenuButton> m_menuButtons;
     std::vector<entt::entity> m_menuQuads;  // one per button, in its order
     std::vector<entt::entity> m_menuLabels; // one per button, null but for a level's number
+    // One per button too, and null for all but a LEVEL THE PLAYER HAS CLEARED:
+    // the original draws a medal on a level button only where getScore is not
+    // zero, so an unfinished level carries no medal rather than a bronze one.
+    std::vector<entt::entity> m_menuMedals;
     entt::entity m_menuBg{entt::null};      // the screen's background
     entt::entity m_menuTitle{entt::null};   // the game's title, on the main screen
 
@@ -578,6 +598,14 @@ private:
     // The medal the counter's CURRENT value earns, by the same computeScore the
     // final one uses. Zero when there is nothing to show.
     int MedalShown() const;
+
+    // WHAT THE PLAYER HAS EARNED, across runs.
+    //
+    // The level grid draws a small medal on every level already finished, and
+    // the port kept no score at all - so there was nothing to draw and every
+    // button was bare. Memory-only unless Paths::saveDir says otherwise, which
+    // is what keeps eighteen suites off the filesystem.
+    Scores::Store m_scores;
 
     struct Hud {
         entt::entity status{entt::null};

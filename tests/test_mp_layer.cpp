@@ -1552,6 +1552,100 @@ void TheMedalScreenIsTheOriginals() {
     CHECK_MSG(Tagged(registry, "Magic Portals Medal") == 0, "and so does the medal");
 }
 
+// A level that has been cleared wears its medal on the grid. Nothing else does.
+//
+// This is the owner's own report - "i dont see any mdels at the level select" -
+// as a test. It is worth an end-to-end case rather than a unit one because the
+// symptom is invisible: a grid of bare buttons looks exactly like a grid nobody
+// has played yet, so the feature can disappear without anyone noticing.
+//
+// The layer is built BARE, as every layer suite is: Paths::saveDir is empty, so
+// the store is memory-only and this test writes nothing to any disk. What it
+// proves is the path from clearing a level to a medal on a button, which does
+// not need a file to exist.
+void TheGridShowsTheMedalsEarned() {
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+
+    for (int tick = 0; tick < 600; ++tick) {
+        std::vector<std::string> pressed;
+        if (tick == 0) pressed.push_back(MagicPortalsLayer::kRight);
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, std::move(pressed));
+        if (layer.MenuScreen() == MagicPortalsLayer::Screen::Finished) break;
+    }
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::Finished,
+              "holding right through level0 must finish it");
+    if (layer.MenuScreen() != MagicPortalsLayer::Screen::Finished) return;
+
+    // Out to the list, by the medal screen's own third button.
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind != MagicPortalsLayer::MenuButton::Kind::List) continue;
+        layer.PressMenu(registry, button);
+        break;
+    }
+    // Through the chapters, if that is where it landed: which screen the list
+    // button opens is not what this case is about.
+    if (layer.MenuScreen() == MagicPortalsLayer::Screen::Worlds) {
+        for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+            if (button.kind != MagicPortalsLayer::MenuButton::Kind::World || button.world != 0) continue;
+            layer.PressMenu(registry, button);
+            break;
+        }
+    }
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::Levels,
+              "the level grid is reachable from the medal screen");
+    if (layer.MenuScreen() != MagicPortalsLayer::Screen::Levels) return;
+
+    // EXACTLY ONE. That it is one rather than "at least one" is the point: it
+    // says the level just cleared gained a medal AND that the fifteen nobody
+    // has finished did not, which is the guard the original draws on
+    // `getScore != 0`.
+    CHECK_MSG(Tagged(registry, "Magic Portals Menu Medal") == 1,
+              "the level just cleared wears a medal on the grid, and only it does");
+
+    // ON THE BUTTON, not beside it.
+    //
+    // buildMenu creates the medal but menuTick places it, so this needs a tick
+    // before there is a position to read at all - without one the transform is
+    // still at the origin and the check below would be measuring nothing.
+    tickWith(layer, registry, kRest, {}, {});
+
+    const entt::entity medal = FirstTagged(registry, "Magic Portals Menu Medal");
+    const MagicPortalsLayer::MenuButton* wearer = nullptr;
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind != MagicPortalsLayer::MenuButton::Kind::Level || button.level != 0) continue;
+        wearer = &button;
+        break;
+    }
+    CHECK_MSG(wearer != nullptr, "level0 has a button on the grid");
+    if (medal != entt::null && wearer != nullptr && registry.all_of<TransformComponent>(medal)) {
+        // The original draws it from the button's TOP-LEFT plus (36, 36) of a
+        // 64px button, so its centre lands 20 in from the button's own centre
+        // against a half-width of 32 - a badge on the corner. Measured from the
+        // centre instead it came out at 52, which is a medal floating in the
+        // gap beside the button touching nothing. This tells those two apart,
+        // which counting the medals cannot.
+        // MagicPortals::Units, qualified: this file brings in Supersonic and
+        // the layer by name, not the whole of the game's namespace.
+        const glm::dvec2 at =
+            MagicPortals::Units::ToPixels(registry.get<TransformComponent>(medal).position);
+        const double dx = std::fabs(at.x - wearer->centrePx.x);
+        const double dy = std::fabs(at.y - wearer->centrePx.y);
+        CHECK_MSG(dx < wearer->sizePx.x * 0.5 && dy < wearer->sizePx.y * 0.5,
+                  "the medal sits on its button rather than floating beside it");
+    }
+
+    layer.OnDetach(registry);
+    CHECK_MSG(Tagged(registry, "Magic Portals Menu Medal") == 0,
+              "and the medal goes with the screen, or a resize stacks another");
+}
+
 void NothingBlinksWhileWalking() {
     NoSpriteBlinksWhileWalking("level1"); // 1-2, where the owner saw one go
     NoSpriteBlinksWhileWalking("level2"); // 1-3, where several do
@@ -1589,6 +1683,7 @@ void runTests() {
     ParticlesGoWithTheirLevel();
     FinishingALevelShowsTheMedal();
     TheMedalScreenIsTheOriginals();
+    TheGridShowsTheMedalsEarned();
     ALevelLatchesTheSoundsItEarns();
     NothingOnScreenIsCulledWhileWalking();
     NothingBlinksWhileWalking();

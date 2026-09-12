@@ -23,6 +23,7 @@ add_library(MagicPortalsSim STATIC
     Prism.cpp
     Puzzle.cpp
     Roles.cpp
+    Scores.cpp
     Shot.cpp
     Sounds.cpp
     Sprites.cpp

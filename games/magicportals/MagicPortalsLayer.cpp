@@ -127,6 +127,15 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
 
     bindInput();
     loadSounds();
+
+    // The medals earned before this run, if this build was told where they are
+    // kept. An empty saveDir is the ordinary case for a test and means this
+    // never opens a file; a file that exists and will not parse is reported and
+    // then left alone rather than overwritten.
+    if (std::string why; !m_scores.Open(m_paths.saveDir, why)) {
+        SUPERSONIC_LOG_WARN("Magic Portals") << "medals not loaded: " << why << std::endl;
+    }
+
     std::string error;
     if (!Chapters::Load(m_paths.chapters, m_chapters, error) ||
         !Camera::LoadRules(m_paths.data + "/portals.json", m_cameraRules, error) ||
@@ -326,6 +335,11 @@ void MagicPortalsLayer::goTo(entt::registry& registry, int next) {
     m_chapterComplete = true;
 }
 
+// Defined below, beside MedalShown, which computes the same thing from the
+// counter's current value. Declared here because clearLevel records the FINAL
+// medal and comes first in this file.
+int MedalFor(const MagicPortalsLayer::Cleared& cleared);
+
 void MagicPortalsLayer::clearLevel(entt::registry& registry) {
     const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(m_current)];
     Cleared cleared;
@@ -337,6 +351,23 @@ void MagicPortalsLayer::clearLevel(entt::registry& registry) {
     cleared.crystalsTotal = static_cast<int>(m_level.goals.crystals.size());
     cleared.crystals = cleared.crystalsTotal - m_level.goals.Remaining();
     m_lastCleared = cleared;
+
+    // THE FINAL MEDAL, not the one the screen is about to count up to.
+    //
+    // MedalShown() climbs bronze to gold as the counter rises, which is a
+    // picture; this is the result. The original writes it at this same moment
+    // and from a different object - GameStateController::writeScore, not the
+    // layer that animates it - for the same reason.
+    //
+    // Saved only when it changed. ScoreManager::setScore writes only when the
+    // new score beats the old, so a replay that goes worse takes nothing away
+    // and costs no write at all.
+    if (m_scores.Record(entry.world, entry.index, MedalFor(cleared))) {
+        if (std::string why; !m_scores.Save(why)) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "medals not saved: " << why << std::endl;
+        }
+    }
+
     // The original does not go straight on: GameStateController::writeScore
     // puts a LevelFinishedLayer up, with the medal the play earned and buttons
     // to play it again, go on, or pick another.
@@ -853,9 +884,15 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
         // medal's plus (-30, 48) of the original's own pixels - left and down -
         // which is why it rides an offset rather than a fraction of the screen:
         // a fraction would be a different place at a different window shape.
+        //
+        // Drawn from its TOP-LEFT, which is the pivot of (0, 0): this one is a
+        // drawScaledSprite with an explicit V2_ZERO origin, unlike the banner
+        // and the plaques above it, which addSprite centres on V2_HALF. Centred
+        // like them it sat half a crystal up and to the left of where the
+        // original puts it.
         if (m_lastCleared->crystalsTotal > 0) {
             byHeight("Magic Portals Finish Crystal", "crystal.png", glm::dvec2(0.47, 0.55), 0.08, 0.60f,
-                     glm::dvec2(-30.0, 48.0));
+                     glm::dvec2(-30.0, 48.0), glm::dvec2(0.0, 0.0));
         }
 
         // The medal itself, in the title's slot: the two screens are never up
@@ -925,6 +962,28 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
             text.text = std::to_string(level.index + 1);
         }
         m_menuLabels.push_back(label);
+
+        // THE MEDAL THIS LEVEL WAS CLEARED WITH, where it has been.
+        //
+        // LevelChooser::itemDrawCallback asks ScoreManager::getScore for the
+        // level and draws getSmallSpriteMedalName(score) only when that is not
+        // zero. The port kept no score, so this drew nothing at all and every
+        // button was bare - which is what the owner reported. `_m` is the
+        // original's own middle size, as against the `_l` the medal screen uses.
+        entt::entity medal = entt::null;
+        if (button.kind == MenuButton::Kind::Level) {
+            const Chapters::Level& cleared = m_chapters.levels[static_cast<std::size_t>(button.level)];
+            const int tier = m_scores.Get(cleared.world, cleared.index);
+            if (tier != Scores::kUnplayed) {
+                // Bronze for anything unrecognised, which is what
+                // getSmallSpriteMedalName does with a score it does not know.
+                const char* file = tier == Scores::kGold     ? "medal_gold_m.png"
+                                   : tier == Scores::kSilver ? "medal_silver_m.png"
+                                                             : "medal_bronze_m.png";
+                medal = quadFor("Magic Portals Menu Medal", menuImage(file));
+            }
+        }
+        m_menuMedals.push_back(medal);
     }
 }
 
@@ -937,6 +996,8 @@ void MagicPortalsLayer::unloadMenuDrawables(entt::registry& registry) {
     m_menuQuads.clear();
     for (auto& e : m_menuLabels) destroy(e);
     m_menuLabels.clear();
+    for (auto& e : m_menuMedals) destroy(e);
+    m_menuMedals.clear();
     // The medal screen's furniture goes with the rest of it. Without this every
     // rebuild leaves its quads behind - and a rebuild is not rare: layOutMenu
     // and buildMenu run again on every window resize, so the veils would stack
@@ -1151,6 +1212,38 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
         if (i < m_menuLabels.size() && m_menuLabels[i] != entt::null && registry.valid(m_menuLabels[i])) {
             const glm::vec3 centre = Units::ToWorld(button.centrePx.x, button.centrePx.y);
             registry.get<TransformComponent>(m_menuLabels[i]).position = glm::vec3(centre.x, centre.y, 0.6f);
+        }
+        if (i < m_menuMedals.size() && m_menuMedals[i] != entt::null && registry.valid(m_menuMedals[i])) {
+            // FROM THE BUTTON'S TOP-LEFT, and as a proportion of it.
+            //
+            // Two things the original does that a centred quad does not.
+            //
+            // The 3-argument drawScaledSprite (utilSprite.angelscript, bytes
+            // 318043..318245) pushes vector2(0, 0) as the origin and hands on,
+            // and drawSprite calls SetSpriteOrigin with it before
+            // DrawShapedSprite - so `pos` is where the sprite's TOP-LEFT goes,
+            // not its middle. level_button.png is 64x64 and medal_gold_m.png is
+            // 32x32, so the medal covers 36..68 of the button in both axes: a
+            // badge over its bottom-right corner, four pixels proud of it.
+            //
+            // Measured from the CENTRE instead, as this first did, the medal
+            // landed a whole half-button further out and floated in the gap
+            // beside the button, touching nothing.
+            //
+            // And the 36 is in the original's pixels against that 64px button,
+            // while the port's buttons are a fraction of the menu box - so the
+            // offset and the medal both ride the ratio between the two, which
+            // is the same place on the button at any window shape.
+            const double native = imageSizePx(menuImage("level_button.png")).x;
+            const double ratio = native > 0.0 ? button.sizePx.x / native : 1.0;
+            // Read back off the material rather than re-deriving the tier: the
+            // quad already knows which medal it is wearing.
+            const glm::dvec2 image =
+                imageSizePx(registry.get<MaterialComponent>(m_menuMedals[i]).albedoTexturePath);
+            const glm::dvec2 sizePx = image * ratio;
+            const glm::dvec2 topLeft = button.centrePx - button.sizePx * 0.5;
+            placeSprite(registry, m_menuMedals[i],
+                        topLeft + glm::dvec2(36.0, 36.0) * ratio + sizePx * 0.5, sizePx, 0.55f, 0.0f);
         }
     }
 
