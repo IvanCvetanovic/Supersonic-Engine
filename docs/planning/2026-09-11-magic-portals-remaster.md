@@ -1378,3 +1378,55 @@ of it is changed here.
 
 Each touches levels that already play, so each wants its own step, with all
 fifteen suites re-run.
+
+## Step 12 - what playing it found (12 September)
+
+The owner played the port for the first time, from level 1-1. Three reports, and
+the first was a bug no suite could have caught.
+
+**Level 1-2's portal led nowhere.** The player places their one portal, walks
+into it, and passes straight through. The port paired a placed portal only with
+another placed portal (`Portals::Tick`), so on a level granting a single
+placement there was no partner and no traversal.
+
+The original does it in `PortalManager::doTeleporting` (bytes 139692..140259),
+which branches on the level's budget:
+- `maxPortals == 2`: the pair, through `teleportToOther` - what the port had.
+- `maxPortals == 1`: `teleportToFirstStaticPortal` (bytes 145999..146550). It
+  takes `SeekEntity('portal_static')` - the first static portal in the level's
+  own order - moves the traveller there, kills the placement, sets that static
+  inactive, and flips velocity to (x, -y), which is the character rule step 11a
+  already carries.
+
+Both branches compare against an immediate, not a variable: `CMPIu` is encoded
+`rW_DW_ARG`, so the disassembly's `v2` and `v1` operands are the literals 2 and
+1. The port now takes the second branch when `budget == 1`, exiting at the first
+live static portal. Consumption already erases the placement, and the static
+persists, so nothing bounces back: with no placement left, entering the static
+leads nowhere.
+
+In chapter 1 only level1 grants exactly one placement. level0 and level14 also
+ship static portals (four and two) but grant none, so the branch cannot fire
+there. `test_mp_statics` covered this partnership in one direction only - the
+static leading to the placement - which is why the suites were green while the
+level was unplayable; it now runs both ways.
+
+**Nothing in the surroundings moves.** True, and the reason is that the levels
+carry nothing to move. Motion in the original is particle systems, held in each
+entity's own `.ent` and dropped by the converter: level1.tscn has no frame data
+at all. What chapter 1 would animate, by placements: crystal 114, door_bg 32,
+light 19, reflect_agent 9, anti_portal_agent 8, portal_static 7 - 189 in all,
+each with a `<ParticleSystem>` (crystal emits two sparkles on a 1700 ms life;
+fire.png burns through a 4x1 cut). Separately 45 entities in the game carry a
+multi-frame `<SpriteCut>`. Porting this means a particle system in the engine
+and a reader for the `.ent` block. Not built, and not folded into a bug fix.
+
+**No main menu.** Correct, and never claimed: the port starts at the level it is
+given and prints that the chapter is complete at a world's end. The original's
+`level_select0..3` scenes and its `WorldSelector` are there to build from.
+
+Also this day: a refused level now says which one it was and why, in the log as
+well as on the HUD. Only the very first failure was reported before, and only
+when nothing had loaded, so a chapter that stopped part way left no record.
+
+GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_statics` 74.

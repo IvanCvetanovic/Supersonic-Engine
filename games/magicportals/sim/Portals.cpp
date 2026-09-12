@@ -270,6 +270,23 @@ void State::Tick(entt::registry& registry, float dt) {
                     break;
                 }
             }
+            // With no second placement to pair with, the original sends the
+            // traveller to the level's first portal_static - but only where the
+            // level grants exactly one placement. PortalManager::doTeleporting
+            // (bytes 139692..140259) takes the pair above when maxPortals is 2,
+            // and teleportToFirstStaticPortal (bytes 145999..146550) when it is
+            // 1; that one resolves its exit by SeekEntity('portal_static'), so
+            // it is the first in the level's own order. Level 1-2 is the case:
+            // one static portal, one placement, and the placement's partner is
+            // the static. Without this the player walks through their own
+            // portal, which is how this was found - by playing it.
+            if (!exit && budget == 1) {
+                for (std::size_t i = 0; i < statics.size(); ++i) {
+                    if (!statics[i].live) continue;
+                    exit = End{true, static_cast<int>(i)};
+                    break;
+                }
+            }
         }
         if (!exit) continue;
 

@@ -89,6 +89,11 @@ struct Placed {
 // it sends a traveller to. When no static portal has that index the traveller
 // goes to a placed portal instead: level1 ships one static portal and grants one
 // placement, and the placement is its partner (docs/original-gameplay.md 2.3).
+//
+// That partnership runs both ways, which the port missed until the game was
+// played: entering the lone placement sends the traveller to the first static
+// portal, as PortalManager::teleportToFirstStaticPortal does on a level whose
+// maxPortals is 1 (Portals.cpp, where Tick pairs an end with its exit).
 struct Static {
     std::string name;
     int index = 0;

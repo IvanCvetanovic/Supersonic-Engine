@@ -223,6 +223,31 @@ void Level1sPortalLeadsToThePlacedOne() {
     }
 }
 
+// The same partnership the other way about, which is how level 1-2 is actually
+// solved: the player walks into the portal they placed and comes out of the
+// static one. The port only ever paired a placement with another placement, so
+// on a level granting one the traveller passed straight through - found by
+// playing it, 12 September. The original takes this path when maxPortals is 1
+// (PortalManager::doTeleporting, bytes 139692..140259, calling
+// teleportToFirstStaticPortal, bytes 145999..146550).
+void Level1sPlacedPortalLeadsToTheStaticOne() {
+    Run run;
+    if (!Begin("level1", run)) return;
+    const glm::dvec2 staticPx = run.level.portals.statics.front().atPx;
+    const glm::dvec2 spawnPx = PlayerPx(run);
+    const glm::dvec2 placedPx = spawnPx + glm::dvec2(0.0, -48.0);
+    CHECK(run.level.portals.TryPlace(placedPx));
+
+    PutPlayer(run, placedPx);
+    Tick(run);
+    CHECK_EQ(run.level.portals.traversals, 1);
+    CHECK_MSG(glm::distance(PlayerPx(run), staticPx) < kArrivalPx,
+              "the player is at " + Px(PlayerPx(run)) + ", the static portal at " + Px(staticPx));
+    // The placement is spent; the static portal stays, as it does the other way.
+    CHECK(run.level.portals.placed.empty());
+    CHECK(run.level.portals.statics.front().live);
+}
+
 // ---- level0, played ------------------------------------------------------------
 
 void Level0FromTheSpawnHoldingRight() {
@@ -251,6 +276,7 @@ void runTests() {
     AStoneThroughAStaticPairGoesOnce();
     WithStaticPortalsSpentBothEndsGo();
     Level1sPortalLeadsToThePlacedOne();
+    Level1sPlacedPortalLeadsToTheStaticOne();
     Level0FromTheSpawnHoldingRight();
 }
 
