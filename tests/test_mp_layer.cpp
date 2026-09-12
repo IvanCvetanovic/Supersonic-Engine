@@ -853,6 +853,12 @@ void TheMenuWalksToALevel() {
     CHECK(layer.MenuScreen() == Screen::Main);
     CHECK(layer.SimLevel() == nullptr);
     CHECK_EQ(MenuButtonsOfKind(layer, Kind::Play), 1);
+    // The screen's own art is drawn, not quietly left out. The backgrounds live
+    // among the original's entities rather than its sprites, and the first cut
+    // of this looked for every menu image in one place: the menu came up with
+    // nothing behind it and said nothing about why.
+    CHECK_EQ(Tagged(registry, "Magic Portals Menu Background"), 1);
+    CHECK_EQ(Tagged(registry, "Magic Portals Title"), 1);
 
     const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
     if (play == nullptr) {

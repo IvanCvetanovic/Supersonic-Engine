@@ -1479,4 +1479,18 @@ value; the click loop passes exactly such a reference.
 the second page's first level (1-13), Escape out of a level to its grid, a
 named level skipping the menu, and a click landing on the button under it.
 
-GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 150.
+**Both backgrounds were missing, and nothing said so.** The first cut of this
+shipped and ran with no background behind either screen. The original keeps its
+menu art in two places - the title, the buttons and the icons under `sprites/`,
+but `main_menu_bg.png` and `world_select_bg.png` among its `entities/`, beside
+the `.ent` files that place them - and `menuImage` looked only in the first.
+
+The wrong path is not the interesting half. `buildMenu` skipped an image it
+could not read WITHOUT A WORD, so a menu with nothing behind it looked like a
+menu meant that way, and no test could see the difference. Now the lookup tries
+both directories, an unreadable menu image is logged, and the walk-to-a-level
+test asserts the background and the title are actually drawn. That is the same
+shape as the refused-level message earlier in step 12: a quiet path where
+something could go missing and nothing reported it.
+
+GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 152.

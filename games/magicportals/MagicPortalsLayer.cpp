@@ -336,7 +336,15 @@ void MagicPortalsLayer::clearLevel(entt::registry& registry) {
 // the original's own two buttons instead of a swipe.
 
 std::string MagicPortalsLayer::menuImage(const std::string& file) const {
-    return m_paths.original + "/sprites/" + file;
+    // The original keeps its menu art in two places: the title, the buttons and
+    // the icons under sprites/, but the two screen BACKGROUNDS among its
+    // entities, beside the .ent files that place them. Asking in the wrong one
+    // used to fail silently - the quad was simply not made - which is how the
+    // main screen first shipped with no background at all.
+    const std::string sprites = m_paths.original + "/sprites/" + file;
+    std::error_code ec;
+    if (std::filesystem::exists(sprites, ec)) return sprites;
+    return m_paths.original + "/entities/" + file;
 }
 
 glm::dvec2 MagicPortalsLayer::MenuBoxPx() const {
@@ -433,13 +441,19 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
     unloadMenuDrawables(registry);
     if (m_screen == Screen::None) return;
 
-    const std::string background = menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png");
-    if (imageSizePx(background).y > 0.0) {
-        m_menuBg = makeSprite(registry, "Magic Portals Menu Background", background, false);
-    }
+    // An image that cannot be read SAYS SO. Skipping it quietly is what hid the
+    // missing backgrounds: a menu with no background looks like a menu someone
+    // designed that way, and nothing anywhere said the file had not been found.
+    const auto quadFor = [this, &registry](const char* tag, const std::string& path) {
+        if (imageSizePx(path).y > 0.0) return makeSprite(registry, tag, path, false);
+        SUPERSONIC_LOG_WARN("Magic Portals") << "menu image could not be read: " << path << std::endl;
+        return entt::entity{entt::null};
+    };
+
+    m_menuBg = quadFor("Magic Portals Menu Background",
+                       menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png"));
     if (m_screen == Screen::Main) {
-        const std::string title = menuImage("game_main_title.png");
-        if (imageSizePx(title).y > 0.0) m_menuTitle = makeSprite(registry, "Magic Portals Title", title, false);
+        m_menuTitle = quadFor("Magic Portals Title", menuImage("game_main_title.png"));
     }
 
     for (const MenuButton& button : m_menuButtons) {
@@ -466,9 +480,7 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
             image = menuImage("level_select_forward.png");
             break;
         }
-        m_menuQuads.push_back(imageSizePx(image).y > 0.0
-                                  ? makeSprite(registry, "Magic Portals Menu Button", image, false)
-                                  : entt::null);
+        m_menuQuads.push_back(quadFor("Magic Portals Menu Button", image));
 
         entt::entity label = entt::null;
         if (button.kind == MenuButton::Kind::Level) {
