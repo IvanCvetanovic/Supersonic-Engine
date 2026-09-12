@@ -31,13 +31,32 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
     void* pUserData) {
 
-    (void)messageType;
     (void)pUserData;
 
     // Severity was discarded here, which is why an error and a warning were
     // equally invisible to anything but a human reading the console.
     const bool isError = (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0;
-    if (isError) g_validationErrors.fetch_add(1, std::memory_order_relaxed);
+
+    // ONLY VALIDATION ERRORS ARE COUNTED, and the type is what says so.
+    //
+    // The LOADER reports through this callback too, at error severity, about
+    // things that are not this engine's Vulkan usage at all - a layer manifest
+    // registered on the machine whose file is missing, for instance. A box with
+    // Steam installed emits two of those before the first frame is drawn:
+    //
+    //   loader_get_json: Failed to open JSON file ...SteamOverlayVulkanLayer64.json
+    //   loader_get_json: Failed to open JSON file ...SteamFossilizeVulkanLayer64.json
+    //
+    // They were counted, and Magic Portals' main fails the run on a non-zero
+    // count - so every validation-enabled run on that machine exited non-zero
+    // however clean the rendering was. A gate that fails for somebody else's
+    // broken manifest is a gate people learn to ignore, which costs more than
+    // having no gate at all.
+    //
+    // Still LOGGED, whatever the type: a missing layer manifest is worth
+    // seeing. It simply is not a verdict on this engine.
+    const bool isValidation = (messageType & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT) != 0;
+    if (isError && isValidation) g_validationErrors.fetch_add(1, std::memory_order_relaxed);
 
     // Through the log, so the editor console shows validation output next
     // to everything else rather than only in a terminal nobody has open.
