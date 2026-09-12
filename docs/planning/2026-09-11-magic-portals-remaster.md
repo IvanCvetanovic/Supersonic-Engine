@@ -1264,7 +1264,9 @@ number with the bytes it came from.
   which kills the player in it - level31's button is put at its `button_dest`,
   and the beholder goes. The button starts at (565, 244), buried in the floor
   where nothing can press it, and rises to (528, 220). It opens door_lift_748,
-  which is the only way to the exit.
+  which stands between the player and the exit. That the risen button opens the
+  door and the exit is then reached is tested; that the door cannot be got past
+  some other way - over it through a portal pair, say - is not.
 - **Its rocks.** overTimeEntityAdder marks each `destroyOnStaticHit`, and
   ETHBeginContactCallback_rolling_stone (MiscCallbacks.angelscript, bytes
   346486..347456) breaks such a stone on anything static it runs into and kills a
