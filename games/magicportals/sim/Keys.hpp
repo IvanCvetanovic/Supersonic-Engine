@@ -47,6 +47,7 @@
 // the three vanish entities, the earthquake, the pick and unlock sounds, and the
 // red key's achievement.
 
+#include "sim/Carry.hpp"
 #include "sim/LevelBuilder.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Tscn.hpp"
@@ -60,27 +61,23 @@
 
 namespace MagicPortals::Keys {
 
-// The port's keys.json.
-struct Rules {
-    double rangePx = 0.0;     // squaredRange's root: picked up AND unlocks within this
-    double leashPx = 0.0;     // further behind its owner than this and it snaps
-    double reaimMs = 0.0;     // how often the trail takes a new destination
-    double strideMs = 0.0;    // how long one of those takes to travel
+// The port's keys.json. range/leash/reaim/stride are the carry path's and are
+// inherited from Carry::Rules, where a shock diamond reads the same four under
+// its own numbers; the range is the one a key shares between being picked up and
+// opening a keyhole. The last two are the keyhole's alone.
+struct Rules : Carry::Rules {
     double fadeStartMs = 0.0; // an unlocked keyhole holds still this long
     double fadeMs = 0.0;      // and then fades away over this
 };
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
 
-struct Key {
+// Its position, trail and owner are Carried's, so a key is still a thing with an
+// atPx and an owner and reads of either are unchanged.
+struct Key : Carry::Carried {
     std::string name;   // the node's name
     std::string colour; // metadata/color, which every one of them carries
-    glm::dvec2 atPx{0.0, 0.0};
-    glm::dvec2 fromPx{0.0, 0.0}; // the trail's last destination, and the next
-    glm::dvec2 toPx{0.0, 0.0};
-    double sinceAimMs = 0.0;
-    entt::entity owner = entt::null; // who is carrying it, or null
-    bool spent = false;              // it has opened its keyhole and is done
+    bool spent = false; // it has opened its keyhole and is done
 };
 
 struct Keyhole {

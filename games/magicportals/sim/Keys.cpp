@@ -1,12 +1,10 @@
 #include "sim/Keys.hpp"
 
-#include "sim/Units.hpp"
+#include "sim/Carry.hpp"
 
-#include "core/Components.hpp"
 #include "core/Json.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <utility>
@@ -16,11 +14,6 @@ namespace MagicPortals::Keys {
 namespace {
 
 namespace Json = Supersonic::Json;
-using Supersonic::TransformComponent;
-
-glm::dvec2 PxOf(entt::registry& registry, entt::entity body) {
-    return Units::ToPixels(registry.get<TransformComponent>(body).position);
-}
 
 double Squared(const glm::dvec2& v) {
     return v.x * v.x + v.y * v.y;
@@ -128,56 +121,17 @@ std::vector<entt::entity> State::Tick(entt::registry& registry, const std::vecto
     for (Key& key : keys) {
         if (key.spent) continue;
 
-        // Dropped when the carrier is gone: the original's shallLeave is a dead
-        // character or a destroyed minion, and here that is the entity ceasing
-        // to be valid - a burnt minion, a crushed one, one taken by the floor.
-        if (key.owner != entt::null &&
-            (!registry.valid(key.owner) || !registry.all_of<TransformComponent>(key.owner))) {
-            key.owner = entt::null;
-        }
-
+        // The carry path, which a shock diamond shares: let go of an owner that
+        // has ceased to be, then take the first carrier within range - here the
+        // player and every minion still standing, since a key admits isCharacter
+        // OR isMinion - and trail it. A key begins trailing in the same tick it
+        // is taken, as the original does.
+        Carry::Drop(key, registry);
         if (key.owner == entt::null) {
-            // Unowned: the first carrier within range takes it. The original
-            // scans the buckets around itself and stops at the first that fits,
-            // so this is a first-match and not a nearest-match.
-            for (const entt::entity carrier : carriers) {
-                if (carrier == entt::null || !registry.valid(carrier) ||
-                    !registry.all_of<TransformComponent>(carrier)) {
-                    continue;
-                }
-                if (Squared(PxOf(registry, carrier) - key.atPx) >= range2) continue;
-                key.owner = carrier;
-                key.fromPx = key.atPx;
-                key.toPx = key.atPx;
-                key.sinceAimMs = 0.0;
-                ++picked;
-                break;
-            }
-            if (key.owner == entt::null) continue;
+            if (!Carry::Acquire(key, registry, carriers, rules.rangePx)) continue;
+            ++picked;
         }
-
-        // Carried: it trails its owner rather than being placed on it. The
-        // original re-aims every 20 ms and interpolates over 60, so a key sits
-        // perpetually behind whoever holds it.
-        const glm::dvec2 ownerPx = PxOf(registry, key.owner);
-        if (Squared(ownerPx - key.atPx) > rules.leashPx * rules.leashPx) {
-            // forceFollowUpPosition: both ends of the interpolation, and the
-            // position, are slammed onto one point. This is also what carries a
-            // key through a portal, since its owner arrives somewhere new.
-            key.atPx = ownerPx;
-            key.fromPx = ownerPx;
-            key.toPx = ownerPx;
-            key.sinceAimMs = 0.0;
-        } else {
-            key.sinceAimMs += ms;
-            if (key.sinceAimMs > rules.reaimMs) {
-                key.fromPx = key.atPx;
-                key.toPx = ownerPx;
-                key.sinceAimMs = 0.0;
-            }
-            const double t = std::min(1.0, key.sinceAimMs / rules.strideMs);
-            key.atPx = key.fromPx + (key.toPx - key.fromPx) * t;
-        }
+        Carry::Trail(key, registry, rules, ms);
 
         // And within the SAME range of a keyhole of its colour, it opens it. The
         // key is spent either way: the original sends one that has found its
