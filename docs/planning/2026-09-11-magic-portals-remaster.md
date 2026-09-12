@@ -1615,6 +1615,75 @@ ticks, and their particles go with the level.
 
 GCC 13.3 and MSVC 14.50 agree: 18 suites, 0 failures, `test_mp_layer` 157.
 
+## Step 20 - a game can draw geometry it built itself (built)
+
+`MeshRegistry::Upload` and `Replace` are public, and their comments describe
+exactly what they are for: "a mesh rebuilt every frame - fog, a dynamic terrain
+patch, a debug overlay". A game could call them and could not draw the result.
+
+`RenderableComponent::meshID` is not authored. `SyncResources` recomputes a
+`ResourceSignature` from `MeshComponent`'s `primitiveType` and `filePath` every
+frame and re-resolves the id from it, so an id written there by hand was
+overwritten on the next frame. There was no field naming already-uploaded
+geometry, which made the whole Upload/Replace pair unreachable from a game -
+a capability the engine offered and could not deliver.
+
+`MeshComponent::meshKey` names it. Resolution goes through `Find` rather than
+`Acquire`, because the geometry already exists; the key is mixed into the
+signature, because it selects a mesh as surely as a path does and is the one
+input with no other trace on the entity - a component switched from one
+uploaded key to another has the same primitive, the same path and the same
+material, and a signature blind to the key would keep drawing the first
+geometry for ever.
+
+Two decisions worth stating:
+
+- **A key naming nothing yet leaves `meshID` alone.** Falling back to the cube
+  would put one on screen for every frame between an entity being created and
+  its geometry being uploaded - at least one frame for anything built during
+  the frame, and a cube nobody asked for in a game that may own none.
+- **It is not persisted.** The geometry behind a key exists only because
+  something uploaded it this session, so a saved scene naming a key nothing has
+  built would resolve to nothing on load. `ComponentCodec` writes the primitive
+  and the path and deliberately not this, like `importMaterialOnResolve`.
+
+**A COVERAGE LIMITATION, recorded rather than left to be discovered.** No suite
+can construct a `MeshRegistry`: it needs a device and a command pool, and
+`test_tilemap` and `test_shadowcache` both record the same constraint for their
+own walks. So what is tested is that the key reaches the signature
+(`test_resourcesync`, which grew a case for it) - the half that decides whether
+the new branch runs at all. The branch itself is proved by the game drawing
+generated geometry, which is a weaker guarantee and worth knowing before
+trusting it.
+
+This was found while building the medal screen, which needs the original's
+Matura lettering: glyph quads uploaded once under a key and `Replace`d as the
+counter ticks. It is the second engine gap that screen turned up, after the
+BMFont reader below.
+
+## Step 19 - the engine reads a BMFont (built), and a correction to its case
+
+`BitmapFont` parses BMFont's text `.fnt` and turns a string into glyph quads
+over the font's page, which a caller uploads through `MeshRegistry` and draws
+like any other textured quad. No rasteriser, no pipeline, no layout engine, no
+ImGui. `test_bitmapfont` writes its own descriptors, so it never touches the
+original's Matura fonts - those are Asantee's and stay outside this repository
+with the art and the sounds.
+
+**A CORRECTION TO THE COMMIT MESSAGE, recorded because it overstated the case.**
+It says world-space text "could not be drawn AT ALL, by any game on this
+engine". That is not true, and this port disproves it: the level grid's number
+labels already use `UITextComponent` with `worldSpace = true`, and have since
+the menu was built. World-space text existed.
+
+What did not exist is world-space text IN A FONT THE GAME SUPPLIES.
+`UITextComponent` draws through ImGui's atlas, so it draws ImGui's typeface; the
+finish screen's whole point is the original's Matura lettering, which no path
+could produce. That is still a real gap and still worth the engine filling, but
+it is a narrower one than the message claimed, and the difference matters: one
+is "the engine cannot draw text in the world", which is false, and the other is
+"the engine can only draw text in its own font", which is true.
+
 ## Step 18 - why things disappeared: every quad was culled as a POINT (fixed)
 
 `ModelLoader::GenerateQuad` filled in its vertices and indices and returned

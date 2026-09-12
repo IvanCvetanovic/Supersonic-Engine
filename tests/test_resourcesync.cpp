@@ -84,6 +84,31 @@ static void testEveryPathThatSelectsAResourceIsInTheSignature() {
               "swapping the albedo and normal paths is a different pair of textures");
 }
 
+static void testGeneratedGeometryIsInTheSignature() {
+    // A mesh the GAME uploaded, named by its cache key. It selects a mesh as
+    // surely as a file path does, and it is the one input with no other trace
+    // on the entity: a component switched from one uploaded key to another has
+    // the same primitive, the same path and the same material, so a signature
+    // blind to the key would keep drawing the first geometry for ever.
+    MeshComponent generated = mesh("Cube");
+    generated.meshKey = "mp:counter-text";
+    const MaterialComponent mat = material("a.png");
+
+    const MeshComponent plain = mesh("Cube");
+    CHECK_MSG(sig(&plain, &mat) != sig(&generated, &mat),
+              "naming uploaded geometry must re-resolve the entity");
+
+    MeshComponent other = mesh("Cube");
+    other.meshKey = "mp:crystal-text";
+    CHECK_MSG(sig(&generated, &mat) != sig(&other, &mat),
+              "and so must switching to different uploaded geometry");
+
+    MeshComponent same = mesh("Cube");
+    same.meshKey = "mp:counter-text";
+    CHECK_MSG(sig(&generated, &mat) == sig(&same, &mat),
+              "an unchanged key must keep its signature, or nothing is ever skipped");
+}
+
 static void testAnAbsentComponentIsNotAnEmptyOne() {
     // An entity with no MeshComponent falls back to the cube; one with a
     // MeshComponent holding empty strings asks the registry for the default
@@ -179,6 +204,7 @@ static void testThePackedMapIsInTheSignatureToo() {
 static void runTests() {
     testTheSameInputsGiveTheSameSignature();
     testEveryPathThatSelectsAResourceIsInTheSignature();
+    testGeneratedGeometryIsInTheSignature();
     testAnAbsentComponentIsNotAnEmptyOne();
     testAReloadedAssetChangesTheSignature();
     testTheSignatureIsNeverZero();

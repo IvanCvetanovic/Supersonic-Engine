@@ -208,6 +208,12 @@ uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
                                  mesh->primitiveType.size());
         signature = MixSignature(signature, &present, 1);
         signature = MixSignature(signature, mesh->filePath.data(), mesh->filePath.size());
+        // The game's own geometry selects a mesh as surely as a path does, so
+        // it belongs here: without it, a component switched from one uploaded
+        // key to another would keep drawing the first one for ever, because
+        // nothing else about the entity changed.
+        signature = MixSignature(signature, &present, 1);
+        signature = MixSignature(signature, mesh->meshKey.data(), mesh->meshKey.size());
     } else {
         signature = MixSignature(signature, &absent, 1);
     }
@@ -289,6 +295,29 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
             // nothing, and the fallback below would hand it the cube instead.
             if (registry.all_of<TilemapComponent>(entity)) {
                 // Owned above.
+            } else if (meshComponent != nullptr && !meshComponent->meshKey.empty()) {
+                // GEOMETRY THE GAME BUILT. Found, never acquired: it exists
+                // because something uploaded it, and there is no file or
+                // primitive to build it from if it does not.
+                //
+                // A key that names nothing yet leaves the id ALONE. Falling
+                // back to the cube here would put a cube on screen for every
+                // frame between an entity being created and its geometry being
+                // uploaded - which for anything built during the frame is at
+                // least one, and is a cube nobody asked for in a game that may
+                // not own a single cube.
+                //
+                // NOT COVERED BY A TEST, and said here rather than assumed:
+                // MeshRegistry needs a device and a command pool, so no suite
+                // can construct one - test_tilemap and test_shadowcache both
+                // record the same limitation for their own walks. What IS
+                // tested is that the key reaches the signature
+                // (test_resourcesync), which is the half that decides whether
+                // this branch runs at all. The branch itself is proved by the
+                // game drawing generated geometry, which is a weaker guarantee
+                // and worth knowing about before trusting it.
+                const uint32_t found = meshes.Find(meshComponent->meshKey);
+                if (found != MeshRegistry::kInvalidMesh) renderable.meshID = found;
             } else if (const auto* mesh = meshComponent) {
                 renderable.meshID = meshes.Acquire(mesh->primitiveType, mesh->filePath);
             } else if (renderable.meshID == MeshRegistry::kInvalidMesh) {

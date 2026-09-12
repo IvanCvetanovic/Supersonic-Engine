@@ -758,6 +758,33 @@ struct MeshComponent {
     uint32_t vertexCount{0};
     uint32_t indexCount{0};
 
+    // Geometry the GAME built, under the key it uploaded it with.
+    //
+    // MeshRegistry::Upload and Replace are public and documented for exactly
+    // this - terrain from a heightfield, fog, a debug overlay, a string of text
+    // as glyph quads - and until this field there was no way to draw the
+    // result. RenderableComponent::meshID is not authored: SyncResources
+    // re-derives it every frame from primitiveType and filePath, so an id
+    // written there by hand was overwritten on the next frame. A capability the
+    // engine offered and could not reach.
+    //
+    // Resolved through Find rather than Acquire, because the geometry already
+    // exists: the game uploaded it. A key naming nothing yet leaves meshID
+    // ALONE rather than falling back to the cube - a game that uploads on its
+    // second frame should draw nothing on its first, not a cube it never asked
+    // for.
+    //
+    // Takes precedence over both fields above when set, so a component carrying
+    // a key is unambiguous rather than a race between three answers.
+    //
+    // NOT PERSISTED, like importMaterialOnResolve below and for the same kind
+    // of reason: the geometry behind a key exists only because something
+    // uploaded it this session. A saved scene naming a key nothing has built
+    // would resolve to nothing on load, which is worse than a scene that says
+    // the entity has no mesh - so ComponentCodec writes the primitive and the
+    // path and deliberately not this.
+    std::string meshKey;
+
     // Set when a user ASSIGNS a model, cleared as soon as the material behind
     // it has been copied onto this entity's MaterialComponent. Runtime state,
     // deliberately unpersisted - like AnimatorComponent::warnedMissing and the
