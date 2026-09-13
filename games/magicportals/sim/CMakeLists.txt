@@ -39,6 +39,7 @@ add_library(MagicPortalsSim STATIC
     Torch.cpp
     Tscn.cpp
     Turrets.cpp
+    Zerog.cpp
 )
 
 # Where the converted levels live - which is NOT in this repository.

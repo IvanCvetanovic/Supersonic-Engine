@@ -10,7 +10,9 @@
 // level27b holds three rings and is the only level in the game that places a
 // moving one where it can be played: 64 px at (448, 76) and 48 px at (160, 210)
 // standing still, and 36 px at (320, 128) swinging 64 px at 1.8 radians a second.
-// The others that move are in chapter 4, which no_gravity stops starting.
+// The others that move are in chapter 4. Those levels all start now that
+// `no_gravity` is built (Zerog.hpp); the census below is chapter 3's and is
+// unchanged by that.
 //
 // Reads the converted levels and the remake's data from outside this repository,
 // and skips, saying where it looked, when either is absent.

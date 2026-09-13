@@ -68,9 +68,13 @@ Every level that started, landed.
 - **The suite's three outcomes.** It lists, against each level, the roles it
   leaves inert (`Roles::IsPorted`, the one list to extend as roles land). A
   level plays only when that list is empty.
-- **Two flags are refused outright.** `Game::Start` now refuses `no_gravity` and
-  `darkest`. Left alone, a zero-gravity level would drop everything in it and a
-  dark one would be lit, and either would look like a level that works.
+- **Both flags are played now, and nothing is refused.** This bullet read "two
+  flags are refused outright" for most of the remaster's life, and the table
+  above is the dated snapshot that belonged with it. `darkest` stopped being
+  refused at Step 29 and is carried; `no_gravity` stopped at Step 31 and is
+  built - zero world gravity, no walking at all, and the recoil of a portal shot
+  as the only way to move. No level property refuses a level any more, and all
+  128 start.
 
 Chapter 1's roles the port does not play yet, counted by the census script
 over the level files:
@@ -3254,3 +3258,110 @@ What is left of the whole remaster: `no_gravity` in 18 levels - the only one of
 the four that is a genuine mechanic rather than a gap, since a portal shot's
 recoil is how the player moves there - `boss_spawn` in level31a and level31c, and
 `gravity_well` in level20c and level27c.
+
+## Step 31 - chapter 4: zero gravity, and the recoil that moves you (built)
+
+Chapter 4 goes from 14 of 32 starting to **32**, and from 11 playing to **24**.
+The game goes from 110 of 128 starting to **128**, and from 106 playing to
+**119**. **Every level in Magic Portals now starts.** `no_gravity` was the last
+thing in the whole game that stopped one, and nothing refuses a level any more.
+
+**It is a movement mode, not a flag**, which is exactly why it was refused for so
+long. One property turns on three separate things, and a level built with any one
+of them missing still starts and cannot be finished:
+
+| | |
+|---|---|
+| the world | `setGravity(V2_ZERO)`, against `(0, scale(10))` - NOTHING falls, not the player, not a crate |
+| the buttons | `MainCharacter::update` skips `ScreenPad::update` entirely. There is no walking at all |
+| the tap | `PortalManager` calls `applyImpulse`, and that is the only way to move |
+
+**The number that nearly went wrong, and the coincidence that nearly sold it.**
+`applyImpulse` is
+`SetLinearVelocity(GetLinearVelocity() + normalize(playerPos - finalPos) * scale(1.4))`.
+`scale` is one multiply by `m_scaleFactor`, which is `GetScreenSize().y /
+m_absoluteSize` with `m_absoluteSize` **480**, so at the reference height the call
+is the number itself. The same wrapper wraps the world's gravity as `scale(10)`,
+and `Units.hpp` already has that 10 decoded as Box2D's `DEFAULT_GRAVITY` in metres
+per second squared - so the 1.4 is **metres per second**, which the engine's
+velocities already are, and needs no conversion at all. 70 px/s at
+`kPixelsPerMetre` 50.
+
+The wrong road was very inviting. The remake's player gravity is 1200 px/s^2 and
+the original's is 10, a ratio of 120, which would have made the recoil 168 px/s -
+sitting beautifully beside the remake's walk speed of 160, one walking-speed per
+shot, far too neat to be an accident. It *was* an accident: `kPixelsPerMetre` is
+50, and `player.json` marks its own 1200 `_guess` and says in as many words that
+it "will NOT match". A coincidence between a guess and a real number is not
+evidence, and chasing `m_absoluteSize` instead of admiring the arithmetic is what
+caught it.
+
+**Every accepted tap shoves, landed or not.** `managePortalInsertion` loads
+`m_noGravity` at instruction 158 and jumps past the call at 161, so the shove
+happens only in these levels; and the call at 166 sits AFTER the `hasFailed` join
+at 157, where the vibrate block at 149-156 is the only thing on the failed side.
+So a tap that goes on to hit a wall moves the player exactly as one that opens a
+portal. The port applies it in `Portals::State::Shoot` - the same seam, before the
+shot has resolved - and the suite asserts the shot is still in the air when the
+velocity changes.
+
+**Added, never set.** `GetLinearVelocity()` at 48, `opAdd` at 51, `SetLinearVelocity`
+at 57. Shots accumulate, and drift is the mechanic; a set would reset the player
+on every tap and make these eighteen levels a different game.
+
+**`Player::Steer` is not edited.** It is the most heavily pinned function in the
+port - `test_mp_play` walks level30's seam through it at friction 0 and 1 - and
+the whole mode is achieved by not CALLING it. That one absence is both halves of
+the original's behaviour at once: no walk, and no fall (`Player.hpp` records that
+Steer applies gravity every tick deliberately, a dynamic body having no floor
+snap). Branching inside it would have reached into the same function every level
+in the game steers through; skipping the call reaches nothing.
+
+**A resolution bug, recorded rather than matched.** `m_scaleFactor` is screen
+height over 480, so the original's recoil grew on taller screens - 1.4 at 480,
+3.15 at 1080. The port takes the reference value. `zerog.json` says so, along with
+the smaller divergence that the original aims away from `finalPos` where the port
+aims away from the tap.
+
+**What the step uncovered, as `darkest` uncovered `torch`.** Opening eighteen
+levels made the inventory able to see inside them, and it found `bouncer` in
+level1c, level6c and level16c - "a solid polygon surface that throws things off
+it, 64x64, shape=3, static, non-sensor", real geometry rather than a trigger. It
+had been read earlier in the session, in `setNoGravityLinearMotionProperties` and
+`ETHCallback_bounce`, and written off as a decorative bob. That was right about
+the player's physics and wrong about the question: it is a ROLE the port owes, and
+asking only "does this move the player?" missed it. The inventory caught what the
+reading did not.
+
+**A settle is not a fall, and the test was fixed rather than loosened.** The first
+run failed three levels for drifting 3.75 px in three seconds. The tempting fix is
+a wider threshold. The truth is that 3.75 px appeared after ONE second and after
+THREE alike: these levels place the player overlapping what is under it and the
+solver pushes it out once, then stops. So `test_mp_zerog` now measures the two
+seconds AFTER the settle and gets **0.0000 px** - and a second of RIGHT held down
+also moves it **0.0000 px**. A fall, for scale, is some 4400 px over the same
+three seconds.
+
+**A test that lost its subject.** `NSkipsWhatThePortRefuses` named a level the
+port turned away - level26c for `darkest`, then level18c for `no_gravity` - and
+checked that the skip got past it and that a refusal left nothing behind. There is
+now no such level anywhere in the game, so it was not re-pointed a third time; it
+was reshaped. What survives is the half that was always the point - that moving on
+UNLOADS what came before - measured against a FRESH attach of the same level, so a
+level left behind shows up as a count that does not match. It holds exactly.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_zerog` at 81 checks, `test_mp_layer` at 206 through the reshaped skip,
+`test_mp_start` at 552, and **128 of 128 levels starting with 119 playing** on
+both. Chapter 4's floors are raised from 14/11 to 32/24.
+
+The eight chapter-4 levels that still do not play are the five holding
+`gravity_well` (level16c, level17c, level18c, level20c, level27c), the three
+holding `bouncer` (level1c, level6c, level16c - seven distinct levels, because
+level16c holds both), and level31c's boss.
+
+What is left of the whole remaster, and all of it now visible rather than hidden
+behind a refusal: `gravity_well` in 5 levels - one callback family,
+`ETHCallback_gravity_agent` with `retrieveRondaboutCount`, `computeRoundabout` and
+`ETHCallback_gravity_area` - `bouncer` in 3, and `boss_spawn` in level31a and
+level31c.

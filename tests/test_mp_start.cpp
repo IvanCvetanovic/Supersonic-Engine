@@ -19,13 +19,16 @@
 
 #include "TestHarness.hpp"
 
+#include "core/Components.hpp"
 #include "sim/Game.hpp"
 #include "sim/Player.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Sprites.hpp"
 #include "sim/Tscn.hpp"
+#include "sim/Units.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -60,12 +63,14 @@ const Chapter kChapters[] = {
     {"", "chapter 1", 32, 32},
     {"a", "chapter 2", 32, 31}, // all but level31a's dragon
     {"b", "chapter 3", 32, 32}, // complete
-    // 14 start: level0c, level27c, and the twelve `darkest` levels carried rather
-    // than refused. 11 play now that the torches are built - level0c, level19c,
-    // and 9 of the 10 torch levels. The three that do not are level20c and
-    // level27c, which hold `gravity_well`, and level31c, which places chapter 4's
-    // own boss beside its torch.
-    {"c", "chapter 4", 14, 11},
+    // ALL 32 START. `no_gravity` was the last thing in the whole game that
+    // stopped a level starting, so every one of the 128 does now.
+    //
+    // 24 play. The eight that do not are: the five holding `gravity_well`
+    // (level16c, level17c, level18c, level20c, level27c), the three holding
+    // `bouncer` (level1c, level6c, level16c) - seven distinct levels, because
+    // level16c holds both - and level31c, which places chapter 4's own boss.
+    {"c", "chapter 4", 32, 24},
 };
 
 // The reason with the node's name taken off the front, so that the same refusal
@@ -78,9 +83,20 @@ std::string ReasonOf(const std::string& error) {
     return "<node>" + error.substr(from);
 }
 
+// How far a player in a zero-gravity level may move in three seconds with no
+// input. Nothing pulls it and nothing steers it, so the honest answer is zero -
+// except that some of these levels place the player overlapping what is under
+// it, and the solver pushes it out ONCE and then stops (3.75 px in level1c,
+// level12c and level15c). That settle is not a fall, and this is the slack for
+// it: a tile. A real fall is some 4400 px over the same three seconds, so
+// nothing that is actually falling can hide under this. test_mp_zerog separates
+// the two properly, by measuring the two seconds AFTER the settle.
+constexpr double kFloatDriftPx = 16.0;
+
 struct Outcome {
     bool started = false;
-    bool landed = false;
+    bool landed = false;   // or, in a zero-gravity level, stayed afloat
+    bool noGravity = false;
     std::string why;
     std::map<std::string, int> ignored; // role -> placements the port leaves inert
 
@@ -109,9 +125,22 @@ Outcome StartAndDrop(const std::string& path) {
                           (Boss::Plays(data.boss, node) || Ghost::Plays(data.ghost, node));
         if (!Roles::IsPorted(role) && !boss) ++outcome.ignored[role];
     }
+    // A ZERO-GRAVITY LEVEL'S PLAYER NEVER LANDS, and asking it to would fail all
+    // eighteen of them. What is asked instead is the DUAL of landing: with no
+    // gravity and no steering, it does not move at all. Skipping the check for
+    // these levels would have been the dishonest fix - a level quietly falling
+    // through its own floor would then have read as playing, which is the same
+    // blindness light_wall.ent had before test_mp_torch watched the body.
+    outcome.noGravity = level.noGravity;
+    const glm::dvec2 spawnPx = Units::ToPixels(registry.get<Supersonic::TransformComponent>(level.player).position);
     for (int tick = 0; tick < kLandingTicks && !outcome.landed; ++tick) {
         Game::Tick(data, registry, level, 0.0f, kStep);
-        outcome.landed = Player::Grounded(registry, level.player, data.tuning);
+        if (!level.noGravity) outcome.landed = Player::Grounded(registry, level.player, data.tuning);
+    }
+    if (level.noGravity) {
+        const glm::dvec2 nowPx = Units::ToPixels(registry.get<Supersonic::TransformComponent>(level.player).position);
+        const glm::dvec2 drift = nowPx - spawnPx;
+        outcome.landed = std::sqrt(drift.x * drift.x + drift.y * drift.y) < kFloatDriftPx;
     }
     return outcome;
 }
@@ -155,8 +184,11 @@ void EveryLevelStartsOrSaysWhy() {
                 continue;
             }
             ++started;
-            CHECK_MSG(outcome.landed, name + ": the player did not land within three seconds");
-            std::string line = outcome.Plays() ? "plays" : outcome.landed ? "starts" : "starts, DOES NOT LAND";
+            const std::string wanted = outcome.noGravity ? ": the player did not stay afloat where it started"
+                                                         : ": the player did not land within three seconds";
+            CHECK_MSG(outcome.landed, name + wanted);
+            const char* const failed = outcome.noGravity ? "starts, DOES NOT FLOAT" : "starts, DOES NOT LAND";
+            std::string line = outcome.Plays() ? "plays" : outcome.landed ? "starts" : failed;
             if (!outcome.ignored.empty()) {
                 line += "; inert:";
                 for (const auto& [role, count] : outcome.ignored) {

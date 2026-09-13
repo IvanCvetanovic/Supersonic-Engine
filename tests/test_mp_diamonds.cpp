@@ -439,8 +439,9 @@ void aCarriedDiamondTrailsItsOwner() {
 }
 
 // The census, over the chapter-3 levels that place one. level29c places one too
-// and is left out: it is in chapter 4, where no_gravity and darkest stop all but
-// two levels starting at all.
+// and is left out because this census is chapter 3's. It is no longer left out
+// for the reason written here before - that no_gravity and darkest stopped all
+// but two of chapter 4 starting - because all 32 of them start now.
 void everyChapterThreeLevelThatPlacesOneFindsIt() {
     const struct Level {
         const char* name;

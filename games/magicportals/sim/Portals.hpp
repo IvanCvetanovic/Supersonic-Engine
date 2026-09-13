@@ -201,6 +201,14 @@ struct State {
     double sinceStartMs = 0.0;
     double sinceTapMs = 0.0;
 
+    // THE ZERO-GRAVITY RECOIL (PortalManager::applyImpulse), set by Game::Start
+    // from the level's own `no_gravity`. Named after the original's own member,
+    // PortalManager.m_noGravity, which gates the call in exactly this place: a
+    // tap that is TAKEN shoves the shooter away from where it aimed, whether or
+    // not the shot goes on to open a portal. Zerog.hpp holds the decode.
+    bool noGravity = false;
+    double recoilMps = 0.0;
+
     // A tap at a point in the level: a shot fired toward it. False when none
     // goes, because the level allows no portal or a shot is already flying.
     bool Shoot(entt::registry& registry, const glm::dvec2& atPx);

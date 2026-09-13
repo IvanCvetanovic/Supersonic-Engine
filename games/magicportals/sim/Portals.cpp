@@ -3,6 +3,7 @@
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 #include "sim/Units.hpp"
+#include "sim/Zerog.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -223,6 +224,21 @@ bool State::Shoot(entt::registry& registry, const glm::dvec2& atPx) {
     fired.atPx = fired.fromPx;
     flight = fired;
     ++shotsFired;
+
+    // THE RECOIL, in a zero-gravity level, and it is how the player moves there.
+    //
+    // Here rather than where the shot arrives, because the original puts it
+    // here: managePortalInsertion calls applyImpulse immediately after the tap
+    // is taken, on the joined path that a failed shot comes down too. So the
+    // shove is spent on a tap that goes on to hit a wall, exactly as it is on
+    // one that opens a portal - the flight below has not resolved yet.
+    //
+    // ADDED to the velocity, never set: applyImpulse is
+    // SetLinearVelocity(GetLinearVelocity() + impulse), so shots accumulate and
+    // drift is the mechanic.
+    if (noGravity && recoilMps > 0.0) {
+        registry.get<RigidBodyComponent>(shooter).velocity += Zerog::Impulse(fired.fromPx, fired.toPx, recoilMps);
+    }
     return true;
 }
 

@@ -43,6 +43,7 @@
 #include "sim/Torch.hpp"
 #include "sim/Tscn.hpp"
 #include "sim/Turrets.hpp"
+#include "sim/Zerog.hpp"
 
 #include <filesystem>
 #include <string>
@@ -73,6 +74,7 @@ struct Data {
     Fields::Rules fields;         // and fields.json
     Ghost::Rules ghost;           // and ghost.json
     Torch::Rules torch;           // and torch.json
+    Zerog::Rules zerog;           // and zerog.json
     Hazards::Rules hazards;       // and hazards.json, which is what the role table got wrong
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
@@ -88,6 +90,10 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
 // The remake's world gravity, 980 px/s^2, as the registry's PhysicsSettings.
 // Units.hpp says why it is that value.
 void UseRemakeGravity(entt::registry& registry);
+
+// And none at all, for a level that sets `no_gravity`: the original's
+// setGravity(V2_ZERO). Zerog.hpp says what else that flag turns on.
+void UseNoGravity(entt::registry& registry);
 
 struct Level {
     LevelBuilder::Built built;
@@ -123,6 +129,12 @@ struct Level {
     // consequence is that a minion in such a level is blind, which minion sight
     // must honour when it is built.
     bool darkest = false;
+    // The level sets `no_gravity`: the world's gravity is zero, the walking
+    // buttons do nothing, and the recoil of a portal shot is how the player
+    // moves. Zerog.hpp holds the decode. Unlike `darkest` this one is ACTED ON,
+    // in three places - the gravity at Start, the steering BeforeStep does not
+    // do, and the shove Portals::Shoot applies.
+    bool noGravity = false;
     entt::entity player = entt::null;
 };
 

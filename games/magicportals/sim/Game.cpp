@@ -71,6 +71,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Fields::LoadRules(portDataDirectory + "/fields.json", read.fields, error)) return false;
     if (!Ghost::LoadRules(portDataDirectory + "/ghost.json", read.ghost, error)) return false;
     if (!Torch::LoadRules(portDataDirectory + "/torch.json", read.torch, error)) return false;
+    if (!Zerog::LoadRules(portDataDirectory + "/zerog.json", read.zerog, error)) return false;
     // And what the remake's role table calls a hazard but the original does not.
     if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
@@ -86,17 +87,22 @@ void UseRemakeGravity(entt::registry& registry) {
     registry.ctx().insert_or_assign<Supersonic::PhysicsSettings>(std::move(settings));
 }
 
+void UseNoGravity(entt::registry& registry) {
+    Supersonic::PhysicsSettings settings;
+    settings.gravity = glm::vec3(0.0f);
+    registry.ctx().insert_or_assign<Supersonic::PhysicsSettings>(std::move(settings));
+}
+
 bool Start(const Data& data, entt::registry& registry, Level& out, std::string& error, bool withStatics) {
     // The two level-property flags, and they are no longer the same case.
     //
-    // no_gravity is still refused, because it is a MOVEMENT MODE and not a
-    // switch. The original sets world gravity to zero for such a level (against
-    // (0, scale(10)) otherwise), and then reads the flag again in MainCharacter,
-    // in GameStateController and - the part that makes it a mechanic -
-    // PortalManager, where firing a portal calls applyImpulse. In those levels the
-    // recoil of a shot is how the player moves. Started without that, a
-    // zero-gravity level would drop everything in it and look like a level that
-    // works, which is what this guard exists to prevent.
+    // no_gravity is now PLAYED. It is a movement mode rather than a switch, and
+    // that is exactly why it was refused until all three of its parts existed:
+    // the world's gravity goes to zero here, Player::Steer is not run at all
+    // (BeforeStep says why that one absence is both the fall and the walk), and
+    // Portals::Shoot shoves the player away from each tap it takes. Started with
+    // any one of those missing, a zero-gravity level would look like a level that
+    // works and be a room with no way out. Zerog.hpp holds the decode.
     //
     // darkest is CARRIED instead. Its whole effect in the original's own
     // level-properties reader is one SetAmbientLight(DARKEST_AMBIENT_LIGHT), and
@@ -107,13 +113,13 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     // is that a minion in such a level is blind, and minion sight is unbuilt in
     // every level alike; minions.json and art.json both say so.
     bool darkest = false;
+    bool noGravity = false;
     for (const Tscn::Node& node : data.scene.nodes) {
         if (node.parent != "." || Roles::RoleOf(data.roles, node) != Roles::kLevelProperties) continue;
         double on = 0.0;
-        if (const Tscn::Value* value = node.Meta("no_gravity");
+        if (const Tscn::Value* value = node.Meta(data.zerog.flagName.c_str());
             value != nullptr && value->AsNumber(on) && on != 0.0) {
-            error = node.name + " sets no_gravity, and that is not ported";
-            return false;
+            noGravity = true;
         }
         on = 0.0;
         if (const Tscn::Value* value = node.Meta("darkest"); value != nullptr && value->AsNumber(on) && on != 0.0) {
@@ -121,13 +127,18 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
         }
     }
 
-    UseRemakeGravity(registry);
+    if (noGravity) {
+        UseNoGravity(registry);
+    } else {
+        UseRemakeGravity(registry);
+    }
     LevelBuilder::Options options;
     options.prismDirectory = data.prisms;
     options.roles = &data.roles;
     options.withStatics = withStatics;
     out = Level{};
     out.darkest = darkest;
+    out.noGravity = noGravity;
     if (!LevelBuilder::Build(data.scene, registry, options, out.built, error)) return false;
     if (withStatics && !Puzzle::Wire(data.scene, data.roles, out.built, out.channels, error)) return false;
     if (withStatics && !Mover::Wire(data.scene, data.roles, out.built, data.movers, out.movers, error)) return false;
@@ -165,6 +176,12 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
         return false;
     }
 
+    // And what a tap does to the player who fired it, which in these levels is
+    // the whole of how they move. Set here rather than found by Portals, because
+    // it is the LEVEL's property and not anything the level places.
+    out.portals.noGravity = noGravity;
+    out.portals.recoilMps = data.zerog.recoilMetresPerSecond;
+
     // And the minions the markers ask for, built last: a minion is teleportable,
     // so it joins the portals' travellers the way what a launcher throws does -
     // after Portals::Find, which is what fills that list to begin with.
@@ -189,7 +206,19 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
     // sets a velocity belongs on this side, what judges a position on the other.
     level.minions.Tick(registry, dt);
     level.boss.BeforeStep(registry);
-    if (level.player != entt::null) Player::Steer(registry, level.player, data.tuning, direction, dt);
+    // In a zero-gravity level the player is NOT STEERED AT ALL, and that single
+    // absence is both halves of the original's behaviour at once:
+    // MainCharacter::update skips ScreenPad::update entirely, so the two walking
+    // buttons do nothing; and Steer applies the fall every tick (Player.hpp says
+    // why it must, for a dynamic body with no floor snap), which is a fall this
+    // level's V2_ZERO gravity does not have.
+    //
+    // Skipping the CALL rather than branching inside Steer leaves the most
+    // heavily pinned function in the port untouched - test_mp_play walks
+    // level30's seam through it at friction 0 and 1 and prints both.
+    if (level.player != entt::null && !level.noGravity) {
+        Player::Steer(registry, level.player, data.tuning, direction, dt);
+    }
 }
 
 void AfterStep(const Data& data, entt::registry& registry, Level& level, float dt) {
