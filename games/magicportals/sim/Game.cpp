@@ -70,6 +70,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Diamonds::LoadRules(portDataDirectory + "/diamonds.json", read.diamonds, error)) return false;
     if (!Fields::LoadRules(portDataDirectory + "/fields.json", read.fields, error)) return false;
     if (!Ghost::LoadRules(portDataDirectory + "/ghost.json", read.ghost, error)) return false;
+    if (!Dragon::LoadRules(portDataDirectory + "/dragon.json", read.dragon, error)) return false;
     if (!Torch::LoadRules(portDataDirectory + "/torch.json", read.torch, error)) return false;
     if (!Zerog::LoadRules(portDataDirectory + "/zerog.json", read.zerog, error)) return false;
     if (!Bounce::LoadRules(portDataDirectory + "/bounce.json", read.bounce, error)) return false;
@@ -203,6 +204,10 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
         out.portals.zones.push_back(zone);
     }
 
+    // Chapter 2's boss. It needs the BUILT level, not just the scene: the claw's
+    // whitelist is four scenery names, and what it takes away are those bodies.
+    if (!Dragon::Find(data.scene, data.roles, out.built, data.dragon, out.dragon, error)) return false;
+
     // And the minions the markers ask for, built last: a minion is teleportable,
     // so it joins the portals' travellers the way what a launcher throws does -
     // after Portals::Find, which is what fills that list to begin with.
@@ -220,6 +225,33 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
     // they belong here too, before the solver reads what they wrote, and after
     // the movers so a body riding a platform is not pulled off it mid-tick.
     level.wells.Tick(registry, dt);
+    // Chapter 2's boss, and it belongs on this side for all three of the reasons
+    // this half exists: it sets its own position, it spits as Turrets::Fire does,
+    // and it takes geometry away BEFORE the solver reads it, so no contact is
+    // ever resolved against a platform that is about to vanish.
+    if (level.dragon.present) {
+        const Dragon::State::Turn turn = level.dragon.Tick(registry, level.player, level.goals.completed, dt);
+        // The claw's four names are scenery - none is in entity_roles.json - so
+        // no module walks a list of them behind this. The removal still goes
+        // through Forget, as a burnt crate does: a crushed platform cannot be a
+        // traveller or a stone, and the funnel is the port's one way out.
+        for (const entt::entity gone : turn.crushed) {
+            if (registry.valid(gone)) registry.destroy(gone);
+            Forget(level, gone);
+        }
+        for (const std::string& gone : turn.crushedNames) level.built.entities.erase(gone);
+        if (turn.fired) {
+            // addFireball is the carranca's own function, so this is the same
+            // fireball.ent the fire diamond's conversion makes - only this one
+            // carries killMainCharacter set.
+            Turrets::Fireball made;
+            made.name = level.dragon.name + "#" + std::to_string(level.dragon.fired);
+            made.atPx = turn.firePx;
+            made.velocityPx = turn.aimPx * level.turrets.rules.speedPx;
+            made.killsPlayer = true;
+            level.turrets.fireballs.push_back(made);
+        }
+    }
     // What a launcher throws travels and breaks walls as a stone the level
     // places does.
     for (const Launchers::Thrown& thrown : level.launchers.Throw(registry, dt)) {

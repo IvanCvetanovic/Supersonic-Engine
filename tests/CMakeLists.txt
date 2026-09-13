@@ -193,6 +193,11 @@ add_mp_test(test_mp_bounce)
 # Chapter 4's gravity wells: a solid circle that pulls every dynamic body in, and
 # the no-portal zone its callback adds that no level file mentions.
 add_mp_test(test_mp_wells)
+# Chapter 2's boss: the dragon that cannot be killed, and the claw that eats its
+# level's floor behind a camera locked to the dragon itself. The inventory counts
+# roles, and the claw's four names have none - so only this suite can tell a
+# level whose floor really goes from one where the claw is drawn and inert.
+add_mp_test(test_mp_dragon)
 # Keys, the keyholes they open and the locked doors that go with them - paired by
 # colour, and picked up at a distance rather than on contact.
 add_mp_test(test_mp_keys)
@@ -229,7 +234,7 @@ target_link_libraries(test_mp_layer PRIVATE MagicPortalsGame)
 # with the path it looked in - never as a pass.
 set_tests_properties(test_mp_levels test_mp_play test_mp_start test_mp_statics test_mp_chapters test_mp_timed
                      test_mp_movers test_mp_hazards test_mp_demolish test_mp_launchers test_mp_shot test_mp_boss test_mp_layer
-                     test_mp_zerog test_mp_bounce test_mp_wells
+                     test_mp_zerog test_mp_bounce test_mp_wells test_mp_dragon
                      PROPERTIES SKIP_RETURN_CODE 77)
 
 # The simulation's own sin, cos, asin, atan2 and pow, pinned bit for bit so the

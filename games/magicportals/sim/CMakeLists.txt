@@ -39,6 +39,7 @@ add_library(MagicPortalsSim STATIC
     Sprites.cpp
     Trigger.cpp
     Torch.cpp
+    Dragon.cpp
     Tscn.cpp
     Turrets.cpp
     Zerog.cpp

@@ -27,6 +27,7 @@
 #include "sim/Bounce.hpp"
 #include "sim/Demolish.hpp"
 #include "sim/Diamonds.hpp"
+#include "sim/Dragon.hpp"
 #include "sim/Fields.hpp"
 #include "sim/Fire.hpp"
 #include "sim/Ghost.hpp"
@@ -75,6 +76,7 @@ struct Data {
     Diamonds::Rules diamonds;     // and diamonds.json
     Fields::Rules fields;         // and fields.json
     Ghost::Rules ghost;           // and ghost.json
+    Dragon::Rules dragon;         // and dragon.json
     Torch::Rules torch;           // and torch.json
     Zerog::Rules zerog;           // and zerog.json
     Bounce::Rules bounce;         // and bounce.json
@@ -125,6 +127,11 @@ struct Level {
     Fields::State fields;
     // Chapter 3's boss, which the fire diamond is the weapon against.
     Ghost::State ghost;
+    // Chapter 2's boss, which is the one that cannot be killed: its level is won
+    // by reaching the exit while it strafes the player and its claw eats the
+    // floor. It owns a camera of its own, because its level is the only one in
+    // the game that sets auto_camera - and sets it to the dragon.
+    Dragon::State dragon;
     // Chapter 4's torches, and the wall of light one of them drops.
     Torch::State torch;
     // The slabs that bob in chapter 4's weightless rooms. Kinematic, so each

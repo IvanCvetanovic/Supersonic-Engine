@@ -2454,11 +2454,29 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
         // Then this tick's input, and what comes before the next step.
         const float direction = readInput(registry);
         m_direction = direction; // for the picture: which way the player walks this tick
-        Game::BeforeStep(m_data, registry, m_level, direction, fixedDelta);
         m_aspect = viewportAspect(registry);
-        const glm::dvec2 playerPx =
-            Units::ToPixels(registry.get<Supersonic::TransformComponent>(m_level.player).position);
-        m_follow.Tick(m_cameraRules, playerPx, ViewPx(), m_boundsPx, fixedDelta);
+        // BEFORE the tick, not after it: the dragon's claw measures everything
+        // from the camera's left edge, and the camera's left edge depends on how
+        // wide the window is. Dragon.hpp says why that width is the only piece of
+        // the camera the sim takes from outside.
+        m_level.dragon.viewWidthPx = ViewPx().x;
+        Game::BeforeStep(m_data, registry, m_level, direction, fixedDelta);
+        if (m_level.dragon.present) {
+            // level31a is the ONE level in all 128 that sets auto_camera, and it
+            // sets it to dragon.ent. AutoCameraController::update is a hard lock
+            // to that entity's x - no lag, no hold, y pinned to 0 - so the
+            // follow's easing does not run here at all. dragon.json has the
+            // decode, and Camera::Clamp is the same arithmetic as the original's
+            // camMin/camMax expressed for a centre rather than a corner.
+            const glm::dvec2 view = ViewPx();
+            m_follow.centrePx =
+                Camera::Clamp(glm::dvec2(m_level.dragon.atPx.x + view.x * 0.5, view.y * 0.5), view, m_boundsPx);
+            m_follow.holdLeftS = 0.0;
+        } else {
+            const glm::dvec2 playerPx =
+                Units::ToPixels(registry.get<Supersonic::TransformComponent>(m_level.player).position);
+            m_follow.Tick(m_cameraRules, playerPx, ViewPx(), m_boundsPx, fixedDelta);
+        }
         placeCamera(registry);
         syncDrawables(registry);
     }

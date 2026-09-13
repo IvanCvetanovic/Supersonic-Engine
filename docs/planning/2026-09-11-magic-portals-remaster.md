@@ -3551,3 +3551,108 @@ both. Chapter 4's play floor is raised from 26 to 31.
 What is left of the whole remaster: **two bosses**. level31a's dragon
 (`ETHCallback_dragon`, a claw, a knight and a knight spawn, `isDestroyableByClaw`)
 and level31c's dark dragon.
+
+## Step 34 - chapter 2: the dragon that cannot be killed, and a camera no level asked for (built)
+
+Chapter 2 goes from 31 of 32 playing to **32**, and the game from 126 of 128 to
+**127**. All 128 still start. **One level in the whole game is left**: level31c's
+dark dragon.
+
+**The role table calls this boss a placeholder, and it is 8.2 KB of bytecode.**
+`entity_roles.json`'s `scenery_fx` note reads "`dragon_claw.ent` - part of the
+chapter-2 boss, which is a placeholder". The boss is `ETHCallback_dragon` (bytes
+380209..383437), a claw (383726..386175), `isDestroyableByClaw` (383437..383726),
+a knight (386379..388631) and a knight spawn (386175..386379) - five callbacks.
+That is the second correction this port has made to the role table, after
+`bouncer`, and both are recorded where a reader of the table would look.
+
+**It has no hit points and no body.** There is no hp, no damage arm and no death
+arm, and the node carries no `<Body>` - so nothing can hurt the dragon and the
+dragon cannot touch the player. **Level 2-32 is won by reaching the exit** while
+it strafes you and its claw eats the floor behind you. Every other boss in the
+game is a fight; this one is a chase, and building it as a fight would have been
+building the wrong thing.
+
+**The one level in 128 that sets `auto_camera`, and the port never read it.**
+level31a's `properties` carries `auto_camera = "dragon.ent"`; no other `.tscn` in
+the game has the key at all, and neither this port nor the remake's GDScript
+honoured it. `Game::Game` branches on it (110437..111736) and builds an
+`AutoCameraController` in place of the ordinary one, whose entire update is:
+
+    masterPos = master.GetPositionXY()                // the dragon
+    cameraPos = vector2(min(max(camMin.x, masterPos.x), camMax.x), 0)
+    SetCameraPos(cameraPos)
+
+A **hard lock** to the followed entity's x. No lag, no easing, y pinned to 0.
+`ICameraController`'s constructor sets `camMin` to (0,0) and `camMax` to
+`findCamMax()`, which is `SeekEntity("max").GetPositionXY() - GetScreenSize()` -
+the same arithmetic as `Camera::Clamp`, expressed for a top-left camera.
+
+**That is why the claw needed no camera passed in**, and it was the design
+question this step opened with. Every number in the claw is measured from
+`GetCameraPos()`, and `GetCameraPos()` here *is* the dragon - so the sim derives
+the camera from the boss it already owns, `Game::Tick` keeps its signature, and
+the layer supplies only the view's WIDTH. The clamp that width feeds does not bite
+until x > 2177, past `take_off` at 2160, where the dragon has already climbed away.
+
+**`GetCameraPos()` is the view's top-left corner**, and that was checked rather
+than assumed: `eth_util.angelscript`'s `isPointInScreen` subtracts it from a point
+and tests the result against `[0, GetScreenSize()]`. Read as a centre - which is
+how the port's own `Camera.hpp` reads `camera_start` - every margin in the claw
+would have sat half a view, some 227 px, to the left of where it belongs.
+
+**Two readings were corrected by going back to the listing rather than to notes.**
+The claw has **six** waypoints, not five: `addWaypoint` is called at ins 54, 82,
+107, 132, 157 and 182, and the last two are identical - which is exactly why
+`setCurrentWaypoint(getNumWaypoints() - 2)` leaves it motionless rather than
+parked mid-swing. And the dragon fires **before** it takes off, not after: ins
+634-637 load `tookOff`, negate it, and reach the `elapsedTime > 4000` test on that
+branch, while the fallthrough clears the gate. The same idiom agrees twice more -
+the follower tracks the player while `!tookOff` (178-181) and the animation runs
+while `!tookOff` (531-534). Both had been written down the other way round.
+
+**The sight gate is asked inside out, and the data file says so.** The original
+fires only if `GetClosestContact(dragon -> player)` returns something
+`isCharacter`. `Shot::FirstBody` walks box, sphere and hull colliders; the player
+is a **capsule** (`Player::Spawn`), so `FirstBody` can never return it - the first
+cut of this module asked `hit->body == player` and produced a dragon that never
+fired once. Teaching `FirstBody` about capsules would have made every portal shot
+in the game stop on the player, which the original does not do. Since the segment
+ends at the player, "the closest thing is the character" and "nothing solid lies
+before the endpoint" are one statement about one world, and the second is the one
+this port's primitive can answer. `test_mp_dragon` pins **both** sides: a shot
+taken through clear air, and a shot refused with a floor in the way.
+
+**What the claw takes is scenery, which settled the ownership question.** The four
+names `isDestroyableByClaw` accepts - `double_block_plat_no_emissive.ent`,
+`platform`, `single_block_plat_no_emissive.ent`, `block00_no_emissive.ent` - are
+in no role at all in `entity_roles.json`. So a crushed platform is not a mover,
+not a breakable and not a traveller: nothing walks a list behind it. The removal
+still goes through `Game`'s `Forget` funnel, as a burnt crate does. level31a
+places 22 of them, counted from the file rather than assumed.
+
+Ethanon gathers the claw's candidates from four spatial-hash buckets around the
+camera, and the port walks the level's own whitelist instead. Stated as an
+equivalence that holds **here** and for a reason: level31a is 256 px tall and the
+view is 256 px tall, so the bucket neighbourhood spans the level's whole height
+and only the two x tests are live.
+
+**The knight is claimed without being built**, and that is the one claim in this
+step not backed by a mechanism. Its spawn does nothing until
+`GameStateController::isFinished` - the port's `Goals::completed` - and the layer
+leaves a level on the tick that goes true, so none of it could ever be seen.
+`dragon.json` says so in the open, and what makes the claim honest is that
+level31a's PLAY does not rest on it: `test_mp_dragon` asserts the dragon flies,
+the claw takes the floor, the bodies leave the registry, and the exit's ground
+survives the camera's clamp.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_dragon` at 151 checks reporting a 6-point 1500 ms swing sweeping every
+250 ms, 22 platforms the claw may take, the camera's left edge at 286.0 with the
+dragon at x 286.0 after ten seconds, 10 of 22 taken by thirty and 21 by sixty, a
+fireball at 130 px/s from 56 px above the player and a shot refused with the floor
+in the way; `test_mp_layer` at 206, `test_mp_start` at 552, and **128 of 128
+levels starting with 127 playing** on both. Chapter 2's play floor is raised from
+31 to 32.
+
+What is left of the whole remaster: **one boss**, level31c's dark dragon.

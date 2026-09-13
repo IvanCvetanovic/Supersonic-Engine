@@ -61,7 +61,7 @@ struct Chapter {
 // roles land" was always meant to mean.
 const Chapter kChapters[] = {
     {"", "chapter 1", 32, 32},
-    {"a", "chapter 2", 32, 31}, // all but level31a's dragon
+    {"a", "chapter 2", 32, 32}, // complete: level31a's dragon was the last of them
     {"b", "chapter 3", 32, 32}, // complete
     // ALL 32 START, AND 31 PLAY. `no_gravity` was the last thing in the whole
     // game that stopped a level STARTING; `bouncer` and `gravity_well` were the
@@ -138,11 +138,16 @@ Outcome StartAndDrop(const std::string& path) {
         if (node.parent != ".") continue;
         const std::string role = Roles::RoleOf(data.roles, node);
         // A boss spawn plays when it is a boss the port HAS: level31's beholder,
-        // or level31b's ghost. Asked per NODE and never per role, which is what
-        // lets one boss be built without claiming another - level31a's dragon and
-        // chapter 4's dark dragon stay inert, and stay honestly counted.
+        // level31b's ghost, or level31a's dragon. Asked per NODE and never per
+        // role, which is what lets one boss be built without claiming another -
+        // chapter 4's dark dragon stays inert, and stays honestly counted.
+        //
+        // Dragon::Plays answers for TWO entity names, because level31a places
+        // dragon.ent and dragon_knight_spawn under the one role; dragon.json says
+        // on what ground the second is claimed.
         const bool boss = role == Roles::kBossSpawn &&
-                          (Boss::Plays(data.boss, node) || Ghost::Plays(data.ghost, node));
+                          (Boss::Plays(data.boss, node) || Ghost::Plays(data.ghost, node) ||
+                           Dragon::Plays(data.dragon, node));
         if (!Roles::IsPorted(role) && !boss) ++outcome.ignored[role];
     }
     // A ZERO-GRAVITY LEVEL'S PLAYER NEVER LANDS, and asking it to would fail all
