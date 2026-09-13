@@ -73,6 +73,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Torch::LoadRules(portDataDirectory + "/torch.json", read.torch, error)) return false;
     if (!Zerog::LoadRules(portDataDirectory + "/zerog.json", read.zerog, error)) return false;
     if (!Bounce::LoadRules(portDataDirectory + "/bounce.json", read.bounce, error)) return false;
+    if (!GravityWell::LoadRules(portDataDirectory + "/gravitywell.json", read.wells, error)) return false;
     // And what the remake's role table calls a hazard but the original does not.
     if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
@@ -187,6 +188,21 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     out.portals.noGravity = noGravity;
     out.portals.recoilMps = data.zerog.recoilMetresPerSecond;
 
+    // The gravity wells, and the no-portal zone each one carries. NOTHING IN THE
+    // LEVEL FILE SAYS `antiportal` here: the agent's own callback adds one on its
+    // first tick, so a port that read only the .tscn would never place it and
+    // would let a portal open inside a well. The zone carries its own radius,
+    // because it comes from the agent's radius and not from white_ring.png.
+    if (!GravityWell::Find(data.scene, data.roles, data.wells, out.wells, error)) return false;
+    out.wells.noGravity = noGravity;
+    for (const GravityWell::Well& well : out.wells.wells) {
+        Portals::NoPortalZone zone;
+        zone.name = well.name;
+        zone.centrePx = well.atPx;
+        zone.radiusPx = well.ZoneRadiusPx(data.wells);
+        out.portals.zones.push_back(zone);
+    }
+
     // And the minions the markers ask for, built last: a minion is teleportable,
     // so it joins the portals' travellers the way what a launcher throws does -
     // after Portals::Find, which is what fills that list to begin with.
@@ -200,6 +216,10 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
     // The bobbing slabs, beside the platforms and for the same reason: what sets
     // a body's position belongs before the step, what judges one after it.
     level.bounce.Tick(registry, dt);
+    // And the wells, which add to a velocity rather than set a position - so
+    // they belong here too, before the solver reads what they wrote, and after
+    // the movers so a body riding a platform is not pulled off it mid-tick.
+    level.wells.Tick(registry, dt);
     // What a launcher throws travels and breaks walls as a stone the level
     // places does.
     for (const Launchers::Thrown& thrown : level.launchers.Throw(registry, dt)) {

@@ -22,7 +22,7 @@ bool IsPorted(const std::string& role) {
         kPlayerSpawn, kLevelBounds, kLevelProperties, kExitDoor, kCollectible,
         kSwitch, kSwitchedDoor, kLift, kMovingPlatform, kNoPortalZone, kStaticPortal, kHazard, kDemolisher,
         kLauncher, kProjectileBlocker, kReflector, kTurret, kFireSource, kExplosive, kHinge,
-        kEnemySpawn, kWaypoint, kKey, kKeyhole, kLockedDoor, kShockField, kPickup, kTorch, kBouncer,
+        kEnemySpawn, kWaypoint, kKey, kKeyhole, kLockedDoor, kShockField, kPickup, kTorch, kBouncer, kGravityWell,
         // Nothing to play: drawn, or read by another role.
         "lift_marker", "camera_start", "scenery_hint", "scenery_fx",
     };

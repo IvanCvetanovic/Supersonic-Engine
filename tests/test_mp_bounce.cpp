@@ -207,9 +207,15 @@ void TheBodyItselfMoves() {
 void TheRoleIsPlayed() {
     CHECK(Roles::IsPorted(Roles::kBouncer));
     CHECK(Roles::Moves(Roles::kBouncer));
-    // And the roles that are NOT played are still not, so admitting this one did
-    // not admit everything.
-    CHECK(!Roles::IsPorted("gravity_well"));
+    // And a role that is NOT played is still not, so admitting this one did not
+    // admit everything.
+    //
+    // This named `gravity_well` until that was built a step later, which is a
+    // guard doing its job: it failed the moment the thing it was pinning stopped
+    // being true. `boss_spawn` takes its place because the port plays two of the
+    // four bosses and leaves level31a's dragon and level31c's dark dragon inert -
+    // Roles::IsPorted is per-role and cannot say "for two of them".
+    CHECK(!Roles::IsPorted(Roles::kBossSpawn));
 }
 
 void runTests() {

@@ -105,6 +105,13 @@ struct NoPortalZone {
     bool moving = false;
     Mover::Oscillation motion; // when it patrols
     std::string name;          // last, so {centre, scale} still makes a zone
+    // An EXPLICIT radius, for a zone that is not an antiportal the level placed.
+    // Zero means the old arithmetic - antiportalRadiusPx times this node's own
+    // scale - which is every antiportal in the game. A gravity well's zone sets
+    // it, because its radius is the agent's own (52 to 248 px across the ten
+    // placements) and cannot be reached from a constant 64. GravityWell.hpp has
+    // the arithmetic.
+    double radiusPx = 0.0;
 
     glm::dvec2 CentreNowPx() const { return moving ? motion.AtPx() : centrePx; }
 };

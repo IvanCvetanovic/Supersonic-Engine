@@ -63,14 +63,13 @@ const Chapter kChapters[] = {
     {"", "chapter 1", 32, 32},
     {"a", "chapter 2", 32, 31}, // all but level31a's dragon
     {"b", "chapter 3", 32, 32}, // complete
-    // ALL 32 START. `no_gravity` was the last thing in the whole game that
-    // stopped a level starting, so every one of the 128 does now.
+    // ALL 32 START, AND 31 PLAY. `no_gravity` was the last thing in the whole
+    // game that stopped a level STARTING; `bouncer` and `gravity_well` were the
+    // last two roles that stopped one PLAYING.
     //
-    // 24 play. The eight that do not are: the five holding `gravity_well`
-    // (level16c, level17c, level18c, level20c, level27c), the three holding
-    // `bouncer` (level1c, level6c, level16c) - seven distinct levels, because
-    // level16c holds both - and level31c, which places chapter 4's own boss.
-    {"c", "chapter 4", 32, 24},
+    // The one that does not is level31c, which places chapter 4's own boss - the
+    // dark dragon, and the only unbuilt thing left in this chapter.
+    {"c", "chapter 4", 32, 31},
 };
 
 // The reason with the node's name taken off the front, so that the same refusal
@@ -102,10 +101,22 @@ std::string ReasonOf(const std::string& error) {
 // where something does.
 constexpr double kFloatDriftPx = 16.0;
 
+// And how far one may move in a zero-gravity level THAT HOLDS A GRAVITY WELL,
+// where the stillness above is the wrong question: a well pulls, so the player
+// moves by design, and level17c holds four of them.
+//
+// This is deliberately not "anything at all". What it still catches is what a
+// newly written force gets wrong: a normalize at dead centre giving a NaN, or a
+// runaway acceleration flinging the player out of the world. Both would sail
+// past a check that merely asked whether the entity still existed - which is
+// what this line said for one draft, and it was no check at all.
+constexpr double kPulledDriftPx = 1000.0;
+
 struct Outcome {
     bool started = false;
     bool landed = false;   // or, in a zero-gravity level, stayed afloat
     bool noGravity = false;
+    bool pulled = false;   // a zero-gravity level with a well in it
     std::string why;
     std::map<std::string, int> ignored; // role -> placements the port leaves inert
 
@@ -140,7 +151,16 @@ Outcome StartAndDrop(const std::string& path) {
     // these levels would have been the dishonest fix - a level quietly falling
     // through its own floor would then have read as playing, which is the same
     // blindness light_wall.ent had before test_mp_torch watched the body.
+    // A ZERO-GRAVITY LEVEL WITH A GRAVITY WELL IN IT IS NOT STILL, and asking it
+    // to be is asking the wrong question. The stillness check below rests on
+    // "nothing pulls it and nothing steers it"; a well is precisely a thing that
+    // pulls it, so level17c - which holds FOUR, more than any level in the game -
+    // moves a stationary player by design. What is asked of those levels instead
+    // is that the player is still SOMEWHERE, which is all this inventory can
+    // honestly claim about a room whose contents are dragging it about.
+    // test_mp_wells measures the pull properly.
     outcome.noGravity = level.noGravity;
+    outcome.pulled = !level.wells.wells.empty();
     const glm::dvec2 spawnPx = Units::ToPixels(registry.get<Supersonic::TransformComponent>(level.player).position);
     for (int tick = 0; tick < kLandingTicks && !outcome.landed; ++tick) {
         Game::Tick(data, registry, level, 0.0f, kStep);
@@ -149,7 +169,8 @@ Outcome StartAndDrop(const std::string& path) {
     if (level.noGravity) {
         const glm::dvec2 nowPx = Units::ToPixels(registry.get<Supersonic::TransformComponent>(level.player).position);
         const glm::dvec2 drift = nowPx - spawnPx;
-        outcome.landed = std::sqrt(drift.x * drift.x + drift.y * drift.y) < kFloatDriftPx;
+        const double moved = std::sqrt(drift.x * drift.x + drift.y * drift.y);
+        outcome.landed = outcome.pulled ? (std::isfinite(moved) && moved < kPulledDriftPx) : moved < kFloatDriftPx;
     }
     return outcome;
 }
@@ -193,10 +214,14 @@ void EveryLevelStartsOrSaysWhy() {
                 continue;
             }
             ++started;
-            const std::string wanted = outcome.noGravity ? ": the player did not stay afloat where it started"
-                                                         : ": the player did not land within three seconds";
+            const std::string wanted =
+                !outcome.noGravity ? ": the player did not land within three seconds"
+                : outcome.pulled   ? ": the player was flung far from where its wells found it"
+                                   : ": the player did not stay afloat where it started";
             CHECK_MSG(outcome.landed, name + wanted);
-            const char* const failed = outcome.noGravity ? "starts, DOES NOT FLOAT" : "starts, DOES NOT LAND";
+            const char* const failed = !outcome.noGravity ? "starts, DOES NOT LAND"
+                                       : outcome.pulled   ? "starts, FLUNG BY ITS WELLS"
+                                                          : "starts, DOES NOT FLOAT";
             std::string line = outcome.Plays() ? "plays" : outcome.landed ? "starts" : failed;
             if (!outcome.ignored.empty()) {
                 line += "; inert:";

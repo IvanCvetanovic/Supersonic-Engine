@@ -3450,3 +3450,104 @@ both. Chapter 4's play floor is raised from 24 to 26.
 
 Seven levels in the game still do not play: `gravity_well` in level16c, level17c,
 level18c, level20c and level27c, and `boss_spawn` in level31a and level31c.
+
+## Step 33 - chapter 4: the gravity wells, and a zone no level file mentions (built)
+
+Chapter 4 goes from 26 of 32 playing to **31**, and the game from 121 of 128 to
+**126**. All 128 still start. **Two levels in the whole game are left**, and both
+are bosses: level31a's dragon and level31c's dark dragon.
+
+**A well is three things, and only two of them are in the level file.** The node
+gives a position, a radius, a `StaticBody2D` and a `CircleShape2D` - so the solid
+circle builds itself (a portal shot already died on it: `Shot::FirstBody` walks
+sphere colliders and skips only triggers), and the attraction can be read off the
+radius. The third is invisible: `ETHCallback_gravity_agent` **adds an
+`antiportal.ent` at its own position on its first tick**, and no `.tscn` in the
+game mentions it. A port built from the level data alone would let a portal open
+inside a well while every role count still read "playing" - the same blindness
+`light_wall.ent` had before `test_mp_torch` watched a body. `test_mp_wells`
+asserts it through `TryPlace`.
+
+**The force**, decoded from `ETHCallback_gravity_area` (bytes 461443..462571):
+
+    forceDir  = normalize(centre - body)          // TOWARD the centre: it attracts
+    forceBias = smoothEnd(1 - d^2/r^2)
+    force     = forceDir * forceBias * forceLength * (dt_ms / 16.6666)
+    velocity += force                             // added, never set
+
+The operand order was checked rather than assumed, because it is the entire
+difference between a well and a fan: `vector2::opSub` takes `thisPos` as the
+object and `bodyPos` as the argument, so the pull runs inward. Only DYNAMIC
+bodies feel it - `DynamicBodyChooser::choose` rejects `IsStatic()` and anything
+with no physics controller, so platforms and walls stand still inside a well.
+
+**Two strengths, and the branch is the world's gravity.** `GetGravity() ==
+V2_ZERO` gives **0.18**, anything else **0.5** - which splits these five levels
+exactly: level16c, level17c and level18c are `no_gravity` levels; level20c and
+level27c are not. The stronger pull is where gravity is already fighting it. The
+port reads `Game::Level::noGravity` rather than interrogating the registry,
+because that flag is what set the registry's gravity in the first place.
+
+**The zone radius is `radius - 12`, not `radius`.** The agent sizes its antiportal
+with `scaleToSize(area, vector2(w, h))` where `w = h = radius*2 - scale(24)`, and
+`scaleToSize` reads `GetSize()` and calls `Scale(size / currentSize)` - so that is
+the entity's SIZE. An antiportal refuses a tap within `GetSize().x * 0.5`. Halving
+gives `radius - 12`, twelve pixels at every one of the ten placements, and
+`radius` was what these notes said before the arithmetic was followed through.
+`Portals::NoPortalZone` gained an explicit `radiusPx` for it - the existing
+`antiportalRadiusPx` is a constant 64 times a node's scale, and these zones run
+52 to 248 px - defaulting to zero so every antiportal already in the game is
+untouched.
+
+**The census, measured by reading every `metadata/radius` in chapter 4**: ten
+placements across five levels - level16c 106; level17c 106, 140, 106, 106;
+level18c 140, 64, 64; level20c 260; level27c 128. A correction worth recording:
+`test_mp_zerog` prints "8 gravity wells across 3 of the eighteen", which is right
+for what it measures - it walks the eighteen zero-gravity levels only, so level20c
+and level27c were never in its loop. The game-wide total is ten across five, and
+the 8 nearly became a documented fact.
+
+**One number is inferred and says so.** `smoothEnd(v)` is `sin(v * PIb)`, and
+`PIb` is a global the decoder renders by name and never defines - every appearance
+is a use. Three independent ones fix it at PI/2: `smoothEnd` must reach 1 at
+v = 1; `PI + PIb` is a half-turn plus a quarter; and `getAngle` brackets its
+quadrants with `PIb/2` and `PI + PIb/2`. `gravitywell.json` records it as
+**inferred, not decoded**, because a data file that calls an inference a decode is
+worse than one that admits the gap.
+
+**The orbit counter is recorded, not built.** `computeRoundabout` keeps
+`roundSum_`, `cwRoundCount_` and `ccwRoundCount_` per body and
+`retrieveRondaboutCount` sums both directions. One grep found its only consumer:
+`checkForLevelAchievements`, calling `dispatchAchievement(60, notify, 2500)` after
+three orbits. Achievement #60, a toast, and the achievement system is unported -
+`Keys.hpp` and `Minions.hpp` record theirs the same way. Worth the grep rather
+than the guess: had it been a goal, a well that attracted perfectly and never
+counted would have left five levels unfinishable.
+
+**Two test premises expired, and both were rewritten rather than relaxed.**
+`test_mp_bounce` pinned `!IsPorted("gravity_well")` as proof that admitting
+`bouncer` had not admitted everything - a guard doing its job, failing the moment
+the thing it pinned stopped being true. It now pins `kBossSpawn`. And
+`test_mp_start`'s zero-gravity check rests on "nothing pulls it and nothing steers
+it"; a well is precisely a thing that pulls it, so level17c - which holds FOUR,
+more than any level in the game - moves a stationary player by design.
+
+That second fix was nearly the wrong one twice. Widening the tolerance would have
+been the settle-versus-fall mistake a third time. Worse, the first draft read
+`outcome.landed = pulled ? registry.valid(level.player) : ...`, which is
+unconditionally true - a check-shaped hole, written in the same hour as a note
+saying exemptions were dishonest. What stands instead asserts something that can
+actually fail: the drift is finite and under 1000 px, which catches the two things
+a newly written force plausibly gets wrong - a `normalize` NaN at dead centre, and
+runaway acceleration.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_wells` at 47 checks reporting 10 wells across 5 levels, a zone refusing a
+portal within 94 px of (256, 128) and a player pulled from 53.0 px to 18.7 px of a
+well in half a second; `test_mp_bounce` at 189, `test_mp_zerog` at 84,
+`test_mp_start` at 552, and **128 of 128 levels starting with 126 playing** on
+both. Chapter 4's play floor is raised from 26 to 31.
+
+What is left of the whole remaster: **two bosses**. level31a's dragon
+(`ETHCallback_dragon`, a claw, a knight and a knight spawn, `isDestroyableByClaw`)
+and level31c's dark dragon.

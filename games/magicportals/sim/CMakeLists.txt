@@ -18,6 +18,7 @@ add_library(MagicPortalsSim STATIC
     Game.cpp
     Ghost.cpp
     Goals.cpp
+    GravityWell.cpp
     Hazards.cpp
     Hinge.cpp
     Keys.cpp

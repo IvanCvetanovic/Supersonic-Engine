@@ -168,7 +168,12 @@ bool State::TryPlace(const glm::dvec2& atPx) {
     for (const NoPortalZone& zone : zones) {
         // The ANTIPORTAL's radius, which is half its own sprite times the node's
         // scale - not the portal's own 14. placement.json has the decode.
-        if (glm::distance(atPx, zone.CentreNowPx()) <= rules.antiportalRadiusPx * zone.scale) return false;
+        //
+        // A zone carrying its OWN radius uses that instead: a gravity well's
+        // antiportal is sized from the agent's radius rather than from
+        // white_ring.png, so no constant here could express it.
+        const double reachPx = zone.radiusPx > 0.0 ? zone.radiusPx : rules.antiportalRadiusPx * zone.scale;
+        if (glm::distance(atPx, zone.CentreNowPx()) <= reachPx) return false;
     }
     if (static_cast<int>(placed.size()) >= budget) {
         if (!rules.recycleOldestAtCap) return false;

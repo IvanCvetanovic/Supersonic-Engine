@@ -31,6 +31,7 @@
 #include "sim/Fire.hpp"
 #include "sim/Ghost.hpp"
 #include "sim/Goals.hpp"
+#include "sim/GravityWell.hpp"
 #include "sim/Hazards.hpp"
 #include "sim/Hinge.hpp"
 #include "sim/Launchers.hpp"
@@ -77,6 +78,7 @@ struct Data {
     Torch::Rules torch;           // and torch.json
     Zerog::Rules zerog;           // and zerog.json
     Bounce::Rules bounce;         // and bounce.json
+    GravityWell::Rules wells;     // and gravitywell.json
     Hazards::Rules hazards;       // and hazards.json, which is what the role table got wrong
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
@@ -128,6 +130,9 @@ struct Level {
     // The slabs that bob in chapter 4's weightless rooms. Kinematic, so each
     // carries what stands on it - Bounce.hpp says why that is the whole step.
     Bounce::State bounce;
+    // Chapter 4's gravity wells: a solid circle that pulls every dynamic body
+    // in, and refuses a portal anywhere inside its reach.
+    GravityWell::State wells;
     // The level sets `darkest`: its ambient light is DARKEST_AMBIENT_LIGHT,
     // (0.01, 0.01, 0.01). Carried rather than acted on - this port has no ambient
     // light for it to change - and art.json holds the decode. Its one gameplay
