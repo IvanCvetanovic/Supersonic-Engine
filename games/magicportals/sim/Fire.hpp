@@ -40,12 +40,15 @@
 //
 // WHAT IS NOT BUILT, SAID HERE RATHER THAN LEFT TO BE NOTICED
 //
-// - The fourth branch, burnProjectile, puts out a flying projectile.ent. The port
-//   has no such body: its shot is a SEGMENT that Portals resolves within a tick
-//   (Shot.hpp), not an entity a bucket sweep could find, so there is nothing here
-//   for a fire agent to reach. The consequence is real - a shot fired THROUGH a
-//   flame opens its portal in the port where the original would have put it out -
-//   and the fix belongs in Shot's segment test, not in this file.
+// - The fourth branch, burnProjectile, does NOT put a flying projectile.ent out:
+//   it CONVERTS one. It is killProjectile - a bare DeleteEntity - followed by
+//   addFireball along the same direction, so the shot is replaced by a fireball
+//   rather than extinguished. (An earlier wording here said "puts out", which read
+//   as extinguishes and was wrong.) Its one caller is the fire diamond's
+//   turnProjectilesIntoFireBalls, and Diamonds owns that: Game runs it every tick
+//   the carrier holds one. What is still not built is a FIRE AGENT reaching a
+//   shot - a shot fired THROUGH a flame keeps flying here - and that belongs in
+//   Shot's segment test, not in this file.
 // - A blast also sets `destroy` on every breakable it grabs. A breakable wall is
 //   Demolish's body to take away, and one body with two owners is how a level ends
 //   up half broken, so it is left out. Nine chapter-2 levels place both a bomb and

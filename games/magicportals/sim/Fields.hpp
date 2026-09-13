@@ -76,6 +76,11 @@ struct Field {
     bool burnable = false;         // carried, and nothing in the port acts on it
     std::string direction;         // copied by the original and never read by it
     entt::entity body = entt::null; // the 30 px trigger the converter gives it
+    // A fireball destroyed it. ETHBeginContactCallback_fireball tests the name
+    // shock_agent / shock_agent.ent against what it touched and, alone among the
+    // sensors it meets, destroys that one and itself with it. A destroyed ring
+    // stops swinging and stops killing.
+    bool gone = false;
 };
 
 struct State {
@@ -90,10 +95,18 @@ struct State {
     // step left the player.
     void Tick(entt::registry& registry, entt::entity player, float dt);
 
+    // A fireball destroyed a shock agent. Marks it gone and hands back the
+    // trigger body the converter gave it, for Game to pass through Forget;
+    // entt::null for a name that is not a ring here or is already gone.
+    entt::entity Destroy(const std::string& name, entt::registry& registry);
+
     const Field* FindField(const std::string& name) const;
 
     // Rings that move at all, which is one placement in every level that starts.
     std::size_t Moving() const;
+
+    // Rings still standing: destroyed ones stay in the list, as spent diamonds do.
+    std::size_t Standing() const;
 };
 
 // A level's shock agents. False, with `error`, for one with no position, a radius

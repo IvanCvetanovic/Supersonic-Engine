@@ -94,6 +94,10 @@ void State::Tick(entt::registry& registry, entt::entity player, float dt) {
     const double seconds = static_cast<double>(dt);
 
     for (Field& field : fields) {
+        // A ring a fireball destroyed stops swinging and stops killing. It stays
+        // in the list, as a spent diamond does, so a suite can still name it.
+        if (field.gone) continue;
+
         // The swing. angle advances by speed radians a second and wraps by taking
         // 2*PI off, as the original's does, and the displacement is a cosine of
         // amplitude stride - so the ring is a full stride from its node at angle
@@ -125,6 +129,29 @@ void State::Tick(entt::registry& registry, entt::entity player, float dt) {
         playerKilled = true;
         killedBy = field.name;
     }
+}
+
+std::size_t State::Standing() const {
+    std::size_t left = 0;
+    for (const Field& field : fields) {
+        if (!field.gone) ++left;
+    }
+    return left;
+}
+
+entt::entity State::Destroy(const std::string& name, entt::registry& registry) {
+    for (Field& field : fields) {
+        if (field.name != name || field.gone) continue;
+        field.gone = true;
+        const entt::entity body = field.body;
+        field.body = entt::null;
+        if (Alive(registry, body)) {
+            registry.destroy(body);
+            return body;
+        }
+        return entt::null;
+    }
+    return entt::null;
 }
 
 const Field* State::FindField(const std::string& name) const {

@@ -5,6 +5,7 @@
 #include "core/Components.hpp"
 #include "core/Json.hpp"
 
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <utility>
@@ -28,6 +29,15 @@ double Squared(const glm::dvec2& v) {
 // there to be measured against.
 bool Alive(entt::registry& registry, entt::entity body) {
     return body != entt::null && registry.valid(body) && registry.all_of<TransformComponent>(body);
+}
+
+// A diamond has no body, so a gutter mouth cannot be met by a collider test. The
+// original's is scaledCollide between two sized entities; here the diamond is the
+// point it is drawn at against the drain's own trigger box, which is the tall thin
+// slot the level gives it rather than a box on its node.
+bool InBox(const glm::dvec2& atPx, const Trigger::Box& box) {
+    const glm::vec3 world = Units::ToWorld(atPx.x, atPx.y);
+    return std::fabs(world.x - box.centre.x) <= box.half.x && std::fabs(world.y - box.centre.y) <= box.half.y;
 }
 
 bool PositionOf(const Tscn::Node& node, glm::dvec2& out) {
@@ -83,6 +93,7 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     if (!number("shock", "stride_ms", read.strideMs)) return false;
     if (!name("shock", read.shockName)) return false;
     if (!name("fire", read.fireName)) return false;
+    if (!name("gutter", read.gutterName)) return false;
 
     // Each of these would look like a level that works. A range of nothing is a
     // diamond that can never be picked up and a minion that can never be struck;
@@ -106,12 +117,18 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         error = path + ": shock.stride_ms is above zero";
         return false;
     }
-    if (read.shockName.empty() || read.fireName.empty()) {
-        error = path + ": shock.entity_name and fire.entity_name both name an entity";
+    if (read.shockName.empty() || read.fireName.empty() || read.gutterName.empty()) {
+        error = path + ": shock, fire and gutter each name an entity";
         return false;
     }
     if (read.shockName == read.fireName) {
         error = path + ": shock.entity_name and fire.entity_name are different entities";
+        return false;
+    }
+    // And the drain is not a diamond. A gutter mouth sharing either name would
+    // make every diamond destroy itself on the frame it was found.
+    if (read.gutterName == read.shockName || read.gutterName == read.fireName) {
+        error = path + ": gutter.entity_name is neither diamond";
         return false;
     }
 
@@ -124,6 +141,12 @@ std::vector<entt::entity> State::Tick(entt::registry& registry, const std::vecto
     std::vector<entt::entity> hit;
     const double ms = static_cast<double>(dt) * 1000.0;
     const double range2 = rules.rangePx * rules.rangePx;
+
+    // Recomputed, never latched: the original writes hasFireDiamond onto the
+    // character every frame a fire diamond is carried, and the diamond's own
+    // death is what clears it. So the flag is the diamond's state and not the
+    // player's, and a diamond that goes down a gutter takes it with it.
+    carrierHasFire = false;
 
     for (Diamond& diamond : diamonds) {
         if (diamond.gone) continue;
@@ -141,6 +164,29 @@ std::vector<entt::entity> State::Tick(entt::registry& registry, const std::vecto
         // ownerID = -1 and nothing more - and the payload below still runs on
         // that frame, because it sits after the branch rather than inside it.
         if (!Carry::Drop(diamond, registry)) Carry::Trail(diamond, registry, rules, ms);
+
+        // A FIRE DIAMOND'S payload is not a strike. Its carry arm calls
+        // turnProjectilesIntoFireBalls, which is Game's to run because the shot
+        // belongs to Portals; all that is owed here is the flag, and the drain
+        // that takes it away.
+        if (diamond.fire) {
+            // The gutter mouth first, so a diamond destroyed on this frame does
+            // not also arm the flag on it. destroy() is what the original calls,
+            // and clearing hasFireDiamond is what its death does.
+            bool drained = false;
+            for (const Gutter& gutter : gutters) {
+                if (!InBox(diamond.atPx, gutter.box)) continue;
+                diamond.gone = true;
+                ++drowned;
+                drained = true;
+                break;
+            }
+            if (drained) continue;
+            // A dropped diamond is nobody's: Carry::Drop has already put the
+            // owner back to null, and an unowned diamond sets no flag.
+            if (diamond.owner != entt::null) carrierHasFire = true;
+            continue;
+        }
 
         // The payload: the first minion within the SAME range dies, and the
         // diamond goes with it. Destroying it is Minions' to do, not this
@@ -165,6 +211,13 @@ const Diamond* State::Find(const std::string& name) const {
     return nullptr;
 }
 
+const Gutter* State::FindGutter(const std::string& name) const {
+    for (const Gutter& gutter : gutters) {
+        if (gutter.name == name) return &gutter;
+    }
+    return nullptr;
+}
+
 std::size_t State::Standing() const {
     std::size_t left = 0;
     for (const Diamond& diamond : diamonds) {
@@ -183,16 +236,33 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const Rules& rule
         // By ENTITY NAME, not by role. shock_diamond.ent and fire_diamond.ent
         // share the `pickup` role and are different mechanisms; the role table
         // cannot tell them apart and this module must.
-        if (Roles::EntityName(node) != rules.shockName) continue;
+        const std::string entity = Roles::EntityName(node);
+
+        // The drain, which is filed under scenery_fx as a "decorative drip
+        // emitter" and is nothing of the kind. Its mouth is its own trigger box.
+        if (entity == rules.gutterName) {
+            Gutter gutter;
+            gutter.name = node.name;
+            if (!Trigger::FromNode(node, gutter.box, error)) {
+                error = node.name + " is a gutter mouth whose trigger does not read: " + error;
+                return false;
+            }
+            out.gutters.push_back(gutter);
+            continue;
+        }
+
+        const bool fire = entity == rules.fireName;
+        if (!fire && entity != rules.shockName) continue;
 
         glm::dvec2 atPx(0.0, 0.0);
         if (!PositionOf(node, atPx)) {
-            error = node.name + " is a shock diamond with no position";
+            error = node.name + " is a diamond with no position";
             return false;
         }
 
         Diamond diamond;
         diamond.name = node.name;
+        diamond.fire = fire;
         diamond.atPx = atPx;
         diamond.fromPx = atPx;
         diamond.toPx = atPx;

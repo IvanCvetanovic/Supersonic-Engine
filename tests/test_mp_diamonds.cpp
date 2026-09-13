@@ -1,19 +1,26 @@
-// Shock diamonds: the pickup only a character may carry, and the minion it kills.
+// The diamonds: two pickups that share a role and a carry path and do entirely
+// different things.
 //
-// What is pinned here is the DECODE, and above all two things a port written to
-// the KEY's shape would get wrong:
+// What is pinned here is the DECODE, and above all three things a careless port
+// gets wrong:
 //
 //   selection  shock_diamond.ent and fire_diamond.ent share the `pickup` role in
-//              entity_roles.json and are different mechanisms - the fire one sets
-//              hasFireDiamond on its carrier, which moves where a portal opens.
-//              Selecting on the role would hand it this behaviour in the four
-//              chapter-3 levels that place one, so level28b, level29b, level30b
-//              and level31b are each asserted to yield NO shock diamond.
-//   the frame  the pickup and the strike are a frame apart. The callback branches
-//              on ownerID at the top; the unowned arm polls for a carrier, writes
-//              ownerID and RETURNS, and the payload that strikes a minion lives
-//              in the carried arm, which that branch reaches on the next frame. A
-//              key is picked up, trails and opens a keyhole all in one tick.
+//              entity_roles.json and are different mechanisms. Selecting on the
+//              role would hand a fire diamond the shock one's behaviour, so the
+//              four chapter-3 levels that place a fire diamond are asserted to
+//              yield a diamond that is FIRE and strikes nothing.
+//   the frame  the pickup and the payload are a frame apart. Both callbacks
+//              branch on ownerID at the top; the unowned arm polls for a carrier,
+//              writes ownerID and RETURNS, and the payload lives in the carried
+//              arm, which that branch reaches on the next frame. A key is picked
+//              up, trails and opens a keyhole all in one tick.
+//   the trade  holding a fire diamond does NOT move where a portal opens - the
+//              reading the 64x in computePortalFinalPos invites. It means NO
+//              portal opens: turnProjectilesIntoFireBalls deletes the shot and
+//              puts a fireball where it was. A test that only checked "the shot
+//              behaved differently" would pass under either reading, so what is
+//              asserted is that nothing was placed AND a fireball exists AND it
+//              cannot hurt the player.
 //
 // And the filter that separates the two carried things: only a character may take
 // a diamond, so a minion put on one does not pick it up - where a minion put on a
@@ -118,18 +125,195 @@ void theRulesAndWhatLevelFifteenHolds() {
     }
 }
 
-// The guard against selecting on the role. These four levels each place a fire
-// diamond and no shock one, and a fire diamond is a different mechanism: were the
-// role the selector, each would gain a diamond that kills minions it never
-// touches in the original.
-void aFireDiamondIsNotOneOfThese() {
+// The guard against selecting on the role, from the fire side. These four levels
+// each place a fire diamond and no shock one: each must yield exactly one
+// diamond, and that one must be marked fire, because everything below turns on
+// the distinction the role table cannot make.
+void aFireDiamondIsFoundAndIsNotAShockOne() {
     for (const char* name : {"level28b", "level29b", "level30b", "level31b"}) {
         Run run;
         if (!Begin(name, run)) continue;
-        CHECK_MSG(run.level.diamonds.diamonds.empty(),
-                  std::string(name) + " places a fire diamond, which this module does not play");
-        CHECK_EQ(run.level.diamonds.Standing(), static_cast<std::size_t>(0));
+        CHECK_MSG(run.level.diamonds.diamonds.size() == static_cast<std::size_t>(1),
+                  std::string(name) + " places one fire diamond");
+        if (run.level.diamonds.diamonds.empty()) continue;
+        CHECK_MSG(run.level.diamonds.diamonds[0].fire,
+                  std::string(name) + "'s diamond is the fire one, not the shock one");
+        CHECK_MSG(run.level.diamonds.diamonds[0].name.find("fire_diamond") != std::string::npos,
+                  std::string(name) + ": and it answers to its node's name");
     }
+}
+
+// A fire diamond kills no minion. level28b places one AND minions, so this is the
+// selection error made visible: were the role the selector, the minion 8 px away
+// would die exactly as level15b's does.
+void aFireDiamondStrikesNothing() {
+    Run run;
+    if (!Begin("level28b", run)) return;
+    if (run.level.player == entt::null) return;
+    if (run.level.diamonds.diamonds.empty() || run.level.minions.minions.empty()) return;
+
+    const glm::dvec2 lyingAt = run.level.diamonds.diamonds[0].atPx;
+    const entt::entity minion = run.level.minions.minions[0].body;
+    if (minion == entt::null) return;
+
+    // Exactly the arrangement that kills in level15b: the player on the diamond,
+    // a minion 8 px off, held there for several frames so the frame separation
+    // cannot be what spares it.
+    for (int tick = 0; tick < 5; ++tick) {
+        PutAt(run.registry, run.level.player, lyingAt);
+        PutAt(run.registry, minion, glm::dvec2(lyingAt.x + 8.0, lyingAt.y));
+        Tick(run);
+    }
+
+    CHECK_MSG(run.level.diamonds.picked == 1, "the player took the fire diamond");
+    CHECK_MSG(run.level.diamonds.struck == 0, "and it struck nothing");
+    CHECK_MSG(run.registry.valid(minion), "the minion 8 px away is alive");
+    CHECK_EQ(run.level.minions.taken, 0);
+    CHECK_MSG(run.level.diamonds.carrierHasFire, "and the carrier holds the fire");
+}
+
+// THE MECHANIC. A tap while carrying one opens no portal at all: the shot is
+// deleted and a fireball stands where it was.
+void holdingOneTurnsAPortalShotIntoAFireball() {
+    Run run;
+    if (!Begin("level28b", run)) return;
+    if (run.level.player == entt::null) return;
+    if (run.level.diamonds.diamonds.empty()) return;
+    const glm::dvec2 lyingAt = run.level.diamonds.diamonds[0].atPx;
+
+    // Taken, and held past the tap cooldowns - the first tap of a level is
+    // refused until the larger of the two, which is 400 ms.
+    for (int tick = 0; tick < 40; ++tick) {
+        PutAt(run.registry, run.level.player, lyingAt);
+        Tick(run);
+    }
+    CHECK_MSG(run.level.diamonds.carrierHasFire, "it is carried");
+    const int placedBefore = static_cast<int>(run.level.portals.placed.size());
+    const int usedBefore = run.level.portals.portalsUsed;
+
+    PutAt(run.registry, run.level.player, lyingAt);
+    const bool taken = run.level.portals.Shoot(run.registry, glm::dvec2(lyingAt.x + 120.0, lyingAt.y));
+    CHECK_MSG(taken, "the tap is TAKEN - the original runs addProjectile and plays its launch sound");
+    CHECK_MSG(run.level.portals.flight.has_value(), "and a shot leaves");
+
+    PutAt(run.registry, run.level.player, lyingAt);
+    Tick(run);
+
+    CHECK_MSG(!run.level.portals.flight.has_value(), "which is gone a frame later, deleted rather than landed");
+    CHECK_MSG(static_cast<int>(run.level.portals.placed.size()) == placedBefore, "NO portal opened");
+    CHECK_MSG(run.level.portals.portalsUsed == usedBefore, "and none was counted against the budget");
+    CHECK_MSG(run.level.turrets.converted == 1, "one shot was converted");
+
+    // And what stands in its place is a fireball that cannot hurt the player -
+    // burnProjectile passes killMainCharacter as immediate 0.
+    bool found = false;
+    for (const Turrets::Fireball& ball : run.level.turrets.fireballs) {
+        if (ball.killsPlayer) continue;
+        found = true;
+        CHECK_MSG(ball.velocityPx.x > 0.0, "flying the way the tap pointed");
+        CHECK_MSG(std::fabs(ball.velocityPx.y) < 1.0, "and level with it");
+    }
+    CHECK_MSG(found, "a fireball stands where the shot was");
+
+    // The player sits on it for a second and is not burned by its own shot.
+    for (int tick = 0; tick < 60; ++tick) {
+        PutAt(run.registry, run.level.player, lyingAt);
+        Tick(run);
+    }
+    CHECK_MSG(!run.level.turrets.playerKilled, "a fireball your own tap bought cannot burn you");
+    CHECK_MSG(!run.level.hazards.playerDied, "and nothing else killed the player either");
+}
+
+// Without the diamond the same tap opens a portal, so the test above is measuring
+// the diamond and not some other refusal.
+void withoutOneTheSameTapOpensAPortal() {
+    Run run;
+    if (!Begin("level28b", run)) return;
+    if (run.level.player == entt::null) return;
+
+    // The player kept well clear of the diamond, which level28b puts at (192, 112).
+    const glm::dvec2 standing(62.0, 208.0);
+    for (int tick = 0; tick < 40; ++tick) {
+        PutAt(run.registry, run.level.player, standing);
+        Tick(run);
+    }
+    CHECK_MSG(!run.level.diamonds.carrierHasFire, "nothing is carried");
+
+    PutAt(run.registry, run.level.player, standing);
+    CHECK(run.level.portals.Shoot(run.registry, glm::dvec2(standing.x, standing.y - 48.0)));
+    for (int tick = 0; tick < 20; ++tick) {
+        PutAt(run.registry, run.level.player, standing);
+        Tick(run);
+    }
+    CHECK_MSG(run.level.portals.placed.size() == static_cast<std::size_t>(1),
+              "the same tap opens a portal: " + run.level.portals.lastFailure);
+    CHECK_EQ(run.level.turrets.converted, 0);
+}
+
+// The drain, and the whole reason those levels can be finished. level30b puts its
+// gutter mouth directly under its diamond.
+void aGutterMouthTakesItAndGivesThePortalsBack() {
+    Run run;
+    if (!Begin("level30b", run)) return;
+    if (run.level.player == entt::null) return;
+    if (run.level.diamonds.diamonds.empty()) return;
+
+    CHECK_MSG(run.level.diamonds.gutters.size() == static_cast<std::size_t>(1), "level30b places one gutter mouth");
+    if (run.level.diamonds.gutters.empty()) return;
+
+    // The mouth is the node's trigger_size at its trigger_offset: 10 x 51 hung 46
+    // px BELOW the node at (384, 182), not a box on the node.
+    const Diamonds::Gutter& gutter = run.level.diamonds.gutters[0];
+    const glm::vec3 mouth = Units::ToWorld(384.0, 182.0 + 46.0);
+    CHECK_MSG(std::fabs(gutter.box.centre.x - mouth.x) < 0.05f && std::fabs(gutter.box.centre.y - mouth.y) < 0.05f,
+              "the mouth hangs below the node");
+    CHECK(::test::nearly(gutter.box.half.x, static_cast<float>(Units::ToMetres(5.0))));
+    CHECK(::test::nearly(gutter.box.half.y, static_cast<float>(Units::ToMetres(25.5))));
+
+    const glm::dvec2 lyingAt = run.level.diamonds.diamonds[0].atPx;
+    for (int tick = 0; tick < 4; ++tick) {
+        PutAt(run.registry, run.level.player, lyingAt);
+        Tick(run);
+    }
+    CHECK_MSG(run.level.diamonds.carrierHasFire, "taken, and the fire is held");
+
+    // Carried into the drain. The diamond trails its owner, so standing in the
+    // mouth brings it in after it.
+    const glm::dvec2 inTheMouth(384.0, 182.0 + 46.0);
+    for (int tick = 0; tick < 120 && !run.level.diamonds.diamonds[0].gone; ++tick) {
+        PutAt(run.registry, run.level.player, inTheMouth);
+        Tick(run);
+    }
+
+    CHECK_MSG(run.level.diamonds.diamonds[0].gone, "the drain took the diamond");
+    CHECK_EQ(run.level.diamonds.drowned, 1);
+    CHECK_MSG(!run.level.diamonds.carrierHasFire, "and the fire went with it");
+    CHECK_EQ(run.level.diamonds.Standing(), static_cast<std::size_t>(0));
+
+    // And the portals are back. The loop above STOPS as soon as the drain has the
+    // diamond, which is about a dozen ticks in - short of both tap cooldowns - so
+    // the clock has to be run on before a tap can be taken at all.
+    for (int tick = 0; tick < 40; ++tick) {
+        PutAt(run.registry, run.level.player, inTheMouth);
+        Tick(run);
+    }
+
+    // What is asserted is that the tap resolves AS A SHOT rather than being
+    // deleted and replaced - not where it lands. level30b's geometry is not this
+    // test's subject and the level carries an antiportal, so a shot that fails on
+    // one is still a shot and still proves the fire is gone.
+    const int converted = run.level.turrets.converted;
+    const int resolved = static_cast<int>(run.level.portals.placed.size()) + run.level.portals.shotsFailed;
+    PutAt(run.registry, run.level.player, inTheMouth);
+    CHECK_MSG(run.level.portals.Shoot(run.registry, glm::dvec2(inTheMouth.x, inTheMouth.y - 48.0)),
+              "a tap is taken again once the drain has the diamond");
+    for (int tick = 0; tick < 20; ++tick) {
+        PutAt(run.registry, run.level.player, inTheMouth);
+        Tick(run);
+    }
+    CHECK_MSG(run.level.turrets.converted == converted, "and it was NOT turned into a fireball");
+    CHECK_MSG(static_cast<int>(run.level.portals.placed.size()) + run.level.portals.shotsFailed > resolved,
+              "it resolved as a shot does, rather than being deleted: " + run.level.portals.lastFailure);
 }
 
 // The whole of the difference from a key, in one test: taken on one frame, and
@@ -282,7 +466,11 @@ void everyChapterThreeLevelThatPlacesOneFindsIt() {
 
 void runTests() {
     theRulesAndWhatLevelFifteenHolds();
-    aFireDiamondIsNotOneOfThese();
+    aFireDiamondIsFoundAndIsNotAShockOne();
+    aFireDiamondStrikesNothing();
+    holdingOneTurnsAPortalShotIntoAFireball();
+    withoutOneTheSameTapOpensAPortal();
+    aGutterMouthTakesItAndGivesThePortalsBack();
     takenOnOneFrameAndStrikingOnTheNext();
     aMinionCannotCarryOne();
     aCarriedDiamondTrailsItsOwner();

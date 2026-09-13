@@ -67,6 +67,14 @@ struct Fireball {
     std::string name; // "<carranca>#<n>", counting from 1
     glm::dvec2 atPx{0.0};
     glm::dvec2 velocityPx{0.0};
+
+    // addFireball's killMainCharacter, which is a PARAMETER and not a property of
+    // the entity: a carranca passes it set, and burnProjectile - the fire
+    // diamond's conversion of a portal shot - passes it clear. The contact
+    // callback tests it first and bails out on a character when it is clear, so
+    // one of these is lethal and the other cannot touch the player, from the same
+    // fireball.ent. Diamonds.hpp has the decode.
+    bool killsPlayer = true;
 };
 
 struct State {
@@ -77,6 +85,12 @@ struct State {
 
     bool playerKilled = false;
     std::string killedBy; // the fireball the player died in
+
+    // Portal shots a fire diamond turned into fireballs, which names them apart
+    // from a carranca's. Not a carranca's doing at all - Game does the converting
+    // (Diamonds.hpp) - but the fireballs land in this list because they are the
+    // same entity and fly by the same rules.
+    int converted = 0;
 
     // Before the step: every carranca whose stride has passed spits one.
     //

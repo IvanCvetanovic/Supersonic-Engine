@@ -128,6 +128,10 @@ void State::Tick(entt::registry& registry, entt::entity player, float dt) {
     // Trigger is exact in the plane, and a capsule is what the character has.
     const glm::vec2 half(Units::ToMetres(rules.hitPx.x * 0.5), Units::ToMetres(rules.hitPx.y * 0.5));
     for (const Fireball& ball : fireballs) {
+        // addFireball's killMainCharacter. A fire diamond's conversion passes it
+        // clear and the contact callback bails out on a character when it is, so
+        // one of these kills and the other cannot. Turrets.hpp has the decode.
+        if (!ball.killsPlayer) continue;
         Trigger::Box box;
         const glm::vec3 centre = Units::ToWorld(ball.atPx.x, ball.atPx.y);
         box.centre = glm::vec2(centre.x, centre.y);

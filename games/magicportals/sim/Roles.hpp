@@ -68,12 +68,14 @@ inline constexpr const char* kWaypoint = "waypoint";
 inline constexpr const char* kShockField = "shock_field";
 // Played only for the boss the port has: Boss::Plays says which.
 inline constexpr const char* kBossSpawn = "boss_spawn";
-// The diamonds (Diamonds.hpp). Named here, and deliberately NOT in IsPorted: the
-// role covers shock_diamond.ent and fire_diamond.ent, which are different
-// mechanisms, and only the shock one is built. IsPorted is per-role and cannot
-// say "served for one entity name and not the other", so admitting this would
-// claim the four fire-diamond levels that start as played in order to claim the
-// five shock ones. Diamonds selects by entity name rather than by this.
+// The diamonds (Diamonds.hpp). The role covers shock_diamond.ent and
+// fire_diamond.ent, which are DIFFERENT mechanisms - one kills a minion, the
+// other takes portals away and gives fireballs instead - so Diamonds selects by
+// entity name and never by this role. It was held out of IsPorted while only the
+// shock one was built, because IsPorted is per-role and cannot say "served for
+// one entity name and not the other": admitting it then would have claimed the
+// four fire-diamond levels that start in order to claim the five shock ones. Both
+// are built now, so it is admitted.
 inline constexpr const char* kPickup = "pickup";
 
 // Roles whose body moves and has to carry what stands on it, so the builder makes

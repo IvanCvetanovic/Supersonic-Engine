@@ -2838,3 +2838,126 @@ in the same sweep. Nothing in this step touches Demolish.
 What is left of chapter 3: `pickup`'s other half, the fire diamond, in 4 levels
 that start; `boss_spawn` in 2; and `gravity_well` in 1, which is chapter 4's
 mechanism appearing early in level27c.
+
+## Step 27 - chapter 3: fire diamonds, and the tap that stops being a portal (built)
+
+Chapter 3 goes from 23 of 32 playing to **31**, and the game from 87 of 128 to
+**95** - the largest single movement in the count since chapter 2. `pickup` is
+admitted to `Roles::IsPorted` at last. It was held out through step 25 for a
+stated reason - `IsPorted` is per-role and cannot say "served for one entity name
+and not the other", so admitting it while only the shock diamond was built would
+have claimed the four fire-diamond levels in order to claim the five shock ones -
+and that reason is now spent. Eight of the nine levels reporting `pickup` inert
+flip; the ninth is level31b, which also places a `boss_spawn`. **Chapter 3 now has
+exactly one level left.**
+
+**It is not a change to where a portal opens, and step 25 said it was.** So did
+`diamonds.json`. Both were wrong and this step corrects them in place rather than
+quietly ceasing to repeat them. Holding a fire diamond means **no portal opens at
+all**. The carry arm calls `turnProjectilesIntoFireBalls` every frame, which walks
+`GetEntityArray('projectile.ent')` calling `burnProjectile` on each, and
+`burnProjectile` is `killProjectile` - a bare `DeleteEntity` - followed by
+`addFireball` along the projectile's own direction. The shot is deleted a frame
+after it leaves and a fireball stands where it was. The trade the mechanic makes
+is your portals for a ranged igniter.
+
+**The 64 is a guard, not a reach.** This is the trap, and the step walked into it
+twice before the bytecode closed it - once as "extend the flight 64x", once as
+"bypass the flight and place directly". `PortalManager::computePortalFinalPos`
+branches at instruction 38 on `GetUInt('hasFireDiamond')` off the character and,
+when set, returns `origin + (destPos - origin) * scale(64)` and jumps straight to
+the function's exit: past `GetClosestContact`, past the anti-portal test, past the
+retry loop, without ever writing its `hasFailed` or `preferedTeleportEntity`
+out-params. That reads as a 64x range extension and is not one.
+
+| | what it looks like | what it is |
+|---|---|---|
+| `* scale(64)` | 64x the reach | 64x the stored range, and nothing else |
+| skipping `GetClosestContact` | the shot ignores walls | there is no landing point to compute |
+| not writing `hasFailed` | a shot that cannot fail | a shot that never reports placement at all |
+
+`addProjectile` computes `dirVector = normalize(finalPos - casterPos)`, and
+`normalize` is scale-invariant, so the 64 **cannot move the aim by a degree**. Its
+only surviving effect is the other thing `addProjectile` does with `finalPos`:
+`SetFloat('squaredDistance', squaredDistance(finalPos, casterPos))`. That makes
+the stored range enormous, so the projectile cannot reach its `destiny` and call
+`insertPortal` during the single frame it exists before the conversion kills it.
+A guard against landing.
+
+**So `Portals` is untouched by this step** - no reach multiplier, no new
+`TryPlace` caller, no change to `Flight`. The port needs no guard because `Game`
+runs the conversion *before* `Portals::Tick` advances the flight, reaching the
+same end by ordering. The most heavily pinned subsystem in the port did not have
+to move, and `test_mp_shot` (90), `test_mp_portal` (37) and `test_mp_layer` (205)
+are unchanged as a result, which is the evidence that it did not.
+
+**The flag is the diamond's, not the player's.** The carry arm does
+`SetUInt('hasFireDiamond', 1)` on the character *every frame* it is carried, and
+the destroyed arm seeks a character and sets it to 0. So `carrierHasFire` is
+recomputed every tick rather than latched, and a diamond that dies takes the
+power with it. A latched flag would have survived the drain and broken every
+level below.
+
+**One fireball, one parameter apart.** `addFireball` and both fireball callbacks
+live in `ETHCallback_carranca.angelscript`: a fire diamond's fireball *is* a
+carranca's, the same `fireball.ent`. So this reuses `Turrets::Fireball` and
+`turrets.json`'s 130 px/s and 16 x 16 rather than inventing a second projectile.
+What differs is `killMainCharacter`, which is a **parameter and not a property of
+the entity**: a carranca passes it set, `burnProjectile` passes immediate 0, and
+`ETHBeginContactCallback_fireball` tests it first and returns on a character when
+it is clear. A carranca's fireball kills the player; the one your own tap bought
+cannot touch you. That is `Turrets::Fireball::killsPlayer`, and the suite stands
+the player in its own fireball for a second to prove it.
+
+What a fireball does to what it hits, in the callback's own order: against a
+sensor it acts on exactly **one** name - `shock_agent` / `shock_agent.ent` -
+destroying that ring and itself, and does nothing to any other sensor; against
+anything solid it destroys itself and then `burn()`s it if `isBurnable` and
+`explode()`s it if `isExplosive`. A minion is not `isCharacter` and carries
+neither flag, so **fireballs do not kill minions**. The two diamonds do not
+overlap: one kills a minion and the other cannot. Both flags are set after
+`Fire::Tick`, which keeps the one-tick split `fire.json` already argues for, so a
+chain of bombs still ripples a tick at a time.
+
+**The gutter mouth is the counterweight, and without it these levels are
+unwinnable.** `entity_roles.json` files `gutter_mouth.ent` under `scenery_fx` as a
+"decorative drip emitter". Its callback is
+`ByNameChooser('fire_diamond.ent')` into `seekNeighbourEntity`, then
+`scaledCollide`, then `destroy()` on the diamond - and destroying the diamond
+clears `hasFireDiamond`. The drain is how the player hands the fire back and gets
+portals again. That is a second role-table misclassification of the kind
+`enemy_killer` was. Its mouth is the node's own `trigger_size` at its
+`trigger_offset` - 10 x 51 hung 46 px *below* the node in level30b - a tall thin
+slot under the sprite rather than a box on the node, and the suite asserts that
+geometry rather than assuming a radius.
+
+The census, measured: `fire_diamond.ent` has 5 placements across 5 levels -
+level15c, level28b, level29b, level30b and level31b. `gutter_mouth.ent` has 3, in
+level29b, level30b and level31b - every one of them in a level that also places a
+fire diamond, and none anywhere else in the game. level30b puts its drain at
+(384, 182) directly under its diamond at (384, 134). **level28b places no drain**,
+which makes taking that one a one-way choice. level15c sits its diamond between
+two `barrel_bomb.ent` at (320.5, 98.5) and (320.5, 142.5), which is the mechanic
+stated outright: take it, shoot the bombs.
+
+Also corrected here: `Fire.hpp` said `burnProjectile` "puts out a flying
+projectile.ent", which reads as *extinguishes* when the truth is *converts*. That
+line was written two steps ago and was wrong.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_diamonds` at 126 checks, `test_mp_keys` unchanged at 104, `test_mp_fields`
+at 63 and `test_mp_minions` at 77, and 98 of 128 levels starting with 95 playing on
+both. `test_mp_shot` (90), `test_mp_portal` (37) and `test_mp_layer` (205) are
+unchanged on both toolchains, which is the measurement that says the portal path
+did not move. `test_mp_demolish` ran green under MSVC this time, so the Smart App
+Control artifact noted in step 26 did not recur.
+
+One honesty note about what the count measures. `test_mp_start` counts a level as
+playing when no role is left inert, which is not the same as proving it can be
+finished. level28b places a fire diamond and **no** gutter mouth, so taking that
+diamond is irreversible and the level must be soluble either with fireballs alone
+or by leaving the diamond where it lies. That is a claim about the original's
+design rather than about this port's faithfulness, and it has not been verified by
+playing it - recorded here rather than left for the count to imply.
+
+What is left of chapter 3: `boss_spawn`, in level31b alone.

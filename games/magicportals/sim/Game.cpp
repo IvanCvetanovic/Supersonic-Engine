@@ -3,9 +3,12 @@
 #include "core/Components.hpp"
 #include "core/PhysicsSettings.hpp"
 #include "core/PhysicsSystem.hpp"
+#include "sim/Trigger.hpp"
 #include "sim/Units.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -175,6 +178,62 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
     // which move things. What it takes away goes through Forget as a thrown body
     // does: a crate is teleportable, so a burning one can be in portals.travellers.
     for (const entt::entity gone : level.fire.Tick(registry, level.player, dt)) Forget(level, gone);
+    // What a fireball ran into (ETHBeginContactCallback_fireball). A carranca's
+    // and a fire diamond's are the same fireball.ent and meet the same things;
+    // only killMainCharacter differs, and Turrets::Tick has already judged that.
+    //
+    // AFTER Fire::Tick on purpose. The original sets a flag and the bomb's own
+    // callback reads it on a later frame, which is the split Fire.hpp keeps: a
+    // chain ripples a tick at a time rather than collapsing into one frame.
+    {
+        std::vector<std::string> spent;
+        const glm::vec2 half(static_cast<float>(Units::ToMetres(level.turrets.rules.hitPx.x * 0.5)),
+                             static_cast<float>(Units::ToMetres(level.turrets.rules.hitPx.y * 0.5)));
+        for (const Turrets::Fireball& ball : level.turrets.fireballs) {
+            Trigger::Box box;
+            const glm::vec3 centre = Units::ToWorld(ball.atPx.x, ball.atPx.y);
+            box.centre = glm::vec2(centre.x, centre.y);
+            box.half = half;
+
+            bool struck = false;
+            // A shock agent is the ONE sensor it acts on, tested by name in the
+            // original, and it destroys that one and itself with it.
+            for (const Fields::Field& field : level.fields.fields) {
+                if (field.gone || !registry.valid(field.body)) continue;
+                if (!Trigger::Overlaps(registry, field.body, box)) continue;
+                const entt::entity gone = level.fields.Destroy(field.name, registry);
+                if (gone != entt::null) Forget(level, gone);
+                struck = true;
+                break;
+            }
+            // Then the solid things: burn what is burnable, ask what is explosive
+            // to go off. Both are the original's own calls, burn() and explode().
+            if (!struck) {
+                for (Fire::Burnable& burnable : level.fire.burnables) {
+                    if (burnable.gone || burnable.burned || !registry.valid(burnable.body)) continue;
+                    if (!Trigger::Overlaps(registry, burnable.body, box)) continue;
+                    burnable.burned = true;
+                    struck = true;
+                    break;
+                }
+            }
+            if (!struck) {
+                for (Fire::Bomb& bomb : level.fire.bombs) {
+                    if (bomb.blown || bomb.requested || !registry.valid(bomb.body)) continue;
+                    if (!Trigger::Overlaps(registry, bomb.body, box)) continue;
+                    bomb.requested = true;
+                    struck = true;
+                    break;
+                }
+            }
+            if (struck) spent.push_back(ball.name);
+        }
+        if (!spent.empty()) {
+            std::erase_if(level.turrets.fireballs, [&spent](const Turrets::Fireball& ball) {
+                return std::find(spent.begin(), spent.end(), ball.name) != spent.end();
+            });
+        }
+    }
     for (const entt::entity gone : level.launchers.Cull(registry)) Forget(level, gone);
     // And a minion the step left in a killer floor. Not a hazard: that floor does
     // nothing to the player, which is the correction hazards.json records.
@@ -208,6 +267,36 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
         }
         const std::vector<entt::entity> struck = level.diamonds.Tick(registry, carriers, prey, dt);
         for (const entt::entity gone : level.minions.Take(registry, struck)) Forget(level, gone);
+    }
+    // turnProjectilesIntoFireBalls. While a fire diamond is carried its callback
+    // walks every live projectile.ent every frame and calls burnProjectile, which
+    // DELETES the shot and puts a fireball where it was, along the direction it
+    // was going. So holding one does not change where a portal opens - it means no
+    // portal opens at all, and the tap buys a fireball instead.
+    //
+    // The original needs a guard for this and the port does not. Its projectile
+    // could in principle reach its destiny and open a portal in the frame before
+    // the conversion catches it, so computePortalFinalPos aims a fire shot at
+    // origin + (destPos - origin) * 64 - a point far outside the level, whose only
+    // effect is an enormous stored range, because addProjectile normalizes the
+    // direction and the 64 cannot move the aim. Here the conversion runs before
+    // Portals::Tick advances the flight, so the shot cannot land first by ordering
+    // and there is nothing to scale. Diamonds.hpp carries that decode.
+    if (level.diamonds.carrierHasFire && level.portals.flight) {
+        const Portals::Flight& shot = *level.portals.flight;
+        const glm::dvec2 along = shot.toPx - shot.atPx;
+        const double length = std::sqrt(along.x * along.x + along.y * along.y);
+        if (length > 0.0) {
+            Turrets::Fireball made;
+            made.name = "fire_diamond#" + std::to_string(++level.turrets.converted);
+            made.atPx = shot.atPx;
+            made.velocityPx = (along / length) * level.turrets.rules.speedPx;
+            // addFireball's killMainCharacter, passed CLEAR by burnProjectile: the
+            // player cannot be hurt by a shot it fired itself.
+            made.killsPlayer = false;
+            level.turrets.fireballs.push_back(made);
+        }
+        level.portals.flight.reset();
     }
     // The shock rings swing, and judge where the step left the player. A poll
     // every frame rather than an entry test, which is what separates one of these
