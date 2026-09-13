@@ -7,6 +7,7 @@
 add_library(MagicPortalsSim STATIC
     Art.cpp
     Boss.cpp
+    Bounce.cpp
     Camera.cpp
     Carry.cpp
     Chapters.cpp

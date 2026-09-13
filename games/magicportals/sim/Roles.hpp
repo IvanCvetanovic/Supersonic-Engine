@@ -84,6 +84,12 @@ inline constexpr const char* kTorch = "torch";
 // four fire-diamond levels that start in order to claim the five shock ones. Both
 // are built now, so it is admitted.
 inline constexpr const char* kPickup = "pickup";
+// The bouncers of chapter 4's weightless rooms (Bounce.hpp), entity `bounce`.
+// The role table calls one "a solid polygon surface that throws things off it",
+// and the throwing is not real: ETHCallback_bounce imparts no impulse at all, it
+// moves the slab itself. It is in Moves() below as well as here, because a
+// bouncer that does not carry what stands on it is not built, only drawn.
+inline constexpr const char* kBouncer = "bouncer";
 
 // Roles whose body moves and has to carry what stands on it, so the builder makes
 // them kinematic rather than static: the remake's MOVING_ROLES

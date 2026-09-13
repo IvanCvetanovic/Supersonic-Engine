@@ -3365,3 +3365,88 @@ behind a refusal: `gravity_well` in 5 levels - one callback family,
 `ETHCallback_gravity_agent` with `retrieveRondaboutCount`, `computeRoundabout` and
 `ETHCallback_gravity_area` - `bouncer` in 3, and `boss_spawn` in level31a and
 level31c.
+
+## Step 32 - chapter 4: the bouncers, and a role table that was wrong (built)
+
+Chapter 4 goes from 24 of 32 playing to **26**, and the game from 119 of 128 to
+**121**. All 128 still start. level1c and level6c play; level16c does not, because
+it places a gravity well beside its bouncer.
+
+**The role table is wrong about this one, and that is the whole finding.**
+`entity_roles.json` calls a bouncer "a solid polygon surface that THROWS THINGS
+OFF IT, 64x64, shape=3, static, non-sensor". The geometry half is right and the
+throwing is not. `ETHCallback_bounce` imparts no impulse to anything, ever: it
+checks whether `speed` is set, injects the defaults if not, and calls
+`linearMotion`, which moves the slab ITSELF. Anything that gets thrown off is only
+what any moving solid does to what rests on it. A port that believed the table
+would have built a trampoline that exists nowhere in the original.
+
+**What it actually is**, decoded in full:
+
+    angle  += unitsPerSecond(speed)        // 1.2 rad/s, min(200 ms) frame clamp
+    offset  = cos(angle) * stride          // stride 1.0
+    pos     = originalPos + getScale() * rotateZ(0) * (0, offset, 0)
+
+`ETHCallback_bounce` passes `vertical = true`, so it bobs up and down; `rotateZ`
+is by an angle of 0 and turns nothing. **The amplitude is one pixel** - `stride`
+is 1.0 and `getScale()` is 1 at the 480-tall reference, the same factor
+`zerog.json` decodes - and a full bob takes 2*PI/1.2 = **5.24 s**. It is
+decoration, and it is built anyway, because the alternative was to admit the role
+without the motion, which is what `torch` nearly shipped with `light_wall.ent`.
+
+**The numbers come from the binary, not from the levels**, which is the reverse of
+every other mover in this port. `setNoGravityLinearMotionProperties` writes
+`speed = 1.2` and `stride = 1.0` onto the entity, and no `bounce` node in any
+level carries a speed, a stride or a direction - all four were checked.
+`Mover::OscillationFromNode` refuses a node without speed and stride for exactly
+that reason, so it could not be reused even had the curve matched.
+
+**A sibling of `Mover::Oscillation`, not a use of it**, on four counts: cosine not
+sine, no half-stride, a rate in radians per second with a frame clamp rather than
+`rateScale * speed * t`, and constants from the binary rather than from a node.
+What IS shared is `Supersonic::DetMath`, so a bob comes out the same on every C
+runtime as a swing does, and `Mover::MoveKinematic`.
+
+**The real work was `Roles::Moves`, not the motion.** A `bounce` node is authored
+as a `StaticBody2D`, and `LevelBuilder` only makes a body kinematic when
+`Roles::Moves` says the role moves. Without that one line the module would have
+computed perfect positions every frame onto a slab that carried nothing standing
+on it - and at ONE PIXEL of travel, no test of where the slab is could ever have
+noticed. So `test_mp_bounce` asserts the BODY is kinematic, as `test_mp_torch`
+watches a body rather than a role count. This is also the first step in the
+remaster to change a body's TYPE at build time, in three levels that already
+passed; none of them stopped landing.
+
+**cos(0) = 1, so a bouncer starts at full displacement**, a whole stride from the
+node the level places it on. The node is the MIDDLE of the bob and never where it
+begins - the same trap `fields.json` records for the shock rings, and the one a
+sine would have got wrong while looking right in motion.
+
+**A failure worth keeping rather than tidying away.** Building this broke three
+stillness assertions in `test_mp_zerog`, which were pointed at level1c: the player
+rests on that level's bouncer and rides it, 2.3919 px over two seconds. The cheap
+fix is to widen a tolerance; that would have buried the only observable evidence
+anywhere that the slab carries its passenger. Instead the stillness checks moved
+to level2c - five crystals, a door, a block, and nothing that moves, where the
+player now measures **0.0000 px** - and the ride became an assertion of its own in
+level1c. `test_mp_start`'s tolerance note was corrected too: it gave one cause for
+that drift where there are two, a one-off settle AND a bouncer's ride.
+
+**The orbit counter is recorded, not built.** `computeRoundabout` keeps
+`roundSum_`, `cwRoundCount_` and `ccwRoundCount_` per body, and
+`retrieveRondaboutCount` returns the sum of the two directions. One grep found its
+only consumer: `checkForLevelAchievements` in `ScoreDashboard.angelscript`, which
+calls `dispatchAchievement(60, notify, 2500)` when the player has orbited three
+times. It is achievement #60, a toast, and the whole achievement system is
+unported - `Keys.hpp` and `Minions.hpp` already record theirs the same way. Worth
+the grep rather than the guess: had it been a goal, a gravity well that attracted
+correctly and never counted would have left five levels unfinishable.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_bounce` at 189 checks reporting 4 bouncers across 3 levels,
+`test_mp_zerog` at 84 through the relocated stillness checks and the new ride,
+`test_mp_start` at 552, and **128 of 128 levels starting with 121 playing** on
+both. Chapter 4's play floor is raised from 24 to 26.
+
+Seven levels in the game still do not play: `gravity_well` in level16c, level17c,
+level18c, level20c and level27c, and `boss_spawn` in level31a and level31c.

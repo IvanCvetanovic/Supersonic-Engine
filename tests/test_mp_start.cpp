@@ -84,13 +84,22 @@ std::string ReasonOf(const std::string& error) {
 }
 
 // How far a player in a zero-gravity level may move in three seconds with no
-// input. Nothing pulls it and nothing steers it, so the honest answer is zero -
-// except that some of these levels place the player overlapping what is under
-// it, and the solver pushes it out ONCE and then stops (3.75 px in level1c,
-// level12c and level15c). That settle is not a fall, and this is the slack for
-// it: a tile. A real fall is some 4400 px over the same three seconds, so
-// nothing that is actually falling can hide under this. test_mp_zerog separates
-// the two properly, by measuring the two seconds AFTER the settle.
+// input. Nothing pulls it and nothing steers it, so the honest answer is zero,
+// and in level2c it is exactly that: 0.0000 px, measured on both toolchains.
+//
+// TWO things move it anyway in other levels, and neither is a fall:
+//   - a level that places the player overlapping what is under it has the solver
+//     push it out ONCE and then stop - 3.75 px in level1c, level12c and level15c;
+//   - and level1c also places a BOUNCER, a slab that bobs a pixel (Bounce.hpp),
+//     so a player resting on one RIDES it for as long as the level runs rather
+//     than ever settling. That is the slab carrying what stands on it, which is
+//     the whole point of `bouncer` being in Roles::Moves.
+//
+// This is the slack for both: a tile. A real fall is some 4400 px over the same
+// three seconds, so nothing that is actually falling can hide under it, and
+// test_mp_zerog measures each properly rather than lumping them together -
+// stillness in level2c, where nothing else moves, and the ride in level1c,
+// where something does.
 constexpr double kFloatDriftPx = 16.0;
 
 struct Outcome {

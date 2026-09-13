@@ -72,6 +72,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Ghost::LoadRules(portDataDirectory + "/ghost.json", read.ghost, error)) return false;
     if (!Torch::LoadRules(portDataDirectory + "/torch.json", read.torch, error)) return false;
     if (!Zerog::LoadRules(portDataDirectory + "/zerog.json", read.zerog, error)) return false;
+    if (!Bounce::LoadRules(portDataDirectory + "/bounce.json", read.bounce, error)) return false;
     // And what the remake's role table calls a hazard but the original does not.
     if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
@@ -142,6 +143,10 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!LevelBuilder::Build(data.scene, registry, options, out.built, error)) return false;
     if (withStatics && !Puzzle::Wire(data.scene, data.roles, out.built, out.channels, error)) return false;
     if (withStatics && !Mover::Wire(data.scene, data.roles, out.built, data.movers, out.movers, error)) return false;
+    // Guarded by withStatics for the reason Mover::Wire is: a bouncer's body is
+    // a static node, so with the statics left out there is nothing to wire to
+    // and every one of them would be reported as not built.
+    if (withStatics && !Bounce::Wire(data.scene, data.roles, out.built, data.bounce, out.bounce, error)) return false;
 
     const Tscn::Node* spawn = nullptr;
     for (const Tscn::Node& node : data.scene.nodes) {
@@ -192,6 +197,9 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
 void BeforeStep(const Data& data, entt::registry& registry, Level& level, float direction, float dt) {
     level.channels.Tick(registry, dt);
     level.movers.Tick(registry, dt);
+    // The bobbing slabs, beside the platforms and for the same reason: what sets
+    // a body's position belongs before the step, what judges one after it.
+    level.bounce.Tick(registry, dt);
     // What a launcher throws travels and breaks walls as a stone the level
     // places does.
     for (const Launchers::Thrown& thrown : level.launchers.Throw(registry, dt)) {

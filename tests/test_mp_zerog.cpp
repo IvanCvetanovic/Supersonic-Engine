@@ -28,6 +28,7 @@
 #include "sim/Units.hpp"
 #include "sim/Zerog.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -45,7 +46,19 @@ const std::string kData = MAGICPORTALS_DATA_DIR;
 const std::string kPortData = MAGICPORTALS_PORT_DATA_DIR;
 constexpr float kStep = 1.0f / 60.0f;
 
-// The first zero-gravity level, and normal ones to hold it against.
+// A zero-gravity level where NOTHING ELSE MOVES, which is where stillness is
+// asserted. level2c holds its player, five crystals, a door and one block -
+// static geometry and collectibles, no bouncer, no lift, no moving platform.
+//
+// This used to be level1c, and level1c broke these tests the moment `bouncer`
+// was built: it places a slab that bobs one pixel, the player rests on it, and
+// rides it. That is the mechanic working - the slab carries what stands on it -
+// so the answer was to assert stillness somewhere the only thing that can move
+// the player is the thing under test, rather than to widen `0.01` until a real
+// motion fitted underneath it.
+constexpr const char* kStill = "level2c";
+
+// And level1c, kept for the opposite reason: to watch the player ride that bob.
 constexpr const char* kWeightless = "level1c";
 constexpr const char* kNormal = "level0";
 // A normal level THAT GRANTS A PLACEMENT. level0 is metadata/max_portals = "0" -
@@ -175,20 +188,20 @@ void NothingFallsInThere() {
     Game::Data data;
     entt::registry registry;
     Game::Level level;
-    if (!Open(kWeightless, data, registry, level)) return;
+    if (!Open(kStill, data, registry, level)) return;
 
     // THE FIRST SECOND IS A SETTLE, NOT A FALL, and telling those apart is the
-    // whole of this test. level1c places its player overlapping what is under it;
-    // the solver pushes it out once - 3.75 px - and then stops. Measured across
-    // three seconds that reads as drift. Measured over the two seconds AFTER it,
-    // it is nothing at all, which a fall never is: at the remake's 980 px/s^2,
-    // three seconds is some 4400 px.
+    // whole of this test. These levels place the player overlapping what is under
+    // it; the solver pushes it out once and then stops. Measured across three
+    // seconds that reads as drift. Measured over the two seconds AFTER it, it is
+    // nothing at all, which a fall never is: at the remake's 980 px/s^2, three
+    // seconds is some 4400 px.
     const glm::dvec2 from = WhereIs(registry, level.player);
     for (int tick = 0; tick < 60; ++tick) Game::Tick(data, registry, level, 0.0f, kStep);
     const glm::dvec2 settled = WhereIs(registry, level.player);
     for (int tick = 0; tick < 120; ++tick) Game::Tick(data, registry, level, 0.0f, kStep);
     const glm::dvec2 to = WhereIs(registry, level.player);
-    std::printf("  %s: settles %.4f px in the first second, then moves %.4f px in two more\n", kWeightless,
+    std::printf("  %s: settles %.4f px in the first second, then moves %.4f px in two more\n", kStill,
                 Length(settled - from), Length(to - settled));
     CHECK(Length(settled - from) < kSettlePx);
     CHECK(Length(to - settled) < 0.01);
@@ -216,13 +229,51 @@ void AndEverywhereElseItStillFalls() {
     CHECK(registry.get<RigidBodyComponent>(level.player).velocity.y < 0.0f);
 }
 
+// A PLAYER STANDING ON A BOUNCER RIDES IT, which is the only direct evidence
+// anywhere that Roles::Moves did its job. test_mp_bounce can assert the body is
+// kinematic, but a kinematic body that failed to carry its passenger would pass
+// that check and every check about where the slab is - the travel is ONE PIXEL,
+// so nothing about the slab's own position could ever tell the difference.
+//
+// This test exists because building `bouncer` broke the three stillness checks
+// above while they were pointed at level1c. That was the mechanic showing
+// through the player's own body, so it is asserted here on purpose rather than
+// merely moved out of the way.
+void AndAPlayerStandingOnOneRidesIt() {
+    Game::Data data;
+    entt::registry registry;
+    Game::Level level;
+    if (!Open(kWeightless, data, registry, level)) return;
+    CHECK(!level.bounce.bobs.empty());
+    if (level.bounce.bobs.empty()) return;
+
+    // Past the settle, so what follows is the bob and not the solver.
+    for (int tick = 0; tick < 60; ++tick) Game::Tick(data, registry, level, 0.0f, kStep);
+
+    double lowest = 0.0;
+    double highest = 0.0;
+    const double startY = WhereIs(registry, level.player).y;
+    for (int tick = 0; tick < 120; ++tick) {
+        Game::Tick(data, registry, level, 0.0f, kStep);
+        const double y = WhereIs(registry, level.player).y - startY;
+        lowest = std::min(lowest, y);
+        highest = std::max(highest, y);
+    }
+    std::printf("  %s: the player rides the bob from %+.4f to %+.4f px\n", kWeightless, lowest, highest);
+
+    // It moves, which a player on a static slab would not - and it moves less
+    // than the whole travel of the bob, which is 2 px peak to peak.
+    CHECK(highest - lowest > 0.1);
+    CHECK(highest - lowest <= 2.0 + 0.5);
+}
+
 // And the dual, on that same seam: in a zero-gravity level BeforeStep leaves the
 // velocity exactly as it found it, in x and in y, with RIGHT held down.
 void AndInThereBeforeStepLeavesItAlone() {
     Game::Data data;
     entt::registry registry;
     Game::Level level;
-    if (!Open(kWeightless, data, registry, level)) return;
+    if (!Open(kStill, data, registry, level)) return;
 
     registry.get<RigidBodyComponent>(level.player).velocity = glm::vec3(0.0f);
     Game::BeforeStep(data, registry, level, 1.0f, kStep);
@@ -235,7 +286,7 @@ void TheWalkingButtonsDoNothing() {
     Game::Data data;
     entt::registry registry;
     Game::Level level;
-    if (!Open(kWeightless, data, registry, level)) return;
+    if (!Open(kStill, data, registry, level)) return;
 
     // A second to settle FIRST, so that what is measured afterwards is the
     // buttons and nothing else. Then a second of RIGHT held down:
@@ -245,7 +296,7 @@ void TheWalkingButtonsDoNothing() {
     const glm::dvec2 from = WhereIs(registry, level.player);
     for (int tick = 0; tick < 60; ++tick) Game::Tick(data, registry, level, 1.0f, kStep);
     const glm::dvec2 to = WhereIs(registry, level.player);
-    std::printf("  %s: a second of RIGHT moves the player %.4f px\n", kWeightless, Length(to - from));
+    std::printf("  %s: a second of RIGHT moves the player %.4f px\n", kStill, Length(to - from));
     CHECK(Length(to - from) < 0.01);
     CHECK(::test::nearly(registry.get<RigidBodyComponent>(level.player).velocity.x, 0.0f));
 }
@@ -354,6 +405,7 @@ void runTests() {
     EveryOneOfTheEighteenStartsAndCarriesTheFlag();
     NothingFallsInThere();
     AndEverywhereElseItStillFalls();
+    AndAPlayerStandingOnOneRidesIt();
     AndInThereBeforeStepLeavesItAlone();
     TheWalkingButtonsDoNothing();
     AndEverywhereElseTheyStillWalk();

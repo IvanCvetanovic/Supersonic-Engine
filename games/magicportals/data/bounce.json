@@ -1,0 +1,79 @@
+{
+  "_note": [
+    "THE BOUNCERS of chapter 4's zero-gravity rooms - entity `bounce`, the role table's",
+    "`bouncer`. Four of them across three levels, and every one in a level that sets",
+    "no_gravity.",
+    "",
+    "THE ROLE TABLE IS WRONG ABOUT THIS ONE, and it is worth saying plainly because the port",
+    "nearly believed it. entity_roles.json calls a bouncer `a solid polygon surface that",
+    "THROWS THINGS OFF IT, 64x64, shape=3, static, non-sensor`. The geometry half is right.",
+    "The throwing is not: ETHCallback_bounce imparts no impulse to anything, ever. It checks",
+    "whether `speed` is set, injects the defaults if not, and calls linearMotion - which",
+    "moves the entity ITSELF. Whatever gets thrown off is only what any moving solid does to",
+    "what rests on it.",
+    "",
+    "WHAT IT ACTUALLY IS: a slab of solid geometry floating gently in a weightless room. The",
+    "function that supplies its numbers is called setNoGravityLinearMotionProperties, and all",
+    "three bouncer levels are no_gravity levels, which is the whole story."
+  ],
+
+  "motion": {
+    "_note": [
+      "ETHCallback_bounce (bytes 353694..353862) calls linearMotion(thisEntity, vertical=true,",
+      "angle=0, startAngle=0). linearMotion (bytes 327527..328407) is:",
+      "",
+      "    angle  += unitsPerSecond(speed)",
+      "    offset  = cos(angle) * stride * sign(speed)",
+      "    pos     = originalPos + getScale() * rotateZ(angle_param) * (0, offset, 0)",
+      "",
+      "with the angle wrapped by adding -2*PI once it passes 2*PI. `vertical` picks",
+      "(0, offset, 0) over (offset, 0, 0); ETHCallback_bounce passes true, so a bouncer bobs",
+      "UP AND DOWN. rotateZ is by the `angle` parameter, which is 0 here, so it turns nothing.",
+      "",
+      "THE NUMBERS COME FROM THE BINARY, NOT FROM THE LEVELS, which is the reverse of every",
+      "other mover in this port. setNoGravityLinearMotionProperties (bytes 353522..353694)",
+      "writes speed = 1.2 and stride = 1.0 onto the entity, and NO `bounce` node in any level",
+      "carries a speed, a stride or a direction - all four were checked. So these are code",
+      "constants recorded as data, rather than data read from a node. Mover::OscillationFromNode",
+      "refuses a node without speed and stride for exactly that reason, and cannot be reused.",
+      "",
+      "STimeManager::unitsPerSecond(speed) is speed * min(200, lastFrameElapsedMs) / 1000 *",
+      "m_factor. m_factor is 1 in normal play (the constructor sets 1f; setFactor drives pause",
+      "and isPaused is m_factor == 0), so the angle advances at 1.2 RADIANS PER SECOND and a",
+      "full bob takes 2*PI/1.2 = 5.24 s. The 200 ms floor on the frame is the original's guard",
+      "against a long frame throwing a platform across the room, and it is kept.",
+      "",
+      "THE AMPLITUDE IS ONE PIXEL. stride is 1.0 and getScale() is 1 at the 480-tall reference",
+      "(SGlobalScale, the same factor zerog.json decodes), so a bouncer travels 1 px up and 1 px",
+      "down. It is decoration, and the port builds it anyway: the geometry is already solid and",
+      "already built, so the only honest alternative was to admit the role without the motion,",
+      "which is the mistake `torch` nearly shipped with light_wall.ent.",
+      "",
+      "sign(speed) IS NOT MODELLED. Every placement in the game takes the injected +1.2 and",
+      "nothing in any level can make it negative, so the factor is always +1. It is recorded",
+      "here rather than written as code nothing can reach."
+    ],
+    "speed_radians_per_second": 1.2,
+    "stride_px": 1.0,
+    "frame_clamp_ms": 200.0,
+    "vertical": true
+  },
+
+  "census": {
+    "_note": [
+      "Measured by counting NODES, not grep lines - the mistake torch.json records. 4 `bounce`",
+      "nodes across 3 levels: level1c one, level6c two, level16c one. Every one of the three is",
+      "a no_gravity level (level1c to level18c).",
+      "",
+      "Each node is a position, metadata/entity_name, a Sprite, a StaticBody2D and a",
+      "CollisionPolygon2D - so LevelBuilder already builds the solid, and these levels already",
+      "start and land. Admitting `bouncer` to Roles::Moves is what turns that static body",
+      "kinematic so it carries what stands on it while it bobs.",
+      "",
+      "level1c and level6c play once this is built. level16c does NOT: it also places a",
+      "gravity_agent, which is the gravity_well role and is not built."
+    ],
+    "nodes": 4,
+    "levels": 3
+  }
+}
