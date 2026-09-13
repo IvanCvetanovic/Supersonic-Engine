@@ -36,6 +36,7 @@ add_library(MagicPortalsSim STATIC
     Sounds.cpp
     Sprites.cpp
     Trigger.cpp
+    Torch.cpp
     Tscn.cpp
     Turrets.cpp
 )

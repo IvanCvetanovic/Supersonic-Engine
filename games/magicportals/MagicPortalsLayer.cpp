@@ -2433,7 +2433,7 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
 
     if (m_loaded) {
         // The app has just stepped physics. So first what follows a step...
-        Game::AfterStep(registry, m_level, fixedDelta);
+        Game::AfterStep(m_data, registry, m_level, fixedDelta);
         // What the tick just did, remembered for the frame to play. Before the
         // two branches below, which take the level away.
         latchSimSounds();

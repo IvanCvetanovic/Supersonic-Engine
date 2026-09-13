@@ -3158,3 +3158,99 @@ level19c, and 110 of 128 levels starting with 97 playing on both.
 What is left of the whole remaster, and the inventory can now see all of it:
 `torch` in 10 levels, `no_gravity` in 18, `boss_spawn` in level31a and level31c,
 and `gravity_well` in level20c and level27c.
+
+## Step 30 - chapter 4: the torches, and the wall of light one drops (built)
+
+Chapter 4 goes from 2 of 32 playing to **11**, and the game from 97 of 128 to
+**106**. That is the largest movement of the whole remaster, and it is a dividend
+of step 29 rather than of this step: admitting `darkest` barely moved the count
+itself, but it let the inventory see inside twelve levels it had never started,
+and `torch` was what it found in ten of them.
+
+**It is a toggle, not an unlock**, and that is the whole mechanism.
+`entity_roles.json` calls a torch "what makes the dark levels navigable" - right
+about the importance, wrong about the shape. The navigating is not the light.
+Shoot the unlit torch (`light_off.ent`) and it lights, and the level's **wall of
+light** begins to go. Shoot the orbiting flame that appears in its place and the
+torch goes back out and **the wall comes back**. A port that built only the first
+half would play all ten levels correctly and still be wrong about what it built.
+
+| | what it looks like | what it is |
+|---|---|---|
+| a torch | scenery in a dark room | a switch that removes a solid |
+| lighting one | the room gets brighter | your shot is consumed, and a wall starts to go |
+| the flame left behind | an effect | the way to undo it, and it is moving |
+| the 1500 ms | a fade | the window in which the signal can exist at all |
+
+**The shot is spent either way.** `hasProjectileAround` polls `scale(24)` around
+the torch, and lighting one calls `killProjectile` - the same bare `DeleteEntity`
+the fire diamond's conversion uses - so a shot that works a switch never goes on
+to open a portal. The port runs the torch block **before** `Portals::Tick` for
+exactly that reason.
+
+**A fireball works a switch too.** `hasProjectileAround` accepts `projectile.ent`
+or, with the flag its call sites pass set, `fireball.ent`. So a fire diamond's
+fireballs light torches - the third place step 27's mechanism has turned out to be
+load-bearing, after the ghost being burnable and the ghost's own diamond restock.
+
+**The 1500 ms is load-bearing, not a flourish.** `destroy()` only *flags* the
+wall; `ETHCallback_light_wall` counts to 1500 ms before deleting itself.
+`addFireSignalIfNecessary` runs immediately after the destroy and only spawns a
+signal while a `light_wall.ent` can still be **found** - which it can, precisely
+because the wall is flagged and not yet gone. Take the wall away on the frame it
+is flagged and no signal can ever appear, and the toggle silently collapses into
+the one-way unlock it is not.
+
+**The signal orbits** rather than sitting where the torch stood: it keeps an
+`originalPos`, spins an angle at 300 degrees a second, and places itself at
+`originalPos + scale(18) * (-cos, sin)`. What the player must hit to undo their own
+switch is moving, and the suite asserts that it moves rather than only that it
+exists.
+
+**The wall goes through Demolish.** `light_wall.ent` carries `metadata/breakable`,
+so it is already a `Demolish::Breakable` with a body and a box that Demolish walks
+every frame. Torch reports, Game funnels, Demolish's `broken` is set and its body
+cleared - rather than a body destroyed behind a list still walking it, which is
+the rule `Minions::Take` exists for. Putting the wall **back** is the only place in
+this port that adds a level's own body mid-run, through
+`LevelBuilder::BuildEntity`.
+
+`Game::AfterStep` now takes the `Data`, as `BeforeStep` does, because that rebuild
+needs the scene - the wall node's body and shape are its children. The alternative
+was for `Level` to borrow a scene pointer, a lifetime hazard introduced for one
+feature. There were three call sites, so the signature moved instead.
+
+**Why this step needed its suite more than most.** `test_mp_start` counts ROLES,
+and `light_wall.ent` is in no role table at all - `RoleOf` answers empty and
+`IsPorted` answers true. The moment `torch` was admitted, all ten levels would
+read "playing" whether or not the wall ever moved, with a solid 30 x 126 body
+still standing across six of them and nothing in the inventory able to notice.
+`test_mp_torch` therefore watches the **body**: alive at 1.4 s, gone from the
+registry after 1.5 s, and solid again once the signal is shot.
+
+**A counting mistake of mine, recorded because it nearly shipped.** The first pass
+said three torches per level and 30 in the game. There is **one** per level and
+**10** in the game. The three came from counting grep LINES rather than nodes - a
+torch is a node header, a `metadata/entity_name` line and a child `Sprite` line.
+The identical trap had been caught for `light_wall` (5 lines, 1 wall) an hour
+earlier in the same session and was walked straight back into. Counting lines is
+not counting entities, and `torch.json` now says so where the census is.
+
+The census, measured: 10 torches across 10 levels, one each - level21c to
+level26c and level28c to level31c, every one a `darkest` level. 6 light walls
+across 6 levels, one each - level25c, level26c, level28c, level29c, level30c,
+level31c. So **four** of the ten (level21c to level24c) have no wall at all, and
+there a torch only lights the room and spends a shot; those four were already
+finishable and the other six were not.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_torch` at 80 checks, `test_mp_layer` unchanged at 205 through the widened
+`AfterStep`, `test_mp_start` at 534, and 110 of 128 levels starting with 106
+playing on both. Chapter 4's play floor is raised from 2 to 11 to match, with the
+three that still do not play named: level20c and level27c hold `gravity_well`, and
+level31c places chapter 4's own boss beside its torch.
+
+What is left of the whole remaster: `no_gravity` in 18 levels - the only one of
+the four that is a genuine mechanic rather than a gap, since a portal shot's
+recoil is how the player moves there - `boss_spawn` in level31a and level31c, and
+`gravity_well` in level20c and level27c.

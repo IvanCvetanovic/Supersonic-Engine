@@ -179,6 +179,10 @@ add_mp_test(test_mp_minions)
 # Chapter 3's boss: the ghost of level 3-32, which only fire can hurt and which
 # drops the only key its level has.
 add_mp_test(test_mp_ghost)
+# Chapter 4's torches, and the wall of light one drops. The inventory counts
+# roles and light_wall.ent has none, so only this suite can tell a played level
+# from one with an unremovable solid across it.
+add_mp_test(test_mp_torch)
 # Keys, the keyholes they open and the locked doors that go with them - paired by
 # colour, and picked up at a distance rather than on contact.
 add_mp_test(test_mp_keys)

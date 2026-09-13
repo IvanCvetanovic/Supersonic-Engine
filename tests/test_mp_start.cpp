@@ -60,10 +60,12 @@ const Chapter kChapters[] = {
     {"", "chapter 1", 32, 32},
     {"a", "chapter 2", 32, 31}, // all but level31a's dragon
     {"b", "chapter 3", 32, 32}, // complete
-    // 14 start: level0c, level27c, and the twelve `darkest` levels now carried
-    // rather than refused. Only 2 play - level0c and level19c - because eleven of
-    // those twelve carry roles the port has never met, `torch` chief among them.
-    {"c", "chapter 4", 14, 2},
+    // 14 start: level0c, level27c, and the twelve `darkest` levels carried rather
+    // than refused. 11 play now that the torches are built - level0c, level19c,
+    // and 9 of the 10 torch levels. The three that do not are level20c and
+    // level27c, which hold `gravity_well`, and level31c, which places chapter 4's
+    // own boss beside its torch.
+    {"c", "chapter 4", 14, 11},
 };
 
 // The reason with the node's name taken off the front, so that the same refusal

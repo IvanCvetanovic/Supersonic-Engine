@@ -70,6 +70,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Diamonds::LoadRules(portDataDirectory + "/diamonds.json", read.diamonds, error)) return false;
     if (!Fields::LoadRules(portDataDirectory + "/fields.json", read.fields, error)) return false;
     if (!Ghost::LoadRules(portDataDirectory + "/ghost.json", read.ghost, error)) return false;
+    if (!Torch::LoadRules(portDataDirectory + "/torch.json", read.torch, error)) return false;
     // And what the remake's role table calls a hazard but the original does not.
     if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
@@ -158,6 +159,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Diamonds::Find(data.scene, data.roles, data.diamonds, out.diamonds, error)) return false;
     if (!Fields::Find(data.scene, data.roles, out.built, data.fields, out.fields, error)) return false;
     if (!Ghost::Find(data.scene, data.roles, data.ghost, out.ghost, error)) return false;
+    if (!Torch::Find(data.scene, data.roles, data.torch, out.torch, error)) return false;
     if (!Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                        out.portals, error)) {
         return false;
@@ -190,7 +192,7 @@ void BeforeStep(const Data& data, entt::registry& registry, Level& level, float 
     if (level.player != entt::null) Player::Steer(registry, level.player, data.tuning, direction, dt);
 }
 
-void AfterStep(entt::registry& registry, Level& level, float dt) {
+void AfterStep(const Data& data, entt::registry& registry, Level& level, float dt) {
     level.goals.Tick(registry, level.player, dt);
     level.hazards.Tick(registry, level.player);
     // The fireballs fly on where the step left the player, and judge it there,
@@ -414,6 +416,67 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
             level.hazards.killedBy = level.ghost.killedBy;
         }
     }
+    // Chapter 4's torches. BEFORE Portals::Tick on purpose: lighting one calls
+    // killProjectile in the original, so a shot that works a switch is SPENT and
+    // must not go on to open a portal on the same tick it was consumed.
+    //
+    // Torch owns no bodies. The light wall carries metadata/breakable, so it is
+    // already a Demolish::Breakable with a body and a box that Demolish walks
+    // every frame - the removal goes through that list rather than behind it, as
+    // a struck minion goes through Minions::Take.
+    if (!level.torch.lights.empty()) {
+        std::optional<glm::dvec2> flightPx;
+        if (level.portals.flight) flightPx = level.portals.flight->atPx;
+        std::vector<glm::dvec2> fireballPx;
+        fireballPx.reserve(level.turrets.fireballs.size());
+        for (const Turrets::Fireball& ball : level.turrets.fireballs) fireballPx.push_back(ball.atPx);
+
+        const Torch::State::Turn turn = level.torch.Tick(flightPx, fireballPx, dt);
+
+        // hasProjectileAround accepts a fireball as readily as a portal shot, so
+        // either can be the one that is spent.
+        if (turn.spentFlight) level.portals.flight.reset();
+        if (turn.spentFireball >= 0 && turn.spentFireball < static_cast<int>(level.turrets.fireballs.size())) {
+            level.turrets.fireballs.erase(level.turrets.fireballs.begin() + turn.spentFireball);
+        }
+
+        if (turn.takeWallAway) {
+            for (Demolish::Breakable& breakable : level.demolish.breakables) {
+                if (breakable.name != level.torch.wall.name || breakable.broken) continue;
+                breakable.broken = true;
+                breakable.brokenBy = level.torch.signal.fromTorch.empty() ? "a torch" : level.torch.signal.fromTorch;
+                const entt::entity gone = breakable.body;
+                breakable.body = entt::null;
+                if (registry.valid(gone)) {
+                    registry.destroy(gone);
+                    Forget(level, gone);
+                }
+                break;
+            }
+        }
+
+        // And the way back: a shot signal rebuilds the wall where it stood. This
+        // is the only thing in the port that adds a level's own body mid-run, and
+        // it is why AfterStep takes the Data at all.
+        if (turn.putWallBack) {
+            LevelBuilder::Options options;
+            options.prismDirectory = data.prisms;
+            options.roles = &data.roles;
+            std::string built;
+            const entt::entity wall =
+                LevelBuilder::BuildEntity(data.scene, level.torch.wall.name, registry, options, level.built, built);
+            if (wall != entt::null) {
+                for (Demolish::Breakable& breakable : level.demolish.breakables) {
+                    if (breakable.name != level.torch.wall.name) continue;
+                    breakable.broken = false;
+                    breakable.brokenBy.clear();
+                    breakable.body = wall;
+                    break;
+                }
+            }
+        }
+    }
+
     // The beholder's rocks, against what the step ran them into.
     for (const entt::entity gone : level.boss.Contacts(registry, level.player, level.portals, dt)) Forget(level, gone);
     level.portals.Tick(registry, dt);
@@ -451,7 +514,7 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
 void Tick(const Data& data, entt::registry& registry, Level& level, float direction, float dt) {
     BeforeStep(data, registry, level, direction, dt);
     Supersonic::PhysicsSystem::Update(registry, dt);
-    AfterStep(registry, level, dt);
+    AfterStep(data, registry, level, dt);
 }
 
 } // namespace MagicPortals::Game

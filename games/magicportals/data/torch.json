@@ -1,0 +1,147 @@
+{
+  "_about": [
+    "The torches of chapter 4's dark levels, and the wall of light one drops.",
+    "Decoded from android_game.bin, ETHCallback_light_off.angelscript, whose fourteen",
+    "functions are the whole mechanism: bytes 467198..473086.",
+    "",
+    "entity_roles.json calls the role `torch` and files light_off / light_off.ent under it,",
+    "with the note 'an unlit torch that can be switched on ... this is what makes the dark",
+    "levels navigable'. That note is right about the importance and wrong about the shape:",
+    "what makes those levels navigable is not the LIGHT, it is that lighting a torch takes a",
+    "WALL away.",
+    "",
+    "IT IS A TOGGLE, NOT AN UNLOCK, and reading it as an unlock is the trap. Shooting the",
+    "unlit torch lights it and drops the wall. Shooting the orbiting flame that appears puts",
+    "the torch back out and REBUILDS the wall. A port that built only the first half would",
+    "play every level correctly and still be wrong about the mechanism."
+  ],
+
+  "torch": {
+    "entity_names": ["light_off.ent", "light_off"],
+    "reach_px": 24.0,
+    "_note": [
+      "ETHCallback_light_off spins its sprite (AddToAngle at 190 units a second) and each",
+      "frame calls hasProjectileAround(GetPositionXY(), 24, includeFireballs). That helper is",
+      "a bucket walk that accepts an entity named projectile.ent OR - when the flag is set,",
+      "and the call site pushes immediate 1 - fireball.ent, inside squaredDistance of",
+      "scale(24). So a FIRE DIAMOND'S FIREBALLS WORK THESE SWITCHES TOO, which is the third",
+      "place step 27's mechanism turned out to be load-bearing.",
+      "",
+      "Lighting one, in the callback's own order: add light_from_projectile.ent and",
+      "light_on_sparkles.ent, set its own `delete` flag, killProjectile (the shot is SPENT -",
+      "the same bare DeleteEntity the fire diamond's conversion uses), add portal_death.ent,",
+      "playLightOnSound, seekLightWallToDestroy, addFireSignalIfNecessary.",
+      "",
+      "On the NEXT frame the `delete` branch runs: SetAmbientLight(0.1, 0.1, 0.25) - lighter",
+      "than darkest's 0.01 but not lit - lightenAllBackgroundEntitities, GenerateLightmaps,",
+      "and it deletes itself. So a lit torch is GONE as an entity, not redrawn."
+    ]
+  },
+
+  "wall": {
+    "entity_name": "light_wall.ent",
+    "fade_ms": 1500.0,
+    "_note": [
+      "seekLightWallToDestroy is SeekEntity('light_wall.ent') - the FIRST one, and every",
+      "level that has one has exactly one - then destroy(wall), then a dashed_door.ent named",
+      "`light_wall_ghost` at the wall's position and angle, offset z by -4. The ghost is not",
+      "decoration: it is the bookmark addLightWall builds the wall back from.",
+      "",
+      "destroy() only sets a flag. ETHCallback_light_wall then counts elapsedTime: at 800 ms",
+      "playLightSwitchSound, and only at 1500 ms playDemolitionSound, wall_destroy.ent,",
+      "startEarthquake(20, 0) and DeleteEntity. Until destroyed it fades its alpha UP toward 1.",
+      "",
+      "THE 1500 ms IS LOAD-BEARING, not a flourish. addFireSignalIfNecessary runs immediately",
+      "after seekLightWallToDestroy and only spawns a signal when SeekEntity STILL finds a",
+      "light_wall.ent - which it does, because the wall is flagged and not yet deleted. Were",
+      "the wall taken away on the frame it was flagged, no signal could ever appear and the",
+      "toggle would be a one-way unlock.",
+      "",
+      "With one torch and one wall per level there is exactly one signal, and no second torch",
+      "can be lit inside the window to ask for another.",
+      "",
+      "The wall is a real solid. In the levels it is a Node2D with a StaticBody2D and a",
+      "CollisionPolygon2D about 30 x 126, and it carries metadata/breakable = 1 - so the port",
+      "already has it in Demolish::Breakable with a body and a box. Removing it therefore goes",
+      "THROUGH Demolish rather than behind its back, as a struck minion goes through",
+      "Minions::Take: a body destroyed behind a module that walks its own list every frame is",
+      "how that list ends up holding an invalid entity."
+    ]
+  },
+
+  "signal": {
+    "entity_name": "fire_signal.ent",
+    "orbit_px": 18.0,
+    "spin_deg_s": 300.0,
+    "reach_px": 24.0,
+    "_note": [
+      "ETHCallback_fire_signal stores originalPos on its first frame, then each frame adds to",
+      "an `angle` custom datum (incrementAngleCustomData, 300 a second) and puts itself at",
+      "originalPos + scale(18) * (-cos(angle), sin(angle)). So it CIRCLES the torch it came",
+      "from rather than sitting on it, and the thing the player has to hit is moving.",
+      "",
+      "Hit - the same hasProjectileAround(pos, 24, includeFireballs) - and it reverses the",
+      "whole thing: add a fresh light_off.ent at originalPos, add light_off_sparkles.ent,",
+      "killProjectile, set `switch` = 1 on the new torch, deleteLightFromProjectile, delete",
+      "itself, add portal_death.ent, darkenAllBackgroundEntitities, SetAmbientLight back to",
+      "DARKEST_AMBIENT_LIGHT, extinguish_fire.ent, playLightOffSound, GenerateLightmaps, and",
+      "addLightWall.",
+      "",
+      "addLightWall seeks the `light_wall_ghost`, adds light_wall_create.ent and a new",
+      "light_wall.ent at the ghost's position and angle, sets the new wall's alpha to 0 (the",
+      "wall's own callback fades it up), and deletes the ghost.",
+      "",
+      "`switch` = 1 on the recreated torch is what entity_roles.json's note means by 'switch",
+      "custom data on the 4 inline ones'. Nothing in the decode READS it; it marks a torch",
+      "that was put back out rather than placed. Carried here, acted on by nothing."
+    ]
+  },
+
+  "ambient": {
+    "lit": [0.1, 0.1, 0.25],
+    "_note": [
+      "What a lit torch sets the level's ambient light to, against darkest's",
+      "(0.01, 0.01, 0.01) in art.json. Recorded and applied by NOTHING, for the same reason",
+      "art.json's darkest block is: this port has no ambient light and Sprites carries no",
+      "colour for it to multiply. The pair of numbers is kept together so that when lighting",
+      "exists, both ends of it are already decoded."
+    ]
+  },
+
+  "_census": [
+    "10 torches across 10 levels, exactly ONE each: level21c, level22c, level23c, level24c,",
+    "level25c, level26c, level28c, level29c, level30c, level31c. Every one of them is a",
+    "`darkest` level, and no level outside that ten places one.",
+    "",
+    "That one-per-level was measured, and a first pass here said three. The three came from",
+    "counting grep LINES rather than nodes: a torch is a node header, a metadata/entity_name",
+    "line and a child Sprite line. The same trap had already been caught for light_wall - 5",
+    "lines, 1 wall - and was walked straight back into for light_off. Counting lines is not",
+    "counting entities.",
+    "",
+    "6 light walls across 6 levels, exactly 1 each: level25c, level26c, level28c, level29c,",
+    "level30c, level31c. So FOUR of the ten torch levels - level21c to level24c - have NO",
+    "wall at all, and there a torch only lights the room and spends a shot. Those four were",
+    "already finishable; the other six were not, and that is what this step fixes.",
+    "",
+    "light_wall.ent, dashed_door.ent and fire_signal.ent are in NO role table at all, so",
+    "Roles::RoleOf returns empty for them and Roles::IsPorted answers true - they have never",
+    "once been reported inert. Nothing would have flagged a level standing behind an",
+    "unremovable wall; the suite has to."
+  ],
+
+  "_not_built": [
+    "Every picture and every sound: light_from_projectile.ent, light_on_sparkles.ent,",
+    "light_off_sparkles.ent, portal_death.ent, extinguish_fire.ent, light_wall_create.ent,",
+    "wall_destroy.ent, the dashed_door ghost's own sprite, playLightOnSound,",
+    "playLightOffSound, playLightSwitchSound, playDemolitionSound, the startEarthquake(20, 0)",
+    "when a wall goes, the torch's 190-a-second spin, and the wall's alpha fade.",
+    "",
+    "The lighting itself: SetAmbientLight, lightenAllBackgroundEntitities,",
+    "darkenAllBackgroundEntitities, setBackgroundTilesEmissiveColor and GenerateLightmaps.",
+    "There is no ambient light in this port to change.",
+    "",
+    "bounceLightEntity, and the `bounce` flag addFireSignalIfNecessary sets on an existing",
+    "light_from_projectile.ent. Presentation, and unreachable here besides."
+  ]
+}

@@ -68,6 +68,13 @@ inline constexpr const char* kWaypoint = "waypoint";
 inline constexpr const char* kShockField = "shock_field";
 // Played only for the boss the port has: Boss::Plays says which.
 inline constexpr const char* kBossSpawn = "boss_spawn";
+// The torches of chapter 4's dark levels (Torch.hpp), light_off / light_off.ent.
+// The role table calls them "what makes the dark levels navigable", and the
+// navigating is not the light: lighting one takes a WALL away. Admitted to
+// IsPorted only once that removal was built, because the wall - light_wall.ent -
+// is in no role table at all, so ten levels would have counted as playing with an
+// unremovable solid standing in six of them and nothing to say so.
+inline constexpr const char* kTorch = "torch";
 // The diamonds (Diamonds.hpp). The role covers shock_diamond.ent and
 // fire_diamond.ent, which are DIFFERENT mechanisms - one kills a minion, the
 // other takes portals away and gives fireballs instead - so Diamonds selects by

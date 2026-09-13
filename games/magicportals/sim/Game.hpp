@@ -40,6 +40,7 @@
 #include "sim/Portals.hpp"
 #include "sim/Puzzle.hpp"
 #include "sim/Roles.hpp"
+#include "sim/Torch.hpp"
 #include "sim/Tscn.hpp"
 #include "sim/Turrets.hpp"
 
@@ -71,6 +72,7 @@ struct Data {
     Diamonds::Rules diamonds;     // and diamonds.json
     Fields::Rules fields;         // and fields.json
     Ghost::Rules ghost;           // and ghost.json
+    Torch::Rules torch;           // and torch.json
     Hazards::Rules hazards;       // and hazards.json, which is what the role table got wrong
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
@@ -113,6 +115,8 @@ struct Level {
     Fields::State fields;
     // Chapter 3's boss, which the fire diamond is the weapon against.
     Ghost::State ghost;
+    // Chapter 4's torches, and the wall of light one of them drops.
+    Torch::State torch;
     // The level sets `darkest`: its ambient light is DARKEST_AMBIENT_LIGHT,
     // (0.01, 0.01, 0.01). Carried rather than acted on - this port has no ambient
     // light for it to change - and art.json holds the decode. Its one gameplay
@@ -130,7 +134,12 @@ struct Level {
 bool Start(const Data& data, entt::registry& registry, Level& out, std::string& error, bool withStatics = true);
 
 void BeforeStep(const Data& data, entt::registry& registry, Level& level, float direction, float dt);
-void AfterStep(entt::registry& registry, Level& level, float dt);
+// Takes the Data, as BeforeStep does. A torch that puts its light wall BACK has
+// to rebuild that wall's body, and LevelBuilder::BuildEntity needs the scene to
+// do it - the node's body and shape are its children. The alternative was for
+// Level to borrow a scene pointer, which is a lifetime hazard introduced for one
+// feature; there were three call sites, so the signature moved instead.
+void AfterStep(const Data& data, entt::registry& registry, Level& level, float dt);
 
 // One whole tick, for a caller that steps physics itself.
 void Tick(const Data& data, entt::registry& registry, Level& level, float direction, float dt);
