@@ -168,6 +168,25 @@ std::vector<entt::entity> State::Spawn(entt::registry& registry) {
     return made;
 }
 
+entt::entity State::Summon(entt::registry& registry, const std::string& name, const glm::dvec2& atPx,
+                           const std::vector<Waypoint>& patrol) {
+    Minion minion;
+    minion.name = name;
+    minion.spawnPx = atPx;
+    minion.waypoints = patrol;
+    // Built exactly as Spawn builds one. The locked rotation is not a detail
+    // here either: minion.ent is fixedRotation="1", and a circle left free to
+    // turn rolls under friction through the post it is meant to hold.
+    minion.body =
+        LevelBuilder::BuildRigidCircle(registry, minion.name, minion.spawnPx, rules.bodyRadiusPx,
+                                       LevelBuilder::Options{});
+    if (minion.body == entt::null) return entt::null;
+    registry.get<RigidBodyComponent>(minion.body).lockRotation = glm::bvec3(true, true, true);
+
+    minions.push_back(minion);
+    return minion.body;
+}
+
 void State::Tick(entt::registry& registry, float dt) {
     const double ms = static_cast<double>(dt) * 1000.0;
     const float speed = Units::ToMetres(SpeedPxPerSecond());
@@ -344,11 +363,15 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const Rules& rule
     // waypointName + n until one is missing, and stamp what is found onto the
     // minion. The order is the index's, not the file's.
     for (Minion& minion : out.minions) {
-        // A marker carrying no waypointName at all is not an error: level31b has
-        // one of those, and the original spawns a minion for it just the same.
-        // Its count loop seeks "0" immediately, finds nothing, and the minion
-        // stands where it spawned - which is what an empty waypoint list gives,
-        // since Tick passes over a minion that has none.
+        // Defensive rather than exercised, and an earlier wording here claimed
+        // otherwise. No marker in any of the 128 levels lacks a waypointName:
+        // level31b's minion_spawn_908 carries "wayB" like the rest, and the node
+        // that carries none - minion_spawn_point - has no role at all and is
+        // never collected above. That one is the chapter-3 boss's summon anchor,
+        // which Ghost reads by name. data/minions.json had this right.
+        //
+        // Kept because an empty list is still the safe answer: Tick passes over a
+        // minion that has no waypoints, so it would stand where it spawned.
         if (minion.waypointName.empty()) continue;
         for (std::size_t index = 0;; ++index) {
             const std::string want = minion.waypointName + std::to_string(index);

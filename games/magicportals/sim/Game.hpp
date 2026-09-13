@@ -28,6 +28,7 @@
 #include "sim/Diamonds.hpp"
 #include "sim/Fields.hpp"
 #include "sim/Fire.hpp"
+#include "sim/Ghost.hpp"
 #include "sim/Goals.hpp"
 #include "sim/Hazards.hpp"
 #include "sim/Hinge.hpp"
@@ -69,6 +70,7 @@ struct Data {
     Keys::Rules keys;             // and keys.json
     Diamonds::Rules diamonds;     // and diamonds.json
     Fields::Rules fields;         // and fields.json
+    Ghost::Rules ghost;           // and ghost.json
     Hazards::Rules hazards;       // and hazards.json, which is what the role table got wrong
     std::filesystem::path prisms; // where LevelBuilder writes the platforms' prisms
 };
@@ -109,6 +111,8 @@ struct Level {
     Diamonds::State diamonds;
     // The lethal rings, which swing about the node that placed them.
     Fields::State fields;
+    // Chapter 3's boss, which the fire diamond is the weapon against.
+    Ghost::State ghost;
     entt::entity player = entt::null;
 };
 

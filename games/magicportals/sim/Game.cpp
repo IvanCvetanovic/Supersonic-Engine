@@ -69,6 +69,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Keys::LoadRules(portDataDirectory + "/keys.json", read.keys, error)) return false;
     if (!Diamonds::LoadRules(portDataDirectory + "/diamonds.json", read.diamonds, error)) return false;
     if (!Fields::LoadRules(portDataDirectory + "/fields.json", read.fields, error)) return false;
+    if (!Ghost::LoadRules(portDataDirectory + "/ghost.json", read.ghost, error)) return false;
     // And what the remake's role table calls a hazard but the original does not.
     if (!Hazards::LoadRules(portDataDirectory + "/hazards.json", read.hazards, error)) return false;
     std::error_code ec;
@@ -135,6 +136,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     if (!Keys::Find(data.scene, data.roles, out.built, data.keys, out.keys, error)) return false;
     if (!Diamonds::Find(data.scene, data.roles, data.diamonds, out.diamonds, error)) return false;
     if (!Fields::Find(data.scene, data.roles, out.built, data.fields, out.fields, error)) return false;
+    if (!Ghost::Find(data.scene, data.roles, data.ghost, out.ghost, error)) return false;
     if (!Portals::Find(data.scene, data.roles, out.built, registry, out.player, data.portals, data.movers, data.shot,
                        out.portals, error)) {
         return false;
@@ -226,6 +228,19 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
                     break;
                 }
             }
+            // And chapter 3's boss, which is the ONLY thing a fireball can hurt
+            // that Fire does not hold: the ghost is not a scene entity, so
+            // Fire::Find never sees it. Its GHOST_RADIUS is a radius rather than
+            // a box, and it has no collider here at all, so this is a plain
+            // distance. Setting `burned` is the whole of it - Ghost::Tick reads
+            // and clears the flag, which is isBurned followed by healBurn.
+            if (!struck && level.ghost.Alive()) {
+                const glm::dvec2 gap = ball.atPx - level.ghost.atPx;
+                if (gap.x * gap.x + gap.y * gap.y <= level.ghost.rules.radiusPx * level.ghost.rules.radiusPx) {
+                    level.ghost.burned = true;
+                    struck = true;
+                }
+            }
             if (struck) spent.push_back(ball.name);
         }
         if (!spent.empty()) {
@@ -302,6 +317,82 @@ void AfterStep(entt::registry& registry, Level& level, float dt) {
     // every frame rather than an entry test, which is what separates one of these
     // from a hazard.
     level.fields.Tick(registry, level.player, dt);
+    // Chapter 3's boss. AFTER the fireball block above on purpose: a fireball
+    // that reaches it this tick sets `burned`, and this reads it on the same
+    // tick rather than the next.
+    //
+    // It REPORTS what it wants done rather than doing it - Minions owns minion
+    // bodies, Keys owns keys and Diamonds owns diamonds, and each walks its own
+    // list every frame.
+    if (level.ghost.present) {
+        // ONLY the escorts this boss called, and that is not a shortcut. The
+        // original's rage arm seeks `minion.ent` by NAME, and what it spawns is a
+        // minion.ent; level31b's own patroller is a ghost_minion.ent and is a
+        // different entity, so it never satisfies that seek. Counting every
+        // minion in the level would count that patroller, the count would never
+        // reach zero, and the boss would sit in RAGE_MODE for ever without ever
+        // summoning - a deadlock, not a slow fight.
+        const std::string escort = level.ghost.name + "#";
+        std::size_t standing = 0;
+        for (const Minions::Minion& minion : level.minions.minions) {
+            if (minion.gone || minion.body == entt::null || !registry.valid(minion.body)) continue;
+            if (minion.name.rfind(escort, 0) != 0) continue;
+            ++standing;
+        }
+
+        const Ghost::State::Turn turn = level.ghost.Tick(registry, level.player, standing, dt);
+
+        // The escort, on the patrol the boss resolved when the level was found.
+        if (turn.summon) {
+            const std::string called = level.ghost.name + "#" + std::to_string(level.ghost.summons);
+            const entt::entity body =
+                level.minions.Summon(registry, called, level.ghost.summonPx, level.ghost.patrol);
+            // A minion is teleportable, so it joins the travellers as one built
+            // at the start of the level does.
+            if (body != entt::null) level.portals.travellers.push_back(body);
+        }
+
+        // The key it drops, which is the only key level31b has: the fight IS the
+        // lock. Its colour is key.ent's own, not the keyhole's.
+        if (turn.droppedKey) {
+            Keys::Key dropped;
+            dropped.name = level.ghost.name + "#key";
+            dropped.colour = level.ghost.rules.keyColour;
+            dropped.atPx = turn.keyPx;
+            dropped.fromPx = turn.keyPx;
+            dropped.toPx = turn.keyPx;
+            level.keys.keys.push_back(dropped);
+        }
+
+        // addEntityIfItCantBeFound: a fire diamond back at its spawn, and only
+        // when none is left. That is what makes dropping one down the gutter
+        // mouth survivable rather than final.
+        if (turn.restockDiamond) {
+            bool anyLeft = false;
+            for (const Diamonds::Diamond& diamond : level.diamonds.diamonds) {
+                if (diamond.fire && !diamond.gone) anyLeft = true;
+            }
+            if (!anyLeft) {
+                for (Diamonds::Diamond& diamond : level.diamonds.diamonds) {
+                    if (!diamond.fire || !diamond.gone) continue;
+                    diamond.gone = false;
+                    diamond.owner = entt::null;
+                    diamond.atPx = level.ghost.diamondSpawnPx;
+                    diamond.fromPx = diamond.atPx;
+                    diamond.toPx = diamond.atPx;
+                    diamond.sinceAimMs = 0.0;
+                    break;
+                }
+            }
+        }
+
+        // The fifth death funnel, as the boss's, the carrancas', the fire's and
+        // the rings' are: one death in the port and not six.
+        if (level.ghost.playerKilled && !level.hazards.playerDied) {
+            level.hazards.playerDied = true;
+            level.hazards.killedBy = level.ghost.killedBy;
+        }
+    }
     // The beholder's rocks, against what the step ran them into.
     for (const entt::entity gone : level.boss.Contacts(registry, level.player, level.portals, dt)) Forget(level, gone);
     level.portals.Tick(registry, dt);

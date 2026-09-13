@@ -176,6 +176,9 @@ add_mp_test(test_mp_hinge)
 # The minions of worlds 3 and 4: spawned from a marker, walking a prefix of
 # waypoints, and taken by the floor that kills them and nothing else.
 add_mp_test(test_mp_minions)
+# Chapter 3's boss: the ghost of level 3-32, which only fire can hurt and which
+# drops the only key its level has.
+add_mp_test(test_mp_ghost)
 # Keys, the keyholes they open and the locked doors that go with them - paired by
 # colour, and picked up at a distance rather than on contact.
 add_mp_test(test_mp_keys)

@@ -2961,3 +2961,114 @@ design rather than about this port's faithfulness, and it has not been verified 
 playing it - recorded here rather than left for the count to imply.
 
 What is left of chapter 3: `boss_spawn`, in level31b alone.
+
+## Step 28 - chapter 3: the ghost of level 3-32, which only fire can hurt (built)
+
+Chapter 3 goes from 31 of 32 playing to **32**, and the game from 95 of 128 to
+**96**. **Chapter 3 is complete.** Worlds 1 and 3 now play in full, and world 2 is
+short exactly one level: level31a's dragon.
+
+**The fire diamond is the weapon, and that is why this step had to follow it.**
+The ghost's SHOOTING arm ends with `isBurned(this)`: burned, it goes to DAMAGE,
+takes `hp += -1`, calls `healBurn(this)` and sounds. Nothing else in level31b can
+burn anything at all. The only fire in the level is the fireballs a portal shot
+*becomes* while a fire diamond is carried - step 27's mechanism. Built in the
+other order this would have been an invulnerable boss, and nothing in the suite
+would have said so, because every other test would still have passed.
+
+**It is the game's second boss and shares nothing with the first**, so it is its
+own module and `Boss.hpp` stays the beholder's. Nothing in `Boss::State` - no
+rocks, no spikes, no button - serves any of it, and `test_mp_boss`'s 126 checks
+are untouched as a result, which is the same argument that kept `Portals` out of
+step 27 and paid off there too.
+
+| | the beholder (1-32) | the ghost (3-32) |
+|---|---|---|
+| moves by | a glide with a wobble | a WaypointManager path |
+| hurt by | a rolling stone rising through it | FIRE, and nothing else |
+| hp | 2 (three hits) | 3 |
+| radius | 48 | 64 |
+| when hurt | fires rings of spikes | summons an escort and waits |
+| on death | raises the level's button | drops a key |
+
+**The rage loop would have deadlocked on the obvious reading**, and this is the
+trap of the step. RAGE_MODE waits for the minion it summoned to be killed, and it
+seeks that one *by name*: `SeekEntity('minion.ent')`, which is what its
+`spawnMinion` gives it. But level31b **also** spawns a patroller of its own at
+level start - and that one is a `ghost_minion.ent`, a different entity, which
+never satisfies the seek. Counting every minion in the level would leave the count
+never zero, so the boss would sit in rage for ever and never summon: not a slow
+fight, a hang. `Game` counts only the escorts this boss named.
+
+**The red line gates the shooting.** Every 3000 ms it seeks `dark_mage.ent` and
+fires `addEnemyShoot` from `scale(-20, -32)`, but only when the player's x is past
+the x of the level's `red_line` entity - (262, 110) in level31b. A player on the
+left of the arena is left alone. The suite uses that as a lever: parked behind the
+line the boss never shoots, so three whole damage cycles can be driven without the
+player being killed in the middle of them.
+
+**`killPortal` stays deferred.** `minions.json` set that branch aside as a step of
+its own because it reaches into portal state nothing else in this port writes from
+outside. It is *not* inherited here: it fires only when a shot's target is named
+`portal.ent`, and this boss always passes the player as its target. The ghost's
+shot only kills the player, with the same `fakeRadius = scale(16)` that file
+already decoded.
+
+**The fight is the lock.** level31b holds a keyhole at (152, 204) and a
+`door_locked` at (120, 160), both `metadata/color` yellow, and **no key anywhere**.
+The only key in the level is the one this boss drops when it dies. The key is
+yellow because `key.ent`'s own CustomData carries a single string variable,
+`color`, valued yellow - the level agrees with the entity rather than being the
+source of the value, and taking it from the keyhole would have been right by
+accident in exactly one level.
+
+It also **restocks the player** on that same 3000 ms beat, with
+`addEntityIfItCantBeFound`: a barrel bomb at `barrel_spawn` and a fire diamond at
+`fire_diamond_spawn`. The fire diamond restock IS built - a diamond is state in a
+plain vector, not a body - so dropping one down level31b's gutter mouth is
+survivable rather than final. The barrel bomb restock is not: `Fire` fills its
+bombs from the scene, and a mid-run bomb is the same mid-run-Add step
+`minions.json` already names for `Fire::Burnable` and `Demolish::Breakable`.
+
+**Where it starts is a consequence, not a choice.** In the original a `ghost.ent`
+is created by a dying `ghost_minion` and flies *to* `ghost_pos`. The port does not
+build that transformation - `minions.json` records that a marker's `entityName` is
+never honoured - so the ghost begins at `ghost_pos`, its four appear waypoints all
+coincide, and the appearance keeps its DURATION (1200 + 2500 + 50 + 0 = 3750 ms)
+and loses its path. What those waypoints drove besides position - the colour, the
+alpha, the swelling scale - is presentation this port has no renderer for anyway.
+
+**And the honesty trap was not there.** Admitting `boss_spawn` to
+`Roles::IsPorted` would have claimed level31a's unbuilt dragon - the exact mistake
+`pickup` was held out of for two steps. It does not arise: `test_mp_start` already
+asks per NODE (`role == kBossSpawn && Boss::Plays(...)`), so the role stays out of
+`IsPorted` and the predicate simply learns a second boss. level31a's dragon and
+chapter 4's dark dragon stay inert and stay honestly counted.
+
+Three corrections to things written earlier, two of them mine. `Minions.hpp` and
+`Minions.cpp` both said level31b has a marker "carrying no waypointName at all".
+It does not: `minion_spawn_908` carries `"wayB"` like every other marker in the
+game. The node that carries none is `minion_spawn_point`, which has **no role at
+all**, is never collected by `Minions::Find`, and is this boss's summon anchor.
+`data/minions.json` had it right and the code comments did not; the
+empty-`waypointName` branch is defensive rather than exercised, and now says so.
+Third, `Ghost` stopped declaring a `Waypoint` of its own: the escort's patrol IS
+an ordinary minion patrol, so it uses `Minions::Waypoint`, which is what
+`Minions::Summon` takes. Two identical structs for one thing was the defect; the
+conversion error was only the symptom.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_ghost` at 73 checks, `test_mp_minions` unchanged at 77, `test_mp_boss` at
+126, `test_mp_keys` at 104 and `test_mp_diamonds` at 126, and 98 of 128 levels
+starting with 96 playing on both. The ghost fired once in the 3333 ms after the
+player crossed the red line - one beat of its 3000 ms interval - and took 3 burns
+before dropping a yellow key, identically on both toolchains.
+
+`test_mp_boss` and `test_mp_minions` being unchanged is the measurement that
+matters here, in the same way `test_mp_shot` and `test_mp_portal` were in step 27:
+a second boss was added beside the first and a second way to build a minion beside
+`Spawn`, and neither disturbed what was already pinned.
+
+What is left of the whole remaster: `boss_spawn` in level31a alone - chapter 2's
+dragon, which is five callbacks and a knight of its own - and then chapter 4,
+where `no_gravity` refuses 18 levels and `darkest` refuses 12.

@@ -1,0 +1,189 @@
+{
+  "_about": [
+    "Chapter 3's boss: the ghost of level 3-32 (level31b), decoded from android_game.bin,",
+    "ETHCallback_ghost (bytes 451999..457261) with its helpers in the same file.",
+    "",
+    "It is the game's SECOND boss and shares nothing with the first. The beholder glides,",
+    "throws rolling stones, is hurt by a stone rising through it, fires rings of spikes and",
+    "raises a button when it dies. The ghost flies a waypoint path, shoots the player, is hurt",
+    "by FIRE, summons a minion when hurt, and drops a KEY when it dies. Boss.hpp is the",
+    "beholder's and stays that way; this is its own module for that reason.",
+    "",
+    "FIVE states, not four, and their numbers are written into the callback's first six",
+    "instructions: APPEARING 0, SHOOTING 1, RAGE_MODE 2, DAMAGE 3, DEATH 4, and",
+    "GHOST_RADIUS 64. The init block writes hp 3, elapsedTime 0, state 0 and shotsFired 0.",
+    "",
+    "HOW IT IS HURT, which is the whole reason this step follows the fire diamond. The",
+    "SHOOTING arm ends with isBurned(this): burned, it goes to DAMAGE, takes hp += -1, calls",
+    "healBurn(this) and plays playGhostDamageSound. Nothing else in the level can burn it, so",
+    "the fire diamond IS the weapon - the fireballs a converted portal shot becomes. A port",
+    "that built this boss without the fire diamond would have an invulnerable boss.",
+    "",
+    "WHAT LEVEL31B IS. The level holds a keyhole (152, 204) and a door_locked (120, 160),",
+    "both metadata/color yellow, and NO KEY ANYWHERE. The only key in the level is the one",
+    "this boss drops when it dies. So the fight is the lock, and Keys is what opens it."
+  ],
+
+  "anchor": {
+    "entity_name": "ghost_pos",
+    "_note": [
+      "The boss_spawn node, and it is NOT shaped like the beholder's. An adder carries",
+      "metadata/entity naming what to spawn ('beholder.ent'), and Boss::Plays reads that",
+      "field. ghost_pos carries no `entity` metadata at all - the NODE NAME is the whole of",
+      "it - so Ghost::Plays matches the entity name instead. Mirroring Boss::Plays literally",
+      "would return false for every level and leave level31b inert with no visible cause.",
+      "",
+      "entity_roles.json files all four bosses under boss_spawn: adder (1-32), dragon.ent",
+      "(2-32), ghost_pos (3-32), dark_dragon_spawn (4-32) and dragon_knight_spawn. The role is",
+      "deliberately NOT in Roles::IsPorted; test_mp_start asks per NODE instead, so building",
+      "one boss never claims another. level31a's dragon stays inert and stays honest."
+    ]
+  },
+
+  "body": {
+    "max_hp": 3,
+    "radius_px": 64.0
+  },
+
+  "appear": {
+    "_note": [
+      "The APPEARING arm flies a WaypointManager rather than gliding. Four waypoints are",
+      "added in the init block; Waypoint's constructor is (pos, time, color, filter, angle),",
+      "read off Waypoint::Waypoint's parameters, and getCurrentPoint interpolates pos, color",
+      "and angle between the current waypoint and the next with the CURRENT one's filter",
+      "applied to the timer's bias. The angle is used as a uniform SetScale and the colour's",
+      "alpha as SetAlpha, so the ghost fades and swells into being.",
+      "",
+      "mid_fraction is the quarter in midPoint = currentPos + (ghost_pos - currentPos) / 4."
+    ],
+    "total_ms": 3750.0,
+    "seed_elapsed_ms": 3000.0,
+    "mid_fraction": 0.25,
+    "legs_ms": [1200.0, 2500.0, 50.0, 0.0],
+    "_filters": ["defaultFilter", "smoothEnd", "defaultFilter", "defaultFilter"],
+    "_scales": ["the entity's own GetScale().x", 0.6, 1.0, 1.0],
+    "_seeds_elapsed_ms": 3000.0,
+    "_seeds_note": [
+      "On WaypointManager::isLastFrame the arm sets state SHOOTING, shotsFired 0 and",
+      "elapsedTime 3000 - NOT zero. Seeding the clock at the shot interval means the first",
+      "shot comes on the first frame of SHOOTING rather than three seconds later."
+    ]
+  },
+
+  "shooting": {
+    "interval_ms": 3000.0,
+    "muzzle_x": -20.0,
+    "muzzle_y": -32.0,
+    "red_line_entity_name": "red_line",
+    "diamond_spawn_entity_name": "fire_diamond_spawn",
+    "muzzle_px": [-20.0, -32.0],
+    "_note": [
+      "Every interval it seeks dark_mage.ent - the PLAYER - and fires only when the player's",
+      "x is past the x of the level's red_line entity. level31b puts red_line at (262, 110),",
+      "so the boss does not shoot at a player still on the left of the arena.",
+      "",
+      "It also restocks the player's tools on that same beat, with addEntityIfItCantBeFound:",
+      "a barrel_bomb at barrel_spawn and a fire_diamond.ent at fire_diamond_spawn. That is",
+      "why level31b places both spawn markers, and why dropping the fire diamond down the",
+      "gutter mouth is survivable - the boss hands you another."
+    ]
+  },
+
+  "shot": {
+    "entity_name": "enemy_shoot.ent",
+    "speed_px_s": 120.0,
+    "hit_px": 16.0,
+    "nudge_px": 16.0,
+    "_note": [
+      "addEnemyShoot and ETHCallback_enemy_shoot are in ETHCallback_minion.angelscript, and",
+      "minions.json's _shooting_not_built already decoded them: enemy_shoot.ent carries",
+      "direction, destiny, casterPos, targetName and targetID, moves 120 units a second, and",
+      "kills with fakeRadius = scale(16) - an isCharacter target within that has hp set to 0.",
+      "",
+      "killPortal is NOT reachable from this boss. That branch fires only when the shot's",
+      "target is named portal.ent, and the ghost always passes the player as its target. So",
+      "the step minions.json deferred stays deferred, and this shot only kills the player.",
+      "",
+      "The muzzle flash (projectile_shoot.ent) and the portal_mark.ent that telegraphs where",
+      "the shot will land are presentation and are not built."
+    ]
+  },
+
+  "damage": {
+    "to_rage_ms": 4000.0,
+    "alpha": 0.5,
+    "_note": [
+      "hp <= 0 goes straight to DEATH. Otherwise it holds at alpha 0.5, bounces, scatters",
+      "explosions, and after 4000 ms goes to RAGE_MODE rather than back to SHOOTING."
+    ]
+  },
+
+  "rage": {
+    "summon_window_ms": 200.0,
+    "waypoint_prefix": "wayA",
+    "minion_entity_name": "minion.ent",
+    "anchor_entity_name": "minion_spawn_point",
+    "_note": [
+      "RAGE_MODE waits on its escort. While no minion.ent exists it spawns one - inside the",
+      "first 200 ms of the state - at the position of the level's minion_spawn_point, on the",
+      "wayA prefix, via spawnMinion. Once one exists it STAYS in rage until that minion is",
+      "gone; then the 200 ms window has passed and it returns to SHOOTING at alpha 1.",
+      "",
+      "minion_spawn_point is NOT a minion_spawn marker and carries no role at all, which is",
+      "why Minions::Find never sees it and why this module resolves it by name. level31b puts",
+      "it at (436, 96); the wayA prefix resolves wayA0 (314, 208) hold 1000 and wayA1",
+      "(412, 208) hold 4000, which minions.json calls 'unclaimed' and assigns to this boss."
+    ]
+  },
+
+  "death": {
+    "burst_ms": 3550.0,
+    "blast_scale": 2.0,
+    "key_entity_name": "key.ent",
+    "key_colour": "yellow",
+    "_note": [
+      "DEATH stops the boss music, bounces at 1.25 over 400 ms, scatters explosions, and at",
+      "3550 ms calls explode(pos, 2.0, 0), adds key.ent at its own position and deletes",
+      "itself.",
+      "",
+      "The key's colour is NOT taken from level31b. key.ent's own CustomData holds exactly one",
+      "variable - a string named color with the value yellow - so every key.ent the game ever",
+      "adds is yellow by the entity's default, and level31b's keyhole and door being yellow is",
+      "the level agreeing with the entity rather than the source of the value.",
+      "",
+      "blast_scale is recorded and NOT applied: explode's own radius is fire.json's blast_px,",
+      "and what the 2.0 multiplies is not established. The port drops the key and does not",
+      "blast, which is the conservative reading - a blast that killed the player at the moment",
+      "of victory would be a worse error than a missing one."
+    ]
+  },
+
+  "explosions": {
+    "stride_ms": 400.0,
+    "spread_px": 64.0,
+    "_not_built": [
+      "DAMAGE and DEATH both scatter small_explosion_no_light.ent through overTimeEntityAdder",
+      "at 400 ms, at an offset of scale(64) * (0.4 + randF(0.7)) along a random angle, built",
+      "as (-cos, sin). Presentation in a renderer-free port, and random - recorded, not built."
+    ]
+  },
+
+  "_not_built": [
+    "The picture and the noise: ghost_appear_effect.ent, the frame changes (0 in SHOOTING,",
+    "3 in RAGE_MODE), the alpha and scale the waypoints drive, the bounces, the explosions,",
+    "playGameMusic and the boss music the DEATH arm stops, and all five ghost sounds.",
+    "",
+    "The ghost_minion. level31b's minion_spawn carries metadata/entityName ghost_minion.ent -",
+    "the ONLY use of that field in all 128 levels - and ETHCallback_ghost_minion tints itself",
+    "black, delegates wholesale to ETHCallback_minion, and on death spawns a ghost.ent and",
+    "deletes itself. The port spawns the default minion there, as minions.json records, so",
+    "that transformation does not happen. It costs nothing playable: the spawned ghost.ent is",
+    "not this boss and has no callback of its own that any level reads.",
+    "",
+    "The barrel bomb restock. addEntityIfItCantBeFound would put a barrel_bomb at",
+    "barrel_spawn; Fire owns bombs and fills them from the scene, so a mid-run bomb is the",
+    "same mid-run-Add step minions.json names for Fire::Burnable and Demolish::Breakable.",
+    "The FIRE DIAMOND restock IS built, because Diamonds holds its diamonds in a plain",
+    "vector and a diamond is not a body."
+  ]
+}

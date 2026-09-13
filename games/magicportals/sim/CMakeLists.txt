@@ -15,6 +15,7 @@ add_library(MagicPortalsSim STATIC
     Fields.cpp
     Fire.cpp
     Game.cpp
+    Ghost.cpp
     Goals.cpp
     Hazards.cpp
     Hinge.cpp

@@ -91,8 +91,12 @@ Outcome StartAndDrop(const std::string& path) {
     for (const Tscn::Node& node : data.scene.nodes) {
         if (node.parent != ".") continue;
         const std::string role = Roles::RoleOf(data.roles, node);
-        // A boss spawn plays when it is the boss the port has: level31's beholder.
-        const bool boss = role == Roles::kBossSpawn && Boss::Plays(data.boss, node);
+        // A boss spawn plays when it is a boss the port HAS: level31's beholder,
+        // or level31b's ghost. Asked per NODE and never per role, which is what
+        // lets one boss be built without claiming another - level31a's dragon and
+        // chapter 4's dark dragon stay inert, and stay honestly counted.
+        const bool boss = role == Roles::kBossSpawn &&
+                          (Boss::Plays(data.boss, node) || Ghost::Plays(data.ghost, node));
         if (!Roles::IsPorted(role) && !boss) ++outcome.ignored[role];
     }
     for (int tick = 0; tick < kLandingTicks && !outcome.landed; ++tick) {

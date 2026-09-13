@@ -143,6 +143,20 @@ struct State {
     // body and what judges where the step left it are two different moments.
     std::vector<entt::entity> Cull(entt::registry& registry);
 
+    // A minion called up mid-run rather than placed: chapter 3's boss summons one
+    // when it is hurt (Ghost.hpp). Built exactly as Spawn builds one, with the
+    // same locked rotation and for the same reason, and pushed onto this list so
+    // that Tick walks it, a killer floor can take it, and Game can count what
+    // still stands. Returns the body, for the caller to hand to the portals as
+    // Game hands what Spawn makes - a minion is teleportable. entt::null when
+    // there is nothing to build it from.
+    //
+    // The patrol is passed IN, already resolved: the boss resolves its prefix
+    // when the level is found, because Game::AfterStep has no scene to resolve a
+    // waypoint name from.
+    entt::entity Summon(entt::registry& registry, const std::string& name, const glm::dvec2& atPx,
+                        const std::vector<Waypoint>& patrol);
+
     // A minion taken by something that is not a killer floor: a shock diamond's
     // strike, which the original does with the same destroy() the floor calls.
     // Removal lives here rather than in the module that struck it, because Tick
@@ -166,9 +180,15 @@ struct State {
 // prefix does: of 63 markers in 35 levels, 62 carry a prefix, 56 of those
 // resolve two waypoints and 6 resolve one, which are the stationary guards.
 //
-// The 63rd carries no waypointName at all (level31b), and that is NOT an error:
-// the original spawns it a minion too, whose count loop finds nothing and which
-// then stands where it spawned.
+// The 63rd is NOT a marker at all, and an earlier wording here had that wrong.
+// It is level31b's minion_spawn_point, which carries no role in entity_roles.json
+// and so is never collected below - it is chapter 3's BOSS's summon anchor, read
+// by name by Ghost (Ghost.hpp). level31b's real marker, minion_spawn_908, does
+// carry a waypointName ("wayB") like every other. data/minions.json said so
+// correctly all along; this comment and the one in Find did not.
+//
+// The empty-waypointName branch in Find is therefore defensive rather than
+// exercised: no marker in any of the 128 levels lacks one.
 bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const Rules& rules, State& out, std::string& error);
 
 } // namespace MagicPortals::Minions
