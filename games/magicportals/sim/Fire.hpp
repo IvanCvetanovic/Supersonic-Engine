@@ -146,6 +146,12 @@ struct State {
     int lit = 0;      // burnables set alight
     int blasts = 0;   // bombs that went off
 
+    // WHERE the bombs went off this tick, cleared and refilled by every Tick.
+    // Blast() reaches what it grabs by BODY, and chapter 4's boss has none - it is
+    // a sensor the level never places, as the ghost is - so Game tests these
+    // against it by hand, exactly as it tests a fireball against the ghost.
+    std::vector<glm::dvec2> blastsPx;
+
     // One tick, after the physics step. Returns the bodies it took away, which
     // the caller must pass through Forget: a burnt crate can be a portal
     // traveller, and a blasted one a demolisher's target.

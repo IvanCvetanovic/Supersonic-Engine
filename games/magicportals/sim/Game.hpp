@@ -25,6 +25,7 @@
 
 #include "sim/Boss.hpp"
 #include "sim/Bounce.hpp"
+#include "sim/DarkDragon.hpp"
 #include "sim/Demolish.hpp"
 #include "sim/Diamonds.hpp"
 #include "sim/Dragon.hpp"
@@ -77,6 +78,7 @@ struct Data {
     Fields::Rules fields;         // and fields.json
     Ghost::Rules ghost;           // and ghost.json
     Dragon::Rules dragon;         // and dragon.json
+    DarkDragon::Rules darkDragon; // and darkdragon.json
     Torch::Rules torch;           // and torch.json
     Zerog::Rules zerog;           // and zerog.json
     Bounce::Rules bounce;         // and bounce.json
@@ -132,6 +134,10 @@ struct Level {
     // floor. It owns a camera of its own, because its level is the only one in
     // the game that sets auto_camera - and sets it to the dragon.
     Dragon::State dragon;
+    // Chapter 4's boss, and the last level of the game: summoned by the player's
+    // own light, hurt only by a barrel bomb its own fireball sets off, and the
+    // holder of the only key its level has.
+    DarkDragon::State darkDragon;
     // Chapter 4's torches, and the wall of light one of them drops.
     Torch::State torch;
     // The slabs that bob in chapter 4's weightless rooms. Kinematic, so each

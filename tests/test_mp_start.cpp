@@ -63,13 +63,11 @@ const Chapter kChapters[] = {
     {"", "chapter 1", 32, 32},
     {"a", "chapter 2", 32, 32}, // complete: level31a's dragon was the last of them
     {"b", "chapter 3", 32, 32}, // complete
-    // ALL 32 START, AND 31 PLAY. `no_gravity` was the last thing in the whole
+    // ALL 32 START AND ALL 32 PLAY. `no_gravity` was the last thing in the whole
     // game that stopped a level STARTING; `bouncer` and `gravity_well` were the
-    // last two roles that stopped one PLAYING.
-    //
-    // The one that does not is level31c, which places chapter 4's own boss - the
-    // dark dragon, and the only unbuilt thing left in this chapter.
-    {"c", "chapter 4", 32, 31},
+    // last two roles that stopped one PLAYING; and level31c's dark dragon was the
+    // last unbuilt thing in the game.
+    {"c", "chapter 4", 32, 32},
 };
 
 // The reason with the node's name taken off the front, so that the same refusal
@@ -147,7 +145,7 @@ Outcome StartAndDrop(const std::string& path) {
         // on what ground the second is claimed.
         const bool boss = role == Roles::kBossSpawn &&
                           (Boss::Plays(data.boss, node) || Ghost::Plays(data.ghost, node) ||
-                           Dragon::Plays(data.dragon, node));
+                           Dragon::Plays(data.dragon, node) || DarkDragon::Plays(data.darkDragon, node));
         if (!Roles::IsPorted(role) && !boss) ++outcome.ignored[role];
     }
     // A ZERO-GRAVITY LEVEL'S PLAYER NEVER LANDS, and asking it to would fail all

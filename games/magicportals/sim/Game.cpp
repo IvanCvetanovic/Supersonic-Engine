@@ -71,6 +71,7 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Fields::LoadRules(portDataDirectory + "/fields.json", read.fields, error)) return false;
     if (!Ghost::LoadRules(portDataDirectory + "/ghost.json", read.ghost, error)) return false;
     if (!Dragon::LoadRules(portDataDirectory + "/dragon.json", read.dragon, error)) return false;
+    if (!DarkDragon::LoadRules(portDataDirectory + "/darkdragon.json", read.darkDragon, error)) return false;
     if (!Torch::LoadRules(portDataDirectory + "/torch.json", read.torch, error)) return false;
     if (!Zerog::LoadRules(portDataDirectory + "/zerog.json", read.zerog, error)) return false;
     if (!Bounce::LoadRules(portDataDirectory + "/bounce.json", read.bounce, error)) return false;
@@ -208,6 +209,10 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     // whitelist is four scenery names, and what it takes away are those bodies.
     if (!Dragon::Find(data.scene, data.roles, out.built, data.dragon, out.dragon, error)) return false;
 
+    // Chapter 4's boss. It places no body and reads five markers by name, so it
+    // needs the scene and nothing the builder made.
+    if (!DarkDragon::Find(data.scene, data.roles, data.darkDragon, out.darkDragon, error)) return false;
+
     // And the minions the markers ask for, built last: a minion is teleportable,
     // so it joins the portals' travellers the way what a launcher throws does -
     // after Portals::Find, which is what fills that list to begin with.
@@ -292,6 +297,20 @@ void AfterStep(const Data& data, entt::registry& registry, Level& level, float d
     // which move things. What it takes away goes through Forget as a thrown body
     // does: a crate is teleportable, so a burning one can be in portals.travellers.
     for (const entt::entity gone : level.fire.Tick(registry, level.player, dt)) Forget(level, gone);
+    // A blast within reach of chapter 4's boss burns it, which is the ONLY thing
+    // that can hurt it. Done here rather than inside Fire for the reason the
+    // ghost's fireball test is done in Game: Fire::Blast reaches what it grabs by
+    // BODY, and this boss is a sensor the level never places, so Fire::Find can
+    // never hold it. The reach is its own radius and the blast's together, which
+    // is the original's sphere against its 220 x 220 collider with that box taken
+    // as its half extent - darkdragon.json says so.
+    if (level.darkDragon.Alive()) {
+        const double reach = level.darkDragon.rules.radiusPx + level.fire.rules.blastPx;
+        for (const glm::dvec2& blastPx : level.fire.blastsPx) {
+            const glm::dvec2 gap = blastPx - level.darkDragon.atPx;
+            if (gap.x * gap.x + gap.y * gap.y <= reach * reach) level.darkDragon.burned = true;
+        }
+    }
     // What a fireball ran into (ETHBeginContactCallback_fireball). A carranca's
     // and a fire diamond's are the same fireball.ent and meet the same things;
     // only killMainCharacter differs, and Turrets::Tick has already judged that.
@@ -563,6 +582,66 @@ void AfterStep(const Data& data, entt::registry& registry, Level& level, float d
                     break;
                 }
             }
+        }
+    }
+
+    // Chapter 4's boss, and the last of the four. AFTER the torch block above on
+    // purpose: the torch is what summons it, and a torch lit this tick arms it on
+    // the same tick rather than the next.
+    if (level.darkDragon.present) {
+        const bool hasTorch = !level.torch.lights.empty();
+        const glm::dvec2 torchPx = hasTorch ? level.torch.lights.front().atPx : glm::dvec2(0.0);
+        const DarkDragon::State::Turn turn = level.darkDragon.Tick(
+            registry, level.player, level.torch.lit > 0, torchPx, hasTorch, level.goals.completed, dt);
+
+        // breakDarkDragonWall. The wall carries metadata/breakable, so it is
+        // already a Demolish::Breakable with a body - the removal goes through
+        // that list rather than behind it, as the torch's own wall does.
+        if (turn.brokeWall && !level.darkDragon.wallNode.empty()) {
+            for (Demolish::Breakable& breakable : level.demolish.breakables) {
+                if (breakable.name != level.darkDragon.wallNode || breakable.broken) continue;
+                breakable.broken = true;
+                breakable.brokenBy = level.darkDragon.name;
+                const entt::entity gone = breakable.body;
+                breakable.body = entt::null;
+                if (registry.valid(gone)) {
+                    registry.destroy(gone);
+                    Forget(level, gone);
+                }
+                break;
+            }
+        }
+
+        // PortalManager::killAll, on the tick it is wounded. The budget and the
+        // count of portals used are deliberately left alone: taking the portals
+        // away is not a refund of what they cost.
+        if (turn.killedPortals) {
+            level.portals.placed.clear();
+            level.portals.flight.reset();
+        }
+
+        // Its fireballs, at the player - or, on the tick a wound ends, at the
+        // level's torch. Same fireball.ent either way, and this one kills.
+        if (turn.fired) {
+            Turrets::Fireball made;
+            made.name = level.darkDragon.name + "#" + std::to_string(level.darkDragon.fired);
+            made.atPx = turn.firePx;
+            made.velocityPx = turn.aimPx * level.turrets.rules.speedPx;
+            made.killsPlayer = true;
+            level.turrets.fireballs.push_back(made);
+        }
+
+        // And the key it drops, which is the only key level31c has: the fight IS
+        // the lock, as it is in level31b. Its colour is key.ent's own, carried in
+        // darkdragon.json because the key is made at run time and has no node.
+        if (turn.droppedKey) {
+            Keys::Key dropped;
+            dropped.name = level.darkDragon.name + "#key";
+            dropped.colour = level.darkDragon.rules.keyColour;
+            dropped.atPx = turn.keyPx;
+            dropped.fromPx = turn.keyPx;
+            dropped.toPx = turn.keyPx;
+            level.keys.keys.push_back(dropped);
         }
     }
 

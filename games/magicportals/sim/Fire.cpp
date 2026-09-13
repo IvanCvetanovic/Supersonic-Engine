@@ -147,6 +147,7 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
 
 std::vector<entt::entity> State::Tick(entt::registry& registry, entt::entity player, float dt) {
     std::vector<entt::entity> removed;
+    blastsPx.clear();
 
     // The bombs asked for BEFORE this tick go off now, and the set is taken first:
     // a blast below may ask another bomb, and that one waits its own turn. This is
@@ -164,6 +165,7 @@ std::vector<entt::entity> State::Tick(entt::registry& registry, entt::entity pla
         registry.destroy(bomb.body);
         removed.push_back(bomb.body);
         ++blasts;
+        blastsPx.push_back(atPx);
         Blast(*this, registry, atPx);
     }
 

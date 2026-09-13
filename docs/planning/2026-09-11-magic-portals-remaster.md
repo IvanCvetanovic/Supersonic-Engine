@@ -3656,3 +3656,97 @@ levels starting with 127 playing** on both. Chapter 2's play floor is raised fro
 31 to 32.
 
 What is left of the whole remaster: **one boss**, level31c's dark dragon.
+
+## Step 35 - chapter 4: the dark dragon, and the last level of the game (built)
+
+Chapter 4 goes from 31 of 32 playing to **32**, and the game from 127 of 128 to
+**128**. **All 128 levels start and all 128 play.** There is no unbuilt mechanic
+left in the remaster.
+
+**The whole level is one mechanism**, and decoding level31c meant decoding all of
+it at once:
+
+  - level31c is `darkest` and holds an unlit torch. A portal shot passing within
+    24 px lights it, which takes the **light wall** away (Torch) and, in the same
+    act, **arms this boss**.
+  - `ETHCallback_dark_dragon_spawn` (bytes 388631..389418) waits 3000 ms, sees the
+    `light_from_projectile.ent` the torch added, and marks itself destroyed -
+    which deletes nothing: `destroy` is a custom uint (347560..347658).
+  - 4000 ms later it adds `dark_dragon.ent` at its own place, calls
+    `breakDarkDragonWall`, and deletes itself.
+  - The dragon flies in over 7400 ms through `shout` to `fighting` and shoots
+    fireballs at the player on the same sight gate as level31a's dragon.
+  - **It is hurt only by fire**, as the ghost is. level31c places no fire agent and
+    no fire diamond. Its only fire is a **barrel bomb**, which is `teleportable`,
+    and the only thing that can light that bomb is the dragon's **own fireball** -
+    the port's fireball path already asks an overlapping bomb to go off.
+  - Every wound: hp -1, the player's **portals are taken away**, the fire interval
+    shortens by 600 ms, it **shoots out the torch**, and it restocks the bomb.
+  - At hp 0 it falls over 9000 ms and drops a **yellow key**, and level31c places
+    the only yellow keyhole and locked door and no key of its own.
+
+**The boss supplies its own ammunition and its own detonator**, and that is not a
+reading. `addEntityIfItCantBeFound` restocks `barrel_bomb` after every shot it
+takes, so a fight that would otherwise end at the first wasted bomb instead hands
+the weapon back - and the boss's own shot is what arms it. The same shape as the
+ghost restocking the fire diamond that kills it, one chapter later and tighter.
+
+**`darkest` becomes a mechanic here, for the first and only time in 128 levels.**
+Twelve levels carry the flag and eleven use it for atmosphere; this one makes light
+a resource, gives you one torch to make it with, and has the boss shoot that torch
+out every time you hurt it. `art.json` has carried `darkest` as a decoded but
+unapplied note since chapter 4 began - this is what it was for.
+
+**Hurt by a blast, and tested by hand for the ghost's reason.** `Fire::Blast`
+reaches what it grabs by BODY, and `dark_dragon.ent` is a sensor (`sensor 1`,
+`density 0`, `gravityScale 0`, Collision 220 x 220) that no level places - so
+`Fire::Find` can never hold it, exactly as it can never hold the ghost.
+`Fire::State` now reports **where** its bombs went off, and `Game` tests those
+against the boss, which is the same shape as the fireball-versus-ghost test
+already beside it. The reach is the boss's own radius and the blast's together:
+the original grabs with a sphere against that real 220 x 220 collider, and the
+port takes the box as its half extent, 110 px. `burnable` in the entity's own
+custom data is what puts it in the blast's filter at all.
+
+**Killing portals is not a refund.** `PortalManager::killAll` becomes
+`placed.clear()` and `flight.reset()`; `budget` and `portalsUsed` are deliberately
+left alone, so a wound costs the portals you have and not the ones you spent.
+
+**One gap, stated rather than papered over.** The original's death also adds a
+`single_block_plat_no_emissive.ent` at `platform_pos`. This port cannot:
+`LevelBuilder::BuildEntity` builds a NODE the scene holds, and no node stands at
+that marker - the original makes the body from the `.ent` itself. There is
+deliberately **no flag for it** in `DarkDragon::Turn`, because a flag `Game` could
+not act on is a hole shaped like a check. The risk: the key drops at (78, 208) and
+the keyhole is at (592, 200), so if that platform is the only way back across, the
+level may not be finishable without it. Nothing in the data settles that - it needs
+the level played. Building it needs a way to place a body from an `.ent` with no
+node behind it, which is the same shape as `LevelBuilder::BuildRigidCircle`.
+
+**One divergence, also stated.** The original's marker watches for the
+`light_from_projectile.ent` a lit torch adds; the port reads `Torch::State::lit`,
+which counts the same event and is monotonic. A player who lit the torch and shot
+the flame back out inside the three-second window would, in the original, leave no
+light to be found and disarm the summon; here the arming stands. Recorded rather
+than built, because modelling it means modelling that entity's own lifetime, which
+nothing else in the game reads.
+
+**A test premise expired, and it was rewritten rather than relaxed.** The first cut
+of `test_mp_darkdragon` ticked six seconds and asserted a shot. It failed, and the
+gate was right: the boss fights at (16, 56) and the player spawns at (710, 48),
+694 px away through the pillars level31c stands between them. What the suite pins
+now is **both** sides - no shot across its own arena, and a shot the moment the
+player comes within 40 px.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite and no
+warnings on either, `test_mp_darkdragon` at 92 checks reporting a summon 3000 +
+4000 ms after the torch and an arrival over 7400 ms, a blast beside it taking hp
+from 3 to 2 and two portals away, a shot refused across 694 px of its own arena
+and taken from 40 px, and a fall of 9.00 s that dropped its key; `test_mp_dragon`
+at 151, `test_mp_layer` at 206, `test_mp_start` at 552, and **128 of 128 levels
+starting and 128 playing** on both. Chapter 4's play floor is raised from 31 to 32.
+
+**The remaster is complete.** Every mechanic the original has is built, and what is
+not built is named in the data file that carries each decode. What is left is
+playing it: level31c's missing platform above, and level28b's fire diamond with no
+gutter mouth, are the two places where only the game itself can say.
