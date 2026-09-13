@@ -6,6 +6,32 @@
     "committed. See docs/planning/2026-09-11-magic-portals-remaster.md, steps 9c, 9d and 11b."
   ],
 
+  "darkest": {
+    "_source": [
+      "A LEVEL PROPERTY rather than an entity. Game's level-properties reader does",
+      "CheckCustomData('darkest') and, when it is set, SetAmbientLight(DARKEST_AMBIENT_LIGHT)",
+      "- and that single call is the whole of what the flag does in that function.",
+      "DARKEST_AMBIENT_LIGHT is built at Game.angelscript bytes 306783..306841 as",
+      "vector3(0.01, 0.01, 0.01), so it is very nearly black rather than actually black."
+    ],
+    "ambient_light": [0.01, 0.01, 0.01],
+    "_applied_by_nothing": [
+      "Recorded here because this is where a renderer would look for it, and applied by",
+      "nothing: the port has no ambient light at all. Sprites carries no colour or tint, so",
+      "there is no value for this to multiply and a dark level draws exactly as a lit one.",
+      "",
+      "The flag is carried on Game::Level all the same, so that when lighting exists the",
+      "levels that want it already say so and nothing has to be re-decoded.",
+      "",
+      "Its ONE decoded gameplay consequence is not drawing at all:",
+      "canSeeAnything = GetAmbientLight() != DARKEST_AMBIENT_LIGHT, so a minion in a darkest",
+      "level is BLIND. minions.json records minion sight as not built, and that note said it",
+      "had 'nothing to build against until darkest exists'. It exists now, and sight is still",
+      "the step it always was - so the blindness costs nothing today and is the first thing",
+      "that must be honoured when sight lands."
+    ]
+  },
+
   "portal": {
     "_source": "the original's portal.ent: Sprite portal_halo.png, blendMode 1 (added), SpriteCut 1 x 1",
     "sprite": "portal_halo.png",

@@ -433,15 +433,22 @@ void LevelsFollowInOrderAndRetryIsInstant() {
 }
 
 void NSkipsWhatThePortRefuses() {
-    // level26c is one of chapter 4's dark levels, which the port refuses, and
-    // level27c after it starts.
+    // level18c is the last of chapter 4's no-gravity levels, which the port still
+    // refuses, and level19c after it starts.
+    //
+    // This used to be level26c, refused for `darkest`, and level27c after it.
+    // `darkest` is carried now rather than refused (art.json), so that pair no
+    // longer demonstrates anything - the level it named simply loads. The test is
+    // about the SKIP and about a refused level leaving nothing behind, both of
+    // which still matter while no_gravity refuses eighteen levels, so it is
+    // pointed at a pair that is still the shape it is testing.
     entt::registry registry;
     publishViewport(registry);
-    MagicPortalsLayer layer(TestPaths(), "level26c");
+    MagicPortalsLayer layer(TestPaths(), "level18c");
     layer.OnAttach(registry);
-    CHECK(IsAt(layer, "level26c"));
+    CHECK(IsAt(layer, "level18c"));
     CHECK(layer.SimLevel() == nullptr);
-    CHECK_MSG(layer.LoadError().find("darkest") != std::string::npos, layer.LoadError());
+    CHECK_MSG(layer.LoadError().find("no_gravity") != std::string::npos, layer.LoadError());
     // Nothing of a refused level is left: the camera is the one thing with a
     // transform. Every refusal in the data now comes before anything is built,
     // so this holds for the later ones too only because unloadLevel runs on
@@ -449,7 +456,7 @@ void NSkipsWhatThePortRefuses() {
     CHECK_EQ(registry.view<TransformComponent>().size(), std::size_t{1});
 
     press(layer, registry, MagicPortalsLayer::kSkip);
-    CHECK(IsAt(layer, "level27c"));
+    CHECK(IsAt(layer, "level19c"));
     CHECK_MSG(layer.SimLevel() != nullptr && layer.LoadError().empty(), layer.LoadError());
     layer.OnDetach(registry);
 }

@@ -3072,3 +3072,89 @@ a second boss was added beside the first and a second way to build a minion besi
 What is left of the whole remaster: `boss_spawn` in level31a alone - chapter 2's
 dragon, which is five callbacks and a knight of its own - and then chapter 4,
 where `no_gravity` refuses 18 levels and `darkest` refuses 12.
+
+*(Corrected by step 29: that sentence was imprecise. `gravity_well` was inert in
+level27c at the time too, which "and then chapter 4" covers only loosely -
+level27c is a chapter-4 level that already started. The inventory had reported it
+all along.)*
+
+## Step 29 - chapter 4: `darkest` carried rather than refused, and the role it uncovered (built)
+
+Chapter 4 goes from 2 of 32 starting to **14**, and the game from 98 of 128 to
+**110**. Playing moves by one - chapter 4 from 1 to 2, the game from 96 to **97** -
+and that small number is the honest point of this step rather than a
+disappointment in it. `darkest` was the only thing **refusing** those twelve
+levels. It was never the only thing in them.
+
+**What the flag actually is.** The original's level-properties reader does
+`CheckCustomData('darkest')` and, when it is set,
+`SetAmbientLight(DARKEST_AMBIENT_LIGHT)` - and that single call is the whole of
+the flag in that function. `DARKEST_AMBIENT_LIGHT` is built at
+`Game.angelscript` bytes 306783..306841 as `vector3(0.01, 0.01, 0.01)`: very
+nearly black rather than black. `art.json` records that number where a renderer
+would look for it.
+
+**This port has no ambient light at all.** `Sprites` carries no colour and no
+tint, so there is nothing for 0.01 to multiply, and a dark level draws exactly as
+a lit one either way. Refusing to start the level did not make that more honest -
+it hid twelve levels whose every role the port already plays or already does not.
+So the flag is CARRIED on `Game::Level` and acted on by nothing, and says so in
+`art.json`, in `Game.cpp` and in the suite.
+
+The one decoded gameplay consequence is not drawing at all:
+`canSeeAnything = GetAmbientLight() != DARKEST_AMBIENT_LIGHT`, so a minion in a
+dark level is **blind**. `minions.json` recorded that and said there was "nothing
+to build against until `darkest` exists". It exists now; minion sight is still the
+step it always was, so the blindness costs nothing today and is the first thing
+that has to be honoured when sight lands.
+
+**`no_gravity` is still refused, and the two flags are no longer the same case.**
+
+| | `darkest` (12 levels) | `no_gravity` (18 levels) |
+|---|---|---|
+| in the original | one `SetAmbientLight` | world gravity to zero, AND read again in three classes |
+| the mechanic | none | `PortalManager` calls `applyImpulse`: the recoil of a shot is how you move |
+| what this port has | no ambient light to change | a solver that would simply drop everything |
+| so | carried | refused, and honestly |
+
+Started without the impulse, a zero-gravity level would drop everything in it and
+still look like a level that works, which is exactly what that guard exists to
+prevent.
+
+**What the twelve levels turned out to hold**, which is the real yield of the
+step. The inventory can now see inside levels it had never opened, and it found a
+role the port has never met:
+
+```
+  10  torch: level21c level22c level23c level24c level25c level26c
+              level28c level29c level30c level31c
+   2  boss_spawn: level31a level31c
+   2  gravity_well: level20c level27c
+```
+
+`torch` is new. It was invisible for as long as every level carrying it was
+refused, and it is now the single largest blocker left in the game.
+
+**A test that was pinning the limitation, not a regression - and I called it one
+before reading it.** `test_mp_layer`'s `NSkipsWhatThePortRefuses` loaded level26c,
+asserted `SimLevel() == nullptr`, and asserted the load error contained the word
+`"darkest"`. All three failed the moment level26c started, which is precisely what
+this change intends. The test is about the SKIP, and about a refused level leaving
+nothing behind - both still true while `no_gravity` refuses eighteen levels - so
+it is pointed at level18c and level19c, a pair that is still the shape it is
+testing, rather than deleted.
+
+**And the play floors were raised, which they should have been three steps ago.**
+`test_mp_start`'s own header says "the floors are raised as roles land", but only
+the START floors ever had been: chapters 2, 3 and 4 all carried a play floor of 0
+while measurably playing 31, 32 and 1. A regression that stopped thirty-one levels
+playing would have passed in silence. They now hold what both toolchains measure.
+
+GCC 13.3 and MSVC 14.50 agree: 0 failures in every Magic Portals suite,
+`test_mp_start` at 534 checks with 12 of 12 darkest levels starting and carrying
+the flag, `test_mp_layer` back to 205 with the skip test exercising level18c into
+level19c, and 110 of 128 levels starting with 97 playing on both.
+
+What is left of the whole remaster, and the inventory can now see all of it:
+`torch` in 10 levels, `no_gravity` in 18, `boss_spawn` in level31a and level31c,
+and `gravity_well` in level20c and level27c.

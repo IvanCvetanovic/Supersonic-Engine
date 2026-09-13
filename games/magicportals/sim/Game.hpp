@@ -113,6 +113,12 @@ struct Level {
     Fields::State fields;
     // Chapter 3's boss, which the fire diamond is the weapon against.
     Ghost::State ghost;
+    // The level sets `darkest`: its ambient light is DARKEST_AMBIENT_LIGHT,
+    // (0.01, 0.01, 0.01). Carried rather than acted on - this port has no ambient
+    // light for it to change - and art.json holds the decode. Its one gameplay
+    // consequence is that a minion in such a level is blind, which minion sight
+    // must honour when it is built.
+    bool darkest = false;
     entt::entity player = entt::null;
 };
 

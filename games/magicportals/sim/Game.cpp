@@ -86,17 +86,37 @@ void UseRemakeGravity(entt::registry& registry) {
 }
 
 bool Start(const Data& data, entt::registry& registry, Level& out, std::string& error, bool withStatics) {
-    // Level flags the port does not play yet. Started without them, a zero-gravity
-    // level would drop everything in it and a dark one would be lit, and either
-    // would look like a level that works.
+    // The two level-property flags, and they are no longer the same case.
+    //
+    // no_gravity is still refused, because it is a MOVEMENT MODE and not a
+    // switch. The original sets world gravity to zero for such a level (against
+    // (0, scale(10)) otherwise), and then reads the flag again in MainCharacter,
+    // in GameStateController and - the part that makes it a mechanic -
+    // PortalManager, where firing a portal calls applyImpulse. In those levels the
+    // recoil of a shot is how the player moves. Started without that, a
+    // zero-gravity level would drop everything in it and look like a level that
+    // works, which is what this guard exists to prevent.
+    //
+    // darkest is CARRIED instead. Its whole effect in the original's own
+    // level-properties reader is one SetAmbientLight(DARKEST_AMBIENT_LIGHT), and
+    // this port has no ambient light: Sprites has no colour or tint for it to
+    // multiply, so a dark level draws exactly as a lit one either way. Refusing
+    // the level did not make that more honest - it only hid twelve levels whose
+    // every ROLE the port already plays or does not. Its one gameplay consequence
+    // is that a minion in such a level is blind, and minion sight is unbuilt in
+    // every level alike; minions.json and art.json both say so.
+    bool darkest = false;
     for (const Tscn::Node& node : data.scene.nodes) {
         if (node.parent != "." || Roles::RoleOf(data.roles, node) != Roles::kLevelProperties) continue;
-        for (const char* flag : {"no_gravity", "darkest"}) {
-            double on = 0.0;
-            if (const Tscn::Value* value = node.Meta(flag); value != nullptr && value->AsNumber(on) && on != 0.0) {
-                error = node.name + " sets " + flag + ", and that is not ported";
-                return false;
-            }
+        double on = 0.0;
+        if (const Tscn::Value* value = node.Meta("no_gravity");
+            value != nullptr && value->AsNumber(on) && on != 0.0) {
+            error = node.name + " sets no_gravity, and that is not ported";
+            return false;
+        }
+        on = 0.0;
+        if (const Tscn::Value* value = node.Meta("darkest"); value != nullptr && value->AsNumber(on) && on != 0.0) {
+            darkest = true;
         }
     }
 
@@ -106,6 +126,7 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     options.roles = &data.roles;
     options.withStatics = withStatics;
     out = Level{};
+    out.darkest = darkest;
     if (!LevelBuilder::Build(data.scene, registry, options, out.built, error)) return false;
     if (withStatics && !Puzzle::Wire(data.scene, data.roles, out.built, out.channels, error)) return false;
     if (withStatics && !Mover::Wire(data.scene, data.roles, out.built, data.movers, out.movers, error)) return false;

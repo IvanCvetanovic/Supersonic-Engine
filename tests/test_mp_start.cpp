@@ -51,11 +51,19 @@ struct Chapter {
     int startFloor; // levels that start today
     int playFloor;  // levels that play today
 };
+// The play floors for chapters 2, 3 and 4 were left at zero while those chapters
+// were being built, so three chapters' worth of gains were protected by nothing:
+// a regression that stopped 31 levels playing would have passed. They are raised
+// here to what both toolchains measure, which is what "the floors are raised as
+// roles land" was always meant to mean.
 const Chapter kChapters[] = {
     {"", "chapter 1", 32, 32},
-    {"a", "chapter 2", 32, 0},
-    {"b", "chapter 3", 32, 0},
-    {"c", "chapter 4", 2, 0},
+    {"a", "chapter 2", 32, 31}, // all but level31a's dragon
+    {"b", "chapter 3", 32, 32}, // complete
+    // 14 start: level0c, level27c, and the twelve `darkest` levels now carried
+    // rather than refused. Only 2 play - level0c and level19c - because eleven of
+    // those twelve carry roles the port has never met, `torch` chief among them.
+    {"c", "chapter 4", 14, 2},
 };
 
 // The reason with the node's name taken off the front, so that the same refusal
@@ -210,8 +218,52 @@ void EveryLevelsArtReads() {
     CHECK_EQ(added, 99);
 }
 
+// The twelve levels that set `darkest`. The flag is CARRIED rather than acted on
+// - this port has no ambient light for DARKEST_AMBIENT_LIGHT (0.01, 0.01, 0.01)
+// to change, and Sprites has no colour to multiply - so what is pinned here is
+// that they start and that the flag reaches Game::Level, never that anything
+// looks different. art.json holds the decode, and minions.json holds the one
+// gameplay consequence: a minion in such a level is blind, which minion sight
+// must honour when it is built.
+void DarkestLevelsStartAndCarryTheFlag() {
+    const char* const kDarkest[] = {"level19c", "level20c", "level21c", "level22c", "level23c", "level24c",
+                                    "level25c", "level26c", "level28c", "level29c", "level30c", "level31c"};
+    const std::filesystem::path prisms = std::filesystem::temp_directory_path() / "supersonic-test-mp-start";
+
+    int carried = 0;
+    for (const char* name : kDarkest) {
+        Game::Data data;
+        entt::registry registry;
+        Game::Level level;
+        std::string error;
+        const bool ok =
+            Game::LoadData(kLevels + "/" + name + ".tscn", kData, prisms, data, error) &&
+            Game::Start(data, registry, level, error);
+        CHECK_MSG(ok, std::string(name) + ": " + error);
+        if (!ok) continue;
+        CHECK_MSG(level.darkest, std::string(name) + " sets darkest, and Game::Level says so");
+        if (level.darkest) ++carried;
+    }
+    CHECK_EQ(carried, 12);
+
+    // And a level that does not set it says so too - without this the flag being
+    // true everywhere would pass every check above.
+    {
+        Game::Data data;
+        entt::registry registry;
+        Game::Level level;
+        std::string error;
+        if (Game::LoadData(kLevels + "/level0.tscn", kData, prisms, data, error) &&
+            Game::Start(data, registry, level, error)) {
+            CHECK_MSG(!level.darkest, "level0 is not a dark level");
+        }
+    }
+    std::printf("  %d of 12 darkest levels start and carry the flag\n", carried);
+}
+
 void runTests() {
     Level30StillPlays();
+    DarkestLevelsStartAndCarryTheFlag();
     EveryLevelStartsOrSaysWhy();
     EveryLevelsArtReads();
 }
