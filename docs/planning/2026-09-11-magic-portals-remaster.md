@@ -4545,3 +4545,167 @@ difference is real. But the original has no rule that hides the HUD on those two
 - **Smart App Control.** It refused `test_mp_portal`, `test_mp_launchers` and
   `MagicPortals.exe` once each after relinking (BAD_COMMAND, "Permission denied"). Each
   ran once relinked again.
+
+## Step 41 - the original's lighting, read from the levels and drawn by nothing yet (built)
+
+The port draws no lighting: every sprite is its texture, tone-mapped, which is why the
+arches of 1-1 are mid-grey where the original's are near-black and a white texel stops
+near 186. The remake's `out/parity/specs/lighting/design_port.md` plans the whole of it
+from a numerical fit of the original's pixels (`fit.md`, about 1/255 per block), in steps
+that each change one thing. **This is its step G1, and it is only reading**: the levels
+now carry the original's lighting, the port reads it strictly, and **not one pixel
+changes**. The engine is not touched.
+
+**THE DATA, REGENERATED AND PROVED UNCHANGED BUT FOR THE KEYS.** The remake's b572fec
+taught its converter to write every lighting input a level file holds as quoted
+`metadata/eth_*` strings, and `--copy-lighting` to copy the files they name. `out/` was
+regenerated with that committed converter, from the remake's root:
+
+```
+tools/converter/.venv/Scripts/python -m ethanon2godot --world N --copy-textures --copy-lighting   (N = 0, 1, 2, 3)
+```
+
+The hashes of `out/levels`, `out/data/chapters.json` and `out/assets` were recorded and
+the levels copied aside first (`out/parity/specs/lighting/work/g1/`). After:
+- **All 128 `.tscn` changed, and all 128 are byte-identical to the file before once their
+  `metadata/eth_*` lines are taken out** (`tscn_diff.py`). Every one of those lines is
+  `metadata/eth_<key> = "<text>"`, and there are **11,234** of them: the converter's own
+  report, summed over the four runs (3,042 + 2,277 + 3,708 + 2,207).
+- **`chapters.json`**: md5-identical.
+- **Every file that was under `out/assets`** - 279, the 66 entity textures among them -
+  md5-identical. What is new: 730 lightmaps in 67 level directories under
+  `assets/lightmaps/`, the 44 normal maps under `assets/entities/normalmaps/`, and
+  `halo.bmp` and `spark_halo.bmp`. `portal_halo.png`, already there as a sprite, was
+  copied over itself and is unchanged.
+- **The Godot copy is out of date on purpose.** The remake's gitignored
+  `game/assets/levels` is still byte-identical to the levels BEFORE this step. Nothing in
+  this repository reads it.
+
+| Key | Lines | Where the converter writes it |
+|---|---|---|
+| `eth_ambient`, `eth_light_intensity` | 128 each | the root, always |
+| `eth_z` | 1,533 | any entity node off z 0; the same nodes as `z_index`, unrounded |
+| `eth_emissive` | 2,140 | any entity node with a non-zero emissive |
+| `eth_static` / `eth_apply_light` | 2,676 / 1,719 | only nodes that draw a sprite or own a light |
+| `eth_normal` | 1,720 | the same; 27 distinct files |
+| `eth_lightmap` | 730 | static, applyLight and a sprite; in 67 levels |
+| `eth_light_range` | 72 | every light, default range included; 68 on static owners |
+| `eth_light_offset` / `eth_light_color` | 71 / 72 | a light, when not the default |
+| `eth_halo` | 71 | a light with a `<HaloBitmap>` |
+| `eth_halo_offset` / `_size` / `_brightness` | 54 / 54 / 66 | a halo, when not the default |
+
+**THE READER, `sim/Lighting`.** Renderer-free, beside `Sprites`, with the design's
+section 3.5 interface: `Lighting::Read(scene, resRoot, out, error)` fills the scene's
+ambient and intensity and a `Look` for **every** entity node (4,065 in the game), a node
+with no key standing at the engine's defaults - depth 0, not static, no light, emissive
+0, colour 1, a light's range 256 and halo 64 at brightness 1. Those are decoded
+defaults, cited in the header, not a guess. The one exception is the root pair: every
+level file has a `<SceneProperties>`, so a root without both is refused, never given
+ambient 1 and intensity 2.
+
+`Tscn` already reads any `metadata/*` string, so **its vocabulary does not grow and
+`test_mp_tscn` is untouched**. The strictness about which `eth_` keys exist, where, and
+what they may say moves up into `Lighting`. It refuses, naming the node's line:
+- an `eth_` key it does not know;
+- a scene key on an entity, or an entity key on the root, or any key below an entity
+  node;
+- a value that is not a quoted string of exactly the numbers the key takes, one space
+  apart, all finite (no `inf`, no `nan`, no double space);
+- a flag that is not `"0"` or `"1"`;
+- a path that is not `res://` or names no file;
+- a lightmap on a node that is not static, does not apply light, or draws no sprite;
+- a lightmap whose size times two is not its sprite's;
+- a light key without `eth_light_range`, a halo number without `eth_halo`, or a range
+  that is not positive;
+- a sprite-or-light key (`eth_static`, `eth_apply_light`, `eth_color`, `eth_normal`, the
+  light's) on a node that neither draws a sprite nor owns a light.
+
+**The design's list has neither the placement rules, the flag rule nor the halo rule;
+they are the converter's own conventions, which landed after the design.** The design
+put every entity key on sprite-or-light nodes only.
+The converter writes `eth_z` and `eth_emissive` on every node, because the player
+marker has no sprite and is where the port's player will take its lighting height -
+and 2-09's `main_char` sits at z 2. So those two may stand anywhere, and the rest keep
+the converter's gate. Before the reader was written, an independent parser of the emitted
+files (`precheck.py`, beside `tscn_diff.py`) checked the gate, the lightmap's three
+conditions and its size, and that every path names a file. It found 0 violations over
+the 128 levels, and the reader then accepted all 128.
+
+**The lightmap's size is checked against `Sprites::Find`'s**, not a second read of the
+sprite's file, so it is the size the layer will stretch the lightmap over. All 730
+lightmaps are exactly half their sprite on both axes, as the remake's
+`data_inventory.md` found. **That factor of 2 holds against `sizePx` as it is today**:
+1x art, where an image pixel is a level unit. A lightmap is a quarter of the hd sprite per
+axis. So when plan_port's System 6 draws the hd tier, `sizePx` must stay in level units
+(the design's "world units", with the tier's 0.5 folded in), or this check must change its
+factor. Otherwise it refuses all 730.
+
+**Not a pure function of the text**, in the same way `Sprites::Find` is not: it asks the
+filesystem whether each path is a file, and reads the lightmaps' and sprites' headers.
+
+**Nothing draws it.** The layer does not call `Lighting::Read`, and `Game::Data` does
+not carry it. Reading it in the layer, the ambient and emissive, the lightmaps, the lights
+and the halos are the design's steps G3 to G6, after the engine steps E0 to E3. The
+design's `color` field turned out to be an instance property (the remake's
+`docs/ethanon-formats.md` correction: `ETHEntity.cpp:236`); the key is the same and no
+level carries one.
+
+**GATES.**
+
+| Gate | Required | Measured |
+|---|---|---|
+| `out/levels` after regeneration | differs only by `metadata/eth_*` lines | 128 of 128 identical once those lines are removed; 11,234 lines; no other byte |
+| `out/data/chapters.json` | unchanged | md5 identical |
+| entity textures | unchanged | 66 of 66 md5 identical (279 of 279 files under `out/assets`) |
+| converter totals | 730 lightmaps, 72 lights / 68 static, 71 halos, 1,720 normals, 2,140 emissive, 1,533 z; 11,234 lines | all equal, and `test_mp_lighting` and `test_mp_start` read the same from the port's side |
+| 1-01 capture, `level0 --window 1280x720 --fixed-step --frames 420` | byte-identical | `a5abafb357766442e22edd119e01952b` before and after |
+| 2-26 capture, `level25a`, the same | byte-identical | `0e925ef51e310519076594c231afbd0d` before and after |
+| `test_mp_levels` `metaStrings` | raised by exactly 11,234 | 5,700 → **16,934**; `grep -cE '^metadata/[^ ]+ = "'` over the files counts 5,700 before and 16,934 after |
+| `metaVectors` / `metaNumbers` / outside joints | unchanged | 837 / 80 / 0 |
+
+**The captures are against this step's own before, not the design's.** The design's
+`port/1-01_level0_f420.png` and `2-26_level25a_f420.png` were taken before steps 38 to
+40 put the HUD in the frame, so they no longer match today's port with or without this
+step (md5 `eee7bdb7...` and `f1b9368f...`). The before-captures were taken first, twice,
+with identical md5s, so the port is deterministic here. Then the data was regenerated,
+the code added, and both were captured again. The logs differ only in the timings and
+the file name.
+
+**What the data change alone did**, run before any code: of 112 suites, only
+`test_mp_levels` failed, and only on `metaStrings` (got 16,934). No other suite reads
+metadata it does not know.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning, with the four changed sources forced to recompile.
+- **ctest.** **113 of 113** pass, 36 of them Magic Portals suites.
+- **`test_mp_lighting`: new, 415 checks** (230 without the levels, which skip by
+  themselves and never with 77).
+  - Every key read off a hand-written scene with invented values, and every absence read
+    as its default: a light with no sprite, a marker, a lit wall with no lightmap, a node
+    with no key.
+  - 31 refusals, each checked for its message and for the line of the node it names.
+  - Over the 128 levels:
+    - the totals, and 67 levels with lightmaps;
+    - each lightmap in its own level's directory, named `add<id>` for its own node's
+      instance id;
+    - the 730 files on disk are exactly the 730 the levels name;
+    - level0's ambient (0.35, 0.3, 0.35) at intensity 3, its 9 lightmaps, and its torch
+      `light_ent_696` key by key;
+    - lights at defaults, one each: 1-2's `portal_static` with no halo, 1-8's blue light
+      at halo brightness 1, and 2-11's fire agent at range 256 with the default halo
+      offset and size;
+    - 4-22's file ambient 0.5 at 3.5;
+    - 2-09's player marker at z 2, the only one off 0;
+    - 2-01's `static_sphere`, the one normal map on a sprite that applies no light.
+- **`test_mp_start`: 552 → 689.** Every level's lighting read, 128, plus the 9 totals.
+  The 552 was not re-measured before the edit. It is derived: the measured 689, less the
+  137 the new sweep adds by construction, is 552, which is what step 35 last recorded.
+- **`test_mp_levels`**: 128 checks, the pin raised.
+- **Unchanged:** `test_mp_tscn` 168, `test_mp_sprites` 155, `test_mp_layer` 304.
+- **Smart App Control.** Two relinks, two refusals ("Not Run").
+  - The first relink: `test_mp_ghost`, `test_mp_boss` and `test_mp_sprites` were refused.
+  - The second relink (`Lighting.cpp` moved to its alphabetical place in the library's
+    list): `test_mp_chapters`, `test_mp_fields`, `test_mp_fire`, `test_mp_bounce` and
+    `test_mp_boss` were refused.
+  - Each ran once relinked again. `MagicPortals.exe`, relinked both times, was never
+    refused, and captured 1-01 and 2-26 at the same md5s after the second.

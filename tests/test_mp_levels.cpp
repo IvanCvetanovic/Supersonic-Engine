@@ -1,13 +1,15 @@
 // The converted levels, read whole.
 //
 // These are the remake's 128 levels as its converter wrote them to
-// Magic-Portals-Remake/out/levels, at the remake's 79af319 (its
-// game/assets/levels copy is byte-identical). They are the original game's
+// Magic-Portals-Remake/out/levels, at the remake's b572fec: 79af319's files
+// (whose game/assets/levels copy is byte-identical to them) with the lighting
+// keys inserted and not one other byte changed. They are the original game's
 // level data and are NOT in this repository - main() skips, and says where it
 // looked, when they are absent.
 //
 // The oracle is the files themselves. Every count below was taken with grep on
-// 10 September 2026, independently of this reader, e.g.
+// 10 September 2026 (the metadata strings again on 14 September, when the
+// lighting keys were added), independently of this reader, e.g.
 //
 //   cd Magic-Portals-Remake/out/levels
 //   cat *.tscn | grep -oE '^\[node[^]]*type="[A-Za-z0-9]+"' | sort | uniq -c
@@ -282,7 +284,16 @@ void AllLevels() {
 
     // Metadata by spelling. The 80 bare numbers are the ten hinges' eight
     // joint_* keys, and nothing else is written bare.
-    CHECK_EQ(total.metaStrings, 5700);
+    //
+    // The strings were 5,700 until the remake's b572fec, whose converter writes
+    // the original's lighting as metadata/eth_* strings. The levels were
+    // regenerated with it on 14 September 2026 and every file came out as the
+    // one before plus those lines: 5,700 + 11,234 = 16,934, the converter's own
+    // report of the lines it added, and what
+    //   cat *.tscn | grep -cE '^metadata/[^ ]+ = "'
+    // counts before and after. sim/Lighting reads them; test_mp_lighting pins
+    // what they say.
+    CHECK_EQ(total.metaStrings, 16934);
     CHECK_EQ(total.metaVectors, 837);
     CHECK_EQ(total.metaNumbers, 80);
     CHECK_EQ(total.metaNumbersOutsideJoints, 0);

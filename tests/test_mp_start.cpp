@@ -21,6 +21,7 @@
 
 #include "core/Components.hpp"
 #include "sim/Game.hpp"
+#include "sim/Lighting.hpp"
 #include "sim/Player.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Sprites.hpp"
@@ -289,6 +290,63 @@ void EveryLevelsArtReads() {
     CHECK_EQ(added, 99);
 }
 
+// Every level's lighting, read as the layer will read it (Lighting.hpp). Nothing
+// draws it yet, and a level whose lighting the reader refuses still starts and
+// plays - so, as for the art, every level is read here and the totals are the
+// converter's own report for the four worlds (the remake's b572fec), pinned.
+// test_mp_lighting pins what individual levels say.
+void EveryLevelsLightingReads() {
+    int read = 0;
+    int lightmaps = 0;
+    int lightmappedLevels = 0;
+    int lights = 0;
+    int staticLights = 0;
+    int halos = 0;
+    int normals = 0;
+    int emissive = 0;
+    int deep = 0;
+    for (const Chapter& chapter : kChapters) {
+        for (int i = 0; i < kLevelsPerChapter; ++i) {
+            const std::string name = "level" + std::to_string(i) + chapter.suffix;
+            Tscn::Scene scene;
+            Lighting::Scene lighting;
+            std::string error;
+            const bool ok = Tscn::Load(kLevels + "/" + name + ".tscn", scene, error) &&
+                            Lighting::Read(scene, kLevels + "/..", lighting, error);
+            CHECK_MSG(ok, name + "'s lighting: " + error);
+            if (!ok) continue;
+            ++read;
+            int here = 0;
+            for (const auto& [node, look] : lighting.nodes) {
+                if (!look.lightmap.empty()) ++here;
+                if (look.light) {
+                    ++lights;
+                    if (look.isStatic) ++staticLights;
+                    if (!look.light->halo.empty()) ++halos;
+                }
+                if (!look.normal.empty()) ++normals;
+                if (look.emissive != glm::dvec3(0.0)) ++emissive;
+                if (look.z != 0.0) ++deep;
+            }
+            lightmaps += here;
+            if (here > 0) ++lightmappedLevels;
+        }
+    }
+    std::printf("  lighting: %d of %d levels read, %d lightmaps in %d levels, %d lights (%d static, %d with a halo), "
+                "%d normal maps, %d emissive, %d with a depth\n",
+                read, kLevelsPerChapter * 4, lightmaps, lightmappedLevels, lights, staticLights, halos, normals,
+                emissive, deep);
+    CHECK_EQ(read, kLevelsPerChapter * 4);
+    CHECK_EQ(lightmaps, 730);
+    CHECK_EQ(lightmappedLevels, 67);
+    CHECK_EQ(lights, 72);
+    CHECK_EQ(staticLights, 68);
+    CHECK_EQ(halos, 71);
+    CHECK_EQ(normals, 1720);
+    CHECK_EQ(emissive, 2140);
+    CHECK_EQ(deep, 1533);
+}
+
 // The twelve levels that set `darkest`. The flag is CARRIED rather than acted on
 // - this port has no ambient light for DARKEST_AMBIENT_LIGHT (0.01, 0.01, 0.01)
 // to change, and Sprites has no colour to multiply - so what is pinned here is
@@ -337,6 +395,7 @@ void runTests() {
     DarkestLevelsStartAndCarryTheFlag();
     EveryLevelStartsOrSaysWhy();
     EveryLevelsArtReads();
+    EveryLevelsLightingReads();
 }
 
 } // namespace

@@ -222,6 +222,11 @@ add_mp_test(test_mp_boss)
 # Its reader is tested on files it writes, so it runs anywhere; only the part
 # that reads the converted levels is skipped without them, and never with 77.
 add_mp_test(test_mp_sprites)
+# A level's lighting: the converter's eth_* keys, read strictly and drawn by
+# nothing yet (sim/Lighting). Like test_mp_sprites, the reader is tested on files
+# it writes and runs anywhere; only the part that reads the converted levels is
+# skipped without them, and never with 77.
+add_mp_test(test_mp_lighting)
 # The sounds: the decoded AudioManager as data, and that every file it names is
 # really in the original's soundfx/. The reader runs anywhere; only the part
 # that opens the original's own files is skipped without them, never with 77.
