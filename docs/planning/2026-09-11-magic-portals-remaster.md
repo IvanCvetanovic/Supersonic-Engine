@@ -3873,3 +3873,67 @@ and all six bounds cases; `test_mp_sounds` 99 → **103**; `test_mp_minions` 77 
 and **128 of 128 levels still start and play** on both. MSVC returned 4551 on
 `test_mp_turrets` once - Smart App Control blocking a freshly linked unsigned exe, not
 a failure - and passed it on the relink the runner does for exactly that.
+
+## Step 37 - the platform the last level needs, and a body with no node (built)
+
+Step 36's level edge turned step 35's recorded gap from a silent fault into a visible
+one, so this closes it. **level31c's missing death platform is built.**
+
+**WHY IT IS NOT A FLOURISH.** The floor at y=240 there is `light_wall` 126x30 at
+(64, 240) → x 1..127, `single_block_plat_no_emissive` 64x32 at (224, 240) → x 192..256,
+then `platform_no_emissive` 256x32 twice → x 256..512 and x 512..768. The light wall
+carries `metadata/breakable`, and lighting the torch takes it away - **and the torch
+must be lit to summon the boss at all**. So from the moment the fight starts there is
+no floor whatever from x 0 to 192. The key drops at (78, 208), inside that hole, and
+`platform_pos` is (160, 240) with that same 64x32 box: **x 128..192**, exactly the
+bridge from where the wall stood to where the standing floor begins. Without it the
+only key in the level sits across a pit - and since step 36 gave the port an edge, a
+player who goes for it now falls out of the world and dies instead of falling for ever.
+That is the difference between a level that cannot be finished and one that says so.
+
+**THE MISSING ROAD WAS A BODY WITH NO NODE.** `LevelBuilder::BuildEntity` builds a NODE
+the scene holds; the original's `AddScaledEntity` makes a body from the `.ent` itself,
+and no node stands at that marker. `LevelBuilder::BuildStaticBox` is that road, beside
+`BuildRigidCircle` which is the same shape for what a launcher throws. It emplaces a
+transform, a tag and a `BoxColliderComponent` at `kStaticDepthMetres` and **no**
+`RigidBodyComponent` - which is exactly what `BuildNode` does for a `StaticBody2D`, and
+what makes this a floor rather than something that falls the instant it is made.
+
+`DarkDragon::Turn` carries `droppedPlatform` now. It deliberately carried nothing while
+`Game` had no way to act on it, on the grounds that a flag nobody can act on is a hole
+shaped like a check; the road exists, so the flag does.
+
+**NEITHER ITS SIZE NOR ITS PICTURE IS WRITTEN DOWN ANYWHERE, and that is the point.**
+level31c places **three** `single_block_plat_no_emissive` nodes of its own, so
+`DarkDragon::Find` keeps the first as a template. `Game` sizes the body with
+`LevelBuilder::ShapeBoundsPx` on that node - its own `CollisionPolygon2D`, running
+x -32..32 and y -16..16 - and the layer borrows its `Sprite2D` texture. So the 64x32 in
+the suite's output is **derived from the level**, not from a constant this step typed:
+if the template's polygon were ever different, the test would say so rather than agree.
+
+**The picture had to be borrowed, not loaded.** `entities/` holds
+`single_block_plat_no_emissive.ENT` and **no .png at all** for that entity - the only
+platform PNG in the whole set is `spinning_platform.png`. The `m_thrown` path draws a
+runtime body from `entities/<sprite>`, which would have found nothing here, so a
+straight copy of that path would have produced an invisible floor. `buildSprites` reads
+the SCENE and so cannot have made an entry either. `syncSprites` therefore synthesises
+one `DrawnSprite` from the template sibling's when the body first appears: a
+`DrawnSprite` with a null `body` and no crystal, static-portal or zone index is drawn
+statically at `sprite.atPx`, which is precisely what a platform that never moves wants.
+It is added AFTER that function's loop and by index, because pushing into `m_sprites`
+while ranging over it would invalidate the range.
+
+`unloadLevel` destroys it explicitly, as it already does for `Boss::Rock` bodies:
+it belongs to no `Built`, so the loop over `built.entities` does not reach it, and a
+retry would otherwise leave a platform standing in the next run of the level.
+
+**One asymmetry, stated rather than left to be found.** The dropped platform gets a
+sprite but no entry in `m_bodies`, so the `B` box view does not draw a box for it. It
+is a debug toggle and never what a player sees, but every other body in the game has
+one, and this does not.
+
+GCC 13.3 and MSVC 14.50 agree: **0 failures in every Magic Portals suite** and no
+warnings on either. `test_mp_darkdragon` 92 → **97**, reporting "it fell over 9.00 s and
+dropped its key" and then "and a 64 x 32 platform at (160, 240), from the sibling the
+level places". Every other suite is unchanged, and **128 of 128 levels still start and
+play** on both.

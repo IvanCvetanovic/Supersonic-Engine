@@ -647,6 +647,11 @@ private:
     bool m_dying = false;         // killed, the lost screen not yet up
     double m_dyingClockMs = 0.0;  // how long since
 
+    // Whether the platform the dark dragon's death adds has been given its
+    // picture yet. It has no node, so buildSprites cannot have made one for it:
+    // syncSprites borrows the template sibling's when the body appears, once.
+    bool m_platformDrawn = false;
+
     // Puts the lost screen up, over the level that is still loaded behind it.
     // Follows openFinished and NOT openMenu: openMenu unloads the level and
     // sets m_current to -1, after which the restart button's own guard

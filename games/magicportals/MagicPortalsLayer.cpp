@@ -362,6 +362,13 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
         entt::entity e = rock.body;
         destroy(e);
     }
+    // The platform the dark dragon's death added, which belongs to no Built and
+    // so is not in the loop above.
+    {
+        entt::entity e = m_level.darkDragon.platformBody;
+        destroy(e);
+    }
+    m_platformDrawn = false;
     destroy(m_level.player);
     m_level = Game::Level{};
     m_loaded = false;
@@ -1778,6 +1785,39 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             continue;
         }
         placeSprite(registry, drawn.quad, centrePx, sprite.sizePx, drawn.z, rotation);
+    }
+
+    // THE PLATFORM THE DARK DRAGON'S DEATH ADDS, which buildSprites cannot have
+    // made a picture for: it has no node, and Sprites::Find reads the scene.
+    // entities/ holds single_block_plat_no_emissive.ENT and no .png, so the
+    // picture is borrowed from the sibling the level already places - the same
+    // node Game sized the box from. Added AFTER the loop above, and by index,
+    // because pushing into m_sprites while ranging over it would invalidate it.
+    const entt::entity platform = m_level.darkDragon.platformBody;
+    if (!m_platformDrawn && m_artReady && platform != entt::null && registry.valid(platform)) {
+        int templateAt = -1;
+        for (std::size_t i = 0; i < m_sprites.size(); ++i) {
+            if (m_sprites[i].sprite.node == m_level.darkDragon.platformNode) {
+                templateAt = static_cast<int>(i);
+                break;
+            }
+        }
+        if (templateAt >= 0) {
+            const DrawnSprite& from = m_sprites[static_cast<std::size_t>(templateAt)];
+            DrawnSprite made;
+            made.sprite = from.sprite;
+            made.sprite.node = m_level.darkDragon.name + "#platform";
+            // Where the body actually is, and no offset: Game already folded the
+            // template's shape offset into the body's own position.
+            made.sprite.atPx = Units::ToPixels(registry.get<TransformComponent>(platform).position);
+            made.sprite.offsetPx = glm::dvec2(0.0);
+            made.sprite.rotation = 0.0;
+            made.z = from.z;
+            made.quad = makeSprite(registry, "Magic Portals Dropped Platform", made.sprite.texture,
+                                   made.sprite.additive);
+            m_sprites.push_back(std::move(made));
+            m_platformDrawn = true;
+        }
     }
 }
 

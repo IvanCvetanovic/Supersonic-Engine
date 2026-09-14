@@ -227,6 +227,21 @@ entt::entity BuildRigidCircle(entt::registry& registry, const std::string& tag, 
     return entity;
 }
 
+entt::entity BuildStaticBox(entt::registry& registry, const std::string& tag, const glm::dvec2& atPx,
+                            const glm::dvec2& sizePx, const Options& options) {
+    // No MakeRigid: a StaticBody2D gets a collider and no RigidBodyComponent,
+    // which is what BuildNode does for one and what makes this a floor rather
+    // than something that falls the moment it is made.
+    (void)options;
+    const entt::entity entity = registry.create();
+    registry.emplace<TransformComponent>(entity).position = Units::ToWorld(atPx.x, atPx.y);
+    registry.emplace<TagComponent>(entity, TagComponent{tag});
+    auto& box = registry.emplace<BoxColliderComponent>(entity);
+    box.size = glm::vec3(Units::ToMetres(sizePx.x), Units::ToMetres(sizePx.y),
+                         static_cast<float>(kStaticDepthMetres));
+    return entity;
+}
+
 entt::entity BuildEntity(const Tscn::Scene& scene, const std::string& nodeName, entt::registry& registry,
                          const Options& options, Built& out, std::string& error) {
     const Tscn::Node* node = scene.FindNode(nodeName);

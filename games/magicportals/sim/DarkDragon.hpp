@@ -112,6 +112,15 @@ struct State {
     glm::dvec2 keyPosPx{0.0};
     bool hasPlatformPos = false;
     glm::dvec2 platformPosPx{0.0};
+    // The node the level ALREADY places for the same entity, used as the
+    // template for the one the death adds: its shape is the box and its sprite
+    // is the picture. level31c places three single_block_plat_no_emissive nodes,
+    // and there is no .png in entities/ for that entity - only the .ent - so a
+    // picture has to be borrowed from a sibling rather than loaded by name.
+    std::string platformNode;
+    // The platform once it has been built, so the layer can draw it and the
+    // level's unload can take it away.
+    entt::entity platformBody{entt::null};
 
     // THE SUMMON. `armed` is the marker's own `destroy` flag, which deletes
     // nothing: it only says the light has been seen.
@@ -150,13 +159,13 @@ struct State {
         glm::dvec2 aimPx{0.0}; // a UNIT vector; Game gives it the fireball's speed
         bool droppedKey = false;
         glm::dvec2 keyPx{0.0};
-        // NO PLATFORM HERE, and its absence is deliberate. The original also adds
-        // a single_block_plat_no_emissive.ent at `platform_pos` as it dies, and
-        // this port cannot: LevelBuilder::BuildEntity builds a NODE the scene
-        // holds, and there is no node at that marker - the original makes one
-        // from the .ent. A flag Game could not act on would be a hole shaped like
-        // a check, so there is none. darkdragon.json records the gap and the risk
-        // it carries.
+        // AND THE PLATFORM, which this port could not build until it had a way
+        // to place a body with no node behind it. There was deliberately no flag
+        // here while that was true, because a flag Game could not act on is a
+        // hole shaped like a check; LevelBuilder::BuildStaticBox is that way, so
+        // the flag exists now and Game acts on it.
+        bool droppedPlatform = false;
+        glm::dvec2 platformPx{0.0};
     };
 
     // One tick, after the physics step - it judges where the step left the

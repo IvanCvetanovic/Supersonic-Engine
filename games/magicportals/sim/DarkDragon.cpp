@@ -351,8 +351,14 @@ State::Turn State::Tick(entt::registry& registry, entt::entity player, bool torc
                 turn.droppedKey = true;
                 turn.keyPx = keyPosPx;
             }
-            // The platform the original adds beside it is NOT built here, and
-            // DarkDragon.hpp says why there is no flag for it at all.
+            // And the platform, added at the same waypoint and from the same
+            // .ent. Without it level31c's key sits in a hole with no floor: the
+            // light wall that floored x 1..127 is `breakable` and lighting the
+            // torch - which is what summons this boss - takes it away.
+            if (hasPlatformPos) {
+                turn.droppedPlatform = true;
+                turn.platformPx = platformPosPx;
+            }
         }
         break;
     }
@@ -393,6 +399,11 @@ bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const Rules& rule
         } else if (name == rules.platformPosName && placed) {
             out.hasPlatformPos = true;
             out.platformPosPx = atPx;
+        } else if (name == rules.platformEntity && out.platformNode.empty()) {
+            // A sibling of the one the death adds, kept as its template: the
+            // entity has no .png of its own, so both its box and its picture
+            // come from a node the level already places.
+            out.platformNode = node.name;
         } else if (name == rules.wallName) {
             // By NODE, because that is how Demolish holds it.
             out.wallNode = node.name;

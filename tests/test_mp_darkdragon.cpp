@@ -440,6 +440,27 @@ void ItDropsTheLevelsOnlyKey() {
         CHECK_MSG(matches, "the key it drops opens the keyhole the level places");
     }
 
+    // AND THE PLATFORM, added at the same waypoint. Until the port had a way to
+    // place a body with no node behind it this was a recorded gap, and with a
+    // level edge in place it was the difference between the key being reachable
+    // and the player falling out of the world going for it.
+    const entt::entity platform = level.darkDragon.platformBody;
+    CHECK_MSG(platform != entt::null && registry.valid(platform), "the death adds its platform");
+    if (platform != entt::null && registry.valid(platform)) {
+        const glm::dvec2 atPx = Units::ToPixels(registry.get<TransformComponent>(platform).position);
+        // platform_pos, read off level31c.
+        CHECK(::test::nearly(static_cast<float>(atPx.x), 160.0f));
+        CHECK(::test::nearly(static_cast<float>(atPx.y), 240.0f));
+        // The template sibling's own box, not a number this test invented.
+        const auto& box = registry.get<Supersonic::BoxColliderComponent>(platform);
+        const float widthPx = box.size.x * static_cast<float>(Units::kPixelsPerMetre);
+        const float heightPx = box.size.y * static_cast<float>(Units::kPixelsPerMetre);
+        CHECK(::test::nearly(widthPx, 64.0f));
+        CHECK(::test::nearly(heightPx, 32.0f));
+        std::printf("  and a %.0f x %.0f platform at (%.0f, %.0f), from the sibling the level places\n", widthPx,
+                    heightPx, atPx.x, atPx.y);
+    }
+
     // And it stays dead.
     for (int tick = 0; tick < 300; ++tick) Game::Tick(data, registry, level, 0.0f, kStep);
     CHECK_EQ(level.keys.keys.size(), std::size_t{1});

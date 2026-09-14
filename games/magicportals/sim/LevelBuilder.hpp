@@ -114,6 +114,15 @@ bool ShapeBoundsPx(const Tscn::Scene& scene, const Tscn::Node& node, glm::dvec2&
 entt::entity BuildRigidCircle(entt::registry& registry, const std::string& tag, const glm::dvec2& atPx,
                               double radiusPx, const Options& options);
 
+// A STATIC box with no node behind it, which is what an entity added at run time
+// needs: the original's AddScaledEntity makes a body from the .ent itself, and
+// BuildEntity above can only build a node the scene already holds. The dark
+// dragon's death adds a platform this way (DarkDragon.hpp). Not added to any
+// Built; the caller owns it. A static carries no RigidBodyComponent, exactly as
+// BuildNode leaves one out for a StaticBody2D.
+entt::entity BuildStaticBox(entt::registry& registry, const std::string& tag, const glm::dvec2& atPx,
+                            const glm::dvec2& sizePx, const Options& options);
+
 // A trigger box from an entity's metadata/trigger_size and trigger_offset, the
 // way LevelRuntime._attach_trigger builds one (level_runtime.gd:243-265).
 // entt::null, with `error` set, when the entity has no trigger_size.

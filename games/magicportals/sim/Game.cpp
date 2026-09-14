@@ -643,6 +643,24 @@ void AfterStep(const Data& data, entt::registry& registry, Level& level, float d
             dropped.toPx = turn.keyPx;
             level.keys.keys.push_back(dropped);
         }
+
+        // AND THE PLATFORM THE KEY NEEDS A FLOOR FROM. The original's
+        // AddScaledEntity makes a body from the .ent; this port makes a static
+        // box with no node behind it, SIZED FROM THE TEMPLATE rather than from a
+        // number written here - the level places three of the same entity, and
+        // their own CollisionPolygon2D is the shape.
+        if (turn.droppedPlatform && level.darkDragon.platformBody == entt::null &&
+            !level.darkDragon.platformNode.empty()) {
+            if (const Tscn::Node* templateNode = data.scene.FindNode(level.darkDragon.platformNode)) {
+                glm::dvec2 offsetPx(0.0);
+                glm::dvec2 sizePx(0.0);
+                if (LevelBuilder::ShapeBoundsPx(data.scene, *templateNode, offsetPx, sizePx)) {
+                    level.darkDragon.platformBody =
+                        LevelBuilder::BuildStaticBox(registry, level.darkDragon.name + "#platform",
+                                                     turn.platformPx + offsetPx, sizePx, LevelBuilder::Options{});
+                }
+            }
+        }
     }
 
     // The beholder's rocks, against what the step ran them into.
