@@ -369,6 +369,7 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
         destroy(e);
     }
     m_platformDrawn = false;
+    m_platformBoxed = false;
     destroy(m_level.player);
     m_level = Game::Level{};
     m_loaded = false;
@@ -1888,6 +1889,29 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             placeSprite(registry, drawn->quad, Units::ToPixels(body.position),
                         imageSizePx(m_paths.art + "/assets/entities/" + thrown.sprite),
                         SlotZ(m_playerSlot) - 0.5f * kSpriteSlotZ, body.rotation.z);
+        }
+    }
+
+    // THE PLATFORM THE DARK DRAGON'S DEATH ADDS, as a box. Its picture is
+    // borrowed in syncSprites, but that is gated on m_artReady - and the box
+    // view is exactly the mode used when there is NO art - so the box is made
+    // here and carries a flag of its own. Every other body in the game has one,
+    // and for a while this did not.
+    //
+    // Sized from the COLLIDER and not from the sprite: a box stands for the
+    // body. Added after the loops above, which have finished walking m_bodies.
+    const entt::entity platformBody = m_level.darkDragon.platformBody;
+    if (!m_platformBoxed && platformBody != entt::null && registry.valid(platformBody)) {
+        if (const auto* collider = registry.try_get<BoxColliderComponent>(platformBody)) {
+            Drawn made;
+            made.body = platformBody;
+            made.offsetPx = glm::dvec2(0.0);
+            made.sizePx = glm::dvec2(collider->size.x, collider->size.y) * Units::kPixelsPerMetre;
+            made.depth = 0.6f; // a static's, as buildDrawables gives one
+            made.box = makeBox(registry, "Magic Portals Body", glm::vec3(0.0f), glm::vec3(1.0f), kStaticColour);
+            registry.emplace<InterpolatedTransformComponent>(made.box);
+            m_bodies.push_back(made);
+            m_platformBoxed = true;
         }
     }
 

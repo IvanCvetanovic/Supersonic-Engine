@@ -651,6 +651,10 @@ private:
     // picture yet. It has no node, so buildSprites cannot have made one for it:
     // syncSprites borrows the template sibling's when the body appears, once.
     bool m_platformDrawn = false;
+    // And whether it has been given its BOX, which is a separate question: the
+    // picture above is gated on there being art at all, and the box view is the
+    // mode used when there is none.
+    bool m_platformBoxed = false;
 
     // Puts the lost screen up, over the level that is still loaded behind it.
     // Follows openFinished and NOT openMenu: openMenu unloads the level and
