@@ -238,7 +238,15 @@ void ThePortsOwnTableIsTheOriginals() {
     playsFor("traversal", "playTeleportSound");
     playsFor("crystal_collected", "playCrystalPickSound");
     playsFor("player_died", "playDeathSound");
-    playsFor("level_finished", "playLevelFinishedSound");
+    // THE FINISH IS THE DOOR'S SOUND, not the medal's, and this pinned the wrong
+    // one. GameStateController::checkGameEnd calls levelFinishedEffect - which
+    // ends in playFinalDoorSound - then hides the character, and only once
+    // gameWonDelay (1400 ms) has passed does it raise the finish layer and play
+    // playVictorySound. The cue this used to name, playLevelFinishedSound, is
+    // defined in AudioManager and called by NOTHING in the binary: a grep for its
+    // CALLINTF finds the definition and no call site. sounds.json keeps it listed
+    // as a decoded cue with no moment rather than deleting it.
+    playsFor("level_finished", "playFinalDoorSound");
     playsFor("medal_shown", "playVictorySound");
     playsFor("wall_broken", "playDemolitionSound");
     playsFor("menu_button", "getButtonSoundName");

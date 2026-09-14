@@ -607,6 +607,28 @@ private:
     double m_counterClockMs = 0.0; // time owed to the next step
     int m_medalDrawn = 0;          // which medal the quad currently wears
 
+    // THE BEAT BETWEEN GOING IN AND BEING SCORED.
+    //
+    // GameStateController::checkGameEnd does not put the medal up when the exit
+    // is reached. In order it runs levelFinishedEffect - the red_suck_effect at
+    // the door, the red_sparkles on the character, and playFinalDoorSound - then
+    // Hide()s the character and zeroes its velocity, then writes the score; and
+    // only once gameEndElapsedTime passes gameWonDelay does it raise the
+    // levelFinishedLayer and play playVictorySound.
+    //
+    // gameWonDelay is 1400 ms: the constructor writes 1400 to gameLostDelay and
+    // copies the same register into gameWonDelay (bytes 125310.., instructions
+    // 24-29). A level may override it - the constructor's later arm reads a
+    // `delay` entity's `time` - but NO LEVEL IN THE GAME PLACES ONE, checked
+    // across all 128, so the override is recorded here and not built.
+    //
+    // This port showed the medal and played both sounds on the tick the exit
+    // reported, with the character still standing in the doorway walking on the
+    // spot. That is what the owner saw.
+    static constexpr double kFinishDelayMs = 1400.0;
+    bool m_finishing = false;      // gone into the door, not yet scored
+    double m_finishClockMs = 0.0;  // how long since
+
     // The medal the counter's CURRENT value earns, by the same computeScore the
     // final one uses. Zero when there is nothing to show.
     int MedalShown() const;
@@ -625,6 +647,40 @@ private:
         entt::entity controls{entt::null};
     };
     Hud m_hud;
+
+    // ---- the on-screen controls ---------------------------------------------
+    //
+    // What the original puts on a phone, and what the owner asked for: a walk
+    // arrow in each bottom corner, and reset and menu together at the top right.
+    // Its own screenshot is the reference - arrow_left.png and arrow_right.png
+    // are pale discs cropped by the screen's edge, restart_level_button.png is
+    // the circular arrows, and main_menu_shortcut.png is the pause bars. The
+    // file called resume_button.png is a PLAY triangle and is not this pair's,
+    // whatever its name suggests.
+    //
+    // DRAWN AS WORLD QUADS PINNED TO THE VIEW, not as UIImageComponent. That
+    // component exists and anchors to a corner by itself, but it wants an
+    // ImTextureID from the renderer's UI image service rather than a path, and
+    // nothing in this layer has ever used that road. These follow the medal
+    // screen's way instead - a quad placed every tick at
+    // m_follow.centrePx + (fraction - 0.5) * ViewPx() - which costs one line of
+    // arithmetic and puts the buttons in the SAME space ScreenToLevelPx already
+    // answers in, which is the space the portal-shot check has to share.
+    enum class Control { Left, Right, Reset, Menu };
+    struct ControlButton {
+        Control kind{Control::Left};
+        entt::entity quad{entt::null};
+        glm::dvec2 centrePx{0.0}; // in the level's pixels, recomputed each tick
+        glm::dvec2 sizePx{0.0};
+    };
+    std::vector<ControlButton> m_controls;
+
+    void buildControls(entt::registry& registry);
+    void unloadControls(entt::registry& registry);
+    // Places them against the camera and returns which one the pointer is on,
+    // or nullptr. Called once a tick, before the shot is fired, because a tap
+    // that works a control must NOT also open a portal under it.
+    const ControlButton* layOutControls(entt::registry& registry);
 };
 
 } // namespace MagicPortals

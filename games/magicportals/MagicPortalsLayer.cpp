@@ -207,6 +207,13 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     m_current = index;
     m_chapterComplete = false;
     m_loadError.clear();
+    // Every level begins here - the first one, a retry, a skip, and going on
+    // from a medal all come through - so this is the one place the finish beat
+    // has to be forgotten. Left set, the NEXT level would open already on its
+    // way to being scored and would put its medal up 1400 ms in, having been
+    // played by nobody.
+    m_finishing = false;
+    m_finishClockMs = 0.0;
     const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(index)];
 
     // A refused level says why on the HUD, which a player reads, and in the log,
@@ -249,7 +256,28 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     m_loaded = true;
     buildDrawables(registry);
     m_aspect = viewportAspect(registry);
-    m_follow.Start(m_cameraRules, cameraStartPx, ViewPx(), m_boundsPx);
+    // THE LEVEL OPENS ON THE PLAYER, by the owner's choice.
+    //
+    // The original holds on camera_start - which sits near a level's exit - for
+    // cameraHoldTime and then eases to the player, and this port did the same:
+    // Camera.hpp decodes it and Camera::Follow still carries the hold, which
+    // test_mp_camera pins. But both of its numbers are _guess in portals.json,
+    // and shown a level the owner asked for the camera to begin already framed
+    // on the character rather than pan in from the goal.
+    //
+    // So the hold is not removed from the camera, only unused here: Start takes
+    // the player's own place, and what hold_time_s would have run is zeroed. A
+    // level that wants the establishing look back needs only this line.
+    glm::dvec2 openOnPx = cameraStartPx;
+    if (m_level.player != entt::null && registry.valid(m_level.player)) {
+        openOnPx = Units::ToPixels(registry.get<Supersonic::TransformComponent>(m_level.player).position);
+    }
+    m_follow.Start(m_cameraRules, openOnPx, ViewPx(), m_boundsPx);
+    m_follow.holdLeftS = 0.0;
+    // AFTER buildDrawables, which is what sets m_artReady at the end of
+    // buildSprites: built before it, the controls would find the flag still
+    // false and quietly make nothing at all.
+    buildControls(registry);
     placeCamera(registry);
     // A new level is a cut, not a pan: there is nothing to draw the camera
     // coming from.
@@ -288,6 +316,9 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     m_thrown.clear();
     for (DrawnSprite& drawn : m_sprites) destroy(drawn.quad);
     m_sprites.clear();
+    // The walk arrows and the two corner buttons go with the level they were
+    // built for. Left standing, a retry would make four more over them.
+    unloadControls(registry);
     // The particles the level's entities were emitting go with them; a retry
     // would otherwise pile a second pool on the first.
     unloadEmitters(registry);
@@ -621,8 +652,26 @@ std::string MagicPortalsLayer::menuImage(const std::string& file) const {
     // entities, beside the .ent files that place them. Asking in the wrong one
     // used to fail silently - the quad was simply not made - which is how the
     // main screen first shipped with no background at all.
-    const std::string sprites = m_paths.original + "/sprites/" + file;
+    // THE HD SET, ALWAYS, which is the owner's call and not the original's rule.
+    //
+    // The APK ships sprites/hd/ beside sprites/: the same art at exactly twice
+    // the size - level_button 64 -> 128, medal_gold_m 32 -> 64, game_main_title
+    // 256 -> 512 - drawn by the artists rather than resampled. The original
+    // chooses between them at run time: isHd() is GetScreenSize().y > 480 and
+    // getHdSpriteDensity() returns 2 above it, so a 2013 phone got the small set
+    // and a large screen the big one. That choice was a memory budget, and the
+    // owner's word is that it has outlived its reason - so the port takes the
+    // HD art whatever the window is doing.
+    //
+    // THE FALLBACK IS NOT DECORATION: 69 of the 80 files in sprites/ have an hd
+    // twin and eleven do not, so a miss here is normal and must fall through
+    // rather than fail. Nothing that reads a size may assume which one it got;
+    // menuTick's medal is measured against the button's own size for exactly
+    // that reason.
     std::error_code ec;
+    const std::string hd = m_paths.original + "/sprites/hd/" + file;
+    if (std::filesystem::exists(hd, ec)) return hd;
+    const std::string sprites = m_paths.original + "/sprites/" + file;
     if (std::filesystem::exists(sprites, ec)) return sprites;
     return m_paths.original + "/entities/" + file;
 }
@@ -733,12 +782,37 @@ void MagicPortalsLayer::layOutMenu() {
     }
     const int pages = std::max(1, (static_cast<int>(entries.size()) + kPerPage - 1) / kPerPage);
     m_menuPage = std::clamp(m_menuPage, 0, pages - 1);
-    // Four rows need more of the box than three did, and the buttons shrink to
-    // match so sixteen of them do not touch.
-    const double left = 0.24;
-    const double right = 0.76;
-    const double top = 0.17;
-    const double bottom = 0.83;
+
+    // A CENTRED BLOCK OF TOUCHING TILES, which is not what this first shipped.
+    //
+    // The original does not spread its buttons over a box at all. Page::Page
+    // (PageManager.angelscript) walks a cursor: it starts at getScreenOffset(),
+    // places a button, steps the cursor by getButtonSize().x, and wraps to the
+    // offset with cursor.y += getButtonSize().y when the next one would pass
+    // the screen's far edge. getButtonSize is GetSpriteSize(button) * g_scale -
+    // the tile's OWN size, with no gap - and getScreenOffset is
+    // ((screen - vector2(columns * buttonSize.x, rows * buttonSize.y)) / 2), so
+    // the block is simply centred. `columns` and `rows` are a COUNT there
+    // (numButtons = rows * columns), not a geometry.
+    //
+    // Spread over a 0.24..0.76 by 0.17..0.83 box at box.y * 0.14 each, as this
+    // did, the tiles float apart and the grid sits squat in the middle of the
+    // screen. That is the difference the owner saw against their capture.
+    //
+    // THE ONE NUMBER HERE IS MEASURED, NOT DECODED, and it says so. The
+    // original's absolute tile size is GetSpriteSize * (GetScreenSize().y / 480)
+    // - SGlobalScale's m_absoluteSize is 480 - and it picks an `hd` sprite at
+    // twice the density above that height, so the size on screen depends on the
+    // device and on which asset was loaded. Neither transfers to this port's
+    // fixed 256 px menu box. What does transfer is the PROPORTION, and in the
+    // owner's capture of the original the sixteen tiles are square at very near
+    // 0.217 of the screen's height, making the block 4 * 0.217 = 0.867 of the
+    // height and 54% of a 16:9 width. That is the fraction below, flagged the
+    // way art.json flags a _guess.
+    constexpr double kTileOfHeight = 0.217; // measured from the owner's capture
+    const double tile = box.y * kTileOfHeight;
+    const glm::dvec2 blockPx(tile * kColumns, tile * kRows);
+    const glm::dvec2 originPx = (box - blockPx) * 0.5;
     for (int slot = 0; slot < kPerPage; ++slot) {
         const int index = m_menuPage * kPerPage + slot;
         if (index >= static_cast<int>(entries.size())) break;
@@ -748,9 +822,10 @@ void MagicPortalsLayer::layOutMenu() {
         button.kind = MenuButton::Kind::Level;
         button.world = m_menuWorld;
         button.level = entries[static_cast<std::size_t>(index)];
-        button.centrePx = at(left + (right - left) * (static_cast<double>(column) / (kColumns - 1)),
-                             top + (bottom - top) * (static_cast<double>(row) / (kRows - 1)));
-        button.sizePx = glm::dvec2(box.y * 0.14);
+        // The cursor's step is the tile itself, and centrePx is the middle of
+        // the tile the cursor's top-left corner opens.
+        button.centrePx = originPx + glm::dvec2(tile * column, tile * row) + glm::dvec2(tile * 0.5);
+        button.sizePx = glm::dvec2(tile);
         m_menuButtons.push_back(button);
     }
     if (pages > 1) {
@@ -937,11 +1012,28 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
             image = menuImage(boss ? "boss_level_button.png" : "level_button.png");
             break;
         }
+        // THE TWO ARROW FILES ARE NAMED THE OTHER WAY ROUND FROM THEIR ART, and
+        // this port drew them by their names until the owner saw it.
+        //
+        // level_select_back.png is a sprite of a RIGHT-pointing triangle, and
+        // level_select_forward.png a LEFT-pointing one. The original's own
+        // createLevelSelectState hands `back` to PageProperties.backButton and
+        // `forward` to forwardButton, and PageProperties puts backButton at
+        // normalized (0, 0.5) and forwardButton at (1, 0.5) - so on screen the
+        // LEFT edge draws the file called "back", whose picture points RIGHT.
+        //
+        // In the original that still looks correct, because the pictures were
+        // authored for those slots and the names are simply misleading. Reading
+        // the names as the direction, as this did, put a right-pointing arrow on
+        // the left and a left-pointing one on the right: both aimed inward, which
+        // is what the owner reported. The owner's capture of the original settles
+        // it - a LEFT arrow on the left, a RIGHT arrow on the right - so each
+        // side takes the file whose picture points the way that side goes.
         case MenuButton::Kind::Back:
-            image = menuImage("level_select_back.png");
+            image = menuImage("level_select_forward.png");
             break;
         case MenuButton::Kind::Forward:
-            image = menuImage("level_select_forward.png");
+            image = menuImage("level_select_back.png");
             break;
         // The medal screen's three, which LevelFinishedLayer names.
         case MenuButton::Kind::Retry:
@@ -964,8 +1056,15 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
             registry.emplace<TransformComponent>(label);
             auto& text = registry.emplace<UITextComponent>(label);
             text.worldSpace = true; // it follows the button it numbers
-            text.fontSize = 26.0f;
-            text.offset = glm::vec2(0.0f, 12.0f);
+            // PageProperties' numberOffset is vector2(0, 0) and its fontScale is
+            // 1, so the number sits on the button's own point rather than nudged
+            // below it. The size rides THE BUTTON rather than being a fixed 26 px:
+            // the tiles are now sized from the window, and a fixed number would
+            // swim about on them as the window changed shape. Taken from the
+            // button and not from the box, because that is what it sits on - and
+            // because layOutMenu's tile fraction is layOutMenu's own business.
+            text.fontSize = static_cast<float>(button.sizePx.y * 0.55);
+            text.offset = glm::vec2(0.0f, 0.0f);
             text.text = std::to_string(level.index + 1);
         }
         m_menuLabels.push_back(label);
@@ -1241,16 +1340,22 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
             // while the port's buttons are a fraction of the menu box - so the
             // offset and the medal both ride the ratio between the two, which
             // is the same place on the button at any window shape.
-            const double native = imageSizePx(menuImage("level_button.png")).x;
-            const double ratio = native > 0.0 ? button.sizePx.x / native : 1.0;
-            // Read back off the material rather than re-deriving the tier: the
-            // quad already knows which medal it is wearing.
-            const glm::dvec2 image =
-                imageSizePx(registry.get<MaterialComponent>(m_menuMedals[i]).albedoTexturePath);
-            const glm::dvec2 sizePx = image * ratio;
+            // AS FRACTIONS OF THE BUTTON, never off the file's own size.
+            //
+            // Both numbers come from the original's SD pair - a 64 px button and
+            // a 32 px medal placed at (36, 36) - so as ratios they are 32/64 and
+            // 36/64 whatever resolution was actually loaded. Measured against the
+            // file instead, as this did, the HD switch moved the badge: the
+            // button's native width doubled to 128, the ratio halved, and 36 *
+            // ratio put the medal in the middle of the tile rather than over its
+            // bottom-right corner. The medal's SIZE happened to survive, because
+            // both files doubled together - which is precisely the kind of
+            // accident that hides a bug until one of the pair has no hd twin.
+            constexpr double kNativeButtonPx = 64.0;
+            const glm::dvec2 sizePx = button.sizePx * (32.0 / kNativeButtonPx);
             const glm::dvec2 topLeft = button.centrePx - button.sizePx * 0.5;
             placeSprite(registry, m_menuMedals[i],
-                        topLeft + glm::dvec2(36.0, 36.0) * ratio + sizePx * 0.5, sizePx, 0.55f, 0.0f);
+                        topLeft + button.sizePx * (36.0 / kNativeButtonPx) + sizePx * 0.5, sizePx, 0.55f, 0.0f);
         }
     }
 
@@ -1674,7 +1779,12 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     // The player in its slot among the art - or, with the boxes shown or no art
     // to show, where the boxes are.
     const bool artOnly = m_artReady && !m_showBoxes;
-    if (m_level.player != entt::null && registry.valid(m_level.player)) {
+    // m_player and m_playerQuad are BOTH gone once the character has stepped into
+    // the door (OnFixedUpdate), and the level goes on running for the 1400 ms
+    // before it is scored - so this has to tolerate their absence rather than
+    // place a box that is no longer there. placeBox does not guard its entity.
+    if (m_level.player != entt::null && registry.valid(m_level.player) && m_player != entt::null &&
+        registry.valid(m_player)) {
         const glm::dvec2 at = Units::ToPixels(registry.get<TransformComponent>(m_level.player).position);
         placeBox(registry, m_player, at, glm::dvec2(m_data.tuning.widthPx, m_data.tuning.heightPx),
                  artOnly ? SlotZ(m_playerSlot) : 0.1f, artOnly ? 0.5f * kSpriteSlotZ : 0.4f, 0.0f);
@@ -2038,11 +2148,101 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
     set(m_hud.controls,
         m_screen != Screen::None
             ? "Click a button.  Escape goes back."
-            : "Left/Right or A/D to walk.  Click to fire a portal.  R retries.  N skips a level.  "
-              "B shows the bodies.  Escape for the menu.");
+            : "The arrows walk, or Left/Right or A/D.  Click the level to fire a portal.  "
+              "The corner buttons reset and go to the menu, or R and Escape.  "
+              "N skips a level.  B shows the bodies.");
 }
 
 // ---- the tick ----------------------------------------------------------------
+
+void MagicPortalsLayer::buildControls(entt::registry& registry) {
+    unloadControls(registry);
+    if (!m_artReady) return; // no art, no buttons - the keys still work
+    const struct Made {
+        Control kind;
+        const char* file;
+        const char* tag;
+    } made[] = {
+        {Control::Left, "arrow_left.png", "Magic Portals Control Left"},
+        {Control::Right, "arrow_right.png", "Magic Portals Control Right"},
+        {Control::Reset, "restart_level_button.png", "Magic Portals Control Reset"},
+        {Control::Menu, "main_menu_shortcut.png", "Magic Portals Control Menu"},
+    };
+    for (const Made& one : made) {
+        const std::string image = menuImage(one.file);
+        if (imageSizePx(image) == glm::dvec2(0.0)) continue;
+        ControlButton button;
+        button.kind = one.kind;
+        button.quad = makeSprite(registry, one.tag, image, false);
+        m_controls.push_back(button);
+    }
+}
+
+void MagicPortalsLayer::unloadControls(entt::registry& registry) {
+    for (ControlButton& button : m_controls) {
+        if (button.quad != entt::null && registry.valid(button.quad)) registry.destroy(button.quad);
+    }
+    m_controls.clear();
+}
+
+const MagicPortalsLayer::ControlButton* MagicPortalsLayer::layOutControls(entt::registry& registry) {
+    using Supersonic::Input;
+    // Only while a level is being played: the menu screens have their own
+    // buttons, and the medal screen wants its three rather than these four.
+    const bool shown = m_loaded && m_screen == Screen::None && !m_finishing;
+    for (ControlButton& button : m_controls) {
+        if (button.quad == entt::null || !registry.valid(button.quad)) continue;
+        registry.get<Supersonic::RenderableComponent>(button.quad).isVisible = shown;
+    }
+    if (!shown) return nullptr;
+
+    const glm::dvec2 view = ViewPx();
+    const glm::dvec2 centre = m_follow.centrePx;
+    const auto onView = [&view, &centre](double nx, double ny) {
+        return centre + glm::dvec2((nx - 0.5) * view.x, (ny - 0.5) * view.y);
+    };
+    // A share of the view's HEIGHT, so they keep their size and their place
+    // whatever shape the window is. The walk arrows are the big pair and sit in
+    // the corners the original's do - its own are cropped by the screen edge,
+    // and these sit just inside it so a mouse can reach all of them.
+    const double walk = view.y * 0.26;
+    const double small = view.y * 0.12;
+    for (ControlButton& button : m_controls) {
+        switch (button.kind) {
+        case Control::Left:
+            button.sizePx = glm::dvec2(walk);
+            button.centrePx = onView(0.085, 0.85);
+            break;
+        case Control::Right:
+            button.sizePx = glm::dvec2(walk);
+            button.centrePx = onView(0.915, 0.85);
+            break;
+        case Control::Reset:
+            button.sizePx = glm::dvec2(small);
+            button.centrePx = onView(0.86, 0.10);
+            break;
+        case Control::Menu:
+            button.sizePx = glm::dvec2(small);
+            button.centrePx = onView(0.95, 0.10);
+            break;
+        }
+        placeSprite(registry, button.quad, button.centrePx, button.sizePx, 0.7f, 0.0f);
+    }
+
+    // WHICH ONE THE POINTER IS ON, in the level's pixels - the space
+    // ScreenToLevelPx answers in, and the same space these were just placed in.
+    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
+    if (viewport == nullptr || !viewport->pointerOverGame) return nullptr;
+    glm::dvec2 atPx(0.0);
+    if (!ScreenToLevelPx(registry, Input::MousePosition(), atPx)) return nullptr;
+    for (const ControlButton& button : m_controls) {
+        const glm::dvec2 half = button.sizePx * 0.5;
+        if (std::fabs(atPx.x - button.centrePx.x) > half.x) continue;
+        if (std::fabs(atPx.y - button.centrePx.y) > half.y) continue;
+        return &button;
+    }
+    return nullptr;
+}
 
 float MagicPortalsLayer::readInput(entt::registry& registry) {
     using Supersonic::Input;
@@ -2050,9 +2250,42 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
     if (Input::IsDown(kLeft) || Input::IsDown(kLeftAlt)) direction -= 1.0f;
     if (Input::IsDown(kRight) || Input::IsDown(kRightAlt)) direction += 1.0f;
 
+    // The on-screen controls, placed and asked about before anything else reads
+    // the pointer.
+    const ControlButton* under = layOutControls(registry);
+    const bool held = Input::IsDown(kTap);
+    const bool pressed = Input::TickWasPressed(kTap);
+
+    if (under != nullptr) {
+        switch (under->kind) {
+        // HELD, not tapped: a walk button is leaned on, and IsDown is what a
+        // replayed tick feeds (Input.hpp lists it among the queries a replay
+        // diverts), so the suites can drive these exactly as they drive a key.
+        case Control::Left:
+            if (held) direction -= 1.0f;
+            break;
+        case Control::Right:
+            if (held) direction += 1.0f;
+            break;
+        // And these are EDGES: held down, a reset would restart the level every
+        // tick for as long as the button was pressed.
+        case Control::Reset:
+            if (pressed && m_current >= 0 && !m_chapterComplete) loadLevel(registry, m_current);
+            break;
+        case Control::Menu:
+            if (pressed) openMenu(registry, Screen::Worlds);
+            break;
+        }
+        // A TAP THAT WORKED A CONTROL IS SPENT. Without this, leaning on the
+        // walk arrow also fires a portal into the floor beneath it every time
+        // the cooldown allows - the control would work and quietly cost the
+        // player their portal budget.
+        return direction;
+    }
+
     // A pointer over a panel or another window is not the game's.
     const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
-    if (viewport != nullptr && viewport->pointerOverGame && Input::TickWasPressed(kTap)) {
+    if (viewport != nullptr && viewport->pointerOverGame && pressed) {
         glm::dvec2 atPx(0.0);
         if (ScreenToLevelPx(registry, Input::MousePosition(), atPx)) m_level.portals.Shoot(registry, atPx);
     }
@@ -2441,9 +2674,33 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
         // death is a retry, at once (main.gd:155-158). Should both come on one
         // tick, reaching the exit wins: the remake's order of two triggers in a
         // frame is not defined.
-        if (m_level.goals.completed) {
+        if (m_finishing) {
+            // Already in the door: the level keeps running behind the effect,
+            // as the original's does, and the score comes when the beat is up.
+            m_finishClockMs += static_cast<double>(fixedDelta) * 1000.0;
+            if (m_finishClockMs >= kFinishDelayMs) clearLevel(registry);
+        } else if (m_level.goals.completed) {
+            // GOING IN. Its sound is the door's, not the medal's - `level_finished`
+            // now maps to playFinalDoorSound, and sounds.json carries the decode
+            // of why the cue this once had is called by nothing in the original.
             latch("level_finished");
-            clearLevel(registry);
+            // Hide(), and the velocity zeroed with it: the character is gone from
+            // the doorway and cannot be left walking on the spot. Destroying the
+            // two drawables IS the port's Hide - syncDrawables skips what is not
+            // there - and the body stays in the world so nothing else that holds
+            // it has to care.
+            if (m_player != entt::null && registry.valid(m_player)) registry.destroy(m_player);
+            m_player = entt::null;
+            if (m_playerQuad != entt::null && registry.valid(m_playerQuad)) registry.destroy(m_playerQuad);
+            m_playerQuad = entt::null;
+            if (m_level.player != entt::null && registry.valid(m_level.player)) {
+                if (auto* rigid = registry.try_get<Supersonic::RigidBodyComponent>(m_level.player)) {
+                    rigid->velocity = glm::vec3(0.0f);
+                }
+            }
+            m_direction = 0.0f;
+            m_finishing = true;
+            m_finishClockMs = 0.0;
         } else if (m_level.hazards.playerDied) {
             latch("player_died");
             ++m_deaths;

@@ -245,14 +245,25 @@ void TheLayerPlaysLevel30() {
 }
 
 void ATapLandsWhereItPoints() {
-    // The camera starts at level30's camera_start, (540, 0), held inside the
-    // level: the view is view.json's 256 px tall and 455 px wide at 16:9, and
-    // level30 is 768 x 256, so it sits at (540, 128). Its centre shows at the
-    // viewport's, the level's top is up the screen - screen y grows down, as the
-    // remake's does, where the engine's grows up - and a tap at a point on the
-    // screen is read on the tick, back through ScreenPointToRay. Its shot flies
-    // from the player, and a portal opens where it points. A tap whose shot
-    // meets a crate on the way opens nothing and costs nothing.
+    // The camera starts ON THE PLAYER, which is the owner's choice and not the
+    // original's: level30 places a camera_start at (540, 0) and the port used to
+    // open there and ease over. It now opens at the spawn, (182, 203), held
+    // inside the level - the view is view.json's 256 px tall and 455 px wide at
+    // 16:9, and level30 is 768 x 256, so the centre clamps to (227.5, 128) and
+    // the view shows x 0..455. MagicPortalsLayer::loadLevel says why.
+    //
+    // Its centre shows at the viewport's, the level's top is up the screen -
+    // screen y grows down, as the remake's does, where the engine's grows up -
+    // and a tap at a point on the screen is read on the tick, back through
+    // ScreenPointToRay. Its shot flies from the player, and a portal opens where
+    // it points. A tap whose shot meets a crate on the way opens nothing and
+    // costs nothing.
+    //
+    // The aims moved with the camera. (600, 128) was the old blocked shot and is
+    // no longer on screen at all; crate_969 stands at (352, 192) and still is,
+    // so it is still what a shot dies on, and the two that land are picked from
+    // what the new view shows. Every one of them is checked with onScreen before
+    // it is tapped, which is what a player can do and the point of this suite.
     entt::registry registry;
     publishViewport(registry);
     MagicPortalsLayer layer(TestPaths(), "level30");
@@ -263,21 +274,33 @@ void ATapLandsWhereItPoints() {
     }
     layer.OnUpdate(registry, MagicPortalsLayer::kTick);
 
-    CHECK_MSG(layer.CameraCentrePx() == glm::dvec2(540.0, 128.0), "the camera starts at " + Point(layer.CameraCentrePx()));
+    // DERIVED, not a literal. level30's spawn is at x 182, which is left of half
+    // the view, so the clamp pins the camera to the level's left edge and the
+    // centre is exactly half a view in. That is 227.5555... and not 227.5: the
+    // view is 256 * (1280/720) = 455.111... px wide, and a rounded literal here
+    // failed by five hundredths of a pixel.
+    const glm::dvec2 expected(layer.ViewPx().x * 0.5, 128.0);
+    CHECK_MSG(glm::length(layer.CameraCentrePx() - expected) < 0.01,
+              "the camera starts at " + Point(layer.CameraCentrePx()) + ", wanted " + Point(expected));
     CHECK(layer.ViewPx().y == 256.0);
     const glm::vec2 centre = screenOf(registry, layer.CameraCentrePx());
     CHECK_MSG(glm::length(centre - glm::vec2(640.0f, 360.0f)) < 0.5f,
               "the camera's centre shows at the viewport's: at (" + std::to_string(centre.x) + ", " +
                   std::to_string(centre.y) + ")");
-    CHECK_MSG(screenOf(registry, glm::dvec2(540.0, 64.0)).y < centre.y &&
-                  screenOf(registry, glm::dvec2(400.0, 128.0)).x < centre.x,
+    // Projected coordinates, not visibility: these two only compare where points
+    // land against the centre, so a point off the side of the view still orders
+    // correctly. The x probe moved in with the camera all the same.
+    CHECK_MSG(screenOf(registry, glm::dvec2(layer.CameraCentrePx().x, 64.0)).y < centre.y &&
+                  screenOf(registry, glm::dvec2(100.0, 128.0)).x < centre.x,
               "the level's top is up the screen, and its left is to the left");
 
     // A level's first tap waits out the placement cooldown, as a player's does.
     waitForFirstTap(layer, registry);
 
-    // From the spawn, (182, 203), a shot at (600, 128) runs into crate_969.
-    const glm::dvec2 blocked(600.0, 128.0);
+    // From the spawn, (182, 203), a shot at crate_969 - a RigidBody2D at
+    // (352, 192), just to the player's right and at nearly its own height -
+    // runs into it and opens nothing.
+    const glm::dvec2 blocked(352.0, 192.0);
     CHECK_MSG(onScreen(registry, blocked), Point(blocked) + " is on screen");
     tap(layer, registry, screenOf(registry, blocked));
     landShot(layer, registry);
@@ -285,9 +308,20 @@ void ATapLandsWhereItPoints() {
     CHECK_MSG(lastFailure(layer) == "crate_969", "the shot stopped at " + lastFailure(layer));
     CHECK_EQ(layer.SimLevel()->portals.portalsUsed, 0);
 
-    // Two over the crates land. Both stay on screen while the camera, after its
-    // hold, goes over to the player.
-    const glm::dvec2 aims[] = {glm::dvec2(400.0, 60.0), glm::dvec2(440.0, 60.0)};
+    // Two that land, in the CORRIDOR between what is above and what is below.
+    //
+    // The first attempt aimed high, at (300, 40) and (340, 40), and both shots
+    // died on block00_ent_981 - a 64 x 64 polygon centred on (256, 96), so it
+    // fills x 224..288 and y 64..128, and a segment from the spawn up to y 40
+    // goes straight through it. What matters is the whole PATH from (182, 203),
+    // not whether the endpoint happens to be empty.
+    //
+    // These two run under that block and over the crates, whose tops are at
+    // y 163 (58 x 58 boxes centred on (352, 192) and (416, 192), so x 323..381
+    // and x 387..445). At x 288 - the block's right edge - the flatter of the
+    // two is still at y 173, well below its y 128 underside, and both stop short
+    // of x 323 where the first crate begins.
+    const glm::dvec2 aims[] = {glm::dvec2(250.0, 150.0), glm::dvec2(300.0, 170.0)};
     for (const glm::dvec2& aim : aims) {
         CHECK_MSG(onScreen(registry, aim), Point(aim) + " is on screen");
         tap(layer, registry, screenOf(registry, aim));
@@ -1551,8 +1585,25 @@ void NoSpriteBlinksWhileWalking(const char* levelName) {
                                   " sprite-frame(s) were drawn");
     // Without a crossing there is no blink to find, and a zero above would be
     // the fixture's silence rather than the renderer's health.
-    CHECK_MSG(entered + left > 0, std::string(levelName) +
-                                      ": no sprite ever crossed the edge of the view, so this proves nothing");
+    //
+    // BUT A LEVEL CAN BE TOO NARROW TO PAN AT ALL, and level1 now is. It is
+    // 512 px against a 455 px view - 57 px of travel in total - and since the
+    // camera opens on the player rather than easing in from camera_start, that
+    // is all the movement there will ever be: not enough to carry any sprite
+    // across an edge. The suite used to get its crossings there from the opening
+    // pan, which is gone by the owner's choice.
+    //
+    // So the crossing is required where the geometry can produce one and stated
+    // where it cannot. level2 has 313 px of slack and still reports its 30 and
+    // 22, which is what keeps this check honest rather than merely quiet.
+    const double slackPx = bounds.x - viewPx.x;
+    if (slackPx > 100.0) {
+        CHECK_MSG(entered + left > 0, std::string(levelName) +
+                                          ": no sprite ever crossed the edge of the view, so this proves nothing");
+    } else {
+        std::printf("  %s: only %.0f px of pan, too narrow for a crossing - the blink count stands on the wider level\n",
+                    levelName, slackPx);
+    }
     CHECK_MSG(blinked == 0, std::string(levelName) + ": " + std::to_string(blinked) +
                                 " sprite(s) went away and came back, first " + firstBlink);
 }
