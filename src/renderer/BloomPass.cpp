@@ -23,16 +23,21 @@ std::vector<char> readFile(const std::string& path) {
 }
 
 // A colour-only pass whose result is immediately sampled by the next one.
-vk::RenderPass makeSamplablePass(vk::Device device, vk::Format format) {
+//
+// `load` keeps what is already in the image instead of leaving it undefined:
+// the screen overlay draws OVER the composite, so it starts from the composite's
+// pixels and from the layout the composite left them in.
+vk::RenderPass makeSamplablePass(vk::Device device, vk::Format format, bool load = false) {
     vk::AttachmentDescription color{};
     color.format = format;
     color.samples = vk::SampleCountFlagBits::e1;
-    // Every pixel is overwritten, so there is nothing worth loading.
-    color.loadOp = vk::AttachmentLoadOp::eDontCare;
+    // Every pixel is overwritten, so there is nothing worth loading - except
+    // for a pass that draws over what is there.
+    color.loadOp = load ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eDontCare;
     color.storeOp = vk::AttachmentStoreOp::eStore;
     color.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
     color.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
-    color.initialLayout = vk::ImageLayout::eUndefined;
+    color.initialLayout = load ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eUndefined;
     color.finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
     vk::AttachmentReference colorRef{};
@@ -136,12 +141,18 @@ BloomPass::~BloomPass() {
 
     if (m_hdrPass) device.destroyRenderPass(m_hdrPass);
     if (m_outputPass) device.destroyRenderPass(m_outputPass);
+    if (m_overlayPass) device.destroyRenderPass(m_overlayPass);
 }
 
 void BloomPass::createRenderPasses() {
     vk::Device device = m_deviceRef.GetDevice();
     m_hdrPass = makeSamplablePass(device, kHdrFormat);
     m_outputPass = makeSamplablePass(device, kOutputFormat);
+    m_overlayPass = MakeOverlayRenderPass(device);
+}
+
+vk::RenderPass BloomPass::MakeOverlayRenderPass(vk::Device device) {
+    return makeSamplablePass(device, kOutputFormat, true);
 }
 
 void BloomPass::createImages() {
@@ -386,6 +397,27 @@ void BloomPass::recordPass(vk::CommandBuffer cmd, vk::RenderPass pass, vk::Frame
     // Three vertices, no buffers: the fullscreen triangle.
     cmd.draw(3, 1, 0, 0);
 
+    cmd.endRenderPass();
+}
+
+void BloomPass::RecordOverlay(vk::CommandBuffer cmd,
+                              const std::function<void(vk::CommandBuffer)>& draw) const {
+    vk::RenderPassBeginInfo begin{};
+    begin.renderPass = m_overlayPass;
+    // The composite's own framebuffer: a framebuffer serves any render pass
+    // compatible with the one it was made for, and a load op is not part of
+    // compatibility.
+    begin.framebuffer = m_outputFramebuffer;
+    begin.renderArea.offset = vk::Offset2D{0, 0};
+    begin.renderArea.extent = vk::Extent2D{m_width, m_height};
+    begin.clearValueCount = 0;
+
+    cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
+    const vk::Viewport viewport{0.0f, 0.0f, static_cast<float>(m_width), static_cast<float>(m_height), 0.0f, 1.0f};
+    const vk::Rect2D scissor{{0, 0}, {m_width, m_height}};
+    cmd.setViewport(0, 1, &viewport);
+    cmd.setScissor(0, 1, &scissor);
+    draw(cmd);
     cmd.endRenderPass();
 }
 

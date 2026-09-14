@@ -636,6 +636,28 @@ failure at creation — only a wrong picture:
   treated as 0.2 of linear light and the grid reads far brighter than it was
   drawn.
 
+**Drawn after the encode: the screen overlay.** One thing a game draws must NOT
+go through this chain: a HUD whose art was authored for display-space blending.
+Through the scene target a white picture comes out at 186 of 255 (linear 1.0
+leaves Reinhard as 0.5), its edges bloom from half the threshold up, and a
+translucent control reads with a contrast that depends on the picture behind it
+- 0.32 over a bright background and 0.56 over a dark one at an alpha of 0.47,
+where display-space blending gives exactly the alpha over anything. No colour or
+alpha chosen before the chain can undo that: white would need infinite radiance.
+
+`core/ScreenOverlay` is an immediate-mode list of quads, published in the
+registry context like `WorldShapes` and consumed and cleared by the renderer
+once a frame. `BloomPass::RecordOverlay` opens a second pass over the composited
+`R8G8B8A8Unorm` image - loaded, not cleared - and `screen_overlay.vert/.frag`
+draw each quad there with blending on and no conversion either way: the texture
+is acquired UNORM (`srgb` false), so a texel is the byte in the file, and what is
+written is a display value. Order of `Add` is order of drawing; there is no
+depth. `--screenshot` reads that same image, so a capture shows the overlay; the
+swapchain's ImGui pass, which the screenshot does not read, would not have.
+
+A game emits the overlay from `OnUpdate`, once a frame: a list emitted on the
+tick would be empty on a frame with no tick and doubled on one with two.
+
 **Transparency, and where its alpha stops mattering.** A material marked
 transparent is diverted out of the opaque walk and drawn afterwards, sorted back
 to front, through a pipeline with blending on and depth writes off. Particles

@@ -215,6 +215,14 @@ private:
     std::unique_ptr<VulkanPipeline> m_worldShapePipeline;
     std::vector<std::unique_ptr<VulkanBuffer>> m_worldShapeBuffers;
 
+    // The screen overlay (core/ScreenOverlay.hpp): quads drawn into the
+    // composited image after the tone map, blended in display values. Built
+    // against a render pass of its own that is only COMPATIBLE with the one it
+    // draws in, because that one belongs to the offscreen target and is rebuilt
+    // with it on every resize.
+    vk::RenderPass m_screenOverlayRenderPass{nullptr};
+    std::unique_ptr<VulkanPipeline> m_screenOverlayPipeline;
+
     // Depth-only pass from the primary directional light.
     std::unique_ptr<ShadowMap> m_shadowMap;
     std::unique_ptr<PointShadowMap> m_pointShadowMap;

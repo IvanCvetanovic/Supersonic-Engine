@@ -321,6 +321,11 @@ void VulkanOffscreen::RecordPostProcess(vk::CommandBuffer commandBuffer) const {
     if (m_bloom) m_bloom->Record(commandBuffer);
 }
 
+void VulkanOffscreen::RecordOverlay(vk::CommandBuffer commandBuffer,
+                                    const std::function<void(vk::CommandBuffer)>& draw) const {
+    if (m_bloom) m_bloom->RecordOverlay(commandBuffer, draw);
+}
+
 
 vk::Image VulkanOffscreen::GetPresentedImage() const {
     return m_bloom ? m_bloom->GetOutputImage() : vk::Image{};

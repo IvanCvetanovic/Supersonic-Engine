@@ -7,6 +7,7 @@
 #include <entt/entt.hpp>
 
 #include "core/WorldShapes.hpp"
+#include "core/ScreenOverlay.hpp"
 
 #include "platform/Window.hpp"
 #include "renderer/VulkanContext.hpp"
@@ -143,6 +144,10 @@ private:
     // registry: the registry is CLEARED by a scene load, and a buffer a game
     // layer holds a pointer to must not be one of the things that goes.
     WorldShapes m_worldShapes;
+
+    // The screen overlay, owned here for the same reason: a game's HUD is
+    // emitted from a layer, into a buffer that must survive a scene load.
+    ScreenOverlay m_screenOverlay;
 
     // A game's own systems. Empty in the editor, which is why nothing else in
     // this file changes shape when there is no game.

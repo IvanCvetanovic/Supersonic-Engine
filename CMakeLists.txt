@@ -400,6 +400,8 @@ set(SHADER_JOBS
     "bloom_bright.frag=bloom_bright.spv"
     "bloom_blur.frag=bloom_blur.spv"
     "bloom_composite.frag=bloom_composite.spv"
+    "screen_overlay.vert=screen_overlay_vert.spv"
+    "screen_overlay.frag=screen_overlay_frag.spv"
 )
 
 # Headers shared between shaders. Not compiled themselves; every compiled

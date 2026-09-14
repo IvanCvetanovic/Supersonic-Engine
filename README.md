@@ -316,6 +316,7 @@ verified by a screenshot of geometry it never touched.
 | `test_pointshadow` | Cube-face view matrices, slot assignment, per-light indices |
 | `test_uicanvas` | Canvas layout, anchoring, rect resolution |
 | `test_uiinput` | UI hit testing, press and release routing |
+| `test_screenoverlay` | The screen overlay drawn after the tone map: where a quad lands in clip space and texture space, that order is draw order, the blend it is drawn with, and that the shader carries the same vertex table |
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
 | `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths |
 | `test_launchoptions` | Argument parsing, missing values, malformed counts |

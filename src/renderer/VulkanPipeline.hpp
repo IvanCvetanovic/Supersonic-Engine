@@ -183,6 +183,15 @@ struct PushConstantData {
     void SetUvSlot(int32_t slot) { flags = PackUvSlot(flags, slot); }
 };
 
+// One quad of the screen overlay (core/ScreenOverlay.hpp, screen_overlay.vert):
+// where it is as fractions of the image, which part of its texture it shows,
+// and the display-referred colour multiplied into it. 48 bytes.
+struct ScreenOverlayPushConstants {
+    glm::vec4 rect{0.0f, 0.0f, 1.0f, 1.0f}; // xy top-left, zw bottom-right, +y down
+    glm::vec4 uv{0.0f, 0.0f, 1.0f, 1.0f};   // xy uvMin, zw uvMax
+    glm::vec4 color{1.0f};
+};
+
 // The depth pass has its own, because it needs a different second half: which
 // cascade is being rasterised, as its full transform.
 //

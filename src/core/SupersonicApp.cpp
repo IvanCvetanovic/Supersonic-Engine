@@ -365,6 +365,9 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     // frame. Published as a pointer into a member the app owns, because an
     // immediate buffer must survive a scene load that clears the registry.
     m_registry.ctx().insert_or_assign<WorldShapes*>(&m_worldShapes);
+    // And the screen overlay: a HUD drawn over the finished image in display
+    // values, consumed and cleared by the renderer the same way.
+    m_registry.ctx().insert_or_assign<ScreenOverlay*>(&m_screenOverlay);
 
     m_registry.ctx().insert_or_assign<UIImageStore*>(&m_renderer->GetUIImageStore());
     m_registry.ctx().insert_or_assign<MeshRegistry*>(&m_renderer->GetMeshRegistry());

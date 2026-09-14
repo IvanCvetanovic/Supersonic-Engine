@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <memory>
 
 #include <vulkan/vulkan.hpp>
@@ -42,6 +43,17 @@ public:
     // Records the whole chain into an already-recording command buffer, after
     // the scene render pass has ended.
     void Record(vk::CommandBuffer commandBuffer) const;
+
+    // Opens a pass over the composited, encoded image - loaded, not cleared -
+    // hands it to `draw`, and closes it. After Record, on the same command
+    // buffer. This is where the screen overlay goes (core/ScreenOverlay.hpp):
+    // past the bright pass, the tone map and the encode, so what it draws is
+    // blended in display values and blooms nothing.
+    void RecordOverlay(vk::CommandBuffer commandBuffer, const std::function<void(vk::CommandBuffer)>& draw) const;
+
+    // A render pass compatible with RecordOverlay's, for building a pipeline
+    // against before any target exists. The caller destroys it.
+    static vk::RenderPass MakeOverlayRenderPass(vk::Device device);
 
     // The tone-mapped, sRGB-encoded result. This is what the editor shows.
     vk::ImageView GetOutputView() const { return m_outputImage->GetImageView(); }
@@ -117,6 +129,7 @@ private:
     vk::PipelineCache m_pipelineCache{nullptr};
     vk::RenderPass m_hdrPass{nullptr};     // half-res float targets
     vk::RenderPass m_outputPass{nullptr};  // full-res encoded target
+    vk::RenderPass m_overlayPass{nullptr}; // the same target, loaded, for the screen overlay
 
     std::unique_ptr<VulkanImage> m_brightImage;
     std::unique_ptr<VulkanImage> m_blurImage;

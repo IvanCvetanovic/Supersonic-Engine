@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vulkan/vulkan.hpp>
 
@@ -52,6 +53,10 @@ public:
     // Runs the bloom chain and the tone map. Called after the scene render pass
     // has ended, on the same command buffer.
     void RecordPostProcess(vk::CommandBuffer commandBuffer) const;
+
+    // The screen overlay's pass over the composited image (BloomPass::RecordOverlay).
+    // Nothing is recorded before the target has been built.
+    void RecordOverlay(vk::CommandBuffer commandBuffer, const std::function<void(vk::CommandBuffer)>& draw) const;
     vk::Framebuffer GetFramebuffer() const { return m_framebuffer; }
     uint32_t GetWidth() const { return m_width; }
     uint32_t GetHeight() const { return m_height; }

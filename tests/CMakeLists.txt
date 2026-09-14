@@ -265,6 +265,7 @@ add_engine_test(test_jobs)
 add_engine_test(test_uiinput)
 add_engine_test(test_uicanvas)
 add_engine_test(test_worldshapes)
+add_engine_test(test_screenoverlay)
 add_engine_test(test_gameruntime)
 add_engine_test(test_packaging)
 add_engine_test(test_userdata)
@@ -291,4 +292,6 @@ set_tests_properties(
     test_packaging  # copies assets/, and now checks the .meta files come too
     test_materials  # reads assets/shaders/shader.frag, to check the UV slot
                     # packing agrees with the shader that unpacks it
+    test_screenoverlay # reads assets/shaders/screen_overlay.vert, to check its
+                       # vertex table is the one ScreenOverlay::CornerOf states
     PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")
