@@ -109,9 +109,60 @@ void TheBoxKillsAndTheOctagonDoesNot() {
     }
 }
 
+void TheLevelsEdgeIsADeathToo() {
+    // checkGameLost's SECOND death, which nothing here used to test: the player
+    // against the level's own extent. level1's `max` marker is at (512, 256) and
+    // hazards.json's margin is (64, 96), so the player lives anywhere inside
+    // (-64, -96)..(576, 352) and dies the moment it is outside.
+    {
+        Run run;
+        if (Begin("level1", run)) {
+            CHECK_MSG(run.level.hazards.haveBounds, "level1 carries its level_bounds marker");
+            CHECK_MSG(std::fabs(run.level.hazards.boundsPx.x - 512.0) < 1e-3 &&
+                          std::fabs(run.level.hazards.boundsPx.y - 256.0) < 1e-3,
+                      "and it is the level's extent");
+            CHECK_MSG(std::fabs(run.level.hazards.marginPx.x - 64.0) < 1e-3 &&
+                          std::fabs(run.level.hazards.marginPx.y - 96.0) < 1e-3,
+                      "with hazards.json's (64, 96) margin, which is the original's size * 2");
+        }
+    }
+
+    struct Case {
+        const char* what;
+        glm::dvec2 at;
+        bool dies;
+    };
+    // +y is DOWN in the remake's pixels (Units::ToWorld negates it), so falling
+    // into a pit is y PAST the marker - which is the case the owner found.
+    const Case cases[] = {
+        {"down the pit, past the margin", {256.0, 400.0}, true},
+        {"down the pit, still inside the margin", {256.0, 300.0}, false},
+        {"off the right", {640.0, 128.0}, true},
+        {"off the left", {-80.0, 128.0}, true},
+        {"up past the ceiling", {256.0, -120.0}, true},
+        {"in the middle of the level", {256.0, 128.0}, false},
+    };
+    for (const Case& one : cases) {
+        Run run;
+        if (!Begin("level1", run)) continue;
+        PutPlayer(run, one.at);
+        Game::Tick(run.data, run.registry, run.level, 0.0f, kStep);
+        CHECK_MSG(run.level.hazards.playerDied == one.dies,
+                  std::string(one.what) + ": " + (run.level.hazards.playerDied ? "died" : "lived"));
+        // And it says which death it was, because the two do not sound alike:
+        // a fall plays playDieByFallSound and an hp death plays nothing.
+        if (one.dies && run.level.hazards.playerDied) {
+            CHECK_MSG(run.level.hazards.diedByFalling, std::string(one.what) + " is a fall");
+            CHECK_MSG(run.level.hazards.killedBy == "the fall",
+                      std::string(one.what) + " is named a fall, got '" + run.level.hazards.killedBy + "'");
+        }
+    }
+}
+
 void runTests() {
     ChapterOnesFourHazards();
     TheBoxKillsAndTheOctagonDoesNot();
+    TheLevelsEdgeIsADeathToo();
 }
 
 } // namespace

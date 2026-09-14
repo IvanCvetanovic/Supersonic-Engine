@@ -33,6 +33,7 @@
 #include "sim/Art.hpp"
 #include "sim/Units.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -503,9 +504,17 @@ void NSkipsToTheNextLevel() {
     layer.OnDetach(registry);
 }
 
-void DeathIsAnInstantRetry() {
-    // Into level5's death_area, and on that same tick the level is as it loaded:
-    // the player at its spawn, one death counted, no load in between.
+void DeathIsABeatAndThenTheLostScreen() {
+    // Into level5's death_area. This used to be an INSTANT RETRY - the tick it
+    // happened the level was back as it loaded, with no screen and no beat -
+    // and the owner's report was that there is no death screen at all.
+    //
+    // checkGameEnd counts gameEndElapsedTime against gameLostDelay before it
+    // raises levelLostLayer, and gameLostDelay is the register gameWonDelay is
+    // copied from: the same 1400 ms the finish already waits. So the death tick
+    // hides the player and counts the death, the level keeps running behind it,
+    // and only then does the screen go up - with LevelLostLayer's two buttons
+    // and no third.
     entt::registry registry;
     publishViewport(registry);
     MagicPortalsLayer layer(TestPaths(), "level5");
@@ -519,13 +528,84 @@ void DeathIsAnInstantRetry() {
     auto& transform = registry.get<TransformComponent>(layer.SimLevel()->player);
     transform.position = glm::vec3(hazard->box.centre, transform.position.z);
     tickWith(layer, registry, kRest, {}, {});
+
+    const auto counted = [&layer](MagicPortalsLayer::MenuButton::Kind kind) {
+        int found = 0;
+        for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+            if (button.kind == kind) ++found;
+        }
+        return found;
+    };
+
+    // Counted at once, and the level NOT reloaded under it.
     CHECK_EQ(layer.Deaths(), 1);
     CHECK(IsAt(layer, "level5"));
-    CHECK(layer.SimLevel() != nullptr);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.SimLevel()->hazards.playerDied,
+              "still dead, with the level still loaded behind the beat");
+    CHECK_MSG(counted(MagicPortalsLayer::MenuButton::Kind::Retry) == 0, "and no screen one tick in");
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::None,
+              "the level is still being played through the beat");
+
+    // 1400 ms at the port's 60 Hz, and a tick over.
+    for (int tick = 0; tick < 85; ++tick) tickWith(layer, registry, kRest, {}, {});
+
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::Dead, "and then the lost screen is up");
+    const int retries = counted(MagicPortalsLayer::MenuButton::Kind::Retry);
+    const int lists = counted(MagicPortalsLayer::MenuButton::Kind::List);
+    const int nexts = counted(MagicPortalsLayer::MenuButton::Kind::Next);
+    CHECK_MSG(retries == 1 && lists == 1 && nexts == 0,
+              "the lost screen's restart and list, and no 'go on': " + std::to_string(retries) + ", " +
+                  std::to_string(lists) + ", " + std::to_string(nexts));
+    std::printf("  level5: died, and the lost screen came up 1400 ms later with %d button(s)\n",
+                static_cast<int>(layer.MenuButtons().size()));
+
+    // And restart is a retry, which is what openDead following openFinished -
+    // rather than openMenu - is for: openMenu would have cleared m_current and
+    // left this button doing nothing at all.
+    bool pressed = false;
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind != MagicPortalsLayer::MenuButton::Kind::Retry) continue;
+        layer.PressMenu(registry, button); // by value: pressing clears the list
+        pressed = true;
+        break;
+    }
+    CHECK_MSG(pressed, "the restart button is pressable");
+    CHECK(IsAt(layer, "level5"));
+    CHECK_MSG(layer.SimLevel() != nullptr && !layer.SimLevel()->hazards.playerDied, "and alive again");
+    if (layer.SimLevel() != nullptr) {
+        CHECK_MSG(glm::distance(playerPx(registry, layer), spawn) < 1.0,
+                  "back at the spawn: " + Point(playerPx(registry, layer)));
+    }
+    layer.OnDetach(registry);
+}
+
+void AFallOutOfTheLevelIsADeath() {
+    // The owner jumped into a pit and nothing happened. Nothing in the port
+    // tested the level's own edge, so the player fell for ever; Hazards now
+    // carries checkGameLost's bounds test, and this is it through the layer.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
     if (layer.SimLevel() == nullptr) return;
-    CHECK(!layer.SimLevel()->hazards.playerDied);
-    CHECK_MSG(glm::distance(playerPx(registry, layer), spawn) < 1.0,
-              "back at the spawn: " + Point(playerPx(registry, layer)));
+    CHECK_MSG(layer.SimLevel()->hazards.haveBounds, "level1 knows its own extent");
+
+    // Below the level and past the margin: (512, 256) plus (64, 96) in y.
+    auto& transform = registry.get<TransformComponent>(layer.SimLevel()->player);
+    const glm::vec3 below = MagicPortals::Units::ToWorld(256.0, 400.0);
+    transform.position = glm::vec3(below.x, below.y, transform.position.z);
+    tickWith(layer, registry, kRest, {}, {});
+
+    CHECK_EQ(layer.Deaths(), 1);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.SimLevel()->hazards.playerDied, "the fall killed it");
+    if (layer.SimLevel() != nullptr) {
+        CHECK_MSG(layer.SimLevel()->hazards.diedByFalling, "and it says it was a fall");
+    }
+    const std::vector<std::string> sounds = layer.LatchedSounds();
+    const bool fell = std::find(sounds.begin(), sounds.end(), "player_fell") != sounds.end();
+    CHECK_MSG(fell, "and the fall's own cue played on the tick it happened");
+    std::printf("  level1: fell past the level's edge and died\n");
     layer.OnDetach(registry);
 }
 
@@ -1808,7 +1888,8 @@ void runTests() {
     Level8FromTheSpawnWithTapsAndWalking();
     LevelsFollowInOrderAndRetryIsInstant();
     NSkipsToTheNextLevel();
-    DeathIsAnInstantRetry();
+    DeathIsABeatAndThenTheLostScreen();
+    AFallOutOfTheLevelIsADeath();
     TheLevelsArtIsDrawn();
     AStaticPortalGlows();
     WithoutTheArtTheLevelIsBoxes();

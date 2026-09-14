@@ -145,7 +145,11 @@ public:
     // `Finished` is the odd one: it sits OVER the level it finished, which
     // stays loaded and drawn but stops ticking, so it is placed against the
     // camera's view rather than against the menu's own box.
-    enum class Screen { None, Main, Worlds, Levels, Finished };
+    // `Finished` and `Dead` are the odd two: each sits OVER the level it ended,
+    // which stays loaded and drawn but stops ticking, so both are placed against
+    // the camera's view rather than against the menu's own box. Everything that
+    // treats a screen as "the level is gone" has to name both.
+    enum class Screen { None, Main, Worlds, Levels, Finished, Dead };
 
     // A button the menu drew, in the menu's pixel box (MenuBoxPx). Kept as
     // data so a click is tested against exactly what was drawn, and so a test
@@ -628,6 +632,26 @@ private:
     static constexpr double kFinishDelayMs = 1400.0;
     bool m_finishing = false;      // gone into the door, not yet scored
     double m_finishClockMs = 0.0;  // how long since
+
+    // AND THE SAME BEAT BEFORE THE LOST SCREEN, which this port had none of:
+    // death was an instant retry, so a player who walked into level5's
+    // death_area was simply back at the spawn with no screen and no sound, and
+    // one who walked off a ledge was not killed at all.
+    //
+    // checkGameEnd counts gameEndElapsedTime against gameLostDelay and only past
+    // it raises the levelLostLayer and plays playDeathSound. gameLostDelay is
+    // the register gameWonDelay is copied FROM (constructor, instructions
+    // 24..29), so the two beats are the same 1400 ms and share the constant's
+    // decode rather than each carrying a number of its own.
+    static constexpr double kDeathDelayMs = kFinishDelayMs;
+    bool m_dying = false;         // killed, the lost screen not yet up
+    double m_dyingClockMs = 0.0;  // how long since
+
+    // Puts the lost screen up, over the level that is still loaded behind it.
+    // Follows openFinished and NOT openMenu: openMenu unloads the level and
+    // sets m_current to -1, after which the restart button's own guard
+    // (`if (m_current < 0) return false`) would make it silently do nothing.
+    void openDead(entt::registry& registry);
 
     // The medal the counter's CURRENT value earns, by the same computeScore the
     // final one uses. Zero when there is nothing to show.

@@ -3750,3 +3750,126 @@ starting and 128 playing** on both. Chapter 4's play floor is raised from 31 to 
 not built is named in the data file that carries each decode. What is left is
 playing it: level31c's missing platform above, and level28b's fire diamond with no
 gutter mouth, are the two places where only the game itself can say.
+
+## Step 36 - the pit that did not kill, and the screen that was not there (built)
+
+Two reports from the owner's second play, and both were the same absence seen from
+different ends: **the level had no edge**.
+
+**A PIT WAS NOT A DEATH, IT WAS AN INFINITE FALL.** `Hazards::State::Tick` tested
+`Trigger::Overlaps` against placed hazard boxes and nothing else, and `Hazards::Rules`
+held only `notHazardNames` - there was no concept of the level's extent anywhere in
+the port. A player who walked off a ledge fell for ever, which is what the owner
+found by jumping into one.
+
+`GameStateController::checkGameLost` (bytes 123759..125310) holds **two** deaths.
+Instructions 0..116 are the hp death; instructions 117..184 are the bounds test, and
+it reads:
+
+```
+charPos.x > maxPos.x || charPos.y > maxPos.y || charPos.x < minPos.x || charPos.y < minPos.y
+```
+
+with, from the constructor (bytes 121296..122160, instructions 60..114):
+
+```
+size   = g_scale.scale(vector2(32, 48))
+maxPos = SeekEntity('max').GetPositionXY() + size * 2
+minPos = size * -2
+```
+
+**The margin is `size * 2` at BOTH ends, and reading it as a bare `size` on the max
+end was a misread of the disassembly worth recording.** Instructions 77..80 compute
+`size * 2` into a variable and instruction 81 is `VAR v8`, which pushes that
+variable's INDEX; instruction 96 is `GETREF`, whose operand is a STACK OFFSET rather
+than a variable index - so the listing's `GETREF v2[size]` annotation names the wrong
+variable. `size * 2` has no other consumer in the function, and a compiler does not
+emit a multiply it never reads. The result is symmetric with the `minPos` line, which
+is what a reader would expect anyway. In the port's unscaled pixels that is
+**(64, 96)**, and it lives in `hazards.json` with the whole derivation beside it.
+
+The marker is the one the port already had: `max`, which `Camera` reads for its clamp
+and `boss.json` for the beholder's spike cull. **Every one of the 128 levels places
+one.** The test is guarded on actually having it, because `loadLevel` refuses a level
+with no `level_bounds` but `Game::Start` does not - and every sim suite goes through
+`Game::Start`. Left unguarded, an absent marker read as (0, 0) would have killed the
+player on the first tick of all 128 levels.
+
+**AND DYING IS TWO MOMENTS, exactly as finishing turned out to be in step 35.** Death
+was an instant retry here: the tick it happened, the level was back as it loaded, with
+no screen at all. `checkGameEnd` counts `gameEndElapsedTime` against `gameLostDelay`
+before it raises `levelLostLayer`, and `gameLostDelay` is the register `gameWonDelay`
+is copied FROM - so it is the same **1400 ms** the finish already waits, and
+`kDeathDelayMs` is written as `kFinishDelayMs` rather than as a second number.
+
+**The sounds were wrong in a way only the decode shows.** `checkGameLost` plays
+exactly one cue and only for a fall: `playDieByFallSound`, at the moment it happens.
+The hp death plays **nothing**. `playDeathSound` belongs to `checkGameEnd`, 1400 ms
+later, where the lost screen goes up - and this port was playing it at the instant of
+death. `player_fell` is now its own event and `player_died` is the screen's.
+`playFallSound` is a third cue again and is **not** a death: sfx 18, gated on a 200 ms
+`charHitSoundTimer` with a volume argument, which is a landing thump.
+
+**THE LOST SCREEN'S VEIL IS NOT THE MEDAL SCREEN'S**, and that was the trap worth
+catching. `LevelLostLayer` (bytes 276429..277344) `addSprite`s `fade_edge.png` at
+`V2_ZERO` sized `(screenSize.x * 0.9, screenSize.y)` at **ARGB(180,...)**, where the
+medal screen pulls the same file one and a half screens wide at **200**. A top-left
+origin 0.9 of a screen wide IS a centre of (0.45, 0.5) - the same origin-to-centre
+conversion the finish veil's note already records. The `stretched` maker had 200
+hardcoded in it, so alpha is the caller's now.
+
+Its two buttons are `button_restart.png` and `list_button.png` at (0.4, 0.6) and
+(0.6, 0.6): **a row**, where the medal screen's three are a column. Same
+last-pushed-is-the-first-argument rule, opposite answer - the constant that varies
+here is the x - which is why it is written down twice. They are the medal screen's own
+`Retry` and `List` kinds, so `PressMenu` needed nothing new, and `openDead` follows
+`openFinished` rather than `openMenu` **because `openMenu` unloads the level and sets
+`m_current` to -1**, after which the restart button's own `if (m_current < 0) return
+false` would have made it silently do nothing.
+
+**THE WALK ARROWS HAD MARGINS THE ORIGINAL DOES NOT HAVE.** They were placed just
+inside the corners on the reasoning that a mouse should be able to reach all of a
+button; the owner's answer was that the original crops them. Its capture shows each
+disc running off the screen at the side AND off the bottom, with only the glyph and a
+collar in view. They are at (0.04, 0.94) and (0.96, 0.94) at 0.30 of the view's height
+now, and the top-right pair keeps the small inset the capture shows. Those fractions
+are **measured from the capture, not decoded**, and say so - the original builds these
+against `GetScreenSize` at `g_scale` and no fraction of the screen is written down
+anywhere in the binary.
+
+**TWO TEST PREMISES EXPIRED, AND BOTH WERE REWRITTEN RATHER THAN RELAXED.**
+
+`test_mp_layer`'s `DeathIsAnInstantRetry` asserted the behaviour this step removes. It
+is two cases now: death is a beat and then a screen, and a fall out of level1 is its
+own death with its own cue.
+
+`test_mp_minions`'s killer-floor case failed on both toolchains, and the failure was
+right. level0b's `max` is at (1052, 256), so with the (64, 96) margin the level ends
+at (1116, 352) - and the case parks the player on a killer floor centred at
+(1152, 448), which spans x 768..1536 and y 384..512. **It was quietly standing the
+player outside the level on both axes**, and nothing noticed because nothing tested
+the edge. What it always MEANT - that `enemy_killer` takes minions and never the
+player - is now asked as "whoever killed it, it was not the killer floor", with the
+fall named as what did.
+
+**What this makes visible in level31c.** The same bounds test turns step 35's recorded
+platform gap from a silent infinite fall into a death. The y=240 row there is
+`light_wall` 126x30 at (64, 240) → x 1..127, `single_block` 64x32 at (224, 240) →
+x 192..256, then `platform_no_emissive` 256x32 twice → x 256..768. The light wall
+carries `metadata/breakable` and lighting the torch takes it away - and the torch must
+be lit to summon the boss at all - so once the fight starts there is **no floor from
+x 0 to 192**, the key drops at (78, 208) inside that hole, and `platform_pos`
+(160, 240) with that same 64x32 box spans **x 128..192**: exactly the bridge from
+wall-end to single_block-start. That is the next step, and it is smaller than
+`darkdragon.json` feared - `DarkDragon` already parses `platform_pos` and
+`platform_entity`; only the `Turn` flag and a builder for a body with no node behind
+it are missing.
+
+GCC 13.3 and MSVC 14.50 agree: **0 failures in every Magic Portals suite** and no
+warnings on either. `test_mp_layer` 205 → **217**, reporting "level5: died, and the
+lost screen came up 1400 ms later with 2 button(s)" and "level1: fell past the level's
+edge and died"; `test_mp_hazards` 19 → **43**, pinning the extent, the (64, 96) margin
+and all six bounds cases; `test_mp_sounds` 99 → **103**; `test_mp_minions` 77 → **78**;
+and **128 of 128 levels still start and play** on both. MSVC returned 4551 on
+`test_mp_turrets` once - Smart App Control blocking a freshly linked unsigned exe, not
+a failure - and passed it on the relink the runner does for exactly that.

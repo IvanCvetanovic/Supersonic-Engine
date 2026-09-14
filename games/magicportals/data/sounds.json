@@ -275,6 +275,26 @@
     "stone_broken": "playStoneHitSound",
     "fireball_spat": "playFireballSound",
 
+    "_note_player_died": [
+      "DYING IS TWO MOMENTS AND TWO SOUNDS TOO, for the same reason finishing is.",
+      "",
+      "GameStateController::checkGameLost (bytes 123759..125310) is what notices, and it",
+      "plays only ONE cue, and only for a fall: past the level's bounds it logs",
+      "GAME_CHARACTER_DIED_BY_FALLING, calls playDieByFallSound(), Hide()s the character",
+      "and calls finishGame(true). The hp death above it plays NOTHING - it drops a",
+      "blood.ent, hides the character and calls finishGame(false).",
+      "",
+      "playDeathSound comes later and from somewhere else: checkGameEnd counts",
+      "gameEndElapsedTime against gameLostDelay - 1400 ms, the same register that feeds",
+      "gameWonDelay - and only past it does setCurrentLayer('levelLostLayer') and",
+      "playDeathSound() (instructions 231..251). So `player_died` is the moment the LOST",
+      "SCREEN GOES UP, not the moment of death, and MagicPortalsLayer holds the 1400 ms",
+      "between them exactly as it holds the finish's.",
+      "",
+      "playFallSound is a different cue again and is NOT a death: it is sfx 18, gated on a",
+      "200 ms charHitSoundTimer with a volume argument, which is a landing thump."
+    ],
+    "player_fell": "playDieByFallSound",
     "player_died": "playDeathSound",
     "_note_level_finished": [
       "THE FINISH IS TWO MOMENTS AND TWO SOUNDS, and this mapped both to one instant.",

@@ -34,6 +34,11 @@ namespace MagicPortals::Hazards {
 // Minions.hpp, which is what does act on it.
 struct Rules {
     std::vector<std::string> notHazardNames;
+
+    // How far past the level's own extent the player may go before it has
+    // fallen out of the world: hazards.json's `bounds.margin_px`, which is the
+    // original's `size * 2` at both ends. See that file for the decode.
+    glm::dvec2 boundsMarginPx{0.0};
 };
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
@@ -49,7 +54,24 @@ struct State {
     bool playerDied = false;
     std::string killedBy; // the hazard the player died in
 
-    // One tick, after the physics step: a player newly inside a hazard dies.
+    // THE LEVEL'S EDGE, which is a death and not a hazard.
+    //
+    // checkGameLost tests the player against the level's extent every frame,
+    // and this port tested nothing - so a player who left a level fell for
+    // ever. The extent is the level_bounds marker Camera and Boss already read;
+    // the margin is hazards.json's. A level with no marker does not test, which
+    // is the same refusal Boss::Find makes rather than inventing an extent.
+    glm::dvec2 boundsPx{0.0};
+    glm::dvec2 marginPx{0.0};
+    bool haveBounds = false;
+
+    // Which of the two deaths it was. The original plays playDieByFallSound the
+    // moment it happens and playDeathSound only when the lost screen goes up;
+    // an hp death has no sound of its own at all.
+    bool diedByFalling = false;
+
+    // One tick, after the physics step: a player newly inside a hazard dies,
+    // and so does one that has left the level.
     void Tick(entt::registry& registry, entt::entity player);
 
     const Hazard* FindHazard(const std::string& name) const;

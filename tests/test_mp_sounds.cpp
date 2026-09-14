@@ -247,6 +247,11 @@ void ThePortsOwnTableIsTheOriginals() {
     // CALLINTF finds the definition and no call site. sounds.json keeps it listed
     // as a decoded cue with no moment rather than deleting it.
     playsFor("level_finished", "playFinalDoorSound");
+    // Dying is two moments as finishing is: the fall's own cue at the moment it
+    // happens, and the lost screen's 1400 ms later. An hp death has no cue of
+    // its own at all - checkGameLost plays one only on the bounds branch.
+    playsFor("player_fell", "playDieByFallSound");
+    playsFor("player_died", "playDeathSound");
     playsFor("medal_shown", "playVictorySound");
     playsFor("wall_broken", "playDemolitionSound");
     playsFor("menu_button", "getButtonSoundName");

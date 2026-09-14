@@ -214,6 +214,10 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     // played by nobody.
     m_finishing = false;
     m_finishClockMs = 0.0;
+    // And the death beat, for the same reason: left set, the next level would
+    // open already dying and put the lost screen up 1400 ms in.
+    m_dying = false;
+    m_dyingClockMs = 0.0;
     const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(index)];
 
     // A refused level says why on the HUD, which a player reads, and in the log,
@@ -747,6 +751,34 @@ void MagicPortalsLayer::layOutMenu() {
         return;
     }
 
+    if (m_screen == Screen::Dead) {
+        // A ROW, and this one genuinely is. LevelLostLayer's constructor (bytes
+        // 276429..277344) calls addButton twice, building its vector2 from
+        // `PshC4 0.6f; PshC4 0.4f` and then `PshC4 0.6f; PshC4 0.6f`. Last
+        // pushed is the FIRST argument, so they are (0.4, 0.6) and (0.6, 0.6):
+        // the constant that VARIES is the x, which is what makes this a row
+        // where the medal screen's three - varying in y - are a column. Same
+        // rule, opposite answer, which is why it is worth writing down twice.
+        const glm::dvec2 view = ViewPx();
+        const glm::dvec2 centre = m_follow.centrePx;
+        const auto onView = [&view, &centre](double nx, double ny) {
+            return centre + glm::dvec2((nx - 0.5) * view.x, (ny - 0.5) * view.y);
+        };
+        // Its two buttons ARE the medal screen's restart and list - the same
+        // two files, button_restart.png and list_button.png, doing the same two
+        // jobs - so they take the same kinds and PressMenu needs nothing new.
+        const MenuButton::Kind kinds[] = {MenuButton::Kind::Retry, MenuButton::Kind::List};
+        const double xs[] = {0.4, 0.6};
+        for (int i = 0; i < 2; ++i) {
+            MenuButton button;
+            button.kind = kinds[i];
+            button.centrePx = onView(xs[i], 0.6);
+            button.sizePx = glm::dvec2(view.y * 0.16);
+            m_menuButtons.push_back(button);
+        }
+        return;
+    }
+
     if (m_screen == Screen::Worlds) {
         // The original pages four worlds two at a time (PageProperties:
         // numItems 4, columns 2, rows 1). A window is not a phone, so the port
@@ -862,30 +894,29 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
 
     // The medal screen keeps the level behind it, so it takes no background of
     // its own; the others cover the screen with theirs.
-    if (m_screen != Screen::Finished) {
+    if (m_screen != Screen::Finished && m_screen != Screen::Dead) {
         m_menuBg = quadFor("Magic Portals Menu Background",
                            menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png"));
     }
     if (m_screen == Screen::Main) {
         m_menuTitle = quadFor("Magic Portals Title", menuImage("game_main_title.png"));
     }
-    if (m_screen == Screen::Finished && m_lastCleared) {
-        // THE WHOLE SCREEN, not just the medal, and in the order
-        // LevelFinishedLayer lays it down.
-        //
-        // Every position here is the original's own, normalized on the screen:
-        // it builds them against GetScreenSize, and the medal screen sits over
-        // the level, so the port places them on the CAMERA'S VIEW rather than
-        // in the menu's box. menuTick does the placing; this only makes them.
-        // Sized by its own aspect at a stated height, which is what everything
-        // here but the veil wants. The heights are DERIVED, not decoded: the
-        // original draws these at 1.5 x g_scale against its own reference
-        // height, and no fraction of the screen is written down anywhere - so
-        // each is its image's height against that reference, and marked here as
-        // derived for the same reason art.json marks its numbers _guess.
-        const auto byHeight = [this, &quadFor](const char* tag, const std::string& file, glm::dvec2 atView,
-                                              double heightView, float z, glm::dvec2 offsetPx = glm::dvec2(0.0),
-                                              glm::dvec2 pivot = glm::dvec2(0.5)) {
+    // THE TWO WAYS A SCREEN'S FURNITURE IS SIZED, out here because BOTH the
+    // medal screen and the lost screen lay theirs down this way.
+    //
+    // Every position either one uses is the original's own, normalized on the
+    // screen: it builds them against GetScreenSize, and both screens sit over
+    // the level, so the port places them on the CAMERA'S VIEW rather than in
+    // the menu's box. menuTick does the placing; this only makes them. Sized by
+    // its own aspect at a stated height, which is what everything but a veil
+    // wants. The heights are DERIVED, not decoded: the original draws these at
+    // 1.5 x g_scale against its own reference height, and no fraction of the
+    // screen is written down anywhere - so each is its image's height against
+    // that reference, and marked here as derived for the same reason art.json
+    // marks its numbers _guess.
+    const auto byHeight = [this, &quadFor](const char* tag, const std::string& file, glm::dvec2 atView,
+                                          double heightView, float z, glm::dvec2 offsetPx = glm::dvec2(0.0),
+                                          glm::dvec2 pivot = glm::dvec2(0.5)) {
             Decoration decoration;
             decoration.image = menuImage(file);
             decoration.quad = quadFor(tag, decoration.image);
@@ -894,33 +925,38 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
             decoration.heightView = heightView;
             decoration.offsetPx = offsetPx;
             decoration.pivot = pivot;
-            decoration.z = z;
-            if (decoration.quad != entt::null) m_menuDecor.push_back(decoration);
-        };
+        decoration.z = z;
+        if (decoration.quad != entt::null) m_menuDecor.push_back(decoration);
+    };
 
-        // And the one that is stretched, because it is a gradient rather than a
-        // picture of anything.
-        const auto stretched = [this, &registry, &quadFor](const char* tag, const std::string& file,
-                                                           glm::dvec2 atView, glm::dvec2 sizeView, float z) {
-            Decoration decoration;
-            decoration.image = menuImage(file);
-            decoration.quad = quadFor(tag, decoration.image);
-            decoration.atView = atView;
-            decoration.sizing = Decoration::Sizing::Stretched;
-            decoration.sizeView = sizeView;
-            decoration.z = z;
-            if (decoration.quad == entt::null) return;
+    // And the one that is stretched, because it is a gradient rather than a
+    // picture of anything.
+    //
+    // ALPHA IS THE CALLER'S, because the two screens do not share it: the medal
+    // screen's veil is ARGB(200,255,255,255) and the lost screen's is 180. The
+    // port drew the first opaque white once, so a gradient meant to sink the
+    // level behind the medal was barely a tint; hardcoding 200 here would have
+    // made the same mistake again on the second screen. The particles take
+    // their colour the same way (albedoColor, above), so this is the
+    // established path rather than a new one.
+    const auto stretched = [this, &registry, &quadFor](const char* tag, const std::string& file,
+                                                       glm::dvec2 atView, glm::dvec2 sizeView, float z,
+                                                       double alpha) {
+        Decoration decoration;
+        decoration.image = menuImage(file);
+        decoration.quad = quadFor(tag, decoration.image);
+        decoration.atView = atView;
+        decoration.sizing = Decoration::Sizing::Stretched;
+        decoration.sizeView = sizeView;
+        decoration.z = z;
+        if (decoration.quad == entt::null) return;
 
-            // ARGB(200, 255, 255, 255), which is the veil's whole job: the
-            // original draws it at alpha 200 of 255 and the port drew it opaque
-            // white, so a gradient meant to sink the level behind the medal was
-            // barely a tint. The particles take their colour the same way
-            // (albedoColor, above), so this is the established path rather than
-            // a new one.
-            registry.get<Supersonic::MaterialComponent>(decoration.quad).albedoColor =
-                glm::vec4(1.0f, 1.0f, 1.0f, 200.0f / 255.0f);
-            m_menuDecor.push_back(decoration);
-        };
+        registry.get<Supersonic::MaterialComponent>(decoration.quad).albedoColor =
+            glm::vec4(1.0f, 1.0f, 1.0f, static_cast<float>(alpha / 255.0));
+        m_menuDecor.push_back(decoration);
+    };
+
+    if (m_screen == Screen::Finished && m_lastCleared) {
 
         // EVERY POSITION BELOW READS THE DECODED PAIRS AS (y, x).
         //
@@ -942,7 +978,7 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
         // half screens wide IS a centre of (0.75, 0.5), so this one position
         // needed no correcting.
         stretched("Magic Portals Finish Veil", "fade_edge.png", glm::dvec2(0.75, 0.5),
-                  glm::dvec2(1.5, 1.0), 0.55f);
+                  glm::dvec2(1.5, 1.0), 0.55f, 200.0);
 
         // "Level finished" over the middle, and the plaque naming the portals
         // spent BELOW the medal - addSprite puts it at medalPos + (0, 0.15) of
@@ -993,6 +1029,26 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
                            : m_medalDrawn == 2 ? "medal_silver_l.png"
                                                : "medal_bronze_l.png";
         m_menuTitle = quadFor("Magic Portals Medal", menuImage(file));
+    }
+
+    if (m_screen == Screen::Dead) {
+        // THE LOST SCREEN, as LevelLostLayer builds it (bytes 276429..277344).
+        //
+        // ITS VEIL IS NOT THE MEDAL SCREEN'S, which is the trap here. That one
+        // is pulled one and a half screens wide at alpha 200; this one is
+        // addSprite'd at V2_ZERO with size (screenSize.x * 0.9, screenSize.y)
+        // at ARGB(180,255,255,255) - narrower, taller and thinner. A top-left
+        // origin 0.9 of a screen wide and a full screen tall IS a centre of
+        // (0.45, 0.5), which is the same origin-to-centre conversion the finish
+        // veil's own note records; read as a centre it would sit off to the
+        // right by a twentieth of the screen.
+        stretched("Magic Portals Lost Veil", "fade_edge.png", glm::dvec2(0.45, 0.5), glm::dvec2(0.9, 1.0),
+                  0.55f, 180.0);
+
+        // And the banner over the middle, at screenSize * (0.5, 0.35): the pair
+        // is pushed `PshC4 0.35f; PshC4 0.5f`, so last-pushed-first makes x the
+        // 0.5. addSprite centres it on V2_HALF, this port's default pivot.
+        byHeight("Magic Portals Game Over", "game_over.png", glm::dvec2(0.5, 0.35), 0.22, 0.58f);
     }
 
     for (const MenuButton& button : m_menuButtons) {
@@ -1137,6 +1193,19 @@ void MagicPortalsLayer::openFinished(entt::registry& registry) {
     buildMenu(registry);
 }
 
+void MagicPortalsLayer::openDead(entt::registry& registry) {
+    // The SCREEN'S cue, and not the moment of death: checkGameEnd plays
+    // playDeathSound here, where it raises levelLostLayer. A fall's own sound
+    // played 1400 ms ago and an hp death made no sound at all.
+    latch("player_died");
+    // The level STAYS, as it does behind the medal: OnFixedUpdate hands the
+    // tick to the menu whenever a screen is up, so it is drawn and frozen.
+    m_screen = Screen::Dead;
+    m_aspect = viewportAspect(registry);
+    layOutMenu();
+    buildMenu(registry);
+}
+
 void MagicPortalsLayer::openMenu(entt::registry& registry, Screen screen) {
     // A level and a menu are never both in the registry.
     unloadLevel(registry);
@@ -1222,7 +1291,8 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
 
     // The medal screen leaves the camera where the level left it, so the level
     // stays framed as it was when it was finished.
-    if (m_screen != Screen::Finished && m_camera != entt::null && registry.valid(m_camera)) {
+    if (m_screen != Screen::Finished && m_screen != Screen::Dead && m_camera != entt::null &&
+        registry.valid(m_camera)) {
         auto& camera = registry.get<CameraComponent>(m_camera);
         const glm::vec3 centre = Units::ToWorld(box.x * 0.5, box.y * 0.5);
         camera.position = glm::vec3(centre.x, centre.y, kCameraDistance);
@@ -1243,7 +1313,7 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
     // Placed here rather than in buildMenu because these sit on the CAMERA'S
     // view, which moves with the level behind them and changes shape with the
     // window - the same reason the buttons are laid out every tick.
-    if (m_screen == Screen::Finished && m_lastCleared) {
+    if ((m_screen == Screen::Finished && m_lastCleared) || m_screen == Screen::Dead) {
         const glm::dvec2 view = ViewPx();
         const glm::dvec2 centre = m_follow.centrePx;
         const auto onView = [&view, &centre](const glm::dvec2& atView) {
@@ -1272,7 +1342,12 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
                         onView(decoration.atView) + decoration.offsetPx + fromPivot, sizePx,
                         decoration.z, 0.0f);
         }
+    }
 
+    // The counter and the medal belong to the MEDAL screen alone: the lost
+    // screen has neither, and m_lastCleared may hold nothing at all while it
+    // is up - the player need never have finished a level to die on one.
+    if (m_screen == Screen::Finished && m_lastCleared) {
         // THE COUNTER, on the frame's clock: one step of one every 100 ms,
         // toward the portals the play spent. The original's ScoreCounter is a
         // Timer with that stride, and its draw reads getCurrent() every frame.
@@ -2189,7 +2264,7 @@ const MagicPortalsLayer::ControlButton* MagicPortalsLayer::layOutControls(entt::
     using Supersonic::Input;
     // Only while a level is being played: the menu screens have their own
     // buttons, and the medal screen wants its three rather than these four.
-    const bool shown = m_loaded && m_screen == Screen::None && !m_finishing;
+    const bool shown = m_loaded && m_screen == Screen::None && !m_finishing && !m_dying;
     for (ControlButton& button : m_controls) {
         if (button.quad == entt::null || !registry.valid(button.quad)) continue;
         registry.get<Supersonic::RenderableComponent>(button.quad).isVisible = shown;
@@ -2202,28 +2277,40 @@ const MagicPortalsLayer::ControlButton* MagicPortalsLayer::layOutControls(entt::
         return centre + glm::dvec2((nx - 0.5) * view.x, (ny - 0.5) * view.y);
     };
     // A share of the view's HEIGHT, so they keep their size and their place
-    // whatever shape the window is. The walk arrows are the big pair and sit in
-    // the corners the original's do - its own are cropped by the screen edge,
-    // and these sit just inside it so a mouse can reach all of them.
-    const double walk = view.y * 0.26;
-    const double small = view.y * 0.12;
+    // whatever shape the window is.
+    //
+    // THE WALK ARROWS ARE CROPPED BY BOTH EDGES, which this first got wrong.
+    // They were placed just inside the corners, on the reasoning that a mouse
+    // should be able to reach all of a button - and the owner's answer was that
+    // the original has no such margins. Its capture shows each disc running off
+    // the screen at the left or right AND off the bottom, with only the glyph
+    // and a collar around it in view. So the centre goes very nearly ON the
+    // corner and the disc is allowed to leave the screen.
+    //
+    // MEASURED FROM THE OWNER'S CAPTURE, not decoded, and marked so for the
+    // same reason the level grid's tile fraction is: the original builds these
+    // against GetScreenSize at g_scale, and no fraction of the screen is
+    // written down anywhere in the binary. The top-right pair is NOT flush -
+    // it keeps the small inset the capture shows.
+    const double walk = view.y * 0.30;
+    const double small = view.y * 0.095;
     for (ControlButton& button : m_controls) {
         switch (button.kind) {
         case Control::Left:
             button.sizePx = glm::dvec2(walk);
-            button.centrePx = onView(0.085, 0.85);
+            button.centrePx = onView(0.04, 0.94);
             break;
         case Control::Right:
             button.sizePx = glm::dvec2(walk);
-            button.centrePx = onView(0.915, 0.85);
+            button.centrePx = onView(0.96, 0.94);
             break;
         case Control::Reset:
             button.sizePx = glm::dvec2(small);
-            button.centrePx = onView(0.86, 0.10);
+            button.centrePx = onView(0.891, 0.108);
             break;
         case Control::Menu:
             button.sizePx = glm::dvec2(small);
-            button.centrePx = onView(0.95, 0.10);
+            button.centrePx = onView(0.966, 0.108);
             break;
         }
         placeSprite(registry, button.quad, button.centrePx, button.sizePx, 0.7f, 0.0f);
@@ -2701,10 +2788,39 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
             m_direction = 0.0f;
             m_finishing = true;
             m_finishClockMs = 0.0;
+        } else if (m_dying) {
+            // Killed, and the lost screen not up yet: the level goes on running
+            // behind it exactly as it does behind the door's effect.
+            m_dyingClockMs += static_cast<double>(fixedDelta) * 1000.0;
+            if (m_dyingClockMs >= kDeathDelayMs) openDead(registry);
         } else if (m_level.hazards.playerDied) {
-            latch("player_died");
+            // DYING, which is not the same moment as the lost screen, and was
+            // the whole of this branch before: death was an instant retry, so
+            // there was no screen, no beat and no sound but one played at the
+            // wrong instant.
+            //
+            // Only a FALL has a cue here. checkGameLost plays
+            // playDieByFallSound when the player leaves the level and plays
+            // nothing at all for an hp death; playDeathSound belongs to the
+            // screen, 1400 ms later. sounds.json carries that decode.
+            if (m_level.hazards.diedByFalling) latch("player_fell");
             ++m_deaths;
-            loadLevel(registry, m_current);
+            // Hide(), as the finish does it and as checkGameLost does it too -
+            // it hides the character before the delay. Left drawn, a corpse
+            // stood in the pit for 1400 ms, which is the same fault as the mage
+            // walking on the spot in the doorway.
+            if (m_player != entt::null && registry.valid(m_player)) registry.destroy(m_player);
+            m_player = entt::null;
+            if (m_playerQuad != entt::null && registry.valid(m_playerQuad)) registry.destroy(m_playerQuad);
+            m_playerQuad = entt::null;
+            if (m_level.player != entt::null && registry.valid(m_level.player)) {
+                if (auto* rigid = registry.try_get<Supersonic::RigidBodyComponent>(m_level.player)) {
+                    rigid->velocity = glm::vec3(0.0f);
+                }
+            }
+            m_direction = 0.0f;
+            m_dying = true;
+            m_dyingClockMs = 0.0;
         }
     }
     if (m_loaded) {

@@ -20,5 +20,50 @@
 
   "not_hazard_names": [
     "enemy_killer"
-  ]
+  ],
+
+  "bounds": {
+    "_source": [
+      "THE LEVEL'S OWN EDGE, which is the death nothing in this port tested for: a player",
+      "who walked off a ledge fell for ever, and the owner found it by jumping into a pit.",
+      "",
+      "GameStateController::checkGameLost (assets/GameStateController.angelscript, bytes",
+      "123759..125310) holds two deaths, not one. Instructions 0..116 are the hp death;",
+      "instructions 117..184 are this one, and read exactly:",
+      "",
+      "  charPos = character.GetPositionXY()",
+      "  if (charPos.x > maxPos.x || charPos.y > maxPos.y ||",
+      "      charPos.x < minPos.x || charPos.y < minPos.y)",
+      "",
+      "Past that, and only when !gameFinished, it logs GAME_CHARACTER_DIED_BY_FALLING,",
+      "plays playDieByFallSound(), Hide()s the character, drops a skull.ent marker at the",
+      "screen edge and calls finishGame(true) - which sets gameLost and is what makes",
+      "checkGameEnd raise the levelLostLayer a delay later.",
+      "",
+      "maxPos and minPos come from the constructor (bytes 121296..122160, instructions",
+      "60..114):",
+      "",
+      "  size   = g_scale.scale(vector2(32, 48))",
+      "  maxPos = SeekEntity('max').GetPositionXY() + size * 2",
+      "  minPos = size * -2",
+      "",
+      "THE MARGIN IS size * 2 ON BOTH ENDS, and reading it as a bare `size` on the max end",
+      "was a misread of the disassembly worth recording. Instructions 77..80 compute",
+      "`size * 2` into a variable and instruction 81 is `VAR v8`, which pushes that",
+      "variable's INDEX; instruction 96 is `GETREF`, whose operand is a STACK OFFSET and",
+      "not a variable index, so the listing's `GETREF v2[size]` annotation names the wrong",
+      "variable. `size * 2` has no other consumer in the function, and a compiler does not",
+      "emit a multiply it never reads - so instruction 96 resolves to it. The result is",
+      "symmetric with the minPos line, which is what a reader would expect anyway.",
+      "",
+      "`size` is scaled by g_scale for the original's screen. The port's level pixels are",
+      "the converter's unscaled units - level1's `max` node sits at (512, 256) in a level",
+      "512 x 256 px - so in this space the scale is the identity and the margin is (64, 96).",
+      "",
+      "The `max` entity is the same node the port already reads as level_bounds for the",
+      "camera clamp (Camera.hpp) and the beholder's spike cull (boss.json). Every one of the",
+      "128 levels places one."
+    ],
+    "margin_px": [64.0, 96.0]
+  }
 }

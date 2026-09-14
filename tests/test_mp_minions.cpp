@@ -327,9 +327,29 @@ void theKillerFloorKillsNoPlayer() {
     }
 
     if (run.level.player == entt::null) return;
+
+    // THE FLOOR IS OUTSIDE THE LEVEL, which is why this no longer asks whether
+    // the player simply lives there - and the premise was rewritten rather than
+    // relaxed, as the dark dragon's shot gate was.
+    //
+    // level0b's `max` marker is at (1052, 256), and hazards.json's margin is
+    // (64, 96), so the level ends at (1116, 352). The killer floor is a
+    // 768 x 128 slab centred at (1152, 448): it spans x 768..1536 and
+    // y 384..512, past that corner on BOTH axes. A player stood on it is
+    // standing below AND beyond the level, and checkGameLost's bounds test -
+    // which this port did not have when this case was written - kills it for
+    // exactly that. The case was quietly parking the player outside the world,
+    // and nothing noticed because nothing tested the edge.
+    //
+    // So what is asked here now is what the case always MEANT: whoever kills
+    // the player there, it is not the killer floor. enemy_killer takes minions
+    // and nothing else, which is the whole correction this file exists to pin.
     PutAt(run.registry, run.level.player, glm::dvec2(1152.0, 448.0));
     for (int tick = 0; tick < 60; ++tick) Tick(run);
-    CHECK_MSG(!run.level.hazards.playerDied, "a second stood in the killer floor does not kill the player");
+    CHECK_MSG(run.level.hazards.killedBy != kKiller,
+              "the killer floor did not kill the player, got '" + run.level.hazards.killedBy + "'");
+    CHECK_MSG(run.level.hazards.playerDied && run.level.hazards.diedByFalling,
+              "it was the fall out of the level that took it, as the original has it");
 }
 
 // And in the other direction: it does take a minion.

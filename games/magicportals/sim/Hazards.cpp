@@ -1,6 +1,8 @@
 #include "sim/Hazards.hpp"
 
+#include "core/Components.hpp"
 #include "core/Json.hpp"
+#include "sim/Units.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -46,6 +48,28 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         read.notHazardNames.push_back(name.AsString());
     }
 
+    // How far past the level a player may go before it has fallen out of it.
+    const Json::Value& bounds = root["bounds"];
+    if (!bounds.IsObject()) {
+        error = path + ": no \"bounds\" object";
+        return false;
+    }
+    const Json::Value& margin = bounds["margin_px"];
+    if (!margin.IsArray() || margin.AsArray().size() != 2) {
+        error = path + ": no \"bounds.margin_px\" pair";
+        return false;
+    }
+    double margins[2] = {0.0, 0.0};
+    int axis = 0;
+    for (const Json::Value& value : margin.AsArray()) {
+        if (!value.IsNumber()) {
+            error = path + ": bounds.margin_px holds a value that is not a number";
+            return false;
+        }
+        margins[axis++] = value.AsNumber();
+    }
+    read.boundsMarginPx = glm::dvec2(margins[0], margins[1]);
+
     out = std::move(read);
     return true;
 }
@@ -60,6 +84,26 @@ void State::Tick(entt::registry& registry, entt::entity player) {
         }
         hazard.playerInside = inside;
     }
+
+    // AND THE LEVEL'S EDGE, which is checkGameLost's second death and was the
+    // one nothing here tested: a player who walked off a ledge fell for ever.
+    // The four comparisons are the original's, in the order it writes them.
+    //
+    // GUARDED ON HAVING A MARKER. The layer's loadLevel refuses a level with no
+    // level_bounds, but Game::Start does not - and every sim suite goes through
+    // Game::Start. An absent marker left boundsPx at (0, 0), and the test would
+    // then kill the player on the first tick of all 128 levels.
+    if (!haveBounds || playerDied) return;
+    const auto* transform = registry.try_get<Supersonic::TransformComponent>(player);
+    if (transform == nullptr) return;
+    const glm::dvec2 atPx = Units::ToPixels(transform->position);
+    const glm::dvec2 maxPx = boundsPx + marginPx;
+    const glm::dvec2 minPx = -marginPx;
+    if (atPx.x > maxPx.x || atPx.y > maxPx.y || atPx.x < minPx.x || atPx.y < minPx.y) {
+        playerDied = true;
+        diedByFalling = true;
+        killedBy = "the fall";
+    }
 }
 
 const Hazard* State::FindHazard(const std::string& name) const {
@@ -71,8 +115,22 @@ const Hazard* State::FindHazard(const std::string& name) const {
 
 bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const Rules& rules, State& out, std::string& error) {
     out = State{};
+    out.marginPx = rules.boundsMarginPx;
     for (const Tscn::Node& node : scene.nodes) {
-        if (node.parent != "." || Roles::RoleOf(roles, node) != Roles::kHazard) continue;
+        if (node.parent != ".") continue;
+        const std::string role = Roles::RoleOf(roles, node);
+
+        // The level's extent - the `max` entity, which Camera reads for its
+        // clamp and Boss for its spike cull. Read here rather than handed in so
+        // that Hazards owns every answer to "what killed the player".
+        if (role == Roles::kLevelBounds && !out.haveBounds) {
+            const Tscn::Value* position = node.Find("position");
+            if (position != nullptr && position->kind == Tscn::Value::Kind::Vector2) {
+                out.boundsPx = glm::dvec2(position->numbers[0], position->numbers[1]);
+                out.haveBounds = true;
+            }
+        }
+        if (role != Roles::kHazard) continue;
 
         // The role table is the remake's design decision, and in this one place it
         // is wrong about the original: what it lists here kills nothing. Taken out
