@@ -4911,3 +4911,269 @@ which is what makes it a byte-identity gate.
   - `WolfBrigade.exe` was refused twice. The first was on the first baseline capture,
     before any change, and it ran on the next attempt without a relink. The second was
     after the final build, cleared by one relink.
+
+## Step 43 - the scene that says its numbers are display values, and the port that does not say it yet (built)
+
+The lighting design's step E1 (the remake's `out/parity/specs/lighting/design_port.md`,
+section 4.1, which is plan_port's System 1a). **An engine switch, off by default.** A
+scene can now declare that its target holds display values rather than linear radiance.
+Then colour textures are sampled as the bytes in the file, the bloom is not recorded,
+and the composite only clamps. An optional 5/6/5 quantisation goes after it. **Nothing
+turns it on**: the port opts in at G2. Wolf Brigade, MainScene and seven Magic Portals
+levels capture byte-identical before and after.
+
+**WHY A MODE AND NOT A TINT.** The original multiplies and blends on encoded 8-bit values.
+The design's fit (`fit.md` section 4) scores the two readings against the original's pixels:
+- no-lightmap sprites below full emissive, 1,359 blocks: blending in linear light **13.59**
+  of 255, on encoded values **0.28**;
+- lightmapped ones, 1,042 blocks: **11.90** against **0.92**.
+
+Step 39 met the same wall from the HUD side: linear 1.0 leaves Reinhard at 0.5, which
+encodes to 186. It went around it with a pass after the composite. The level art is scene
+geometry, so the scene itself has to be able to say what its numbers are.
+
+**THE SETTING (engine: `core/RenderSettings.hpp`).**
+- `enum class SceneEncoding : uint8_t { LinearHdr, LinearNoToneMap, DisplayEncoded }`,
+  default `LinearHdr`.
+  - The composite reads it as the enum's value, so the order is part of the shader's
+    contract. The header says so, and `test_screenoverlay` holds the shader to it.
+- `enum class OutputQuantize : uint8_t { None, Rgb565 }`, default `None`.
+- `decodesColourTextures()`: false only for `DisplayEncoded`. One place to ask, like
+  `drawsSky()`.
+- `SceneClearColor(const RenderSettings*)`: the clear, all cases in one function.
+  - A null settings, or a sky under either linear mode, keeps **0.00023**. That is the
+    radiance Reinhard and the encode bring back to 0.02, and the sky covers it anyway.
+  - A flat colour is written verbatim, as before.
+  - A `DisplayEncoded` scene is cleared to `backgroundColor` as it stands, sky or not. A
+    radiance means nothing in a target of display values.
+  - The design is silent on a `LinearNoToneMap` sky. It keeps the literal.
+
+**WHERE IT IS READ.**
+- **`RenderSystem::SyncResources`** asks for albedo with `srgb = decodesColourTextures()`.
+  - It does so on both acquisitions: the entity's, and a mesh section's.
+  - `ResourceSignature` takes the answer as a fifth, **undefaulted** parameter, mixed in
+    as a byte of its own. Switching the mode changes no path and moves no generation, so
+    without it every sprite would keep its sRGB copy.
+  - The section loop is gated on the texture generation, not on the signature. So
+    `GpuMesh` gains `sectionDecodesColour`, compared beside `sectionTextureGeneration`.
+  - `TextureRegistry::Acquire` keys its cache `"srgb:"` or `"data:"` plus the path
+    (`TextureRegistry.cpp:227`) and passes the flag to `UploadRGBA`, which picks
+    `eR8G8B8A8Srgb` or `eR8G8B8A8Unorm` from it (`:181`, `:267`). Checked in the source,
+    because the signature flipping would be worth nothing if the lookup then handed back
+    the sRGB copy. Both uploads coexist. No capture isolates this half: the port
+    experiment's brighter glows are explained by the missing tone map alone.
+  - Normal and ORM maps stay data in every mode.
+- **`SupersonicApp`** copies `encoding` and `quantize` into `BloomPass::Settings` every
+  frame, beside the four numbers it already copied.
+  - That block runs in game mode too: it is at the frame loop's level, not inside the
+    editor's UI. The port experiment below shows the mode reaching the composite from a
+    game layer.
+- **`BloomPass`.**
+  - `RunsBloomChain(settings)` is false for `DisplayEncoded`. `Record` then skips the
+    bright and both blur passes and records the composite only.
+  - `CompositeValue(settings)` packs the push constant: (intensity, or 0 when the chain
+    is not recorded; exposure; the encoding's value; 1 to quantise). **With the defaults it
+    is (intensity, exposure, 0, 0), exactly what the composite was always given.**
+  - The design put the forced intensity 0 in `SupersonicApp`. It lives here instead, so
+    every caller gets it and a suite can reach it.
+- **`VulkanRenderer`** clears to `SceneClearColor`. `drawSky` still decides the sky pass.
+- **`SceneSerializer`** writes `"Encoding": "LinearNoToneMap" | "DisplayEncoded"` and
+  `"Quantize": "Rgb565"` **only when not the default**.
+  - A scene that never chose saves to the bytes it saved before.
+  - Any other word, and a missing key, reads as the default, as an unknown `Background`
+    reads as the sky.
+  - A scene loaded over a display-encoded one does not inherit it.
+- **`InspectorPanel`**, not in the design's list, and small:
+  - an encoding combo and a 16-bit checkbox;
+  - the background picker stops its pow(1/2.2) / pow(2.2) round trip under
+    `DisplayEncoded`, where the stored number is already the display value.
+
+**THE COMPOSITE (`bloom_composite.frag`, regenerated `.spv`).** The design's whole file,
+with two departures, both measured:
+- **LinearHdr** keeps its two lines in their order: Reinhard, then pow(1/2.2).
+- **LinearNoToneMap**: pow(clamp(colour, 0, 1), 1/2.2).
+- **DisplayEncoded**: clamp(scene * exposure, 0, 1). **It does not read the bloom at all.**
+  The design added `bloom * 0`. But in this mode binding 1 is not the bright image (next
+  paragraph), and 0 times a non-finite texel is NaN.
+- **Rgb565 writes the 8-bit reading of the level, as k/255.** The design wrote
+  `floor(c * levels + 0.5) / levels` and left the driver to store it.
+  - Measured on a MainScene copy, that stored level 20 of 31 (164.516 of 255) as **164**,
+    on all 322 pixels at that level, and 0 pixels as 165. One green pixel came out 133
+    for level 33 of 63 (133.57).
+  - Now `floor(level * 255 / levels + 0.5) / 255`: **0 pixels off a level** in the same
+    capture.
+  - **Which 8-bit reading the original's captures use is not settled here.** Replicating
+    the high bits into the low ones differs from `round(level * 255 / (2^bits - 1))` by
+    one on 4 of the 32 five-bit levels and 10 of the 64 six-bit ones. G6 gates against the
+    fit, and the shader comment names both.
+- The `.spv` was rebuilt by the `Shaders` target with the SDK's glslc (step S0's
+  configuration), and a direct `glslc bloom_composite.frag` produces the same bytes.
+
+**THE BLOOM THAT IS NOT RECORDED LEAVES AN IMAGE WITH NO LAYOUT.** The bright image is
+only ever in `eShaderReadOnlyOptimal` because the bright pass left it there, and the pass
+starts from `eUndefined`. A composite that skips the pass cannot bind it. So `BloomPass`
+allocates a second composite set, `m_compositeSceneOnlySet`, that names the scene image in
+both bindings. The pool grew from 4 sets and 5 images to 5 and 7.
+- **Proved load-bearing, for one build, not kept.** The skip branch bound the ordinary
+  `m_compositeSet` instead. A `DisplayEncoded` MainScene then **failed: exit 1, "10 Vulkan
+  validation error(s)", `VUID-vkCmdDraw-None-09600`**: "expects VkImage ... to be in layout
+  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL--instead, current layout is
+  VK_IMAGE_LAYOUT_UNDEFINED".
+  - The source was restored from a copy taken before the experiment, and everything below
+    was rebuilt and re-run on it.
+- The composite pass is never skipped. It writes the image `--screenshot` reads, and the
+  image `RecordOverlay` loads.
+
+**THE SCREEN OVERLAY (step 39) IS UNTOUCHED.** It is still a second pass over the
+composited `R8G8B8A8Unorm` image. It is loaded after the composite in every mode, with
+its textures acquired UNORM regardless of the scene's encoding.
+- **Under the defaults it is bit-exact.** All seven port captures below carry the HUD, and
+  all seven are byte-identical.
+- **Under `DisplayEncoded` it still draws, from a game layer.** For one build, not kept, the
+  port forced the mode in `OnUpdate`.
+  - 1-01 and 2-05 at frame 420 exited 0, `Vulkan validation layers: ACTIVE`, with no
+    validation message.
+  - The restart, pause and arrow buttons are drawn over the new composite.
+  - The mode reached the composite from the game: pixels at 255 went from **0 to 2,344**
+    (1-01) and **0 to 1,646** (2-05), the portals and the torch flame. Under Reinhard, 255
+    is unreachable.
+  - The HUD's own pixels are not a byte-identity check here: its controls are translucent,
+    so they carry the new background. G2 measures them.
+- **Quantisation does not reach the overlay**, which is drawn after it. The original's HUD
+  went into the same 16-bit framebuffer, so G6 has to decide whether that matters. Nothing
+  here pretends it does not.
+
+**WHAT THE NEW MODES DRAW (MainScene copies, `work/e1/modes/`).** Five copies of
+`MainScene.scene`, each with only its `Rendering` line edited, were captured
+`--window 1280x720 --fixed-step --frames 120`. Each capture is the editor viewport,
+744 x 336, and so is every MainScene capture in this step, the gate's included:
+`SupersonicEngine` is the editor, where `--window` sizes the window and the offscreen
+target follows the viewport (AGENTS.md). **All five exited 0 with
+"Clean exit with validation active."**
+- **Clear:**
+  - Background `Color` (0.25, 0.5, 0.75) under `DisplayEncoded`: every one of the 744
+    top-row pixels is **(64, 128, 191)**, the bytes of the authored colour.
+  - The same scene under `LinearHdr`: **(123, 155, 173)**, which is Reinhard and the
+    encode applied to it, predicted to the unit.
+- **`Rgb565` over `DisplayEncoded`:**
+  - 0 pixels off a 5/6/5 level, of 249,984.
+  - The distinct values are R 25, G 41, B 27, against 124 / 119 / 180 unquantised.
+  - Quantising the unquantised capture differs from it only by exactly one level, and only
+    where the 8-bit value sits within half a step of a level boundary. That is a limit of
+    reading an 8-bit capture, not a disagreement.
+- **Whole frame:**
+
+| Encoding | mean | max | share at 255 | mean abs vs default |
+|---|---|---|---|---|
+| `LinearHdr` (default) | 58.80 | 236 | 0.00 % | 0 |
+| `LinearNoToneMap` | 60.40 | 255 | 0.53 % | 1.60 |
+| `DisplayEncoded` | 21.37 | 255 | 0.52 % | 37.72 |
+| `DisplayEncoded` + `Rgb565` | 20.75 | 255 | 0.52 % | 38.34 |
+
+MainScene is a lit PBR scene, and its ambient and lights assume radiance, so
+`DisplayEncoded` darkens it. That is expected, and ARCHITECTURE.md section 5 says it: a
+display-encoded scene is expected to draw unlit.
+
+**THE SUITES.**
+- **`test_serialize` 419 -> 445** (floor 334 -> 400):
+  - both words round-trip, and `LinearNoToneMap` on its own, so a reader that mapped every
+    non-default word to one mode would be caught;
+  - a default scene's file contains neither key;
+  - an unknown word (`"Gamma24"`, `"Rgb444"`) loads as the default over a registry that
+    held `DisplayEncoded` and `Rgb565`;
+  - the clear, in all six combinations of background and encoding, and for null.
+- **`test_resourcesync` 22 -> 26** (floor 19 -> 23):
+  - decoded and undecoded are different signatures, and an unchanged mode still skips;
+  - the four combinations of texture generation and mode are all distinct;
+  - an entity with no material also re-resolves.
+- **`test_screenoverlay` 28 -> 46** (floor 25 -> 40). It holds the overlay, and now the
+  composite under it:
+  - `CompositeValue` with the defaults is (0.55, 1, 0, 0);
+  - `DisplayEncoded` at intensity 2 gives x = 0 and z = 2, and records no chain;
+  - `Rgb565` gives w = 1;
+  - `LinearNoToneMap` keeps the intensity and the chain, with z = 1;
+  - it reads `bloom_composite.frag` and checks that each mode's number lands in the branch
+    of the same index, and that 31 / 63 / 31 and `w > 0.5` are there.
+  - **Mutation:** with the shader's `z < 1.5` edited to `z < 2.5`, and no rebuild (the suite
+    reads the source at run time), it failed on exactly that check, 1 of 46. The file was
+    restored byte for byte.
+- **No suite constructs the pass.** `Record`'s skip, the second set, the driver's rounding
+  and the clear on a real target need a device. They are proved by the captures and the
+  experiment above.
+- **Unchanged:** `test_materials` 235, `test_renderplan` 127, `test_sprite` 66,
+  `test_draworder` 85, `test_shadowcache` 82, `test_mp_layer` 304, `test_mp_sprites` 155,
+  and the 18 `test_wb_*`.
+
+**NOT CONVERTED BY THE MODE, AND LEFT FOR LATER STEPS.**
+- `grid.frag` still pre-linearises its colours, and the procedural sky and the PBR path's
+  lights and fog assume radiance. A 2D display-encoded scene uses none of them.
+  - A `DisplayEncoded` scene left on `Background::Sky` still records the sky pass, and is
+    now cleared to `backgroundColor` beneath it. That pairing is incoherent and nothing
+    gates it. G2 sets a black `Color` background, which records no sky.
+- The float scene target's residual stays as design 4.1 states it. A translucent texel
+  blended onto a destination already above 1 is not clipped per draw. The contingency is
+  an 8-bit target, if a gate ever points there.
+- The port does not opt in: that is G2, with `DisplayEncoded`, a black `Color` background
+  and bloom 0.
+  - Its HUD (steps 38 to 40) is drawn after the composite, so it keeps its look.
+  - Any world quad the menus draw becomes UNORM and brighter, i.e. as authored.
+
+**GATES.**
+
+| Gate | Required | Measured |
+|---|---|---|
+| `SupersonicEngine --scene assets/scenes/MainScene.scene --window 1280x720 --fixed-step --frames 120 --screenshot` | byte-identical before/after | `1e24c2a30f6f22dc2bb01b6038bd1af9` before (twice), after the first build, and on the final source (twice); step 42's md5; `Clean exit with validation active` |
+| `WolfBrigade --window 1280x720 --fixed-step --frames 120 --screenshot` | byte-identical before/after | `d9e7b8fe5e8b0b2f162b0195e5d5ba31` before (twice), after the first build, and on the final source (twice); step 42's md5 |
+| port captures, `--window 1280x720 --fixed-step --frames 420` | unchanged until G2 opts in | before, after and final, all identical: 1-01 `a5abafb357766442e22edd119e01952b`, 1-09 `fca99769138c284b64d82f602014a1e2`, 1-13 `8b69fc8d3a0497a3db347eb24c2848bf`, 2-05 `7741d03fd24cc41323a10fa666b00818`, 2-26 `0e925ef51e310519076594c231afbd0d`, 3-05 `03ae1cbcc47d7630f7b225f9c803ec46`, 4-22 `a48cd2fcafd0d159404119fc9dc4b432`; validation ACTIVE, no message |
+| screen overlay under the defaults | bit-exact | the seven port captures above carry the HUD, byte-identical |
+| screen overlay under `DisplayEncoded` (experiment, not kept) | still drawn after the composite, validation silent | 1-01 and 2-05 exit 0, validation ACTIVE, no message; HUD drawn; pixels at 255 0 -> 2,344 and 0 -> 1,646 |
+| `bloom_composite.spv` | regenerated from the GLSL | rebuilt by the `Shaders` target; a direct glslc compile is byte-identical to it |
+| bloom skipped: a valid binding 1 | validation silent | 5 mode captures clean; with the bright-image set bound instead (experiment, not kept): exit 1, 10 errors, `VUID-vkCmdDraw-None-09600` |
+| `DisplayEncoded` clear | authored colour verbatim | (64, 128, 191) for (0.25, 0.5, 0.75), 744 of 744 top-row pixels; `LinearHdr` (123, 155, 173) as predicted |
+| `Rgb565` | every channel on a level | 0 of 249,984 pixels off a level (322 before the k/255 write) |
+| build | zero warnings | 0, three full builds (146, 121 and 5 steps) and every relink |
+| ctest | all pass; `test_serialize`, `test_resourcesync`, `test_materials`, `test_renderplan`, `test_sprite`, the 18 `test_wb_*` named | **113 / 113**; `test_serialize` 445, `test_resourcesync` 26, `test_screenoverlay` 46, `test_materials` 235, `test_renderplan` 127, `test_sprite` 66, all 18 `test_wb_*` pass |
+
+`lightgate.py` was not run: the port captures are byte-identical to before, so every number
+it would print is the one it printed before. The design gates the encoding at G2, with
+`--variant engine_tier1x`.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning, in any of three full builds.
+  - The first: every changed file, and the composite shader compiled.
+  - The second, on the final source: after the k/255 change and the first experiment's
+    revert.
+  - The third: after the port experiment's revert, which recompiled the layer and relinked
+    `MagicPortals.exe` and `test_mp_layer`.
+- **ctest.** 113 of 113 after the first build, on the final source, and once more after
+  the last edits: the quantisation comment and the `tests/CMakeLists.txt` comment beside
+  `test_screenoverlay`, which now names `bloom_composite.frag` too. That build reconfigured
+  and had nothing to compile, with no warning and `Shader compiler:
+  C:/VulkanSDK/1.4.357.0/Bin/glslc.exe` in its log.
+- **Smart App Control.** Three rounds of refusals ("Not Run"), each resolved by deleting and
+  relinking the refused executables until none was refused.
+  - **First build.** 16 suites were refused: `test_sat`, `test_nav`, `test_wb_data`,
+    `test_wb_waves`, `test_wb_combat`, `test_wb_snapshot`, `test_wb_audio`,
+    `test_wb_selection`, `test_wb_hero`, `test_mp_tscn`, `test_mp_geometry`, `test_mp_play`,
+    `test_mp_fire`, `test_input`, `test_layerstack` and `test_userdata`.
+    - On the first relink `test_nav` and `test_wb_combat` were refused again.
+    - On the second relink `test_wb_combat` was refused again. It ran on the third.
+  - **Final build.** 39 suites were refused.
+    - On the first relink 5 were refused again: `test_wb_economy`, `test_wb_selection`,
+      `test_camera`, `test_cascades` and `test_gltf`.
+    - Then 2 (`test_cascades`, `test_gltf`), then `test_cascades` twice. It ran on the fifth
+      relink.
+    - A full `ctest` then ran 113 of 113 with none refused, and again after the third build.
+  - **`WolfBrigade.exe`** was refused once, on the first capture after the final build
+    ("Permission denied", exit 126). It ran on the next attempt without a relink.
+  - **`MagicPortals.exe`** was refused on every attempt after the port experiment's link
+    (3 attempts at each of 2 levels) and after the revert's link (3 attempts at each of
+    7 levels). Each time one delete-and-relink cleared it, and every capture in this record
+    was retaken on the relinked binary. The PNGs of the refused runs were deleted first, so
+    none of them could be mistaken for a new one.
+  - The port experiment's first build did not compile (C2664: `insert_or_assign` wants an
+    rvalue), and the two captures taken straight after it ran the previous binary. They were
+    deleted, not measured.
+- **The comment on the quantisation** was corrected after the last captures. It had claimed
+  bit replication agrees on every level. The `Shaders` target recompiled the file, and the
+  `.spv` is byte-identical to the one every capture above ran.
