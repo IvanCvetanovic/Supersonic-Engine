@@ -36,6 +36,7 @@ endif()
 
 add_executable(MagicPortals
     main.cpp
+    LevelVisit.cpp   # DEV: --visit-levels, never pushed without it
 )
 
 target_link_libraries(MagicPortals PRIVATE MagicPortalsGame)

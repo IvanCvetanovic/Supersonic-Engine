@@ -22,6 +22,7 @@
 #include "core/SupersonicApp.hpp"
 #include "renderer/VulkanContext.hpp"
 
+#include "LevelVisit.hpp"
 #include "MagicPortalsLayer.hpp"
 
 int main(int argc, char** argv) {
@@ -41,8 +42,32 @@ int main(int argc, char** argv) {
     // original shows its current-score plaque only then - from a scores.json
     // written for the purpose, without touching the save of whoever plays.
     std::string savesOverride;
+    // DEV ONLY: walk levels in one process and check the engine's material
+    // descriptor sets go back to its pool (LevelVisit.hpp). Empty = a normal run.
+    MagicPortals::LevelVisitLayer::Options visit;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
+        if (arg == "--visit-levels" || arg == "--visit-passes") {
+            if (i + 1 >= argc) {
+                std::cerr << arg << " needs a value\n";
+                return EXIT_FAILURE;
+            }
+            const std::string value = argv[++i];
+            if (arg == "--visit-levels") {
+                visit.levels = value;
+            } else {
+                try {
+                    visit.passes = std::stoi(value);
+                } catch (const std::exception&) {
+                    visit.passes = 0;
+                }
+                if (visit.passes < 1) {
+                    std::cerr << "--visit-passes wants a whole number of at least 1, got '" << value << "'\n";
+                    return EXIT_FAILURE;
+                }
+            }
+            continue;
+        }
         if (arg == "--level" || arg == "--levels" || arg == "--art" || arg == "--data" || arg == "--saves") {
             if (i + 1 >= argc) {
                 std::cerr << arg << " needs a value\n";
@@ -78,7 +103,12 @@ int main(int argc, char** argv) {
                   << "  --art <dir>       what their res:// stands for (default the directory above them)\n"
                   << "  --data <dir>      the remake's game/data directory (default " << paths.data << ")\n"
                   << "  --saves <dir>     DEV: keep the medals (scores.json) here instead of the user's\n"
-                  << "                    data directory - for a capture that needs a medal recorded\n";
+                  << "                    data directory - for a capture that needs a medal recorded\n"
+                  << "  --visit-levels <lightmapped|all|name,...>\n"
+                  << "                    DEV: visit these levels in one process, holding each one's\n"
+                  << "                    lightmaps as material sets and dropping them on leaving; the\n"
+                  << "                    run fails unless the engine's descriptor sets return to its pool\n"
+                  << "  --visit-passes <n> DEV: how many times to walk that list (default 1)\n";
         return EXIT_SUCCESS;
     }
     if (!options.ok) {
@@ -126,6 +156,8 @@ int main(int argc, char** argv) {
     }
     paths.saveDir = saveDir.string();
 
+    // Outside the app, because the layer stack is torn down with it.
+    MagicPortals::LevelVisitLayer::Result visitResult;
     try {
         Supersonic::SupersonicApp app(options, &manifest);
 
@@ -144,10 +176,25 @@ int main(int argc, char** argv) {
                                                                     : "NOT LOADED - nothing is checking this run")
             << std::endl;
 
-        app.PushLayer(std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start));
+        auto game = std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start);
+        MagicPortals::MagicPortalsLayer& gameLayer = *game;
+        app.PushLayer(std::move(game));
+        if (!visit.levels.empty()) {
+            app.PushLayer(std::make_unique<MagicPortals::LevelVisitLayer>(gameLayer, paths, visit, visitResult));
+        }
         app.Run();
     } catch (const std::exception& e) {
         std::cerr << "[Magic Portals] fatal: " << e.what() << std::endl;
+        Supersonic::Log::CloseFileSink();
+        return EXIT_FAILURE;
+    }
+
+    if (!visit.levels.empty() && (!visitResult.finished || !visitResult.failures.empty())) {
+        std::cerr << "[Magic Portals] level visit "
+                  << (visitResult.finished ? "failed" : "did not finish") << ": "
+                  << visitResult.failures.size() << " failure(s)";
+        if (!visitResult.failures.empty()) std::cerr << ", the first: " << visitResult.failures.front();
+        std::cerr << std::endl;
         Supersonic::Log::CloseFileSink();
         return EXIT_FAILURE;
     }

@@ -4709,3 +4709,205 @@ metadata it does not know.
     `test_mp_boss` were refused.
   - Each ran once relinked again. `MagicPortals.exe`, relinked both times, was never
     refused, and captured 1-01 and 2-26 at the same md5s after the second.
+
+## Step 42 - the material descriptor sets given back, and the walk that ran out without them (built)
+
+The lighting design's step E0 (the remake's `out/parity/specs/lighting/design_port.md`,
+section 4.8). **An engine defect the lighting would trip, fixed before the lighting
+exists.** The design gives every lightmapped sprite a material set of its own: 730
+lightmaps in 67 levels, at most 21 in one (3-13). `TextureRegistry`'s pool held 512
+sets and never took one back. **No pixel changes**, and nothing in the port draws
+differently. The game gains only a DEV switch that proves the fix.
+
+**THE DEFECT, REPRODUCED BEFORE ANYTHING WAS FIXED.** The pool had no
+`eFreeDescriptorSet` flag. `Invalidate` and `ReplaceRGBA` erased sets from the cache
+and never freed them. The capacity check read the cache's size, so after any drop it
+undercounted the pool.
+- The design predicted two symptoms: the fallback set at 512 cached, or a throw once
+  drops had hidden the pool's use. The walk below hit the second.
+- **`MagicPortals --visit-levels lightmapped --visit-passes 2`, on the unfixed engine,
+  died at its 44th level (3-10)**: `fatal: vk::Device::allocateDescriptorSets:
+  ErrorOutOfPoolMemory`, exit 1, 7.9 s in.
+  - The cache held 65 sets at the time.
+  - The pool held 512, by the log's arithmetic: 65 cached, plus the 444 lightmap sets
+    of the 43 levels before (dropped, never freed), plus 3 of 3-10's 11. The fourth
+    lightmap loaded, and its set was the 513th.
+- **The `sets.empty()` throw after the allocation was dead code.** vulkan-hpp throws
+  `OutOfPoolMemoryError` itself, so that exception went straight out of the frame.
+
+**THE FIX (engine: `TextureRegistry`, the new `renderer/MaterialSetLedger.hpp`).**
+- **The pool is freeable, and holds `MaterialSets::kMaxSets` = 1024**, the design's
+  margin. A set is a few bytes of pool.
+- **A dropped set is freed through `VulkanDevice::DeferDestroy`**, because a command
+  buffer from the last two frames may still bind it. Both of the registry's reasons to
+  drop a set use one function, `MaterialSets::TakeNaming`: a texture invalidated, and a
+  texture's pixels replaced. It removes every set naming the id in any binding and
+  returns them. It replaces two hand-written loops that erased and forgot. So a texture
+  replaced once a frame no longer takes a set from the pool once a frame.
+- **The cap is checked against the pool, not the cache.** `MaterialSets::Ledger` counts
+  a set as live from its allocation until its free actually runs. A set out of the
+  cache and still queued is exactly what the old check missed.
+  - `MaterialSetsInPool()` reads that count.
+  - `MaterialSetCount()` keeps its meaning, the cache's size, so nothing that reads it
+    moves.
+- **A pool that refuses degrades instead of throwing.** Full by the ledger, out of pool
+  memory, or fragmented, it hands out the white fallback's set and logs it, as the old
+  cap branch did. vulkan-hpp throws the last two, and a freeable pool can be
+  fragmented. Any other error propagates.
+- **The images are resolved before the set is allocated.** A throw between allocation
+  and cache would leave a set the ledger counts and nothing gives back.
+- **Shutdown.** `~VulkanRenderer` destroys the registry at `m_textureRegistry.reset()`,
+  and the pool with it (which frees every set). Only later does it call
+  `FlushDeferredDestroys`. A queued free holding the pool's handle would then free into
+  a destroyed pool.
+  - So the pool and its ledger live in a `shared_ptr` the registry owns, and a queued
+    free holds a `weak_ptr`.
+  - After the destructor it no longer locks, and the free does nothing.
+
+**THE RECYCLED HANDLE (engine: `VulkanRenderer`).** Freeing sets makes one thing false
+that `test_shadowcache` stated in so many words: "TextureRegistry hands back a set it
+has never handed back before."
+- `ShadowPassSignature` mixes a cut-out caster's material set **handle**, and
+  `ShadowCache` keeps that signature across frames. Once sets are freed, the driver may
+  give the same handle to another material. Same handle, same everything else,
+  different holes: a cached pass that looks right.
+- **The seed every pass signature starts from now mixes
+  `TextureRegistry::Generation()`.** Every call that drops a set bumps it, so a reused
+  handle always arrives at a later generation than any signature that saw it.
+- The cost is one re-record of every pass per texture reload.
+- The two other handle uses are the opaque and blended passes' batching keys, which
+  live within one frame, so they are unaffected.
+- The comment in `test_shadowcache` is corrected, and `ARCHITECTURE.md` says the same
+  beside the signature.
+
+**THE PROOF (game, DEV ONLY: `LevelVisit.{hpp,cpp}`, two flags in `main.cpp`).**
+`--visit-levels <lightmapped|all|name,...>` and `--visit-passes <n>` push a second layer
+beside `MagicPortalsLayer`. It is never pushed without the flag, and is built into the
+executable only, never `MagicPortalsGame`, so no suite links it.
+- **It stands in for what the lighting will do.** G3's unload does not exist yet, and E2
+  has not added the lightmap binding.
+  - For each level, it reads the lightmaps through `Lighting::Read`.
+  - It opens the level with `PressMenu` (a `Level` button), waits 6 frames, then acquires
+    each lightmap as a data texture with one material set of its own. That is the pool
+    pressure the fourth binding will add.
+  - It holds them for 2 frames, then invalidates them before opening the next level, as
+    G3 will.
+  - The sets are never bound, so nothing is drawn.
+- **Its checks, any failure failing the run:**
+  - at each release, the level's sets leave the cache at once and stay counted in the
+    pool, because their free is deferred;
+  - six frames on, the pool equals the cache;
+  - n lightmaps add exactly n to both counts;
+  - no acquisition comes back as the fallback;
+  - after the last release, the pool equals the cache again;
+  - then the last level's lightmaps are taken and dropped **on the frame the run
+    quits**, so their frees are still queued when the renderer destroys the pool. That
+    is the shutdown case above, and validation is what would catch a free into a
+    destroyed pool.
+- `main` returns failure if the walk did not finish or recorded a failure, before the
+  existing validation-error check.
+
+**On the fixed engine, the same command: exit 0 in 19.1 s, validation ACTIVE.**
+- **The walk:** 134 visits (67 levels, twice) and 1,460 lightmap sets acquired and
+  dropped. That is 1.43 times the new cap and 2.85 times the old.
+- **Every release:** 134 of 134 left exactly the released sets waiting (at most 21, at
+  3-13), with the pool unchanged at that moment.
+- **Every visit:** 134 of 134 found the pool equal to the cache six frames later, and
+  134 of 134 added exactly n to both.
+- **The baseline:**
+  - **Pass 1** climbed from 22 to 75, as the levels' own sprites and the HUD cached
+    their images. Those sets are never dropped.
+  - **Pass 2** stood at **75 at all 67 visits**.
+  - The peak was **96**: 75 plus 3-13's 21.
+- **After the last release:** 75 in the cache and 75 in the pool. The run quit with 5
+  sets still waiting, and `Subsystem resources destroyed cleanly`.
+- **The log:** no "exhausted", "out of memory", "fragmented" or "did not count" line,
+  and not one line containing "error".
+
+**WHAT NO SUITE COVERS, AND WHY.** No suite can construct a `TextureRegistry`: it needs a
+device, a command pool and the pipeline's material layout. Step 20 recorded the same for
+`MeshRegistry`.
+- **Split out so the suites can reach it:** the ledger and `TakeNaming`, the part that
+  decides. `test_materials` grew four cases, 210 to 235 checks:
+  - a set dropped from the cache still fills the pool until it is given back;
+  - giving back more than was taken is refused, not wrapped;
+  - every binding is searched for a dead id, and what was taken is handed back in key
+    order;
+  - the cap is 1024.
+- **Only a run can reach the rest:**
+  - the `vkFreeDescriptorSets` call;
+  - its deferral past the frames in flight;
+  - the pool flag;
+  - the fallback on a real refusal;
+  - the weak reference at shutdown.
+- **The deferral is proved** by the visit's release check (the pool unchanged on the
+  frame of the drop) and by validation staying silent while dropped sets were still
+  bound by the previous two frames' command buffers. The engine's own
+  `SupersonicEngine --frames 120` self-check does that too: it invalidates
+  `uv_grid.png` at frame 60 (the log says `texture=dropped`), and any set naming it now
+  goes through the new free.
+- **The shutdown guard is load-bearing, measured with it removed.** For one build, not
+  kept, the queued free captured the raw device and pool handle and freed without
+  locking. The same walk quit with its 5 frees queued and then **failed: exit 1, "20
+  Vulkan validation error(s); failing the run"**. The first was
+  `vkFreeDescriptorSets(): descriptorPool Invalid VkDescriptorPool Object`
+  (`VUID-vkFreeDescriptorSets-descriptorPool-parameter`, then `-pDescriptorSets-00310`),
+  printed during shutdown after the registry was gone.
+  - The source was restored from a copy taken before the experiment. On the restored
+    source, the build, the full ctest, the walk and the four captures were all redone,
+    with the numbers in the table.
+  - The guard rests on `m_setPool` being the only strong owner. The header says so.
+- **Not proved: the degraded paths never ran.** Those are the out-of-memory and
+  fragmented catches, and the ledger-full branch. The walk peaked at 96 of 1024.
+
+**LEFT FOR LATER STEPS.** The layer does not invalidate anything on unload yet (G3), and
+there is no fourth binding (E2). `--visit-levels` is the check to run again once both
+exist, with the probe's own acquisition replaced by the layer's.
+
+**GATES.**
+
+| Gate | Required | Measured |
+|---|---|---|
+| visit walk, unfixed engine | reproduces the defect | fatal `ErrorOutOfPoolMemory` at visit 44 (3-10), 444 lightmap sets in, 65 cached; exit 1 |
+| visit walk, fixed: exhaustion | none | 1,460 lightmap sets over 134 visits; peak 96 in pool of 1024; 0 fallback sets; exit 0 |
+| visit walk: set count back to baseline after each unload | pool == cache at every visit | 134 / 134; pass-2 baseline 75 at every visit; after the last release 75 / 75 |
+| visit walk: frees deferred, not immediate | pool unchanged on the release frame | 134 / 134 releases (5 to 21 sets waiting) |
+| visit walk: validation | active and silent | `Vulkan validation layers: ACTIVE`; no validation error; `main` exit 0 |
+| visit walk with the shutdown guard removed (experiment, not kept) | validation catches the free into a destroyed pool | exit 1, 20 validation errors, `VUID-vkFreeDescriptorSets-descriptorPool-parameter` |
+| `MainScene.scene --window 1280x720 --fixed-step --frames 120 --screenshot` | byte-identical | `1e24c2a30f6f22dc2bb01b6038bd1af9` before (twice), after (twice) and on the final source (twice); `Clean exit with validation active` |
+| `WolfBrigade --window 1280x720 --fixed-step --frames 120 --screenshot` | byte-identical | `d9e7b8fe5e8b0b2f162b0195e5d5ba31` before (twice), after (twice) and on the final source (twice) |
+| 1-01 `level0 --window 1280x720 --fixed-step --frames 420` | byte-identical (not required by E0) | `a5abafb357766442e22edd119e01952b` before and after, step 41's md5 |
+| 2-26 `level25a`, the same | byte-identical (not required by E0) | `0e925ef51e310519076594c231afbd0d` before and after, step 41's md5 |
+| build | zero warnings | 0, with the 17 translation units that include a changed file recompiled |
+| ctest | all pass; `test_materials`, `test_resourcesync` named | 113 / 113; `test_materials` 235, `test_resourcesync` 22 (unchanged), `test_shadowcache` 82 (unchanged), `test_mp_layer` 304 (unchanged) |
+
+The MainScene captures without `--fixed-step` differ between two runs of the same
+binary (`08b6075f...` and `cd0c9fd3...`). The design's command is `--frames 120
+--screenshot`, so both games were captured with `--window 1280x720 --fixed-step` added,
+which is what makes it a byte-identity gate.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning, twice. Each time the changed engine header and sources, both
+  tests and the two game files were touched, so all 17 dependent translation units
+  recompiled. The second time was the final source, after the experiment was reverted.
+- **ctest.** **113 of 113** pass, twice, the second on the final source. No suite was
+  added.
+- **Smart App Control.** Two full builds, so two rounds of refusals ("Not Run"), each
+  resolved by deleting and relinking the refused executables.
+  - **First build.** 13 suites were refused: `test_scenemanager`, `test_sat`,
+    `test_wb_combat`, `test_mp_timed`, `test_mp_movers`, `test_mp_hinge`,
+    `test_mp_zerog`, `test_mp_boss`, `test_serialize`, `test_mixer`, `test_materials`,
+    `test_hierarchy` and `test_gltf`. On the first relink `test_sat` and
+    `test_mp_zerog` were refused again, and both passed on the second.
+  - **Final build.** 13 different suites were refused: `test_renderplan`,
+    `test_wb_selection`, `test_husk_layer`, `test_mp_geometry`, `test_mp_play`,
+    `test_mp_chapters`, `test_mp_camera`, `test_mp_timed`, `test_mp_sounds`,
+    `test_mp_hud`, `test_shadowcache`, `test_packaging` and `test_mixer`. On the first
+    relink `test_mp_sounds` and `test_mixer` were refused again, and both passed on
+    the second.
+  - After each, a full `ctest` ran 113 of 113 with none refused.
+  - `MagicPortals.exe` was refused after 4 of its 11 links this step. Each was cleared
+    by one or two relinks.
+  - `WolfBrigade.exe` was refused twice. The first was on the first baseline capture,
+    before any change, and it ran on the next attempt without a relink. The second was
+    after the final build, cleared by one relink.
