@@ -128,7 +128,21 @@ size_t writeScene(entt::registry& registry, std::ostream& file) {
              << (rendering.background == RenderSettings::Background::Color ? "Color" : "Sky")
              << "\", \"BackgroundColor\": [" << rendering.backgroundColor[0] << ", "
              << rendering.backgroundColor[1] << ", " << rendering.backgroundColor[2]
-             << "] },\n";
+             << "]";
+
+        // Words again, and written ONLY WHEN NOT THE DEFAULT, unlike every key
+        // above. A scene that has never heard of these saves to the same bytes
+        // it always did, so adding them rewrites no file that does not use
+        // them - and a file that does is the one that says so.
+        if (rendering.encoding == RenderSettings::SceneEncoding::LinearNoToneMap) {
+            file << ", \"Encoding\": \"LinearNoToneMap\"";
+        } else if (rendering.encoding == RenderSettings::SceneEncoding::DisplayEncoded) {
+            file << ", \"Encoding\": \"DisplayEncoded\"";
+        }
+        if (rendering.quantize == RenderSettings::OutputQuantize::Rgb565) {
+            file << ", \"Quantize\": \"Rgb565\"";
+        }
+        file << " },\n";
     }
 
     file << "  \"Entities\": [\n";
@@ -331,6 +345,18 @@ void applyPhysicsSettings(entt::registry& registry, const Json::Value& root) {
                 }
             }
         }
+
+        // The same rule as the background, for the same reason: anything that
+        // is not a word this build knows is the default, which is the chain
+        // every scene written before these keys existed was drawn through.
+        // "LinearHdr" and "None" read as themselves, though neither is written.
+        const std::string encoding = node["Encoding"].AsString("LinearHdr");
+        rendering.encoding = encoding == "DisplayEncoded"  ? RenderSettings::SceneEncoding::DisplayEncoded
+                           : encoding == "LinearNoToneMap" ? RenderSettings::SceneEncoding::LinearNoToneMap
+                                                           : RenderSettings::SceneEncoding::LinearHdr;
+        rendering.quantize = node["Quantize"].AsString("None") == "Rgb565"
+                                 ? RenderSettings::OutputQuantize::Rgb565
+                                 : RenderSettings::OutputQuantize::None;
     }
     registry.ctx().insert_or_assign<RenderSettings>(std::move(rendering));
 }

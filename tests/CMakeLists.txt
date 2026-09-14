@@ -303,5 +303,7 @@ set_tests_properties(
     test_materials  # reads assets/shaders/shader.frag, to check the UV slot
                     # packing agrees with the shader that unpacks it
     test_screenoverlay # reads assets/shaders/screen_overlay.vert, to check its
-                       # vertex table is the one ScreenOverlay::CornerOf states
+                       # vertex table is the one ScreenOverlay::CornerOf states,
+                       # and bloom_composite.frag, to check its branches are
+                       # numbered as RenderSettings::SceneEncoding is
     PROPERTIES WORKING_DIRECTORY "${SUPERSONIC_SRC}")

@@ -15,6 +15,7 @@
 #include "core/PhysicsSettings.hpp"
 #include "core/RenderSettings.hpp"
 
+#include <array>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -1626,6 +1627,130 @@ static void testTheBackgroundSurvivesARoundTripAndDefaultsToTheSky() {
               "an unknown mode is the sky, not a black screen nobody can explain");
 }
 
+static void testTheEncodingSurvivesARoundTripAsWordsWrittenOnlyWhenChosen() {
+    // What the scene target's numbers mean, and whether the output is cut to
+    // 16 bits. A 2D game that opts into display-encoded values and loses the
+    // choice on reload is drawn through the tone map again, which looks like
+    // every colour quietly went grey - so both have to come back.
+    const std::string path = "test_encoding_tmp.scene";
+    {
+        entt::registry registry;
+        RenderSettings look;
+        look.encoding = RenderSettings::SceneEncoding::DisplayEncoded;
+        look.quantize = RenderSettings::OutputQuantize::Rgb565;
+        registry.ctx().insert_or_assign<RenderSettings>(std::move(look));
+        CHECK_MSG(SceneSerializer::Serialize(registry, path).ok, "the scene must save");
+    }
+    const std::string text = readWholeFile(path);
+    CHECK_MSG(text.find("\"Encoding\": \"DisplayEncoded\"") != std::string::npos,
+              "the encoding is a word in the file, not an index");
+    CHECK_MSG(text.find("\"Quantize\": \"Rgb565\"") != std::string::npos,
+              "and so is the quantisation");
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    std::remove(path.c_str());
+    CHECK_MSG(result.ok, "and load: " + result.message);
+    const auto& look = loaded.ctx().get<RenderSettings>();
+    CHECK_MSG(look.encoding == RenderSettings::SceneEncoding::DisplayEncoded, "the encoding comes back");
+    CHECK_MSG(look.quantize == RenderSettings::OutputQuantize::Rgb565, "and the quantisation");
+    CHECK_MSG(!look.decodesColourTextures(), "and a display-encoded scene decodes no colour texture");
+
+    // The middle mode on its own, so a reader that mapped every non-default
+    // word to DisplayEncoded would be caught.
+    const std::string middlePath = "test_encoding_middle_tmp.scene";
+    {
+        entt::registry registry;
+        RenderSettings middle;
+        middle.encoding = RenderSettings::SceneEncoding::LinearNoToneMap;
+        registry.ctx().insert_or_assign<RenderSettings>(std::move(middle));
+        CHECK(SceneSerializer::Serialize(registry, middlePath).ok);
+    }
+    const std::string middleText = readWholeFile(middlePath);
+    entt::registry middleLoaded;
+    CHECK(SceneSerializer::Deserialize(middleLoaded, middlePath).ok);
+    std::remove(middlePath.c_str());
+    CHECK_MSG(middleText.find("\"Encoding\": \"LinearNoToneMap\"") != std::string::npos, "written as its word");
+    CHECK_MSG(middleText.find("\"Quantize\"") == std::string::npos, "with no quantisation key, since it is off");
+    CHECK_MSG(middleLoaded.ctx().get<RenderSettings>().encoding == RenderSettings::SceneEncoding::LinearNoToneMap,
+              "and read back as itself");
+    CHECK_MSG(middleLoaded.ctx().get<RenderSettings>().decodesColourTextures(),
+              "a linear scene without a tone map still decodes its colour textures");
+
+    // DEFAULTS ARE NOT WRITTEN. Every scene in the tree saves to the bytes it
+    // saved to before these keys existed, which is what lets a scene file's
+    // diff show a real choice rather than two new keys on every save.
+    const std::string plainPath = "test_encoding_plain_tmp.scene";
+    {
+        entt::registry registry;
+        registry.ctx().insert_or_assign<RenderSettings>(RenderSettings{});
+        CHECK(SceneSerializer::Serialize(registry, plainPath).ok);
+    }
+    const std::string plainText = readWholeFile(plainPath);
+    std::remove(plainPath.c_str());
+    CHECK_MSG(plainText.find("\"Rendering\"") != std::string::npos, "the rendering block is still written");
+    CHECK_MSG(plainText.find("Encoding") == std::string::npos, "but no encoding key at the default");
+    CHECK_MSG(plainText.find("Quantize") == std::string::npos, "and no quantisation key at the default");
+
+    // A word nobody recognises is the default chain, as an unknown background
+    // is the sky - and a scene loaded over a display-encoded one does not
+    // inherit its encoding.
+    entt::registry future;
+    RenderSettings stale;
+    stale.encoding = RenderSettings::SceneEncoding::DisplayEncoded;
+    stale.quantize = RenderSettings::OutputQuantize::Rgb565;
+    future.ctx().insert_or_assign<RenderSettings>(std::move(stale));
+    const std::string futurePath = "test_encoding_future_tmp.scene";
+    {
+        std::ofstream out(futurePath);
+        out << "{\n  \"Version\": 2,\n  \"Scene\": \"Future\",\n"
+            << "  \"Rendering\": { \"Encoding\": \"Gamma24\", \"Quantize\": \"Rgb444\" },\n"
+            << "  \"Entities\": []\n}\n";
+    }
+    CHECK(SceneSerializer::Deserialize(future, futurePath).ok);
+    std::remove(futurePath.c_str());
+    CHECK_MSG(future.ctx().get<RenderSettings>().encoding == RenderSettings::SceneEncoding::LinearHdr,
+              "an unknown encoding is the linear chain, not the one the last scene had");
+    CHECK_MSG(future.ctx().get<RenderSettings>().quantize == RenderSettings::OutputQuantize::None,
+              "and an unknown quantisation is none");
+}
+
+static void testTheClearFollowsTheEncoding() {
+    // What the scene target is cleared to. The sky's 0.00023 is a RADIANCE,
+    // chosen so Reinhard and the encode bring it back to 0.02; in a target of
+    // display values nothing would bring it back, so a display-encoded scene
+    // is cleared to its authored colour instead.
+    const auto isSkyLiteral = [](const std::array<float, 3>& c) {
+        return c[0] == 0.00023f && c[1] == 0.00023f && c[2] == 0.00023f;
+    };
+    const auto isAuthored = [](const std::array<float, 3>& c) {
+        return c[0] == 0.31f && c[1] == 0.62f && c[2] == 0.93f;
+    };
+
+    CHECK_MSG(isSkyLiteral(RenderSettings::SceneClearColor(nullptr)),
+              "a scene that never said gets the clear every scene has always had");
+
+    RenderSettings look;
+    look.backgroundColor[0] = 0.31f;
+    look.backgroundColor[1] = 0.62f;
+    look.backgroundColor[2] = 0.93f;
+    CHECK_MSG(isSkyLiteral(RenderSettings::SceneClearColor(&look)), "a linear sky keeps the literal");
+
+    look.background = RenderSettings::Background::Color;
+    CHECK_MSG(isAuthored(RenderSettings::SceneClearColor(&look)), "a flat colour is written verbatim, as it was");
+
+    look.encoding = RenderSettings::SceneEncoding::DisplayEncoded;
+    CHECK_MSG(isAuthored(RenderSettings::SceneClearColor(&look)), "so is a display-encoded one");
+
+    look.background = RenderSettings::Background::Sky;
+    CHECK_MSG(isAuthored(RenderSettings::SceneClearColor(&look)),
+              "and a display-encoded scene never gets the radiance literal, sky or not");
+
+    look.encoding = RenderSettings::SceneEncoding::LinearNoToneMap;
+    CHECK_MSG(isSkyLiteral(RenderSettings::SceneClearColor(&look)),
+              "while a linear scene without a tone map is still linear");
+}
+
 static void testAShapeWithAKindFromTheFutureLoadsAsARing() {
     // A number nobody has a case for switches to nothing and draws an empty
     // marker, which looks exactly like the entity never being reached. Reading
@@ -1665,6 +1790,8 @@ static void runTests() {
     testAStackAndItsRankingSurviveARoundTrip();
     testAShapeSurvivesARoundTripIncludingItsKind();
     testTheBackgroundSurvivesARoundTripAndDefaultsToTheSky();
+    testTheEncodingSurvivesARoundTripAsWordsWrittenOnlyWhenChosen();
+    testTheClearFollowsTheEncoding();
     testAShapeWithAKindFromTheFutureLoadsAsARing();
     testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
     testUnversionedScenesStillLoad();
@@ -1689,4 +1816,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 334)
+TEST_MAIN("test_serialize", 400)

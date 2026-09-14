@@ -1757,15 +1757,17 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // rather than painted over - so a flat background is one draw call cheaper
     // than a gradient rather than one draw call plus a cover. The value below
     // is what a scene that has not chosen still gets.
+    //
+    // And a scene whose numbers are display values (SceneEncoding::
+    // DisplayEncoded) is cleared to its authored colour as it stands: 0.00023
+    // is a radiance, and there is no tone map left to turn it into 0.02.
+    // RenderSettings::SceneClearColor holds all three cases in one place.
     const RenderSettings* renderSettings = registry.ctx().find<RenderSettings>();
     const bool drawSky = renderSettings == nullptr || renderSettings->drawsSky();
+    const std::array<float, 3> clearColor = RenderSettings::SceneClearColor(renderSettings);
 
     offscreenClearValues[0].color =
-        drawSky ? vk::ClearColorValue{std::array<float, 4>{0.00023f, 0.00023f, 0.00023f, 1.0f}}
-                : vk::ClearColorValue{std::array<float, 4>{renderSettings->backgroundColor[0],
-                                                           renderSettings->backgroundColor[1],
-                                                           renderSettings->backgroundColor[2],
-                                                           1.0f}};
+        vk::ClearColorValue{std::array<float, 4>{clearColor[0], clearColor[1], clearColor[2], 1.0f}};
     offscreenClearValues[1].depthStencil = vk::ClearDepthStencilValue{1.0f, 0};
 
     offscreenPassInfo.clearValueCount = static_cast<uint32_t>(offscreenClearValues.size());

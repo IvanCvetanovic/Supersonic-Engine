@@ -6,9 +6,15 @@
 // it, and that the C++ statement of the vertex table is the one the shader
 // actually carries. The pixels themselves need a device; the Magic Portals
 // captures in the remaster's step 39 are where they were looked at.
+//
+// And the composite it is drawn over: the numbers BloomPass hands
+// bloom_composite.frag for each RenderSettings::SceneEncoding, and that the
+// shader's branches are numbered as the enum is (remaster step 43).
 
 #include "TestHarness.hpp"
+#include "core/RenderSettings.hpp"
 #include "core/ScreenOverlay.hpp"
+#include "renderer/BloomPass.hpp"
 #include "renderer/VulkanPipeline.hpp"
 
 #include <cmath>
@@ -161,6 +167,84 @@ void testTheShaderCarriesTheSameVertexTable() {
     CHECK_MSG(same, "and its six corners are CornerOf's, in the same order");
 }
 
+void testTheCompositeUnderTheOverlayIsUnchangedByDefault() {
+    // The overlay loads whatever the composite wrote. With every setting at its
+    // default the composite must be handed exactly the four numbers it always
+    // was - (intensity, exposure, 0, 0) - or every existing scene's pixels move
+    // before the overlay draws a thing.
+    BloomPass::Settings settings{};
+    settings.intensity = 0.55f;
+    settings.exposure = 1.0f;
+    const glm::vec4 value = BloomPass::CompositeValue(settings);
+    CHECK(BloomPass::RunsBloomChain(settings));
+    CHECK_NEAR(value.x, 0.55f);
+    CHECK_NEAR(value.y, 1.0f);
+    CHECK_MSG(value.z == 0.0f && value.w == 0.0f, "the two new numbers are zero by default");
+}
+
+void testADisplayEncodedCompositeRunsNoBloomWhateverItsIntensity() {
+    BloomPass::Settings settings{};
+    settings.intensity = 2.0f;
+    settings.exposure = 0.75f;
+    settings.encoding = RenderSettings::SceneEncoding::DisplayEncoded;
+    glm::vec4 value = BloomPass::CompositeValue(settings);
+    CHECK_MSG(!BloomPass::RunsBloomChain(settings), "no bright or blur pass is recorded");
+    CHECK_MSG(value.x == 0.0f, "and the composite adds no bloom, whatever the scene's intensity");
+    CHECK_NEAR(value.y, 0.75f);
+    CHECK_MSG(value.z == 2.0f, "DisplayEncoded reaches the shader as 2");
+    CHECK_MSG(value.w == 0.0f, "quantisation is its own switch");
+
+    settings.quantize = RenderSettings::OutputQuantize::Rgb565;
+    value = BloomPass::CompositeValue(settings);
+    CHECK_MSG(value.w == 1.0f, "and Rgb565 reaches it as 1");
+
+    // Only DisplayEncoded skips the chain: a linear scene without a tone map
+    // still has radiance above white for the bloom to find.
+    settings.encoding = RenderSettings::SceneEncoding::LinearNoToneMap;
+    value = BloomPass::CompositeValue(settings);
+    CHECK(BloomPass::RunsBloomChain(settings));
+    CHECK_NEAR(value.x, 2.0f);
+    CHECK_MSG(value.z == 1.0f, "LinearNoToneMap reaches the shader as 1");
+}
+
+void testTheCompositeShaderBranchesOnTheEnumsNumbers() {
+    // bloom_composite.frag picks its branch by comparing params.value.z with
+    // thresholds of its own, and CompositeValue sends the enum's value. Each
+    // mode must land in the branch of the same index, which a mode inserted in
+    // the middle of the enum, or a threshold edited in the shader, would break
+    // with nothing to show for it but a wrong picture.
+    std::ifstream file("assets/shaders/bloom_composite.frag");
+    CHECK_MSG(file.good(), "assets/shaders/bloom_composite.frag opens (the suite runs from the project root)");
+    if (!file.good()) return;
+    std::stringstream text;
+    text << file.rdbuf();
+    const std::string source = text.str();
+
+    const std::regex threshold(R"(params\.value\.z\s*<\s*([0-9.]+))");
+    std::vector<float> thresholds;
+    for (auto it = std::sregex_iterator(source.begin(), source.end(), threshold); it != std::sregex_iterator(); ++it) {
+        thresholds.push_back(std::stof((*it)[1].str()));
+    }
+    CHECK_EQ(static_cast<int>(thresholds.size()), 2);
+
+    const RenderSettings::SceneEncoding modes[] = {RenderSettings::SceneEncoding::LinearHdr,
+                                                   RenderSettings::SceneEncoding::LinearNoToneMap,
+                                                   RenderSettings::SceneEncoding::DisplayEncoded};
+    bool agree = thresholds.size() == 2;
+    for (int i = 0; agree && i < 3; ++i) {
+        BloomPass::Settings settings{};
+        settings.encoding = modes[i];
+        const float z = BloomPass::CompositeValue(settings).z;
+        int branch = 0;
+        for (float t : thresholds) branch += z < t ? 0 : 1;
+        agree = branch == i;
+    }
+    CHECK_MSG(agree, "LinearHdr, LinearNoToneMap and DisplayEncoded take the shader's first, second and third branch");
+
+    CHECK_MSG(source.find("params.value.w > 0.5") != std::string::npos, "the quantise switch is w above one half");
+    CHECK_MSG(source.find("vec3(31.0, 63.0, 31.0)") != std::string::npos, "to 5, 6 and 5 bits");
+}
+
 } // namespace
 
 static void runTests() {
@@ -172,6 +256,9 @@ static void runTests() {
     testClearEmptiesTheListAndTheDropCount();
     testTheOverlayBlendsAsAPictureOverWhatIsThere();
     testTheShaderCarriesTheSameVertexTable();
+    testTheCompositeUnderTheOverlayIsUnchangedByDefault();
+    testADisplayEncodedCompositeRunsNoBloomWhateverItsIntensity();
+    testTheCompositeShaderBranchesOnTheEnumsNumbers();
 }
 
-TEST_MAIN("test_screenoverlay", 25)
+TEST_MAIN("test_screenoverlay", 40)

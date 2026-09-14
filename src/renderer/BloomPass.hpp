@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.hpp>
 #include <glm/glm.hpp>
 
+#include "core/RenderSettings.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanImage.hpp"
 
@@ -93,7 +94,34 @@ public:
 
         // Applied in the composite, before the tone map.
         float exposure{1.0f};
+
+        // What the scene target's numbers are (RenderSettings::SceneEncoding).
+        // DisplayEncoded records no bright or blur pass and adds no bloom,
+        // whatever `intensity` says.
+        RenderSettings::SceneEncoding encoding{RenderSettings::SceneEncoding::LinearHdr};
+
+        // Applied after the encoding, before the screen overlay.
+        RenderSettings::OutputQuantize quantize{RenderSettings::OutputQuantize::None};
     };
+
+    // Whether the bright and blur passes are recorded. A scene of display
+    // values has no radiance above white for them to find, and the three
+    // passes are most of what this chain costs.
+    static bool RunsBloomChain(const Settings& settings) {
+        return settings.encoding != RenderSettings::SceneEncoding::DisplayEncoded;
+    }
+
+    // The composite's four numbers, as bloom_composite.frag reads them:
+    // x intensity (0 when the chain is not recorded), y exposure, z the
+    // encoding's enum value, w 1 to quantise. With the defaults this is
+    // (intensity, exposure, 0, 0), the push constant the composite has always
+    // been given. Static and device-free so a suite can hold it to the shader.
+    static glm::vec4 CompositeValue(const Settings& settings) {
+        return glm::vec4(RunsBloomChain(settings) ? settings.intensity : 0.0f,
+                         settings.exposure,
+                         static_cast<float>(settings.encoding),
+                         settings.quantize == RenderSettings::OutputQuantize::Rgb565 ? 1.0f : 0.0f);
+    }
 
     void SetSettings(const Settings& settings) { m_settings = settings; }
     const Settings& GetSettings() const { return m_settings; }
@@ -152,6 +180,11 @@ private:
     vk::DescriptorSet m_brightSet{nullptr};     // bright     -> blur
     vk::DescriptorSet m_blurSet{nullptr};       // blur       -> bright
     vk::DescriptorSet m_compositeSet{nullptr};  // scene+bloom-> output
+    // scene+scene -> output, for a chain that records no bloom. The bright
+    // image is only ever in a samplable layout because the bright pass left it
+    // there, so a composite that skipped that pass cannot bind it: on the first
+    // frame after the target is built it has no layout to sample in at all.
+    vk::DescriptorSet m_compositeSceneOnlySet{nullptr};
 
     vk::Pipeline m_brightPipeline{nullptr};
     vk::Pipeline m_blurPipeline{nullptr};

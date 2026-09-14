@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
+
 namespace Supersonic {
 
 // Scene-level rendering, in the registry's context beside PhysicsSettings.
@@ -77,12 +80,70 @@ struct RenderSettings {
     // authored sRGB colour therefore has to be de-encoded before it lands
     // here, which the inspector does, because a colour picked as #161a22 and
     // written straight into a linear buffer comes out visibly lighter.
+    //
+    // Under SceneEncoding::DisplayEncoded (below) the target holds display
+    // values, so there this IS the colour on screen and nothing de-encodes it.
     float backgroundColor[3]{0.086f, 0.102f, 0.133f};
 
     // Whether the sky pass runs at all this frame. One place to ask, so the
     // pass that records it and the clear that would otherwise be covered by
     // it cannot come to disagree about which is responsible for the pixel.
     bool drawsSky() const { return background == Background::Sky; }
+
+    // ---- What the scene target's numbers mean ----------------------------
+    //
+    // Everything above assumes the scene target holds linear radiance, and for
+    // a lit 3D scene it must. A 2D game ported from a GLES2-era engine was
+    // never lit that way: its artists tinted, faded and added glows on the
+    // encoded bytes of an 8-bit framebuffer, and the only arithmetic that
+    // reproduces what they saw is that same arithmetic. Through the linear
+    // chain a white texel stops at 186 of 255 (Reinhard leaves linear 1.0 at
+    // 0.5), and a colour of (1, 0.1, 0.1) multiplied in linear light and then
+    // encoded lifts the 0.1 to 0.35. No tint chosen before the chain undoes
+    // either, so the chain itself has to be able to say what its numbers are.
+    //
+    //   LinearHdr        linear radiance: bloom, Reinhard, then the sRGB
+    //                    encode. Today's chain and the default.
+    //   LinearNoToneMap  linear radiance: bloom, clamp, then the sRGB encode.
+    //   DisplayEncoded   the numbers ARE display values. Colour textures are
+    //                    sampled without an sRGB decode, so every multiply and
+    //                    every blend happens on encoded values; the bright and
+    //                    blur passes are not recorded, and the composite only
+    //                    clamps.
+    //
+    // Declared in this order on purpose: the composite reads the mode as the
+    // enum's value (0, 1, 2), so a mode added anywhere but the end renumbers
+    // the shader's branches.
+    enum class SceneEncoding : uint8_t { LinearHdr, LinearNoToneMap, DisplayEncoded };
+    SceneEncoding encoding{SceneEncoding::LinearHdr};
+
+    // Applied last, after the encoding. Rgb565 reproduces a 16-bit
+    // framebuffer without dithering: every channel lands on one of the 32 or
+    // 64 levels such a target can store. The screen overlay is drawn after it
+    // and is not quantised.
+    enum class OutputQuantize : uint8_t { None, Rgb565 };
+    OutputQuantize quantize{OutputQuantize::None};
+
+    // Whether a colour texture is decoded from sRGB when it is sampled. One
+    // place to ask, for the same reason as drawsSky: the resolve that picks the
+    // upload and the signature that decides when to re-resolve must agree.
+    bool decodesColourTextures() const { return encoding != SceneEncoding::DisplayEncoded; }
+
+    // What the scene target is cleared to, before the sky or anything else.
+    //
+    // A scene with a sky keeps the literal the chain was built around: 0.00023
+    // is the linear radiance that Reinhard and the encode bring back to 0.02 on
+    // screen, and the sky covers it anyway. A flat colour is written verbatim.
+    // In DisplayEncoded the target holds display values, so the linear literal
+    // means nothing there and the authored colour is the clear in either case.
+    // Null is a scene that never said, and gets what every scene has always had.
+    static std::array<float, 3> SceneClearColor(const RenderSettings* settings) {
+        if (settings == nullptr ||
+            (settings->drawsSky() && settings->encoding != SceneEncoding::DisplayEncoded)) {
+            return {0.00023f, 0.00023f, 0.00023f};
+        }
+        return {settings->backgroundColor[0], settings->backgroundColor[1], settings->backgroundColor[2]};
+    }
 };
 
 } // namespace Supersonic

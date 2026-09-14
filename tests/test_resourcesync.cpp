@@ -39,8 +39,8 @@ MaterialComponent material(const std::string& albedo, const std::string& normal 
 }
 
 uint64_t sig(const MeshComponent* m, const MaterialComponent* mat,
-             uint64_t meshGen = 1, uint64_t textureGen = 1) {
-    return RenderSystem::ResourceSignature(m, mat, meshGen, textureGen);
+             uint64_t meshGen = 1, uint64_t textureGen = 1, bool decodesColour = true) {
+    return RenderSystem::ResourceSignature(m, mat, meshGen, textureGen, decodesColour);
 }
 
 } // namespace
@@ -201,6 +201,35 @@ static void testThePackedMapIsInTheSignatureToo() {
               "an unchanged material must keep its signature");
 }
 
+static void testTheSceneColourSpaceIsInTheSignature() {
+    // A scene that switches to display-encoded values asks for every albedo
+    // again as a UNORM upload - the same path, a different texture. Nothing on
+    // any entity changes, and no generation moves, so without the colour space
+    // in the signature every sprite would keep sampling its sRGB copy and the
+    // switch would look like it did nothing.
+    const MeshComponent m = mesh("Quad");
+    const MaterialComponent mat = material("assets/textures/uv_grid.png");
+
+    CHECK_MSG(sig(&m, &mat, 1, 1, true) != sig(&m, &mat, 1, 1, false),
+              "the same albedo decoded and not decoded are different textures");
+    CHECK_MSG(sig(&m, &mat, 1, 1, false) == sig(&m, &mat, 1, 1, false),
+              "and a scene that stays display-encoded must still skip");
+
+    // Not folded into a generation: a mode switch on the same frame as a
+    // reload must not land back on a signature some earlier frame resolved.
+    const uint64_t a = sig(&m, &mat, 1, 1, true);
+    const uint64_t b = sig(&m, &mat, 1, 2, true);
+    const uint64_t c = sig(&m, &mat, 1, 1, false);
+    const uint64_t d = sig(&m, &mat, 1, 2, false);
+    CHECK_MSG(a != b && a != c && a != d && b != c && b != d && c != d,
+              "the colour space and the texture generation must not cancel each other out");
+
+    // Even an entity with no material changes: its texture ids are the
+    // built-in ones either way, and a redundant re-resolve costs less than a
+    // rule with an exception in it.
+    CHECK(sig(&m, nullptr, 1, 1, true) != sig(&m, nullptr, 1, 1, false));
+}
+
 static void runTests() {
     testTheSameInputsGiveTheSameSignature();
     testEveryPathThatSelectsAResourceIsInTheSignature();
@@ -209,6 +238,7 @@ static void runTests() {
     testAReloadedAssetChangesTheSignature();
     testTheSignatureIsNeverZero();
     testThePackedMapIsInTheSignatureToo();
+    testTheSceneColourSpaceIsInTheSignature();
 }
 
-TEST_MAIN("test_resourcesync", 19)
+TEST_MAIN("test_resourcesync", 23)

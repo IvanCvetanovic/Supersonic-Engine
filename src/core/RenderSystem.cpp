@@ -7,6 +7,7 @@
 #include <limits>
 #include "core/TransformSystem.hpp"
 #include "core/MaterialSystem.hpp"
+#include "core/RenderSettings.hpp"
 #include "core/TilemapSystem.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -192,10 +193,16 @@ void RenderSystem::SortParticleDraws(std::vector<ParticleDraw>& draws) {
 uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
                                          const MaterialComponent* material,
                                          uint64_t meshGeneration,
-                                         uint64_t textureGeneration) {
+                                         uint64_t textureGeneration,
+                                         bool decodesColourTextures) {
     uint64_t signature = MixSignature(1469598103934665603ull, &meshGeneration,
                                       sizeof(meshGeneration));
     signature = MixSignature(signature, &textureGeneration, sizeof(textureGeneration));
+
+    // The colour space the albedo is uploaded in. As a byte of its own, not
+    // folded into a generation, so a mode switch and a reload cannot cancel.
+    const unsigned char colourSpace = decodesColourTextures ? 1 : 0;
+    signature = MixSignature(signature, &colourSpace, 1);
 
     // A marker per field, so "no MeshComponent" cannot hash the same as one
     // holding empty strings - they resolve to different meshes.
@@ -272,6 +279,13 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
     const uint64_t meshGeneration = meshes.Generation();
     const uint64_t textureGeneration = textures.Generation();
 
+    // Whether a colour texture is decoded from sRGB on read, for the whole
+    // scene (RenderSettings::SceneEncoding). A scene that never said is linear,
+    // which decodes, as every scene always has. Normal and ORM maps are data
+    // in every mode and never ask.
+    const RenderSettings* renderSettings = registry.ctx().find<RenderSettings>();
+    const bool decodeColour = renderSettings == nullptr || renderSettings->decodesColourTextures();
+
     auto view = registry.view<RenderableComponent>();
     for (auto entity : view) {
         auto& renderable = view.get<RenderableComponent>(entity);
@@ -283,7 +297,7 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
         // Only the RESOLUTION is skipped - three hash-map lookups, each building
         // its key by concatenating strings.
         const uint64_t signature = ResourceSignature(meshComponent, materialComponent,
-                                                     meshGeneration, textureGeneration);
+                                                     meshGeneration, textureGeneration, decodeColour);
         const bool resolve = signature != renderable.resourceSignature;
 
         if (resolve) {
@@ -373,9 +387,15 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
         // answer belongs to the MESH: eighty units sharing one model resolve it
         // once between them, and a reloaded texture bumps the generation so
         // nothing is left pointing at the image it replaced.
+        //
+        // And on the colour space, for the reason the entity signature mixes
+        // it: a scene switching its encoding moves no generation, and without
+        // this every model would keep the albedo upload of the mode before.
         if (GpuMesh* gpuMesh = meshes.GetMutable(renderable.meshID);
-            gpuMesh && gpuMesh->sectionTextureGeneration != textureGeneration) {
+            gpuMesh && (gpuMesh->sectionTextureGeneration != textureGeneration ||
+                        gpuMesh->sectionDecodesColour != decodeColour)) {
             gpuMesh->sectionTextureGeneration = textureGeneration;
+            gpuMesh->sectionDecodesColour = decodeColour;
 
             for (MeshSection& section : gpuMesh->sections) {
                 const MeshMaterial& surface = section.material;
@@ -385,7 +405,7 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
                 // straight out, and a neutral ORM is 1 in every channel.
                 section.albedoTextureID = surface.albedoTexturePath.empty()
                                         ? textures.GetWhiteTexture()
-                                        : textures.Acquire(surface.albedoTexturePath, true,
+                                        : textures.Acquire(surface.albedoTexturePath, decodeColour,
                                                            textures.GetCheckerTexture());
                 section.normalTextureID = surface.normalTexturePath.empty()
                                         ? textures.GetFlatNormalTexture()
@@ -404,7 +424,7 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
         if (const auto* material = materialComponent) {
             renderable.albedoTextureID = material->albedoTexturePath.empty()
                                        ? textures.GetWhiteTexture()
-                                       : textures.Acquire(material->albedoTexturePath, true,
+                                       : textures.Acquire(material->albedoTexturePath, decodeColour,
                                                           textures.GetCheckerTexture());
             // srgb=false: a normal map holds directions, not colour, so it must
             // not be gamma-decoded on read.

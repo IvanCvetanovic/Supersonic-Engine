@@ -216,11 +216,11 @@ void BloomPass::createDescriptors(vk::ImageView sceneView, vk::Sampler sceneSamp
 
     vk::DescriptorPoolSize poolSize{};
     poolSize.type = vk::DescriptorType::eCombinedImageSampler;
-    // Three single-image sets plus one two-image set.
-    poolSize.descriptorCount = 5;
+    // Three single-image sets plus two two-image sets.
+    poolSize.descriptorCount = 7;
 
     vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.maxSets = 4;
+    poolInfo.maxSets = 5;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
     m_descriptorPool = device.createDescriptorPool(poolInfo);
@@ -237,6 +237,7 @@ void BloomPass::createDescriptors(vk::ImageView sceneView, vk::Sampler sceneSamp
     m_brightSet = allocate(m_singleLayout);
     m_blurSet = allocate(m_singleLayout);
     m_compositeSet = allocate(m_doubleLayout);
+    m_compositeSceneOnlySet = allocate(m_doubleLayout);
 
     const auto write = [&](vk::DescriptorSet set, uint32_t binding,
                            vk::ImageView view, vk::Sampler sampler) {
@@ -261,6 +262,11 @@ void BloomPass::createDescriptors(vk::ImageView sceneView, vk::Sampler sceneSamp
     // The second blur direction writes back into the bright image, so that is
     // what the composite reads - not the blur image.
     write(m_compositeSet, 1, m_brightImage->GetImageView(), m_sampler);
+    // A composite with no bloom still has a binding 1, and it must name an
+    // image that is samplable on every frame: the scene is, because the scene
+    // pass always runs first. The shader does not read it in that mode.
+    write(m_compositeSceneOnlySet, 0, sceneView, sceneSampler);
+    write(m_compositeSceneOnlySet, 1, sceneView, sceneSampler);
 
     vk::PushConstantRange range{};
     range.stageFlags = vk::ShaderStageFlagBits::eFragment;
@@ -422,6 +428,17 @@ void BloomPass::RecordOverlay(vk::CommandBuffer cmd,
 }
 
 void BloomPass::Record(vk::CommandBuffer cmd) const {
+    // 4. only, for a scene of display values (RenderSettings::SceneEncoding).
+    // The composite is never skipped: it writes the image --screenshot reads
+    // and the screen overlay loads.
+    if (!RunsBloomChain(m_settings)) {
+        Params composite{};
+        composite.value = CompositeValue(m_settings);
+        recordPass(cmd, m_outputPass, m_outputFramebuffer, m_width, m_height,
+                   m_compositePipeline, m_doublePipelineLayout, m_compositeSceneOnlySet, composite);
+        return;
+    }
+
     const float texelX = 1.0f / static_cast<float>(m_halfWidth);
     const float texelY = 1.0f / static_cast<float>(m_halfHeight);
 
@@ -446,7 +463,7 @@ void BloomPass::Record(vk::CommandBuffer cmd) const {
 
     // 4. Add it back to the scene, tone map, encode.
     Params composite{};
-    composite.value = glm::vec4(m_settings.intensity, m_settings.exposure, 0.0f, 0.0f);
+    composite.value = CompositeValue(m_settings);
     recordPass(cmd, m_outputPass, m_outputFramebuffer, m_width, m_height,
                m_compositePipeline, m_doublePipelineLayout, m_compositeSet, composite);
 }

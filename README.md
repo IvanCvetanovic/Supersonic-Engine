@@ -49,7 +49,7 @@ code quietly contradicts.
 | **Cascaded shadows** | Four 2048² D32 cascades in one array image, fitted to the camera by bounding sphere and snapped to the texel grid so edges do not crawl; per-cascade normal offset, 3×3 PCF, and a cross-fade across each split |
 | **Normal mapping** | Tangent-space, with glTF-convention `vec4` tangents (handedness in `w`) generated for procedural meshes too |
 | **Frustum culling** | Gribb–Hartmann plane extraction; the scene pass culls against the camera, the shadow pass against the light, so nothing off-screen pops its shadow in and out |
-| **HDR + bloom** | Floating-point scene target, luminance-thresholded bright pass with a soft knee, separable half-res blur, then tone map and sRGB encode — exactly one encode, at the end of the chain |
+| **HDR + bloom** | Floating-point scene target, luminance-thresholded bright pass with a soft knee, separable half-res blur, then tone map and sRGB encode — exactly one encode, at the end of the chain. A scene can instead declare its values display-encoded (UNORM textures, no bloom, a clamp) for 2D art authored against an 8-bit framebuffer, optionally cut to RGB565 |
 | **Transparency** | A blended pass after the opaque one and after the sky, sorted back to front, with depth writes off — per-material, and particles ride the same pipeline |
 | **Alpha cutout** | A per-material alpha threshold discarded before shading, so foliage and grates keep a hard edge and stay opaque instead of sorting against themselves in the blend pass — and it reaches the shadow too: a leaf casts its holes, on a second depth pipeline that culls neither face, while a blended surface casts nothing rather than a rectangle |
 | **Sky and fog** | A procedural gradient sky drawn as a fullscreen triangle where nothing else claimed the depth, and exponential-squared distance fog, both authored per scene |
@@ -297,7 +297,7 @@ verified by a screenshot of geometry it never touched.
 | `test_raycast` | Viewport picking, slab intersection, depth ordering |
 | `test_meshgen` | Primitive generation, winding, tangents, OBJ parsing |
 | `test_gltf` | glTF import against real assets in the tree, including a `.glb` with embedded textures |
-| `test_serialize` | JSON reader, scene and prefab round-trips |
+| `test_serialize` | JSON reader, scene and prefab round-trips, including the scene's encoding and quantisation as words written only when chosen, and the clear each encoding gets |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
 | `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, and the count of material descriptor sets a dropped texture gives back |
 | `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
@@ -316,7 +316,7 @@ verified by a screenshot of geometry it never touched.
 | `test_pointshadow` | Cube-face view matrices, slot assignment, per-light indices |
 | `test_uicanvas` | Canvas layout, anchoring, rect resolution |
 | `test_uiinput` | UI hit testing, press and release routing |
-| `test_screenoverlay` | The screen overlay drawn after the tone map: where a quad lands in clip space and texture space, that order is draw order, the blend it is drawn with, and that the shader carries the same vertex table |
+| `test_screenoverlay` | The screen overlay drawn after the tone map: where a quad lands in clip space and texture space, that order is draw order, the blend it is drawn with, and that the shader carries the same vertex table. And the composite under it: the four numbers each scene encoding sends, and that the shader's branches are numbered as the enum is |
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
 | `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths |
 | `test_launchoptions` | Argument parsing, missing values, malformed counts |
@@ -327,7 +327,7 @@ verified by a screenshot of geometry it never touched.
 | `test_sat` | Oriented box collision, face manifolds, the ramp an AABB could not represent |
 | `test_lightselection` | Which lights survive the eight-light cap, and that the sun is not one of the casualties |
 | `test_shadowcache` | The signature that lets a depth pass be skipped, and what must dirty it |
-| `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped |
+| `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped, and that the scene's colour space is in it |
 | `test_determinism` | That one binary over one scene produces the same frames twice |
 | `test_replay` | Recording a run's input and reading it back: levels carry, edges do not, floats keep their bits, and a truncated file is refused. Also the POINTER — where it is, and the touches on it — which is what makes a session played with a mouse reproducible, and the capture function the engine actually records through, which nothing reached before |
 | `test_camera` | That the fly camera can be turned off, in both halves, that a scene written before the switch existed still flies, and that the editor's own eye can go flat and come back |

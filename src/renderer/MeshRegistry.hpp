@@ -59,6 +59,11 @@ struct GpuMesh {
     // generation, so a re-imported texture is picked up rather than leaving
     // every section pointing at the image it replaced.
     uint64_t sectionTextureGeneration{0};
+
+    // And which colour space their albedo was acquired in
+    // (RenderSettings::decodesColourTextures). A scene switching its encoding
+    // moves no generation, so this is compared beside it.
+    bool sectionDecodesColour{true};
     glm::vec3 boundsMin{-0.5f};
     glm::vec3 boundsMax{0.5f};
 

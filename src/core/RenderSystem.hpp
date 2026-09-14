@@ -538,10 +538,17 @@ public:
     // absent, and absent is a different answer from present-and-empty: an entity
     // with no MeshComponent falls back to the cube, and one with an empty path
     // asks the registry for the default primitive.
+    //
+    // `decodesColourTextures` is RenderSettings::decodesColourTextures() for the
+    // scene: the same albedo path is a different upload in each colour space,
+    // so a scene switching its encoding must re-resolve every entity even
+    // though no path on any of them changed. Not defaulted, so a caller cannot
+    // forget the scene has a say.
     static uint64_t ResourceSignature(const MeshComponent* mesh,
                                       const MaterialComponent* material,
                                       uint64_t meshGeneration,
-                                      uint64_t textureGeneration);
+                                      uint64_t textureGeneration,
+                                      bool decodesColourTextures);
 
     // Everything one depth pass would draw, reduced to a number.
     //

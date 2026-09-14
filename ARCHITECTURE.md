@@ -625,7 +625,7 @@ composite adds the bloom back, applies Reinhard and encodes once.
 
 | Stage | Format | Why |
 |---|---|---|
-| Colour textures | `R8G8B8A8Srgb` | decoded to linear on read, which is what the PBR maths expects |
+| Colour textures | `R8G8B8A8Srgb`; `R8G8B8A8Unorm` in a `DisplayEncoded` scene | decoded to linear on read, which is what the PBR maths expects - unless the scene says its numbers are display values (below) |
 | Data textures (normal and packed ORM maps) | `R8G8B8A8Unorm` | a normal map stores directions and an ORM map stores three numbers the shader multiplies straight into roughness, metallic and occlusion; a transfer function would bend all of them |
 | Offscreen scene colour and its MSAA resolve | `R16G16B16A16Sfloat` | linear HDR, so highlights can exceed 1.0 and the bright pass has something to select |
 | Bloom bright and blur, half resolution | `R16G16B16A16Sfloat` | still linear; half resolution because a blur is low-frequency and full resolution costs four times the bandwidth for an image nobody can tell apart |
@@ -683,6 +683,49 @@ swapchain's ImGui pass, which the screenshot does not read, would not have.
 
 A game emits the overlay from `OnUpdate`, once a frame: a list emitted on the
 tick would be empty on a frame with no tick and doubled on one with two.
+
+**What the scene's numbers mean: `RenderSettings::encoding`.** Everything above
+is `LinearHdr`, the default. A scene can say otherwise, and it is a scene
+setting (serialised as a word, omitted at the default) because it decides how
+every texture is uploaded, not how one surface is shaded:
+
+| Encoding | Colour textures | Bloom | Composite |
+|---|---|---|---|
+| `LinearHdr` (default) | sRGB, decoded on read | bright, blur, blur, add | Reinhard, then encode |
+| `LinearNoToneMap` | sRGB, decoded on read | bright, blur, blur, add | clamp, then encode |
+| `DisplayEncoded` | UNORM: the byte in the file | not recorded | clamp only |
+
+`DisplayEncoded` is for 2D art authored against an 8-bit framebuffer, where a tint,
+a fade and an additive glow were all arithmetic on encoded bytes. The Magic Portals
+remaster measured why no tint chosen before the linear chain can stand in for it:
+its fit of the original's pixels gives a block error of 13.59 of 255 blending in
+linear light against 0.28 on encoded values (remaster, step 43).
+- `RenderSystem::SyncResources` asks for albedo with `srgb` =
+  `RenderSettings::decodesColourTextures()`, for entities and for mesh sections
+  alike. The answer is mixed into `ResourceSignature` and compared beside a mesh's
+  `sectionTextureGeneration`, because switching the mode changes no path and moves
+  no generation. `TextureRegistry` keys the two uploads apart. Normal and ORM maps
+  are data in every mode.
+- `BloomPass::RunsBloomChain` skips the bright and two blur passes, and
+  `CompositeValue` sends intensity 0. **The composite then binds a second set that
+  names the scene image twice.** The bright image is only ever samplable because
+  the bright pass left it `eShaderReadOnlyOptimal`, so on the first frame after the
+  target is built it has no layout at all. Measured with the ordinary set bound: 10
+  validation errors, `VUID-vkCmdDraw-None-09600`, "current layout is
+  VK_IMAGE_LAYOUT_UNDEFINED".
+- The composite itself always runs. It writes the image `--screenshot` reads and
+  the screen overlay loads, and the overlay pass is untouched by the mode.
+- The clear is `RenderSettings::SceneClearColor`. The sky's 0.00023 is a radiance,
+  so a `DisplayEncoded` scene is cleared to `backgroundColor` as it stands, sky or
+  not. The inspector's colour picker stops converting it for the same reason.
+- `RenderSettings::quantize = Rgb565` rounds each channel to 5, 6 and 5 bits after
+  the encoding, and writes the level's 8-bit reading, `round(level * 255 / (2^bits - 1))`,
+  as `k / 255`. Writing `level / (2^bits - 1)` and letting the driver round it stored
+  20/31 (164.516) as 164. The screen overlay, drawn after, is not quantised.
+
+**Not converted by the mode:** `grid.frag`'s pre-linearised colours, the procedural
+sky pass, the PBR path's lights and fog, all of which assume radiance, and ImGui. A
+`DisplayEncoded` scene is expected to draw unlit, over a `Color` background.
 
 **Transparency, and where its alpha stops mattering.** A material marked
 transparent is diverted out of the opaque walk and drawn afterwards, sorted back

@@ -1668,6 +1668,11 @@ void SupersonicApp::Run() {
                 applied.softKnee = rendering->bloomSoftKnee;
                 applied.intensity = rendering->bloomIntensity;
                 applied.exposure = rendering->exposure;
+                // The encoding decides whether the bloom runs at all
+                // (BloomPass::RunsBloomChain), so a DisplayEncoded scene gets
+                // no bloom whatever its intensity says.
+                applied.encoding = rendering->encoding;
+                applied.quantize = rendering->quantize;
             }
             bloom->SetSettings(applied);
         }

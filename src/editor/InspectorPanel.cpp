@@ -193,6 +193,24 @@ void InspectorPanel::drawWorldSettings(entt::registry& registry) {
                         "at roughly fifty units.");
 
     ImGui::Spacing();
+    ImGui::SeparatorText("Encoding");
+
+    // In the enum's order, which is the order the composite numbers them.
+    static const char* kEncodings[] = { "Linear HDR", "Linear, no tone map", "Display encoded" };
+    int encoding = static_cast<int>(rendering.encoding);
+    if (ImGui::Combo("Scene Values", &encoding, kEncodings, IM_ARRAYSIZE(kEncodings))) {
+        rendering.encoding = static_cast<RenderSettings::SceneEncoding>(encoding);
+    }
+    bool quantize = rendering.quantize == RenderSettings::OutputQuantize::Rgb565;
+    if (ImGui::Checkbox("16-bit Output (RGB565)", &quantize)) {
+        rendering.quantize = quantize ? RenderSettings::OutputQuantize::Rgb565
+                                      : RenderSettings::OutputQuantize::None;
+    }
+    ImGui::TextDisabled("Display encoded: textures are not decoded, blending happens on "
+                        "display values, there is no bloom and the composite only clamps. "
+                        "For 2D art authored for an 8-bit framebuffer.");
+
+    ImGui::Spacing();
     ImGui::SeparatorText("Background");
 
     static const char* kBackgrounds[] = { "Sky", "Colour" };
@@ -202,19 +220,26 @@ void InspectorPanel::drawWorldSettings(entt::registry& registry) {
                                                : RenderSettings::Background::Sky;
     }
 
+    const bool displayEncoded = rendering.encoding == RenderSettings::SceneEncoding::DisplayEncoded;
+
     if (rendering.background == RenderSettings::Background::Color) {
         // THE PICKER IS sRGB AND THE BUFFER IS LINEAR, so the two are
         // converted here rather than the number being handed straight over. A
         // colour picked as #161a22 and written into a floating-point target
         // comes out visibly lighter, because the composite at the end of the
         // chain encodes once and would encode this twice.
+        //
+        // Unless the scene's numbers are display values, where the buffer is
+        // not linear and the picker's number is the one to store.
         float shown[3];
         for (int i = 0; i < 3; ++i) {
-            shown[i] = std::pow(std::max(rendering.backgroundColor[i], 0.0f), 1.0f / 2.2f);
+            shown[i] = displayEncoded ? rendering.backgroundColor[i]
+                                      : std::pow(std::max(rendering.backgroundColor[i], 0.0f), 1.0f / 2.2f);
         }
         if (ImGui::ColorEdit3("Colour", shown)) {
             for (int i = 0; i < 3; ++i) {
-                rendering.backgroundColor[i] = std::pow(std::max(shown[i], 0.0f), 2.2f);
+                rendering.backgroundColor[i] = displayEncoded ? shown[i]
+                                                              : std::pow(std::max(shown[i], 0.0f), 2.2f);
             }
         }
         ImGui::TextDisabled("The sky pass is not recorded at all, so this is one "
