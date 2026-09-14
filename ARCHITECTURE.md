@@ -128,7 +128,7 @@ Teardown order is load-bearing: `EditorLayer` must be destroyed before
 |---|---|---|
 | Meshes | `MeshRegistry` | Cube/Sphere/Plane/Terrain primitives, OBJ, and glTF |
 | glTF/GLB | `GltfLoader` (tinygltf) | Bakes each node's transform chain into its primitives |
-| Textures | `TextureRegistry` (stb_image) | Cached by path; one descriptor set per texture |
+| Textures | `TextureRegistry` (stb_image) | Cached by path; one material descriptor set per triple of maps, given back to a freeable pool of 1024 when a texture is dropped |
 | Audio | `AudioClip` | Uncompressed RIFF/WAVE |
 
 Both registries cache failures so a missing or broken asset is not reopened
@@ -494,6 +494,32 @@ ordered rather than hashed - three 32-bit ids do not pack into a 64-bit key,
 and a hash collision would render one material with another's maps and say
 nothing about it.
 
+**Sets go back to the pool.** For most of the engine's life they did not: the
+pool had no `eFreeDescriptorSet` flag, and `Invalidate` and `ReplaceRGBA` erased
+sets from the cache without freeing them. The capacity check read the cache's
+size, so it undercounted the pool, and the allocation past the real limit threw
+`ErrorOutOfPoolMemory` mid-frame. Walking Magic Portals' 67 lightmapped levels
+in one process, with a set per lightmap dropped at each unload, did that at the
+44th level with 64 sets cached. Now the pool is freeable and holds
+`MaterialSets::kMaxSets` (1024). A dropped set is freed through
+`VulkanDevice::DeferDestroy`, because a command buffer from the last two frames
+may still bind it. It stays counted in `MaterialSets::Ledger` until the free
+runs, and the cap is checked against that count (`MaterialSetsInPool()`), not
+the cache's (`MaterialSetCount()`). A full, out-of-memory or fragmented pool
+hands out the white fallback's set and logs it. vulkan-hpp throws the latter two,
+so the old empty-vector check could never run. The queued free holds the pool
+through a `weak_ptr`: the renderer destroys the registry, and its pool with
+every set in it, before it flushes the deferred queue at shutdown.
+`Ledger` and `TakeNaming`, which picks the sets naming a dropped texture in any
+binding, are tested in `test_materials`. The free itself needs a device, so it
+is proved only by `MagicPortals --visit-levels`. That run acquired 1,460
+lightmap sets over two passes and peaked at 96 live. The pool equalled the cache
+at every level, and validation was active and silent.
+
+A recycled set can come back with the same **handle** naming other textures.
+Nothing else in the engine held one across frames except the shadow pass
+signature, below, which now mixes in the texture generation.
+
 Three values are duplicated into `shader.frag` by hand, each with a comment
 naming the C++ constant it must match: `POINT_SHADOW_CASTERS`,
 `SPOT_SHADOW_CASTERS` and the point light near plane, `0.05`. Nothing links
@@ -764,7 +790,12 @@ Three things about how it is done, each of which was the alternative's problem:
 **handle**, all inside the frustum cull. The handle rather than the texture id
 for the reason the vertex buffer handle is already there: a reload swaps the
 image under a stable id. Miss any of them and the cache serves a silhouette the
-material no longer has, which looks entirely plausible.
+material no longer has, which looks entirely plausible. Since dropped sets go
+back to the pool, a handle can be reused for another material, so the seed every
+pass signature starts from also mixes `TextureRegistry::Generation()`. Every
+call that drops a set bumps it, so a reused handle always arrives at a later
+generation than any signature that saw it. That costs one re-record of every
+pass per texture reload.
 
 All three depth call sites take the same pair of pipelines - four cascades, six
 cube faces per point-light slot, one per spot slot - and each was checked by

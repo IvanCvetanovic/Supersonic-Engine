@@ -302,7 +302,10 @@ static void testTheCutoutInputsAreInTheSignature() {
     casters[0].baseAlpha = 1.0f;
     // A reloaded texture is the case the mesh path already learned: the id
     // survives and the contents do not, so the id is not a statement about the
-    // pixels. TextureRegistry hands back a set it has never handed back before.
+    // pixels. TextureRegistry hands back a set it has not handed back at this
+    // texture generation. NOT "never before": dropped sets now go back to the
+    // pool and the driver may reuse a handle, which is why the renderer mixes
+    // the generation into the seed every pass signature starts from.
     casters[0].materialSet = fakeDescriptorSet(0x1234);
     CHECK_MSG(base != signatureOf(casters, light),
               "a reloaded texture is a new descriptor set, and a new silhouette");

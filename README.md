@@ -63,7 +63,7 @@ code quietly contradicts.
 
 - **glTF 2.0** import via tinygltf — meshes, materials, texture references, **skins and animations**
 - **Wavefront OBJ** import
-- **Textures** through `stb_image`, with per-material descriptor sets cached by texture pair
+- **Textures** through `stb_image`, with per-material descriptor sets cached by texture triple and given back to the pool when a texture is reloaded or dropped
 - **Procedural geometry** — cube, sphere, plane, and a heightfield **terrain generator**
 - **Shared materials** as `.material` assets — one asset, many entities, edited once; create and assign them from the content browser, or detach an entity with *Make Unique*
 - **Scenes and prefabs** as readable JSON (`.scene`, `.prefab`), parsed by a hand-written reader with no external dependency
@@ -299,7 +299,7 @@ verified by a screenshot of geometry it never touched.
 | `test_gltf` | glTF import against real assets in the tree, including a `.glb` with embedded textures |
 | `test_serialize` | JSON reader, scene and prefab round-trips |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
-| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, and not reading our own save back |
+| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, and the count of material descriptor sets a dropped texture gives back |
 | `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |

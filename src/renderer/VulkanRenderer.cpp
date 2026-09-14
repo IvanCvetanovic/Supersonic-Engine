@@ -1535,6 +1535,17 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
                                                 sizeof(glm::mat4) * paletteCount);
     }
 
+    // And the texture generation, because a cut-out caster's material set is
+    // in the signature as a HANDLE, and handles are recycled: the registry
+    // gives a dropped set back to its pool, and the driver may hand the same
+    // handle out again for another material. Same handle, same everything
+    // else, different holes - a cached pass that looks right and is not. A set
+    // is only ever dropped by a call that bumps the generation, so a recycled
+    // handle always arrives at a later generation than any signature that saw
+    // it before. Costs one re-record of every pass per texture reload.
+    const uint64_t textureGeneration = m_textureRegistry->Generation();
+    shadowSeed = RenderSystem::MixSignature(shadowSeed, &textureGeneration, sizeof(textureGeneration));
+
     vk::CommandBufferBeginInfo beginInfo{};
     cmd.begin(beginInfo);
     prepareZone.Stop();

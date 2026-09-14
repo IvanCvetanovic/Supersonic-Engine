@@ -17,17 +17,14 @@
 namespace Supersonic {
 
 namespace {
-// Generous, but each set is tiny and the pool is allocated once.
-constexpr uint32_t kMaxMaterialSets = 512;
-
 // The ids a material set is built from, in binding order.
 //
 // This used to be two ids packed into one uint64_t, which stopped working the
 // moment there were three. Squeezing three into 64 bits would mean 21 bits each
 // and a silent wrong answer the day an id passed two million; hashing them
 // would mean a collision rendering one material with another's maps, with
-// nothing to say so. An ordered key over at most 512 entries costs a handful of
-// comparisons and cannot be wrong.
+// nothing to say so. An ordered key over at most MaterialSets::kMaxSets entries
+// costs a handful of comparisons and cannot be wrong.
 using MaterialKey = std::array<uint32_t, VulkanPipeline::kMaterialBindingCount>;
 } // namespace
 
@@ -84,10 +81,14 @@ TextureRegistry::~TextureRegistry() {
     // Sets are freed with the pool; the images own their own handles.
     m_materialSets.clear();
     m_textures.clear();
-    if (m_descriptorPool) {
-        m_deviceRef.GetDevice().destroyDescriptorPool(m_descriptorPool);
-        m_descriptorPool = nullptr;
+    if (m_setPool && m_setPool->handle) {
+        m_deviceRef.GetDevice().destroyDescriptorPool(m_setPool->handle);
+        m_setPool->handle = nullptr;
     }
+    // Last, and it is what makes a free still queued on the device harmless:
+    // its weak reference no longer locks, so it does nothing. The renderer
+    // flushes that queue AFTER destroying this registry.
+    m_setPool.reset();
 }
 
 void TextureRegistry::createDescriptorPool() {
@@ -96,14 +97,50 @@ void TextureRegistry::createDescriptorPool() {
     // Read from the layout's own count rather than repeated here. A pool sized
     // for two bindings while the layout declares three does not fail: it simply
     // runs out of sets a third early, hundreds of materials into a scene.
-    poolSize.descriptorCount = kMaxMaterialSets * VulkanPipeline::kMaterialBindingCount;
+    poolSize.descriptorCount = MaterialSets::kMaxSets * VulkanPipeline::kMaterialBindingCount;
 
     vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.maxSets = kMaxMaterialSets;
+    // FREEABLE. Without this flag a set goes back only with the whole pool, and
+    // this registry drops sets for as long as the process runs: every texture
+    // invalidated, every texture's pixels replaced. A pool that never took one
+    // back ran out a few hundred drops in - ErrorOutOfPoolMemory, thrown
+    // mid-frame, with the cache holding a few dozen sets - which is what walking
+    // Magic Portals' lightmapped levels in one process did, at 3-10.
+    poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;
+    poolInfo.maxSets = MaterialSets::kMaxSets;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
 
-    m_descriptorPool = m_deviceRef.GetDevice().createDescriptorPool(poolInfo);
+    m_setPool = std::make_shared<SetPool>();
+    m_setPool->device = m_deviceRef.GetDevice();
+    m_setPool->handle = m_deviceRef.GetDevice().createDescriptorPool(poolInfo);
+}
+
+void TextureRegistry::giveBack(std::vector<vk::DescriptorSet> sets) {
+    if (sets.empty() || !m_setPool) return;
+    // Deferred rather than freed here, for the reason the images are: a set
+    // bound by a command buffer submitted a frame or two ago is still being
+    // read, and freeing it now is a use-after-free that was legal on the frame
+    // it was recorded. Counted as live until the free actually runs.
+    m_deviceRef.DeferDestroy(
+        [pool = std::weak_ptr<SetPool>(m_setPool), sets = std::move(sets)]() {
+            const std::shared_ptr<SetPool> owner = pool.lock();
+            if (!owner || !owner->handle) return; // freed with the pool already
+            owner->device.freeDescriptorSets(owner->handle, sets);
+            for (std::size_t i = 0; i < sets.size(); ++i) {
+                if (!owner->ledger.GivenBack()) {
+                    SUPERSONIC_LOG_ERROR("TextureRegistry")
+                        << "Gave back a material set the pool did not count as live." << std::endl;
+                    break;
+                }
+            }
+        });
+}
+
+vk::DescriptorSet TextureRegistry::fallbackSet() const {
+    const MaterialKey fallbackKey{m_whiteTexture, m_flatNormalTexture, m_neutralOrmTexture};
+    if (auto it = m_materialSets.find(fallbackKey); it != m_materialSets.end()) return it->second;
+    return nullptr;
 }
 
 bool TextureRegistry::isBuiltIn(uint32_t id) const {
@@ -257,27 +294,23 @@ vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_
         return it->second;
     }
 
-    if (m_materialSets.size() >= kMaxMaterialSets) {
-        SUPERSONIC_LOG_ERROR("TextureRegistry") << "Material descriptor set pool exhausted; reusing the default." << std::endl;
-        const MaterialKey fallbackKey{m_whiteTexture, m_flatNormalTexture, m_neutralOrmTexture};
-        if (auto it = m_materialSets.find(fallbackKey); it != m_materialSets.end()) return it->second;
-        return nullptr;
-    }
-
-    vk::DescriptorSetAllocateInfo allocInfo{};
-    allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_materialLayout;
-
-    const auto sets = m_deviceRef.GetDevice().allocateDescriptorSets(allocInfo);
-    if (sets.empty()) {
-        throw std::runtime_error("TextureRegistry ran out of descriptor sets!");
+    // The POOL's count, not the cache's. A set dropped from the cache is still
+    // in the pool until its deferred free runs, and checking the cache's size
+    // here is what let the allocation below throw with room apparently left.
+    if (!m_setPool->ledger.HasRoom()) {
+        SUPERSONIC_LOG_ERROR("TextureRegistry") << "Material descriptor set pool exhausted ("
+            << m_setPool->ledger.Live() << " live); reusing the default." << std::endl;
+        return fallbackSet();
     }
 
     // Written binding by binding from the key itself, so adding a fourth map
     // means adding it to the key and to the layout and nowhere else. The
     // previous shape named each texture in a local and would have needed a
     // third of everything, in three places, all of them easy to half-do.
+    //
+    // Resolved BEFORE the set is allocated, because each of these can throw,
+    // and a throw after the allocation would leave a set the pool counts and
+    // nothing will ever give back.
     std::array<vk::DescriptorImageInfo, VulkanPipeline::kMaterialBindingCount> images{};
     for (uint32_t i = 0; i < VulkanPipeline::kMaterialBindingCount; ++i) {
         const Texture* texture = get(key[i]);
@@ -292,6 +325,31 @@ vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_
             throw std::runtime_error("Texture is missing a sampler or image view!");
         }
     }
+
+    vk::DescriptorSetAllocateInfo allocInfo{};
+    allocInfo.descriptorPool = m_setPool->handle;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_materialLayout;
+
+    // The two ways a pool refuses, caught and degraded exactly like the cap
+    // above. vulkan-hpp THROWS them - the empty-vector check that stood here
+    // could never run - and a freeable pool can also be fragmented, with room
+    // in total and none in one piece. Anything else (a lost device, no memory
+    // at all) is not a full pool and is left to propagate.
+    std::vector<vk::DescriptorSet> sets;
+    try {
+        sets = m_deviceRef.GetDevice().allocateDescriptorSets(allocInfo);
+    } catch (const vk::OutOfPoolMemoryError&) {
+        SUPERSONIC_LOG_ERROR("TextureRegistry") << "Material descriptor pool out of memory ("
+            << m_setPool->ledger.Live() << " live); reusing the default." << std::endl;
+        return fallbackSet();
+    } catch (const vk::FragmentedPoolError&) {
+        SUPERSONIC_LOG_ERROR("TextureRegistry") << "Material descriptor pool fragmented ("
+            << m_setPool->ledger.Live() << " live); reusing the default." << std::endl;
+        return fallbackSet();
+    }
+    if (sets.empty()) return fallbackSet();
+    m_setPool->ledger.Taken();
 
     std::array<vk::WriteDescriptorSet, VulkanPipeline::kMaterialBindingCount> writes{};
     for (uint32_t i = 0; i < VulkanPipeline::kMaterialBindingCount; ++i) {
@@ -350,20 +408,13 @@ bool TextureRegistry::Invalidate(const std::string& path) {
 
     // A descriptor set naming a destroyed image is the null-sampler class of
     // bug that cost this project six commits, so every set mentioning a dead id
-    // goes too. They are rebuilt on demand by AcquireMaterialSet.
-    if (!deadIds.empty()) {
-        for (auto it = m_materialSets.begin(); it != m_materialSets.end();) {
-            // Every binding, not two named ones. The key is the whole triple
-            // now, so asking "does this set mention a dead id" is a search over
-            // it rather than a pair of comparisons somebody has to remember to
-            // extend the next time a map is added.
-            const bool names = std::any_of(
-                it->first.begin(), it->first.end(), [&deadIds](uint32_t id) {
-                    return std::find(deadIds.begin(), deadIds.end(), id) != deadIds.end();
-                });
-            it = names ? m_materialSets.erase(it) : std::next(it);
-        }
-    }
+    // goes too - out of the cache now, back to the pool once no frame can bind
+    // it. They are rebuilt on demand by AcquireMaterialSet.
+    //
+    // Every binding, not two named ones: TakeNaming searches the whole key.
+    // The generation below is bumped in the same call, which is what lets a
+    // cache keyed on a set handle tell a recycled handle from the old one.
+    giveBack(MaterialSets::TakeNaming(m_materialSets, deadIds));
 
     if (dropped) {
         // Every cached path-to-id answer is now wrong.
@@ -394,11 +445,9 @@ bool TextureRegistry::ReplaceRGBA(uint32_t id, const uint8_t* pixels,
 
     // Descriptor sets naming this id keep working only if they are rewritten to
     // the new image, so they are dropped and rebuilt rather than left pointing
-    // at the image about to be destroyed.
-    for (auto it = m_materialSets.begin(); it != m_materialSets.end();) {
-        const bool names = std::find(it->first.begin(), it->first.end(), id) != it->first.end();
-        it = names ? m_materialSets.erase(it) : std::next(it);
-    }
+    // at the image about to be destroyed - and given back, or a texture
+    // replaced once a frame would take a set from the pool once a frame.
+    giveBack(MaterialSets::TakeNaming(m_materialSets, std::vector<uint32_t>{id}));
 
     m_deviceRef.DeferDestroy(
         [img = std::shared_ptr<VulkanImage>(std::move(oldImage))]() mutable { img.reset(); });

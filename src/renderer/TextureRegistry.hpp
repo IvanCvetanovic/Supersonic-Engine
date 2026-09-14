@@ -10,6 +10,7 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include "renderer/MaterialSetLedger.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanImage.hpp"
 #include "renderer/VulkanPipeline.hpp"
@@ -62,8 +63,13 @@ public:
                         uint32_t width, uint32_t height, bool srgb = true,
                         vk::Filter filter = vk::Filter::eLinear);
 
-    // Descriptor set binding both maps for one material, cached per pair so a
-    // scene sharing materials does not allocate a set per entity.
+    // Descriptor set binding every map of one material, cached per triple of
+    // ids so a scene sharing materials does not allocate a set per entity.
+    //
+    // A full pool - MaterialSets::kMaxSets live, which counts sets dropped from
+    // the cache and not yet freed - hands out the white fallback's set and logs
+    // it, rather than throwing out of the middle of a frame. So does a driver
+    // that reports the pool out of memory or fragmented before that.
     vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId, uint32_t ormId);
 
     // Drops a cached path so the next Acquire re-reads it from disk, and
@@ -74,7 +80,14 @@ public:
     //
     // Any material descriptor set naming the old id is dropped with it, because
     // a set still pointing at a destroyed image is exactly the null-sampler
-    // class of bug that cost this project six commits.
+    // class of bug that cost this project six commits - and given back to the
+    // pool, through the device's deferred queue, because a command buffer
+    // recorded in the last two frames may still bind it.
+    //
+    // So a set's HANDLE can come back later naming other textures. Every path
+    // that frees one bumps Generation() as it drops it, so anything caching a
+    // handle across frames has to mix the generation in beside it, as the
+    // shadow pass signature does.
     bool Invalidate(const std::string& path);
 
     // Rewrites the pixels behind an existing id, keeping the id and every
@@ -106,7 +119,17 @@ public:
     uint32_t GetNeutralOrmTexture() const { return m_neutralOrmTexture; }
 
     size_t Size() const { return m_textures.size(); }
+
+    // The sets the cache hands out.
     size_t MaterialSetCount() const { return m_materialSets.size(); }
+
+    // The sets the POOL holds: the cached ones, plus any dropped from the cache
+    // whose free has not run yet. Equal to MaterialSetCount() once the renderer
+    // has collected - two frames after the last Invalidate or ReplaceRGBA - and
+    // larger by exactly what is waiting before that. It is the number the cap
+    // is checked against, and the one a check of reclamation has to read: the
+    // cache's size went down on every Invalidate even when nothing was freed.
+    size_t MaterialSetsInPool() const { return m_setPool ? m_setPool->ledger.Live() : 0; }
 
 private:
     struct Texture {
@@ -115,7 +138,37 @@ private:
         uint32_t height{0};
     };
 
+    // The pool and what it has handed out, SHARED so that a free queued on the
+    // device can outlive this registry. The renderer destroys the registry -
+    // and with it the pool, which frees every set at once - before it flushes
+    // the deferred queue at shutdown, so a queued free holding the pool's handle
+    // would free into a destroyed pool. A queued free holds a weak reference
+    // instead, and does nothing once the pool is gone.
+    //
+    // The registry's m_setPool is the ONLY strong owner, and that is what the
+    // guard rests on: a queued free locks the reference only for the duration
+    // of its own call, never across the destructor, so once m_setPool is reset
+    // no lock can succeed. Hand a second shared_ptr to anything and a free could
+    // find the pool alive with a null handle, skip, and leave the ledger counting
+    // a set that no longer exists.
+    //
+    // Measured, not assumed: with the free taking the raw handle instead, the
+    // Magic Portals level walk (MagicPortals --visit-levels) quit with 5 frees
+    // queued and failed on 20 validation errors, "vkFreeDescriptorSets():
+    // descriptorPool Invalid VkDescriptorPool Object".
+    struct SetPool {
+        vk::Device device;
+        vk::DescriptorPool handle{nullptr};
+        MaterialSets::Ledger ledger{MaterialSets::kMaxSets};
+    };
+
     void createDescriptorPool();
+    // Queues `sets`, already out of the cache, to be given back to the pool
+    // once no frame in flight can still bind them.
+    void giveBack(std::vector<vk::DescriptorSet> sets);
+    // The white fallback's set, for a pool that cannot hand out another. Null
+    // when even that one was never allocated.
+    vk::DescriptorSet fallbackSet() const;
     // One of the shared fallbacks. Never freed and never rewritten: Acquire
     // hands them out for missing files, so many paths resolve to one id.
     bool isBuiltIn(uint32_t id) const;
@@ -125,7 +178,7 @@ private:
     VulkanDevice& m_deviceRef;
     vk::CommandPool m_commandPool;
     vk::DescriptorSetLayout m_materialLayout;
-    vk::DescriptorPool m_descriptorPool{nullptr};
+    std::shared_ptr<SetPool> m_setPool;
 
     std::vector<Texture> m_textures;
     std::unordered_map<std::string, uint32_t> m_lookup;

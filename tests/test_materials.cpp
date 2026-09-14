@@ -17,15 +17,19 @@
 #include "core/MaterialSystem.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/SceneSerializer.hpp"
+#include "renderer/MaterialSetLedger.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace Supersonic;
 
@@ -1143,7 +1147,98 @@ static void testOverridesSurviveASaveAndLoad() {
     cleanup();
 }
 
+// --- material descriptor sets going back to the pool -----------------------
+//
+// TextureRegistry cannot be built here: it needs a device. What it DECIDES can,
+// and that is where both of its failures were. Neither was visible: a pool
+// that never took a set back threw ErrorOutOfPoolMemory hundreds of drops in,
+// while the cache it checked held a few dozen sets. Walking Magic Portals'
+// lightmapped levels in one process did exactly that, at the 44th level.
+// The Vulkan calls themselves - the free, and its deferral past the frames in
+// flight - are proved only by that walk (MagicPortals --visit-levels).
+
+using SetKey = std::array<uint32_t, 3>;
+
+static void testASetDroppedFromTheCacheStillFillsThePool() {
+    // The undercount itself. Dropped from the cache, a set is still allocated
+    // until its deferred free runs, so the room is not there yet.
+    MaterialSets::Ledger ledger(3);
+    std::map<SetKey, int> cache;
+    for (int i = 0; i < 3; ++i) {
+        cache.emplace(SetKey{uint32_t(i), 100, 200}, 1000 + i);
+        ledger.Taken();
+    }
+    CHECK_MSG(!ledger.HasRoom(), "three sets taken fill a pool of three");
+
+    const std::vector<int> dropped = MaterialSets::TakeNaming(cache, {1});
+    CHECK_EQ(dropped.size(), size_t{1});
+    CHECK_EQ(cache.size(), size_t{2});
+    CHECK_MSG(!ledger.HasRoom(),
+              "a set out of the cache and not yet freed still occupies the pool; the cache's size "
+              "said there was room, and the allocation threw");
+    CHECK_EQ(ledger.Live(), uint32_t{3});
+
+    CHECK_MSG(ledger.GivenBack(), "the deferred free gives it back");
+    CHECK_MSG(ledger.HasRoom(), "and only then is there room");
+    CHECK_EQ(ledger.Live(), uint32_t{2});
+    CHECK_EQ(ledger.Live(), static_cast<uint32_t>(cache.size()));
+}
+
+static void testGivingBackWhatWasNeverTakenChangesNothing() {
+    // A double free is a bug to report. Wrapped instead, the count would read
+    // four billion and every material after it would draw the fallback.
+    MaterialSets::Ledger ledger(2);
+    ledger.Taken();
+    CHECK(ledger.GivenBack());
+    CHECK_MSG(!ledger.GivenBack(), "nothing is live, so nothing can be given back");
+    CHECK_EQ(ledger.Live(), uint32_t{0});
+    CHECK_MSG(ledger.HasRoom(), "and the pool is still usable");
+}
+
+static void testEveryBindingIsSearchedForADeadTexture() {
+    // A dropped texture takes every set naming it, in whichever binding: a
+    // set left naming a destroyed image is the null-sampler bug. The key is the
+    // whole triple; the search must be too, and it must hand back what it
+    // took, which the two hand-written loops it replaced simply erased.
+    std::map<SetKey, int> cache{
+        {SetKey{1, 2, 3}, 10},    // albedo
+        {SetKey{4, 5, 6}, 20},
+        {SetKey{7, 1, 9}, 30},    // normal
+        {SetKey{10, 11, 1}, 40},  // ORM
+        {SetKey{12, 13, 14}, 50},
+    };
+
+    CHECK_MSG(MaterialSets::TakeNaming(cache, {}).empty(), "no dead ids take nothing");
+    CHECK_MSG(MaterialSets::TakeNaming(cache, {99}).empty(), "an id no set names takes nothing");
+    CHECK_EQ(cache.size(), size_t{5});
+
+    const std::vector<int> taken = MaterialSets::TakeNaming(cache, {1});
+    CHECK_EQ(taken.size(), size_t{3});
+    CHECK_MSG(taken == std::vector<int>({10, 30, 40}), "every binding that names it, in key order");
+    CHECK_EQ(cache.size(), size_t{2});
+    CHECK_MSG(cache.count(SetKey{4, 5, 6}) == 1 && cache.count(SetKey{12, 13, 14}) == 1,
+              "and nothing that does not");
+
+    const std::vector<int> two = MaterialSets::TakeNaming(cache, {13, 5});
+    CHECK_MSG(two == std::vector<int>({20, 50}), "several dead ids at once, as one Invalidate drops both colour spaces");
+    CHECK_MSG(cache.empty(), "leaving nothing");
+}
+
+static void testThePoolHoldsTheWalkWithRoomToSpare() {
+    // The cap the lighting design asks for: twice the old 512. At most 21
+    // lightmaps in one Magic Portals level and 730 in the game; with sets given
+    // back, the walk through all of them twice peaked at 96 live.
+    CHECK_EQ(MaterialSets::kMaxSets, uint32_t{1024});
+    MaterialSets::Ledger ledger(MaterialSets::kMaxSets);
+    CHECK_EQ(ledger.Capacity(), uint32_t{1024});
+    CHECK(ledger.HasRoom());
+}
+
 static void runTests() {
+    testASetDroppedFromTheCacheStillFillsThePool();
+    testGivingBackWhatWasNeverTakenChangesNothing();
+    testEveryBindingIsSearchedForADeadTexture();
+    testThePoolHoldsTheWalkWithRoomToSpare();
     testAnOverrideReplacesOnlyTheSurfaceItNames();
     testTheMapsSurviveTheOverride();
     testAnOverrideThatNamesNothingIsInert();
@@ -1189,4 +1284,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 210)
+TEST_MAIN("test_materials", 235)
