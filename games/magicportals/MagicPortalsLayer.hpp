@@ -15,11 +15,13 @@
 #include <random>
 
 #include "core/AudioEngine.hpp"
+#include "core/BitmapFont.hpp"
 
 #include "sim/Camera.hpp"
 #include "sim/Chapters.hpp"
 #include "sim/Game.hpp"
 #include "sim/Art.hpp"
+#include "sim/Hud.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Scores.hpp"
 #include "sim/Sounds.hpp"
@@ -231,6 +233,39 @@ public:
     // A screen point (Input's coordinates) as the point in the level under it,
     // in the remake's pixels. False when there is no viewport or camera.
     bool ScreenToLevelPx(const entt::registry& registry, const glm::vec2& screenPoint, glm::dvec2& outPx) const;
+
+    // ---- the HUD, and the seconds a level opens with ------------------------
+    //
+    // The on-screen controls, in the original's order of drawing: the walk pads
+    // in the bottom corners, restart and pause flush in the top-right, and the
+    // clear-portals button in the top-left while a placed portal is alive.
+    enum class Control { Left, Right, Reset, Menu, Clear };
+
+    // ui.json, as read at attach. HudError says why nothing could start when
+    // the port's data - ui.json among it - would not read; empty otherwise.
+    const Hud::Rules& HudRules() const { return m_hudRules; }
+    const std::string& HudError() const { return m_hudError; }
+
+    // How long the level being shown has been loaded, in milliseconds of the
+    // TICK's clock: zero on the tick it loads, a retry included. Everything the
+    // level opens with - the black, "Part N", the plaque, the pads' slide and
+    // pulse - is a function of this and nothing else.
+    double LevelAgeMs() const { return m_levelAgeMs; }
+
+    // A control's rectangle on the view as the last tick laid it out, (0, 0)
+    // the view's top-left, in design units; false when it is not shown.
+    bool ControlRect(Control control, Hud::Rect& out) const;
+
+    // The no-portal sign's rectangle on the view as the last tick left it, in
+    // design units; false in a level that places none.
+    bool NoPortalSignRect(Hud::Rect& out) const;
+
+    // Puts this frame's HUD into the engine's screen overlay, in the original's
+    // order of drawing. OnUpdate calls it once a frame; it is public so a suite
+    // can ask for exactly the HUD without the rest of a frame. Nothing is drawn
+    // when the registry publishes no overlay, which a bare suite registry does
+    // not until it inserts one.
+    void EmitHud(entt::registry& registry) const;
 
 private:
     // A body the level built, and the box standing for it. The box sits at the
@@ -674,46 +709,83 @@ private:
     // is what keeps eighteen suites off the filesystem.
     Scores::Store m_scores;
 
-    struct Hud {
+    // The engine's own text lines: what a refused level, a chapter's end and the
+    // menu screens say. Not the original's, which draws no text over a level.
+    struct HudText {
         entt::entity status{entt::null};
         entt::entity result{entt::null};
         entt::entity controls{entt::null};
     };
-    Hud m_hud;
+    HudText m_hud;
 
     // ---- the on-screen controls ---------------------------------------------
     //
-    // What the original puts on a phone, and what the owner asked for: a walk
-    // arrow in each bottom corner, and reset and menu together at the top right.
-    // Its own screenshot is the reference - arrow_left.png and arrow_right.png
-    // are pale discs cropped by the screen's edge, restart_level_button.png is
-    // the circular arrows, and main_menu_shortcut.png is the pause bars. The
-    // file called resume_button.png is a PLAY triangle and is not this pair's,
-    // whatever its name suggests.
+    // What the original draws over a level, placed and timed by ui.json through
+    // sim/Hud.hpp: this layer only says where those functions put things.
     //
-    // DRAWN AS WORLD QUADS PINNED TO THE VIEW, not as UIImageComponent. That
-    // component exists and anchors to a corner by itself, but it wants an
-    // ImTextureID from the renderer's UI image service rather than a path, and
-    // nothing in this layer has ever used that road. These follow the medal
-    // screen's way instead - a quad placed every tick at
-    // m_follow.centrePx + (fraction - 0.5) * ViewPx() - which costs one line of
-    // arithmetic and puts the buttons in the SAME space ScreenToLevelPx already
-    // answers in, which is the space the portal-shot check has to share.
-    enum class Control { Left, Right, Reset, Menu };
+    // DRAWN THROUGH THE ENGINE'S SCREEN OVERLAY (core/ScreenOverlay.hpp), not as
+    // quads in the level. The original blended its HUD straight onto display
+    // values; the scene target blends in linear light and is tone-mapped after,
+    // which capped white at 186 and made a translucent button's contrast depend
+    // on what was behind it (step 39). The overlay is drawn after all of that,
+    // in screen fractions, so it needs no camera, no interpolation and no z.
+    //
+    // HIT-TESTED IN VIEW SPACE, straight from the pointer's place in the
+    // viewport, so a tap on a control does not depend on the camera at all.
     struct ControlButton {
         Control kind{Control::Left};
-        entt::entity quad{entt::null};
-        glm::dvec2 centrePx{0.0}; // in the level's pixels, recomputed each tick
-        glm::dvec2 sizePx{0.0};
+        std::string image; // the picture, empty when it could not be read
+        Hud::Rect rect;    // on the view, as last laid out
+        bool shown{false};
     };
     std::vector<ControlButton> m_controls;
 
-    void buildControls(entt::registry& registry);
-    void unloadControls(entt::registry& registry);
-    // Places them against the camera and returns which one the pointer is on,
-    // or nullptr. Called once a tick, before the shot is fired, because a tap
-    // that works a control must NOT also open a portal under it.
-    const ControlButton* layOutControls(entt::registry& registry);
+    Hud::Rules m_hudRules;
+    bool m_hudReady{false};
+    std::string m_hudError;
+    double m_levelAgeMs{0.0};
+
+    // The tutorial's ring, drawn on each pad's corner, under the pads; empty
+    // outside the tutorial.
+    std::string m_ringImage;
+
+    // The current-score plaque and its medal, where a medal is recorded; both
+    // empty on a fresh save, as the original adds nothing where getScore is 0.
+    std::string m_plaqueImage;
+    std::string m_medalImage;
+
+    // "Part N", a quad a letter over the font's own pages, above the black.
+    std::string m_captionText;
+    Supersonic::BitmapFont m_captionFont;
+    bool m_captionFontTried{false};
+
+    // The no-portal sign: taken out of the level's sprites, because the level
+    // places it off the level and its script pins it to the camera's corner.
+    struct NoPortalSign {
+        bool present{false};
+        std::string image;         // the hd twin where there is one
+        glm::dvec2 sizeUnits{0.0}; // the entity's size, as its .ent draws it
+        Hud::Follow follow;        // its centre, in the level's units
+        Hud::Rect onView;          // as the last tick left it
+        double heldMs{0.0};        // frame time owed to the follow (Hud::HandOver)
+    };
+    NoPortalSign m_sign;
+
+    void buildControls();
+    void unloadControls();
+    // The control rectangles for this view and this age, and whether each is
+    // shown. Pure layout.
+    void layOutControls();
+    // The no-portal sign a tick on, against the camera as this tick left it.
+    void tickNoPortalSign(double dtMs);
+    // Every control hidden: a screen has gone up over the level.
+    void hideHud();
+    // Which control the pointer is on, or nullptr. Asked once a tick, before a
+    // shot is fired, because a tap that works a control must not also open a
+    // portal under it.
+    const ControlButton* controlUnderPointer(const entt::registry& registry) const;
+    // Whether the level being played is the one whose pads pulse long and ring.
+    bool tutorialPads() const;
 };
 
 } // namespace MagicPortals

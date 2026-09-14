@@ -227,6 +227,11 @@ add_mp_test(test_mp_sprites)
 # that opens the original's own files is skipped without them, never with 77.
 add_mp_test(test_mp_sounds)
 
+# The HUD a level is played under and the seconds it opens with - ui.json and
+# sim/Hud's arithmetic, pinned against the captures of the original. Pure, and
+# reads only the port's own committed data, so it runs anywhere and never skips.
+add_mp_test(test_mp_hud)
+
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.
 add_mp_test(test_mp_layer)

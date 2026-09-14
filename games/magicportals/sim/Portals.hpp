@@ -121,6 +121,10 @@ struct Placed {
     glm::dvec2 atPx{0.0};
     Trigger::Circle trigger;
     std::vector<entt::entity> inside; // the travellers overlapping it as of the last tick
+    // Whether a pair ever carried anything through it: the original's
+    // hasTeleportedSomething, which PortalManager::teleportToOther (bytes
+    // 144944..145873) sets on both ends of a placed pair. Only KillAll reads it.
+    bool teleported = false;
 };
 
 // A pre-placed portal (portal_system.gd:79-87, 206-227). `destiny` is the index
@@ -223,6 +227,14 @@ struct State {
     // A portal opened at a point at once, as an arriving shot opens one. The
     // suites use it to put portals where a test needs them. False when refused.
     bool TryPlace(const glm::dvec2& atPx);
+
+    // PortalManager::killAll (bytes 147664..148016): every placed portal goes at
+    // once. With `refund`, each that never carried anything is given back to the
+    // count the golden score reads (GameStateController::decrementPortalCounter),
+    // which is what the clear-portals button asks for. A shot still in flight is
+    // not a portal yet and is left alone, as killAll leaves it. Returns how many
+    // went.
+    int KillAll(bool refund);
 
     const NoPortalZone* FindZone(const std::string& name) const;
 

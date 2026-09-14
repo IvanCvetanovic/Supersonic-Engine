@@ -26,6 +26,7 @@
 #include "core/PhysicsSystem.hpp"
 // For the renderer's own cull: RenderSystem.hpp carries renderer/Frustum.hpp.
 #include "core/RenderSystem.hpp"
+#include "core/ScreenOverlay.hpp"
 #include "core/TransformSystem.hpp"
 #include "core/SimulationClock.hpp"
 #include "core/ViewportInfo.hpp"
@@ -45,6 +46,7 @@
 
 using namespace Supersonic;
 using MagicPortals::MagicPortalsLayer;
+namespace Hud = MagicPortals::Hud;
 
 namespace {
 
@@ -1871,6 +1873,504 @@ void TheGridShowsTheMedalsEarned() {
               "and the medal goes with the screen, or a resize stacks another");
 }
 
+// ---- The HUD and the start of a level (steps 38 and 39) ---------------------
+//
+// sim/Hud is pinned number by number in test_mp_hud. What is held here is that
+// the layer sends the engine's screen overlay what those numbers say: each
+// picture where its rectangle is and at its alpha, in the ORIGINAL'S ORDER OF
+// DRAWING - which, with no depth in the overlay, is all the layering there is;
+// shown and hidden when the original's are; and a tap on one spent on it.
+
+// This frame's HUD, as the layer sends it: the same call OnUpdate makes, into
+// an overlay the suite publishes, with none of the rest of a frame.
+std::vector<ScreenOverlay::Quad> HudFrame(entt::registry& registry, const MagicPortalsLayer& layer) {
+    static ScreenOverlay overlay;
+    overlay.Clear();
+    registry.ctx().insert_or_assign<ScreenOverlay*>(&overlay);
+    layer.EmitHud(registry);
+    return overlay.Quads();
+}
+
+bool EndsWith(const std::string& path, const std::string& file) {
+    return path.size() >= file.size() && path.compare(path.size() - file.size(), file.size(), file) == 0;
+}
+
+// The first quad showing `file`, and where it is in the frame's order; -1 when
+// the frame has none.
+int IndexOfImage(const std::vector<ScreenOverlay::Quad>& quads, const std::string& file) {
+    for (std::size_t i = 0; i < quads.size(); ++i) {
+        if (EndsWith(quads[i].texture, "/" + file)) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+int CountImage(const std::vector<ScreenOverlay::Quad>& quads, const std::string& file) {
+    return static_cast<int>(std::count_if(quads.begin(), quads.end(), [&file](const ScreenOverlay::Quad& quad) {
+        return EndsWith(quad.texture, "/" + file);
+    }));
+}
+
+// Where the opening's blacks are in the frame: untextured quads painted black.
+std::vector<int> BlackIndices(const std::vector<ScreenOverlay::Quad>& quads) {
+    std::vector<int> found;
+    for (std::size_t i = 0; i < quads.size(); ++i) {
+        if (quads[i].texture.empty() && quads[i].color.r == 0.0f && quads[i].color.g == 0.0f &&
+            quads[i].color.b == 0.0f) {
+            found.push_back(static_cast<int>(i));
+        }
+    }
+    return found;
+}
+
+int CountCaption(const std::vector<ScreenOverlay::Quad>& quads, const std::string& font) {
+    const std::string stem = std::filesystem::path(font).stem().string();
+    return static_cast<int>(std::count_if(quads.begin(), quads.end(), [&stem](const ScreenOverlay::Quad& quad) {
+        return quad.texture.find(stem) != std::string::npos;
+    }));
+}
+
+// A quad's rectangle on the view, in design units.
+Hud::Rect OnView(const MagicPortalsLayer& layer, const ScreenOverlay::Quad& quad) {
+    const glm::dvec2 view = layer.ViewPx();
+    Hud::Rect rect;
+    rect.min = glm::dvec2(quad.min) * view;
+    rect.size = glm::dvec2(quad.max - quad.min) * view;
+    return rect;
+}
+
+bool SameRect(const Hud::Rect& a, const Hud::Rect& b, double eps = 1e-3) {
+    return glm::length(a.min - b.min) < eps && glm::length(a.size - b.size) < eps;
+}
+
+std::string ShowRect(const Hud::Rect& rect) {
+    return Point(rect.min) + " " + std::to_string(rect.size.x) + " x " + std::to_string(rect.size.y);
+}
+
+// Where a point on the view shows on the 1280x720 viewport the suites publish.
+glm::vec2 ScreenOfView(const MagicPortalsLayer& layer, const glm::dvec2& onView) {
+    const glm::dvec2 view = layer.ViewPx();
+    return glm::vec2(static_cast<float>(onView.x / view.x * 1280.0), static_cast<float>(onView.y / view.y * 720.0));
+}
+
+bool NearD(double a, double b, double eps = 1e-4) {
+    return std::fabs(a - b) <= eps;
+}
+
+void TheHudIsTheOriginals() {
+    if (!OriginalArtIsThere("TheHudIsTheOriginals")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level4");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    const Hud::Rules& rules = layer.HudRules();
+    CHECK_MSG(layer.HudError().empty(), "ui.json read: " + layer.HudError());
+    CHECK_EQ(layer.LevelAgeMs(), 0.0);
+
+    // The first tick: the level is a tick old, all black, "Part 5" over it.
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(NearD(layer.LevelAgeMs(), 1000.0 / 60.0, 1e-3), "a tick old: " + std::to_string(layer.LevelAgeMs()));
+    {
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const std::vector<int> blacks = BlackIndices(frame);
+        CHECK_MSG(blacks.size() == 2, "a level opens under two blacks: " + std::to_string(blacks.size()));
+        for (const int at : blacks) {
+            const ScreenOverlay::Quad& black = frame[static_cast<std::size_t>(at)];
+            CHECK_MSG(black.min == glm::vec2(0.0f) && black.max == glm::vec2(1.0f) && black.color.a > 0.97f,
+                      "each covering the whole image, nearly opaque: " + std::to_string(black.color.a));
+        }
+        const int left = IndexOfImage(frame, rules.pads.leftSprite);
+        const int right = IndexOfImage(frame, rules.pads.rightSprite);
+        const int pause = IndexOfImage(frame, rules.pause.sprite);
+        const int restart = IndexOfImage(frame, rules.restart.sprite);
+        if (blacks.size() == 2) {
+            CHECK_MSG(blacks[0] < left && left < blacks[1] && blacks[0] < right && right < blacks[1],
+                      "the pads are drawn between the two blacks, as the original's controllers are");
+            CHECK_MSG(restart >= 0 && pause >= 0 && restart < blacks[0] && pause < blacks[0],
+                      "restart and pause are under both");
+        }
+        const std::string font = std::string(MAGICPORTALS_ORIGINAL_DIR) + "/data/" + rules.caption.font;
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(font, ec)) {
+            // "Part 5": five letters and the space, each its own quad, over all of it.
+            CHECK_EQ(CountCaption(frame, rules.caption.font), 6);
+            CHECK_MSG(!blacks.empty() && !frame.empty() &&
+                          frame.back().texture.find("Matura84") != std::string::npos,
+                      "the caption is the last thing drawn");
+        }
+    }
+    // Both pads are still outside their corners at the first tick.
+    Hud::Rect left;
+    CHECK(layer.ControlRect(MagicPortalsLayer::Control::Left, left));
+    CHECK_MSG(left.Max().x <= 0.0, "the left pad starts off the screen: " + ShowRect(left));
+
+    // Just before the blacks' own clock starts (ui.json's start_after_ms, 465 ms
+    // on the level's age), the pads have slid nearly home and the plaque would be
+    // coming up - and all of it is still under two whole blacks, which is why
+    // rec11's first lit frame already has them settled.
+    for (int tick = 1; tick < 27; ++tick) tickWith(layer, registry, kRest, {}, {});
+    {
+        CHECK_MSG(layer.LevelAgeMs() < rules.overlay.startAfterMs, "27 ticks is before the black starts");
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const std::vector<int> blacks = BlackIndices(frame);
+        CHECK_MSG(blacks.size() == 2, "still two blacks at 450 ms: " + std::to_string(blacks.size()));
+        for (const int at : blacks) {
+            CHECK_MSG(frame[static_cast<std::size_t>(at)].color.a == 1.0f,
+                      "each still whole: " + std::to_string(frame[static_cast<std::size_t>(at)].color.a));
+        }
+    }
+
+    // 1.2 s in: the black (465 + 700 ms) and the slide are over, the HUD is settled.
+    for (int tick = 27; tick < 72; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const std::vector<ScreenOverlay::Quad> settled = HudFrame(registry, layer);
+    CHECK_MSG(BlackIndices(settled).empty(), "no black once the fade is over");
+    const glm::dvec2 view = layer.ViewPx();
+    const struct {
+        MagicPortalsLayer::Control control;
+        const std::string& file;
+        Hud::Rect want;
+    } expected[] = {
+        {MagicPortalsLayer::Control::Menu, rules.pause.sprite, {glm::dvec2(view.x - 32.0, 0.0), glm::dvec2(32.0)}},
+        {MagicPortalsLayer::Control::Reset, rules.restart.sprite, {glm::dvec2(view.x - 64.0, 0.0), glm::dvec2(32.0)}},
+        {MagicPortalsLayer::Control::Left, rules.pads.leftSprite, {glm::dvec2(0.0, 192.0), glm::dvec2(64.0)}},
+        {MagicPortalsLayer::Control::Right, rules.pads.rightSprite, {glm::dvec2(view.x - 64.0, 192.0), glm::dvec2(64.0)}},
+    };
+    for (const auto& one : expected) {
+        Hud::Rect laidOut;
+        CHECK_MSG(layer.ControlRect(one.control, laidOut) && SameRect(laidOut, one.want),
+                  one.file + " laid out at " + ShowRect(laidOut) + ", wanted " + ShowRect(one.want));
+        const int at = IndexOfImage(settled, one.file);
+        CHECK_MSG(at >= 0 && CountImage(settled, one.file) == 1, one.file + " is drawn, once");
+        if (at < 0) continue;
+        const ScreenOverlay::Quad& quad = settled[static_cast<std::size_t>(at)];
+        CHECK_MSG(SameRect(OnView(layer, quad), one.want, 1e-3), one.file + " drawn at " + ShowRect(OnView(layer, quad)));
+        CHECK_MSG(quad.color.r == 1.0f && quad.color.g == 1.0f && quad.color.b == 1.0f, one.file + " untinted");
+        // 120 of 255. The pads are still in their short pulse, which runs 4.2 s.
+        if (one.control == MagicPortalsLayer::Control::Menu || one.control == MagicPortalsLayer::Control::Reset) {
+            CHECK_MSG(NearD(quad.color.a, 120.0 / 255.0, 1e-6), one.file + " at 120 of 255");
+        }
+    }
+    Hud::Rect clear;
+    CHECK_MSG(!layer.ControlRect(MagicPortalsLayer::Control::Clear, clear) &&
+                  IndexOfImage(settled, rules.clearPortals.sprite) < 0,
+              "no clear-portals button with no portal placed");
+    CHECK_MSG(IndexOfImage(settled, rules.pads.ringSprite) < 0, "rings are the tutorial's alone");
+    CHECK_MSG(IndexOfImage(settled, rules.plaque.sprite) < 0,
+              "a bare layer has no medal recorded, so no plaque - as on a fresh save");
+
+    // The text the port used to lay over a level is gone while it is played.
+    int spoken = 0;
+    for (auto [entity, text] : registry.view<UITextComponent>().each()) {
+        (void)entity;
+        if (!text.text.empty()) ++spoken;
+    }
+    CHECK_MSG(spoken == 0, "no text over a level being played: " + std::to_string(spoken) + " line(s) say something");
+
+    // Nothing of the HUD is a quad in the level any more: the scene target's
+    // tone map is what made it wrong.
+    CHECK_EQ(Tagged(registry, "Magic Portals Control Left"), 0);
+    CHECK_EQ(Tagged(registry, "Magic Portals Level Start Black"), 0);
+
+    // Past the pads' pulse and the caption: flat 120, nothing left of the opening.
+    for (int tick = 72; tick < 260; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const std::vector<ScreenOverlay::Quad> later = HudFrame(registry, layer);
+    if (const int pad = IndexOfImage(later, rules.pads.leftSprite); pad >= 0) {
+        CHECK_MSG(NearD(later[static_cast<std::size_t>(pad)].color.a, 120.0 / 255.0, 1e-6),
+                  "a pad flat at 120 of 255 once its pulse is over");
+    }
+    CHECK_EQ(CountCaption(later, rules.caption.font), 0);
+    layer.OnDetach(registry);
+}
+
+void TheHudStaysOnTheViewAsTheCameraMoves() {
+    if (!OriginalArtIsThere("TheHudStaysOnTheViewAsTheCameraMoves")) return;
+    // level30 is 768 wide, so walking right pans the camera. The overlay is laid
+    // out on the screen, so the pause button cannot move with the camera at all.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level30");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    const std::string& pause = layer.HudRules().pause.sprite;
+    const double startX = layer.CameraCentrePx().x;
+    double worst = 0.0;
+    int seen = 0;
+    for (int tick = 0; tick < 240; ++tick) {
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+        if (tick < 60) continue;
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int at = IndexOfImage(frame, pause);
+        if (at < 0) break;
+        ++seen;
+        const Hud::Rect drawn = OnView(layer, frame[static_cast<std::size_t>(at)]);
+        worst = std::max(worst, glm::length(drawn.min - glm::dvec2(layer.ViewPx().x - 32.0, 0.0)));
+    }
+    CHECK_MSG(layer.CameraCentrePx().x > startX + 20.0,
+              "the camera panned: " + std::to_string(startX) + " -> " + std::to_string(layer.CameraCentrePx().x));
+    CHECK_MSG(seen == 180 && worst < 1e-3,
+              "the pause button never left its corner while it did: worst " + std::to_string(worst));
+    layer.OnDetach(registry);
+}
+
+void AClearPortalsButtonComesWithAPortal() {
+    if (!OriginalArtIsThere("AClearPortalsButtonComesWithAPortal")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level30");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    const std::string& file = layer.HudRules().clearPortals.sprite;
+    waitForFirstTap(layer, registry);
+    Hud::Rect clear;
+    CHECK(!layer.ControlRect(MagicPortalsLayer::Control::Clear, clear));
+
+    // ATapLandsWhereItPoints' first landing aim.
+    const glm::dvec2 aim(250.0, 150.0);
+    tap(layer, registry, screenOf(registry, aim));
+    landShot(layer, registry);
+    CHECK_EQ(layer.SimLevel()->portals.placed.size(), std::size_t{1});
+    CHECK_EQ(layer.SimLevel()->portals.portalsUsed, 1);
+    {
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int at = IndexOfImage(frame, file);
+        CHECK_MSG(layer.ControlRect(MagicPortalsLayer::Control::Clear, clear) &&
+                      SameRect(clear, Hud::Rect{glm::dvec2(0.0), glm::dvec2(32.0)}) && at >= 0 &&
+                      SameRect(OnView(layer, frame[static_cast<std::size_t>(at < 0 ? 0 : at)]), clear),
+                  "a placed portal puts the clear-portals button up, flush top-left: " + ShowRect(clear));
+        CHECK_MSG(at >= 0 && at > IndexOfImage(frame, layer.HudRules().pause.sprite),
+                  "drawn after restart and pause, as PortalManager adds it after GameLayer's");
+    }
+
+    // A tap on it: the portal goes, the count it cost comes back - it never
+    // carried anything - and no shot is fired into the corner under it.
+    const int fired = layer.SimLevel()->portals.shotsFired;
+    tap(layer, registry, ScreenOfView(layer, clear.Centre()));
+    CHECK_MSG(layer.SimLevel()->portals.placed.empty(), "pressing it clears the placed portals");
+    CHECK_MSG(layer.SimLevel()->portals.portalsUsed == 0,
+              "and gives back the one that carried nothing: " +
+                  std::to_string(layer.SimLevel()->portals.portalsUsed));
+    CHECK_MSG(layer.SimLevel()->portals.shotsFired == fired, "the tap was spent on the button");
+    const std::vector<std::string> sounds = layer.LatchedSounds();
+    CHECK_MSG(std::find(sounds.begin(), sounds.end(), "portal_spent") != sounds.end(),
+              "with playPortalKilledSound");
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(!layer.ControlRect(MagicPortalsLayer::Control::Clear, clear) &&
+                  IndexOfImage(HudFrame(registry, layer), file) < 0,
+              "and with no portal left the button goes");
+    layer.OnDetach(registry);
+}
+
+void APlaqueForALevelWithAMedal() {
+    if (!OriginalArtIsThere("APlaqueForALevelWithAMedal")) return;
+    // Memory-only medals, earned the way a player earns one: level0 by holding
+    // right, then the medal screen's own retry. The level it reopens has a medal
+    // recorded, so it opens with the plaque, as the original's preLoop does.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    const Hud::Rules& rules = layer.HudRules();
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_EQ(IndexOfImage(HudFrame(registry, layer), rules.plaque.sprite), -1);
+    for (int tick = 0; tick < 600 && layer.MenuScreen() != MagicPortalsLayer::Screen::Finished; ++tick) {
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+    }
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Finished);
+    if (layer.MenuScreen() != MagicPortalsLayer::Screen::Finished) return;
+    CHECK_MSG(HudFrame(registry, layer).empty(), "the medal screen puts nothing of the level's HUD over itself");
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind != MagicPortalsLayer::MenuButton::Kind::Retry) continue;
+        layer.PressMenu(registry, button);
+        break;
+    }
+    CHECK(IsAt(layer, "level0") && layer.MenuScreen() == MagicPortalsLayer::Screen::None);
+    CHECK_EQ(layer.LevelAgeMs(), 0.0);
+
+    // A tick in: the plaque and its medal are coming in, under both blacks.
+    tickWith(layer, registry, kRest, {}, {});
+    {
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int plaque = IndexOfImage(frame, rules.plaque.sprite);
+        int medal = -1;
+        for (std::size_t i = 0; i < frame.size(); ++i) {
+            if (frame[i].texture.find("medal_") != std::string::npos && EndsWith(frame[i].texture, "_l.png")) {
+                medal = static_cast<int>(i);
+            }
+        }
+        const std::vector<int> blacks = BlackIndices(frame);
+        CHECK_MSG(plaque >= 0 && medal > plaque, "a level with a medal recorded opens with the plaque, medal over it");
+        CHECK_MSG(!blacks.empty() && plaque < blacks.front(), "and both are under the black");
+    }
+
+    for (int tick = 1; tick < 90; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const auto plaqueAlpha = [&registry, &layer, &rules]() {
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int at = IndexOfImage(frame, rules.plaque.sprite);
+        return at < 0 ? 0.0 : static_cast<double>(frame[static_cast<std::size_t>(at)].color.a);
+    };
+    {
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int at = IndexOfImage(frame, rules.plaque.sprite);
+        const Hud::Rect want{rules.plaque.centreUnits - rules.plaque.sizeUnits * 0.5, rules.plaque.sizeUnits};
+        CHECK_MSG(at >= 0 && SameRect(OnView(layer, frame[static_cast<std::size_t>(at < 0 ? 0 : at)]), want),
+                  "the plaque at (8, 4) 64 x 128");
+    }
+    CHECK_MSG(plaqueAlpha() > 0.99, "held whole at 1.5 s");
+    for (int tick = 90; tick < 150; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(plaqueAlpha() < 0.99 && plaqueAlpha() > 0.0, "going at 2.5 s: " + std::to_string(plaqueAlpha()));
+    for (int tick = 150; tick < 185; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(plaqueAlpha() == 0.0, "and gone by 3 s");
+    layer.OnDetach(registry);
+}
+
+void TheTutorialRingsAndAWeightlessLevelHasNoPads() {
+    if (!OriginalArtIsThere("TheTutorialRingsAndAWeightlessLevelHasNoPads")) return;
+    {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level0");
+        layer.OnAttach(registry);
+        if (!layer.LoadError().empty()) {
+            CHECK_MSG(false, layer.LoadError());
+            return;
+        }
+        const Hud::Rules& rules = layer.HudRules();
+        // 300 ms: the long pulse's first peak, 210 of 255 - to a byte, because
+        // eighteen float ticks come to a hair over 300 ms and uint() truncates.
+        for (int tick = 0; tick < 18; ++tick) tickWith(layer, registry, kRest, {}, {});
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int pad = IndexOfImage(frame, rules.pads.rightSprite);
+        if (pad >= 0) {
+            CHECK_MSG(NearD(frame[static_cast<std::size_t>(pad)].color.a, 210.0 / 255.0, 1.01 / 255.0),
+                      "the tutorial pad at its first peak: " + std::to_string(frame[static_cast<std::size_t>(pad)].color.a));
+        }
+        const int ring = IndexOfImage(frame, rules.pads.ringSprite);
+        CHECK_EQ(CountImage(frame, rules.pads.ringSprite), 2);
+        CHECK_MSG(ring >= 0 && ring < IndexOfImage(frame, rules.restart.sprite) && ring < pad,
+                  "the rings are drawn first, from the pads' update, under everything");
+        // A retry is a new level to the original, and to its clock.
+        press(layer, registry, MagicPortalsLayer::kRetry);
+        CHECK_MSG(layer.LevelAgeMs() < 20.0, "a retry starts the level's clock again: " +
+                                                 std::to_string(layer.LevelAgeMs()));
+        CHECK_EQ(BlackIndices(HudFrame(registry, layer)).size(), std::size_t{2});
+        layer.OnDetach(registry);
+    }
+    {
+        // test_mp_zerog's weightless level: MainCharacter neither updates nor
+        // draws the pads when noGravity is set.
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level1c");
+        layer.OnAttach(registry);
+        if (!layer.LoadError().empty()) {
+            CHECK_MSG(false, layer.LoadError());
+            return;
+        }
+        const Hud::Rules& rules = layer.HudRules();
+        for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        Hud::Rect rect;
+        CHECK_MSG(layer.SimLevel()->portals.noGravity && !layer.ControlRect(MagicPortalsLayer::Control::Left, rect) &&
+                      IndexOfImage(frame, rules.pads.leftSprite) < 0 && IndexOfImage(frame, rules.pads.rightSprite) < 0,
+                  "a weightless level has no walk pads");
+        CHECK_MSG(CountImage(frame, rules.pause.sprite) == 1 && CountImage(frame, rules.restart.sprite) == 1,
+                  "and keeps restart and pause");
+        layer.OnDetach(registry);
+    }
+}
+
+void TheNoPortalSignIsPinnedToTheCorner() {
+    if (!OriginalArtIsThere("TheNoPortalSignIsPinnedToTheCorner")) return;
+    {
+        // 1-15 places no_portal_sign.ent off the level, at (-61, -24).
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level14");
+        layer.OnAttach(registry);
+        if (!layer.LoadError().empty()) {
+            CHECK_MSG(false, layer.LoadError());
+            return;
+        }
+        Hud::Rect sign;
+        CHECK_MSG(layer.NoPortalSignRect(sign), "level14 has the no-portal sign");
+        // It is no longer one of the level's own pictures.
+        int inLevel = 0;
+        for (auto [entity, material] : registry.view<MaterialComponent>().each()) {
+            (void)entity;
+            if (material.albedoTexturePath.find("no_portal_symbol_small") != std::string::npos) ++inLevel;
+        }
+        CHECK_MSG(inLevel == 0, "and does not draw it where the level put it: " + std::to_string(inLevel));
+
+        // Held while the blacks are whole, then handed that time in one piece
+        // (Hud::HandOver): 3 units from its corner by 700 ms, not 13.
+        const Hud::Rect atLoad = sign;
+        for (int tick = 0; tick < 27; ++tick) tickWith(layer, registry, kRest, {}, {}); // 450 ms
+        CHECK(layer.NoPortalSignRect(sign));
+        CHECK_MSG(SameRect(sign, atLoad), "unmoved under the whole blacks: " + ShowRect(sign));
+        for (int tick = 27; tick < 42; ++tick) tickWith(layer, registry, kRest, {}, {}); // 700 ms
+        CHECK(layer.NoPortalSignRect(sign));
+        CHECK_MSG(glm::length(sign.min) < 3.5, "nearly in its corner as the picture comes through: " + ShowRect(sign));
+        const Hud::Rect atSevenHundred = sign;
+
+        for (int tick = 42; tick < 270; ++tick) tickWith(layer, registry, kRest, {}, {}); // 4.5 s
+        CHECK(layer.NoPortalSignRect(sign));
+        CHECK_MSG(glm::length(sign.min) < 0.36 && SameRect(sign, Hud::Rect{sign.min, glm::dvec2(64.0)}),
+                  "at 4.5 s it sits flush in the top-left corner, 64 units: " + ShowRect(sign));
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        CHECK_MSG(!frame.empty() && frame.front().texture.find("no_portal_symbol_small") != std::string::npos,
+                  "drawn first, under everything the HUD draws");
+        if (!frame.empty()) {
+            CHECK_MSG(frame.front().color == glm::vec4(1.0f), "at full opacity, untinted");
+            std::error_code ec;
+            const std::string hd = std::string(MAGICPORTALS_ORIGINAL_DIR) + "/entities/hd/no_portal_symbol_small.png";
+            if (std::filesystem::is_regular_file(hd, ec)) {
+                CHECK_MSG(frame.front().texture.find("entities/hd/") != std::string::npos,
+                          "with the hd art the original draws: " + frame.front().texture);
+            }
+        }
+
+        // A retry is a new level to the sign as well. Pressed while the blacks
+        // are still whole, it must not hand the attempt before's held time to the
+        // next one's chase: at 700 ms it is where a first attempt has it.
+        press(layer, registry, MagicPortalsLayer::kRetry);
+        for (int tick = 1; tick < 20; ++tick) tickWith(layer, registry, kRest, {}, {});
+        press(layer, registry, MagicPortalsLayer::kRetry);
+        for (int tick = 1; tick < 42; ++tick) tickWith(layer, registry, kRest, {}, {});
+        CHECK(layer.NoPortalSignRect(sign));
+        CHECK_MSG(NearD(layer.LevelAgeMs(), 700.0, 1e-3) && SameRect(sign, atSevenHundred),
+                  "a retry during the hold starts the sign afresh: " + ShowRect(sign) + " against " +
+                      ShowRect(atSevenHundred));
+        layer.OnDetach(registry);
+    }
+    {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level0");
+        layer.OnAttach(registry);
+        if (!layer.LoadError().empty()) {
+            CHECK_MSG(false, layer.LoadError());
+            return;
+        }
+        Hud::Rect sign;
+        CHECK_MSG(!layer.NoPortalSignRect(sign),
+                  "level0 grants no portal either, but places no sign, and shows none - the entity is the trigger");
+        layer.OnDetach(registry);
+    }
+}
+
 void NothingBlinksWhileWalking() {
     NoSpriteBlinksWhileWalking("level1"); // 1-2, where the owner saw one go
     NoSpriteBlinksWhileWalking("level2"); // 1-3, where several do
@@ -1914,6 +2414,12 @@ void runTests() {
     ACarrancasFireballIsSeenAndHeard();
     NothingOnScreenIsCulledWhileWalking();
     NothingBlinksWhileWalking();
+    TheHudIsTheOriginals();
+    TheHudStaysOnTheViewAsTheCameraMoves();
+    AClearPortalsButtonComesWithAPortal();
+    APlaqueForALevelWithAMedal();
+    TheTutorialRingsAndAWeightlessLevelHasNoPads();
+    TheNoPortalSignIsPinnedToTheCorner();
 }
 
 } // namespace

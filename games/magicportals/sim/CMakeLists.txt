@@ -21,6 +21,7 @@ add_library(MagicPortalsSim STATIC
     GravityWell.cpp
     Hazards.cpp
     Hinge.cpp
+    Hud.cpp
     Keys.cpp
     Launchers.cpp
     LevelBuilder.cpp

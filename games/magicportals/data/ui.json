@@ -1,0 +1,337 @@
+{
+  "_about": [
+    "The in-level HUD and the start of a level, as the original draws them: the two walk",
+    "pads, restart and pause, the clear-portals button, and the black fade, the 'Part N'",
+    "caption and the current-score plaque every level opens with. Read by sim/Hud.hpp.",
+    "",
+    "EVERY POSITION AND SIZE IS IN DESIGN UNITS, which in this port are the level's own",
+    "pixels: the view is view.json's height_px (256) tall and follows the window's shape",
+    "across. The original draws both its world and its UI at 2.8125 screen px per unit at",
+    "720p (720 / 256). Each element is anchored to the SCREEN CORNER it was measured from,",
+    "because 1280 / 2.8125 = 455.11 is not a whole number and the view's width changes with",
+    "the window: an element anchored from the wrong edge drifts off its corner.",
+    "",
+    "TWO SOURCES, and every block names which it took each number from.",
+    "  MEASURED - captures of the original at 1280x720, analysed in the remake's gitignored",
+    "    out/parity/specs/ui1/static_hud.md (+ .json) and level_start_timeline.md (+ .json).",
+    "  DECODED - the original's compiled script, android_game.bin, by function and byte",
+    "    range, read the way every other data file here cites it. The listing is not",
+    "    committed: it is the original's code.",
+    "The decode's g_scale.scale(N) IS N units at any screen: the plaque below is decoded at",
+    "scale(40, 40) and measured with its centre at (40.02, 40.02) units, and the ring's decoded",
+    "scale(200) grows at the 167 units/s the captures bracket.",
+    "Where the two disagree, docs/planning/2026-09-11-magic-portals-remaster.md step 38 says",
+    "which was taken and why. Nothing here is Asantee's: numbers only, never the art.",
+    "",
+    "EVERY ALPHA HERE IS A DISPLAY-SPACE ALPHA, as the original blended: the layer draws all of",
+    "it through the engine's screen overlay (src/core/ScreenOverlay.hpp), after the tone map, so",
+    "a translucent control mixes over the encoded picture at exactly its alpha whatever is behind",
+    "it. Drawn through the scene as it was until step 39, white came out at 186 and a 0.47 button",
+    "read 0.32..0.56 by background (step 39 has the table)."
+  ],
+
+  "hud": {
+    "opacity": {
+      "_source": [
+        "DECODED: 0x78FFFFFF (the script's constant 2030043135), i.e. alpha 120 of 255.",
+        "It is the SAME constant in four places: GameStateProperties.menuButtonsCustomColor",
+        "(Game::Game, bytes 110437..111736, instruction 55) which GameLayer::GameLayer",
+        "(bytes 99164..100120) hands to restart and to the pause button through",
+        "Button::setCustomColor; ScreenPad.color and ScreenPad.defaultAlpha (ScreenPad::",
+        "ScreenPad, bytes 148254..149254, instructions 184 and 224..233); and the",
+        "clear-portals button (PortalManager::addClearPortalsButton, bytes 146550..146886,",
+        "instruction 73).",
+        "MEASURED: 0.48 +-0.02 on all four (static_hud.md section 4: high-pass gain medians",
+        "0.477..0.478 over 120-123 frames; 0.480 absolute over the black floor of 4-32).",
+        "120/255 = 0.4706 sits inside that; the capture is RGB565, so +-0.02 is one step."
+      ],
+      "alpha_byte": 120
+    },
+
+    "restart": {
+      "_source": [
+        "MEASURED: sprites/hd/restart_level_button.png (64x64 texels) drawn 32x32 units, its",
+        "top-left at screen px (1100, 0) in 123 of 123 frames (static_hud.md section 3): 32",
+        "units in from the right edge, flush with the top, touching the pause button.",
+        "DECODED: GameLayer::GameLayer places it at normalized ((screenW - menuButton.width) /",
+        "screenW, 0) with origin (1, 0) - its right edge on the pause button's left edge."
+      ],
+      "sprite": "restart_level_button.png",
+      "anchor": "top_right",
+      "inset_units": [32, 0],
+      "size_units": [32, 32]
+    },
+
+    "pause": {
+      "_source": [
+        "MEASURED: sprites/hd/main_menu_shortcut.png (64x64) drawn 32x32 units, top-left at",
+        "screen px (1190, 0) in 123 of 123 frames: flush in the top-right corner, no margin",
+        "(static_hud.md section 3). Screen-fixed while the camera scrolls (rec11, 1.75..13.75 s)."
+      ],
+      "sprite": "main_menu_shortcut.png",
+      "anchor": "top_right",
+      "inset_units": [0, 0],
+      "size_units": [32, 32]
+    },
+
+    "clear_portals": {
+      "_source": [
+        "MEASURED: sprites/hd/clear_portals_button.png (64x64) drawn 32x32 units at (0, 0),",
+        "CCORR 0.9987, in 1-3 with one portal placed; absent at the start of all 57 settled",
+        "levels and throughout 1-1 (static_hud.md section 8).",
+        "DECODED, which settles what the capture could not: PortalManager::update (bytes",
+        "138545..139692) returns early when maxPortals is 0; when its `portals` array is empty",
+        "it calls removeClearPortalsButton; otherwise, if the button was pressed, it calls",
+        "killAll(true), and then addClearPortalsButton. So it is shown EXACTLY while at least",
+        "one placed portal is alive, and pressing it clears them. addClearPortalsButton places",
+        "it at V2_ZERO with origin V2_ZERO: flush top-left. killAll (bytes 147664..148016) plays",
+        "playPortalKilledSound and, with its argument true, gives back one count of the",
+        "golden score for every portal whose hasTeleportedSomething is still 0",
+        "(GameStateController::decrementPortalCounter); teleportToOther (bytes 144944..145873)",
+        "sets that flag on both ends of a pair it carries something through."
+      ],
+      "sprite": "clear_portals_button.png",
+      "anchor": "top_left",
+      "inset_units": [0, 0],
+      "size_units": [32, 32]
+    },
+
+    "pads": {
+      "_source": [
+        "MEASURED: sprites/hd/arrow_left.png and arrow_right.png (128x128) drawn 64x64 units",
+        "WHOLLY ON SCREEN, flush in the bottom corners: an off-screen-aware fit over 41 levels",
+        "put 39 at exactly scale 1.40625 and top-left (0, 540) / (1100, 540), the other two",
+        "within 1 px (static_hud.md section 3). This overturns step 36's reading that the",
+        "discs run off the screen.",
+        "DECODED: ScreenPad::draw (bytes 152234..152659) draws each with drawScaledSprite at",
+        "its interpolator's position, the left with origin (0, 1) and the right with origin",
+        "(1, 1). MainCharacter skips both the pads' update and their draw when the level",
+        "has no gravity (MainCharacter::draw bytes 134672..134752, MainCharacter::update bytes",
+        "128578..128850): a weightless level has no walk pads at all."
+      ],
+      "left_sprite": "arrow_left.png",
+      "right_sprite": "arrow_right.png",
+      "size_units": 64,
+
+      "hit": {
+        "_source": [
+          "DECODED: ScreenPad::getTargetButton (bytes 149699..149925) asks isPointInSphere",
+          "against each pad's CURRENT position (its corner, as it slides) with buttonRadius =",
+          "g_scale.getScale() * 64, i.e. 64 units: a quarter circle about the screen corner.",
+          "That is the decoded area and it is already larger than the drawn disc (opaque to",
+          "46 units), so it is taken as it stands."
+        ],
+        "radius_units": 64
+      },
+
+      "slide_in": {
+        "_source": [
+          "DECODED, and seen by nobody in a still: ScreenPad::ScreenPad builds lInterp from",
+          "(-xOffset, screenH) to (0, screenH) and rInterp from (screenW + xOffset, screenH) to",
+          "(screenW, screenH), each over 700 ms, xOffset = g_scale.scale(128). Interpolator's",
+          "filter is always smoothEnd (InterpolationTimer::InterpolationTimer, bytes",
+          "18322..18514). It happens under the black fade, which is why level_start_timeline",
+          "found the pads 'neither simply under the overlay nor above it' while it runs."
+        ],
+        "from_units": 128,
+        "ms": 700
+      },
+
+      "pulse": {
+        "_source": [
+          "DECODED: ScreenPad::computeButtonColor (bytes 151340..151795). While elapsed <",
+          "stride * (tutorial ? 48 : 14), the pads' alpha is defaultAlpha + uint(bias *",
+          "variation), variation = tutorial ? 90 : 40, with bias = (elapsed % stride) / stride",
+          "and turned over on every odd stride - a TRIANGLE of period two strides. After it,",
+          "flat 120. The tutorial is level0 BY NAME: MainCharacter::MainCharacter (bytes",
+          "126650..127790, instructions 41..64) passes GetSceneFileName() ==",
+          "'scenes/level0.esc' as ScreenPad's tutorialMode.",
+          "MEASURED, in agreement: 1-1 pulses 0.475..0.496 <-> 0.805..0.824, triangle over sine,",
+          "period 0.609 s (static_hud.md section 5a) - i.e. 120 <-> 210 of 255 at 600 ms. The",
+          "spec concluded ONLY 1-1 pulses from t4.5 against t8.0, both past the 4.2 s gate; its",
+          "own opacity outputs put every other level's t2.0 pads above their t4.5 and t8.0 ones",
+          "(median 0.487/0.489 against 0.475/0.477 left/right, max 0.515), and the W-K proxy",
+          "agrees (t2.0 - t8.0 median +0.007/+0.005 over 49 levels, t4.5 - t8.0 exactly 0).",
+          "The short non-tutorial pulse is taken from the decode. Its measured amplitude is",
+          "smaller than 40 would give at random phase; the library's t2.0 frames all sample",
+          "one narrow arc of the cycle, so that is not taken as evidence against it."
+        ],
+        "stride_ms": 300,
+        "strides": 14,
+        "variation_byte": 40,
+        "tutorial_level": "level0",
+        "tutorial_strides": 48,
+        "tutorial_variation_byte": 90
+      },
+
+      "ring": {
+        "_source": [
+          "DECODED: ScreenPad::drawIndicatingRing (bytes 151795..152234), called from",
+          "computeButtonColor in the tutorial only and from UPDATE, so before the pads draw and",
+          "under them: sprites/ring_sprite.png centred (origin V2_HALF) on each pad's position,",
+          "sized sphereSize * max(bias, 0.01) with sphereSize = g_scale.scale(200, 200) and",
+          "bias = (elapsed % 1200) / 1200, at alpha uint((1 - bias) * 255).",
+          "MEASURED, as a check rather than a source: static_hud.md 5b fitted this as a growing",
+          "copy of the PAD sprite, which it is not - ring_sprite.png is clear in the middle and",
+          "bright only at its rim - so its opacity numbers do not transfer. Its timing does: a",
+          "new one every 1.224 s at every second trough, drawn behind the pads, anchored at the",
+          "corner, and its right-pad growth of 155..181 units/s brackets the decoded 167."
+        ],
+        "sprite": "ring_sprite.png",
+        "stride_ms": 1200,
+        "size_units": 200,
+        "min_bias": 0.01
+      }
+    },
+
+    "no_portal_sign": {
+      "_source": [
+        "MEASURED: in 1-15 (level14) and 2-07 (level6a) the original draws",
+        "entities/hd/no_portal_symbol_small.png (128x128) at screen (0, 0), 180 px = 64 units, at",
+        "full opacity, CCORR 0.977 / 0.897; in no other of 57 settled levels does it score 0.8",
+        "(static_hud.md section 3, 'No-portal sign'). The 1x art at 2x matches only 0.818, so the",
+        "hd twin is drawn. The third level placing it, 2-28 (level27a), had no in-level capture.",
+        "DECODED, which is why it is where it is although it is a level entity at (-61, -24):",
+        "ETHCallback_no_portal_sign (MiscCallbacks.angelscript, bytes 343129..343339) calls",
+        "followUp(thisEntity, GetCameraPos() + GetSize() * 0.5, 600, 100, true) every frame.",
+        "followUp (utilEntityEffect.angelscript, bytes 328407..329130) builds a",
+        "PositionInterpolator from where the entity stands to that target over interpStride",
+        "(600 ms), filtered by smoothEnd, on accumulated frame time; each frame, when the target",
+        "is not where the entity is and switchTime > updateRate (100 ms), it resets the",
+        "interpolator from its current position to the target and zeroes switchTime; then it",
+        "adds the frame's time to both and puts the entity at the interpolator's position. So",
+        "the sign's centre trails the camera's top-left corner by half its own size. It is",
+        "found by the level's own metadata/entity_name, which is how SeekEntity finds it in",
+        "PortalManager::PortalManager (instruction 118)."
+      ],
+      "entity": "no_portal_sign.ent",
+      "follow_ms": 600,
+      "retarget_ms": 100,
+      "centre_in_by_size": 0.5
+    }
+  },
+
+  "level_start": {
+    "_clock": [
+      "TWO CLOCKS, as the original has them (step 40). Zero at the tick a level is loaded, the",
+      "LEVEL'S AGE times everything here but the black: the caption (Ethanon's ETHTextDrawer::Draw",
+      "adds lastFrameElapsedTimeMS, ETHDrawable.cpp:64-66), the plaque (UISprite's",
+      "InterpolationTimer::update and GameStateController::m_uiTime, both",
+      "GetLastFrameElapsedTime), the pads' slide and pulse (ScreenPad::update, bytes",
+      "150164..151039, instruction 170: g_timeManager's last frame time) and the sign's follow.",
+      "The black is the only part timed by GetTime(), a live CLOCK_MONOTONIC read",
+      "(AndroidGLES2Video.cpp:66-70) - see overlay.start_after_ms for what that costs it.",
+      "A retry opens the same way: its restart builds a fresh Game state."
+    ],
+
+    "overlay": {
+      "_source": [
+        "DECODED: a FadeInController (ETHFramework/FadeInController.angelscript, bytes",
+        "37911..38779) draws a full-screen black rect at alpha uint((1 - elapsed / time) * 255)",
+        "until elapsed reaches time = 700 ms, and a level has TWO of them: BaseState::preLoop",
+        "(bytes 11137..11245) adds one and Game::preLoop adds another (instruction 316). Two",
+        "linear blacks stacked leave (elapsed / 700)^2 of the picture.",
+        "MEASURED, and reconciled by that: level_start_timeline fitted a linear 0.54 s fade",
+        "(1.855 /s, section 1). The same frames fit (t / 0.7)^2 with the start a steady",
+        "0.19 +-0.03 s before its black frame, where the linear fit's implied start drifts by",
+        "0.13 s across the ramp. Both cover the world, the player, restart and pause and the",
+        "plaque; one covers the pads (below); neither covers the caption."
+      ],
+      "fade_ms": 700,
+      "layers": 2,
+
+      "_between": [
+        "DECODED, and it explains the one thing level_start_timeline could not: the PADS are",
+        "drawn BETWEEN the two blacks. BaseState::preLoop adds the UI layer manager (restart,",
+        "pause, the plaque) and then the first FadeInController; Game::preLoop adds the",
+        "character - whose draw is the pads - long before the second (instruction 316); and",
+        "GameControllerManager::draw draws its controllers in the order they were added. So the",
+        "world, the buttons and the plaque are under both, the pads under one, and 'Part N',",
+        "which DrawFadingText hands to the engine's own drawable manager, over both. The",
+        "timeline measured the pads 'brighter than under the overlay (17-49 grey) and darker",
+        "than above it (89-155)' at 1.695..1.727 s: under one of two."
+      ],
+      "layers_over_pads": 1,
+
+      "_start_after": [
+        "HOW LONG BOTH BLACKS STAY WHOLLY BLACK before their 700 ms begin, on the level's age.",
+        "DECODED, which is why there is such a number: FadeInController::FadeInController and",
+        "::start (bytes 37911..38429) take startTime from GetTime() - wall time - after a",
+        "LoadSprite, and ::draw fades by GetTime() - startTime. Game::preLoop builds the second",
+        "at instruction 316 and BaseState::preLoop the first; Ethanon runs preLoop only once the",
+        "scene is built (ETHEngine.cpp:176-179 -> ETHScriptWrapper::LoadScene, .Scene.cpp:570-612,",
+        "then LoadSceneScripts :660-668), all inside ONE frame's update. Every other part of the",
+        "opening accumulates FRAME time (see _clock), and gs2d charges a frame the whole wall",
+        "time since the last one, capped at 1000 ms (ComputeElapsedTimeF, Application.cpp:36-50;",
+        "android/main.cpp:180-181). So the frame after a level's load carries all of that load",
+        "in its delta for the caption, the plaque, the pads and the sign, and the black only",
+        "what came after instruction 316.",
+        "MEASURED on rec11, the only footage of an opening: each lit frame n28..n37 gives the",
+        "level's age from its caption (alpha = 1 - t / 3000) and the black's from the world's",
+        "brightness (k = (t / 700)^2), and the second runs behind the first by 465 ms",
+        "(level_start_timeline.md sections 1-2: median 465, 423..490; review 2's own table of",
+        "the same frames: median 464; step 40's re-measure from the raw frames with its own",
+        "reference: median 473). Its black frame n27 is the level's age 24 ms, black whole.",
+        "IT IS THAT EMULATOR'S LOAD, NOT A DESIGNED WAIT: a device that loaded a level in no",
+        "time would show 0. It is kept because it is what the original shows - pads home, plaque",
+        "up and 'Part N' dimmer before the picture comes through - and 0 here gives the",
+        "zero-load opening step 38 built."
+      ],
+      "start_after_ms": 465
+    },
+
+    "caption": {
+      "_source": [
+        "DECODED: Game::showGameTitle (bytes 114874..115157) calls drawCenteredFadingText with",
+        "'Part ' + (levelIndex + 1), getMatura42HardFontName() - Matura84_shadow.fnt on an",
+        "hd screen (ResourceSelector bytes 398764..398909) - at screenSize * (0.5, 0.8), colour",
+        "0xFFFFFFFF, 3000 ms, scale g_scale.getScale() / getHdSpriteDensity(): half a unit per",
+        "font pixel. drawCenteredFadingText (bytes 320351..320663) takes ComputeTextBoxSize *",
+        "scale / 2 off the position, the box being the line's summed xadvance by lineHeight,",
+        "and ETHTextDrawer::Draw (Ethanon ETHDrawable.cpp:64-75) fades alpha linearly to 0.",
+        "gs2d's BitmapFont::DrawBitmapText (BitmapFont.cpp:412) applies NO kerning.",
+        "MEASURED: Matura84_shadow, white, above the overlay, linear 2.99 s, centred on x, line",
+        "centre 204.47 units = 0.8 of 256 within 0.33 (level_start_timeline section 2). Its",
+        "0.4964 units per font pixel was fitted WITH a kerning pair (P-a +1) the original never",
+        "applies; without it the measured 248.49 px advance of 'Part 1' is 177 font px at",
+        "1.404, against the decoded 1.40625 - so the decode's 0.5 is taken."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "prefix": "Part ",
+      "units_per_font_px": 0.5,
+      "centre_of_view": [0.5, 0.8],
+      "fade_ms": 3000
+    },
+
+    "plaque": {
+      "_source": [
+        "DECODED: Game::addCurrentMedalSprite (bytes 115478..115930), only when",
+        "ScoreManager::getScore for the level is not 0: medalPos = g_scale.scale(40, 40); the",
+        "plaque sprites/current_score_plaque.png at medalPos + g_scale.scale(0, 28) and the",
+        "medal getLargeSpriteMedalName(score) at medalPos, both with origin V2_HALF, the medal",
+        "added second and so drawn over it. A UISprite fades in over its interpolator, 1000 ms,",
+        "smoothEnd (UISprite::init bytes 84118..84502, UISprite::update bytes 84559..84790).",
+        "Game::dismissCurrentMedalSprite (bytes 115930..116151) dismisses both once",
+        "GameStateController::getUiTime() > 2000; a dismissed UISprite fades out over a new",
+        "1000 ms interpolator as 1 - smoothEnd, smoothEnd(v) = sin(v * PI / 2) (Interpolator",
+        "bytes 313899..313971).",
+        "MEASURED, in agreement: hd current_score_plaque 64x128 units top-left (8.02, 4.02) and",
+        "hd medal_gold_l 64x64 top-left (8.02, 8.02) - exactly those centres - under the overlay,",
+        "held, then an eased fade ending with the caption (level_start_timeline section 3). Its",
+        "fade starts 2.095 s after the tap in rec11 and about 2.03 s in the library's t2.0",
+        "frames; the decoded 2000 ms is taken. Absent on a fresh save (smoke/10_level1-1_t*)."
+      ],
+      "sprite": "current_score_plaque.png",
+      "centre_units": [40, 68],
+      "size_units": [64, 128],
+      "medal_centre_units": [40, 40],
+      "medal_size_units": [64, 64],
+      "medal_bronze": "medal_bronze_l.png",
+      "medal_silver": "medal_silver_l.png",
+      "medal_gold": "medal_gold_l.png",
+      "appear_ms": 1000,
+      "dismiss_after_ms": 2000,
+      "dismiss_ms": 1000
+    }
+  }
+}

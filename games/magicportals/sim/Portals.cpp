@@ -420,6 +420,15 @@ void State::Tick(entt::registry& registry, float dt) {
             exit->isStatic ? statics[static_cast<std::size_t>(exit->key)].atPx : placedWithId(exit->key)->atPx;
         Teleport(registry, entry.body, exitPx, rules.transit, entry.body == shooter);
         ++traversals;
+        // A placed pair carried something, so neither end is refunded if it is
+        // cleared later. Only the pair: teleportToOther is the one route that
+        // sets the flag, and a placement whose exit is the level's first static
+        // portal goes through teleportToFirstStaticPortal instead.
+        if (!entry.end.isStatic && !exit->isStatic) {
+            for (Placed& portal : placed) {
+                if (portal.id == entry.end.key || portal.id == exit->key) portal.teleported = true;
+            }
+        }
         lockoutS = static_cast<float>(rules.transit.reentryLockoutS);
 
         // Both ends of a pair go (:270-282), except a static end, which stays
@@ -435,6 +444,17 @@ void State::Tick(entt::registry& registry, float dt) {
             }
         }
     }
+}
+
+int State::KillAll(bool refund) {
+    const int killed = static_cast<int>(placed.size());
+    if (refund) {
+        for (const Placed& portal : placed) {
+            if (!portal.teleported && portalsUsed > 0) --portalsUsed;
+        }
+    }
+    placed.clear();
+    return killed;
 }
 
 bool Find(const Tscn::Scene& scene, const Roles::Table& roles, const LevelBuilder::Built& built,

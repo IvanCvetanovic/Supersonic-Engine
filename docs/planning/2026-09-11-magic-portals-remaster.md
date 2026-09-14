@@ -3937,3 +3937,611 @@ warnings on either. `test_mp_darkdragon` 92 → **97**, reporting "it fell over 
 dropped its key" and then "and a 64 x 32 platform at (160, 240), from the sibling the
 level places". Every other suite is unchanged, and **128 of 128 levels still start and
 play** on both.
+
+## Step 38 - the HUD the original draws, and the three seconds every level opens with (built)
+
+The port's in-level HUD was placed by eye from one of the owner's screenshots, and a
+level simply appeared. Two measured specs now exist for both - the remake's
+`out/parity/specs/ui1/static_hud.md` (57 settled levels of captures of the original at
+1280x720) and `level_start_timeline.md` (every frame of a 14 s recording of 1-1) - and
+this step builds to them. **Every number is data** (`games/magicportals/data/ui.json`,
+each block citing its sources) and **all the arithmetic is `sim/Hud`**, pure, which the
+layer only places quads by.
+
+**THE DECODE CAME FIRST, AND IT SETTLED FOUR OF THE SPECS' OPEN QUESTIONS.** The
+full-module reading of `android_game.bin` that step 11a describes has `ScreenPad`,
+`FadeInController`, `UISprite`, `Game::addCurrentMedalSprite` and
+`dismissCurrentMedalSprite`, `Game::showGameTitle`, `GameLayer` and
+`PortalManager::update` in it. Where a number is decoded, `ui.json` takes the decode and
+holds the captures against it. They agree nearly everywhere; where they do not, the
+reason is below.
+
+**Where the controls are.** Restart and pause are hd sprites drawn 32 x 32 units, flush
+in the top-right corner and touching (123 of 123 frames at px (1100, 0) and (1190, 0)).
+The walk pads are 64 x 64 units **wholly on screen, flush in the bottom corners** (39 of
+41 levels exactly and the other two within a pixel, by a fit that lets a sprite hang off
+the edge). **Both overturn step 36**, which ran the pads' discs off the screen at 0.30 of
+the view and kept an inset on the top-right pair, each read by eye off one capture. Every
+element is anchored to the corner it was measured from, because the view is 455.11 units
+wide at 16:9 and follows the window's shape.
+
+**How opaque.** `0x78FFFFFF` - alpha 120 of 255 - is ONE constant in four places: the
+game layer's `menuButtonsCustomColor` (restart and pause), `ScreenPad.color` (the pads),
+and the clear-portals button. The captures measured 0.48 +-0.02 (RGB565) on all four;
+120/255 is 0.4706.
+
+**THE PULSE IS EVERY LEVEL'S, WHERE THE SPEC SAID ONLY 1-1's.**
+`ScreenPad::computeButtonColor` pulses the pads as a triangle of two 300 ms strides, from
+120 up to 120 + variation: 14 strides (4.2 s) with a variation of 40, or in the tutorial
+48 strides (14.4 s) with 90. The tutorial is **level0 by name**:
+`MainCharacter::MainCharacter` passes `GetSceneFileName() == "scenes/level0.esc"`. The
+spec measured 1-1 at 0.475..0.496 <-> 0.805..0.824, triangle over sine, period 0.609 s,
+which is 120 <-> 210 at 600 ms. But it concluded that no other level pulses by comparing
+t4.5 with t8.0, **both past the 4.2 s gate**. Its own opacity outputs put every other
+level's t2.0 pads above their t4.5 and t8.0 ones (median 0.487/0.489 against 0.475/0.477,
+max 0.515), and its W-K proxy agrees independently (t2.0 - t8.0 median +0.007/+0.005 over
+49 levels; t4.5 - t8.0 exactly 0). The decode is taken. At t2.0 the measured amplitude is
+smaller than 40 at a random phase would give; the library's t2.0 frames all sample one
+narrow arc of the cycle, and nothing is tuned to it.
+
+**AND THE "GHOST" IS A RING.** The spec fitted what grows out of 1-1's pads as a scaled
+copy of the pad sprite, drawn behind it. `drawIndicatingRing` draws
+`sprites/ring_sprite.png` - clear in the middle, bright only at its rim - centred on the
+pad's corner, `200 units * max(bias, 0.01)` wide over 1200 ms at alpha `1 - bias`, from
+the pads' UPDATE and so under them. The spec's timing survives (every second trough,
+behind, corner-anchored). Its opacity numbers do not, and its right-pad growth of
+155..181 units/s brackets the decoded 167 where its left-pad 116.5 does not.
+
+**AND THE PADS SLIDE IN.** `ScreenPad`'s interpolators bring each pad in from 128 units
+outside its corner over 700 ms, eased by `smoothEnd` (sin(v * pi / 2), every
+Interpolator's filter). No still shows it: on the emulator, the load stall's frame delta
+had finished the slide before the first lit frame.
+
+**THE BLACK IS TWO BLACKS, WHICH IS WHY IT MEASURED 0.54 s WHERE THE CODE SAYS 700 ms.**
+`FadeInController` draws a full-screen black at `1 - elapsed / 700`, and a level has two:
+`BaseState::preLoop` adds one and `Game::preLoop` another. Stacked, `(t / 0.7)^2` of the
+picture shows through. The timeline fitted a linear 0.54 s fade; the same frames fit the
+square with a start steady at 0.19 +-0.03 s before its black frame, where the linear
+fit's implied start drifts by 0.13 s across the ramp. The controllers draw in the order
+they were added, so **the pads are drawn BETWEEN the two blacks**: under one, where the
+world, restart, pause and the plaque are under both. That is exactly the timeline's
+unexplained "pads brighter than under the overlay and darker than above it", and the
+port draws its black as two quads, one each side of the pads.
+
+**"Part N".** `Game::showGameTitle` draws `"Part " + (levelIndex + 1)` in
+`Matura84_shadow.fnt` at `screenSize * (0.5, 0.8)`, centred on its box of summed advances
+by line height, fading linearly over 3000 ms, at half a unit per font pixel. The spec's
+0.4964 was fitted with a kerning pair (P-a +1) that **gs2d's `DrawBitmapText` never
+applies** (BitmapFont.cpp:412; no kerning anywhere in it). Without it, the measured 248.49
+px advance of "Part 1" is 177 font px at 1.404, against the decode's 1.40625. So the
+engine's `BitmapFont`, which applies no kerning either, was already right and needed
+nothing. The caption is **a quad per letter**, each with a texture transform that picks
+its glyph out of the page, rather than `BuildText` behind a `MeshRegistry` key. Matura84
+keeps "Part 1"'s P and r on page 0 and its a, t and 1 on page 2, so a quad per letter can
+take each page as its own texture. And the whole layout stays a pure function that a
+suite can pin with no registry at all.
+
+**The plaque.** `addCurrentMedalSprite` runs only where `getScore` is not 0. It puts the
+medal at `scale(40, 40)` and the plaque at that plus `(0, 28)`, both centred; the
+captures put their top-left corners at (8.02, 8.02) and (8.02, 4.02), which is exactly
+those centres. Both are `UISprite`s: they come in over 1000 ms by `smoothEnd`, are
+dismissed once `getUiTime() > 2000`, and go out over 1000 ms as `1 - smoothEnd`. The
+captures start that fade 2.095 s after the tap in the recording and about 2.03 s in the
+library. The decoded 2000 ms is taken; it runs about 0.04 alpha under six of the seven
+library t2.0 plaques the timeline dated by their captions. A fresh save shows no plaque, as the original's does.
+
+**ONE CLOCK.** The timeline measured two, 0.70 s apart: the caption, plaque and pulse run
+from the tap, the black from its first frame. That 0.70 s is the emulator's load stall,
+since `Game::preLoop` starts every one of them. So the port runs them all from the tick a
+level is loaded (`LevelAgeMs`), a retry included: the original's restart builds a fresh
+Game state (`GameLayer::update`). *Superseded by step 40*: the black is on a second clock
+after all, and the port now starts it 465 ms into the level's age.
+
+**The clear-portals button** follows `PortalManager::update`:
+- none where maxPortals is 0;
+- removed while `portals` is empty, and shown otherwise - so exactly while a placed portal
+  is alive;
+- pressing it calls `killAll(true)`, which plays `playPortalKilledSound` and gives back a
+  count of the golden score for every portal whose `hasTeleportedSomething` is still 0.
+  `teleportToOther` sets that flag on both ends of a pair it carries something through.
+
+`Portals::State::KillAll` and `Placed::teleported` are exactly that, and the button sits
+flush top-left at 32 units.
+
+**No text over a level.** The status, result and help lines the port laid over a level
+being played are gone. Across 41 levels' settled frames, the only screen-fixed regions are
+the two button corners and the two pads (static_hud.md section 6). A refused level, a
+chapter's end and the menu screens still say what they say.
+
+**Four things wrong in the port, fixed on the way.**
+- **The HUD trailed the camera by a tick.** The controls were placed in `readInput`,
+  before the camera moved that tick. They were then placed after `placeCamera` and
+  interpolated as the camera is. *Superseded by step 39*, which draws the HUD on the
+  screen and so needs no camera at all; `test_mp_layer` still walks level30 until the
+  camera pans and the pause button never moves on the view.
+- **A tap on a control asked the camera.** It is now tested in VIEW space, straight from
+  the pointer's place in the viewport. A pad's hit area is `isPointInSphere` with
+  `buttonRadius = scale(64)`: a quarter circle of 64 units about the corner, already
+  larger than the drawn disc. A button's is `Button::isPointInButton`, its rectangle.
+- **The pause button stepped a level it had just unloaded.** `openMenu`, called from
+  `readInput`, left the tick to run `BeforeStep` and read the player's transform on an
+  empty level. The tick now returns when a screen has gone up.
+- **A weightless level drew walk pads.** `MainCharacter` neither updates nor draws them
+  when `noGravity` is set, so the port hides them there. Decoded only: no capture of a
+  weightless level has been measured.
+
+**THE ENGINE BLENDS IN LINEAR LIGHT, AND THE ORIGINAL DID NOT** - and this step got the
+consequence wrong. It drew the HUD as quads in the level and converted only the opening
+black (`Hud::BlackInLinearLight`), on the argument that nothing else could be converted
+and that translucent elements would merely read "somewhat brighter". Review measured the
+opposite for opaque white (186 of 255 on a black screen) and a control contrast that
+moved with the background. **Step 39 replaces all of it**: the HUD is drawn after the
+tone map, in display values, and the conversion is gone.
+
+**Captured** with a dev-only `--saves <dir>` in main.cpp. It points the medals directory
+somewhere other than the user's own, so a capture can open a level with a medal recorded
+without touching a player's save.
+- **Which frame.** For each library frame, the one whose level age matches: the frame's
+  label plus the offset its own caption alpha dates it by (2.385..2.445 s for t2.0).
+- **Which levels.** 1-1, 1-5, 1-17 and 3-5, at t2.0, t4.5 and t8.0.
+- **Alignment.** An edge alignment of each HUD region against the original puts restart,
+  pause and both pads at **(0, 0) px in all twelve**. On the four t2.0 frames, where the
+  caption and plaque are still up, the caption is within 1 px and the plaque at (0, 0).
+- **The ring, seen.** Every library frame of 1-1 lands 45 ms into a ring stride, so the ring
+  is a dot hidden under its pad in all three (6000 ms is five strides). The recording's
+  frame at 3.094 s (stride phase 0.81) was compared with the port at age 2200 ms (0.83).
+  Both show a faint rim about 225 px out from each bottom corner, well clear of the pads,
+  where the decode says 227.
+- **Two clocks, on purpose.** The library frames are dated by their caption (the tap
+  clock), and the ring, pulse and plaque run on that clock. The fade check dates the
+  recording by its black frame instead, 0.19 s after the fade's start.
+- **What still differs** is the world behind them: its lighting is not ported, and its
+  colour goes through the pipeline above. 1-1's pad pulse at t8.0 is also phase-sensitive,
+  to the tens of milliseconds by which the two clocks' origins differ.
+
+**Not built, and said so.**
+- **The pause screen.**
+- **The tutorial popups of 1-2 and 1-3.** In the original they hide the HUD; the port has
+  no popups.
+- **The pads' fade on game over.** `ScreenPad::draw` multiplies their alpha by 0.98 a
+  frame; the port hides the controls through the finish and death beats instead.
+- **The no-portal sign of 1-15, 2-07 and 2-28.** It is screen-fixed in the original but
+  drawn by a level entity, which `followUp`s the camera's corner. The port still draws it
+  where the level file puts it, off the level. *Built in step 39.*
+
+MSVC 14.50 (Release, Ninja) only, this step: **35 of 35 Magic Portals suites pass**, and
+the full build prints no warning.
+- `test_mp_hud` is new, at **184** checks, and needs nothing from outside this repository.
+- `test_mp_layer` goes from 217 to **277**. The new checks cover:
+  - the HUD's rectangles and alphas, held against its quads;
+  - a portal cleared by a tap on its button, with its count given back;
+  - a medal earned, and the plaque it opens the retry with;
+  - the tutorial's rings;
+  - no pads in level1c.
+- **Smart App Control.** It refused five freshly linked suites on the first run (ctest's
+  `BAD_COMMAND`, "Permission denied"). Each passed once relinked, as step 36 recorded for
+  `test_mp_turrets`.
+- **Not run on GCC.**
+
+## Step 39 - the HUD drawn after the tone map, and the sign pinned to the corner (built)
+
+Two independent reviews of step 38 compared its captures with the original's and found
+seven discrepancies. Each was re-measured before anything changed. Four were one engine
+gap, one was a missing element, and two are declined below with the reason.
+
+**THE ENGINE GAP: THE HUD WENT THROUGH THE BLOOM AND THE TONE MAP.** Every quad the
+layer drew was scene geometry. The scene target is linear light, and
+`bloom_composite.frag` adds the bloom, applies Reinhard and encodes once. For a HUD
+that is wrong in three ways:
+- **White is capped.** Linear 1.0 leaves Reinhard as 0.5 and encodes to **186**, and no
+  finite radiance reaches 255. On 1-1's black opening frame the port's "Part 1" read 184.6
+  where the original reads 253.
+- **Glyphs bloom.** The bright pass's soft knee starts at half its threshold, so every
+  letter carried a halo: 86 / 34 / 21 / 12 / 5 grey at 0.5-2 / 2-4 / 4-6 / 6-8 / 8-12 px.
+- **The blend is in linear light.** A translucent control's contrast then depends on
+  what is behind it.
+
+The third is the one no choice of alpha can fix. For white and black sprite pixels at
+alpha 120/255 over a background of display value b:
+
+| background b | display-space contrast (the original) | through Reinhard (step 38) | linear, tone map off |
+|---|---|---|---|
+| 0.05 | **0.471** | 0.559 | 0.673 |
+| 0.20 | **0.471** | 0.451 | 0.571 |
+| 0.40 | **0.471** | 0.317 | 0.457 |
+
+Only display-space blending is invariant to the background, and that invariance is
+what the captures of the original show. Its measured gain barely moves across levels
+with very different backgrounds. So turning the tone map off would not have helped:
+it is worse than Reinhard over the dark stone most levels have. Pre-compensating the
+colour cannot reach white at all, since it would need infinite radiance.
+
+**Fixed in the engine, minimally, with a suite.**
+- **`core/ScreenOverlay`.** An immediate-mode list of quads. Each quad has a rectangle
+  in fractions of the image, a uv rectangle, a display-referred colour and a texture
+  path. It is published in the registry context the way `WorldShapes` is.
+- **`BloomPass::RecordOverlay`.** Opens a second render pass over the composited
+  `R8G8B8A8Unorm` image. The pass loads the image instead of clearing it, starting
+  from the layout the composite left.
+- **`VulkanRenderer::DrawFrame`.** Resolves every quad's texture and material set,
+  then draws the list with `screen_overlay.vert/.frag` and clears it.
+  - No vertex buffer: six vertices from `gl_VertexIndex`.
+  - Blending on, no depth.
+  - Each texture is acquired UNORM (`srgb` false), so a texel is the byte in the file
+    and what is written is a display value.
+- **Order and capture.** Order of `Add` is order of drawing. `--screenshot` reads this
+  same image, so captures show the overlay.
+- **Why not `UIImageComponent`.** It is drawn in the swapchain's ImGui pass, which
+  `SupersonicApp.cpp` does not read for a screenshot (it reads
+  `offscreen.GetPresentedImage()`). A HUD there would have been invisible to every
+  capture.
+- **Shaders.** The two new `.spv` are compiled by the build and left in the tree beside
+  their sources (`SHADER_JOBS`).
+- **Suite.** `test_screenoverlay` is new, **28 checks**. It pins:
+  - clip-space and texture-space corners;
+  - 1280x720 pixel placement of the pause button;
+  - two non-degenerate triangles;
+  - order;
+  - the ceiling;
+  - the blend factors;
+  - that the shader's own vertex table is the one `CornerOf` states.
+
+  ARCHITECTURE.md section 5 and the README's suite table say the same.
+
+**THE PORT'S HUD GOES THROUGH IT.** `MagicPortalsLayer::EmitHud` replaces every HUD
+entity. Emission order is the original's order of drawing, as step 38 decoded it:
+1. the no-portal sign (a level entity);
+2. the tutorial's rings;
+3. restart and pause;
+4. the plaque, then its medal;
+5. clear-portals;
+6. the first black;
+7. the pads;
+8. the second black;
+9. "Part N".
+
+It runs once a FRAME from `OnUpdate`. The overlay is cleared every frame, so a HUD
+emitted on the tick would vanish from frames with no tick. It reads the last tick's
+`LevelAgeMs` and changes nothing.
+
+With the HUD on the screen, four of step 38's parts are dead weight, and all four are
+gone:
+- the eight z constants;
+- the black's overscan;
+- the interpolated transforms;
+- **`Hud::BlackInLinearLight`**.
+
+In display space two stacked blacks multiply exactly as the original's did. Its old
+validation had been taken under Reinhard. Re-measured now, on the world band of 1-1:
+
+| frame | port brightness k | decode (t / 0.7)^2 per byte | original (rec11) |
+|---|---|---|---|
+| 350 ms into the black | **0.253** | 0.252 | 0.262 (n29) |
+| 600 ms into the black | **0.741** | 0.738 | 0.753 (n36) |
+
+**Evidence after, on the same measures the reviews used.** (`out/parity/ui1/r2/`, gitignored.)
+- **Caption on the black frame.** Ink median 253 and p99 253, against the original's 253
+  and 255. The ring profile outside the ink:
+
+  | px from ink | 0.5-2 | 2-4 | 4-6 | 6-8 | 8-12 |
+  |---|---|---|---|---|---|
+  | port | 83.5 | 1.6 | 0.0 | 0.0 | 0.0 |
+  | original | 83.9 | 1.7 | 0.1 | 0.1 | 0.1 |
+
+  The halo is gone; what is left is the glyphs' own antialiasing.
+- **Control contrast.** High-pass gain, static_hud's section 4 method, on t8.0 frames.
+  Columns are restart / pause / left pad / right pad:
+
+  | level | original | port now | step 38 |
+  |---|---|---|---|
+  | 1-05 | 0.476 0.476 0.477 0.476 | 0.474 0.473 0.467 0.469 | 0.471 0.465 0.327 0.406 |
+  | 1-15 | 0.480 0.479 0.472 0.473 | 0.475 0.474 0.471 0.471 | - |
+  | 1-17 | 0.478 0.487 0.472 0.476 | 0.475 0.474 0.471 0.472 | 0.471 0.464 0.332 0.366 |
+  | 3-05 | 0.471 0.473 0.475 0.476 | 0.473 0.471 0.471 0.472 | 0.437 0.521 0.332 0.366 |
+
+- **Plaque at alpha 1.** Pixels whose sprite value is in the 200-255, 150-200 and 0-50
+  bands:
+  - port frame 90: 231 / 177 / 26;
+  - the sprite itself: 231 / 177 / 26;
+  - the original at 2.928 s: 233 / 175 / 25;
+  - step 38 (review): 183 / 135 / 42.
+- **Plaque while it fades.** Apparent alpha at t2.0, regressed as the review did, for
+  1-01 / 1-05 / 1-15 / 3-05:
+  - original 0.404 / 0.490 / 0.443 / 0.413;
+  - port 0.361 / 0.444 / 0.402 / 0.409;
+  - step 38 read 0.465..0.679.
+
+  It no longer lingers. What is left is **not explained**:
+  - 1-01, 1-05 and 1-15 read 0.041..0.046 below the original, and 3-05 is within 0.004.
+  - The difference is one-signed. At 2.4 s the plaque's alpha falls 1.27 per second, so
+    0.04 is about 30 ms, two frames. On those three levels the original's plaque runs
+    about two frames behind the clock its own caption dates the frame by.
+  - A first run of this table had 3-05 at 0.473, 0.06 *above*. That was a capture error,
+    not the port: its frame was dated 2.385 s, a base copied from 1-05, where 3-05's own
+    caption alpha (0.189) dates it 2.434 s. Re-dated, re-captured, it reads 0.409.
+  - Why 3-05 has no two-frame lag and the others do is not established. A candidate is
+    the plaque's accumulated `getUiTime()` starting a frame or two after the caption's
+    `GetTime()` origin, the same kind of split as the opening's (below). No capture here
+    can tell that from frame-pacing noise.
+- **The world is untouched.** Outside the HUD corners plus a 60 px margin, the t8.0
+  captures of 1-01, 1-05, 1-17 and 3-05 are **byte-identical** before and after.
+
+**THE NO-PORTAL SIGN, PINNED AS ITS SCRIPT PINS IT.** 1-15 and 2-07 draw
+`entities/hd/no_portal_symbol_small.png` flush top-left at 64 units, at full opacity. The
+decode says why a level entity does that:
+- **The callback.** `ETHCallback_no_portal_sign` (MiscCallbacks.angelscript, bytes
+  343129..343339) calls `followUp(thisEntity, GetCameraPos() + GetSize() * 0.5, 600, 100,
+  true)` every frame.
+- **The follow.** `followUp` (utilEntityEffect.angelscript, bytes 328407..329130) eases a
+  `PositionInterpolator` over 600 ms by `smoothEnd`, on frame time. **It aims it again
+  from where it has got to** whenever the target is not where the entity stands and
+  more than 100 ms have passed. So it never runs a whole ease. It closes about 30 % of the
+  distance every 117 ms, and a quarter of a percent is left at 2 s, which is where the
+  library's t2.0 frames already find it.
+- **Data and state.** `ui.json`'s new `hud.no_portal_sign` block carries those numbers;
+  `Hud::Follow` is that state machine.
+- **Drawing.** The layer takes the entity out of the level's sprites by
+  `metadata/entity_name`, as `SeekEntity` finds it, and draws it first in the overlay.
+  It uses the hd twin, which the captures match (0.977 against 0.818 for the 1x at
+  twice its size); the converter copies only the 1x.
+
+`locate.py` with the hd sprite, at scale 1.40625 in the top-left region:
+
+| frame | port | original |
+|---|---|---|
+| 1-15 t2.0 | (0, 0) 180 px, 0.783 | 0.805 |
+| 1-15 t4.5 | (0, 0) 180 px, 0.928 | 0.977 |
+| 1-15 t8.0 | (0, 0) 180 px, 0.928 | 0.977 |
+| 2-07 t8.0 | (0, 0) 180 px, 0.876 | 0.897 |
+
+At t2.0 both are lower because the plaque is over the sign. The rest of the gap is the
+unlit world seen through the sign's translucent parts. 2-28 (level27a) still has no
+in-level capture of the original.
+
+**DECLINED: THE HUD OVER THE TUTORIAL POPUPS OF 1-2 AND 1-3.** The difference is real: the
+original hides restart, pause and both pads while its help popup is up. But the port
+builds no popup. Hiding the controls there would leave two levels with no controls and
+nothing to dismiss. It belongs with the popup, which is its own system and stays unbuilt.
+
+**DECLINED, WITH THE MEASUREMENT: THE OPENING'S TWO CLOCKS.** The review saw the port's
+pads slide in and its plaque fade in while the black lifts. At equal blackness the
+original's caption is 0.15 dimmer. Re-measured on rec11's frames n29..n38, under the
+stacked black: the caption's clock leads the black's by **0.46 s** (0.42..0.47, steady
+across the ramp).
+
+The decode explains that lead without a second clock in the design:
+- `FadeInController` times itself from `GetTime()` at its construction in `preLoop`.
+- `showGameTitle` starts the caption earlier in the same `preLoop`.
+- The pads' slide and the plaque's `UISprite` run on accumulated frame time
+  (`InterpolationTimer::update`, `GetLastFrameElapsedTime`). The first frame after a
+  level load carries the whole load in its delta.
+
+On the emulator that delta covered the 700 ms slide and most of the plaque's 1000 ms
+fade-in before anything was drawn. That is why no capture can show either. The port
+loads within a tick, so it plays the zero-load timeline its spec gives. The fade curve
+itself matches (table above). The slide's one-tick lag the review measured was the
+interpolated transform, which is gone with the overlay. *Overturned by step 40*, which
+reads `GetTime()` down to the clock it reads and builds the lead.
+
+**Captured** by `out/parity/ui1/capture_port_r2.sh`:
+- **Library frames.** Each is dated by its own caption alpha: t2.0 is 2.448 s on 1-01,
+  2.389 s on 1-05, 2.406 s on 1-17, 2.434 s on 3-05 and 2.417 s on 1-15. 2-07's caption
+  has a fireball over it, so 2.40 s is taken. Step 38 and the first run of this step
+  dated 3-05 at 2.385 s, a base copied from 1-05; it is re-captured at 2.434 s.
+- **rec11 frames.** Dated by their black (n29, n36) and by their caption (n62).
+
+All 21 were run with the validation layers active and logged no VUID.
+
+| capture | offset px | edge IoU | HUD |
+|---|---|---|---|
+| 1-01 t2.0 / t4.5 / t8.0 | 0,0 / 0,0 / 0,0 | 0.43 / 0.41 / 0.41 | matches; pad pulse phase varies (tutorial pulse) |
+| 1-05 t2.0 / t4.5 / t8.0 | 0,0 each | 0.43 / 0.42 / 0.41 | matches |
+| 1-17 t2.0 / t4.5 / t8.0 | 0,0 each | 0.38 / 0.37 / 0.36 | matches |
+| 3-05 t2.0 / t4.5 / t8.0 | 0,0 each | 0.42 / 0.37 / 0.37 | matches |
+| 1-15 t2.0 / t4.5 / t8.0 | 0,0 each | 0.38 / 0.38 / 0.37 | matches, sign included |
+| 2-07 t2.0 / t4.5 / t8.0 | 0,0 / 0,-15 / 0,0 | 0.24 / 0.17 / 0.18 | matches; the world does not (its darkness and lights are not ported). The t4.5 offset is the whole frame's: pause and restart alone still fit best at 0 px (mean abs 13.4 and 11.2 at 0, worse at every shift to 20 px) |
+
+**What still differs is the world, not the HUD.** Lighting is not ported: the torch,
+the lamps and the dark levels' shading are absent, and the world still goes through the
+tone map. So a translucent control over the port's stone sits on a different
+background, though with the original's contrast. The overlay makes the HUD
+display-referred and nothing else.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning.
+- **Magic Portals suites.** **35 of 35** pass, and **112 of 112** suites pass across
+  the whole ctest set. The fix round's brief counts 34 `mp_` suites; the 35th is
+  `test_mp_hud`, new in step 38 and not yet committed.
+- **`test_screenoverlay`.** New, 28 checks.
+- **`test_mp_hud`.** 184 → **179**, and that net is two moves, not a wash:
+  - **20 checks went** with `BlackInLinearLight`: the test that walked the conversion
+    across the black's alphas is gone because the function is gone.
+  - **15 came in** for the sign's follow: the rules, the settled rectangle, the first
+    ease, the re-aim past 100 ms, the chase at 2 s and 20 s, and a moved camera.
+  - Nothing else in the suite changed, so the 20 is the 184 less the 164 left before the
+    sign's 15.
+- **`test_mp_layer`.** 277 → **294**. The HUD is asserted on the overlay list itself -
+  rectangle, alpha, texture and order - and the sign is in level14 and not in level0.
+- **Smart App Control.** It refused eight freshly linked suites and `MagicPortals.exe`
+  (BAD_COMMAND, "blocked by your organization's Device Guard policy"). Each ran once
+  relinked.
+
+## Step 40 - the black that started after the load, and the popup that is its own system (built)
+
+A third review compared step 39's captures with the original's and found five
+discrepancies. **Four are one cause**: the port's opening black started with the level,
+where rec11's starts later. **The fifth** is the HUD over the tutorial popups of 1-2 and
+1-3. Each was re-measured first. The four are fixed by one number, and the popup stays
+declined for a stronger reason than step 39 gave.
+
+**WHAT THE REVIEW SAW.** Every lit frame of rec11 (n28 onwards) already has:
+- the pads home in their corners;
+- the plaque up;
+- "Part 1" dimmer than the port's at the same blackness, by 0.15 of alpha (0.46 s of
+  its fade).
+
+The port instead slid its pads in and faded its plaque up while the picture came
+through. It also kept the caption and plaque on screen about 0.5 s longer after the
+black had gone. Step 39 had declined this as the emulator's load stall. That
+explanation fit the captures, but nothing had checked it.
+
+**THE DECODE, READ DOWN TO THE CLOCK EACH PART READS.**
+- **The black reads wall time.** `FadeInController::FadeInController` and `::start`
+  (bytes 37911..38429) take `startTime` from `GetTime()` after a `LoadSprite`, and
+  `::draw` fades by `GetTime() - startTime`.
+  - Ethanon's `GetTime` is the video's `GetElapsedTime`
+    (ETHScriptWrapper.System.cpp:90-93).
+  - On Android that is a live `clock_gettime(CLOCK_MONOTONIC)`
+    (AndroidGLES2Video.cpp:66-70).
+  - Of every function in the module, `GetTime()` is called only by `FadeInController`,
+    portals, the earthquake, the score dashboard and a menu blink.
+- **Everything else in the opening reads frame time.** Each adds the last frame's
+  elapsed time:
+  - the caption: Ethanon's `ETHTextDrawer::Draw`, ETHDrawable.cpp:64-66;
+  - the plaque: `UISprite` through `InterpolationTimer::update`, and
+    `GameStateController::m_uiTime`, which gates its dismissal;
+  - the pads' slide and pulse: `ScreenPad::update`, instruction 170;
+  - the sign: `followUp`'s interpolator.
+- **A level's load is one frame.**
+  - Ethanon loads the scene and then runs its `preLoop` inside one frame's update
+    (ETHEngine.cpp:176-179 → ETHScriptWrapper.Scene.cpp:570-612, then
+    `LoadSceneScripts` :660-668).
+  - `Game::preLoop` builds its `FadeInController` at instruction 316, and
+    `BaseState::preLoop` builds the other one, both after the scene is in.
+  - gs2d charges the next frame the whole wall time since the last one, capped at
+    1000 ms (`ComputeElapsedTimeF`, Application.cpp:36-50; android/main.cpp:180-181).
+
+So the frame after a load hands **all** of it to the caption, the plaque, the pads and
+the sign, but only the part after instruction 316 to the black. The black runs behind
+the rest by however long the load took before the blacks were built. That is the
+two-clock split the timeline measured, now with its mechanism named.
+
+**MEASURED, THREE WAYS.** Each lit frame gives the level's age from its caption,
+t = 3000 (1 - alpha), and the black's own age from the world's brightness,
+700 sqrt(k). The difference is the lead:
+
+| source | frames | median lead | range |
+|---|---|---|---|
+| level_start_timeline.md sections 1-2 | n28..n37 | 465 ms | 423..490 |
+| review 2's table of the same frames | n28..n37 | 464 ms | 422..490 |
+| step 40's own re-measure from the raw frames, with its own settled reference | n28..n37 | 473 ms | 435..506 |
+
+The lead is steady across the ramp. n37, whose caption stalls for 84 ms, is the low
+end. The black frame n27 is 24 ms into the level by its caption, and wholly black.
+
+**WHAT THE PORT DOES.**
+- **`ui.json`**: new `level_start.overlay.start_after_ms` = **465**. Its note cites the
+  decode above and the three measurements. It also says what the number is: **that
+  emulator's load, not a designed wait**. A device that loaded in no time would show 0,
+  and setting it to 0 restores step 38's zero-load opening. It is kept because it is
+  what the original shows.
+- **`Hud::OverlayLayersAlpha`** times both blacks by the level's age less that number.
+  They are wholly black before it, and the pads still sit between them.
+  - **The hold's look is inferred, not decoded.** In the original neither black exists
+    yet then, and no frame is drawn.
+  - The port draws its held frames as rec11's black frame n27 looks, the one frame of
+    the load that was drawn.
+- **Nothing else moves.** The caption, the plaque, the pads' slide, pulse and rings, and
+  the dismissal all stay on the level's age.
+- **The sign is handed the hold in one piece** (`Hud::HandOver`). The sign's chase is
+  the one clock in the opening that is not a pure function of age: it is re-aimed every
+  100 ms. Fed sixty short frames it is still 13 units out at 700 ms. Fed the original's
+  one long frame it is 3 units out.
+  - So its frame time is held while the blacks are whole and given over on the first
+    tick after.
+  - **This is inferred.** There is no footage of 1-15's opening, and by 2 s the two
+    feeds are within a pixel of each other: the library's t2.0 capture of 1-15 is
+    byte-identical either way.
+- **A retry opens the same way**, as its restart builds a fresh Game state.
+
+**EVIDENCE AFTER.** The port was captured at the rec11 frames, each dated by its own
+caption alpha (`out/parity/ui1/capture_port_r3.sh`). Both sides were measured by
+`out/parity/ui1/r3/opening_check.py`:
+- world brightness k;
+- caption alpha on the glyph interiors;
+- plaque alpha in its text band;
+- each pad's disc band as a fraction of that side's own settled frames, median of the
+  same 4.0..8.5 s window.
+
+| rec11 frame | level age | world k, original / port | caption | plaque | left pad band | right pad band |
+|---|---|---|---|---|---|---|
+| n28 | 700 ms | 0.091 / 0.112 | 0.761 / 0.764 | 1.11 / 0.89 | 0.26 / 0.26 | 0.24 / 0.25 |
+| n29 | 833 ms | 0.246 / 0.280 | 0.721 / 0.720 | 0.99 / 0.96 | 0.47 / 0.49 | 0.46 / 0.48 |
+| n31 | 917 ms | 0.380 / 0.419 | 0.694 / 0.694 | 1.05 / 0.98 | 0.63 / 0.63 | 0.62 / 0.63 |
+| n33 | 983 ms | 0.515 / 0.550 | 0.674 / 0.670 | 1.07 / 0.99 | 0.70 / 0.70 | 0.69 / 0.70 |
+| n36 | 1050 ms | 0.728 / 0.706 | 0.649 / 0.646 | 1.05 / 1.00 | 0.79 / 0.78 | 0.78 / 0.77 |
+| n38 | 1150 ms | 0.950 / 0.962 | 0.617 / 0.615 | 1.03 / 1.00 | 0.86 / 0.89 | 0.83 / 0.88 |
+| n62 | 2000 ms | 1.000 / 1.000 | 0.331 / 0.330 | 1.00 / 0.99 | 1.11 / 1.09 | 1.08 / 1.08 |
+
+- **Before.** At matched blackness review 2 measured the port's pad bands at
+  0.06 / 0.18 / 0.40 / 0.56 against 0.26 / 0.47 / 0.63 / 0.69, and its caption 0.15
+  brighter.
+- **Now.** Both agree within 0.03 on every frame. The pads are 0 px from their corners
+  from n28 on.
+- **The caption and plaque end** 1.83 s after the black clears; rec11's end 1.78 s after.
+- **What is left.**
+  - **World k.** On this estimator it reads 0.02..0.04 brighter in the port on n28..n33
+    and 0.02 darker on n36.
+    - The estimator's own lead (473 ms) would bring the first to 0.014..0.022, but take
+      n36 to 0.049 darker.
+    - So no single lead explains the residual; it sits within the spread of the three
+      estimates.
+  - **Plaque at n28.** The original's 1.11 is divided by a k of 0.09, which multiplies
+    its noise by eleven. The port's 0.89 is the decoded `smoothEnd` at 700 ms.
+- **The library frames** (1-01, 1-05, 1-17, 3-05, 1-15, 2-07 at t2.0, t4.5 and t8.0)
+  are **byte-identical** to step 39's captures. They are all past 1.165 s, where nothing
+  changed, and compare as step 39 tabled them (offset 0, 0 on all but 2-07 t4.5).
+
+**DECLINED AGAIN, WITH THE DECODE: THE HUD OVER THE POPUPS OF 1-2 AND 1-3.** The
+difference is real. But the original has no rule that hides the HUD on those two levels.
+- **What opens the popups.** `Game::managePopups` (bytes 115157..115478) opens
+  `LevelHelp1Popup` for world 0, level index 1 and `LevelHelp2Popup` for index 2. It
+  does so through `UILayerManager::openPopup` (bytes 78770..78899), which makes the
+  popup the current UI layer.
+- **Why the HUD goes.** Restart, pause and the plaque belong to the game layer, so they
+  go with the swap: review 3 measured the plaque at 0.021 on 1-03 even with a gold
+  medal saved. **"Part 2" and "Part 3" stay drawn over the popup** in both captures,
+  because the caption is not a layer sprite.
+- **What hiding it here would do.** Hiding the HUD by level name would encode a rule
+  the original does not have. It would also leave two levels with no controls and
+  nothing to dismiss.
+- **What the unit of work is.** The popup:
+  - `Popup` and its layer (bytes 71281..73437);
+  - `LevelHelp1Popup` (constructor 205113..207734, draw 208104..208915);
+  - `LevelHelp2Popup` (209049..211708, 212078..212768), each an animated page with a
+    hand, blocks and a portal;
+  - the continue button.
+
+  Seven more popup classes and `HelpBlockController` serve the other levels. That is
+  its own step, and the HUD will hide with its layer when it is built.
+
+**Not done, and said so.**
+- **Input during the hold is not gated.** Under the whole black the pads walk and a tap
+  can open a portal. The original takes none during its load, which draws no frame.
+  Nothing measured it.
+- **No capture of the original's 1-15 opening exists**, so the sign's hand-over is held
+  against the decode only.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning.
+- **Magic Portals suites.** **35 of 35** pass, and **112 of 112** across the whole
+  ctest set.
+- **`test_mp_hud`: 179 → 255** (-1 + 29 + 1 + 1 + 2 + 44 = 76).
+  - The black held and its squared fade from 465 ms: 20 checks, replacing the 21 that
+    timed it from the first tick.
+  - rec11 frame by frame, each dated by its caption: world k within 0.05, pads home and
+    plaque up on n28..n36, and n27 whole (29). A black on the level's own clock misses
+    these k by 0.25..0.9.
+  - The pads between the blacks, and hidden while both are whole - marked inferred (+1).
+  - The file's 465 (+1).
+  - A negative `start_after_ms` refused by name (+2).
+  - `HandOver` and the sign fed the hold in one piece against sixty short frames (44).
+- **`test_mp_layer`: 294 → 304.**
+  - At 450 ms both blacks are still whole (4).
+  - level14's sign is unmoved under them and within 3.5 units of its corner by 700 ms (4).
+  - A retry pressed during the hold hands nothing of the attempt before to the sign's
+    chase: at 700 ms it is where a first attempt has it (2).
+  - The settled-HUD check waits 1.2 s instead of 1.
+- **Smart App Control.** It refused `test_mp_portal`, `test_mp_launchers` and
+  `MagicPortals.exe` once each after relinking (BAD_COMMAND, "Permission denied"). Each
+  ran once relinked again.

@@ -25,7 +25,7 @@
 #include "MagicPortalsLayer.hpp"
 
 int main(int argc, char** argv) {
-    // --level, --levels, --art and --data are the game's own flags. LaunchOptions
+    // --level, --levels, --art, --data and --saves are the game's own flags. LaunchOptions
     // refuses anything it does not know, which is right for the engine, so the
     // game takes its flags out first and hands on the rest untouched.
     MagicPortals::MagicPortalsLayer::Paths paths;
@@ -36,9 +36,14 @@ int main(int argc, char** argv) {
     std::string start;
     std::vector<char*> engineArgs{argv[0]};
     bool artGiven = false;
+    // DEV ONLY: where the medals are kept, instead of the user's own directory.
+    // It exists so a parity capture can open a level with a medal recorded - the
+    // original shows its current-score plaque only then - from a scores.json
+    // written for the purpose, without touching the save of whoever plays.
+    std::string savesOverride;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        if (arg == "--level" || arg == "--levels" || arg == "--art" || arg == "--data") {
+        if (arg == "--level" || arg == "--levels" || arg == "--art" || arg == "--data" || arg == "--saves") {
             if (i + 1 >= argc) {
                 std::cerr << arg << " needs a value\n";
                 return EXIT_FAILURE;
@@ -51,6 +56,8 @@ int main(int argc, char** argv) {
             } else if (arg == "--art") {
                 paths.art = value;
                 artGiven = true;
+            } else if (arg == "--saves") {
+                savesOverride = value;
             } else {
                 paths.data = value;
             }
@@ -69,7 +76,9 @@ int main(int argc, char** argv) {
                   << "                    the game opens its menu.\n"
                   << "  --levels <dir>    the converted levels (default " << paths.levels << ")\n"
                   << "  --art <dir>       what their res:// stands for (default the directory above them)\n"
-                  << "  --data <dir>      the remake's game/data directory (default " << paths.data << ")\n";
+                  << "  --data <dir>      the remake's game/data directory (default " << paths.data << ")\n"
+                  << "  --saves <dir>     DEV: keep the medals (scores.json) here instead of the user's\n"
+                  << "                    data directory - for a capture that needs a medal recorded\n";
         return EXIT_SUCCESS;
     }
     if (!options.ok) {
@@ -109,7 +118,8 @@ int main(int argc, char** argv) {
     //
     // Empty when the platform will not say: the medals are then not kept, which
     // the game says out loud rather than writing somewhere unpredictable.
-    const std::filesystem::path saveDir = Supersonic::UserDataDirectory(manifest.title);
+    const std::filesystem::path saveDir =
+        savesOverride.empty() ? Supersonic::UserDataDirectory(manifest.title) : std::filesystem::path(savesOverride);
     if (saveDir.empty()) {
         std::cerr << "[Magic Portals] no writable user directory; "
                      "medals earned this session will not be kept.\n";
