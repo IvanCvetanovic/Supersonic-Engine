@@ -6742,3 +6742,285 @@ expects. So it no longer acquires anything of its own.
   on which every gate above was read; and the walk above was run on it.
 - **Neither repository was committed to.** The remake's working tree is clean: everything
   this step wrote is under the gitignored `out/parity/specs/lighting/work/g4/`.
+
+## Step 48 - a light a 2D sprite can take, with a height of its own, and the loop that adds it (built)
+
+The lighting design's step E3 (the remake's `out/parity/specs/lighting/design_port.md`,
+section 7.1: section 4.4 and the light loop of section 4.6). **An engine capability, off
+until something places a light**: a `Light2DComponent`, one storage buffer that carries
+every one of them to the shader, and the loop in `shadeSprite2D` that adds one clamped term
+per light to a 2D sprite whose mask shares a bit with it. It reads, at last, the four things
+step 46 packed and nothing read: the height, the tint without ambient, the light mask and
+`kNormalYDown`.
+
+**Nothing places a light, and nothing drew differently.** Wolf Brigade, MainScene, every port
+frame the gate takes, the HUD over both blacks and the menu are byte-identical before and
+after. What the loop draws was proved on a scene built for it: 30,256 predicted pixels, none
+more than 1 of 255 away. The game does not change: no signature it calls moved.
+
+**THE COMPONENT (engine: `core/Components.hpp`).** `Light2DComponent`, as design section 4.4
+wrote it: `color`, `intensity`, `range`, `height`, `layers`, `enabled`.
+- **x and y are the entity's world position; the height is absolute** and not the
+  transform's z. In a 2D scene z is draw order: the port's quads sit at slot depths, and a
+  torch drawn in front of a wall is not nearer to it.
+- Beside `LightComponent`, and deliberately not a `type` of it. Those lights are tied to the
+  camera's depth slices, chosen by importance and given shadow slots, none of which means
+  anything to a sprite under an orthographic camera.
+- The arithmetic is written above the struct, so a reader finds the formula where the light
+  is declared.
+
+**THE GATHER (engine: `core/Light2D.{hpp,cpp}`, new, no Vulkan).** `Light2D::GatherLights2D`,
+pure, the engine's shape for this (`ClusterGrid`, `GatherUvTransforms`):
+- Position from `LightWorldPosition`: the world matrix once the hierarchy has resolved, the
+  local transform before. A lamp parented to a character goes with it, which is the bug
+  section 4c of ARCHITECTURE.md records `LightComponent` once had.
+- `color x intensity` folded on the CPU.
+- **A light whose folded colour is zero is not packed**, and is not counted as dropped. Ethanon
+  leaves it out of its list the same way: `ETHEntityRenderingManager::AddLight`,
+  `ETHEntityRenderingManager.cpp:161-172`, the test at `:163` (read in the remake's
+  `reference/ethanon` clone this step, where it checks the colour before `lightIntensity` is
+  applied; folded here, an intensity of 0 is the same black light).
+- **Past `capacity`, dropped in the registry's order and counted.** The renderer logs the
+  count once per change, as it does for the froxel list and the transforms.
+- Nothing else is filtered. A range of 0 lights nothing; a negative range is squared by the
+  shader and lights as its magnitude. The design lists four behaviours and a range rule is
+  not one of them, so it is left below as an open item rather than invented here.
+
+**THE RECORD.** `GpuLight2D`, std430, 32 bytes: `vec3 position` (z the height), `float range`,
+`vec3 color`, `uint32 layers`, behind `GpuLight2DHeader`, 16 bytes: the count and three words
+of padding, because a runtime array of a struct holding a vec3 starts at 16. Size and all four
+offsets are `static_assert`ed. `kMaxLights2D` = 64; `kLight2DBufferBytes` = 16 + 32 x 64 =
+2,064.
+
+**THE BUFFER (engine: `VulkanPipeline`, `VulkanRenderer`).**
+- Scene set binding **12**, storage buffer, fragment stage. Every `VulkanPipeline` builds the
+  scene layout the same way, so all of them gained it together.
+- `m_light2DBuffers`, one per frame in flight, allocated at capacity with the clustered-light
+  buffers; the descriptor pool's storage-buffer count `MAX_FRAMES_IN_FLIGHT * 6u` -> `* 7u`,
+  with its comment's list of bindings; a thirteenth `WriteDescriptorSet`.
+- **Gathered and uploaded every frame, after the UV transforms and before the uniform
+  buffer, a count of zero included.** `shadeSprite2D` reads the count for every 2D sprite
+  fragment, lit or not, so a frame with no light has to say zero rather than leave a stale or
+  unwritten number in front of it. The existing light upload's `if (!empty())` was not
+  copied; the transforms' unconditional upload was.
+- Header and records go up as one contiguous write from a scratch vector.
+- **Proved in two builds, so a difference would have had an owner.** The first build had the
+  component, the gather, the codec, binding 12, the pool, the write and the upload, and not
+  the shader: all 21 gate frames byte-identical to before (`work/e3/stageA/`), validation
+  silent. The second added the shader, and nothing else that draws (its other step was
+  `test_materials`' reading of it).
+
+**THE SHADER (`shader.frag`, regenerated `frag.spv`, 44,904 -> 49,020 bytes).** Design section
+4.6's declarations and loop:
+- `struct Light2D` and `Light2DBuffer` at binding 12, `MAX_LIGHTS_2D = 64u`, and
+  `LIGHT_MASK_BITS = 0xFFu` beside `LIGHT_MASK_SHIFT`.
+- `lit` starts at zero. When the mask is not zero and the count is not zero:
+  - the normal map decoded and **not renormalised**, green flipped under `kNormalYDown`;
+  - carried along the model's first two columns, normalised, so a rotated or mirrored sprite
+    turns its normals with it, with z left as z (towards the viewer, where heights are);
+  - `P = (fragWorldPos.xy, emissive.w)`, the tint `texel x emissive.rgb` (no ambient);
+  - per light sharing a mask bit: skip at `d2 >= r2`, else
+    `lit += clamp(tint * color * ((1 - d2 / r2) * dot(v, n) * inversesqrt(max(d2, 1e-12))), 0, 1)`.
+- **The return is `base * alpha + lit` premultiplied and `base + lit` otherwise.** With `lit`
+  exactly zero, those are the two expressions this path returned before, and the captures
+  below say so to the byte. The light goes on at full weight over a partly transparent texel,
+  as the original's separate `One, One` light pass does.
+- The range test is not redundant with the clamp. Beyond the range and **behind** the surface,
+  `1 - d2/r2` and the facing are both negative and their product is a positive light from
+  nowhere. The suite now pins that case (mutation below).
+- Not ported, as design section 4.6 states: the per-light cull, the scissor, and the vertical
+  variant.
+- The `Shaders` target compiled it with the SDK's glslc (step S0), a direct
+  `glslc shader.frag` gives the same bytes (`60f19975...`), and `spirv-val` accepts it. A
+  comment-only fix to the shader after the gate frames recompiled it to the same md5.
+
+**THE CODEC (`ComponentCodec`).** `"Light2D": { "Color", "Intensity", "Range", "Height",
+"Layers", "Enabled" }`, written when the entity has one, its own key rather than inside
+`"Light"`, which a reader would turn into a PBR point light. Each field reads with the
+component's own default; `Layers` is clamped to a byte, not wrapped. **Beyond the design's
+list, and why:** ComponentCodec's header says adding a component means editing one place, and
+scenes and prefabs save through it. Without it a Light2D placed in a scene would not survive
+a save. The editor's play/stop snapshot (`PlayMode.cpp`) and undo history (`EditHistory.cpp`)
+both go through `SceneSerializer`, so a Light2D survives those too (checked in the source, not
+run). `InspectorPanel` was not touched: there is no Light2D section or Add Component entry.
+
+**THE SUITES.**
+- **`test_light2d` (new), 90 checks, floor 80.** Pure arithmetic and a registry, so it needs no
+  working directory and cannot skip.
+  - The gather: x and y from the transform, **the height and not the transform's z**, range,
+    colour x intensity (3, 1.5, 0.3 from (1, 0.5, 0.1) x 3), layers; a parented light at its
+    world matrix; a black light, a light at intensity 0 and a disabled one left out and not
+    counted, a pure red one kept; 70 lights at capacity 64 give 64 and **6 dropped**, and at
+    capacity 3 give 67 dropped, with a black one among them neither taking a slot nor counted;
+    an empty registry gives 0 and 0; a stale output vector is cleared.
+  - `Light2D::WorldNormal` and `Light2D::Contribution`, **the CPU transliteration kept beside
+    the shader** (each line carries the GLSL it mirrors):
+    - flat normal, light at height 6 over a receiver at 0: the add is
+      `(1 - d^2/R^2) * (6/d)` at x = 0, 2, 5, 8, 12 and 18 with R 20; nearer is brighter; a
+      receiver raised to the light's height takes nothing;
+    - a texel facing image-right is lit from world +x (0.91 at 3 units, R 10) and **exactly
+      0** from -x, and 0 from above;
+    - the same sprite turned +90 degrees (`TransformComponent::getModelMatrix`, as the
+      renderer builds the record): the model's first column is +y, it is lit from above at
+      0.91, not from the right and not from below; turned -90 it is lit from below; a scaled
+      quad's normal is not stretched;
+    - mirrored (scale x -1): lit from -x, not +x, green unchanged;
+    - `kNormalYDown`: a green-up texel faces down and is lit from below, not above; red
+      untouched;
+    - a half-length normal gives half the add (not renormalised);
+    - `d >= R`: exactly 0 at d = R, just past it, far past it, diagonally past it, and **past
+      it behind the surface**; just inside it is `1 - 4.99^2/25`; a light on the fragment
+      divides by nothing;
+    - the mask: a shared bit lights, no shared bit and a mask of 0 do not, bit 7 works;
+    - per-channel clamp of tint x colour, and a black texel takes no light.
+  - **The rotation is the engine frame's claim.** `engine_math.md` section 2.6 measured the
+    original's rotated lightmaps against its drawing rotation (MAE 0.80; correlation -0.107
+    for the opposite sense). That the port hands the engine its sprites' angles in that sense
+    is the game's to show when it feeds them (G5); this step does not settle it.
+- **`test_materials` 326 -> 336** (floor 320 -> 330, still six below the count). New case: the
+  shader's `struct Light2D` is `GpuLight2D`'s four members in order; binding 12 is a count,
+  three pads and the array; `MAX_LIGHTS_2D` is `kMaxLights2D`; `LIGHT_MASK_BITS` is
+  `kLightMaskBits`; the loop reads the height from `emissive.w` and the tint from
+  `emissive.rgb`. Read from the source at run time, comments stripped, spacing ignored.
+- **`test_serialize` 445 -> 479** (floor 400 -> 460). The fully loaded entity carries a
+  Light2D with every field off its default, so the prefab's key parity and value round trip
+  cover it. A new case: a scene saves it under `"Light2D"` and not `"Light"`, once, only for
+  the entity that has one, and reads it back field for field without growing a
+  `LightComponent`; a block naming only `Range` and `Layers: 300` reads the other fields as
+  defaults and the layers as 255; `Layers: -4` reads as 0.
+- **Mutations, not kept.**
+  - `MAX_LIGHTS_2D = 32u` in `shader.frag`, no rebuild: `test_materials` failed on exactly
+    that check, **1 of 336** (`test_materials.cpp:1444`). Restored from a copy, md5
+    `bdf2d3dd...` before and after.
+  - The y-down flip removed from `Light2D::WorldNormal`: `test_light2d` **3 failures of 89**
+    (`:310`, `:313`, `:314`, the y-down case).
+  - The range test removed from `Contribution`. Before running it, reading the suite found
+    no case the clamp alone would get wrong (every beyond-the-range light it had was in
+    front of its surface), so the behind-and-beyond case was added first; that run of the old
+    suite was not made. With the case, the mutation failed **1 of 90** (`:346`).
+  - Light2D.cpp was restored from a copy (md5 `2e1d378f...`) after each, and everything was
+    rebuilt.
+- **Unchanged from step 47's counts:** `test_resourcesync` 32, `test_draworder` 104,
+  `test_renderplan` 127, `test_sprite` 66, `test_screenoverlay` 46, `test_mp_layer` 463,
+  `test_mp_lighting` 444; all 18 `test_wb_*` pass. Also run directly: `test_clustergrid` 201,
+  `test_lightselection` 19 (no earlier count taken).
+- **What no suite covers.** The binding, the pool, the write, the upload and the shader's own
+  arithmetic need a device. The scene below covers them.
+
+**PROVED ON A SCENE BUILT FOR IT (`work/e3/experiment/`: `make.py`, `check.py`).** Two
+scenes, `SupersonicEngine --scene <scene> --window 1280x720 --fixed-step --frames 120
+--screenshot` (the editor viewport, 744 x 336): DisplayEncoded, a black `Color` background,
+bloom 0, an **orthographic** camera at the origin looking down -z (height 8), so a pixel's
+world position is linear in its index and every pixel can be predicted, not only a centre.
+Eight premultiplied 2D sprites of 1.6 units, white albedo, each with **its own light on its
+own layer** so no light reaches another's sprite. The two normal maps are generated 8 x 8
+PNGs of one colour, under `out/`. `check.py` predicts every pixel 3 px inside each quad from
+the numbers in the scene and the maps' bytes (the flat map is the built-in (128, 128, 255)):
+design section 4.6's loop in numpy, then `floor(v * 255 + 0.5)`.
+- **Both exit 0, "Clean exit with validation active", no VUID.** That covers binding 12's
+  write and the upload with eight lights and with the masks off.
+
+| Quad (3,782 px each) | Light | max abs diff | mean predicted | mean measured | centre pixel, predicted / measured |
+|---|---|---|---|---|---|
+| Q1 flat, tint (0.8, 0.9, 1), ambient 0 | (1, 0.6, 0.3), 0.5 right, height 1, R 3 | 1 1 1 | 137.82 93.02 51.68 | 137.76 92.99 51.66 | 158 107 59 / 158 107 59 |
+| Q2 image-right normal | white, 1.2 right, height 0 | 1 1 1 | 188.56 | 188.49 | 215 / 215 |
+| Q3 the same | 1.2 **left** | 0 0 0 | 0 | 0 | 0 / 0 |
+| Q4 turned +90 degrees | 1.2 **above** | 1 1 1 | 188.29 | 188.23 | 214 / 214 |
+| Q5 turned +90 degrees | 1.2 right | 1 1 1 | 31.67 | 31.66 | 0 / 0 (lit only on the half below the light) |
+| Q6 mirrored | 1.2 **left** | 1 1 1 | 188.55 | 188.49 | 213 / 213 |
+| Q7 green-up map, `NormalYDown` | 1.2 **below** | 1 1 1 | 188.29 | 188.23 | 214 / 214 |
+| Q8 alpha 0.5, ambient 0.5, flat | (0.4, 0.2, 0.1) x 2, height 1 above | 1 1 1 | 214.32 139.04 101.40 | 214.26 138.97 101.36 | 245 154 109 / 245 154 109 |
+
+- **Every predicted pixel within 1 of 255, and 0 non-black pixels outside the quads**: a light
+  with no sprite under it adds nothing.
+- **Q8 is the premultiplied claim.** The light goes on at full weight over the half-transparent
+  texel: 245, 154, 109 at the centre. Weighting it by alpha, `(base + lit) * alpha`, would read
+  154, 109, 86.
+- **With every `LightMask` 0** (`light2d_nomask.scene`, the same lights): Q1 to Q7 are black to
+  the last pixel and Q8 is its base alone, **64 64 64** on all 3,782 pixels; max diff 0.
+- On the final build both scenes captured again: `light2d.png` `cb913dd7...` and
+  `light2d_nomask.png` `5883441e...`, md5-identical to the first.
+
+**GATES.** Captures by `work/e3/capture.sh` (a copy of G4's with its folder changed), before
+on this step's starting build (G4's final, commit `827ea6c`, which rebuilt with nothing to do).
+**The before is G4's final**: all 21 before-frames md5-identical to `work/g4/final2/`, and the
+menu, MainScene and Wolf Brigade md5s too.
+
+| Gate | Required | Measured |
+|---|---|---|
+| `SupersonicEngine --scene assets/scenes/MainScene.scene --window 1280x720 --fixed-step --frames 120 --screenshot` | byte-identical before/after | `1e24c2a30f6f22dc2bb01b6038bd1af9` before, stage A, after and final (steps 42 to 47's); `Clean exit with validation active` |
+| `WolfBrigade --window 1280x720 --fixed-step --frames 120 --screenshot` | byte-identical before/after | `d9e7b8fe5e8b0b2f162b0195e5d5ba31` before, stage A, after and final |
+| port captures, 1-01, 1-09, 1-13, 2-05, 2-26, 3-05, 4-22 at frame 420 | unchanged (no light emitted yet) | identical before, stage A, after and final: `a585e9b2...`, `6620c110...`, `521e8405...`, `2979daf4...`, `8f250214...`, `05edbf77...`, `a80eae25...` |
+| the torch and door frames (level0 f270..390, level0a f300..420) | unchanged | 10 of 10 identical in stage A and final; in `after/` 8 of 10, the other two failed (below) and 6 reruns were identical |
+| screen overlay / HUD, level0 frame 1 | bit-exact | `5c5cfed20f942d06da1f22fb5835c1dd` before, stage A, after and final |
+| the menu, frame 120 | unchanged | `934232ed534adae966587863179378e9` before, stage A, after and final |
+| scene encoding (step 43) and the 2D record (step 46) under the port | bit-exact | every port frame above is DisplayEncoded and drawn through `shadeSprite2D` with mask 0, and identical |
+| all 128 levels at frame 420 (not required) | unchanged | **128 / 128 md5-identical** to `work/g4/after/sweep/` (`capture.sh final sweep`, on the final build); the seven gate levels' sweep frames equal this step's `before/` frames; every run exit 0, validation ACTIVE in all 128 logs, no VUID. The level sprites of every lit level draw through `shadeSprite2D` with mask 0 |
+| validation | silent | "ACTIVE" in every port log of before, stage A, after and final; MainScene's "Clean exit with validation active"; no `VUID` or "Validation Error" in any log (Wolf Brigade's prints neither, as before) |
+| light loop, binding 12, upload (experiment) | as predicted, validation silent | 30,256 pixels within 1 of 255, 0 stray; masks off: 0 of 255; exit 0, clean exit with validation, twice |
+| `frag.spv` | regenerated from the GLSL | `Shaders` target; direct glslc identical (`60f19975...`); `spirv-val` clean |
+| build | zero warnings | 0 in all four builds (269, 4, 5 and 129 steps) and every relink |
+| ctest | all pass; `test_light2d`, `test_serialize`, `test_materials` named | **114 / 114**, Not Run 0; 90, 479, 336 |
+
+`lightgate.py` was not run: every port frame is byte-identical to G4's, so every number it would
+print is the one step 47 printed. The design gates the light itself at G5.
+
+**TWO FAILED RUNS IN `after/`, NOT REPRODUCED.** In the `after/` round, `level0a` at frames 360
+and 420 **exited 1 about three seconds in, with no PNG** and no message. **No gate number came
+from either**: the md5 columns above are stage A's and final's, where all 21 ran.
+- Each log stops right after "[AudioEngine] Loaded ... fireball.mp3", the last line before a
+  good run's `[SelfCheck] Mid-run invalidate`, which `SupersonicApp` logs at frame
+  `maxFrames / 2` (180 and 210 here). So both died in the first half of the run, after the
+  level and its sounds had loaded; where exactly is not known.
+- The run between them (f390) and those around them were normal, and the Windows Application
+  log has no event for the executable.
+- Re-run three times each on the same binary: **6 of 6 exit 0**, md5-identical to before
+  (`9efeb31f...`, `d69eab9d...`).
+- The `final/` round on the relinked binary took all 21, again identical.
+- Not the shader: stage A (no shader change) and the reruns and final (with it) draw the same
+  frames, and a shader problem does not exit on a timer. The cause is not known. It is recorded
+  rather than folded into "Smart App Control", which refuses at launch with 126.
+
+**LEFT FOR LATER STEPS AND FOR THE OWNER.**
+- **G5** places the lights (section 5.3), gives the player and the shot theirs (5.4), sets the
+  sprites' height, mask, normal map and `normalYDown` (5.2), and draws the halos. Its torch-pass
+  gate is the first measurement of this loop against the original; it must also show the
+  rotation sense of `engine_math.md` section 2.6 end to end.
+- **A range of 0 or below** is not filtered (0 lights nothing, a negative range lights as its
+  magnitude). Ethanon keeps a light only if `range > 0`, which the remake's converter already
+  applies; the engine does not. The owner's call.
+- **No Inspector section** for `Light2DComponent`; the codec saves it, nothing in the editor
+  adds or edits one.
+- **Not measured:** frame time with lights (design section 4.9 expects a loop of at most a
+  handful on a small share of fragments). No light is emitted yet.
+- **Stale counts, left alone:** README's badge and "Sixty-eight suites" and AGENTS.md's
+  "Sixty-eight" predate this step (ctest runs 114). AGENTS.md's registrar grep still reads
+  74: its `[a-z_]+` does not match `test_light2d`, whose name has a digit;
+  `ComponentCodec.hpp` still says the codec names eighteen components.
+- **The ui2-screens branch** has not seen binding 12. Nothing it calls changed signature, but a
+  merge that touches `shader.frag`, `VulkanRenderer` or the scene layout meets this step there.
+- Unchanged from step 47: the script's emissive, the sky controller, the placeholder boxes,
+  1-13's camera, the watcher gap for overlays.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning in any build.
+  - The first (269 steps): the component, the gather, the codec, the renderer and pipeline, the
+    new suite and the serialize suite, with the shader untouched (stage A).
+  - The second (4 steps): the shader and `test_materials`.
+  - The third (5 steps): the suite floors.
+  - The fourth (129 steps), after the mutations' restores, a member block moved in
+    `VulkanRenderer.hpp` and a comment fixed in `shader.frag`: the core library, every
+    executable, and the shader recompiled to the same `frag.spv`.
+- **ctest: 114 of 114, Not Run 0** (`work/e3/ctest_final.log`), on the fourth build.
+  - **Smart App Control**, resolved by deleting and relinking:
+    - the second build: 28 suites refused, then 7, then 2, then `test_packaging` alone, then
+      none;
+    - the fourth: 8 refused (`test_decomposition`, `test_mp_play`, `test_mp_portal`,
+      `test_mp_sounds`, `test_mp_torch`, `test_resourcesync`, `test_scripts`,
+      `test_shadowcache`), all ran after one relink;
+    - `MagicPortals.exe` refused after the first build and after the fourth, each run after one
+      relink; `test_serialize` refused on a direct run after the first build (it ran in the
+      ctest rounds); `test_materials` and `test_light2d` refused once each during the
+      mutations, each run after one relink.
+- **Neither repository was committed to.** The remake's working tree is clean: everything this
+  step wrote is under the gitignored `out/parity/specs/lighting/work/e3/`.
