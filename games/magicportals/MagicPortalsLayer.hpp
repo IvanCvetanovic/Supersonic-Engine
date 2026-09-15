@@ -22,6 +22,7 @@
 #include "sim/Game.hpp"
 #include "sim/Art.hpp"
 #include "sim/Hud.hpp"
+#include "sim/LevelEnd.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Pause.hpp"
 #include "sim/Scores.hpp"
@@ -151,12 +152,10 @@ public:
     // what needs state the port does not keep: no score, so no locking, no
     // page counter, no swipe. What is drawn is its art, where its own
     // normalized positions put it.
-    // `Finished` is the odd one: it sits OVER the level it finished, which
-    // stays loaded and drawn but stops ticking, so it is placed against the
-    // camera's view rather than against the menu's own box.
     // `Finished` and `Dead` are the odd two: each sits OVER the level it ended,
-    // which stays loaded and drawn but stops ticking, so both are placed against
-    // the camera's view rather than against the menu's own box. Everything that
+    // which stays loaded, drawn AND RUNNING - neither screen stops game time
+    // (the remake's ui2 spec, D7) - and both are drawn through the screen
+    // overlay on the view, as the pause is (sim/LevelEnd.hpp). Everything that
     // treats a screen as "the level is gone" has to name both.
     enum class Screen { None, Main, Worlds, Levels, Finished, Dead };
 
@@ -315,6 +314,32 @@ public:
     enum class DevPress { Pause, Levels, Resume, Skip, Achievements, Sound, Music };
     void ScheduleDevPress(int tick, DevPress press);
 
+    // DEV ONLY: hold a walk from tick `from` to tick `to` inclusive, as a held
+    // arrow would: -1 left, 1 right. A --fixed-step capture has no input, and the
+    // finished and lost screens need a walk into a door or a hazard.
+    void ScheduleDevHold(int from, int to, float direction);
+
+    // ---- how a level ends -----------------------------------------------------
+    //
+    // The beat after the door or the death, the HUD going, and the finished and
+    // lost screens over the level that goes on running (sim/LevelEnd.hpp, from
+    // ui.json's level_end block).
+    const LevelEnd::Rules& LevelEndRules() const { return m_levelEndRules; }
+    // Whether the door was reached, or the player killed, on this level.
+    bool Finishing() const { return m_finishing; }
+    bool Dying() const { return m_dying; }
+    // Game time since the door or the death: what the beat is counted in.
+    double EndedMs() const { return m_dying ? m_dyingClockMs : m_finishClockMs; }
+    // The pads' alpha byte as it decays from the end on, once a tick.
+    int EndPadAlphaByte() const { return m_padEndByte; }
+    // How long the finished or lost screen has been current, in milliseconds of
+    // the tick's clock: zero on the tick it came up.
+    double EndScreenClockMs() const { return m_end.clockMs; }
+    // What the finished screen scores, and where its two counters have got to.
+    const LevelEnd::Play& EndPlay() const { return m_end.play; }
+    int PortalsCounted() const { return m_end.portals.current; }
+    int CrystalsCounted() const { return m_end.crystals.current; }
+
 private:
     // A body the level built, and the box standing for it. The box sits at the
     // body's shape, offset from its entity in the body's own frame.
@@ -357,7 +382,7 @@ private:
     // registry.
     void openMenu(entt::registry& registry, Screen screen);
     // The medal screen, over the level that was just finished: unlike every
-    // other screen this KEEPS the level, which simply stops ticking.
+    // other screen this KEEPS the level, which goes on running under it.
     void openFinished(entt::registry& registry);
     void layOutMenu();
     void buildMenu(entt::registry& registry);
@@ -619,80 +644,36 @@ private:
     entt::entity m_menuBg{entt::null};      // the screen's background
     entt::entity m_menuTitle{entt::null};   // the game's title, on the main screen
 
-    // ---- the medal screen ---------------------------------------------------
+    // ---- the finished and lost screens ------------------------------------
     //
-    // LevelFinishedLayer draws a good deal more than a medal, and the port drew
-    // only the medal. Decoded from its constructor and its draw (bytes
-    // 271777..273843 and 274980..276253): a dimming veil over the frozen level,
-    // the "level finished" banner, the plaque naming the portals spent, the
-    // golden-score plaque when the play earned one, and a crystal beside the
-    // medal when the level had any.
-    //
-    // One vector rather than a member each: they differ only in image and
-    // placement, and nothing addresses an individual one.
-    struct Decoration {
-        entt::entity quad{entt::null};
-
-        // Normalized ON THE CAMERA'S VIEW, because that is how the original
-        // places them - against GetScreenSize - and the medal screen sits over
-        // the level rather than in the menu's own box.
-        glm::dvec2 atView{0.0};
-
-        // HOW IT IS SIZED, stated rather than inferred from a zero.
-        //
-        // Stretched: sizeView is the size, as a fraction of the view. Only the
-        // veil wants this - it is a gradient strip the original pulls one and a
-        // half screens wide, and sizing it from its own aspect would draw a
-        // hairline.
-        //
-        // ByHeight: heightView is its height as a fraction of the view and the
-        // width follows the IMAGE'S OWN aspect. Everything else wants this, for
-        // the reason the chapter icons needed it: an 84x128 image drawn square
-        // is an image nobody authored.
-        enum class Sizing { Stretched, ByHeight };
-        Sizing sizing{Sizing::ByHeight};
-        glm::dvec2 sizeView{0.0}; // Stretched
-        double heightView = 0.0;  // ByHeight
-        std::string image;        // resolved path, for asking its aspect
-
-        // A pixel offset from the medal, applied after atView. The crystal is
-        // placed at medalPos + (-30, 48) in the original's own pixels rather
-        // than at a fraction of the screen, and expressing that as a fraction
-        // would be a different position at a different window shape.
-        //
-        // No y flip: Units::ToWorld takes the remake's pixels with +y DOWN and
-        // flips once inside, so the original's screen-space offsets carry over
-        // verbatim. 48 is 48 further DOWN, as it is in the original.
-        glm::dvec2 offsetPx{0.0};
-
-        // WHERE ON THE SPRITE atView lands, as a fraction of it: (0.5, 0.5) is
-        // its centre, which is what almost everything here uses.
-        //
-        // The original's addSprite takes this as the sprite's origin, and the
-        // golden-score plaque is the one that does not centre: it is placed at
-        // vector2(0.23, 0.5) of the screen with an origin of vector2(0.5, 0.33),
-        // so a third of the way down rather than half. Drawing it centred put it
-        // visibly high, which is the "tiny plaque floating" in the first
-        // screenshot of this screen.
-        glm::dvec2 pivot{0.5, 0.5};
-
-        float z = 0.0f;
+    // Drawn through the screen overlay by EmitHud, laid out by sim/LevelEnd.hpp;
+    // nothing of them is in the registry. What the layer holds is what a
+    // picture cannot be a pure function of: the screen's clock, what the level
+    // ended with, and the ScoreCounters, which step on the tick.
+    LevelEnd::Rules m_levelEndRules;
+    struct EndScreen {
+        double clockMs{0.0}; // UI frame time since the screen became current
+        LevelEnd::Play play;
+        LevelEnd::Counter portals;  // ScoreCounter(0, portalsUsed, 100)
+        LevelEnd::Counter crystals; // and the crystals collected
     };
-    std::vector<Decoration> m_menuDecor;
-
-    // The portals-spent counter the medal is computed FROM.
-    //
-    // The original builds ScoreCounter(0, numPortals, 100): it starts at zero
-    // and steps ONE toward the play's portal count every 100 ms, and its draw
-    // recomputes the medal from getCurrent() on every frame. So the medal
-    // climbs bronze to silver to gold as the number rises, rather than being
-    // stamped at the end. That is a behaviour and not decoration - the port
-    // showing the final medal immediately was wrong in a way no screenshot
-    // would have revealed.
-    static constexpr double kCounterStrideMs = 100.0;
-    int m_counterShown = 0;        // where the count has got to
-    double m_counterClockMs = 0.0; // time owed to the next step
-    int m_medalDrawn = 0;          // which medal the quad currently wears
+    EndScreen m_end;
+    // The walk pads' alpha byte from the door or the death on, decayed a tick at a
+    // time; and whether clear-portals was up to be dismissed with restart and pause.
+    int m_padEndByte{0};
+    bool m_clearShownAtEnd{false};
+    // Each end-screen picture's file resolved once per level, and its size in
+    // texels; empty and zero for one that cannot be read, which is not drawn.
+    std::map<std::string, std::string> m_endImages;
+    std::map<std::string, glm::ivec2> m_endTexels;
+    // The screen up over the level as pieces, `ms` into it.
+    std::vector<LevelEnd::Piece> endPieces(const glm::dvec2& viewUnits, double ms) const;
+    // One tick of the screen: its clock, its counters and its buttons. True when
+    // a button was pressed, which may have taken the level away.
+    bool endScreenTick(entt::registry& registry, float fixedDelta);
+    // What the HUD keeps once a level has ended: the pads' last byte, and
+    // whether clear-portals goes with restart and pause.
+    void endHud();
 
     // THE BEAT BETWEEN GOING IN AND BEING SCORED.
     //
@@ -703,16 +684,15 @@ private:
     // only once gameEndElapsedTime passes gameWonDelay does it raise the
     // levelFinishedLayer and play playVictorySound.
     //
-    // gameWonDelay is 1400 ms: the constructor writes 1400 to gameLostDelay and
-    // copies the same register into gameWonDelay (bytes 125310.., instructions
-    // 24-29). A level may override it - the constructor's later arm reads a
+    // gameWonDelay is 1400 ms (ui.json's level_end.beats, decoded): the
+    // constructor writes 1400 to gameLostDelay and copies the same register into
+    // gameWonDelay. A level may override it - the constructor's later arm reads a
     // `delay` entity's `time` - but NO LEVEL IN THE GAME PLACES ONE, checked
     // across all 128, so the override is recorded here and not built.
     //
     // This port showed the medal and played both sounds on the tick the exit
     // reported, with the character still standing in the doorway walking on the
     // spot. That is what the owner saw.
-    static constexpr double kFinishDelayMs = 1400.0;
     bool m_finishing = false;      // gone into the door, not yet scored
     double m_finishClockMs = 0.0;  // how long since
 
@@ -723,10 +703,8 @@ private:
     //
     // checkGameEnd counts gameEndElapsedTime against gameLostDelay and only past
     // it raises the levelLostLayer and plays playDeathSound. gameLostDelay is
-    // the register gameWonDelay is copied FROM (constructor, instructions
-    // 24..29), so the two beats are the same 1400 ms and share the constant's
-    // decode rather than each carrying a number of its own.
-    static constexpr double kDeathDelayMs = kFinishDelayMs;
+    // the register gameWonDelay is copied FROM, so the two beats are the same
+    // 1400 ms - ui.json carries both, with the one decode.
     bool m_dying = false;         // killed, the lost screen not yet up
     double m_dyingClockMs = 0.0;  // how long since
 
@@ -744,10 +722,6 @@ private:
     // sets m_current to -1, after which the restart button's own guard
     // (`if (m_current < 0) return false`) would make it silently do nothing.
     void openDead(entt::registry& registry);
-
-    // The medal the counter's CURRENT value earns, by the same computeScore the
-    // final one uses. Zero when there is nothing to show.
-    int MedalShown() const;
 
     // WHAT THE PLAYER HAS EARNED, across runs.
     //
@@ -788,6 +762,7 @@ private:
         std::string image; // the picture, empty when it could not be read
         Hud::Rect rect;    // on the view, as last laid out
         bool shown{false};
+        double alpha{0.0}; // display-space, as last laid out
     };
     std::vector<ControlButton> m_controls;
 
@@ -852,12 +827,19 @@ private:
     // Each pause picture's file resolved to the hd art once per level; empty
     // for one that cannot be read, which is then not drawn.
     std::map<std::string, std::string> m_pauseImages;
-    // The pause's fonts where they are not the caption's own.
-    std::map<std::string, Supersonic::BitmapFont> m_pauseFonts;
-    const Supersonic::BitmapFont* pauseFont(const std::string& name) const;
+    // The fonts the pause and the end screens write in, where they are not the
+    // caption's own; read once for the run.
+    std::map<std::string, Supersonic::BitmapFont> m_uiFonts;
+    const Supersonic::BitmapFont* uiFont(const std::string& name) const;
 
-    // DEV ONLY: the scheduled presses, and the layer's own tick count.
+    // DEV ONLY: the scheduled presses and holds, and the layer's own tick count.
     std::vector<std::pair<int, DevPress>> m_devPresses;
+    struct DevHold {
+        int from{0};
+        int to{0};
+        float direction{0.0f};
+    };
+    std::vector<DevHold> m_devHolds;
     int m_ticks{0};
 
     void buildControls();
@@ -885,8 +867,6 @@ private:
     void layOutControls();
     // The no-portal sign a tick on, against the camera as this tick left it.
     void tickNoPortalSign(double dtMs);
-    // Every control hidden: a screen has gone up over the level.
-    void hideHud();
     // Which control the pointer is on, or nullptr. Asked once a tick, before a
     // shot is fired, because a tap that works a control must not also open a
     // portal under it.

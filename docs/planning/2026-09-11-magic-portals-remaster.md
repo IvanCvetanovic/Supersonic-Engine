@@ -5875,3 +5875,283 @@ enough.
   - after a verbose recompile, eight, then one.
 - **No other document's table moves.** README.md and ARCHITECTURE.md list neither suite's
   checks.
+
+## Step 46 - the level finished and the game over, over a level that goes on running (built)
+
+The medal screen and the lost screen were scene quads, sized by guessed fractions of the
+view (buttons 41 u, "level finished" 41 u tall, the medal 77 u, "game over" 56 u), and the
+level under both stopped ticking. The HUD vanished at once at the door and at a death, and
+the golden-score plaque was drawn for gold alone. This step rebuilds both screens to the
+remake's merged spec, `out/parity/specs/ui2/spec.md` sections 3 and 4 and deltas D1..D9
+(section 1.2), and holds them to its acceptance lists 6.2 and 6.3. The evidence is
+`pause_finished.md` sections 2..3 and `popups_gameover.md` section 4 beside it.
+- **Data.** Every number is in `games/magicportals/data/ui.json`, in one new block,
+  `level_end`, each entry citing its decode and its measurement:
+  - `beats`: the 1400 ms `gameWonDelay` and `gameLostDelay`;
+  - `hud`: the pads' `a <- uint(a * 0.98)` decay;
+  - `finished`: F1..F12;
+  - `lost`: L1..L4.
+  - The three constants the layer carried (`kFinishDelayMs`, `kDeathDelayMs`,
+    `kCounterStrideMs`) are gone into it.
+- **Arithmetic.** It lives in a new pure file, `sim/LevelEnd`: both screens' pieces in the
+  original's order of drawing, what a tap is on, `computeScore`, `ScoreCounter`, the pads'
+  decay, a HUD button's dismiss, and the veil drawn as a clamped texture. It is built on step
+  45's `sim/UiLayer` primitives. `UiLayer::Read` now holds the strict JSON readers that
+  `sim/Pause` kept to itself, so both screens refuse a bad number with the same words.
+- **Drawing.** Both screens go through `core/ScreenOverlay` in display values (D9), as the
+  pause and the HUD do. Nothing of either is in the registry any more. `EmitHud` draws the
+  screen after restart, pause and clear-portals and before the level's blacks, the walk pads
+  and the caption (spec 3.4's order).
+- **Closed:** D1..D9. D10..D12 were step 45's or are the popups'.
+
+**THE DELTAS, AND HOW EACH IS CLOSED.**
+- **D1..D5, sizes.**
+  - The five buttons are 64 u.
+  - `level_finished.png` is 256 x 64 u and the portals plaque 64 x 64 u.
+  - The medal is 96 u: `scale(1.5)` of the 64 u one.
+  - `game_over.png` is 128 x 128 u.
+  - Every piece is placed as the pause's are: the anchor is `view * at_screen`, and the
+    top-left is that less `size * origin`. The medal screen's pairs are already turned
+    round, last-pushed-first.
+- **D6, the golden plaque's gate, inverted.** `CMPIu score, 3; JNS` skips the plaque when the
+  final score is 3 or more. So it is drawn for silver and bronze and never for gold, with its
+  number at its anchor + (10, 1) u. The comment that argued the old gate ("a plaque claiming
+  a medal nobody won") went with it.
+- **D7, the level runs on.** `OnFixedUpdate` no longer hands the tick to `menuTick` while
+  `Screen::Finished` or `Screen::Dead` is up.
+  - **The screen goes first.** Each tick it advances its own clock and counters and reads a
+    tap (`endScreenTick`). A button that leaves the level leaves it there.
+  - **Then the level's own tick.** `AfterStep` and `stepLevel` run with a walk of 0: the
+    camera, the no-portal sign, the flipbooks, the particles and the sounds all go on.
+  - **Nothing is pressable from the door or the death on** (spec 3.5): no walk, no shot, no
+    control, no pause. The beat used to read the keys and a tap, so a tap in the doorway
+    fired a portal.
+  - **Once either beat has begun, the other cannot.** The branches are now ordered finishing,
+    dying, door, death. Reaching the exit on the same tick as a death still wins.
+  - **The camera stays put.** In level0 the wall under the medal changes by 0.000 grey over
+    1.6 s (A-F11), and the tick-level suite finds the screen 84 ticks after the door.
+- **D8, the HUD as a level ends.** `layOutControls` lays out an ended level as well as a
+  playing one. `ControlButton` carries its alpha, and `hideHud` is gone.
+  - **At the door**, restart, pause and clear-portals are CUT on the door tick.
+  - **At a death**, they are DISMISSED as UIButtons (`LevelEnd::HudDismissed`): 700 ms,
+    alpha 120/255 x byte(1 - smoothEnd), sliding 32 u out along the ray from the screen
+    centre through each one's ANCHOR, the corner its placement is measured from (step 45's
+    rule). `Button::draw` (bytes 15237..15660) multiplies the custom colour into the
+    UIButton's own.
+  - **The pads**, either way, decay from the byte they were last drawn with
+    (`Hud::PadAlphaByte`, new), `uint(a * 0.98)` a tick. The pulse and the tutorial ring stop.
+  - **U1 is not resolved.** The decode predicts the dismiss both ways and the door measured a
+    cut, so both measurements are followed, as the spec asks.
+  - **U2, decided: per 60 Hz tick.** Under `--fixed-step` a tick is a drawn frame, and a
+    60 fps device draws the same count.
+- **D9.** Display-space throughout, as above.
+
+**THE VEIL, AND THE SAMPLER THAT REPEATS.**
+- **The texture.** `fade_edge.png` is 64 x 16 texels, black. Every row is the same alpha
+  ramp, 255 at the left to 0 at the right. It is stretched 1920 px (F1) or 1152 px (L1)
+  wide.
+- **The problem.** The overlay binds the texture registry's sampler, which is `eRepeat`
+  (`VulkanImage::CreateSampler`'s default). Magnified 30x, bilinear filtering would blend
+  the opaque first texel with the clear last one across the leftmost 15 px. L1's right
+  edge is on screen too, at 1152.
+- **What the port does.** `LevelEnd::ClampedStrips` draws the stretch as three quads:
+  - a half-texel strip at each end showing only that edge texel's centre;
+  - between them, the texture from the first texel's centre to the last one's.
+  - That is exactly a clamped linear sample, which is what the spec's decoded profile
+    assumes (`np.interp` over texel centres).
+- **No engine file changes.** A clamp sampler for overlay textures was the alternative; it
+  would have touched the renderer, which another branch is changing now.
+
+**THE COUNTER, AS SCORECOUNTER COUNTS.** `ScoreCounter::update` (bytes 39728..39922) adds
+the frame's time to a Timer. Only once that reaches the stride, and while `current != end`,
+does it reset the Timer to zero and step one. The remainder is dropped, which at the port's
+60 Hz is nothing. `LevelEnd::Counter` is that, ticked from t0 by `endScreenTick`, for the
+portals and for the crystals (F12's `n`). The medal is `computeScore` of the portal count
+where it stands, every frame. `MedalFor` and the saved medal go through the same
+`LevelEnd::ComputeScore`.
+
+**WHAT ELSE CHANGED.**
+- **The text lines.** The engine's own "1-1 cleared with 0 portals - gold" and "Click a
+  button" lines are no longer written over a level under either screen. The original draws
+  its own count there.
+- **`MenuButtons()`** still lists Retry, Next and List for both screens, at their settled
+  places in the level's pixels, so `PressMenu` and the suites work as before. A tap is
+  tested against where each button is on its tick, entrance and all.
+- **`Hud::LayOutTextFrom`**, new, lays text out from a top-left corner: F12 is `DrawText`,
+  not centred. `LayOutText` now calls it.
+- **Logged with the tick.** The door, the death and each screen becoming current are
+  written to the log, so a capture can be dated.
+- **`Pause::LoadRules`'s `units_per_font_px` refusal** now reads "missing, not a number, or
+  not above zero", the shared reader's words. The refusal checks test only the key's name.
+
+**DEV ONLY: `--hold <left|right>@<from>-<to>`** in `main.cpp`, beside `--press`.
+- **What it does.** It holds a walk over a span of the layer's ticks
+  (`MagicPortalsLayer::ScheduleDevHold`, read in `keyDirection`).
+- **Why.** A `--fixed-step` run takes no input, and the finished and lost captures need the
+  player walked into a door or a hazard at a known tick. `--record/--replay` was not used.
+- **The runs:**
+  - level0 held right from tick 1 reaches its door on tick 193, pads at 180; the medal is
+    current on tick 277;
+  - 2-10 (level9a) held right from tick 260 dies on tick 281, pads at 120; the lost screen
+    is current on 365;
+  - 2-32 (level31a), idle, dies on tick 287; its screen is current on 371.
+
+**CAPTURED AND MEASURED.**
+- **Scripts.** `out/parity/ui2/finished/capture_port.sh` and `measure.py` (gitignored), with
+  the spec's own helpers (`specs/ui2/work/lib.py`, `fit_text.py`) and `tools/parity`'s
+  `locate.py` and `compare.py`.
+- **Frames.** 83 captures at 1280x720, `--fixed-step`, one tick a frame. Every run gets its
+  own saves directory, because a finish writes a medal: fresh for level0, the all-gold save
+  for 2-10 and 2-32.
+  - Frame F is (F - t0) / 60 s after t0.
+  - The settled finished frame is 457 (t0 + 3.0 s); the settled lost frames are 485 (2-10)
+    and 491 (2-32), t0 + 2.0 s.
+  - The recording's own instants (A-F9 at 0.69 s, A-F10) fall between ticks, so the port is
+    read on the ticks either side and interpolated.
+- **The veil's twin.** No same-frame twin exists: the world is running. The reference is the
+  median of three pre-screen frames (253, 270, 276; 2-10: 350, 360, 364). The settled
+  image is the median of three (457, 469, 481; 485, 497, 533). Columns are regressed over
+  pixels whose temporal std is under 4 in both sets, the UI and the pad corners masked, as
+  `dim_profile.py` did.
+- **Alphas.** Each is a composite fit, `frame = base + alpha (sprite - base)`, over the
+  sprite's opaque texels. The base is the reference dimmed by the veil as it stood that
+  frame, the veil's own fraction fitted first. Button slides are the distance along each
+  ray at which that fit is best.
+- **The pads.** The world under a pad is static until t0, and the start alpha is the byte
+  the port logged. Every later alpha then follows from `F_k - F_0 = (a_k - a_0) A (P - B)`.
+  - level0's left pad sits over a static portal's animated glow and reads up to 0.079 off
+    from tick 20 on. That cannot be the pad: both pads are drawn in one loop from one byte
+    (`m_padEndByte`) at one alpha, so the port has no way to put them apart. The residual is
+    the glow under the template, and the right pad, over still wall, is quoted.
+  - 2-10's left pad is quoted for the same reason.
+- **The binary.** Three captures (fin 457, 2-32 491, 2-10 302) were retaken on the final
+  binary and are md5-identical. All 83 logs say `Vulkan validation layers: ACTIVE`, and
+  none has an error or a warning.
+- **Pairs** (`compare.py`), each looked at:
+  - finished 1-1 `offset_px (0, 0)`, `edge_iou` 0.780, `mean_abs` 7.55: every piece lands on
+    the original's, and the world differs by its unported lighting;
+  - 2-32 (0, 0), 0.394, 25.23: the UI lands exactly; the port's level31a sky leaves the
+    right half black, which is in the pre-screen frame too, the world's and not the UI's;
+  - 2-10 (0, 0), 0.395, 11.91: the UI lands exactly. The original's frame (n190) still shows
+    its pads, which at the emulator's 20 fps outlive t0 (spec U2).
+
+| # | check | original | port | tolerance | pass |
+|---|---|---|---|---|---|
+| A-F1 | F2 level finished TL, S, Pearson | (234.0, 110.25), 1.406, 0.909 (this script: 0.915 at the decoded TL) | (233.87, 110.16), 1.40625, 0.987 | ±0.5 px; ±0.003; >= 0.90 | yes |
+| A-F1 | F3 portals plaque (medal box masked) | (511.5, 414.0), 0.914 (this script: 0.877) | (511.6, 414.0), 1.40625, 0.998 | ±0.5 px; ±0.003; >= 0.91 | yes |
+| A-F1 | F5 / F6 / F7 TL | (870, 90) / (870, 270) / (870, 450), 0.9993 | exactly those, 1.40625, 0.99999 each | ±0.5 px; >= 0.999 | yes |
+| A-F1 | F8 medal TL, scale | (467.0, 261.25), 2.104 (this script: (466.65, 261.0), 2.109, 0.9995) | (466.6, 261.0), 2.10938, 0.99992 | ±1.0 px; 2.109 ±0.01 | yes |
+| A-F2 | F9 "0": font, scale, centre | Matura128_shadow (rms 6.08), 1.405, (601.1, 373.9) | Matura128_shadow (2.87; next Matura64 14.49), 1.405, (601.6, 374.9) | ±1.0 px of the measured | yes, **at the edge** (0.5, 1.0) |
+| A-F3 | F4 at its TL, F10 | absent | Pearson -0.020; no golden number | < 0.5 | yes |
+| A-F4 | F1 k(x), 20 px columns, x <= 1195 | rms 0.0063 against the decode | rms **0.00106** over 60 columns; 1210 px reads 0.3839 against 0.3833 | rms <= 0.012 | yes |
+| A-F4 | 10 px columns 1065..1195 | 0.0099 rms residual | every column within -0.0013..+0.0010 of the decode | ±0.02 each | yes |
+| A-F5 | plateau opacities F2, F3, F5-F8 | 0.997..1.020 | composite F2 0.997, F3 0.992, buttons 0.9997; high-pass F8 1.005, buttons 0.999 | 1.00 ±0.02 | yes |
+| A-F6 | restart / pause gain, player | 0.4705 -> -0.034 on the next frame | 0.473 / 0.472 on tick 192, **0.003 / 0.002 on the door frame 193**; 11,908 px change about the door 192 -> 193 against 583 after | <= 0.03 by the next frame | yes |
+| A-F7 | pad alpha a tick at a time from 180 | rms 0.005 from 180 | right pad max \|diff\| **0.0013** over ticks 0..83; the suite: gone 99 ticks on | ±0.02 a frame; 81/99/106 ±1 | yes |
+| A-F8 | t0 - door | 1.41..1.50 s | door tick 193, screen tick 277: 84 ticks, **1400 ms**; fitted T with t0 277 is 1.005 | 1400 ms ±1 tick | yes |
+| A-F9 | at t0 + 0.1 / 0.35 / 0.69 / 1.0 s | model sin 0.156 / 0.522 / 0.884 / 1.0, lin 0.143 / 0.50 / 0.986 / 1.0 | veil 0.152 / 0.520 / 0.881 / 1.000; F2 0.152 / 0.520 / 0.881 / 0.997; F3 0.179 / 0.529 / 0.876 / 0.992; F5 0.140 / 0.497 / 0.983 / 1.000 | ±0.03 | yes |
+| A-F9 | best-fit T | sin 0.985..0.995, lin 0.680..0.695 | veil 1.005, F2 1.01, F3 1.00; buttons linear 0.705 | 1.00 ±0.08; 0.70 ±0.03 | yes |
+| A-F10 | slide at 0.022 / 0.257 / 0.429 / 0.527 / 0.656 s | 83.5 / 39 / 15.5 / 5 / 0 px | 85.5 / 41.0 / 16.0 / 6.6 / 0.5 px (the 32 u model at those instants: 85.6 / 40.9 / 16.1 / 6.7 / 0.4) | ±3 px each | yes |
+| A-F10 | rms over the ramp against the 32 u model | 1.17..1.21 px | F5 0.149, F6 0.149, F7 0.171 px | <= 1.3 px | yes |
+| A-F11 | 0.8 s mean abs diff, t0 + 1.6 -> 2.4 -> 3.2 s | flame 4.98 / 4.67, portal 4.31 / 8.47, wall 0.00 / 0.02 | door flame 6.55 / 7.08, left portal 2.92 / 2.04, mid portal 2.59 / 1.47; wall 0.000 / 0.000; buttons 0.000 / 0.000 | > 1 grey; < 0.1 | yes |
+| A-F12 | counter and medal past golden + 2 | decode only | not captured; `test_mp_levelend` pins 6 portals against 1 at mid-stride, 0 1 2 3 4 5 6 6 6, gold -> silver -> bronze; `test_mp_layer` reads 0 1 2 2 at 50 / 150 / 250 / 500 ms on 1-9's two portals | exact at mid-stride | pinned, not captured |
+| A-G1 | L2 / L3 / L4 centres, 2-32 settled | (640, 252) / (512, 432) / (768, 432); locate 0.9909 / 0.9959 / 0.9908 | exactly those (L2 fits (639.95, 252.0)); locate 0.9949 / 0.9953 / 0.9934; Pearson 0.988 / 0.99999 / 0.99999 | ±0.5 px; >= 0.985 | yes |
+| A-G2 | L1 column gains, x 20..1140 | 0.29 / 0.34 / 0.576 / 0.68 / 0.769 / 0.826 / 0.925 / 0.979 / 0.997 | 0.296 / 0.344 / 0.568 / 0.658 / 0.734 / 0.846 / 0.921 / 0.960 / 0.998; every column within 0.001 of the decode | ±0.04 of the decode | yes |
+| A-G3 | L1 / L2 sin T, L3 / L4 linear T, slide | 0.995; 0.700; rms 1.27 px; 78 px at 48 ms | 1.005 / 1.005; 0.700 / 0.705; slide rms 0.118 / 0.122 px; 80.0 px at 50 ms (tick 3; model 79.9) | ±0.08; ±0.03; <= 1.3 px; ±3 px | yes |
+| A-G4 | restart / pause dismissal from the death tick | 0.475 -> 0 by 1 - smoothEnd, >= 28 u | pause 0.470 / 0.452 / 0.417 / 0.365 / 0.265 / 0.136 / 0.046 at ticks 0 / 1 / 3 / 6 / 12 / 21 / 30 (model within 0.0007); travel 0 / 1.24 / 3.56 / 7.11 / 13.87 / 22.58 / **28.8 u**; tick 39's alpha is one byte (0.0018), gone from tick 40 | ±0.03 a frame; >= 28 u | yes |
+| A-G5 | pads from 120 | rms 0.0069; 0 after 81 | left pad rms **0.0003** (max 0.0006), 0.0004 at tick 83; the suite: gone by t0 | rms <= 0.01; 81 ±1 | yes |
+| A-G6 | death -> lost screen | 1.438 s / 1.349 s | 2-10 ticks 281 -> 365, 2-32 287 -> 371: 84 ticks, **1400 ms** | 1400 ms ±1 tick | yes |
+| A-G7 | the world under L1 after t0 + 1.0 s | the fire agent, the dragon move | 2-10 t0 + 2.0 -> 2.8 s: fire agent 4.85 grey; wall 0.000; UI 0.033 | > 1 grey | yes |
+
+- **The port lands on the decode.** Every sprite fits best at its decoded top-left and
+  scale; the two titles, F2 and L2, sit 0.05 px left of it on a 0.05 px search. Both veils
+  follow the decoded profile to 0.0013.
+- **The text offset U11 is not reproduced.** F9's centre sits at exactly A-F2's 1.0 px from
+  the measured one, as step 45's texts did.
+- **The door effect** (`red_suck_effect.ent`, `red_sparkles.ent`) that the original plays at
+  the door is not in the port. It is a world effect, not this screen.
+
+**TESTS.**
+- **New suite `test_mp_levelend`: 226 checks,** pure, and it never skips.
+  - **What the file says:** every number above, and D1..D6 by name.
+  - **Where the settled finished screen puts F2, F3, F5..F8:** each at its decoded
+    top-left to 0.06 px and within A-F1 of the measured one. F9 is at its decoded centre, and
+    within A-F2's pixel give or take the 0.006 the decode itself sits off.
+  - **What the play earns:** F4 and F10 drawn for a final score under 3 and never for gold;
+    F11 and F12 from their corners, F12 not centred.
+  - **The counter at 60 Hz:** mid-stride at every step, a step on the sixth tick, holding at
+    its end, and the medal following it.
+  - **The entrances:** A-F9's four instants, A-F10's five, all start offsets, and A-G3's
+    first frame.
+  - **The lost screen:** A-G1's centres.
+  - **Taps:** where the button is on its tick.
+  - **The veil's three strips:** 15 px end strips, and u = x / 1920 across the middle.
+  - **The HUD:** the decays from 120 / 180 / 210 gone after 81 / 99 / 106, the anchors,
+    and A-G4 a tick at a time.
+  - **Six refusals, each by name.**
+  - A first run caught the suite itself taking a piece out of a temporary list, which
+    dangles. `Find` on a temporary is now deleted.
+- **`test_mp_layer`: 436 -> 478.**
+  - **`FinishingALevelShowsTheMedal`:** "3 button quads" becomes "no button quads; three
+    button pictures in the frame", a tick into the entrance, since nothing is sent at alpha 0.
+  - **`TheMedalScreenIsTheOriginals`:** the tagged-quad and material checks become frame
+    checks. The veil is three `fade_edge.png` strips at 200/255 reaching 1.5 views; then the
+    banner, the plaque, the buttons, the medal; one counter glyph; no restart or pause. After
+    detach, nothing.
+  - **`APlaqueForALevelWithAMedal`:** "nothing over the medal" becomes "nothing of GameLayer
+    over it".
+  - **`Level8FromTheSpawnWithTapsAndWalking`:** adds the counter on the screen's own clock
+    and D6 on gold. It also adds F11 and F12 through the layer, the one path the pure suite
+    cannot reach: 1-9's three crystals count to 3 by 500 ms, and the frame holds
+    `crystal.png` (from `entities/hd`) after the medal and three `Matura84_shadow` glyphs,
+    which on gold, with no golden number, can only be "3/3".
+  - **`AFallOutOfTheLevelIsADeath`:** D7 with a body still falling, where the three captures
+    all had bodies at rest. The lost screen is up 84 ticks on. 316 ticks later the body is
+    94.8 u lower and the camera has moved 0.00009 px, the follow closing its last fraction
+    on the x the test teleported the body to. `Camera::Clamp` holds the follow inside the
+    bounds and the death is past them, so nothing pans under the screen. The original never
+    filmed a fall death (U9), so there is nothing to fit it to.
+  - **Two new cases:**
+    - `TheDoorCutsTheHudAndTheLevelRunsOnUnderTheMedal`: the door tick has no restart or
+      pause, and the pads are at their pulse byte. The byte decays exactly and is gone 99
+      ticks on; the medal comes up 84 ticks on. A second under it is a second of the level's
+      age. Escape and a stray tap do nothing, and a tap on restart replays.
+    - `ADeathDismissesTheHudAndTheLostScreenComesIn`: whole and home on the death tick; at
+      350 ms, 120/255 x (1 - sin(pi/4)) and moving out; gone at 700. The lost screen comes up
+      84 ticks on, pads gone. Veil, title, restart, list, in that order at 180 and 0.9 views.
+      The level runs on, and a tap on L3 replays.
+- **`test_mp_hud`: 417**, unchanged.
+
+**NOT BUILT, INFERRED, AND LEFT OPEN.**
+- **INFERRED:** clear-portals is dismissed with restart and pause at a death, and cut with
+  them at the door. The spec's recordings had no portal placed.
+- **INFERRED:** the pads decay from the byte last drawn, and the door tick's own frame shows
+  it undecayed. The ±1 frame of A-F7 and A-G5 covers the other reading.
+- **Not built:** the door's suck-and-sparkle effect; the fall death's skull and the other
+  death effects (U9).
+- **Not built:** a scene `end_delay` override of the 1400 ms. No level places one.
+- **Not built:** the level-start plaque at the end. It keeps its own timeline, and every
+  captured end comes after it has gone.
+- **Decode only:** silver, bronze, the live downgrade, F4/F10 and F11/F12 on a real play
+  (U4). The crystal's size and F12's placement are unmeasured. F11/F12 are drawn through
+  the layer in the suite (1-9) but were not captured.
+- **Escape over either screen does nothing**, as before; `handleBackButton` for those layers
+  was not read.
+- **The finished screen's last 80 px** (x > 1200) were unmeasurable in the original. The
+  port's 1210 px column reads the decoded 0.383.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning, at `/W4` on the game, the sim library and every suite
+  (`build.ninja` carries it on `LevelEnd.cpp.obj`). The nine touched translation units were
+  compiled again from scratch for the check (`LevelEnd`, `UiLayer`, `Pause`, `Hud`, the
+  layer, `main`, and the three suites), and printed none. After review, `test_mp_layer.cpp`
+  gained seven checks and was compiled again, with no warning; a full build then had no
+  work to do.
+- **ctest.** **114 of 114** pass (113 and the new suite), "Not Run" 0, on the final source,
+  after the review's checks too.
+- **Smart App Control** refused freshly linked executables. Each was deleted and relinked
+  until nothing was Not Run:
+  - the game twice, once after a rebuild and once after the final recompile;
+  - five suites on the first full run, which the next relink cleared;
+  - after the final recompile, eleven, then three, then two.
+- **No other document's table moves.** Only this plan lists the suites' checks.

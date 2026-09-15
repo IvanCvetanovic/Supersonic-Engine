@@ -25,6 +25,7 @@ add_library(MagicPortalsSim STATIC
     Keys.cpp
     Launchers.cpp
     LevelBuilder.cpp
+    LevelEnd.cpp
     Lighting.cpp
     Minions.cpp
     Mover.cpp

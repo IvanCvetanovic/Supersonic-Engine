@@ -149,6 +149,10 @@ bool OnPad(const Rules& rules, Side side, const glm::dvec2& viewUnits, double ag
 // The pads' alpha, pulsing for the first strides of a level and flat after.
 double PadOpacity(const Rules& rules, double ageMs, bool tutorial);
 
+// The same as the byte ScreenPad::computeButtonColor writes, which is what the
+// pads decay from once a level has ended (LevelEnd::PadDecayByte).
+int PadAlphaByte(const Rules& rules, double ageMs, bool tutorial);
+
 // The ring the tutorial pads emit. `shown` is false outside the tutorial and
 // once the pulse has stopped.
 struct Ring {
@@ -235,5 +239,10 @@ std::vector<Glyph> LayOutCaption(const Rules& rules, const Supersonic::BitmapFon
 // places (Pause.hpp).
 std::vector<Glyph> LayOutText(const Supersonic::BitmapFont& font, const std::string& text, const glm::dvec2& centre,
                               double unitsPerFontPx);
+
+// And text that is NOT centred: gs2d's DrawBitmapText as ETHScript's DrawText
+// calls it, the box's top-left at `topLeft` (the finished screen's crystal count).
+std::vector<Glyph> LayOutTextFrom(const Supersonic::BitmapFont& font, const std::string& text,
+                                  const glm::dvec2& topLeft, double unitsPerFontPx);
 
 } // namespace MagicPortals::Hud

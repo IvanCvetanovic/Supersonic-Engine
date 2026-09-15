@@ -575,5 +575,269 @@
       "units_per_font_px": 0.5,
       "offset_units": [10, -4]
     }
+  },
+
+  "level_end": {
+    "_about": [
+      "HOW A LEVEL ENDS: the beat after the door or the death, the HUD going, and the two screens",
+      "the original raises over the level that is still running - LevelFinishedLayer and",
+      "LevelLostLayer. Read by sim/LevelEnd.hpp, over ui_layer's primitives.",
+      "Specified in the remake's gitignored out/parity/specs/ui2/spec.md sections 3 and 4, and its",
+      "deltas D1..D9 (section 1.2); the evidence is pause_finished.md sections 2..3 and",
+      "popups_gameover.md section 4 beside it. Measured on finished_1-1.png, finish_1-1.mp4,",
+      "2-32_h6.3.png, death_2-10.mp4 and gameover_2-32.mp4, 1280x720.",
+      "",
+      "NEITHER SCREEN STOPS GAME TIME (spec D7): the level goes on being stepped behind both, as",
+      "it is through the beat. Placed as the pause is placed (spec 0.1): each anchor is view *",
+      "at_screen, its top-left that less size_units * origin; every size is the 1x texel size in",
+      "units and the hd twin is drawn, the finished medal excepted (96 u, scale 1.5).",
+      "ALPHAS ARE DISPLAY-SPACE (spec D9), drawn through the engine's screen overlay after restart",
+      "and pause and before the level's blacks, the walk pads and the level-start caption."
+    ],
+
+    "beats": {
+      "_source": [
+        "DECODED: GameStateController::GameStateController (bytes 121296..122160, instructions",
+        "24..29) writes 1400 to gameLostDelay and copies it into gameWonDelay; checkGameEnd",
+        "(bytes 125613..126638) raises levelFinishedLayer or levelLostLayer once gameEndElapsedTime",
+        "- game time from the door or the death - passes it. A scene end_delay entity can override",
+        "it; no level of the 128 places one (spec 3.4, U4).",
+        "MEASURED: door to the finished layer 1.41..1.50 s (finish_1-1.mp4, fitted t0 6.388..6.406);",
+        "first HUD-dismiss frame to the lost layer 1.438 s (death_2-10) and 1.349 s (gameover_2-32).",
+        "The emulator's clock runs 1.0..1.5% long (spec 0.3): the decode is taken."
+      ],
+      "won_delay_ms": 1400,
+      "lost_delay_ms": 1400
+    },
+
+    "hud": {
+      "_source": [
+        "DECODED: ScreenPad::draw (step 38) multiplies each pad's alpha byte by 0.98 and truncates,",
+        "a <- uint(a * 0.98), once per drawn frame after the game has ended, from whatever alpha the",
+        "pulse left; the pulse stops. Taken PER 60 Hz TICK here (spec U2): a --fixed-step run draws",
+        "a frame a tick, and a 60 fps device draws the same count.",
+        "MEASURED: 120 -> 0 in 81 frames on death_2-10 (rms 0.0069; a float 0.98^n fits 0.037); from",
+        "the door on finish_1-1, left pad rms 0.005 from 180 (spec 3.4, 4.1). 180 and 210 reach 0",
+        "after 99 and 106 frames.",
+        "AT THE DOOR restart and pause are CUT in one frame (gain 0.4705 -> -0.034, 4.992 -> 5.007 s);",
+        "AT A DEATH they are DISMISSED as UIButtons, 700 ms, alpha (1 - smoothEnd) of their own 120,",
+        "sliding 32 u out along the ray from the screen centre through each one's anchor (alpha",
+        "0.475 -> 0 over n138..n148, >= 28 u travel). finishGame (bytes 122645..122773) dismisses",
+        "GameLayer both ways; why the door cuts instead is unexplained (spec U1), and both",
+        "measurements are followed (spec D8). Button::draw (bytes 15237..15660) multiplies the",
+        "custom colour by the UIButton's own."
+      ],
+      "pad_decay_factor": 0.98
+    },
+
+    "finished": {
+      "veil": {
+        "_source": [
+          "DECODED: LevelFinishedLayer::LevelFinishedLayer (bytes 271777..273843, instruction 253",
+          "on) adds sprites/fade_edge.png at V2_ZERO, origin V2_ZERO, sized (screen.x * 1.5,",
+          "screen.y), tinted ARGB(200, 255, 255, 255): a black texture whose alpha ramps 255 -> 0",
+          "across its 64 texels, so the world under screen x keeps",
+          "k(x) = 1 - (200/255) * a_fade(64 x / 1.5 W), sampled linearly and clamped. A UISprite.",
+          "MEASURED: that geometry fits finished_1-1.png at rms 0.0063 (video 0.0066), against 0.034",
+          "flat and 0.0103 for a linear ramp; 10 px columns to x 1195 at rms 0.0099; sin fade-in",
+          "T 0.985 s (spec 3.1 F1, 3.2, D9). Below the walk pads, which fade on through it."
+        ],
+        "sprite": "fade_edge.png",
+        "tint_alpha_byte": 200,
+        "size_of_screen": [1.5, 1]
+      },
+      "title": {
+        "_source": [
+          "DECODED: same constructor: sprites/level_finished.png at (0.464, 0.278), V2_HALF. A",
+          "UISprite. Its 1x file is 256 x 64 texels.",
+          "MEASURED: hd TL (234.0, 110.25) px at S 1.406 against the decoded (233.92, 110.16);",
+          "Pearson 0.909 behind the medal's ribbon; sin T 0.995 s, no motion (spec 3.1 F2, D2).",
+          "It was 0.16 of the view tall (41 u) before this."
+        ],
+        "sprite": "level_finished.png",
+        "at_screen": [0.464, 0.278],
+        "origin": [0.5, 0.5],
+        "size_units": [256, 64]
+      },
+      "portals_plaque": {
+        "_source": [
+          "DECODED: same constructor: sprites/portals_created_plaque.png at the medal's (0.47, 0.55)",
+          "plus (0, 0.15) of the screen, V2_HALF, under the medal. A UISprite.",
+          "MEASURED: hd TL (511.5, 414.0) px at S 1.406 against the decoded (511.6, 414.0); the 1x",
+          "sprite at 2x fits worse (0.706); sin T 0.99 s (spec 3.1 F3, D3). It was 31 u tall."
+        ],
+        "sprite": "portals_created_plaque.png",
+        "at_screen": [0.47, 0.70],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "golden_plaque": {
+        "_source": [
+          "DECODED: same constructor, instructions 392..393: CMPIu score, 3; JNS skips it - so",
+          "sprites/golden_score_plaque.png at (0.23, 0.5) with origin (0.5, 0.33) is added ONLY",
+          "when the play's final score is below 3, i.e. not gold (spec D6, re-read while merging).",
+          "A UISprite. The port drew it for gold alone before this.",
+          "MEASURED: finished_1-1.png, gold, has none. Its placement is decode only (spec U4)."
+        ],
+        "sprite": "golden_score_plaque.png",
+        "at_screen": [0.23, 0.5],
+        "origin": [0.5, 0.33],
+        "size_units": [64, 128],
+        "shown_below_score": 3
+      },
+      "restart_button": {
+        "_source": [
+          "DECODED: same constructor: 'restart', sprites/button_restart.png at (0.75, 0.25),",
+          "V2_HALF (the pair pushed last-first). LevelFinishedLayer::update (bytes 274095..274980):",
+          "createGameState(currentLevel). A UIButton.",
+          "MEASURED: TL exactly (870, 90) px, Pearson 0.9993, scale 1.405..1.406; linear T 0.690 s;",
+          "slide rms 1.19 px against the 32 u model (spec 3.1 F5, D1). It was 41 u before this."
+        ],
+        "sprite": "button_restart.png",
+        "at_screen": [0.75, 0.25],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "next_button": {
+        "_source": [
+          "DECODED: same constructor: 'next', sprites/button_right.png at (0.75, 0.5), V2_HALF;",
+          "update: goToNextLevel(currentLevel). A UIButton.",
+          "MEASURED: TL (870, 270) px, Pearson 0.9993; linear T 0.685 s (spec 3.1 F6, D1)."
+        ],
+        "sprite": "button_right.png",
+        "at_screen": [0.75, 0.5],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "list_button": {
+        "_source": [
+          "DECODED: same constructor: 'menu', sprites/list_button.png at (0.75, 0.75), V2_HALF;",
+          "update: createLevelSelectState. A UIButton.",
+          "MEASURED: TL (870, 450) px, Pearson 0.9993; linear T 0.680 s (spec 3.1 F7, D1)."
+        ],
+        "sprite": "list_button.png",
+        "at_screen": [0.75, 0.75],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "medal": {
+        "_source": [
+          "DECODED: LevelFinishedLayer::draw (bytes 274980..276253, instructions 83..98) draws",
+          "getLargeSpriteMedalName(computeScore(counter.getCurrent(), golden, numCrystals,",
+          "maxCrystals)) with drawScaledSprite at screen * (0.47, 0.55), V2_HALF, scale(1.5): the",
+          "64 u medal at 96 u, every frame, in the restart button's colour - so at the buttons' alpha,",
+          "with no pop. ScoreManager::computeScore (bytes 363979..364204); getLargeSpriteMedalName",
+          "(bytes 364204..364411): 3 gold, 2 silver, anything else bronze.",
+          "MEASURED: medal_gold_l TL (467.0, 261.25) px at S 2.104 against the decoded (466.6, 261.0)",
+          "and 2.109; _m fits 0.952; linear T 0.695 s (spec 3.1 F8, 3.3, D4). It was 77 u."
+        ],
+        "at_screen": [0.47, 0.55],
+        "origin": [0.5, 0.5],
+        "size_units": [96, 96],
+        "bronze": "medal_bronze_l.png",
+        "silver": "medal_silver_l.png",
+        "gold": "medal_gold_l.png"
+      },
+      "counter": {
+        "_source": [
+          "DECODED: the same draw writes counter.getCurrent() with drawCenteredText at the medal's",
+          "position + scale(0, -7.5), getMatura64FontName - Matura128_shadow.fnt on an hd screen -",
+          "white at the buttons' alpha. The counter is ScoreCounter(0, numPortals, 100)",
+          "(ScoreCounter::ScoreCounter bytes 39408..39581, ::update 39728..39922): its Timer adds",
+          "the frame's time while this layer is current, and each time it reaches the stride it",
+          "resets to zero and steps one toward the end.",
+          "MEASURED: Matura128_shadow at 1.405 px per font px (rms 6.08; Matura64 15.47, Matura84",
+          "15.73), centre (601.1, 373.9) px against the decoded (601.6, 374.9) (spec 3.1 F9, 3.3, U11)."
+        ],
+        "font": "Matura128_shadow.fnt",
+        "units_per_font_px": 0.5,
+        "offset_units": [0, -7.5],
+        "stride_ms": 100
+      },
+      "golden_number": {
+        "_source": [
+          "DECODED: the same draw, with the golden plaque: the level's golden score centred at the",
+          "plaque's position + scale(10, 1), Matura84_shadow at half a unit per font px, at the",
+          "buttons' alpha. Decode only; nothing gold draws it (spec 3.1 F10, U4)."
+        ],
+        "font": "Matura84_shadow.fnt",
+        "units_per_font_px": 0.5,
+        "offset_units": [10, 1]
+      },
+      "crystal": {
+        "_source": [
+          "DECODED: the same draw, for a level with crystals: entities/crystal.png with",
+          "drawScaledSprite at the medal's position + scale(-30, 48), origin V2_ZERO, at getScale -",
+          "its 1x 32 x 32 texels as 32 u, the hd twin drawn - at the buttons' alpha (spec 3.1 F11,",
+          "D12). Decode only: its size is not measured (U4)."
+        ],
+        "sprite": "crystal.png",
+        "offset_units": [-30, 48],
+        "size_units": [32, 32]
+      },
+      "crystal_count": {
+        "_source": [
+          "DECODED: the same draw writes 'n/max' with DrawText - NOT centred, from its top-left - at",
+          "the crystal's position + scale(27, 3), Matura84_shadow at scale(0.7) / density: 0.35 u",
+          "per font px. n is a second ScoreCounter from 0 to the crystals collected, 100 ms a step",
+          "(spec 3.1 F12). Decode only (U4)."
+        ],
+        "font": "Matura84_shadow.fnt",
+        "units_per_font_px": 0.35,
+        "offset_units": [27, 3],
+        "stride_ms": 100
+      }
+    },
+
+    "lost": {
+      "veil": {
+        "_source": [
+          "DECODED: LevelLostLayer::LevelLostLayer (bytes 276429..277344) adds sprites/fade_edge.png",
+          "at V2_ZERO, origin V2_ZERO, sized (screen.x * 0.9, screen.y), tinted ARGB(180, 255, 255,",
+          "255): k(x) = 1 - (180/255) * a_fade(64 x / 0.9 W). There is no other dim. A UISprite.",
+          "MEASURED: settled column gains on death_2-10 0.29 at x 20 .. 0.997 at x 1140, within",
+          "0.036 of that model (x 860); a 1280-wide rect fits worse; sin T 0.995 s (spec 4.2, D9)."
+        ],
+        "sprite": "fade_edge.png",
+        "tint_alpha_byte": 180,
+        "size_of_screen": [0.9, 1]
+      },
+      "title": {
+        "_source": [
+          "DECODED: same constructor: sprites/game_over.png at (0.5, 0.35), V2_HALF. A UISprite.",
+          "MEASURED: 2-10 fit scale 1.405, plateau alpha 1.004; locate on 2-32_h6.3.png at 1.40625",
+          "Pearson 0.9909, centre (640, 252) px (spec 4.2 L2, D5). It was 56 u tall."
+        ],
+        "sprite": "game_over.png",
+        "at_screen": [0.5, 0.35],
+        "origin": [0.5, 0.5],
+        "size_units": [128, 128]
+      },
+      "restart_button": {
+        "_source": [
+          "DECODED: same constructor: 'restart', sprites/button_restart.png at (0.4, 0.6), V2_HALF",
+          "(PshC4 0.6f; PshC4 0.4f, last-first). LevelLostLayer::update (bytes 277576..278179):",
+          "createGameState(currentLevel). A UIButton.",
+          "MEASURED: fit scale 1.405; 2-32 locate 0.996 at centre (512, 432) px; linear T 0.700 s;",
+          "slide rms 1.27 px against 32 u (spec 4.1, 4.2 L3, D1)."
+        ],
+        "sprite": "button_restart.png",
+        "at_screen": [0.4, 0.6],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "list_button": {
+        "_source": [
+          "DECODED: same constructor: 'menu', sprites/list_button.png at (0.6, 0.6), V2_HALF;",
+          "update: createLevelSelectState. A UIButton. The BuyButton beside it is OMITTED by the",
+          "owner's store ruling (spec 8).",
+          "MEASURED: fit scale 1.405; 2-32 locate 0.9908 at centre (768, 432) px (spec 4.2 L4, D1)."
+        ],
+        "sprite": "list_button.png",
+        "at_screen": [0.6, 0.6],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      }
+    }
   }
 }

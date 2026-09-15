@@ -237,6 +237,11 @@ add_mp_test(test_mp_sounds)
 # reads only the port's own committed data, so it runs anywhere and never skips.
 add_mp_test(test_mp_hud)
 
+# How a level ends: the finished and lost screens and the HUD going - ui.json's
+# level_end and sim/LevelEnd's arithmetic, pinned against the remake's ui2 spec.
+# Pure, reading only the port's own committed data, so it never skips.
+add_mp_test(test_mp_levelend)
+
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.
 add_mp_test(test_mp_layer)

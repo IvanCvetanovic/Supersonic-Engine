@@ -21,6 +21,10 @@
 
 #include "sim/Hud.hpp"
 
+namespace Supersonic::Json {
+class Value;
+}
+
 namespace MagicPortals::UiLayer {
 
 struct Rules {
@@ -74,5 +78,36 @@ int ButtonDismissAlphaByte(const Rules& rules, double ms);
 // Its anchor then: from `anchor` back out to ButtonStart, eased by smoothEnd.
 glm::dvec2 ButtonDismissAnchorAt(const Rules& rules, const glm::dvec2& anchor, const glm::dvec2& viewUnits,
                                  double ms);
+
+// ---- reading a screen's block of ui.json ------------------------------------
+//
+// Shared by every screen the primitives above lay out (Pause.hpp, LevelEnd.hpp),
+// so each refuses a bad number with the same words. Each names the key it read
+// as `where.key` in `why` and returns false, leaving `out` as it was.
+namespace Read {
+
+// The whole file, parsed.
+bool File(const std::string& path, Supersonic::Json::Value& root, std::string& error);
+
+bool Text(const Supersonic::Json::Value& block, const char* key, std::string& out, std::string& why,
+          const std::string& where);
+bool Pair(const Supersonic::Json::Value& block, const char* key, glm::dvec2& out, std::string& why,
+          const std::string& where);
+// A pair both above zero: a size.
+bool Size(const Supersonic::Json::Value& block, const char* key, glm::dvec2& out, std::string& why,
+          const std::string& where);
+// A pair both within 0..1: a fraction of the screen or of a sprite.
+bool Fraction(const Supersonic::Json::Value& block, const char* key, glm::dvec2& out, std::string& why,
+              const std::string& where);
+bool Positive(const Supersonic::Json::Value& block, const char* key, double& out, std::string& why,
+              const std::string& where);
+// A whole number within 0..255.
+bool Byte(const Supersonic::Json::Value& block, const char* key, int& out, std::string& why,
+          const std::string& where);
+// An object with a sprite under `spriteKey`, at_screen, origin and size_units.
+bool ReadPlaced(const Supersonic::Json::Value& block, const char* spriteKey, Placed& out, std::string& why,
+                const std::string& where);
+
+} // namespace Read
 
 } // namespace MagicPortals::UiLayer

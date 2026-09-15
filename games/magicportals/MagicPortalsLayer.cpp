@@ -7,6 +7,7 @@
 #include <cmath>
 #include <map>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "core/Input.hpp"
@@ -188,7 +189,8 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error) &&
                       Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error) &&
                       Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error) &&
-                      Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error);
+                      Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error) &&
+                      LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error);
     // ui.json is the port's own and committed, so a HUD that will not read is a
     // fault in this repository and stops the start as loudly as a missing level.
     m_hudReady = read;
@@ -266,6 +268,10 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     // open already dying and put the lost screen up 1400 ms in.
     m_dying = false;
     m_dyingClockMs = 0.0;
+    // And the screen either raises, with its counters, and the HUD's last byte.
+    m_end = EndScreen{};
+    m_padEndByte = 0;
+    m_clearShownAtEnd = false;
     // And the level's age, which everything it opens with is timed by. A retry
     // is a new level to the original - its restart button builds a fresh Game
     // state, whose preLoop starts the black, "Part N" and the plaque again
@@ -445,9 +451,8 @@ void MagicPortalsLayer::goTo(entt::registry& registry, int next) {
     m_chapterComplete = true;
 }
 
-// Defined below, beside MedalShown, which computes the same thing from the
-// counter's current value. Declared here because clearLevel records the FINAL
-// medal and comes first in this file.
+// Defined below. Declared here because clearLevel records the FINAL medal and
+// comes first in this file.
 int MedalFor(const MagicPortalsLayer::Cleared& cleared);
 
 void MagicPortalsLayer::clearLevel(entt::registry& registry) {
@@ -464,8 +469,8 @@ void MagicPortalsLayer::clearLevel(entt::registry& registry) {
 
     // THE FINAL MEDAL, not the one the screen is about to count up to.
     //
-    // MedalShown() climbs bronze to gold as the counter rises, which is a
-    // picture; this is the result. The original writes it at this same moment
+    // The finished screen's medal follows its counter as it rises, which is a
+    // picture (LevelEnd::ShownScore); this is the result. The original writes it at this same moment
     // and from a different object - GameStateController::writeScore, not the
     // layer that animates it - for the same reason.
     //
@@ -485,33 +490,11 @@ void MagicPortalsLayer::clearLevel(entt::registry& registry) {
 }
 
 // The medal a play earns, as computeScore has it (ScoreManager.angelscript,
-// bytes 363979..364204): 3 is gold, 2 silver, anything else bronze.
-//
-//   - a level with crystals, none of them collected, is bronze whatever else;
-//   - within the golden score: gold with every crystal, silver without;
-//   - within the golden score and two more: silver;
-//   - beyond that: bronze.
+// bytes 363979..364204): 3 is gold, 2 silver, anything else bronze. One
+// implementation, LevelEnd::ComputeScore, which the finished screen's live medal
+// uses too.
 int MedalFor(const MagicPortalsLayer::Cleared& cleared) {
-    if (cleared.crystalsTotal > 0 && cleared.crystals == 0) return 1;
-    if (cleared.portalsUsed <= cleared.goldenScore) {
-        return cleared.crystals < cleared.crystalsTotal ? 2 : 3;
-    }
-    if (cleared.portalsUsed <= cleared.goldenScore + 2) return 2;
-    return 1;
-}
-
-int MagicPortalsLayer::MedalShown() const {
-    if (!m_lastCleared) return 0;
-
-    // The SAME computeScore the final medal uses, with the counter's current
-    // value standing in for the portals spent. One implementation rather than a
-    // second that agrees with it today: the original's draw does exactly this -
-    // computeScore(golden, numCrystals, maxCrystals, counter.getCurrent()) - so
-    // the medal it shows is a function of the number on screen, not of the
-    // number the play ended on.
-    Cleared asCounted = *m_lastCleared;
-    asCounted.portalsUsed = m_counterShown;
-    return MedalFor(asCounted);
+    return LevelEnd::ComputeScore(cleared.portalsUsed, cleared.goldenScore, cleared.crystals, cleared.crystalsTotal);
 }
 
 // ---- the entities' particles --------------------------------------------------
@@ -780,68 +763,38 @@ void MagicPortalsLayer::layOutMenu() {
         return;
     }
 
-    if (m_screen == Screen::Finished) {
-        // Over the level, so placed against what the CAMERA shows rather than
-        // the menu's own box: the level's own pixels are what a click maps to.
-        const glm::dvec2 view = ViewPx();
-        const glm::dvec2 centre = m_follow.centrePx;
-        const auto onView = [&view, &centre](double nx, double ny) {
-            return centre + glm::dvec2((nx - 0.5) * view.x, (ny - 0.5) * view.y);
-        };
-        // ONE COLUMN DOWN THE RIGHT, at x 0.75 and a quarter, a half and three
-        // quarters down.
+    if (m_screen == Screen::Finished || m_screen == Screen::Dead) {
+        // OVER THE LEVEL, laid out by sim/LevelEnd.hpp on the camera's view and
+        // drawn through the overlay (EmitHud): these are the buttons as they sit
+        // once their entrance is over, in the level's pixels, which is what
+        // PressMenu and the suites read. A tap is tested against where each one
+        // is on its tick (endScreenTick), entrance and all.
         //
-        // This briefly became a row across the bottom, and that was my error.
-        // LevelFinishedLayer's constructor calls addButton with vector2(0.25,
-        // 0.75), (0.5, 0.75) and (0.75, 0.75), and I read those pairs as (x, y).
-        // They are not: AngelScript pushes a call's arguments so that the LAST
-        // pushed is the FIRST parameter, so `PshC4 A; PshC4 B; vector2()` builds
-        // vector2(B, A) and the constant that varies here is the Y.
-        //
-        // What settles it is the veil in the same constructor (bytes 271777..,
-        // instruction 253 onward): it pushes screenSize.y and then
-        // screenSize.x * 1.5. A full-screen dimming veil is one and a half
-        // screens WIDE; there is no reading in which it is screenSize.y wide and
-        // one and a half screen-widths tall. Same rule, three corroborations:
-        // the "level finished" banner lands top-centre, the level-select arrows
-        // land on the left and right edges, and the column this port already had
-        // by eye - x 0.82 - was very nearly this one.
-        const MenuButton::Kind kinds[] = {MenuButton::Kind::Retry, MenuButton::Kind::Next,
-                                          MenuButton::Kind::List};
-        const double ys[] = {0.25, 0.50, 0.75};
-        for (int i = 0; i < 3; ++i) {
-            MenuButton button;
-            button.kind = kinds[i];
-            button.centrePx = onView(0.75, ys[i]);
-            button.sizePx = glm::dvec2(view.y * 0.16);
-            m_menuButtons.push_back(button);
-        }
-        return;
-    }
-
-    if (m_screen == Screen::Dead) {
-        // A ROW, and this one genuinely is. LevelLostLayer's constructor (bytes
-        // 276429..277344) calls addButton twice, building its vector2 from
-        // `PshC4 0.6f; PshC4 0.4f` and then `PshC4 0.6f; PshC4 0.6f`. Last
-        // pushed is the FIRST argument, so they are (0.4, 0.6) and (0.6, 0.6):
-        // the constant that VARIES is the x, which is what makes this a row
-        // where the medal screen's three - varying in y - are a column. Same
-        // rule, opposite answer, which is why it is worth writing down twice.
+        // The finished screen's three are ONE COLUMN at x 0.75 and the lost
+        // screen's two ONE ROW at y 0.6: AngelScript pushes a call's arguments
+        // last-first, so LevelFinishedLayer's `PshC4 A; PshC4 B; vector2()` is
+        // vector2(B, A), and the veil in the same constructor - one and a half
+        // screens WIDE - is what settles the order. ui.json carries the pairs
+        // already turned round.
+        constexpr double kSettledMs = 1.0e9;
         const glm::dvec2 view = ViewPx();
-        const glm::dvec2 centre = m_follow.centrePx;
-        const auto onView = [&view, &centre](double nx, double ny) {
-            return centre + glm::dvec2((nx - 0.5) * view.x, (ny - 0.5) * view.y);
-        };
-        // Its two buttons ARE the medal screen's restart and list - the same
-        // two files, button_restart.png and list_button.png, doing the same two
-        // jobs - so they take the same kinds and PressMenu needs nothing new.
-        const MenuButton::Kind kinds[] = {MenuButton::Kind::Retry, MenuButton::Kind::List};
-        const double xs[] = {0.4, 0.6};
-        for (int i = 0; i < 2; ++i) {
+        const glm::dvec2 corner = m_follow.centrePx - view * 0.5;
+        for (const LevelEnd::Piece& piece : endPieces(view, kSettledMs)) {
+            if (piece.element != LevelEnd::Element::Button) continue;
             MenuButton button;
-            button.kind = kinds[i];
-            button.centrePx = onView(xs[i], 0.6);
-            button.sizePx = glm::dvec2(view.y * 0.16);
+            switch (piece.button) {
+            case LevelEnd::Button::Restart:
+                button.kind = MenuButton::Kind::Retry;
+                break;
+            case LevelEnd::Button::Next:
+                button.kind = MenuButton::Kind::Next;
+                break;
+            case LevelEnd::Button::List:
+                button.kind = MenuButton::Kind::List;
+                break;
+            }
+            button.centrePx = corner + piece.rect.Centre();
+            button.sizePx = piece.rect.size;
             m_menuButtons.push_back(button);
         }
         return;
@@ -960,165 +913,14 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
         return entt::entity{entt::null};
     };
 
-    // The medal screen keeps the level behind it, so it takes no background of
-    // its own; the others cover the screen with theirs.
-    if (m_screen != Screen::Finished && m_screen != Screen::Dead) {
-        m_menuBg = quadFor("Magic Portals Menu Background",
-                           menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png"));
-    }
+    // The finished and lost screens put nothing in the registry: they are drawn
+    // over their level through the screen overlay (EmitHud).
+    if (m_screen == Screen::Finished || m_screen == Screen::Dead) return;
+    m_menuBg = quadFor("Magic Portals Menu Background",
+                       menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png"));
     if (m_screen == Screen::Main) {
         m_menuTitle = quadFor("Magic Portals Title", menuImage("game_main_title.png"));
     }
-    // THE TWO WAYS A SCREEN'S FURNITURE IS SIZED, out here because BOTH the
-    // medal screen and the lost screen lay theirs down this way.
-    //
-    // Every position either one uses is the original's own, normalized on the
-    // screen: it builds them against GetScreenSize, and both screens sit over
-    // the level, so the port places them on the CAMERA'S VIEW rather than in
-    // the menu's box. menuTick does the placing; this only makes them. Sized by
-    // its own aspect at a stated height, which is what everything but a veil
-    // wants. The heights are DERIVED, not decoded: the original draws these at
-    // 1.5 x g_scale against its own reference height, and no fraction of the
-    // screen is written down anywhere - so each is its image's height against
-    // that reference, and marked here as derived for the same reason art.json
-    // marks its numbers _guess.
-    const auto byHeight = [this, &quadFor](const char* tag, const std::string& file, glm::dvec2 atView,
-                                          double heightView, float z, glm::dvec2 offsetPx = glm::dvec2(0.0),
-                                          glm::dvec2 pivot = glm::dvec2(0.5)) {
-            Decoration decoration;
-            decoration.image = menuImage(file);
-            decoration.quad = quadFor(tag, decoration.image);
-            decoration.atView = atView;
-            decoration.sizing = Decoration::Sizing::ByHeight;
-            decoration.heightView = heightView;
-            decoration.offsetPx = offsetPx;
-            decoration.pivot = pivot;
-        decoration.z = z;
-        if (decoration.quad != entt::null) m_menuDecor.push_back(decoration);
-    };
-
-    // And the one that is stretched, because it is a gradient rather than a
-    // picture of anything.
-    //
-    // ALPHA IS THE CALLER'S, because the two screens do not share it: the medal
-    // screen's veil is ARGB(200,255,255,255) and the lost screen's is 180. The
-    // port drew the first opaque white once, so a gradient meant to sink the
-    // level behind the medal was barely a tint; hardcoding 200 here would have
-    // made the same mistake again on the second screen. The particles take
-    // their colour the same way (albedoColor, above), so this is the
-    // established path rather than a new one.
-    const auto stretched = [this, &registry, &quadFor](const char* tag, const std::string& file,
-                                                       glm::dvec2 atView, glm::dvec2 sizeView, float z,
-                                                       double alpha) {
-        Decoration decoration;
-        decoration.image = menuImage(file);
-        decoration.quad = quadFor(tag, decoration.image);
-        decoration.atView = atView;
-        decoration.sizing = Decoration::Sizing::Stretched;
-        decoration.sizeView = sizeView;
-        decoration.z = z;
-        if (decoration.quad == entt::null) return;
-
-        registry.get<Supersonic::MaterialComponent>(decoration.quad).albedoColor =
-            glm::vec4(1.0f, 1.0f, 1.0f, static_cast<float>(alpha / 255.0));
-        m_menuDecor.push_back(decoration);
-    };
-
-    if (m_screen == Screen::Finished && m_lastCleared) {
-
-        // EVERY POSITION BELOW READS THE DECODED PAIRS AS (y, x).
-        //
-        // AngelScript pushes a call's arguments last-first, so the bytecode's
-        // `PshC4 A; PshC4 B; vector2()` is vector2(B, A). The veil in this same
-        // constructor proves it: it pushes screenSize.y then screenSize.x * 1.5,
-        // and a dimming veil is one and a half screens WIDE, not that many
-        // screen-widths tall. Read the other way round, every plaque on this
-        // screen is transposed - which is how the banner came to sit out at the
-        // left instead of over the middle.
-        //
-        // The veil, first and furthest back. fade_edge.png is a 200-odd byte
-        // HORIZONTAL GRADIENT, not a flat panel, and the original stretches it
-        // one and a half screens wide at ARGB(200,255,255,255) from a top-left
-        // origin - so the light end falls off the right and what is seen is the
-        // dark-to-middle part of it. Sized explicitly for that reason: sizing
-        // this one from its own aspect, which is the rule the chapter icons
-        // needed, would draw a hairline. A top-left origin at (0,0) one and a
-        // half screens wide IS a centre of (0.75, 0.5), so this one position
-        // needed no correcting.
-        stretched("Magic Portals Finish Veil", "fade_edge.png", glm::dvec2(0.75, 0.5),
-                  glm::dvec2(1.5, 1.0), 0.55f, 200.0);
-
-        // "Level finished" over the middle, and the plaque naming the portals
-        // spent BELOW the medal - addSprite puts it at medalPos + (0, 0.15) of
-        // the screen, not out to its right.
-        byHeight("Magic Portals Finish Banner", "level_finished.png", glm::dvec2(0.464, 0.278), 0.16,
-                 0.58f);
-        byHeight("Magic Portals Portals Plaque", "portals_created_plaque.png",
-                 glm::dvec2(0.47, 0.55 + 0.15), 0.12, 0.58f);
-
-        // The golden-score plaque only where the play earned one. The original
-        // guards it on the score qualifying - `if (score >= 3)`, so gold alone -
-        // and a plaque claiming a medal nobody won would be worse than no
-        // plaque. Its origin is (0.5, 0.33) rather than centred, which is the
-        // one pivot on this screen that is not the default.
-        if (MedalFor(*m_lastCleared) >= 3) {
-            byHeight("Magic Portals Golden Plaque", "golden_score_plaque.png", glm::dvec2(0.23, 0.5),
-                     0.12, 0.58f, glm::dvec2(0.0), glm::dvec2(0.5, 0.33));
-        }
-
-        // And a crystal by the medal, for a level that had any. Its place is the
-        // medal's plus (-30, 48) of the original's own pixels - left and down -
-        // which is why it rides an offset rather than a fraction of the screen:
-        // a fraction would be a different place at a different window shape.
-        //
-        // Drawn from its TOP-LEFT, which is the pivot of (0, 0): this one is a
-        // drawScaledSprite with an explicit V2_ZERO origin, unlike the banner
-        // and the plaques above it, which addSprite centres on V2_HALF. Centred
-        // like them it sat half a crystal up and to the left of where the
-        // original puts it.
-        if (m_lastCleared->crystalsTotal > 0) {
-            byHeight("Magic Portals Finish Crystal", "crystal.png", glm::dvec2(0.47, 0.55), 0.08, 0.60f,
-                     glm::dvec2(-30.0, 48.0), glm::dvec2(0.0, 0.0));
-        }
-
-        // The medal itself, in the title's slot: the two screens are never up
-        // together. Its image follows the COUNTER rather than the final score,
-        // so it climbs as the number rises - menuTick swaps the texture when
-        // the tier changes, and m_medalDrawn remembers which one is on.
-        //
-        // The counter is NOT reset here. buildMenu runs again on every window
-        // resize, so resetting here would restart the count - and drop the
-        // medal back to bronze - because somebody dragged the window edge.
-        // openFinished owns that, because it runs once when the level is
-        // cleared. Same mistake the decoration leak was: state set up in a
-        // function that is not once per screen.
-        m_medalDrawn = MedalShown();
-        const char* file = m_medalDrawn == 3   ? "medal_gold_l.png"
-                           : m_medalDrawn == 2 ? "medal_silver_l.png"
-                                               : "medal_bronze_l.png";
-        m_menuTitle = quadFor("Magic Portals Medal", menuImage(file));
-    }
-
-    if (m_screen == Screen::Dead) {
-        // THE LOST SCREEN, as LevelLostLayer builds it (bytes 276429..277344).
-        //
-        // ITS VEIL IS NOT THE MEDAL SCREEN'S, which is the trap here. That one
-        // is pulled one and a half screens wide at alpha 200; this one is
-        // addSprite'd at V2_ZERO with size (screenSize.x * 0.9, screenSize.y)
-        // at ARGB(180,255,255,255) - narrower, taller and thinner. A top-left
-        // origin 0.9 of a screen wide and a full screen tall IS a centre of
-        // (0.45, 0.5), which is the same origin-to-centre conversion the finish
-        // veil's own note records; read as a centre it would sit off to the
-        // right by a twentieth of the screen.
-        stretched("Magic Portals Lost Veil", "fade_edge.png", glm::dvec2(0.45, 0.5), glm::dvec2(0.9, 1.0),
-                  0.55f, 180.0);
-
-        // And the banner over the middle, at screenSize * (0.5, 0.35): the pair
-        // is pushed `PshC4 0.35f; PshC4 0.5f`, so last-pushed-first makes x the
-        // 0.5. addSprite centres it on V2_HALF, this port's default pivot.
-        byHeight("Magic Portals Game Over", "game_over.png", glm::dvec2(0.5, 0.35), 0.22, 0.58f);
-    }
-
     for (const MenuButton& button : m_menuButtons) {
         std::string image;
         switch (button.kind) {
@@ -1159,16 +961,12 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
         case MenuButton::Kind::Forward:
             image = menuImage("level_select_back.png");
             break;
-        // The medal screen's three, which LevelFinishedLayer names.
+        // The finished and lost screens' own, which never reach here: those two
+        // screens returned above, and draw their buttons through the overlay.
         case MenuButton::Kind::Retry:
-            image = menuImage("button_restart.png");
-            break;
         case MenuButton::Kind::Next:
-            image = menuImage("button_right.png");
-            break;
         case MenuButton::Kind::List:
-            image = menuImage("list_button.png");
-            break;
+            continue;
         }
         m_menuQuads.push_back(quadFor("Magic Portals Menu Button", image));
 
@@ -1228,12 +1026,6 @@ void MagicPortalsLayer::unloadMenuDrawables(entt::registry& registry) {
     m_menuLabels.clear();
     for (auto& e : m_menuMedals) destroy(e);
     m_menuMedals.clear();
-    // The medal screen's furniture goes with the rest of it. Without this every
-    // rebuild leaves its quads behind - and a rebuild is not rare: layOutMenu
-    // and buildMenu run again on every window resize, so the veils would stack
-    // one atop another and darken a shade at a time.
-    for (Decoration& decoration : m_menuDecor) destroy(decoration.quad);
-    m_menuDecor.clear();
     destroy(m_menuBg);
     destroy(m_menuTitle);
 }
@@ -1244,25 +1036,28 @@ void MagicPortalsLayer::unloadMenu(entt::registry& registry) {
 }
 
 void MagicPortalsLayer::openFinished(entt::registry& registry) {
+    // setCurrentLayer('levelFinishedLayer') and playVictorySound.
     latch("medal_shown");
-    // The count starts from nothing, HERE, because this runs once when the
-    // level is cleared. buildMenu runs again on every window resize, so a reset
-    // there would restart the count - and drop the medal back to bronze -
-    // because somebody dragged the window edge. Without a reset anywhere, the
-    // next level cleared would start counting from the last one's total and
-    // show the wrong medal from its first frame.
-    m_counterShown = 0;
-    m_counterClockMs = 0.0;
-    // The level STAYS: it is drawn behind the medal, and stops ticking because
-    // OnFixedUpdate hands the tick to the menu whenever a screen is up.
+    // The screen's clock starts here, on the tick it becomes current, and its
+    // counters from nothing: ScoreCounter(0, numPortals, 100) and the crystals'
+    // own. Set once, here - a window resize lays the screen out again and must
+    // not restart the count.
+    m_end.clockMs = 0.0;
+    if (m_lastCleared) {
+        m_end.play.portalsUsed = m_lastCleared->portalsUsed;
+        m_end.play.goldenScore = m_lastCleared->goldenScore;
+        m_end.play.crystals = m_lastCleared->crystals;
+        m_end.play.crystalsTotal = m_lastCleared->crystalsTotal;
+    }
+    m_end.portals = LevelEnd::Counter{0, m_end.play.portalsUsed, 0.0};
+    m_end.crystals = LevelEnd::Counter{0, m_end.play.crystals, 0.0};
+    // The level STAYS, and goes on running: neither end screen stops game time
+    // (spec D7). The HUD it has left is laid out by layOutControls as a level
+    // that has ended.
     m_screen = Screen::Finished;
-    // The level stays behind the medal, but its controls do not; and nothing
-    // of the HUD is emitted while a screen is up (EmitHud), or the pads and
-    // "Part N" of a quick finish would sit over the medal.
-    hideHud();
     m_aspect = viewportAspect(registry);
     layOutMenu();
-    buildMenu(registry);
+    SUPERSONIC_LOG_INFO("Magic Portals") << "finished screen current on tick " << m_ticks << std::endl;
 }
 
 void MagicPortalsLayer::openDead(entt::registry& registry) {
@@ -1270,13 +1065,12 @@ void MagicPortalsLayer::openDead(entt::registry& registry) {
     // playDeathSound here, where it raises levelLostLayer. A fall's own sound
     // played 1400 ms ago and an hp death made no sound at all.
     latch("player_died");
-    // The level STAYS, as it does behind the medal: OnFixedUpdate hands the
-    // tick to the menu whenever a screen is up, so it is drawn and frozen.
+    m_end.clockMs = 0.0;
+    // The level STAYS, and goes on running, as it does behind the medal.
     m_screen = Screen::Dead;
-    hideHud();
     m_aspect = viewportAspect(registry);
     layOutMenu();
-    buildMenu(registry);
+    SUPERSONIC_LOG_INFO("Magic Portals") << "lost screen current on tick " << m_ticks << std::endl;
 }
 
 void MagicPortalsLayer::openMenu(entt::registry& registry, Screen screen) {
@@ -1362,10 +1156,9 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
     layOutMenu(); // the window may have changed shape since the last tick
     const glm::dvec2 box = MenuBoxPx();
 
-    // The medal screen leaves the camera where the level left it, so the level
-    // stays framed as it was when it was finished.
-    if (m_screen != Screen::Finished && m_screen != Screen::Dead && m_camera != entt::null &&
-        registry.valid(m_camera)) {
+    // Only the menu screens: the finished and lost screens are over a running
+    // level and never take this tick (OnFixedUpdate).
+    if (m_camera != entt::null && registry.valid(m_camera)) {
         auto& camera = registry.get<CameraComponent>(m_camera);
         const glm::vec3 centre = Units::ToWorld(box.x * 0.5, box.y * 0.5);
         camera.position = glm::vec3(centre.x, centre.y, kCameraDistance);
@@ -1381,82 +1174,9 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
     if (m_menuBg != entt::null && registry.valid(m_menuBg)) {
         placeSprite(registry, m_menuBg, box * 0.5, box, -1.0f, 0.0f);
     }
-    // The medal screen's furniture, and the counter the medal follows.
-    //
-    // Placed here rather than in buildMenu because these sit on the CAMERA'S
-    // view, which moves with the level behind them and changes shape with the
-    // window - the same reason the buttons are laid out every tick.
-    if ((m_screen == Screen::Finished && m_lastCleared) || m_screen == Screen::Dead) {
-        const glm::dvec2 view = ViewPx();
-        const glm::dvec2 centre = m_follow.centrePx;
-        const auto onView = [&view, &centre](const glm::dvec2& atView) {
-            return centre + glm::dvec2((atView.x - 0.5) * view.x, (atView.y - 0.5) * view.y);
-        };
-
-        for (const Decoration& decoration : m_menuDecor) {
-            if (decoration.quad == entt::null || !registry.valid(decoration.quad)) continue;
-
-            glm::dvec2 sizePx(0.0);
-            if (decoration.sizing == Decoration::Sizing::Stretched) {
-                sizePx = glm::dvec2(view.x * decoration.sizeView.x, view.y * decoration.sizeView.y);
-            } else {
-                const double height = view.y * decoration.heightView;
-                const glm::dvec2 image = imageSizePx(decoration.image);
-                const double aspect = image.y > 0.0 ? image.x / image.y : 1.0;
-                sizePx = glm::dvec2(height * aspect, height);
-            }
-            // The pivot, as a shift of the CENTRE: placeSprite centres a quad on
-            // the point it is given, and the original places a sprite by its
-            // origin, so a sprite whose origin is p has its centre at
-            // pos + size * (0.5 - p). The default (0.5, 0.5) makes that zero,
-            // which is why only the golden-score plaque moves.
-            const glm::dvec2 fromPivot = sizePx * (glm::dvec2(0.5) - decoration.pivot);
-            placeSprite(registry, decoration.quad,
-                        onView(decoration.atView) + decoration.offsetPx + fromPivot, sizePx,
-                        decoration.z, 0.0f);
-        }
-    }
-
-    // The counter and the medal belong to the MEDAL screen alone: the lost
-    // screen has neither, and m_lastCleared may hold nothing at all while it
-    // is up - the player need never have finished a level to die on one.
-    if (m_screen == Screen::Finished && m_lastCleared) {
-        // THE COUNTER, on the frame's clock: one step of one every 100 ms,
-        // toward the portals the play spent. The original's ScoreCounter is a
-        // Timer with that stride, and its draw reads getCurrent() every frame.
-        m_counterClockMs += static_cast<double>(MagicPortalsLayer::kTick) * 1000.0;
-        while (m_counterClockMs >= kCounterStrideMs && m_counterShown < m_lastCleared->portalsUsed) {
-            m_counterClockMs -= kCounterStrideMs;
-            ++m_counterShown;
-        }
-
-        // And the medal follows it. Rewriting the texture rather than rebuilding
-        // the quad: makeSprite bakes the path into the material, and a quad
-        // rebuilt every time the tier changed would lose its place in the
-        // drawing order for a frame.
-        if (const int shown = MedalShown(); shown != m_medalDrawn && m_menuTitle != entt::null &&
-                                            registry.valid(m_menuTitle)) {
-            m_medalDrawn = shown;
-            const char* file = shown == 3   ? "medal_gold_l.png"
-                               : shown == 2 ? "medal_silver_l.png"
-                                            : "medal_bronze_l.png";
-            registry.get<Supersonic::MaterialComponent>(m_menuTitle).albedoTexturePath = menuImage(file);
-        }
-    }
-
     if (m_menuTitle != entt::null && registry.valid(m_menuTitle)) {
-        if (m_screen == Screen::Finished) {
-            // At the original's own place for it: screenSize * (0.47, 0.55),
-            // which the port reads on the camera's view. This was an eyeballed
-            // offset from the centre before the constructor was decoded, and
-            // then (0.55, 0.47) - the decoded pair read in the wrong order.
-            const glm::dvec2 view = ViewPx();
-            const glm::dvec2 at = m_follow.centrePx + glm::dvec2((0.47 - 0.5) * view.x, (0.55 - 0.5) * view.y);
-            placeSprite(registry, m_menuTitle, at, glm::dvec2(view.y * 0.30), 0.6f, 0.0f);
-        } else {
-            placeSprite(registry, m_menuTitle, glm::dvec2(box.x * 0.5, box.y * 0.30),
-                        glm::dvec2(box.y * 1.30, box.y * 0.30), 0.4f, 0.0f);
-        }
+        placeSprite(registry, m_menuTitle, glm::dvec2(box.x * 0.5, box.y * 0.30),
+                    glm::dvec2(box.y * 1.30, box.y * 0.30), 0.4f, 0.0f);
     }
     for (std::size_t i = 0; i < m_menuButtons.size() && i < m_menuQuads.size(); ++i) {
         const MenuButton& button = m_menuButtons[i];
@@ -2365,8 +2085,9 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
     set(m_hud.status, status);
 
     std::string result;
-    const bool playing = m_loaded && m_screen == Screen::None;
-    if (m_lastCleared && !playing) {
+    // Nothing over a level, the finished and lost screens included: those draw
+    // the original's own count and medal over it.
+    if (m_lastCleared && !m_loaded) {
         const Cleared& c = *m_lastCleared;
         result = c.label + " cleared with " + Count(c.portalsUsed) + (c.portalsUsed == 1 ? " portal" : " portals") +
                  (c.crystalsTotal > 0 ? ", " + Count(c.crystals) + "/" + Count(c.crystalsTotal) + " crystals" : "") +
@@ -2375,7 +2096,8 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
     set(m_hud.result, result);
     // The keys are the port's, and a level has the original's own pads and
     // buttons on it now, so the help goes with the rest of the text.
-    set(m_hud.controls, m_screen != Screen::None ? "Click a button.  Escape goes back." : "");
+    const bool menu = m_screen != Screen::None && m_screen != Screen::Finished && m_screen != Screen::Dead;
+    set(m_hud.controls, menu ? "Click a button.  Escape goes back." : "");
 }
 
 // ---- the tick ----------------------------------------------------------------
@@ -2452,12 +2174,36 @@ void MagicPortalsLayer::buildControls() {
           &m_pauseRules.musicOffSprite}) {
         if (m_pauseImages.find(*file) == m_pauseImages.end()) m_pauseImages[*file] = readable(menuImage(*file));
     }
-    // And its fonts, where they are not the caption's, read once for the run.
-    for (const std::string* name : {&m_pauseRules.title.font, &m_pauseRules.goldenNumber.font}) {
-        if (*name == m_hudRules.caption.font || m_pauseFonts.find(*name) != m_pauseFonts.end()) continue;
+    // And the finished and lost screens', with each one's size in texels: the
+    // veil is drawn as a clamped texture, which is split by its texels. The
+    // crystal is an entity's picture, whose hd twin sits beside it.
+    const LevelEnd::Rules::Finished& finished = m_levelEndRules.finished;
+    const LevelEnd::Rules::Lost& lost = m_levelEndRules.lost;
+    for (const std::string* file :
+         {&finished.veil.sprite, &finished.title.sprite, &finished.portalsPlaque.sprite, &finished.goldenPlaque.sprite,
+          &finished.restart.sprite, &finished.next.sprite, &finished.list.sprite, &finished.medalBronze,
+          &finished.medalSilver, &finished.medalGold, &lost.veil.sprite, &lost.title.sprite, &lost.restart.sprite,
+          &lost.list.sprite}) {
+        if (m_endImages.find(*file) == m_endImages.end()) m_endImages[*file] = readable(menuImage(*file));
+    }
+    if (m_endImages.find(finished.crystalSprite) == m_endImages.end()) {
+        std::error_code ec;
+        const std::string hd = m_paths.original + "/entities/hd/" + finished.crystalSprite;
+        m_endImages[finished.crystalSprite] =
+            readable(std::filesystem::exists(hd, ec) ? hd : originalImage(finished.crystalSprite));
+    }
+    for (const auto& [file, image] : m_endImages) {
+        m_endTexels[file] = image.empty() ? glm::ivec2(0) : glm::ivec2(imageSizePx(image));
+    }
+
+    // And their fonts, where they are not the caption's, read once for the run.
+    const Pause::Rules& pause = m_pauseRules;
+    for (const std::string* name : {&pause.title.font, &pause.goldenNumber.font, &finished.counter.font,
+                                    &finished.goldenNumber.font, &finished.crystalCount.font}) {
+        if (*name == m_hudRules.caption.font || m_uiFonts.find(*name) != m_uiFonts.end()) continue;
         std::string why;
-        if (!m_pauseFonts[*name].Load(m_paths.original + "/data/" + *name, why)) {
-            SUPERSONIC_LOG_WARN("Magic Portals") << "no pause text in " << *name << ": " << why << std::endl;
+        if (!m_uiFonts[*name].Load(m_paths.original + "/data/" + *name, why)) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "no text in " << *name << ": " << why << std::endl;
         }
     }
 }
@@ -2469,12 +2215,14 @@ void MagicPortalsLayer::unloadControls() {
     m_medalImage.clear();
     m_captionText.clear();
     m_pauseImages.clear();
+    m_endImages.clear();
+    m_endTexels.clear();
 }
 
-const Supersonic::BitmapFont* MagicPortalsLayer::pauseFont(const std::string& name) const {
+const Supersonic::BitmapFont* MagicPortalsLayer::uiFont(const std::string& name) const {
     if (name == m_hudRules.caption.font) return &m_captionFont;
-    const auto found = m_pauseFonts.find(name);
-    return found != m_pauseFonts.end() ? &found->second : nullptr;
+    const auto found = m_uiFonts.find(name);
+    return found != m_uiFonts.end() ? &found->second : nullptr;
 }
 
 bool MagicPortalsLayer::tutorialPads() const {
@@ -2485,37 +2233,60 @@ bool MagicPortalsLayer::tutorialPads() const {
 void MagicPortalsLayer::layOutControls() {
     const glm::dvec2 view = ViewPx();
     // Only while a level is being played: the menu screens have their own
-    // buttons, and neither going into the door nor dying leaves any up.
+    // buttons.
     const bool playing = m_loaded && m_screen == Screen::None && !m_finishing && !m_dying;
+    // AND AS A LEVEL ENDS, from the door or the death on, finished and lost
+    // screens included (spec 3.4, 4.1, D8): the pads decay from the byte the
+    // pulse left them at, and nothing is pressed - the tick reads no input for
+    // an ended level.
+    const bool ended = m_loaded && (m_finishing || m_dying);
     // A weightless level has no walk pads at all: MainCharacter neither updates
     // nor draws them when noGravity is set. Nor are they drawn while a pause has
     // game time stopped (spec 2.2, measured gain 0.010 / -0.025), where restart,
     // pause and clear-portals stay drawn under its dim, frozen and unpressed:
     // the tick reads no input for a level while a pause is up.
-    const bool pads = playing && !m_level.portals.noGravity && !m_pause.open;
+    const bool pads = (playing || (ended && m_padEndByte > 0)) && !m_level.portals.noGravity && !m_pause.open;
+    const double padAlpha = playing ? Hud::PadOpacity(m_hudRules, m_levelAgeMs, tutorialPads())
+                                    : static_cast<double>(m_padEndByte) / 255.0;
+    // Restart, pause and clear-portals: CUT at the door, in one frame (gain
+    // 0.4705 -> -0.034), and DISMISSED at a death as UIButtons, 700 ms out along
+    // their rays. Both are measurements and the decode explains only the second
+    // (spec U1); both are followed.
+    const auto corner = [&](const Hud::Placement& placement, bool present) {
+        if (playing) return std::make_tuple(Hud::Place(placement, view), present, Hud::Opacity(m_hudRules));
+        if (m_dying && present) {
+            const LevelEnd::Dismissed out =
+                LevelEnd::HudDismissed(m_levelEndRules, placement, m_hudRules.alphaByte, view, m_dyingClockMs);
+            return std::make_tuple(out.rect, out.shown, out.alpha);
+        }
+        return std::make_tuple(Hud::Place(placement, view), false, 0.0);
+    };
     for (ControlButton& button : m_controls) {
         switch (button.kind) {
         case Control::Left:
             button.rect = Hud::PadRect(m_hudRules, Hud::Side::Left, view, m_levelAgeMs);
             button.shown = pads;
+            button.alpha = padAlpha;
             break;
         case Control::Right:
             button.rect = Hud::PadRect(m_hudRules, Hud::Side::Right, view, m_levelAgeMs);
             button.shown = pads;
+            button.alpha = padAlpha;
             break;
         case Control::Reset:
-            button.rect = Hud::Place(m_hudRules.restart, view);
-            button.shown = playing;
+            std::tie(button.rect, button.shown, button.alpha) = corner(m_hudRules.restart, true);
             break;
         case Control::Menu:
-            button.rect = Hud::Place(m_hudRules.pause, view);
-            button.shown = playing;
+            std::tie(button.rect, button.shown, button.alpha) = corner(m_hudRules.pause, true);
             break;
         case Control::Clear:
             // PortalManager::update: none in a level that grants no portal, and
-            // otherwise exactly while a placed one is alive.
-            button.rect = Hud::Place(m_hudRules.clearPortals, view);
-            button.shown = playing && m_level.portals.budget > 0 && !m_level.portals.placed.empty();
+            // otherwise exactly while a placed one is alive - and at a death,
+            // dismissed with the other two if it was up (INFERRED: the spec's
+            // recordings had no portal placed).
+            std::tie(button.rect, button.shown, button.alpha) = corner(
+                m_hudRules.clearPortals,
+                playing ? m_level.portals.budget > 0 && !m_level.portals.placed.empty() : m_clearShownAtEnd);
             break;
         }
     }
@@ -2551,9 +2322,10 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
     auto* const* slot = registry.ctx().find<ScreenOverlay*>();
     if (slot == nullptr || *slot == nullptr) return;
     ScreenOverlay& overlay = **slot;
-    // Nothing over a screen: the menus and the medal are drawn in the level's
-    // space, and the overlay is drawn after all of it.
-    if (!m_hudReady || !m_loaded || m_screen != Screen::None) return;
+    // Nothing over a menu screen, which is drawn in the level's space. The
+    // finished and lost screens are over a level, and drawn here.
+    const bool overLevel = m_screen == Screen::Finished || m_screen == Screen::Dead;
+    if (!m_hudReady || !m_loaded || (m_screen != Screen::None && !overLevel)) return;
     const glm::dvec2 view = ViewPx();
     if (view.x <= 0.0 || view.y <= 0.0) return;
 
@@ -2579,6 +2351,21 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
         }
         return nullptr;
     };
+    // Text on the view, centred on `at` or from it as its top-left, a quad a
+    // letter over the font's own pages.
+    const auto write = [&](const std::string& fontName, const std::string& words, const glm::dvec2& at,
+                           double unitsPerFontPx, bool centred, double alpha) {
+        const Supersonic::BitmapFont* font = uiFont(fontName);
+        if (font == nullptr) return;
+        const auto& pages = font->Pages();
+        const std::vector<Hud::Glyph> glyphs = centred ? Hud::LayOutText(*font, words, at, unitsPerFontPx)
+                                                       : Hud::LayOutTextFrom(*font, words, at, unitsPerFontPx);
+        for (const Hud::Glyph& glyph : glyphs) {
+            if (glyph.page < 0 || static_cast<std::size_t>(glyph.page) >= pages.size()) continue;
+            add(glyph.rect, pages[static_cast<std::size_t>(glyph.page)], white(alpha), glyph.uvOffset,
+                glyph.uvOffset + glyph.uvScale);
+        }
+    };
 
     // IN THE ORIGINAL'S ORDER OF DRAWING, which is the whole of the layering:
     // there is no depth here, and a quad added later is drawn over one before.
@@ -2592,8 +2379,9 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
     //    ahead of every draw; centred on the pads' corners, sliding with them.
     const bool tutorial = tutorialPads();
     const bool padsShown = find(Control::Left) != nullptr || find(Control::Right) != nullptr;
+    // The pulse stops when a level ends, and the ring with it.
     if (const Hud::Ring ring = Hud::RingAt(m_hudRules, m_levelAgeMs, tutorial);
-        ring.shown && padsShown && !m_ringImage.empty()) {
+        ring.shown && padsShown && !m_finishing && !m_dying && !m_ringImage.empty()) {
         for (const Hud::Side side : {Hud::Side::Left, Hud::Side::Right}) {
             Hud::Rect rect;
             rect.size = glm::dvec2(ring.sizeUnits);
@@ -2605,9 +2393,10 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
     // 3. The UI layer, in the order its sprites were added: restart and pause
     //    (GameLayer), the plaque and then its medal over it (Game::preLoop), and
     //    the clear-portals button, which PortalManager adds while playing.
-    const double controls = Hud::Opacity(m_hudRules);
+    // Each at the alpha layOutControls left it: its 120, or what a death's
+    // dismiss has left of it.
     for (const Control kind : {Control::Reset, Control::Menu}) {
-        if (const ControlButton* button = find(kind)) add(button->rect, button->image, white(controls));
+        if (const ControlButton* button = find(kind)) add(button->rect, button->image, white(button->alpha));
     }
     if (!m_plaqueImage.empty() && !m_medalImage.empty()) {
         const double plaque = Hud::PlaqueAlpha(m_hudRules, m_levelAgeMs);
@@ -2618,7 +2407,7 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
         add(centred(m_hudRules.plaque.medalCentreUnits, m_hudRules.plaque.medalSizeUnits), m_medalImage,
             white(plaque));
     }
-    if (const ControlButton* clear = find(Control::Clear)) add(clear->rect, clear->image, white(controls));
+    if (const ControlButton* clear = find(Control::Clear)) add(clear->rect, clear->image, white(clear->alpha));
 
     // 4. The pause, when one is up: CustomGameMenuLayer, the CURRENT UI layer,
     //    which UILayerManager::draw draws after GameLayer - so over restart,
@@ -2642,21 +2431,53 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
             add(sprite.rect, image->second, glm::vec4(1.0f, 1.0f, 1.0f, alpha));
         }
         const double text = static_cast<double>(Pause::TextAlphaByte(m_pauseRules, m_pause.clockMs)) / 255.0;
-        const auto write = [&](const std::string& fontName, const std::string& words, const glm::dvec2& centre,
-                               double unitsPerFontPx) {
-            const Supersonic::BitmapFont* font = pauseFont(fontName);
-            if (font == nullptr) return;
-            const auto& pages = font->Pages();
-            for (const Hud::Glyph& glyph : Hud::LayOutText(*font, words, centre, unitsPerFontPx)) {
-                if (glyph.page < 0 || static_cast<std::size_t>(glyph.page) >= pages.size()) continue;
-                add(glyph.rect, pages[static_cast<std::size_t>(glyph.page)], white(text), glyph.uvOffset,
-                    glyph.uvOffset + glyph.uvScale);
-            }
-        };
         write(m_pauseRules.title.font, Pause::TitleText(m_pauseRules, m_pause.level),
-              Pause::TitleCentre(m_pauseRules, view), m_pauseRules.title.unitsPerFontPx);
+              Pause::TitleCentre(m_pauseRules, view), m_pauseRules.title.unitsPerFontPx, true, text);
         write(m_pauseRules.goldenNumber.font, Pause::GoldenText(m_pause.level),
-              Pause::GoldenCentre(m_pauseRules, view), m_pauseRules.goldenNumber.unitsPerFontPx);
+              Pause::GoldenCentre(m_pauseRules, view), m_pauseRules.goldenNumber.unitsPerFontPx, true, text);
+    }
+
+    // 4b. The finished or the lost screen, when one is up: the CURRENT UI layer
+    //     over the running level and whatever the HUD has left, and under the
+    //     walk pads, which fade on through its veil (spec 3.4's order, 3.2). The
+    //     pieces are sim/LevelEnd's, in LevelFinishedLayer's and LevelLostLayer's
+    //     own order. The veil is fade_edge.png stretched a screen and a half (or
+    //     0.9 of one) wide: drawn as the three strips of a CLAMPED texture, since
+    //     the overlay's sampler repeats, and a repeat would blend the opaque first
+    //     texel with the clear last one across the screen's left edge.
+    if (overLevel) {
+        const auto image = [this](const std::string& file) -> const std::string& {
+            static const std::string none;
+            const auto found = m_endImages.find(file);
+            return found != m_endImages.end() ? found->second : none;
+        };
+        for (const LevelEnd::Piece& piece : endPieces(view, m_end.clockMs)) {
+            const double alpha = static_cast<double>(piece.alphaByte) / 255.0;
+            switch (piece.element) {
+            case LevelEnd::Element::Counter:
+            case LevelEnd::Element::GoldenNumber:
+            case LevelEnd::Element::CrystalCount:
+                write(piece.file, piece.words, piece.at, piece.unitsPerFontPx, piece.centred, alpha);
+                break;
+            case LevelEnd::Element::Veil: {
+                const std::string& veil = image(piece.file);
+                const auto texels = m_endTexels.find(piece.file);
+                if (veil.empty() || texels == m_endTexels.end()) break;
+                for (const LevelEnd::Strip& strip : LevelEnd::ClampedStrips(piece.rect, texels->second)) {
+                    add(strip.rect, veil, white(alpha), strip.uvMin, strip.uvMax);
+                }
+                break;
+            }
+            case LevelEnd::Element::Title:
+            case LevelEnd::Element::PortalsPlaque:
+            case LevelEnd::Element::GoldenPlaque:
+            case LevelEnd::Element::Button:
+            case LevelEnd::Element::Medal:
+            case LevelEnd::Element::Crystal:
+                if (const std::string& file = image(piece.file); !file.empty()) add(piece.rect, file, white(alpha));
+                break;
+            }
+        }
     }
 
     // 5. The two blacks, with the pads between them: BaseState's FadeInController,
@@ -2671,9 +2492,8 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
     const int under = m_hudRules.overlay.layers - over;
     const auto black = [](double alpha) { return glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(alpha)); };
     add(whole, std::string(), black(Hud::OverlayLayersAlpha(m_hudRules, LevelFrameMs(), under)));
-    const double pads = Hud::PadOpacity(m_hudRules, m_levelAgeMs, tutorial);
     for (const Control kind : {Control::Left, Control::Right}) {
-        if (const ControlButton* button = find(kind)) add(button->rect, button->image, white(pads));
+        if (const ControlButton* button = find(kind)) add(button->rect, button->image, white(button->alpha));
     }
     add(whole, std::string(), black(Hud::OverlayLayersAlpha(m_hudRules, LevelFrameMs(), over)));
 
@@ -2692,10 +2512,6 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
                 glyph.uvOffset + glyph.uvScale);
         }
     }
-}
-
-void MagicPortalsLayer::hideHud() {
-    for (ControlButton& button : m_controls) button.shown = false;
 }
 
 const MagicPortalsLayer::ControlButton* MagicPortalsLayer::controlUnderPointer(const entt::registry& registry) const {
@@ -2734,7 +2550,11 @@ float MagicPortalsLayer::keyDirection() const {
     float direction = 0.0f;
     if (Input::IsDown(kLeft) || Input::IsDown(kLeftAlt)) direction -= 1.0f;
     if (Input::IsDown(kRight) || Input::IsDown(kRightAlt)) direction += 1.0f;
-    return direction;
+    // DEV ONLY: a held walk a capture scheduled for this tick.
+    for (const DevHold& hold : m_devHolds) {
+        if (m_ticks >= hold.from && m_ticks <= hold.to) direction += hold.direction;
+    }
+    return std::clamp(direction, -1.0f, 1.0f);
 }
 
 float MagicPortalsLayer::readInput(entt::registry& registry) {
@@ -3158,9 +2978,10 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
     // Asked for on the TICK, where a key press is an edge, and answered on the
     // frame, where the picture is.
     if (Input::TickWasPressed(kDump)) m_dumpRequested = true;
+    const bool overLevel = m_screen == Screen::Finished || m_screen == Screen::Dead;
     // A menu is up instead of a level: it takes the tick, and nothing below
     // runs. The two are never both in the registry.
-    if (m_screen != Screen::None) {
+    if (m_screen != Screen::None && !overLevel) {
         menuTick(registry);
         updateHud(registry);
         return;
@@ -3179,39 +3000,59 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
         updateHud(registry);
         return;
     }
-    // The bodies' boxes over the art, or not: the picture only.
-    if (Input::TickWasPressed(kBoxes)) m_showBoxes = !m_showBoxes;
-    // Out of a level that is not being played - one the port refused, or a
-    // chapter's end, which otherwise has nowhere to go - to its grid. A level
-    // being played takes the back key as the pause (readInput).
-    if (m_current >= 0 && !m_loaded && Input::TickWasPressed(kBack)) {
-        m_menuWorld = m_chapters.levels[static_cast<std::size_t>(m_current)].world;
-        openMenu(registry, Screen::Levels);
+    // The finished or lost screen is up over a level that GOES ON RUNNING (spec
+    // D7): the screen's clock, counters and buttons first - a button that leaves
+    // the level leaves it before it is stepped again - and then the level's own
+    // tick below, which reads no input once it has ended.
+    if (overLevel && endScreenTick(registry, fixedDelta)) {
         updateHud(registry);
         return;
     }
-    // Skip and retry first, so the tick that asks plays the level it lands on.
-    if (m_current >= 0 && Input::TickWasPressed(kSkip)) {
-        goTo(registry, m_chapters.Next(m_current));
-    } else if (m_current >= 0 && !m_chapterComplete && Input::TickWasPressed(kRetry)) {
-        loadLevel(registry, m_current);
+    // The bodies' boxes over the art, or not: the picture only.
+    if (Input::TickWasPressed(kBoxes)) m_showBoxes = !m_showBoxes;
+    if (!overLevel) {
+        // Out of a level that is not being played - one the port refused, or a
+        // chapter's end, which otherwise has nowhere to go - to its grid. A level
+        // being played takes the back key as the pause (readInput).
+        if (m_current >= 0 && !m_loaded && Input::TickWasPressed(kBack)) {
+            m_menuWorld = m_chapters.levels[static_cast<std::size_t>(m_current)].world;
+            openMenu(registry, Screen::Levels);
+            updateHud(registry);
+            return;
+        }
+        // Skip and retry first, so the tick that asks plays the level it lands on.
+        if (m_current >= 0 && Input::TickWasPressed(kSkip)) {
+            goTo(registry, m_chapters.Next(m_current));
+        } else if (m_current >= 0 && !m_chapterComplete && Input::TickWasPressed(kRetry)) {
+            loadLevel(registry, m_current);
+        }
     }
 
+    const double dtMs = static_cast<double>(fixedDelta) * 1000.0;
     if (m_loaded) {
         // The app has just stepped physics. So first what follows a step...
         Game::AfterStep(m_data, registry, m_level, fixedDelta);
         // What the tick just did, remembered for the frame to play. Before the
-        // two branches below, which take the level away.
+        // branches below, which may put a screen up.
         latchSimSounds();
-        // ...and the moment the exit reports, the next level (main.gd:161-168). A
-        // death is a retry, at once (main.gd:155-158). Should both come on one
-        // tick, reaching the exit wins: the remake's order of two triggers in a
-        // frame is not defined.
+        // ...and the moment the exit reports, the beat before the medal; the
+        // moment the player dies, the beat before the lost screen. Should both
+        // come on one tick, reaching the exit wins: the remake's order of two
+        // triggers in a frame is not defined. And once either has begun, the
+        // other cannot: the level runs on behind the beat and the screen, and a
+        // hidden player neither finishes nor dies again.
         if (m_finishing) {
             // Already in the door: the level keeps running behind the effect,
             // as the original's does, and the score comes when the beat is up.
-            m_finishClockMs += static_cast<double>(fixedDelta) * 1000.0;
-            if (m_finishClockMs >= kFinishDelayMs) clearLevel(registry);
+            m_finishClockMs += dtMs;
+            m_padEndByte = LevelEnd::PadDecayByte(m_levelEndRules, m_padEndByte, 1);
+            if (m_screen == Screen::None && m_finishClockMs >= m_levelEndRules.wonDelayMs) clearLevel(registry);
+        } else if (m_dying) {
+            // Killed, and the lost screen not up yet: the level goes on running
+            // behind it exactly as it does behind the door's effect.
+            m_dyingClockMs += dtMs;
+            m_padEndByte = LevelEnd::PadDecayByte(m_levelEndRules, m_padEndByte, 1);
+            if (m_screen == Screen::None && m_dyingClockMs >= m_levelEndRules.lostDelayMs) openDead(registry);
         } else if (m_level.goals.completed) {
             // GOING IN. Its sound is the door's, not the medal's - `level_finished`
             // now maps to playFinalDoorSound, and sounds.json carries the decode
@@ -3234,11 +3075,10 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
             m_direction = 0.0f;
             m_finishing = true;
             m_finishClockMs = 0.0;
-        } else if (m_dying) {
-            // Killed, and the lost screen not up yet: the level goes on running
-            // behind it exactly as it does behind the door's effect.
-            m_dyingClockMs += static_cast<double>(fixedDelta) * 1000.0;
-            if (m_dyingClockMs >= kDeathDelayMs) openDead(registry);
+            endHud();
+            // Said with the tick, so a capture can be dated from the door.
+            SUPERSONIC_LOG_INFO("Magic Portals") << "door reached on tick " << m_ticks << ", pads at "
+                                                 << m_padEndByte << std::endl;
         } else if (m_level.hazards.playerDied) {
             // DYING, which is not the same moment as the lost screen, and was
             // the whole of this branch before: death was an instant retry, so
@@ -3267,12 +3107,24 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
             m_direction = 0.0f;
             m_dying = true;
             m_dyingClockMs = 0.0;
+            endHud();
+            SUPERSONIC_LOG_INFO("Magic Portals") << "player died on tick " << m_ticks << ", pads at "
+                                                 << m_padEndByte << std::endl;
         }
     }
     if (m_loaded) {
         // The level is a tick older. BEFORE the input, because the pads slide
         // in and a tap is tested against where they are on this tick.
-        m_levelAgeMs += static_cast<double>(fixedDelta) * 1000.0;
+        m_levelAgeMs += dtMs;
+        if (m_finishing || m_dying) {
+            // NOTHING IS PRESSABLE from the door or the death on (spec 3.5):
+            // GameLayer is dismissed and no screen is current yet, and once one
+            // is its buttons are its own (endScreenTick). The level still runs,
+            // with nobody walking it.
+            stepLevel(registry, 0.0f, fixedDelta);
+            updateHud(registry);
+            return;
+        }
         // Then this tick's input, and what comes before the next step.
         const float direction = readInput(registry);
         // A control may have opened a pause, which stops the level HERE, after
@@ -3408,6 +3260,70 @@ bool MagicPortalsLayer::devPressDue(DevPress press) {
 
 void MagicPortalsLayer::ScheduleDevPress(int tick, DevPress press) {
     m_devPresses.emplace_back(tick, press);
+}
+
+void MagicPortalsLayer::ScheduleDevHold(int from, int to, float direction) {
+    m_devHolds.push_back(DevHold{from, to, direction});
+}
+
+// ---- how a level ends ------------------------------------------------------------
+
+void MagicPortalsLayer::endHud() {
+    // The pads decay from the byte they were last drawn with: the pulse stops
+    // where it was (ScreenPad::draw, a <- uint(a * 0.98)). A weightless level
+    // has none to decay.
+    m_padEndByte = m_level.portals.noGravity ? 0 : Hud::PadAlphaByte(m_hudRules, m_levelAgeMs, tutorialPads());
+    m_clearShownAtEnd = m_level.portals.budget > 0 && !m_level.portals.placed.empty();
+}
+
+std::vector<LevelEnd::Piece> MagicPortalsLayer::endPieces(const glm::dvec2& viewUnits, double ms) const {
+    if (m_screen == Screen::Finished) {
+        return LevelEnd::Finished(m_levelEndRules, m_end.play, m_end.portals.current, m_end.crystals.current,
+                                  viewUnits, ms);
+    }
+    if (m_screen == Screen::Dead) return LevelEnd::Lost(m_levelEndRules, viewUnits, ms);
+    return {};
+}
+
+bool MagicPortalsLayer::endScreenTick(entt::registry& registry, float fixedDelta) {
+    using Supersonic::Input;
+    // UI frame time, which this layer being current is what advances; and the
+    // ScoreCounters, which count only while it is.
+    const double dtMs = static_cast<double>(fixedDelta) * 1000.0;
+    m_end.clockMs += dtMs;
+    if (m_screen == Screen::Finished) {
+        m_end.portals.Tick(dtMs, m_levelEndRules.finished.counterStrideMs);
+        m_end.crystals.Tick(dtMs, m_levelEndRules.finished.crystalStrideMs);
+    }
+    // The window may have changed shape, and the camera moved with the level.
+    m_aspect = viewportAspect(registry);
+    layOutMenu();
+
+    // A tap, tested against where each button is on this tick, in view space as
+    // the controls are: Button::isPointInButton, its sprite's rectangle - a
+    // button still sliding in is pressable where it is.
+    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
+    if (viewport == nullptr || !viewport->pointerOverGame || !Input::TickWasPressed(kTap)) return false;
+    const glm::vec2 size = viewport->Size();
+    if (size.x <= 0.0f || size.y <= 0.0f) return false;
+    const glm::dvec2 view = ViewPx();
+    const glm::dvec2 at = glm::dvec2(viewport->ToLocal(Input::MousePosition()) / size) * view;
+    const std::optional<LevelEnd::Button> pressed = LevelEnd::ButtonAt(endPieces(view, m_end.clockMs), at);
+    if (!pressed) return false;
+    MenuButton button;
+    switch (*pressed) {
+    case LevelEnd::Button::Restart:
+        button.kind = MenuButton::Kind::Retry;
+        break;
+    case LevelEnd::Button::Next:
+        button.kind = MenuButton::Kind::Next;
+        break;
+    case LevelEnd::Button::List:
+        button.kind = MenuButton::Kind::List;
+        break;
+    }
+    PressMenu(registry, button);
+    return true;
 }
 
 bool MagicPortalsLayer::pauseTick(entt::registry& registry, float fixedDelta) {

@@ -33,6 +33,7 @@
 #include "core/ViewportInfo.hpp"
 
 #include "sim/Art.hpp"
+#include "sim/LevelEnd.hpp"
 #include "sim/Pause.hpp"
 #include "sim/UiLayer.hpp"
 #include "sim/Units.hpp"
@@ -232,6 +233,11 @@ int Shown(entt::registry& registry, const char* tag) {
     return count;
 }
 
+std::vector<ScreenOverlay::Quad> HudFrame(entt::registry& registry, const MagicPortalsLayer& layer);
+int IndexOfImage(const std::vector<ScreenOverlay::Quad>& quads, const std::string& file);
+int CountImage(const std::vector<ScreenOverlay::Quad>& quads, const std::string& file);
+int CountCaption(const std::vector<ScreenOverlay::Quad>& quads, const std::string& font);
+
 // ---- One level --------------------------------------------------------------
 
 void TheLayerPlaysLevel30() {
@@ -412,6 +418,31 @@ void Level8FromTheSpawnWithTapsAndWalking() {
     CHECK_MSG(cleared && cleared->name == "level8" && cleared->label == "1-9" && cleared->portalsUsed == 2 &&
                   cleared->traversals >= 1,
               "through the pair the two shots opened");
+    // THE COUNTER, from the tick the screen came up (spec 3.3, A-F12): nothing
+    // at t0, one 100 ms on and two at 200, and there it holds. 2 against a
+    // golden score of 2 is gold throughout, so the medal never changes.
+    if (clearedAt > 0) {
+        CHECK_EQ(layer.EndScreenClockMs(), 0.0);
+        CHECK_EQ(layer.PortalsCounted(), 0);
+        std::string counted;
+        for (int tick = 1; tick <= 30; ++tick) {
+            tickWith(layer, registry, kRest, {}, {});
+            if (tick == 3 || tick == 9 || tick == 15 || tick == 30) counted += std::to_string(layer.PortalsCounted());
+        }
+        CHECK_MSG(counted == "0122", "at 50, 150, 250 and 500 ms the count reads " + counted);
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        CHECK_MSG(IndexOfImage(frame, "medal_gold_l.png") >= 0 && IndexOfImage(frame, "golden_score_plaque.png") < 0,
+                  "gold at 2 of 2, and so no golden plaque (D6)");
+        // F11 and F12 through the layer: the crystal from entities/hd and its
+        // count in Matura84_shadow, which on gold (no golden number) can only
+        // be "3/3", counted up in 300 ms.
+        CHECK_EQ(layer.CrystalsCounted(), 3);
+        CHECK_MSG(IndexOfImage(frame, "crystal.png") >= 0, "the crystal is in the frame");
+        CHECK_MSG(CountCaption(frame, "Matura84_shadow.fnt") == 3,
+                  "and its count is three glyphs: " + std::to_string(CountCaption(frame, "Matura84_shadow.fnt")));
+        CHECK_MSG(IndexOfImage(frame, "crystal.png") > IndexOfImage(frame, "medal_gold_l.png"),
+                  "drawn after the medal it hangs from");
+    }
     CHECK_MSG(GoOnFromTheMedal(layer, registry), "the medal screen offers to go on");
     CHECK_MSG(IsAt(layer, "level9") && layer.SimLevel() != nullptr, "and level9 is loaded");
     layer.OnDetach(registry);
@@ -611,7 +642,26 @@ void AFallOutOfTheLevelIsADeath() {
     const std::vector<std::string> sounds = layer.LatchedSounds();
     const bool fell = std::find(sounds.begin(), sounds.end(), "player_fell") != sounds.end();
     CHECK_MSG(fell, "and the fall's own cue played on the tick it happened");
-    std::printf("  level1: fell past the level's edge and died\n");
+    // D7 with a body still falling: the level runs on under the beat and the
+    // lost screen, so the player goes on falling, but the follow is held inside
+    // the level's bounds (Camera::Clamp, the original's camMin/camMax) and the
+    // death is past them, so the camera does not pan under the screen.
+    const auto fallenY = [&registry, &layer] {
+        return registry.get<TransformComponent>(layer.SimLevel()->player).position.y;
+    };
+    for (int tick = 0; tick < 84; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::Dead, "the lost screen is up 84 ticks on");
+    const glm::dvec2 atScreen = layer.CameraCentrePx();
+    const float yAtScreen = fallenY();
+    for (int tick = 0; tick < 316; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(fallenY() < yAtScreen - 1.0f, "the body falls on under the screen");
+    // Not bit-equal: the follow is still closing the last fraction of a pixel
+    // on the x this test teleported the body to, which is not a pan.
+    const double moved = glm::length(layer.CameraCentrePx() - atScreen);
+    CHECK_MSG(moved < 0.01, "and the camera stays where the screen found it, moved " + std::to_string(moved));
+    std::printf("  level1: fell past the level's edge and died; the screen 84 ticks on, 316 more and the body is "
+                "%.1f u lower, the camera %.5f px from where the screen found it\n",
+                static_cast<double>(yAtScreen - fallenY()), moved);
     layer.OnDetach(registry);
 }
 
@@ -1222,11 +1272,20 @@ void FinishingALevelShowsTheMedal() {
     CHECK_EQ(MenuButtonsOfKind(layer, Kind::Retry), 1);
     CHECK_EQ(MenuButtonsOfKind(layer, Kind::Next), 1);
     CHECK_EQ(MenuButtonsOfKind(layer, Kind::List), 1);
-    // And each is DRAWN, not merely listed. A kind buildMenu's switch does not
-    // name gets no image and so no quad - an invisible button that counting
-    // the buttons themselves would never catch. GCC's -Wswitch caught it once;
-    // this catches it without a compiler's help.
-    CHECK_EQ(Tagged(registry, "Magic Portals Menu Button"), 3);
+    // And each is DRAWN, not merely listed - through the screen overlay now, as
+    // the original's UI is drawn, so nothing of the screen is in the registry.
+    // A button with no picture would be an invisible button that counting the
+    // buttons themselves would never catch.
+    CHECK_EQ(Tagged(registry, "Magic Portals Menu Button"), 0);
+    {
+        // A tick into its entrance: on its first they are all at alpha 0, which
+        // the overlay is not sent.
+        tickWith(layer, registry, kRest, {}, {});
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        CHECK_MSG(IndexOfImage(frame, "button_restart.png") >= 0 && IndexOfImage(frame, "button_right.png") >= 0 &&
+                      IndexOfImage(frame, "list_button.png") >= 0,
+                  "the three buttons are in the frame");
+    }
 
     // And going on reaches the next level, with the screen gone.
     const MagicPortalsLayer::MenuButton* next = MenuButtonOf(layer, Kind::Next);
@@ -1762,31 +1821,41 @@ void TheMedalScreenIsTheOriginals() {
                   "evenly spaced, as a quarter, a half and three quarters are");
     }
 
-    // The screen's furniture is drawn, not just the medal. The veil, the
-    // banner and the portals plaque are there whatever the play earned.
-    CHECK_MSG(Tagged(registry, "Magic Portals Finish Veil") == 1, "the dimming veil is drawn");
-    CHECK_MSG(Tagged(registry, "Magic Portals Finish Banner") == 1, "and the level-finished banner");
-    CHECK_MSG(Tagged(registry, "Magic Portals Portals Plaque") == 1, "and the portals-spent plaque");
-    CHECK_MSG(Tagged(registry, "Magic Portals Medal") == 1, "and the medal itself");
-
-    // AND THE VEIL ACTUALLY DIMS. The original draws it at ARGB(200,255,255,255)
-    // and the port drew it opaque white, so a gradient meant to sink the level
-    // behind the medal read as barely a tint - a fidelity bug that looks exactly
-    // like a deliberately subtle design and so would never be reported as one.
-    // Checked on the material rather than by eye for that reason.
-    if (const entt::entity veil = FirstTagged(registry, "Magic Portals Finish Veil");
-        veil != entt::null && registry.all_of<MaterialComponent>(veil)) {
-        CHECK_MSG(::test::nearly(registry.get<MaterialComponent>(veil).albedoColor.a, 200.0f / 255.0f),
-                  "the veil carries the original's alpha of 200, not an opaque white");
+    // The screen's furniture is drawn, not just the medal - through the screen
+    // overlay, in display values (spec D9), and nothing of it in the registry.
+    // A second in, so every piece is whole.
+    CHECK_EQ(Tagged(registry, "Magic Portals Finish Veil"), 0);
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+    const int veil = IndexOfImage(frame, "fade_edge.png");
+    const int title = IndexOfImage(frame, "level_finished.png");
+    const int plaque = IndexOfImage(frame, "portals_created_plaque.png");
+    const int restart = IndexOfImage(frame, "button_restart.png");
+    const int list = IndexOfImage(frame, "list_button.png");
+    const int medal = IndexOfImage(frame, "medal_gold_l.png");
+    CHECK_MSG(veil >= 0 && title > veil && plaque > title && restart > plaque && list > restart && medal > list,
+              "the veil, the banner, the plaque, the buttons, then the medal: " + std::to_string(veil) + " " +
+                  std::to_string(title) + " " + std::to_string(plaque) + " " + std::to_string(restart) + " " +
+                  std::to_string(list) + " " + std::to_string(medal));
+    // THE VEIL DIMS, and it is a GRADIENT: fade_edge.png at 200 of 255, three
+    // strips of a clamped texture one and a half views wide from the top-left.
+    CHECK_EQ(CountImage(frame, "fade_edge.png"), 3);
+    if (veil >= 0 && CountImage(frame, "fade_edge.png") == 3) {
+        const ScreenOverlay::Quad& left = frame[static_cast<std::size_t>(veil)];
+        const ScreenOverlay::Quad& right = frame[static_cast<std::size_t>(veil + 2)];
+        CHECK_MSG(::test::nearly(left.color.a, 200.0f / 255.0f) && left.min == glm::vec2(0.0f) &&
+                      ::test::nearly(right.max.x, 1.5f) && ::test::nearly(right.max.y, 1.0f),
+                  "the veil carries the original's 200, from (0, 0) to 1.5 views wide");
     }
+    // The count, "0", in Matura128_shadow after the medal; no golden plaque on gold.
+    CHECK_MSG(CountCaption(frame, "Matura128_shadow.fnt") == 1, "the counter is one glyph");
+    CHECK(IndexOfImage(frame, "golden_score_plaque.png") < 0);
+    // Restart and pause went at the door, and the pads have faded out.
+    CHECK(IndexOfImage(frame, layer.HudRules().restart.sprite) < 0 && IndexOfImage(frame, layer.HudRules().pause.sprite) < 0);
 
-    // AND THEY GO WHEN THE SCREEN DOES. buildMenu runs again on every window
-    // resize, so a screen whose decorations are not torn down stacks another
-    // veil each time and darkens a shade at a time.
+    // AND THEY GO WHEN THE SCREEN DOES.
     layer.OnDetach(registry);
-    CHECK_MSG(Tagged(registry, "Magic Portals Finish Veil") == 0,
-              "the veil goes with the screen, or a resize stacks another");
-    CHECK_MSG(Tagged(registry, "Magic Portals Medal") == 0, "and so does the medal");
+    CHECK_MSG(HudFrame(registry, layer).empty(), "nothing of the screen is left once the level is gone");
 }
 
 // A level that has been cleared wears its medal on the grid. Nothing else does.
@@ -2200,7 +2269,17 @@ void APlaqueForALevelWithAMedal() {
     }
     CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Finished);
     if (layer.MenuScreen() != MagicPortalsLayer::Screen::Finished) return;
-    CHECK_MSG(HudFrame(registry, layer).empty(), "the medal screen puts nothing of the level's HUD over itself");
+    {
+        // The medal screen is drawn over the level through the overlay, with
+        // nothing of GameLayer under it: restart and pause went at the door, and
+        // the level-start plaque was never up on a fresh save. A tick in, since
+        // nothing of the screen is sent at its alpha 0.
+        tickWith(layer, registry, kRest, {}, {});
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        CHECK_MSG(IndexOfImage(frame, "level_finished.png") >= 0 && IndexOfImage(frame, rules.restart.sprite) < 0 &&
+                      IndexOfImage(frame, rules.pause.sprite) < 0 && IndexOfImage(frame, rules.plaque.sprite) < 0,
+                  "the medal screen puts nothing of GameLayer over the level");
+    }
     for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
         if (button.kind != MagicPortalsLayer::MenuButton::Kind::Retry) continue;
         layer.PressMenu(registry, button);
@@ -2777,6 +2856,200 @@ void NothingOnScreenIsCulledWhileWalking() {
     NoSpriteOnScreenIsCulled("level2"); // 1-3, where several do
 }
 
+// ---- how a level ends -------------------------------------------------------------
+//
+// sim/LevelEnd is pinned number by number in test_mp_levelend. What is held here
+// is the layer's side: the level GOES ON RUNNING under both screens (spec D7);
+// the screen comes up exactly the beat after the door or the death; restart and
+// pause are cut at the door and dismissed at a death (D8); the pads decay a tick
+// at a time from the byte they had; and a tap on a screen's button is taken
+// where that button is.
+
+// Holds right through level0 until the door, and returns the tick it was reached
+// on, or -1.
+int WalkLevel0IntoItsDoor(MagicPortalsLayer& layer, entt::registry& registry) {
+    for (int tick = 1; tick <= 600; ++tick) {
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+        if (layer.Finishing()) return tick;
+    }
+    return -1;
+}
+
+void TheDoorCutsTheHudAndTheLevelRunsOnUnderTheMedal() {
+    if (!OriginalArtIsThere("TheDoorCutsTheHudAndTheLevelRunsOnUnderTheMedal")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    const Hud::Rules& hud = layer.HudRules();
+    const MagicPortals::LevelEnd::Rules& rules = layer.LevelEndRules();
+    const int door = WalkLevel0IntoItsDoor(layer, registry);
+    CHECK_MSG(door > 0, "holding right reaches level0's door");
+    if (door < 0) return;
+
+    // A-F6: on the door tick restart and pause are gone, the player with them,
+    // and the pads are drawn at the byte the pulse left them at.
+    Hud::Rect rect;
+    CHECK_MSG(!layer.ControlRect(MagicPortalsLayer::Control::Reset, rect) &&
+                  !layer.ControlRect(MagicPortalsLayer::Control::Menu, rect),
+              "restart and pause are cut on the door tick");
+    const int start = layer.EndPadAlphaByte();
+    CHECK_MSG(start >= hud.alphaByte && start <= hud.alphaByte + hud.pads.tutorialVariationByte,
+              "the pads decay from their pulse: " + std::to_string(start));
+    {
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int pad = IndexOfImage(frame, hud.pads.leftSprite);
+        CHECK_MSG(IndexOfImage(frame, hud.restart.sprite) < 0 && IndexOfImage(frame, hud.pause.sprite) < 0 && pad >= 0 &&
+                      NearD(frame[static_cast<std::size_t>(pad < 0 ? 0 : pad)].color.a, start / 255.0, 1e-6),
+                  "the frame has the pads at that byte and no restart or pause");
+    }
+
+    // A-F7 and A-F8: a tick at a time, uint(a * 0.98), and the screen current
+    // exactly 1400 ms of game time after the door.
+    int screenAt = -1;
+    int padsGoneAt = -1;
+    bool decayed = true;
+    for (int tick = 1; tick <= 200; ++tick) {
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+        decayed = decayed && layer.EndPadAlphaByte() == MagicPortals::LevelEnd::PadDecayByte(rules, start, tick);
+        if (screenAt < 0 && layer.MenuScreen() == MagicPortalsLayer::Screen::Finished) screenAt = tick;
+        if (padsGoneAt < 0 && !layer.ControlRect(MagicPortalsLayer::Control::Left, rect)) padsGoneAt = tick;
+        if (tick == 84) CHECK_MSG(NearD(layer.EndScreenClockMs(), 0.0), "the screen's clock starts at its t0");
+    }
+    std::printf("  level0: door on tick %d, pads from %d gone %d ticks on, medal %d ticks on\n", door, start,
+                padsGoneAt, screenAt);
+    CHECK_MSG(decayed, "the pads' byte is uint(a * 0.98) every tick from the door");
+    CHECK_EQ(screenAt, 84);
+    int zeroAt = 0;
+    while (MagicPortals::LevelEnd::PadDecayByte(rules, start, zeroAt) > 0) ++zeroAt;
+    CHECK_MSG(padsGoneAt == zeroAt, "the pads go on the tick their byte reaches 0: " + std::to_string(zeroAt));
+
+    // D7: THE LEVEL RUNS ON. Its age keeps counting under the screen, as game
+    // time does in the original, and the screen's own clock with it.
+    const double age = layer.LevelAgeMs();
+    const double clock = layer.EndScreenClockMs();
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(NearD(layer.LevelAgeMs() - age, 1000.0, 1e-3) && NearD(layer.EndScreenClockMs() - clock, 1000.0, 1e-3),
+              "a second under the medal is a second of the level's age: " +
+                  std::to_string(layer.LevelAgeMs() - age));
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Finished && layer.SimLevel() != nullptr);
+
+    // Escape does nothing here, and a tap beside the buttons neither.
+    press(layer, registry, MagicPortalsLayer::kBack);
+    tap(layer, registry, ScreenOfView(layer, glm::dvec2(0.1, 0.1) * layer.ViewPx()));
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::Finished && !layer.Paused(),
+              "no pause over a finished level, and a tap on nothing is nothing");
+    // A tap on restart, where it is drawn, plays the level again.
+    const std::vector<MagicPortals::LevelEnd::Piece> pieces = MagicPortals::LevelEnd::Finished(
+        rules, layer.EndPlay(), layer.PortalsCounted(), layer.CrystalsCounted(), layer.ViewPx(), 5000.0);
+    for (const MagicPortals::LevelEnd::Piece& piece : pieces) {
+        if (piece.element != MagicPortals::LevelEnd::Element::Button ||
+            piece.button != MagicPortals::LevelEnd::Button::Restart) {
+            continue;
+        }
+        tap(layer, registry, ScreenOfView(layer, piece.rect.Centre()));
+    }
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::None && IsAt(layer, "level0") &&
+                  !layer.Finishing() && layer.LevelAgeMs() == 0.0,
+              "the medal's restart, tapped, starts level0 again");
+    layer.OnDetach(registry);
+}
+
+void ADeathDismissesTheHudAndTheLostScreenComesIn() {
+    if (!OriginalArtIsThere("ADeathDismissesTheHudAndTheLostScreenComesIn")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level5");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+    if (layer.SimLevel() == nullptr) return;
+    const Hud::Rules& hud = layer.HudRules();
+    const MagicPortals::LevelEnd::Rules& rules = layer.LevelEndRules();
+    // Past the pulse, so the pads decay from their 120 as 2-10's did.
+    for (int tick = 0; tick < 300; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const MagicPortals::Hazards::Hazard* hazard = layer.SimLevel()->hazards.FindHazard("death_area_ent_800");
+    CHECK(hazard != nullptr);
+    if (hazard == nullptr) return;
+    auto& transform = registry.get<TransformComponent>(layer.SimLevel()->player);
+    transform.position = glm::vec3(hazard->box.centre, transform.position.z);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.Dying() && layer.EndedMs() == 0.0, "the death tick");
+    CHECK_EQ(layer.EndPadAlphaByte(), 120);
+
+    const glm::dvec2 view = layer.ViewPx();
+    const Hud::Rect home = Hud::Place(hud.pause, view);
+    Hud::Rect rect;
+    // A-G4: dismissed, not cut - whole on the death tick, half gone and moving
+    // out at 350 ms, and gone before 700.
+    CHECK_MSG(layer.ControlRect(MagicPortalsLayer::Control::Menu, rect) && SameRect(rect, home),
+              "the pause control is still home on the death tick");
+    {
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int pause = IndexOfImage(frame, hud.pause.sprite);
+        CHECK_MSG(pause >= 0 && NearD(frame[static_cast<std::size_t>(pause < 0 ? 0 : pause)].color.a, 120.0 / 255.0, 1e-6),
+                  "at its own 120");
+    }
+    for (int tick = 0; tick < 21; ++tick) tickWith(layer, registry, kRest, {}, {});
+    {
+        const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+        const int pause = IndexOfImage(frame, hud.pause.sprite);
+        const double want = 120.0 / 255.0 * (1.0 - std::sin(3.14159265358979 / 4.0));
+        CHECK_MSG(pause >= 0 && NearD(frame[static_cast<std::size_t>(pause < 0 ? 0 : pause)].color.a, want, 0.01),
+                  "350 ms in the pause control is at " +
+                      std::to_string(pause < 0 ? -1.0 : frame[static_cast<std::size_t>(pause)].color.a));
+        CHECK_MSG(layer.ControlRect(MagicPortalsLayer::Control::Menu, rect) && rect.min.x > home.min.x &&
+                      rect.min.y < home.min.y,
+                  "and moving out, right and up");
+        CHECK_EQ(layer.EndPadAlphaByte(), MagicPortals::LevelEnd::PadDecayByte(rules, 120, 21));
+    }
+    for (int tick = 0; tick < 21; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(!layer.ControlRect(MagicPortalsLayer::Control::Menu, rect) &&
+                  !layer.ControlRect(MagicPortalsLayer::Control::Reset, rect),
+              "gone 700 ms after the death");
+
+    // A-G6: the lost screen 1400 ms after the death, to the tick.
+    int screenAt = 42;
+    while (screenAt < 200 && layer.MenuScreen() != MagicPortalsLayer::Screen::Dead) {
+        tickWith(layer, registry, kRest, {}, {});
+        ++screenAt;
+    }
+    CHECK_EQ(screenAt, 84);
+    CHECK_MSG(!layer.ControlRect(MagicPortalsLayer::Control::Left, rect), "the pads from 120 are gone by then (81)");
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const std::vector<ScreenOverlay::Quad> frame = HudFrame(registry, layer);
+    const int veil = IndexOfImage(frame, "fade_edge.png");
+    const int title = IndexOfImage(frame, "game_over.png");
+    const int restart = IndexOfImage(frame, "button_restart.png");
+    const int list = IndexOfImage(frame, "list_button.png");
+    CHECK_MSG(veil >= 0 && title > veil && restart > title && list > restart && CountImage(frame, "fade_edge.png") == 3,
+              "the veil, game over, restart and list, in that order");
+    if (veil >= 0) {
+        CHECK_MSG(::test::nearly(frame[static_cast<std::size_t>(veil)].color.a, 180.0f / 255.0f) &&
+                      ::test::nearly(frame[static_cast<std::size_t>(veil + 2)].max.x, 0.9f),
+                  "at 180, 0.9 of the view wide");
+    }
+    CHECK(IndexOfImage(frame, "button_right.png") < 0);
+    const double age = layer.LevelAgeMs();
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.LevelAgeMs() > age, "and the level runs on under it (D7)");
+
+    // A tap on L3 where it is drawn: level5 again, alive.
+    const std::vector<MagicPortals::LevelEnd::Piece> pieces = MagicPortals::LevelEnd::Lost(rules, view, 5000.0);
+    for (const MagicPortals::LevelEnd::Piece& piece : pieces) {
+        if (piece.element == MagicPortals::LevelEnd::Element::Button &&
+            piece.button == MagicPortals::LevelEnd::Button::Restart) {
+            tap(layer, registry, ScreenOfView(layer, piece.rect.Centre()));
+        }
+    }
+    CHECK_MSG(layer.MenuScreen() == MagicPortalsLayer::Screen::None && IsAt(layer, "level5") && !layer.Dying(),
+              "the lost screen's restart, tapped, plays level5 again");
+    layer.OnDetach(registry);
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     Level31DrawsTheBeholder();
@@ -2820,6 +3093,8 @@ void runTests() {
     ThePauseResumesWhereTheTapLeftIt();
     ThePausesButtonsGoWhereTheOriginalsGo();
     SkipOnALevelAlreadyFinished();
+    TheDoorCutsTheHudAndTheLevelRunsOnUnderTheMedal();
+    ADeathDismissesTheHudAndTheLostScreenComesIn();
     TheSceneHoldsDisplayValues();
 }
 

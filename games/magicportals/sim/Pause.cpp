@@ -2,76 +2,20 @@
 
 #include "core/Json.hpp"
 
-#include <fstream>
-#include <sstream>
+#include <utility>
 
 namespace MagicPortals::Pause {
 
 namespace {
 
 namespace Json = Supersonic::Json;
-
-bool Text(const Json::Value& block, const char* key, std::string& out, std::string& why, const std::string& where) {
-    const Json::Value& value = block[key];
-    if (!value.IsString() || value.AsString().empty()) {
-        why = where + "." + key + " is missing or not a non-empty string";
-        return false;
-    }
-    out = value.AsString();
-    return true;
-}
-
-bool Pair(const Json::Value& block, const char* key, glm::dvec2& out, std::string& why, const std::string& where) {
-    const Json::Value& value = block[key];
-    if (!value.IsArray() || value.AsArray().size() != 2 || !value.AsArray()[0].IsNumber() ||
-        !value.AsArray()[1].IsNumber()) {
-        why = where + "." + key + " is not a pair of numbers";
-        return false;
-    }
-    out = glm::dvec2(value.AsArray()[0].AsNumber(), value.AsArray()[1].AsNumber());
-    return true;
-}
-
-// A size, and a fraction of the screen or of a sprite: the first above zero,
-// the other two within 0..1, because nothing on this screen is placed off it.
-bool Size(const Json::Value& block, const char* key, glm::dvec2& out, std::string& why, const std::string& where) {
-    if (!Pair(block, key, out, why, where)) return false;
-    if (!(out.x > 0.0) || !(out.y > 0.0)) {
-        why = where + "." + key + " is not above zero";
-        return false;
-    }
-    return true;
-}
-
-bool Fraction(const Json::Value& block, const char* key, glm::dvec2& out, std::string& why,
-              const std::string& where) {
-    if (!Pair(block, key, out, why, where)) return false;
-    if (out.x < 0.0 || out.x > 1.0 || out.y < 0.0 || out.y > 1.0) {
-        why = where + "." + key + " is not within 0..1";
-        return false;
-    }
-    return true;
-}
-
-bool ReadPlaced(const Json::Value& block, const char* spriteKey, UiLayer::Placed& out, std::string& why,
-                const std::string& where) {
-    if (!block.IsObject()) {
-        why = where + " is not an object";
-        return false;
-    }
-    return Text(block, spriteKey, out.sprite, why, where) && Fraction(block, "at_screen", out.atScreen, why, where) &&
-           Fraction(block, "origin", out.origin, why, where) && Size(block, "size_units", out.sizeUnits, why, where);
-}
-
-bool Scale(const Json::Value& block, double& out, std::string& why, const std::string& where) {
-    const Json::Value& value = block["units_per_font_px"];
-    if (!value.IsNumber() || !(value.AsNumber() > 0.0)) {
-        why = where + ".units_per_font_px is missing or not above zero";
-        return false;
-    }
-    out = value.AsNumber();
-    return true;
-}
+using UiLayer::Read::Byte;
+using UiLayer::Read::Fraction;
+using UiLayer::Read::Pair;
+using UiLayer::Read::Positive;
+using UiLayer::Read::ReadPlaced;
+using UiLayer::Read::Size;
+using UiLayer::Read::Text;
 
 } // namespace
 
@@ -79,20 +23,8 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     Rules read;
     if (!UiLayer::LoadRules(path, read.layer, error)) return false;
 
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        error = path + ": cannot open";
-        return false;
-    }
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    const std::string text = buffer.str();
-    Json::Parser parser(text);
     Json::Value root;
-    if (!parser.Parse(root)) {
-        error = path + ": " + parser.Error();
-        return false;
-    }
+    if (!UiLayer::Read::File(path, root, error)) return false;
     const Json::Value& pause = root["pause"];
     if (!pause.IsObject()) {
         error = path + ": pause is not an object";
@@ -104,14 +36,7 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         return false;
     };
 
-    const Json::Value& dim = pause["dim"];
-    const Json::Value& alpha = dim["alpha_byte"];
-    if (!alpha.IsNumber() || alpha.AsNumber() < 0.0 || alpha.AsNumber() > 255.0 ||
-        alpha.AsNumber() != static_cast<double>(static_cast<int>(alpha.AsNumber()))) {
-        why = "pause.dim.alpha_byte is missing or not a whole number within 0..255";
-        return fail();
-    }
-    read.dimAlphaByte = static_cast<int>(alpha.AsNumber());
+    if (!Byte(pause["dim"], "alpha_byte", read.dimAlphaByte, why, "pause.dim")) return fail();
 
     const Json::Value& current = pause["current_plaque"];
     if (!ReadPlaced(pause["golden_plaque"], "sprite", read.goldenPlaque, why, "pause.golden_plaque") ||
@@ -140,10 +65,10 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     }
     if (!Text(title, "font", read.title.font, why, "pause.title") ||
         !Text(title, "prefix", read.title.prefix, why, "pause.title") ||
-        !Scale(title, read.title.unitsPerFontPx, why, "pause.title") ||
+        !Positive(title, "units_per_font_px", read.title.unitsPerFontPx, why, "pause.title") ||
         !Fraction(title, "centre_of_screen", read.title.centreOfScreen, why, "pause.title") ||
         !Text(golden, "font", read.goldenNumber.font, why, "pause.golden_number") ||
-        !Scale(golden, read.goldenNumber.unitsPerFontPx, why, "pause.golden_number") ||
+        !Positive(golden, "units_per_font_px", read.goldenNumber.unitsPerFontPx, why, "pause.golden_number") ||
         !Pair(golden, "offset_units", read.goldenNumber.offsetUnits, why, "pause.golden_number")) {
         return fail();
     }

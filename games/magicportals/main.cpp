@@ -53,8 +53,41 @@ int main(int argc, char** argv) {
     // layer's 120th tick.
     using DevPress = MagicPortals::MagicPortalsLayer::DevPress;
     std::vector<std::pair<int, DevPress>> presses;
+    // DEV ONLY: a walk held over a stated span of ticks, as a held arrow would
+    // hold it. The finished and lost screens' captures need the player walked
+    // into a door or a hazard, which a --fixed-step run cannot do.
+    // `--hold right@1-400` holds right from the layer's 1st tick to its 400th.
+    struct Hold {
+        int from = 0;
+        int to = 0;
+        float direction = 0.0f;
+    };
+    std::vector<Hold> holds;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
+        if (arg == "--hold") {
+            const std::string value = i + 1 < argc ? argv[++i] : "";
+            const std::size_t at = value.find('@');
+            const std::size_t dash = at == std::string::npos ? std::string::npos : value.find('-', at);
+            const std::string what = value.substr(0, at);
+            Hold hold;
+            hold.direction = what == "left" ? -1.0f : what == "right" ? 1.0f : 0.0f;
+            if (dash != std::string::npos) {
+                try {
+                    hold.from = std::stoi(value.substr(at + 1, dash - at - 1));
+                    hold.to = std::stoi(value.substr(dash + 1));
+                } catch (const std::exception&) {
+                    hold.from = 0;
+                }
+            }
+            if (hold.direction == 0.0f || hold.from < 1 || hold.to < hold.from) {
+                std::cerr << "--hold wants <left|right>@<first tick>-<last tick>, from at least 1, got '" << value
+                          << "'\n";
+                return EXIT_FAILURE;
+            }
+            holds.push_back(hold);
+            continue;
+        }
         if (arg == "--press") {
             if (i + 1 >= argc) {
                 std::cerr << "--press needs a value, e.g. pause@120\n";
@@ -156,6 +189,9 @@ int main(int argc, char** argv) {
                   << "                    DEV: press the pause control (pause) or one of the pause's\n"
                   << "                    buttons (levels, resume, skip, achievements, sound, music) on\n"
                   << "                    the game's tick <tick>, for a capture; repeatable\n"
+                  << "  --hold <left|right>@<from>-<to>\n"
+                  << "                    DEV: hold a walk from the game's tick <from> to <to>, for a\n"
+                  << "                    capture that walks into a door or a hazard; repeatable\n"
                   << "  --visit-levels <lightmapped|all|name,...>\n"
                   << "                    DEV: visit these levels in one process, holding each one's\n"
                   << "                    lightmaps as material sets and dropping them on leaving; the\n"
@@ -230,6 +266,7 @@ int main(int argc, char** argv) {
 
         auto game = std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start);
         for (const auto& [tick, press] : presses) game->ScheduleDevPress(tick, press);
+        for (const Hold& hold : holds) game->ScheduleDevHold(hold.from, hold.to, hold.direction);
         MagicPortals::MagicPortalsLayer& gameLayer = *game;
         app.PushLayer(std::move(game));
         if (!visit.levels.empty()) {

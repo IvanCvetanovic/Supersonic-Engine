@@ -277,6 +277,10 @@ bool OnPad(const Rules& rules, Side side, const glm::dvec2& viewUnits, double ag
 }
 
 double PadOpacity(const Rules& rules, double ageMs, bool tutorial) {
+    return static_cast<double>(PadAlphaByte(rules, ageMs, tutorial)) / 255.0;
+}
+
+int PadAlphaByte(const Rules& rules, double ageMs, bool tutorial) {
     const Rules::Pads& pads = rules.pads;
     const int strides = tutorial ? pads.tutorialStrides : pads.strides;
     const int variation = tutorial ? pads.tutorialVariationByte : pads.variationByte;
@@ -288,7 +292,7 @@ double PadOpacity(const Rules& rules, double ageMs, bool tutorial) {
         if (std::fmod(stride, 2.0) == 1.0) bias = 1.0 - bias;
         alpha += static_cast<int>(bias * static_cast<double>(variation));
     }
-    return static_cast<double>(alpha) / 255.0;
+    return alpha;
 }
 
 Ring RingAt(const Rules& rules, double ageMs, bool tutorial) {
@@ -402,15 +406,19 @@ std::vector<Glyph> LayOutCaption(const Rules& rules, const Supersonic::BitmapFon
 
 std::vector<Glyph> LayOutText(const Supersonic::BitmapFont& font, const std::string& text, const glm::dvec2& centre,
                               double unitsPerFontPx) {
+    if (!font.IsLoaded()) return {};
+    // ComputeTextBoxSize: the widest line's summed advances, by lineHeight a line.
+    const glm::dvec2 box = glm::dvec2(font.Measure(text)) * unitsPerFontPx;
+    return LayOutTextFrom(font, text, centre - box * 0.5, unitsPerFontPx);
+}
+
+std::vector<Glyph> LayOutTextFrom(const Supersonic::BitmapFont& font, const std::string& text,
+                                  const glm::dvec2& topLeft, double unitsPerFontPx) {
     std::vector<Glyph> glyphs;
     if (!font.IsLoaded()) return glyphs;
     const double scale = unitsPerFontPx;
     const glm::dvec2 page(font.PageSize());
     if (page.x <= 0.0 || page.y <= 0.0) return glyphs;
-
-    // ComputeTextBoxSize: the widest line's summed advances, by lineHeight a line.
-    const glm::dvec2 box = glm::dvec2(font.Measure(text)) * scale;
-    const glm::dvec2 origin = centre - box * 0.5;
 
     double pen = 0.0;
     double lineTop = 0.0;
@@ -424,7 +432,7 @@ std::vector<Glyph> LayOutText(const Supersonic::BitmapFont& font, const std::str
         if (found == nullptr) continue;
         if (found->width > 0 && found->height > 0) {
             Glyph glyph;
-            glyph.rect.min = origin + glm::dvec2(pen + found->xoffset, lineTop + found->yoffset) * scale;
+            glyph.rect.min = topLeft + glm::dvec2(pen + found->xoffset, lineTop + found->yoffset) * scale;
             glyph.rect.size = glm::dvec2(found->width, found->height) * scale;
             glyph.page = found->page;
             glyph.uvScale = glm::dvec2(found->width, found->height) / page;
