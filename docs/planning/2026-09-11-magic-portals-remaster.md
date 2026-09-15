@@ -6474,3 +6474,271 @@ print is the one step 45 printed.
 - **Neither repository was committed to.** The remake's working tree is clean: everything this
   step wrote is under the gitignored `out/parity/specs/lighting/work/e2/`. The pre-E2 tree and
   its build are in the session scratchpad.
+
+## Step 47 - the lightmaps drawn, the ambient handed to the engine, and every mixed sprite premultiplied (built)
+
+The lighting design's step G4 (the remake's `out/parity/specs/lighting/design_port.md`,
+section 7.1, with sections 5.2 and 10). **The port now adds each static, light-applying
+sprite's baked lightmap, the level's `add<id>.png`, over its colour times its ambient**,
+through the engine's 2D sprite path that step 46 built. The ambient that step 45 folded
+into the albedo colour now rides in the sprite's own record, and every mixed sprite of a
+lit level is drawn premultiplied. **No engine file changes.** No light, normal map or halo is
+drawn yet (E3, G5).
+
+**Every gate passes.**
+- On 1-01, 1-09 and 2-26, every halo-free class is within **0.85** of the fit's
+  `engine_tier1x` model, the worst bias **+0.8**: the design asked 2.0 and 2.5.
+- The classes without a lightmap read what they read at G3, to the hundredth.
+- The torch confirmation that failed at G3 passes: bright flame G **244.8**, asked 235.
+- The design's level walk now watches the layer's own lightmap sets, not a probe's:
+  1,460 over two passes, peak 91 of 1024, pool equal to cache at every visit.
+
+**WHAT CHANGED (game: `MagicPortalsLayer.{hpp,cpp}`).** Step 45 said moving the fold to the
+engine would be a change to `tint()` alone, and it is, with one field to feed it.
+- **`tint(quad, colour, emissive, lightmap)`**, the one place a level sprite's look is
+  written, on a lit level:
+  - `albedoColor = C`, the node's colour with a timed crystal's fade on its alpha;
+  - `sprite2D.enabled`, `sprite2D.ambient = min(1, A + E)` (`Lighting::AmbientTerm`),
+    strength left at 1;
+  - `overlayTexturePath` = the sprite's lightmap, or empty;
+  - a `BlendMode::Alpha` material made `Premultiplied`. `Additive` stays: no blendMode-1
+    instance applies light (design section 4.5).
+  - Each field written only when it changes, so a still level writes nothing a tick and
+    `SyncResources`' signature does not churn.
+  - **On a level whose lighting did not read**: the plain unlit path, `albedoColor = C`, no
+    2D record, no overlay, `Alpha`. That is what step 45's `term = 1` drew.
+- **`DrawnSprite::lightmap`**, set in `buildSprites` from the node's look when it is static
+  and applies light (design section 3.1). `Lighting::Read` already refuses a lightmap
+  anywhere else; the condition says what the engine does rather than what the file holds.
+- **What names no lightmap:** the player, the placed portals' halos, the shot, the
+  beholder, spikes and thrown stones, which no level file placed.
+  - **The dark dragon's dropped platform does not take its template's.** A bake is the light
+    that fell where the template stands, and the original reads one per entity already in
+    the scene, by its id (`ETHScene.cpp:315-334`, `add<id>` at `ETHSpriteEntity.cpp:437`).
+    The platform is added when the dragon dies, under an id no file names. The design is
+    silent here. **Reasoning, and not exercised:** 4-32, the one level that drops it, is a
+    `darkest` level with no lightmap at all.
+- **No runtime bake is needed here.** Every level that places a torch is a `darkest` level
+  (torch.json's census), and none of the ten ships a lightmap: not one `eth_lightmap` key in
+  their ten files (counted this step). So G6's switch to runtime mode has no
+  file lightmap to drop, and G4 draws files on every level.
+- **Not done, and why:** section 5.2's `normalTexturePath`, `height`, `normalYDown` and
+  `lightMask`. The engine reads none of them until the light loop (E3), and G4's text names
+  only the ambient, the overlay and the blend. `lighting.json` gains nothing.
+- Comments: the class header, `HeldLightmaps`, the unload, `syncLighting`'s block, and
+  `sim/Lighting.hpp`'s header, which said the lightmaps were drawn by nothing.
+- **ARCHITECTURE.md, section 4c**: the sentence on `--visit-levels` named the command and
+  step 42's peak of 96. Run today the command peaks at 91, so it now says the walk watches
+  the sprites' own sets, 1,460 over two passes, peaking at 91. The only other document
+  touched.
+- **A correction to step 45's suite comment:** `add696.png` is not "the torch's wall". It is
+  the lightmap of `light_ent_696`'s own sprite, `torch_small.png` (the new case pins it).
+
+**THE WALK WATCHES THE LAYER (game, DEV ONLY: `LevelVisit.{hpp,cpp}`, `main.cpp`'s help).**
+Steps 42 to 46 had nothing drawing a lightmap, so `--visit-levels` acquired each level's
+lightmaps itself and invalidated them before the layer did. **Run unchanged it would now
+double count**: its invalidation would drop the probe's set and the sprite's, twice what it
+expects. So it no longer acquires anything of its own.
+- **Six frames after a level opens**, it checks:
+  - the pool equals the cache (the check that matters, unchanged);
+  - `HeldLightmaps()` equals the lightmaps the level file names;
+  - each is the overlay of a sprite, loaded (not the black a failed file caches), and under
+    the id the registry gives its path. Asking for a loaded path adds nothing, so
+    `TextureRegistry::Size()` staying put says the sprites had loaded every one.
+- **One thing it does take.** The renderer acquires a set only for a sprite it draws, and a
+  lightmapped sprite off screen has none yet. For each lightmapped sprite, it asks for the
+  set of **that sprite's own four maps**: the set the renderer takes when it comes into view.
+  - None may come back as the exhausted pool's fallback.
+  - Taking the undrawn ones must add exactly that many to both counts.
+  - So each visit puts the level's whole pressure on the pool, as walking it through would.
+- **When the next visit opens a level**, the layer's unload inside `PressMenu` must drop
+  exactly the measured number of sets from the cache and leave the pool unchanged. Nothing
+  renders inside `PressMenu`, so nothing else can drop one. A level opened over itself is a
+  retry and must drop none.
+- **At the end** it leaves for the level grid and checks the pool equals the cache. Then it
+  opens the last level again and quits with its sets held. The layer's detach drops them
+  after the last frame, so their frees are still queued when the renderer destroys the
+  pool: step 42's shutdown case, now through the layer, with validation to catch it.
+
+**THE SUITES.**
+- **`test_mp_layer` 418 -> 463.**
+  - **`ColoursOf` now reads what the engine packs**, not the material's field: a
+    `PushConstantData` with the material's colour, through `RenderSystem::ApplySprite2D`. So
+    every step 45 pin (level0's arches and torch, the shot's (0.95, 0.9, 1), level21c's 0.01,
+    the crystal's fade) still holds the product C x min(1, A + E), whichever side multiplies.
+  - `EverySpriteIsDrawnAtItsAmbient` adds that both arches are colour (1, 1, 1, 1) with the
+    2D record on at (0.35, 0.3, 0.35): the product is the engine's.
+  - `TheLevelsArtIsDrawn` (level8's 23 sprites) and `ThePlayerIsTheDarkMage` now pin
+    `Premultiplied` where they pinned `Alpha`.
+  - **`LightmapsAreDrawnOverTheirSprites`** (new), design section 7.1's pins:
+    - level0: **9** materials name an overlay, exactly `HeldLightmaps()`;
+    - each on the 2D path, strength 1, premultiplied;
+    - four at the ambient (both arches, the wall, the torch) and five whole (emissive 1: the
+      platforms, the bar, the stone);
+    - **`add696.png` on `torch_small.png` at (288, 80) px**, which is `light_ent_696` at
+      (288, 64) with its sprite's 16 px offset, and one torch sprite in all;
+    - no halo, door or player among them, and the four static portals' halos still
+      `Additive` with the 2D record on;
+    - a retry draws the same nine;
+    - N draws level1's nine, as held, none of level0's;
+    - the grid draws none;
+    - **level4a: none**, and every one of its sprites on the 2D path.
+  - **A first draft of the new case was wrong, not the layer**: it expected all nine of
+    level0's lightmapped sprites at the ambient. Five are emissive 1, and 5 checks failed
+    naming them. The pin was rewritten per image before the after frames were captured.
+- **`test_mp_lighting` 444**, unchanged: G4 adds nothing renderer-free.
+- **Mutations, one build each, not kept.** The layer was copied first (md5 `3647f973...`) and
+  put back byte for byte after each.
+  - `tint` not writing the overlay: **9 failures** of 443 checks (the level0 and level1
+    overlay pins; the per-overlay loop ran over nothing).
+  - the ambient folded into `albedoColor` **as well as** handed to the engine: **10 failures**
+    of 463 (the arches 0.1225, the torch, the retried arches, the shot at 0.9025, level21c's
+    four sceneries at 0.0001, and both arch records).
+  - `Alpha` never made `Premultiplied`: **11 failures** of 463 (level8's sprites, the player,
+    and the nine overlays).
+  - **`releaseLightmaps` not invalidating** (the walk's own check): the walk **failed, exit
+    1, 134 failures**, the first "opening 1-2 (level1): the layer's unload of 9 lightmap
+    set(s) moved the cache from 25 to 25". The pool peaked at **804**, over step 42's old
+    cap of 512.
+
+**THE GATES.** Captures by `work/g4/capture.sh` (a copy of E2's, folder changed), gates by
+`gates.sh`, the sweep scored by `screen.py`, all under `out/parity/specs/lighting/work/g4/`.
+- **The before is G3's final**, taken on this step's starting build: all 21 before-frames are
+  md5-identical to `work/e2/final/`, which step 46 found identical to `work/g3/fix2_final/`.
+  `WolfBrigade.exe` was refused (exit 126), again after one relink, and ran after the second.
+- **The after was taken on the final build and again after the last rebuild**
+  (`final2/`): 21 of 21 md5-identical. A first capture on the step's first build
+  (`try1/`) gave the same bytes as `after/` for every level it took.
+- The design's "today" figures for `LM_E<1` (34.78, 43.12, 54.46) are from before G2; the
+  Before column is G3's, which is what this step changes.
+- **Design section 10's second amendment does not apply here.** It replaces a best-tier
+  variant with its 1x re-render; every G4 row is read against `engine_tier1x`, which is
+  already the model drawn with 1x art. `work/g3/fit_extra/` is not used.
+
+| Gate | Required | Before (G3) | Measured |
+|---|---|---|---|
+| 1-01 `LM_E<1` against `engine_tier1x` (67 blocks) | bMAE <= 2.0, abs(bias) <= 2.5 | 9.59, -17.9 -8.7 -2.0 | **0.45**, 0.0 +0.1 -0.1 |
+| 1-01 `LM_E=1` (97) | the same | 3.15, -4.0 -1.4 +0.4 | **0.85**, +0.7 +0.7 +0.8 |
+| 1-09 `LM_E<1` (603) | the same | 1.72, -2.4 -1.1 -0.1 | **0.66**, +0.1 +0.1 +0.1 |
+| 1-09 `LM_E=1` (290) | the same | 2.41, -4.5 -2.2 -0.4 | **0.12**, 0.0 0.0 0.0 |
+| 1-09 `noLM_E=1` (519) | the same, and within 0.3 of G3 | 0.29, -0.1 -0.1 -0.1 | **0.29**, -0.1 -0.1 -0.1 |
+| 2-26 `LM_E<1` (372) | bMAE <= 2.0, abs(bias) <= 2.5 | 20.46, -36.8 -17.7 -6.9 | **0.24**, 0.0 0.0 0.0 |
+| 2-26 `noLM_E=1` (1,161) | the same, and within 0.3 of G3 | 0.91, -0.1 -0.1 -0.1 | **0.91**, -0.1 -0.1 -0.1 |
+| non-LM classes elsewhere, within 0.3 of G3 | (the same clause) | 2-05 `noLM_E<1` 1.62; 4-22 `noLM_E<1` 0.82, `noLM_E=1` 0.91 | **1.62; 0.82, 0.91**, biases to the tenth unchanged |
+| 2-05 `noLM_E<1` at frames 330, 360, 390, 450, 480, 510 (design section 10's amended G3 row) | median bMAE <= 2.0, abs(bias) <= 1.0 | 0.42, +0.1 +0.1 +0.1 at each | **0.42, +0.1 +0.1 +0.1 at each**, 349 blocks, offset (0, 0) |
+| `torch.py`, level0 frames 270..420 (design section 10: must pass again here) | bright flame R >= 240, G >= 235 | 255.0, 232.1 (B 127.5, peak grey 243.0) | **255.0, 244.8** (B 132.9, peak grey 244.0); the original 253.2, 252.0, 159.1 |
+| `test_mp_layer`: level0 9 overlays, `add696.png` on `light_ent_696`; level4a none | pass | 418 checks | **463 checks, 0 failures** |
+| `test_mp_lighting` | pass | 444 | **444, 0 failures** |
+| E0's walk, `--visit-levels lightmapped --visit-passes 2`, the layer's own sets | exit 0; pool = cache after every unload; no exhaustion; validation silent | step 46: the probe's 1,460, peak 96 | **exit 0 in 19.6 s**, 134 visits, 0 failures (below) |
+| `door.py` on 2-01 (step 44's confirmation) | p95 R >= 230, p95 G <= 50 | 255, 48 | **255, 48** |
+| MainScene and Wolf Brigade, `--fixed-step --frames 120` | unchanged (no engine file changed) | `1e24c2a3...`, `d9e7b8fe...` | **the same**; MainScene "Clean exit with validation active" |
+| the menu at 120, level0 frame 1 (the HUD over both blacks) | unchanged | `934232ed...`, `5c5cfed2...` | **the same**. Neither draws a level sprite |
+| validation, 19 port captures and all 128 sweep runs | active, silent | - | "ACTIVE" in every port log, no `VUID` or "Validation Error" in any, every run exit 0 |
+
+**The walk, measured** (`work/g4/visit_final.log`, on the final binary):
+- 134 visits (67 levels, twice), **1,460 lightmap sets**: 1,100 already taken by the renderer
+  at the measure, 360 taken for sprites not yet in view.
+- **Every unload** dropped exactly the level's sets (at most 21, at 3-13) with the pool
+  unchanged at that moment; **every visit** found the pool equal to the cache six frames on.
+- **The baseline**, the pool without the level's lightmap sets: pass 1 climbed **16 -> 70**,
+  pass 2 stood at **70 at all 67 visits**. Peak **91** (70 plus 3-13's 21).
+  - Step 46's baseline was 75 with a peak of 96. The five fewer are sets the layer no longer
+    takes: a lightmapped image drawn only with its lightmap never needs the set with a black
+    overlay. Reasoning from the keys, not measured set by set.
+- On the grid after the last release: 74 cached, 74 in the pool (70 plus the grid's own 4).
+- Quit holding level27c's 5 sets for the layer's detach; `Subsystem resources destroyed
+  cleanly`, no line containing "error".
+
+**THE COLOUR CHANGE IS THE LIGHTMAP'S, AND THE REST IS A ROUNDING (attributed).**
+- **Where there is no lightmap, the frames move by at most one level.** Frame 420 against G3:
+  1-13 820 px, 2-05 285, 4-22 551 and 2-01 821 px changed, every one by 1 of 255.
+- **That is the premultiplied blend alone.** One build, not kept (`attr_blend.sh`): this
+  step's layer with the `Alpha -> Premultiplied` line taken out.
+  - 1-13, 2-05 and 4-22 captured **md5-identical to G3's frames**. So the ambient's move into
+    the engine is exact, as `ApplySprite2D` multiplies the same two floats the fold did.
+  - Against this step's frames it differs by at most 1 of 255: 1-01 on 1,220 px, 2-26 on
+    592, 1-13 820, 2-05 285, 4-22 551.
+  - The source was restored to its md5, and everything after was rebuilt and recaptured.
+- **Whole frame (`compare.py`, frame 420 against `levels/<W-LL>_t8.0.png`):**
+
+| Level | mean_abs before -> after | edge_iou before -> after |
+|---|---|---|
+| **1-01** | **23.49 -> 15.86** | 0.4450 -> 0.4560 |
+| **1-09** | **9.42 -> 8.21** | 0.4220 -> 0.4290 |
+| 1-13 | 17.62 -> 17.62 | 0.2307 -> 0.2307 |
+| 2-05 | 12.35 -> 12.35 | 0.3235 -> 0.3234 |
+| 2-26 | 13.69 -> 10.43 | 0.3322 -> 0.4077 |
+| 3-05 | 9.27 -> 8.74 | 0.3832 -> 0.3883 |
+| 4-22 | 4.95 -> 4.95 | 0.6088 -> 0.6088 |
+
+- G5's own gate is 1-01 at 15 or below (design section 7.1); 15.86 is not that gate, and
+  halos are not drawn.
+
+**WHAT ELSE MOVED, NOT GATED.**
+- **Against the original**, the lightmapped classes: 1-01 `LM_E<1` 8.74 -> **3.01**, 1-09
+  `LM_E<1` 2.78 -> **2.36**, 2-26 `LM_E<1` 20.64 -> **2.36**.
+  - The design's thresholds for these are after plan_port System 6 (2.53, 2.0, 2.27). The
+    port is within 0.66 of `engine_tier1x`, and `engine_tier1x` itself reads 2.95, 2.34 and
+    2.36 against the original on those blocks. So what remains is the 1x art, not the add.
+  - Against `engine` (the best tier): 1.96, 2.17, 1.92.
+  - 1-09 `LM_E=1` reads 11.72 against the original, where `engine_tier1x` reads 11.72: the
+    tier again, as step 45 found.
+- **The halo classes** (G5's): 1-01 `LM_E<1_halo` 42.22 -> 13.21 against `engine_tier1x`,
+  1-09 `LM_E<1_halo` 40.92 -> 10.29, both still dark (bias -24.4 and -18.9 on R): no halo is
+  drawn. 1-01 `LM_E=1_halo` reads 0.11 against `engine_tier1x` and 20.58 against `engine`,
+  a split this step did not look into.
+- **All 128 levels at frame 420** (`capture.sh after sweep`, `screen.py` against step 46's
+  `work/e2/after/sweep`):
+  - every run exit 0, validation ACTIVE, no VUID, **no level drawn unlit**;
+  - **all 67 lightmapped levels** changed by more than one level somewhere;
+  - **the 61 without a lightmap** changed by at most 1 of 255, except **one pixel of 4-25 by
+    2** (474 px changed in all). Not looked into; two premultiplied layers rounding the same
+    way is the first guess;
+  - against the 81 library frames: **no `edge_iou` fell by more than 0.02** (worst -0.0038,
+    3-09; best +0.0755, 2-26); `mean_abs` fell on 36, rose on one (3-15, +0.02) and held on
+    the rest.
+  - **1-05, 34.74 -> 13.74**, the largest fall: step 45 put its rise (6.4) on the blue lamp's
+    lightmap under a wall now dimmed, and this step draws that lightmap.
+
+**LEFT FOR LATER STEPS AND FOR THE OWNER.**
+- **E3 and G5**: the lights, the normal maps, the height, the mask and `normalYDown`; the
+  halos; `lighting.json`'s green-down switch. The torch confirmation is G5's again.
+- **G6**: RGB565 and the runtime bake. No level needs to drop a file lightmap for it.
+- **Step 46's watcher gap stands**: an edited lightmap is read again only when its level
+  unloads.
+- **Step 46's `AcquireMaterialSet` throw** on a key naming an invalidated texture: the overlay
+  now carries per-level lightmaps. `unloadLevel` invalidates them before it destroys the
+  sprites, with no frame between; the walk's 134 unloads and the sweep ran with validation
+  silent. Not a proof for every order of unload a later screen may add.
+- Unchanged from step 45: the script's emissive (design section 5.8), the sky controller
+  (black ground on 34 levels), the placeholder boxes, 1-13's camera.
+- Not measured: frame time and draw calls with the overlays (design section 6 expects at most
+  about 21 more draws on 3-13).
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning in any build.
+  - The first built `MagicPortals` alone (the layer, `main.cpp`, `LevelVisit.cpp`) for the
+    gate captures; the second rebuilt it with the new walk.
+  - The full build after the suite: 31 translation units, 40 links. So was the final full
+    build with every changed file touched, after the three suite mutations were restored.
+  - The attribution and the walk mutation each built `MagicPortals` alone; each restore was
+    followed by a build (1 translation unit, 3 links: `MagicPortalsGame`, `test_mp_layer`,
+    `MagicPortals`).
+- **ctest: 113 of 113 pass, Not Run 0** (`work/g4/ctest_final.log`), on the last build.
+  - **Smart App Control**, resolved by deleting and relinking each time:
+    - the final full build: `test_mp_zerog`, `test_mp_diamonds`, `test_mp_hud`,
+      `test_mp_camera` and `test_mp_tscn` refused; `test_mp_tscn` again after one relink,
+      none after two; then 113 of 113;
+    - the build after the attribution: none refused, 113 of 113;
+    - the build after the walk mutation: `test_mp_layer` refused, ran after one relink;
+      then 113 of 113;
+    - `test_mp_layer.exe` in the blend mutation and `MagicPortals.exe` in the walk mutation,
+      each refused once (exit 126) and run after one relink;
+    - `WolfBrigade.exe` at the before capture, as above.
+  - Run directly on the final build: `test_mp_layer` **463**, `test_mp_lighting` 444,
+    `test_mp_sprites` 166, `test_mp_torch` 92, `test_mp_start` 726 and `test_mp_levels` 128
+    checks, 0 failures and no skip line in any.
+- **The final binary draws the gate frames**: `final2/`, 21 of 21 md5-identical to `after/`,
+  on which every gate above was read; and the walk above was run on it.
+- **Neither repository was committed to.** The remake's working tree is clean: everything
+  this step wrote is under the gitignored `out/parity/specs/lighting/work/g4/`.

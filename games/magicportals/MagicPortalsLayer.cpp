@@ -377,7 +377,7 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
 }
 
 void MagicPortalsLayer::unloadLevel(entt::registry& registry, bool keepLightmaps) {
-    // THE LIGHTMAPS GO BACK WITH THE LEVEL. Each lightmapped sprite will hold a
+    // THE LIGHTMAPS GO BACK WITH THE LEVEL. Each lightmapped sprite holds a
     // texture and a material set of its own (730 across the game), and the
     // registry keeps both until told to drop them; a session walking the chapters
     // would otherwise hold every level's at once (the lighting design's section
@@ -469,7 +469,9 @@ void MagicPortalsLayer::releaseLightmaps(entt::registry& registry) {
     if (auto* const* textures = registry.ctx().find<Supersonic::TextureRegistry*>();
         textures != nullptr && *textures != nullptr) {
         // A path never acquired is simply not there; Invalidate says false and
-        // does nothing, which is every path until the lightmaps are drawn.
+        // does nothing. Since step 47 each is acquired by the sprite that draws
+        // it, the first frame the level is drawn. Before the sprites go, which
+        // is safe: nothing renders between here and their destruction below.
         for (const std::string& path : m_heldLightmaps) (*textures)->Invalidate(path);
     }
     m_lightmapsHandedBack += m_heldLightmaps.size();
@@ -1845,6 +1847,12 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         if (const auto look = m_look.nodes.find(sprite.node); m_lit && look != m_look.nodes.end()) {
             drawn.colour = glm::vec4(look->second.colour);
             drawn.emissive = look->second.emissive;
+            // Its baked light, when the original draws one for it: static and
+            // applying light (the design's section 3.1). Lighting::Read
+            // already refuses a lightmap anywhere else; the condition is kept
+            // so this line says what the engine does rather than what the file
+            // happens to hold.
+            if (look->second.isStatic && look->second.applyLight) drawn.lightmap = look->second.lightmap;
         }
         drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
         drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
@@ -1954,6 +1962,11 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             // And its look: the platform the template's .ent is, lit as it is.
             made.colour = from.colour;
             made.emissive = from.emissive;
+            // But NOT its lightmap, which `made` leaves empty. A bake is the light
+            // that fell where the template stands, and the original reads one per
+            // entity already in the scene, named by its id (ETHScene.cpp:315-334,
+            // add<id> at ETHSpriteEntity.cpp:437); this platform is added when the
+            // dragon dies, long after, under an id no file names.
             made.quad = makeSprite(registry, "Magic Portals Dropped Platform", made.sprite.texture,
                                    made.sprite.additive);
             m_sprites.push_back(std::move(made));
@@ -2273,10 +2286,25 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
 // scene holding display values (SceneRendering), the multiply lands on the bytes,
 // as it did in the original.
 //
-// FOLDED INTO THE ALBEDO COLOUR, which the engine's unlit path already
-// multiplies in. The design's step E2 gives the engine a 2D path that takes the
-// ambient apart from the colour, which the lights will need; until then this is
-// the whole of it, and moving it there is a change to tint() alone.
+// THROUGH THE ENGINE'S 2D SPRITE PATH (MaterialComponent::sprite2D), since step
+// 47, the lighting design's G4. Step 45 folded the factor into the albedo colour;
+// the engine now takes it apart from the colour, which the lights will need (a
+// lamp is not dimmed by the room it shines in), and multiplies the two on the
+// CPU exactly as the fold did, so a sprite without a lightmap draws the same.
+//
+// AND ITS LIGHTMAP, added after the multiply and dimmed by nothing: the baked
+// add<id>.png of a static, light-applying sprite (design decisions 3 and 4, from
+// the fit: multiplying it scores 26.95 of 255 where adding it scores 0.92, and
+// the shipped PNG beats the ETC1 file on 11 of 11 entities). Every level that
+// places a torch is a `darkest` level and ships no lightmap (torch.json's census),
+// so no lit torch ever has one to drop; the runtime bake is the design's G6.
+//
+// PREMULTIPLIED, every mixed sprite of a lit level. The original adds a sprite's
+// live light at full weight where its base is weighted by alpha, which one draw
+// can only do premultiplied (design section 4.5). With nothing added yet it is
+// the straight mix to within a rounding, so it goes on here with the ambient
+// rather than as a second switch the lights would have to remember. The added
+// sprites stay added: no blendMode-1 instance applies light.
 //
 // What is NOT coloured, and why:
 //   - the particles. Ethanon multiplies a particle system by
@@ -2292,9 +2320,11 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
                       : glm::dvec3(1.0);
 
     for (const DrawnSprite& drawn : m_sprites) {
-        tint(registry, drawn.quad, drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade), drawn.emissive);
+        tint(registry, drawn.quad, drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade), drawn.emissive,
+             drawn.lightmap);
     }
     // What no level places, with its .ent's emissive (art.json, launchers.json).
+    // None has a lightmap: a bake belongs to an entity the level file placed.
     const glm::vec4 white(1.0f);
     tint(registry, m_playerQuad, white, m_artRules.character.emissive);
     for (const entt::entity quad : m_portalQuads) tint(registry, quad, white, m_artRules.portal.emissive);
@@ -2310,13 +2340,32 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
 }
 
 void MagicPortalsLayer::tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour,
-                             const glm::dvec3& emissive) const {
+                             const glm::dvec3& emissive, const std::string& lightmap) const {
+    using Supersonic::MaterialComponent;
     if (quad == entt::null || !registry.valid(quad)) return;
-    const glm::vec3 term = m_lit ? glm::vec3(Lighting::AmbientTerm(m_ambient, emissive)) : glm::vec3(1.0f);
-    const glm::vec4 want(glm::vec3(colour) * term, colour.a);
-    // Written only when it changes, so a still level writes nothing a tick.
-    auto& material = registry.get<Supersonic::MaterialComponent>(quad);
-    if (material.albedoColor != want) material.albedoColor = want;
+    auto& material = registry.get<MaterialComponent>(quad);
+
+    // A level whose lighting did not read is drawn as before lighting existed:
+    // the plain unlit path, its colour alone, mixed straight.
+    MaterialComponent::Sprite2DLight sprite;
+    MaterialComponent::BlendMode blend = material.blend;
+    if (m_lit) {
+        sprite.enabled = true;
+        sprite.ambient = glm::vec3(Lighting::AmbientTerm(m_ambient, emissive));
+        if (blend == MaterialComponent::BlendMode::Alpha) blend = MaterialComponent::BlendMode::Premultiplied;
+    } else if (blend == MaterialComponent::BlendMode::Premultiplied) {
+        blend = MaterialComponent::BlendMode::Alpha;
+    }
+
+    // Each written only when it changes: a still level writes nothing a tick,
+    // and the overlay's path is in SyncResources' signature, which a rewrite of
+    // the same path would not move but a churn of it would.
+    if (material.albedoColor != colour) material.albedoColor = colour;
+    if (material.sprite2D != sprite) material.sprite2D = sprite;
+    // Empty on an unlit level: buildSprites takes a lightmap only from a look
+    // that read.
+    if (material.overlayTexturePath != lightmap) material.overlayTexturePath = lightmap;
+    if (material.blend != blend) material.blend = blend;
 }
 
 void MagicPortalsLayer::syncTurrets(entt::registry& registry) {

@@ -105,8 +105,8 @@ int main(int argc, char** argv) {
                   << "  --saves <dir>     DEV: keep the medals (scores.json) here instead of the user's\n"
                   << "                    data directory - for a capture that needs a medal recorded\n"
                   << "  --visit-levels <lightmapped|all|name,...>\n"
-                  << "                    DEV: visit these levels in one process, holding each one's\n"
-                  << "                    lightmaps as material sets and dropping them on leaving; the\n"
+                  << "                    DEV: visit these levels in one process, taking the material set\n"
+                  << "                    of every lightmapped sprite, which the level drops on leaving; the\n"
                   << "                    run fails unless the engine's descriptor sets return to its pool\n"
                   << "  --visit-passes <n> DEV: how many times to walk that list (default 1)\n";
         return EXIT_SUCCESS;

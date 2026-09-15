@@ -47,9 +47,10 @@
 //
 // And what the original's SCRIPT sets over the level file: the port's
 // lighting.json, and the ambient light a level is drawn with at any moment
-// (Rules, Ambient). Drawn since step 45 as the design's G3: the layer multiplies
-// every sprite's colour by AmbientTerm(Ambient(...), emissive). The lightmaps, the
-// lights and the halos are still drawn by nothing.
+// (Rules, Ambient). Drawn since step 45 as the design's G3: every sprite's colour
+// is multiplied by AmbientTerm(Ambient(...), emissive), by the engine's 2D sprite
+// path since step 47 (G4), which also adds each Look::lightmap over its sprite.
+// The lights and the halos are still drawn by nothing.
 
 #include "sim/Torch.hpp"
 #include "sim/Tscn.hpp"

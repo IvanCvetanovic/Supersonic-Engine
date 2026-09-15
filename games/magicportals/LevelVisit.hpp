@@ -8,26 +8,36 @@
 // cannot be tested any other way: no suite can construct a TextureRegistry,
 // because it needs a device (the remake's design_port.md, step E0).
 //
-// What it stands in for. The lighting design gives every lightmapped sprite a
-// descriptor set of its own - 730 lightmaps across the game, against a pool
-// that used to hold 512 sets and never took one back - and has the layer drop a
-// level's lightmaps when the level unloads (its G3). The layer does that since
-// step 45 (MagicPortalsLayer::HeldLightmaps); the fourth binding does not exist
-// yet (E2), so nothing acquires a lightmap for the layer to drop. So for each
-// level visited this acquires the level's lightmaps as data textures and one
-// material set per lightmap, which is the pool pressure the fourth binding will
-// put on it, and invalidates those paths when it moves on, as the layer's unload
-// does - before the layer's own, which then finds them gone. The sets are never
-// bound: nothing it does is drawn.
+// What it watches. Since step 47 (the lighting design's G4) every lightmapped
+// sprite draws its lightmap as the overlay of its own material, so it holds a
+// descriptor set of its own - 730 lightmaps across the game - and the layer
+// hands a level's lightmaps back when the level unloads (step 45). Steps 42 to
+// 46 had nothing drawing a lightmap, so this used to acquire them itself; now it
+// acquires nothing of its own and watches the layer's.
 //
-// The checks:
-//  - on release, the level's sets leave the cache at once and stay counted in
-//    the pool, because their free is deferred;
-//  - six frames later, when the renderer has collected them, the sets in the
-//    pool equal the sets in the cache: nothing dropped is still held;
-//  - acquiring a level's n lightmaps adds exactly n to both;
-//  - no acquisition came back as the exhausted pool's fallback;
-//  - after the last release, the pool again equals the cache.
+// One thing it does take. The renderer acquires a set only for a sprite it
+// draws, so a lightmapped sprite the camera has not reached has none yet. For
+// each one, this asks the registry for the set of that sprite's own four maps -
+// the set the renderer takes when the sprite comes into view, not another - so
+// every visit puts the level's whole pressure on the pool, as a player who walks
+// the level through would.
+//
+// The checks, per visit:
+//  - six frames after the level opens, the sets in the pool equal the sets in
+//    the cache: whatever the last level dropped has been freed;
+//  - the layer holds exactly the lightmaps the level file names, each is the
+//    overlay of a sprite, loaded (not the black a failed file caches) and under
+//    the id the registry gives its path;
+//  - each such sprite's set is its own, not the exhausted pool's fallback, and
+//    taking the ones not yet drawn adds exactly those to both counts;
+// and when the layer unloads the level (the next visit opening it):
+//  - the level's lightmap sets leave the cache at once, exactly that many, and
+//    stay counted in the pool, because their free is deferred.
+// At the end it leaves for the level grid and checks the pool equals the cache
+// again, then opens the last level once more and quits with its sets held, so
+// the layer's detach drops them after the last frame and their frees are still
+// queued when the renderer destroys the pool: the shutdown case, which
+// validation (failing the run) is what would catch.
 // A failure is recorded, and main turns it into a failing exit.
 
 #include <cstddef>
@@ -55,10 +65,11 @@ public:
         bool finished = false;
         std::vector<std::string> failures;
         int visits = 0;
-        std::size_t lightmapSets = 0;       // acquired over the whole run
+        std::size_t lightmapSets = 0;       // sets naming a lightmap, over the whole run
+        std::size_t drawnFirst = 0;         // of those, already taken by the renderer at the measure
         std::size_t peakInPool = 0;         // the most sets the pool held at once
-        std::vector<std::size_t> baselines; // the pool at each visit, before its lightmaps
-        std::size_t finalInPool = 0;
+        std::vector<std::size_t> baselines; // the pool at each visit, without its lightmap sets
+        std::size_t finalInPool = 0;        // on the level grid, after the last release
     };
 
     LevelVisitLayer(MagicPortalsLayer& game, MagicPortalsLayer::Paths paths, Options options, Result& result);
@@ -73,13 +84,19 @@ private:
         int level = -1;                     // in chapters.levels
         std::string name;
         std::string label;                  // W-LL
-        std::vector<std::string> lightmaps; // on disk, as Lighting resolves them
+        std::vector<std::string> lightmaps; // on disk, as Lighting resolves them, sorted
     };
 
+    enum class Phase { Walking, Leaving, Returning, Done };
+
     void fail(std::string why);
-    void release(entt::registry& registry);
-    void measureAndAcquire(entt::registry& registry);
-    void finish(entt::registry& registry);
+    // Presses `button` on the game, and checks what its unload did to the pool:
+    // `expectDropped` sets out of the cache at once, the pool unchanged.
+    void pressAndCheckRelease(entt::registry& registry, MagicPortalsLayer::MenuButton button,
+                              const std::string& what, std::size_t expectDropped);
+    void open(entt::registry& registry, const Visit& visit);
+    // False when there is no registry to measure, which ends the walk.
+    bool measure(entt::registry& registry, const Visit& visit, bool counted);
 
     MagicPortalsLayer& m_game;
     MagicPortalsLayer::Paths m_paths;
@@ -88,11 +105,9 @@ private:
 
     std::vector<Visit> m_plan;  // one pass
     int m_visit = -1;           // across all passes
-    int m_age = 0;              // frames since the visit began
-    bool m_done = false;
-    bool m_closing = false;
-    std::vector<std::string> m_held; // lightmap paths this layer holds now
-    std::size_t m_heldSets = 0;      // and the material sets it acquired for them
+    int m_age = 0;              // frames since the phase's last press
+    Phase m_phase = Phase::Walking;
+    std::size_t m_heldSets = 0; // sets naming the shown level's lightmaps, as last measured
 };
 
 } // namespace MagicPortals

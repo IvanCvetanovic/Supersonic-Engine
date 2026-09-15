@@ -70,8 +70,9 @@ namespace MagicPortals {
 //    gives, or lighting.json's where the script replaces it - a `darkest` level,
 //    a lit torch - and the emissive its node or its .ent gives. The layer keeps
 //    each sprite's own colour (a crystal's fade, the beholder's red) apart from
-//    that factor, and writes the product. The lightmaps, lights and halos are
-//    not drawn yet.
+//    that factor, and hands both to the engine's 2D sprite path, premultiplied.
+//    A static sprite that applies light adds its baked lightmap over that. The
+//    lights and halos are not drawn yet.
 //  - What the levels do not picture, the game draws as the original's own
 //    entities draw it (Art.hpp): the portals a shot opens, and the shot. Their
 //    images are read from the original's extracted assets; without them they
@@ -210,8 +211,8 @@ public:
     // the engine's texture registry when the level goes (TextureRegistry::
     // Invalidate). Kept across a retry, which draws the same level again, and
     // given back by anything else that unloads it: the next level, the menu,
-    // detaching. Nothing samples a lightmap yet (the lighting design's E2 and
-    // G4), so giving them back costs nothing until then.
+    // detaching. Each is the overlay of the sprite it was baked for (since step
+    // 47), so giving them back gives back a texture and a material set apiece.
     const std::vector<std::string>& HeldLightmaps() const { return m_heldLightmaps; }
     // How many lightmap paths the layer has handed back over its life, whether or
     // not a registry was there to take them. For the suites, which have none to
@@ -334,6 +335,7 @@ private:
         glm::vec4 colour{1.0f};
         float fade{1.0f};
         glm::dvec3 emissive{0.0}; // its node's eth_emissive
+        std::string lightmap;     // its node's eth_lightmap, on disk; empty = none
         entt::entity body{entt::null};
         int crystal{-1};      // in goals.crystals
         int staticPortal{-1}; // in portals.statics
@@ -381,9 +383,13 @@ private:
     // Every sprite of the level coloured for the ambient light now: after
     // everything above has made, unmade and placed this tick's quads.
     void syncLighting(entt::registry& registry);
-    // A quad's albedo, (C.rgb * min(1, ambient + emissive), C.a), written only
-    // when it changes. The one place a level sprite's colour is written.
-    void tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour, const glm::dvec3& emissive) const;
+    // A quad's light: its colour C as albedoColor, min(1, ambient + emissive) as
+    // its 2D sprite's ambient, its lightmap as the overlay, and a mixed blend made
+    // premultiplied - or, on a level whose lighting did not read, C alone on the
+    // plain unlit path. Each written only when it changes. The one place a level
+    // sprite's colour is written.
+    void tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour, const glm::dvec3& emissive,
+              const std::string& lightmap = {}) const;
     // Hands the held lightmaps back to the texture registry, when there is one.
     void releaseLightmaps(entt::registry& registry);
     void updateHud(entt::registry& registry);

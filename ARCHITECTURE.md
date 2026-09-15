@@ -553,9 +553,10 @@ through a `weak_ptr`: the renderer destroys the registry, and its pool with
 every set in it, before it flushes the deferred queue at shutdown.
 `Ledger` and `TakeNaming`, which picks the sets naming a dropped texture in any
 binding, are tested in `test_materials`. The free itself needs a device, so it
-is proved only by `MagicPortals --visit-levels`. That run acquired 1,460
-lightmap sets over two passes and peaked at 96 live. The pool equalled the cache
-at every level, and validation was active and silent.
+is proved only by `MagicPortals --visit-levels`. Since the port draws its
+lightmaps as material overlays, the walk watches the sprites' own sets rather
+than acquiring its own: 1,460 lightmap sets over two passes, peaking at 91 live.
+The pool equalled the cache at every level, and validation was active and silent.
 
 A recycled set can come back with the same **handle** naming other textures.
 Nothing else in the engine held one across frames except the shadow pass

@@ -757,7 +757,10 @@ void TheLevelsArtIsDrawn() {
         (void)entity;
         if (tag.tag != "Magic Portals Sprite") continue;
         std::error_code ec;
-        if (!material.unlit || !material.transparent || material.blend != MaterialComponent::BlendMode::Alpha ||
+        // Mixed as level8 says, which since step 47 is premultiplied: the lighting
+        // adds a sprite's light at full weight over its alpha-weighted base.
+        if (!material.unlit || !material.transparent ||
+            material.blend != MaterialComponent::BlendMode::Premultiplied ||
             !std::filesystem::is_regular_file(material.albedoTexturePath, ec)) {
             drawnAsArt = false;
         }
@@ -768,7 +771,7 @@ void TheLevelsArtIsDrawn() {
         }
         if (transform.position.z < farthest) farthest = transform.position.z;
     }
-    CHECK_MSG(drawnAsArt, "each unlit, mixed as level8 says, with an image that is there");
+    CHECK_MSG(drawnAsArt, "each unlit, mixed (premultiplied) as level8 says, with an image that is there");
     CHECK_MSG(skyFound && skyZ == farthest, "the sky is the farthest back");
     CHECK_MSG(std::fabs(skyScale.x - 455.0f / 50.0f) < 1e-4f && std::fabs(skyScale.y - 256.0f / 50.0f) < 1e-4f,
               "at its image's own size");
@@ -954,9 +957,9 @@ void ThePlayerIsTheDarkMage() {
     };
     const MaterialComponent& material = registry.get<MaterialComponent>(mageQuad);
     CHECK_MSG(material.albedoTexturePath.find("magic_portals_hd.png") != std::string::npos &&
-                  material.blend == MaterialComponent::BlendMode::Alpha && animation().columns == 4 &&
+                  material.blend == MaterialComponent::BlendMode::Premultiplied && animation().columns == 4 &&
                   animation().rows == 4,
-              "dark_mage.ent's sheet, cut 4 x 4, mixed");
+              "dark_mage.ent's sheet, cut 4 x 4, mixed (premultiplied)");
     CHECK_MSG(animation().firstFrame == 4 && animation().frameCount == 1 && !animation().playing,
               "standing on the start frame");
     CHECK_MSG(Shown(registry, "Magic Portals Player") == 0, "and its box stands behind it");
@@ -2448,12 +2451,22 @@ void TheSceneHoldsDisplayValues() {
 // (the lighting design's G3): the ambient its level file gives, or darkest's in a
 // level that sets it; the emissive its node or its .ent gives.
 
-// The albedo of every entity wearing `tag` whose image is `file`.
+// The colour every entity wearing `tag` whose image is `file` is DRAWN with: what
+// the engine packs for its draw. Since step 47 the layer writes C as the albedo
+// colour and min(1, A + E) as the sprite's 2D ambient, and RenderSystem::
+// ApplySprite2D multiplies the two; step 45 folded them itself. Read through the
+// engine's own packing, so every pin below holds the product either way, and a
+// layer that folded the ambient AND handed it to the engine (ambient squared)
+// fails them.
 std::vector<glm::vec4> ColoursOf(entt::registry& registry, const char* tag, const std::string& file) {
     std::vector<glm::vec4> out;
     for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
         (void)entity;
-        if (t.tag == tag && EndsWith(material.albedoTexturePath, file)) out.push_back(material.albedoColor);
+        if (t.tag != tag || !EndsWith(material.albedoTexturePath, file)) continue;
+        PushConstantData push{};
+        push.albedoColor = material.albedoColor; // what buildPushConstants' material branch writes
+        RenderSystem::ApplySprite2D(material, push);
+        out.push_back(push.albedoColor);
     }
     return out;
 }
@@ -2489,6 +2502,21 @@ void EverySpriteIsDrawnAtItsAmbient() {
     const std::vector<glm::vec4> arches = ColoursOf(registry, "Magic Portals Sprite", "arch_with_base_blur.png");
     CHECK_EQ(arches.size(), std::size_t{2});
     CHECK_MSG(AllAre(arches, 0.35f, 0.30f, 0.35f), "the arches, emissive 0, at the ambient: " + Show(arches));
+    // Since step 47 that product is the engine's, not the layer's: the arches'
+    // own colour stays whole and the ambient rides in their 2D sprite record.
+    int archRecords = 0;
+    for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        (void)entity;
+        if (t.tag != "Magic Portals Sprite" || !EndsWith(material.albedoTexturePath, "arch_with_base_blur.png")) continue;
+        ++archRecords;
+        const glm::vec3 ambient = material.sprite2D.ambient;
+        CHECK_MSG(material.albedoColor == glm::vec4(1.0f) && material.sprite2D.enabled &&
+                      std::fabs(ambient.r - 0.35f) < 1e-5f && std::fabs(ambient.g - 0.30f) < 1e-5f &&
+                      std::fabs(ambient.b - 0.35f) < 1e-5f,
+                  "an arch: colour (1, 1, 1, 1), its 2D sprite on, at ambient (" + std::to_string(ambient.r) + ", " +
+                      std::to_string(ambient.g) + ", " + std::to_string(ambient.b) + ")");
+    }
+    CHECK_EQ(archRecords, 2);
     const std::vector<glm::vec4> platforms =
         ColoursOf(registry, "Magic Portals Sprite", "STONE03A4x10_contrast.png");
     CHECK_EQ(platforms.size(), std::size_t{3});
@@ -2650,6 +2678,152 @@ void ATimedCrystalFadesInItsAlphaAlone() {
     layer.OnDetach(registry);
 }
 
+// ---- the lightmaps (step 47) ------------------------------------------------------
+//
+// A static sprite that applies light adds its baked lightmap, the level's
+// add<id>.png, over its colour times its ambient (the lighting design's G4). The
+// layer names it as the overlay of that sprite's own material, and the engine's 2D
+// sprite path adds it.
+
+struct Overlaid {
+    std::string albedo;
+    std::string overlay;
+    glm::dvec2 centrePx{0.0};
+    MaterialComponent::Sprite2DLight sprite;
+    MaterialComponent::BlendMode blend{MaterialComponent::BlendMode::Alpha};
+};
+
+// Every material in the registry that names an overlay, whatever it is.
+std::vector<Overlaid> OverlaysOf(entt::registry& registry) {
+    std::vector<Overlaid> out;
+    for (auto [entity, material, transform] : registry.view<MaterialComponent, TransformComponent>().each()) {
+        (void)entity;
+        if (material.overlayTexturePath.empty()) continue;
+        out.push_back(Overlaid{material.albedoTexturePath, material.overlayTexturePath,
+                               MagicPortals::Units::ToPixels(transform.position), material.sprite2D, material.blend});
+    }
+    return out;
+}
+
+std::vector<std::string> SortedOverlayPaths(const std::vector<Overlaid>& overlays) {
+    std::vector<std::string> out;
+    for (const Overlaid& o : overlays) out.push_back(o.overlay);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+void LightmapsAreDrawnOverTheirSprites() {
+    // 1-1 (level0): nine lightmaps, one of them the torch's.
+    {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level0");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
+                  layer.LoadError() + layer.ArtError() + layer.LightingError());
+        if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
+
+        const std::vector<Overlaid> overlays = OverlaysOf(registry);
+        CHECK_EQ(overlays.size(), std::size_t{9});
+        CHECK_MSG(SortedOverlayPaths(overlays) == layer.HeldLightmaps(),
+                  "one sprite for each lightmap the layer holds, and nothing else names one");
+        // Four are emissive 0 and so at the ambient (the arches, the wall, the
+        // torch); five are emissive 1 and whole (the platforms, the bar and the
+        // stone): the lightmap is added over either.
+        int dimmed = 0;
+        int whole = 0;
+        for (const Overlaid& o : overlays) {
+            const glm::vec3 a = o.sprite.ambient;
+            CHECK_MSG(o.sprite.enabled && o.sprite.overlayStrength == 1.0f &&
+                          o.blend == MaterialComponent::BlendMode::Premultiplied,
+                      o.overlay + ": on the 2D sprite path, all of it added, premultiplied");
+            const bool emissive0 = EndsWith(o.albedo, "/arch_with_base_blur.png") || EndsWith(o.albedo, "/wall_w3.png") ||
+                                   EndsWith(o.albedo, "/torch_small.png");
+            const glm::vec3 want = emissive0 ? glm::vec3(0.35f, 0.30f, 0.35f) : glm::vec3(1.0f);
+            const bool at = std::fabs(a.r - want.r) < 1e-5f && std::fabs(a.g - want.g) < 1e-5f &&
+                            std::fabs(a.b - want.b) < 1e-5f;
+            CHECK_MSG(at, o.overlay + " on " + o.albedo + ": ambient (" + std::to_string(a.r) + ", " +
+                              std::to_string(a.g) + ", " + std::to_string(a.b) + ")");
+            if (at) ++(emissive0 ? dimmed : whole);
+        }
+        CHECK_EQ(dimmed, 4);
+        CHECK_EQ(whole, 5);
+        // light_ent_696 stands at (288, 64) and hangs its sprite, torch_small.png,
+        // 16 px below: its lightmap is add696.png, on that sprite and only there.
+        const auto torch = std::find_if(overlays.begin(), overlays.end(), [](const Overlaid& o) {
+            return EndsWith(o.overlay, "/lightmaps/level0/add696.png");
+        });
+        CHECK_MSG(torch != overlays.end(), "add696.png is drawn");
+        if (torch != overlays.end()) {
+            CHECK_MSG(EndsWith(torch->albedo, "/torch_small.png"), "over light_ent_696's own image: " + torch->albedo);
+            CHECK_MSG(glm::distance(torch->centrePx, glm::dvec2(288.0, 80.0)) < 1e-3,
+                      "where light_ent_696 draws it: " + Point(torch->centrePx));
+        }
+        CHECK_EQ(std::count_if(overlays.begin(), overlays.end(),
+                               [](const Overlaid& o) { return EndsWith(o.albedo, "/torch_small.png"); }),
+                 std::ptrdiff_t{1});
+
+        // The static portals' halos, the door and the player name none: the first
+        // two do not apply light, and nothing the player moves was baked.
+        CHECK_MSG(std::none_of(overlays.begin(), overlays.end(), [](const Overlaid& o) {
+                      return EndsWith(o.albedo, "portal_halo.png") || EndsWith(o.albedo, "window01.png") ||
+                             EndsWith(o.albedo, "magic_portals_hd.png");
+                  }),
+                  "no halo, door or player among them");
+        // Added sprites stay added, lit or not: no blendMode-1 instance applies light.
+        int halos = 0;
+        for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+            (void)entity;
+            if (t.tag != "Magic Portals Sprite" || !EndsWith(material.albedoTexturePath, "portal_halo.png")) continue;
+            ++halos;
+            CHECK_MSG(material.blend == MaterialComponent::BlendMode::Additive && material.sprite2D.enabled,
+                      "a static portal's halo: added, on the 2D sprite path");
+        }
+        CHECK_EQ(halos, 4);
+
+        // A retry draws the same nine again.
+        const std::vector<std::string> held = layer.HeldLightmaps();
+        press(layer, registry, MagicPortalsLayer::kRetry);
+        CHECK_MSG(SortedOverlayPaths(OverlaysOf(registry)) == held, "a retry draws the same nine");
+
+        // The next level draws its own, and none of level0's.
+        press(layer, registry, MagicPortalsLayer::kSkip);
+        CHECK(IsAt(layer, "level1"));
+        const std::vector<std::string> next = SortedOverlayPaths(OverlaysOf(registry));
+        CHECK_EQ(next.size(), std::size_t{9});
+        CHECK_MSG(next == layer.HeldLightmaps() && std::all_of(next.begin(), next.end(), [](const std::string& p) {
+                      return p.find("/assets/lightmaps/level1/add") != std::string::npos;
+                  }),
+                  "level1's nine, as the layer holds them");
+
+        // Out to the grid: nothing names an overlay.
+        press(layer, registry, MagicPortalsLayer::kBack);
+        CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Levels);
+        CHECK_MSG(OverlaysOf(registry).empty(), "the menu draws no lightmap");
+        layer.OnDetach(registry);
+    }
+
+    // 2-05 (level4a) names none: lit, and nothing added.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level4a");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
+              layer.LoadError() + layer.ArtError() + layer.LightingError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
+    CHECK_MSG(OverlaysOf(registry).empty() && layer.HeldLightmaps().empty(), "level4a draws no lightmap");
+    int sprites = 0;
+    int lit = 0;
+    for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        (void)entity;
+        if (t.tag != "Magic Portals Sprite") continue;
+        ++sprites;
+        if (material.sprite2D.enabled) ++lit;
+    }
+    CHECK_MSG(sprites > 0 && lit == sprites, "though every one of its sprites is on the 2D sprite path");
+    layer.OnDetach(registry);
+}
+
 void NothingBlinksWhileWalking() {
     NoSpriteBlinksWhileWalking("level1"); // 1-2, where the owner saw one go
     NoSpriteBlinksWhileWalking("level2"); // 1-3, where several do
@@ -2703,6 +2877,7 @@ void runTests() {
     EverySpriteIsDrawnAtItsAmbient();
     AShotIsDimmedAndADarkLevelIsDark();
     ATimedCrystalFadesInItsAlphaAlone();
+    LightmapsAreDrawnOverTheirSprites();
 }
 
 } // namespace
