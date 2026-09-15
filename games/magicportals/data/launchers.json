@@ -17,7 +17,9 @@
       "radius_px": 30.0,
       "demolisher": true,
       "teleportable": true,
-      "sprite": "rolling_stone.png"
+      "sprite": "rolling_stone.png",
+      "emissive": [0.5, 0.5, 0.5],
+      "_emissive": "rolling_stone.ent's <EmissiveColor r=0.5 g=0.5 b=0.5>: a thrown stone, and the beholder's rock, are drawn at min(1, ambient + 0.5) of their colour (step 45)"
     }
   },
 

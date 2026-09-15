@@ -252,7 +252,7 @@ void LevelVisitLayer::OnUpdate(entt::registry& registry, float deltaTime) {
 
     const bool start = m_visit < 0 || m_age >= kSettleFrames + kHoldFrames;
     if (start) {
-        // What G3 will do when a level unloads.
+        // What the layer's unload does since step 45, for the sets this layer took.
         release(registry);
         ++m_visit;
         m_age = 0;

@@ -2,12 +2,17 @@
 
 #include "sim/Sprites.hpp"
 
+#include "core/Json.hpp"
+
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
+#include <sstream>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -320,6 +325,59 @@ bool Read(const Tscn::Scene& scene, const std::string& resRoot, Scene& out, std:
 
     out = std::move(read);
     return true;
+}
+
+bool LoadRules(const std::string& path, Rules& out, std::string& error) {
+    namespace Json = Supersonic::Json;
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        error = path + ": cannot open";
+        return false;
+    }
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    // Named, not a temporary: the parser keeps a reference to what it reads.
+    const std::string text = buffer.str();
+    Json::Parser parser(text);
+    Json::Value root;
+    if (!parser.Parse(root)) {
+        error = path + ": " + parser.Error();
+        return false;
+    }
+    if (!root.IsObject()) {
+        error = path + ": not an object";
+        return false;
+    }
+    const auto light = [&](const char* key, glm::dvec3& into) {
+        const Json::Value& value = root[key]["value"];
+        bool ok = root.Has(key) && root[key].IsObject() && value.IsArray() && value.AsArray().size() == 3;
+        for (std::size_t i = 0; ok && i < 3; ++i) {
+            const Json::Value& channel = value.AsArray()[i];
+            ok = channel.IsNumber() && std::isfinite(channel.AsNumber()) && channel.AsNumber() >= 0.0 &&
+                 channel.AsNumber() <= 1.0;
+            if (ok) into[static_cast<glm::length_t>(i)] = channel.AsNumber();
+        }
+        if (!ok) error = path + ": " + key + ".value is not three numbers from 0 to 1";
+        return ok;
+    };
+    Rules read;
+    if (!light("darkest_ambient", read.darkestAmbient) || !light("torch_lit_ambient", read.torchLitAmbient)) {
+        return false;
+    }
+    out = read;
+    return true;
+}
+
+glm::dvec3 Ambient(const Rules& rules, const glm::dvec3& fileAmbient, bool darkest, const Torch::State& torch) {
+    const bool litNow = std::any_of(torch.lights.begin(), torch.lights.end(),
+                                    [](const Torch::Light& light) { return light.lit; });
+    if (litNow) return rules.torchLitAmbient;
+    if (torch.putOut > 0 || darkest) return rules.darkestAmbient;
+    return fileAmbient;
+}
+
+glm::dvec3 AmbientTerm(const glm::dvec3& ambient, const glm::dvec3& emissive) {
+    return glm::min(glm::dvec3(1.0), ambient + emissive);
 }
 
 } // namespace MagicPortals::Lighting

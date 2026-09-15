@@ -73,6 +73,10 @@ bool LoadData(const std::string& levelPath, const std::string& dataDirectory,
     if (!Dragon::LoadRules(portDataDirectory + "/dragon.json", read.dragon, error)) return false;
     if (!DarkDragon::LoadRules(portDataDirectory + "/darkdragon.json", read.darkDragon, error)) return false;
     if (!Torch::LoadRules(portDataDirectory + "/torch.json", read.torch, error)) return false;
+    // Read here, beside torch.json, although only the layer draws with it: the
+    // ambient a level is drawn with follows its torch, and a suite of the
+    // simulation's has to be able to ask for it without a layer.
+    if (!Lighting::LoadRules(portDataDirectory + "/lighting.json", read.lighting, error)) return false;
     if (!Zerog::LoadRules(portDataDirectory + "/zerog.json", read.zerog, error)) return false;
     if (!Bounce::LoadRules(portDataDirectory + "/bounce.json", read.bounce, error)) return false;
     if (!GravityWell::LoadRules(portDataDirectory + "/gravitywell.json", read.wells, error)) return false;
@@ -109,13 +113,13 @@ bool Start(const Data& data, entt::registry& registry, Level& out, std::string& 
     // works and be a room with no way out. Zerog.hpp holds the decode.
     //
     // darkest is CARRIED instead. Its whole effect in the original's own
-    // level-properties reader is one SetAmbientLight(DARKEST_AMBIENT_LIGHT), and
-    // this port has no ambient light: Sprites has no colour or tint for it to
-    // multiply, so a dark level draws exactly as a lit one either way. Refusing
-    // the level did not make that more honest - it only hid twelve levels whose
-    // every ROLE the port already plays or does not. Its one gameplay consequence
-    // is that a minion in such a level is blind, and minion sight is unbuilt in
-    // every level alike; minions.json and art.json both say so.
+    // level-properties reader is one SetAmbientLight(DARKEST_AMBIENT_LIGHT), which
+    // is drawing, not play: the layer draws the level with that ambient
+    // (Lighting::Ambient) and nothing here changes. Refusing the level did not
+    // make that more honest - it only hid twelve levels whose every ROLE the port
+    // already plays or does not. Its one gameplay consequence is that a minion in
+    // such a level is blind, and minion sight is unbuilt in every level alike;
+    // minions.json says so.
     bool darkest = false;
     bool noGravity = false;
     for (const Tscn::Node& node : data.scene.nodes) {

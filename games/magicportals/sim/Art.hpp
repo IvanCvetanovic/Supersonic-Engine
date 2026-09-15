@@ -10,6 +10,10 @@
 // How fast a sheet plays is not decoded, so it is carried as a _guess and
 // pinned by nothing.
 //
+// Each also carries its .ent's <EmissiveColor>: the original draws every sprite
+// at min(1, ambient + emissive) of its colour (Lighting::AmbientTerm), what no
+// level places as much as what it does, so the layer needs it for these too.
+//
 // The images are the original's, read from the extracted APK beside the remake
 // (MAGICPORTALS_ORIGINAL_DIR) and never committed.
 
@@ -25,6 +29,7 @@ struct Picture {
     int columns = 1;              // its SpriteCut
     int rows = 1;
     double framesPerSecond = 0.0; // _guess, for a sheet of more than one frame that plays
+    glm::dvec3 emissive{0.0};     // the .ent's <EmissiveColor>, rgb; required, never defaulted
 
     int Frames() const { return columns * rows; }
 };

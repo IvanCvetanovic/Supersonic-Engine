@@ -347,13 +347,14 @@ void EveryLevelsLightingReads() {
     CHECK_EQ(deep, 1533);
 }
 
-// The twelve levels that set `darkest`. The flag is CARRIED rather than acted on
-// - this port has no ambient light for DARKEST_AMBIENT_LIGHT (0.01, 0.01, 0.01)
-// to change, and Sprites has no colour to multiply - so what is pinned here is
-// that they start and that the flag reaches Game::Level, never that anything
-// looks different. art.json holds the decode, and minions.json holds the one
-// gameplay consequence: a minion in such a level is blind, which minion sight
-// must honour when it is built.
+// The twelve levels that set `darkest`. The simulation carries the flag and acts
+// on nothing: what it changes is the ambient light the level is DRAWN with,
+// DARKEST_AMBIENT_LIGHT (0.01, 0.01, 0.01) in place of the file's (lighting.json,
+// Lighting::Ambient, step 45). So what is pinned here is that they start, that
+// the flag reaches Game::Level, and that the ambient they start with is darkest's
+// whatever their file says. minions.json holds the one gameplay consequence: a
+// minion in such a level is blind, which minion sight must honour when it is
+// built.
 void DarkestLevelsStartAndCarryTheFlag() {
     const char* const kDarkest[] = {"level19c", "level20c", "level21c", "level22c", "level23c", "level24c",
                                     "level25c", "level26c", "level28c", "level29c", "level30c", "level31c"};
@@ -372,6 +373,16 @@ void DarkestLevelsStartAndCarryTheFlag() {
         if (!ok) continue;
         CHECK_MSG(level.darkest, std::string(name) + " sets darkest, and Game::Level says so");
         if (level.darkest) ++carried;
+        Lighting::Scene look;
+        const bool read = Lighting::Read(data.scene, kLevels + "/..", look, error);
+        CHECK_MSG(read, std::string(name) + "'s lighting: " + error);
+        if (read) {
+            CHECK_MSG(Lighting::Ambient(data.lighting, look.ambient, level.darkest, level.torch) ==
+                          glm::dvec3(0.01, 0.01, 0.01),
+                      std::string(name) + " starts drawn at darkest's 0.01");
+            CHECK_MSG(look.ambient != glm::dvec3(0.01, 0.01, 0.01),
+                      std::string(name) + "'s file says otherwise, so the replacement is what is pinned");
+        }
     }
     CHECK_EQ(carried, 12);
 
@@ -385,6 +396,12 @@ void DarkestLevelsStartAndCarryTheFlag() {
         if (Game::LoadData(kLevels + "/level0.tscn", kData, prisms, data, error) &&
             Game::Start(data, registry, level, error)) {
             CHECK_MSG(!level.darkest, "level0 is not a dark level");
+            Lighting::Scene look;
+            if (Lighting::Read(data.scene, kLevels + "/..", look, error)) {
+                CHECK_MSG(Lighting::Ambient(data.lighting, look.ambient, level.darkest, level.torch) ==
+                              glm::dvec3(0.35, 0.3, 0.35),
+                          "and is drawn at its file's own ambient");
+            }
         }
     }
     std::printf("  %d of 12 darkest levels start and carry the flag\n", carried);

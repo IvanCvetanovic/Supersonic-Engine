@@ -279,6 +279,14 @@ void ThePortalAndTheShotAreTheirEnts() {
     CHECK_MSG(rules.spike.sprite == "beholder_spike.png" && !rules.spike.additive && rules.spike.Frames() == 1 &&
                   rules.spike.pivotXPx == 0.0 && rules.spike.pivotYPx == 10.0,
               "beholder_spike.ent: one frame, its pivot 10 px below the middle");
+
+    // Each .ent's <EmissiveColor>, which the layer draws it with (step 45). Only
+    // the shot's is below one, so only the shot is ever dimmed by a level's ambient.
+    CHECK_MSG(rules.portal.emissive == glm::dvec3(1.0), "portal.ent: emissive 1");
+    CHECK_MSG(rules.shot.emissive == glm::dvec3(0.6, 0.6, 1.0), "projectile.ent: emissive (0.6, 0.6, 1)");
+    CHECK_MSG(mage.emissive == glm::dvec3(1.0), "dark_mage.ent: emissive 1");
+    CHECK_MSG(beholder.emissive == glm::dvec3(1.0), "beholder.ent: emissive 1");
+    CHECK_MSG(rules.spike.emissive == glm::dvec3(1.0), "beholder_spike.ent: emissive 1");
 }
 
 void APulseGoesThereAndBack() {
@@ -302,9 +310,10 @@ void APulseGoesThereAndBack() {
 void ASheetThatDoesNotSayHowFastIsRefused() {
     const std::filesystem::path path = Scratch() / "art.json";
     // Everything else in order, so the shot's missing rate is what is refused.
-    const std::string text = R"({"portal": {"sprite": "a.png", "additive": true},
-                                 "shot": {"sprite": "b.png", "additive": true, "columns": 6},
+    const std::string text = R"({"portal": {"sprite": "a.png", "additive": true, "emissive": [1, 1, 1]},
+                                 "shot": {"sprite": "b.png", "additive": true, "columns": 6, "emissive": [1, 1, 1]},
                                  "character": {"sprite": "c.png", "additive": false, "columns": 4, "rows": 4,
+                                               "emissive": [1, 1, 1],
                                                "start_frame": 4, "pivot_px": [0, 2],
                                                "rows_by_direction": {"left": 1, "right": 2},
                                                "animation": {"frames_per_second": 10, "idle_column": 0}}})";
@@ -314,6 +323,24 @@ void ASheetThatDoesNotSayHowFastIsRefused() {
     const bool ok = Art::LoadRules(path.string(), rules, error);
     CHECK(!ok);
     CHECK_MSG(error.find("frames_per_second") != std::string::npos, error);
+}
+
+void APictureWithoutItsEmissiveIsRefused() {
+    // The emissive decides how dark a picture is drawn, and a default nobody
+    // decoded would be the ambient alone: a black player on a dark level.
+    const std::filesystem::path path = Scratch() / "art-no-emissive.json";
+    for (const std::string& emissive : {std::string(), std::string(R"(, "emissive": [1, 1])"),
+                                        std::string(R"(, "emissive": [1, -0.5, 1])")}) {
+        const std::string text = R"({"portal": {"sprite": "a.png", "additive": true)" + emissive + R"(},
+                                     "shot": {"sprite": "b.png", "additive": true, "emissive": [1, 1, 1]},
+                                     "character": {"sprite": "c.png", "additive": false, "emissive": [1, 1, 1]}})";
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Art::Rules rules;
+        std::string error;
+        const bool ok = Art::LoadRules(path.string(), rules, error);
+        CHECK_MSG(!ok, "refused: portal" + emissive);
+        CHECK_MSG(error.find("portal's emissive") != std::string::npos, error);
+    }
 }
 
 void TheOriginalsImagesAreCutAsTheEntsSay() {
@@ -616,6 +643,7 @@ int main() {
     ThePortalAndTheShotAreTheirEnts();
     APulseGoesThereAndBack();
     ASheetThatDoesNotSayHowFastIsRefused();
+    APictureWithoutItsEmissiveIsRefused();
 
     std::error_code original;
     if (std::filesystem::is_directory(kOriginal + "/entities", original)) {

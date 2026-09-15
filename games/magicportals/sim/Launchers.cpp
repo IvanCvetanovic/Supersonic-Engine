@@ -5,6 +5,7 @@
 #include "sim/Units.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <fstream>
 #include <sstream>
 
@@ -37,8 +38,9 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         if (!name.empty() && name[0] == '_') continue;
         if (!entry.IsObject() || !entry.Has("radius_px") || !entry["radius_px"].IsNumber() ||
             !entry.Has("demolisher") || !entry["demolisher"].IsBool() || !entry.Has("teleportable") ||
-            !entry["teleportable"].IsBool() || !entry.Has("sprite") || !entry["sprite"].IsString()) {
-            error = path + ": throwables." + name + " needs radius_px, demolisher, teleportable and sprite";
+            !entry["teleportable"].IsBool() || !entry.Has("sprite") || !entry["sprite"].IsString() ||
+            !entry["emissive"].IsArray() || entry["emissive"].AsArray().size() != 3) {
+            error = path + ": throwables." + name + " needs radius_px, demolisher, teleportable, sprite and emissive";
             return false;
         }
         Throwable throwable;
@@ -46,6 +48,14 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         throwable.demolisher = entry["demolisher"].AsBool();
         throwable.teleportable = entry["teleportable"].AsBool();
         throwable.sprite = entry["sprite"].AsString("");
+        for (std::size_t i = 0; i < 3; ++i) {
+            const Supersonic::Json::Value& channel = entry["emissive"].AsArray()[i];
+            if (!channel.IsNumber() || !(channel.AsNumber() >= 0.0)) {
+                error = path + ": throwables." + name + ".emissive is not three numbers, none below zero";
+                return false;
+            }
+            throwable.emissive[static_cast<glm::length_t>(i)] = channel.AsNumber();
+        }
         read.throwables[name] = throwable;
     }
     const Json::Value& names = root["despawners"]["names"];

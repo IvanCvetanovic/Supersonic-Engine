@@ -19,6 +19,9 @@
 #include "core/ScreenOverlay.hpp"
 #include "core/SimulationClock.hpp"
 #include "core/ViewportInfo.hpp"
+// For handing a level's lightmaps back when it goes. Only through the pointer the
+// app publishes in the registry's context, which a suite's bare registry has not.
+#include "renderer/TextureRegistry.hpp"
 
 #include "sim/Roles.hpp"
 #include "sim/Units.hpp"
@@ -250,7 +253,9 @@ void MagicPortalsLayer::bindInput() {
 // ---- levels -----------------------------------------------------------------
 
 bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
-    unloadLevel(registry);
+    // A retry draws the same level again at once, so its lightmaps stay where
+    // they are: a retry does not touch the disk (level_manager.gd:5-13).
+    unloadLevel(registry, m_loaded && index == m_current);
     m_current = index;
     m_chapterComplete = false;
     m_loadError.clear();
@@ -286,11 +291,22 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     std::string error;
     if (index != m_dataIndex) {
         m_dataIndex = -1;
+        m_lit = false;
+        m_look = Lighting::Scene{};
         if (!Game::LoadData(m_paths.levels + "/" + entry.name + ".tscn", m_paths.data, m_paths.prisms, m_data,
                             error, m_paths.portData)) {
             return refuse(error);
         }
         m_dataIndex = index;
+        // Its lighting, read once with it. A level whose lighting will not read
+        // is still played, its sprites in their own colours - as a level whose
+        // art will not read is still played as boxes - and says why.
+        m_lit = Lighting::Read(m_data.scene, m_paths.art, m_look, m_lightingError);
+        if (m_lit) {
+            m_lightingError.clear();
+        } else {
+            SUPERSONIC_LOG_WARN("Magic Portals") << entry.name << " drawn unlit: " << m_lightingError << std::endl;
+        }
     }
     if (!Game::Start(m_data, registry, m_level, error)) {
         // Start may have built some of the level before it refused.
@@ -310,6 +326,17 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     }
 
     m_loaded = true;
+    // The lightmaps this level names, held until it goes. The same list again
+    // after a retry, which kept the last one.
+    m_heldLightmaps.clear();
+    if (m_lit) {
+        for (const auto& [node, look] : m_look.nodes) {
+            if (!look.lightmap.empty()) m_heldLightmaps.push_back(look.lightmap);
+        }
+        // The nodes are hashed: sorted, so the list does not depend on the map.
+        std::sort(m_heldLightmaps.begin(), m_heldLightmaps.end());
+        m_heldLightmaps.erase(std::unique(m_heldLightmaps.begin(), m_heldLightmaps.end()), m_heldLightmaps.end());
+    }
     buildDrawables(registry);
     m_aspect = viewportAspect(registry);
     // THE LEVEL OPENS ON THE PLAYER, by the owner's choice.
@@ -349,7 +376,13 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     return true;
 }
 
-void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
+void MagicPortalsLayer::unloadLevel(entt::registry& registry, bool keepLightmaps) {
+    // THE LIGHTMAPS GO BACK WITH THE LEVEL. Each lightmapped sprite will hold a
+    // texture and a material set of its own (730 across the game), and the
+    // registry keeps both until told to drop them; a session walking the chapters
+    // would otherwise hold every level's at once (the lighting design's section
+    // 6, and step 42's walk). A retry keeps them: it draws them again at once.
+    if (!keepLightmaps) releaseLightmaps(registry);
     auto destroy = [&registry](entt::entity& e) {
         if (e != entt::null && registry.valid(e)) registry.destroy(e);
         e = entt::null;
@@ -397,6 +430,7 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     destroy(m_playerQuad);
     destroy(m_beholderBox);
     destroy(m_beholderQuad);
+    m_beholderColour = glm::vec4(1.0f);
     for (auto& e : m_spikes) destroy(e);
     m_spikes.clear();
     for (auto& e : m_fireballs) destroy(e);
@@ -428,6 +462,18 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     destroy(m_level.player);
     m_level = Game::Level{};
     m_loaded = false;
+    m_ambient = glm::dvec3(1.0);
+}
+
+void MagicPortalsLayer::releaseLightmaps(entt::registry& registry) {
+    if (auto* const* textures = registry.ctx().find<Supersonic::TextureRegistry*>();
+        textures != nullptr && *textures != nullptr) {
+        // A path never acquired is simply not there; Invalidate says false and
+        // does nothing, which is every path until the lightmaps are drawn.
+        for (const std::string& path : m_heldLightmaps) (*textures)->Invalidate(path);
+    }
+    m_lightmapsHandedBack += m_heldLightmaps.size();
+    m_heldLightmaps.clear();
 }
 
 void MagicPortalsLayer::goTo(entt::registry& registry, int next) {
@@ -1792,6 +1838,14 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         drawn.quad = makeSprite(registry, "Magic Portals Sprite", sprite.texture, sprite.additive);
         // The player's slot is kept free.
         drawn.z = SlotZ(sprite.order < m_playerSlot ? sprite.order : sprite.order + 1);
+        // Its instance colour and emissive, as its node gives them. A node the
+        // look does not hold keeps the engine's defaults, colour 1 and emissive 0;
+        // Lighting::Read holds every entity node, so that is only ever a level
+        // whose lighting did not read, which is drawn unlit anyway.
+        if (const auto look = m_look.nodes.find(sprite.node); m_lit && look != m_look.nodes.end()) {
+            drawn.colour = glm::vec4(look->second.colour);
+            drawn.emissive = look->second.emissive;
+        }
         drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
         drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
         drawn.zone = indexOf(m_level.portals.zones, sprite.node);
@@ -1839,11 +1893,10 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             gone = crystal.collected || crystal.expired;
             // A timed crystal fades as it runs out: the remake's guess, as the
             // box's is, and here as the alpha the remake fades.
-            float alpha = 1.0f;
+            drawn.fade = 1.0f;
             if (crystal.timed && crystal.leftS < 2.0) {
-                alpha = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
+                drawn.fade = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
             }
-            if (!gone) registry.get<MaterialComponent>(drawn.quad).albedoColor = glm::vec4(1.0f, 1.0f, 1.0f, alpha);
         } else if (drawn.staticPortal >= 0) {
             gone = !m_level.portals.statics[static_cast<std::size_t>(drawn.staticPortal)].live;
         } else if (drawn.zone >= 0) {
@@ -1898,6 +1951,9 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             made.sprite.offsetPx = glm::dvec2(0.0);
             made.sprite.rotation = 0.0;
             made.z = from.z;
+            // And its look: the platform the template's .ent is, lit as it is.
+            made.colour = from.colour;
+            made.emissive = from.emissive;
             made.quad = makeSprite(registry, "Magic Portals Dropped Platform", made.sprite.texture,
                                    made.sprite.additive);
             m_sprites.push_back(std::move(made));
@@ -1940,13 +1996,14 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         entt::entity body;
         double radiusPx;
         std::string sprite;
+        glm::dvec3 emissive;
     };
     std::vector<Loose> loose;
     for (const Launchers::Thrown& thrown : m_level.launchers.live) {
-        loose.push_back({thrown.body, thrown.is.radiusPx, thrown.is.sprite});
+        loose.push_back({thrown.body, thrown.is.radiusPx, thrown.is.sprite, thrown.is.emissive});
     }
     for (const Boss::Rock& rock : m_level.boss.rocks) {
-        loose.push_back({rock.body, m_level.boss.rock.radiusPx, m_level.boss.rock.sprite});
+        loose.push_back({rock.body, m_level.boss.rock.radiusPx, m_level.boss.rock.sprite, m_level.boss.rock.emissive});
     }
     for (const Loose& thrown : loose) {
         if (!registry.valid(thrown.body)) continue;
@@ -1955,6 +2012,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         if (drawn == m_thrown.end()) {
             ThrownBox made;
             made.body = thrown.body;
+            made.emissive = thrown.emissive;
             made.box = makeBox(registry, "Magic Portals Thrown", glm::vec3(0.0f), glm::vec3(1.0f), kStoneColour);
             registry.emplace<InterpolatedTransformComponent>(made.box);
             // Drawn as what it is, with the image the converter copied for its .ent.
@@ -2200,6 +2258,65 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     show(m_shot, !(artOnly && m_shotQuad != entt::null));
     show(m_player, !(artOnly && m_playerQuad != entt::null));
     show(m_beholderBox, !(artOnly && m_beholderQuad != entt::null));
+
+    // Last: every quad this tick made is there to colour.
+    syncLighting(registry);
+}
+
+// ---- the ambient light ----------------------------------------------------------
+//
+// The original draws every sprite as texel x colour x min(1, ambient + emissive)
+// before it adds anything (ETHRenderEntity.cpp:113-117), whatever its blend and
+// whether or not it applies light: pass 1 of every draw. The remake's fit of the
+// original's pixels holds that to 0.28 of 255 over 1,359 blocks of sprites
+// without a lightmap, where drawing them full bright is 45.30 (fit.md 4). With the
+// scene holding display values (SceneRendering), the multiply lands on the bytes,
+// as it did in the original.
+//
+// FOLDED INTO THE ALBEDO COLOUR, which the engine's unlit path already
+// multiplies in. The design's step E2 gives the engine a 2D path that takes the
+// ambient apart from the colour, which the lights will need; until then this is
+// the whole of it, and moving it there is a change to tint() alone.
+//
+// What is NOT coloured, and why:
+//   - the particles. Ethanon multiplies a particle system by
+//     min(1, luminance + ambient) only when it is alpha-blended
+//     (ETHParticleManager.cpp:382-389), and every one of the game's 102 is added
+//     (Particles.hpp). So updateEmitters is unchanged, by the rule rather than by
+//     omission.
+//   - the boxes: placeholders the PBR path draws, which stand for things rather
+//     than being them. At a dark level's 0.01 they would vanish.
+//   - the menu, the medal screens and the HUD, none of which is in a level.
+void MagicPortalsLayer::syncLighting(entt::registry& registry) {
+    m_ambient = m_lit ? Lighting::Ambient(m_data.lighting, m_look.ambient, m_level.darkest, m_level.torch)
+                      : glm::dvec3(1.0);
+
+    for (const DrawnSprite& drawn : m_sprites) {
+        tint(registry, drawn.quad, drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade), drawn.emissive);
+    }
+    // What no level places, with its .ent's emissive (art.json, launchers.json).
+    const glm::vec4 white(1.0f);
+    tint(registry, m_playerQuad, white, m_artRules.character.emissive);
+    for (const entt::entity quad : m_portalQuads) tint(registry, quad, white, m_artRules.portal.emissive);
+    tint(registry, m_shotQuad, white, m_artRules.shot.emissive);
+    tint(registry, m_beholderQuad, m_beholderColour, m_artRules.beholder.emissive);
+    // A spike is a box when its image is not there, and a box is not coloured.
+    for (const entt::entity spike : m_spikes) {
+        if (spike == entt::null || !registry.valid(spike)) continue;
+        if (!registry.get<Supersonic::MaterialComponent>(spike).unlit) continue;
+        tint(registry, spike, white, m_artRules.spike.emissive);
+    }
+    for (const ThrownBox& thrown : m_thrown) tint(registry, thrown.quad, white, thrown.emissive);
+}
+
+void MagicPortalsLayer::tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour,
+                             const glm::dvec3& emissive) const {
+    if (quad == entt::null || !registry.valid(quad)) return;
+    const glm::vec3 term = m_lit ? glm::vec3(Lighting::AmbientTerm(m_ambient, emissive)) : glm::vec3(1.0f);
+    const glm::vec4 want(glm::vec3(colour) * term, colour.a);
+    // Written only when it changes, so a still level writes nothing a tick.
+    auto& material = registry.get<Supersonic::MaterialComponent>(quad);
+    if (material.albedoColor != want) material.albedoColor = want;
 }
 
 void MagicPortalsLayer::syncTurrets(entt::registry& registry) {
@@ -2278,7 +2395,7 @@ void MagicPortalsLayer::syncBoss(entt::registry& registry) {
             const glm::dvec2 cellPx = sheetPx / glm::dvec2(picture.columns, picture.rows);
             placeSprite(registry, m_beholderQuad, beholder.atPx, cellPx * m_beholderScale, m_beholderZ, 0.0f);
             const float left = static_cast<float>(std::max(beholder.hp, 0)) / static_cast<float>(boss.rules.maxHp);
-            registry.get<MaterialComponent>(m_beholderQuad).albedoColor = glm::vec4(1.0f, left, left, 1.0f);
+            m_beholderColour = glm::vec4(1.0f, left, left, 1.0f);
         }
     }
 

@@ -1,0 +1,35 @@
+{
+  "_about": [
+    "What the port's lighting reads that no level file carries. Levels carry their own ambient,",
+    "emissive and lightmaps as metadata/eth_* keys (sim/Lighting.hpp); this is what the ORIGINAL'S",
+    "SCRIPT sets over them. The remake's out/parity/specs/lighting/design_port.md, section 5.9, and",
+    "docs/planning/2026-09-11-magic-portals-remaster.md, step 45 (the design's G3).",
+    "",
+    "Only what step G3 reads is here: the two ambient lights the script sets. The design's other",
+    "rows - the normal maps' green, the halo scale, the script emissive overrides and the 16-bit",
+    "framebuffer - arrive with the steps that read them (G4 to G6), not before."
+  ],
+
+  "darkest_ambient": {
+    "_source": [
+      "Moved from art.json's darkest block. Game's level-properties reader does",
+      "CheckCustomData('darkest') and, when it is set, SetAmbientLight(DARKEST_AMBIENT_LIGHT); that",
+      "one call is the whole of what the flag does there. DARKEST_AMBIENT_LIGHT is built at",
+      "Game.angelscript bytes 306783..306841 as vector3(0.01, 0.01, 0.01): very nearly black, not",
+      "black. It REPLACES the level file's own <Ambient> - level21c (4-22) says 0.5 and draws at",
+      "0.01 - and ETHCallback_fire_signal sets it again when a torch is put back out",
+      "(torch.json, signal)."
+    ],
+    "value": [0.01, 0.01, 0.01]
+  },
+
+  "torch_lit_ambient": {
+    "_source": [
+      "Moved from torch.json's ambient.lit. ETHCallback_light_off's `delete` branch, run on the",
+      "frame after the torch is shot, calls SetAmbientLight(0.1, 0.1, 0.25) - lighter than",
+      "darkest's 0.01, and blue, but not lit - then lightenAllBackgroundEntitities and",
+      "GenerateLightmaps (bytes 467198..473086). Those two are the design's step G6, not this."
+    ],
+    "value": [0.1, 0.1, 0.25]
+  }
+}

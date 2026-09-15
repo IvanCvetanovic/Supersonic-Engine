@@ -5596,3 +5596,565 @@ whether it ships does.
   0 failures. `ninja: no work to do` before it.
 - **No other document's table moves.** No engine file changed and no suite was added, and
   neither README.md nor ARCHITECTURE.md lists `test_mp_layer`'s checks.
+
+## Step 45 - every sprite at its ambient, the dark levels dark, and the lightmaps handed back (built)
+
+The lighting design's step G3 (the remake's `out/parity/specs/lighting/design_port.md`,
+section 7.1). **The port now draws every level sprite the way the original's first pass
+does: its colour times min(1, ambient + emissive), per channel.** The ambient is the level
+file's, or darkest's 0.01 where the level sets `darkest`, or a lit torch's (0.1, 0.1,
+0.25); the emissive is the sprite's node's, or its `.ent`'s for what no level places. A
+level's lightmaps are handed back to the texture registry when it goes. **No engine file
+changes.** No lightmap, light or halo is drawn yet (G4, G5).
+
+**Three gates fail, and none of them is the multiply. None is waived here.**
+- 2-05's `noLM_E<1` bias is the carranca's fireball placeholder box, in the carranca's mouth
+  on the one frame the gate reads. On six other frames from 330 to 510 the same 349 blocks
+  pass.
+- 1-09's `LM_E=1` bias is the art tier, on sprites this step multiplies by exactly one.
+- Step 44's torch confirmation (G >= 235) now reads 232.1: the arches under the flame are
+  dimmed, and their lightmap and halo are not drawn yet.
+
+Each is a row of THE GATES, with its attribution and the step where it must pass again.
+- **The first review** found all three, and two suite pins that could pass having checked
+  nothing. The pins were fixed, and this record was corrected; no game or engine source
+  changed in answer.
+- **The second review** measured the same three failures and found two things more:
+  - two sentences of this record said more than was measured (1-09's `LM_E=1` frames, and
+    4-22's offset);
+  - no suite pinned a timed crystal's fade, which this step moved into the tint.
+  - Both sentences were reworded to what was measured, a `test_mp_layer` case was added
+    (it fails when the fade is dropped), and 2-05's attribution gained the frames above.
+  - Again no game or engine source changed.
+
+**WHY IT IS ONE MULTIPLY.** The original's pass 1 is `vc = min(1, A + E) * C`, and the
+texel times that, for every sprite whether or not it applies light and whatever its blend
+(`ETHRenderEntity.cpp:113-117`, the remake's `engine_math.md` section 0). The design's fit
+of the original's pixels holds it to **0.28** of 255 over 1,359 blocks of sprites without a
+lightmap, against **45.30** for drawing them full bright (`fit.md` section 4), and finds the
+fitted gain equal to the scene ambient to within 0.02 on every lightmapped entity (section
+5). Since step 44 the scene holds display values, so the multiply lands on the bytes, as the
+original's did.
+- Over the 128 levels, **1,250 of the 2,883 level sprites** have min(1, A + E) below one on
+  some channel, in 114 levels; **137** of them, in the twelve `darkest` levels, go to 0.01.
+  The rest are emissive 1 and do not change.
+
+**THE DATA (game: `data/lighting.json`, new; `art.json`, `torch.json`, `launchers.json`).**
+- **`lighting.json`** holds only what this step reads, each with its decode:
+  - `darkest_ambient` (0.01, 0.01, 0.01), moved from `art.json`'s `darkest` block:
+    `SetAmbientLight(DARKEST_AMBIENT_LIGHT)`, built at `Game.angelscript` bytes
+    306783..306841. It replaces the file's ambient: 4-22's file says 0.5.
+  - `torch_lit_ambient` (0.1, 0.1, 0.25), moved from `torch.json`'s `ambient.lit`: what
+    `ETHCallback_light_off`'s `delete` branch sets.
+  - The design's section 5.9 file also carries the normal maps' green, a halo scale, script
+    emissive overrides and `rgb565`. Those belong to G4 to G6 and are not in the file.
+- **`art.json`**: each picture gains `emissive`, its `.ent`'s `<EmissiveColor>`, read from
+  the extracted files: `portal.ent` (1, 1, 1), `projectile.ent` **(0.6, 0.6, 1)**,
+  `dark_mage.ent` (1, 1, 1), `beholder.ent` (1, 1, 1), `beholder_spike.ent` (1, 1, 1). The
+  `darkest` block keeps its decode and points to `lighting.json`.
+- **`launchers.json`**: `rolling_stone.ent` gains `emissive` **(0.5, 0.5, 0.5)**, which a
+  thrown stone and the beholder's rock (the same throwable) are drawn with.
+- **`torch.json`**: the `ambient` block points to `lighting.json`, and `_not_built` no
+  longer lists `SetAmbientLight`.
+- **Strict, like the rest.** `Art::LoadRules` refuses a picture without `emissive`, or with
+  one that is not three numbers none below zero; `Launchers::LoadRules` the same for a
+  throwable. A default would draw the player at the ambient alone, which on a dark level is
+  black, and nobody decoded that.
+
+**THE AMBIENT (game sim: `sim/Lighting`, `sim/Game`).** Renderer-free, so the simulation's
+suites reach it without a layer.
+- `Lighting::Rules` and `LoadRules`: both lights required, each three numbers from 0 to 1.
+- `Lighting::Ambient(rules, fileAmbient, darkest, torch)`: the original's events in their
+  order, so the last one decides.
+  - It starts at the file's ambient, or darkest's when the level sets `darkest`.
+  - A torch lit now gives the torch's.
+  - A torch put out gives darkest's on any level: `ETHCallback_fire_signal` sets
+    `DARKEST_AMBIENT_LIGHT`, never the file's back.
+  - **"Lit now" is any light's own `lit`, not `Torch::State::lit`**, which counts torches
+    ever lit and never comes down. Read the counter and a torch put out stays at (0.1, 0.1,
+    0.25); `test_mp_lighting` and `test_mp_torch` both pin that trap.
+  - Every level places at most one torch (`torch.json`'s census), so "lit now, else put out
+    before, else the start" is exactly the last event.
+  - **One frame early.** The original sets the lit ambient on the frame after the shot, in
+    the `delete` branch; the port has it from the tick the torch is shot.
+- `Lighting::AmbientTerm(ambient, emissive)`: min(1, A + E) per channel.
+- `Game::Data` carries `Lighting::Rules lighting`, read by `LoadData` beside `torch.json`.
+  Nothing in `Game::Level` or the tick reads it: it is presentation, and the state hash is
+  untouched. Minion sight, when it is built, compares the same `Lighting::Ambient`
+  (`Game.hpp`'s `darkest` comment says so).
+
+**THE LAYER (`MagicPortalsLayer.{hpp,cpp}`).**
+- **Read once with the level's data.** `Lighting::Read(m_data.scene, m_paths.art, ...)`
+  where `Game::LoadData` runs, so a retry reuses it. A level whose lighting will not read
+  is played unlit, as a level whose art will not read is played as boxes, and says why
+  (`LightingError()`, and a log line). Without the art it does not read: step 41's reader
+  checks the sprite and lightmap files.
+- **The layer keeps C apart (design section 5.2).** Each level sprite carries its node's
+  colour and emissive; a timed crystal's fade multiplies its alpha; the beholder's (1, hp /
+  max, hp / max) is kept as `m_beholderColour`. No sync function writes a sprite's
+  `albedoColor` any more.
+- **`syncLighting`**, the last thing `syncDrawables` does, on the tick and at a load, so a
+  quad made this tick is coloured before it is drawn. It computes the ambient and hands
+  every sprite to one function, `tint`: `albedoColor = (C.rgb * min(1, A + E), C.a)`,
+  written only when it changes.
+  - The level's sprites, the dark dragon's dropped platform (its template's look), the
+    player, the placed portals' halos, the shot, the beholder, pictured spikes, and thrown
+    stones and rocks, each with its own emissive.
+  - **Added sprites are dimmed too**: the fit's model computes `vc` before the blend, and so
+    does the original.
+  - **Folded into the albedo colour**, which the engine's unlit path already multiplies.
+    E2 gives the engine a 2D path that holds the ambient apart; moving it there is a change
+    to `tint` alone.
+- **Not coloured, each for a reason:**
+  - **the particles**: Ethanon multiplies a system by min(1, luminance + ambient) only when
+    it is alpha-blended (`ETHParticleManager.cpp:382-389`), and all 102 of the game's are
+    added (`Particles.hpp`), so `updateEmitters` is unchanged by the rule;
+  - **the boxes**, PBR placeholders that stand for things, which at 0.01 would vanish;
+  - the menu, the medal screens and the HUD, which are not in a level.
+- **Not done: the script's emissive (design section 5.8).** The 2-05 door and crates, and
+  the player on `ignore_emissive` levels, are drawn with their files' emissive. The design
+  keeps those as override rows in `lighting.json`, one of them a `_guess`; no step of section
+  7.1 names them, and G3's text does not. So:
+  - 4-22's player is drawn whole, where the original draws a black silhouette with red eyes;
+  - its doorway frame (`window01.png`, emissive 0.7) is drawn at 0.71, where the original's
+    reads 3.3, 3.9 and 4.6 of 255 over its 4 blocks: about 0.01 of the texel. That is a
+    second level carrying `ignore_emissive = "1"` whose door renders at emissive 0, beside
+    2-05's. **New evidence for the rule section 5.8 declined; not adopted here.**
+  - 2-05's crates render at 0.15 of their texel, where the original's read about 0.33.
+  - Neither 1-09 nor 1-13 carries `ignore_emissive` or `door_emissive`, so the player gate
+    below is not touched by any of it.
+
+**THE LIGHTMAPS HANDED BACK.** The design's section 6 names this step's half of the budget:
+each lightmapped sprite will hold a texture and a material set of its own, 730 across the
+game, and the registry keeps both until told.
+- The layer holds the level's lightmap paths (`HeldLightmaps()`, sorted) from the moment it
+  loads, and `unloadLevel` gives each to `TextureRegistry::Invalidate`, through the pointer
+  the app publishes in the registry's context.
+  - A suite's bare registry has no such pointer, so the call is skipped there and the list is
+    still cleared. `LightmapsHandedBack()` counts the paths given back either way, which is
+    how a suite sees a retry keep them.
+- **A retry keeps them**: `loadLevel` passes `keepLightmaps` when it reloads the level it is
+  showing, which draws the same lightmaps again at once, and a retry does not touch the disk
+  (`level_manager.gd:5-13`). The next level, the menu, a chapter's end, a refused start and
+  detaching all give them back.
+- **Nothing is dropped yet.** Nothing acquires a lightmap until E2 and G4, and `Invalidate`
+  on a path never acquired finds no key, drops nothing and bumps no generation
+  (`TextureRegistry.cpp`, `Invalidate`). So it is harmless now, as the design says.
+- **Detaching is safe**: `~SupersonicApp` clears the layers before it resets the renderer.
+
+**THE SUITES.**
+- **`test_mp_layer` 366 -> 418.**
+  - `EverySpriteIsDrawnAtItsAmbient`, on level0:
+    - the ambient (0.35, 0.3, 0.35);
+    - both arches at it, and the torch's own sprite (emissive 0);
+    - the three platforms, the door (emissive 0.7, so 1) and the four static portals'
+      added halos whole;
+    - a static body's box still the layer's grey;
+    - the player whole;
+    - nine lightmaps held, in level0's directory, sorted, `add696.png` among them;
+    - a retry holding the same list, handing none back, and dimming the rebuilt arches again;
+    - N holding level1's nine and none of level0's, with level0's nine handed back;
+    - Escape to the grid holding none, 18 handed back, and dimming nothing.
+  - `AShotIsDimmedAndADarkLevelIsDark`:
+    - level1's shot at **(0.95, 0.9, 1)**;
+    - level21c at ambient 0.01, its pilars, wall and platforms at 0.01, its three crystals
+      and the lift's door whole, and no lightmap held.
+    - **Only the shot waits on the original's extracted assets** (`projectile.png` is an
+      `Art.hpp` image). level21c's scenery is the converter's art beside the levels, so its
+      pins run wherever the levels do.
+      - Before the review the whole test returned when the original's assets were missing,
+        design pins included.
+      - Shown by one build with level21c's `Paths::original` pointed at a directory that does
+        not exist: **410 checks, 0 failures** (the suite's count before the second review's
+        case). Against a normal run its log gains six lines,
+        each naming that directory: five HUD images and the caption font.
+      - The suite was put back byte for byte (md5 `306c8a13...` before and after) and built
+        again (`work/g3/fix1/mutation_no_original_level21c.log`).
+  - `WithoutTheArtTheLevelIsBoxes` also finds the lighting reported, nothing dimmed and
+    nothing held.
+  - `ATimedCrystalFadesInItsAlphaAlone` (8 checks, added after the second review), on level14
+    (1-15):
+    - Before this step `syncSprites` wrote a timed crystal's fade straight into its albedo.
+      Now the fade is a factor on C's alpha, which `syncLighting` multiplies in.
+    - With more than 2 s left, all five crystals are (1, 1, 1, 1): each is emissive 1 under
+      the file's (0.25, 0.25, 0.4).
+    - `crystal_861` goes at 12 s. Ticked into its last 2 s, to a tick whose fade (computed as
+      `syncSprites` computes it, from that tick's `leftS`) is below 0.8, exactly one crystal
+      is (1, 1, 1, fade) and four are whole.
+    - **Mutation, one build, not kept:** `syncLighting` passing the colour without the fade
+      makes both of the last two checks fail (418 checks, 2 failures). The layer was copied
+      first and put back byte for byte (md5 `d23fb19e...` before and after), and everything
+      was built again.
+- **`test_mp_torch` 92** (11 check statements added, each run once). `theAmbientFollowsTheTorch`, on level25c:
+  - that the level has a torch and a wall, checked before the test returns without them.
+    Before the review it returned with no check (the 91 the first draft of this record
+    gave);
+  - darkest's 0.01 over the file's 0.5;
+  - (0.1, 0.1, 0.25) once lit, and still after the wall has gone;
+  - 0.01 again when the signal is shot, while `lit` stays at 1.
+- **`test_mp_start` 689 -> 726.** Each of the twelve `darkest` levels starts at darkest's
+  0.01, and its file says otherwise; level0 starts at its file's own.
+- **`test_mp_lighting` 415 -> 444.** `TheScriptsAmbientIsReadAndFollowsTheTorch`, which
+  runs without the levels:
+  - `lighting.json`'s two lights;
+  - `Ambient` through start, darkest, lit, put out on a darkest and on an ordinary level,
+    and lit again;
+  - `AmbientTerm` per channel and clipped;
+  - seven refusals, each for its message.
+- **`test_mp_sprites` 155 -> 166**: the five pictures' emissives pinned; a picture with no
+  emissive, two numbers, or a negative one refused.
+- **`test_mp_launchers` 95 -> 98**: rolling_stone.ent's 0.5, on each of the three levels.
+- **Mutations, for one build each, not kept.** Three edits were put in by a script that
+  copied the two files first, and the copies were put back byte for byte afterwards.
+  - **All three at once**:
+    - `Ambient` reading `torch.lit > 0`;
+    - the `syncLighting` call taken out;
+    - `loadLevel` never keeping the lightmaps.
+  - Results:
+    - **`test_mp_lighting` failed 2** (a torch put out, on a dark and on an ordinary level);
+    - **`test_mp_torch` failed 1** ("out: 0.01 again");
+    - **`test_mp_layer` failed 10** (level0's ambient, arches, torch sprite and retried arches;
+      the shot; level21c's ambient and its four sceneries).
+  - **Nothing failed for the retry.** The held list is rebuilt from the same level either way,
+    so the list alone could not tell a kept lightmap from one handed back and taken again.
+    `LightmapsHandedBack()` was added for that.
+  - **The retry edit on its own**, against the new checks: **`test_mp_layer` failed 3** (0, 9
+    and 18 handed back).
+  - The source was restored, every changed file recompiled, and every number in this record
+    retaken or checked on that build (below).
+
+**THE GATES.** Captures: `out/parity/specs/lighting/work/g3/{before,after}/` by `capture.sh`;
+gates by `gates.sh`, `gate_extra.py` and `player_alpha.py`; the review's attributions by
+`fix1_extra.py`. After each review every frame was retaken on the final build
+(`work/g3/fix1_final/`, then `work/g3/fix2_final/`) and every script run again on it: each
+number in the Measured column below came out again to the digit printed. The Before column
+is step 44's frames, not retaken.
+- **The before is step 44's**, and was checked rather than assumed: 1-01 at frame 420
+  captured on this step's starting build is `a904609a...`, step 44's `fix1_final` md5. The
+  seven frames were copied from `work/g2/fix1_final/`.
+
+**4-22's BLOCKS, BUILT (`work/g3/l422_blocks.py`).** The fit built none for 4-22. The
+design's recipe, with the fit's own scripts unchanged:
+- **The ambient first.** The fit's parser reads the file's `<Ambient>`, 0.5, and nothing of
+  `darkest`. So `parse_esc` is wrapped to give 0.01 for level21c before anything renders:
+  the camera search, the refine and every block's `vc` see the level as the original draws
+  it.
+- **The camera.**
+  - `camfind2.py`: coarse (0.0, -0.09) at NCC 0.892, fine **(0.089, 0.0)** at 0.726.
+    - The NCC is low because the frame is mostly black: 51.3 % of the original's pixels are
+      at most 4 of 255 on every channel (`fix1_extra.py`). It is not the validation; the MAE
+      minimum below is, as the design says.
+  - `camrefine.py`'s check: the static-pixel MAE over its grid around the rounded camera,
+    with the found camera added. The minimum is **0.922 at (0, 0)**; the found camera
+    scores 0.975 and the next grid points 1.02 and 1.07. So 4-22's world camera is **(0, 0)**.
+    The review re-ran it with integer offsets up to 2 units added: the same minimum, and
+    2.9 to 3.25 at 2 units.
+  - Step 44's (0, -1) is `compare.py`'s whole-frame offset, port against original, not the
+    camera. `compare.py` reads (0, -1) on step 44's frame and (0, 0) on this step's.
+    `lightgate`'s own offset search reads (0, 0) on both, over the same 630 `noLM_E<1`
+    blocks.
+- **The blocks** (`tmp/fit/L4-22_blocks.json`, written where `lightgate` reads, beside the
+  fit's five; no other file there touched): **1,608**, of which **630** are `noLM_E<1` and
+  978 `noLM_E=1`.
+  - The 630 are seven entities at emissive 0 (126 pilar, 230 wall, 142 + 10 platform, 95
+    block, 7 + 16 single stone), plus the doorway frame's 4 at emissive 0.7.
+  - The 978 are the sky's 953 and the lift door's 25.
+  - The original reads **0.0** on every emissive-0 block: 0.01 of any texel is below one
+    5-bit step.
+  - **So the port's 0.83 there, and the +0.8 bias below, are the 5/6/5 framebuffer**, which
+    the port has not got until G6 (design decision 7). Against `engine_no565` the 630
+    `noLM_E<1` blocks read 0.22 with a bias of +0.07 +0.08 +0.09, and the 626 emissive-0
+    ones 0.22 against a model mean of 0.74 (`fix1_extra.py`).
+
+| Gate | Required | Before | Measured |
+|---|---|---|---|
+| 2-05 `noLM_E<1` against `engine_tier1x` | bMAE <= 2.0 | 67.20 (293 blocks) | **1.62** (349 blocks) |
+| the same | abs(bias) <= 1.0 per channel | +69.3 +66.3 +66.0 | **+2.4 +1.1 +0.4: FAILS on R and G** |
+| the same, without the 13 blocks within 2 px of a box pixel (`gate_extra.py`: colour within 2 of (113, 55, 21), grown by 2 px) | (attribution, not the gate) | 68.09, +69.1 +67.3 +67.9 | **0.41, +0.1 +0.1 +0.1** (336 blocks). A plain colour mask (within 6, not grown) touches 9 blocks and leaves 340 at **0.42, +0.09 +0.05 +0.07** (`fix1_extra.py`) |
+| the same, all 349 blocks, at frames 330, 360, 390, 450, 480 and 510 (`work/g3/fix2/phase/`) | (attribution, not the gate) | - | **0.42, +0.1 +0.1 +0.1** at every one of the six |
+| 1-01 `LM_E<1` against `lm_omitted` | abs(bias) <= 2.5 | +42.8 +45.3 +46.9 | **+0.5 +0.6 +1.5** |
+| 1-01 `LM_E=1` against `lm_omitted` | abs(bias) <= 2.5 | +0.2 +0.2 +0.2 | **+0.2 +0.2 +0.2** |
+| 1-09 `LM_E<1` against `lm_omitted` | abs(bias) <= 2.5 | +46.8 +45.6 +43.8 | **+1.0 +0.6 +1.8** |
+| 1-09 `LM_E=1` against `lm_omitted` | abs(bias) <= 2.5 | +3.2 +3.2 +2.8 | **+3.2 +3.2 +2.8: FAILS**, unchanged by construction |
+| the same against `lm_omitted` drawn with 1x art | (attribution, not the gate) | 0.11, 0.0 0.0 0.0 | **0.11, 0.0 0.0 0.0** |
+| 2-26 `LM_E<1` against `lm_omitted` | abs(bias) <= 2.5 | +81.6 +78.7 +76.1 | **+0.4 +0.3 +0.2** |
+| 2-26 `LM_E=1` | abs(bias) <= 2.5 | no such blocks | no such blocks |
+| player gain, 1-09 (`player_alpha.py`) | each channel in [0.95, 1.05] | 1.0001 0.9996 1.0000 | **1.0001 0.9996 1.0000** |
+| player gain, 1-13 | each channel in [0.95, 1.05] | - | **0.9997 0.9998 0.9995** |
+| 4-22, the emissive-0 scenery blocks, mean port value | <= 4 of 255 | 75.02 | **0.83** (626 blocks, largest block 1.39) |
+| 4-22 `noLM_E<1` against `engine_tier1x` | bMAE <= 2.0 | 74.61 | **0.82**, bias +0.8 +0.8 +0.8 |
+| the same against `engine_no565` | (attribution, not the gate) | - | **0.22**, bias +0.07 +0.08 +0.09: the +0.8 is the 5/6/5 framebuffer, G6's |
+| `test_mp_layer`, `test_mp_torch`, `test_mp_start` pins | as the design lists | - | pass: 418, 92, 726 checks, 0 failures |
+| `torch.py` bright flame, level0 frames 270..420 (step 44's G2 confirmation, re-read) | R >= 240, G >= 235 | 255.0, 238.3 | **255.0, 232.1: FAILS on G**. B 145.2 -> 127.5, peak grey 255.0 -> 243.0. Must pass again at G4 and G5 |
+| `door.py` on 2-01 (step 44's G2 confirmation, re-read) | p95 R >= 230, p95 G <= 50 | 255, 48 | **255, 48** |
+| `compare.py` `edge_iou`, section 7.0's seven levels (G2's clause, re-read) | none falls by more than 0.02 | step 44's | worst **-0.0054** (3-05); the other six rose |
+
+**2-05's block count moved with the frame, not with the rule.** `lightgate` reads the
+port's offset as **(0, 1)** on step 44's frame and **(0, 0)** on this step's (rerun on
+`before/`: (0, 1), 293 blocks, 67.20). So 56 more of the fit's clean blocks fall inside the
+compared frame, and the two columns are not the same block set.
+- **4-22's did not move.** `lightgate` reads (0, 0) on both frames, 630 blocks both times,
+  so its two columns are the same blocks. The (0, -1) -> (0, 0) above is `compare.py`'s,
+  rerun on `before/` for this record.
+
+**Three rows fail, and none is this step's multiply. None is waived here.**
+- **2-05's bias is the carranca's fireball box.** At frame 420 a fireball sits in the right
+  carranca's mouth, and the port draws it as a flat (113, 55, 21) box.
+  - `fireball.ent` has no sprite, so the box is its picture (`syncTurrets`), and no lighting
+    step draws it.
+  - **The original draws no such thing there at t8.0.** Its mouth is dark
+    (`work/g3/fix1/2-05_carranca_orig_vs_port.png`), and the carranca's 59 blocks read as
+    the model does: original against `engine`, -0.13 -0.09 -0.15.
+  - Every block the box touches is the carranca's (entity 827). Its bias against
+    `engine_tier1x` is +13.6 +6.2 +1.8, near the box's own ratio.
+  - The only other entity off by more than 0.5 against the original is the bar at entity
+    910 (`bar4_contrast.png`): +3.7 +3.6 +3.4 on the 3 blocks at x 880 at the frame's top
+    edge.
+    - Against `engine_tier1x` it is -0.3 +0.1 +0.3. The 1x model itself sits +3.8 +3.4 +2.9
+      above `engine` on those blocks, so that is the art tier (System 6), not this step.
+  - Without the box's blocks the class is at 0.41 with +0.1 on every channel; with them bMAE
+    passes and bias does not.
+  - **Dimming the box was not done.** It would take those blocks from about 108 to about 1
+    and pass the row for a cosmetic reason: the port would still draw a box where the
+    original draws none. It would also dim a stand-in for an added particle system, which
+    the original does not dim (design section 5.6).
+  - **It is the frame, not the class** (second review, `work/g3/fix2/phase/`). 2-05 was
+    captured on the same binary at frames 330, 360, 390, 450, 480 and 510, and `lightgate`
+    run on each against `engine_tier1x`.
+    - Every one reads offset (0, 0), all **349** blocks, **0.42**, bias **+0.1 +0.1 +0.1**:
+      inside both of the row's limits with no block taken out. Entity 827 reads +0.1 0.0 +0.1
+      against the original.
+    - Frame 420 is the only one of the seven with the box: 1,980 px at x 990..1034, y
+      529..572. On the other six no pixel of the frame is within 2 of (113, 55, 21), and that
+      region reads 6.2/6.6/7.3, where the original's `t8.0` reads 6.1/6.4/6.6.
+    - The frame at 420 is md5-identical to the gate's (`5345f959...`).
+  - **The original also draws a fireball at that mouth, at another moment.** Bright orange
+    pixels (R > 180, G > 100) in the library frames:
+    - `2-05_h6.3.png`: x 597..996, reaching the mouth, whose box region reads 25/10/8;
+    - `2-05_t8.0.png`: x 597..805 only, over the crates, and the mouth reads 6.1/6.4/6.6.
+    - So the fixed pair, port frame 420 against `t8.0`, catches the right carranca's fire at
+      two different moments of its cycle. The fit chose its blocks clear of particles on the
+      original's frame, not on the port's.
+    - A capture moment is game state, as `lightgate` already treats a camera offset.
+  - **So System 2 is not expected to close this row alone** (reasoning, not measured: no port
+    draws `fireball.ent`'s particles yet). Particles put where the box is on frame 420 would
+    still cover those blocks, which the fit chose clear of anything on the original's frame.
+    What is measured is the other six frames. The row closes when it is read at a moment where
+    neither frame draws a fireball over entity 827, or with the blocks under a port-drawn
+    moving object taken out. Either is a change to the design's gate, and that is the owner's.
+- **1-09's `LM_E=1` bias is the art tier, and G3 cannot move it.** Those sprites are
+  emissive 1, so min(1, A + E) is 1: this step multiplies them by exactly one.
+  - Over their 290 blocks, **one pixel** differs between step 44's frame and this step's, by
+    1 of 255, in block (608, 416) of entity 590 (`work/g3/fix2/lme1_diff.py`). The class's
+    bias is +3.232 +3.186 +2.835 on both frames, to the thousandth.
+  - `lm_omitted` exists only at the best tier (hd, fullhd), and the port draws 1x.
+  - The design assumed a tier moves detail and not the block mean. On this class it moves
+    the mean by 3: the fit's own section 4 has the engine at -1.4 -0.6 -1.0 against the
+    original, and `engine_tier1x` at +0.9 +1.7 +1.0.
+  - **Attributed by rendering `lm_omitted` with 1x art** (`work/g3/extra_variant.py`): the
+    fit's `render.py`, at the camera in the fit's blocks file, into a copy of the file under
+    `work/g3/fit_extra/`.
+    - The renderer was first held to the file: `engine_tier1x` rendered the same way equals
+      the stored prediction on every block of 1-01, 1-09 and 2-26, worst difference 0.0.
+    - Against that variant the class is 0.11 with a bias of 0.0 on every channel, before and
+      after.
+  - The same variant puts every lightmapped class of the three levels within 0.8 of the
+    model: 1-01 `LM_E<1` 0.59 (0.0 0.0 -0.2), `LM_E=1` 0.85 (+0.8 +0.7 +0.8); 1-09 `LM_E<1`
+    0.63 (+0.2 0.0 +0.1); 2-26 `LM_E<1` 0.44 (+0.1 0.0 0.0).
+  - Against the original it closes at plan_port's System 6.
+- **Step 44's torch confirmation fails on G.** `torch.py` over level0's frames 270 to 420:
+  - bright flame **(255.0, 232.1, 127.5)** against step 44's (255.0, 238.3, 145.2) and the
+    original's (253.2, 252.0, 159.1). Peak grey 255.0 -> 243.0.
+  - G2's confirmation asks G >= 235: it passed at step 44 and now reads 2.9 below.
+  - **Cause:** the flame's particles are added over the arches and wall, which are
+    emissive 0 and now drawn at 0.35. In the original those pixels also carry the lightmap
+    and the halo, which put an orange glow under the flame.
+  - In the flame's box 58,343 of 61,600 pixels changed. Among the 1,232 brightest before,
+    866 to 965 did, depending on the frame, and their mean G fell from 186.7 to 168.5 at
+    frame 270. No particle changed (`updateEmitters` is untouched).
+  - **It stays a gate.** G4 (the lightmap under the arches) and G5 (the torch's halo) each
+    re-read `torch.py`, and neither passes while G is below 235.
+- **The owner's choice**, as step 44 left 4-32:
+  - 2-05's bias: read the row at a frame where neither picture has a fireball over the
+    carranca, or take out the blocks under port-drawn moving objects, or waive it now on the
+    attribution above. System 2 alone is not expected to close it.
+  - 1-09's `LM_E=1` bias: gate it again at System 6, or amend the design's G3 rows to
+    compare against an `lm_omitted_tier1x` variant like `work/g3/fit_extra/`'s. The design's
+    threshold for the "bias only" rows rests on an assumption this measurement contradicts,
+    and the design is the owner's to change, not this record's.
+  - The torch's G: G4 and G5 carry it; whether this step may land below it meanwhile.
+
+**THE PLAYER'S GAIN (`work/g3/player_alpha.py`).**
+- **T is what the port samples**: the original's `entities/magic_portals_hd.png`, 160 x 224,
+  cells of 40 x 56. That is the file `art.json` names and the layer draws, not
+  `entities/hd/`, which the original draws.
+- A cell is drawn at 2.8125 px per texel and sampled bilinearly across the whole sheet.
+- **Located by masked NCC** over all 16 cells: cell 4 on both levels, NCC 0.9992 and 0.9989,
+  refined to 1/8 px (0.9997 and 1.0000).
+- **The gain** is `sum(actual * T) / sum(T * T)` per channel over the opaque pixels, eroded
+  by 3 px: 5,037 pixels on 1-09 and 5,028 on 1-13, residual MAE 0.4 to 0.6 and 0.24.
+- **1-13's camera offset does not matter here**, since the player is located in the frame.
+  So this is the one G3 gate 1-13 can take while `lightgate` refuses it.
+- **The measure can see a gain.** The same 1-09 frame scaled by (0.3, 0.3, 0.4) reads
+  0.3002, 0.2995 and 0.4000.
+- The player is emissive 1, so the gate holds the fold to leaving it whole, which is what
+  the original's (1.02, 0.98, 1.00) and (1.03, 1.00, 1.01) say.
+
+**WHAT ELSE MOVED, NOT GATED.**
+- **Classes this step does not own**, port against `engine_tier1x`, before -> after:
+  - 1-01 `LM_E<1` 34.58 -> **9.59** (bias -17.9 -8.7 -2.0), 1-09 `LM_E<1` 43.00 -> **1.72**,
+    2-26 `LM_E<1` 58.27 -> **20.46** (-36.8 -17.7 -6.9). The remainder is the missing
+    lightmap: the design expected about 38/255 low on R at 2-26 until G4.
+  - The E = 1 classes read the same to the hundredth: 1-01 `LM_E=1` 3.15, 1-09 `LM_E=1`
+    2.41 and `noLM_E=1` 0.29, 2-26 `noLM_E=1` 0.91, 4-22 `noLM_E=1` 0.91.
+  - The halo classes are darker, as the lightmap and halo they lack sat under a sprite now
+    dimmed: 1-01 `LM_E<1_halo` 37.63 -> 42.22, 1-09 `LM_E<1_halo` 39.78 -> 40.92. G4 and G5.
+- **Whole frame (`compare.py`, frame 420 against `levels/<W-LL>_t8.0.png`):**
+
+| Level | edge_iou before -> after | mean_abs before -> after |
+|---|---|---|
+| 1-01 | 0.4375 -> 0.4450 | 26.23 -> 23.49 |
+| 1-09 | 0.4124 -> 0.4220 | 24.27 -> 9.42 |
+| 1-13 | 0.2217 -> 0.2307 | 38.26 -> 17.62 |
+| 2-05 | 0.2782 -> 0.3235 | 32.22 -> 12.35 |
+| 2-26 | 0.3218 -> 0.3322 | 18.43 -> 13.69 |
+| 3-05 | 0.3886 -> 0.3832 | 21.04 -> 9.27 |
+| 4-22 | 0.2536 -> **0.6088** | 39.53 -> **4.95** |
+
+- **All 128 levels at frame 420** (`capture.sh after sweep`, scored by `screen.py` against step
+  44's `work/g2/fix1/after`):
+  - every run exited 0, validation ACTIVE, no VUID, and no level drawn unlit: all 128 levels'
+    lighting reads;
+  - **113 frames changed**. The 15 that did not are 4-03 to 4-18 but 4-14, whose placed
+    sprites are all emissive 1. The one exception is 4-13's carranca, whose frame is unchanged,
+    so it is not in view at frame 420;
+  - the seven gate levels' sweep frames are md5-identical to `after/`.
+- **Against the 81 library frames: no level loses more than 0.02 of `edge_iou`.** The change
+  runs from -0.0178 (3-07) to +0.4883 (4-23), median +0.0069. `mean_abs` fell on 64 of the
+  81 and rose on 3: 1-05 by 6.4, 1-18 by 1.1, 1-22 by 0.7.
+  - 1-05 was looked at: its original lights a wall with a blue lamp's lightmap and halo, which
+    the port does not draw yet, over a wall now dimmed to the ambient.
+- **Step 44's open question, 4-32.** plan_port's fifteen-level clause failed at G2 on 4-32
+  (0.2369 at step 43 -> 0.1917), and step 44 put about 0.023 of that in the silhouettes this
+  step draws. **After this step 4-32 is at 0.4847**, +0.2478 on step 43 and +0.2930 on step 44.
+  Its black ground (the sky controller) is still there.
+  - The fifteen, step 44 -> now:
+    - chapter 1: 1-07 0.4334 -> 0.4493, 1-10 0.4518 -> 0.4707, 1-12 0.3864 -> 0.3804,
+      1-17 0.3894 -> 0.3823, 1-27 0.4112 -> 0.4210;
+    - chapters 2 to 4: 2-01 0.2512 -> 0.3732, 3-23 0.3653 -> 0.3631, 4-05 0.1643 ->
+      0.1643 (unchanged bytes), 4-32 0.1917 -> 0.4847;
+    - and the seven in the table above.
+  - The worst change among them is 1-17's -0.0071.
+- **The torch's flame and `door.py`** are step 44's G2 confirmations, so they are rows of
+  THE GATES above, the torch's failing on G. The first draft of this record kept them here,
+  out of the table.
+- **Unchanged bytes:**
+  - the menu at frame 120 (`934232ed...`) and level0's frame 1, both blacks whole
+    (`5c5cfed2...`), step 44's md5s: neither draws a level sprite;
+  - MainScene and Wolf Brigade at `--fixed-step --frames 120`: `1e24c2a3...` and
+    `d9e7b8fe...`, step 43's, with no engine file changed.
+
+**STEP 42'S WALK, WITH THE LAYER HANDING BACK.** `MagicPortals --visit-levels lightmapped
+--visit-passes 2`:
+- **exit 0 in 18.8 s**, validation ACTIVE, 134 visits, 1,460 lightmap sets, peak **96**, 0
+  failures;
+- pass 2's baseline **75 at all 67 visits**, 75 cached and 75 in the pool after the last
+  release, and no line containing "error".
+- Step 42's numbers, one for one.
+- The probe still acquires the lightmaps itself and releases them before it opens the next
+  level, so the layer's own `Invalidate` finds them gone. What this shows is that the
+  layer's hand-back on every unload breaks nothing in the walk, validation included.
+- The design's full E0 check, with the probe's acquisition replaced by the layer's own,
+  waits for E2 and G4.
+
+**LEFT FOR LATER STEPS AND FOR THE OWNER.**
+- The three failing rows above: the owner's call, with the step that closes each.
+- The script's emissive (design section 5.8): the 4-22 player and door, the 2-05 door and
+  crates. No step of section 7.1 builds it, and this record adds 4-22's door as evidence.
+- The torch flame's G, a gate again at G4 and G5.
+- Step 44's open items stand: the sky controller (black ground on 34 levels), the placeholder
+  boxes, and 1-13's camera.
+- **To be checked, not changed here:** `Game.cpp` hands `DarkDragon::Tick` `level.torch.lit > 0`
+  as "the torch is lit". `lit` is cumulative, the trap `Lighting::Ambient` avoids by reading
+  each light's own flag. Whether the dragon should arm on "lit now" rather than "ever lit"
+  wants the script read; if it should, that is a state-hash change for a later step.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning.
+  - The final build was taken after the mutations were restored, with every changed source,
+    header and suite touched: 35 translation units compiled (`work/g3/build_final.log`).
+  - Every build before it printed no warning either.
+- **ctest: 113 of 113 pass, "Not Run" 0.** Resolved as follows.
+  - **First build.** `test_mp_fire` and `test_mp_sounds` were refused ("Not Run"), and each
+    ran after one delete and relink.
+  - **The mutation build.** `test_mp_start`, then `test_mp_layer`, were refused. The latter ran
+    after one relink.
+  - **The final build.** `test_mp_portal`, `test_mp_camera`, `test_mp_timed`, `test_mp_torch`,
+    `test_mp_zerog` and `test_mp_fields` were refused.
+    - After one relink, `test_mp_timed`, `test_mp_torch` and `test_mp_zerog` were still
+      refused; after two, `test_mp_torch`.
+    - It ran on the sixth.
+    - Every relink printed no warning, and a full `ctest` then ran 113 of 113 with none
+      refused.
+- **The final binary draws the gate frames.** `MagicPortals.exe`, relinked by the final build,
+  was not refused.
+  - The seven gate levels at frame 420, retaken on it, are md5-identical to `after/`
+    (`work/g3/final/`).
+  - **Then every frame `capture.sh` takes, retaken on it** (`work/g3/final2/`): all 21 are
+    md5-identical to `after/`. That is the seven gate levels, level0's torch frames 270 to
+    420, 2-01's door frames 300 to 420, the menu at 120 (`934232ed...`), level0's frame 1
+    (`5c5cfed2...`), MainScene (`1e24c2a3...`) and Wolf Brigade (`d9e7b8fe...`). So the
+    unchanged-bytes, torch and door numbers above hold on the final binary, measured rather
+    than inferred.
+  - Step 42's walk on it: exit 0, 134 visits, 1,460 sets, peak 96, pass 2 at 75 throughout, 0
+    failures, validation ACTIVE, no line containing "error".
+- **After the review.** Only `test_mp_layer.cpp` and `test_mp_torch.cpp` changed, and this
+  record.
+  - **The final build** touched every changed source, header and suite: 35 translation units
+    compiled, no warning (`work/g3/build_fix1_final.log`), then `ninja: no work to do`.
+  - **ctest first refused 13** ("Not Run"): `test_mp_tscn`, `_levels`, `_geometry`,
+    `_scores`, `_start`, `_ghost`, `_bounce`, `_darkdragon`, `_keys`, `_shot`, `_boss`,
+    `_sprites` and `_lighting`.
+    - Each round deleted the refused executables and relinked them: 6 were still refused
+      after the first, 2 after the second (`test_mp_levels`, `test_mp_lighting`), none after
+      the third.
+    - No relink printed a warning.
+  - **Then a full ctest: 113 of 113 pass, Not Run 0.** Run directly: `test_mp_torch` 92,
+    `test_mp_layer` 410 (before the second review's case), `test_mp_start` 726,
+    `test_mp_lighting` 444, `test_mp_sprites` 166 and `test_mp_launchers` 98 checks, 0
+    failures each.
+  - **`MagicPortals.exe`, relinked by that build, was not refused.** All 21 `capture.sh`
+    frames retaken on it (`work/g3/fix1_final/`) are md5-identical to `after/`, MainScene
+    and Wolf Brigade included. `gates.sh`, `gate_extra.py`, `player_alpha.py` and
+    `fix1_extra.py` on them print the numbers above.
+  - Step 42's walk on it: exit 0, 134 visits, 1,460 sets, peak 96, pass 2's baseline 75 at
+    all 67 visits, 75 and 75 after the last release, 0 failures, validation ACTIVE, no line
+    containing "error".
+- **After the second review.** Only `test_mp_layer.cpp` changed, and this record.
+  - **Build.** The suite alone first: one translation unit compiled, `MagicPortals.exe`'s md5
+    unchanged. Then the mutation above, and the layer put back byte for byte.
+  - **The final build** touched every changed source, header and suite: 35 translation units
+    compiled and 40 links, no line containing "warning" or "error"
+    (`work/g3/fix2/build_fix2_touched.log`), then `ninja: no work to do`.
+  - **ctest first refused 6** ("Not Run"): `test_mp_tscn`, `_scores`, `_statics`, `_movers`,
+    `_hazards` and `_sprites`.
+    - On the next run `test_mp_scores` ran and the other five were refused again. They were
+      deleted and relinked once, with no warning, and none was refused after.
+  - **Then a full ctest: 113 of 113 pass, Not Run 0** (`work/g3/fix2/ctest_final.log`). Run
+    directly: `test_mp_layer` **418**, `test_mp_torch` 92, `test_mp_start` 726,
+    `test_mp_lighting` 444, `test_mp_sprites` 166 and `test_mp_launchers` 98 checks, 0
+    failures and no skip line in any.
+  - **`MagicPortals.exe`, relinked by that build (md5 `52645a59...`), was not refused.**
+    - All 21 `capture.sh` frames retaken on it (`work/g3/fix2_final/`) are md5-identical to
+      `after/` and to `fix1_final/`, MainScene (`1e24c2a3...`) and Wolf Brigade (`d9e7b8fe...`)
+      included.
+    - `gates.sh`, `gate_extra.py`, `player_alpha.py` and `fix1_extra.py` on them write the
+      same files as on `fix1_final/`, apart from the tag in a path and a final newline.
+  - Step 42's walk on it: exit 0 in 19 s, 134 visits, 1,460 sets, peak 96, pass 2's baseline
+    75 at all 67 visits, 75 and 75 after the last release, 0 failures, validation ACTIVE, no
+    line containing "error".
+- **No other document's table moves.** No engine file changed and no suite was added, and
+  neither README.md nor ARCHITECTURE.md lists the Magic Portals suites' checks.
+- **Neither repository was committed to.** The remake's working tree is clean: everything it
+  gained is under the gitignored `out/parity/specs/lighting/work/g3/`, plus
+  `tmp/fit/L4-22_blocks.json` with its mask and overlay.

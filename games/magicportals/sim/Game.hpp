@@ -39,6 +39,7 @@
 #include "sim/Launchers.hpp"
 #include "sim/Keys.hpp"
 #include "sim/LevelBuilder.hpp"
+#include "sim/Lighting.hpp"
 #include "sim/Minions.hpp"
 #include "sim/Player.hpp"
 #include "sim/Portals.hpp"
@@ -80,6 +81,7 @@ struct Data {
     Dragon::Rules dragon;         // and dragon.json
     DarkDragon::Rules darkDragon; // and darkdragon.json
     Torch::Rules torch;           // and torch.json
+    Lighting::Rules lighting;     // and lighting.json: the ambient lights the script sets (presentation only)
     Zerog::Rules zerog;           // and zerog.json
     Bounce::Rules bounce;         // and bounce.json
     GravityWell::Rules wells;     // and gravitywell.json
@@ -147,10 +149,11 @@ struct Level {
     // in, and refuses a portal anywhere inside its reach.
     GravityWell::State wells;
     // The level sets `darkest`: its ambient light is DARKEST_AMBIENT_LIGHT,
-    // (0.01, 0.01, 0.01). Carried rather than acted on - this port has no ambient
-    // light for it to change - and art.json holds the decode. Its one gameplay
-    // consequence is that a minion in such a level is blind, which minion sight
-    // must honour when it is built.
+    // (0.01, 0.01, 0.01), in place of its file's. Nothing in the simulation acts
+    // on it: the layer draws with it (Lighting::Ambient, lighting.json), and that
+    // is presentation, off the state hash. Its one gameplay consequence is that a
+    // minion in such a level is blind, which minion sight must honour when it is
+    // built, by comparing the same Lighting::Ambient the layer draws with.
     bool darkest = false;
     // The level sets `no_gravity`: the world's gravity is zero, the walking
     // buttons do nothing, and the recoil of a portal shot is how the player

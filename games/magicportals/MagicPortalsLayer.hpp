@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -22,6 +23,7 @@
 #include "sim/Game.hpp"
 #include "sim/Art.hpp"
 #include "sim/Hud.hpp"
+#include "sim/Lighting.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Scores.hpp"
 #include "sim/Sounds.hpp"
@@ -63,6 +65,13 @@ namespace MagicPortals {
 //    (RenderSettings::SceneEncoding::DisplayEncoded, set at attach): a texture
 //    is sampled as the bytes in its file, tints and blends work on those bytes,
 //    and nothing is tone-mapped or bloomed, on a flat black ground.
+//  - Every sprite of a level is its colour times min(1, ambient + emissive), as
+//    the original draws it (Lighting::AmbientTerm): the ambient the level file
+//    gives, or lighting.json's where the script replaces it - a `darkest` level,
+//    a lit torch - and the emissive its node or its .ent gives. The layer keeps
+//    each sprite's own colour (a crystal's fade, the beholder's red) apart from
+//    that factor, and writes the product. The lightmaps, lights and halos are
+//    not drawn yet.
 //  - What the levels do not picture, the game draws as the original's own
 //    entities draw it (Art.hpp): the portals a shot opens, and the shot. Their
 //    images are read from the original's extracted assets; without them they
@@ -187,6 +196,28 @@ public:
     // then drawn as boxes - or empty.
     const std::string& ArtError() const { return m_artError; }
 
+    // Why the level's lighting could not be read (Lighting::Read), when it could
+    // not - its sprites are then drawn in their own colours, unlit, as before
+    // lighting existed - or empty.
+    const std::string& LightingError() const { return m_lightingError; }
+
+    // The ambient light the last tick coloured the level's sprites with
+    // (Lighting::Ambient). (1, 1, 1) when there is no level or its lighting did
+    // not read, which multiplies nothing.
+    glm::dvec3 AmbientNow() const { return m_ambient; }
+
+    // The lightmap files of the level being drawn, which the layer hands back to
+    // the engine's texture registry when the level goes (TextureRegistry::
+    // Invalidate). Kept across a retry, which draws the same level again, and
+    // given back by anything else that unloads it: the next level, the menu,
+    // detaching. Nothing samples a lightmap yet (the lighting design's E2 and
+    // G4), so giving them back costs nothing until then.
+    const std::vector<std::string>& HeldLightmaps() const { return m_heldLightmaps; }
+    // How many lightmap paths the layer has handed back over its life, whether or
+    // not a registry was there to take them. For the suites, which have none to
+    // watch: it is how a retry is seen to keep them.
+    std::size_t LightmapsHandedBack() const { return m_lightmapsHandedBack; }
+
     // Whether B has the bodies' boxes shown over the art.
     bool ShowingBoxes() const { return m_showBoxes; }
 
@@ -287,6 +318,7 @@ private:
         entt::entity body{entt::null};
         entt::entity box{entt::null};
         entt::entity quad{entt::null};
+        glm::dvec3 emissive{0.0}; // the thrown .ent's, from launchers.json
     };
 
     // One of the level's sprites as a textured quad, and what it follows: the
@@ -296,6 +328,12 @@ private:
         Sprites::Sprite sprite;
         entt::entity quad{entt::null};
         float z{0.0f};
+        // C, the instance colour, as its node gives it (eth_color), and a timed
+        // crystal's fade, which multiplies its alpha. What the ambient does to
+        // them is syncLighting's.
+        glm::vec4 colour{1.0f};
+        float fade{1.0f};
+        glm::dvec3 emissive{0.0}; // its node's eth_emissive
         entt::entity body{entt::null};
         int crystal{-1};      // in goals.crystals
         int staticPortal{-1}; // in portals.statics
@@ -340,12 +378,21 @@ private:
     // syncBoss: they belong to a turret, not to the beholder, and every level
     // of chapter 2 that has one has no boss at all.
     void syncTurrets(entt::registry& registry);
+    // Every sprite of the level coloured for the ambient light now: after
+    // everything above has made, unmade and placed this tick's quads.
+    void syncLighting(entt::registry& registry);
+    // A quad's albedo, (C.rgb * min(1, ambient + emissive), C.a), written only
+    // when it changes. The one place a level sprite's colour is written.
+    void tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour, const glm::dvec3& emissive) const;
+    // Hands the held lightmaps back to the texture registry, when there is one.
+    void releaseLightmaps(entt::registry& registry);
     void updateHud(entt::registry& registry);
 
     // The level at `index` in chapters.json, in place of whatever was there.
     // False, with LoadError, when it is refused; nothing of it is left then.
     bool loadLevel(entt::registry& registry, int index);
-    void unloadLevel(entt::registry& registry);
+    // `keepLightmaps` for a retry, which draws the same level again at once.
+    void unloadLevel(entt::registry& registry, bool keepLightmaps = false);
     // The level at `next`, or the chapter's end when it is -1.
     void goTo(entt::registry& registry, int next);
     // The exit reached: recorded, and on to the next level.
@@ -383,6 +430,13 @@ private:
 
     Game::Data m_data;
     int m_dataIndex{-1}; // whose level m_data holds, so a retry reuses it
+    // The level's lighting, read with m_data and reused with it.
+    Lighting::Scene m_look;
+    bool m_lit{false}; // m_look read, so sprites are coloured for the ambient
+    std::string m_lightingError;
+    glm::dvec3 m_ambient{1.0};
+    std::vector<std::string> m_heldLightmaps;
+    std::size_t m_lightmapsHandedBack{0};
     Game::Level m_level;
     bool m_loaded{false};
     std::string m_loadError;
@@ -420,6 +474,7 @@ private:
     entt::entity m_beholderBox{entt::null};
     entt::entity m_beholderQuad{entt::null};
     glm::dvec2 m_beholderScale{1.0}; // its pulse as last set, which it keeps while it throws rocks
+    glm::vec4 m_beholderColour{1.0f}; // C: (1, hp / max, hp / max), reddening as it is hurt
     std::vector<entt::entity> m_spikes; // one per spike in flight
     float m_beholderZ{0.5f};
     float m_spikeZ{0.5f};

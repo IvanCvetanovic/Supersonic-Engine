@@ -3,45 +3,46 @@
     "What the port draws for what no level pictures - the portals a shot opens, the shot,",
     "the player, and chapter 1's boss with its spikes - as the original's own entities draw",
     "them. Their images are read from the extracted APK beside the remake and never",
-    "committed. See docs/planning/2026-09-11-magic-portals-remaster.md, steps 9c, 9d and 11b."
+    "committed. See docs/planning/2026-09-11-magic-portals-remaster.md, steps 9c, 9d and 11b.",
+    "",
+    "Each carries its .ent's <EmissiveColor>, because the original dims every sprite it draws",
+    "to min(1, ambient + emissive) of its colour (ETHRenderEntity.cpp:113-117), these as much",
+    "as the level's own (step 45)."
   ],
 
   "darkest": {
     "_source": [
       "A LEVEL PROPERTY rather than an entity. Game's level-properties reader does",
       "CheckCustomData('darkest') and, when it is set, SetAmbientLight(DARKEST_AMBIENT_LIGHT)",
-      "- and that single call is the whole of what the flag does in that function.",
-      "DARKEST_AMBIENT_LIGHT is built at Game.angelscript bytes 306783..306841 as",
-      "vector3(0.01, 0.01, 0.01), so it is very nearly black rather than actually black."
+      "- and that single call is the whole of what the flag does in that function."
     ],
-    "ambient_light": [0.01, 0.01, 0.01],
-    "_applied_by_nothing": [
-      "Recorded here because this is where a renderer would look for it, and applied by",
-      "nothing: the port has no ambient light at all. Sprites carries no colour or tint, so",
-      "there is no value for this to multiply and a dark level draws exactly as a lit one.",
-      "",
-      "The flag is carried on Game::Level all the same, so that when lighting exists the",
-      "levels that want it already say so and nothing has to be re-decoded.",
+    "_moved": [
+      "The ambient light itself, (0.01, 0.01, 0.01), now lives in lighting.json as",
+      "darkest_ambient, where the port's lighting reads it (step 45). The flag is carried on",
+      "Game::Level, and the layer multiplies every level sprite by min(1, ambient + emissive)",
+      "with that ambient in place of the file's.",
       "",
       "Its ONE decoded gameplay consequence is not drawing at all:",
       "canSeeAnything = GetAmbientLight() != DARKEST_AMBIENT_LIGHT, so a minion in a darkest",
-      "level is BLIND. minions.json records minion sight as not built, and that note said it",
-      "had 'nothing to build against until darkest exists'. It exists now, and sight is still",
-      "the step it always was - so the blindness costs nothing today and is the first thing",
-      "that must be honoured when sight lands."
+      "level is BLIND. minions.json records minion sight as not built. Lighting::Ambient is the",
+      "number sight must compare when it lands."
     ]
   },
 
   "portal": {
     "_source": "the original's portal.ent: Sprite portal_halo.png, blendMode 1 (added), SpriteCut 1 x 1",
     "sprite": "portal_halo.png",
-    "additive": true
+    "additive": true,
+    "emissive": [1.0, 1.0, 1.0],
+    "_emissive": "portal.ent's <EmissiveColor r=1 g=1 b=1>: min(1, ambient + 1) is 1, so it is never dimmed"
   },
 
   "shot": {
     "_source": "the original's projectile.ent: Sprite projectile.png, blendMode 1 (added), SpriteCut 6 x 1, PivotAdjust (4, 0)",
     "sprite": "projectile.png",
     "additive": true,
+    "emissive": [0.6, 0.6, 1.0],
+    "_emissive": "projectile.ent's <EmissiveColor r=0.6 g=0.6 b=1>: under ambient A it is drawn at min(1, A + (0.6, 0.6, 1))",
     "columns": 6,
     "rows": 1,
     "animation": {
@@ -58,6 +59,8 @@
     "_source": "the original's dark_mage.ent: Sprite magic_portals_hd.png, blendMode 0, SpriteCut 4 x 4, startFrame 4, PivotAdjust (0, 2)",
     "sprite": "magic_portals_hd.png",
     "additive": false,
+    "emissive": [1.0, 1.0, 1.0],
+    "_emissive": "dark_mage.ent's <EmissiveColor r=1 g=1 b=1>: never dimmed by the ambient (what script sets over it is the lighting design's section 5.8, not built)",
     "columns": 4,
     "rows": 4,
     "start_frame": 4,
@@ -99,6 +102,8 @@
     ],
     "sprite": "beholder.png",
     "additive": false,
+    "emissive": [1.0, 1.0, 1.0],
+    "_emissive": "beholder.ent's <EmissiveColor r=1 g=1 b=1>",
     "columns": 2,
     "rows": 1,
     "pulse": {
@@ -116,6 +121,8 @@
     ],
     "sprite": "beholder_spike.png",
     "additive": false,
+    "emissive": [1.0, 1.0, 1.0],
+    "_emissive": "beholder_spike.ent's <EmissiveColor r=1 g=1 b=1>",
     "pivot_px": [0, 10]
   }
 }

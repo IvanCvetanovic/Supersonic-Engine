@@ -98,13 +98,11 @@
   },
 
   "ambient": {
-    "lit": [0.1, 0.1, 0.25],
-    "_note": [
-      "What a lit torch sets the level's ambient light to, against darkest's",
-      "(0.01, 0.01, 0.01) in art.json. Recorded and applied by NOTHING, for the same reason",
-      "art.json's darkest block is: this port has no ambient light and Sprites carries no",
-      "colour for it to multiply. The pair of numbers is kept together so that when lighting",
-      "exists, both ends of it are already decoded."
+    "_moved": [
+      "What a lit torch sets the level's ambient light to, (0.1, 0.1, 0.25), and what putting it",
+      "out sets it back to, darkest's (0.01, 0.01, 0.01), now live in lighting.json as",
+      "torch_lit_ambient and darkest_ambient, where the port's lighting reads them",
+      "(Lighting::Ambient, step 45)."
     ]
   },
 
@@ -137,9 +135,12 @@
     "playLightOffSound, playLightSwitchSound, playDemolitionSound, the startEarthquake(20, 0)",
     "when a wall goes, the torch's 190-a-second spin, and the wall's alpha fade.",
     "",
-    "The lighting itself: SetAmbientLight, lightenAllBackgroundEntitities,",
-    "darkenAllBackgroundEntitities, setBackgroundTilesEmissiveColor and GenerateLightmaps.",
-    "There is no ambient light in this port to change.",
+    "The rest of the lighting: lightenAllBackgroundEntitities, darkenAllBackgroundEntitities,",
+    "setBackgroundTilesEmissiveColor, GenerateLightmaps and the light_from_projectile.ent light",
+    "(the lighting design's step G6). SetAmbientLight IS built since step 45: the layer draws",
+    "with lighting.json's ambient while the torch is lit and darkest's once it is put out, and",
+    "with it one frame early - on the tick the torch is shot, where the original waits for its",
+    "`delete` branch on the next frame.",
     "",
     "bounceLightEntity, and the `bounce` flag addFireSignalIfNecessary sets on an existing",
     "light_from_projectile.ent. Presentation, and unreachable here besides."

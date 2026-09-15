@@ -19,6 +19,9 @@
 //               level correctly and still be wrong about the mechanism.
 //   the fuel    hasProjectileAround takes a fireball as readily as a portal shot,
 //               so a fire diamond works these switches too.
+//   the light   what the level is drawn with follows the switch: darkest's 0.01 in
+//               place of the file's ambient, lighting.json's (0.1, 0.1, 0.25) while
+//               the torch is lit, and 0.01 again once it is put out.
 //
 // Reads the converted levels and the remake's data from outside this repository,
 // and skips, saying where it looked, when either is absent.
@@ -27,6 +30,7 @@
 
 #include "core/Components.hpp"
 #include "sim/Game.hpp"
+#include "sim/Lighting.hpp"
 #include "sim/Units.hpp"
 
 #include <cmath>
@@ -209,6 +213,47 @@ void shootingTheSignalPutsTheWallBack() {
     CHECK_MSG(!run.level.portals.flight.has_value(), "that shot was spent too");
 }
 
+// The ambient light the level is drawn with, through the whole toggle, as the
+// layer asks for it (Lighting::Ambient over Game::Data's lighting.json). The
+// numbers are the script's; that the layer colours its sprites with them is
+// test_mp_layer's.
+void theAmbientFollowsTheTorch() {
+    Run run;
+    if (!Begin(kWalled, run)) return;
+    // level25c is the census's torch with a wall; without either this test would
+    // pass having checked nothing.
+    CHECK_MSG(!run.level.torch.lights.empty() && run.level.torch.wall.present, "level25c has a torch and a wall");
+    if (run.level.torch.lights.empty() || !run.level.torch.wall.present) return;
+
+    Lighting::Scene look;
+    std::string error;
+    const bool read = Lighting::Read(run.data.scene, kLevels + "/..", look, error);
+    CHECK_MSG(read, error);
+    const auto ambientNow = [&run, &look]() {
+        return Lighting::Ambient(run.data.lighting, look.ambient, run.level.darkest, run.level.torch);
+    };
+    const auto is = [](const glm::dvec3& v, double r, double g, double b) {
+        return std::fabs(v.r - r) < 1e-12 && std::fabs(v.g - g) < 1e-12 && std::fabs(v.b - b) < 1e-12;
+    };
+
+    CHECK_MSG(run.level.darkest, "level25c sets darkest");
+    CHECK_MSG(is(look.ambient, 0.5, 0.5, 0.5), "and its file says 0.5, which is not what it is drawn with");
+    CHECK_MSG(is(ambientNow(), 0.01, 0.01, 0.01), "unlit: DARKEST_AMBIENT_LIGHT");
+
+    PutShotAt(run, run.level.torch.lights[0].atPx);
+    Tick(run);
+    CHECK_MSG(run.level.torch.lights[0].lit, "the torch is lit");
+    CHECK_MSG(is(ambientNow(), 0.1, 0.1, 0.25), "lit: (0.1, 0.1, 0.25)");
+    for (int tick = 0; tick < 100; ++tick) Tick(run);
+    CHECK_MSG(is(ambientNow(), 0.1, 0.1, 0.25), "and it stays lit after the wall has gone");
+
+    PutShotAt(run, run.level.torch.signal.atPx);
+    Tick(run);
+    CHECK_MSG(!run.level.torch.lights[0].lit && run.level.torch.putOut == 1, "the signal put it out");
+    CHECK_MSG(run.level.torch.lit == 1, "while the count of torches ever lit stays at one");
+    CHECK_MSG(is(ambientNow(), 0.01, 0.01, 0.01), "out: 0.01 again");
+}
+
 // A fireball works a switch as readily as a portal shot: hasProjectileAround is
 // called with includeFireballs set, which is the third place the fire diamond's
 // machinery turns out to matter.
@@ -261,6 +306,7 @@ void runTests() {
     theWallStandsForASecondAndAHalf();
     shootingTheSignalPutsTheWallBack();
     aFireballWorksASwitchToo();
+    theAmbientFollowsTheTorch();
     everyTorchLevelFindsThem();
 }
 

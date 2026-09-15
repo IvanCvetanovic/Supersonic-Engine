@@ -11,7 +11,10 @@
 //  - levels come in chapters.json's order: the exit loads the next, R retries,
 //    N skips one the port refuses, and a world's end is the chapter's end;
 //  - 1-9 (level8) can be played from the spawn to the exit with taps and
-//    walking alone, tapping only what the screen shows.
+//    walking alone, tapping only what the screen shows;
+//  - every sprite of a level is drawn at its colour times min(1, ambient +
+//    emissive): 1-1's arches at its ambient, a dark level's scenery at 0.01, and
+//    a level's lightmaps are handed back when it goes (step 45).
 //
 // No window and no Vulkan. The app steps physics once before each layer tick at
 // 60 Hz, so this suite does the same.
@@ -836,6 +839,9 @@ void WithoutTheArtTheLevelIsBoxes() {
     layer.OnAttach(registry);
     CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
     CHECK_MSG(!layer.ArtError().empty(), "the missing art is reported");
+    CHECK_MSG(!layer.LightingError().empty(), "and so is the lighting, which names the same missing files");
+    CHECK_MSG(layer.AmbientNow() == glm::dvec3(1.0) && layer.HeldLightmaps().empty(),
+              "so nothing is dimmed and no lightmap is held");
     CHECK_EQ(Tagged(registry, "Magic Portals Sprite"), 0);
     const int bodies = Tagged(registry, "Magic Portals Body");
     CHECK_MSG(bodies > 0 && Shown(registry, "Magic Portals Body") == bodies, "and every body is a box");
@@ -2436,6 +2442,214 @@ void TheSceneHoldsDisplayValues() {
     layer.OnDetach(registry);
 }
 
+// ---- the ambient light (step 45) ---------------------------------------------------
+//
+// The original draws every sprite at its colour times min(1, ambient + emissive)
+// (the lighting design's G3): the ambient its level file gives, or darkest's in a
+// level that sets it; the emissive its node or its .ent gives.
+
+// The albedo of every entity wearing `tag` whose image is `file`.
+std::vector<glm::vec4> ColoursOf(entt::registry& registry, const char* tag, const std::string& file) {
+    std::vector<glm::vec4> out;
+    for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        (void)entity;
+        if (t.tag == tag && EndsWith(material.albedoTexturePath, file)) out.push_back(material.albedoColor);
+    }
+    return out;
+}
+
+bool AllAre(const std::vector<glm::vec4>& colours, float r, float g, float b, float a = 1.0f) {
+    if (colours.empty()) return false;
+    return std::all_of(colours.begin(), colours.end(), [=](const glm::vec4& c) {
+        return std::fabs(c.r - r) < 1e-5f && std::fabs(c.g - g) < 1e-5f && std::fabs(c.b - b) < 1e-5f &&
+               std::fabs(c.a - a) < 1e-5f;
+    });
+}
+
+std::string Show(const std::vector<glm::vec4>& colours) {
+    std::string out;
+    for (const glm::vec4& c : colours) {
+        out += "(" + std::to_string(c.r) + ", " + std::to_string(c.g) + ", " + std::to_string(c.b) + ", " +
+               std::to_string(c.a) + ") ";
+    }
+    return out.empty() ? "none" : out;
+}
+
+void EverySpriteIsDrawnAtItsAmbient() {
+    // 1-1 (level0), at its file's ambient (0.35, 0.3, 0.35).
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    CHECK_MSG(layer.LightingError().empty(), layer.LightingError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
+    CHECK_MSG(layer.AmbientNow() == glm::dvec3(0.35, 0.3, 0.35), "level0's own ambient");
+
+    const std::vector<glm::vec4> arches = ColoursOf(registry, "Magic Portals Sprite", "arch_with_base_blur.png");
+    CHECK_EQ(arches.size(), std::size_t{2});
+    CHECK_MSG(AllAre(arches, 0.35f, 0.30f, 0.35f), "the arches, emissive 0, at the ambient: " + Show(arches));
+    const std::vector<glm::vec4> platforms =
+        ColoursOf(registry, "Magic Portals Sprite", "STONE03A4x10_contrast.png");
+    CHECK_EQ(platforms.size(), std::size_t{3});
+    CHECK_MSG(AllAre(platforms, 1.0f, 1.0f, 1.0f), "the platforms, emissive 1, whole: " + Show(platforms));
+    const std::vector<glm::vec4> torch = ColoursOf(registry, "Magic Portals Sprite", "torch_small.png");
+    CHECK_MSG(AllAre(torch, 0.35f, 0.30f, 0.35f), "the torch's own sprite is emissive 0 too: " + Show(torch));
+    const std::vector<glm::vec4> door = ColoursOf(registry, "Magic Portals Sprite", "window01.png");
+    CHECK_MSG(AllAre(door, 1.0f, 1.0f, 1.0f), "the door, emissive 0.7: min(1, 0.35 + 0.7) is 1: " + Show(door));
+    // Added sprites are dimmed like mixed ones; the static portals are emissive 1.
+    const std::vector<glm::vec4> halos = ColoursOf(registry, "Magic Portals Sprite", "portal_halo.png");
+    CHECK_EQ(halos.size(), std::size_t{4});
+    CHECK_MSG(AllAre(halos, 1.0f, 1.0f, 1.0f), "the static portals' halos: " + Show(halos));
+    // The boxes are placeholders the PBR path draws, never dimmed: a static
+    // body's stays the layer's grey (0.42, 0.44, 0.50).
+    int greyBoxes = 0;
+    for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        (void)entity;
+        if (t.tag == "Magic Portals Body" && material.albedoColor == glm::vec4(0.42f, 0.44f, 0.50f, 1.0f)) ++greyBoxes;
+    }
+    CHECK_MSG(greyBoxes > 0, "the static bodies' boxes keep their own grey");
+    if (OriginalArtIsThere("EverySpriteIsDrawnAtItsAmbient")) {
+        const std::vector<glm::vec4> mage =
+            ColoursOf(registry, "Magic Portals Player Sprite", "magic_portals_hd.png");
+        CHECK_MSG(AllAre(mage, 1.0f, 1.0f, 1.0f), "the player, dark_mage.ent's emissive 1, whole: " + Show(mage));
+    }
+
+    // Its lightmaps, held until it goes: level0's nine, in its own directory.
+    const std::vector<std::string> held = layer.HeldLightmaps();
+    CHECK_EQ(held.size(), std::size_t{9});
+    CHECK_MSG(std::all_of(held.begin(), held.end(),
+                          [](const std::string& p) { return p.find("/assets/lightmaps/level0/add") != std::string::npos; }),
+              "each in level0's own directory");
+    CHECK_MSG(std::any_of(held.begin(), held.end(), [](const std::string& p) { return EndsWith(p, "/add696.png"); }),
+              "the torch's wall among them");
+    CHECK_MSG(std::is_sorted(held.begin(), held.end()), "in a fixed order");
+    CHECK_EQ(layer.LightmapsHandedBack(), std::size_t{0});
+
+    // A retry draws the same level again, so it keeps them, and colours again.
+    press(layer, registry, MagicPortalsLayer::kRetry);
+    CHECK_MSG(layer.HeldLightmaps() == held, "a retry holds the lightmaps it draws again");
+    CHECK_MSG(layer.LightmapsHandedBack() == 0, "and handed none back to do it");
+    CHECK_MSG(AllAre(ColoursOf(registry, "Magic Portals Sprite", "arch_with_base_blur.png"), 0.35f, 0.30f, 0.35f),
+              "and the rebuilt arches are dimmed again");
+
+    // The next level gives them back and holds its own.
+    press(layer, registry, MagicPortalsLayer::kSkip);
+    CHECK(IsAt(layer, "level1"));
+    const std::vector<std::string>& next = layer.HeldLightmaps();
+    CHECK_EQ(next.size(), std::size_t{9});
+    CHECK_MSG(!next.empty() && std::all_of(next.begin(), next.end(), [](const std::string& p) {
+                  return p.find("/assets/lightmaps/level1/add") != std::string::npos;
+              }),
+              "level1's, and none of level0's");
+    CHECK_MSG(layer.LightmapsHandedBack() == 9, "level0's nine handed back on the way");
+
+    // Out to the grid: no level, nothing held, nothing dimmed.
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Levels);
+    CHECK_MSG(layer.HeldLightmaps().empty(), "the menu holds no lightmap");
+    CHECK_MSG(layer.LightmapsHandedBack() == 18, "and level1's went back too");
+    CHECK_MSG(layer.AmbientNow() == glm::dvec3(1.0), "and colours nothing");
+    layer.OnDetach(registry);
+}
+
+void AShotIsDimmedAndADarkLevelIsDark() {
+    // Only the shot needs the original's extracted assets (projectile.png is an
+    // Art.hpp image); the dark level's scenery is the converter's art beside the
+    // levels, so its pins run wherever the levels do.
+    if (OriginalArtIsThere("AShotIsDimmedAndADarkLevelIsDark (the shot)")) {
+        // The shot is projectile.ent's, emissive (0.6, 0.6, 1): under level1's
+        // (0.35, 0.3, 0.35), min(1, A + E) is (0.95, 0.9, 1).
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level1");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.LightingError().empty(), layer.LoadError() + layer.LightingError());
+        if (layer.SimLevel() != nullptr) {
+            waitForFirstTap(layer, registry);
+            tap(layer, registry, screenOf(registry, playerPx(registry, layer) + glm::dvec2(0.0, -48.0)));
+            CHECK_MSG(layer.SimLevel()->portals.flight.has_value(), "the tap fired: " + lastFailure(layer));
+            const std::vector<glm::vec4> shot = ColoursOf(registry, "Magic Portals Shot Sprite", "projectile.png");
+            CHECK_MSG(AllAre(shot, 0.95f, 0.90f, 1.0f), "the shot, dimmed on the channels it is not emissive on: " +
+                                                            Show(shot));
+        }
+        layer.OnDetach(registry);
+    }
+
+    // 4-22 (level21c) sets `darkest`: drawn at 0.01, whatever its file's 0.5.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level21c");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.LightingError().empty(), layer.LoadError() + layer.LightingError());
+    if (layer.SimLevel() == nullptr) return;
+    CHECK_MSG(layer.AmbientNow() == glm::dvec3(0.01, 0.01, 0.01), "darkest's ambient, not the file's 0.5");
+    for (const char* scenery : {"pilar.png", "wall_w3.png", "STONE03A4x10_contrast.png", "bar3_contrast.png"}) {
+        const std::vector<glm::vec4> colours = ColoursOf(registry, "Magic Portals Sprite", scenery);
+        CHECK_MSG(AllAre(colours, 0.01f, 0.01f, 0.01f), std::string(scenery) + ", emissive 0: " + Show(colours));
+    }
+    const std::vector<glm::vec4> crystals = ColoursOf(registry, "Magic Portals Sprite", "crystal.png");
+    CHECK_EQ(crystals.size(), std::size_t{3});
+    CHECK_MSG(AllAre(crystals, 1.0f, 1.0f, 1.0f), "the crystals, emissive 1, bright: " + Show(crystals));
+    const std::vector<glm::vec4> lift = ColoursOf(registry, "Magic Portals Sprite", "metal_door.png");
+    CHECK_MSG(AllAre(lift, 1.0f, 1.0f, 1.0f), "and the lift's door: " + Show(lift));
+    CHECK_MSG(layer.HeldLightmaps().empty(), "darkest levels ship no lightmap");
+    layer.OnDetach(registry);
+}
+
+void ATimedCrystalFadesInItsAlphaAlone() {
+    // A timed crystal's fade used to be written straight into its albedo. Since
+    // step 45 it is a factor on C's alpha that syncLighting multiplies with the
+    // ambient term, so this pins that the fade still arrives, and only in alpha.
+    // 1-15 (level14): crystal_861 goes at 12 s, and like its four untimed
+    // neighbours it is emissive 1 under the file's (0.25, 0.25, 0.4), so every
+    // crystal's colour stays whole.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level14");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
+              layer.LoadError() + layer.ArtError() + layer.LightingError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
+    // Found again after every tick: a death would reload the level under it.
+    auto timed = [&layer]() -> const MagicPortals::Goals::Crystal* {
+        return layer.SimLevel() != nullptr ? layer.SimLevel()->goals.FindCrystal("crystal_861") : nullptr;
+    };
+    CHECK_MSG(timed() != nullptr && timed()->timed && timed()->lifeS == 12.0, "level14's crystal_861, 12 s");
+    if (timed() == nullptr || !timed()->timed) return;
+
+    const std::vector<glm::vec4> before = ColoursOf(registry, "Magic Portals Sprite", "crystal.png");
+    CHECK_EQ(before.size(), std::size_t{5});
+    CHECK_MSG(AllAre(before, 1.0f, 1.0f, 1.0f, 1.0f), "with more than 2 s left, every crystal whole: " + Show(before));
+
+    // Into its last 2 s, on to a tick whose fade is well below one.
+    float fade = 1.0f;
+    for (int tick = 0; tick < 12 * 60; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        const MagicPortals::Goals::Crystal* crystal = timed();
+        if (crystal == nullptr || crystal->expired || crystal->collected) break;
+        if (crystal->leftS >= 2.0) continue;
+        // syncSprites' own arithmetic, on the leftS this tick drew with.
+        fade = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal->leftS * 12.0)));
+        if (fade < 0.8f) break;
+    }
+    const MagicPortals::Goals::Crystal* crystal = timed();
+    CHECK_MSG(crystal != nullptr && !crystal->expired && !crystal->collected && crystal->leftS < 2.0 && fade < 0.8f,
+              "reached a fading tick of crystal_861, fade " + std::to_string(fade));
+    if (crystal == nullptr || fade >= 0.8f) return;
+
+    const std::vector<glm::vec4> after = ColoursOf(registry, "Magic Portals Sprite", "crystal.png");
+    CHECK_EQ(after.size(), std::size_t{5});
+    const auto fading = std::count_if(after.begin(), after.end(), [fade](const glm::vec4& c) {
+        return AllAre({c}, 1.0f, 1.0f, 1.0f, fade);
+    });
+    const auto whole =
+        std::count_if(after.begin(), after.end(), [](const glm::vec4& c) { return AllAre({c}, 1.0f, 1.0f, 1.0f); });
+    CHECK_MSG(fading == 1, "one crystal at (1, 1, 1, fade " + std::to_string(fade) + "): " + Show(after));
+    CHECK_MSG(whole == 4, "and the four untimed ones whole: " + Show(after));
+    layer.OnDetach(registry);
+}
+
 void NothingBlinksWhileWalking() {
     NoSpriteBlinksWhileWalking("level1"); // 1-2, where the owner saw one go
     NoSpriteBlinksWhileWalking("level2"); // 1-3, where several do
@@ -2486,6 +2700,9 @@ void runTests() {
     TheTutorialRingsAndAWeightlessLevelHasNoPads();
     TheNoPortalSignIsPinnedToTheCorner();
     TheSceneHoldsDisplayValues();
+    EverySpriteIsDrawnAtItsAmbient();
+    AShotIsDimmedAndADarkLevelIsDark();
+    ATimedCrystalFadesInItsAlphaAlone();
 }
 
 } // namespace

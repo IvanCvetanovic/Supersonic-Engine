@@ -11,11 +11,14 @@
 // What it stands in for. The lighting design gives every lightmapped sprite a
 // descriptor set of its own - 730 lightmaps across the game, against a pool
 // that used to hold 512 sets and never took one back - and has the layer drop a
-// level's lightmaps when the level unloads (its G3). Neither exists yet. So for
-// each level visited this acquires the level's lightmaps as data textures and
-// one material set per lightmap, which is the pool pressure the fourth binding
-// will put on it, and invalidates those paths when it moves on, which is what
-// G3's unload will do. The sets are never bound: nothing it does is drawn.
+// level's lightmaps when the level unloads (its G3). The layer does that since
+// step 45 (MagicPortalsLayer::HeldLightmaps); the fourth binding does not exist
+// yet (E2), so nothing acquires a lightmap for the layer to drop. So for each
+// level visited this acquires the level's lightmaps as data textures and one
+// material set per lightmap, which is the pool pressure the fourth binding will
+// put on it, and invalidates those paths when it moves on, as the layer's unload
+// does - before the layer's own, which then finds them gone. The sets are never
+// bound: nothing it does is drawn.
 //
 // The checks:
 //  - on release, the level's sets leave the cache at once and stay counted in

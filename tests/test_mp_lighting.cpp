@@ -15,6 +15,11 @@
 // 14 September 2026, which an independent parser of the emitted files agreed
 // with: 730 lightmaps, 72 lights (68 on static owners), 71 halos, 1,720 normal
 // maps, 2,140 non-zero emissives, 1,533 non-zero depths.
+//
+// And, since step 45 (the design's G3), what the original's script sets over a
+// level file: the port's lighting.json, the ambient light a level is drawn with
+// as its torch is lit and put out, and the factor every sprite is multiplied by.
+// Those run anywhere too, on the port's own data and states this suite builds.
 
 #include "TestHarness.hpp"
 
@@ -171,6 +176,67 @@ std::string Replace(const std::string& text, const std::string& from, const std:
     std::string out = text;
     out.replace(at, from.size(), to);
     return out;
+}
+
+// ---- what the script sets: lighting.json and the ambient now ---------------------
+
+void TheScriptsAmbientIsReadAndFollowsTheTorch() {
+    Lighting::Rules rules;
+    std::string error;
+    const bool ok = Lighting::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/lighting.json", rules, error);
+    CHECK_MSG(ok, error);
+    CHECK_MSG(Is(rules.darkestAmbient, 0.01, 0.01, 0.01), "DARKEST_AMBIENT_LIGHT, Game.angelscript 306783..306841");
+    CHECK_MSG(Is(rules.torchLitAmbient, 0.1, 0.1, 0.25), "what ETHCallback_light_off's delete branch sets");
+
+    const glm::dvec3 file(0.35, 0.3, 0.35);
+    Torch::State none;
+    CHECK_MSG(Lighting::Ambient(rules, file, false, none) == file, "a level that sets nothing: its file's ambient");
+    CHECK_MSG(Lighting::Ambient(rules, file, true, none) == rules.darkestAmbient,
+              "`darkest` REPLACES the file's ambient rather than dimming it");
+
+    Torch::State torch;
+    torch.lights.push_back(Torch::Light{});
+    CHECK_MSG(Lighting::Ambient(rules, file, true, torch) == rules.darkestAmbient, "an unlit torch changes nothing");
+    torch.lights[0].lit = true;
+    torch.lit = 1;
+    CHECK_MSG(Lighting::Ambient(rules, file, true, torch) == rules.torchLitAmbient, "lit, the torch's ambient");
+    CHECK_MSG(Lighting::Ambient(rules, file, false, torch) == rules.torchLitAmbient, "on any level");
+    // Put back out. The cumulative counter stays at 1, and must not be what is read.
+    torch.lights[0].lit = false;
+    torch.putOut = 1;
+    CHECK_EQ(torch.lit, 1);
+    CHECK_MSG(Lighting::Ambient(rules, file, true, torch) == rules.darkestAmbient,
+              "put out: darkest again, though the torch has been lit once");
+    CHECK_MSG(Lighting::Ambient(rules, file, false, torch) == rules.darkestAmbient,
+              "and ETHCallback_fire_signal sets darkest on any level, not the file's back");
+    torch.lights[0].lit = true;
+    torch.lit = 2;
+    CHECK_MSG(Lighting::Ambient(rules, file, true, torch) == rules.torchLitAmbient, "and lit again, lit again");
+
+    // min(1, ambient + emissive), per channel.
+    CHECK(Is(Lighting::AmbientTerm(glm::dvec3(0.35, 0.3, 0.35), glm::dvec3(0.0)), 0.35, 0.3, 0.35));
+    CHECK(Is(Lighting::AmbientTerm(glm::dvec3(0.35, 0.3, 0.35), glm::dvec3(1.0)), 1.0, 1.0, 1.0));
+    CHECK_MSG(Is(Lighting::AmbientTerm(glm::dvec3(0.25, 0.5, 0.5), glm::dvec3(0.5, 0.25, 0.75)), 0.75, 0.75, 1.0),
+              "each channel on its own, and clipped at 1");
+
+    // Refused: anything but three numbers from 0 to 1, and either light missing.
+    const std::filesystem::path path = Scratch() / "lighting.json";
+    const auto refused = [&](const std::string& text, const std::string& says) {
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Lighting::Rules read;
+        std::string why;
+        const bool loaded = Lighting::LoadRules(path.string(), read, why);
+        CHECK_MSG(!loaded, "refused: " + text);
+        CHECK_MSG(why.find(says) != std::string::npos, why);
+    };
+    const std::string lit = R"("torch_lit_ambient": {"value": [0.1, 0.1, 0.25]})";
+    refused("{" + lit + "}", "darkest_ambient");
+    refused(R"({"darkest_ambient": {"value": [0.01, 0.01]}, )" + lit + "}", "darkest_ambient");
+    refused(R"({"darkest_ambient": {"value": [0.01, 0.01, 1.5]}, )" + lit + "}", "from 0 to 1");
+    refused(R"({"darkest_ambient": {"value": [0.01, -0.01, 0.01]}, )" + lit + "}", "from 0 to 1");
+    refused(R"({"darkest_ambient": {"value": [0.01, "0.01", 0.01]}, )" + lit + "}", "darkest_ambient");
+    refused(R"({"darkest_ambient": [0.01, 0.01, 0.01], )" + lit + "}", "darkest_ambient");
+    refused(R"({"darkest_ambient": {"value": [0.01, 0.01, 0.01]}})", "torch_lit_ambient");
 }
 
 // ---- the reader, on a scene this suite writes ------------------------------------
@@ -603,6 +669,7 @@ void LevelsCarryWhatTheConverterReported() {
 } // namespace
 
 int main() {
+    TheScriptsAmbientIsReadAndFollowsTheTorch();
     EveryKeyIsReadAndEveryAbsenceIsTheDefault();
     AnythingElseIsRefusedNamingTheLine();
 

@@ -44,7 +44,14 @@
 // of the scene's text, in the way Sprites::Find is not: it checks that each path
 // names a file, and reads the headers of the lightmaps and of the sprites
 // (through Sprites::Find) to compare their sizes.
+//
+// And what the original's SCRIPT sets over the level file: the port's
+// lighting.json, and the ambient light a level is drawn with at any moment
+// (Rules, Ambient). Drawn since step 45 as the design's G3: the layer multiplies
+// every sprite's colour by AmbientTerm(Ambient(...), emissive). The lightmaps, the
+// lights and the halos are still drawn by nothing.
 
+#include "sim/Torch.hpp"
 #include "sim/Tscn.hpp"
 
 #include <optional>
@@ -94,5 +101,41 @@ struct Scene {
 // Sprites::Find. False, with `error` reading "line N: <node>: why", for anything
 // the reader refuses; `out` is then empty.
 bool Read(const Tscn::Scene& scene, const std::string& resRoot, Scene& out, std::string& error);
+
+// The port's lighting.json: the two ambient lights the original's script sets
+// in place of a level file's own.
+struct Rules {
+    glm::dvec3 darkestAmbient{0.0};  // DARKEST_AMBIENT_LIGHT, for a level that sets `darkest`
+    glm::dvec3 torchLitAmbient{0.0}; // what a lit torch sets
+};
+
+// False, with `error`, unless both are three finite numbers from 0 to 1. The
+// original's are well inside that, and an ambient above 1 is clipped by
+// AmbientTerm anyway, so a value outside it is a typing mistake, not a light.
+bool LoadRules(const std::string& path, Rules& out, std::string& error);
+
+// The ambient light the original draws a level with now, from its events in
+// their order:
+//   - it starts at the level file's <Ambient> (Scene::ambient), or at
+//     darkestAmbient when the level sets `darkest`, which REPLACES the file's
+//     (Game's level-properties reader: SetAmbientLight(DARKEST_AMBIENT_LIGHT));
+//   - a torch lit sets torchLitAmbient (ETHCallback_light_off's `delete` branch);
+//   - a torch put back out sets darkestAmbient (ETHCallback_fire_signal), on any
+//     level.
+// So the last event decides. A torch is lit now when any of the level's lights
+// is (Torch::State::Light::lit), NOT when the cumulative `lit` counter is above
+// zero: that one never comes down. Every level places at most one torch
+// (torch.json's census), so "any lit now, else put out before, else the start"
+// is exactly the last event.
+//
+// One frame early against the original, which sets the lit ambient on the frame
+// AFTER the shot; the port has it from the tick the torch is shot.
+glm::dvec3 Ambient(const Rules& rules, const glm::dvec3& fileAmbient, bool darkest, const Torch::State& torch);
+
+// What a sprite's colour is multiplied by before anything is added:
+// min(1, ambient + emissive), per channel (ETHRenderEntity.cpp:113-117), for
+// every sprite whether or not it applies light, and whatever its blend. The
+// remake's fit holds it to 0.28 of 255 over 1,359 unlit blocks (fit.md 4).
+glm::dvec3 AmbientTerm(const glm::dvec3& ambient, const glm::dvec3& emissive);
 
 } // namespace MagicPortals::Lighting

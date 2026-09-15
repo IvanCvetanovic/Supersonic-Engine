@@ -4,6 +4,7 @@
 #include "core/Json.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <fstream>
 #include <sstream>
 
@@ -38,6 +39,17 @@ bool Pair(const Json::Value& value, glm::dvec2& out) {
     return true;
 }
 
+// Three numbers, none below zero: an .ent's <EmissiveColor> r, g and b.
+bool Emissive(const Json::Value& value, glm::dvec3& out) {
+    if (!value.IsArray() || value.AsArray().size() != 3) return false;
+    for (std::size_t i = 0; i < 3; ++i) {
+        const Json::Value& channel = value.AsArray()[i];
+        if (!channel.IsNumber() || !(channel.AsNumber() >= 0.0)) return false;
+        out[static_cast<glm::length_t>(i)] = channel.AsNumber();
+    }
+    return true;
+}
+
 // `plays` false for a sheet whose frames are chosen rather than played, which
 // then need not say how fast.
 bool ReadPicture(const Json::Value& entry, const std::string& name, Picture& out, std::string& error,
@@ -50,6 +62,12 @@ bool ReadPicture(const Json::Value& entry, const std::string& name, Picture& out
     Picture read;
     read.sprite = entry["sprite"].AsString("");
     read.additive = entry["additive"].AsBool();
+    // Required: a picture without one would be drawn at the ambient alone, which
+    // for the player on a dark level is black - a default nobody decoded.
+    if (!Emissive(entry["emissive"], read.emissive)) {
+        error = name + "'s emissive is not three numbers, none below zero";
+        return false;
+    }
     if ((entry.Has("columns") && !WholeAtLeastOne(entry["columns"], read.columns)) ||
         (entry.Has("rows") && !WholeAtLeastOne(entry["rows"], read.rows))) {
         error = name + "'s columns and rows are whole numbers from 1";
