@@ -6158,3 +6158,319 @@ compared frame, and the two columns are not the same block set.
 - **Neither repository was committed to.** The remake's working tree is clean: everything it
   gained is under the gitignored `out/parity/specs/lighting/work/g3/`, plus
   `tmp/fit/L4-22_blocks.json` with its mask and overlay.
+
+## Step 46 - a fourth map in every material, a sprite's record in the fields the unlit path never read, and a third blend (built)
+
+The lighting design's step E2 (the remake's `out/parity/specs/lighting/design_port.md`,
+section 7.1: sections 4.2, 4.3, 4.5 and the base of 4.6). **Three engine capabilities, all
+off by default**, that G4 will switch on for the lightmaps:
+- an **additive overlay map**, the fourth binding of every material set, 1x1 black when a
+  material names none;
+- a **2D sprite path** in `shader.frag`, `clamp(texel * tint * ambient + overlay * strength,
+  0, 1)`, whose numbers ride in the per-draw fields the unlit path never read, so the record
+  stays 128 bytes;
+- a **premultiplied blend**, a third blended pipeline beside mix and add.
+
+**Nothing turns them on, and nothing drew differently.** Wolf Brigade, MainScene and every
+port frame the gate takes are byte-identical before and after; so are all 128 levels at frame
+420. What the new path draws was proved on a scene built for it, below. The game gains no
+lighting; its only change is `LevelVisit.cpp` passing the fourth map the engine now asks for.
+
+**THE OVERLAY (engine: `Components.hpp`, `VulkanPipeline`, `TextureRegistry`,
+`MaterialSetLedger.hpp`, `RenderSystem`).**
+- `MaterialComponent::overlayTexturePath`, and `RenderableComponent::overlayTextureID`,
+  resolved in `SyncResources` beside the other three.
+  - **Colour, decoded exactly when the albedo is** (`srgb = decodesColourTextures()`): a
+    baked light is authored in its picture's space. In the port's `DisplayEncoded` scene it
+    is the byte in the file, added to the encoded value, which is what the design's decisions
+    1 and 3 take from the fit (`fit.md` sections 0 and 4).
+  - An unnamed or unreadable overlay is **black**. A checkerboard added over a sprite would
+    be a worse way to say a file is missing than the sprite unlit.
+  - The path is mixed into `ResourceSignature`; its colour space is already there (step 43).
+- `VulkanPipeline::kMaterialBindingCount` 3 -> 4, and `kOverlayBinding` = 3. The layout loop,
+  the pool size, the cache key and the per-binding writes all follow the constant, as
+  `TextureRegistry.cpp` said they would; the comment there now says it happened.
+- **`TextureRegistry::GetBlackTexture`**, a 1x1 (0, 0, 0, 255) **data** texture.
+  - Uploaded **after** the checkerboard, so ids 0, 1 and 2, which `RenderableComponent`'s
+    literals name, did not move. Its own literal is 4.
+  - **Protected from `Invalidate` and `ReplaceRGBA`** like every built-in. The port makes that
+    urgent: a lightmap that fails to load caches black under its own path, and G3's unload
+    invalidates that path every time the level goes.
+  - `fallbackSet()`'s key names it. A brace-initialised array of four given three ids
+    zero-fills the fourth, and id 0 is the white albedo: an overlay of white.
+- **`AcquireMaterialSet(albedo, normal, orm, overlay)`**, not defaulted.
+  - Each slot falls back to its **own** neutral, now in one pure function,
+    `MaterialSets::ResolveKey`: checkerboard, flat normal, neutral ORM, black.
+- **Who binds what for the fourth slot:**
+  - the opaque and blended passes and the entity shadow caster: the entity's overlay;
+  - **a mesh section**, and a section's shadow caster: **black**. A file's surface names
+    no overlay (`MeshMaterial` has none), and the entity's maps are not what a
+    multi-surface mesh draws with. The design is silent here;
+  - the particles and the screen overlay: black.
+- **Not on `MaterialAsset`** (`MaterialLibrary`, `MaterialSystem` untouched): an overlay is
+  one surface's own bake, and a shared asset carrying one would paint it on every user,
+  the argument `uvScale`'s comment already makes.
+- **Beyond the design's list, and why.**
+  - `AssetRepointer` repoints the overlay with the other maps; a scene saves it with a Guid.
+  - **The asset watcher does not watch it, deliberately**, with the reason at the watch
+    site. A 2D game names hundreds (730 lightmaps here), `Watch` never forgets a path,
+    and every watched path is a stat on every frame. One pass of Python `os.stat` over the
+    730 files in `out/assets/lightmaps` took **6.63, 5.43 and 4.55 ms** (warm, three runs):
+    a third of a 60 Hz frame. So an edited overlay file is read again only when its path is
+    invalidated, as a level unload does. Not measured with the engine's own
+    `fs::last_write_time`.
+  - `InspectorPanel`: an "Overlay Map" path field, and the blend combo gains its third
+    word. Its two-entry table would have shown a premultiplied material as Alpha, and one
+    click would have rewritten it.
+
+**THE 2D RECORD (engine: `RenderSystem::ApplySprite2D`, `PushConstantData`, `Components.hpp`).**
+`MaterialComponent::Sprite2DLight`, as design section 4.2 wrote it: `enabled`, `ambient`,
+`height`, `lightMask`, `normalYDown`, `overlayStrength`. Meaningful only with `unlit`.
+`ApplySprite2D` writes it over the fields the unlit path never read:
+
+| Field | PBR / plain unlit | with `kSprite2D` |
+|---|---|---|
+| `albedoColor.rgb` | tint | tint x ambient |
+| `albedoColor.a` | alpha factor | alpha factor |
+| `material` | roughness, metallic, ao, cutoff | overlay strength, 0, 0, cutoff |
+| `emissive` | emission, occlusion strength | tint without the ambient, lighting height |
+| `flags` bits 1, 2, 3 | free | `kSprite2D`, `kNormalYDown`, `kPremultiplied` |
+| `flags` bits 20..27 | free | light mask (`PackLightMask`, beside `PackUvSlot`) |
+
+- **A static function the draw loop calls last**, after the material branch and after the
+  surface-override branch, both of which write `albedoColor`, `material` and `emissive`.
+  The design wrote it inline in `buildPushConstants`; out here a suite can read it.
+- **Every `static_assert` on the record is unchanged**: 128 bytes, the same offsets.
+- The mask sits above the UV slot's twelve bits and four bits short of the sign bit.
+- **The height, the tint without ambient, the normal switch and the mask are carried and
+  read by nothing.** They are for the light term (E3). `shader.frag` declares
+  `FLAG_NORMAL_Y_DOWN` and `LIGHT_MASK_SHIFT` so the suite can hold them to the C++ now.
+- **Outside the state hash.** `StateHash` reads no `MaterialComponent` (checked), so nothing
+  here can move a replay.
+- `MaterialComponent::unlit`'s comment promised a value above 1 reaches the bright pass. The
+  2D path clamps, as a fixed-point target clamps one draw. The comment now says so.
+
+**THE PREMULTIPLIED BLEND (engine: `VulkanPipeline`, `VulkanRenderer`, `RenderSystem`).**
+- `MaterialComponent::BlendMode` gains `Premultiplied`.
+- `VulkanPipelineOptions::additive` becomes `BlendEquation { Mix, Add, Premultiplied }`.
+  `ColorBlendFor(Premultiplied)` is `One, OneMinusSrcAlpha` for colour and alpha; Mix and
+  Add keep their factors, which the suites check.
+- `VulkanRenderer` builds `m_premultipliedPipeline` beside the additive one, and
+  `RenderSystem::Render` takes it.
+- `TransparentDraw::additive` and `BlendRun::additive` become `BlendEquation blend`.
+  `RenderSystem::EquationFor` is the one table from a material's blend to a pipeline's.
+  Runs are still cut from the sorted list, now wherever the equation changes.
+- A transparent `Premultiplied` material sets `kPremultiplied` on any path. Every exit of
+  `shader.frag` then multiplies its colour by its alpha: the 2D path, the plain unlit exit
+  and the PBR exit. An opaque material's blend is ignored, as the gather ignores it.
+
+**THE SHADER (`shader.frag`, regenerated `frag.spv`).**
+- Set 1 binding 3, `overlayMap`; the three switches and the mask shift.
+- **`shadeSprite2D`**: the texel masked to 0 where its alpha is 0, times the vertex colour;
+  `base = clamp(texel * albedoColor.rgb + overlay * material.x, 0, 1)`; premultiplied when
+  asked. **The overlay is sampled through the material's UV transform**, the rule
+  `MaterialComponent`'s comment states for every map. The remake's `data_inventory.md` finds no
+  lightmapped sprite with a sprite cut other than (1, 1), so for the port the two readings are
+  the same pixels.
+- **The light loop is not here, and neither is binding 12.** The design allows it to land
+  with an empty buffer or in E3. Declaring a storage buffer the layout has not got is a
+  layout mismatch, and the buffer, the scene-set binding and the pool count are E3's
+  (section 4.4). Only the base is built.
+- **The plain unlit exit** computes `alpha` once and writes `vec4(albedo, alpha)`: the same
+  two operations, in the same order, as before. The premultiply is under the flag.
+- `frag.spv` was rebuilt by the `Shaders` target with the SDK's glslc (step S0), and a direct
+  `glslc shader.frag` gives the same bytes.
+
+**THE CODEC (`ComponentCodec`).**
+- `"OverlayTexture"`, through `writeAssetRef`, **only when named**, so it gets a Guid.
+- `"Sprite2D": { "Enabled", "Ambient", "Height", "LightMask", "NormalYDown",
+  "OverlayStrength" }`, **only when the block differs from the default**, each field read
+  with its own default. A block saying only `"Enabled": true` reads ambient and strength
+  as 1, not 0.
+- `"Blend"` has three words. Any other word reads as Alpha, as before for any word but
+  `"Additive"`.
+- A material that never used them saves to the bytes it saved before (checked in the suite).
+
+**PROVED ON A SCENE BUILT FOR IT (`work/e2/experiment/`, `check.py`).** No suite can build the
+pipelines, the fourth descriptor write, the black set or the shader, so a scene was written
+that uses each. It was captured by `SupersonicEngine --scene sprite2d.scene --window 1280x720
+--fixed-step --frames 120 --screenshot` (the editor viewport, 744 x 336).
+- The scene: MainScene's camera, `DisplayEncoded`, a black `Color` background, and fourteen
+  unlit quads. The two overlay images are generated 8 x 8 PNGs of one colour, under `out/`.
+- **Exit 0, "Clean exit with validation active", no VUID.** That covers every set naming
+  black, the overlay sets, and a premultiplied run between mixed ones.
+- Each quad is read as the most common colour in a window at its centre. The editor grid draws
+  thin lines over the lower row.
+
+| Quad | Predicted (x 255) | Measured |
+|---|---|---|
+| plain unlit, tint (0.5, 0.25, 0.75) | 127.5 63.75 191.25 | **128 64 191** (750 of 750 px) |
+| 2D, tint 0.5, ambient (0.5, 1, 0.25), **no overlay: the black set** | 63.75 127.5 31.88 | **64 128 32** |
+| 2D, tint 0.5, ambient 0.5, overlay (40, 80, 120) | 103.75 143.75 183.75 | **104 144 184** |
+| the same, overlay strength 0.5 | 83.75 103.75 123.75 | **84 104 124** |
+| 2D, tint 1, ambient 1, overlay 200: **the clamp** | 255 255 255 | **255 255 255** |
+| overlay named, `sprite2D` off: **not sampled** | 127.5 127.5 127.5 | **128 128 128** |
+| **Premultiplied** (1, 0, 0, a 0.5) over an opaque 0.8 | 229.5 102 102 | **229 102 102** (404 of 540) |
+| **Alpha**, the same | 229.5 102 102 | **229 102 102** (422 of 540) |
+| Premultiplied 2D, a 0.5, ambient 0.5, overlay, over 0.8 | 185.75 205.75 225.75 | **186 206 226** |
+| Alpha 2D, the same, over a backing that reads 0.4 | 134.75 154.75 174.75 | **135 155 175** |
+
+- **A premultiplied draw that adds nothing equals the alpha draw** on the same destination,
+  to the byte.
+- **Found, not caused by this step, not investigated.** Some plain unlit opaque quads of tint 0.8
+  in these scenes read **102, half of 204**. It happens with nothing new in the scene.
+  - **Only in the lower row.** Every dark quad is at y = -0.6, across the ground plane the
+    editor grid draws on. The upper row at y = 2.2 read its predicted value in every scene
+    (`p_row_high.scene`: 204); the same row moved down (`p_row_z0.scene`) reads 102.
+  - **But not by position alone.** One quad alone at x = -4 or at x = 2 is dark; of four in
+    a row, the right two are, and the one at x = -4 is not.
+  - **The first candidate is the grid.** ARCHITECTURE.md says `grid.frag`'s pre-linearised
+    colours are not converted by `DisplayEncoded`. A grid alone does not explain the
+    dependence on which quads are present.
+  - **The pre-E2 engine draws the same bytes.** `SupersonicEngine` was built from a
+    `git archive` of `e5cb31d` in the session scratchpad (`work/e2/before_build.bat`).
+    Run from that tree, so it read its own shaders, it captured `v_onlyB.scene` (four
+    such quads) and `p_one_left.scene` (one) **md5-identical** to this step's build: 74f1f35f... and
+    31be1fe6....
+  - **The sprite rows are outside it.** All six Q rows are in the upper row. F1 to F3's
+    backings read 204, as predicted. Only F4's backing is dark, and its row above is read
+    against the 0.4 that backing actually shows.
+  - Whether the editor, the grid or the renderer does it is left open; no Magic Portals
+    frame shows it.
+
+**THE SUITES.**
+- **`test_materials` 235 -> 326** (floor 235 -> 320). Ten cases added, and the ledger cases
+  now take the layout's own key shape. The floor is six below the count because the new shader
+  case returns early when `shader.frag` cannot be opened, skipping its six later checks. Its
+  first check fails in that case, so the suite still fails:
+  - the set has four bindings, the overlay third;
+  - `ResolveKey`: every slot naming nothing gets its own neutral in binding order, an overlay
+    past the end is black and leaves the other three alone, and the last id is a texture while
+    one past it is not;
+  - `TakeNaming` searches the fourth binding: a set naming a dead id only as its overlay is
+    handed back;
+  - `ColorBlendFor(Premultiplied)` is `One, OneMinusSrcAlpha` with alpha alike, and Mix and Add
+    keep theirs;
+  - the four switches, the UV slot and the mask share the flags word, each packing leaving the
+    others and the sign bit alone;
+  - **the shader's copies**: `FLAG_SPRITE2D`, `FLAG_NORMAL_Y_DOWN`, `FLAG_PREMULTIPLIED`,
+    `LIGHT_MASK_SHIFT` and binding 3's `overlayMap`, read out of `shader.frag`;
+  - `ApplySprite2D`:
+    - an unlit material without `sprite2D` leaves every byte of its record (`memcmp`), and so
+      does a lit one that sets it;
+    - an enabled sprite writes tint x ambient, the tint alone with the height, the strength
+      with the cutoff kept, the mask and the normal switch, and keeps the UV slot, the model,
+      the skin and the probe;
+  - `kPremultiplied` only on a transparent premultiplied material, lit or not, and no switch
+    for the other two blends;
+  - the overlay, the 2D block and `"Premultiplied"` round-trip; a plain material writes neither
+    key and reads the defaults; a block with only `Enabled` reads ambient and strength 1;
+  - an unknown blend word loads as Alpha.
+  - **Mutation:** with `FLAG_PREMULTIPLIED = 1 << 4` in `shader.frag`, and no rebuild (the suite
+    reads the source at run time), it failed on exactly that check, 1 of 326
+    (`test_materials.cpp:1374`). The file was restored from a copy, md5 `6ba432a6...` before and
+    after.
+- **`test_draworder` 85 -> 104** (floor 61 -> 80). The blend cases now take the enum. Added:
+  - a premultiplied sprite gathered between two mixed panes sorts between them and is its own
+    run of three;
+  - all three equations in one frame: runs cut at every change and nowhere else, covering every
+    draw once;
+  - `EquationFor`'s table, and that an unset draw and a default material mix;
+  - `ColorBlendFor` without `blendEnable` is off whichever equation it names.
+- **`test_resourcesync` 26 -> 32** (floor 23 -> 29). Gaining an overlay, swapping it, and an
+  unchanged one are three answers. The same file as the ORM map and as the overlay is two. The
+  overlay's colour space moves the signature, and a sprite's light settings, which select no
+  texture, do not.
+- **Unchanged:** `test_renderplan` 127, `test_serialize` 445, `test_sprite` 66,
+  `test_screenoverlay` 46, `test_shadowcache` 82, `test_mp_layer` 418, and all 18 `test_wb_*`
+  pass. `test_assetdatabase` reads 110; `AssetRepointer` changed and its suite did not, and its
+  count before was not taken.
+- **What no suite covers, and why.** No suite can build a `TextureRegistry` or a pipeline: they
+  need a device (steps 20 and 42 say the same). Only a run reaches:
+  - the fourth descriptor write, and the black texture's upload;
+  - `isBuiltIn` refusing to free black;
+  - the premultiplied pipeline's creation;
+  - the shader's arithmetic.
+  The scene above covers the draws; the refusal to free black is not exercised by anything.
+- **Carried, not changed.** `AcquireMaterialSet` throws when a key names a texture whose image
+  `Invalidate` has moved out. That was already true of the other three bindings. The overlay
+  is meant for per-level lightmaps, so it is the slot most likely to meet it. It cannot today:
+  `Invalidate` bumps the generation, so `SyncResources` re-resolves every entity before the
+  next `Render`.
+
+**GATES.** Captures by `work/e2/capture.sh` (a copy of G3's with its folder changed), before on
+this step's starting build and after on its final one.
+- **The before is G3's final**: all 21 before-frames are md5-identical to
+  `work/g3/fix2_final/`.
+- **The after is on the third build, and again on the fourth.** `after/` and the sweep were
+  captured on the third build. Two comment-only edits followed (`Components.hpp`,
+  `tests/CMakeLists.txt`), and the fourth build relinked every executable. All 21 gate frames
+  were captured again on it, into `work/e2/final/`: **21 of 21 md5-identical** to `after/`.
+
+| Gate | Required | Measured |
+|---|---|---|
+| `SupersonicEngine --scene assets/scenes/MainScene.scene --window 1280x720 --fixed-step --frames 120 --screenshot` | byte-identical before/after | `1e24c2a30f6f22dc2bb01b6038bd1af9` before and after (steps 42 to 45's); `Clean exit with validation active` |
+| `WolfBrigade --window 1280x720 --fixed-step --frames 120 --screenshot` | byte-identical before/after | `d9e7b8fe5e8b0b2f162b0195e5d5ba31` before and after (steps 42 to 45's) |
+| port gate levels, `--fixed-step --frames 420` | unchanged (nothing uses the overlay) | identical before and after: 1-01 `f62ca770...`, 1-09 `a34abfab...`, 1-13 `c17b4dc0...`, 2-05 `5345f959...`, 2-26 `b335d981...`, 3-05 `0bf26811...`, 4-22 `8916b072...` |
+| the torch and door frames (level0 f270..390, level0a f300..420) | unchanged | 10 of 10 identical |
+| screen overlay (step 39), nothing behind it: level0 frame 1 | bit-exact | `5c5cfed20f942d06da1f22fb5835c1dd` before and after |
+| the menu, frame 120 | unchanged | `934232ed534adae966587863179378e9` before and after |
+| scene encoding (step 43) under the port's `DisplayEncoded` | bit-exact | every port frame above is `DisplayEncoded` and identical; the HUD drawn over it identical |
+| all 128 levels at frame 420 (not required) | unchanged | **128 / 128 md5-identical** to `work/g3/after/sweep/`; the seven gate levels' sweep frames equal this step's `after/` frames; every run exit 0, validation ACTIVE in all 128 logs, no VUID |
+| validation | silent | the 19 port logs say `Vulkan validation layers: ACTIVE`, MainScene's `Clean exit with validation active` (Wolf Brigade's log prints neither, before or after); no `VUID` or "Validation Error" in any of the 21 logs, in `after/` or in `final/`; every run exit 0 |
+| 2D path, overlay, clamp, premultiplied pipeline (experiment) | as predicted, validation silent | every quad within 0.5 of its prediction; premultiplied = alpha to the byte; exit 0, clean exit with validation |
+| `--visit-levels lightmapped --visit-passes 2` (`LevelVisit.cpp` changed) | step 42's walk still holds | exit 0 in 19.1 s; 134 visits, 1,460 sets, peak **96**; pass 1 22 -> 75, pass 2 **75 at all 67 visits**; 75 / 75 after the last release; 5 waiting at quit; `Subsystem resources destroyed cleanly`; no line containing "error" |
+| build | zero warnings | 0 in every build: the first (it stopped on `test_draworder`'s C2039, the suite not yet moved to the enum), the full one (170 steps), the floor's, the fourth after the comment edits (266 steps), and every relink |
+| ctest | all pass; `test_materials`, `test_resourcesync`, `test_draworder`, `test_renderplan`, `test_serialize`, `test_sprite`, all `test_wb_*` named | **113 / 113**, Not Run 0, on the fourth build; 326, 32, 104, 127, 445, 66; the 18 `test_wb_*` pass |
+
+`lightgate.py` was not run: every port frame is byte-identical to G3's, so every number it would
+print is the one step 45 printed.
+
+**LEFT FOR LATER STEPS AND FOR THE OWNER.**
+- **E3** adds the light term: binding 12, `GatherLights2D`, the loop that reads the height, the
+  tint without ambient, the mask and `kNormalYDown`.
+- **G4** switches the port's G3 fold to `sprite2D.ambient`, names the lightmaps and makes the
+  alpha sprites premultiplied. Design section 10's torch confirmation (G >= 235) must pass there.
+- **Step 42's walk still acquires its own sets.** Run it again at G4, with the layer's
+  acquisition in place of the probe's: the design's full E0 check.
+- **The watcher gap is a choice to confirm.** An overlay is not hot-reloaded, to keep 730 stats
+  a frame out of the port. A platform file-change backend would lift it.
+- **Found, not caused here:** some plain unlit quads in the editor scene draw at half their tint,
+  identically on the pre-E2 build. Uninvestigated; the editor grid is the first candidate.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning in any build.
+  - The first compiled every changed engine file, `LevelVisit.cpp` and the shader (90
+    translation units), and stopped on `test_draworder`, not yet moved to the enum.
+  - The second built the rest: 170 steps, 51 translation units, and the three executables.
+  - The third rebuilt `test_materials` after its floor was raised. It also recompiled
+    `shader.frag`, touched by the mutation's restore, into the same `frag.spv`.
+  - The fourth followed two comment-only edits after the sweep: `RenderableComponent`'s count
+    of the ids `SyncResources` overwrites, and what `tests/CMakeLists.txt` says
+    `test_materials` reads. `Components.hpp` is included everywhere, so it recompiled 140
+    translation units and relinked every executable (266 steps).
+- **ctest.** 113 of 113, Not Run 0, three times: after the second, third and fourth builds.
+  The named suites' counts on the fourth are the ones above.
+- **Smart App Control.** Three rounds of refusals ("Not Run"), each resolved by deleting and
+  relinking the refused executables.
+  - **Second build.** 18 suites were refused: `test_sat`, `test_convexhull`, `test_wb_combat`,
+    `test_wb_audio`, `test_husk_scenarios`, `test_mp_levels`, `test_mp_zerog`,
+    `test_mp_sprites`, `test_mp_sounds`, `test_assetdatabase`, `test_spotlight`,
+    `test_shadowcache`, `test_replay`, `test_physics`, `test_scripts`, `test_hierarchy`,
+    `test_blending` and `test_skeletal`.
+    - All 95 others passed in that run.
+    - On the first relink `test_convexhull`, `test_husk_scenarios`, `test_mp_zerog` and
+      `test_skeletal` were refused again. All four passed on the second.
+  - **Third build.** `test_materials` was refused, again after one relink, and ran on the
+    second.
+  - **Fourth build.** 33 suites were refused, all 80 others passed. Relinked, 5 were refused
+    again (`test_husk_foundation`, `test_mp_darkdragon`, `test_mp_sprites`, `test_wb_controls`,
+    `test_wb_waves`), then 2 (`test_mp_sprites`, `test_wb_waves`), then none.
+    - `MagicPortals.exe` and `WolfBrigade.exe` were refused too: exit 126, "Permission
+      denied", on the first `final/` capture. `WolfBrigade.exe` ran after one relink,
+      `MagicPortals.exe` after two. `final/` was captured after that.
+  - `SupersonicEngine.exe` was never refused.
+  - The pre-E2 `SupersonicEngine.exe` built in the scratchpad was not refused either.
+- **Neither repository was committed to.** The remake's working tree is clean: everything this
+  step wrote is under the gitignored `out/parity/specs/lighting/work/e2/`. The pre-E2 tree and
+  its build are in the session scratchpad.
