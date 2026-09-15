@@ -10,6 +10,7 @@
 #include <tuple>
 #include <utility>
 
+#include "core/Application.hpp"
 #include "core/Input.hpp"
 #include "core/Log.hpp"
 #include "core/Raycast.hpp"
@@ -23,6 +24,9 @@
 
 #include "sim/Roles.hpp"
 #include "sim/Units.hpp"
+
+#include "stb_image.h"
+#include "stb_image_write.h"
 
 namespace MagicPortals {
 
@@ -191,7 +195,9 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error) &&
                       Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error) &&
                       LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error) &&
-                      Popup::LoadRules(m_paths.portData + "/ui.json", m_popupRules, error);
+                      Popup::LoadRules(m_paths.portData + "/ui.json", m_popupRules, error) &&
+                      MainMenu::LoadRules(m_paths.portData + "/ui.json", m_mainMenuRules, error) &&
+                      Loading::LoadRules(m_paths.portData + "/ui.json", m_loadingRules, error);
     // ui.json is the port's own and committed, so a HUD that will not read is a
     // fault in this repository and stops the start as loudly as a missing level.
     m_hudReady = read;
@@ -199,16 +205,42 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
         m_loadError = error;
         m_hudError = error;
     } else if (m_startLevel.empty()) {
-        // No level named: the menu, which is what the game itself opens with.
-        // A named level is entered directly, so --level and every suite reach
-        // the game exactly as they did before the menu existed.
+        // No level named: the loading screen and then the menu, which is what the
+        // game itself opens with (owner ruling R4). A named level is entered
+        // directly, so --level and every suite reach the game exactly as they did
+        // before the menu existed.
         buildCamera(registry);
-        openMenu(registry, Screen::Main);
+        openMenu(registry, Screen::Loading);
     } else if (const int start = m_chapters.Find(m_startLevel); start < 0) {
         m_loadError = m_startLevel + " is not a level of " + m_paths.chapters;
     } else {
         buildCamera(registry);
         loadLevel(registry, start);
+    }
+    if (read) {
+        // The pictures the menu states draw through the overlay, each resolved to
+        // its hd twin once: the backgrounds are entities, named with their
+        // directory; the rest are sprites. One that cannot be read says so, once,
+        // and is not drawn.
+        const auto resolve = [this](const std::string& file, bool named) {
+            if (m_menuPictures.find(file) != m_menuPictures.end()) return;
+            const std::string path = named ? originalAsset(file) : menuImage(file);
+            if (imageSizePx(path).y > 0.0) {
+                m_menuPictures[file] = path;
+            } else {
+                SUPERSONIC_LOG_WARN("Magic Portals") << "menu picture could not be read: " << path << std::endl;
+                m_menuPictures[file] = std::string();
+            }
+        };
+        const MainMenu::Rules& menu = m_mainMenuRules;
+        resolve(menu.background.sprite, true);
+        const std::initializer_list<const std::string*> sprites = {
+            &menu.play.sprite,  &menu.title.sprite,     &menu.credits.sprite,   &menu.achievements.sprite,
+            &menu.sound.sprite, &menu.soundOffSprite,   &menu.music.sprite,     &menu.music.offSprite,
+            &m_loadingRules.logo.sprite};
+        for (const std::string* file : sprites) {
+            resolve(*file, false);
+        }
     }
     if (m_current < 0 && m_screen == Screen::None) {
         SUPERSONIC_LOG_ERROR("Magic Portals") << "Could not start: " << m_loadError << std::endl;
@@ -581,6 +613,65 @@ void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
     }
 }
 
+bool MagicPortalsLayer::addEntityEmitters(const std::string& entity, const glm::dvec2& atPx, float z,
+                                          double angleDeg) {
+    std::vector<Particles::System> systems;
+    std::string error;
+    if (!Particles::Load(m_paths.original + "/entities/" + entity, systems, error) || systems.empty()) return false;
+    for (const Particles::System& system : systems) {
+        const std::string image = m_paths.original + "/particles/" + system.bitmap;
+        const glm::dvec2 sheet = imageSizePx(image);
+        if (sheet.x <= 0.0 || sheet.y <= 0.0) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "particle image could not be read: " << image << std::endl;
+            continue;
+        }
+        Emitter emitter;
+        emitter.system = system;
+        emitter.atPx = atPx;
+        // A later system of the same entity draws over an earlier one.
+        emitter.z = z + 0.001f * static_cast<float>(m_emitters.size());
+        emitter.image = image;
+        emitter.cellPx = glm::dvec2(sheet.x / system.columns, sheet.y / system.rows);
+        emitter.angleDeg = angleDeg;
+        emitter.particles.resize(static_cast<std::size_t>(std::min(system.count, kMaxParticles)));
+        m_emitters.push_back(std::move(emitter));
+    }
+    return true;
+}
+
+std::string MagicPortalsLayer::loadingHaloImage() {
+    // Only into a directory the caller named: an empty Paths::prisms would put the
+    // file in the working directory, so the halo is then left undrawn instead.
+    if (m_paths.prisms.empty()) return {};
+    const std::string source = m_paths.original + "/" + m_loadingRules.haloSprite;
+    std::error_code ec;
+    std::filesystem::create_directories(m_paths.prisms, ec);
+    const std::filesystem::path target = m_paths.prisms / "black_halo_multiply.png";
+    if (std::filesystem::exists(target, ec) && std::filesystem::last_write_time(target, ec) >=
+                                                    std::filesystem::last_write_time(source, ec)) {
+        return target.string();
+    }
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    stbi_uc* grey = stbi_load(source.c_str(), &width, &height, &channels, 1);
+    if (grey == nullptr) {
+        SUPERSONIC_LOG_WARN("Magic Portals") << "loading halo could not be read: " << source << std::endl;
+        return {};
+    }
+    // AM_MODULATE draws dst * texel; black at alpha (1 - texel) leaves exactly that.
+    std::vector<unsigned char> rgba(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u, 0u);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(width) * static_cast<std::size_t>(height); ++i) {
+        rgba[i * 4u + 3u] = static_cast<unsigned char>(255 - grey[i]);
+    }
+    stbi_image_free(grey);
+    if (stbi_write_png(target.string().c_str(), width, height, 4, rgba.data(), width * 4) == 0) {
+        SUPERSONIC_LOG_WARN("Magic Portals") << "loading halo could not be written: " << target.string() << std::endl;
+        return {};
+    }
+    return target.string();
+}
+
 void MagicPortalsLayer::unloadEmitters(entt::registry& registry) {
     for (Emitter& emitter : m_emitters) {
         for (Particle& particle : emitter.particles) {
@@ -617,7 +708,7 @@ void MagicPortalsLayer::updateEmitters(entt::registry& registry, float deltaTime
             if (particle.lifeMs <= 0.0) particle.lifeMs = std::max(1.0, system.lifeTimeMs);
             particle.size = system.size + particleRandom(-system.randomizeSize * 0.5, system.randomizeSize * 0.5);
             particle.angleDir = system.angleDir + particleRandom(-system.randAngle * 0.5, system.randAngle * 0.5);
-            particle.angle = system.angleStart + particleRandom(0.0, system.randAngleStart);
+            particle.angle = system.angleStart + particleRandom(0.0, system.randAngleStart) + emitter.angleDeg;
             particle.velocityPx =
                 system.direction + glm::dvec2(particleRandom(-system.randomizeDir.x * 0.5, system.randomizeDir.x * 0.5),
                                               particleRandom(-system.randomizeDir.y * 0.5, system.randomizeDir.y * 0.5));
@@ -644,6 +735,7 @@ void MagicPortalsLayer::updateEmitters(entt::registry& registry, float deltaTime
 
             particle.elapsedMs += elapsedMs;
             if (!particle.released) {
+                if (emitter.killed) continue;
                 // Staggered across one lifetime, in pool order, unless the
                 // system releases the lot at once.
                 const double releaseAt = (system.lifeTimeMs + system.randomLifeTimeMs) *
@@ -660,7 +752,7 @@ void MagicPortalsLayer::updateEmitters(entt::registry& registry, float deltaTime
             const double age = particle.lifeMs > 0.0 ? particle.elapsedMs / particle.lifeMs : 1.0;
             if (particle.elapsedMs > particle.lifeMs) {
                 ++particle.repeats;
-                if (system.repeat > 0 && particle.repeats >= system.repeat) {
+                if ((system.repeat > 0 && particle.repeats >= system.repeat) || emitter.killed) {
                     hide();
                     continue;
                 }
@@ -773,11 +865,17 @@ void MagicPortalsLayer::layOutMenu() {
         return glm::dvec2(height * aspect, height);
     };
 
+    // The loading screen has no button.
+    if (m_screen == Screen::Loading) return;
     if (m_screen == Screen::Main) {
+        // DRAWN THROUGH THE OVERLAY by EmitMenu from sim/MainMenu, which also says
+        // what a touch is on. This is TAP START as it sits once its entrance is
+        // over, for PressMenu and the suites: the view is the menu's box.
+        const Hud::Rect settled = MainMenu::SettledPlayRect(m_mainMenuRules, box);
         MenuButton play;
         play.kind = MenuButton::Kind::Play;
-        play.centrePx = at(0.5, 0.66);
-        play.sizePx = sized("main_play_game_button.png", 0.16);
+        play.centrePx = settled.Centre();
+        play.sizePx = settled.size;
         m_menuButtons.push_back(play);
         return;
     }
@@ -933,13 +1031,43 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
     };
 
     // The finished and lost screens put nothing in the registry: they are drawn
-    // over their level through the screen overlay (EmitHud).
-    if (m_screen == Screen::Finished || m_screen == Screen::Dead) return;
-    m_menuBg = quadFor("Magic Portals Menu Background",
-                       menuImage(m_screen == Screen::Main ? "main_menu_bg.png" : "world_select_bg.png"));
-    if (m_screen == Screen::Main) {
-        m_menuTitle = quadFor("Magic Portals Title", menuImage("game_main_title.png"));
+    // over their level through the screen overlay (EmitHud). Nor does the main
+    // menu, which EmitMenu draws, background and all, in display values.
+    if (m_screen == Screen::Finished || m_screen == Screen::Dead || m_screen == Screen::Main) return;
+    if (m_screen == Screen::Loading) {
+        // scenes/loading_screen.esc: its background, its character and its portal,
+        // in the level's space as a level's art is. Sized by the 1x files, drawn
+        // with the hd twins (sim/Loading.hpp; ui.json loading).
+        m_loadingBg = quadFor("Magic Portals Loading Background", originalAsset(m_loadingRules.background.sprite));
+        const std::string halo = originalImage(m_artRules.portal.sprite);
+        if (imageSizePx(halo).y > 0.0) {
+            m_loadingPortal = makeSprite(registry, "Magic Portals Loading Portal", halo, m_artRules.portal.additive);
+        }
+        // black_halo.ent under it, as the multiply it is (ui.json loading.portal).
+        if (const std::string multiply = loadingHaloImage(); !multiply.empty()) {
+            m_loadingHalo = makeSprite(registry, "Magic Portals Loading Halo", multiply, false);
+        }
+        // portal.ent's particle systems, the spiral and portal.png, just in front of
+        // its halo and in the order the .ent states them.
+        unloadEmitters(registry);
+        m_loadingVanished = false;
+        const glm::dvec2 portalAt = Loading::PortalAt(m_loadingRules, MenuBoxPx());
+        addEntityEmitters(m_loadingRules.portalEntity, portalAt, 0.32f, 0.0);
+        m_loadingPortalEmitters = m_emitters.size();
+        const Art::Character& mage = m_artRules.character;
+        const std::string sheet = originalAsset("entities/" + mage.sprite);
+        if (imageSizePx(sheet).y > 0.0) {
+            m_loadingCharacter = makeSprite(registry, "Magic Portals Loading Character", sheet, mage.additive);
+            auto& animation = registry.emplace<SpriteAnimationComponent>(m_loadingCharacter);
+            animation.columns = static_cast<uint32_t>(mage.columns);
+            animation.rows = static_cast<uint32_t>(mage.rows);
+            animation.firstFrame = static_cast<uint32_t>(m_loadingRules.firstFrame);
+            animation.frameCount = 1;
+            animation.playing = false; // the frame is the loop's (Loading::CharacterFrame)
+        }
+        return;
     }
+    m_menuBg = quadFor("Magic Portals Menu Background", menuImage("world_select_bg.png"));
     for (const MenuButton& button : m_menuButtons) {
         std::string image;
         switch (button.kind) {
@@ -1047,6 +1175,10 @@ void MagicPortalsLayer::unloadMenuDrawables(entt::registry& registry) {
     m_menuMedals.clear();
     destroy(m_menuBg);
     destroy(m_menuTitle);
+    destroy(m_loadingBg);
+    destroy(m_loadingCharacter);
+    destroy(m_loadingPortal);
+    destroy(m_loadingHalo);
 }
 
 void MagicPortalsLayer::unloadMenu(entt::registry& registry) {
@@ -1099,10 +1231,14 @@ void MagicPortalsLayer::openMenu(entt::registry& registry, Screen screen) {
     m_current = -1;
     m_chapterComplete = false;
     m_loadError.clear();
+    // A STATE CHANGE opens under a black of its own, with every clock from
+    // nothing (BaseState::preLoop). Another page of the same grid is not one.
+    if (screen != m_screen) beginMenuState();
     m_screen = screen;
     m_aspect = viewportAspect(registry);
     layOutMenu();
     buildMenu(registry);
+    if (screen == Screen::Loading) loadUiFont(m_loadingRules.dots.font);
 }
 
 bool MagicPortalsLayer::PressMenu(entt::registry& registry, MenuButton button) {
@@ -1169,8 +1305,41 @@ bool MagicPortalsLayer::PressMenu(entt::registry& registry, MenuButton button) {
     return false;
 }
 
-void MagicPortalsLayer::menuTick(entt::registry& registry) {
+void MagicPortalsLayer::menuTick(entt::registry& registry, float fixedDelta) {
     using namespace Supersonic;
+    // WHAT THE LAST TICK ASKED FOR, before anything else: a release, the loading
+    // screen's hold or the back key. The original's setState swaps between
+    // frames, so its release frame is drawn in the old state untinted and the new
+    // state's black comes on the next (ui3 spec 0.4, A-S5).
+    if (m_pendingMenu.kind != PendingMenu::Kind::None) {
+        const PendingMenu pending = m_pendingMenu;
+        m_pendingMenu = PendingMenu{};
+        switch (pending.kind) {
+        case PendingMenu::Kind::MainButton:
+            PressMainMenu(registry, pending.main);
+            break;
+        case PendingMenu::Kind::Button:
+            PressMenu(registry, pending.button);
+            break;
+        case PendingMenu::Kind::Screen:
+            openMenu(registry, pending.screen);
+            break;
+        case PendingMenu::Kind::None:
+            break;
+        }
+        // A level was entered: this was the tick it loaded on, and its first tick
+        // is the next.
+        if (m_screen == Screen::None || m_screen == Screen::Finished || m_screen == Screen::Dead) return;
+    }
+
+    // The state's clock: its first tick is its zero, and it goes on from there.
+    if (m_menuClock.fresh) {
+        m_menuClock.fresh = false;
+    } else {
+        ++m_menuClock.ticks;
+        m_menuClock.ms += static_cast<double>(fixedDelta) * 1000.0;
+    }
+
     m_aspect = viewportAspect(registry);
     layOutMenu(); // the window may have changed shape since the last tick
     const glm::dvec2 box = MenuBoxPx();
@@ -1190,17 +1359,36 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
         }
     }
 
+    if (m_screen == Screen::Loading) {
+        loadingTick(registry);
+        return;
+    }
+    if (m_screen == Screen::Main) {
+        mainMenuInput(registry);
+        return;
+    }
+
+    // Chapter select and the grid: the touch first, since a page button lays the
+    // screen out again, and then every quad where this tick has it.
+    menuQuadInput(registry);
+    if (m_screen != Screen::Worlds && m_screen != Screen::Levels) return;
+
     if (m_menuBg != entt::null && registry.valid(m_menuBg)) {
         placeSprite(registry, m_menuBg, box * 0.5, box, -1.0f, 0.0f);
     }
-    if (m_menuTitle != entt::null && registry.valid(m_menuTitle)) {
-        placeSprite(registry, m_menuTitle, glm::dvec2(box.x * 0.5, box.y * 0.30),
-                    glm::dvec2(box.y * 1.30, box.y * 0.30), 0.4f, 0.0f);
-    }
+    const auto same = [](const MenuButton& a, const MenuButton& b) {
+        return a.kind == b.kind && a.world == b.world && a.level == b.level;
+    };
+    const float tint = static_cast<float>(m_mainMenuRules.state.pressTintByte) / 255.0f;
     for (std::size_t i = 0; i < m_menuButtons.size() && i < m_menuQuads.size(); ++i) {
         const MenuButton& button = m_menuButtons[i];
         if (m_menuQuads[i] != entt::null && registry.valid(m_menuQuads[i])) {
             placeSprite(registry, m_menuQuads[i], button.centrePx, button.sizePx, 0.5f, 0.0f);
+            // Button::update's 0xFFCCCCCC while the touch that went down on it is
+            // still inside it.
+            const bool held = m_menuTouch.heldInside && m_menuTouch.downOn && same(*m_menuTouch.downOn, button);
+            registry.get<MaterialComponent>(m_menuQuads[i]).albedoColor =
+                held ? glm::vec4(tint, tint, tint, 1.0f) : glm::vec4(1.0f);
         }
         if (i < m_menuLabels.size() && m_menuLabels[i] != entt::null && registry.valid(m_menuLabels[i])) {
             const glm::vec3 centre = Units::ToWorld(button.centrePx.x, button.centrePx.y);
@@ -1208,8 +1396,6 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
         }
         if (i < m_menuMedals.size() && m_menuMedals[i] != entt::null && registry.valid(m_menuMedals[i])) {
             // FROM THE BUTTON'S TOP-LEFT, and as a proportion of it.
-            //
-            // Two things the original does that a centred quad does not.
             //
             // The 3-argument drawScaledSprite (utilSprite.angelscript, bytes
             // 318043..318245) pushes vector2(0, 0) as the origin and hands on,
@@ -1219,25 +1405,10 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
             // 32x32, so the medal covers 36..68 of the button in both axes: a
             // badge over its bottom-right corner, four pixels proud of it.
             //
-            // Measured from the CENTRE instead, as this first did, the medal
-            // landed a whole half-button further out and floated in the gap
-            // beside the button, touching nothing.
-            //
-            // And the 36 is in the original's pixels against that 64px button,
-            // while the port's buttons are a fraction of the menu box - so the
-            // offset and the medal both ride the ratio between the two, which
-            // is the same place on the button at any window shape.
-            // AS FRACTIONS OF THE BUTTON, never off the file's own size.
-            //
-            // Both numbers come from the original's SD pair - a 64 px button and
-            // a 32 px medal placed at (36, 36) - so as ratios they are 32/64 and
-            // 36/64 whatever resolution was actually loaded. Measured against the
-            // file instead, as this did, the HD switch moved the badge: the
-            // button's native width doubled to 128, the ratio halved, and 36 *
-            // ratio put the medal in the middle of the tile rather than over its
-            // bottom-right corner. The medal's SIZE happened to survive, because
-            // both files doubled together - which is precisely the kind of
-            // accident that hides a bug until one of the pair has no hd twin.
+            // AS FRACTIONS OF THE BUTTON, never off the file's own size: both
+            // numbers come from the original's SD pair - a 64 px button and a
+            // 32 px medal placed at (36, 36) - so as ratios they are 32/64 and
+            // 36/64 whatever resolution was actually loaded.
             constexpr double kNativeButtonPx = 64.0;
             const glm::dvec2 sizePx = button.sizePx * (32.0 / kNativeButtonPx);
             const glm::dvec2 topLeft = button.centrePx - button.sizePx * 0.5;
@@ -1245,28 +1416,314 @@ void MagicPortalsLayer::menuTick(entt::registry& registry) {
                         topLeft + button.sizePx * (36.0 / kNativeButtonPx) + sizePx * 0.5, sizePx, 0.55f, 0.0f);
         }
     }
+}
 
-    // Escape goes up a screen; from the first there is nowhere up to go.
-    if (Input::TickWasPressed(kBack)) {
-        if (m_screen == Screen::Levels) {
-            openMenu(registry, Screen::Worlds);
-        } else if (m_screen == Screen::Worlds) {
-            openMenu(registry, Screen::Main);
+void MagicPortalsLayer::beginMenuState() {
+    m_menuClock = MenuClock{};
+    m_menuTouch = MenuTouch{};
+    // SoundPanelLayer is built afresh with the state: its music switch comes in
+    // with the rest, if the sound is on.
+    m_mainMusicAddedMs = 0.0;
+    m_mainMusicDismissedMs = -1.0;
+}
+
+void MagicPortalsLayer::loadingTick(entt::registry& registry) {
+    // Nothing on the loading screen takes a touch; a DEV tap due now is spent.
+    (void)touchThisTick(registry);
+    const Loading::Rules& rules = m_loadingRules;
+    const glm::dvec2 view = MenuBoxPx();
+    // LoadingScreen::loop's frame: 1 on the state's first tick.
+    const int frame = m_menuClock.ticks + 1;
+    const double tickMs = static_cast<double>(kTick) * 1000.0;
+
+    if (m_loadingBg != entt::null && registry.valid(m_loadingBg)) {
+        placeSprite(registry, m_loadingBg, rules.background.centreOfScreen * view, rules.background.sizeUnits, -1.0f,
+                    0.0f);
+    }
+    const glm::dvec2 portal = Loading::PortalAt(rules, view);
+    if (m_loadingPortal != entt::null && registry.valid(m_loadingPortal)) {
+        placeSprite(registry, m_loadingPortal, portal, imageSizePx(originalImage(m_artRules.portal.sprite)), 0.3f,
+                    0.0f);
+    }
+    if (m_loadingHalo != entt::null && registry.valid(m_loadingHalo)) {
+        // black_halo.ent, OVER the portal's halo and under its particles. The
+        // decode adds it at the portal's z less 4, which Ethanon's draw hash would
+        // sort under the halo; the recording says otherwise - launch_gold frame 183,
+        // once the spiral is killed, is a black blob with no trace of the added
+        // halo, and frames 74-155 show the spiral light on dark - so the port draws
+        // what the frames show. Why is not settled.
+        placeSprite(registry, m_loadingHalo, portal,
+                    imageSizePx(m_paths.original + "/" + rules.haloSprite) * rules.haloScale, 0.31f, 0.0f);
+    }
+    if (!Loading::CharacterShown(rules, frame) && !m_loadingVanished) {
+        // The frame the last texture loads: vanishEffect and killPortal.
+        m_loadingVanished = true;
+        for (std::size_t i = 0; i < m_loadingPortalEmitters && i < m_emitters.size(); ++i) m_emitters[i].killed = true;
+        addEntityEmitters(rules.vanish.suckEntity, Loading::SuckAt(rules, view), 0.6f,
+                          Loading::SuckAngleDeg(rules, view));
+        addEntityEmitters(rules.vanish.sparklesEntity, Loading::SparklesAt(rules, view), 0.61f, 0.0);
+    }
+    if (m_loadingCharacter != entt::null && registry.valid(m_loadingCharacter)) {
+        if (Loading::CharacterShown(rules, frame)) {
+            const Art::Character& mage = m_artRules.character;
+            const glm::dvec2 cell = imageSizePx(originalImage(mage.sprite)) / glm::dvec2(mage.columns, mage.rows);
+            registry.get<Supersonic::SpriteAnimationComponent>(m_loadingCharacter).firstFrame =
+                static_cast<uint32_t>(Loading::CharacterFrame(rules, frame, tickMs));
+            // The image stands with its pivot on the entity, as the level's player.
+            placeSprite(registry, m_loadingCharacter,
+                        Loading::CharacterAt(rules, view, frame) - glm::dvec2(mage.pivotXPx, mage.pivotYPx), cell,
+                        0.5f, 0.0f);
+        } else {
+            // ETHEntity::Hide, on the frame the last texture loads.
+            registry.destroy(m_loadingCharacter);
+            m_loadingCharacter = entt::null;
+        }
+    }
+    if (Loading::HoldOver(rules, frame, tickMs)) {
+        m_pendingMenu.kind = PendingMenu::Kind::Screen;
+        m_pendingMenu.screen = Screen::Main;
+        SUPERSONIC_LOG_INFO("Magic Portals") << "loading held on tick " << m_ticks << " (frame " << frame
+                                             << "); the main menu is next" << std::endl;
+    }
+}
+
+void MagicPortalsLayer::mainMenuInput(entt::registry& registry) {
+    using Supersonic::Input;
+    // OWNER RULING R2: the back key on the main menu leaves the game, as
+    // MainMenuLayer::update does (GetKeyState(14), then Exit). The engine's
+    // latch stops the run loop after this frame.
+    if (Input::TickWasPressed(kBack) || devPressDue(DevPress::Back)) {
+        SUPERSONIC_LOG_INFO("Magic Portals") << "back key on the main menu on tick " << m_ticks << ": quitting"
+                                             << std::endl;
+        Supersonic::Application::RequestQuit();
+        return;
+    }
+    const Touch touch = touchThisTick(registry);
+    const glm::dvec2 view = MenuBoxPx();
+    const Pause::Switches switches = MainMenuSwitches();
+    if (touch.pressed) {
+        MenuState::TouchDown(m_menuTouch.touch, touch.atView);
+        m_menuTouch.mainDown =
+            MainMenu::ButtonsAt(m_mainMenuRules, switches, view, m_menuClock.ms, touch.atView);
+    }
+    const unsigned inside =
+        touch.over ? MainMenu::ButtonsAt(m_mainMenuRules, switches, view, m_menuClock.ms, touch.atView) : 0u;
+    m_menuTouch.mainHeld = touch.held && !touch.released ? (m_menuTouch.mainDown & inside) : 0u;
+    if (!touch.released) return;
+    const unsigned pressed = m_menuTouch.mainDown & inside;
+    m_menuTouch = MenuTouch{};
+    const std::optional<MainMenu::Button> first = MainMenu::FirstActed(pressed);
+    if (!first) return;
+    if (*first == MainMenu::Button::Sound || *first == MainMenu::Button::Music) {
+        // A switch changes on its own update, so on the release frame itself.
+        PressMainMenu(registry, *first);
+        return;
+    }
+    m_pendingMenu.kind = PendingMenu::Kind::MainButton;
+    m_pendingMenu.main = *first;
+}
+
+void MagicPortalsLayer::menuQuadInput(entt::registry& registry) {
+    using Supersonic::Input;
+    // The back key goes up a state, on the next tick as a release does.
+    if (Input::TickWasPressed(kBack) || devPressDue(DevPress::Back)) {
+        m_menuTouch = MenuTouch{};
+        m_pendingMenu.kind = PendingMenu::Kind::Screen;
+        m_pendingMenu.screen = m_screen == Screen::Levels ? Screen::Worlds : Screen::Main;
+        return;
+    }
+    const Touch touch = touchThisTick(registry);
+    // The quads are laid out in the menu's box, which is the view's units.
+    const auto under = [this](const glm::dvec2& at) -> const MenuButton* {
+        for (const MenuButton& button : m_menuButtons) {
+            if (std::fabs(at.x - button.centrePx.x) > button.sizePx.x * 0.5) continue;
+            if (std::fabs(at.y - button.centrePx.y) > button.sizePx.y * 0.5) continue;
+            return &button;
+        }
+        return nullptr;
+    };
+    const auto same = [](const MenuButton& a, const MenuButton& b) {
+        return a.kind == b.kind && a.world == b.world && a.level == b.level;
+    };
+    if (touch.pressed) {
+        MenuState::TouchDown(m_menuTouch.touch, touch.atView);
+        const MenuButton* down = under(touch.atView);
+        m_menuTouch.downOn = down != nullptr ? std::optional<MenuButton>(*down) : std::nullopt;
+    }
+    if (touch.held || touch.released) MenuState::TouchHeld(m_menuTouch.touch, touch.atView);
+    const MenuButton* on = touch.over ? under(touch.atView) : nullptr;
+    const bool inside = m_menuTouch.downOn && on != nullptr && same(*on, *m_menuTouch.downOn);
+    m_menuTouch.heldInside = inside && touch.held && !touch.released;
+    if (!touch.released) return;
+    const std::optional<MenuButton> down = m_menuTouch.downOn;
+    const bool tile =
+        down && (down->kind == MenuButton::Kind::World || down->kind == MenuButton::Kind::Level);
+    const bool takes = !tile || MenuState::TileTakes(m_mainMenuRules.state, m_menuTouch.touch);
+    m_menuTouch = MenuTouch{};
+    if (!inside || !takes) return;
+    if (down->kind == MenuButton::Kind::Back || down->kind == MenuButton::Kind::Forward) {
+        // A page of the same state: the original draws it from the release frame.
+        PressMenu(registry, *down);
+        return;
+    }
+    m_pendingMenu.kind = PendingMenu::Kind::Button;
+    m_pendingMenu.button = *down;
+}
+
+const std::string& MagicPortalsLayer::menuPicture(const std::string& file) const {
+    static const std::string none;
+    const auto found = m_menuPictures.find(file);
+    return found != m_menuPictures.end() ? found->second : none;
+}
+
+void MagicPortalsLayer::loadUiFont(const std::string& name) {
+    if (name == m_hudRules.caption.font) {
+        if (m_captionFontTried) return;
+        m_captionFontTried = true;
+        std::string why;
+        if (!m_captionFont.Load(m_paths.original + "/data/" + name, why)) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "no text in " << name << ": " << why << std::endl;
         }
         return;
     }
+    if (m_uiFonts.find(name) != m_uiFonts.end()) return;
+    std::string why;
+    if (!m_uiFonts[name].Load(m_paths.original + "/data/" + name, why)) {
+        SUPERSONIC_LOG_WARN("Magic Portals") << "no text in " << name << ": " << why << std::endl;
+    }
+}
 
-    const auto* viewport = registry.ctx().find<ViewportInfo>();
-    if (viewport == nullptr || !viewport->pointerOverGame || !Input::TickWasPressed(kTap)) return;
-    glm::dvec2 atPx(0.0);
-    if (!ScreenToLevelPx(registry, Input::MousePosition(), atPx)) return;
-    for (const MenuButton& button : m_menuButtons) {
-        const glm::dvec2 half = button.sizePx * 0.5;
-        if (std::fabs(atPx.x - button.centrePx.x) > half.x) continue;
-        if (std::fabs(atPx.y - button.centrePx.y) > half.y) continue;
-        PressMenu(registry, button);
+Pause::Switches MagicPortalsLayer::MainMenuSwitches() const {
+    Pause::Switches switches;
+    switches.soundOn = m_soundOn;
+    switches.musicOn = m_musicOn;
+    switches.musicAddedMs = m_mainMusicAddedMs;
+    switches.musicDismissedMs = m_mainMusicDismissedMs;
+    return switches;
+}
+
+bool MagicPortalsLayer::PressMainMenu(entt::registry& registry, MainMenu::Button button) {
+    if (m_screen != Screen::Main) return false;
+    switch (button) {
+    case MainMenu::Button::Play:
+    case MainMenu::Button::Title:
+        // MainMenuLayer::update's play_button and PortalMainMenu::loop's title:
+        // createLevelSelectState, which is chapter select from the menu.
+        latch("menu_button");
+        openMenu(registry, Screen::Worlds);
+        return true;
+    case MainMenu::Button::Credits:
+    case MainMenu::Button::Achievements:
+        // getItemSelectButtonSoundName, which sounds.json maps with the level's
+        // own buttons. The credits screen and the dashboard are ui3 spec sections 3
+        // and 4, not built yet: the press leads nowhere.
+        latch("level_button");
+        return false;
+    case MainMenu::Button::Sound: {
+        // GlobalSoundSwitch::manageSoundSwitch, and SoundPanelLayer's music switch
+        // dismissed while the sound is off and added afresh when it is back: the
+        // pause's arithmetic on this state's clock.
+        const double now = m_menuClock.ms;
+        const double dismissMs = m_mainMenuRules.layer.buttonDismissMs;
+        const bool dismissing = m_mainMusicDismissedMs >= 0.0 && now - m_mainMusicDismissedMs < dismissMs;
+        m_soundOn = !m_soundOn;
+        if (!m_soundOn) {
+            if (!dismissing && now >= m_mainMusicAddedMs) m_mainMusicDismissedMs = now;
+        } else {
+            m_mainMusicAddedMs = dismissing ? m_mainMusicDismissedMs + dismissMs : now;
+        }
+        latch("menu_button");
+        return true;
+    }
+    case MainMenu::Button::Music: {
+        const bool shown = m_soundOn && m_menuClock.ms >= m_mainMusicAddedMs &&
+                           !(m_mainMusicDismissedMs >= 0.0 &&
+                             m_menuClock.ms - m_mainMusicDismissedMs < m_mainMenuRules.layer.buttonDismissMs);
+        if (!shown) return false;
+        m_musicOn = !m_musicOn;
+        latch("menu_button");
+        return true;
+    }
+    }
+    return false;
+}
+
+void MagicPortalsLayer::EmitMenu(entt::registry& registry) const {
+    using Supersonic::ScreenOverlay;
+    auto* const* slot = registry.ctx().find<ScreenOverlay*>();
+    if (slot == nullptr || *slot == nullptr) return;
+    ScreenOverlay& overlay = **slot;
+    const bool menu = m_screen == Screen::Loading || m_screen == Screen::Main || m_screen == Screen::Worlds ||
+                      m_screen == Screen::Levels;
+    if (!m_hudReady || !menu) return;
+    const glm::dvec2 view = MenuBoxPx();
+    if (view.x <= 0.0 || view.y <= 0.0) return;
+
+    const auto add = [&overlay, &view](const Hud::Rect& rect, const std::string& image, const glm::vec4& colour,
+                                       const glm::dvec2& uvMin = glm::dvec2(0.0),
+                                       const glm::dvec2& uvMax = glm::dvec2(1.0)) {
+        if (colour.a <= 0.0f) return;
+        ScreenOverlay::Quad quad;
+        quad.min = glm::vec2(rect.min / view);
+        quad.max = glm::vec2(rect.Max() / view);
+        quad.uvMin = glm::vec2(uvMin);
+        quad.uvMax = glm::vec2(uvMax);
+        quad.color = colour;
+        quad.texture = image;
+        overlay.Add(std::move(quad));
+    };
+    const auto write = [&](const std::string& fontName, const std::string& words, const glm::dvec2& centre,
+                           double unitsPerFontPx, double alpha) {
+        const Supersonic::BitmapFont* font = uiFont(fontName);
+        if (font == nullptr) return;
+        const auto& pages = font->Pages();
+        for (const Hud::Glyph& glyph : Hud::LayOutText(*font, words, centre, unitsPerFontPx)) {
+            if (glyph.page < 0 || static_cast<std::size_t>(glyph.page) >= pages.size()) continue;
+            add(glyph.rect, pages[static_cast<std::size_t>(glyph.page)],
+                glm::vec4(1.0f, 1.0f, 1.0f, static_cast<float>(alpha)), glyph.uvOffset,
+                glyph.uvOffset + glyph.uvScale);
+        }
+    };
+    const Hud::Rect whole{glm::dvec2(0.0), view};
+    const float black =
+        static_cast<float>(MenuState::FadeAlphaByte(m_mainMenuRules.state, m_menuClock.ms)) / 255.0f;
+
+    if (m_screen == Screen::Main) {
+        // The background, then the layer's buttons in the order they were added,
+        // each at its bounce, bob, press tint, blink and entrance (sim/MainMenu).
+        for (const MainMenu::Piece& piece :
+             MainMenu::Pieces(m_mainMenuRules, MainMenuSwitches(), view, m_menuClock.ms, m_layerClockMs,
+                              m_menuTouch.mainHeld)) {
+            const std::string& image = menuPicture(piece.file);
+            if (image.empty()) continue;
+            const float grey = static_cast<float>(piece.rgbByte) / 255.0f;
+            add(piece.rect, image, glm::vec4(grey, grey, grey, static_cast<float>(piece.alphaByte) / 255.0f));
+        }
+        // The state's black, drawn after the layer manager: over all of it.
+        add(whole, std::string(), glm::vec4(0.0f, 0.0f, 0.0f, black));
         return;
     }
+    if (m_screen == Screen::Loading) {
+        // BaseState::loop draws the black first; LoadingScreen::loop then writes
+        // the dots, while it is still loading, and the logo on every frame.
+        add(whole, std::string(), glm::vec4(0.0f, 0.0f, 0.0f, black));
+        const Loading::Rules& rules = m_loadingRules;
+        const int frame = m_menuClock.ticks + 1;
+        if (Loading::IsLoading(rules, frame)) {
+            const glm::dvec2 at = rules.dots.centreOfScreen * view;
+            write(rules.dots.font, Loading::DotsText(rules, Loading::LoadedBefore(rules, frame)), at,
+                  rules.dots.unitsPerFontPx, 1.0);
+            write(rules.dots.font, Loading::TrackText(rules), at, rules.dots.unitsPerFontPx,
+                  static_cast<double>(rules.dots.trackAlphaByte) / 255.0);
+        }
+        if (const std::string& logo = menuPicture(rules.logo.sprite); !logo.empty()) {
+            add(UiLayer::RectAt(rules.logo, UiLayer::Anchor(rules.logo, view)), logo, glm::vec4(1.0f));
+        }
+        return;
+    }
+    // Chapter select and the grid are drawn in the level's space; their black is
+    // over all of it.
+    add(whole, std::string(), glm::vec4(0.0f, 0.0f, 0.0f, black));
 }
 
 // ---- the camera -------------------------------------------------------------
@@ -2079,12 +2536,11 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
         if (e != entt::null && registry.valid(e)) registry.get<UITextComponent>(e).text = std::move(text);
     };
     std::string status;
-    if (m_screen == Screen::Main) {
-        status = "Magic Portals";
-    } else if (m_screen == Screen::Worlds) {
-        status = "Choose a chapter";
-    } else if (m_screen == Screen::Levels) {
-        status = "Chapter " + Count(m_menuWorld + 1) + " - choose a level";
+    const bool menu = m_screen == Screen::Loading || m_screen == Screen::Main || m_screen == Screen::Worlds ||
+                      m_screen == Screen::Levels;
+    if (menu) {
+        // NO TEXT on a menu state (ui3 spec D7): every picture the original draws
+        // there is its own art, and its own fonts where it writes anything.
     } else if (m_current < 0) {
         status = "Magic Portals could not start: " + m_loadError;
     } else {
@@ -2113,10 +2569,9 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
                  (c.Gold() ? " - gold" : "");
     }
     set(m_hud.result, result);
-    // The keys are the port's, and a level has the original's own pads and
-    // buttons on it now, so the help goes with the rest of the text.
-    const bool menu = m_screen != Screen::None && m_screen != Screen::Finished && m_screen != Screen::Dead;
-    set(m_hud.controls, menu ? "Click a button.  Escape goes back." : "");
+    // The keys are the port's, and the menus and a level have the original's own
+    // buttons on them now, so the help goes with the rest of the text.
+    set(m_hud.controls, "");
 }
 
 // ---- the tick ----------------------------------------------------------------
@@ -3064,6 +3519,8 @@ void MagicPortalsLayer::stopMusic(entt::registry& registry) {
 void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     using Supersonic::Input;
     ++m_ticks;
+    // The layer's own clock: what the original's absolute GetTimeF reads give.
+    m_layerClockMs += static_cast<double>(fixedDelta) * 1000.0;
     // Asked for on the TICK, where a key press is an edge, and answered on the
     // frame, where the picture is.
     if (Input::TickWasPressed(kDump)) m_dumpRequested = true;
@@ -3071,7 +3528,7 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
     // A menu is up instead of a level: it takes the tick, and nothing below
     // runs. The two are never both in the registry.
     if (m_screen != Screen::None && !overLevel) {
-        menuTick(registry);
+        menuTick(registry, fixedDelta);
         updateHud(registry);
         return;
     }
@@ -3408,9 +3865,10 @@ std::vector<Hud::Rect> MagicPortalsLayer::HelpBlockRects() const {
     return rects;
 }
 
-void MagicPortalsLayer::ScheduleDevTap(int tick, std::optional<glm::dvec2> viewFraction) {
+void MagicPortalsLayer::ScheduleDevTap(int tick, std::optional<glm::dvec2> viewFraction, int releaseTick) {
     DevTap tap;
     tap.tick = tick;
+    tap.releaseTick = std::max(releaseTick, tick + 1);
     tap.onHelpBlock = !viewFraction.has_value();
     tap.viewFraction = viewFraction.value_or(glm::dvec2(0.0));
     m_devTaps.push_back(tap);
@@ -3450,8 +3908,14 @@ MagicPortalsLayer::Touch MagicPortalsLayer::touchThisTick(const entt::registry& 
             it->onHelpBlock = false; // released where it went down
             touch.pressed = true;
             touch.held = true;
+            // Its release is counted from the tick it went down on, which may be
+            // later than the one it asked for.
+            it->releaseTick = std::max(it->releaseTick, m_ticks + 1);
             SUPERSONIC_LOG_INFO("Magic Portals") << "DEV tap down on tick " << m_ticks << " at (" << at.x << ", "
                                                  << at.y << ") units" << std::endl;
+        } else if (m_ticks < it->releaseTick) {
+            // Held where it went down, until its release tick.
+            touch.held = true;
         } else {
             touch.released = true;
             SUPERSONIC_LOG_INFO("Magic Portals") << "DEV tap up on tick " << m_ticks << std::endl;
@@ -3797,6 +4261,8 @@ void MagicPortalsLayer::OnUpdate(entt::registry& registry, float deltaTime) {
     // and double on one with two. It reads the last tick's state and changes
     // nothing.
     EmitHud(registry);
+    // And the menu states', which never share a frame with the HUD.
+    EmitMenu(registry);
     // Only the camera's SHAPE, for the viewport this frame is drawn into.
     if (m_camera == entt::null || !registry.valid(m_camera)) return;
     registry.get<Supersonic::CameraComponent>(m_camera).aspect = viewportAspect(registry);

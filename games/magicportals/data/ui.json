@@ -1483,5 +1483,350 @@
         ]
       }
     }
+  },
+
+  "menu_state": {
+    "_about": [
+      "WHAT EVERY MENU STATE SHARES: the black it opens under, and how a menu button is pressed.",
+      "Read by sim/MenuState.hpp. Specified in the remake's gitignored out/parity/specs/ui3/spec.md",
+      "sections 0.3-0.4 (evidence: motion.md 1.1-1.3 and static.md 0 beside it). The entrance every",
+      "menu button makes is ui_layer.button's, unchanged (ui3 spec 0.4, 'UIButton entrance').",
+      "",
+      "ONE CLOCK, THE TICK'S. The original times the black by GetTime() (wall clock) and a button's",
+      "entrance, bounce and blink by the frame time it accumulates; the spec's port decision P4",
+      "starts both on the state's first frame. The port runs every menu clock on its 60 Hz tick, as",
+      "step 40 runs the level's blacks and step 45 the pause: a state's first tick is its 0 ms, so a",
+      "--fixed-step frame drawn k ticks after it is k / 60 s in. The title's bob, an absolute",
+      "GetTimeF() read, takes the layer's own tick clock since it attached."
+    ],
+    "fade": {
+      "_source": [
+        "DECODED: SStateManager::setState (bytes 8865..8956) swaps the state at once, and",
+        "BaseState::preLoop (bytes 11137..11245) adds a FadeInController (bytes 37911..38779) to",
+        "EVERY state: a full-screen eth_framework_square.png (64x64, opaque white) tinted",
+        "ARGB(iTOb(fTOu((1 - elapsed / 700) * 255)), 0, 0, 0) by drawBlackRect (bytes",
+        "314960..315187), drawn after the layer manager, until elapsed reaches 700 ms. A menu",
+        "state has ONE black (a level has two: level_start.overlay).",
+        "MEASURED: 16 of 16 recorded transitions, linear T median 0.698 s (0.680..0.755), linear",
+        "under smoothEnd in 15 of 16; the new state's first frame at gain 0.000..0.064; no",
+        "fade-out and no cross-fade (ui3 spec 0.4, A-S1)."
+      ],
+      "fade_ms": 700
+    },
+    "press": {
+      "_source": [
+        "DECODED: Button::update (bytes 15892..16865). A touch down records whether it went down",
+        "inside the button's rectangle (Button::isPointInButton, bytes 15741..15892: the sprite's",
+        "rectangle at the button's current place, no bounce, no offset); while that touch is held",
+        "inside, m_color is 0xFFCCCCCC, a multiply of 204/255 = 0.80; on the release (touch state",
+        "3), with the down inside and the last held place inside, the button is pressed. setState",
+        "swaps on that frame and the new scene draws from the next (ui3 motion.md 1.3). Page tiles",
+        "also refuse the press once the touch has travelled more than g_scale.scale(48) from where",
+        "it went down (Page::update bytes 54849..55450; TouchGapDetector::update bytes",
+        "93936..94422 keeps the LARGEST distance while held).",
+        "MEASURED: box brightness 0.795..0.815 for the whole hold (nav_gold 235-241, 540-543,",
+        "675-678, 787-790, 1036-1041); the release frame drawn untinted in the old state and the",
+        "new state's black on the next (nav_gold 84->85, 544->545, 1042->1043)."
+      ],
+      "tint_byte": 204,
+      "tile_travel_units": 48
+    }
+  },
+
+  "main_menu": {
+    "_about": [
+      "THE MAIN MENU, PortalMainMenu (MainMenu, MainMenuLayer, SoundPanelLayer). Read by",
+      "sim/MainMenu.hpp. Specified in the remake's gitignored out/parity/specs/ui3/spec.md section 2",
+      "(evidence: static.md 1 and motion.md 3 beside it; stills main_menu.png, main_menu_b.png,",
+      "main_menu_sound_music_off.png; recordings rec/launch_gold.mp4 and rec/nav_gold.mp4).",
+      "",
+      "PLACED BY FRACTIONS OF THE SCREEN, as the pause (ui2 spec 0.1): an anchor is view * at_screen",
+      "and a top-left is that anchor less size_units * origin; every size is the sprite's 1x texel",
+      "size in units and the hd twin is drawn. The one exception is the music switch, whose x is 32",
+      "UNITS from the left edge at any aspect (ui3 spec 0.1), not the pause's 0.09 of the width.",
+      "",
+      "DRAWN THROUGH THE SCREEN OVERLAY in display values (ui3 spec D21), the background too, with",
+      "the state's black (menu_state.fade) last, over everything.",
+      "",
+      "OWNER RULINGS (ui3 spec 9): the Facebook button at (1, 0) and the free build's buy button",
+      "are omitted; Achievements is kept."
+    ],
+    "background": {
+      "_source": [
+        "DECODED: PortalMainMenu::preLoop (bytes 200461..202148, instructions 370..389) adds",
+        "menu_bg.ent at GetScreenSize() * 0.5 with AddScaledEntity(getScale): main_menu_bg.png",
+        "(1x 512x256, hd 1024x512) at 512 x 256 units, centred - wider than a 16:9 screen's",
+        "455.11, so its top-left is (-80, 0) px at 720p. A static sprite: no particle, no light.",
+        "MEASURED: centre (640, 360), S 1.40625 on the hd twin, template rms 2.31 grey (ui3 spec",
+        "2.2 M0); 0 px of 33 s of idle footage move outside the title and TAP START (2.3)."
+      ],
+      "sprite": "entities/main_menu_bg.png",
+      "size_units": [512, 256],
+      "centre_of_screen": [0.5, 0.5]
+    },
+    "play_button": {
+      "_source": [
+        "DECODED: MainMenuLayer::MainMenuLayer (bytes 95602..96208, instructions 22..44) adds",
+        "'play_button', sprites/main_play_game_button.png at MainMenuProperties.buttonNormPos, which",
+        "PortalMainMenu::PortalMainMenu (bytes 199409..200273, instructions 51..61) sets to",
+        "(0.5, 0.66); a three-argument addButton takes origin V2_HALF (UILayer::addButton bytes",
+        "62797..62924). PortalMainMenu::preLoop (instructions 55..71) calls",
+        "setButtonHighlightEffects(button, 0.01, 400) (bytes 370863..371164): setBounce(scaleA",
+        "(0.99, 1.01), scaleB (1.01, 0.99), 400) and setBlink(colourA 0.95, colourB 1.0, 400); then",
+        "setBlinkAlpha(alphaA 0.25, alphaB 1.0). Button::bounce (bytes 17149..17549):",
+        "interpolate(A, B, smoothEnd(bias)), bias (t mod stride) / stride, reversed on odd strides,",
+        "about the origin. Button::blinkColor (bytes 17819..18318): colour and alpha interpolated",
+        "LINEARLY by the same reversed bias. Button::draw (bytes 15237..15660) multiplies the press",
+        "tint, the custom colour (whose alpha is the entrance's) and the blink colour, then the",
+        "alpha by the blink alpha, truncated to bytes. Its clock is its own frame time from preLoop.",
+        "MEASURED: centre exact; alpha 0.25 / 0.42 / 0.48 on the three stills; sx 0.990..1.010",
+        "against sy, corr -0.887, stride 0.4075 s; blink a linear triangle, stride 0.4055 s",
+        "(emulator clock ~1.3% slow); main_menu.png sits at a stride start (ui3 spec 2.2 M1, 0.7",
+        "I1 and I2; the 0.95 dip at the dim end is the spec's MERGE reading of the decode)."
+      ],
+      "sprite": "main_play_game_button.png",
+      "at_screen": [0.5, 0.66],
+      "origin": [0.5, 0.5],
+      "size_units": [256, 64],
+      "bounce": {
+        "scale_a": [0.99, 1.01],
+        "scale_b": [1.01, 0.99],
+        "stride_ms": 400
+      },
+      "blink": {
+        "colour_a": 0.95,
+        "colour_b": 1.0,
+        "alpha_a": 0.25,
+        "alpha_b": 1.0,
+        "stride_ms": 400
+      }
+    },
+    "title": {
+      "_source": [
+        "DECODED: PortalMainMenu::PortalMainMenu (instructions 10..34) sets titleSprite",
+        "sprites/game_main_title.png and titlePos (0.5, 0.25); MainMenuLayer::MainMenuLayer",
+        "(instructions 107..159) adds it as the button 'title' with origin V2_HALF, after",
+        "play_button, so it is drawn over it. PortalMainMenu::doTitleAnimation (bytes",
+        "202943..203108) sets its offset every frame to (0, sin(GetTimeF() * 0.002) *",
+        "g_scale.scale(1.4)): GetTimeF is in milliseconds, so a 3141.6 ms period of 1.4 units. The",
+        "offset moves the picture, not the button's rectangle (Button::draw adds it to m_pos;",
+        "Button::isPointInButton does not). PortalMainMenu::loop (instructions 50..86) opens",
+        "createLevelSelectState when it is pressed, as TAP START does.",
+        "MEASURED: TL (280, -181.25 / -179.75 / -183.5) px, Pearson 0.9996; bob period 3.141 s,",
+        "amplitude 3.933 px, rms 0.067 px, x std 0.007 px over 33 s (ui3 spec 2.2 M2, 0.7 I3). The",
+        "file hd/game_main_title_.png fits as well; the constructor names this one."
+      ],
+      "sprite": "game_main_title.png",
+      "at_screen": [0.5, 0.25],
+      "origin": [0.5, 0.5],
+      "size_units": [256, 256],
+      "bob": {
+        "amplitude_units": 1.4,
+        "radians_per_ms": 0.002
+      }
+    },
+    "credits_button": {
+      "_source": [
+        "DECODED: PortalMainMenu::preLoop (instructions 101..126): addButton('credits',",
+        "sprites/credits.png, (0, 0), origin (0, 0)); PortalMainMenu::loop (instructions 9..39) sets",
+        "the CreditsScreen state when it is pressed, and preLoop (instructions 216..240) gives it",
+        "getItemSelectButtonSoundName.",
+        "MEASURED: TL (0, 0) exact, Pearson 0.9993 (ui3 spec 2.2 M3). The credits screen is not built",
+        "yet (ui3 spec 3): pressing it makes its noise and leads nowhere."
+      ],
+      "sprite": "credits.png",
+      "at_screen": [0, 0],
+      "origin": [0, 0],
+      "size_units": [32, 32]
+    },
+    "achievements_button": {
+      "_source": [
+        "DECODED: PortalMainMenu::preLoop (instructions 132..157): addButton('scores',",
+        "sprites/scores.png, (1, 1), origin (1, 1)); PortalMainMenu::loop (instructions 88..131)",
+        "sets the ScoreDashboard state when it is pressed; getItemSelectButtonSoundName.",
+        "MEASURED: TL (920, 630) exact, Pearson 0.9993 (ui3 spec 2.2 M4).",
+        "OWNER RULING: kept. The dashboard is not built yet (ui3 spec 4): pressing it makes its noise",
+        "and leads nowhere."
+      ],
+      "sprite": "scores.png",
+      "at_screen": [1, 1],
+      "origin": [1, 1],
+      "size_units": [128, 32]
+    },
+    "sound_switch": {
+      "_source": [
+        "DECODED: MainMenuLayer::MainMenuLayer (instructions 1..7) builds its SoundPanelLayer first,",
+        "and PortalMainMenu::PortalMainMenu (instructions 87..124) sets soundSwitchPos (0, 1),",
+        "origin (0, 1), sprites/sound_high.png on and sound_mute.png off. UISwitch::UISwitch (bytes",
+        "84978..85212) calls UIButton::UIButton, so it makes the buttons' entrance (ui3 motion.md",
+        "1.2). GlobalSoundSwitch::manageSoundSwitch (bytes 32340..32535) sets the global volume;",
+        "SoundPanelLayer::manageMusicSwitch (bytes 74288..74908) dismisses the music switch while",
+        "it is off and adds a fresh one when it comes back on - the pause's own class",
+        "(pause.sound_switch).",
+        "MEASURED: sound_high TL (0, 630), 0.9993; sound_mute at (0, 630), 0.9992 on",
+        "main_menu_sound_music_off.png, with no music switch drawn (ui3 spec 2.2 M5, 2.4)."
+      ],
+      "on_sprite": "sound_high.png",
+      "off_sprite": "sound_mute.png",
+      "at_screen": [0, 1],
+      "origin": [0, 1],
+      "size_units": [32, 32]
+    },
+    "music_switch": {
+      "_source": [
+        "DECODED: PortalMainMenu::PortalMainMenu (instructions 64..69 and 141..197): buttonWidth =",
+        "g_scale.scale(32) and musicSwitchPos = (buttonWidth / GetScreenSize().x, 1), origin (0, 1),",
+        "sprites/music_on.png / music_off.png. So its x is 32 UNITS from the left edge whatever the",
+        "aspect, where the pause's is 0.09 of the width. SoundPanelLayer adds it, as on the pause.",
+        "MEASURED: TL (90, 630) exact at 720p, Pearson 0.9993 - scale(32) is 90 px, where 0.09 W",
+        "would be 115.2 (ui3 spec 0.1, 2.2 M6); its entrance from (-75.3, +49.3) px, rms 0.443 px",
+        "(A-S3). music_off is not captured (U13)."
+      ],
+      "on_sprite": "music_on.png",
+      "off_sprite": "music_off.png",
+      "at_units_x": 32,
+      "at_screen_y": 1,
+      "origin": [0, 1],
+      "size_units": [32, 32]
+    }
+  },
+
+  "loading": {
+    "_about": [
+      "THE LOADING SCREEN the original opens with, LoadingScreen, before the main menu. Read by",
+      "sim/Loading.hpp. OWNER RULING R4 (ui3 spec 8.2): built as the original. Specified in the",
+      "remake's gitignored out/parity/specs/ui3/spec.md section 2.1 (evidence: motion.md 2,",
+      "rec/launch_gold.mp4 frames 73-184, rec/intro_lib.mp4); decoded from LoadingScreen::preLoop",
+      "(bytes 176126..178170) and ::loop (bytes 178170..179373).",
+      "",
+      "NOTHING IS LOADED. The original loads resource.list's textures two a frame, so its walk takes",
+      "81 frames on any device and its 8.96 s on the emulator are that emulator's frame time. The",
+      "port keeps the 81 frames, one a tick (1.35 s), then the decoded 1000 ms hold. The engine",
+      "splash before it is Ethanon's, not the game script's, and is not drawn.",
+      "",
+      "The scene is scenes/loading_screen.esc on black: 'bg', 'character' and 'portal'. The",
+      "background and the character are drawn in the level's space as the level's art is, and the",
+      "portal as a level's placed portal is (art.json portal); the logo and the dots are drawn",
+      "through the screen overlay after the state's black (menu_state.fade), as the state's loop",
+      "draws them after its controllers."
+    ],
+    "background": {
+      "_source": [
+        "DECODED: LoadingScreen::preLoop (instructions 45..69) seeks the scene's 'bg' entity -",
+        "world_select_bg.png in scenes/loading_screen.esc, 512x256 texels, scaled by",
+        "SGlobalScale::scaleEntities (instruction 8) to 512 x 256 units - and puts it at",
+        "GetScreenSize() * 0.5: centred, as the main menu's background is.",
+        "MEASURED: the paper background of rec/launch_gold.mp4 frames 74-183 (ui3 motion.md 2)."
+      ],
+      "sprite": "entities/world_select_bg.png",
+      "size_units": [512, 256],
+      "centre_of_screen": [0.5, 0.5]
+    },
+    "character": {
+      "_source": [
+        "DECODED: LoadingScreen::preLoop (instructions 71..99) puts the scene's 'character'",
+        "(magic_portals_hd.png, SpriteCut 4 x 4, PivotAdjust (0, 2): dark_mage.ent's sheet, art.json",
+        "character) at m_charStartPos = GetScreenSize() * (0.35, 0.5). ::loop (instructions 16..65),",
+        "every frame still loading, sets its place to interpolate(start, portal, loaded / total) and",
+        "its frame to FrameTimer::set(8, 11, 90, repeat) (bytes 23254..23650): 8 on the first call,",
+        "then one on for each 90 ms of frame time, back to 8 past 11 - the sheet's row 2, walking",
+        "right. The frame the last texture loads it is hidden (instructions 221..226).",
+        "MEASURED: x 401 px on the first scene frame to 717 px on the last visible one (launch_gold",
+        "74-141, work/motion/loading_launch_gold.json), hidden from frame 142."
+      ],
+      "start_of_screen": [0.35, 0.5],
+      "first_frame": 8,
+      "last_frame": 11,
+      "stride_ms": 90
+    },
+    "portal": {
+      "_source": [
+        "DECODED: LoadingScreen::preLoop (instructions 101..119) puts the scene's 'portal' at",
+        "GetScreenSize() * (0.65, 0.5), which the character walks to. It is portal.ent as the scene",
+        "writes it out in full: portal_halo.png added (art.json portal) and its two particle",
+        "systems, the spiral and portal.png (sim/Particles.hpp reads them from the .ent).",
+        "Instructions 121..152 add black_halo.ent at its place, z scale(-4) below it:",
+        "black_halo.bmp at SpriteCut 1, Scale 4 - 128 units - with blendMode 4, gs2d's AM_MODULATE,",
+        "a multiply of what is behind it. The engine has no multiply blend, so the port draws it",
+        "as black at an alpha of 1 - the texel (black_halo.bmp is a grey without alpha), which is",
+        "the same arithmetic on display values.",
+        "MEASURED: centre x ~823..832 px (ui3 spec 2.1); the dark spiral and halo of",
+        "rec/launch_gold.mp4 frames 74-155."
+      ],
+      "at_screen": [0.65, 0.5],
+      "entity": "portal.ent",
+      "halo_sprite": "entities/black_halo.bmp",
+      "halo_scale": 4
+    },
+    "vanish": {
+      "_source": [
+        "DECODED: LoadingScreen::loop (instructions 221..250), the frame the last texture loads:",
+        "character.Hide(), vanishEffect(character's place, portal's place) and killPortal(portal).",
+        "vanishEffect (Portal.angelscript, bytes 356384..356958): direction = normalize(object -",
+        "portal); AddEntity('suck_effect.ent', portal + direction * g_scale.scale(32), angle",
+        "radianToDegree(getAngle(direction)) - 90, getScale), where getAngle(v) is atan2(v.x, v.y)",
+        "in [0, 2 pi) (Ethanon GameMath.h:711-715); and AddEntity('sparkles.ent', the object's",
+        "place). A particle's angle starts at angleStart + its spread + its entity's angle",
+        "(ETHParticleManager.cpp:517). killPortal (bytes 357278..357358) calls",
+        "KillParticleSystem(0) and (1): ETHParticleManager::Kill, after which no particle is",
+        "released or renewed and each lives out its life (ETHParticleManager.cpp:211, 259, 378);",
+        "the halo sprite stays.",
+        "MEASURED: the lilac burst on the portal's character side at launch_gold frame 160 and the",
+        "sparkles over the dark halo to frame 183 (ui3 motion.md 2)."
+      ],
+      "suck_entity": "suck_effect.ent",
+      "suck_offset_units": 32,
+      "suck_angle_offset_deg": -90,
+      "sparkles_entity": "sparkles.ent"
+    },
+    "load": {
+      "_source": [
+        "DECODED: LoadingScreen::LoadingScreen (bytes 175670..175912) sets m_texturesPerFrame 2;",
+        "::preLoop (instructions 153..214) splits resource.list by line, 162 entries; ::loop",
+        "(instructions 192..209) adds min(total - loaded, 2) a frame, so the last loads on the 81st",
+        "frame. From the next frame (instructions 253..272) m_loadedTime adds",
+        "GetLastFrameElapsedTime() each frame, and once it is over 1000 the menu state is set",
+        "(SGameStateFactory::createMenuState).",
+        "MEASURED: 1.03 s from the vanish (launch_gold 156) to the menu's first frame (184) on the",
+        "emulator's slow clock (ui3 spec 2.1)."
+      ],
+      "resources": 162,
+      "resources_per_frame": 2,
+      "hold_ms": 1000
+    },
+    "logo": {
+      "_source": [
+        "DECODED: LoadingScreen::loop (instructions 274..309), every frame:",
+        "drawScaledSprite('sprites/asanteegameslogo.png', GetScreenSize() * (0.5, 0.2), getScale,",
+        "white, V2_HALF) - 128x64 texels, 128 x 64 units - drawn by the state's loop after its",
+        "controllers, so never covered by the black.",
+        "MEASURED: over black on launch_gold frame 73, the loading state's first (ui3 spec 2.1)."
+      ],
+      "sprite": "asanteegameslogo.png",
+      "at_screen": [0.5, 0.2],
+      "origin": [0.5, 0.5],
+      "size_units": [128, 64]
+    },
+    "dots": {
+      "_source": [
+        "DECODED: LoadingScreen::preLoop (instructions 216..526) fills m_swapStrings with 26 strings",
+        "of ten characters, each twice: none, then a run of up to three dots entering at the left",
+        "and leaving at the right one column at a time ('.', '..', '...', ' ...', ...,",
+        "'       ...', '        ..', '         .'). ::loop (instructions 85..190), while loading,",
+        "draws drawCenteredText(m_swapStrings[loaded mod 26], Matura42 - Matura84_shadow.fnt on an",
+        "hd screen - at GetScreenSize() * (0.5, 0.8), getScale / density: half a unit per font px,",
+        "white), then '............' the same way in ARGB(40, 255, 255, 255). loaded goes up two a",
+        "frame, so each frame shows the next of the 13 patterns.",
+        "MEASURED: 'Asantee logo and dim dots on black' on launch_gold frame 73 (ui3 motion.md 2)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "units_per_font_px": 0.5,
+      "centre_of_screen": [0.5, 0.8],
+      "columns": 10,
+      "run": 3,
+      "strings_per_pattern": 2,
+      "track_dots": 12,
+      "track_alpha_byte": 40
+    }
   }
 }

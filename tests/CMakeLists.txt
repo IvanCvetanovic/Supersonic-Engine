@@ -247,6 +247,13 @@ add_mp_test(test_mp_levelend)
 # pinned against the remake's ui2 spec, section 5. Pure, and it never skips.
 add_mp_test(test_mp_popup)
 
+# The front door: the loading screen, the main menu, and the black, press, bounce
+# and blink every menu state shares - ui.json's menu_state, main_menu and loading
+# and sim/MenuState, sim/MainMenu and sim/Loading, pinned against the remake's ui3
+# spec, sections 0 and 2. Pure, reading only the port's own committed data, so it
+# never skips.
+add_mp_test(test_mp_frontdoor)
+
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.
 add_mp_test(test_mp_layer)

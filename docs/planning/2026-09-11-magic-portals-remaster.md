@@ -6463,3 +6463,358 @@ the projectile 200. A
   - the game once after the final build (its captures failed "Permission denied" and were
     retaken), and once more mid-capture, where it ran again unrelinked.
 - **No other document's table moves.** Only this plan lists the suites' checks.
+
+## Step 48 - the front door: the loading screen, the main menu, and the black every menu state opens under (built)
+
+The port opened straight onto a main menu of its own layout. TAP START was the only
+button, 164 x 41 u. The title was a 512x512 texture stretched to 333 x 77 u. The
+background was the 1x file squeezed into the view. The engine's text lines ran over all
+of it. Every menu screen was a cut with no black, and a press acted on the down edge.
+There was no loading screen and nothing moved. This step builds the remake's merged
+spec `out/parity/specs/ui3/spec.md` sections 0.3-0.7 (what every menu state shares) and
+section 2 with 2.1 (the main menu and the loading screen before it). It holds them to
+that spec's acceptance lists 7.1 and 7.2. The evidence is `static.md` and `motion.md`
+beside the spec, the recordings under its `rec/`, and the library stills
+`out/parity/original/screens/main_menu*.png`.
+
+**THE OWNER'S STANDING INSTRUCTION: MATCH THE ORIGINAL.** The design owner ruled on ui3
+spec 8.2's four questions, and every later menu step is held to these answers:
+- **R1**, chapter select pages TWO chapters per page, as the original does. For the
+  chapter select step; nothing here.
+- **R2**, device back (Escape) on the main menu QUITS the app, as `MainMenuLayer::update`
+  does. Built here.
+- **R3**, LOCKING as the original, from the port's save: a chapter needs 60% or more of
+  the one before, and a level needs the one before it scored. The dev `--level` flag keeps
+  opening any level directly. For the chapter select and grid steps; nothing here.
+- **R4**, the loading screen as the original: the Asantee logo scene and its 1000 ms hold
+  before the main menu. Built here.
+- **P1-P4**, spec 8.1's port decisions, each taken as recommended:
+  - P1, every per-frame rule once per 60 Hz tick;
+  - P2, credits at 22.76 u/s;
+  - P3, the dashboard's scroll bar at W - 7.5 u;
+  - P4, a state's buttons and its black both start on the state's first frame. Only P4
+    applies here.
+- **Owner rulings carried:** the Facebook buttons (menu and credits), the free build's buy
+  button and every like, store or video button are OMITTED. Achievements is KEPT. Its
+  dashboard is the Credits and Achievements step's, and the pause's Achievements button
+  opens it once that step builds it.
+
+- **Data.** Every number is in `games/magicportals/data/ui.json`, in three new blocks, each
+  citing its decode and its measurement:
+  - `menu_state`: the black (`fade_ms` 700) and the press (`tint_byte` 204,
+    `tile_travel_units` 48);
+  - `main_menu`: M0-M6, TAP START's bounce and blink, and the title's bob. The music
+    switch's x is `at_units_x` 32: units, not a fraction;
+  - `loading`: the background, the character's walk, the portal, its halo and the vanish,
+    the load (162 resources, 2 a frame, `hold_ms` 1000), the logo and the dots.
+  - The entrance is `ui_layer.button`'s, unchanged.
+- **Arithmetic.** Three new pure files:
+  - `sim/MenuState`: the black's byte, Button's triangle, bounce and blink, its byte
+    arithmetic, scaling about an origin, and the touch's largest travel;
+  - `sim/MainMenu`: every piece in the original's order, what a point is inside, and which
+    press acts first;
+  - `sim/Loading`: the loop's frame arithmetic, the walk, the sheet frame, the dots, the
+    vanish's places and the hold.
+- **Drawing.**
+  - **The main menu** goes through `core/ScreenOverlay` in display values (spec D21),
+    background and all, with the state's black last. It puts nothing in the registry.
+  - **The loading screen's scene** is quads in the level's space, as a level's art is: the
+    background, the character, the portal's halo, the multiplied black halo and the
+    particles. Its logo and dots go through the overlay.
+  - **Chapter select and the grid** keep their world quads and gain their black over them.
+  - **The new `EmitMenu`** draws it all from `OnUpdate`, beside `EmitHud`.
+- **Closed:**
+  - D1's black, on every menu state change;
+  - D2 for the main menu;
+  - D3 for the main menu's background;
+  - D4, D5, D6, D7 (no text on any menu state), D8 (R2);
+  - D18, on every menu screen;
+  - D21 for the main menu;
+  - D22's clocks: the layer keeps them per state and across the per-tick layout, never in
+    a button.
+  - Chapter select's and the grid's own deltas (D9-D17, D19, D20) are the later steps'.
+
+**THE DECODE, READ AGAIN WHERE THE SPEC STOPPED.** From the listing the spec cites
+(`asbc/all_functions.txt`):
+- **`Button::update` (bytes 15892..16865) follows a touch in EVERY button it went down
+  inside.**
+  - A held touch rewrites `m_lastDownPos`. The release presses a button when that last
+    held place is inside and the down was inside.
+  - TAP START's rectangle lies wholly under the title's (y 385..565 px against -180..540),
+    so a touch there holds both.
+  - `PortalMainMenu::loop` acts on either with `createLevelSelectState`, so it makes no
+    difference where it goes. `MainMenu::FirstActed` still orders them as the original
+    runs them: the sound panel, TAP START, info, the title, Achievements.
+- **`UIButton::setColor` (bytes 31747..31953)** writes the entrance alpha into `m_color`
+  and keeps its rgb, which `Button::update` has just set to 0xFFCCCCCC or white.
+  `Button::draw` (bytes 15237..15660) then multiplies that by the custom colour and the
+  blink colour, and the alpha by the blink alpha, truncating each to a byte. So TAP START's
+  alpha is `entrance x blink` and its grey `tint x blink`.
+- **`setButtonHighlightEffects` (bytes 370863..371164) fixes the bounce stride at 400 ms.**
+  Its second argument is the BLINK stride. TAP START passes 400, so the spec's numbers
+  hold; the pause's close button passes 150, which step 47 already has.
+- **`drawBlackRect` (bytes 314960..315187)** writes `iTOb(fTOu((1 - t/700) * 255))`,
+  truncated, and `FadeInController::draw` stops at `elapsed >= 700`.
+- **`MainMenuLayer::MainMenuLayer` (bytes 95602..96208) builds its `SoundPanelLayer`
+  FIRST.**
+  - So `UILayer::draw` draws the sound switch before TAP START, the title, info and
+    Achievements, with the music switch (added by the panel's update) last.
+  - Spec 2.3 puts the whole panel after M4. No capture separates the two, since no switch
+    overlaps a button; the port takes the decode, as step 45 did.
+- **`MainMenuLayer::update` (bytes 96444..96772)** tests `GetKeyState(14) == 1` and calls
+  `Exit`. That is R2.
+- **The noises.** TAP START and the title make `getButtonSoundName`, the port's
+  `menu_button`. Info and Achievements make `getItemSelectButtonSoundName`, which
+  `sounds.json` already maps with the level's own buttons: `level_button`.
+- **`LoadingScreen::loop` (bytes 178170..179373).**
+  - `BaseState::loop` draws the controllers first: the loading state's own black.
+  - Only while loading, the loop then writes `m_swapStrings[loaded mod 26]` white and
+    `'............'` at ARGB(40, 255, 255, 255), both Matura42 (Matura84_shadow on hd) at
+    (0.5, 0.8) and half a unit per font pixel.
+  - The logo comes after, every frame. So the logo and the dots are over the black, as
+    launch_gold frame 73 shows them on black.
+  - The 26 strings are 13 patterns, each twice: a run of three dots crossing ten columns.
+- **`FrameTimer::set` (bytes 23254..23650)** resets to its first frame on the first call.
+  After that it steps one frame each time its summed frame time reaches the stride, and
+  never more than one a call.
+- **`vanishEffect` (bytes 356384..356958).**
+  - The suck effect goes at `portal + normalize(character - portal) * scale(32)`, turned
+    `getAngle(direction) - 90` degrees. `getAngle` is `atan2(x, y)` in [0, 2 pi)
+    (Ethanon `GameMath.h:711-715`), so 180 degrees here.
+  - The sparkles go on the character.
+  - `killPortal` (bytes 357278..357358) kills both of the portal's particle systems:
+    nothing is released or renewed, and each particle lives out its life
+    (`ETHParticleManager.cpp:211, 259, 378`).
+  - A particle starts turned by its entity's angle (`ETHParticleManager.cpp:517`).
+- **`black_halo.ent` is blendMode 4, `AM_MODULATE`** (gs2d `Video.h:60-68`), added at the
+  portal's z less 4.
+  - The engine has no multiply blend. The port writes `black_halo.bmp` once, beside the
+    prisms, as black at an alpha of 255 less its grey. Drawn with the ordinary blend, that
+    is the same arithmetic.
+  - That file is the layer's only write outside `Paths::saveDir`, and only into a named
+    `Paths::prisms` (the header says so). With none, nothing is written and the halo is
+    left undrawn, so a layer built bare never writes into the working directory.
+  - **The frames overrule the decoded order.** Ethanon's draw hash sorts z less 4 UNDER
+    the portal's added halo. But launch_gold frame 183, once the spiral is killed, is a
+    black blob with no trace of that halo, and frames 74-155 show the spiral light on dark.
+    So the port draws the multiply over the added halo and under the particles. Why is not
+    settled.
+
+**ONE CLOCK: THE TICK'S.** This is P4's sibling, decided the way steps 40 and 45 decided it
+for the level's blacks and the pause.
+- The original times the black by `GetTime()`, and the bob by `GetTimeF()`, both wall
+  clocks. It times buttons, blinks and the loading hold by summed frame time.
+- The port runs all of it on the 60 Hz tick:
+  - a menu state's first tick is its 0 ms, and a `--fixed-step` frame k ticks later is
+    k / 60 s in;
+  - the bob reads the layer's own clock from attach (`LayerClockMs`).
+- The loading hold sums whole microseconds. 60 ticks are 1000 ms whether the tick is the
+  double 1000/60 or the float the engine holds, and a first build that summed the float
+  held one tick short.
+
+**A STATE CHANGE WAITS FOR THE NEXT TICK; A PAGE DOES NOT.**
+- **A release that changes state is done at the start of the next tick.** So are the
+  loading hold and the back key on chapter select or the grid.
+  - `SStateManager::setState` swaps at once, but the new scene draws from the next frame.
+    The original's release frame is drawn in the old state, untinted, and the new black
+    comes one frame on (spec 0.4, A-S5).
+  - `PressMenu` and the new `PressMainMenu` stay immediate. The suites' presses are
+    unchanged.
+- **A page of the same grid is not a state**: no black, and its arrow acts on the release
+  tick itself.
+- **The press everywhere.** The main menu, and chapter select's and the grid's world
+  quads, now:
+  - tint the button a touch went down on at 204/255 while it is held inside;
+  - act on the release with the down inside;
+  - on a chapter or level tile, refuse a touch whose largest travel passed 48 u.
+
+**THE LOADING SCREEN (R4).** `Screen::Loading` opens where the menu used to, when no level
+is named. What it draws:
+- `world_select_bg` centred;
+- the character's hd sheet walking frames 8-11 from 0.35 to 0.65 of the width by
+  `loaded / 162`;
+- the portal: `portal_halo` added, the multiplied black halo, and `portal.ent`'s two
+  particle systems through the level's own emitter code (which gains an entity angle and a
+  kill);
+- the dots and the logo.
+
+The 81st tick hides the character, kills the portal's systems and adds the suck effect and
+the sparkles. Then:
+- tick 142 is the hold's 61st, and asks for the menu;
+- tick 143 is the main menu's first, black.
+
+Not drawn:
+- the engine's own splash before it, which is Ethanon's and not the game script's;
+- the loading state's black as the emulator showed it (spec U15, its first frames took
+  165 ms or more). The port draws the decoded 700 ms of it over the scene, under the logo
+  and the dots.
+
+No music plays until the main menu's `playMenuMusic`.
+
+**DEV ONLY**, in `main.cpp`:
+- **`--tap <x>,<y>@<tick>-<release>`** holds a tap from its tick until its release tick, so
+  a capture can show the press tint. `--tap x,y@tick` still releases on the next tick.
+  Both reach the menu states now, through `touchThisTick`.
+- **`--press back@<tick>`** is the back key on a menu state.
+- `--record`/`--replay` were not used.
+
+**CAPTURED AND MEASURED.**
+- **Scripts.** `out/parity/ui3/frontdoor/capture_port.sh` and `measure.py` (gitignored),
+  on the spec's own fits: `specs/ui3/work/static/lib.py`'s sprite Pearson, and
+  `work/motion`'s fade regression, masked template tracks, ramp and bounce fits, re-run on
+  the port's frames.
+- **Frames.** 1280x720, `--fixed-step`, one tick a frame, each capture its own process:
+  - the whole launch: loading frames and every tick of the menu's entrance (140..190);
+  - one blink period tick by tick (239..288), then three more seconds at 5 ticks;
+  - 12 s of the bob at 12 ticks, and 30 s at 60 ticks;
+  - muted, with the sound switch tapped on 240;
+  - releases on TAP START and on the title on 241;
+  - TAP START held from 240 to 255, chapter select from 256, the back key on 400, the
+    menu again from 401;
+  - the same to chapter select, then its first tile tapped on 330 and released on 331
+    (the level grid from 332), the back key on 450 and chapter select again from 451
+    (330..380, 449..500).
+- **The binary.** All 363 captures and the back-key run were retaken on the final source,
+  after the loading screen's last change. The grid series' 103 were taken on it too. They
+  came before the halo writer's guard on an empty prisms directory, which no capture reaches
+  (`main.cpp` always names one). Every run logged `Vulkan validation layers:
+  ACTIVE` and wrote its frame, and none logged a validation error.
+- **Pairs.** `compare.py`, each looked at:
+  - frame 239 against `main_menu.png`: `offset_px (0, 0)`, `edge_iou` 0.664, `mean_abs`
+    6.70;
+  - frame 263 against `main_menu_b.png`: (0, 0), 0.731, 5.20;
+  - muted against `main_menu_sound_music_off.png`: (0, 0), 0.645, 8.23;
+  - frame 60 against launch_gold 100: (0, 0), 0.634, 4.11;
+  - frame 141 against launch_gold 183: (0, 0), 0.751, 1.80.
+  - Every element lands on the original's. The residue is the omitted Facebook button,
+    TAP START's blink phase, and the loading character's and particles' moment.
+
+| # | check | original | port | tolerance | pass |
+|---|---|---|---|---|---|
+| A-S1 | loading -> menu (first black frame 143): linear T, rms; smoothEnd rms | T 0.698 median (0.680..0.755), rms 0.005..0.028 | **T 0.700** (t0 -0.002), rms 0.0013; smoothEnd 0.0317; t0 held at the first frame: T 0.698, rms 0.0016 | 0.70 +-0.03; rms <= 0.02 and under smoothEnd's | yes |
+| A-S1 | gain at 0.10 / 0.35 / 0.60 s; first new frame | 0.143 / 0.50 / 0.857 (decoded); 0.000..0.064 | **0.145 / 0.503 / 0.859**; 0.000 (frame 143 all black) | +-0.03; <= 0.07 | yes |
+| A-S1 | menu -> chapter select by the release (256) | as above | T 0.700, rms 0.0013; 0.145 / 0.502 / 0.859; 0.000; release frame 255 = its untouched twin (mean abs 0.000) | as above; old frame untinted | yes |
+| A-S1 | chapter select -> menu by the back key (401) | as above | T 0.700, rms 0.0013; 0.145 / 0.503 / 0.859; 0.000; frame 400 = settled chapter select (0.000) | as above | yes |
+| A-S1 | chapter select -> level grid by a tile's release (332) | as above | T 0.700, rms 0.0013; t0 held: T 0.698, rms 0.0014; 0.145 / 0.502 / 0.859; 0.000 (frame 331 is the old state at gain 0.968 of the grid's background) | as above | yes |
+| A-S1 | level grid -> chapter select by the back key (451) | as above | T 0.700, rms 0.0012; t0 held: T 0.698, rms 0.0016; 0.145 / 0.502 / 0.859; 0.000 | as above | yes |
+| A-S2 | title y, launch (143): rms, t0 first; left at 0.10 / 0.25 / 0.50 s | rms 0.17..0.85 (free t0); 69.97 / 42.12 / 8.91 | **rms 0.157** (45 frames, 2 dim frames off by > 4 px dropped); 70.32 / 42.36 / 8.93 | <= 0.9; +-3 px | yes |
+| A-S2 | title y, after the back key (401) | same | rms 0.179; 70.37 / 42.37 / 8.91 | same | yes |
+| A-S2 | TAP START y, both entrances | same | rms 0.043 / 0.045 from 0.23 s; 42.02 / 8.88 at 0.25 / 0.50 | same | yes, **0.10 s not trackable**: entrance 0.14 x blink 0.44, under a black that leaves 0.15 of the picture, is under 1% contrast; the 14 frames before 0.23 s were not found or matched elsewhere |
+| A-S3 | M4 / M6 corner entrance: rms on the anchor ray, direction | 0.256 / 0.443 px | **0.075 / 0.057 px**; best angle 0.05 / 0.00 degrees off the ray; start (+78.44, +44.12) / (-75.30, +49.29) px decoded | <= 0.6 px; 1 degree | yes |
+| A-S4 | M2 alpha, linear T | 0.700..0.735 | **0.700** (rms 0.0053; smoothEnd 0.0334) launch; 0.695 (0.0056) after the back key | 0.70 +-0.04 | yes |
+| A-S5 | TAP START held 240..254, released on 255 | 0.795..0.815; new state next frame | **0.798..0.803** on all 15 held frames; 255 untinted (= twin); 256 chapter select, black | 0.80 +-0.02; nothing before the release; next tick | yes |
+| A-S6 | a tile dragged 60 u / 40 u | decoded | `test_mp_layer` `ATileRefusesATouchThatTravelled`: 60 u no action, 40 u acts | exact | yes, on the port's chapter icons (its own layout until R1's step) |
+| A-S7 | M0 background template rms | 2.31 | **0.349** on frame 239 (2.356 on `main_menu.png` by the same script) | <= 3 grey | yes |
+| A-M1 | M3 / M4 / M5 / M6 TL, S, Pearson | exact, 0.9993 each | **(0, 0), (920, 630), (0, 630), (90, 630)**; S 1.40625; Pearson 0.99998 / 0.99999 / 0.99998 / 0.99998 | +-0.5 px; S +-0.003; >= 0.999 | yes |
+| A-M2 | M2 TL x and y band; M1 centre | x 280; y in [-183.94, -176.06]; centre (640, 475.2) | **(280.0, -176.09)**, S 1.40625, 0.99999 (the bob at 3983 ms is +3.91 px); M1 centre (640.0, 475.2) at sx 0.99, sy 1.01 | x +-0.5; y in band; +-1 px | yes, y **at the band's edge**: the capture is at the bob's crest |
+| A-M3 | muted: M5 `sound_mute`; M6 slot | (0, 630) 0.9992; empty | **(0, 630)**, S 1.40625, 0.99998; music_on -0.034, music_off -0.037 at (90, 630) | +-0.5 px; < 0.5 | yes |
+| A-M4 | TAP START at rest (87 frames, 239..469) | sx 0.990..1.010, antiphase -0.887, stride 0.4075 s; alpha triangle, rgb in phase; min 0.2375 | **sx 0.990..1.010** (fit 0.990 -> 1.010, rms 0.0002), corr **-0.9996**, stride **0.400 s**, t0 0.000; alpha **0.248..1.000** (stride 0.400, t0 0); alpha/grey corr 0.997; brightness x alpha min **0.233** | +-0.003; 400 ms +-1%; +-0.03; 0.2375 +-0.03 | yes |
+| A-M5 | the bob, 61 frames over 12 s | 3.141 s, 3.933 px, rms 0.067, x std 0.007 | **3.1415 s, 3.940 px, rms 0.008 px, x std 0.0002 px** | +-1%; +-0.15; <= 0.1; <= 0.2 | yes |
+| A-M6 | 30 s, 31 frames: temporal std with M1, M2 and M2's bob band masked | 0 px > 6 (p99 1.40, max 3.10) | on the original's own masks (`work/motion/idlefit.py`: title x 330..950, y 60..460; TAP START x 430..850, y 380..540; the band y 34..59, x 461..791): **0 px > 6**, p99 0.42, max 5.18. The band alone holds 4,384 px > 6 (original 4,334). On `measure.py`'s wider masks: 0, p99 0.00, max 1.65 | 0 px | yes |
+| A-M7 | every element on the same frame | same frame | frame 143 black to its last byte; on 144 every tracked element (title, TAP START, Achievements, music) matches; the corner fits' t0 is the first frame | exact | yes |
+| A-M8 | release on TAP START / on the title on 241 | next frame | 241 = the untouched twin (0.000 each); 242 all black; 243 correlates **0.977** with chapter select and 0.129 with the menu | exact | yes |
+| R2 | `--press back@300` on the main menu | quits | logged "quitting" on tick 300; the 900-frame run exited 0 early (5.6 s) | - | yes |
+
+- **Sprites land on the decode, exactly.** Every button fits best at its decoded top-left
+  and at 1.40625, with Pearson 0.99998..0.99999 where the original's own stills fit
+  0.9993. The measured original sits on the same pixels.
+- **The loading screen has no acceptance row** (spec 7). Its pairs were looked at
+  frame by frame against launch_gold 100, 160 and 183: the walk, the spiral on the dark
+  halo, the lilac suck to the portal's character side, and the black blob with its
+  sparkles after.
+
+**TESTS.**
+- **`test_mp_frontdoor`, new: 194**, pure, against the spec.
+  - The file's numbers.
+  - The black's bytes and A-S1's three gains.
+  - The triangle, TAP START's bounce (antiphase, smoothEnd) and blink (linear, the dip at
+    the dim end, brightness x alpha 0.2375), and `Button::draw`'s bytes.
+  - The 48 u travel, the largest while held.
+  - M0-M6 at their stills' pixels, the draw order, and 4:3 (music stays 32 u in).
+  - The bob's period and amplitude, on the layer's clock, moving the picture and not the
+    rectangle.
+  - All six entrance offsets along the anchor ray (A-S3's px), A-S2's three remaining
+    offsets, and A-S4's 127.
+  - The music switch going with the sound and coming back afresh.
+  - What a point is inside, the overlap, which acts first, and the held tint.
+  - The loading screen: 81 frames, the menu on 142 for either tick, the walk, FrameTimer's
+    frames, the 26 strings, the vanish's places and angle, and the logo.
+  - Eight refusals, each by name.
+- **`test_mp_layer`: 536 -> 590.**
+  - `TheMenuWalksToALevel` and `TheGridPagesThroughAWorld` tick through the loading screen
+    first. The main menu's pictures are the overlay's, background first and title over
+    TAP START, and no longer registry quads.
+  - `TheSceneHoldsDisplayValues` starts on `Screen::Loading`.
+  - `AClickOnTheMenuPressesWhatIsUnderIt` becomes `TheMainMenuActsOnTheRelease`:
+    - down on TAP START holds it and the title;
+    - 15 ticks held change nothing, at 0.80;
+    - the release tick is still the menu, untinted;
+    - chapter select comes on the next tick under a whole black, with the menu's noise;
+    - a touch dragged off and let go presses nothing.
+  - **Five new cases:**
+    - `TheLoadingScreenLeadsToTheMenu`: its quads, the black first and the logo last with
+      the dots between, the character gone on 81, the dots gone on 82, the menu on tick
+      143.
+    - `TheMenuStatesOpenUnderABlack`: 127/255 at 21 ticks, gone at 42. Chapter select and
+      the grid each get their own black, and a page does not. The back key goes up a state
+      on the tick after.
+    - `TheBackKeyOnTheMainMenuQuits` (R2), which clears the process-wide latch after.
+    - `TheMainMenusSwitchesAndCornerButtons`: the switches on the release tick, and A-M3
+      in the layer. Info and Achievements make `level_button` and lead nowhere.
+    - `ATileRefusesATouchThatTravelled` (A-S6).
+- **`test_mp_hud` 417, `test_mp_levelend` 226, `test_mp_popup` 156**: unchanged.
+
+- **A-S1 covers the port's five state changes.** loading -> menu, menu -> chapter select,
+  chapter select -> menu, chapter select -> grid and grid -> chapter select were each fitted
+  on frames. The spec's other transitions (credits, the dashboard, and chapter select's and
+  the grid's own back buttons) are later steps', and use the same black.
+- **TAP START's blink colour: the decode, against this step's own fit of the original.**
+  - `measure.py`'s M1 composite fit reads the blink's dim end (alpha about 0.25) on both
+    stills. The port's frame 239 fits grey **0.941** at alpha 0.248 (rms 0.61), which is the
+    decode's colorA 0.95 at the start of a stride. `main_menu.png` fits grey **1.001** at
+    alpha 0.246 (rms 3.68). That is motion.md's reading, which spec 8.4 set aside for the
+    decode (the push order of `setButtonHighlightEffects`, instructions 22..40).
+  - The decode is kept. At alpha 0.25, grey and alpha separate only weakly: the original's
+    still fits with rms 3.68 where the port's clean frame fits with 0.61 and recovers alpha
+    to 0.0001.
+  - A-M4's tolerance holds either reading: brightness x alpha 0.233 (port) and 0.246
+    (original) both lie in 0.2375 +-0.03.
+
+**NOT BUILT, INFERRED, AND LEFT OPEN.**
+- **Not built, and each is a later step's:**
+  - info's credits screen (spec 3) and Achievements' dashboard (spec 4): both buttons make
+    their noise and lead nowhere;
+  - chapter select and the grid as the original lays them out (R1, R3, the pager);
+  - the switches' saving, as step 45 left it.
+- **INFERRED:** the black halo over the portal's added halo, against the decoded z (above).
+- **Left open:** TAP START's blink colour at the dim end, the decode (0.95) against the
+  original still's fit (1.00). A-M4 passes either way (above).
+- **Not captured:** the loading state's own 700 ms black (U15); `music_off` on the main
+  menu (U13); the main menu's back key on the original (U1).
+- **Taken from the decode, as step 45 did:**
+  - the music switch starts its entrance with the rest, where the original adds it on the
+    panel's first update, a frame later. A-M7 asks for the same frame.
+  - the sound switch drawn before TAP START (above).
+- **TAP START's first 0.23 s** are not tracked on the port's frames (A-S2 above). The title,
+  under the same arithmetic, is tracked from 0.05 s.
+- **The black and the bob run on the tick**, not a wall clock (above). A port frame that
+  took longer than a tick would show the original's black further on than the port's.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning, at `/W4` on the game, the sim library and every suite. One C4456
+  (a shadowed `halo` in `buildMenu`) appeared on the way and was renamed. For the check, the
+  step's headers and sources were touched and the build recompiled eight translation units:
+  `MenuState`, `MainMenu`, `Loading`, `MagicPortalsLayer`, `LevelVisit`, `main` and both
+  suites. It printed none.
+- **ctest.** **116 of 116** pass (115 and the new suite), "Not Run" 0, on the final source.
+  That includes the halo writer's guard, which recompiled `MagicPortalsLayer`, `LevelVisit`,
+  `main` and `test_mp_layer` with no warning.
+  Directly: `test_mp_frontdoor` 194, `test_mp_layer` 590, 0 failures each.
+- **Smart App Control** refused freshly linked executables. Each was deleted and relinked
+  until nothing was Not Run:
+  - `test_mp_layer` once;
+  - after the first full build, 6 suites, then 1;
+  - after the loading screen's build, 3, then 1;
+  - after the from-scratch recompile, 3, then none, and a full run passed all 116;
+  - after the guard, `test_layerstack` (BAD_COMMAND), then none, and 116 again.
+- **No other document's table moves.** Only this plan lists the suites' checks.

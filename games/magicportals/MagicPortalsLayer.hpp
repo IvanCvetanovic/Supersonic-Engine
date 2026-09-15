@@ -23,6 +23,9 @@
 #include "sim/Art.hpp"
 #include "sim/Hud.hpp"
 #include "sim/LevelEnd.hpp"
+#include "sim/Loading.hpp"
+#include "sim/MainMenu.hpp"
+#include "sim/MenuState.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Pause.hpp"
 #include "sim/Popup.hpp"
@@ -107,7 +110,9 @@ public:
         std::string chapters = MAGICPORTALS_CHAPTERS_FILE;
         std::string data = MAGICPORTALS_DATA_DIR;
         std::string portData = MAGICPORTALS_PORT_DATA_DIR;
-        std::filesystem::path prisms; // where LevelBuilder may write
+        // Where LevelBuilder may write, and the loading screen's black halo
+        // (loadingHaloImage). Nothing is written when it is empty.
+        std::filesystem::path prisms;
         // What res:// stands for: the converter writes the levels' art beside
         // the levels, so the directory above them (Sprites.hpp).
         std::string art = MAGICPORTALS_LEVELS_DIR "/..";
@@ -116,7 +121,7 @@ public:
         std::string original = MAGICPORTALS_ORIGINAL_DIR;
 
         // WHERE THE PLAYER'S MEDALS ARE KEPT, and empty by default - which
-        // means this layer never touches the filesystem.
+        // means this layer keeps no save on the filesystem.
         //
         // Injected rather than resolved here, which is WolfBrigadeLayer's
         // contract and exists for the reason its header states: "where may I
@@ -149,16 +154,19 @@ public:
     // built with a level's name never sees the menu at all, which is how every
     // suite, every headless render and --level enter the game.
     //
-    // The original's own three (MainMenu, WorldSelector, LevelSelector), less
-    // what needs state the port does not keep: no score, so no locking, no
-    // page counter, no swipe. What is drawn is its art, where its own
-    // normalized positions put it.
+    // The original's own menu STATES: LoadingScreen, PortalMainMenu,
+    // WorldSelector and LevelSelector. Each opens under its own black
+    // (menu_state.fade) and presses its buttons as Button::update does
+    // (menu_state.press). The loading screen and the main menu are the remake's
+    // ui3 spec section 2 (sim/Loading.hpp, sim/MainMenu.hpp, drawn by EmitMenu);
+    // chapter select and the grid are still the port's own layout of the
+    // original's art, which ui3 sections 5 and 6 are to replace.
     // `Finished` and `Dead` are the odd two: each sits OVER the level it ended,
     // which stays loaded, drawn AND RUNNING - neither screen stops game time
     // (the remake's ui2 spec, D7) - and both are drawn through the screen
     // overlay on the view, as the pause is (sim/LevelEnd.hpp). Everything that
     // treats a screen as "the level is gone" has to name both.
-    enum class Screen { None, Main, Worlds, Levels, Finished, Dead };
+    enum class Screen { None, Loading, Main, Worlds, Levels, Finished, Dead };
 
     // A button the menu drew, in the menu's pixel box (MenuBoxPx). Kept as
     // data so a click is tested against exactly what was drawn, and so a test
@@ -267,6 +275,36 @@ public:
     // design units; false in a level that places none.
     bool NoPortalSignRect(Hud::Rect& out) const;
 
+    // ---- the menu states: the loading screen, the main menu and the black -----
+    //
+    // Every menu state's clock runs on the tick (ui.json menu_state._about): zero
+    // on the state's first tick, which is the tick after the one whose release -
+    // or whose loading hold, or back key - asked for it, as the original's
+    // setState swaps between frames. The layer's own clock, which the title's bob
+    // reads, runs from attach.
+    const MenuState::Rules& MenuStateRules() const { return m_mainMenuRules.state; }
+    const MainMenu::Rules& MainMenuRules() const { return m_mainMenuRules; }
+    const Loading::Rules& LoadingRules() const { return m_loadingRules; }
+    // How long the menu state that is up has been current: ticks and milliseconds.
+    int MenuStateTicks() const { return m_menuClock.ticks; }
+    double MenuStateMs() const { return m_menuClock.ms; }
+    // The layer's own clock since it attached, in milliseconds of the tick.
+    double LayerClockMs() const { return m_layerClockMs; }
+    // The main menu's buttons a held touch that went down inside them is still
+    // inside (MainMenu::Bit): drawn at the press tint.
+    unsigned MainMenuHeld() const { return m_menuTouch.mainHeld; }
+    // The main menu's two switches, and the music switch's clock on this state.
+    Pause::Switches MainMenuSwitches() const;
+    // Press one of the main menu's buttons, as a release on it does - at once: a
+    // touch's release asks for it on the tick after. False when it led nowhere: no
+    // main menu is up, the music switch is not there, or it is info or
+    // Achievements, whose screens the port does not have yet.
+    bool PressMainMenu(entt::registry& registry, MainMenu::Button button);
+    // Puts this frame's menu into the screen overlay: the main menu's pictures, the
+    // loading screen's logo and dots, and every menu state's black. Nothing when no
+    // menu state is up. OnUpdate calls it once a frame.
+    void EmitMenu(entt::registry& registry) const;
+
     // Puts this frame's HUD into the engine's screen overlay, in the original's
     // order of drawing. OnUpdate calls it once a frame; it is public so a suite
     // can ask for exactly the HUD without the rest of a frame. Nothing is drawn
@@ -331,18 +369,20 @@ public:
     std::vector<Hud::Rect> HelpBlockRects() const;
 
     // DEV ONLY: a touch at a point of the view - given as fractions of it - pressed
-    // on the layer's tick `tick` and released on the next, for a --fixed-step
+    // on the layer's tick `tick` and released on `releaseTick` (the next, when that
+    // is not after `tick`), held where it went down in between, for a --fixed-step
     // capture. With no point it lands on the centre of the level's first help
-    // block, wherever the camera has it on that tick. Only the popups read it: it
-    // opens a help block's popup, and closes one that is up.
-    void ScheduleDevTap(int tick, std::optional<glm::dvec2> viewFraction);
+    // block, wherever the camera has it on that tick. The popups and the menu
+    // states read it: it opens a help block's popup, closes one that is up, and
+    // presses a menu's buttons as a touch does.
+    void ScheduleDevTap(int tick, std::optional<glm::dvec2> viewFraction, int releaseTick = 0);
 
     // DEV ONLY: press one of these on the layer's tick `tick` (1 the first
     // OnFixedUpdate), as a tap would, for a --fixed-step capture that has no
-    // input. `Pause` is the in-level pause control; the rest are the pause's own
-    // buttons. A press is taken on the first tick at or after its own on which
-    // what it presses is there to press.
-    enum class DevPress { Pause, Levels, Resume, Skip, Achievements, Sound, Music };
+    // input. `Pause` is the in-level pause control; `Back` the back key on a menu
+    // state; the rest are the pause's own buttons. A press is taken on the first
+    // tick at or after its own on which what it presses is there to press.
+    enum class DevPress { Pause, Levels, Resume, Skip, Achievements, Sound, Music, Back };
     void ScheduleDevPress(int tick, DevPress press);
 
     // DEV ONLY: hold a walk from tick `from` to tick `to` inclusive, as a held
@@ -417,11 +457,24 @@ private:
     void openFinished(entt::registry& registry);
     void layOutMenu();
     void buildMenu(entt::registry& registry);
+    // A menu state becomes current: its clock from nothing, no touch followed.
+    void beginMenuState();
+    // The loading screen's quads placed for this tick, and its hold counted.
+    void loadingTick(entt::registry& registry);
+    // The main menu's touch, as Button::update reads it.
+    void mainMenuInput(entt::registry& registry);
+    // Chapter select's and the grid's touch, the same way, on their world quads.
+    void menuQuadInput(entt::registry& registry);
+    // A picture of the original's that the menu states draw, resolved once; empty
+    // when it cannot be read.
+    const std::string& menuPicture(const std::string& file) const;
+    // A font of the original's, read once for the run.
+    void loadUiFont(const std::string& name);
     void unloadMenu(entt::registry& registry);
     // Just the drawables, which a rebuilt screen replaces but a click on a
     // level takes away for good.
     void unloadMenuDrawables(entt::registry& registry);
-    void menuTick(entt::registry& registry);
+    void menuTick(entt::registry& registry, float fixedDelta);
     // One of the original's own menu images, which live beside its entities.
     std::string menuImage(const std::string& file) const;
 
@@ -561,8 +614,15 @@ private:
         glm::dvec2 cellPx{0.0};
         std::string image;
         int crystal = -1; // when it decorates one: it stops with the crystal
+        double angleDeg = 0.0; // its entity's angle, which every particle starts turned by
+        // ETHEntity::KillParticleSystem: no particle is released or renewed, and each
+        // lives out the life it has.
+        bool killed = false;
         std::vector<Particle> particles;
     };
+    // Every particle system of an entity of the original's, at a place: false when
+    // the .ent carries none or cannot be read.
+    bool addEntityEmitters(const std::string& entity, const glm::dvec2& atPx, float z, double angleDeg);
 
     // No emitter draws more than this, whatever its .ent asks for. Chapter 1
     // places 189 of them and the largest asks for 32, so this is a guard
@@ -663,6 +723,59 @@ private:
 
     // The menu. Screen::None while a level is played.
     Screen m_screen{Screen::None};
+
+    // ---- the menu states ---------------------------------------------------
+    MainMenu::Rules m_mainMenuRules;
+    Loading::Rules m_loadingRules;
+    // The state's clock: `fresh` until its first tick, which is its zero.
+    struct MenuClock {
+        bool fresh{true};
+        int ticks{0};
+        double ms{0.0};
+    };
+    MenuClock m_menuClock;
+    double m_layerClockMs{0.0};
+    // The one touch a menu follows (Button::update): where it went down and how
+    // far it has travelled; which main-menu buttons it went down inside and is
+    // still inside; and which of chapter select's or the grid's quads.
+    struct MenuTouch {
+        MenuState::Touch touch;
+        unsigned mainDown{0u};
+        unsigned mainHeld{0u};
+        std::optional<MenuButton> downOn;
+        bool heldInside{false};
+    };
+    MenuTouch m_menuTouch;
+    // What a release - or the loading screen's hold, or the back key - asked for,
+    // done on the next tick: the original's release frame is drawn in the old
+    // state, and the new one's black from the frame after (ui3 spec 0.4).
+    struct PendingMenu {
+        enum class Kind { None, MainButton, Button, Screen };
+        Kind kind{Kind::None};
+        MainMenu::Button main{MainMenu::Button::Play};
+        MenuButton button;
+        Screen screen{Screen::None};
+    };
+    PendingMenu m_pendingMenu;
+    // The main menu's music switch, on the state's clock: when its entrance began
+    // and when it was last dismissed (SoundPanelLayer::manageMusicSwitch).
+    double m_mainMusicAddedMs{0.0};
+    double m_mainMusicDismissedMs{-1.0};
+    // The pictures the menu states draw through the overlay, by the name ui.json
+    // gives them, each resolved to its hd twin once.
+    std::map<std::string, std::string> m_menuPictures;
+    // The loading screen's scene, in the level's space.
+    entt::entity m_loadingBg{entt::null};
+    entt::entity m_loadingCharacter{entt::null};
+    entt::entity m_loadingPortal{entt::null};
+    entt::entity m_loadingHalo{entt::null};
+    // How many emitters the portal's own are, at the front of m_emitters.
+    std::size_t m_loadingPortalEmitters{0};
+    bool m_loadingVanished{false};
+    // black_halo.bmp as the multiply it is drawn with: black, at an alpha of one
+    // less its texel, written once beside the prisms; empty when it cannot be,
+    // or when Paths::prisms names no directory.
+    std::string loadingHaloImage();
     int m_menuWorld{0}; // whose levels the grid shows
     int m_menuPage{0};  // which page of that grid
     std::vector<MenuButton> m_menuButtons;
@@ -944,9 +1057,10 @@ private:
     std::vector<DevHold> m_devHolds;
     struct DevTap {
         int tick{0};
+        int releaseTick{0}; // held from its tick until this one, which releases it
         bool onHelpBlock{false};
         glm::dvec2 viewFraction{0.0};
-        bool pressed{false}; // pressed on its tick, released on the one after
+        bool pressed{false};
     };
     std::vector<DevTap> m_devTaps;
     int m_ticks{0};

@@ -20,6 +20,7 @@
 
 #include "MagicPortalsLayer.hpp"
 
+#include "core/Application.hpp"
 #include "core/Components.hpp"
 #include "core/Input.hpp"
 #include "core/InterpolationSystem.hpp"
@@ -34,6 +35,9 @@
 
 #include "sim/Art.hpp"
 #include "sim/LevelEnd.hpp"
+#include "sim/Loading.hpp"
+#include "sim/MainMenu.hpp"
+#include "sim/MenuState.hpp"
 #include "sim/Pause.hpp"
 #include "sim/Popup.hpp"
 #include "sim/UiLayer.hpp"
@@ -255,6 +259,8 @@ std::vector<ScreenOverlay::Quad> HudFrame(entt::registry& registry, const MagicP
 int IndexOfImage(const std::vector<ScreenOverlay::Quad>& quads, const std::string& file);
 int CountImage(const std::vector<ScreenOverlay::Quad>& quads, const std::string& file);
 int CountCaption(const std::vector<ScreenOverlay::Quad>& quads, const std::string& font);
+glm::vec2 ScreenOfView(const MagicPortalsLayer& layer, const glm::dvec2& onView);
+bool NearD(double a, double b, double eps);
 
 // ---- One level --------------------------------------------------------------
 
@@ -1108,6 +1114,40 @@ const MagicPortalsLayer::MenuButton* MenuButtonOf(const MagicPortalsLayer& layer
     return nullptr;
 }
 
+// Ticks through the loading screen until the main menu is up: 143 ticks, and a
+// bound well past them.
+bool TickToTheMainMenu(MagicPortalsLayer& layer, entt::registry& registry) {
+    for (int tick = 0; tick < 400 && layer.MenuScreen() != MagicPortalsLayer::Screen::Main; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+    }
+    return layer.MenuScreen() == MagicPortalsLayer::Screen::Main;
+}
+
+// A tick on which a held touch is let go, where it is.
+void releaseWith(MagicPortalsLayer& layer, entt::registry& registry, const glm::vec2& pointer) {
+    PhysicsSystem::Update(registry, MagicPortalsLayer::kTick);
+    Input::TickInput input;
+    input.mousePosition = pointer;
+    input.released = {MagicPortalsLayer::kTap};
+    Input::BeginReplayedTick(input);
+    layer.OnFixedUpdate(registry, MagicPortalsLayer::kTick);
+    Input::EndReplayedTick();
+}
+
+// The back key, on one tick.
+void pressBack(MagicPortalsLayer& layer, entt::registry& registry) {
+    press(layer, registry, MagicPortalsLayer::kBack);
+}
+
+// What the menu states put into the overlay this frame.
+std::vector<ScreenOverlay::Quad> MenuFrame(entt::registry& registry, const MagicPortalsLayer& layer) {
+    static ScreenOverlay overlay;
+    overlay.Clear();
+    registry.ctx().insert_or_assign<ScreenOverlay*>(&overlay);
+    layer.EmitMenu(registry);
+    return overlay.Quads();
+}
+
 int MenuButtonsOfKind(const MagicPortalsLayer& layer, MagicPortalsLayer::MenuButton::Kind kind) {
     int count = 0;
     for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
@@ -1116,8 +1156,8 @@ int MenuButtonsOfKind(const MagicPortalsLayer& layer, MagicPortalsLayer::MenuBut
     return count;
 }
 
-// Started with no level named, the game opens its menu, and the menu walks
-// main -> chapters -> levels -> the level itself.
+// Started with no level named, the game opens its loading screen and then its
+// menu, and the menu walks main -> chapters -> levels -> the level itself.
 void TheMenuWalksToALevel() {
     using Screen = MagicPortalsLayer::Screen;
     using Kind = MagicPortalsLayer::MenuButton::Kind;
@@ -1126,15 +1166,26 @@ void TheMenuWalksToALevel() {
     MagicPortalsLayer layer(TestPaths(), "");
     layer.OnAttach(registry);
     CHECK_MSG(layer.LoadError().empty(), layer.LoadError());
-    CHECK(layer.MenuScreen() == Screen::Main);
+    CHECK_MSG(layer.MenuScreen() == Screen::Loading, "the loading screen first (owner ruling R4)");
     CHECK(layer.SimLevel() == nullptr);
+    CHECK_MSG(TickToTheMainMenu(layer, registry), "and the main menu after it");
     CHECK_EQ(MenuButtonsOfKind(layer, Kind::Play), 1);
-    // The screen's own art is drawn, not quietly left out. The backgrounds live
-    // among the original's entities rather than its sprites, and the first cut
-    // of this looked for every menu image in one place: the menu came up with
-    // nothing behind it and said nothing about why.
-    CHECK_EQ(Tagged(registry, "Magic Portals Menu Background"), 1);
-    CHECK_EQ(Tagged(registry, "Magic Portals Title"), 1);
+    // The main menu's own art is drawn - through the overlay, in display values,
+    // and so not in the registry at all (ui3 spec D21). The backgrounds live among
+    // the original's entities rather than its sprites, and the first cut of this
+    // looked for every menu image in one place: the menu came up with nothing
+    // behind it and said nothing about why.
+    CHECK_EQ(Tagged(registry, "Magic Portals Menu Background"), 0);
+    CHECK_EQ(Tagged(registry, "Magic Portals Title"), 0);
+    if (OriginalArtIsThere("TheMenuWalksToALevel")) {
+        // Its buttons are drawn once their entrance has begun: at alpha 0 on the
+        // state's first tick, nothing of them is sent.
+        for (int tick = 0; tick < 30; ++tick) tickWith(layer, registry, kRest, {}, {});
+        const std::vector<ScreenOverlay::Quad> frame = MenuFrame(registry, layer);
+        CHECK_MSG(IndexOfImage(frame, "main_menu_bg.png") == 0, "the background, first");
+        CHECK_MSG(IndexOfImage(frame, "game_main_title.png") > IndexOfImage(frame, "main_play_game_button.png"),
+                  "the title over TAP START");
+    }
 
     const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
     if (play == nullptr) {
@@ -1180,6 +1231,7 @@ void TheGridPagesThroughAWorld() {
         CHECK_MSG(false, layer.LoadError());
         return;
     }
+    CHECK(TickToTheMainMenu(layer, registry));
     const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
     if (play == nullptr) return;
     layer.PressMenu(registry, *play);
@@ -1246,10 +1298,71 @@ void EscapePausesALevelAndResumesIt() {
     CHECK_MSG(!layer.Paused() && layer.SimLevel() != nullptr, "and Escape again resumes it");
 }
 
-// And a click lands on the button under it, through the same camera mapping a
-// tap in a level goes through.
-void AClickOnTheMenuPressesWhatIsUnderIt() {
-    using Kind = MagicPortalsLayer::MenuButton::Kind;
+// A touch on the main menu is Button::update's: the button under a touch that
+// went down inside it draws at 0.80 for as long as it is held there, nothing
+// happens while it is, and the release asks for chapter select, which is up on the
+// tick after - under its own black, every clock from nothing (A-S5, A-M8).
+void TheMainMenuActsOnTheRelease() {
+    namespace MainMenu = MagicPortals::MainMenu;
+    using Screen = MagicPortalsLayer::Screen;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty() || !TickToTheMainMenu(layer, registry)) {
+        CHECK_MSG(false, "no main menu: " + layer.LoadError());
+        return;
+    }
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const glm::vec2 play = ScreenOfView(layer, MainMenu::SettledPlayRect(layer.MainMenuRules(), layer.ViewPx()).Centre());
+    tickWith(layer, registry, play, {MagicPortalsLayer::kTap}, {MagicPortalsLayer::kTap});
+    // TAP START's centre is under the title's rectangle too, which follows the
+    // touch as well (Button::update runs on both).
+    const unsigned both = MainMenu::Bit(MainMenu::Button::Play) | MainMenu::Bit(MainMenu::Button::Title);
+    CHECK_MSG(layer.MainMenuHeld() == both, "down on TAP START: held, and the title with it");
+    for (int tick = 0; tick < 14; ++tick) tickWith(layer, registry, play, {MagicPortalsLayer::kTap}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Main && layer.MainMenuHeld() == both,
+              "250 ms held: nothing happens, and it is still held");
+    if (OriginalArtIsThere("TheMainMenuActsOnTheRelease")) {
+        const std::vector<ScreenOverlay::Quad> frame = MenuFrame(registry, layer);
+        const int index = IndexOfImage(frame, "main_play_game_button.png");
+        const float blink = static_cast<float>(
+            MagicPortals::MenuState::BlinkAt(layer.MainMenuRules().playBlink, layer.MenuStateMs()).colour);
+        CHECK_MSG(index >= 0 && NearD(frame[static_cast<std::size_t>(index)].color.r, 0.8 * blink, 0.005),
+                  "drawn at the press tint 0.80");
+    }
+    releaseWith(layer, registry, play);
+    CHECK_MSG(layer.MenuScreen() == Screen::Main && layer.MainMenuHeld() == 0u,
+              "the release tick is drawn in the old state, untinted");
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Worlds, "chapter select on the tick after the release");
+    CHECK_EQ(layer.MenuStateTicks(), 0);
+    const std::vector<ScreenOverlay::Quad> black = MenuFrame(registry, layer);
+    CHECK_MSG(!black.empty() && black.back().texture.empty() && black.back().color.a == 1.0f,
+              "under a whole black");
+    const std::vector<std::string> sounds = layer.LatchedSounds();
+    CHECK_MSG(std::find(sounds.begin(), sounds.end(), "menu_button") != sounds.end(), "with the menu's own noise");
+
+    // A touch that goes down on TAP START and is let go off it presses nothing.
+    const glm::vec2 away(1100.0f, 300.0f);
+    pressBack(layer, registry);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK(layer.MenuScreen() == Screen::Main);
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    tickWith(layer, registry, play, {MagicPortalsLayer::kTap}, {MagicPortalsLayer::kTap});
+    tickWith(layer, registry, away, {MagicPortalsLayer::kTap}, {});
+    CHECK_MSG(layer.MainMenuHeld() == 0u, "dragged off it: no longer tinted");
+    releaseWith(layer, registry, away);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Main, "and let go off it: no press");
+}
+
+// The loading screen: 81 ticks of walking, the character gone on the 81st, the
+// 1000 ms hold, and the main menu's first tick the 143rd (owner ruling R4).
+void TheLoadingScreenLeadsToTheMenu() {
+    using Screen = MagicPortalsLayer::Screen;
+    namespace Loading = MagicPortals::Loading;
+    if (!OriginalArtIsThere("TheLoadingScreenLeadsToTheMenu")) return;
     entt::registry registry;
     publishViewport(registry);
     MagicPortalsLayer layer(TestPaths(), "");
@@ -1258,18 +1371,196 @@ void AClickOnTheMenuPressesWhatIsUnderIt() {
         CHECK_MSG(false, layer.LoadError());
         return;
     }
-    // One tick puts the camera on the menu's box, which is what a click is
-    // read through.
     tickWith(layer, registry, kRest, {}, {});
-    const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
-    if (play == nullptr) {
-        CHECK_MSG(false, "the main screen has no play button");
+    CHECK(layer.MenuScreen() == Screen::Loading && layer.MenuStateTicks() == 0);
+    CHECK_EQ(Tagged(registry, "Magic Portals Loading Background"), 1);
+    CHECK_EQ(Tagged(registry, "Magic Portals Loading Character"), 1);
+    CHECK_EQ(Tagged(registry, "Magic Portals Loading Portal"), 1);
+    {
+        const std::vector<ScreenOverlay::Quad> frame = MenuFrame(registry, layer);
+        const int logo = IndexOfImage(frame, "asanteegameslogo.png");
+        CHECK_MSG(!frame.empty() && frame.front().texture.empty() && frame.front().color.a == 1.0f,
+                  "the first frame is under a whole black");
+        CHECK_MSG(logo == static_cast<int>(frame.size()) - 1, "and the logo is over it, last");
+        CHECK_MSG(CountCaption(frame, "Matura84_shadow") >= 12, "with the dots written between");
+    }
+    const int menuFrame = Loading::MenuFrame(layer.LoadingRules(), 1000.0 / 60.0);
+    for (int tick = 2; tick <= menuFrame; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        if (tick == 80) CHECK_EQ(Tagged(registry, "Magic Portals Loading Character"), 1);
+        if (tick == 81) {
+            CHECK_MSG(Tagged(registry, "Magic Portals Loading Character") == 0, "hidden as the last texture loads");
+            CHECK_MSG(CountCaption(MenuFrame(registry, layer), "Matura84_shadow") >= 12, "the dots' last frame");
+        }
+        if (tick == 82) CHECK_MSG(CountCaption(MenuFrame(registry, layer), "Matura84_shadow") == 0, "then none");
+    }
+    CHECK_MSG(layer.MenuScreen() == Screen::Loading, "the hold's last frame is still the loading screen");
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Main && layer.MenuStateTicks() == 0, "the main menu on the next");
+    CHECK_EQ(Tagged(registry, "Magic Portals Loading Background"), 0);
+    CHECK(layer.LatchedSounds().empty());
+}
+
+// Every menu state opens under ONE black of its own, 1 -> 0 over 700 ms of the
+// tick, over everything; another page of the same grid does not (A-S1). The back
+// key goes up a state on the tick after, as a release does.
+void TheMenuStatesOpenUnderABlack() {
+    using Screen = MagicPortalsLayer::Screen;
+    using Kind = MagicPortalsLayer::MenuButton::Kind;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty() || !TickToTheMainMenu(layer, registry)) {
+        CHECK_MSG(false, "no main menu: " + layer.LoadError());
         return;
     }
-    // Read before the press: laying the screen out again clears the button.
-    const glm::vec2 at = screenOf(registry, play->centrePx);
-    tap(layer, registry, at);
-    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Worlds);
+    const auto blackAlpha = [&]() {
+        const std::vector<ScreenOverlay::Quad> frame = MenuFrame(registry, layer);
+        return !frame.empty() && frame.back().texture.empty() && frame.back().color.r == 0.0f
+                   ? frame.back().color.a
+                   : 0.0f;
+    };
+    CHECK_EQ(blackAlpha(), 1.0f);
+    for (int tick = 0; tick < 21; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(NearD(blackAlpha(), 127.0 / 255.0, 1e-6), "350 ms in: half, linear");
+    for (int tick = 0; tick < 21; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(blackAlpha() == 0.0f, "700 ms in: gone");
+
+    const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
+    if (play == nullptr) return;
+    layer.PressMenu(registry, *play);
+    CHECK(layer.MenuScreen() == Screen::Worlds);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuStateTicks() == 0 && blackAlpha() == 1.0f, "chapter select: its own black");
+    for (int tick = 0; tick < 30; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const MagicPortalsLayer::MenuButton* world = MenuButtonOf(layer, Kind::World, 0);
+    if (world == nullptr) return;
+    layer.PressMenu(registry, *world);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Levels && blackAlpha() == 1.0f, "the grid: its own black");
+    for (int tick = 0; tick < 50; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const MagicPortalsLayer::MenuButton* forward = MenuButtonOf(layer, Kind::Forward);
+    if (forward == nullptr) return;
+    const int before = layer.MenuStateTicks();
+    layer.PressMenu(registry, *forward);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuStateTicks() == before + 1 && blackAlpha() == 0.0f, "another page is not another state");
+
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK_MSG(layer.MenuScreen() == Screen::Levels, "the back key's tick is still the grid");
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Worlds && blackAlpha() == 1.0f, "then chapter select, under a black");
+    press(layer, registry, MagicPortalsLayer::kBack);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Main && layer.MenuStateTicks() == 0, "then the main menu");
+}
+
+// OWNER RULING R2: the back key on the main menu leaves the game, as
+// MainMenuLayer::update's Exit does.
+void TheBackKeyOnTheMainMenuQuits() {
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty() || !TickToTheMainMenu(layer, registry)) {
+        CHECK_MSG(false, "no main menu: " + layer.LoadError());
+        return;
+    }
+    Application::ClearQuitRequest();
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK(!Application::QuitRequested());
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK_MSG(Application::QuitRequested(), "the back key asks the app to stop");
+    // The latch is the process's: put it back for every case after this one.
+    Application::ClearQuitRequest();
+}
+
+// The switches act on the release tick itself; info and Achievements make their
+// noise and lead nowhere yet - their screens are ui3 sections 3 and 4.
+void TheMainMenusSwitchesAndCornerButtons() {
+    namespace MainMenu = MagicPortals::MainMenu;
+    using Screen = MagicPortalsLayer::Screen;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty() || !TickToTheMainMenu(layer, registry)) {
+        CHECK_MSG(false, "no main menu: " + layer.LoadError());
+        return;
+    }
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const auto touchAt = [&](double xPx, double yPx) {
+        const glm::vec2 at(static_cast<float>(xPx), static_cast<float>(yPx));
+        tickWith(layer, registry, at, {MagicPortalsLayer::kTap}, {MagicPortalsLayer::kTap});
+        releaseWith(layer, registry, at);
+    };
+    CHECK(layer.SoundOn());
+    touchAt(45.0, 675.0);
+    CHECK_MSG(!layer.SoundOn() && layer.MenuScreen() == Screen::Main, "the sound switch, on its release tick");
+    for (int tick = 0; tick < 43; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const unsigned musicBit = MainMenu::Bit(MainMenu::Button::Music);
+    CHECK_MSG((MainMenu::ButtonsAt(layer.MainMenuRules(), layer.MainMenuSwitches(), layer.ViewPx(), layer.MenuStateMs(),
+                                   glm::dvec2(135.0, 675.0) / 2.8125) &
+               musicBit) == 0u,
+              "A-M3: the music switch has gone with the sound");
+    if (OriginalArtIsThere("TheMainMenusSwitchesAndCornerButtons")) {
+        const std::vector<ScreenOverlay::Quad> frame = MenuFrame(registry, layer);
+        CHECK(IndexOfImage(frame, "sound_mute.png") >= 0 && IndexOfImage(frame, "music_on.png") < 0 &&
+              IndexOfImage(frame, "music_off.png") < 0);
+    }
+    touchAt(45.0, 675.0);
+    CHECK(layer.SoundOn());
+    for (int tick = 0; tick < 43; ++tick) tickWith(layer, registry, kRest, {}, {});
+    touchAt(135.0, 675.0);
+    CHECK_MSG(!layer.MusicOn(), "the music switch, back in afresh, turns the music off");
+    touchAt(135.0, 675.0);
+    CHECK(layer.MusicOn());
+
+    touchAt(45.0, 45.0);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Main, "info leads nowhere yet");
+    touchAt(1100.0, 675.0);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Main, "nor does Achievements");
+    const std::vector<std::string> sounds = layer.LatchedSounds();
+    CHECK_MSG(std::count(sounds.begin(), sounds.end(), "level_button") == 2,
+              "but each makes getItemSelectButtonSoundName's noise");
+}
+
+// A-S6: a page tile refuses a touch that travelled more than 48 u while held.
+void ATileRefusesATouchThatTravelled() {
+    using Screen = MagicPortalsLayer::Screen;
+    using Kind = MagicPortalsLayer::MenuButton::Kind;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty() || !TickToTheMainMenu(layer, registry)) {
+        CHECK_MSG(false, "no main menu: " + layer.LoadError());
+        return;
+    }
+    const MagicPortalsLayer::MenuButton* play = MenuButtonOf(layer, Kind::Play);
+    if (play == nullptr) return;
+    layer.PressMenu(registry, *play);
+    for (int tick = 0; tick < 5; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const MagicPortalsLayer::MenuButton* icon = MenuButtonOf(layer, Kind::World, 0);
+    if (icon == nullptr) return;
+    const glm::dvec2 centre = icon->centrePx;
+    const double half = icon->sizePx.y * 0.5;
+    CHECK_MSG(half > 31.0, "the icon is tall enough to drag 60 u inside it");
+    const auto drag = [&](double travel) {
+        const glm::vec2 from = ScreenOfView(layer, centre - glm::dvec2(0.0, half - 1.0));
+        const glm::vec2 to = ScreenOfView(layer, centre - glm::dvec2(0.0, half - 1.0 - travel));
+        tickWith(layer, registry, from, {MagicPortalsLayer::kTap}, {MagicPortalsLayer::kTap});
+        tickWith(layer, registry, to, {MagicPortalsLayer::kTap}, {});
+        releaseWith(layer, registry, to);
+        tickWith(layer, registry, kRest, {}, {});
+    };
+    drag(60.0);
+    CHECK_MSG(layer.MenuScreen() == Screen::Worlds, "dragged 60 u and let go inside: no action");
+    drag(40.0);
+    CHECK_MSG(layer.MenuScreen() == Screen::Levels, "dragged 40 u: it acts");
 }
 
 // ---- the medal a finished level earns -----------------------------------------
@@ -3107,7 +3398,7 @@ void TheSceneHoldsDisplayValues() {
         MagicPortalsLayer layer(TestPaths(), start);
         layer.OnAttach(registry);
         if (start == "level0") CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
-        if (start.empty()) CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Main);
+        if (start.empty()) CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Loading);
         if (start == "level99") CHECK(layer.Current() == nullptr);
         SceneSettingsSayDisplayValues(registry, start);
         // The next level and a retry keep it: nothing per level writes it.
@@ -3361,7 +3652,12 @@ void runTests() {
     TheGridPagesThroughAWorld();
     NamingALevelSkipsTheMenu();
     EscapePausesALevelAndResumesIt();
-    AClickOnTheMenuPressesWhatIsUnderIt();
+    TheMainMenuActsOnTheRelease();
+    TheLoadingScreenLeadsToTheMenu();
+    TheMenuStatesOpenUnderABlack();
+    TheBackKeyOnTheMainMenuQuits();
+    TheMainMenusSwitchesAndCornerButtons();
+    ATileRefusesATouchThatTravelled();
     ALevelsEntitiesEmit();
     ParticlesGoWithTheirLevel();
     FinishingALevelShowsTheMedal();

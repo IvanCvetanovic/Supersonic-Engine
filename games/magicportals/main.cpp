@@ -69,8 +69,11 @@ int main(int argc, char** argv) {
     // down on its card, at a known moment. `--tap help@300` taps the level's first
     // help block where the camera has it; `--tap 640,200@300` taps that pixel of a
     // 1280x720 window (the spec's own coordinates), whatever the window's size.
+    // `--tap 640,475@300-315` holds it from tick 300 and releases it on 315: the
+    // menus' captures need a button held, to see its press tint, then released.
     struct Tap {
         int tick = 0;
+        int releaseTick = 0;
         std::optional<glm::dvec2> fraction;
     };
     std::vector<Tap> taps;
@@ -83,7 +86,12 @@ int main(int argc, char** argv) {
             Tap tap;
             bool ok = at != std::string::npos;
             try {
-                if (ok) tap.tick = std::stoi(value.substr(at + 1));
+                if (ok) {
+                    const std::string when = value.substr(at + 1);
+                    const std::size_t dash = when.find('-');
+                    tap.tick = std::stoi(when.substr(0, dash));
+                    if (dash != std::string::npos) tap.releaseTick = std::stoi(when.substr(dash + 1));
+                }
                 if (ok && what != "help") {
                     const std::size_t comma = what.find(',');
                     ok = comma != std::string::npos;
@@ -95,8 +103,9 @@ int main(int argc, char** argv) {
             } catch (const std::exception&) {
                 ok = false;
             }
-            if (!ok || tap.tick < 1) {
-                std::cerr << "--tap wants help@<tick> or <x>,<y>@<tick> (pixels of 1280x720, tick at least 1), got '"
+            if (!ok || tap.tick < 1 || (tap.releaseTick != 0 && tap.releaseTick <= tap.tick)) {
+                std::cerr << "--tap wants help@<tick> or <x>,<y>@<tick>[-<release tick>] (pixels of 1280x720, tick "
+                             "at least 1, a release after it), got '"
                           << value << "'\n";
                 return EXIT_FAILURE;
             }
@@ -143,7 +152,8 @@ int main(int argc, char** argv) {
                          {"skip", DevPress::Skip},
                          {"achievements", DevPress::Achievements},
                          {"sound", DevPress::Sound},
-                         {"music", DevPress::Music}};
+                         {"music", DevPress::Music},
+                         {"back", DevPress::Back}};
             int tick = 0;
             if (at != std::string::npos) {
                 try {
@@ -159,7 +169,8 @@ int main(int argc, char** argv) {
                 if (tick >= 1) presses.emplace_back(tick, name.press);
             }
             if (!known || tick < 1) {
-                std::cerr << "--press wants <pause|levels|resume|skip|achievements|sound|music>@<tick of at least 1>,"
+                std::cerr << "--press wants <pause|levels|resume|skip|achievements|sound|music|back>@<tick of at least "
+                             "1>,"
                              " got '"
                           << value << "'\n";
                 return EXIT_FAILURE;
@@ -224,13 +235,15 @@ int main(int argc, char** argv) {
                   << "  --saves <dir>     DEV: keep the medals (scores.json) here instead of the user's\n"
                   << "                    data directory - for a capture that needs a medal recorded\n"
                   << "  --press <what>@<tick>\n"
-                  << "                    DEV: press the pause control (pause) or one of the pause's\n"
-                  << "                    buttons (levels, resume, skip, achievements, sound, music) on\n"
-                  << "                    the game's tick <tick>, for a capture; repeatable\n"
-                  << "  --tap <help|x,y>@<tick>\n"
-                  << "                    DEV: a touch down on the game's tick <tick> and up on the next,\n"
-                  << "                    on the level's first help block or at pixel x,y of 1280x720,\n"
-                  << "                    for a capture that opens or closes a popup; repeatable\n"
+                  << "                    DEV: press the pause control (pause), one of the pause's\n"
+                  << "                    buttons (levels, resume, skip, achievements, sound, music) or\n"
+                  << "                    the back key on a menu state (back) on the game's tick <tick>,\n"
+                  << "                    for a capture; repeatable\n"
+                  << "  --tap <help|x,y>@<tick>[-<release>]\n"
+                  << "                    DEV: a touch down on the game's tick <tick> and up on the next\n"
+                  << "                    (or held there until <release>), on the level's first help block\n"
+                  << "                    or at pixel x,y of 1280x720, for a capture that opens or closes a\n"
+                  << "                    popup or presses a menu's button; repeatable\n"
                   << "  --hold <left|right>@<from>-<to>\n"
                   << "                    DEV: hold a walk from the game's tick <from> to <to>, for a\n"
                   << "                    capture that walks into a door or a hazard; repeatable\n"
@@ -309,7 +322,7 @@ int main(int argc, char** argv) {
         auto game = std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start);
         for (const auto& [tick, press] : presses) game->ScheduleDevPress(tick, press);
         for (const Hold& hold : holds) game->ScheduleDevHold(hold.from, hold.to, hold.direction);
-        for (const Tap& tap : taps) game->ScheduleDevTap(tap.tick, tap.fraction);
+        for (const Tap& tap : taps) game->ScheduleDevTap(tap.tick, tap.fraction, tap.releaseTick);
         MagicPortals::MagicPortalsLayer& gameLayer = *game;
         app.PushLayer(std::move(game));
         if (!visit.levels.empty()) {
