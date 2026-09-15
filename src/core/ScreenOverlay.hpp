@@ -66,7 +66,25 @@ public:
         // An image file, read with NO colour conversion - its bytes are already
         // display values. Empty draws plain `color`.
         std::string texture;
+
+        // How the quad is TURNED about its own centre: a 2x2 matrix applied to
+        // each corner's offset from that centre, in FRACTIONS of the image. The
+        // identity, the default, draws the rectangle min and max say exactly as
+        // before this existed; the shader takes the plain path then.
+        //
+        // A matrix in fractions rather than an angle, because a turn is only a
+        // turn in square pixels and this class never knows the image's shape
+        // (see min above). A caller that does - a HUD laid out in its own units
+        // knows its view's aspect - passes Rotation(angle, aspect). A sprite a 2D
+        // engine draws at an angle is why: Magic Portals' help popups turn an
+        // arrow 23 degrees and a wall 90.
+        glm::mat2 basis{1.0f};
     };
+
+    // The basis that turns a quad `radians` COUNTER-CLOCKWISE on the screen, on
+    // an image `aspect` (width / height) wide: the turn in square pixels, taken
+    // into fractions and back.
+    static glm::mat2 Rotation(float radians, float aspect);
 
     // Appended. Past kMaxQuads a quad is dropped and counted, for the reason
     // WorldShapes gives: a frame drawing ten thousand HUD pictures is a loop in
@@ -89,10 +107,10 @@ public:
     static constexpr int kVerticesPerQuad = 6;
 
     // Where vertex `index` (0..5) of a quad lands - in Vulkan clip space, where
-    // (-1, -1) is the image's top-left - and which texture coordinate it
-    // carries. screen_overlay.vert computes exactly this; it is stated here so a
-    // suite can hold the mapping without a device. An index outside 0..5 is
-    // taken modulo six.
+    // (-1, -1) is the image's top-left - turned by its basis about its centre,
+    // and which texture coordinate it carries. screen_overlay.vert computes
+    // exactly this; it is stated here so a suite can hold the mapping without a
+    // device. An index outside 0..5 is taken modulo six.
     struct Corner {
         glm::vec2 clip{0.0f};
         glm::vec2 uv{0.0f};

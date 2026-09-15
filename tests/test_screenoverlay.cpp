@@ -93,6 +93,35 @@ void testTheTextureRectangleRidesTheSameCorners() {
               "an index past five wraps rather than reading past the table");
 }
 
+void testATurnedQuadTurnsInSquarePixels() {
+    // A 64 x 16 px arrow centred at (640, 360) on a 1280 x 720 image, turned 90
+    // degrees counter-clockwise: in square pixels it stands 16 wide and 64 tall,
+    // its right end - the first corner's right neighbour - now at the top.
+    const glm::vec2 image(1280.0f, 720.0f);
+    ScreenOverlay::Quad arrow = quadAt(glm::vec2(608.0f, 352.0f) / image, glm::vec2(672.0f, 368.0f) / image);
+    arrow.basis = ScreenOverlay::Rotation(glm::radians(90.0f), image.x / image.y);
+    const auto px = [&](int index) { return (ScreenOverlay::CornerOf(arrow, index).clip + 1.0f) * 0.5f * image; };
+    CHECK_MSG(near2(px(0), glm::vec2(632.0f, 392.0f), 1e-3f), "the top-left corner turns down to (632, 392)");
+    CHECK_MSG(near2(px(1), glm::vec2(632.0f, 328.0f), 1e-3f), "the top-right corner turns up to (632, 328)");
+    CHECK_MSG(near2(px(2), glm::vec2(648.0f, 328.0f), 1e-3f), "the bottom-right corner to (648, 328)");
+    CHECK_MSG(near2(px(5), glm::vec2(648.0f, 392.0f), 1e-3f), "and the bottom-left to (648, 392)");
+    CHECK_MSG(near2(ScreenOverlay::CornerOf(arrow, 0).uv, glm::vec2(0.0f)), "the texture turns with it");
+
+    // 23 degrees, the popup's arrow: every corner stays 33 px from the centre.
+    arrow.basis = ScreenOverlay::Rotation(glm::radians(23.0f), image.x / image.y);
+    bool round = true;
+    for (int i = 0; i < ScreenOverlay::kVerticesPerQuad; ++i) {
+        round = round && std::fabs(glm::length(px(i) - glm::vec2(640.0f, 360.0f)) - std::sqrt(32.0f * 32.0f + 8.0f * 8.0f)) < 1e-3f;
+    }
+    CHECK_MSG(round, "a turn keeps each corner's distance from the centre in pixels");
+    CHECK_MSG(px(1).y < 360.0f - 8.0f, "and counter-clockwise lifts the right end");
+
+    // Unturned, the identity, and the arithmetic is the one it always was.
+    CHECK(ScreenOverlay::Rotation(0.0f, 16.0f / 9.0f) == glm::mat2(1.0f));
+    const ScreenOverlay::Quad plain = quadAt(glm::vec2(0.1f, 0.2f), glm::vec2(0.3f, 0.7f));
+    CHECK(ScreenOverlay::CornerOf(plain, 2).clip == glm::mix(plain.min, plain.max, glm::vec2(1.0f)) * 2.0f - 1.0f);
+}
+
 void testQuadsKeepTheOrderTheyWereAddedIn() {
     // No depth and no sort: the order of Add is the order of drawing, which is
     // what lets a game put a black between two of its own pictures.
@@ -135,7 +164,7 @@ void testTheOverlayBlendsAsAPictureOverWhatIsThere() {
     CHECK(blend.srcColorBlendFactor == vk::BlendFactor::eSrcAlpha);
     CHECK(blend.dstColorBlendFactor == vk::BlendFactor::eOneMinusSrcAlpha);
     CHECK(blend.colorBlendOp == vk::BlendOp::eAdd);
-    CHECK_EQ(sizeof(ScreenOverlayPushConstants), std::size_t{48});
+    CHECK_EQ(sizeof(ScreenOverlayPushConstants), std::size_t{64});
 }
 
 void testTheShaderCarriesTheSameVertexTable() {
@@ -165,6 +194,18 @@ void testTheShaderCarriesTheSameVertexTable() {
         same = near2(ScreenOverlay::CornerOf(unit, static_cast<int>(i)).uv, corners[i]);
     }
     CHECK_MSG(same, "and its six corners are CornerOf's, in the same order");
+
+    // The turn: the push block's fourth vec4 is the basis ScreenOverlayPushConstants
+    // sends after the colour, and the shader turns the corner about the centre the
+    // way CornerOf does, only when the basis is not the identity.
+    const std::size_t colour = source.find("vec4 color;");
+    const std::size_t basis = source.find("vec4 basis;");
+    CHECK_MSG(colour != std::string::npos && basis != std::string::npos && basis > colour &&
+                  source.find("vec4", colour + 1) == basis,
+              "the shader's push block carries vec4 basis straight after vec4 color");
+    CHECK_MSG(source.find("if (quad.basis != vec4(1.0, 0.0, 0.0, 1.0))") != std::string::npos &&
+                  source.find("at = centre + mat2(quad.basis.xy, quad.basis.zw) * (at - centre);") != std::string::npos,
+              "and turns a corner about the rectangle's centre as CornerOf does, identity excepted");
 }
 
 void testTheCompositeUnderTheOverlayIsUnchangedByDefault() {
@@ -252,6 +293,7 @@ static void runTests() {
     testACornerButtonLandsOnItsPixels();
     testTheSixVerticesAreTwoTrianglesCoveringTheRectangle();
     testTheTextureRectangleRidesTheSameCorners();
+    testATurnedQuadTurnsInSquarePixels();
     testQuadsKeepTheOrderTheyWereAddedIn();
     testClearEmptiesTheListAndTheDropCount();
     testTheOverlayBlendsAsAPictureOverWhatIsThere();

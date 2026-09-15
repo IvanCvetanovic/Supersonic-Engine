@@ -1905,6 +1905,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
                     push.rect = glm::vec4(quad.min, quad.max);
                     push.uv = glm::vec4(quad.uvMin, quad.uvMax);
                     push.color = quad.color;
+                    push.basis = glm::vec4(quad.basis[0], quad.basis[1]);
                     pass.pushConstants(pipeline.GetLayout(),
                                        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
                                        sizeof(push), &push);
