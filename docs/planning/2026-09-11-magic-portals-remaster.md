@@ -5177,3 +5177,422 @@ it would print is the one it printed before. The design gates the encoding at G2
 - **The comment on the quantisation** was corrected after the last captures. It had claimed
   bit replication agrees on every level. The `Shaders` target recompiled the file, and the
   `.spv` is byte-identical to the one every capture above ran.
+
+## Step 44 - the port says its numbers are display values, and the ground its skies left bare (built)
+
+The lighting design's step G2 (the remake's `out/parity/specs/lighting/design_port.md`,
+section 7.1, which is plan_port's System 1b with its V2 chosen). **The port opts in to the
+switch step 43 built.** At attach the layer puts a `RenderSettings` in the registry's
+context: `DisplayEncoded`, a flat black `Color` background and bloom 0. **No engine file
+changes.** Nearly every level pixel moves (93 to 99 % of each captured frame); the HUD
+does not; no ambient, emissive, lightmap or light is drawn yet (G3 onwards).
+
+**Every gate the design lists for G2 passes. One clause it inherits does not, and is left
+for the owner.** The design says G2 is plan_port's 1b, and 1b's non-regression clause
+names fifteen levels, not section 7.0's seven. On 4-32 `edge_iou` falls by **0.0452**
+against a tolerance of 0.02. The drop lies in two gaps this step stops hiding:
+- the darkest level's scenery, still drawn at full brightness until G3;
+- the sky, which the original pins to the camera and the port does not. That leaves black
+  ground on **34 of the 128 levels**, up to half a frame.
+
+Both are measured below, under the fifteen levels and the bare ground, and the decision is
+under LEFT FOR THE OWNER. The first review found both. No source changed in answer; this
+record did.
+
+**WHAT THE LAYER SETS (`MagicPortalsLayer.cpp`, `SceneRendering` and `OnAttach`).**
+- **`encoding = DisplayEncoded`.** The original multiplied and blended on the encoded bytes
+  of an 8-bit framebuffer. The design's fit scores blending in linear light at **13.59**
+  of 255 over 1,359 unlit blocks against **0.28** on encoded values, and **11.90** against
+  **0.92** over 1,042 lightmapped ones (`fit.md` section 4). Every later lighting step
+  multiplies into those same bytes, so this is the space the rest is defined in, not a look.
+- **`background = Color`, `backgroundColor = (0, 0, 0)`**, and so no sky pass.
+  - Ethanon clears to black: `video->SetBGColor(gs2d::constant::BLACK)` at start
+    (`ETHEngine.cpp:114`), and black is `GLES2Video`'s own default (`GLES2Video.cpp:87`).
+  - The original's script sets it once more: `LoadingScreen::preLoop` pushes
+    `-16777216` (0xFF000000) and calls `SetBackgroundColor` (the remake's decoded listing,
+    `out/parity/specs/ui3/work/motion/dec_loading.txt`). That listing is partial, so
+    whether any other function calls it is not read here.
+  - A display-encoded scene left on the sky is incoherent (step 43). Leaving the sky has a
+    consequence of its own, measured below.
+- **`bloomIntensity = 0`.** The original draws no bloom. `BloomPass::RunsBloomChain` already
+  records no chain for this encoding, whatever the number says, so the zero only makes the
+  scene's own settings say the same.
+- **Left at their defaults:** `quantize None` (the 16-bit target is G6), exposure 1, and
+  the bloom threshold and knee, which no recorded pass reads.
+- **Where.** `OnAttach`, beside the clock, before the menu or a level is built, so the
+  menu gets it and so does a start that fails.
+  - `insert_or_assign`, not `emplace`: a `--scene` load may already have put a
+    `RenderSettings` of its own there. The suite loads one first.
+  - Nothing per level writes it, and `OnDetach` leaves it, as it leaves the clock.
+- **Not in a data file.** The design's `lighting.json` (section 5.9) carries only `rgb565`
+  among the scene settings, and that is G6's. These three are what the arithmetic is, not
+  numbers to tune: a data file that said `LinearHdr` would put every later step's
+  multiply back on radiance. The black's provenance is in the code comment and above.
+- `MagicPortalsLayer.hpp`: the class comment gains the encoding, and the HUD's comment no
+  longer says the scene blends in linear light.
+
+**THE BEFORE WAS RETAKEN, NOT READ FROM THE DESIGN.** Section 7.0's "today" was captured
+before steps 38 to 40 put the HUD in the frame, as step 41 found. Every gate capture
+below was taken with the same command on step 43's build (before) and on this step's
+(after).
+- The seven section 7.0 levels at frame 420 reproduced step 43's md5s exactly (1-01
+  `a5abafb3...` through 4-22 `a48cd2fc...`).
+- Against `engine_tier1x`, the two classes this step gates came out exactly as section 7.0
+  printed them (12.25 and 2.86): the HUD covers none of their blocks. Classes near the
+  HUD corners did not (1-01 `LM_E=1` 8.82 against the design's 9.75), and neither did
+  `edge_iou` (1-01 0.398 against 0.395). The table below uses this step's own before.
+- Captures: `out/parity/specs/lighting/work/g2/{before,after,final}/`, by `capture.sh`;
+  gates by `gates.sh` and `hud_g2.py`. `torch_g2.py` and `door_g2.py` are copies of
+  plan_port's `torch.py` and `door.py` that read the port frames from there, and nothing
+  else changed. `door.py` reads the original from `levels_v1`: its 2-01 t4.5 and t8.0 are
+  md5-identical to `levels/`.
+- **All 128 levels at frame 420, both builds, after the first review**:
+  `work/g2/fix1/{before,after}/`, by `fix1/sweep.sh`.
+  - The before binary is the reviewer's build of a `git archive` of step 43's commit. Its
+    471 source, shader and CMake files were checked here against the commit: equal with
+    carriage returns ignored, and every `.spv` byte-identical.
+  - Every run exited 0, and every log says validation is ACTIVE with no VUID.
+  - The sweep's frames agree with the other two sets wherever they overlap. Per build, 20
+    are md5-identical to the reviewer's set and 8 to `before/` and `after/` above.
+  - Scored by `fix1/census.py`, `ablate.py`, `attrib.py` and `camera_from_sky.py`, with
+    results beside them. The final binary's frames are in `work/g2/fix1_final/`.
+
+**THE COLOUR TRANSFER, ISOLATED (`lightgate --variant engine_tier1x`).** The design picked
+the E = 1 classes without a lightmap because ambient and lightmaps cannot move them, so
+they read the encoding alone.
+
+| Level, class (blocks) | port vs model, before | bias before (R, G, B) | port vs model, after | bias after | port vs original, before -> after | floor (model vs original) |
+|---|---|---|---|---|---|---|
+| 1-09 `noLM_E=1` (519) | 12.25 | -9.8 -9.3 -12.2 | **0.29** | **-0.1 -0.1 -0.1** | 17.94 -> 9.01 | 8.94 |
+| 2-26 `noLM_E=1` (1,161) | 2.86 | -0.1 -2.2 -3.6 | **0.91** | **-0.1 -0.1 -0.1** | 4.23 -> 2.16 | 1.92 |
+
+- Both are within one unit of the model, with the same -0.1 bias on every channel. The
+  -0.1 is the size the missing 5/6/5 predicts: `fit.md` scores `engine` 1.72 against
+  `engine_no565` 1.83 on this class. It is left for G6.
+- **1-09's port-vs-original 9.01 is the floor, not this step.** `engine_tier1x` is 8.94
+  from the original on those blocks: it is the model drawn with the 1x art the port
+  draws, and the original draws hd. That is plan_port's System 6.
+- 2-26 is all `dark_sky.png`, and its port-vs-original 2.16 is within 0.24 of the floor.
+
+**THE FLAMES.** Additive glows now clip at the top of the range instead of compressing.
+
+| | before | after | original | gate |
+|---|---|---|---|---|
+| 1-1 torch, bright flame RGB (`torch_g2.py`, frames 270..420) | 196.6 157.5 127.1 | **255.0 238.3 145.2** | 253.2 252.0 159.1 | R >= 240, G >= 235 |
+| 1-1 torch, peak grey | 194.7 | 255.0 | 255.0 | - |
+| 2-01 door flames, p95 R / p95 G (`door_g2.py`, frames 300..420) | 168 / 71 | **255 / 48** | 247 / 36 | R >= 230, G <= 50 |
+
+- **The torch's G passes, and is still 14 short of the original.** Over the brightest tenth
+  of the flame's pixels, R is 255 on 100 % of them in the port. G is at 250 or more on
+  **48 %** in the port against **89 %** in the original (p10 210 against 249). So the
+  channel that clips is right, and the core where G also clips is smaller. The encoding
+  cannot shrink a core. The candidates are the particles: the additive pipeline weights
+  by alpha where Ethanon adds `One, One`, and the flame sits 13 units low (plan_port gaps
+  J and I, System 2). Not measured further here.
+- **The door's G passes by 2, and the HUD is not holding it up.** `door.py`'s box,
+  x 996..1107, predates the HUD and overlaps the right pad's quad from x 1100. With the
+  box cut at x 1099 the numbers do not move: p95 R 255 and G **48** after, 168 / 71
+  before, 247 / 36 in the original. So the table keeps `door.py`'s own box, comparable
+  with plan_port's baseline.
+- Its red rows now run 377..643 px against the original's 404..642, and the mean red
+  excess in the mask is 133.0 against 108.3: the dim tops of the flames now clear the
+  script's red > 40 test. Not gated, and the same System 2 particles.
+- **Both G margins are thin**: the torch's G by 3.3 and the door's by 2. The captures are
+  deterministic, so neither passes by luck. But plan_port System 2's particle changes can
+  move either way, so `torch.py` and `door.py` are to be run again there.
+
+**WHOLE FRAME (`compare.py`, frame 420 against `levels/<W-LL>_t8.0.png`).** No level may
+lose more than 0.02 of `edge_iou`.
+
+| Level | edge_iou before -> after | change | mean_abs before -> after |
+|---|---|---|---|
+| 1-01 | 0.3979 -> 0.4375 | +0.0396 | 29.43 -> 26.23 |
+| 1-09 | 0.3948 -> 0.4124 | +0.0176 | 27.64 -> 24.27 |
+| 1-13 | 0.2112 -> 0.2217 | +0.0105 | 37.49 -> 38.26 |
+| 2-05 | 0.2852 -> 0.2782 | **-0.0070** | 30.13 -> 32.22 |
+| 2-26 | 0.3268 -> 0.3218 | **-0.0050** | 17.00 -> 18.43 |
+| 3-05 | 0.3721 -> 0.3886 | +0.0165 | 20.55 -> 21.04 |
+| 4-22 | 0.2502 -> 0.2536 | +0.0034 | 40.25 -> 39.53 |
+
+- 1-13's offset is (0, -10) before and after, the camera difference section 7.0 records;
+  `lightgate` still refuses it (exit 2).
+- 4-22's phase offset reads (0, -1) after, (0, 0) before. `lightgate` accepts 1 px, and no
+  4-22 blocks exist yet (G3 builds them).
+- 2-05 is one of the levels where the black ground now shows (below). 2-26 has none, and
+  its 0.005 is not attributed.
+
+**PLAN_PORT'S FIFTEEN LEVELS: ONE FAILS.** The design's G2 gate names section 7.0's
+levels, and passes. But the design also says G2 *is* plan_port's 1b. 1b's own
+non-regression clause is "`edge_iou` on the 15 levels of section 0.3 does not drop by more
+than 0.02". The first review ran it; this record did not, until now. Frame 420 of the
+sweep, the same `compare.py` and the same `levels/`:
+
+| Level | edge_iou before -> after | change | mean_abs before -> after | bare ground after |
+|---|---|---|---|---|
+| 1-07 | 0.3890 -> 0.4334 | +0.0444 | 31.04 -> 31.93 | 0 |
+| 1-10 | 0.3989 -> 0.4518 | +0.0529 | 29.10 -> 27.55 | 128 px |
+| 1-12 | 0.3595 -> 0.3864 | +0.0269 | 29.87 -> 31.43 | 0 |
+| 1-17 | 0.3645 -> 0.3894 | +0.0249 | 25.01 -> 23.15 | 0 |
+| 1-27 | 0.3636 -> 0.4112 | +0.0476 | 25.97 -> 24.79 | 0 |
+| 2-01 | 0.2455 -> 0.2512 | +0.0057 | 34.34 -> 35.84 | 31,810 px |
+| 3-23 | 0.3375 -> 0.3653 | +0.0278 | 27.62 -> 27.82 | 0 |
+| 4-05 | 0.1605 -> 0.1643 | +0.0038 | 31.29 -> 32.39 | 0 |
+| **4-32** | **0.2369 -> 0.1917** | **-0.0452 FAILS** | **37.65 -> 52.35** | **266,448 px (28.9 %)** |
+| the seven above | as in the table above | worst -0.0070 | | 2-05 18,485 px |
+
+- Offsets are (0, 0) before and after on every level except 4-05, which is (-80, 0) both.
+  plan_port section 0.2 records that as 4-05's camera-start difference.
+- **Where 4-32's 0.0452 went (`fix1/ablate.py`).** Pixels in a region were replaced by the
+  original's own, in both port frames, and `compare.py`'s metric was scored again. What
+  stays of the change lies outside that region. The regions:
+  - **B**, the bare ground below: 266,448 px.
+  - **D**, where the original draws near-black (grey < 20) outside B: 355,267 px. These are
+    4-32's silhouettes. `properties_843` carries `darkest = "1"`, and the port draws those
+    pixels at mean grey 64 (1.6 in the original), before this step and after it.
+
+  | replaced | before | after | change |
+  |---|---|---|---|
+  | nothing | 0.2369 | 0.1917 | -0.0452 |
+  | B | 0.2380 | 0.2066 | -0.0314 |
+  | D | 0.6541 | 0.6316 | -0.0225 |
+  | B and D | 0.6707 | 0.6611 | **-0.0096** |
+
+  - With both replaced, what is left is within the tolerance, so the failure lies in those
+    two regions.
+  - Replacing D alone recovers more (0.023) than replacing B alone (0.014). Replacing D
+    lifts both scores to about 0.65, so these are indicators, not an exact split.
+  - The first review measured the same drop two other ways, and this record's
+    `fix1/attrib.py` reproduces both:
+    - B dilated by 3 px and left out of both edge maps: 0.2315 -> 0.1972;
+    - B filled with the before frame's pixels: 0.2037.
+  - Within 3 px of B the original has 7,930 edge pixels. The port has 4,164 there before,
+    2,908 of them on the original's, and 1,631 after, 879 on the original's.
+- **4-22, the other `darkest` level in the gate, does not fail.** It is 55 % silhouette
+  too, drawn at grey 65, but it has no bare ground: its change is +0.0034, and -0.0046
+  with D replaced.
+  - On 4-32 the port's edges inside D went from 56,999 to 61,172, of about 92,000 kept
+    per frame. On 4-22 they went down, 56,352 to 55,059.
+  - Why D costs 4-32 more is not measured further. One candidate is that the edges the
+    bare ground lost were spent inside D instead; the percentile threshold keeps the count.
+- **What should close it, not yet shown.** D is what the design's G3 draws: ambient 0.01 on
+  a `darkest` level, gated on 4-22 by E = 0 scenery at most 4/255. B needs the sky
+  controller, below, which no step of either plan owns yet. Neither belongs to G2.
+- **Beyond the fifteen, a screen, not a gate.** `levels/` holds a t8.0 frame for 81 of the
+  128 levels, and only 4-32 falls by more than 0.02 among them. The median change
+  is +0.017, from -0.0452 (4-32) to +0.0592 (1-23).
+  - plan_port section 0.2 checked only 14 library frames for a menu caught in place of
+    the level. 4-01 and 2-32, which it found wrong, are not among the 81.
+  - The 17 library frames of levels with more than 2,000 bare pixels (below) were looked at
+    beside the port's, and all are in-level. The other frames were not.
+
+**THE HUD IS UNCHANGED, AND WHY IT CANNOT BE BYTE-IDENTICAL.** Step 43 said it: the
+controls are translucent, so a control's pixel carries the world behind it. At level4
+(1-05) frame 143 the md5 goes from `3f204d4a...` to `7f7b98ec...`, and 97.1 % of the
+pixels outside the HUD corners changed. So the check is on what display-space blending
+keeps invariant, with step 39's own measures, plus one frame where nothing is behind it
+(`hud_g2.py`, medals from `out/parity/ui1/saves_gold`).
+- **Nothing behind it: level0 frame 1**, both opening blacks whole. **Byte-identical**,
+  `5c5cfed20f942d06da1f22fb5835c1dd` before and after, 0 pixels differing.
+- **Opaque HUD: level0 frame 90**, the plaque and medal at alpha 1. 858,079 pixels of the
+  frame changed. Inside the 39,510 texels the sprites' own alpha calls opaque (at least
+  254/255 after a bilinear resize), 10 pixels changed, by 1, all on the mask's one-pixel
+  edge. Inside the mask eroded by 2 px: **0 of 37,910**.
+- **Translucent controls: high-pass gain** of restart, pause, left pad and right pad (step
+  39's method). In display space it is the control's alpha whatever is behind it.
+
+  | frame | before | after | original | largest change |
+  |---|---|---|---|---|
+  | 1-05 t8.0 (level4, 503) | 0.4738 0.4726 0.4666 0.4688 | 0.4737 0.4732 0.4664 0.4686 | 0.4762 0.4760 0.4766 0.4757 | 0.0006 |
+  | 1-15 t8.0 (level14, 505) | 0.4751 0.4742 0.4707 0.4714 | 0.4755 0.4746 0.4709 0.4712 | 0.4797 0.4795 0.4719 0.4734 | 0.0004 |
+  | 1-17 t8.0 (level16, 504) | 0.4751 0.4745 0.4707 0.4717 | 0.4755 0.4745 0.4708 0.4716 | 0.4778 0.4872 0.4724 0.4757 | 0.0004 |
+  | 3-05 t8.0 (level4b, 506) | 0.4725 0.4711 0.4710 0.4717 | 0.4736 0.4716 0.4712 0.4715 | 0.4707 0.4734 0.4749 0.4761 | 0.0011 |
+  | 1-05 t2.0 (level4, 143) | 0.4738 0.4726 0.4743 0.4764 | 0.4737 0.4732 0.4741 0.4763 | 0.4762 0.4760 0.4836 0.4844 | 0.0006 |
+
+  The world's mean grey behind them moved 72.45 -> 73.62 at frame 143 and 91.90 -> 99.49
+  at level0 frame 90; the gains moved by at most 0.0011.
+- **The plaque while it fades**, 1-05 at t2.0 (frame 143 against 293, step 39's
+  regression): apparent alpha **0.4437 -> 0.4448**.
+- **The overlay list itself** is a function of `ui.json` and the level's age, and this step
+  touches neither. `test_mp_layer`'s HUD checks (rectangles, alphas, textures, order) pass
+  unchanged.
+
+**WHAT ELSE MOVED, NOT GATED.**
+- **The ground its skies leave bare.** Before this step the engine's procedural sky showed
+  wherever no level sprite was drawn, at grey 89. Now the black shows there. Counted as
+  pixels that are 0 after and at least 60 on every channel before, at frame 420 of all 128
+  levels (`fix1/census.py`).
+  - **34 of the 128 levels, 3,659,902 px in all.** 25 levels lose more than 1 % of the
+    frame, and 14 lose more than 10 %.
+  - An earlier version of this record said "over every capture taken" and listed only 2-01
+    and 2-05. The captures then did not include the levels below.
+- **Split by what the original draws on those pixels.** 19 of the 34 levels have a library
+  frame; the mean is over the same pixels.
+
+  | the original draws | levels | px | largest |
+  |---|---|---|---|
+  | **a bright sky**, now black | 6 | 373,854 | **1-21** 234,829 (25.5 %, mean 171 132 112, the sunset through the arches); **1-20** 122,794 (13.3 %, 224 175 122); 1-29 5,212; 1-25 4,712; 1-08 3,190; 1-19 3,117 |
+  | **the dark blue-grey sky** | 10 | 1,322,324 | **2-02** 336,507 (36.5 %, 62 68 74); **4-32** 266,448 (28.9 %, 60 71 79); **4-20** 216,148 (23.4 %); **2-07** 199,507 (21.6 %); **2-09** 146,699 (15.9 %); 2-03 63,587; 2-29 41,093; 2-01 31,810; 2-05 18,485; 2-08 2,040 |
+  | near-black too (every channel under 30) | 3 | 14,786 | 3-18 14,645 (19 23 27), 1-10 128, 1-23 13: black is right or close |
+  | no library frame | 15 | 1,948,938 | **2-31** 473,224 (51.3 %); **2-27** 302,138 (32.8 %); **3-30** 218,256 (23.7 %); **2-32** 201,020 (21.8 %); **2-18** 164,633 (17.9 %); **4-31** 147,103 (16.0 %); **2-22** 93,708 (10.2 %); then 2-14, 2-30, 2-23, 2-17, 2-11, 4-27, 2-16, 1-02 |
+
+  - **2-01 (level0a):** 31,810 px, x 1120..1279 and y 0..606. 95 % of them are at x 1171
+    or more.
+  - **2-05 (level4a):** 18,485 px. 4,667 are in the left 8 px column and 13,783 in the band
+    y 602..629 above the floor; 35 are elsewhere, up to x 1099.
+  - None in 1-01, 1-09, 1-13, 2-26, 3-05 or 4-22.
+  - None in the 19 levels that carry `space_sky` (4-01 to 4-19). The original draws those
+    with a different controller, `SpaceSky`.
+- **Why: the original pins its sky to the camera, and the port draws it where the level
+  put it.** Read from the original's compiled script, in the `tools/asbc` listing of
+  `android_game.bin`. The excerpt is kept at `work/g2/fix1/sky_functions.txt`, with the
+  full listing's md5.
+  - **`Game::preLoop`** (`Game.angelscript`, bytes 112536..114414). A level without
+    `Game.spaceBg` builds `StaticSky` with the name `'sky'`, then adds it with the other
+    controllers (instructions 148..182 and 281..287).
+  - **`StaticSky::StaticSky`** (`Sky.angelscript`, 153461..153922). It collects every
+    entity named `sky` and every one named `sky.ent` into `m_skies`, then calls `scaleSky`.
+  - **`StaticSky::scaleSky`** (154161..154942), for each sky:
+    - it scales it by `GetScreenSize().y / GetSize().y`, so it is as tall as the screen;
+    - it takes `m_width` from the scaled width;
+    - it reads the entity's `scroll` float, which makes a scrolling sky.
+  - **`StaticSky::position`** (154942..155688). A sky that does not scroll gets
+    `originalPos = GetScreenSize() * 0.5 + (m_width * t, 0)`. Then
+    `SetPositionXY(GetCameraPos() + originalPos + scrollPos)`.
+  - **`StaticSky::update`** (155688..156307) calls `position` for every sky on every frame,
+    and moves `scrollPos` along for a scrolling one.
+  - So the position a level gives its sky is overwritten from the first frame. The sky is
+    centred on the screen and as tall as it, which at 16:9 is as wide as it too: 455.1
+    units against `dark_sky.png`'s 455.
+  - The port places the one 455x256 quad where the level put it, and its camera moves off
+    it. The camera offsets below are read from the frames (`fix1/camera_from_sky.py`): a
+    display-encoded, unlit sky pixel is its texel, so the offset matching the most texels
+    places the camera.
+    - **Scrolled right, to the level's far edge:** 2-01 by 57 u (372,193 px matched), and
+      4-32 and 1-20 by 313 u (192,196 and 115,544). Their `max` markers are 512 and 768 u
+      wide.
+    - **Scrolled down, to the level's bottom:** 2-02 by 126 u and 2-05 by 44 u, whose
+      `max` markers are 382 and 300 u tall. That is 2-05's band: its sky ends 214 u down
+      the view, at 602 px.
+    - **2-05's left column** is the sky placed at (230.5, 130), 3 u right of the view's
+      edge.
+    - **1-21:** no pixel of the frame matches the sky (86 at best). Its `max` is (512, 512),
+      so a view held at the bottom starts at y 256, where the sky ends. The arches frame
+      nothing.
+    - 1-01, as a check, reads (0, 0).
+  - This corrects the explanation given here before: that the sky's size and the view's
+    width were left, and belonged to plan_port System 6. System 6's content scale (gap D)
+    is a separate question.
+  - **No step of the lighting design or of plan_port owns this controller.** Before this
+    step the grey sky hid it. This step shows it, and the decision is under LEFT FOR THE
+    OWNER.
+- **Placeholder boxes go dark.** The layer's boxes (bodies without art, markers, zones, a
+  carranca's fireball) are lit PBR quads, and a display-encoded scene is expected to draw
+  unlit (ARCHITECTURE.md section 5). A fireball on 2-01 went from (149, 116, 80) to
+  (112, 55, 21), where the original draws its fire (148, 113, 90). They stand in for art
+  not yet drawn.
+- **Classes this step does not own**, against `engine_tier1x`, before -> after:
+  - 1-01 `LM_E=1` 7.79 -> 3.15, 1-09 `LM_E=1` 7.73 -> 2.41. The rest is the missing
+    lightmap (G4).
+  - 2-05 `noLM_E<1` 66.59 -> 67.20, 2-26 `LM_E<1` 54.46 -> 58.27, 1-01 `LM_E<1` 34.78 ->
+    34.58, 1-09 `LM_E<1` 43.12 -> 43.00. Below full emissive nothing multiplies by the
+    ambient yet (G3). Reinhard had been darkening them, which is why two got worse.
+  - The halo classes wait for G5.
+- **The menu** draws world quads, not the overlay, so it is display-encoded too.
+  - Frame 120 of the menu, with `--saves saves_gold`: mean 43.58 -> 42.12, max 188 -> 255,
+    and 439 pixels at white where there were none.
+  - The original's `screens/main_menu.png` is not the same frame. `compare.py` offsets
+    (14, 31) before and (40, 0) after, `edge_iou` 0.08. So nothing is claimed for or
+    against it.
+
+**THE SUITE.** `test_mp_layer` **304 -> 366**; its floor (35) is unchanged.
+- `TheSceneHoldsDisplayValues`, 62 checks. It starts at level0, at the menu and at level99
+  (a start that fails), each on a registry that held no `RenderSettings`. Each time:
+  - `DisplayEncoded`, so `decodesColourTextures()` is false;
+  - `Color` and `!drawsSky()`;
+  - the colour (0, 0, 0), and `SceneClearColor` returns it rather than the linear literal;
+  - bloom 0, `quantize None`, exposure 1.
+- Also after N to level1 and a retry, and over a context that already held a loaded
+  scene's settings (bloom 2, background 0.5), which the layer replaces.
+- **Mutation.** With the `insert_or_assign` line replaced by a no-op, the suite ran 326
+  checks with **12 failures**: the four starts on an empty registry found no settings,
+  and the loaded scene's settings failed 8 checks. The file was restored from a copy
+  (`cmp` identical) and everything rebuilt.
+- `test_mp_sprites` 155, unchanged.
+
+**STEP 42'S WALK, RETAKEN ON THE NEW KEYS.** `DisplayEncoded` moves every albedo from the
+registry's `srgb:` key to its `data:` key, and step 42 walked the pool only on the first.
+Not one of the design's G2 gates, and the design's full visit check waits for G3; run
+because it is one command. `MagicPortals --visit-levels lightmapped --visit-passes 2`:
+**exit 0 in 19.2 s**, validation ACTIVE, 134 visits, 1,460 lightmap sets, peak **96** in
+the pool, 0 failures, pass 2's baseline **75 at all 67 visits**, 75 cached and 75 in the
+pool after the last release, `Subsystem resources destroyed cleanly`, and no line
+containing "error". Those are step 42's numbers, one for one.
+
+**LEFT FOR THE OWNER.** This step's implementation does not depend on the answers, but
+whether it ships does.
+- **plan_port's fifteen-level clause fails on 4-32** (-0.0452), and the failure lies in
+  the silhouettes and the bare ground. The review offered two ways on: waive the clause on
+  4-32 until G3 and the sky controller land, or gate 4-32 again at G3. Its advice is to
+  hold the step until the owner picks one.
+  - The measurements favour waiving: with both regions replaced, 4-32's change is
+    -0.0096.
+  - It is still the owner's call. The clause is plan_port's, and this record cannot loosen
+    it.
+- **Black ground on 34 levels until the sky follows the camera.** It covers 51 % of 2-31,
+  37 % of 2-02, 29 % of 4-32 and 25 % of 1-21. On 1-21 and 1-20 the original's sunset
+  through the arches is replaced by black.
+  - The before hid it behind a grey no level draws.
+  - Porting `StaticSky` is a system of its own:
+    - it needs the `scroll` custom float, which is not read here;
+    - it needs the tiling of several skies;
+    - its gates must pin the sky in 2-26's `noLM_E=1` blocks, which are all sky.
+  - Nothing in G2 needs it. It needs an owner, and a place in the order: before G3, or
+    beside it.
+- **Placeholder boxes darker** (above) until plan_port System 7's art replaces them. A
+  playtest will see them.
+
+**GATES.**
+
+| Gate | Required | Measured |
+|---|---|---|
+| `lightgate --variant engine_tier1x`, 1-09 `noLM_E=1` | bMAE <= 2.0, abs(bias) <= 2.5 per channel | **0.29**, bias -0.1 / -0.1 / -0.1 (before 12.25, -9.8 / -9.3 / -12.2) |
+| the same, 2-26 `noLM_E=1` | bMAE <= 2.0, abs(bias) <= 2.5 per channel | **0.91**, bias -0.1 / -0.1 / -0.1 (before 2.86, -0.1 / -2.2 / -3.6) |
+| `torch.py`, bright flame | R >= 240, G >= 235 | **R 255.0, G 238.3** (before 196.6 / 157.5; original 253.2 / 252.0) |
+| `door.py` on 2-01 | p95 R >= 230, p95 G <= 50 | **R 255, G 48** (before 168 / 71; original 247 / 36) |
+| `compare.py` `edge_iou`, section 7.0 levels | none falls by more than 0.02 | worst **-0.0070** (2-05), then -0.0050 (2-26); five rose, by up to +0.0396 (1-01) |
+| `compare.py` `edge_iou`, plan_port 0.3's fifteen levels (1b's own non-regression clause, not in the design's G2 list) | none falls by more than 0.02 | **FAILS on 4-32: -0.0452** (0.2369 -> 0.1917). The other fourteen pass, worst -0.0070 (2-05). With the bare ground and 4-32's silhouettes both replaced by the original's pixels: -0.0096. Left for the owner |
+| HUD, nothing behind it (level0 frame 1) | byte-identical | `5c5cfed2...` before and after |
+| HUD, opaque (level0 frame 90) | unchanged | 0 of 37,910 plaque and medal pixels 2 px inside their edge; 10 edge pixels by 1 |
+| HUD, translucent (restart, pause, pads; five frames incl. level4 frame 143) | unchanged | high-pass gain within **0.0011**; plaque apparent alpha 0.4437 -> 0.4448 |
+| `test_mp_layer` | the layer's `RenderSettings` are DisplayEncoded / black / 0 | 366 checks, 0 failures (mutation: 12 failures) |
+| final binary, first round | the gate captures are what the last build draws | spot check: 1-01, 1-09, 2-26, 2-01 at frame 420, level4 frame 143 and level0 frame 1, retaken after that round's last rebuild, md5-identical to the after set |
+| final binary, after the review's rebuild | the gate captures are what the last build draws | `work/g2/fix1_final/`, 38 frames: all 26 `capture.sh` frames (the HUD's eight and the menu included), the eight of the fifteen levels it does not take, 1-20 and 1-21, all md5-identical to the after sets; and MainScene and Wolf Brigade, md5-identical to step 43's. `gates.sh` and `compare.py` on them print every number above again. `hud_g2.py` was not run again: its frames are identical, so its numbers stand |
+| MainScene and Wolf Brigade, `--fixed-step --frames 120` (no engine file changed) | byte-identical | `1e24c2a30f6f22dc2bb01b6038bd1af9` and `d9e7b8fe5e8b0b2f162b0195e5d5ba31`, step 43's |
+| `--visit-levels lightmapped --visit-passes 2` (not a G2 gate) | step 42's walk still holds on `data:` keys | exit 0; 1,460 sets, peak 96, baseline 75; 0 failures |
+| bare ground (not a gate) | counted | 34 of 128 levels, 3,659,902 px; 14 levels over 10 % of the frame; cause read from `StaticSky` (camera-pinned sky) |
+| validation | silent | every capture's log says `Vulkan validation layers: ACTIVE`; the only `[Validation]` lines are the loader's two missing Steam layer manifests, as in step 43's captures; every run exited 0 |
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning.
+  - The first build compiled the layer, `main.cpp` and `LevelVisit.cpp` (the header
+    changed) and `test_mp_layer.cpp`.
+  - The second, after a comment-only edit in the layer, compiled the layer again.
+  - The third followed the mutation's revert. The mutation build itself printed C4551 on
+    the no-op line it had put in, which is gone.
+- **ctest.** **113 of 113** pass, none refused ("Not Run" 0): after the second build, and
+  again after the third.
+- **Smart App Control** refused nothing in the first round: `MagicPortals.exe` was
+  relinked three times, and every capture exited 0.
+- **After the review, no source changed.**
+  - The four translation units were compiled again from scratch: the layer, `main.cpp`,
+    `LevelVisit.cpp` and `test_mp_layer.cpp`. No warning.
+  - Smart App Control then refused the new `test_mp_layer.exe`, so ctest showed it Not Run.
+    It went on refusing through 19 relinks of the same object; each gave a new md5, and
+    neither running it directly nor through ctest helped.
+  - Compiling the object again before each link got through on the fifth such round. The rebuilt `MagicPortals.exe` was refused the same way, and ran after five
+    more links, two with `main.cpp` recompiled.
+  - Every such round printed no warning.
+- **Then ctest: 113 of 113 pass, Not Run 0.** `test_mp_layer` run directly: 366 checks,
+  0 failures. `ninja: no work to do` before it.
+- **No other document's table moves.** No engine file changed and no suite was added, and
+  neither README.md nor ARCHITECTURE.md lists `test_mp_layer`'s checks.

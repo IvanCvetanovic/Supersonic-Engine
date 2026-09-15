@@ -24,6 +24,7 @@
 #include "core/Input.hpp"
 #include "core/InterpolationSystem.hpp"
 #include "core/PhysicsSystem.hpp"
+#include "core/RenderSettings.hpp"
 // For the renderer's own cull: RenderSystem.hpp carries renderer/Frustum.hpp.
 #include "core/RenderSystem.hpp"
 #include "core/ScreenOverlay.hpp"
@@ -35,6 +36,7 @@
 #include "sim/Units.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -2371,6 +2373,69 @@ void TheNoPortalSignIsPinnedToTheCorner() {
     }
 }
 
+// ---- What the scene's numbers are ------------------------------------------------
+//
+// The original drew into an 8-bit framebuffer and blended on its bytes, so the
+// port's scene says its numbers are display values (step 44, the lighting
+// design's G2): colour textures sampled undecoded, no tone map, no bloom, and a
+// flat black ground, so no sky pass. The setting is the layer's, not a level's,
+// so the menu and a start that fails get it too. Not quantised to 5/6/5 yet:
+// that is G6.
+void SceneSettingsSayDisplayValues(entt::registry& registry, const std::string& start) {
+    const RenderSettings* rendering = registry.ctx().find<RenderSettings>();
+    CHECK_MSG(rendering != nullptr, "the layer puts RenderSettings in the context, starting at '" + start + "'");
+    if (rendering == nullptr) return;
+    CHECK_MSG(rendering->encoding == RenderSettings::SceneEncoding::DisplayEncoded, "display-encoded at '" + start + "'");
+    CHECK_MSG(!rendering->decodesColourTextures(), "so a colour texture is its file's bytes");
+    CHECK_MSG(rendering->background == RenderSettings::Background::Color && !rendering->drawsSky(),
+              "a flat ground, and no sky pass behind the level");
+    CHECK_EQ(rendering->backgroundColor[0], 0.0f);
+    CHECK_EQ(rendering->backgroundColor[1], 0.0f);
+    CHECK_EQ(rendering->backgroundColor[2], 0.0f);
+    const std::array<float, 3> clear = RenderSettings::SceneClearColor(rendering);
+    CHECK_MSG(clear[0] == 0.0f && clear[1] == 0.0f && clear[2] == 0.0f,
+              "and the target is cleared to that black, not to the linear literal");
+    CHECK_EQ(rendering->bloomIntensity, 0.0f);
+    CHECK_MSG(rendering->quantize == RenderSettings::OutputQuantize::None, "not quantised before G6");
+    CHECK_EQ(rendering->exposure, 1.0f);
+}
+
+void TheSceneHoldsDisplayValues() {
+    for (const char* name : {"level0", "", "level99"}) {
+        const std::string start = name;
+        entt::registry registry;
+        publishViewport(registry);
+        CHECK(registry.ctx().find<RenderSettings>() == nullptr);
+        MagicPortalsLayer layer(TestPaths(), start);
+        layer.OnAttach(registry);
+        if (start == "level0") CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
+        if (start.empty()) CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Main);
+        if (start == "level99") CHECK(layer.Current() == nullptr);
+        SceneSettingsSayDisplayValues(registry, start);
+        // The next level and a retry keep it: nothing per level writes it.
+        if (start == "level0") {
+            press(layer, registry, MagicPortalsLayer::kSkip);
+            CHECK(IsAt(layer, "level1"));
+            press(layer, registry, MagicPortalsLayer::kRetry);
+            SceneSettingsSayDisplayValues(registry, "level1, retried");
+        }
+        layer.OnDetach(registry);
+    }
+
+    // A --scene load has already put a scene's own settings in the context, sky
+    // and bloom included. The layer's replace them rather than deferring.
+    entt::registry registry;
+    publishViewport(registry);
+    RenderSettings loaded;
+    loaded.bloomIntensity = 2.0f;
+    loaded.backgroundColor[0] = 0.5f;
+    registry.ctx().insert_or_assign(loaded);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    SceneSettingsSayDisplayValues(registry, "level0 over a loaded scene");
+    layer.OnDetach(registry);
+}
+
 void NothingBlinksWhileWalking() {
     NoSpriteBlinksWhileWalking("level1"); // 1-2, where the owner saw one go
     NoSpriteBlinksWhileWalking("level2"); // 1-3, where several do
@@ -2420,6 +2485,7 @@ void runTests() {
     APlaqueForALevelWithAMedal();
     TheTutorialRingsAndAWeightlessLevelHasNoPads();
     TheNoPortalSignIsPinnedToTheCorner();
+    TheSceneHoldsDisplayValues();
 }
 
 } // namespace

@@ -12,6 +12,7 @@
 #include "core/Input.hpp"
 #include "core/Log.hpp"
 #include "core/Raycast.hpp"
+#include "core/RenderSettings.hpp"
 // For RenderSystem::Stats, which the app publishes into the registry context:
 // what the last frame actually drew, culled and refused.
 #include "core/RenderSystem.hpp"
@@ -108,6 +109,41 @@ bool PositionOf(const Tscn::Node* node, glm::dvec2& out) {
     return true;
 }
 
+// WHAT THE SCENE'S NUMBERS ARE: display values, as the original's were.
+//
+// The original drew into an 8-bit GLES2 framebuffer. Every tint, fade and glow
+// in its art was multiplied and blended on the encoded bytes, and an additive
+// sum clipped at 255. Through the engine's default chain (sRGB decode, bloom,
+// Reinhard, encode) a white texel stopped at 186 and 1-1's torch flame at
+// (197, 158, 127), where the original's is (253, 252, 159). The remake's fit of
+// the original's pixels settles which arithmetic it was (its lighting
+// design_port.md section 0, fit.md section 4): blending in linear light scores
+// 13.59 of 255 over 1,359 unlit blocks against 0.28 on encoded values, and
+// 11.90 against 0.92 over 1,042 lightmapped ones. Everything the lighting adds
+// after this multiplies those same bytes, so this is not a look to tune but the
+// space the rest is defined in.
+//
+// A flat black behind everything, which also means no sky pass: Ethanon clears
+// to black (ETHEngine.cpp:114, and GLES2Video.cpp:87's default), and the
+// original's own LoadingScreen::preLoop sets SetBackgroundColor(0xFF000000). A
+// display-encoded scene left on the sky is incoherent (RenderSettings.hpp).
+//
+// No bloom, which the original never drew. The engine records no bloom chain
+// for this encoding whatever the intensity says (BloomPass::RunsBloomChain);
+// zero makes the scene's own settings say the same.
+//
+// Not quantised to 5/6/5: the original's 16-bit target is the design's step G6.
+Supersonic::RenderSettings SceneRendering() {
+    Supersonic::RenderSettings rendering;
+    rendering.encoding = Supersonic::RenderSettings::SceneEncoding::DisplayEncoded;
+    rendering.background = Supersonic::RenderSettings::Background::Color;
+    rendering.backgroundColor[0] = 0.0f;
+    rendering.backgroundColor[1] = 0.0f;
+    rendering.backgroundColor[2] = 0.0f;
+    rendering.bloomIntensity = 0.0f;
+    return rendering;
+}
+
 } // namespace
 
 MagicPortalsLayer::MagicPortalsLayer(Paths paths, std::string startLevel)
@@ -130,6 +166,10 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       ? registry.ctx().get<Supersonic::SimulationClock>()
                       : registry.ctx().emplace<Supersonic::SimulationClock>();
     clock.fixedDelta = kTick;
+    // And the scene's encoding (SceneRendering), before anything is drawn, for
+    // the menu as for a level. Assigned rather than emplaced: a --scene load
+    // may already have put a RenderSettings of its own in the context.
+    registry.ctx().insert_or_assign<Supersonic::RenderSettings>(SceneRendering());
 
     bindInput();
     loadSounds();

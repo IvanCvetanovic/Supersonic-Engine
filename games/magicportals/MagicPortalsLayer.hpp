@@ -59,6 +59,10 @@ namespace MagicPortals {
 //    and goes when that goes. The bodies are also boxes in the colour of what
 //    they are, hidden behind the art until B shows them - and shown anyway when
 //    the art cannot be read, which is a level still played, drawn plainly.
+//  - The scene holds display values, as the original's 8-bit framebuffer did
+//    (RenderSettings::SceneEncoding::DisplayEncoded, set at attach): a texture
+//    is sampled as the bytes in its file, tints and blends work on those bytes,
+//    and nothing is tone-mapped or bloomed, on a flat black ground.
 //  - What the levels do not picture, the game draws as the original's own
 //    entities draw it (Art.hpp): the portals a shot opens, and the shot. Their
 //    images are read from the original's extracted assets; without them they
@@ -725,10 +729,13 @@ private:
     //
     // DRAWN THROUGH THE ENGINE'S SCREEN OVERLAY (core/ScreenOverlay.hpp), not as
     // quads in the level. The original blended its HUD straight onto display
-    // values; the scene target blends in linear light and is tone-mapped after,
-    // which capped white at 186 and made a translucent button's contrast depend
-    // on what was behind it (step 39). The overlay is drawn after all of that,
-    // in screen fractions, so it needs no camera, no interpolation and no z.
+    // values; the scene target then blended in linear light and was tone-mapped
+    // after, which capped white at 186 and made a translucent button's contrast
+    // depend on what was behind it (step 39). The overlay is drawn after the
+    // composite, in screen fractions, so it needs no camera, no interpolation
+    // and no z. The level has held display values too since step 44; the HUD
+    // stays here, after the composite, where no scene setting reaches it
+    // (whether the original's 5/6/5 should is the lighting design's step G6).
     //
     // HIT-TESTED IN VIEW SPACE, straight from the pointer's place in the
     // viewport, so a tap on a control does not depend on the camera at all.
