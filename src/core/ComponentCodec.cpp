@@ -190,6 +190,22 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "},\n";
     }
 
+    // Its own key rather than a Type of "Light": a 2D light shares no field with
+    // a scene light but a colour, and a reader that met one inside "Light" would
+    // make a PBR point light of it.
+    if (const auto* light = registry.try_get<Light2DComponent>(entity)) {
+        out << indent << "\"Light2D\": {\n";
+        out << indent << "  \"Color\": ";
+        writeVec3(out, light->color, "Light2DComponent.color");
+        out << ",\n";
+        out << indent << "  \"Intensity\": " << jsonSafe(light->intensity, "Light2DComponent.intensity") << ",\n";
+        out << indent << "  \"Range\": " << jsonSafe(light->range, "Light2DComponent.range") << ",\n";
+        out << indent << "  \"Height\": " << jsonSafe(light->height, "Light2DComponent.height") << ",\n";
+        out << indent << "  \"Layers\": " << static_cast<int>(light->layers) << ",\n";
+        out << indent << "  \"Enabled\": " << (light->enabled ? "true" : "false") << "\n";
+        out << indent << "},\n";
+    }
+
     if (const auto* camera = registry.try_get<CameraComponent>(entity)) {
         out << indent << "\"Camera\": {\n";
         out << indent << "  \"Orthographic\": "
@@ -767,6 +783,21 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         light.innerAngle = l["InnerAngle"].AsFloat(0.35f);
         light.outerAngle = l["OuterAngle"].AsFloat(0.52f);
         light.castsShadow = l["CastsShadow"].AsBool(true);
+    }
+
+    // Each field falls back to the component's own default, so a block missing
+    // a key reads as the light it would have been.
+    if (node.Has("Light2D")) {
+        const auto& l = node["Light2D"];
+        const Light2DComponent defaults{};
+        auto& light = registry.emplace_or_replace<Light2DComponent>(entity);
+        light.color = readVec3(l["Color"], defaults.color);
+        light.intensity = l["Intensity"].AsFloat(defaults.intensity);
+        light.range = l["Range"].AsFloat(defaults.range);
+        light.height = l["Height"].AsFloat(defaults.height);
+        light.layers = static_cast<uint8_t>(
+            std::clamp(l["Layers"].AsNumber(defaults.layers), 0.0, 255.0));
+        light.enabled = l["Enabled"].AsBool(defaults.enabled);
     }
 
     if (node.Has("Camera")) {

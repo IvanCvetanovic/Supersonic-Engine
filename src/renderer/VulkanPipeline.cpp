@@ -396,11 +396,24 @@ void VulkanPipeline::createDescriptorSetLayout() {
     instanceBinding.stageFlags =
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
 
-    const std::array<vk::DescriptorSetLayoutBinding, 12> sceneBindings = {
+    // Every 2D point light in the frame (Light2DComponent, core/Light2D.hpp): a
+    // count and a flat list, read by shader.frag's 2D sprite path only.
+    //
+    // Not bindings 5 to 7. Those lights are tied to the camera's depth slices,
+    // chosen by importance and given shadow slots; a 2D light is none of that,
+    // and a sprite loops the handful there are rather than looking up a froxel.
+    // Fragment only, like the transforms: nothing about a light moves a vertex.
+    vk::DescriptorSetLayoutBinding light2DBinding{};
+    light2DBinding.binding = 12;
+    light2DBinding.descriptorType = vk::DescriptorType::eStorageBuffer;
+    light2DBinding.descriptorCount = 1;
+    light2DBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+    const std::array<vk::DescriptorSetLayoutBinding, 13> sceneBindings = {
         uboBinding, shadowBinding, paletteBinding, pointShadowBinding, spotShadowBinding,
         clusterBindings[0], clusterBindings[1], clusterBindings[2],
         environmentBindings[0], environmentBindings[1], uvTransformBinding,
-        instanceBinding
+        instanceBinding, light2DBinding
     };
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};

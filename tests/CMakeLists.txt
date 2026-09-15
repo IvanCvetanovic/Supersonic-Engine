@@ -262,6 +262,11 @@ add_engine_test(test_input)
 add_engine_test(test_spotlight)
 add_engine_test(test_lightselection)
 add_engine_test(test_clustergrid)
+# 2D point lights: the gather that packs Light2DComponents for scene binding 12,
+# and shader.frag's light loop through its CPU twin, Light2D::Contribution. Pure
+# arithmetic, so it needs no working directory; test_materials holds the
+# shader's declarations to the same constants.
+add_engine_test(test_light2d)
 add_engine_test(test_shadowcache)
 add_engine_test(test_resourcesync)
 add_engine_test(test_layerstack)
@@ -303,7 +308,8 @@ set_tests_properties(
     test_materials  # reads assets/shaders/shader.frag, to check the UV slot
                     # packing agrees with the shader that unpacks it, and
                     # that its 2D sprite switches, light mask shift and
-                    # overlay binding are the ones VulkanPipeline.hpp states
+                    # overlay binding are the ones VulkanPipeline.hpp states,
+                    # and its 2D light buffer the one core/Light2D.hpp packs
     test_screenoverlay # reads assets/shaders/screen_overlay.vert, to check its
                        # vertex table is the one ScreenOverlay::CornerOf states,
                        # and bloom_composite.frag, to check its branches are

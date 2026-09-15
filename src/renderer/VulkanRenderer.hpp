@@ -16,6 +16,7 @@
 #include "renderer/VulkanOffscreen.hpp"
 #include "core/RenderSystem.hpp"
 #include "core/ClusterGrid.hpp"
+#include "core/Light2D.hpp"
 #include "renderer/ShadowCache.hpp"
 #include "renderer/MeshRegistry.hpp"
 #include "renderer/TextureRegistry.hpp"
@@ -317,6 +318,19 @@ private:
     // because the two run out for unrelated reasons and either one silencing
     // the other is a report nobody sees.
     uint32_t m_uvOverflowReportedFor{0};
+
+    // Every 2D point light in the frame (Light2DComponent), scene binding 12: a
+    // 16-byte count and core/Light2D.hpp's records behind it, one buffer per
+    // frame in flight, sized at kMaxLights2D. Written EVERY frame, a count of
+    // zero included, because shader.frag reads the count for every 2D sprite
+    // whether or not anything lights it.
+    std::vector<std::unique_ptr<VulkanBuffer>> m_light2DBuffers;
+    std::vector<uint8_t> m_light2DScratch;
+    std::vector<GpuLight2D> m_light2DGather;
+
+    // How many 2D lights were dropped over the cap when that was last said, so
+    // it is said once per change. Zero means within the cap.
+    uint32_t m_light2DDropReportedFor{0};
 
     // Reused between frames so the gather does not allocate every frame.
     std::vector<glm::mat4> m_paletteScratch;

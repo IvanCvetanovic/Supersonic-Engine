@@ -96,13 +96,37 @@ layout(location = 6) flat in int fragInstance;
 const int FLAG_UNLIT = 1;
 
 // Must match PushConstantData::kSprite2D, kNormalYDown and kPremultiplied, and
-// Components.hpp's kLightMaskShift. test_materials reads these lines. The mask
-// and the normal switch are carried for the 2D light term, which is not built
-// yet, so nothing below reads those two.
+// Components.hpp's kLightMaskShift and kLightMaskBits. test_materials reads
+// these lines. The mask and the normal switch are read by shadeSprite2D's light
+// loop.
 const int FLAG_SPRITE2D      = 1 << 1;
 const int FLAG_NORMAL_Y_DOWN = 1 << 2;
 const int FLAG_PREMULTIPLIED = 1 << 3;
 const int LIGHT_MASK_SHIFT   = 20;
+const uint LIGHT_MASK_BITS   = 0xFFu;
+
+// Set 0, binding 12: every 2D point light in the frame (Light2DComponent),
+// gathered by Light2D::GatherLights2D. Must match core/Light2D.hpp's GpuLight2D
+// and GpuLight2DHeader: std430 puts the array at 16, after the count and three
+// words of padding, with a 32-byte stride. The renderer writes the count every
+// frame, zero included, because the loop below reads it for every 2D sprite.
+struct Light2D {
+    vec3  position;   // world x, world y; z = the light's height
+    float range;
+    vec3  color;      // colour x intensity, may exceed 1
+    uint  layers;
+};
+layout(std430, set = 0, binding = 12) readonly buffer Light2DBuffer {
+    uint count;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+    Light2D lights[];
+} light2D;
+
+// Must match kMaxLights2D. The buffer is sized for this many, so a count above
+// it (which the renderer never writes) would read past the end.
+const uint MAX_LIGHTS_2D = 64u;
 
 // The UV slot lives in the twelve bits ABOVE the switches. Must match
 // PushConstantData::kUvSlotShift and kUvSlotMask.
@@ -382,18 +406,21 @@ float spotShadowFactor(int slot, float NdotL) {
 
 // A 2D sprite (PushConstantData::kSprite2D): the texel times the tint times the
 // ambient, plus the overlay, clamped the way a fixed-point target clamps one
-// draw's output. The record's fields mean what that path gives them:
-// albedoColor.rgb is already tint x ambient (RenderSystem::ApplySprite2D) and
-// material.x is the overlay's strength.
+// draw's output, plus one clamped term per 2D light that reaches it. The
+// record's fields mean what that path gives them: albedoColor.rgb is already
+// tint x ambient (RenderSystem::ApplySprite2D), material.x is the overlay's
+// strength, emissive.rgb is the tint WITHOUT the ambient and emissive.w the
+// surface's lighting height.
 //
 // The overlay is NOT scaled by the tint or the ambient: a baked light term
 // already carries its surface's albedo, and the engines it reproduces add it
 // straight (Ethanon's add1.ps, gl_FragColor = v_color * diffuse + t1).
 //
-// The light term - one clamped add per light, at full weight - belongs after
-// the base and is not built yet; premultiplied output is what will let it be
-// added at full weight over a partly transparent texel.
+// The light loop has a CPU twin, Light2D::WorldNormal and Light2D::Contribution
+// (core/Light2D.cpp), which test_light2d tests. Change both or neither.
 vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
+    int flags = instances[fragInstance].flags;
+
     // A fully transparent texel carries no colour, so it cannot show through a
     // premultiplied blend, and will not be lit.
     vec3 texel = albedoTex.a > 0.0 ? albedoTex.rgb * fragColor : vec3(0.0);
@@ -403,10 +430,54 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
                       + texture(overlayMap, uv).rgb * instances[fragInstance].material.x,
                       0.0, 1.0);
 
-    if ((instances[fragInstance].flags & FLAG_PREMULTIPLIED) != 0) {
-        return vec4(base * alpha, alpha);
+    // Each light's add is clamped on its own, the way a fixed-point target
+    // clamps the separate One, One draw a GLES2-era engine gives every light.
+    // The sum is not clamped here: a float target keeps it, and the composite
+    // clamps once, which equals clamping after every add of non-negative terms.
+    vec3 lit = vec3(0.0);
+    uint mask = (uint(flags) >> LIGHT_MASK_SHIFT) & LIGHT_MASK_BITS;
+    uint count = min(light2D.count, MAX_LIGHTS_2D);
+    if (mask != 0u && count > 0u) {
+        // Decoded, not renormalised: the length of the stored vector is part of
+        // the look. A material without a normal map samples the flat
+        // (0.5, 0.5, 1.0) texture, which decodes to straight out of the screen.
+        vec3 c = texture(normalMap, uv).rgb * 2.0 - 1.0;
+        if ((flags & FLAG_NORMAL_Y_DOWN) != 0) c.y = -c.y;
+
+        // The sprite's own axes, so a rotated or mirrored sprite turns its
+        // normals with it. z is towards the viewer, where the heights are.
+        mat4 model = instances[fragInstance].model;
+        vec3 n = normalize(model[0].xyz) * c.x + normalize(model[1].xyz) * c.y + vec3(0.0, 0.0, c.z);
+
+        // emissive.w is the lighting height; the fragment's own z is only its
+        // draw depth, a slot in the sprites' order.
+        vec3 p = vec3(fragWorldPos.xy, instances[fragInstance].emissive.w);
+        // emissive.rgb is the colour WITHOUT ambient: a light is not dimmed by
+        // the room it is in.
+        vec3 tint = texel * instances[fragInstance].emissive.rgb;
+
+        for (uint i = 0u; i < count; ++i) {
+            if ((light2D.lights[i].layers & mask) == 0u) continue;
+            vec3 v = light2D.lights[i].position - p;
+            float d2 = dot(v, v);
+            float r2 = light2D.lights[i].range * light2D.lights[i].range;
+            if (d2 >= r2) continue;                       // the falloff is exactly 0 there
+            float attenuation = 1.0 - d2 / r2;
+            float facing = dot(v, n) * inversesqrt(max(d2, 1e-12));
+            // A light behind the surface is a negative colour, clamped to
+            // nothing rather than subtracted.
+            lit += clamp(tint * light2D.lights[i].color * (attenuation * facing), 0.0, 1.0);
+        }
     }
-    return vec4(base, alpha);
+
+    // Premultiplied, the light goes on at FULL weight over a partly transparent
+    // texel, as the separate additive pass it reproduces does; only the base is
+    // weighted by alpha. With nothing lit, lit is exactly zero and both lines
+    // are the arithmetic this path had before the loop.
+    if ((flags & FLAG_PREMULTIPLIED) != 0) {
+        return vec4(base * alpha + lit, alpha);
+    }
+    return vec4(base + lit, alpha);
 }
 
 void main() {

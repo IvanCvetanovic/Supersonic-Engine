@@ -191,9 +191,10 @@ struct PushConstantData {
     //   flags 8..19      UV slot                  UV slot (unchanged)
     //   flags 20..27     unused                   2D light mask (PackLightMask)
     //
-    // The light term that reads emissive.rgb, emissive.w, the mask and
-    // kNormalYDown is not built yet; the record carries them already so that
-    // adding it changes the shader and not this layout.
+    // The light term reads emissive.rgb, emissive.w, the mask and kNormalYDown,
+    // against the frame's Light2DComponents at scene binding 12 (core/Light2D).
+    // It was added to the shader without changing this layout, which is what
+    // carrying them from the start was for.
     static constexpr int32_t kSprite2D = 1 << 1;
 
     // With kSprite2D: the normal map's green channel points down the image.

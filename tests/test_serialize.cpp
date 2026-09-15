@@ -309,6 +309,16 @@ static entt::entity makeFullyLoadedEntity(entt::registry& registry) {
     light.outerAngle = 0.44f;
     light.castsShadow = false;
 
+    // Every field away from its default, so a value the reader defaults instead
+    // of reading shows up as a difference.
+    auto& light2D = registry.emplace<Light2DComponent>(entity);
+    light2D.color = glm::vec3(1.0f, 0.5f, 0.1f);
+    light2D.intensity = 3.0f;
+    light2D.range = 6.0f;
+    light2D.height = 0.12f;
+    light2D.layers = 0b10;
+    light2D.enabled = false;
+
     auto& camera = registry.emplace<CameraComponent>(entity);
     camera.fov = 72.0f;
     camera.farPlane = 500.0f;
@@ -759,6 +769,17 @@ static void testPrefabRoundTripsEveryField() {
             CHECK_NEAR(light->innerAngle, 0.21f);
             CHECK_NEAR(light->outerAngle, 0.44f);
             CHECK_MSG(!light->castsShadow, "castsShadow must survive as false, not default to true");
+        }
+
+        const auto* light2D = registry.try_get<Light2DComponent>(clone);
+        CHECK_MSG(light2D != nullptr, "prefab lost its Light2DComponent");
+        if (light2D) {
+            CHECK_NEAR(light2D->color.g, 0.5f);
+            CHECK_NEAR(light2D->intensity, 3.0f);
+            CHECK_NEAR(light2D->range, 6.0f);
+            CHECK_NEAR(light2D->height, 0.12f);
+            CHECK_EQ(static_cast<int>(light2D->layers), 2);
+            CHECK_MSG(!light2D->enabled, "a disabled 2D light must come back disabled");
         }
 
         const auto* camera = registry.try_get<CameraComponent>(clone);
@@ -1715,6 +1736,82 @@ static void testTheEncodingSurvivesARoundTripAsWordsWrittenOnlyWhenChosen() {
               "and an unknown quantisation is none");
 }
 
+static void testA2DLightSurvivesARoundTripUnderItsOwnKey() {
+    // A 2D light is its own component under its own key. Saved as a "Light" it
+    // would come back a PBR point light, lit by the froxel grid and lighting
+    // every lit surface in the scene, and no 2D sprite at all.
+    const std::string path = "test_light2d_tmp.scene";
+    {
+        entt::registry registry;
+        const auto lamp = registry.create();
+        registry.emplace<TagComponent>(lamp, "Torch");
+        registry.emplace<TransformComponent>(lamp).position = glm::vec3(5.76f, -1.28f, 0.0f);
+        auto& light = registry.emplace<Light2DComponent>(lamp);
+        light.color = glm::vec3(1.0f, 0.5f, 0.1f);
+        light.intensity = 3.0f;
+        light.range = 6.0f;
+        light.height = 0.12f;
+        light.layers = 0b10;
+
+        const auto wall = registry.create();
+        registry.emplace<TagComponent>(wall, "Wall");
+        registry.emplace<TransformComponent>(wall);
+        CHECK_MSG(SceneSerializer::Serialize(registry, path).ok, "the scene must save");
+    }
+    const std::string text = readWholeFile(path);
+    CHECK_MSG(text.find("\"Light2D\"") != std::string::npos, "the light is written under Light2D");
+    CHECK_MSG(text.find("\"Light\":") == std::string::npos, "and not as a scene light");
+    // Written once: the entity without one writes no key for it.
+    CHECK_MSG(text.find("\"Light2D\"") == text.rfind("\"Light2D\""),
+              "only the entity that has a 2D light writes one");
+
+    entt::registry loaded;
+    const auto result = SceneSerializer::Deserialize(loaded, path);
+    std::remove(path.c_str());
+    CHECK_MSG(result.ok, "and load: " + result.message);
+
+    int lights = 0;
+    for (const auto entity : loaded.view<Light2DComponent>()) {
+        ++lights;
+        const auto& light = loaded.get<Light2DComponent>(entity);
+        CHECK(loaded.get<TagComponent>(entity).tag == "Torch");
+        CHECK_NEAR(light.color.r, 1.0f);
+        CHECK_NEAR(light.color.g, 0.5f);
+        CHECK_NEAR(light.color.b, 0.1f);
+        CHECK_NEAR(light.intensity, 3.0f);
+        CHECK_NEAR(light.range, 6.0f);
+        CHECK_NEAR(light.height, 0.12f);
+        CHECK_EQ(static_cast<int>(light.layers), 2);
+        CHECK(light.enabled);
+        CHECK_MSG(!loaded.all_of<LightComponent>(entity), "and it does not become a scene light");
+    }
+    CHECK_EQ(lights, 1);
+
+    // A block that names only some fields reads the rest as the component's own
+    // defaults, not as zero: a light with no Intensity key is not a black one.
+    // And the layers, a byte, are clamped rather than wrapped.
+    Json::Value node;
+    std::string error;
+    CHECK(Json::Parse(R"({"Light2D": {"Range": 2.0, "Layers": 300}})", node, error));
+    entt::registry partial;
+    const auto entity = partial.create();
+    ComponentCodec::Read(partial, entity, node);
+    const auto* light = partial.try_get<Light2DComponent>(entity);
+    CHECK_MSG(light != nullptr, "a partial block still makes the component");
+    if (light != nullptr) {
+        const Light2DComponent defaults{};
+        CHECK_NEAR(light->range, 2.0f);
+        CHECK_NEAR(light->color.g, defaults.color.g);
+        CHECK_NEAR(light->intensity, defaults.intensity);
+        CHECK_NEAR(light->height, defaults.height);
+        CHECK(light->enabled == defaults.enabled);
+        CHECK_EQ(static_cast<int>(light->layers), 255);
+    }
+    CHECK(Json::Parse(R"({"Light2D": {"Layers": -4}})", node, error));
+    ComponentCodec::Read(partial, entity, node);
+    CHECK_EQ(static_cast<int>(partial.get<Light2DComponent>(entity).layers), 0);
+}
+
 static void testTheClearFollowsTheEncoding() {
     // What the scene target is cleared to. The sky's 0.00023 is a RADIANCE,
     // chosen so Reinhard and the encode bring it back to 0.02; in a target of
@@ -1791,6 +1888,7 @@ static void runTests() {
     testAShapeSurvivesARoundTripIncludingItsKind();
     testTheBackgroundSurvivesARoundTripAndDefaultsToTheSky();
     testTheEncodingSurvivesARoundTripAsWordsWrittenOnlyWhenChosen();
+    testA2DLightSurvivesARoundTripUnderItsOwnKey();
     testTheClearFollowsTheEncoding();
     testAShapeWithAKindFromTheFutureLoadsAsARing();
     testLoadingASceneReplacesTheWorldPhysicsRatherThanKeepingIt();
@@ -1816,4 +1914,4 @@ static void runTests() {
     testMissingPrefabReturnsNull();
 }
 
-TEST_MAIN("test_serialize", 400)
+TEST_MAIN("test_serialize", 460)

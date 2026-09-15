@@ -298,9 +298,9 @@ verified by a screenshot of geometry it never touched.
 | `test_raycast` | Viewport picking, slab intersection, depth ordering |
 | `test_meshgen` | Primitive generation, winding, tangents, OBJ parsing |
 | `test_gltf` | glTF import against real assets in the tree, including a `.glb` with embedded textures |
-| `test_serialize` | JSON reader, scene and prefab round-trips, including the scene's encoding and quantisation as words written only when chosen, and the clear each encoding gets |
+| `test_serialize` | JSON reader, scene and prefab round-trips, including the scene's encoding and quantisation as words written only when chosen, the clear each encoding gets, and a 2D light under its own key with each missing field at its default |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
-| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, the count of material descriptor sets a dropped texture gives back, and the fourth map: each slot's own neutral (black for the overlay), the 2D sprite record, the switches and light mask sharing the flags word with the shader's copy, the premultiplied blend's factors, and the overlay, the 2D block and the third blend word surviving a save |
+| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, the count of material descriptor sets a dropped texture gives back, and the fourth map: each slot's own neutral (black for the overlay), the 2D sprite record, the switches and light mask sharing the flags word with the shader's copy, the premultiplied blend's factors, and the overlay, the 2D block and the third blend word surviving a save. And the 2D light buffer the shader declares: its record, its header, its cap and the mask's width |
 | `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
@@ -327,6 +327,7 @@ verified by a screenshot of geometry it never touched.
 | `test_contacts` | Enter/stay/exit diffing, pair ordering, normal direction, triggers |
 | `test_sat` | Oriented box collision, face manifolds, the ramp an AABB could not represent |
 | `test_lightselection` | Which lights survive the eight-light cap, and that the sun is not one of the casualties |
+| `test_light2d` | 2D point lights: what the gather packs (world x and y, the height rather than the transform's z, colour times intensity), that a black light is left out and one past the cap is dropped and counted, and the shader's light loop through its CPU twin: a flat sprite lit by height alone, a normal facing image-right lit from the right and not the left, a rotated sprite lit from the side it turned to, a mirrored one flipped, nothing at or beyond the range |
 | `test_shadowcache` | The signature that lets a depth pass be skipped, and what must dirty it |
 | `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped, and that the scene's colour space and the overlay path are in it |
 | `test_determinism` | That one binary over one scene produces the same frames twice |

@@ -13,6 +13,7 @@
 #include "TestHarness.hpp"
 #include "core/AssetWatcher.hpp"
 #include "core/Components.hpp"
+#include "core/Light2D.hpp"
 #include "core/MaterialLibrary.hpp"
 #include "core/MaterialSystem.hpp"
 #include "core/RenderSystem.hpp"
@@ -1386,6 +1387,76 @@ static void testTheShaderReadsTheSwitchesFromTheSameBits() {
               "the overlay is sampled from the binding the registry writes it to");
 }
 
+static void testTheShaderReadsThe2DLightsAsTheRendererWritesThem() {
+    // Scene binding 12. Three more descriptions of one layout: GpuLight2D and its
+    // header in core/Light2D.hpp, the buffer VulkanRenderer writes, and the block
+    // shader.frag declares. A disagreement is not a validation error; it is every
+    // sprite lit from somebody else's numbers, or a count read out of a light.
+    std::ifstream file("assets/shaders/shader.frag");
+    CHECK_MSG(file.good(), "shader.frag must be readable from the working directory");
+    if (!file.good()) return;
+    const std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    // Compared with the spacing taken out, so aligning declarations is not a
+    // failure and a changed word is.
+    const auto squeezed = [](std::string text) {
+        text.erase(std::remove_if(text.begin(), text.end(),
+                                  [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }),
+                   text.end());
+        return text;
+    };
+    // The text from `start` to the first `end` after it, or empty.
+    const auto between = [&source](const std::string& start, const std::string& end) {
+        const size_t at = source.find(start);
+        if (at == std::string::npos) return std::string();
+        const size_t stop = source.find(end, at);
+        if (stop == std::string::npos) return std::string();
+        return source.substr(at, stop - at + end.size());
+    };
+    // Comments taken out, so the check reads the declaration and not its notes.
+    const auto withoutComments = [](const std::string& text) {
+        std::string out;
+        size_t i = 0;
+        while (i < text.size()) {
+            if (text.compare(i, 2, "//") == 0) {
+                while (i < text.size() && text[i] != '\n') ++i;
+            } else {
+                out += text[i++];
+            }
+        }
+        return out;
+    };
+
+    CHECK_MSG(squeezed(withoutComments(between("struct Light2D {", "};"))) ==
+                  "structLight2D{vec3position;floatrange;vec3color;uintlayers;};",
+              "the shader's Light2D is GpuLight2D's four members, in its order");
+    CHECK_EQ(offsetof(GpuLight2D, range), size_t(12));
+    CHECK_EQ(offsetof(GpuLight2D, layers), size_t(28));
+
+    CHECK_MSG(squeezed(withoutComments(between("layout(std430, set = 0, binding = 12)", "} light2D;"))) ==
+                  "layout(std430,set=0,binding=12)readonlybufferLight2DBuffer{uintcount;uint_pad0;"
+                  "uint_pad1;uint_pad2;Light2Dlights[];}light2D;",
+              "binding 12 is a count, three words of padding and the lights: GpuLight2DHeader, 16 bytes");
+    CHECK_EQ(sizeof(GpuLight2DHeader), size_t(16));
+
+    CHECK_MSG(squeezed(between("const uint MAX_LIGHTS_2D", ";")) ==
+                  "constuintMAX_LIGHTS_2D=" + std::to_string(kMaxLights2D) + "u;",
+              "MAX_LIGHTS_2D is kMaxLights2D, the number the buffer is sized for");
+
+    std::ostringstream bits;
+    bits << "constuintLIGHT_MASK_BITS=0x" << std::uppercase << std::hex << kLightMaskBits << "u;";
+    CHECK_MSG(squeezed(between("const uint LIGHT_MASK_BITS", ";")) == bits.str(),
+              "and the mask it unpacks is as wide as PackLightMask packs: " + bits.str());
+
+    // The loop reads what ApplySprite2D writes: the height from emissive.w and
+    // the tint without ambient from emissive.rgb.
+    CHECK_MSG(source.find("vec3 p = vec3(fragWorldPos.xy, instances[fragInstance].emissive.w);") !=
+                  std::string::npos,
+              "the light loop takes the surface's height from emissive.w");
+    CHECK_MSG(source.find("vec3 tint = texel * instances[fragInstance].emissive.rgb;") != std::string::npos,
+              "and the tint without the ambient from emissive.rgb");
+}
+
 static void testA2DSpriteWritesItsRecordAndNothingElseDoes() {
     // A material that did not ask writes exactly what it wrote before: the
     // fields a 2D sprite repurposes are the PBR path's, and a lit surface
@@ -1581,6 +1652,7 @@ static void runTests() {
     testAPremultipliedColourIsTakenWhole();
     testTheSwitchesTheSlotAndTheMaskShareAWordWithoutTouching();
     testTheShaderReadsTheSwitchesFromTheSameBits();
+    testTheShaderReadsThe2DLightsAsTheRendererWritesThem();
     testA2DSpriteWritesItsRecordAndNothingElseDoes();
     testOnlyABlendedPremultipliedMaterialSaysSo();
     testAnOverlayAndA2DSpriteSurviveASaveAndLoad();
@@ -1635,4 +1707,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 320)
+TEST_MAIN("test_materials", 330)

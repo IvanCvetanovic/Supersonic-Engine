@@ -382,7 +382,7 @@ directional-*only*: a point light sitting in slot 0 still reaches its cube
 through the later branch, and a second directional light is lit but never
 shadowed. One shadowed directional light is the limit.
 
-**Descriptor sets.** Set 0 is per-frame and has twelve bindings; set 1 is
+**Descriptor sets.** Set 0 is per-frame and has thirteen bindings; set 1 is
 per-material and has four, rebound per draw.
 
 | Set 0 | Contents | Stages |
@@ -399,6 +399,7 @@ per-material and has four, rebound per draw.
 | 9 | prefiltered cubes, `samplerCube[2]`, one per environment probe | fragment |
 | 10 | this frame's texture coordinate transforms, storage buffer | fragment |
 | 11 | this frame's per-draw records, one per INSTANCE, storage buffer | vertex + fragment |
+| 12 | this frame's 2D point lights (`Light2DComponent`), a count and a flat list, storage buffer | fragment |
 
 Bindings 5 through 7 are why there is no `MAX_LIGHTS` any more: the light array
 used to live inside the uniform block as a fixed eight, and a storage buffer
@@ -425,6 +426,17 @@ pushes a real push constant — it draws no instanced batches, so it has nothing
 to gain and a smaller block to fill — which is why the 128-byte layout and its
 `static_assert` are still live even though the scene shaders no longer declare
 one.
+
+Binding 12 is the 2D sprite path's lights, and deliberately not bindings 5 to 7:
+those lights are tied to the camera's depth slices, chosen by importance and
+given shadow slots, none of which means anything to a flat sprite under an
+orthographic camera. `Light2D::GatherLights2D` packs every enabled
+`Light2DComponent` as a 32-byte std430 record (world x and y, the light's
+**height** as z, range, colour x intensity, layers) behind a 16-byte count, at
+most `kMaxLights2D` (64). A light of zero colour is left out, as Ethanon leaves it
+out; one past the cap is dropped and logged once per change. The buffer is
+written every frame, a count of zero included, because `shadeSprite2D` reads the
+count for every 2D sprite fragment.
 
 The three sampler shapes are not interchangeable. The cascades must be one array
 image because the per-fragment cascade choice is not dynamically uniform — it
@@ -476,9 +488,24 @@ overwrites it:
 | `flags` bits 0-3 | unlit | unlit, `kSprite2D`, `kNormalYDown`, `kPremultiplied` |
 | `flags` bits 8-19 / 20-27 | UV slot / unused | UV slot / 2D light mask (`PackLightMask`) |
 
-The height, the tint without ambient, the normal switch and the light mask are
-carried for a 2D light term that is not built yet; nothing reads them. The
-shader's copies of the four switches and the mask's shift are held to the C++ by
+**The 2D light term.** After the base, a sprite whose light mask is not zero
+adds one term per binding-12 light whose layers share a bit with it:
+`clamp(texel * tint * colour * (1 - d2/r2) * dot(L - P, N) / d, 0, 1)`. `P` is the
+fragment's world x and y with the surface's **lighting height** (`emissive.w`) as
+z, never the quad's own z, which in a 2D scene is draw order. The tint is the one
+without the ambient (`emissive.rgb`): a lamp is not dimmed by the room it is in.
+`N` is the normal map decoded and not renormalised, its green flipped under
+`kNormalYDown`, carried along the model's first two columns so a rotated or
+mirrored sprite turns its normals with it. Quadratic falloff with no constant
+term, a clamp per light rather than per sum, and premultiplied output that adds
+the light at full weight over a partly transparent texel are what a GLES2-era 2D
+engine's separate `One, One` light pass does. A mask of zero skips the normal
+fetch and the loop, and then the path's output is its base to the bit.
+
+The loop has a CPU twin, `Light2D::WorldNormal` and `Light2D::Contribution`,
+which `test_light2d` tests the way `ClusterGrid::ClusterForFragment` stands in for
+`clusterIndexFor`. The shader's copies of the four switches, the mask's shift and
+width, the light record, the buffer's header and its cap are held to the C++ by
 `test_materials`, which reads `shader.frag` as it reads the UV slot's.
 
 One packed map rather than three separate ones, because that is what an

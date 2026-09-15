@@ -389,6 +389,46 @@ struct LightComponent {
     bool castsShadow{true};
 };
 
+// A point light for 2D sprites (MaterialComponent::sprite2D), and nothing else.
+//
+// It lights only a sprite whose sprite2D.lightMask shares a bit with `layers`.
+// The PBR path never sees one: LightComponent's lights are tied to the camera's
+// depth slices, chosen by importance and given shadow slots, and none of that
+// means anything to a flat sprite in an orthographic view.
+//
+// Its x and y are the entity's world position. Its HEIGHT IS ABSOLUTE and
+// separate from the transform's z, because in a 2D scene z is draw order, not
+// geometry: a torch drawn in front of a wall is not therefore nearer to it.
+//
+// The arithmetic, per light, in shader.frag's shadeSprite2D and in
+// Light2D::Contribution for the suites:
+//   add = clamp(albedo * tint * color * intensity
+//               * (1 - min(d2, r2) / r2) * max(0, dot(L - P, N) / d), 0, 1)
+// with P = (fragment x, fragment y, the surface's height) and N the surface's
+// normal map turned into world axes. Quadratic falloff with no constant term,
+// and a normal that is not renormalised, are deliberate: that is what GLES2-era
+// 2D lighting does, and a game porting one needs it exactly.
+struct Light2DComponent {
+    glm::vec3 color{1.0f};
+
+    // Multiplies color on the CPU (Light2D::GatherLights2D). Either may exceed
+    // 1: a lamp authored at three times white is how the engines this exists for
+    // brighten a dark room, and the shader clamps each light's own add.
+    float intensity{1.0f};
+
+    // Where the falloff reaches zero, in world units. Past it the light adds
+    // exactly nothing.
+    float range{5.0f};
+
+    // The light's height in the 2D lighting space, in world units.
+    float height{0.5f};
+
+    // Which sprites it reaches: those whose lightMask shares a bit with this.
+    uint8_t layers{1};
+
+    bool enabled{true};
+};
+
 // A 2D affine transform on texture coordinates.
 //
 // Scrolling rain and a flipbook flame are the same feature: the mesh never
@@ -664,7 +704,8 @@ struct MaterialComponent {
     //   base = clamp(albedo * albedoColor.rgb * ambient + overlay * overlayStrength, 0, 1)
     // which is how GLES2-era 2D engines draw a lit sprite's first pass: the
     // ambient multiplies the texel and the tint, and the baked overlay is added
-    // after, undimmed by either.
+    // after, undimmed by either. Then one clamped add per Light2DComponent whose
+    // layers share a bit with lightMask (the formula is beside that component).
     struct Sprite2DLight {
         bool enabled{false};
 
@@ -677,12 +718,13 @@ struct MaterialComponent {
         // the transform's z: in a 2D scene z is draw order, not geometry.
         float height{0.0f};
 
-        // Which 2D light layers reach it; 0 is none. Packed and carried now;
-        // the light term that reads it is not built yet.
+        // Which Light2DComponent layers reach it; 0 is none, and then the
+        // shader neither samples the normal map nor walks the lights.
         uint8_t lightMask{0};
 
         // The normal map's green channel points DOWN the image (DirectX
-        // convention), where the engine's y is up. Carried with the mask.
+        // convention), where the engine's y is up. Read only by the light term:
+        // the normal map is sampled for nothing else on this path.
         bool normalYDown{false};
 
         // How much of the overlay is added. 1 is all of it.
