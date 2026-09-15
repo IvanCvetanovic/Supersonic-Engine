@@ -123,6 +123,9 @@ public:
         // The blended pipeline that adds rather than mixes, for materials
         // whose blend is Additive. Bound per run - see BlendRun.
         VulkanPipeline& additivePipeline,
+        // And the one that composites a colour already multiplied by its
+        // alpha, for materials whose blend is Premultiplied.
+        VulkanPipeline& premultipliedPipeline,
         VulkanPipeline* skyPipeline,
         MeshRegistry& meshes,
         TextureRegistry& textures,
@@ -177,6 +180,7 @@ public:
         uint32_t albedoTextureID{0};
         uint32_t normalTextureID{0};
         uint32_t ormTextureID{0};
+        uint32_t overlayTextureID{0};
 
         int32_t sortKey{0};
     };
@@ -336,6 +340,8 @@ public:
         // not id 0 - that one is the sRGB white ALBEDO. Unreachable, because
         // the single construction site sets it, and wrong on the day it is not.
         uint32_t ormTextureID{2};
+        // And the black overlay's, for the same reason.
+        uint32_t overlayTextureID{4};
 
         // ALONG THE VIEW DIRECTION, not the distance to the camera.
         //
@@ -373,9 +379,9 @@ public:
         // to the sort. Stable input, stable frame.
         uint32_t gathered{0};
 
-        // Added to what is behind it rather than mixed over it
-        // (MaterialComponent::blend). Not a sort key: see BlendRun.
-        bool additive{false};
+        // How it composites with what is behind it (MaterialComponent::blend):
+        // mixed, added, or premultiplied. Not a sort key: see BlendRun.
+        BlendEquation blend{BlendEquation::Mix};
     };
 
     // Orders blended draws back to front, then by sort key, then by gather
@@ -396,13 +402,33 @@ public:
     struct BlendRun {
         uint32_t first{0};
         uint32_t count{0};
-        bool additive{false};
+        BlendEquation blend{BlendEquation::Mix};
     };
 
     // The runs of `sorted`, in order. None for an empty list, and one for a
     // frame in which every blended surface blends alike - which records what
     // the pass recorded before there was more than one blend.
     static std::vector<BlendRun> BlendRuns(const std::vector<TransparentDraw>& sorted);
+
+    // The pipeline equation a transparent material's blend asks for. Alpha is
+    // Mix, Additive is Add, Premultiplied is Premultiplied: one table, so the
+    // gather and a suite cannot come to disagree about it.
+    static BlendEquation EquationFor(MaterialComponent::BlendMode blend);
+
+    // What a material writes into its draw's record AFTER everything else has
+    // had its say - the material branch and a mesh surface's override both
+    // write albedoColor, material and emissive, and a 2D sprite gives those
+    // fields a meaning of their own (PushConstantData::kSprite2D).
+    //
+    //   - unlit with sprite2D.enabled: kSprite2D, kNormalYDown when asked,
+    //     the light mask, albedoColor.rgb = tint x ambient, emissive =
+    //     (tint, height), material = (overlayStrength, 0, 0, alphaCutoff).
+    //   - transparent with blend Premultiplied: kPremultiplied.
+    //
+    // Anything else is left exactly as it was, so every existing draw writes
+    // the record it wrote before. Static and pure so a suite can read the
+    // packing; the draw loop's buildPushConstants calls it last.
+    static void ApplySprite2D(const MaterialComponent& material, PushConstantData& push);
 
     // One live particle, gathered from every emitter before any of them is
     // recorded. Out here beside TransparentDraw for the same reason: the
@@ -538,6 +564,9 @@ public:
     // absent, and absent is a different answer from present-and-empty: an entity
     // with no MeshComponent falls back to the cube, and one with an empty path
     // asks the registry for the default primitive.
+    //
+    // Every path that selects a texture is in it: albedo, normal, ORM and the
+    // overlay.
     //
     // `decodesColourTextures` is RenderSettings::decodesColourTextures() for the
     // scene: the same albedo path is a different upload in each colour space,

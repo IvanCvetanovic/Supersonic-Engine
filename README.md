@@ -50,10 +50,11 @@ code quietly contradicts.
 | **Normal mapping** | Tangent-space, with glTF-convention `vec4` tangents (handedness in `w`) generated for procedural meshes too |
 | **Frustum culling** | Gribb–Hartmann plane extraction; the scene pass culls against the camera, the shadow pass against the light, so nothing off-screen pops its shadow in and out |
 | **HDR + bloom** | Floating-point scene target, luminance-thresholded bright pass with a soft knee, separable half-res blur, then tone map and sRGB encode — exactly one encode, at the end of the chain. A scene can instead declare its values display-encoded (UNORM textures, no bloom, a clamp) for 2D art authored against an 8-bit framebuffer, optionally cut to RGB565 |
-| **Transparency** | A blended pass after the opaque one and after the sky, sorted back to front, with depth writes off — per-material, and particles ride the same pipeline |
+| **Transparency** | A blended pass after the opaque one and after the sky, sorted back to front, with depth writes off — per-material, mixed, added or premultiplied, and particles ride the same pipeline |
 | **Alpha cutout** | A per-material alpha threshold discarded before shading, so foliage and grates keep a hard edge and stay opaque instead of sorting against themselves in the blend pass — and it reaches the shadow too: a leaf casts its holes, on a second depth pipeline that culls neither face, while a blended surface casts nothing rather than a rectangle |
 | **Sky and fog** | A procedural gradient sky drawn as a fullscreen triangle where nothing else claimed the depth, and exponential-squared distance fog, both authored per scene |
 | **Emissive** | A per-material emissive colour and strength, driven above 1.0 to trip the bloom threshold |
+| **2D sprites** | An unlit material can be drawn as a 2D sprite: its texel times its tint times an ambient, plus an additive overlay map (a baked lightmap) that the tint does not dim, clamped per draw as an 8-bit target would — carried in the per-draw record's unused fields, so the record stays 128 bytes |
 | **Texture sampling** | A generated mip chain and anisotropic filtering, both guarded on the device actually supporting them |
 | **Anti-aliasing** | 4× MSAA, resolved into the image the editor samples |
 | **Pipeline cache** | The driver's compiled pipelines persist to disk between runs, validated against vendor, device and driver UUID before reuse |
@@ -63,7 +64,7 @@ code quietly contradicts.
 
 - **glTF 2.0** import via tinygltf — meshes, materials, texture references, **skins and animations**
 - **Wavefront OBJ** import
-- **Textures** through `stb_image`, with per-material descriptor sets cached by texture triple and given back to the pool when a texture is reloaded or dropped
+- **Textures** through `stb_image`, with per-material descriptor sets cached by their four maps and given back to the pool when a texture is reloaded or dropped
 - **Procedural geometry** — cube, sphere, plane, and a heightfield **terrain generator**
 - **Shared materials** as `.material` assets — one asset, many entities, edited once; create and assign them from the content browser, or detach an entity with *Make Unique*
 - **Scenes and prefabs** as readable JSON (`.scene`, `.prefab`), parsed by a hand-written reader with no external dependency
@@ -299,7 +300,7 @@ verified by a screenshot of geometry it never touched.
 | `test_gltf` | glTF import against real assets in the tree, including a `.glb` with embedded textures |
 | `test_serialize` | JSON reader, scene and prefab round-trips, including the scene's encoding and quantisation as words written only when chosen, and the clear each encoding gets |
 | `test_undo` | Undo/redo stacks, redo invalidation, snapshot round-trip stability |
-| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, and the count of material descriptor sets a dropped texture gives back |
+| `test_materials` | Material asset round-trip, shared edits, Make Unique, link persistence, reloading in place, not reading our own save back, the count of material descriptor sets a dropped texture gives back, and the fourth map: each slot's own neutral (black for the overlay), the 2D sprite record, the switches and light mask sharing the flags word with the shader's copy, the premultiplied blend's factors, and the overlay, the 2D block and the third blend word surviving a save |
 | `test_input` | Action mapping, press/release edges, stick deadzone, gamepad fallback |
 | `test_jobs` | Dispatch coverage, the Wait fence, throwing jobs, pool restart |
 | `test_physics` | Integration, broadphase, narrowphase, mass-weighted response, triggers, raycast and overlap queries |
@@ -327,7 +328,7 @@ verified by a screenshot of geometry it never touched.
 | `test_sat` | Oriented box collision, face manifolds, the ramp an AABB could not represent |
 | `test_lightselection` | Which lights survive the eight-light cap, and that the sun is not one of the casualties |
 | `test_shadowcache` | The signature that lets a depth pass be skipped, and what must dirty it |
-| `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped, and that the scene's colour space is in it |
+| `test_resourcesync` | The signature that lets an entity's mesh and texture resolve be skipped, and that the scene's colour space and the overlay path are in it |
 | `test_determinism` | That one binary over one scene produces the same frames twice |
 | `test_replay` | Recording a run's input and reading it back: levels carry, edges do not, floats keep their bits, and a truncated file is refused. Also the POINTER — where it is, and the touches on it — which is what makes a session played with a mouse reproducible, and the capture function the engine actually records through, which nothing reached before |
 | `test_camera` | That the fly camera can be turned off, in both halves, that a scene written before the switch existed still flies, and that the editor's own eye can go flat and come back |

@@ -18,10 +18,13 @@
 #include "core/RenderSystem.hpp"
 #include "core/SceneSerializer.hpp"
 #include "renderer/MaterialSetLedger.hpp"
+#include "renderer/VulkanPipeline.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -1157,7 +1160,8 @@ static void testOverridesSurviveASaveAndLoad() {
 // The Vulkan calls themselves - the free, and its deferral past the frames in
 // flight - are proved only by that walk (MagicPortals --visit-levels).
 
-using SetKey = std::array<uint32_t, 3>;
+// The registry's own key shape: one id per binding of the material layout.
+using SetKey = std::array<uint32_t, VulkanPipeline::kMaterialBindingCount>;
 
 static void testASetDroppedFromTheCacheStillFillsThePool() {
     // The undercount itself. Dropped from the cache, a set is still allocated
@@ -1165,7 +1169,7 @@ static void testASetDroppedFromTheCacheStillFillsThePool() {
     MaterialSets::Ledger ledger(3);
     std::map<SetKey, int> cache;
     for (int i = 0; i < 3; ++i) {
-        cache.emplace(SetKey{uint32_t(i), 100, 200}, 1000 + i);
+        cache.emplace(SetKey{uint32_t(i), 100, 200, 300}, 1000 + i);
         ledger.Taken();
     }
     CHECK_MSG(!ledger.HasRoom(), "three sets taken fill a pool of three");
@@ -1198,25 +1202,29 @@ static void testGivingBackWhatWasNeverTakenChangesNothing() {
 static void testEveryBindingIsSearchedForADeadTexture() {
     // A dropped texture takes every set naming it, in whichever binding: a
     // set left naming a destroyed image is the null-sampler bug. The key is the
-    // whole triple; the search must be too, and it must hand back what it
+    // whole quadruple; the search must be too, and it must hand back what it
     // took, which the two hand-written loops it replaced simply erased.
+    //
+    // The overlay binding is the one the port drops most: a level's lightmaps
+    // are invalidated every time it unloads.
     std::map<SetKey, int> cache{
-        {SetKey{1, 2, 3}, 10},    // albedo
-        {SetKey{4, 5, 6}, 20},
-        {SetKey{7, 1, 9}, 30},    // normal
-        {SetKey{10, 11, 1}, 40},  // ORM
-        {SetKey{12, 13, 14}, 50},
+        {SetKey{1, 2, 3, 15}, 10},    // albedo
+        {SetKey{4, 5, 6, 15}, 20},
+        {SetKey{7, 1, 9, 15}, 30},    // normal
+        {SetKey{10, 11, 1, 15}, 40},  // ORM
+        {SetKey{12, 13, 14, 15}, 50},
+        {SetKey{16, 17, 18, 1}, 60},  // overlay
     };
 
     CHECK_MSG(MaterialSets::TakeNaming(cache, {}).empty(), "no dead ids take nothing");
     CHECK_MSG(MaterialSets::TakeNaming(cache, {99}).empty(), "an id no set names takes nothing");
-    CHECK_EQ(cache.size(), size_t{5});
+    CHECK_EQ(cache.size(), size_t{6});
 
     const std::vector<int> taken = MaterialSets::TakeNaming(cache, {1});
-    CHECK_EQ(taken.size(), size_t{3});
-    CHECK_MSG(taken == std::vector<int>({10, 30, 40}), "every binding that names it, in key order");
+    CHECK_EQ(taken.size(), size_t{4});
+    CHECK_MSG(taken == std::vector<int>({10, 30, 40, 60}), "every binding that names it, the overlay's too, in key order");
     CHECK_EQ(cache.size(), size_t{2});
-    CHECK_MSG(cache.count(SetKey{4, 5, 6}) == 1 && cache.count(SetKey{12, 13, 14}) == 1,
+    CHECK_MSG(cache.count(SetKey{4, 5, 6, 15}) == 1 && cache.count(SetKey{12, 13, 14, 15}) == 1,
               "and nothing that does not");
 
     const std::vector<int> two = MaterialSets::TakeNaming(cache, {13, 5});
@@ -1234,7 +1242,350 @@ static void testThePoolHoldsTheWalkWithRoomToSpare() {
     CHECK(ledger.HasRoom());
 }
 
+// --- the fourth map, the 2D record and the premultiplied blend -------------
+//
+// The overlay is a fourth binding in every material set, and the choices that
+// can be wrong without a picture showing it are all here: which neutral a slot
+// with no texture gets, where the switches and the light mask sit in the flags
+// word and whether the shader reads them from the same bits, what a 2D sprite
+// writes over the fields the unlit path never reads, and the factors the
+// premultiplied pipeline composites with. None of it needs a device.
+
+static void testAMaterialSetHasFourBindingsAndTheOverlayIsThird() {
+    CHECK_EQ(VulkanPipeline::kMaterialBindingCount, uint32_t{4});
+    CHECK_EQ(VulkanPipeline::kOverlayBinding, uint32_t{3});
+    CHECK_EQ(sizeof(SetKey) / sizeof(uint32_t), size_t{4});
+}
+
+static void testASlotWithNoTextureFallsBackToItsOwnNeutral() {
+    // Five textures exist (ids 0 to 4); an id past them names nothing. The
+    // neutrals are distinct numbers so a slot handed another slot's neutral is
+    // caught.
+    const SetKey fallbacks{103, 101, 102, 104};  // checker, flat normal, neutral ORM, black
+    const uint32_t count = 5;
+
+    const SetKey named = MaterialSets::ResolveKey(SetKey{0, 1, 2, 4}, count, fallbacks);
+    CHECK_MSG(named == SetKey({0, 1, 2, 4}), "ids that name textures are kept, every slot");
+
+    const SetKey none = MaterialSets::ResolveKey(SetKey{0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu},
+                                                 count, fallbacks);
+    CHECK_MSG(none == fallbacks, "each slot naming nothing gets its own neutral, in binding order");
+
+    const SetKey onlyOverlay = MaterialSets::ResolveKey(SetKey{3, 1, 2, 5}, count, fallbacks);
+    CHECK_MSG(onlyOverlay[VulkanPipeline::kOverlayBinding] == 104,
+              "an overlay past the end is black - white would add a full-bright copy of nothing");
+    CHECK_MSG(onlyOverlay[0] == 3 && onlyOverlay[1] == 1 && onlyOverlay[2] == 2,
+              "and the other three are left alone");
+
+    const SetKey edge = MaterialSets::ResolveKey(SetKey{5, 4, 4, 4}, count, fallbacks);
+    CHECK_MSG(edge == SetKey({103, 4, 4, 4}), "the last id is a texture; one past it is not");
+}
+
+static void testAPremultipliedColourIsTakenWhole() {
+    VulkanPipelineOptions options;
+    options.blendEnable = true;
+    options.blendEquation = BlendEquation::Premultiplied;
+    const vk::PipelineColorBlendAttachmentState blend = ColorBlendFor(options);
+    CHECK(blend.blendEnable == VK_TRUE);
+    CHECK_MSG(blend.srcColorBlendFactor == vk::BlendFactor::eOne,
+              "the colour already carries its alpha, so it is not weighted again");
+    CHECK(blend.dstColorBlendFactor == vk::BlendFactor::eOneMinusSrcAlpha);
+    CHECK(blend.colorBlendOp == vk::BlendOp::eAdd);
+    CHECK_MSG(blend.srcAlphaBlendFactor == vk::BlendFactor::eOne &&
+                  blend.dstAlphaBlendFactor == vk::BlendFactor::eOneMinusSrcAlpha &&
+                  blend.alphaBlendOp == vk::BlendOp::eAdd,
+              "and alpha composites as a mixed draw's does");
+
+    // The two it joins are what they were: a new equation must not move them.
+    VulkanPipelineOptions mix;
+    mix.blendEnable = true;
+    CHECK(ColorBlendFor(mix).srcColorBlendFactor == vk::BlendFactor::eSrcAlpha);
+    CHECK(ColorBlendFor(mix).dstColorBlendFactor == vk::BlendFactor::eOneMinusSrcAlpha);
+    CHECK(ColorBlendFor(mix).srcAlphaBlendFactor == vk::BlendFactor::eOne);
+    VulkanPipelineOptions add = mix;
+    add.blendEquation = BlendEquation::Add;
+    CHECK(ColorBlendFor(add).srcColorBlendFactor == vk::BlendFactor::eSrcAlpha);
+    CHECK(ColorBlendFor(add).dstColorBlendFactor == vk::BlendFactor::eOne);
+    CHECK(ColorBlendFor(add).srcAlphaBlendFactor == vk::BlendFactor::eZero);
+}
+
+static void testTheSwitchesTheSlotAndTheMaskShareAWordWithoutTouching() {
+    // Unlit, 2D, normal-down and premultiplied in the low byte, the slot in the
+    // twelve bits above, the light mask in the eight above that. Packing any
+    // of them must leave the others exactly as they were.
+    CHECK_EQ(PushConstantData::kUnlit, 1);
+    CHECK_EQ(PushConstantData::kSprite2D, 2);
+    CHECK_EQ(PushConstantData::kNormalYDown, 4);
+    CHECK_EQ(PushConstantData::kPremultiplied, 8);
+    CHECK_EQ(kLightMaskShift, kUvSlotShift + 12);
+
+    const int32_t switches = PushConstantData::kUnlit | PushConstantData::kSprite2D |
+                             PushConstantData::kNormalYDown | PushConstantData::kPremultiplied;
+    int32_t flags = PackUvSlot(switches, 4095);
+    flags = PackLightMask(flags, 0xFF);
+    CHECK_EQ(UnpackUvSlot(flags), 4095);
+    CHECK_EQ(int(UnpackLightMask(flags)), 0xFF);
+    CHECK_MSG((flags & 0xFF) == switches, "the switches survived both packings");
+    CHECK_MSG(flags > 0, "and the sign bit was never reached");
+
+    // Repacking replaces rather than accumulates, in both directions.
+    flags = PackLightMask(flags, 0x02);
+    CHECK_EQ(int(UnpackLightMask(flags)), 0x02);
+    CHECK_EQ(UnpackUvSlot(flags), 4095);
+    flags = PackUvSlot(flags, 7);
+    CHECK_EQ(int(UnpackLightMask(flags)), 0x02);
+    CHECK_EQ(UnpackUvSlot(flags), 7);
+    CHECK_MSG((flags & 0xFF) == switches, "and the switches are still the switches");
+    CHECK_EQ(int(UnpackLightMask(0)), 0);
+}
+
+static void testTheShaderReadsTheSwitchesFromTheSameBits() {
+    // The same two-descriptions problem as the UV slot, for the new switches:
+    // shader.frag spells each bit itself, and a disagreement draws a sprite
+    // through the wrong exit with nothing else to say so.
+    std::ifstream file("assets/shaders/shader.frag");
+    CHECK_MSG(file.good(), "shader.frag must be readable from the working directory");
+    if (!file.good()) return;
+    const std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    const auto declares = [&source](const std::string& name, int32_t bit) {
+        const std::string line = "const int " + name + " = 1 << " + std::to_string(bit) + ";";
+        const size_t at = source.find("const int " + name + " ");
+        if (at == std::string::npos) return false;
+        // Compared with the spacing taken out, so aligning the declarations
+        // is not a failure.
+        std::string found = source.substr(at, source.find(';', at) - at + 1);
+        found.erase(std::remove(found.begin(), found.end(), ' '), found.end());
+        std::string wanted = line;
+        wanted.erase(std::remove(wanted.begin(), wanted.end(), ' '), wanted.end());
+        return found == wanted;
+    };
+    const auto bitOf = [](int32_t flag) {
+        int32_t bit = 0;
+        while ((1 << bit) != flag) ++bit;
+        return bit;
+    };
+
+    CHECK_MSG(declares("FLAG_SPRITE2D", bitOf(PushConstantData::kSprite2D)),
+              "shader.frag's FLAG_SPRITE2D is PushConstantData::kSprite2D's bit");
+    CHECK_MSG(declares("FLAG_NORMAL_Y_DOWN", bitOf(PushConstantData::kNormalYDown)),
+              "FLAG_NORMAL_Y_DOWN is kNormalYDown's bit");
+    CHECK_MSG(declares("FLAG_PREMULTIPLIED", bitOf(PushConstantData::kPremultiplied)),
+              "FLAG_PREMULTIPLIED is kPremultiplied's bit");
+
+    const size_t maskAt = source.find("const int LIGHT_MASK_SHIFT");
+    CHECK_MSG(maskAt != std::string::npos, "shader.frag declares LIGHT_MASK_SHIFT");
+    if (maskAt == std::string::npos) return;
+    std::string mask = source.substr(maskAt, source.find(';', maskAt) - maskAt + 1);
+    mask.erase(std::remove(mask.begin(), mask.end(), ' '), mask.end());
+    CHECK_MSG(mask == "constintLIGHT_MASK_SHIFT=" + std::to_string(kLightMaskShift) + ";",
+              "LIGHT_MASK_SHIFT is kLightMaskShift: " + mask);
+
+    CHECK_MSG(source.find("layout(set = 1, binding = " + std::to_string(VulkanPipeline::kOverlayBinding) +
+                          ") uniform sampler2D overlayMap;") != std::string::npos,
+              "the overlay is sampled from the binding the registry writes it to");
+}
+
+static void testA2DSpriteWritesItsRecordAndNothingElseDoes() {
+    // A material that did not ask writes exactly what it wrote before: the
+    // fields a 2D sprite repurposes are the PBR path's, and a lit surface
+    // reading its roughness out of an overlay strength would look plausible.
+    PushConstantData untouched{};
+    untouched.albedoColor = glm::vec4(0.2f, 0.4f, 0.6f, 0.8f);
+    untouched.material = glm::vec4(0.4f, 0.1f, 1.0f, 0.25f);
+    untouched.emissive = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+    untouched.flags = PackUvSlot(PushConstantData::kUnlit, 9);
+
+    MaterialComponent plain;
+    plain.unlit = true;
+    PushConstantData record = untouched;
+    RenderSystem::ApplySprite2D(plain, record);
+    CHECK_MSG(std::memcmp(&record, &untouched, sizeof(record)) == 0,
+              "an unlit material without sprite2D leaves every byte of its record");
+
+    MaterialComponent litSprite = plain;
+    litSprite.unlit = false;
+    litSprite.sprite2D.enabled = true;
+    record = untouched;
+    RenderSystem::ApplySprite2D(litSprite, record);
+    CHECK_MSG(std::memcmp(&record, &untouched, sizeof(record)) == 0,
+              "and so does a lit one that asks: the 2D record is the unlit path's");
+
+    MaterialComponent sprite;
+    sprite.unlit = true;
+    sprite.albedoColor = glm::vec4(0.5f, 1.0f, 0.25f, 0.75f);
+    sprite.alphaCutoff = 0.125f;
+    sprite.sprite2D.enabled = true;
+    sprite.sprite2D.ambient = glm::vec3(0.35f, 0.30f, 0.35f);
+    sprite.sprite2D.height = -0.36f;
+    sprite.sprite2D.lightMask = 0x03;
+    sprite.sprite2D.normalYDown = true;
+    sprite.sprite2D.overlayStrength = 0.5f;
+    record = untouched;
+    RenderSystem::ApplySprite2D(sprite, record);
+
+    CHECK((record.flags & PushConstantData::kUnlit) != 0);
+    CHECK((record.flags & PushConstantData::kSprite2D) != 0);
+    CHECK((record.flags & PushConstantData::kNormalYDown) != 0);
+    CHECK_MSG((record.flags & PushConstantData::kPremultiplied) == 0, "not blended, so not premultiplied");
+    CHECK_EQ(int(UnpackLightMask(record.flags)), 0x03);
+    CHECK_MSG(UnpackUvSlot(record.flags) == 9, "the UV slot the gather wrote is kept");
+    CHECK_NEAR(record.albedoColor.r, 0.5f * 0.35f);
+    CHECK_NEAR(record.albedoColor.g, 1.0f * 0.30f);
+    CHECK_NEAR(record.albedoColor.b, 0.25f * 0.35f);
+    CHECK_MSG(record.albedoColor.a == 0.75f, "alpha is the tint's own, never the ambient's");
+    CHECK_MSG(record.emissive.r == 0.5f && record.emissive.g == 1.0f && record.emissive.b == 0.25f,
+              "emissive.rgb is the tint without the ambient");
+    CHECK_NEAR(record.emissive.w, -0.36f);
+    CHECK_MSG(record.material.x == 0.5f && record.material.y == 0.0f && record.material.z == 0.0f,
+              "material.x is the overlay's strength and nothing else rides there");
+    CHECK_MSG(record.material.w == 0.125f, "and w is still the cutoff the discard reads");
+    CHECK_MSG(record.model == untouched.model && record.skinPaletteBase == untouched.skinPaletteBase &&
+                  record.probeIndex == untouched.probeIndex,
+              "the fields it does not own are left");
+
+    MaterialComponent noDown = sprite;
+    noDown.sprite2D.normalYDown = false;
+    noDown.sprite2D.lightMask = 0;
+    record = untouched;
+    RenderSystem::ApplySprite2D(noDown, record);
+    CHECK((record.flags & PushConstantData::kNormalYDown) == 0);
+    CHECK_EQ(int(UnpackLightMask(record.flags)), 0);
+}
+
+static void testOnlyABlendedPremultipliedMaterialSaysSo() {
+    MaterialComponent material;
+    material.blend = MaterialComponent::BlendMode::Premultiplied;
+
+    PushConstantData record{};
+    RenderSystem::ApplySprite2D(material, record);
+    CHECK_MSG((record.flags & PushConstantData::kPremultiplied) == 0,
+              "an opaque material ignores its blend, as the gather does");
+
+    material.transparent = true;
+    record = PushConstantData{};
+    RenderSystem::ApplySprite2D(material, record);
+    CHECK_MSG((record.flags & PushConstantData::kPremultiplied) != 0, "a blended one premultiplies, lit or not");
+    CHECK_MSG((record.flags & PushConstantData::kSprite2D) == 0, "without becoming a sprite");
+
+    for (const MaterialComponent::BlendMode other :
+         {MaterialComponent::BlendMode::Alpha, MaterialComponent::BlendMode::Additive}) {
+        material.blend = other;
+        record = PushConstantData{};
+        RenderSystem::ApplySprite2D(material, record);
+        CHECK_MSG(record.flags == 0, "the other two blends set no switch at all");
+    }
+}
+
+static void testAnOverlayAndA2DSpriteSurviveASaveAndLoad() {
+    cleanup();
+    entt::registry registry;
+    const auto entity = makeEntity(registry, "Lit Wall");
+    auto& material = registry.get<MaterialComponent>(entity);
+    material.unlit = true;
+    material.transparent = true;
+    material.blend = MaterialComponent::BlendMode::Premultiplied;
+    material.overlayTexturePath = "assets/textures/uv_grid.png";
+    material.sprite2D.enabled = true;
+    material.sprite2D.ambient = glm::vec3(0.35f, 0.3f, 0.35f);
+    material.sprite2D.height = -0.36f;
+    material.sprite2D.lightMask = 2;
+    material.sprite2D.normalYDown = true;
+    material.sprite2D.overlayStrength = 0.75f;
+
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("\"Blend\": \"Premultiplied\"") != std::string::npos, "the blend was written, by name");
+    CHECK_MSG(text.find("\"OverlayTexture\"") != std::string::npos, "the overlay was written");
+    CHECK_MSG(text.find("\"Sprite2D\"") != std::string::npos, "and the 2D block");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+    bool found = false;
+    for (auto e : loaded.view<MaterialComponent>()) {
+        const auto& m = loaded.get<MaterialComponent>(e);
+        found = true;
+        CHECK(m.blend == MaterialComponent::BlendMode::Premultiplied);
+        CHECK(m.overlayTexturePath == "assets/textures/uv_grid.png");
+        CHECK(m.sprite2D.enabled);
+        CHECK_NEAR(m.sprite2D.ambient.r, 0.35f);
+        CHECK_NEAR(m.sprite2D.ambient.g, 0.3f);
+        CHECK_NEAR(m.sprite2D.height, -0.36f);
+        CHECK_EQ(int(m.sprite2D.lightMask), 2);
+        CHECK(m.sprite2D.normalYDown);
+        CHECK_NEAR(m.sprite2D.overlayStrength, 0.75f);
+    }
+    CHECK_MSG(found, "the entity came back");
+    cleanup();
+}
+
+static void testAMaterialThatNeverUsedThemWritesNeither() {
+    // Omitted at the default, so every scene saved before this saves to the
+    // same text - and one saved since, that uses neither, reads as before.
+    cleanup();
+    entt::registry registry;
+    makeEntity(registry, "Plain");
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("OverlayTexture") == std::string::npos, "no overlay key");
+    CHECK_MSG(text.find("Sprite2D") == std::string::npos, "no 2D block");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+    for (auto e : loaded.view<MaterialComponent>()) {
+        const auto& m = loaded.get<MaterialComponent>(e);
+        CHECK(m.overlayTexturePath.empty());
+        CHECK_MSG(m.sprite2D == MaterialComponent::Sprite2DLight{}, "and the default sprite settings");
+    }
+
+    // A block that says only that it is enabled reads every other field as
+    // its default, not as zero: an ambient of zero would draw the sprite black.
+    std::string partial = text;
+    const size_t at = partial.find("\"Transparent\"");
+    CHECK(at != std::string::npos);
+    if (at != std::string::npos) {
+        partial.insert(at, "\"Sprite2D\": { \"Enabled\": true },\n    ");
+    }
+    entt::registry partialLoaded;
+    CHECK(SceneSerializer::DeserializeFromString(partialLoaded, partial).ok);
+    for (auto e : partialLoaded.view<MaterialComponent>()) {
+        const auto& m = partialLoaded.get<MaterialComponent>(e);
+        CHECK(m.sprite2D.enabled);
+        CHECK_MSG(m.sprite2D.ambient == glm::vec3(1.0f) && m.sprite2D.overlayStrength == 1.0f,
+                  "the ambient and the strength default to one");
+    }
+    cleanup();
+}
+
+static void testABlendThisBuildDoesNotKnowMixes() {
+    cleanup();
+    entt::registry registry;
+    const auto entity = makeEntity(registry, "Future");
+    registry.get<MaterialComponent>(entity).transparent = true;
+    registry.get<MaterialComponent>(entity).blend = MaterialComponent::BlendMode::Additive;
+    std::string text = SceneSerializer::SerializeToString(registry);
+    const size_t at = text.find("\"Additive\"");
+    CHECK(at != std::string::npos);
+    if (at != std::string::npos) text.replace(at, 10, "\"Subtractive\"");
+
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+    for (auto e : loaded.view<MaterialComponent>()) {
+        CHECK_MSG(loaded.get<MaterialComponent>(e).blend == MaterialComponent::BlendMode::Alpha,
+                  "an unknown word loads mixing, as an unknown background loads the sky");
+    }
+    cleanup();
+}
+
 static void runTests() {
+    testAMaterialSetHasFourBindingsAndTheOverlayIsThird();
+    testASlotWithNoTextureFallsBackToItsOwnNeutral();
+    testAPremultipliedColourIsTakenWhole();
+    testTheSwitchesTheSlotAndTheMaskShareAWordWithoutTouching();
+    testTheShaderReadsTheSwitchesFromTheSameBits();
+    testA2DSpriteWritesItsRecordAndNothingElseDoes();
+    testOnlyABlendedPremultipliedMaterialSaysSo();
+    testAnOverlayAndA2DSpriteSurviveASaveAndLoad();
+    testAMaterialThatNeverUsedThemWritesNeither();
+    testABlendThisBuildDoesNotKnowMixes();
     testASetDroppedFromTheCacheStillFillsThePool();
     testGivingBackWhatWasNeverTakenChangesNothing();
     testEveryBindingIsSearchedForADeadTexture();
@@ -1284,4 +1635,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 235)
+TEST_MAIN("test_materials", 320)

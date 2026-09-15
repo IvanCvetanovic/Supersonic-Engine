@@ -546,13 +546,15 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                 ImGui::SameLine();
                 ImGui::TextDisabled("(alpha from Albedo, drawn back to front)");
 
-                // Mixed over what is behind it, or added to it - a glow wants
-                // the second. See MaterialComponent::blend.
-                const char* kBlends[] = {"Alpha", "Additive"};
-                int blend = material.blend == MaterialComponent::BlendMode::Additive ? 1 : 0;
-                if (ImGui::Combo("Blend", &blend, kBlends, 2)) {
-                    material.blend = blend == 1 ? MaterialComponent::BlendMode::Additive
-                                                : MaterialComponent::BlendMode::Alpha;
+                // Mixed over what is behind it, added to it - a glow wants the
+                // second - or composited premultiplied. In the enum's order,
+                // so the index is the value; a two-entry table showed a
+                // premultiplied material as Alpha, and one click rewrote it.
+                // See MaterialComponent::blend.
+                const char* kBlends[] = {"Alpha", "Additive", "Premultiplied"};
+                int blend = static_cast<int>(material.blend);
+                if (ImGui::Combo("Blend", &blend, kBlends, 3)) {
+                    material.blend = static_cast<MaterialComponent::BlendMode>(blend);
                 }
             }
 
@@ -618,6 +620,21 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                     ImGui::SameLine();
                     ImGui::TextDisabled("(red ignored)");
                 }
+            }
+
+            // The fourth map. A path field and nothing else: what reads it is
+            // MaterialComponent::sprite2D, which a game sets, and a field here
+            // is what keeps a saved overlay from being invisible in the editor.
+            char overlayBuffer[512] = {};
+            const size_t overlayLen = std::min(material.overlayTexturePath.size(), sizeof(overlayBuffer) - 1);
+            std::memcpy(overlayBuffer, material.overlayTexturePath.data(), overlayLen);
+            if (ImGui::InputText("Overlay Map", overlayBuffer, sizeof(overlayBuffer))) {
+                material.overlayTexturePath = overlayBuffer;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Added after everything that multiplies the albedo, and not\n"
+                                  "dimmed by the tint: a baked light. Read only by an unlit\n"
+                                  "material drawn as a 2D sprite (sprite2D.enabled).");
             }
 
             // The texture coordinate transform, applied to all three maps

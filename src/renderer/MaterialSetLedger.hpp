@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -21,7 +23,27 @@ namespace Supersonic {
 // fallback's maps, saying so once per call in a log nobody reads.
 namespace MaterialSets {
 
-// A set is a few bytes of pool: three image-sampler descriptors. 1024 is twice
+// The ids a set is actually built from, in binding order.
+//
+// Each slot that names no texture - an id past the registry's `textureCount` -
+// falls back to ITS OWN neutral, in `fallbacks`, never to a shared one. A
+// missing albedo is a mistake worth seeing and gets the checkerboard; a missing
+// normal, packed or overlay map is the ordinary case and gets the value that
+// changes nothing: a flat normal, a neutral ORM of 1, an overlay of black that
+// adds 0. The overlay's fallback is the reason this is out here: the slot a
+// caller most often has no texture for is the one whose wrong neutral - white -
+// would add a full-bright copy of nothing over every sprite.
+template <std::size_t N>
+std::array<uint32_t, N> ResolveKey(const std::array<uint32_t, N>& ids, uint32_t textureCount,
+                                   const std::array<uint32_t, N>& fallbacks) {
+    std::array<uint32_t, N> key = ids;
+    for (std::size_t i = 0; i < N; ++i) {
+        if (key[i] >= textureCount) key[i] = fallbacks[i];
+    }
+    return key;
+}
+
+// A set is a few bytes of pool: four image-sampler descriptors. 1024 is twice
 // the old cap, with the margin the Magic Portals port asks for - one set per
 // lightmapped sprite, at most 21 lightmaps in one level - once sets are given
 // back when a level lets its textures go.

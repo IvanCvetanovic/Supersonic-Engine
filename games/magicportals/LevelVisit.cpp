@@ -146,7 +146,8 @@ void LevelVisitLayer::measureAndAcquire(entt::registry& registry) {
     // The set an exhausted pool hands out instead. Acquired before the first
     // measurement, so it is part of every baseline rather than of one level.
     const vk::DescriptorSet fallback = textures.AcquireMaterialSet(
-        textures.GetWhiteTexture(), textures.GetFlatNormalTexture(), textures.GetNeutralOrmTexture());
+        textures.GetWhiteTexture(), textures.GetFlatNormalTexture(), textures.GetNeutralOrmTexture(),
+        textures.GetBlackTexture());
 
     const std::size_t cachedBefore = textures.MaterialSetCount();
     const std::size_t inPoolBefore = textures.MaterialSetsInPool();
@@ -170,8 +171,8 @@ void LevelVisitLayer::measureAndAcquire(entt::registry& registry) {
             continue;
         }
         m_held.push_back(path);
-        const vk::DescriptorSet set =
-            textures.AcquireMaterialSet(id, textures.GetFlatNormalTexture(), textures.GetNeutralOrmTexture());
+        const vk::DescriptorSet set = textures.AcquireMaterialSet(
+            id, textures.GetFlatNormalTexture(), textures.GetNeutralOrmTexture(), textures.GetBlackTexture());
         if (!set || set == fallback) {
             fail(visit.name + ": " + path + " got no material set of its own (pool exhausted)");
             continue;
@@ -224,7 +225,8 @@ void LevelVisitLayer::finish(entt::registry& registry) {
         for (const std::string& path : last.lightmaps) {
             const uint32_t id = textures.Acquire(path, false, textures.GetWhiteTexture());
             if (id != textures.GetWhiteTexture()) {
-                textures.AcquireMaterialSet(id, textures.GetFlatNormalTexture(), textures.GetNeutralOrmTexture());
+                textures.AcquireMaterialSet(id, textures.GetFlatNormalTexture(), textures.GetNeutralOrmTexture(),
+                                            textures.GetBlackTexture());
             }
             textures.Invalidate(path);
         }

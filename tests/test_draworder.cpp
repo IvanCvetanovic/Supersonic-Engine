@@ -193,11 +193,14 @@ void testTwoDrawsAgreeingOnEverythingKeepGatherOrder() {
 // A glow is added rather than mixed, and that is a different pipeline, so the
 // sorted blended list is recorded as runs of one blend. What must not happen is
 // the list being grouped by blend: that saves binds, and draws a halo over a
-// sprite nearer than it.
+// sprite nearer than it. A premultiplied sprite is a third pipeline, and the
+// same rule holds for it.
 
-RenderSystem::TransparentDraw blendedAs(float viewDepth, uint32_t gathered, bool additive) {
+using Blend = BlendEquation;
+
+RenderSystem::TransparentDraw blendedAs(float viewDepth, uint32_t gathered, Blend blend) {
     RenderSystem::TransparentDraw draw = blended(viewDepth, 0, gathered);
-    draw.additive = additive;
+    draw.blend = blend;
     return draw;
 }
 
@@ -205,33 +208,94 @@ void testAHaloBetweenTwoSpritesIsThreeRuns() {
     // Gathered out of order so the sort has work to do. A sort that grouped by
     // blend would put the two mixed ones together and the halo at an end.
     std::vector<RenderSystem::TransparentDraw> draws{
-        blendedAs(2.0f, 0, false), blendedAs(9.0f, 1, false), blendedAs(5.0f, 2, true)};
+        blendedAs(2.0f, 0, Blend::Mix), blendedAs(9.0f, 1, Blend::Mix), blendedAs(5.0f, 2, Blend::Add)};
 
     RenderSystem::SortTransparentDraws(draws);
     CHECK_NEAR(draws[0].viewDepth, 9.0f);
-    CHECK_MSG(draws[1].additive, "the halo stays between the two sprites, at its depth");
+    CHECK_MSG(draws[1].blend == Blend::Add, "the halo stays between the two sprites, at its depth");
     CHECK_NEAR(draws[2].viewDepth, 2.0f);
 
     const std::vector<RenderSystem::BlendRun> runs = RenderSystem::BlendRuns(draws);
     CHECK_EQ(runs.size(), size_t{3});
     if (runs.size() == 3) {
-        CHECK(!runs[0].additive && runs[0].first == 0 && runs[0].count == 1);
-        CHECK_MSG(runs[1].additive && runs[1].first == 1 && runs[1].count == 1, "one bind for the halo alone");
-        CHECK(!runs[2].additive && runs[2].first == 2 && runs[2].count == 1);
+        CHECK(runs[0].blend == Blend::Mix && runs[0].first == 0 && runs[0].count == 1);
+        CHECK_MSG(runs[1].blend == Blend::Add && runs[1].first == 1 && runs[1].count == 1,
+                  "one bind for the halo alone");
+        CHECK(runs[2].blend == Blend::Mix && runs[2].first == 2 && runs[2].count == 1);
     }
+}
+
+void testAPremultipliedSpriteBetweenTwoPanesStaysBetweenThem() {
+    // The case the third pipeline adds: a lit sprite, premultiplied, at a depth
+    // between two mixed ones. Grouping it with either neighbour's pipeline
+    // would draw it with the wrong equation; grouping by blend would move it.
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blendedAs(1.0f, 0, Blend::Mix), blendedAs(4.0f, 1, Blend::Premultiplied),
+        blendedAs(8.0f, 2, Blend::Mix)};
+
+    RenderSystem::SortTransparentDraws(draws);
+    CHECK_NEAR(draws[0].viewDepth, 8.0f);
+    CHECK_MSG(draws[1].blend == Blend::Premultiplied && draws[1].gathered == 1,
+              "the premultiplied sprite is drawn between the two panes, at its depth");
+    CHECK_NEAR(draws[2].viewDepth, 1.0f);
+
+    const std::vector<RenderSystem::BlendRun> runs = RenderSystem::BlendRuns(draws);
+    CHECK_EQ(runs.size(), size_t{3});
+    if (runs.size() == 3) {
+        CHECK(runs[0].blend == Blend::Mix && runs[0].first == 0 && runs[0].count == 1);
+        CHECK_MSG(runs[1].blend == Blend::Premultiplied && runs[1].first == 1 && runs[1].count == 1,
+                  "its own run, so its own pipeline");
+        CHECK(runs[2].blend == Blend::Mix && runs[2].first == 2 && runs[2].count == 1);
+    }
+}
+
+void testThreeBlendsCutARunAtEveryChangeAndNowhereElse() {
+    // All three equations in one frame, with neighbours alike. Runs are cut
+    // where the equation changes, so two premultiplied sprites in a row share
+    // one, and a mixed pane after an added glow after a premultiplied sprite
+    // is three.
+    std::vector<RenderSystem::TransparentDraw> draws{
+        blendedAs(9.0f, 0, Blend::Premultiplied), blendedAs(8.0f, 1, Blend::Premultiplied),
+        blendedAs(7.0f, 2, Blend::Add),           blendedAs(6.0f, 3, Blend::Mix),
+        blendedAs(5.0f, 4, Blend::Mix),           blendedAs(4.0f, 5, Blend::Premultiplied)};
+    RenderSystem::SortTransparentDraws(draws);
+
+    const std::vector<RenderSystem::BlendRun> runs = RenderSystem::BlendRuns(draws);
+    CHECK_EQ(runs.size(), size_t{4});
+    if (runs.size() == 4) {
+        CHECK(runs[0].blend == Blend::Premultiplied && runs[0].first == 0 && runs[0].count == 2);
+        CHECK(runs[1].blend == Blend::Add && runs[1].first == 2 && runs[1].count == 1);
+        CHECK(runs[2].blend == Blend::Mix && runs[2].first == 3 && runs[2].count == 2);
+        CHECK(runs[3].blend == Blend::Premultiplied && runs[3].first == 5 && runs[3].count == 1);
+    }
+
+    uint32_t covered = 0;
+    for (const RenderSystem::BlendRun& run : runs) covered += run.count;
+    CHECK_MSG(covered == draws.size(), "the runs cover every draw exactly once");
+}
+
+void testEachMaterialBlendNamesItsEquation() {
+    // One table between what a material says and what the pass binds. Alpha
+    // is the default, so a material that never chose draws on the pipeline it
+    // always drew on.
+    CHECK(RenderSystem::EquationFor(MaterialComponent::BlendMode::Alpha) == Blend::Mix);
+    CHECK(RenderSystem::EquationFor(MaterialComponent::BlendMode::Additive) == Blend::Add);
+    CHECK(RenderSystem::EquationFor(MaterialComponent::BlendMode::Premultiplied) == Blend::Premultiplied);
+    CHECK(RenderSystem::EquationFor(MaterialComponent{}.blend) == Blend::Mix);
+    CHECK_MSG(RenderSystem::TransparentDraw{}.blend == Blend::Mix, "and an unset draw mixes");
 }
 
 void testNeighboursThatBlendAlikeShareARun() {
     std::vector<RenderSystem::TransparentDraw> draws{
-        blendedAs(9.0f, 0, true), blendedAs(8.0f, 1, true), blendedAs(7.0f, 2, false),
-        blendedAs(6.0f, 3, false), blendedAs(5.0f, 4, false)};
+        blendedAs(9.0f, 0, Blend::Add), blendedAs(8.0f, 1, Blend::Add), blendedAs(7.0f, 2, Blend::Mix),
+        blendedAs(6.0f, 3, Blend::Mix), blendedAs(5.0f, 4, Blend::Mix)};
     RenderSystem::SortTransparentDraws(draws);
 
     const std::vector<RenderSystem::BlendRun> runs = RenderSystem::BlendRuns(draws);
     CHECK_EQ(runs.size(), size_t{2});
     if (runs.size() == 2) {
-        CHECK(runs[0].additive && runs[0].first == 0 && runs[0].count == 2);
-        CHECK(!runs[1].additive && runs[1].first == 2 && runs[1].count == 3);
+        CHECK(runs[0].blend == Blend::Add && runs[0].first == 0 && runs[0].count == 2);
+        CHECK(runs[1].blend == Blend::Mix && runs[1].first == 2 && runs[1].count == 3);
     }
 }
 
@@ -243,7 +307,7 @@ void testAFrameWithNoGlowIsOneRun() {
     const std::vector<RenderSystem::BlendRun> runs = RenderSystem::BlendRuns(draws);
     CHECK_EQ(runs.size(), size_t{1});
     if (!runs.empty()) {
-        CHECK(!runs[0].additive);
+        CHECK(runs[0].blend == Blend::Mix);
         CHECK_EQ(runs[0].first, uint32_t{0});
         CHECK_EQ(runs[0].count, uint32_t{3});
     }
@@ -263,7 +327,7 @@ void testAGlowAddsAndAPaneMixes() {
               "a pane mixes over what is behind it");
 
     VulkanPipelineOptions glow = pane;
-    glow.additive = true;
+    glow.blendEquation = BlendEquation::Add;
     const vk::PipelineColorBlendAttachmentState added = ColorBlendFor(glow);
     CHECK(added.blendEnable == VK_TRUE);
     CHECK(added.srcColorBlendFactor == vk::BlendFactor::eSrcAlpha);
@@ -276,8 +340,10 @@ void testAGlowAddsAndAPaneMixes() {
 
     // Without blendEnable the switch means nothing.
     VulkanPipelineOptions solid;
-    solid.additive = true;
+    solid.blendEquation = BlendEquation::Add;
     CHECK(ColorBlendFor(solid).blendEnable == VK_FALSE);
+    solid.blendEquation = BlendEquation::Premultiplied;
+    CHECK_MSG(ColorBlendFor(solid).blendEnable == VK_FALSE, "whichever equation it names");
 }
 
 // --- particles -------------------------------------------------------------
@@ -474,6 +540,9 @@ void runTests() {
     testDepthStillBeatsTheSortKey();
     testTwoDrawsAgreeingOnEverythingKeepGatherOrder();
     testAHaloBetweenTwoSpritesIsThreeRuns();
+    testAPremultipliedSpriteBetweenTwoPanesStaysBetweenThem();
+    testThreeBlendsCutARunAtEveryChangeAndNowhereElse();
+    testEachMaterialBlendNamesItsEquation();
     testNeighboursThatBlendAlikeShareARun();
     testAFrameWithNoGlowIsOneRun();
     testNothingBlendedIsNoRuns();
@@ -498,4 +567,4 @@ void runTests() {
 
 } // namespace
 
-TEST_MAIN("test_draworder", 61)
+TEST_MAIN("test_draworder", 80)

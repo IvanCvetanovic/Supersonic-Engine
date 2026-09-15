@@ -353,7 +353,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     // The blended pipeline once more, adding instead of mixing. Everything else
     // - no depth write, both faces - holds for a glow for the same reasons.
     VulkanPipeline::Options additiveOptions = blendOptions;
-    additiveOptions.additive = true;
+    additiveOptions.blendEquation = BlendEquation::Add;
 
     m_additivePipeline = std::make_unique<VulkanPipeline>(
         m_deviceRef.GetDevice(),
@@ -361,6 +361,20 @@ void VulkanRenderer::createGraphicsPipeline() {
         "assets/shaders/vert.spv",
         "assets/shaders/frag.spv",
         additiveOptions);
+
+    // And once more for a colour the shader has already multiplied by its
+    // alpha (MaterialComponent::BlendMode::Premultiplied): One,
+    // OneMinusSrcAlpha. Built whether or not a scene asks for it, like the
+    // additive one - a pipeline is created with the swapchain, not per frame.
+    VulkanPipeline::Options premultipliedOptions = blendOptions;
+    premultipliedOptions.blendEquation = BlendEquation::Premultiplied;
+
+    m_premultipliedPipeline = std::make_unique<VulkanPipeline>(
+        m_deviceRef.GetDevice(),
+        m_offscreenRenderPass,
+        "assets/shaders/vert.spv",
+        "assets/shaders/frag.spv",
+        premultipliedOptions);
 
     // Sky. No vertex input - the triangle comes from gl_VertexIndex - and no
     // depth write, because nothing is ever behind it. The depth TEST stays on:
@@ -1789,6 +1803,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // between the opaque and transparent passes, and only RenderSystem knows
     // where the boundary is - see the note on Render.
     RenderSystem::Render(registry, *m_pipeline, *m_transparentPipeline, *m_additivePipeline,
+                         *m_premultipliedPipeline,
                          drawSky ? m_skyPipeline.get() : nullptr,
                          *m_meshRegistry, *m_textureRegistry,
                          cmd, m_descriptorSets[m_currentFrame],
@@ -1883,7 +1898,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
             for (const ScreenOverlay::Quad& quad : overlay->Quads()) {
                 const uint32_t image = quad.texture.empty() ? white : textures.Acquire(quad.texture, false, white);
                 sets.push_back(textures.AcquireMaterialSet(image, textures.GetFlatNormalTexture(),
-                                                           textures.GetNeutralOrmTexture()));
+                                                           textures.GetNeutralOrmTexture(),
+                                                           textures.GetBlackTexture()));
             }
 
             offscreen.RecordOverlay(cmd, [&](vk::CommandBuffer pass) {

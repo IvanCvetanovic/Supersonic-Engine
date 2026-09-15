@@ -230,6 +230,44 @@ static void testTheSceneColourSpaceIsInTheSignature() {
     CHECK(sig(&m, nullptr, 1, 1, true) != sig(&m, nullptr, 1, 1, false));
 }
 
+static void testTheOverlayIsInTheSignatureToo() {
+    // The fourth path that selects a texture, and the one a 2D game changes
+    // most: a sprite gains its level's lightmap when the level loads. Missed
+    // here, the resolve is skipped and the sprite keeps adding the overlay it
+    // had - or none - with nothing to say so.
+    const MeshComponent m = mesh("Quad");
+
+    MaterialComponent none = material("wall.png");
+    MaterialComponent lit = material("wall.png");
+    lit.overlayTexturePath = "lightmaps/level0/add696.png";
+    CHECK_MSG(sig(&m, &none) != sig(&m, &lit), "gaining an overlay must re-resolve the entity");
+
+    MaterialComponent other = lit;
+    other.overlayTexturePath = "lightmaps/level1/add696.png";
+    CHECK_MSG(sig(&m, &lit) != sig(&m, &other), "and so must swapping it for another");
+
+    MaterialComponent again = material("wall.png");
+    again.overlayTexturePath = "lightmaps/level0/add696.png";
+    CHECK_MSG(sig(&m, &lit) == sig(&m, &again), "an unchanged overlay must keep its signature");
+
+    // Moved between slots, not merely present: the same file named as the
+    // packed map and as the overlay is two different bindings, one of them
+    // data and one colour.
+    MaterialComponent asOrm = material("wall.png", {}, "lightmaps/level0/add696.png");
+    CHECK_MSG(sig(&m, &lit) != sig(&m, &asOrm), "the overlay's path is not the ORM map's");
+
+    // Its colour space is the albedo's, already in the signature.
+    CHECK(sig(&m, &lit, 1, 1, true) != sig(&m, &lit, 1, 1, false));
+
+    // And nothing on a material that never names one moves by it: the 2D
+    // settings select no texture, so they are not an input.
+    MaterialComponent sprite = none;
+    sprite.sprite2D.enabled = true;
+    sprite.sprite2D.ambient = glm::vec3(0.35f);
+    CHECK_MSG(sig(&m, &none) == sig(&m, &sprite),
+              "a sprite's light settings are not a resource, so they do not re-resolve it");
+}
+
 static void runTests() {
     testTheSameInputsGiveTheSameSignature();
     testEveryPathThatSelectsAResourceIsInTheSignature();
@@ -239,6 +277,7 @@ static void runTests() {
     testTheSignatureIsNeverZero();
     testThePackedMapIsInTheSignatureToo();
     testTheSceneColourSpaceIsInTheSignature();
+    testTheOverlayIsInTheSignatureToo();
 }
 
-TEST_MAIN("test_resourcesync", 23)
+TEST_MAIN("test_resourcesync", 29)

@@ -221,6 +221,26 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         writeAssetRef(out, indent, "AlbedoTexture", mat->albedoTexturePath, ",\n");
         writeAssetRef(out, indent, "NormalTexture", mat->normalTexturePath, ",\n");
         writeAssetRef(out, indent, "OrmTexture", mat->ormTexturePath, ",\n");
+        // Written only when named, and the 2D block below only when it differs
+        // from the default: a scene that never used either saves to the bytes it
+        // saved before they existed.
+        if (!mat->overlayTexturePath.empty()) {
+            writeAssetRef(out, indent, "OverlayTexture", mat->overlayTexturePath, ",\n");
+        }
+        if (mat->sprite2D != MaterialComponent::Sprite2DLight{}) {
+            const MaterialComponent::Sprite2DLight& sprite = mat->sprite2D;
+            out << indent << "  \"Sprite2D\": {\n";
+            out << indent << "    \"Enabled\": " << (sprite.enabled ? "true" : "false") << ",\n";
+            out << indent << "    \"Ambient\": ";
+            writeVec3(out, sprite.ambient, "MaterialComponent.sprite2D.ambient");
+            out << ",\n";
+            out << indent << "    \"Height\": " << jsonSafe(sprite.height, "sprite2D.height") << ",\n";
+            out << indent << "    \"LightMask\": " << static_cast<int>(sprite.lightMask) << ",\n";
+            out << indent << "    \"NormalYDown\": " << (sprite.normalYDown ? "true" : "false") << ",\n";
+            out << indent << "    \"OverlayStrength\": "
+                << jsonSafe(sprite.overlayStrength, "sprite2D.overlayStrength") << "\n";
+            out << indent << "  },\n";
+        }
         out << indent << "  \"OcclusionStrength\": "
             << jsonSafe(mat->occlusionStrength, "occlusionStrength") << ",\n";
         out << indent << "  \"Roughness\": " << mat->roughness << ",\n";
@@ -235,7 +255,10 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"EmissiveStrength\": " << jsonSafe(mat->emissiveStrength, "emissiveStrength") << ",\n";
         out << indent << "  \"Transparent\": " << (mat->transparent ? "true" : "false") << ",\n";
         out << indent << "  \"Blend\": \""
-            << (mat->blend == MaterialComponent::BlendMode::Additive ? "Additive" : "Alpha") << "\",\n";
+            << (mat->blend == MaterialComponent::BlendMode::Additive        ? "Additive"
+                : mat->blend == MaterialComponent::BlendMode::Premultiplied ? "Premultiplied"
+                                                                            : "Alpha")
+            << "\",\n";
         out << indent << "  \"AlphaCutoff\": " << jsonSafe(mat->alphaCutoff, "alphaCutoff") << ",\n";
         // The three authored numbers, and not uvSlot - that is renderer scratch
         // and means nothing outside the frame that wrote it.
@@ -787,6 +810,22 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // Absent from every scene written before packed maps existed, which
         // reads as no map and so as exactly the surface it was.
         material.ormTexturePath = readAssetRef(m, "OrmTexture");
+        // Absent from every scene written before overlays, and from every one
+        // that names none since: no overlay, which adds nothing.
+        material.overlayTexturePath = readAssetRef(m, "OverlayTexture");
+        // Absent likewise, and each field on its own falls back to the default,
+        // so a block missing a key reads as the sprite it would have been.
+        if (m.Has("Sprite2D")) {
+            const auto& sprite = m["Sprite2D"];
+            const MaterialComponent::Sprite2DLight defaults{};
+            material.sprite2D.enabled = sprite["Enabled"].AsBool(defaults.enabled);
+            material.sprite2D.ambient = readVec3(sprite["Ambient"], defaults.ambient);
+            material.sprite2D.height = sprite["Height"].AsFloat(defaults.height);
+            material.sprite2D.lightMask = static_cast<uint8_t>(
+                std::clamp(sprite["LightMask"].AsNumber(defaults.lightMask), 0.0, 255.0));
+            material.sprite2D.normalYDown = sprite["NormalYDown"].AsBool(defaults.normalYDown);
+            material.sprite2D.overlayStrength = sprite["OverlayStrength"].AsFloat(defaults.overlayStrength);
+        }
         material.occlusionStrength = m["OcclusionStrength"].AsFloat(1.0f);
         material.roughness = m["Roughness"].AsFloat(0.4f);
         material.metallic = m["Metallic"].AsFloat(0.1f);
@@ -797,8 +836,12 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         material.transparent = m["Transparent"].AsBool(false);
         // Absent in every scene written before a surface could be added, and
         // mixing is what those scenes blended with.
-        material.blend = m["Blend"].AsString("Alpha") == "Additive" ? MaterialComponent::BlendMode::Additive
-                                                                    : MaterialComponent::BlendMode::Alpha;
+        // Any other word reads as Alpha too, as an unknown Background reads as
+        // the sky: a scene naming a blend this build does not know draws mixing.
+        const std::string blendWord = m["Blend"].AsString("Alpha");
+        material.blend = blendWord == "Additive"        ? MaterialComponent::BlendMode::Additive
+                       : blendWord == "Premultiplied" ? MaterialComponent::BlendMode::Premultiplied
+                                                      : MaterialComponent::BlendMode::Alpha;
         // Absent means zero means no cutout, so a scene written before this
         // existed loads as the opaque material it was.
         material.alphaCutoff = m["AlphaCutoff"].AsFloat(0.0f);

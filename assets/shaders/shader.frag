@@ -51,6 +51,10 @@ layout(set = 1, binding = 1) uniform sampler2D normalMap;
 // that is a byte each. Materials without one sample a 1x1 white DATA texture,
 // so the multiply below is a no-op and no branch is needed here either.
 layout(set = 1, binding = 2) uniform sampler2D ormMap;
+// An additive map, sampled at the surface's coordinates and added after the
+// multiply by the 2D sprite path only (shadeSprite2D). Materials without one
+// bind a 1x1 black texture, so the add needs no branch either.
+layout(set = 1, binding = 3) uniform sampler2D overlayMap;
 
 // Must match Engine::PushConstantData.
 // A push constant block must be declared identically in every stage of a
@@ -77,7 +81,8 @@ struct InstanceData {
     int skinPaletteBase;   // -1 = not skinned
     int skinJointCount;
     int probeIndex;        // which environment lights this draw
-    int flags;             // bit 0 = unlit; bits 8.. = uv slot
+    int flags;             // bit 0 = unlit, 1 = 2D sprite, 2 = normal y down,
+                           // 3 = premultiplied; bits 8..19 = uv slot, 20..27 = 2D light mask
 };
 
 layout(std430, set = 0, binding = 11) readonly buffer InstanceBuffer {
@@ -89,6 +94,15 @@ layout(location = 6) flat in int fragInstance;
 
 // Must match VulkanPipeline::PushConstantData::kUnlit.
 const int FLAG_UNLIT = 1;
+
+// Must match PushConstantData::kSprite2D, kNormalYDown and kPremultiplied, and
+// Components.hpp's kLightMaskShift. test_materials reads these lines. The mask
+// and the normal switch are carried for the 2D light term, which is not built
+// yet, so nothing below reads those two.
+const int FLAG_SPRITE2D      = 1 << 1;
+const int FLAG_NORMAL_Y_DOWN = 1 << 2;
+const int FLAG_PREMULTIPLIED = 1 << 3;
+const int LIGHT_MASK_SHIFT   = 20;
 
 // The UV slot lives in the twelve bits ABOVE the switches. Must match
 // PushConstantData::kUvSlotShift and kUvSlotMask.
@@ -366,6 +380,35 @@ float spotShadowFactor(int slot, float NdotL) {
     return lit / 9.0;
 }
 
+// A 2D sprite (PushConstantData::kSprite2D): the texel times the tint times the
+// ambient, plus the overlay, clamped the way a fixed-point target clamps one
+// draw's output. The record's fields mean what that path gives them:
+// albedoColor.rgb is already tint x ambient (RenderSystem::ApplySprite2D) and
+// material.x is the overlay's strength.
+//
+// The overlay is NOT scaled by the tint or the ambient: a baked light term
+// already carries its surface's albedo, and the engines it reproduces add it
+// straight (Ethanon's add1.ps, gl_FragColor = v_color * diffuse + t1).
+//
+// The light term - one clamped add per light, at full weight - belongs after
+// the base and is not built yet; premultiplied output is what will let it be
+// added at full weight over a partly transparent texel.
+vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
+    // A fully transparent texel carries no colour, so it cannot show through a
+    // premultiplied blend, and will not be lit.
+    vec3 texel = albedoTex.a > 0.0 ? albedoTex.rgb * fragColor : vec3(0.0);
+    float alpha = albedoTex.a * instances[fragInstance].albedoColor.a;
+
+    vec3 base = clamp(texel * instances[fragInstance].albedoColor.rgb
+                      + texture(overlayMap, uv).rgb * instances[fragInstance].material.x,
+                      0.0, 1.0);
+
+    if ((instances[fragInstance].flags & FLAG_PREMULTIPLIED) != 0) {
+        return vec4(base * alpha, alpha);
+    }
+    return vec4(base, alpha);
+}
+
 void main() {
     // Every map on this material samples through the same transform. See
     // transformedUV above for why it is computed once rather than three times.
@@ -411,7 +454,16 @@ void main() {
     // That is not an oversight - it is Godot's `modulate` past white, which is
     // how this game flashes a unit that has been hit.
     if ((instances[fragInstance].flags & FLAG_UNLIT) != 0) {
-        outColor = vec4(albedo, albedoTex.a * instances[fragInstance].albedoColor.a);
+        // A 2D sprite gives the record's unused fields a meaning of their own,
+        // so it leaves here rather than share the plain exit below.
+        if ((instances[fragInstance].flags & FLAG_SPRITE2D) != 0) {
+            outColor = shadeSprite2D(uv, albedoTex);
+            return;
+        }
+        // Without either new switch, the arithmetic this exit always did.
+        float alpha = albedoTex.a * instances[fragInstance].albedoColor.a;
+        outColor = vec4(albedo, alpha);
+        if ((instances[fragInstance].flags & FLAG_PREMULTIPLIED) != 0) outColor.rgb *= alpha;
         return;
     }
 
@@ -682,4 +734,8 @@ void main() {
     }
 
     outColor = vec4(color, albedoTex.a * instances[fragInstance].albedoColor.a);
+
+    // For a premultiplied blend (MaterialComponent::BlendMode::Premultiplied).
+    // Unset, which is every material that never chose it, this is not reached.
+    if ((instances[fragInstance].flags & FLAG_PREMULTIPLIED) != 0) outColor.rgb *= outColor.a;
 }

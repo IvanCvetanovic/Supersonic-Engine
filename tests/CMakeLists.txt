@@ -301,7 +301,9 @@ set_tests_properties(
     test_physics    # assets/scenes/MainScene.scene, to prove it has a floor
     test_packaging  # copies assets/, and now checks the .meta files come too
     test_materials  # reads assets/shaders/shader.frag, to check the UV slot
-                    # packing agrees with the shader that unpacks it
+                    # packing agrees with the shader that unpacks it, and
+                    # that its 2D sprite switches, light mask shift and
+                    # overlay binding are the ones VulkanPipeline.hpp states
     test_screenoverlay # reads assets/shaders/screen_overlay.vert, to check its
                        # vertex table is the one ScreenOverlay::CornerOf states,
                        # and bloom_composite.frag, to check its branches are

@@ -135,6 +135,15 @@ PushConstantData buildPushConstants(const entt::registry& registry, entt::entity
         }
     }
 
+    // LAST of the material's say, after the surface branch too: a 2D sprite
+    // repurposes albedoColor, material and emissive, and either branch above
+    // writing one of them afterwards would undo its packing. A sprite is a
+    // single-surface quad, so today the surface branch never runs for one; the
+    // order is what keeps that from mattering.
+    if (const auto* material = registry.try_get<MaterialComponent>(entity)) {
+        RenderSystem::ApplySprite2D(*material, push);
+    }
+
     // Both passes go through this one function, so the shadow pass skins with
     // no further change. The -1 default stands for everything else.
     if (const auto* skin = registry.try_get<SkinnedMeshComponent>(entity)) {
@@ -169,12 +178,52 @@ void RenderSystem::SortTransparentDraws(std::vector<TransparentDraw>& draws) {
 std::vector<RenderSystem::BlendRun> RenderSystem::BlendRuns(const std::vector<TransparentDraw>& sorted) {
     std::vector<BlendRun> runs;
     for (uint32_t i = 0; i < static_cast<uint32_t>(sorted.size()); ++i) {
-        if (runs.empty() || runs.back().additive != sorted[i].additive) {
-            runs.push_back(BlendRun{i, 0, sorted[i].additive});
+        if (runs.empty() || runs.back().blend != sorted[i].blend) {
+            runs.push_back(BlendRun{i, 0, sorted[i].blend});
         }
         ++runs.back().count;
     }
     return runs;
+}
+
+BlendEquation RenderSystem::EquationFor(MaterialComponent::BlendMode blend) {
+    switch (blend) {
+    case MaterialComponent::BlendMode::Additive: return BlendEquation::Add;
+    case MaterialComponent::BlendMode::Premultiplied: return BlendEquation::Premultiplied;
+    case MaterialComponent::BlendMode::Alpha:
+    default: return BlendEquation::Mix;
+    }
+}
+
+void RenderSystem::ApplySprite2D(const MaterialComponent& material, PushConstantData& push) {
+    if (material.unlit && material.sprite2D.enabled) {
+        const MaterialComponent::Sprite2DLight& sprite = material.sprite2D;
+        const glm::vec3 tint(material.albedoColor);
+
+        push.flags |= PushConstantData::kSprite2D;
+        if (sprite.normalYDown) push.flags |= PushConstantData::kNormalYDown;
+        push.flags = PackLightMask(push.flags, sprite.lightMask);
+
+        // The ambient multiplies here, on the CPU, so the shader's base is the
+        // same one multiply the plain unlit path already does.
+        push.albedoColor = glm::vec4(tint * sprite.ambient, material.albedoColor.a);
+
+        // The tint again WITHOUT the ambient, for the light term: a lamp is
+        // not dimmed by the room it shines in. And the lighting height, which
+        // is not the transform's z - in a 2D scene that is draw order.
+        push.emissive = glm::vec4(tint, sprite.height);
+
+        // x is the overlay's strength; w stays the cutoff, which the discard
+        // above every exit of shader.frag reads for every path alike.
+        push.material = glm::vec4(sprite.overlayStrength, 0.0f, 0.0f, material.alphaCutoff);
+    }
+
+    // Any path, not only a sprite's: every exit of shader.frag honours it. And
+    // only on a blended material, because a premultiplied colour composited by
+    // an opaque pipeline would simply be a darker colour.
+    if (material.transparent && material.blend == MaterialComponent::BlendMode::Premultiplied) {
+        push.flags |= PushConstantData::kPremultiplied;
+    }
 }
 
 void RenderSystem::SortParticleDraws(std::vector<ParticleDraw>& draws) {
@@ -235,6 +284,11 @@ uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
         signature = MixSignature(signature, &present, 1);
         signature = MixSignature(signature, material->ormTexturePath.data(),
                                  material->ormTexturePath.size());
+        // The overlay selects a texture as surely as the other three. Its colour
+        // space is the albedo's, already mixed above.
+        signature = MixSignature(signature, &present, 1);
+        signature = MixSignature(signature, material->overlayTexturePath.data(),
+                                 material->overlayTexturePath.size());
     } else {
         signature = MixSignature(signature, &absent, 1);
     }
@@ -440,10 +494,20 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
                                     ? textures.GetNeutralOrmTexture()
                                     : textures.Acquire(material->ormTexturePath, false,
                                                        textures.GetNeutralOrmTexture());
+            // COLOUR, like the albedo, and decoded exactly when the albedo is:
+            // a baked light term is authored in the same space as the picture
+            // it lights. Black when unnamed or unreadable, which adds nothing -
+            // a checkerboard added over a sprite would be a worse way to say a
+            // file is missing than the sprite simply unlit.
+            renderable.overlayTextureID = material->overlayTexturePath.empty()
+                                        ? textures.GetBlackTexture()
+                                        : textures.Acquire(material->overlayTexturePath, decodeColour,
+                                                           textures.GetBlackTexture());
         } else {
             renderable.albedoTextureID = textures.GetWhiteTexture();
             renderable.normalTextureID = textures.GetFlatNormalTexture();
             renderable.ormTextureID = textures.GetNeutralOrmTexture();
+            renderable.overlayTextureID = textures.GetBlackTexture();
         }
     }
 }
@@ -532,7 +596,8 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
             if (const vk::DescriptorSet set =
                     textures.AcquireMaterialSet(renderable.albedoTextureID,
                                                 renderable.normalTextureID,
-                                                renderable.ormTextureID)) {
+                                                renderable.ormTextureID,
+                                                renderable.overlayTextureID)) {
                 caster.alphaCutoff = alpha.cutoff;
                 caster.baseAlpha = alpha.baseAlpha;
                 caster.materialSet = set;
@@ -594,7 +659,8 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
                 if (const vk::DescriptorSet set =
                         textures.AcquireMaterialSet(section.albedoTextureID,
                                                     section.normalTextureID,
-                                                    section.ormTextureID)) {
+                                                    section.ormTextureID,
+                                                    textures.GetBlackTexture())) {
                     surfaceCaster.alphaCutoff = resolved.alphaCutoff;
                     surfaceCaster.baseAlpha = alpha.baseAlpha * resolved.baseColor.a;
                     surfaceCaster.materialSet = set;
@@ -938,6 +1004,7 @@ void RenderSystem::Render(
     VulkanPipeline& pipeline,
     VulkanPipeline& transparentPipeline,
     VulkanPipeline& additivePipeline,
+    VulkanPipeline& premultipliedPipeline,
     VulkanPipeline* skyPipeline,
     MeshRegistry& meshes,
     TextureRegistry& textures,
@@ -1132,11 +1199,11 @@ void RenderSystem::Render(
             transparent.push_back(TransparentDraw{
                 entity, mesh, world.matrix,
                 renderable.albedoTextureID, renderable.normalTextureID,
-                renderable.ormTextureID,
+                renderable.ormTextureID, renderable.overlayTextureID,
                 glm::dot(centre - viewPosition, frustum.ViewDirection()),
                 renderable.sortKey,
                 static_cast<uint32_t>(transparent.size()),
-                material->blend == MaterialComponent::BlendMode::Additive});
+                EquationFor(material->blend)});
             continue;
         }
 
@@ -1152,6 +1219,7 @@ void RenderSystem::Render(
             renderable.albedoTextureID,
             renderable.normalTextureID,
             renderable.ormTextureID,
+            renderable.overlayTextureID,
             renderable.sortKey});
     }
 
@@ -1214,6 +1282,7 @@ void RenderSystem::Render(
             uint32_t albedo = draw.albedoTextureID;
             uint32_t normal = draw.normalTextureID;
             uint32_t orm = draw.ormTextureID;
+            uint32_t overlay = draw.overlayTextureID;
             uint32_t firstIndex = 0;
             uint32_t indexCount = draw.indexCount;
 
@@ -1224,6 +1293,10 @@ void RenderSystem::Render(
                 albedo = section.albedoTextureID;
                 normal = section.normalTextureID;
                 orm = section.ormTextureID;
+                // A file's surface carries no overlay (MeshMaterial has none),
+                // and the entity's belongs to the entity's maps, which a
+                // multi-surface mesh does not draw with. So black: it adds nothing.
+                overlay = textures.GetBlackTexture();
             }
 
             // One set per combination of maps, cached, so surfaces and entities
@@ -1235,7 +1308,7 @@ void RenderSystem::Render(
             // it, exactly as distance ordering destroyed it for the transparent
             // pass.
             const vk::DescriptorSet materialSet =
-                textures.AcquireMaterialSet(albedo, normal, orm);
+                textures.AcquireMaterialSet(albedo, normal, orm, overlay);
 
             PassItem item;
             item.key = PassDraw{ static_cast<uint64_t>(draw.meshID), firstIndex, indexCount,
@@ -1314,7 +1387,9 @@ void RenderSystem::Render(
         // with no additive surface is one run, and records what it did before
         // there was a second blend.
         for (const BlendRun& run : BlendRuns(transparent)) {
-            VulkanPipeline& runPipeline = run.additive ? additivePipeline : transparentPipeline;
+            VulkanPipeline& runPipeline = run.blend == BlendEquation::Add ? additivePipeline
+                                        : run.blend == BlendEquation::Premultiplied ? premultipliedPipeline
+                                        : transparentPipeline;
 
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
                                        runPipeline.GetPipeline());
@@ -1345,7 +1420,7 @@ void RenderSystem::Render(
 
                 const vk::DescriptorSet blendedSet =
                     textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID,
-                                                draw.ormTextureID);
+                                                draw.ormTextureID, draw.overlayTextureID);
 
                 PassItem item;
 
@@ -1471,7 +1546,7 @@ void RenderSystem::Render(
     // bound, which is exactly what the two binds above make true.
     vk::DescriptorSet whiteSet = textures.AcquireMaterialSet(
         textures.GetWhiteTexture(), textures.GetFlatNormalTexture(),
-        textures.GetNeutralOrmTexture());
+        textures.GetNeutralOrmTexture(), textures.GetBlackTexture());
     if (whiteSet) {
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                          transparentPipeline.GetLayout(),

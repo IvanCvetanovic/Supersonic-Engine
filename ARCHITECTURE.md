@@ -383,7 +383,7 @@ through the later branch, and a second directional light is lit but never
 shadowed. One shadowed directional light is the limit.
 
 **Descriptor sets.** Set 0 is per-frame and has twelve bindings; set 1 is
-per-material and has three, rebound per draw.
+per-material and has four, rebound per draw.
 
 | Set 0 | Contents | Stages |
 |---|---|---|
@@ -435,10 +435,51 @@ required, and the slot they are indexed with is read out of the light block
 rather than computed per fragment. The spots are a single descriptor over a
 layered image, because a spot is sampled exactly like a cascade.
 
-Set 1 is albedo, a tangent-space normal map, and one packed map holding
+Set 1 is albedo, a tangent-space normal map, one packed map holding
 occlusion, roughness and metallic in R, G and B - the channels glTF packs them
-into. A single set is what previously forced every object to sample one
-globally bound texture.
+into - and an additive **overlay** (binding 3). A single set is what previously
+forced every object to sample one globally bound texture.
+
+The overlay is `MaterialComponent::overlayTexturePath`: a map sampled at the
+surface's own coordinates and added after everything that multiplies the albedo,
+undimmed by the tint. A 2D engine's per-sprite lightmap is the case it exists
+for. Only the 2D sprite path below samples it; every other path binds it and
+never reads it. A material without one binds a built-in 1x1 black **data**
+texture (`TextureRegistry::GetBlackTexture`), uploaded after the checkerboard so
+the ids `RenderableComponent`'s literals name for the other built-ins did not
+move, and protected from `Invalidate` like them. Each slot of a set falls back to
+its own neutral - checkerboard, flat normal, neutral ORM, black -
+in `MaterialSets::ResolveKey`, which `test_materials` holds to it. A mesh
+section has no overlay (a file's surface names none), so sections bind black.
+The path is per entity and not on `MaterialAsset`: an overlay is one surface's
+own bake. It is repointed with the other maps, but deliberately **not watched**
+for hot reload: a 2D game names hundreds (Magic Portals ships 730), `Watch` never
+forgets a path, and a stat per path per frame over 730 files measured 4.6 to 6.6
+ms.
+
+**The 2D sprite record.** An unlit material with `sprite2D.enabled` is drawn by
+`shader.frag`'s `shadeSprite2D`:
+`base = clamp(texel * tint * ambient + overlay * strength, 0, 1)`, the way a
+GLES2-era 2D engine draws a lit sprite's first pass, clamped as its fixed-point
+target clamps one draw. The per-draw record does not grow: the unlit path never
+read `material.xyz`, `emissive` or most of the flag bits, and
+`RenderSystem::ApplySprite2D` gives them a second meaning, applied after the
+material and surface-override branches of the record's builder so neither
+overwrites it:
+
+| Field | PBR / plain unlit | with `kSprite2D` |
+|---|---|---|
+| `albedoColor.rgb` | tint | tint x ambient |
+| `albedoColor.a` | alpha factor | alpha factor |
+| `material.x` / `.y`, `.z` / `.w` | roughness / metallic, ao / cutoff | overlay strength / 0 / cutoff |
+| `emissive.rgb` / `.w` | emission / occlusion strength | tint without ambient / lighting height |
+| `flags` bits 0-3 | unlit | unlit, `kSprite2D`, `kNormalYDown`, `kPremultiplied` |
+| `flags` bits 8-19 / 20-27 | UV slot / unused | UV slot / 2D light mask (`PackLightMask`) |
+
+The height, the tint without ambient, the normal switch and the light mask are
+carried for a 2D light term that is not built yet; nothing reads them. The
+shader's copies of the four switches and the mask's shift are held to the C++ by
+`test_materials`, which reads `shader.frag` as it reads the UV slot's.
 
 One packed map rather than three separate ones, because that is what an
 exporter writes and what an author paints, and because three bindings would
@@ -489,8 +530,8 @@ read by both the layout and `TextureRegistry`'s descriptor pool. It used to be
 a literal `2` in each, which is the shape of mistake that does not fail: a
 pool sized for two bindings while the layout declares three does not error, it
 quietly runs out of sets a third early, hundreds of materials into a scene
-nobody was testing. The set cache is keyed on the whole triple of texture ids,
-ordered rather than hashed - three 32-bit ids do not pack into a 64-bit key,
+nobody was testing. The set cache is keyed on the whole quadruple of texture ids,
+ordered rather than hashed - four 32-bit ids do not pack into a 64-bit key,
 and a hash collision would render one material with another's maps and say
 nothing about it.
 
@@ -739,6 +780,19 @@ A blended surface writes no depth, so a pane with nothing but sky behind it
 leaves the depth buffer at the clear value, and a sky drawn after the whole
 scene at z = 1.0 with a lessOrEqual compare passes that test and paints over it.
 Transparency worked indoors and vanished against the horizon.
+
+**Three blend equations.** `MaterialComponent::blend` is `Alpha`, `Additive` or
+`Premultiplied`, meaningful only on a transparent material, and the renderer
+builds one blended pipeline per `BlendEquation`: Mix (`SrcAlpha,
+OneMinusSrcAlpha`), Add (`SrcAlpha, One`, destination alpha kept) and
+Premultiplied (`One, OneMinusSrcAlpha` for colour and alpha). The sorted blended
+list is recorded as `BlendRun`s cut wherever the equation changes and nowhere
+else, so a premultiplied sprite between two panes stays between them. A
+premultiplied material sets `kPremultiplied`, and every exit of `shader.frag`
+multiplies its colour by its alpha under it. For a draw that adds nothing after
+its base that is the arithmetic of Mix; it exists for one that will, where a light
+must be added at full weight over a partly transparent texel, which one
+straight-alpha draw cannot do.
 
 **Cutout, which is the half most world content wants.** A leaf card, a
 chain-link fence, a grate is mostly holes with hard edges - not a pane of glass.

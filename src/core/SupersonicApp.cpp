@@ -1696,6 +1696,17 @@ void SupersonicApp::Run() {
             // The whole chain is silent from the first missing line.
             if (!material.ormTexturePath.empty()) m_assetWatcher.Watch(material.ormTexturePath);
 
+            // NOT the overlay, and the exception is deliberate. An overlay is
+            // one sprite's own baked light, so a 2D game names hundreds of them
+            // in a session - Magic Portals ships 730 lightmaps, at most 21 in a
+            // level - and Watch never forgets a path. Every watched path is a
+            // stat on every frame, and one pass of stats over those 730 files
+            // (a script's, not this watcher's) took 4.6 to 6.6 ms: a third of a
+            // 60 Hz frame. So an edited overlay file is read again only when
+            // something invalidates its path, as a game unloading a level does,
+            // until the watcher has the platform backend its own header says
+            // is due in the hundreds.
+
             // And the shared asset itself. The three paths above are the
             // RESOLVED ones Sync copied out of it, so without this line editing
             // a .material in a text editor changes nothing until a restart -

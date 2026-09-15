@@ -477,6 +477,25 @@ constexpr int32_t UnpackUvSlot(int32_t flags) {
     return (flags >> kUvSlotShift) & kUvSlotMask;
 }
 
+// Which 2D light layers reach a sprite (MaterialComponent::Sprite2DLight), in
+// the eight bits above the UV slot.
+//
+// The same word for the same reason: the record has no byte left. Bits 20 to
+// 27, so it starts where the slot's twelve bits end and stops four bits short
+// of the sign bit, which the slot's own comment above says must not be reached.
+// A protocol with shader.frag's LIGHT_MASK_SHIFT, held to it by test_materials.
+constexpr int32_t kLightMaskShift = 20;
+constexpr int32_t kLightMaskBits = 0xFF;
+
+constexpr int32_t PackLightMask(int32_t flags, uint8_t mask) {
+    return (flags & ~(kLightMaskBits << kLightMaskShift))
+         | ((static_cast<int32_t>(mask) & kLightMaskBits) << kLightMaskShift);
+}
+
+constexpr uint8_t UnpackLightMask(int32_t flags) {
+    return static_cast<uint8_t>((flags >> kLightMaskShift) & kLightMaskBits);
+}
+
 // One surface of a model, re-materialised by the name the file gave it.
 //
 // A model is authored as several named surfaces and a game addresses them by
@@ -595,6 +614,10 @@ struct MaterialComponent {
     // albedoColor is NOT clamped on this path, so a value above 1.0 stays above
     // 1.0 and reaches the bright pass. That is deliberate: it is how a flat
     // sprite flashes white when it is hit.
+    //
+    // The one exception is a material with sprite2D.enabled (below): that path
+    // clamps its base to [0, 1], the way the fixed-point target of the engines
+    // it exists for clamps one draw's output.
     bool unlit{false};
     float roughness{0.4f};
     float metallic{0.1f};
@@ -615,6 +638,59 @@ struct MaterialComponent {
     // Sampled as data, never as colour: these are numbers, and an sRGB decode
     // would bend every one of them.
     std::string ormTexturePath;
+
+    // An additive map, sampled at the surface's own coordinates and added after
+    // everything that multiplies the albedo. A baked light term that already
+    // contains its surface's albedo is the motivating case: a 2D engine's
+    // per-sprite lightmap, which is added on top of the sprite and is not dimmed
+    // by the sprite's tint or the room's ambient.
+    //
+    // Colour data: decoded like the albedo, unless the scene is DisplayEncoded.
+    // Read by the 2D sprite path only (sprite2D.enabled); every other path binds
+    // it and never samples it. A material without one binds a 1x1 black
+    // texture, so the add is the same arithmetic rather than a branch.
+    //
+    // Per entity, and deliberately not on MaterialAsset: an overlay is one
+    // surface's own bake, so a shared asset carrying one would paint one
+    // sprite's light onto every sprite using it - the argument uvScale makes
+    // below for its own fields.
+    std::string overlayTexturePath;
+
+    // A 2D sprite's light, carried in the unlit path's per-draw fields
+    // (PushConstantData, whose layout is documented beside kSprite2D).
+    // Meaningful only with `unlit`; the PBR path ignores it.
+    //
+    // With `enabled`, the sprite is drawn as
+    //   base = clamp(albedo * albedoColor.rgb * ambient + overlay * overlayStrength, 0, 1)
+    // which is how GLES2-era 2D engines draw a lit sprite's first pass: the
+    // ambient multiplies the texel and the tint, and the baked overlay is added
+    // after, undimmed by either.
+    struct Sprite2DLight {
+        bool enabled{false};
+
+        // Multiplies albedo x albedoColor before anything is added. Not folded
+        // into albedoColor, because a light term (layers below) takes the tint
+        // without the ambient: a lamp is not dimmed by the room it shines in.
+        glm::vec3 ambient{1.0f};
+
+        // This surface's height in the 2D lighting space, in world units. Not
+        // the transform's z: in a 2D scene z is draw order, not geometry.
+        float height{0.0f};
+
+        // Which 2D light layers reach it; 0 is none. Packed and carried now;
+        // the light term that reads it is not built yet.
+        uint8_t lightMask{0};
+
+        // The normal map's green channel points DOWN the image (DirectX
+        // convention), where the engine's y is up. Carried with the mask.
+        bool normalYDown{false};
+
+        // How much of the overlay is added. 1 is all of it.
+        float overlayStrength{1.0f};
+
+        bool operator==(const Sprite2DLight&) const = default;
+    };
+    Sprite2DLight sprite2D;
 
     // How much of the map's RED channel is believed, 0 to 1.
     //
@@ -676,7 +752,14 @@ struct MaterialComponent {
     // that asks whether a surface is blended - the gather, the shadow passes -
     // already asks `transparent`, and a second way to be blended would be a
     // second question each of them could forget to ask.
-    enum class BlendMode : uint8_t { Alpha, Additive };
+    //
+    // Premultiplied is the third: the shader multiplies its colour by its alpha
+    // before the blend, and the pipeline composites One, OneMinusSrcAlpha. For
+    // a draw that adds nothing after its base that is exactly Alpha. It exists
+    // for a draw that does - a sprite whose light must be added at FULL weight
+    // on a texel whose base is only partly opaque, which one straight-alpha draw
+    // cannot express (Ethanon draws that light as a separate One, One pass).
+    enum class BlendMode : uint8_t { Alpha, Additive, Premultiplied };
     BlendMode blend{BlendMode::Alpha};
 
     // Discard any fragment whose alpha falls below this, and zero means do not.
@@ -825,11 +908,17 @@ struct RenderableComponent {
     // normal and neutral ORM, so an untextured material needs no special case.
     //
     // The literals match the order TextureRegistry uploads its built-ins in,
-    // which is fragile and is why SyncResources overwrites all three from the
-    // registry on the first resolve rather than trusting them.
+    // which is fragile and is why SyncResources overwrites these three and the
+    // overlay below - all four - from the registry on the first resolve rather
+    // than trusting them.
     uint32_t albedoTextureID{0};
     uint32_t normalTextureID{1};
     uint32_t ormTextureID{2};
+
+    // The additive overlay (MaterialComponent::overlayTexturePath), 1x1 black
+    // when the material names none. The literal is TextureRegistry's fifth
+    // built-in, uploaded after the checker so the three above did not move.
+    uint32_t overlayTextureID{4};
 
     bool isVisible{true};
     bool castsShadow{true};

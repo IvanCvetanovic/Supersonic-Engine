@@ -74,6 +74,12 @@ TextureRegistry::TextureRegistry(VulkanDevice& device, vk::CommandPool commandPo
     }
     m_checkerTexture = UploadRGBA("builtin:checker", checker.data(), dim, dim, true);
 
+    // 1x1 black, as data: the neutral additive overlay, which adds nothing.
+    // LAST, after the checker, so the ids RenderableComponent's literals name
+    // for the other built-ins (0, 1, 2) do not move.
+    const std::array<uint8_t, 4> black = { 0, 0, 0, 255 };
+    m_blackTexture = UploadRGBA("builtin:black", black.data(), 1, 1, false);
+
     SUPERSONIC_LOG_INFO("TextureRegistry") << "Initialised with built-in white, flat-normal and checker textures." << std::endl;
 }
 
@@ -138,14 +144,21 @@ void TextureRegistry::giveBack(std::vector<vk::DescriptorSet> sets) {
 }
 
 vk::DescriptorSet TextureRegistry::fallbackSet() const {
-    const MaterialKey fallbackKey{m_whiteTexture, m_flatNormalTexture, m_neutralOrmTexture};
+    // Every slot named. A brace-initialised array zero-fills what it is not
+    // given, and id 0 is the white albedo: an overlay of white.
+    const MaterialKey fallbackKey{m_whiteTexture, m_flatNormalTexture, m_neutralOrmTexture,
+                                  m_blackTexture};
     if (auto it = m_materialSets.find(fallbackKey); it != m_materialSets.end()) return it->second;
     return nullptr;
 }
 
 bool TextureRegistry::isBuiltIn(uint32_t id) const {
+    // Black too, and the port makes it urgent: a lightmap that failed to load
+    // caches black under its own path, and that path is invalidated every time
+    // its level unloads.
     return id == m_checkerTexture || id == m_whiteTexture ||
-           id == m_flatNormalTexture || id == m_neutralOrmTexture;
+           id == m_flatNormalTexture || id == m_neutralOrmTexture ||
+           id == m_blackTexture;
 }
 
 const TextureRegistry::Texture* TextureRegistry::get(uint32_t id) const {
@@ -280,16 +293,14 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb, uint32_t f
 }
 
 vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_t normalId,
-                                                      uint32_t ormId) {
+                                                      uint32_t ormId, uint32_t overlayId) {
     // Each slot falls back to its OWN neutral, not to a shared one. A missing
     // albedo is a mistake worth seeing, so it gets the checkerboard; a missing
-    // normal or ORM map is the ordinary case - most materials have neither -
-    // so they get values that multiply out to no change at all.
-    if (albedoId >= m_textures.size()) albedoId = m_checkerTexture;
-    if (normalId >= m_textures.size()) normalId = m_flatNormalTexture;
-    if (ormId >= m_textures.size()) ormId = m_neutralOrmTexture;
-
-    const MaterialKey key{albedoId, normalId, ormId};
+    // normal, ORM or overlay map is the ordinary case - most materials have
+    // none of them - so they get values that change nothing at all.
+    const MaterialKey key = MaterialSets::ResolveKey(
+        MaterialKey{albedoId, normalId, ormId, overlayId}, static_cast<uint32_t>(m_textures.size()),
+        MaterialKey{m_checkerTexture, m_flatNormalTexture, m_neutralOrmTexture, m_blackTexture});
     if (auto it = m_materialSets.find(key); it != m_materialSets.end()) {
         return it->second;
     }
@@ -303,10 +314,11 @@ vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_
         return fallbackSet();
     }
 
-    // Written binding by binding from the key itself, so adding a fourth map
-    // means adding it to the key and to the layout and nowhere else. The
-    // previous shape named each texture in a local and would have needed a
-    // third of everything, in three places, all of them easy to half-do.
+    // Written binding by binding from the key itself, so adding a map means
+    // adding it to the key and to the layout and nowhere else - which is how
+    // the overlay, the fourth, arrived. The previous shape named each texture
+    // in a local and would have needed a third of everything, in three places,
+    // all of them easy to half-do.
     //
     // Resolved BEFORE the set is allocated, because each of these can throw,
     // and a throw after the allocation would leave a set the pool counts and

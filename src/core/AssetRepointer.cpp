@@ -39,12 +39,14 @@ RepointResult RepointAssets(entt::registry& registry, MaterialLibrary* materials
 
         for (auto entity : registry.view<MaterialComponent>()) {
             auto& material = registry.get<MaterialComponent>(entity);
-            // All four, including materialPath: a .material is an asset with an
+            // All five, including materialPath: a .material is an asset with an
             // identity of its own, so renaming one has to follow just as a
-            // texture does.
+            // texture does. And the overlay, which a scene saves with a Guid
+            // like the other three maps.
             if (repoint(material.albedoTexturePath, move)) ++result.componentFields;
             if (repoint(material.normalTexturePath, move)) ++result.componentFields;
             if (repoint(material.ormTexturePath, move)) ++result.componentFields;
+            if (repoint(material.overlayTexturePath, move)) ++result.componentFields;
             if (repoint(material.materialPath, move)) ++result.componentFields;
         }
 

@@ -44,14 +44,28 @@ vk::PipelineColorBlendAttachmentState ColorBlendFor(const VulkanPipelineOptions&
     state.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
     state.colorBlendOp = vk::BlendOp::eAdd;
     state.alphaBlendOp = vk::BlendOp::eAdd;
-    if (options.additive) {
+    switch (options.blendEquation) {
+    case BlendEquation::Add:
         state.dstColorBlendFactor = vk::BlendFactor::eOne;
         state.srcAlphaBlendFactor = vk::BlendFactor::eZero;
         state.dstAlphaBlendFactor = vk::BlendFactor::eOne;
-    } else {
+        break;
+    case BlendEquation::Premultiplied:
+        // The colour already carries its alpha, so the source is taken whole.
+        // Alpha composites the same way, which is what straight Mix gives the
+        // alpha channel too - so a premultiplied draw that adds nothing leaves
+        // the target as a Mix draw would.
+        state.srcColorBlendFactor = vk::BlendFactor::eOne;
         state.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
         state.srcAlphaBlendFactor = vk::BlendFactor::eOne;
         state.dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        break;
+    case BlendEquation::Mix:
+    default:
+        state.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        state.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+        state.dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        break;
     }
     return state;
 }
@@ -396,9 +410,10 @@ void VulkanPipeline::createDescriptorSetLayout() {
 
     // ---- Set 1: per-material ----
     // binding 0: albedo, binding 1: tangent-space normal map, binding 2: the
-    // packed occlusion/roughness/metallic map. Rebound per draw, which is what
-    // lets each entity carry its own maps rather than sharing one global
-    // sampler.
+    // packed occlusion/roughness/metallic map, binding 3: the additive overlay
+    // the 2D sprite path adds after its multiply (1x1 black when unnamed).
+    // Rebound per draw, which is what lets each entity carry its own maps
+    // rather than sharing one global sampler.
     //
     // The count is read from the array by everything below it, and
     // TextureRegistry sizes its pool from kMaterialBindingCount for the same

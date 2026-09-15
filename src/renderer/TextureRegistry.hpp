@@ -63,14 +63,21 @@ public:
                         uint32_t width, uint32_t height, bool srgb = true,
                         vk::Filter filter = vk::Filter::eLinear);
 
-    // Descriptor set binding every map of one material, cached per triple of
-    // ids so a scene sharing materials does not allocate a set per entity.
+    // Descriptor set binding every map of one material, cached per quadruple
+    // of ids so a scene sharing materials does not allocate a set per entity.
+    //
+    // Every slot falls back to its own neutral (MaterialSets::ResolveKey): an
+    // id that names no texture - kInvalidTexture, say - is the checkerboard as
+    // an albedo, the flat normal, the neutral ORM, and black as an overlay.
+    // Not defaulted: a fourth map a caller forgot is a set the caller did not
+    // mean to ask for.
     //
     // A full pool - MaterialSets::kMaxSets live, which counts sets dropped from
     // the cache and not yet freed - hands out the white fallback's set and logs
     // it, rather than throwing out of the middle of a frame. So does a driver
     // that reports the pool out of memory or fragmented before that.
-    vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId, uint32_t ormId);
+    vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId, uint32_t ormId,
+                                         uint32_t overlayId);
 
     // Drops a cached path so the next Acquire re-reads it from disk, and
     // queues the old image for deferred destruction. This is what makes editing
@@ -117,6 +124,12 @@ public:
     // The shader multiplies the material's constants by it, so a material with
     // no map shades exactly as it did before the binding existed.
     uint32_t GetNeutralOrmTexture() const { return m_neutralOrmTexture; }
+
+    // 1x1 black, as data: the neutral additive overlay. A material with no
+    // overlay binds this and the 2D sprite path adds exactly zero, so the add
+    // is the same arithmetic rather than a branch. Uploaded after the checker,
+    // so the three built-ins RenderableComponent's literals name kept their ids.
+    uint32_t GetBlackTexture() const { return m_blackTexture; }
 
     size_t Size() const { return m_textures.size(); }
 
@@ -184,7 +197,7 @@ private:
     std::unordered_map<std::string, uint32_t> m_lookup;
 
     // Keyed by the ids of every binding, in binding order. Ordered rather than
-    // hashed: three 32-bit ids do not pack into a 64-bit key, and a hash
+    // hashed: four 32-bit ids do not pack into a 64-bit key, and a hash
     // collision here would render one material with another's maps and say
     // nothing about it.
     std::map<std::array<uint32_t, VulkanPipeline::kMaterialBindingCount>,
@@ -195,6 +208,7 @@ private:
     uint32_t m_checkerTexture{kInvalidTexture};
     uint32_t m_flatNormalTexture{kInvalidTexture};
     uint32_t m_neutralOrmTexture{kInvalidTexture};
+    uint32_t m_blackTexture{kInvalidTexture};
 };
 
 } // namespace Supersonic

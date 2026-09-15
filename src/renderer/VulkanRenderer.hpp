@@ -200,6 +200,10 @@ private:
     // material marks additive (MaterialComponent::blend).
     std::unique_ptr<VulkanPipeline> m_additivePipeline;
 
+    // And again, compositing a colour already multiplied by its alpha, for the
+    // surfaces a material marks premultiplied.
+    std::unique_ptr<VulkanPipeline> m_premultipliedPipeline;
+
     // The sky, drawn at the far plane after opaque geometry.
     std::unique_ptr<VulkanPipeline> m_skyPipeline;
     std::unique_ptr<VulkanPipeline> m_gridPipeline;

@@ -154,7 +154,8 @@ struct PushConstantData {
     // analytic hemisphere, which looks like a descriptor bug and is not one.
     int32_t probeIndex{0};        // 120..123 (fragment)
 
-    // Per-draw switches, one bit each. Currently only kUnlit.
+    // Per-draw switches, one bit each: kUnlit, kSprite2D, kNormalYDown and
+    // kPremultiplied, then the UV slot and the 2D light mask above them.
     //
     // This takes the block to exactly 128 bytes, which is the guaranteed
     // minimum every Vulkan implementation must offer - so it is the last thing
@@ -173,6 +174,35 @@ struct PushConstantData {
     // exactly 1.0, ambient tuned to nothing - and the result still moves when
     // somebody adds a lamp.
     static constexpr int32_t kUnlit = 1 << 0;
+
+    // A 2D sprite (MaterialComponent::sprite2D), drawn by shader.frag's
+    // shadeSprite2D. Only with kUnlit. It gives the fields the unlit path never
+    // reads a second meaning, so the record does not grow past 128 bytes:
+    //
+    //   field            PBR / plain unlit        with kSprite2D
+    //   model            model matrix             model matrix
+    //   albedoColor.rgb  tint                     tint x ambient
+    //   albedoColor.a    alpha factor             alpha factor (unchanged)
+    //   material.x       roughness                overlay strength
+    //   material.y, .z   metallic, ao             0, unused
+    //   material.w       alpha cutoff             alpha cutoff (unchanged)
+    //   emissive.rgb     emission                 tint WITHOUT ambient, for a light term
+    //   emissive.w       occlusion strength       lighting height, world units
+    //   flags 8..19      UV slot                  UV slot (unchanged)
+    //   flags 20..27     unused                   2D light mask (PackLightMask)
+    //
+    // The light term that reads emissive.rgb, emissive.w, the mask and
+    // kNormalYDown is not built yet; the record carries them already so that
+    // adding it changes the shader and not this layout.
+    static constexpr int32_t kSprite2D = 1 << 1;
+
+    // With kSprite2D: the normal map's green channel points down the image.
+    static constexpr int32_t kNormalYDown = 1 << 2;
+
+    // Output premultiplied colour, rgb x alpha, for a pipeline blending One,
+    // OneMinusSrcAlpha (MaterialComponent::BlendMode::Premultiplied). Honoured
+    // by every exit of shader.frag.
+    static constexpr int32_t kPremultiplied = 1 << 3;
 
     // The low byte is switches; the twelve bits above it are a UV transform
     // slot. The packing itself, and the reasons for its shape, are in
@@ -255,15 +285,25 @@ struct ShadowPushConstantData {
 //
 // The alias inside the class keeps every VulkanPipeline::Options call site
 // working unchanged.
+// Which equation a blended pipeline composites with. MaterialComponent::blend
+// says which a surface wants; the blended pass binds one pipeline per run of
+// equal equation (RenderSystem::BlendRun).
+//
+//   Mix            src * srcAlpha + dst * (1 - srcAlpha)
+//   Add            src * srcAlpha + dst; the destination's alpha is left as it
+//                  was, since a glow does not make what is behind it any more
+//                  or less opaque
+//   Premultiplied  src + dst * (1 - srcAlpha), colour and alpha alike, for a
+//                  shader that has already multiplied its colour by its alpha
+//                  (PushConstantData::kPremultiplied)
+enum class BlendEquation : uint8_t { Mix, Add, Premultiplied };
+
 struct VulkanPipelineOptions {
     bool depthWrite{true};
     bool blendEnable{false};
 
-    // With blendEnable: ADD the source to what is there, src * srcAlpha + dst,
-    // instead of mixing it over. MaterialComponent::blend says what wants it.
-    // The destination's alpha is left as it was, since a glow does not make
-    // what is behind it any more or less opaque.
-    bool additive{false};
+    // Meaningful only with blendEnable.
+    BlendEquation blendEquation{BlendEquation::Mix};
 
     vk::CullModeFlags cullMode{vk::CullModeFlagBits::eBack};
     bool useVertexInput{true};
@@ -386,15 +426,19 @@ public:
     static constexpr uint32_t kSceneSet = 0;
     static constexpr uint32_t kMaterialSet = 1;
 
-    // How many samplers a material set holds: albedo, normal, and the packed
-    // occlusion/roughness/metallic map.
+    // How many samplers a material set holds: albedo, normal, the packed
+    // occlusion/roughness/metallic map, and the additive overlay
+    // (MaterialComponent::overlayTexturePath), in binding order.
     //
     // Public because TextureRegistry sizes its descriptor pool from it. That
     // used to be a literal 2 in each of the two files, which is the shape of
     // mistake that does not fail: a pool sized for two bindings while the
     // layout declares three simply runs out of sets a third early, hundreds of
     // materials later, in a scene nobody was testing.
-    static constexpr uint32_t kMaterialBindingCount = 3;
+    static constexpr uint32_t kMaterialBindingCount = 4;
+
+    // Where the overlay sits in the set, and in TextureRegistry's key.
+    static constexpr uint32_t kOverlayBinding = 3;
 
 private:
     void createDescriptorSetLayout();
