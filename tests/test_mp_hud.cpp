@@ -9,19 +9,24 @@
 //
 // Pure: no window, no registry, no level. ui.json is the port's own and
 // committed, so this runs anywhere; the caption's layout is tested on a font it
-// writes, never on the original's.
+// writes, never on the original's. The pause screen that sim/Pause.hpp lays out
+// is pinned here the same way, against the remake's ui2 spec.
 
 #include "TestHarness.hpp"
 
 #include "core/BitmapFont.hpp"
 
 #include "sim/Hud.hpp"
+#include "sim/Pause.hpp"
+#include "sim/UiLayer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -534,6 +539,373 @@ void WhatIsRefused() {
               "a black that would start before its level is refused, by name: " + error);
 }
 
+// ---- the pause screen (sim/Pause.hpp, sim/UiLayer.hpp) ----------------------
+//
+// Held against the remake's out/parity/specs/ui2/spec.md section 2: its decoded
+// top-left corners at 1280x720, and the measured ones beside them from
+// pause_fresh_1-1.png and pause_gold_1-4.png (pause_finished.md section 1.1).
+
+Pause::Rules LoadPause() {
+    Pause::Rules rules;
+    std::string error;
+    CHECK_MSG(Pause::LoadRules(kUi, rules, error), "ui.json's pause reads: " + error);
+    return rules;
+}
+
+// What pause_gold_1-4.png was opened over, and pause_fresh_1-1.png.
+constexpr Pause::Level kGold14{3, 2, 3};
+constexpr Pause::Level kFresh11{0, 0, 0};
+
+const Pause::Sprite* FindElement(const std::vector<Pause::Sprite>& sprites, Pause::Element element) {
+    for (const Pause::Sprite& sprite : sprites) {
+        if (sprite.element == element) return &sprite;
+    }
+    return nullptr;
+}
+
+const Pause::Sprite* FindButton(const std::vector<Pause::Sprite>& sprites, Pause::Button button) {
+    for (const Pause::Sprite& sprite : sprites) {
+        if (sprite.element == Pause::Element::Button && sprite.button == button) return &sprite;
+    }
+    return nullptr;
+}
+
+int IndexOf(const std::vector<Pause::Sprite>& sprites, const Pause::Sprite* sprite) {
+    return sprite == nullptr ? -1 : static_cast<int>(sprite - sprites.data());
+}
+
+void ThePauseFileSaysWhatWasDecoded() {
+    const Pause::Rules rules = LoadPause();
+    CHECK_EQ(rules.layer.spriteAppearMs, 1000.0);
+    CHECK_EQ(rules.layer.buttonAppearMs, 700.0);
+    CHECK_EQ(rules.layer.buttonDismissMs, 700.0);
+    CHECK_EQ(rules.layer.buttonSlideUnits, 32.0);
+
+    // ARGB(200, 0, 0, 0): the world multiplied by 1 - 200/255, which the captures
+    // measured at 0.2149 (gold 1-4) and 0.2131 / 0.2146 (fresh 1-1).
+    CHECK_EQ(rules.dimAlphaByte, 200);
+    const double k = 1.0 - rules.dimAlphaByte / 255.0;
+    CHECK_MSG(Near(k, 0.2149, 0.01) && Near(k, 0.2131, 0.01), "the decoded dim " + Num(k) + " is the measured k");
+
+    CHECK(rules.goldenPlaque.sprite == "golden_score_plaque.png");
+    CHECK(rules.currentPlaque.sprite == "current_score_plaque.png");
+    CHECK(rules.levels.sprite == "back_to_main_menu.png");
+    CHECK(rules.resume.sprite == "resume_button.png");
+    CHECK(rules.skip.sprite == "skip_level_button.png");
+    CHECK(rules.achievements.sprite == "scores.png");
+    CHECK(rules.sound.sprite == "sound_high.png" && rules.soundOffSprite == "sound_mute.png");
+    CHECK(rules.music.sprite == "music_on.png" && rules.musicOffSprite == "music_off.png");
+    CHECK(rules.title.font == "Matura84_shadow.fnt" && rules.goldenNumber.font == "Matura84_shadow.fnt");
+    CHECK(rules.title.prefix == "Part ");
+    CHECK_EQ(rules.title.unitsPerFontPx, 0.5);
+    CHECK_EQ(rules.goldenNumber.unitsPerFontPx, 0.5);
+    CHECK(rules.goldenNumber.offsetUnits == glm::dvec2(10.0, -4.0));
+    // The music switch at the pause's own 0.09 of the width - not the main menu's
+    // 32 units, which ui3 measured as a different widget.
+    CHECK(rules.music.atScreen == glm::dvec2(0.09, 1.0));
+}
+
+void ThePauseSitsWhereTheCapturesPutIt() {
+    const Pause::Rules rules = LoadPause();
+    const std::vector<Pause::Sprite> settled = Pause::Sprites(rules, kGold14, Pause::Switches{}, kView720, 3000.0);
+
+    const struct {
+        const char* name;
+        const Pause::Sprite* sprite;
+        const char* file;
+        double decodedX, decodedY; // spec 2.1, "TL px @720p (decoded)"
+        double measuredX, measuredY;
+        double w, h; // px
+    } rows[] = {
+        {"P2 golden plaque", FindElement(settled, Pause::Element::GoldenPlaque), "golden_score_plaque.png", 934.0,
+         86.4, 934.0, 86.25, 180.0, 360.0},
+        {"P3 current plaque", FindElement(settled, Pause::Element::CurrentPlaque), "current_score_plaque.png", 166.0,
+         169.2, 166.0, 169.25, 180.0, 360.0},
+        {"P4 medal", FindElement(settled, Pause::Element::CurrentMedal), "medal_gold_l.png", 166.0, 169.2, 166.0,
+         169.25, 180.0, 180.0},
+        {"P5 back to levels", FindButton(settled, Pause::Button::Levels), "back_to_main_menu.png", 447.6, 226.8,
+         447.6, 226.8, 180.0, 180.0},
+        {"P6 resume", FindButton(settled, Pause::Button::Resume), "resume_button.png", 652.4, 226.8, 652.25, 226.75,
+         180.0, 180.0},
+        {"P7 skip", FindButton(settled, Pause::Button::Skip), "skip_level_button.png", 550.0, 414.0, 550.0, 414.0,
+         180.0, 180.0},
+        {"P8 Achievements", FindButton(settled, Pause::Button::Achievements), "scores.png", 920.0, 630.0, 920.0,
+         630.0, 360.0, 90.0},
+        {"P9 sound", FindButton(settled, Pause::Button::Sound), "sound_high.png", 0.0, 630.0, 0.0, 630.0, 90.0, 90.0},
+        {"P10 music", FindButton(settled, Pause::Button::Music), "music_on.png", 115.2, 630.0, 115.25, 630.0, 90.0,
+         90.0},
+    };
+    for (const auto& row : rows) {
+        CHECK_MSG(row.sprite != nullptr, std::string(row.name) + " is drawn on a finished level");
+        if (row.sprite == nullptr) continue;
+        CHECK_MSG(row.sprite->file == row.file,
+                  std::string(row.name) + " is " + row.file + ", not " + row.sprite->file);
+        // To the decode's own rounding, and within A-P3's half pixel of the capture.
+        CHECK_MSG(RectPx(row.sprite->rect, row.decodedX, row.decodedY, row.w, row.h, 0.06),
+                  std::string(row.name) + " at the decoded TL: " + ShowPx(row.sprite->rect));
+        CHECK_MSG(RectPx(row.sprite->rect, row.measuredX, row.measuredY, row.w, row.h, 0.5),
+                  std::string(row.name) + " within half a pixel of the measured TL");
+        // Settled, every one is whole: plateau opacity 1.00 on both captures.
+        CHECK_EQ(row.sprite->alphaByte, 255);
+    }
+    // P3 and P4 share their top-left only by coincidence of origin and size.
+    const Pause::Sprite* plaque = FindElement(settled, Pause::Element::CurrentPlaque);
+    const Pause::Sprite* medal = FindElement(settled, Pause::Element::CurrentMedal);
+    CHECK_MSG(plaque != nullptr && medal != nullptr && plaque->rect.size == glm::dvec2(64.0, 128.0) &&
+                  medal->rect.size == glm::dvec2(64.0, 64.0),
+              "the plaque is 64 x 128 units and its medal 64 x 64");
+
+    // The dim covers the view at 200 of 255, first of everything.
+    const Pause::Sprite* dim = FindElement(settled, Pause::Element::Dim);
+    CHECK_MSG(dim != nullptr && IndexOf(settled, dim) == 0 && dim->rect.min == glm::dvec2(0.0) &&
+                  dim->rect.size == kView720 && dim->alphaByte == 200 && dim->file.empty(),
+              "the dim is first, whole-view, alpha 200, drawn plain");
+    // UILayer::draw: every sprite, then every button.
+    int lastSprite = -1;
+    int firstButton = static_cast<int>(settled.size());
+    for (std::size_t i = 0; i < settled.size(); ++i) {
+        if (settled[i].element == Pause::Element::Button) {
+            firstButton = std::min(firstButton, static_cast<int>(i));
+        } else {
+            lastSprite = static_cast<int>(i);
+        }
+    }
+    CHECK_MSG(lastSprite < firstButton, "the sprites are all drawn before the buttons");
+    CHECK_MSG(IndexOf(settled, medal) > IndexOf(settled, plaque), "the medal over its plaque");
+
+    // Fractions of the screen, not corners: at 4:3 the x positions move with the
+    // width and the sizes stay.
+    const glm::dvec2 view43(256.0 * 4.0 / 3.0, 256.0);
+    const std::vector<Pause::Sprite> narrow = Pause::Sprites(rules, kGold14, Pause::Switches{}, view43, 3000.0);
+    const Pause::Sprite* resume43 = FindButton(narrow, Pause::Button::Resume);
+    const Pause::Sprite* scores43 = FindButton(narrow, Pause::Button::Achievements);
+    CHECK_MSG(resume43 != nullptr && Near(resume43->rect.Centre().x, 0.58 * view43.x, 1e-9) &&
+                  resume43->rect.size == glm::dvec2(64.0),
+              "at 4:3 resume is still at 0.58 of the width, 64 units");
+    CHECK_MSG(scores43 != nullptr && Near(scores43->rect.Max().x, view43.x, 1e-9) &&
+                  Near(scores43->rect.Max().y, view43.y, 1e-9),
+              "and Achievements is still flush in the corner");
+}
+
+void ThePauseShowsWhatTheSaveSays() {
+    const Pause::Rules rules = LoadPause();
+    // A-P1: fresh 1-1 has no current plaque, no medal and no skip.
+    const std::vector<Pause::Sprite> fresh = Pause::Sprites(rules, kFresh11, Pause::Switches{}, kView720, 3000.0);
+    CHECK(FindElement(fresh, Pause::Element::CurrentPlaque) == nullptr);
+    CHECK(FindElement(fresh, Pause::Element::CurrentMedal) == nullptr);
+    CHECK(FindButton(fresh, Pause::Button::Skip) == nullptr);
+    for (const Pause::Button always : {Pause::Button::Levels, Pause::Button::Resume, Pause::Button::Achievements,
+                                       Pause::Button::Sound, Pause::Button::Music}) {
+        CHECK_MSG(FindButton(fresh, always) != nullptr, "and every other button is there");
+    }
+    CHECK(FindElement(fresh, Pause::Element::GoldenPlaque) != nullptr);
+    CHECK(FindElement(fresh, Pause::Element::Dim) != nullptr);
+
+    // Any tier at all gates them: the save stores 1 for bronze.
+    for (int tier = 1; tier <= 3; ++tier) {
+        const std::vector<Pause::Sprite> finished =
+            Pause::Sprites(rules, Pause::Level{tier, 2, 3}, Pause::Switches{}, kView720, 3000.0);
+        const Pause::Sprite* medal = FindElement(finished, Pause::Element::CurrentMedal);
+        const std::string want = tier == 3   ? "medal_gold_l.png"
+                                 : tier == 2 ? "medal_silver_l.png"
+                                             : "medal_bronze_l.png";
+        CHECK_MSG(medal != nullptr && medal->file == want, "tier " + std::to_string(tier) + " wears " + want);
+        CHECK(FindButton(finished, Pause::Button::Skip) != nullptr);
+    }
+    CHECK(Pause::MedalSprite(rules, 0).empty());
+
+    // P11 and P12: "Part 1" / "0" on fresh 1-1, "Part 4" / "2" on gold 1-4.
+    CHECK(Pause::TitleText(rules, kFresh11) == "Part 1");
+    CHECK(Pause::TitleText(rules, kGold14) == "Part 4");
+    CHECK(Pause::GoldenText(kFresh11) == "0");
+    CHECK(Pause::GoldenText(kGold14) == "2");
+    // Decoded centres; A-P4 holds them within a pixel of the measured, which sit
+    // 0.5 px left and 0.5..1.0 px up of the decode on every text (spec U11).
+    const glm::dvec2 title = Pause::TitleCentre(rules, kView720) * kPxPerUnit;
+    const glm::dvec2 golden = Pause::GoldenCentre(rules, kView720) * kPxPerUnit;
+    CHECK_MSG(Near(title.x, 652.8, 0.05) && Near(title.y, 165.6, 0.05), "Part N centred at (652.8, 165.6) px");
+    CHECK_MSG(Near(golden.x, 1052.1, 0.05) && Near(golden.y, 211.95, 0.05),
+              "the golden number centred at (1052.1, 211.95) px");
+    CHECK_MSG(Near(title.x, 652.3, 1.0) && Near(title.x, 651.8, 1.0) && Near(title.y, 165.1, 1.0),
+              "within A-P4's pixel of both measured Part N centres");
+    CHECK_MSG(Near(golden.x, 1051.6, 1.0) && Near(golden.x, 1052.1, 1.0) && Near(golden.y, 210.95, 1.0),
+              "and of both measured golden numbers");
+
+    // The switches: sound off shows sound_mute where sound_high was, and the music
+    // switch is dismissed from that moment - 700 ms out, unpressable - then gone.
+    Pause::Switches muted;
+    muted.soundOn = false;
+    muted.musicDismissedMs = 2000.0;
+    const std::vector<Pause::Sprite> going = Pause::Sprites(rules, kFresh11, muted, kView720, 2350.0);
+    const Pause::Sprite* sound = FindButton(going, Pause::Button::Sound);
+    CHECK_MSG(sound != nullptr && sound->file == "sound_mute.png" && RectPx(sound->rect, 0.0, 630.0, 90.0, 90.0),
+              "A-P7: sound_mute at (0, 630)");
+    const Pause::Sprite* leaving = FindButton(going, Pause::Button::Music);
+    CHECK_MSG(leaving != nullptr && !leaving->pressable &&
+                  leaving->alphaByte == static_cast<int>((1.0 - std::sin(0.25 * 3.141592653589793)) * 255.0),
+              "350 ms into its dismissal the music switch is at 1 - smoothEnd(0.5), unpressable");
+    const std::vector<Pause::Sprite> gone = Pause::Sprites(rules, kFresh11, muted, kView720, 2700.0);
+    CHECK_MSG(FindButton(gone, Pause::Button::Music) == nullptr, "A-P7: and 700 ms on, the music slot is empty");
+    // And back on: a fresh entrance from that moment.
+    Pause::Switches back;
+    back.musicAddedMs = 5000.0;
+    back.musicDismissedMs = 2000.0;
+    back.musicOn = false;
+    const std::vector<Pause::Sprite> returning = Pause::Sprites(rules, kFresh11, back, kView720, 5000.0);
+    const Pause::Sprite* music = FindButton(returning, Pause::Button::Music);
+    CHECK_MSG(music != nullptr && music->alphaByte == 0 && music->file == "music_off.png" && music->pressable,
+              "sound on again brings the music switch back from alpha 0, showing music_off");
+}
+
+void ThePauseComesInAsUISpriteAndUIButtonDo() {
+    const Pause::Rules rules = LoadPause();
+    const std::vector<Pause::Sprite> settled = Pause::Sprites(rules, kGold14, Pause::Switches{}, kView720, 3000.0);
+    const std::vector<Pause::Sprite> first = Pause::Sprites(rules, kGold14, Pause::Switches{}, kView720, 0.0);
+    CHECK_MSG(FindElement(first, Pause::Element::Dim)->alphaByte == 0, "the dim starts clear");
+
+    // UIButton::UIButton: 32 units out along the ray from the screen's centre to
+    // the button's ANCHOR. Spec 2.4's P5, P6 and P7 offsets are that; its P8
+    // (+26.4, +18.1) is the ray to Achievements' centre, where the decode takes
+    // its anchor, the screen's corner.
+    const struct {
+        const char* name;
+        Pause::Button button;
+        glm::dvec2 offset;
+    } starts[] = {
+        {"P5", Pause::Button::Levels, {-29.48, -12.44}},  {"P6", Pause::Button::Resume, {29.48, -12.44}},
+        {"P7", Pause::Button::Skip, {0.0, 32.0}},          {"P8", Pause::Button::Achievements, {27.89, 15.69}},
+        {"P9", Pause::Button::Sound, {-27.89, 15.69}},     {"P10", Pause::Button::Music, {-26.39, 18.10}},
+    };
+    for (const auto& start : starts) {
+        const Pause::Sprite* from = FindButton(first, start.button);
+        const Pause::Sprite* to = FindButton(settled, start.button);
+        if (from == nullptr || to == nullptr) {
+            CHECK_MSG(false, std::string(start.name) + " is there");
+            continue;
+        }
+        const glm::dvec2 offset = from->rect.min - to->rect.min;
+        CHECK_MSG(glm::length(offset - start.offset) < 0.01,
+                  std::string(start.name) + " starts " + Num(offset.x) + ", " + Num(offset.y) + " units out");
+        CHECK_MSG(Near(glm::length(offset), 32.0, 1e-9), std::string(start.name) + " 32 units out");
+        CHECK_EQ(from->alphaByte, 0);
+    }
+
+    // A-P8, 350 ms after the tap: P5 at alpha 0.50 +-0.03 and 32 (1 - sin(pi/4)) =
+    // 9.37 units out +-0.5, and the world under a dim that leaves 0.590 +-0.03.
+    const std::vector<Pause::Sprite> at350 = Pause::Sprites(rules, kGold14, Pause::Switches{}, kView720, 350.0);
+    const Pause::Sprite* levels = FindButton(at350, Pause::Button::Levels);
+    const Pause::Sprite* levelsHome = FindButton(settled, Pause::Button::Levels);
+    CHECK_MSG(levels != nullptr && Near(levels->alphaByte / 255.0, 0.50, 0.03),
+              "A-P8: P5 alpha " + Num(levels != nullptr ? levels->alphaByte / 255.0 : -1.0));
+    const double out = levels != nullptr ? glm::length(levels->rect.min - levelsHome->rect.min) : -1.0;
+    CHECK_MSG(Near(out, 9.37, 0.5) && Near(out, 32.0 * (1.0 - std::sin(0.25 * 3.141592653589793)), 1e-9),
+              "A-P8: P5 " + Num(out) + " units out");
+    const double gain = 1.0 - FindElement(at350, Pause::Element::Dim)->alphaByte / 255.0;
+    CHECK_MSG(Near(gain, 0.590, 0.03), "A-P8: the world at " + Num(gain) + " under the dim");
+    // The sprites fade by smoothEnd, the buttons linearly: at 350 ms the plaque is
+    // at sin(0.55) where the button is at 0.5.
+    CHECK_EQ(FindElement(at350, Pause::Element::GoldenPlaque)->alphaByte,
+             static_cast<int>(std::sin(0.35 * 1.5707963267948966) * 255.0));
+    CHECK_EQ(Pause::TextAlphaByte(rules, 350.0), levels != nullptr ? levels->alphaByte : -1);
+    // A-F9's own samples of the two curves.
+    CHECK_EQ(UiLayer::ButtonAlphaByte(rules.layer, 100.0), 36);
+    CHECK_EQ(UiLayer::ButtonAlphaByte(rules.layer, 700.0), 255);
+    CHECK_EQ(UiLayer::SpriteAlphaByte(rules.layer, 255, 100.0), 39);
+    CHECK_EQ(UiLayer::SpriteAlphaByte(rules.layer, 200, 1000.0), 200);
+    // Home at 700 ms and whole; the dim still coming in until 1000.
+    const std::vector<Pause::Sprite> at700 = Pause::Sprites(rules, kGold14, Pause::Switches{}, kView720, 700.0);
+    CHECK_MSG(FindButton(at700, Pause::Button::Resume)->rect.min ==
+                  FindButton(settled, Pause::Button::Resume)->rect.min,
+              "the buttons are home at 700 ms");
+    CHECK_MSG(FindElement(at700, Pause::Element::Dim)->alphaByte < 200, "and the dim is not yet whole");
+    bool easing = true;
+    for (double ms = 0.0; ms < 700.0; ms += 16.0) {
+        const double a = glm::length(FindButton(Pause::Sprites(rules, kGold14, Pause::Switches{}, kView720, ms),
+                                                Pause::Button::Levels)->rect.min - levelsHome->rect.min);
+        const double b = glm::length(FindButton(Pause::Sprites(rules, kGold14, Pause::Switches{}, kView720, ms + 16.0),
+                                                Pause::Button::Levels)->rect.min - levelsHome->rect.min);
+        if (b > a) easing = false;
+    }
+    CHECK_MSG(easing, "and a button only ever comes in");
+}
+
+void APauseTapLandsOnTheButtonItSees() {
+    const Pause::Rules rules = LoadPause();
+    const auto at = [&rules](const Pause::Level& level, double ms, const glm::dvec2& point) {
+        return Pause::ButtonAt(rules, level, Pause::Switches{}, kView720, ms, point);
+    };
+    const glm::dvec2 resume = glm::dvec2(0.58, 0.44) * kView720;
+    CHECK(at(kGold14, 3000.0, resume) == Pause::Button::Resume);
+    CHECK(at(kGold14, 3000.0, glm::dvec2(0.42, 0.44) * kView720) == Pause::Button::Levels);
+    CHECK(at(kGold14, 3000.0, glm::dvec2(0.5, 0.7) * kView720) == Pause::Button::Skip);
+    CHECK_MSG(!at(kFresh11, 3000.0, glm::dvec2(0.5, 0.7) * kView720).has_value(),
+              "no skip to press on a level never finished");
+    CHECK(at(kFresh11, 3000.0, kView720 - glm::dvec2(10.0)) == Pause::Button::Achievements);
+    CHECK(at(kFresh11, 3000.0, glm::dvec2(10.0, kView720.y - 10.0)) == Pause::Button::Sound);
+    CHECK(at(kFresh11, 3000.0, glm::dvec2(0.09 * kView720.x + 10.0, kView720.y - 10.0)) == Pause::Button::Music);
+    CHECK_MSG(!at(kFresh11, 3000.0, kView720 * 0.5).has_value(), "the dim itself presses nothing");
+    CHECK_MSG(!at(kGold14, 3000.0, glm::dvec2(0.2, 0.36) * kView720).has_value(), "nor does a plaque");
+    // Where the button IS on that tick: 25 units left of resume's centre is on it
+    // once it is home, and not while it is still 32 units out to the right.
+    const glm::dvec2 leftOfResume = resume - glm::dvec2(25.0, 0.0);
+    CHECK(!at(kGold14, 0.0, leftOfResume).has_value());
+    CHECK(at(kGold14, 700.0, leftOfResume) == Pause::Button::Resume);
+    // And never a music switch on its way out.
+    Pause::Switches muted;
+    muted.soundOn = false;
+    muted.musicDismissedMs = 2000.0;
+    CHECK(!Pause::ButtonAt(rules, kFresh11, muted, kView720, 2100.0,
+                           glm::dvec2(0.09 * kView720.x + 10.0, kView720.y - 10.0))
+               .has_value());
+}
+
+void TextIsCentredWhereverItIsAsked() {
+    const std::string fnt = Write("pause.fnt",
+                                  "info face=\"Test\" size=84\n"
+                                  "common lineHeight=84 base=54 scaleW=512 scaleH=512 pages=1\n"
+                                  "page id=0 file=\"pause_0.png\"\n"
+                                  "char id=50 x=10 y=20 width=40 height=50 xoffset=2 yoffset=14 xadvance=44 page=0\n");
+    Supersonic::BitmapFont font;
+    std::string error;
+    CHECK_MSG(font.Load(fnt, error), error);
+    const glm::dvec2 centre(374.09, 75.36);
+    const std::vector<Hud::Glyph> glyphs = Hud::LayOutText(font, "2", centre, 0.5);
+    CHECK_EQ(glyphs.size(), std::size_t{1});
+    if (glyphs.size() != 1) return;
+    // A 44 x 84 font px box at half a unit, centred: its top-left 11 and 21 units
+    // up and left, and the glyph at its offsets from there.
+    CHECK_MSG(glm::length(glyphs[0].rect.min - (centre - glm::dvec2(11.0, 21.0) + glm::dvec2(1.0, 7.0))) < 1e-9,
+              "the glyph sits at the box's corner plus its offsets");
+    CHECK(glyphs[0].rect.size == glm::dvec2(20.0, 25.0));
+}
+
+void WhatThePauseRefuses() {
+    Pause::Rules rules;
+    std::string error;
+    CHECK(!Pause::LoadRules(Write("pause_missing.json", "{}"), rules, error));
+    CHECK_MSG(!error.empty(), "an empty file says why");
+
+    std::ifstream in(kUi, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const auto refused = [&text](const char* name, const std::string& needle, const std::string& with,
+                                 const std::string& named) {
+        const std::size_t found = text.find(needle);
+        CHECK_MSG(found != std::string::npos, std::string(name) + ": ui.json has " + needle);
+        if (found == std::string::npos) return;
+        std::string bad = text;
+        bad.replace(found, needle.size(), with);
+        Pause::Rules out;
+        std::string why;
+        CHECK_MSG(!Pause::LoadRules(Write(name, bad), out, why) && why.find(named) != std::string::npos,
+                  std::string(name) + " is refused by name: " + why);
+    };
+    refused("pause_dim.json", "\"alpha_byte\": 200", "\"alpha_byte\": 300", "alpha_byte");
+    refused("pause_off.json", "\"at_screen\": [0.8, 0.31]", "\"at_screen\": [1.8, 0.31]", "golden_plaque");
+    refused("pause_slide.json", "\"slide_units\": 32", "\"slide_units\": 0", "slide_units");
+    refused("pause_title.json", "\"centre_of_screen\": [0.51, 0.23]", "\"centre_of_screen\": [0.51, 1.23]",
+            "centre_of_screen");
+}
+
 void runTests() {
     TheFileSaysWhatWasMeasuredAndDecoded();
     TheButtonsSitWhereTheCapturesPutThem();
@@ -549,6 +921,13 @@ void runTests() {
     ThePlaqueHoldsThenGoes();
     TheCaptionIsLaidOutAsTheOriginalLaysItOut();
     WhatIsRefused();
+    ThePauseFileSaysWhatWasDecoded();
+    ThePauseSitsWhereTheCapturesPutIt();
+    ThePauseShowsWhatTheSaveSays();
+    ThePauseComesInAsUISpriteAndUIButtonDo();
+    APauseTapLandsOnTheButtonItSees();
+    TextIsCentredWhereverItIsAsked();
+    WhatThePauseRefuses();
 }
 
 } // namespace

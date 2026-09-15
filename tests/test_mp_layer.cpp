@@ -33,6 +33,8 @@
 #include "core/ViewportInfo.hpp"
 
 #include "sim/Art.hpp"
+#include "sim/Pause.hpp"
+#include "sim/UiLayer.hpp"
 #include "sim/Units.hpp"
 
 #include <algorithm>
@@ -1142,8 +1144,11 @@ void NamingALevelSkipsTheMenu() {
     CHECK(layer.MenuButtons().empty());
 }
 
-// Escape leaves a level for the grid it came from.
-void EscapeLeavesALevelForItsGrid() {
+// Escape is the original's back key, GameState::handleBackButton: over a level
+// being played it opens the pause, and from the pause it resumes. It used to
+// leave the level for its grid, which is now the pause's own first button
+// (ThePausesButtonsGoWhereTheOriginalsGo).
+void EscapePausesALevelAndResumesIt() {
     entt::registry registry;
     publishViewport(registry);
     MagicPortalsLayer layer(TestPaths(), "level1");
@@ -1152,10 +1157,13 @@ void EscapeLeavesALevelForItsGrid() {
         CHECK_MSG(false, layer.LoadError());
         return;
     }
+    tickWith(layer, registry, kRest, {}, {});
     press(layer, registry, MagicPortalsLayer::kBack);
-    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Levels);
-    CHECK(layer.SimLevel() == nullptr);
-    CHECK_EQ(MenuButtonsOfKind(layer, MagicPortalsLayer::MenuButton::Kind::Level), 16);
+    CHECK_MSG(layer.Paused(), "Escape pauses the level");
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::None);
+    CHECK_MSG(layer.SimLevel() != nullptr, "which stays loaded under the pause");
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK_MSG(!layer.Paused() && layer.SimLevel() != nullptr, "and Escape again resumes it");
 }
 
 // And a click lands on the button under it, through the same camera mapping a
@@ -2373,6 +2381,329 @@ void TheNoPortalSignIsPinnedToTheCorner() {
     }
 }
 
+// ---- the pause ------------------------------------------------------------------
+//
+// sim/Pause is pinned number by number in test_mp_hud. What is held here is the
+// layer's side of CustomGameMenuLayer: the pause control and Escape open it OVER
+// the level, which stops - nothing moves, the pads go, the level's age stands
+// still - while the pause comes in on its own clock; it is drawn after restart
+// and pause and before the blacks; it resumes the level exactly where the tap
+// left it; and each of its buttons goes where the original's goes.
+
+// A tap on the in-level pause control, where it is drawn.
+bool TapThePauseControl(MagicPortalsLayer& layer, entt::registry& registry, std::vector<std::string> down = {}) {
+    Hud::Rect control;
+    if (!layer.ControlRect(MagicPortalsLayer::Control::Menu, control)) return false;
+    down.push_back(MagicPortalsLayer::kTap);
+    tickWith(layer, registry, ScreenOfView(layer, control.Centre()), std::move(down), {MagicPortalsLayer::kTap});
+    return true;
+}
+
+// A tap on one of the pause's buttons, where the pause draws it on this tick.
+bool TapPauseButton(MagicPortalsLayer& layer, entt::registry& registry, MagicPortals::Pause::Button button) {
+    const std::vector<MagicPortals::Pause::Sprite> sprites =
+        MagicPortals::Pause::Sprites(layer.PauseRules(), layer.PausedLevel(), layer.PauseSwitches(), layer.ViewPx(),
+                                     layer.PauseClockMs() + 1000.0 / 60.0);
+    for (const MagicPortals::Pause::Sprite& sprite : sprites) {
+        if (sprite.element != MagicPortals::Pause::Element::Button || sprite.button != button) continue;
+        tap(layer, registry, ScreenOfView(layer, sprite.rect.Centre()));
+        return true;
+    }
+    return false;
+}
+
+// The untextured black quads of a frame that are the pause's dim: whole-view,
+// and the only black drawn once the level's own blacks have lifted.
+int CountBlacks(const std::vector<ScreenOverlay::Quad>& quads) {
+    return static_cast<int>(BlackIndices(quads).size());
+}
+
+void ThePauseStopsTheLevelUnderIt() {
+    if (!OriginalArtIsThere("ThePauseStopsTheLevelUnderIt")) return;
+    namespace Pause = MagicPortals::Pause;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    CHECK_MSG(layer.PauseRules().dimAlphaByte == 200, "ui.json's pause read at attach");
+    // Walking right, half a second in: the caption is still fading and the player
+    // is moving, which is what a stopped world has to be told apart from.
+    for (int tick = 0; tick < 30; ++tick) tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+    CHECK_MSG(TapThePauseControl(layer, registry, {MagicPortalsLayer::kRight}), "the pause control is there to tap");
+    CHECK_MSG(layer.Paused(), "the pause control opens the pause");
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.MenuScreen() == MagicPortalsLayer::Screen::None &&
+                  IsAt(layer, "level0"),
+              "over the level, which stays loaded: it no longer leaves for the grid");
+    if (!layer.Paused() || layer.SimLevel() == nullptr) return;
+    CHECK_EQ(layer.PauseClockMs(), 0.0);
+    CHECK_EQ(layer.PausedLevel().savedMedal, 0);
+    CHECK_EQ(layer.PausedLevel().index, 0);
+
+    const double age = layer.LevelAgeMs();
+    const double frame = layer.LevelFrameMs();
+    const glm::dvec2 at = playerPx(registry, layer);
+    const glm::vec3 velocity = registry.get<RigidBodyComponent>(layer.SimLevel()->player).velocity;
+    CHECK_MSG(std::fabs(velocity.x) > 0.0f, "the player was walking when the pause came");
+
+    // Two seconds under it, the right arrow still held.
+    for (int tick = 0; tick < 120; ++tick) tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+    CHECK(layer.Paused());
+    CHECK_MSG(glm::length(playerPx(registry, layer) - at) == 0.0,
+              "the world does not move: the player is where the tap left it, " + Point(playerPx(registry, layer)));
+    CHECK_MSG(registry.get<RigidBodyComponent>(layer.SimLevel()->player).velocity == velocity,
+              "and still carries the speed it had, to take up again");
+    CHECK_EQ(layer.LevelAgeMs(), age);
+    // The tick is a float's 1/60 s, so 120 of them are 2000.0001 ms.
+    CHECK_MSG(NearD(layer.PauseClockMs(), 2000.0, 1e-3), "the pause's own clock runs: " +
+                                                             std::to_string(layer.PauseClockMs()));
+    CHECK_MSG(NearD(layer.LevelFrameMs(), frame + 2000.0, 1e-3), "and the level's frame clock with it");
+
+    Hud::Rect rect;
+    CHECK_MSG(!layer.ControlRect(MagicPortalsLayer::Control::Left, rect) &&
+                  !layer.ControlRect(MagicPortalsLayer::Control::Right, rect),
+              "the walk pads are not drawn under a pause");
+    CHECK_MSG(layer.ControlRect(MagicPortalsLayer::Control::Reset, rect) &&
+                  layer.ControlRect(MagicPortalsLayer::Control::Menu, rect),
+              "restart and pause are, frozen under its dim");
+
+    const Hud::Rules& hud = layer.HudRules();
+    const Pause::Rules& rules = layer.PauseRules();
+    const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+    const int restart = IndexOfImage(quads, hud.restart.sprite);
+    const int pause = IndexOfImage(quads, hud.pause.sprite);
+    const std::vector<int> blacks = BlackIndices(quads);
+    CHECK_MSG(IndexOfImage(quads, hud.pads.leftSprite) < 0 && IndexOfImage(quads, hud.pads.rightSprite) < 0,
+              "no pad in the frame");
+    CHECK_MSG(blacks.size() == 1, "one black, the pause's dim, once the level's blacks have lifted: " +
+                                      std::to_string(blacks.size()));
+    if (blacks.size() != 1 || restart < 0 || pause < 0) return;
+    const ScreenOverlay::Quad& dim = quads[static_cast<std::size_t>(blacks[0])];
+    CHECK_MSG(restart < blacks[0] && pause < blacks[0], "restart and pause are drawn under the dim");
+    CHECK_MSG(NearD(quads[static_cast<std::size_t>(restart)].color.a, 120.0 / 255.0, 1e-6),
+              "at their own 120, which the dim takes to 0.10");
+    CHECK_MSG(dim.min == glm::vec2(0.0f) && dim.max == glm::vec2(1.0f) && NearD(dim.color.a, 200.0 / 255.0, 1e-6),
+              "the dim covers the view at 200 of 255 once it is in");
+    const int golden = IndexOfImage(quads, rules.goldenPlaque.sprite);
+    const int resume = IndexOfImage(quads, rules.resume.sprite);
+    const int levels = IndexOfImage(quads, rules.levels.sprite);
+    const int scores = IndexOfImage(quads, rules.achievements.sprite);
+    const int sound = IndexOfImage(quads, rules.sound.sprite);
+    const int music = IndexOfImage(quads, rules.music.sprite);
+    CHECK_MSG(golden > blacks[0] && resume > golden && levels > golden && scores > golden && sound > golden &&
+                  music > golden,
+              "the golden plaque over the dim, and the buttons over the sprites");
+    CHECK_MSG(IndexOfImage(quads, rules.currentPlaque.sprite) < 0 && IndexOfImage(quads, rules.skip.sprite) < 0,
+              "A-P1: a level never finished has no current plaque and no skip");
+    if (resume >= 0) {
+        const Hud::Rect want = MagicPortals::UiLayer::RectAt(rules.resume, glm::dvec2(0.58, 0.44) * layer.ViewPx());
+        CHECK_MSG(SameRect(OnView(layer, quads[static_cast<std::size_t>(resume)]), want) &&
+                      quads[static_cast<std::size_t>(resume)].color.a == 1.0f,
+              "resume at its place, whole");
+    }
+    const std::string font = std::string(MAGICPORTALS_ORIGINAL_DIR) + "/data/" + rules.title.font;
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(font, ec)) {
+        // "Part 1" and "0" over the pause, then the level-start caption - still
+        // fading on the frame clock, 2.5 s into it - last of all.
+        CHECK_EQ(CountCaption(quads, rules.title.font), 6 + 1 + 6);
+        const ScreenOverlay::Quad& last = quads.back();
+        CHECK_MSG(last.texture.find("Matura84") != std::string::npos &&
+                      NearD(last.color.a, Hud::CaptionAlpha(hud, layer.LevelFrameMs()), 1e-6) &&
+                      last.color.a < quads[quads.size() - 7].color.a,
+                  "the level-start caption goes on fading above the pause: " + std::to_string(last.color.a));
+    }
+
+    // Under the dim, restart is not pressed: nothing below the pause reads a tap.
+    if (layer.ControlRect(MagicPortalsLayer::Control::Reset, rect)) {
+        tap(layer, registry, ScreenOfView(layer, rect.Centre()));
+        CHECK_MSG(layer.Paused() && layer.LevelAgeMs() == age, "a tap on restart under the pause does nothing");
+    }
+}
+
+void ThePauseResumesWhereTheTapLeftIt() {
+    if (!OriginalArtIsThere("ThePauseResumesWhereTheTapLeftIt")) return;
+    // Two runs of level0. The first walks right, is paused for a second and a
+    // half with the arrow held, and resumed; the second walks right straight
+    // through. After as many ticks of game time, the two players stand in the
+    // same place: the pause took exactly nothing from the level.
+    const auto run = [](bool paused, double& ageOut, glm::dvec2& atOut) {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level0");
+        layer.OnAttach(registry);
+        if (!layer.LoadError().empty()) return false;
+        const std::vector<std::string> right = {MagicPortalsLayer::kRight};
+        for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+        for (int tick = 0; tick < 40; ++tick) tickWith(layer, registry, kRest, right, {});
+        if (paused) {
+            tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight, MagicPortalsLayer::kBack},
+                     {MagicPortalsLayer::kBack});
+            CHECK_MSG(layer.Paused(), "Escape pauses a level being played");
+            for (int tick = 0; tick < 90; ++tick) tickWith(layer, registry, kRest, right, {});
+            tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight, MagicPortalsLayer::kBack},
+                     {MagicPortalsLayer::kBack});
+            CHECK_MSG(!layer.Paused(), "and Escape resumes it");
+            // A-P9: the frame after, the whole layer is gone - no fade - and the
+            // pads are back.
+            const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+            CHECK_MSG(IndexOfImage(quads, layer.PauseRules().resume.sprite) < 0 && CountBlacks(quads) == 0 &&
+                          IndexOfImage(quads, layer.HudRules().pads.leftSprite) >= 0,
+                      "A-P9: the frame after resume has no pause in it, and has the pads");
+        } else {
+            tickWith(layer, registry, kRest, right, {});
+        }
+        for (int tick = 0; tick < 30; ++tick) tickWith(layer, registry, kRest, right, {});
+        ageOut = layer.LevelAgeMs();
+        atOut = playerPx(registry, layer);
+
+        if (paused) {
+            // A second pause plays its whole entrance again: UILayer::hide(true)
+            // reset every element. A-P8, 350 ms in.
+            tickWith(layer, registry, kRest, {MagicPortalsLayer::kBack}, {MagicPortalsLayer::kBack});
+            CHECK(layer.Paused());
+            {
+                const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+                const std::vector<int> blacks = BlackIndices(quads);
+                CHECK_MSG(blacks.empty() && IndexOfImage(quads, layer.PauseRules().resume.sprite) < 0,
+                          "the tick a pause opens it has come in by nothing");
+            }
+            for (int tick = 0; tick < 21; ++tick) tickWith(layer, registry, kRest, {}, {});
+            CHECK_MSG(NearD(layer.PauseClockMs(), 350.0, 1e-3), "21 ticks is 350 ms");
+            const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+            const std::vector<int> blacks = BlackIndices(quads);
+            const int levels = IndexOfImage(quads, layer.PauseRules().levels.sprite);
+            CHECK_MSG(blacks.size() == 1 && NearD(1.0 - quads[static_cast<std::size_t>(blacks.front())].color.a,
+                                                  0.590, 0.03),
+                      "A-P8: the world at 0.590 +-0.03 under the dim");
+            CHECK_MSG(levels >= 0 && NearD(quads[static_cast<std::size_t>(levels)].color.a, 0.50, 0.03),
+                      "A-P8: back-to-levels at alpha 0.50 +-0.03");
+            if (levels >= 0) {
+                const Hud::Rect home =
+                    MagicPortals::UiLayer::RectAt(layer.PauseRules().levels, glm::dvec2(0.42, 0.44) * layer.ViewPx());
+                const double out = glm::length(OnView(layer, quads[static_cast<std::size_t>(levels)]).min - home.min);
+                CHECK_MSG(NearD(out, 9.37, 0.5), "A-P8: and 9.37 +-0.5 units out: " + std::to_string(out));
+            }
+        }
+        return true;
+    };
+    double pausedAge = 0.0;
+    double straightAge = 0.0;
+    glm::dvec2 pausedAt(0.0);
+    glm::dvec2 straightAt(0.0);
+    CHECK(run(true, pausedAge, pausedAt));
+    CHECK(run(false, straightAge, straightAt));
+    CHECK_MSG(NearD(pausedAge, straightAge, 1e-6), "the level is as old either way: " + std::to_string(pausedAge) +
+                                                       " against " + std::to_string(straightAge));
+    CHECK_MSG(glm::length(pausedAt - straightAt) < 1e-3,
+              "and its player is in the same place: " + Point(pausedAt) + " against " + Point(straightAt));
+    CHECK_MSG(glm::length(straightAt - glm::dvec2(0.0)) > 0.0, "having walked somewhere");
+}
+
+void ThePausesButtonsGoWhereTheOriginalsGo() {
+    if (!OriginalArtIsThere("ThePausesButtonsGoWhereTheOriginalsGo")) return;
+    namespace Pause = MagicPortals::Pause;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level4");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    for (int tick = 0; tick < 90; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK(TapThePauseControl(layer, registry));
+    CHECK(layer.Paused());
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+
+    // Skip is not there on a level never finished, and pressing it leads nowhere.
+    CHECK_MSG(!layer.PressPause(registry, Pause::Button::Skip) && layer.Paused(), "no skip on a fresh level");
+    // Achievements: kept by the owner's ruling, and pressing it changes nothing
+    // yet - the popup it opens is not built.
+    CHECK_MSG(TapPauseButton(layer, registry, Pause::Button::Achievements) && layer.Paused() &&
+                  IsAt(layer, "level4") && layer.MenuScreen() == MagicPortalsLayer::Screen::None,
+              "Achievements does nothing visible");
+
+    // The sound switch: off, sound_mute in its place, the music switch dismissed
+    // and gone 700 ms later; and no music is wanted.
+    const std::string& muteFile = layer.PauseRules().soundOffSprite;
+    CHECK(layer.SoundOn());
+    CHECK(TapPauseButton(layer, registry, Pause::Button::Sound));
+    CHECK_MSG(!layer.SoundOn(), "the sound switch turns the sound off");
+    CHECK_MSG(IndexOfImage(HudFrame(registry, layer), muteFile) >= 0, "and shows sound_mute");
+    for (int tick = 0; tick < 43; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(IndexOfImage(HudFrame(registry, layer), layer.PauseRules().music.sprite) < 0,
+              "A-P7: the music switch has gone with the sound");
+    const bool musicBefore = layer.MusicOn();
+    CHECK_MSG(!layer.PressPause(registry, Pause::Button::Music) && layer.MusicOn() == musicBefore,
+              "and cannot be pressed while it is gone");
+    CHECK(TapPauseButton(layer, registry, Pause::Button::Sound));
+    CHECK(layer.SoundOn());
+    {
+        const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+        CHECK_MSG(IndexOfImage(quads, layer.PauseRules().music.sprite) < 0,
+                  "the music switch comes back from nothing, a fresh entrance");
+    }
+    for (int tick = 0; tick < 43; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK(TapPauseButton(layer, registry, Pause::Button::Music));
+    CHECK_MSG(!layer.MusicOn() && IndexOfImage(HudFrame(registry, layer), layer.PauseRules().musicOffSprite) >= 0,
+              "the music switch turns the music off, and shows music_off");
+    CHECK(TapPauseButton(layer, registry, Pause::Button::Music));
+    CHECK(layer.MusicOn());
+
+    // Back to levels: the level grid of this level's world, the level gone.
+    CHECK(TapPauseButton(layer, registry, Pause::Button::Levels));
+    CHECK_MSG(!layer.Paused() && layer.MenuScreen() == MagicPortalsLayer::Screen::Levels &&
+                  layer.SimLevel() == nullptr,
+              "back to levels opens the grid");
+    CHECK_EQ(MenuButtonsOfKind(layer, MagicPortalsLayer::MenuButton::Kind::Level), 16);
+}
+
+void SkipOnALevelAlreadyFinished() {
+    if (!OriginalArtIsThere("SkipOnALevelAlreadyFinished")) return;
+    namespace Pause = MagicPortals::Pause;
+    // Memory-only medals, earned as a player earns one: level0 by holding right,
+    // then the medal screen's own retry.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    for (int tick = 0; tick < 600 && layer.MenuScreen() != MagicPortalsLayer::Screen::Finished; ++tick) {
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+    }
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Finished);
+    if (layer.MenuScreen() != MagicPortalsLayer::Screen::Finished) return;
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind != MagicPortalsLayer::MenuButton::Kind::Retry) continue;
+        layer.PressMenu(registry, button);
+        break;
+    }
+    CHECK(IsAt(layer, "level0"));
+    for (int tick = 0; tick < 90; ++tick) tickWith(layer, registry, kRest, {}, {});
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK(layer.Paused());
+    CHECK_MSG(layer.PausedLevel().savedMedal > 0, "the pause reads the medal just recorded");
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+    const Pause::Rules& rules = layer.PauseRules();
+    const int plaque = IndexOfImage(quads, rules.currentPlaque.sprite);
+    const int medal = IndexOfImage(quads, Pause::MedalSprite(rules, layer.PausedLevel().savedMedal));
+    CHECK_MSG(plaque >= 0 && medal > plaque && IndexOfImage(quads, rules.skip.sprite) > medal,
+              "A-P2: the current plaque, its medal over it, and skip");
+    CHECK(TapPauseButton(layer, registry, Pause::Button::Skip));
+    CHECK_MSG(!layer.Paused() && IsAt(layer, "level1") && layer.MenuScreen() == MagicPortalsLayer::Screen::None &&
+                  layer.SimLevel() != nullptr,
+              "skip goes on to the next level");
+    CHECK_EQ(layer.LevelFrameMs(), 0.0);
+}
+
 // ---- What the scene's numbers are ------------------------------------------------
 //
 // The original drew into an 8-bit framebuffer and blended on its bytes, so the
@@ -2468,7 +2799,7 @@ void runTests() {
     TheMenuWalksToALevel();
     TheGridPagesThroughAWorld();
     NamingALevelSkipsTheMenu();
-    EscapeLeavesALevelForItsGrid();
+    EscapePausesALevelAndResumesIt();
     AClickOnTheMenuPressesWhatIsUnderIt();
     ALevelsEntitiesEmit();
     ParticlesGoWithTheirLevel();
@@ -2485,6 +2816,10 @@ void runTests() {
     APlaqueForALevelWithAMedal();
     TheTutorialRingsAndAWeightlessLevelHasNoPads();
     TheNoPortalSignIsPinnedToTheCorner();
+    ThePauseStopsTheLevelUnderIt();
+    ThePauseResumesWhereTheTapLeftIt();
+    ThePausesButtonsGoWhereTheOriginalsGo();
+    SkipOnALevelAlreadyFinished();
     TheSceneHoldsDisplayValues();
 }
 

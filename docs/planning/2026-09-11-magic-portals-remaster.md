@@ -5596,3 +5596,282 @@ whether it ships does.
   0 failures. `ninja: no work to do` before it.
 - **No other document's table moves.** No engine file changed and no suite was added, and
   neither README.md nor ARCHITECTURE.md lists `test_mp_layer`'s checks.
+
+## Step 45 - the pause the original raises over a level, and the world that stands still under it (built)
+
+The in-level pause control called `openMenu(Screen::Worlds)`: it unloaded the level and
+put the chapter screen up, and Escape unloaded it for the level grid. The original does
+neither. `GameState::showMenuPopup` (bytes 98935..99036) makes `CustomGameMenuLayer` the
+current UI layer **over** the level and pauses game time. This step builds that screen to
+the remake's merged spec, `out/parity/specs/ui2/spec.md` section 2 (its evidence is
+`pause_finished.md` section 1 beside it), and holds it to that spec's acceptance list 6.1.
+- **Data.** Every number is in `games/magicportals/data/ui.json`, in two new blocks, each
+  citing its decode and its measurement:
+  - `ui_layer`: the UISprite and UIButton primitives that the finished, lost and help
+    screens will share;
+  - `pause`: the screen itself.
+- **Arithmetic.** It lives in two new pure files, `sim/UiLayer` (the primitives and the
+  fraction-of-the-screen placement) and `sim/Pause` (the screen), so a suite pins every
+  rectangle, alpha and text with no window.
+- **Drawing.** The layer draws the pause through `core/ScreenOverlay` in display values, as
+  step 39 draws the HUD. That is forced, not chosen: restart and pause are overlay quads,
+  and the dim has to cover them (A-P6). A dim drawn in the scene would sit under them.
+- **The spec's §1.2 D10** (the pause control unloads the level) is the delta this closes.
+  Nothing of the finished, lost or help screens moved.
+
+**THE DECODE, READ AGAIN WHERE THE SPEC STOPPED, AND WHAT IT CHANGED.**
+- **Achievements starts from a different place.** Spec 2.4 gives its entrance offset as
+  (+26.4, +18.1) u. `UIButton::UIButton` (bytes 76108..76681, instructions 22..64) starts
+  a button at `pos + normalize(pos - GetScreenSize() * 0.5) * g_scale.scale(32)`, where
+  `_pos` is `unnormalizePos(normPos)` (`UILayer::addButton`, bytes 62337..62682): the
+  button's ANCHOR, not its centre.
+  - For P5, P6 and P7 the origin is V2_HALF, so anchor and centre are the same point, and
+    the spec's (-29.48, -12.44), (+29.48, -12.44) and (0, +32) come out either way.
+  - Achievements is anchored at the screen's corner with origin (1, 1). From the anchor it
+    starts **(+27.89, +15.69)** u out; the spec's number is the ray to its centre.
+  - The switches, placed the same way, start (-27.89, +15.69) and (-26.39, +18.10).
+  - **The port takes the decode.** A-P8 measures only P5, so no capture tells the two
+    apart.
+- **The switches, which the spec left undecoded (U12, and 2.4's "not decoded"), are in the
+  remake's ui3 listing** (`out/parity/specs/ui3/work/static/dec_ui.txt`).
+  - **Sound.** `SoundPanelLayer::SoundPanelLayer` (bytes 73444..73806) adds the sound switch
+    through `addGlobalSoundSwitch`. `GlobalSoundSwitch::manageSoundSwitch` (bytes
+    32340..32535) sets `SetGlobalVolume(1)` or `(0)`, then calls
+    `GlobalVolumeManager::saveVolume`.
+  - **Music.** `SoundPanelLayer::manageMusicSwitch` (bytes 74288..74908) runs every update.
+    With the sound off and a music switch present, it calls `UIButton::dismiss` on it: 700 ms
+    out, then removed. With the sound on and none present, it adds a fresh one: a fresh
+    entrance.
+  - **Both enter as buttons.** ui3's motion.md 1.2 has `UISwitch::UISwitch` calling
+    `UIButton::UIButton`.
+- **The pause is drawn under the level's blacks, not over them.** `UILayerManager` is a
+  controller that `BaseState::preLoop` adds before the first `FadeInController` (step 38's
+  `_between`), and every UI layer draws inside it. Spec 2.2's order stops at the texts only
+  because the blacks are gone 1.165 s into a level.
+- **Every alpha is a byte.**
+  - A sprite's is `fTOu(getBias * a)` (`UISprite::update`, bytes 84559..84790), where `a`
+    is 200 for the dim and 255 for a plaque.
+  - A button's is `fTOu(unfilteredBias * 255)` (`UIButton::setColor`, bytes 31747..31953):
+    linear. Only its position is eased.
+  - "Part N" takes the resume button's colour with its rgb set to white
+    (`GameMenuLayer::draw`, bytes 101852..102330). The golden number takes the first
+    button's (`CustomGameMenuLayer::draw`, bytes 281012..281464). Both buttons are on the
+    same clock.
+
+**GAME TIME STOPS, AND THE APP DOES NOT KNOW IT HAS.** Not stepping the level is not
+enough.
+- **What the app runs anyway.** `SupersonicApp` runs `PhysicsSystem::Update` and
+  `SpriteAnimationSystem::Update` before every `OnFixedUpdate`, paused or not, so a player
+  paused mid-walk would slide on and a falling one would fall.
+- **What the layer does about it.** When the pause opens it holds every entity with a
+  `RigidBodyComponent`: its transform and its whole body state (velocity, sleep and all).
+  It puts them back after each of those steps. It also stops the flipbooks that were
+  playing and stops carrying the particles.
+- **Where the tick stops.** The pause opens where the tick reads its input: after
+  `AfterStep`, before `BeforeStep`. The tick it resumes on runs that `BeforeStep` half, with
+  the walk the keys ask for (the pointer is on the button that resumed it). So the level
+  takes up exactly where it stopped.
+  - `test_mp_layer` walks level0 right for 40 ticks, pauses for 90 with the arrow held,
+    resumes, and walks 30 more.
+  - A second run walks the same 71 ticks straight through.
+  - The two players stand within 1e-3 px of each other at the same level age.
+- **Captured.**
+  - Two frames of the fresh 1-1 pause, 2 s and 3 s after the tap, differ in **0 of 921,600
+    pixels**.
+  - The same level unpaused changes 231,632 pixels over those 3 s: the torch, the tutorial
+    pulse, the particles.
+  - The spec's popup measurement (world temporal std 0.001, section 0.3) says the original
+    stands as still.
+- **What stops with game time.** The pads are not drawn (`layOutControls`). Restart, pause
+  and clear-portals stay drawn, under the dim at their own 120. The level-start plaque
+  holds whatever alpha it had, since GameLayer is not updated.
+- **Two clocks.** `LevelAgeMs` is game time and stands still.
+  - **`LevelFrameMs`, new.** It is the level's age plus every millisecond a pause stood
+    it still, and it goes on running.
+  - **The caption reads it.** `ETHTextDrawer::Draw` adds the engine's own frame time.
+  - **So do the two blacks.** `FadeInController` reads `GetTime()`.
+  - **Neither clock stops for a pause in the original**, so a caption still fading when a
+    pause opens goes on fading above it.
+  - **INFERRED, not captured for a pause** (spec 2.2's last bullet, U3). Until a pause
+    opens the two clocks are the same number, so nothing a level already did moved.
+
+**INPUT, AS SPEC 2.5 MAPS IT.**
+- **The pause control and Escape** open the pause where the pause control could be pressed:
+  a level loaded, not in its door, not dying. `GameState::handleBackButton` (bytes
+  98331..98935) shows the pause while GameLayer is current and resumes while GameMenuLayer
+  is.
+  - A refused level and a chapter's end still go to their grid on Escape.
+  - During the 1400 ms finish and death beats Escape now does nothing, where it used to
+    leave for the grid.
+- **Resume** (`hideMenuPopup`): the whole layer goes on that tick, with no fade. Every
+  element is reset (`UILayer::hide(true)`), so the next pause plays its whole entrance
+  again.
+- **Back to levels** closes the pause and presses the medal screen's `Kind::List`: the grid
+  of this level's world, which is `createLevelSelectState`.
+- **Skip** is there only on a level already finished (`score > 0`, any tier). It presses
+  `Kind::Next`, `goToNextLevel`.
+- **Achievements**, kept by the owner's ruling, does nothing visible. It makes the menu
+  button's noise, and `PressPause` reports it led nowhere. The AchievementsPopup is U10's.
+- **The sound switch.**
+  - Off: nothing is played and no music runs. The music switch is dismissed and comes back
+    with a fresh entrance.
+  - The music switch stops the music.
+  - Both hold for the session: `SoundOn()` and `MusicOn()`. **Not persisted**, where the
+    original saves the volume.
+- **The noises.** The level's buttons make `level_button`, through `PressMenu`
+  (`sounds.json` already maps the exit-level and skip-level sounds to that entry). The
+  others make `menu_button`. Opening the pause makes none, as the in-level restart makes
+  none.
+- **Under the dim nothing is pressed.** The tick reads only the pause's buttons while it is
+  up (spec 0.5).
+
+**DEV ONLY: `--press <what>@<tick>`** in `main.cpp`, beside `--saves`.
+- **What it does.** It presses the pause control (`pause`) or one of the pause's buttons
+  (`levels`, `resume`, `skip`, `achievements`, `sound`, `music`) on the layer's tick.
+  `MagicPortalsLayer::ScheduleDevPress` takes the press where a tap of the same thing is
+  taken, and the log says on which tick.
+- **Why.** A `--fixed-step` run takes no input, and every acceptance capture has to open a
+  pause, and some mute it and resume it, at a known moment. `--record/--replay` was not
+  used.
+
+**CAPTURED AND MEASURED.**
+- **Scripts.** `out/parity/ui2/pause/capture_port.sh` and `measure.py` (gitignored), with
+  the spec's own helpers (`specs/ui2/work/lib.py`, `fit_text.py`).
+- **Frames.** 1280x720, `--fixed-step`, one tick a frame; `--press pause@480` and frame 660
+  is 3 s after the tap, as the library's stills are. Fresh 1-1 is paused at 8.0 s, gold 1-4
+  (a save with every level's medal gold) at 6.0 s.
+- **The dim's twin.** The dim is regressed against the SAME port frame unpaused: frame
+  T - 1, because the tick a pause opens stops before it syncs the drawables. That is a
+  cleaner pair than the original's two stills 3 s apart, and the port's unported lighting
+  cannot enter the tolerance.
+- **A-P5's blocks.** The original's column mixes two sources. This script run on the
+  original's two stills gives k 0.2149 but blocks 0.1978..0.2390, outside 0.205..0.225,
+  because those stills are 3 s apart and the report excluded the torch and the near-blacks
+  besides. The port's tight blocks come from the same-frame pair, not from luck.
+- **The A-P9 twins.** A second pause opens at tick 700 of a run resumed at 660, so its
+  world is regressed against that run's frame 699 (`repause_1-1_twin_699`). A first pass
+  used a straight run's frame 661 and read 0.5907 on blocks 0.5858..0.5981; the matched
+  pair reads A-P8's numbers exactly. The resumed frame 661 is 481 ticks of game time in,
+  and it is pixel-identical to a straight run's frame 481 (`unpaused_1-1_481`); against the
+  straight run's frame 661, 3 s further on, 130,215 px differ by more than 8.
+- **The binary.** All ten captures were retaken on the final binary and are md5-identical;
+  the two A-P9 twins were taken on it after.
+  Every run logged `Vulkan validation layers: ACTIVE`, and nothing but the loader's two
+  missing Steam manifests.
+- **Pairs.** `compare.py`: fresh 1-1 `offset_px (0, 0)`, `edge_iou` 0.779, `mean_abs` 5.71;
+  gold 1-4 (0, 0), 0.842, 5.83. Looked at: every pause element lands on the original's; the
+  world behind differs by its lighting and torch, as step 44 left them.
+
+| # | check | original | port | tolerance | pass |
+|---|---|---|---|---|---|
+| A-P1 | fresh 1-1: P3, P4, P7 absent (Pearson at their TL) | none drawn | -0.003, -0.129, 0.094 | < 0.5 | yes |
+| A-P1 | P1, P2, P5, P6, P8, P9, P10 present; "Part 1"; "0" | present | all present (Pearson 0.99998..0.99999); "Part 1" and "0" fit | presence exact | yes |
+| A-P2 | gold 1-4: P3, P4 `medal_gold_l`, P7 present; "Part 4"; "2" | present | present, Pearson 0.99998..0.99999 | presence exact | yes |
+| A-P3 | P2 golden plaque TL | (934.0, 86.25), S 1.407, 0.9992 | **(934.0, 86.4)**, S 1.40625, 0.99999 | ±0.5 px; S ±0.003; >= 0.999 | yes |
+| A-P3 | P3 current plaque TL (medal masked) | (166.0, 169.25), 1.406, 0.9995 | (166.0, 169.2), 1.40625, 0.99999 | same | yes |
+| A-P3 | P4 medal TL | (166.0, 169.25), 1.4055, 0.9993 | (166.0, 169.2), 1.40625, 0.99998 | same | yes |
+| A-P3 | P5 back to levels TL | 0.99929 at (447.6, 226.8) | (447.6, 226.8), 1.40625, 0.99999 | same | yes |
+| A-P3 | P6 resume TL | (652.25, 226.75), 0.9994 | (652.4, 226.8), 1.40625, 0.99999 | same | yes |
+| A-P3 | P7 skip TL | (550, 414), 0.9993 | (550.0, 414.0), 1.40625, 0.99999 | same | yes |
+| A-P3 | P8 Achievements TL | (920, 630), 0.9993 | (920.0, 630.0), 1.40625, 0.99999 | same | yes |
+| A-P3 | P9 sound TL | (0, 630), 0.9993 | (0.0, 630.0), 1.40625, 0.99998 | same | yes |
+| A-P3 | P10 music TL | (115.25, 630), 0.9991 | (115.2, 630.0), 1.40625, 0.99998 | same | yes |
+| A-P4 | "Part 1": font, scale, centre | Matura84_shadow (6.63; next 15.70), 1.405, (652.3, 165.1) | Matura84_shadow (3.82; next 15.47), 1.405, (652.8, 165.6) | ±0.01 font px/px; ±1.0 px of measured | yes (0.5, 0.5) |
+| A-P4 | "Part 4" | Matura84_shadow (6.95), 1.405, (651.8, 165.1) | Matura84_shadow (3.96; next 15.02), 1.405, (652.8, 165.6) | same | yes, **at the edge** (1.0, 0.5) |
+| A-P4 | golden "0" | Matura84_shadow (7.68), 1.40, (1052.1, 210.95) | Matura84_shadow (4.53; next 11.51), 1.40, (1052.1, 211.95) | same | yes, **at the edge** (0, 1.0) |
+| A-P4 | golden "2" | Matura84_shadow (5.70), 1.40, (1051.6, 210.95) | Matura84_shadow (3.71; next 11.46), 1.40, (1052.1, 211.95) | same | yes, **at the edge** (0.5, 1.0) |
+| A-P5 | world k, intercept, 80 px blocks | 0.2149, +0.37, 0.212..0.218 (the report's); this script: 0.2149, +0.374, blocks 0.1978..0.2390 (97) | fresh **0.2158**, +0.005, 0.2137..0.2183 (118 blocks); gold **0.2159**, -0.010, 0.2133..0.2186 (106) | 0.2157 ±0.01; ±1 grey; 0.205..0.225 | yes |
+| A-P6 | restart / pause high-pass gain under the dim | 0.100 / 0.100; this script 0.0973 / 0.0982 | 0.1025 / 0.1021 (unpaused 0.4743 / 0.4727) | 0.10 ±0.02 | yes |
+| A-P6 | pads | 0.010 / -0.025; this script 0.0098 / -0.025 | 0.012 / -0.023 | <= 0.03 | yes |
+| A-P7 | muted: P9 `sound_mute` TL; P10 slot | (0, 630), 0.9992; empty | (0.0, 630.0), S 1.40625, 0.99998; music_on 0.061, music_off 0.045 | ±0.5 px; < 0.5 | yes |
+| A-P8 | 350 ms: P5 alpha, P5 offset, world gain | decoded 0.50, 9.37 u, 0.590 | 0.4978, 9.32 u (on a 0.5 px search), **0.5924** | ±0.03; ±0.5 u; ±0.03 | yes |
+| A-P9 | resume, the frame after | decoded: cut, pads drawn | resume and golden plaque Pearson -0.078 / -0.011; pads high-pass 0.727 / 0.724; identical to a straight run's frame 481 (0 px differ) | absent; pads drawn | yes |
+| A-P9 | a second pause, 350 ms in | decoded: replays A-P8 | world **0.5924**, blocks 0.5910..0.5932, P5 alpha 0.4979, 9.32 u: A-P8's numbers | as A-P8 | yes |
+
+- **The port lands on the decode, exactly.**
+  - Every sprite fits best at its decoded top-left and at 1.40625.
+  - Both texts fit best at their decoded centres.
+  - The fits' own grids (0.5 px, 0.005 of scale) are why "Part N" reads 1.405 and the
+    number 1.40.
+- **The rasterisation offset the captures show is not reproduced** (spec U11). Every text
+  of the original's sits about 0.5 px left of and 0.5..1.0 px above its decoded centre, and
+  that leaves three A-P4 coordinates at exactly the tolerance's 1.0 px.
+  - A-P4 allows it.
+  - Its cause is not established, so nothing is tuned toward it.
+- **The sprite fit needed a second pass.** Its first refined on a quarter-pixel grid and
+  could not land on (447.6, 226.8) or (115.2, 630), so it scored 0.9996..0.9997 beside
+  them. `measure.py` now seeds from the decoded placement and descends to 0.05 px.
+
+**TESTS.**
+- **`test_mp_hud`: 255 → 417**, pure, against the spec.
+  - **What the file says:** the four primitive numbers, the dim's 200 against the three
+    measured k, every sprite and font name, and the music switch at 0.09 of the width.
+  - **Where the settled gold 1-4 pause puts P2..P10:** each at its decoded top-left to
+    0.06 px and within 0.5 px of the measured one, 255 whole. P3 and P4 are told apart by
+    their sizes. The dim is first; every sprite comes before every button. At 4:3 the x
+    positions move with the width and the sizes stay.
+  - **The state gates:** fresh against every tier, the medal by tier, "Part 1" / "Part 4",
+    "0" / "2", and both text centres within A-P4's pixel of both measurements.
+  - **The switches:** sound off, the music switch's dismissal and its return.
+  - **The entrance:** all six start offsets, 32 u out; A-P8's three numbers; linear
+    buttons against smoothEnd sprites; home at 700 ms; a button only ever comes in.
+  - **What a tap is on,** where the button is on that tick, and never a music switch on its
+    way out.
+  - **`Hud::LayOutText`** centring on a written font.
+  - **Four refusals, each by name.**
+- **`test_mp_layer`: 366 → 436.**
+  - `EscapeLeavesALevelForItsGrid` (3 checks) becomes `EscapePausesALevelAndResumesIt` (4).
+  - **Four new cases:**
+    - `ThePauseStopsTheLevelUnderIt`: the pause control opens it over the loaded level. A
+      walking player stays put, velocity kept, through two seconds. The level's age stands
+      still, the pause's and the frame clock run. No pads. Restart and pause sit under the
+      dim at 120. The dim is 200 and whole-view. The golden plaque and the buttons are over
+      it; no plaque and no skip on a fresh save. Glyph counts are checked, with the
+      level-start caption still fading above it all. A tap on restart under the dim does
+      nothing.
+    - `ThePauseResumesWhereTheTapLeftIt`: the two runs above. A-P9 on the frame after.
+      A second pause starts from nothing and is at A-P8's numbers 21 ticks in.
+    - `ThePausesButtonsGoWhereTheOriginalsGo`: no skip on a fresh level. Achievements
+      changes nothing. The sound switch, sound_mute, the music switch gone and back, and
+      music_off. Back to levels opens world 0's grid of 16.
+    - `SkipOnALevelAlreadyFinished`: level0 finished by walking and retried. The pause
+      reads the medal just recorded and shows plaque, medal and skip (A-P2). Skip opens
+      level1.
+  - The baseline was counted by building HEAD's two test files against this source: 255,
+    and 366 with the three Escape checks failing as they must.
+
+**NOT BUILT, INFERRED, AND LEFT OPEN.**
+- **INFERRED:** the caption and the blacks run on through a pause (U3), described above.
+- **INFERRED:** Achievements is drawn on every level. `getAchievementsFromLevel` gates it,
+  the port has no achievements table, and every captured level has one (U5).
+- **Not built:** the AchievementsPopup (U10).
+- **Not built:** the switches' saving (`GlobalVolumeManager::saveVolume`). The port's
+  settings live for the session.
+- **Not built:** the press bounce `Button::Button` sets up (`setBounce(300, ...)`), which
+  the spec does not list.
+- **Not built:** the main menu's own switches. ui3's M6 sits at 32 u, a different widget.
+- **The dim is drawn as plain black** at alpha 200 rather than as `sprites/square.png`
+  tinted black. The file is opaque white in every one of its 64x64 texels, so the two are
+  the same arithmetic.
+- **U5 is still open:** a bronze-only save, a level with no achievements, and `music_off`
+  have no capture of the original. The port's `music_off` shows where the decode puts it.
+- **The first frame of the music switch.** The original's music switch is added by the
+  layer's first update, so its entrance may start one frame behind the rest. The port
+  starts them together.
+- **The finished and lost screens are not touched.** Escape during their 1400 ms beats is
+  above.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning, at `/W4` on the game, the sim library and both suites
+  (`games/magicportals/CMakeLists.txt`, `sim/CMakeLists.txt` and `tests/CMakeLists.txt`
+  each set it; `build.ninja` carries it on `Pause.cpp.obj`). The seven
+  touched translation units were compiled again from scratch for the check, and printed
+  none.
+- **ctest.** **113 of 113** pass, "Not Run" 0, on the final source. No suite was added.
+- **Smart App Control** refused freshly linked executables three times. Each was deleted
+  and relinked until nothing was Not Run:
+  - `test_json` on the first run;
+  - after the final full relink, ten Magic Portals suites, then three, then one;
+  - after a verbose recompile, eight, then one.
+- **No other document's table moves.** README.md and ARCHITECTURE.md list neither suite's
+  checks.

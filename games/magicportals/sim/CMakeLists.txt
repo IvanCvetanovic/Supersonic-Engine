@@ -29,6 +29,7 @@ add_library(MagicPortalsSim STATIC
     Minions.cpp
     Mover.cpp
     Particles.cpp
+    Pause.cpp
     Player.cpp
     Portal.cpp
     Portals.cpp
@@ -45,6 +46,7 @@ add_library(MagicPortalsSim STATIC
     DarkDragon.cpp
     Tscn.cpp
     Turrets.cpp
+    UiLayer.cpp
     Zerog.cpp
 )
 

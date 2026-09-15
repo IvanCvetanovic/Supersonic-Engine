@@ -187,7 +187,8 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       Camera::LoadRules(m_paths.data + "/portals.json", m_cameraRules, error) &&
                       Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error) &&
                       Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error) &&
-                      Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error);
+                      Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error) &&
+                      Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error);
     // ui.json is the port's own and committed, so a HUD that will not read is a
     // fault in this repository and stops the start as loudly as a missing level.
     m_hudReady = read;
@@ -270,6 +271,8 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     // state, whose preLoop starts the black, "Part N" and the plaque again
     // (GameLayer::update, bytes 100358..100663) - so it is zero here too.
     m_levelAgeMs = 0.0;
+    // And the time a pause stood it still, which the new level has had none of.
+    m_stoppedMs = 0.0;
     const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(index)];
 
     // A refused level says why on the HUD, which a player reads, and in the log,
@@ -378,6 +381,8 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     // The walk arrows and the corner buttons go with the level they were built
     // for, and so does what the level opened with.
     unloadControls();
+    // And a pause over it: whatever it held goes with the bodies it held.
+    m_pause = PauseScreen{};
     // The particles the level's entities were emitting go with them; a retry
     // would otherwise pile a second pool on the first.
     unloadEmitters(registry);
@@ -2436,6 +2441,25 @@ void MagicPortalsLayer::buildControls() {
         }
     }
     m_captionText = Hud::CaptionText(m_hudRules, entry.index);
+
+    // The pause's pictures, each resolved once for the level: any of them may be
+    // drawn the moment the pause opens.
+    for (const std::string* file :
+         {&m_pauseRules.goldenPlaque.sprite, &m_pauseRules.currentPlaque.sprite, &m_pauseRules.medalBronze,
+          &m_pauseRules.medalSilver, &m_pauseRules.medalGold, &m_pauseRules.levels.sprite,
+          &m_pauseRules.resume.sprite, &m_pauseRules.skip.sprite, &m_pauseRules.achievements.sprite,
+          &m_pauseRules.sound.sprite, &m_pauseRules.soundOffSprite, &m_pauseRules.music.sprite,
+          &m_pauseRules.musicOffSprite}) {
+        if (m_pauseImages.find(*file) == m_pauseImages.end()) m_pauseImages[*file] = readable(menuImage(*file));
+    }
+    // And its fonts, where they are not the caption's, read once for the run.
+    for (const std::string* name : {&m_pauseRules.title.font, &m_pauseRules.goldenNumber.font}) {
+        if (*name == m_hudRules.caption.font || m_pauseFonts.find(*name) != m_pauseFonts.end()) continue;
+        std::string why;
+        if (!m_pauseFonts[*name].Load(m_paths.original + "/data/" + *name, why)) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "no pause text in " << *name << ": " << why << std::endl;
+        }
+    }
 }
 
 void MagicPortalsLayer::unloadControls() {
@@ -2444,6 +2468,13 @@ void MagicPortalsLayer::unloadControls() {
     m_plaqueImage.clear();
     m_medalImage.clear();
     m_captionText.clear();
+    m_pauseImages.clear();
+}
+
+const Supersonic::BitmapFont* MagicPortalsLayer::pauseFont(const std::string& name) const {
+    if (name == m_hudRules.caption.font) return &m_captionFont;
+    const auto found = m_pauseFonts.find(name);
+    return found != m_pauseFonts.end() ? &found->second : nullptr;
 }
 
 bool MagicPortalsLayer::tutorialPads() const {
@@ -2457,8 +2488,11 @@ void MagicPortalsLayer::layOutControls() {
     // buttons, and neither going into the door nor dying leaves any up.
     const bool playing = m_loaded && m_screen == Screen::None && !m_finishing && !m_dying;
     // A weightless level has no walk pads at all: MainCharacter neither updates
-    // nor draws them when noGravity is set.
-    const bool pads = playing && !m_level.portals.noGravity;
+    // nor draws them when noGravity is set. Nor are they drawn while a pause has
+    // game time stopped (spec 2.2, measured gain 0.010 / -0.025), where restart,
+    // pause and clear-portals stay drawn under its dim, frozen and unpressed:
+    // the tick reads no input for a level while a pause is up.
+    const bool pads = playing && !m_level.portals.noGravity && !m_pause.open;
     for (ControlButton& button : m_controls) {
         switch (button.kind) {
         case Control::Left:
@@ -2586,24 +2620,68 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
     }
     if (const ControlButton* clear = find(Control::Clear)) add(clear->rect, clear->image, white(controls));
 
-    // 4. The two blacks, with the pads between them: BaseState's FadeInController,
+    // 4. The pause, when one is up: CustomGameMenuLayer, the CURRENT UI layer,
+    //    which UILayerManager::draw draws after GameLayer - so over restart,
+    //    pause, the plaque and clear-portals, each frozen at what it was - and,
+    //    being the UI layer manager's, before either black (spec 0.5, 2.2). The
+    //    pictures and alphas are sim/Pause's; the two texts come last, as
+    //    GameMenuLayer::draw and CustomGameMenuLayer::draw draw them after
+    //    UILayer::draw.
+    if (m_pause.open) {
+        for (const Pause::Sprite& sprite :
+             Pause::Sprites(m_pauseRules, m_pause.level, PauseSwitches(), view, m_pause.clockMs)) {
+            const float alpha = static_cast<float>(sprite.alphaByte) / 255.0f;
+            if (sprite.element == Pause::Element::Dim) {
+                // square.png is opaque white in every texel, so tinted black it is
+                // exactly a plain black.
+                add(sprite.rect, std::string(), glm::vec4(0.0f, 0.0f, 0.0f, alpha));
+                continue;
+            }
+            const auto image = m_pauseImages.find(sprite.file);
+            if (image == m_pauseImages.end() || image->second.empty()) continue;
+            add(sprite.rect, image->second, glm::vec4(1.0f, 1.0f, 1.0f, alpha));
+        }
+        const double text = static_cast<double>(Pause::TextAlphaByte(m_pauseRules, m_pause.clockMs)) / 255.0;
+        const auto write = [&](const std::string& fontName, const std::string& words, const glm::dvec2& centre,
+                               double unitsPerFontPx) {
+            const Supersonic::BitmapFont* font = pauseFont(fontName);
+            if (font == nullptr) return;
+            const auto& pages = font->Pages();
+            for (const Hud::Glyph& glyph : Hud::LayOutText(*font, words, centre, unitsPerFontPx)) {
+                if (glyph.page < 0 || static_cast<std::size_t>(glyph.page) >= pages.size()) continue;
+                add(glyph.rect, pages[static_cast<std::size_t>(glyph.page)], white(text), glyph.uvOffset,
+                    glyph.uvOffset + glyph.uvScale);
+            }
+        };
+        write(m_pauseRules.title.font, Pause::TitleText(m_pauseRules, m_pause.level),
+              Pause::TitleCentre(m_pauseRules, view), m_pauseRules.title.unitsPerFontPx);
+        write(m_pauseRules.goldenNumber.font, Pause::GoldenText(m_pause.level),
+              Pause::GoldenCentre(m_pauseRules, view), m_pauseRules.goldenNumber.unitsPerFontPx);
+    }
+
+    // 5. The two blacks, with the pads between them: BaseState's FadeInController,
     //    the character's pads, then Game's own FadeInController. In display
     //    values, as the original drew them, so each is its decoded alpha as it
     //    stands - two stacked blacks leave (t / 700)^2 of the picture, t being
-    //    their own age: the level's less overlay.startAfterMs (step 40).
+    //    their own age: the level's less overlay.startAfterMs (step 40). On the
+    //    FRAME clock, because FadeInController reads GetTime(), which a pause does
+    //    not stop; the pads run on game time, which it does.
     const Hud::Rect whole{glm::dvec2(0.0), view};
     const int over = m_hudRules.overlay.layersOverPads;
     const int under = m_hudRules.overlay.layers - over;
     const auto black = [](double alpha) { return glm::vec4(0.0f, 0.0f, 0.0f, static_cast<float>(alpha)); };
-    add(whole, std::string(), black(Hud::OverlayLayersAlpha(m_hudRules, m_levelAgeMs, under)));
+    add(whole, std::string(), black(Hud::OverlayLayersAlpha(m_hudRules, LevelFrameMs(), under)));
     const double pads = Hud::PadOpacity(m_hudRules, m_levelAgeMs, tutorial);
     for (const Control kind : {Control::Left, Control::Right}) {
         if (const ControlButton* button = find(kind)) add(button->rect, button->image, white(pads));
     }
-    add(whole, std::string(), black(Hud::OverlayLayersAlpha(m_hudRules, m_levelAgeMs, over)));
+    add(whole, std::string(), black(Hud::OverlayLayersAlpha(m_hudRules, LevelFrameMs(), over)));
 
-    // 5. "Part N", over everything, laid out for this view's width.
-    const double caption = Hud::CaptionAlpha(m_hudRules, m_levelAgeMs);
+    // 6. "Part N", over everything, laid out for this view's width. On the frame
+    //    clock too: ETHTextDrawer::Draw adds the engine's own frame time, so a
+    //    caption still fading when a pause opens goes on fading above it. The
+    //    popups' captures show that; no capture of a pause does (spec 2.2, U3).
+    const double caption = Hud::CaptionAlpha(m_hudRules, LevelFrameMs());
     if (caption > 0.0 && !m_captionText.empty()) {
         const auto& pages = m_captionFont.Pages();
         for (const Hud::Glyph& glyph : Hud::LayOutCaption(m_hudRules, m_captionFont, m_captionText, view)) {
@@ -2651,15 +2729,30 @@ const MagicPortalsLayer::ControlButton* MagicPortalsLayer::controlUnderPointer(c
     return nullptr;
 }
 
-float MagicPortalsLayer::readInput(entt::registry& registry) {
+float MagicPortalsLayer::keyDirection() const {
     using Supersonic::Input;
     float direction = 0.0f;
     if (Input::IsDown(kLeft) || Input::IsDown(kLeftAlt)) direction -= 1.0f;
     if (Input::IsDown(kRight) || Input::IsDown(kRightAlt)) direction += 1.0f;
+    return direction;
+}
+
+float MagicPortalsLayer::readInput(entt::registry& registry) {
+    using Supersonic::Input;
+    float direction = keyDirection();
 
     // The on-screen controls, laid out and asked about before anything else
     // reads the pointer.
     layOutControls();
+
+    // THE BACK KEY PAUSES, where the pause control could be pressed:
+    // GameState::handleBackButton (bytes 98331..98935) shows the pause while
+    // GameLayer is current. It used to leave the level for its grid, which is
+    // now the pause's own first button.
+    if (pauseAllowed() && (Input::TickWasPressed(kBack) || devPressDue(DevPress::Pause))) {
+        openPause(registry);
+        return direction;
+    }
     const ControlButton* under = controlUnderPointer(registry);
     const bool held = Input::IsDown(kTap);
     const bool pressed = Input::TickWasPressed(kTap);
@@ -2680,8 +2773,10 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
         case Control::Reset:
             if (pressed && m_current >= 0 && !m_chapterComplete) loadLevel(registry, m_current);
             break;
+        // GameLayer's menu button calls GameState::showMenuPopup (bytes
+        // 98935..99036): the pause, over this level, rather than out of it.
         case Control::Menu:
-            if (pressed) openMenu(registry, Screen::Worlds);
+            if (pressed) openPause(registry);
             break;
         // PortalManager::killAll(true): the placed portals go, those that never
         // carried anything are given back, and it plays playPortalKilledSound
@@ -2967,6 +3062,12 @@ void MagicPortalsLayer::playLatched(entt::registry& registry, float deltaTime) {
     // The frames' own clock, which the shared timers are kept on.
     m_soundClockMs += static_cast<double>(deltaTime) * 1000.0;
     if (m_latched.empty()) return;
+    // The sound switch off is SetGlobalVolume(0): nothing is heard, and what the
+    // tick latched is dropped rather than kept for later.
+    if (!m_soundOn) {
+        m_latched.clear();
+        return;
+    }
 
     Supersonic::AudioEngine** slot = registry.ctx().find<Supersonic::AudioEngine*>();
     Supersonic::AudioEngine* audio = slot != nullptr ? *slot : nullptr;
@@ -3011,7 +3112,9 @@ void MagicPortalsLayer::updateMusic(entt::registry& registry) {
     // level loaded, so it falls into the level's own branch and the music does
     // not stop underneath it.
     std::string wanted;
-    if (m_screen == Screen::Main || m_screen == Screen::Worlds || m_screen == Screen::Levels) {
+    if (!m_soundOn || !m_musicOn) {
+        // Either switch off: no music at all.
+    } else if (m_screen == Screen::Main || m_screen == Screen::Worlds || m_screen == Screen::Levels) {
         wanted = "menu";
     } else if (m_loaded) {
         // Game.angelscript starts playGameMusic(isBossFight); the port's boss
@@ -3051,6 +3154,7 @@ void MagicPortalsLayer::stopMusic(entt::registry& registry) {
 
 void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta) {
     using Supersonic::Input;
+    ++m_ticks;
     // Asked for on the TICK, where a key press is an edge, and answered on the
     // frame, where the picture is.
     if (Input::TickWasPressed(kDump)) m_dumpRequested = true;
@@ -3061,11 +3165,26 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
         updateHud(registry);
         return;
     }
+    // A pause is up over the level: it takes the tick, and the level does not
+    // step. Only on the tick it resumes does the level take up its tick again,
+    // from exactly where the tap left it.
+    if (m_pause.open) {
+        if (pauseTick(registry, fixedDelta) && m_loaded && m_screen == Screen::None) {
+            // The tick the pause was opened on read its input and stopped short
+            // of BeforeStep; this one runs that half now, with the walk the keys
+            // ask for - the pointer is on the button that resumed it, and a tap
+            // spent on a button is spent.
+            stepLevel(registry, keyDirection(), fixedDelta);
+        }
+        updateHud(registry);
+        return;
+    }
     // The bodies' boxes over the art, or not: the picture only.
     if (Input::TickWasPressed(kBoxes)) m_showBoxes = !m_showBoxes;
-    // Out of a level, to the grid it came from - a chapter's end included,
-    // which otherwise has nowhere to go.
-    if (m_current >= 0 && Input::TickWasPressed(kBack)) {
+    // Out of a level that is not being played - one the port refused, or a
+    // chapter's end, which otherwise has nowhere to go - to its grid. A level
+    // being played takes the back key as the pause (readInput).
+    if (m_current >= 0 && !m_loaded && Input::TickWasPressed(kBack)) {
         m_menuWorld = m_chapters.levels[static_cast<std::size_t>(m_current)].world;
         openMenu(registry, Screen::Levels);
         updateHud(registry);
@@ -3156,46 +3275,244 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
         m_levelAgeMs += static_cast<double>(fixedDelta) * 1000.0;
         // Then this tick's input, and what comes before the next step.
         const float direction = readInput(registry);
-        // The pause button opens a screen, which unloads the level: nothing
-        // below has a level to step or a player to follow any more.
-        if (!m_loaded || m_screen != Screen::None) {
+        // A control may have opened a pause, which stops the level HERE, after
+        // the step it has just taken and before the next: the tick the pause
+        // resumes on runs the rest. Or it opened a screen that unloaded the
+        // level, and nothing below has a level to step any more.
+        if (!m_loaded || m_screen != Screen::None || m_pause.open) {
             updateHud(registry);
             return;
         }
-        m_direction = direction; // for the picture: which way the player walks this tick
-        m_aspect = viewportAspect(registry);
-        // BEFORE the tick, not after it: the dragon's claw measures everything
-        // from the camera's left edge, and the camera's left edge depends on how
-        // wide the window is. Dragon.hpp says why that width is the only piece of
-        // the camera the sim takes from outside.
-        m_level.dragon.viewWidthPx = ViewPx().x;
-        Game::BeforeStep(m_data, registry, m_level, direction, fixedDelta);
-        if (m_level.dragon.present) {
-            // level31a is the ONE level in all 128 that sets auto_camera, and it
-            // sets it to dragon.ent. AutoCameraController::update is a hard lock
-            // to that entity's x - no lag, no hold, y pinned to 0 - so the
-            // follow's easing does not run here at all. dragon.json has the
-            // decode, and Camera::Clamp is the same arithmetic as the original's
-            // camMin/camMax expressed for a centre rather than a corner.
-            const glm::dvec2 view = ViewPx();
-            m_follow.centrePx =
-                Camera::Clamp(glm::dvec2(m_level.dragon.atPx.x + view.x * 0.5, view.y * 0.5), view, m_boundsPx);
-            m_follow.holdLeftS = 0.0;
-        } else {
-            const glm::dvec2 playerPx =
-                Units::ToPixels(registry.get<Supersonic::TransformComponent>(m_level.player).position);
-            m_follow.Tick(m_cameraRules, playerPx, ViewPx(), m_boundsPx, fixedDelta);
-        }
-        placeCamera(registry);
-        layOutControls();
-        // AFTER the camera: the sign is aimed at the corner this tick left it at,
-        // with its frame time held back while the blacks are whole and handed
-        // over in one piece when they start, as the original's load hands it.
-        tickNoPortalSign(Hud::HandOver(m_hudRules, m_levelAgeMs, static_cast<double>(fixedDelta) * 1000.0,
-                                       m_sign.heldMs));
-        syncDrawables(registry);
+        stepLevel(registry, direction, fixedDelta);
     }
     updateHud(registry);
+}
+
+void MagicPortalsLayer::stepLevel(entt::registry& registry, float direction, float fixedDelta) {
+    m_direction = direction; // for the picture: which way the player walks this tick
+    m_aspect = viewportAspect(registry);
+    // BEFORE the tick, not after it: the dragon's claw measures everything
+    // from the camera's left edge, and the camera's left edge depends on how
+    // wide the window is. Dragon.hpp says why that width is the only piece of
+    // the camera the sim takes from outside.
+    m_level.dragon.viewWidthPx = ViewPx().x;
+    Game::BeforeStep(m_data, registry, m_level, direction, fixedDelta);
+    if (m_level.dragon.present) {
+        // level31a is the ONE level in all 128 that sets auto_camera, and it
+        // sets it to dragon.ent. AutoCameraController::update is a hard lock
+        // to that entity's x - no lag, no hold, y pinned to 0 - so the
+        // follow's easing does not run here at all. dragon.json has the
+        // decode, and Camera::Clamp is the same arithmetic as the original's
+        // camMin/camMax expressed for a centre rather than a corner.
+        const glm::dvec2 view = ViewPx();
+        m_follow.centrePx =
+            Camera::Clamp(glm::dvec2(m_level.dragon.atPx.x + view.x * 0.5, view.y * 0.5), view, m_boundsPx);
+        m_follow.holdLeftS = 0.0;
+    } else {
+        const glm::dvec2 playerPx =
+            Units::ToPixels(registry.get<Supersonic::TransformComponent>(m_level.player).position);
+        m_follow.Tick(m_cameraRules, playerPx, ViewPx(), m_boundsPx, fixedDelta);
+    }
+    placeCamera(registry);
+    layOutControls();
+    // AFTER the camera: the sign is aimed at the corner this tick left it at,
+    // with its frame time held back while the blacks are whole and handed
+    // over in one piece when they start, as the original's load hands it.
+    tickNoPortalSign(Hud::HandOver(m_hudRules, m_levelAgeMs, static_cast<double>(fixedDelta) * 1000.0,
+                                   m_sign.heldMs));
+    syncDrawables(registry);
+}
+
+// ---- the pause ----------------------------------------------------------------
+
+bool MagicPortalsLayer::pauseAllowed() const {
+    // Where the pause control is drawn and can be pressed: a level being played,
+    // not going into its door and not dying.
+    return m_hudReady && m_loaded && m_screen == Screen::None && !m_finishing && !m_dying && !m_pause.open;
+}
+
+Pause::Switches MagicPortalsLayer::PauseSwitches() const {
+    Pause::Switches switches;
+    switches.soundOn = m_soundOn;
+    switches.musicOn = m_musicOn;
+    switches.musicAddedMs = m_pause.musicAddedMs;
+    switches.musicDismissedMs = m_pause.musicDismissedMs;
+    return switches;
+}
+
+void MagicPortalsLayer::openPause(entt::registry& registry) {
+    using namespace Supersonic;
+    if (!pauseAllowed() || m_current < 0) return;
+    const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(m_current)];
+    m_pause = PauseScreen{};
+    m_pause.open = true;
+    // What CustomGameMenuLayer's constructor reads: the score recorded for this
+    // level, which gates the current-score plaque, its medal and skip, and the
+    // golden score its plaque names.
+    m_pause.level.savedMedal = m_scores.Get(entry.world, entry.index);
+    m_pause.level.goldenScore = entry.goldenScore;
+    m_pause.level.index = entry.index;
+
+    // GAME TIME STOPS (STimeManager::pause). The level is not stepped from here,
+    // but the app steps physics before every tick regardless, so every body is
+    // held as it stands now and put back after each of those steps: velocities,
+    // sleep and all, so the level resumes as though the pause had not happened.
+    for (auto [entity, transform, body] : registry.view<TransformComponent, RigidBodyComponent>().each()) {
+        m_pause.held.push_back(PauseScreen::Held{entity, transform, body});
+    }
+    // And the flipbooks, which the app turns on the tick: the world under a
+    // popup measured still (temporal std 0.001, spec 0.3), so nothing animates.
+    for (auto [entity, animation] : registry.view<SpriteAnimationComponent>().each()) {
+        if (!animation.playing) continue;
+        animation.playing = false;
+        m_pause.stoppedFlipbooks.push_back(entity);
+    }
+    // The pads go with game time.
+    layOutControls();
+}
+
+void MagicPortalsLayer::holdWorld(entt::registry& registry) {
+    using namespace Supersonic;
+    for (const PauseScreen::Held& held : m_pause.held) {
+        if (!registry.valid(held.entity)) continue;
+        if (auto* transform = registry.try_get<TransformComponent>(held.entity)) *transform = held.transform;
+        if (auto* body = registry.try_get<RigidBodyComponent>(held.entity)) *body = held.body;
+    }
+}
+
+void MagicPortalsLayer::closePause(entt::registry& registry) {
+    using namespace Supersonic;
+    if (!m_pause.open) return;
+    // The world as the tap left it, this tick's physics step undone too.
+    holdWorld(registry);
+    for (const entt::entity entity : m_pause.stoppedFlipbooks) {
+        if (!registry.valid(entity)) continue;
+        if (auto* animation = registry.try_get<SpriteAnimationComponent>(entity)) animation->playing = true;
+    }
+    // UILayer::hide(true): gone on this frame, no fade, and every element reset,
+    // so the next pause plays its whole entrance again (spec 2.4).
+    m_pause = PauseScreen{};
+    layOutControls();
+}
+
+bool MagicPortalsLayer::devPressDue(DevPress press) {
+    for (auto it = m_devPresses.begin(); it != m_devPresses.end(); ++it) {
+        if (it->second != press || it->first > m_ticks) continue;
+        SUPERSONIC_LOG_INFO("Magic Portals") << "DEV press " << static_cast<int>(press) << " taken on tick "
+                                             << m_ticks << " (asked for " << it->first << ")" << std::endl;
+        m_devPresses.erase(it);
+        return true;
+    }
+    return false;
+}
+
+void MagicPortalsLayer::ScheduleDevPress(int tick, DevPress press) {
+    m_devPresses.emplace_back(tick, press);
+}
+
+bool MagicPortalsLayer::pauseTick(entt::registry& registry, float fixedDelta) {
+    using Supersonic::Input;
+    // The step the app just ran is undone before anything looks at the world.
+    holdWorld(registry);
+    // UI frame time runs; game time does not, and the level's frame clock counts
+    // the difference.
+    const double dtMs = static_cast<double>(fixedDelta) * 1000.0;
+    m_pause.clockMs += dtMs;
+    m_stoppedMs += dtMs;
+    // The window may change shape under a pause; restart and pause, drawn frozen
+    // under it, stay on their corner.
+    m_aspect = viewportAspect(registry);
+    layOutControls();
+
+    // The back key resumes: handleBackButton hides the pause when GameMenuLayer
+    // is current.
+    std::optional<Pause::Button> pressed;
+    if (Input::TickWasPressed(kBack)) pressed = Pause::Button::Resume;
+    const struct {
+        DevPress dev;
+        Pause::Button button;
+    } devs[] = {{DevPress::Resume, Pause::Button::Resume},
+                {DevPress::Levels, Pause::Button::Levels},
+                {DevPress::Skip, Pause::Button::Skip},
+                {DevPress::Achievements, Pause::Button::Achievements},
+                {DevPress::Sound, Pause::Button::Sound},
+                {DevPress::Music, Pause::Button::Music}};
+    for (const auto& dev : devs) {
+        if (!pressed && devPressDue(dev.dev)) pressed = dev.button;
+    }
+
+    // A tap, tested against where each button is on this tick, in view space as
+    // the controls are: Button::isPointInButton, its sprite's rectangle.
+    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
+    if (!pressed && viewport != nullptr && viewport->pointerOverGame && Input::TickWasPressed(kTap)) {
+        const glm::vec2 size = viewport->Size();
+        if (size.x > 0.0f && size.y > 0.0f) {
+            const glm::dvec2 view = ViewPx();
+            const glm::dvec2 at = glm::dvec2(viewport->ToLocal(Input::MousePosition()) / size) * view;
+            pressed = Pause::ButtonAt(m_pauseRules, m_pause.level, PauseSwitches(), view, m_pause.clockMs, at);
+        }
+    }
+    if (!pressed) return false;
+    const bool resuming = *pressed == Pause::Button::Resume;
+    PressPause(registry, *pressed);
+    return resuming && !m_pause.open;
+}
+
+bool MagicPortalsLayer::PressPause(entt::registry& registry, Pause::Button button) {
+    if (!m_pause.open) return false;
+    switch (button) {
+    case Pause::Button::Resume:
+        // GameState::hideMenuPopup: the layer hidden, GameLayer current, game time
+        // resumed. Its button makes the menu's own noise.
+        latch("menu_button");
+        closePause(registry);
+        return true;
+    case Pause::Button::Levels:
+        // returnToLevelSelect: createLevelSelectState, which is the grid this
+        // level's world is on - the medal screen's list button does exactly that.
+        closePause(registry);
+        return PressMenu(registry, MenuButton{MenuButton::Kind::List});
+    case Pause::Button::Skip:
+        // goToNextLevel(levelIndex), and only on a level already finished: the
+        // button is not there otherwise.
+        if (m_pause.level.savedMedal <= 0) return false;
+        closePause(registry);
+        return PressMenu(registry, MenuButton{MenuButton::Kind::Next});
+    case Pause::Button::Achievements:
+        // OWNER RULING: kept, and drawn - but the AchievementsPopup it opens is
+        // not built (spec section 7, U10), so pressing it changes nothing but
+        // the noise a button makes.
+        latch("menu_button");
+        return false;
+    case Pause::Button::Sound: {
+        // GlobalSoundSwitch::manageSoundSwitch: SetGlobalVolume 1 or 0. And
+        // SoundPanelLayer::manageMusicSwitch dismisses the music switch while the
+        // sound is off, and adds a fresh one - a fresh entrance - once it is on
+        // and the old one is gone.
+        const double now = m_pause.clockMs;
+        const double dismissMs = m_pauseRules.layer.buttonDismissMs;
+        const bool dismissing = m_pause.musicDismissedMs >= 0.0 && now - m_pause.musicDismissedMs < dismissMs;
+        m_soundOn = !m_soundOn;
+        if (!m_soundOn) {
+            if (!dismissing && now >= m_pause.musicAddedMs) m_pause.musicDismissedMs = now;
+        } else {
+            m_pause.musicAddedMs = dismissing ? m_pause.musicDismissedMs + dismissMs : now;
+        }
+        latch("menu_button");
+        return true;
+    }
+    case Pause::Button::Music: {
+        const Pause::Switches switches = PauseSwitches();
+        const bool shown = switches.soundOn && m_pause.clockMs >= switches.musicAddedMs &&
+                           !(switches.musicDismissedMs >= 0.0 &&
+                             m_pause.clockMs - switches.musicDismissedMs < m_pauseRules.layer.buttonDismissMs);
+        if (!shown) return false;
+        m_musicOn = !m_musicOn;
+        latch("menu_button");
+        return true;
+    }
+    }
+    return false;
 }
 
 // ---- per frame: nothing the level or a replay depends on --------------------
@@ -3205,7 +3522,7 @@ void MagicPortalsLayer::OnUpdate(entt::registry& registry, float deltaTime) {
     // because a particle is a picture: nothing below may reach Game::Level,
     // the simulation's clock or the state hash. Carried before the camera's
     // early return, so a level drawn without one does not freeze them.
-    updateEmitters(registry, deltaTime);
+    if (!m_pause.open) updateEmitters(registry, deltaTime);
     // And the sounds the tick latched, played here for the same reason: a
     // sound is a picture with a speaker. Both are before the camera's early
     // return, so a level drawn without one is not also silent.

@@ -13,6 +13,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/GameRuntime.hpp"
@@ -45,8 +46,55 @@ int main(int argc, char** argv) {
     // DEV ONLY: walk levels in one process and check the engine's material
     // descriptor sets go back to its pool (LevelVisit.hpp). Empty = a normal run.
     MagicPortals::LevelVisitLayer::Options visit;
+    // DEV ONLY: a press of the pause control, or of one of the pause's buttons, on
+    // a stated tick. A --fixed-step run takes no input at all, and a parity
+    // capture of the pause has to open one - and mute its sound, and resume it -
+    // at a known moment. `--press pause@120` presses the pause control on the
+    // layer's 120th tick.
+    using DevPress = MagicPortals::MagicPortalsLayer::DevPress;
+    std::vector<std::pair<int, DevPress>> presses;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
+        if (arg == "--press") {
+            if (i + 1 >= argc) {
+                std::cerr << "--press needs a value, e.g. pause@120\n";
+                return EXIT_FAILURE;
+            }
+            const std::string value = argv[++i];
+            const std::size_t at = value.find('@');
+            const std::string what = value.substr(0, at);
+            const struct {
+                const char* name;
+                DevPress press;
+            } names[] = {{"pause", DevPress::Pause},
+                         {"levels", DevPress::Levels},
+                         {"resume", DevPress::Resume},
+                         {"skip", DevPress::Skip},
+                         {"achievements", DevPress::Achievements},
+                         {"sound", DevPress::Sound},
+                         {"music", DevPress::Music}};
+            int tick = 0;
+            if (at != std::string::npos) {
+                try {
+                    tick = std::stoi(value.substr(at + 1));
+                } catch (const std::exception&) {
+                    tick = 0;
+                }
+            }
+            bool known = false;
+            for (const auto& name : names) {
+                if (what != name.name) continue;
+                known = true;
+                if (tick >= 1) presses.emplace_back(tick, name.press);
+            }
+            if (!known || tick < 1) {
+                std::cerr << "--press wants <pause|levels|resume|skip|achievements|sound|music>@<tick of at least 1>,"
+                             " got '"
+                          << value << "'\n";
+                return EXIT_FAILURE;
+            }
+            continue;
+        }
         if (arg == "--visit-levels" || arg == "--visit-passes") {
             if (i + 1 >= argc) {
                 std::cerr << arg << " needs a value\n";
@@ -104,6 +152,10 @@ int main(int argc, char** argv) {
                   << "  --data <dir>      the remake's game/data directory (default " << paths.data << ")\n"
                   << "  --saves <dir>     DEV: keep the medals (scores.json) here instead of the user's\n"
                   << "                    data directory - for a capture that needs a medal recorded\n"
+                  << "  --press <what>@<tick>\n"
+                  << "                    DEV: press the pause control (pause) or one of the pause's\n"
+                  << "                    buttons (levels, resume, skip, achievements, sound, music) on\n"
+                  << "                    the game's tick <tick>, for a capture; repeatable\n"
                   << "  --visit-levels <lightmapped|all|name,...>\n"
                   << "                    DEV: visit these levels in one process, holding each one's\n"
                   << "                    lightmaps as material sets and dropping them on leaving; the\n"
@@ -177,6 +229,7 @@ int main(int argc, char** argv) {
             << std::endl;
 
         auto game = std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start);
+        for (const auto& [tick, press] : presses) game->ScheduleDevPress(tick, press);
         MagicPortals::MagicPortalsLayer& gameLayer = *game;
         app.PushLayer(std::move(game));
         if (!visit.levels.empty()) {

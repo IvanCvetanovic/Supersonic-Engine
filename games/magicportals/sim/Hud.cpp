@@ -397,15 +397,20 @@ std::string MedalSprite(const Rules& rules, int medal) {
 
 std::vector<Glyph> LayOutCaption(const Rules& rules, const Supersonic::BitmapFont& font, const std::string& text,
                                  const glm::dvec2& viewUnits) {
+    return LayOutText(font, text, rules.caption.centreOfView * viewUnits, rules.caption.unitsPerFontPx);
+}
+
+std::vector<Glyph> LayOutText(const Supersonic::BitmapFont& font, const std::string& text, const glm::dvec2& centre,
+                              double unitsPerFontPx) {
     std::vector<Glyph> glyphs;
     if (!font.IsLoaded()) return glyphs;
-    const double scale = rules.caption.unitsPerFontPx;
+    const double scale = unitsPerFontPx;
     const glm::dvec2 page(font.PageSize());
     if (page.x <= 0.0 || page.y <= 0.0) return glyphs;
 
     // ComputeTextBoxSize: the widest line's summed advances, by lineHeight a line.
     const glm::dvec2 box = glm::dvec2(font.Measure(text)) * scale;
-    const glm::dvec2 origin = rules.caption.centreOfView * viewUnits - box * 0.5;
+    const glm::dvec2 origin = centre - box * 0.5;
 
     double pen = 0.0;
     double lineTop = 0.0;

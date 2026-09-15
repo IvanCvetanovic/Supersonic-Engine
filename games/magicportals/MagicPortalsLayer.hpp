@@ -23,6 +23,7 @@
 #include "sim/Art.hpp"
 #include "sim/Hud.hpp"
 #include "sim/Particles.hpp"
+#include "sim/Pause.hpp"
 #include "sim/Scores.hpp"
 #include "sim/Sounds.hpp"
 #include "sim/Sprites.hpp"
@@ -85,7 +86,9 @@ public:
     static constexpr const char* kRetry = "mp.retry";        // R
     static constexpr const char* kSkip = "mp.skip";          // N
     static constexpr const char* kBoxes = "mp.boxes";        // B: the bodies' boxes, over the art
-    static constexpr const char* kBack = "mp.back";          // Escape: out to the menu, and back through it
+    // Escape: the pause over a level being played and back out of it, as the
+    // original's back key (GameState::handleBackButton); up a screen in the menu.
+    static constexpr const char* kBack = "mp.back";
     // G: write down what the game believes it is drawing, right now.
     //
     // A diagnostic rather than a control, and it exists because a sprite that
@@ -270,6 +273,47 @@ public:
     // when the registry publishes no overlay, which a bare suite registry does
     // not until it inserts one.
     void EmitHud(entt::registry& registry) const;
+
+    // ---- the pause screen -----------------------------------------------------
+    //
+    // CustomGameMenuLayer, over the level it pauses: the in-level pause control
+    // and Escape open it, and it STOPS GAME TIME - the level is not stepped, the
+    // world does not move, the pads are not drawn - while its own entrance runs
+    // on a clock of its own. Laid out by sim/Pause.hpp from ui.json and drawn
+    // through the screen overlay after restart, pause and the blacks. The level
+    // stays loaded under it and MenuScreen() stays Screen::None: the pause is a
+    // layer over a level, not a screen that replaces one.
+    bool Paused() const { return m_pause.open; }
+    // How long it has been up, in milliseconds of the tick's clock: zero on the
+    // tick it opened.
+    double PauseClockMs() const { return m_pause.clockMs; }
+    const Pause::Rules& PauseRules() const { return m_pauseRules; }
+    // What the open pause was raised over, read when it opened.
+    const Pause::Level& PausedLevel() const { return m_pause.level; }
+    // The two switches, and the music switch's clock on this pause.
+    Pause::Switches PauseSwitches() const;
+    // Whether the game makes a sound at all, and plays its music: the pause's
+    // two switches, which hold for the session.
+    bool SoundOn() const { return m_soundOn; }
+    bool MusicOn() const { return m_musicOn; }
+    // Press one of the pause's buttons, as a tap on it does. False when it led
+    // nowhere: no pause is up, the button is not there, or it is Achievements,
+    // which the port has no screen for yet.
+    bool PressPause(entt::registry& registry, Pause::Button button);
+
+    // The level's FRAME clock: its age plus every millisecond game time stood
+    // still under a pause. What the original times by frame time the pause does
+    // not stop - the level-start caption, the blacks' wall clock - reads this;
+    // what runs on game time reads LevelAgeMs.
+    double LevelFrameMs() const { return m_levelAgeMs + m_stoppedMs; }
+
+    // DEV ONLY: press one of these on the layer's tick `tick` (1 the first
+    // OnFixedUpdate), as a tap would, for a --fixed-step capture that has no
+    // input. `Pause` is the in-level pause control; the rest are the pause's own
+    // buttons. A press is taken on the first tick at or after its own on which
+    // what it presses is there to press.
+    enum class DevPress { Pause, Levels, Resume, Skip, Achievements, Sound, Music };
+    void ScheduleDevPress(int tick, DevPress press);
 
 private:
     // A body the level built, and the box standing for it. The box sits at the
@@ -778,8 +822,64 @@ private:
     };
     NoPortalSign m_sign;
 
+    // ---- the pause ------------------------------------------------------------
+    Pause::Rules m_pauseRules;
+    struct PauseScreen {
+        bool open{false};
+        double clockMs{0.0}; // UI frame time since the tap, on the tick
+        Pause::Level level;
+        double musicAddedMs{0.0};
+        double musicDismissedMs{-1.0};
+        // The world as the tap left it: every simulated body's transform and
+        // state, put back after each physics step the app runs under the pause.
+        struct Held {
+            entt::entity entity{entt::null};
+            Supersonic::TransformComponent transform;
+            Supersonic::RigidBodyComponent body;
+        };
+        std::vector<Held> held;
+        // The flipbooks that were playing, stopped for as long as it is up.
+        std::vector<entt::entity> stoppedFlipbooks;
+    };
+    PauseScreen m_pause;
+    // The switches: GlobalSoundSwitch sets the global volume, GlobalMusicSwitch
+    // the music. Held for the session only - the original saves the volume
+    // (GlobalVolumeManager::saveVolume), which the port does not yet.
+    bool m_soundOn{true};
+    bool m_musicOn{true};
+    // Game time stood still this level, for LevelFrameMs.
+    double m_stoppedMs{0.0};
+    // Each pause picture's file resolved to the hd art once per level; empty
+    // for one that cannot be read, which is then not drawn.
+    std::map<std::string, std::string> m_pauseImages;
+    // The pause's fonts where they are not the caption's own.
+    std::map<std::string, Supersonic::BitmapFont> m_pauseFonts;
+    const Supersonic::BitmapFont* pauseFont(const std::string& name) const;
+
+    // DEV ONLY: the scheduled presses, and the layer's own tick count.
+    std::vector<std::pair<int, DevPress>> m_devPresses;
+    int m_ticks{0};
+
     void buildControls();
     void unloadControls();
+
+    // The pause. Opened only where the pause control could be pressed; closed
+    // as UILayer::hide(true) closes it, at once and forgetting its entrance.
+    bool pauseAllowed() const;
+    void openPause(entt::registry& registry);
+    void closePause(entt::registry& registry);
+    // Puts every body back where the tap left it, undoing the physics step the
+    // app runs before every tick whether or not the game's time is stopped.
+    void holdWorld(entt::registry& registry);
+    // One tick under the pause. True when it resumed the level on this tick.
+    bool pauseTick(entt::registry& registry, float fixedDelta);
+    // The rest of a level's tick once its input is read: what comes before the
+    // next physics step, the camera, the controls and the drawables.
+    void stepLevel(entt::registry& registry, float direction, float fixedDelta);
+    // The walk the keys alone ask for, with no pointer.
+    float keyDirection() const;
+    // Whether a scheduled DEV press of this kind is due, taking it if so.
+    bool devPressDue(DevPress press);
     // The control rectangles for this view and this age, and whether each is
     // shown. Pure layout.
     void layOutControls();

@@ -333,5 +333,247 @@
       "dismiss_after_ms": 2000,
       "dismiss_ms": 1000
     }
+  },
+
+  "ui_layer": {
+    "_about": [
+      "THE TWO ANIMATION PRIMITIVES every UI layer the original raises over a level is built from:",
+      "the pause here, and the finished, lost and help screens after it. Read by sim/UiLayer.hpp.",
+      "Specified in the remake's gitignored out/parity/specs/ui2/spec.md section 0.4 (numbers from",
+      "pause_finished.md and popups_gameover.md beside it).",
+      "BOTH RUN ON UI FRAME TIME, which the pause does not stop: a layer animates while the game",
+      "is frozen under it (spec section 0.3). The port keeps that clock per layer, on the tick."
+    ],
+    "sprite": {
+      "_source": [
+        "DECODED: UISprite::init (bytes 84118..84502) builds its PositionInterpolator over 1000 ms",
+        "and zeroes the tint's alpha; UISprite::update (bytes 84559..84790) writes",
+        "ARGB(fTOu(getBias * a), r, g, b) every frame - getBias is the smoothEnd-filtered bias",
+        "sin(v * pi / 2), and `a` the alpha byte the sprite was added with (200 for the pause's",
+        "dim, 255 for a plaque).",
+        "MEASURED: sin over linear on every screen with footage, T 0.985..1.075 s (spec 0.4)."
+      ],
+      "appear_ms": 1000
+    },
+    "button": {
+      "_source": [
+        "DECODED: UIButton::UIButton (bytes 76108..76681) starts the button at",
+        "initPos = pos + normalize(pos - GetScreenSize() * 0.5) * g_scale.scale(32) * effectScale",
+        "(instructions 22..64; effectScale 1 from UILayer::addButton, bytes 62337..62682) and",
+        "eases it to pos over a 700 ms PositionInterpolator (instruction 95), filtered by",
+        "smoothEnd. `pos` is the button's own ANCHOR - its normalized position times the screen -",
+        "not its centre, which only differs for a button whose origin is not V2_HALF (the pause's",
+        "Achievements and switches). UIButton::update (bytes 76911..77152) sets the alpha to the",
+        "UNFILTERED bias, linear, while not dismissed (UIButton::setColor, bytes 31747..31953:",
+        "fTOu(alpha * 255)), and to 1 - the filtered bias once dismissed. UIButton::dismiss",
+        "(bytes 31534..31691) resets the interpolator from pos back to initPos over 700 ms.",
+        "MEASURED: linear T 0.680..0.73 s; slide rms 0.97..1.27 px against the 32 u model (spec 0.4);",
+        "ui3 motion.md 1.2 confirms UISwitch::UISwitch calls UIButton::UIButton, so the sound and",
+        "music switches enter the same way."
+      ],
+      "appear_ms": 700,
+      "dismiss_ms": 700,
+      "slide_units": 32
+    }
+  },
+
+  "pause": {
+    "_about": [
+      "THE PAUSE SCREEN, CustomGameMenuLayer (extends GameMenuLayer and SoundPanelLayer), which the",
+      "in-level pause control and the back key raise over the frozen level. Read by sim/Pause.hpp.",
+      "Specified in the remake's gitignored out/parity/specs/ui2/spec.md section 2; its evidence is",
+      "pause_finished.md section 1 (+ .json) beside it. Measured on pause_fresh_1-1.png and",
+      "pause_gold_1-4.png, 1280x720, 3 s after the tap.",
+      "",
+      "PLACED BY FRACTIONS OF THE SCREEN, NOT FROM CORNERS (spec 0.1): each element's anchor is",
+      "view * at_screen, and its top-left is that anchor less size_units * origin. Sizes stay in",
+      "units, so at another aspect the x positions move with the width and the sizes do not. The",
+      "switches and Achievements are flush in their corners only because their fraction is 0 or 1",
+      "with the matching origin. Every size is the sprite's 1x texel size in units; the hd twin is",
+      "what is drawn (spec 0.1).",
+      "",
+      "ALPHAS ARE DISPLAY-SPACE, drawn through the engine's screen overlay after restart, pause and",
+      "the level's blacks and before the level-start caption (spec 2.2)."
+    ],
+
+    "dim": {
+      "_source": [
+        "DECODED: GameMenuLayer::GameMenuLayer (bytes 100789..101246, instructions 19..54) adds",
+        "GameStateProperties.whiteSquareSprite over V2_ZERO .. GetScreenSize() in",
+        "backgroundColor, which Game::Game (bytes 110437..111736) sets to ARGB(200, 0, 0, 0) with",
+        "sprites/square.png - a 64x64 file opaque white in every texel, so the port draws the",
+        "black plainly. A UISprite: alpha fTOu(smoothEnd * 200).",
+        "MEASURED: world multiplied by k = 0.2149 (gold 1-4), 0.2131 / 0.2146 (fresh 1-1) against",
+        "the decoded 1 - 200/255 = 0.2157; flat in 80 px blocks 0.212..0.218, a pure multiply",
+        "(spec 2.2). Restart and pause read 0.100 / 0.100 under it, 0.47 x 0.2157."
+      ],
+      "alpha_byte": 200
+    },
+
+    "golden_plaque": {
+      "_source": [
+        "DECODED: CustomGameMenuLayer::CustomGameMenuLayer (bytes 278359..280345) sets",
+        "goldenScoreMedalPos = GetScreenSize() * (0.8, 0.31) (instructions 25..41; pushed",
+        "last-first) and adds sprites/golden_score_plaque.png there with origin (0.5, 0.38)",
+        "(instructions 72..92). A UISprite, always added.",
+        "MEASURED: hd sprite TL (934.0, 86.25) px at S 1.407, Pearson 0.9992 / 0.9991; the decode",
+        "puts it at (934.0, 86.4) (spec 2.1 P2)."
+      ],
+      "sprite": "golden_score_plaque.png",
+      "at_screen": [0.8, 0.31],
+      "origin": [0.5, 0.38],
+      "size_units": [64, 128]
+    },
+
+    "current_plaque": {
+      "_source": [
+        "DECODED: same constructor: currentScoreMedalPos = GetScreenSize() * (0.2, 0.36)",
+        "(instructions 43..59); only `if (score > 0)` (instructions 96..99, score =",
+        "ScoreManager::getScore for this level) it adds sprites/current_score_plaque.png there with",
+        "origin (0.5, 0.25) (101..121) and then getLargeSpriteMedalName(score) with V2_HALF",
+        "(125..150), which draws over it. getLargeSpriteMedalName (ScoreManager bytes",
+        "364204..364411): 3 gold, 2 silver, anything else bronze.",
+        "MEASURED: plaque TL (166.0, 169.25) S 1.406 Pearson 0.9995 (medal masked); medal",
+        "medal_gold_l TL (166.0, 169.25) S 1.4055 Pearson 0.9993, where medal_gold_m at 2x scores",
+        "0.979. Absent on fresh 1-1, present on gold 1-4 and gold 1-3 (spec 2.1 P3, P4; 2.3)."
+      ],
+      "sprite": "current_score_plaque.png",
+      "at_screen": [0.2, 0.36],
+      "origin": [0.5, 0.25],
+      "size_units": [64, 128],
+      "medal_origin": [0.5, 0.5],
+      "medal_size_units": [64, 64],
+      "medal_bronze": "medal_bronze_l.png",
+      "medal_silver": "medal_silver_l.png",
+      "medal_gold": "medal_gold_l.png"
+    },
+
+    "levels_button": {
+      "_source": [
+        "DECODED: GameMenuLayer::GameMenuLayer (instructions 58..86) adds 'back_button' with",
+        "GameStateProperties.backToMainMenuButton at gameMenuExitButtonPos, V2_HALF; Game::Game",
+        "sets them to sprites/back_to_main_menu.png and (0.42, 0.44). GameMenuLayer::update (bytes",
+        "101487..101852) opens createLevelSelectState when returnToLevelSelect is set (Game::Game",
+        "instructions 199..201), and CustomGameMenuLayer gives it getExitLevelButtonSound",
+        "(instructions 208..228).",
+        "MEASURED: Pearson 0.99929 at the decoded TL (447.6, 226.8); list_button.png, the port's",
+        "grid button, fits worse (0.99902, 1.3 px off, S 1.404) (spec 2.1 P5)."
+      ],
+      "sprite": "back_to_main_menu.png",
+      "at_screen": [0.42, 0.44],
+      "origin": [0.5, 0.5],
+      "size_units": [64, 64]
+    },
+
+    "resume_button": {
+      "_source": [
+        "DECODED: GameMenuLayer::GameMenuLayer (instructions 88..116): 'resume_button',",
+        "GameStateProperties.resumeGameButton at gameMenuResumeButtonPos, V2_HALF; Game::Game sets",
+        "sprites/resume_button.png and (0.58, 0.44). GameState::loop (instructions 73..138) calls",
+        "hideMenuPopup when it is pressed.",
+        "MEASURED: TL (652.25, 226.75) against the decoded (652.4, 226.8), Pearson 0.9994 (spec 2.1 P6)."
+      ],
+      "sprite": "resume_button.png",
+      "at_screen": [0.58, 0.44],
+      "origin": [0.5, 0.5],
+      "size_units": [64, 64]
+    },
+
+    "skip_button": {
+      "_source": [
+        "DECODED: CustomGameMenuLayer::CustomGameMenuLayer (instructions 154..205), inside the same",
+        "`score > 0` branch as the current plaque: 'skip', sprites/skip_level_button.png at",
+        "(0.5, 0.7), V2_HALF, with getSkipLevelButtonSound. CustomGameMenuLayer::update (bytes",
+        "280592..281012, instructions 20..36) calls goToNextLevel(levelIndex) when it is pressed.",
+        "MEASURED: TL (550, 414), Pearson 0.9993; absent on fresh 1-1 (spec 2.1 P7)."
+      ],
+      "sprite": "skip_level_button.png",
+      "at_screen": [0.5, 0.7],
+      "origin": [0.5, 0.5],
+      "size_units": [64, 64]
+    },
+
+    "achievements_button": {
+      "_source": [
+        "DECODED: CustomGameMenuLayer::CustomGameMenuLayer (instructions 230..279): 'scores',",
+        "sprites/scores.png at V2_ONE with origin V2_ONE, added only where",
+        "AchievementManager::getAchievementsFromLevel is not null; update (instructions 38..94)",
+        "opens an AchievementsPopup through UILayerManager::openPopup.",
+        "MEASURED: TL (920, 630), Pearson 0.9993 (spec 2.1 P8).",
+        "OWNER RULING: kept. The port has no achievements table and no AchievementsPopup yet (spec",
+        "section 7 U10), so it is drawn on every level - every captured level has one - and",
+        "pressing it does nothing visible."
+      ],
+      "sprite": "scores.png",
+      "at_screen": [1, 1],
+      "origin": [1, 1],
+      "size_units": [128, 32]
+    },
+
+    "sound_switch": {
+      "_source": [
+        "DECODED: SoundPanelLayer::SoundPanelLayer (bytes 73444..73806) adds 'sound_switch' through",
+        "UILayer::addGlobalSoundSwitch with SoundPanelProperties' soundSwitchOn/Off at",
+        "soundSwitchPos (0, 1) with origin (0, 1) (SoundPanelProperties::SoundPanelProperties,",
+        "bytes 51707..52281). GlobalSoundSwitch::manageSoundSwitch (bytes 32340..32535): switched",
+        "on, SetGlobalVolume(1); off, SetGlobalVolume(0); then GlobalVolumeManager::saveVolume.",
+        "(Decoded in the remake's ui3 work/static/dec_ui.txt.)",
+        "MEASURED: sound_high TL (0, 630) Pearson 0.9993 on both pauses; sound_mute at (0, 630)",
+        "Pearson 0.9992 on main_menu_sound_music_off.png, the same SoundPanelLayer (spec 2.1 P9)."
+      ],
+      "on_sprite": "sound_high.png",
+      "off_sprite": "sound_mute.png",
+      "at_screen": [0, 1],
+      "origin": [0, 1],
+      "size_units": [32, 32]
+    },
+
+    "music_switch": {
+      "_source": [
+        "DECODED: SoundPanelLayer::manageMusicSwitch (bytes 74288..74908), every update: with the",
+        "sound switch enabled and no music switch, it adds one through",
+        "UILayer::addGlobalMusicSwitch (a fresh UIButton, so a fresh entrance); with the sound",
+        "switch disabled and a music switch there, UIButton::dismiss - 700 ms out, and removed.",
+        "Game::Game places it at (0.09, 1), origin (0, 1).",
+        "MEASURED: music_on TL (115.25, 630) against the decoded 115.2, Pearson 0.9991; the slot is",
+        "empty on main_menu_sound_music_off.png (spec 2.1 P10, ui3 note: the main menu's own is",
+        "at 32 u, not here)."
+      ],
+      "on_sprite": "music_on.png",
+      "off_sprite": "music_off.png",
+      "at_screen": [0.09, 1],
+      "origin": [0, 1],
+      "size_units": [32, 32]
+    },
+
+    "title": {
+      "_source": [
+        "DECODED: GameMenuLayer::draw (bytes 101852..102330) draws levelNumberString +",
+        "(levelIndex + 1) with drawCenteredText at GetScreenSize() * levelNumberStringNormPos, in",
+        "the resume button's colour with its rgb set to white - so at the buttons' alpha. Game::Game",
+        "sets 'Part ' and (0.51, 0.23); the font resolves to Matura84_shadow.fnt on an hd screen",
+        "(ResourceSelector bytes 398764..399050) at half a unit per font pixel.",
+        "MEASURED: Matura84_shadow at 1.405 px per font px (rms 6.95 / 6.63, the next font 15.45);",
+        "centre (651.8..652.3, 165.1) against the decoded (652.8, 165.6) (spec 2.1 P11, U11)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "prefix": "Part ",
+      "units_per_font_px": 0.5,
+      "centre_of_screen": [0.51, 0.23]
+    },
+
+    "golden_number": {
+      "_source": [
+        "DECODED: CustomGameMenuLayer::draw (bytes 281012..281464) draws ScoreManager::",
+        "getGoldenScore for the level with drawCenteredText at goldenScoreMedalPos +",
+        "g_scale.scale(10, -4), getMatura42HardFontName at getScale / getHdSpriteDensity, in the",
+        "first button's colour with its rgb set to white.",
+        "MEASURED: Matura84_shadow at 1.40 (rms 5.70 / 7.68); centre (1051.6..1052.1, 210.95)",
+        "against the decoded (1052.1, 211.95); '0' on 1-1, '2' on 1-3 and 1-4 (spec 2.1 P12)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "units_per_font_px": 0.5,
+      "offset_units": [10, -4]
+    }
   }
 }

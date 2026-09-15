@@ -229,4 +229,11 @@ struct Glyph {
 std::vector<Glyph> LayOutCaption(const Rules& rules, const Supersonic::BitmapFont& font, const std::string& text,
                                  const glm::dvec2& viewUnits);
 
+// The same rule for any centred text: the line's box, its summed advances by
+// the line height at `unitsPerFontPx`, centred on `centre` on the view. The
+// pause's "Part N" and its golden number are drawCenteredText too, at their own
+// places (Pause.hpp).
+std::vector<Glyph> LayOutText(const Supersonic::BitmapFont& font, const std::string& text, const glm::dvec2& centre,
+                              double unitsPerFontPx);
+
 } // namespace MagicPortals::Hud
