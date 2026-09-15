@@ -242,6 +242,11 @@ add_mp_test(test_mp_hud)
 # Pure, reading only the port's own committed data, so it never skips.
 add_mp_test(test_mp_levelend)
 
+# The tutorial and help popups: ui.json's popups and sim/Popup's arithmetic - the
+# framework, every class's waypoint loops, the close button's bounce and blink -
+# pinned against the remake's ui2 spec, section 5. Pure, and it never skips.
+add_mp_test(test_mp_popup)
+
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.
 add_mp_test(test_mp_layer)

@@ -189,4 +189,12 @@ struct Dismissed {
 Dismissed HudDismissed(const Rules& rules, const Hud::Placement& placement, int alphaByte,
                        const glm::dvec2& viewUnits, double ms);
 
+// And the same control `ms` into its ENTRANCE, UIButton::UIButton's: alpha its
+// own byte times min(ms / 700, 1), sliding in from 32 u out along the same ray,
+// eased by smoothEnd. GameLayer's buttons come in on GameLayer's updates, which
+// start with the level and wait out a popup raised as it loads (the remake's ui2
+// spec, 5.4 and A-H9).
+Dismissed HudEntered(const Rules& rules, const Hud::Placement& placement, int alphaByte,
+                     const glm::dvec2& viewUnits, double ms);
+
 } // namespace MagicPortals::LevelEnd

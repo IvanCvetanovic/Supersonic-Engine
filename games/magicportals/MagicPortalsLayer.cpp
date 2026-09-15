@@ -190,7 +190,8 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error) &&
                       Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error) &&
                       Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error) &&
-                      LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error);
+                      LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error) &&
+                      Popup::LoadRules(m_paths.portData + "/ui.json", m_popupRules, error);
     // ui.json is the port's own and committed, so a HUD that will not read is a
     // fault in this repository and stops the start as loudly as a missing level.
     m_hudReady = read;
@@ -277,8 +278,11 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
     // state, whose preLoop starts the black, "Part N" and the plaque again
     // (GameLayer::update, bytes 100358..100663) - so it is zero here too.
     m_levelAgeMs = 0.0;
-    // And the time a pause stood it still, which the new level has had none of.
+    // And the time a pause or a popup stood it still, which the new level has had
+    // none of, and the plaque's dismissal, which it has not reached.
     m_stoppedMs = 0.0;
+    m_plaqueDismissAgeMs = -1.0;
+    m_plaqueAlpha = 0.0;
     const Chapters::Level& entry = m_chapters.levels[static_cast<std::size_t>(index)];
 
     // A refused level says why on the HUD, which a player reads, and in the log,
@@ -355,6 +359,16 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
         }
     }
     syncDrawables(registry);
+    // The help blocks it places, and the popup it opens as it loads, which
+    // Game::preLoop raises in the load frame (Game::managePopups, bytes
+    // 115157..115478): a retry of 1-02 raises it again. Only where the HUD is
+    // drawn at all - a level drawn as boxes has no UI to put one in.
+    findHelpBlocks();
+    if (m_artReady && m_hudReady) {
+        if (const Popup::Class* popup = Popup::LevelStartClass(m_popupRules, entry.name)) {
+            openPopup(registry, *popup, false);
+        }
+    }
     return true;
 }
 
@@ -387,8 +401,13 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry) {
     // The walk arrows and the corner buttons go with the level they were built
     // for, and so does what the level opened with.
     unloadControls();
-    // And a pause over it: whatever it held goes with the bodies it held.
+    // And a pause or a popup over it: whatever it held goes with the bodies it
+    // held, and so do the help blocks and a touch on one.
     m_pause = PauseScreen{};
+    m_popup = PopupScreen{};
+    m_frozen = Frozen{};
+    m_helpBlocks.clear();
+    m_helpTouch = HelpTouch{};
     // The particles the level's entities were emitting go with them; a retry
     // would otherwise pile a second pool on the first.
     unloadEmitters(registry);
@@ -2195,6 +2214,18 @@ void MagicPortalsLayer::buildControls() {
     for (const auto& [file, image] : m_endImages) {
         m_endTexels[file] = image.empty() ? glm::ivec2(0) : glm::ivec2(imageSizePx(image));
     }
+    // And the popups': the framework's and every class's, named within the
+    // original's assets rather than by file alone - the hand and the stone are
+    // entities, the smoke a particle - each the hd twin where one exists.
+    const auto popupImage = [&](const std::string& file) {
+        if (m_popupImages.find(file) == m_popupImages.end()) m_popupImages[file] = readable(originalAsset(file));
+    };
+    popupImage(m_popupRules.card.sprite);
+    popupImage(m_popupRules.closeButton.sprite);
+    for (const Popup::Class& popup : m_popupRules.classes) {
+        popupImage(popup.card.sprite);
+        for (const Popup::Item& item : popup.items) popupImage(item.sprite);
+    }
 
     // And their fonts, where they are not the caption's, read once for the run.
     const Pause::Rules& pause = m_pauseRules;
@@ -2217,6 +2248,7 @@ void MagicPortalsLayer::unloadControls() {
     m_pauseImages.clear();
     m_endImages.clear();
     m_endTexels.clear();
+    m_popupImages.clear();
 }
 
 const Supersonic::BitmapFont* MagicPortalsLayer::uiFont(const std::string& name) const {
@@ -2245,14 +2277,27 @@ void MagicPortalsLayer::layOutControls() {
     // game time stopped (spec 2.2, measured gain 0.010 / -0.025), where restart,
     // pause and clear-portals stay drawn under its dim, frozen and unpressed:
     // the tick reads no input for a level while a pause is up.
-    const bool pads = (playing || (ended && m_padEndByte > 0)) && !m_level.portals.noGravity && !m_pause.open;
+    // A popup stops game time the same way, and the pads go with it (spec 5.2).
+    const bool pads = (playing || (ended && m_padEndByte > 0)) && !m_level.portals.noGravity && !GameTimeStopped();
     const double padAlpha = playing ? Hud::PadOpacity(m_hudRules, m_levelAgeMs, tutorialPads())
                                     : static_cast<double>(m_padEndByte) / 255.0;
     // Restart, pause and clear-portals: CUT at the door, in one frame (gain
     // 0.4705 -> -0.034), and DISMISSED at a death as UIButtons, 700 ms out along
     // their rays. Both are measurements and the decode explains only the second
     // (spec U1); both are followed.
+    // While playing, restart and pause are GameLayer's UIButtons, and come IN as
+    // UIButtons on GameLayer's updates - the level's age, which a popup raised as
+    // the level loads holds at zero: under 1-02's and 1-03's popups they are not
+    // there to see, and they slide in once it has gone (spec 5.4, A-H9). On any
+    // other level the entrance is over at 700 ms, under the opening's black.
+    // Clear-portals keeps the flat 120 it had: PortalManager adds it with each
+    // portal, and no capture shows its entrance.
     const auto corner = [&](const Hud::Placement& placement, bool present) {
+        if (playing && &placement != &m_hudRules.clearPortals) {
+            const LevelEnd::Dismissed in =
+                LevelEnd::HudEntered(m_levelEndRules, placement, m_hudRules.alphaByte, view, m_levelAgeMs);
+            return std::make_tuple(in.rect, present && in.shown, in.alpha);
+        }
         if (playing) return std::make_tuple(Hud::Place(placement, view), present, Hud::Opacity(m_hudRules));
         if (m_dying && present) {
             const LevelEnd::Dismissed out =
@@ -2399,7 +2444,8 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
         if (const ControlButton* button = find(kind)) add(button->rect, button->image, white(button->alpha));
     }
     if (!m_plaqueImage.empty() && !m_medalImage.empty()) {
-        const double plaque = Hud::PlaqueAlpha(m_hudRules, m_levelAgeMs);
+        // As GameLayer's last update left it (tickPlaqueDismissal).
+        const double plaque = m_plaqueAlpha;
         const auto centred = [](const glm::dvec2& centre, const glm::dvec2& size) {
             return Hud::Rect{centre - size * 0.5, size};
         };
@@ -2435,6 +2481,38 @@ void MagicPortalsLayer::EmitHud(entt::registry& registry) const {
               Pause::TitleCentre(m_pauseRules, view), m_pauseRules.title.unitsPerFontPx, true, text);
         write(m_pauseRules.goldenNumber.font, Pause::GoldenText(m_pause.level),
               Pause::GoldenCentre(m_pauseRules, view), m_pauseRules.goldenNumber.unitsPerFontPx, true, text);
+    }
+
+    // 4a. A popup, when one is up: the CURRENT UI layer, drawn where the pause is,
+    //     over restart, pause and the plaque (frozen, or not yet come in at a level's
+    //     start) and under both blacks and the caption (spec 5.2's order). The
+    //     pieces are sim/Popup's: the dim, the card, the close button, then the
+    //     class's own draw() - turned sprites turned in the view's square units,
+    //     which the overlay is told in fractions of this view's shape.
+    if (m_popup.open && m_popup.cls != nullptr) {
+        const float aspect = static_cast<float>(view.x / view.y);
+        for (const Popup::Piece& piece : Popup::Pieces(m_popupRules, *m_popup.cls, m_popup.state, view)) {
+            const glm::vec4 colour(glm::vec3(piece.rgb), static_cast<float>(piece.alphaByte) / 255.0f);
+            if (piece.element == Popup::Element::Dim) {
+                // eth_framework_square.png is opaque white in every texel, so tinted
+                // black it is exactly a plain black.
+                add(piece.rect, std::string(), colour);
+                continue;
+            }
+            const auto image = m_popupImages.find(piece.sprite);
+            if (image == m_popupImages.end() || image->second.empty() || colour.a <= 0.0f) continue;
+            ScreenOverlay::Quad quad;
+            quad.min = glm::vec2(piece.rect.min / view);
+            quad.max = glm::vec2(piece.rect.Max() / view);
+            quad.uvMin = glm::vec2(piece.uvMin);
+            quad.uvMax = glm::vec2(piece.uvMax);
+            quad.color = colour;
+            quad.texture = image->second;
+            if (piece.angleDeg != 0.0) {
+                quad.basis = ScreenOverlay::Rotation(glm::radians(static_cast<float>(piece.angleDeg)), aspect);
+            }
+            overlay.Add(std::move(quad));
+        }
     }
 
     // 4b. The finished or the lost screen, when one is up: the CURRENT UI layer
@@ -2573,9 +2651,20 @@ float MagicPortalsLayer::readInput(entt::registry& registry) {
         openPause(registry);
         return direction;
     }
-    const ControlButton* under = controlUnderPointer(registry);
+    // DEV ONLY: a scheduled tap owns the pointer on its ticks, wherever the real
+    // cursor happens to rest over the window.
+    const bool devTap = std::any_of(m_devTaps.begin(), m_devTaps.end(), [this](const DevTap& tap) {
+        return tap.tick <= m_ticks;
+    });
+    const ControlButton* under = devTap ? nullptr : controlUnderPointer(registry);
     const bool held = Input::IsDown(kTap);
     const bool pressed = Input::TickWasPressed(kTap);
+
+    // A HELP BLOCK takes a touch that goes down on it - no portal, no control -
+    // and opens its popup when that touch comes up; the popup stops the level on
+    // this tick, as the pause control does. The controls are asked first: they
+    // are GameLayer's buttons, which the block's disabled touches do not reach.
+    if (under == nullptr && helpBlockInput(registry)) return direction;
 
     if (under != nullptr) {
         switch (under->kind) {
@@ -2997,6 +3086,18 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
             // spent on a button is spent.
             stepLevel(registry, keyDirection(), fixedDelta);
         }
+        tickPlaqueDismissal(false);
+        updateHud(registry);
+        return;
+    }
+    // A popup the same way. One a help block raised mid-tick owes that tick's
+    // BeforeStep half, as the pause does; one raised as the level loaded owes
+    // nothing, and the next tick is the level's first.
+    if (m_popup.open) {
+        if (popupTick(registry, fixedDelta) && m_loaded && m_screen == Screen::None) {
+            stepLevel(registry, keyDirection(), fixedDelta);
+        }
+        tickPlaqueDismissal(false);
         updateHud(registry);
         return;
     }
@@ -3025,6 +3126,13 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
             goTo(registry, m_chapters.Next(m_current));
         } else if (m_current >= 0 && !m_chapterComplete && Input::TickWasPressed(kRetry)) {
             loadLevel(registry, m_current);
+        }
+        // A level that raised its tutorial as it loaded stops HERE, as one loaded
+        // from a menu does: not a tick older and not stepped under its popup, so a
+        // retried 1-02 stands at age 0 as the first load of it does.
+        if (GameTimeStopped()) {
+            updateHud(registry);
+            return;
         }
     }
 
@@ -3116,6 +3224,8 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
         // The level is a tick older. BEFORE the input, because the pads slide
         // in and a tap is tested against where they are on this tick.
         m_levelAgeMs += dtMs;
+        // GameLayer is updated on this tick: the plaque's colour is written.
+        tickPlaqueDismissal(true);
         if (m_finishing || m_dying) {
             // NOTHING IS PRESSABLE from the door or the death on (spec 3.5):
             // GameLayer is dismissed and no screen is current yet, and once one
@@ -3127,11 +3237,11 @@ void MagicPortalsLayer::OnFixedUpdate(entt::registry& registry, float fixedDelta
         }
         // Then this tick's input, and what comes before the next step.
         const float direction = readInput(registry);
-        // A control may have opened a pause, which stops the level HERE, after
-        // the step it has just taken and before the next: the tick the pause
-        // resumes on runs the rest. Or it opened a screen that unloaded the
-        // level, and nothing below has a level to step any more.
-        if (!m_loaded || m_screen != Screen::None || m_pause.open) {
+        // A control may have opened a pause, or a help block a popup, which stops
+        // the level HERE, after the step it has just taken and before the next:
+        // the tick it resumes on runs the rest. Or it opened a screen that
+        // unloaded the level, and nothing below has a level to step any more.
+        if (!m_loaded || m_screen != Screen::None || GameTimeStopped()) {
             updateHud(registry);
             return;
         }
@@ -3180,7 +3290,7 @@ void MagicPortalsLayer::stepLevel(entt::registry& registry, float direction, flo
 bool MagicPortalsLayer::pauseAllowed() const {
     // Where the pause control is drawn and can be pressed: a level being played,
     // not going into its door and not dying.
-    return m_hudReady && m_loaded && m_screen == Screen::None && !m_finishing && !m_dying && !m_pause.open;
+    return m_hudReady && m_loaded && m_screen == Screen::None && !m_finishing && !m_dying && !GameTimeStopped();
 }
 
 Pause::Switches MagicPortalsLayer::PauseSwitches() const {
@@ -3205,46 +3315,281 @@ void MagicPortalsLayer::openPause(entt::registry& registry) {
     m_pause.level.goldenScore = entry.goldenScore;
     m_pause.level.index = entry.index;
 
-    // GAME TIME STOPS (STimeManager::pause). The level is not stepped from here,
-    // but the app steps physics before every tick regardless, so every body is
-    // held as it stands now and put back after each of those steps: velocities,
-    // sleep and all, so the level resumes as though the pause had not happened.
+    // GAME TIME STOPS (STimeManager::pause).
+    freezeWorld(registry);
+    // The pads go with game time.
+    layOutControls();
+}
+
+void MagicPortalsLayer::freezeWorld(entt::registry& registry) {
+    using namespace Supersonic;
+    m_frozen = Frozen{};
+    // The level is not stepped from here, but the app steps physics before every
+    // tick regardless, so every body is held as it stands now and put back after
+    // each of those steps: velocities, sleep and all, so the level resumes as
+    // though game time had never stopped.
     for (auto [entity, transform, body] : registry.view<TransformComponent, RigidBodyComponent>().each()) {
-        m_pause.held.push_back(PauseScreen::Held{entity, transform, body});
+        m_frozen.held.push_back(Frozen::Held{entity, transform, body});
     }
     // And the flipbooks, which the app turns on the tick: the world under a
     // popup measured still (temporal std 0.001, spec 0.3), so nothing animates.
     for (auto [entity, animation] : registry.view<SpriteAnimationComponent>().each()) {
         if (!animation.playing) continue;
         animation.playing = false;
-        m_pause.stoppedFlipbooks.push_back(entity);
+        m_frozen.stoppedFlipbooks.push_back(entity);
     }
-    // The pads go with game time.
-    layOutControls();
 }
 
 void MagicPortalsLayer::holdWorld(entt::registry& registry) {
     using namespace Supersonic;
-    for (const PauseScreen::Held& held : m_pause.held) {
+    for (const Frozen::Held& held : m_frozen.held) {
         if (!registry.valid(held.entity)) continue;
         if (auto* transform = registry.try_get<TransformComponent>(held.entity)) *transform = held.transform;
         if (auto* body = registry.try_get<RigidBodyComponent>(held.entity)) *body = held.body;
     }
 }
 
-void MagicPortalsLayer::closePause(entt::registry& registry) {
+void MagicPortalsLayer::thawWorld(entt::registry& registry) {
     using namespace Supersonic;
-    if (!m_pause.open) return;
-    // The world as the tap left it, this tick's physics step undone too.
+    // The world as game time left it, this tick's physics step undone too.
     holdWorld(registry);
-    for (const entt::entity entity : m_pause.stoppedFlipbooks) {
+    for (const entt::entity entity : m_frozen.stoppedFlipbooks) {
         if (!registry.valid(entity)) continue;
         if (auto* animation = registry.try_get<SpriteAnimationComponent>(entity)) animation->playing = true;
     }
+    m_frozen = Frozen{};
+}
+
+void MagicPortalsLayer::closePause(entt::registry& registry) {
+    if (!m_pause.open) return;
+    thawWorld(registry);
     // UILayer::hide(true): gone on this frame, no fade, and every element reset,
     // so the next pause plays its whole entrance again (spec 2.4).
     m_pause = PauseScreen{};
     layOutControls();
+}
+
+// ---- the popups ------------------------------------------------------------------
+
+std::string MagicPortalsLayer::originalAsset(const std::string& relative) const {
+    // THE HD TWIN, as the rest of the port's UI takes it (menuImage), but beside
+    // the file wherever it lives: the hand and the stone are entities, the smoke a
+    // particle, and those keep their twins in entities/hd/, not sprites/hd/.
+    std::error_code ec;
+    const std::filesystem::path path(relative);
+    const std::string hd = m_paths.original + "/" + (path.parent_path() / "hd" / path.filename()).generic_string();
+    if (std::filesystem::exists(hd, ec)) return hd;
+    return m_paths.original + "/" + relative;
+}
+
+void MagicPortalsLayer::findHelpBlocks() {
+    m_helpBlocks.clear();
+    if (!m_loaded) return;
+    for (const Tscn::Node& node : m_data.scene.nodes) {
+        if (node.parent != ".") continue;
+        const Tscn::Value* entity = node.Meta("entity_name");
+        if (entity == nullptr || entity->kind != Tscn::Value::Kind::String || entity->text != m_popupRules.helpBlock.entity) {
+            continue;
+        }
+        HelpBlock block;
+        const Tscn::Value* box = node.Meta("trigger_size");
+        if (!PositionOf(&node, block.atUnits) || box == nullptr || box->kind != Tscn::Value::Kind::Vector2) continue;
+        block.boxUnits = glm::dvec2(box->numbers[0], box->numbers[1]);
+        m_helpBlocks.push_back(block);
+    }
+}
+
+std::vector<Hud::Rect> MagicPortalsLayer::HelpBlockRects() const {
+    std::vector<Hud::Rect> rects;
+    const glm::dvec2 corner = m_follow.centrePx - ViewPx() * 0.5;
+    for (const HelpBlock& block : m_helpBlocks) {
+        rects.push_back(Popup::HelpBlockRect(m_popupRules, block.atUnits, block.boxUnits, corner));
+    }
+    return rects;
+}
+
+void MagicPortalsLayer::ScheduleDevTap(int tick, std::optional<glm::dvec2> viewFraction) {
+    DevTap tap;
+    tap.tick = tick;
+    tap.onHelpBlock = !viewFraction.has_value();
+    tap.viewFraction = viewFraction.value_or(glm::dvec2(0.0));
+    m_devTaps.push_back(tap);
+}
+
+MagicPortalsLayer::Touch MagicPortalsLayer::touchThisTick(const entt::registry& registry) {
+    using Supersonic::Input;
+    Touch touch;
+    const glm::dvec2 view = ViewPx();
+    // DEV ONLY first: a scheduled tap is pressed on its tick and released on the
+    // next, where it stood.
+    for (auto it = m_devTaps.begin(); it != m_devTaps.end();) {
+        if (it->tick > m_ticks) {
+            ++it;
+            continue;
+        }
+        glm::dvec2 at = it->viewFraction * view;
+        if (it->onHelpBlock) {
+            // Only a block the view shows: a player cannot touch one off the
+            // screen. A tap with none is dropped, so it does not hold the pointer
+            // for the rest of the run.
+            const std::vector<Hud::Rect> rects = HelpBlockRects();
+            if (!rects.empty()) at = rects.front().Centre();
+            if (rects.empty() || at.x < 0.0 || at.y < 0.0 || at.x > view.x || at.y > view.y) {
+                SUPERSONIC_LOG_WARN("Magic Portals") << "DEV tap on tick " << m_ticks
+                                                     << " dropped: no help block on the view" << std::endl;
+                it = m_devTaps.erase(it);
+                continue;
+            }
+        }
+        touch.over = true;
+        touch.atView = at;
+        touch.atPx = at / view * glm::dvec2(1280.0, 720.0);
+        if (!it->pressed) {
+            it->pressed = true;
+            it->viewFraction = at / view;
+            it->onHelpBlock = false; // released where it went down
+            touch.pressed = true;
+            touch.held = true;
+            SUPERSONIC_LOG_INFO("Magic Portals") << "DEV tap down on tick " << m_ticks << " at (" << at.x << ", "
+                                                 << at.y << ") units" << std::endl;
+        } else {
+            touch.released = true;
+            SUPERSONIC_LOG_INFO("Magic Portals") << "DEV tap up on tick " << m_ticks << std::endl;
+            m_devTaps.erase(it);
+        }
+        return touch;
+    }
+    const auto* viewport = registry.ctx().find<Supersonic::ViewportInfo>();
+    if (viewport == nullptr || !viewport->pointerOverGame) return touch;
+    const glm::vec2 size = viewport->Size();
+    if (size.x <= 0.0f || size.y <= 0.0f) return touch;
+    const glm::vec2 local = viewport->ToLocal(Input::MousePosition());
+    touch.over = true;
+    touch.atPx = glm::dvec2(local);
+    touch.atView = glm::dvec2(local / size) * view;
+    touch.pressed = Input::TickWasPressed(kTap);
+    touch.released = Input::TickWasReleased(kTap);
+    touch.held = Input::IsDown(kTap);
+    return touch;
+}
+
+bool MagicPortalsLayer::helpBlockInput(entt::registry& registry) {
+    // HelpBlockController::update (bytes 226317..228622): a touch down in a
+    // block's rectangle disables the level's touches, so it fires no portal; the
+    // move it makes is kept; its release, not having moved 12, opens the level's
+    // popup. Not while game time is stopped, which the caller already is not.
+    if (m_helpBlocks.empty()) {
+        m_helpTouch = HelpTouch{};
+        return false;
+    }
+    const Touch touch = touchThisTick(registry);
+    const std::vector<Hud::Rect> rects = HelpBlockRects();
+    bool taken = false;
+    if (touch.pressed && touch.over) {
+        for (std::size_t i = 0; i < rects.size(); ++i) {
+            if (!rects[i].Contains(touch.atView)) continue;
+            m_helpTouch = HelpTouch{true, static_cast<int>(i), touch.atPx, 0.0};
+            taken = true;
+            break;
+        }
+    }
+    if (!m_helpTouch.armed) return taken;
+    taken = true;
+    if (touch.over) m_helpTouch.maxMovePx = std::max(m_helpTouch.maxMovePx, glm::length(touch.atPx - m_helpTouch.downPx));
+    if (!touch.released && touch.held) return taken;
+    // Released, or gone without a release this tick saw: either way it is over.
+    const HelpTouch done = m_helpTouch;
+    m_helpTouch = HelpTouch{};
+    if (!touch.released || done.block < 0 || static_cast<std::size_t>(done.block) >= rects.size() ||
+        !rects[static_cast<std::size_t>(done.block)].Contains(touch.atView) ||
+        !(done.maxMovePx < m_popupRules.helpBlock.maxMovePx)) {
+        return taken;
+    }
+    const Chapters::Level* level = Current();
+    bool listed = false;
+    const Popup::Class* popup = level != nullptr ? Popup::HelpBlockClass(m_popupRules, level->name, listed) : nullptr;
+    if (popup == nullptr) {
+        // 4-02's SpaceEasterEggHelpPopup, which the port does not build (spec U6).
+        SUPERSONIC_LOG_INFO("Magic Portals") << "help block released on tick " << m_ticks << ": "
+                                             << (listed ? "its popup is not built" : "no popup is listed") << std::endl;
+        return taken;
+    }
+    openPopup(registry, *popup, true);
+    return taken;
+}
+
+void MagicPortalsLayer::openPopup(entt::registry& registry, const Popup::Class& cls, bool stepOnResume) {
+    if (m_popup.open || m_pause.open) return;
+    // A popup nobody can see must not stop the level: without its card and its
+    // close button - the original's assets absent - it is said once and not
+    // raised, as a HUD control whose picture is missing is not built.
+    const auto drawable = [this](const std::string& file) {
+        const auto found = m_popupImages.find(file);
+        return found != m_popupImages.end() && !found->second.empty();
+    };
+    if (!drawable(cls.card.sprite) || !drawable(m_popupRules.closeButton.sprite)) {
+        SUPERSONIC_LOG_WARN("Magic Portals") << "popup " << cls.name << " not raised: its card or close button "
+                                             << "could not be read" << std::endl;
+        return;
+    }
+    m_popup = PopupScreen{};
+    m_popup.open = true;
+    m_popup.cls = &cls;
+    m_popup.state = Popup::Start(cls);
+    m_popup.stepOnResume = stepOnResume;
+    m_helpTouch = HelpTouch{};
+    // Popup::Popup pauses g_timeManager (instructions 147..166).
+    freezeWorld(registry);
+    layOutControls();
+    SUPERSONIC_LOG_INFO("Magic Portals") << "popup " << cls.name << " opened on tick " << m_ticks << std::endl;
+}
+
+bool MagicPortalsLayer::ClosePopup() {
+    if (!m_popup.open || Popup::Closing(m_popup.state)) return false;
+    Popup::Close(m_popup.state);
+    SUPERSONIC_LOG_INFO("Magic Portals") << "popup closed on tick " << m_ticks << std::endl;
+    return true;
+}
+
+bool MagicPortalsLayer::popupTick(entt::registry& registry, float fixedDelta) {
+    using Supersonic::Input;
+    // The step the app just ran is undone before anything looks at the world.
+    holdWorld(registry);
+    const double dtMs = static_cast<double>(fixedDelta) * 1000.0;
+    m_stoppedMs += dtMs;
+    Popup::Tick(*m_popup.cls, m_popup.state, dtMs);
+    m_aspect = viewportAspect(registry);
+    layOutControls();
+
+    // Popup::hasReceivedCloseCommand: a touch DOWN anywhere, the close button
+    // included, or the back key. The touch is spent on the close and reaches
+    // nothing under the popup.
+    const Touch touch = touchThisTick(registry);
+    if ((touch.pressed && touch.over) || Input::TickWasPressed(kBack)) ClosePopup();
+
+    // Popup::update: once every sprite and the button are dismissed, the last layer
+    // is current again and game time resumes - on this tick.
+    if (!Popup::Gone(m_popupRules, m_popup.state)) return false;
+    const bool step = m_popup.stepOnResume;
+    thawWorld(registry);
+    m_popup = PopupScreen{};
+    layOutControls();
+    SUPERSONIC_LOG_INFO("Magic Portals") << "popup gone, game time resumed on tick " << m_ticks << std::endl;
+    return step;
+}
+
+void MagicPortalsLayer::tickPlaqueDismissal(bool updated) {
+    // Game::loop -> dismissCurrentMedalSprite (bytes 115930..116151): once
+    // getUiTime() > 2000 - a frame clock neither a pause nor a popup stops - the
+    // plaque and its medal are dismissed. The fade that follows runs on GameLayer's
+    // updates, so it starts from the age the level had when that happened, which
+    // under a stop is the age the stop holds.
+    if (m_plaqueDismissAgeMs < 0.0 && LevelFrameMs() > m_hudRules.plaque.dismissAfterMs) {
+        m_plaqueDismissAgeMs =
+            GameTimeStopped() ? m_levelAgeMs
+                              : std::max(0.0, m_levelAgeMs - (LevelFrameMs() - m_hudRules.plaque.dismissAfterMs));
+    }
+    if (updated) m_plaqueAlpha = Hud::PlaqueAlphaFrom(m_hudRules, m_levelAgeMs, m_plaqueDismissAgeMs);
 }
 
 bool MagicPortalsLayer::devPressDue(DevPress press) {
@@ -3438,7 +3783,7 @@ void MagicPortalsLayer::OnUpdate(entt::registry& registry, float deltaTime) {
     // because a particle is a picture: nothing below may reach Game::Level,
     // the simulation's clock or the state hash. Carried before the camera's
     // early return, so a level drawn without one does not freeze them.
-    if (!m_pause.open) updateEmitters(registry, deltaTime);
+    if (!GameTimeStopped()) updateEmitters(registry, deltaTime);
     // And the sounds the tick latched, played here for the same reason: a
     // sound is a picture with a speaker. Both are before the camera's early
     // return, so a level drawn without one is not also silent.

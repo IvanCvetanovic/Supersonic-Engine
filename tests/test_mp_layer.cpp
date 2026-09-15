@@ -35,6 +35,7 @@
 #include "sim/Art.hpp"
 #include "sim/LevelEnd.hpp"
 #include "sim/Pause.hpp"
+#include "sim/Popup.hpp"
 #include "sim/UiLayer.hpp"
 #include "sim/Units.hpp"
 
@@ -160,6 +161,23 @@ void landShot(MagicPortalsLayer& layer, entt::registry& registry) {
 // refused - correctly - so the ones that mean to test the shot say so here.
 void waitForFirstTap(MagicPortalsLayer& layer, entt::registry& registry) {
     for (int tick = 0; tick < 26; ++tick) tickWith(layer, registry, kRest, {}, {});
+}
+
+// 1-02 and 1-03 raise their tutorial popup as they load, and it stops the level -
+// no walk, no tap, no particle - until a touch closes it and its fade has run
+// (sim/Popup.hpp). A case that means to play either level closes it first, as a
+// player does, and the level then plays from an age of zero exactly as it did
+// before popups were built. Returns the ticks it took.
+int CloseTheLevelStartPopup(MagicPortalsLayer& layer, entt::registry& registry) {
+    if (!layer.PopupOpen()) return 0;
+    tap(layer, registry, kRest);
+    int ticks = 1;
+    while (layer.PopupOpen() && ticks < 180) {
+        tickWith(layer, registry, kRest, {}, {});
+        ++ticks;
+    }
+    CHECK_MSG(!layer.PopupOpen(), "the level-start popup closes on a touch and is gone after its fade");
+    return ticks;
 }
 
 std::string lastFailure(const MagicPortalsLayer& layer) {
@@ -477,9 +495,11 @@ void LevelsFollowInOrderAndRetryIsInstant() {
               "1-1 cleared with no portal: its golden score is 0, so that is gold");
     if (layer.SimLevel() == nullptr) return;
 
-    // level1 as it loads: the player at its spawn, (448, 110).
+    // level1 as it loads: the player at its spawn, (448, 110), under its popup.
     const glm::dvec2 spawn(448.0, 110.0);
     CHECK_MSG(glm::distance(playerPx(registry, layer), spawn) < 1.0, "at " + Point(playerPx(registry, layer)));
+    CHECK_MSG(layer.PopupOpen(), "1-02 opens with its tutorial popup, reached from 1-1 as from anywhere");
+    CloseTheLevelStartPopup(layer, registry);
 
     // A portal placed, then R: level1 as it loaded, again.
     //
@@ -627,6 +647,7 @@ void AFallOutOfTheLevelIsADeath() {
     CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
     if (layer.SimLevel() == nullptr) return;
     CHECK_MSG(layer.SimLevel()->hazards.haveBounds, "level1 knows its own extent");
+    CloseTheLevelStartPopup(layer, registry);
 
     // Below the level and past the margin: (512, 256) plus (64, 96) in y.
     auto& transform = registry.get<TransformComponent>(layer.SimLevel()->player);
@@ -905,6 +926,7 @@ void APortalAndAShotAreTheOriginals() {
     layer.OnAttach(registry);
     CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
     if (layer.SimLevel() == nullptr) return;
+    CloseTheLevelStartPopup(layer, registry);
     // A level's first tap waits out the placement cooldown, as a player's does.
     waitForFirstTap(layer, registry);
     const glm::dvec2 target = playerPx(registry, layer) + glm::dvec2(0.0, -48.0);
@@ -959,6 +981,7 @@ void WithoutTheOriginalThePortalIsABox() {
     layer.OnAttach(registry);
     CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
     if (layer.SimLevel() == nullptr) return;
+    CHECK_MSG(!layer.PopupOpen(), "a popup whose card and button cannot be read is not raised to stop the level");
     waitForFirstTap(layer, registry);
     tap(layer, registry, screenOf(registry, playerPx(registry, layer) + glm::dvec2(0.0, -48.0)));
     CHECK_EQ(Tagged(registry, "Magic Portals Shot Sprite"), 0);
@@ -1207,6 +1230,13 @@ void EscapePausesALevelAndResumesIt() {
         CHECK_MSG(false, layer.LoadError());
         return;
     }
+    // Under 1-02's popup the back key closes the popup (Popup::hasReceivedCloseCommand,
+    // GSK_BACK), not opens the pause over it.
+    CHECK(layer.PopupOpen());
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK_MSG(!layer.Paused() && layer.OpenPopup() != nullptr && MagicPortals::Popup::Closing(*layer.OpenPopup()),
+              "Escape under a popup closes it");
+    while (layer.PopupOpen()) tickWith(layer, registry, kRest, {}, {});
     tickWith(layer, registry, kRest, {}, {});
     press(layer, registry, MagicPortalsLayer::kBack);
     CHECK_MSG(layer.Paused(), "Escape pauses the level");
@@ -1315,6 +1345,10 @@ void ALevelsEntitiesEmit() {
         CHECK_MSG(false, layer.LoadError());
         return;
     }
+    // Under the tutorial popup the level stands still, its particles with it.
+    for (int frame = 0; frame < 30; ++frame) layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+    CHECK_MSG(Tagged(registry, "Magic Portals Particle") == 0, "no particle is carried while a popup has time stopped");
+    CloseTheLevelStartPopup(layer, registry);
     // Ticking alone draws none of them.
     for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
     CHECK_MSG(Tagged(registry, "Magic Portals Particle") == 0,
@@ -1338,14 +1372,18 @@ void ParticlesGoWithTheirLevel() {
         CHECK_MSG(false, layer.LoadError());
         return;
     }
+    CloseTheLevelStartPopup(layer, registry);
     for (int frame = 0; frame < 120; ++frame) layer.OnUpdate(registry, MagicPortalsLayer::kTick);
     const int before = Tagged(registry, "Magic Portals Particle");
     CHECK(before > 0);
 
-    // A retry rebuilds the level from what was read when it loaded.
+    // A retry rebuilds the level from what was read when it loaded - and raises
+    // 1-02's popup again, as Game::preLoop does on every load.
     press(layer, registry, MagicPortalsLayer::kRetry);
+    CHECK_MSG(layer.PopupOpen(), "a retry of 1-02 raises its popup again");
     CHECK_MSG(Tagged(registry, "Magic Portals Particle") == 0,
               "a retry left " + std::to_string(Tagged(registry, "Magic Portals Particle")) + " particle(s) behind");
+    CloseTheLevelStartPopup(layer, registry);
     for (int frame = 0; frame < 120; ++frame) layer.OnUpdate(registry, MagicPortalsLayer::kTick);
     CHECK_MSG(Tagged(registry, "Magic Portals Particle") <= before,
               "the level came back with more particles than it had");
@@ -1591,6 +1629,9 @@ void NoSpriteBlinksWhileWalking(const char* levelName) {
         CHECK_MSG(false, layer.LoadError());
         return;
     }
+
+    // 1-02 and 1-03 are walked, so their tutorial popups are closed first.
+    CloseTheLevelStartPopup(layer, registry);
 
     // Four frames a tick: 240 Hz against 60, so three frames in four are drawn
     // from an interpolated pose and none of them from a tick's own.
@@ -2562,8 +2603,13 @@ void ThePauseStopsTheLevelUnderIt() {
     if (blacks.size() != 1 || restart < 0 || pause < 0) return;
     const ScreenOverlay::Quad& dim = quads[static_cast<std::size_t>(blacks[0])];
     CHECK_MSG(restart < blacks[0] && pause < blacks[0], "restart and pause are drawn under the dim");
-    CHECK_MSG(NearD(quads[static_cast<std::size_t>(restart)].color.a, 120.0 / 255.0, 1e-6),
-              "at their own 120, which the dim takes to 0.10");
+    // Half a second into the level GameLayer's two are still coming in as UIButtons
+    // (700 ms, linear): their own 120 times fTOu(516.7 / 700 * 255) = 188, frozen there.
+    CHECK_MSG(NearD(quads[static_cast<std::size_t>(restart)].color.a,
+                    120.0 / 255.0 *
+                        MagicPortals::UiLayer::ButtonAlphaByte(layer.LevelEndRules().layer, layer.LevelAgeMs()) / 255.0,
+                    1e-6),
+              "at their own 120 times the entrance they had reached, which the dim takes lower still");
     CHECK_MSG(dim.min == glm::vec2(0.0f) && dim.max == glm::vec2(1.0f) && NearD(dim.color.a, 200.0 / 255.0, 1e-6),
               "the dim covers the view at 200 of 255 once it is in");
     const int golden = IndexOfImage(quads, rules.goldenPlaque.sprite);
@@ -2680,6 +2726,248 @@ void ThePauseResumesWhereTheTapLeftIt() {
     CHECK_MSG(glm::length(pausedAt - straightAt) < 1e-3,
               "and its player is in the same place: " + Point(pausedAt) + " against " + Point(straightAt));
     CHECK_MSG(glm::length(straightAt - glm::dvec2(0.0)) > 0.0, "having walked somewhere");
+}
+
+// ---- the tutorial and help popups (spec section 5) ---------------------------------
+
+void TheTutorialPopupStopsALevelAsItLoads() {
+    if (!OriginalArtIsThere("TheTutorialPopupStopsALevelAsItLoads")) return;
+    namespace Popup = MagicPortals::Popup;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) {
+        CHECK_MSG(false, layer.LoadError());
+        return;
+    }
+    const Hud::Rules& hud = layer.HudRules();
+    const Popup::Rules& rules = layer.PopupRules();
+    CHECK_MSG(layer.PopupOpen() && layer.OpenPopupClass() != nullptr &&
+                  layer.OpenPopupClass()->name == "LevelHelp1Popup" && layer.GameTimeStopped(),
+              "1-02 opens LevelHelp1Popup in its load frame (Game::managePopups)");
+    CHECK_EQ(static_cast<int>(layer.HelpBlockRects().size()), 1);
+    if (!layer.PopupOpen()) return;
+    const glm::dvec2 spawn = playerPx(registry, layer);
+
+    // A-H3, 1.6 s in with the arrow held: game time stands at zero, the frame clock
+    // does not, and nothing walks.
+    for (int tick = 0; tick < 96; ++tick) tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+    CHECK_MSG(layer.LevelAgeMs() == 0.0 && NearD(layer.LevelFrameMs(), 1600.0, 1e-3),
+              "the level's age stands at 0 under it while its frame clock runs: " + std::to_string(layer.LevelFrameMs()));
+    CHECK_MSG(glm::length(playerPx(registry, layer) - spawn) < 1e-6, "and the player is still at its spawn");
+    CHECK_MSG(NearD(layer.OpenPopup()->clockMs, 1600.0, 1e-3), "the popup's own clock runs");
+    {
+        const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+        CHECK_MSG(IndexOfImage(quads, hud.pads.leftSprite) < 0 && IndexOfImage(quads, hud.pads.rightSprite) < 0 &&
+                      IndexOfImage(quads, hud.restart.sprite) < 0 && IndexOfImage(quads, hud.pause.sprite) < 0,
+                  "A-H3: no pad, and restart and pause not come in: GameLayer has not had an update");
+        const std::vector<int> blacks = BlackIndices(quads);
+        const int card = IndexOfImage(quads, "help_popup.png");
+        const int close = IndexOfImage(quads, "popup_close_button.png");
+        const int stone = IndexOfImage(quads, "single_stone_sprite.png");
+        CHECK_MSG(blacks.size() == 1 && card > blacks[0] && close > card && stone > close,
+                  "the dim, the card, the button, then the demonstration");
+        if (!blacks.empty()) {
+            const ScreenOverlay::Quad& dim = quads[static_cast<std::size_t>(blacks[0])];
+            CHECK_MSG(dim.min == glm::vec2(0.0f) && dim.max == glm::vec2(1.0f) && NearD(dim.color.a, 150.0 / 255.0, 1e-6),
+                      "H1: the view in black at 150 of 255");
+        }
+        CHECK_EQ(CountImage(quads, "single_stone_sprite.png"), 2);
+        if (card >= 0) {
+            const Hud::Rect onView = OnView(layer, quads[static_cast<std::size_t>(card)]);
+            CHECK_MSG(SameRect(onView, Hud::Rect{layer.ViewPx() * 0.5 - glm::dvec2(170.0, 128.0), glm::dvec2(340.0, 256.0)}),
+                      "H2: 340 x 256 u about the view's centre: " + ShowRect(onView));
+        }
+        // The caption over it all, on the frame clock: 1 - 1600 / 3000.
+        const int glyphs = CountCaption(quads, hud.caption.font);
+        CHECK_MSG(glyphs > 0 && NearD(quads.back().color.a, Hud::CaptionAlpha(hud, layer.LevelFrameMs()), 1e-6) &&
+                      NearD(quads.back().color.a, 1.0 - 1600.0 / 3000.0, 0.03) &&
+                      quads.back().texture.find("Matura84") != std::string::npos,
+                  "A-H3: \"Part 2\" drawn last, at the byte of 1 - 1600 / 3000 (A-H3's 0.03): " +
+                      std::to_string(quads.back().color.a));
+        // The arrow is turned: its quad carries a basis that is not the identity.
+        CHECK_MSG(IndexOfImage(quads, "teleport_arrow.png") < 0, "the arrow not in yet at 1.6 s");
+    }
+    // Later in its loop the arrow is up, turned 23 degrees.
+    for (int tick = 0; tick < 42; ++tick) tickWith(layer, registry, kRest, {}, {});
+    {
+        const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+        const int arrow = IndexOfImage(quads, "teleport_arrow.png");
+        const float aspect = static_cast<float>(layer.ViewPx().x / layer.ViewPx().y);
+        const glm::mat2 want = ScreenOverlay::Rotation(glm::radians(23.0f), aspect);
+        CHECK_MSG(arrow >= 0 && glm::length(quads[static_cast<std::size_t>(arrow)].basis[0] - want[0]) < 1e-6f &&
+                      glm::length(quads[static_cast<std::size_t>(arrow)].basis[1] - want[1]) < 1e-6f,
+                  "the arrow at 2.3 s, turned 23 degrees on the overlay");
+    }
+    // A-H10 / A-H11: a touch down on the card, away from the button, closes it on its
+    // tick; the demonstration goes that frame, no portal is fired, and the popup is
+    // gone a second later.
+    const glm::vec2 onCard(640.0f, 200.0f);
+    tap(layer, registry, onCard);
+    CHECK_MSG(layer.PopupOpen() && Popup::Closing(*layer.OpenPopup()), "the close starts on the touch-down tick");
+    {
+        const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+        CHECK_MSG(IndexOfImage(quads, "single_stone_sprite.png") < 0 && IndexOfImage(quads, "tap_icon.png") < 0 &&
+                      IndexOfImage(quads, "help_popup.png") >= 0,
+                  "A-H11: the demonstration vanishes on the close frame, the card still there");
+    }
+    int ticks = 0;
+    while (layer.PopupOpen() && ticks < 120) {
+        tickWith(layer, registry, kRest, {}, {});
+        ++ticks;
+    }
+    CHECK_MSG(ticks == 60, "gone 60 ticks - the 1000 ms of its fade - after the close: " + std::to_string(ticks));
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.SimLevel()->portals.portalsUsed == 0 &&
+                  !layer.SimLevel()->portals.flight.has_value(),
+              "A-H10: the closing touch placed no portal");
+    CHECK_MSG(layer.LevelAgeMs() == 0.0 && !layer.GameTimeStopped(), "game time resumes from the age it stood at");
+    // A-H9, level start: GameLayer comes in from here, restart and pause as UIButtons.
+    tickWith(layer, registry, kRest, {}, {});
+    {
+        const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+        const int restart = IndexOfImage(quads, hud.restart.sprite);
+        const double want = 120.0 / 255.0 *
+                            MagicPortals::UiLayer::ButtonAlphaByte(layer.LevelEndRules().layer, 1000.0 / 60.0) / 255.0;
+        CHECK_MSG(restart >= 0 && NearD(quads[static_cast<std::size_t>(restart)].color.a, want, 1e-6),
+                  "a tick after, restart is a tick into its entrance");
+        CHECK_MSG(IndexOfImage(quads, "help_popup.png") < 0 && CountBlacks(quads) == 0, "and nothing of the popup is drawn");
+    }
+    for (int tick = 1; tick < 42; ++tick) tickWith(layer, registry, kRest, {}, {});
+    Hud::Rect rect;
+    CHECK_MSG(layer.ControlRect(MagicPortalsLayer::Control::Reset, rect) &&
+                  SameRect(rect, Hud::Place(hud.restart, layer.ViewPx())),
+              "restart home 700 ms after the popup went");
+    CHECK_MSG(layer.ControlRect(MagicPortalsLayer::Control::Left, rect) &&
+                  SameRect(rect, Hud::PadRect(hud, Hud::Side::Left, layer.ViewPx(), 700.0)),
+              "and the left pad slid in with it");
+    // And the level plays: the arrow walks the player.
+    for (int tick = 0; tick < 30; ++tick) tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight}, {});
+    CHECK_MSG(glm::length(playerPx(registry, layer) - spawn) > 1.0, "after the popup the level plays");
+    // A retry raises it again, every element from nothing.
+    press(layer, registry, MagicPortalsLayer::kRetry);
+    CHECK_MSG(layer.PopupOpen() && layer.OpenPopup()->clockMs == 0.0 && rules.dimAlphaByte == 150,
+              "a retry of 1-02 raises its popup again from its start");
+    CHECK_MSG(layer.LevelAgeMs() == 0.0 && layer.LevelFrameMs() == 0.0,
+              "and the retried level stands at age 0 under it, as its first load does: " +
+                  std::to_string(layer.LevelAgeMs()));
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.LevelAgeMs() == 0.0 && NearD(layer.OpenPopup()->clockMs, 1000.0 / 60.0, 1e-6),
+              "a tick on, only the popup's clock has moved");
+    layer.OnDetach(registry);
+}
+
+void AHelpBlockOpensItsPopupAndTheLevelTakesUpWhereItStopped() {
+    if (!OriginalArtIsThere("AHelpBlockOpensItsPopupAndTheLevelTakesUpWhereItStopped")) return;
+    namespace Popup = MagicPortals::Popup;
+    // Two runs of 1-13 (level12), whose block the view shows from the start. The first
+    // walks right, taps the block, holds the arrow under its popup for two seconds,
+    // closes it and walks on; the second walks right straight through. After as many
+    // ticks of game time, the two players stand in the same place.
+    const auto run = [](bool tapped, double& ageOut, glm::dvec2& atOut) {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level12");
+        layer.OnAttach(registry);
+        if (!layer.LoadError().empty()) return false;
+        const Hud::Rules& hud = layer.HudRules();
+        const std::vector<std::string> right = {MagicPortalsLayer::kRight};
+        for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+        for (int tick = 0; tick < 20; ++tick) tickWith(layer, registry, kRest, right, {});
+        const std::vector<Hud::Rect> blocks = layer.HelpBlockRects();
+        CHECK_MSG(blocks.size() == 1, "level12 places one help block");
+        if (blocks.empty()) return false;
+        const glm::vec2 onBlock = ScreenOfView(layer, blocks[0].Centre());
+        if (tapped) {
+            // The touch goes down on the block: no portal, no popup yet.
+            tickWith(layer, registry, onBlock, {MagicPortalsLayer::kRight, MagicPortalsLayer::kTap},
+                     {MagicPortalsLayer::kTap});
+            CHECK_MSG(!layer.PopupOpen() && !layer.SimLevel()->portals.flight.has_value() &&
+                          layer.SimLevel()->portals.portalsUsed == 0,
+                      "a touch down on a help block fires no portal and opens nothing yet");
+            // And comes up on it: HelpBlockController's release.
+            Input::TickInput input;
+            input.mousePosition = onBlock;
+            input.down = right;
+            input.released = {MagicPortalsLayer::kTap};
+            PhysicsSystem::Update(registry, MagicPortalsLayer::kTick);
+            Input::BeginReplayedTick(input);
+            layer.OnFixedUpdate(registry, MagicPortalsLayer::kTick);
+            Input::EndReplayedTick();
+            CHECK_MSG(layer.PopupOpen() && layer.OpenPopupClass() != nullptr &&
+                          layer.OpenPopupClass()->name == "LevelHelp15Popup",
+                      "its release opens LevelHelp15Popup");
+            const double age = layer.LevelAgeMs();
+            for (int tick = 0; tick < 120; ++tick) tickWith(layer, registry, kRest, right, {});
+            CHECK_MSG(layer.LevelAgeMs() == age, "game time stands still under it");
+            {
+                // A-H4 / A-H5: restart and pause frozen at their 120 under the dim, no pads.
+                const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+                const std::vector<int> blacks = BlackIndices(quads);
+                const int restart = IndexOfImage(quads, hud.restart.sprite);
+                CHECK_MSG(IndexOfImage(quads, hud.pads.leftSprite) < 0 && IndexOfImage(quads, hud.pads.rightSprite) < 0,
+                          "A-H5: no pads under a help popup");
+                CHECK_MSG(blacks.size() == 1 && restart >= 0 && restart < blacks[0] &&
+                              NearD(quads[static_cast<std::size_t>(restart)].color.a, 120.0 / 255.0, 1e-6),
+                          "A-H5: restart drawn, whole at its 120, under the dim");
+                CHECK_MSG(IndexOfImage(quads, "rolling_stone.png") >= 0, "and the demonstration's stone is the hd one");
+            }
+            // A tap on restart, under it, closes the popup and restarts nothing.
+            Hud::Rect restartRect;
+            CHECK(layer.ControlRect(MagicPortalsLayer::Control::Reset, restartRect));
+            tap(layer, registry, ScreenOfView(layer, restartRect.Centre()));
+            CHECK_MSG(Popup::Closing(*layer.OpenPopup()) && layer.LevelAgeMs() == age,
+                      "a touch on restart under the popup closes it and nothing else");
+            for (int tick = 0; tick < 59; ++tick) tickWith(layer, registry, kRest, right, {});
+            CHECK_MSG(layer.PopupOpen(), "still fading a tick before its second is up");
+            tickWith(layer, registry, kRest, right, {});
+            CHECK_MSG(!layer.PopupOpen(), "gone on its 60th tick, and the level takes up that tick's walk");
+            const std::vector<ScreenOverlay::Quad> quads = HudFrame(registry, layer);
+            Hud::Rect pad;
+            CHECK_MSG(IndexOfImage(quads, hud.pads.leftSprite) >= 0 && layer.ControlRect(MagicPortalsLayer::Control::Left, pad) &&
+                          SameRect(pad, Hud::PadRect(hud, Hud::Side::Left, layer.ViewPx(), 10000.0)),
+                      "A-H9: the pads drawn on the first frame after, at their settled place");
+        } else {
+            tickWith(layer, registry, kRest, right, {});
+            tickWith(layer, registry, kRest, right, {});
+        }
+        for (int tick = 0; tick < 30; ++tick) tickWith(layer, registry, kRest, right, {});
+        ageOut = layer.LevelAgeMs();
+        atOut = playerPx(registry, layer);
+        return true;
+    };
+    double tappedAge = 0.0;
+    double straightAge = 0.0;
+    glm::dvec2 tappedAt(0.0);
+    glm::dvec2 straightAt(0.0);
+    CHECK(run(true, tappedAge, tappedAt));
+    CHECK(run(false, straightAge, straightAt));
+    CHECK_MSG(NearD(tappedAge, straightAge, 1e-6),
+              "the level is as old either way: " + std::to_string(tappedAge) + " against " + std::to_string(straightAge));
+    CHECK_MSG(glm::length(tappedAt - straightAt) < 1e-3,
+              "and its player in the same place: " + Point(tappedAt) + " against " + Point(straightAt));
+
+    // A touch that moves more than 12 px before it comes up opens nothing.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level12");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty()) return;
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const std::vector<Hud::Rect> blocks = layer.HelpBlockRects();
+    if (blocks.empty()) return;
+    const glm::vec2 onBlock = ScreenOfView(layer, blocks[0].Centre());
+    tickWith(layer, registry, onBlock, {MagicPortalsLayer::kTap}, {MagicPortalsLayer::kTap});
+    tickWith(layer, registry, onBlock + glm::vec2(14.0f, 0.0f), {MagicPortalsLayer::kTap}, {});
+    Input::TickInput input;
+    input.mousePosition = onBlock;
+    input.released = {MagicPortalsLayer::kTap};
+    PhysicsSystem::Update(registry, MagicPortalsLayer::kTick);
+    Input::BeginReplayedTick(input);
+    layer.OnFixedUpdate(registry, MagicPortalsLayer::kTick);
+    Input::EndReplayedTick();
+    CHECK_MSG(!layer.PopupOpen(), "a touch that moved 14 px opens no popup, even let go on the block");
+    layer.OnDetach(registry);
 }
 
 void ThePausesButtonsGoWhereTheOriginalsGo() {
@@ -3091,6 +3379,8 @@ void runTests() {
     TheNoPortalSignIsPinnedToTheCorner();
     ThePauseStopsTheLevelUnderIt();
     ThePauseResumesWhereTheTapLeftIt();
+    TheTutorialPopupStopsALevelAsItLoads();
+    AHelpBlockOpensItsPopupAndTheLevelTakesUpWhereItStopped();
     ThePausesButtonsGoWhereTheOriginalsGo();
     SkipOnALevelAlreadyFinished();
     TheDoorCutsTheHudAndTheLevelRunsOnUnderTheMedal();

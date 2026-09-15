@@ -57,6 +57,11 @@ Hud::Rect RectAt(const Placed& placed, const glm::dvec2& anchor);
 // fTOu(smoothEnd(min(ms / appear, 1)) * tintAlphaByte). Zero before it starts.
 int SpriteAlphaByte(const Rules& rules, int tintAlphaByte, double ms);
 
+// And `ms` after UISprite::dismiss, which resets its interpolator: the byte
+// fTOu((1 - smoothEnd(min(ms / appear, 1))) * tintAlphaByte), from whole whatever
+// it had reached, and zero once it is over, when the layer removes the sprite.
+int SpriteDismissAlphaByte(const Rules& rules, int tintAlphaByte, double ms);
+
 // A UIButton `ms` into its entrance: fTOu(min(ms / appear, 1) * 255). LINEAR -
 // UIButton::update takes the unfiltered bias for the alpha, and only the
 // position is eased.

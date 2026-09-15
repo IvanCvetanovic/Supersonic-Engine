@@ -6155,3 +6155,311 @@ where it stands, every frame. `MedalFor` and the saved medal go through the same
   - five suites on the first full run, which the next relink cleared;
   - after the final recompile, eleven, then three, then two.
 - **No other document's table moves.** Only this plan lists the suites' checks.
+
+## Step 47 - the tutorial and help popups, over a level whose game time stands still (built)
+
+The port had no popups. 1-02 and 1-03 opened straight into play, and a help block was a
+"?" in the world that did nothing when touched. Step 40 declined the HUD over the popups of
+1-2 and 1-3 because the popup was its own system, and said the HUD would hide with its layer
+when that was built. This step builds it, to the remake's merged spec,
+`out/parity/specs/ui2/spec.md` section 5 (with sections 0 and 1), and holds it to its
+acceptance list 6.4. The evidence is `popups_gameover.md` sections 1..3 and the recordings
+under `rec/` beside it.
+- **Data.** Every number is in `games/magicportals/data/ui.json`, in one new block, `popups`,
+  each entry citing its decode and its measurement:
+  - `dim`, `card`, `close_button`: H1..H3;
+  - `highlight`: the close button's bounce and blink;
+  - `level_start`: 1-02 and 1-03;
+  - `help_block`: the entity, its box scale, the 12 of the move gate, and the 13 scenes;
+  - `classes`: eight demonstrations, every waypoint, static and sheet of each.
+- **Arithmetic.** It lives in a new pure file, `sim/Popup`: the rules and their refusals,
+  the loops, a popup's clock and its close, its pieces in the original's order of drawing,
+  the close button's state, and a help block's rectangle. Three small additions beside it:
+  - `UiLayer::SpriteDismissAlphaByte`, a UISprite `ms` after `dismiss`;
+  - `Hud::PlaqueAlphaFrom`, the plaque dismissed at a stated age; `PlaqueAlpha` is now
+    that with the dismissal where an unstopped level has it, the same values;
+  - `LevelEnd::HudEntered`, a GameLayer button `ms` into its UIButton entrance, the mirror
+    of step 46's `HudDismissed`.
+- **Drawing.** Through `core/ScreenOverlay` in display values, as the pause and the end
+  screens are. `EmitHud` draws the popup after the pause's section and before the end
+  screens, the level's blacks and the caption, so "Part N" lands over it (spec 5.4).
+- **Closed:** step 40's declined item. Restart, pause and the plaque are not drawn under
+  the two level-start popups, by the layer rule and not by a level name.
+
+**WHICH LEVELS, AND WHEN.**
+- **Level start.** `Game::managePopups` (bytes 115157..115478) is called from
+  `Game::preLoop`, so on every load, a retry included. `loadLevel` opens `LevelHelp1Popup`
+  on level1 and `LevelHelp2Popup` on level2 once the drawables are synced, when the
+  original art and the HUD are ready; a run without the art opens none.
+- **A retry stands at age 0.** The retry and skip keys load the level mid-tick, and that
+  tick used to go on to `AfterStep` and a tick of age. A level that has just raised its
+  popup now stops there, as one loaded from a menu does, and `test_mp_layer` pins age 0
+  after the retry and after a tick more. The same stop guards the skip key landing on 1-02
+  or 1-03 from the level before; that path is not tested or captured.
+- **Help blocks.** `HelpBlockController::update` (bytes 226317..228622), skipped while game
+  time is stopped:
+  - the rectangle is the entity's 38 x 38 collision box x `scale(1.2)`, centred at its
+    position less the camera (`Popup::HelpBlockRect`);
+  - a touch down in it disables the level's touches, so that touch fires no portal;
+  - the longest move is kept, and a release that moved less than 12 opens the scene's
+    class. The 12 is read as window pixels (spec U8: its units are unmeasured). A move of
+    14 px opens nothing in the suite;
+  - the controls are asked first, as GameLayer's buttons are above the controller.
+- **The 13 scenes** are the spec's table: 1-02, 1-03, 1-10, 1-11, 1-13, 1-19, 1-25, 1-32,
+  2-03, 2-06, 3-09, 4-01, 4-02. Probed at tick 180, the blocks sit at (units of the view,
+  455 wide): level9 (200, 152), level10 (190, 60), level12 (45, 102.7), level18 (222.1,
+  84.7), level24 (295.1, 119.7), level2a (335.1, 77), level5a (32, 55); level31, level8b,
+  level0c and level1c are off the view there.
+- **4-02 is NOT BUILT.** `SpaceEasterEggHelpPopup`, with the owner's video-button ruling,
+  has no content and, `tapScreenToClose` false, no way out. Spec U6 asks for an owner ruling,
+  not a guess. `help_block.levels` gives level1c `popup: null`: its block takes the touch,
+  fires no portal, logs "its popup is not built" and opens nothing.
+- **Achievements 62 and 63**, which the controller dispatches before 4-01's and 4-02's
+  popups, are not dispatched: the port has no achievement system.
+
+**THE FRAMEWORK, AS DECODED.**
+- **H1**, the dim: `eth_framework_square.png` over the screen in ARGB(150, 0, 0, 0), a
+  UISprite, alpha byte(smoothEnd(t / 1000 ms) x 150). The file is opaque white, so the port
+  draws the black plainly, as the pause's dim.
+- **H2**, the card: `sprites/help_popup.png` (1x only), 340 x 256 u about the screen's
+  centre, a UISprite on the same curve; top-left (161.875, 0) px at 720p.
+- **H3**, the close button: `hd/popup_close_button.png`, 64 u at `PORTAL_HELP_POPUP_POS`
+  (0.92, 0.5), a UIButton: alpha linear over 700 ms, sliding in 32 u along the ray from the
+  screen's centre, eased by smoothEnd. Decoded centre 0.92 x 1280 = 1177.6 px.
+- **Bounce and blink.** `setButtonHighlightEffects(button, 0.03, 150)` (bytes
+  370863..371164), arguments pushed last-first:
+  - bounce from A = (0.97, 1.03) to B = (1.03, 0.97), a 400 ms stride, smoothEnd, reversed
+    on odd strides;
+  - blink from brightness 0.95 to 1.0, a 150 ms stride, linear, into the rgb only;
+  - both on the button's own elapsed time from its creation, and both stop at the close
+    (`UIButton::update` calls `Button::update` only while not dismissed).
+  - **Which end is A** was settled by the recording: sx is 1.03 near 2.02 and 2.80 s after
+    the tap and 0.97 near 2.38 and 3.18 s, the odd and even multiples of 400 ms.
+- **The demonstration.** Each class's `draw` calls `UILayer::draw` first, then its tracks
+  and statics:
+  - the tracks are WaypointSprites, each in its own colour, and not drawn at all once the
+    close button is dismissed;
+  - the statics are `drawScaledSprite` at `HelpPopup::computePos` = screen x (0.5 + at),
+    tinted with the close button's colour with its rgb set white. So they come in with the
+    button's linear alpha, without its blink, and are at alpha 0 from the close;
+  - a sheet (the chara) steps its frames on its own FrameTimer, 150 ms.
+- **Draw order: the decode, not spec 5.2's list.** Spec 5.2 lists H3 after the
+  demonstration; `UILayer::draw` draws it before, and the port follows the decode. The
+  button's opaque texels start near x 1130 px at its widest and the card's end near 1082,
+  so the orders differ only where a sprite crosses the button: 1-02's chara walks out to
+  x 1152 at y 309.6 as it fades to alpha 0, over the button's top edge. 2-03's fireball
+  ends at x 1152 too, above and below the button.
+- **Angles are counter-clockwise on the screen.** `GLES2Sprite::DrawOptimal` turns by
+  `RotateZ(-angle)` (Ethanon `GLES2Sprite.cpp:268-270`). The arrow's 23 degrees pointing up
+  and right between the two portals, and the anti-portal projectile's 200 degrees heading
+  left, confirm the sign on the recordings.
+- **The close.** A touch **down** anywhere (`tapScreenToClose`, instructions 45..47;
+  `Popup::hasReceivedCloseCommand`, bytes 73196..73437) or the back key (GSK_BACK). The
+  tracks go on that frame; the button dismisses over 700 ms, the dim and the card over
+  1000 ms from whole (`UISprite::dismiss` resets its timer). The popup is gone once all
+  have, 60 ticks, and game time resumes on that tick (`Popup::update`).
+- **Pages.** One each. No class has paging code; the "arrow" is the close button.
+
+**THE LOOPS, AS A FRAMETIMER STEPS THEM.** `WaypointManager` (bytes 40242..42676) adds the
+frame's time and steps ONE waypoint at most a call when it reaches the stride, keeping the
+remainder. A 0 ms stride is a jump that still takes its call. The bias is min(t, stride) /
+max(stride, 1) through the waypoint's filter (linear, smoothEnd, smoothBeginning), and
+position, alpha and angle all follow it; past the last it wraps. `Popup::Loop` is that, a
+60 Hz tick a call. Every decoded loop is a whole number of ticks (5500, 6400, 3500, 2200,
+4000, 6500 ms = 330, 384, 210, 132, 240, 390), and each class repeats exactly that many
+ticks later and at no lag a tick either side.
+
+**THE HUD UNDER IT, AND AFTER IT.**
+- **Game time stops** (`GameTimeStopped()`: a pause or a popup). The world is held as the
+  pause holds it: step 45's held state is now `m_frozen`, with `freezeWorld` and
+  `thawWorld` shared by both. The emitters, the flipbooks and the level's age stop. The
+  level's frame clock does not, so the caption goes on fading (spec 0.3).
+- **The pads are not drawn** while game time is stopped, and nothing under the popup is
+  pressable. Escape closes the popup and does not pause.
+- **Over a help block's popup**, restart and pause stay drawn, frozen, under the dim.
+- **Under a level-start popup** GameLayer has not had an update:
+  - restart and pause now come in as UIButtons on the level's AGE
+    (`LevelEnd::HudEntered`): 700 ms, linear alpha x their 120 byte, sliding 32 u in along
+    the ray through each one's anchor. On every other level that entrance runs under the
+    opening black (`overlay.start_after_ms` 700) and draws as before;
+  - the pads slide in on the age, as they always did;
+  - **the plaque**: `Game::dismissCurrentMedalSprite` dismisses it once the FRAME clock
+    passes 2000 ms, which a popup does not stop, and `UISprite::dismiss` resets its timer,
+    which only GameLayer's updates run. So after a popup of more than 2 s it is whole on the
+    first update and fades out over 1000 ms (`tickPlaqueDismissal`,
+    `Hud::PlaqueAlphaFrom`). The mechanism is INFERRED from the decode; the timings are
+    A-H9's.
+- **The same pixel a tick later.** On the popup-gone tick the port draws nothing of
+  GameLayer yet, and its first update is the next tick. The original starts them on the
+  gone frame (n265). One tick, inside A-H9.
+- **A help block's popup** is raised mid-tick, after the step. The tick it goes away runs
+  the rest of the tick, with the keys' walk, as the pause's resume does, so a level played
+  through a popup is the level played without one (the suite compares the two runs).
+
+**AN ENGINE CHANGE, AND WHAT IT COSTS THE MERGE.** The demonstrations turn sprites: the arrow
+23 degrees, the wall 90, the dust -35..35, the rolling stone and the fireball through 180,
+the projectile 200. A
+`ScreenOverlay::Quad` is a min and a max, which cannot say a turn, so:
+- **`core/ScreenOverlay`**: `Quad::basis`, a 2x2 in fractions applied to each corner's offset
+  from the quad's centre (identity by default), and `ScreenOverlay::Rotation(radians,
+  aspect)`, the turn in square pixels taken into fractions. `CornerOf` applies it.
+- **`screen_overlay.vert`**: a fourth `vec4 basis` in the push block and the same branch;
+  `screen_overlay_vert.spv` rebuilt (the `Shaders` target).
+- **`VulkanPipeline.hpp`**: `ScreenOverlayPushConstants` gains `basis`, 48 -> 64 bytes.
+  **`VulkanRenderer.cpp`**: one line sends it.
+- **An unturned quad keeps the arithmetic it had, to the bit**: both sides branch on the
+  identity.
+- **This departs from step 46's "no engine file changes".** `ScreenOverlay.hpp/.cpp` and the
+  shader are byte-identical to the main tree's today. `VulkanPipeline.hpp` and
+  `VulkanRenderer.cpp` are being changed there by the lighting work, so the merge cost is
+  those two files: one struct member and one line.
+- **`test_screenoverlay` 46 -> 57**: a quad turned 90 degrees lands on its four pixels, 23
+  degrees keeps every corner's distance, identity and the plain arithmetic are unchanged,
+  the push block is 64 bytes, and the shader carries `vec4 basis` after `vec4 color` with
+  `CornerOf`'s branch.
+
+**DEV ONLY: `--tap <help|x,y>@<tick>`** in `main.cpp`, beside `--press` and `--hold`.
+- **What it does.** A touch down on the tick and up on the next
+  (`MagicPortalsLayer::ScheduleDevTap`, read in `touchThisTick`): on the level's first help
+  block where the camera has it, or at pixel x, y of 1280 x 720.
+- **Why.** The help popups open from a tap and close from a touch down, and a
+  `--fixed-step` run takes no input.
+- **Its warts.** A scheduled tap owns the pointer on its ticks, so it cannot press a HUD
+  control. A `help@` tap with no block on the view is dropped with a warning.
+- **The runs:** 1-13 tapped at 300: popup opened on 301; closed by 640,200@601, gone on
+  661. 1-02 closed by 640,200@300: gone on 360.
+
+**CAPTURED AND MEASURED.**
+- **Scripts.** `out/parity/ui2/popups/capture_port.sh` and `measure.py` (gitignored), with
+  the spec's `specs/ui2/work/lib.py` and `fit_text.py`, and `tools/parity`'s `compare.py`.
+  `date_still.py` dated the library stills against a sweep of port frames.
+- **Frames.** 324 captures at 1280x720, `--fixed-step`, one tick a frame, every run with its
+  own saves (fresh; the all-gold save for 1-02's close).
+  - 1-02 and 1-03 open in the load, so frame F is F / 60 s into the popup.
+  - The library stills were dated by the demonstration: the hand whole at its fingertip,
+    the arrow and left portal not in yet. The demo-region difference bottoms out over
+    frames 86..102 on both levels; frame 96 (1.6 s) is used for every still row, its hand
+    at (384.0, 396.0) against the original's (384.0, 395.9) and (384.0, 395.4).
+  - A help block tapped at T opens on T + 1, and frame F is (F - T - 1) / 60 s in.
+- **Masks and fits.**
+  - A dim is `frame = k twin + c` over world pixels whose std across three unpopped frames
+    (280, 290, 300) is under 2, the card, the button's travel, restart, pause and the pad
+    corners masked.
+  - An alpha is a composite fit, `frame = base + alpha (sprite - base)`, the base being
+    the twin dimmed and carded as that frame has them. The close button's alpha is fitted
+    with its brightness free, since the blink runs from its first tick.
+  - Sprite centres and scales are a Pearson search against the template (`fit`). The card
+    is fitted over its border band with the demonstration, caption and button masked.
+    `locate.py`'s masked CCORR under-reads these sprites about 0.9x (spec 5.5's own
+    finding), so it is not the size measurement here, as in steps 45 and 46.
+- **Pairs** (`compare.py`), each looked at:
+  - 1-02, frame 96: `offset_px (0, 0)`, `edge_iou` 0.636, `mean_abs` 7.49. The card, the
+    hand, the stones, the portal, the button and "Part 2" land on the original's; the world
+    around differs by the camera's start and the unported lighting, and the port shows the
+    help block the original's camera does not;
+  - 1-03, frame 96: (0, 0), 0.552, 9.55; the same;
+  - 1-13, `rec/help_1-13_frames/0214_012234ms.png` (1.954 s after the fitted loop origin)
+    against port frame 418: (0, 0), 0.551, 6.78. The stone on its wall, the card, the
+    button, the dimmed restart and pause and the help block all coincide.
+- **The binary.** All capture logs say `Vulkan validation layers: ACTIVE`, with no error
+  and no warning. Six (1-02 frame 96, 1-02's close 300 and 361, 1-13's 420 and 662, 1-10's
+  311) were retaken on the final binary, after the retry's stop and the dropped help tap,
+  and are md5-identical. The second-loop frames for A-H12 were taken on it.
+
+| # | check | original | port | tolerance | pass |
+|---|---|---|---|---|---|
+| A-H1 | H2 centre, scale (1-02 / 1-03 frame 96) | (640.1, 359.95), 2.8145, Pearson 0.996 | (640.0, 360.0), 2.8125, 0.99994 on both | ±1 px; 2.8125 ±0.005 | yes |
+| A-H1 | H3 centre | (1177.6, 360.0) on both (sx, sy 1.391 / 1.419 and 1.408 / 1.404) | (1177.6, 360.0) on both, sx / sy 1.3632 / 1.4492: the bounce's A end at 1600 ms (1.3641 / 1.4484) | (1177.5, 360) ±1.5 px | yes |
+| A-H2 | stones (384, 540), (896, 410.4); portal (896, 309.6) | (384.0, 540.0) 0.9987; (896.0, 410.4) 0.9988 on 1-03; (896.0, 309.65) 0.9987 | (384.0, 540.0) 0.99997; (896.0, 410.4) 0.99997; (896.0, 309.6) 0.9998. 1-02's right stone, under the portal's glow, fits (896.15, 410.9) at 0.797 in the original and 0.804 in the port | ±1.5 px | yes |
+| A-H3 | HUD high-pass gains under the popup | restart / pause / pads / plaque within -0.008..0.011 | 1-02: 0.0009 / 0.002 / 0.005, 0.0004 / 0.0017; 1-03: 0.003 / 0.0026 / 0.0019, 0.0051 / 0.0022; the gold save the same | <= 0.03 | yes |
+| A-H3 | "Part N" alpha at 1.6 s | 0.49 / 0.47 (the still's own age) | 0.46 / 0.46 on a 0.01 search; the model byte(1 - 1600 / 3000) = 0.467; the suite pins the quad at `CaptionAlpha(LevelFrameMs)` | ±0.03 | yes |
+| A-H4 | world k under H1, 1-13 plateau | 0.399-0.406 | 0.4119 on each of frames 381..430 (intercept -0.025); 80 px blocks 0.4071..0.4156 (20) | 0.4118 ±0.02 | yes |
+| A-H5 | restart / pause gain relative to the unpopped frame; pads | 0.412-0.420; pads absent | 0.4126 / 0.4124; pads -0.0006 / 0.0008 against 0.470 / 0.472 unpopped | 0.41 ±0.02; absent | yes |
+| A-H6 | H1 / H2 fade in and out, best-fit sin T | in 1.075 / 1.010 / 0.990 s, out 1.045 / 1.025 / 0.980 s | in **1.005 s** (rms 0.0025; linear 0.73 at 0.033); out **0.990 s** (rms 0.002; linear 0.72 at 0.035) | 1.00 ±0.08 s | yes |
+| A-H7 | H3 slide along +x, alpha | rms 0.97 px against 32 u; T 0.705 s | 80.0 / 70.0 / 51.0 / 34.0 / 19.5 / 9.0 / 2.5 / 0.0 px at 0.05 / 0.1 / 0.2 / 0.3 / 0.4 / 0.5 / 0.6 / 0.7 s (the model 79.9 / 70.0 / 51.0 / 33.9 / 19.6 / 8.9 / 2.3 / 0); rms **0.131 px**; alpha linear T **0.705 s** (rms 0.0034) | rms <= 1.3 px; 0.70 ±0.03 s | yes |
+| A-H8 | bounce, stride, blink over 50 plateau ticks | sx, sy 0.97..1.03 antiphase (corr -0.993), stride 410 ms, blink min 0.957 | sx 0.9694..1.0305, sy the same, corr -1.000; stride **400 ms**; brightness 0.949..1.000 | 0.97..1.03 ±0.005; 400 ms ±5%; 0.95 ±0.02 | yes |
+| A-H9 | help block: pads on the first frame after the popup | drawn, settled | gone on tick 661; left / right pad gain 0.470 / 0.472 on frame 661 (the unpopped 0.470 / 0.472), -0.0014 on 660 | drawn, no slide | yes |
+| A-H9 | level start (1-02, gold save): from the popup-gone frame | restart / pause settled by 0.70 s; pads by 0.79 s; plaque whole, gone by ~0.89 s | gone on tick 360. Restart at home: 0.54 at 0.617 s, 0.94 at 0.667, 1.00 from 0.717. Left pad at home: 0.75 at 0.667, 0.93 at 0.717, then its pulse (0.85..1.07). Plaque: 0.004 on 360, **0.938** at 0.017 s, 0.513 at 0.317, 0.097 at 0.717, 0.024 at 0.867, 0.004 by 0.967 | 0.70 ±0.05 s; 0.70 ±0.1 s; gone by 1.0 ±0.12 s | yes (one tick late, see above) |
+| A-H10 | a touch down on the card at (640, 200) | the fade starts on the touch-down frame; no portal | 1-02: "DEV tap down on tick 300", "popup closed on tick 300", gone on 360; the suite: `portalsUsed` 0 and no flight after the closing tap | the tick; unchanged | yes |
+| A-H11 | demonstration gone on the close frame, 1-02 stone box | 85.0 / 38.1 -> 165.8 / 13.6; card 173.8 | 81.6 / 41.3 on frame 299 -> **165.5 / 13.9** on 300; card 173.0 | that frame | yes |
+| A-H12 | each class's loop | 5.56 / 6.49 / 3.54 / 2.23 / 4.06 / 6.58 s, +1.1..1.5% on the emulator's clock | 1-02 / 1-03 / 1-13 / 1-25 / 2-03 / 1-10 repeat after 330 / 384 / 210 / 132 / 240 / 390 ticks = **5500 / 6400 / 3500 / 2200 / 4000 / 6500 ms**: the frame a loop in against the one two loops in differs by 0.000 grey over the card (the chara's band masked), and by 0.064..0.37 a tick either side (2-03 0.004 / 0.006, 1-10 0.020 / 0.016) | the decode ±0.5% | yes |
+| A-H13 | tracks against the decode, phase fixed at creation | medians 0.7..2.1 px (hand, stone); fireball 8.8, projectile 13.5 against unrotated templates | hand 1-02 0.002 px (7 frames), 1-03 0.002 (11); stone 1-13 0.004 (12), 1-25 0.005 (19); fireball 0.000 (17), projectile 0.003 (4), turned templates. Every fit at Pearson >= 0.9 is within 0.6 px; the few below it (0.20..0.86) are the stone meeting its wall and the stone or fireball crossing a portal. One track a class was fitted on frames; the others (arrow, portals, dust, wall, ring, agent, chara) are pinned against the decode by `test_mp_popup` only | median <= 2 px; <= 15 px | yes |
+
+**TESTS.**
+- **New suite `test_mp_popup`: 156 checks,** pure, and it never skips.
+  - **What the file says:** every framework number, the 13 scenes and their classes, each
+    class's items, waypoints, loops and sheets, by name.
+  - **Where the framework sits:** the card's top-left (161.875, 0), the button's decoded
+    centre 1177.6 within A-H1's 1.5 px of the measured, the statics at A-H2's pixels, and
+    the order of drawing.
+  - **The entrance and the dismissal:** the dim and card on smoothEnd, the button linear
+    with its slide, the tracks gone and the statics at 0 on the close frame, gone 60 ticks
+    on.
+  - **The bounce and the blink:** A at 0 ms, B at 400, the reversal, the blink's 150 ms,
+    frozen at the close.
+  - **The loops:** FrameTimer's one-step rule and the 0 ms jump; every class repeats at its
+    loop in ticks and at no lag a tick either side, within 0.5% of the decode (A-H12).
+  - **The tracks:** points of each class at chosen phases, turned sprites carried round
+    their origin (A-H13).
+  - **A help block's box**, and **GameLayer after a level-start popup**: `HudEntered`, the
+    pads, `PlaqueAlphaFrom` whole on the first update and out over 1000 ms.
+  - **Six refusals, each by name.**
+- **`test_mp_layer`: 478 -> 536.**
+  - **`CloseTheLevelStartPopup`**, a helper: level1 and level2 now open on a popup, so the
+    cases that play them (`LevelsFollowInOrderAndRetryIsInstant`,
+    `AFallOutOfTheLevelIsADeath`, `APortalAndAShotAreTheOriginals`,
+    `EscapePausesALevelAndResumesIt`, `ALevelsEntitiesEmit`, `ParticlesGoWithTheirLevel`,
+    `NoSpriteBlinksWhileWalking`) close it first; `WithoutTheOriginalThePortalIsABox` has
+    no popup without the art; Escape closes a popup before it pauses; a retry raises it
+    again.
+  - **`ThePauseStopsTheLevelUnderIt`**: restart's alpha is 120/255 x its entrance byte.
+  - **Two new cases:**
+    - `TheTutorialPopupStopsALevelAsItLoads`: 1-02 raises `LevelHelp1Popup` in its load;
+      96 ticks with the walk held leave age 0, the player at its spawn, the frame clock at
+      1600 ms; no pad, restart or pause; dim, card, button, demonstration in that order;
+      "Part 2" last at the caption byte; the arrow turned 23 degrees at 2.3 s. A touch
+      down on the card closes it on its tick, the demonstration goes that frame, no portal,
+      gone 60 ticks on; restart a tick into its entrance, home 700 ms after; the level
+      then walks. A retry raises it from 0 at age 0.
+    - `AHelpBlockOpensItsPopupAndTheLevelTakesUpWhereItStopped`: level12's block opens
+      `LevelHelp15Popup` on the release; a move of 14 px opens nothing; the run through the
+      popup ends where a straight run of the same play ends, the player within 1e-3.
+- **`test_mp_hud`: 417**, unchanged. **`test_mp_levelend`: 226**, unchanged.
+
+**NOT BUILT, INFERRED, AND LEFT OPEN.**
+- **Not built:** 4-02's `SpaceEasterEggHelpPopup` (spec U6 wants an owner ruling); the
+  achievements 62 and 63.
+- **Decode only, not captured:** 3-09's `LevelHelp25Popup` with the chara sheet, 4-01's
+  `RedKeyLocationHelpPopup` (spec U7: their blocks were never reached). The port opens both.
+- **INFERRED:** the anti-portal popup's static chara at frame 0, and 3-09's sheet at frame
+  0: nothing sets a frame.
+- **INFERRED:** `m_ring`'s decoded ARGB(96, 0xA0, 0, 0) (spec U13), not checked against
+  frames.
+- **INFERRED:** the plaque's whole-then-out mechanism under a popup; its timings are A-H9's.
+- **INFERRED:** a loop's origin is the popup's creation. The recordings' origins sit within
+  the load stall (spec 5.4) and the port has no stall.
+- **Not built:** the pressed close button's darkening; clear-portals' entrance (it keeps its
+  flat 120, and no level starts with a portal placed).
+- **The 12 of the move gate** is window pixels; its units are unmeasured (spec U8), as is
+  whether the releasing tap walks.
+- **Not fitted on frames:** the tracks other than the one A-H13 fits in each class (the
+  arrow, the portals, the dust, the wall, the ring, the agent, the chara). The suite holds
+  them to the decode's arithmetic.
+
+**MSVC 14.50 (Release, Ninja) only; GCC was not run.**
+- **Build.** No warning, at `/W4` on the game, the sim library and every suite
+  (`build.ninja` carries it on `Popup.cpp.obj`). After the last source change the build
+  recompiled 27 translation units - every file this step touches and everything that
+  includes `ScreenOverlay.hpp` or `VulkanPipeline.hpp` - and printed none. A second build had
+  no work to do.
+- **ctest.** **115 of 115** pass (114 and the new suite), "Not Run" 0, on the final source.
+  Directly: `test_mp_popup` 156, `test_mp_layer` 536, `test_screenoverlay` 57,
+  `test_mp_hud` 417, `test_mp_levelend` 226, 0 failures each.
+- **Smart App Control** refused freshly linked executables. Each was deleted and relinked
+  until nothing was Not Run:
+  - the first full run after the final build had 22 BAD_COMMAND. Rerun, 20 were still
+    refused and were relinked; after that 3, then 2, then 1 were refused and relinked, then
+    none, and a full run passed all 115;
+  - the game once after the final build (its captures failed "Permission denied" and were
+    retaken), and once more mid-capture, where it ran again unrelinked.
+- **No other document's table moves.** Only this plan lists the suites' checks.

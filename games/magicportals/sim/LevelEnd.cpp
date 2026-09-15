@@ -359,4 +359,18 @@ Dismissed HudDismissed(const Rules& rules, const Hud::Placement& placement, int 
     return out;
 }
 
+Dismissed HudEntered(const Rules& rules, const Hud::Placement& placement, int alphaByte,
+                     const glm::dvec2& viewUnits, double ms) {
+    Dismissed out;
+    const Hud::Rect home = Hud::Place(placement, viewUnits);
+    const glm::dvec2 anchor = HudAnchor(placement, viewUnits);
+    const glm::dvec2 now = UiLayer::ButtonAnchorAt(rules.layer, anchor, viewUnits, ms);
+    out.rect = Hud::Rect{home.min + (now - anchor), home.size};
+    out.alpha = static_cast<double>(alphaByte) / 255.0 *
+                static_cast<double>(UiLayer::ButtonAlphaByte(rules.layer, ms)) / 255.0;
+    // There before its first frame is drawn: a tap is tested against where it is.
+    out.shown = true;
+    return out;
+}
+
 } // namespace MagicPortals::LevelEnd

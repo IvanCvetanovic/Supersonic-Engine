@@ -839,5 +839,649 @@
         "size_units": [64, 64]
       }
     }
+  },
+  "popups": {
+    "_about": [
+      "THE TUTORIAL AND HELP POPUPS, ETHFramework's Popup and the game's HelpPopup classes, which two",
+      "levels raise as they load and thirteen raise from a help block. Read by sim/Popup.hpp.",
+      "Specified in the remake's gitignored out/parity/specs/ui2/spec.md section 5; its evidence is",
+      "popups_gameover.md sections 1..3 (+ .json) beside it, and the recordings under rec/.",
+      "",
+      "ONE PAGE EACH, closed by a touch DOWN anywhere (HelpPopup sets tapScreenToClose, instructions",
+      "45..47; Popup::hasReceivedCloseCommand, bytes 73196..73437) or the back key (GetKeyState(14),",
+      "GSK_BACK, Ethanon toolkit/Source/src/gs2d/src/Input.h:51). Popup::Popup pauses game time",
+      "(instructions 147..166) and Popup::update resumes it only once everything is dismissed: the",
+      "world stands still under the fade out too, and the walk pads are not drawn at all.",
+      "",
+      "PLACED BY FRACTIONS OF THE SCREEN, as the pause (spec 0.1): each anchor is view * at_screen and",
+      "each top-left that anchor less size_units * origin. ALPHAS ARE DISPLAY-SPACE, drawn through",
+      "the screen overlay after restart, pause and the plaque and before the level's two blacks and",
+      "its caption (spec 5.2's order; UILayerManager sits before the FadeInControllers, step 45).",
+      "Sprites are named within the original's assets; the hd twin beside a file is drawn where one",
+      "exists."
+    ],
+    "dim": {
+      "_source": [
+        "DECODED: Popup::Popup (bytes 71281..72052, instructions 49..69) adds",
+        "ETHFramework/sprites/eth_framework_square.png over V2_ZERO .. GetScreenSize() in",
+        "ARGB(150, 0, 0, 0), a UISprite: alpha fTOu(smoothEnd * 150). The file is 64x64 opaque white,",
+        "so the port draws the black plainly, as the pause's dim.",
+        "MEASURED: world gain 0.4057 on 1-13 (n199..n355, rms 3.47) and 0.399 on 1-10, against the",
+        "decoded 1 - 150/255 = 0.4118 (spec 5.2 H1); in sin T 1.075 / 1.010 / 0.990 s, out 1.045 /",
+        "1.025 / 0.980 s (1-13 / 1-10 / 2-03)."
+      ],
+      "alpha_byte": 150
+    },
+    "card": {
+      "_source": [
+        "DECODED: Popup::Popup (instructions 87..115): the class's popup sprite at GetScreenSize() * 0.5,",
+        "V2_HALF, its own size; HelpPopup passes sprites/help_popup.png, which has no hd twin (340x256).",
+        "A UISprite.",
+        "MEASURED: centre (640.0, 360.0) px, scale 2.815 x 2.810 over 222,269 border px on 1-13 (spec",
+        "5.2 H2); drawn 340x256 units at 2.8125 px each."
+      ],
+      "sprite": "sprites/help_popup.png",
+      "at_screen": [0.5, 0.5],
+      "origin": [0.5, 0.5],
+      "size_units": [340, 256]
+    },
+    "close_button": {
+      "_source": [
+        "DECODED: HelpPopup::HelpPopup (bytes 204244..204540) hands Popup sprites/popup_close_button.png",
+        "at PORTAL_HELP_POPUP_POS = (0.92, 0.5) (global initialiser, bytes 308967..309018); Popup::Popup",
+        "adds it as the 'close' UIButton, V2_HALF (instructions 123..143). Its entrance and dismissal",
+        "are ui_layer.button's.",
+        "MEASURED: centre (1177.5, 360.0) px, 64 u; slide in from +x rms 0.97 px against 32 u, T 0.705",
+        "s, alpha linear (spec 5.2 H3, 5.3)."
+      ],
+      "sprite": "sprites/popup_close_button.png",
+      "at_screen": [0.92, 0.5],
+      "origin": [0.5, 0.5],
+      "size_units": [64, 64]
+    },
+    "highlight": {
+      "_source": [
+        "DECODED: setButtonHighlightEffects(button, 0.03, 150) (bytes 370863..371164): setBounce((1 -",
+        "0.03, 1 + 0.03), (1 + 0.03, 1 - 0.03), 400) and setBlink((0.95, 0.95, 0.95), V3_ONE, 150),",
+        "arguments pushed last-first. Button::bounce (bytes 17149..17549) reads the button's own",
+        "elapsed time: the stride's fraction, reversed on odd strides, smoothEnd, from scale A to B;",
+        "Button::blinkColor (17819..18318) the same, LINEAR, from brightness A to B, multiplied into",
+        "the rgb only (Button::draw, 15237..15660). Both stop at the close: UIButton::update calls",
+        "Button::update only while not dismissed.",
+        "MEASURED: 1-13 n210..n261 sx and sy 0.97..1.03 in antiphase (corr -0.993), stride 410 ms; sx",
+        "at 1.03 near 2.02 and 2.80 s after the tap and 0.97 near 2.38 and 3.18 s on the emulator's",
+        "clock, the odd and even multiples of 400 ms that put A at (0.97, 1.03); blink 0.957..1.0,",
+        "stride 151 ms (spec 0.4, A-H8)."
+      ],
+      "bounce_scale_a": [0.97, 1.03],
+      "bounce_scale_b": [1.03, 0.97],
+      "bounce_stride_ms": 400,
+      "blink_brightness_a": 0.95,
+      "blink_brightness_b": 1.0,
+      "blink_stride_ms": 150
+    },
+    "level_start": {
+      "_source": [
+        "DECODED: Game::managePopups (bytes 115157..115478), called from Game::preLoop (instruction",
+        "430), so on every load of the level, a retry included: world 0 index 1 opens LevelHelp1Popup",
+        "and index 2 LevelHelp2Popup through UILayerManager::openPopup, in the level's load frame.",
+        "MEASURED: rec/popup_1-02.mp4 and popup_1-03.mp4; the library's 1-02_popup.png and",
+        "1-03_popup.png; only these two of 127 sidecars have popup_pages > 0 (spec 5.1, 5.4)."
+      ],
+      "levels": [
+        {"scene": "level1", "label": "1-02", "popup": "LevelHelp1Popup"},
+        {"scene": "level2", "label": "1-03", "popup": "LevelHelp2Popup"}
+      ]
+    },
+    "help_block": {
+      "_source": [
+        "DECODED: HelpBlockController::update (bytes 226317..228622), skipped while game time is paused:",
+        "for each help_block.ent, TouchInputManager::getTouchStateInRect over its collision box times",
+        "scale(1.2) with origin V2_HALF at GetPositionXY() - GetCameraPos(). A touch down in it",
+        "disables the level's touches (no portal); while it moves, touchMoveLength keeps the longest",
+        "getTouchMoveSum; a release with touchMoveLength < 12 opens the level's class. The 13 world",
+        "and index branches are exactly the 13 scenes that place help_block.ent (spec 5.1). The 12 is",
+        "in the device's pixels, which the port reads as the window's (spec U8: its units unmeasured).",
+        "4-02's SpaceEasterEggHelpPopup is NOT BUILT: with the owner's video-button ruling it has no",
+        "content and, tapScreenToClose false, no way out, and spec U6 asks for an owner ruling rather",
+        "than a guess. Its block still takes the touch and opens nothing."
+      ],
+      "entity": "help_block.ent",
+      "box_scale": 1.2,
+      "max_move_px": 12,
+      "levels": [
+        {"scene": "level1", "label": "1-02", "popup": "LevelHelp1Popup"},
+        {"scene": "level2", "label": "1-03", "popup": "LevelHelp2Popup"},
+        {"scene": "level9", "label": "1-10", "popup": "LevelHelpAntiportalAgent"},
+        {"scene": "level10", "label": "1-11", "popup": "LevelHelpAntiportalAgent"},
+        {"scene": "level12", "label": "1-13", "popup": "LevelHelp15Popup"},
+        {"scene": "level18", "label": "1-19", "popup": "LevelHelp15Popup"},
+        {"scene": "level24", "label": "1-25", "popup": "LevelHelp25Popup.stone"},
+        {"scene": "level31", "label": "1-32", "popup": "LevelHelp25Popup.stone"},
+        {"scene": "level2a", "label": "2-03", "popup": "LevelHelpW2P3Popup"},
+        {"scene": "level5a", "label": "2-06", "popup": "LevelHelpW2P3Popup"},
+        {"scene": "level8b", "label": "3-09", "popup": "LevelHelp25Popup.chara"},
+        {"scene": "level0c", "label": "4-01", "popup": "RedKeyLocationHelpPopup"},
+        {"scene": "level1c", "label": "4-02", "popup": null}
+      ]
+    },
+    "classes": {
+      "_about": [
+        "EACH CLASS'S draw() AFTER UILayer::draw, in its own order: the tracks are WaypointSprites",
+        "(WaypointManager bytes 40242..42676; WaypointSprite::draw bytes 43056..43349), each drawn",
+        "in its own colour and not at all once the close button is dismissed; the statics are",
+        "drawScaledSprite at HelpPopup::computePos (bytes 204875..205105) = screen * (0.5 + at), tinted",
+        "with the close button's colour with its rgb set white (Button::getColor, FloatColor::setColor",
+        "V3_ONE), so they come in with its linear alpha and are drawn at alpha 0 from the close on.",
+        "A waypoint's `ms` is the move to the NEXT one, eased by ITS filter (position, alpha and angle",
+        "alike); 0 ms is a jump, and the loop wraps to the first. Angles are degrees counter-clockwise",
+        "on the screen: GLES2Sprite::DrawOptimal turns by RotateZ(-angle) (Ethanon",
+        "toolkit/Source/src/gs2d/src/Video/GLES2/GLES2Sprite.cpp:268-270), and the arrow at 23 degrees",
+        "points from the lower portal to the upper one only that way. Sizes are the 1x texel size in",
+        "units, the hd twin drawn where one exists (spec 5.5, MEASURED stone and hand scale 1.41).",
+        "The waypoint tables are the spec's section 5.5, DECODED from each constructor and checked on",
+        "the six recordings: loop periods 1.0..1.5% long on the emulator's clock (spec 0.3), track",
+        "medians 0.7..2.1 px for the hand and stone tracks."
+      ],
+      "LevelHelp1Popup": {
+        "_source": [
+          "DECODED: LevelHelp1Popup (constructor bytes 205113..207734, draw 208104..208915): UILayer::draw;",
+          "then, while the button is not dismissed, m_arrow, m_portal, m_hand; the two stones and the",
+          "portal static; then m_timer.set(0, 3, 150) as m_chara's frame and m_chara. Loop 5500 ms.",
+          "MEASURED: 1-02 (rec/popup_1-02.mp4) loop 5.56 s; hand track 49 frames median 0.7 px; stones",
+          "at (384, 540) and (896, 410.4) px scale 1.41 CCOEFF 0.997, portal at (896, 309.6) 0.981."
+        ],
+        "loop_ms": 5500,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_arrow",
+            "sprite": "sprites/teleport_arrow.png",
+            "size_units": [64, 16],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.0, 0.08], "alpha": 0, "angle": 23, "filter": "smooth_end", "ms": 1700},
+              {"at": [0.0, 0.08], "alpha": 0, "angle": 23, "filter": "smooth_end", "ms": 300},
+              {"at": [0.0, 0.08], "alpha": 100, "angle": 23, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.0, 0.08], "alpha": 100, "angle": 23, "filter": "smooth_end", "ms": 500},
+              {"at": [0.0, 0.08], "alpha": 0, "angle": 23, "filter": "smooth_end", "ms": 1500}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_portal",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1700},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 300},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_hand",
+            "sprite": "entities/tap_icon.png",
+            "size_units": [48, 48],
+            "origin": [0.5, 1.3],
+            "waypoints": [
+              {"at": [-0.2, -0.1], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [-0.2, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 3000},
+              {"at": [-0.2, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "stone_left",
+            "sprite": "sprites/single_stone_sprite.png",
+            "size_units": [64, 32],
+            "origin": [0.5, 0.5],
+            "at": [-0.2, 0.25]
+          },
+          {
+            "kind": "static",
+            "name": "stone_right",
+            "sprite": "sprites/single_stone_sprite.png",
+            "size_units": [64, 32],
+            "origin": [0.5, 0.5],
+            "at": [0.2, 0.07]
+          },
+          {
+            "kind": "static",
+            "name": "portal_right",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [0.2, -0.07]
+          },
+          {
+            "kind": "track",
+            "name": "m_chara",
+            "sprite": "sprites/help_chara.png",
+            "size_units": [32, 48],
+            "origin": [0.5, 0.5],
+            "sheet": {"columns": 4, "rows": 1, "frame_ms": 150},
+            "waypoints": [
+              {"at": [-0.4, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 1700},
+              {"at": [-0.4, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 300},
+              {"at": [-0.4, 0.12], "alpha": 255, "angle": 0, "filter": "linear", "ms": 1500},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "linear", "ms": 200},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 200},
+              {"at": [0.2, -0.07], "alpha": 255, "angle": 0, "filter": "linear", "ms": 1600},
+              {"at": [0.4, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0}
+            ]
+          }
+        ]
+      },
+      "LevelHelp2Popup": {
+        "_source": [
+          "DECODED: LevelHelp2Popup (constructor bytes 209049..211708, draw 212078..212768): UILayer::draw;",
+          "then, while the button is not dismissed, m_portal0, m_portal1, m_hand; the two stones; then",
+          "m_chara on its 150 ms frames. Loop 6400 ms.",
+          "MEASURED: 1-03 (rec/popup_1-03.mp4) loop 6.49 s; hand track 93 frames median 0.7 px, at",
+          "(384, 504) and (896, 360) px as decoded."
+        ],
+        "loop_ms": 6400,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_portal0",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1700},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 300},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 4400},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_portal1",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 4000},
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 100},
+              {"at": [0.2, -0.07], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.07], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 800}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_hand",
+            "sprite": "entities/tap_icon.png",
+            "size_units": [48, 48],
+            "origin": [0.5, 1.3],
+            "waypoints": [
+              {"at": [-0.2, -0.1], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [-0.2, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 100},
+              {"at": [-0.2, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0},
+              {"at": [0.2, -0.27], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, 0.0], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1900},
+              {"at": [0.2, 0.0], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 400}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "stone_left",
+            "sprite": "sprites/single_stone_sprite.png",
+            "size_units": [64, 32],
+            "origin": [0.5, 0.5],
+            "at": [-0.2, 0.25]
+          },
+          {
+            "kind": "static",
+            "name": "stone_right",
+            "sprite": "sprites/single_stone_sprite.png",
+            "size_units": [64, 32],
+            "origin": [0.5, 0.5],
+            "at": [0.2, 0.07]
+          },
+          {
+            "kind": "track",
+            "name": "m_chara",
+            "sprite": "sprites/help_chara.png",
+            "size_units": [32, 48],
+            "origin": [0.5, 0.5],
+            "sheet": {"columns": 4, "rows": 1, "frame_ms": 150},
+            "waypoints": [
+              {"at": [-0.34, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 3700},
+              {"at": [-0.34, 0.12], "alpha": 255, "angle": 0, "filter": "linear", "ms": 1500},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "linear", "ms": 200},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 200},
+              {"at": [0.2, -0.07], "alpha": 255, "angle": 0, "filter": "linear", "ms": 800},
+              {"at": [0.3, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0}
+            ]
+          }
+        ]
+      },
+      "LevelHelp15Popup": {
+        "_source": [
+          "DECODED: LevelHelp15Popup (constructor bytes 212902..215358, draw 215745..216153): UILayer::draw;",
+          "then, while the button is not dismissed, m_stone, m_wall, m_dust0, m_dust1, m_dust2. No",
+          "statics. Loop 3500 ms.",
+          "MEASURED: 1-13 (rec/help_1-13.mp4) loop 3.54 s; stone track 36 frames median 1.1 px; stone",
+          "composite fit scale 1.41 at (640, 144) px, alpha 0.998."
+        ],
+        "loop_ms": 3500,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_stone",
+            "sprite": "entities/rolling_stone.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.0, -0.3], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 500},
+              {"at": [0.0, -0.3], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 1500},
+              {"at": [0.0, 0.07], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 300},
+              {"at": [0.0, 0.07], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 1200}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_wall",
+            "sprite": "entities/breakable_wall_sand.png",
+            "size_units": [32, 128],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.0, 0.2], "alpha": 255, "angle": 90, "filter": "smooth_end", "ms": 500},
+              {"at": [0.0, 0.2], "alpha": 255, "angle": 90, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.0, 0.2], "alpha": 255, "angle": 90, "filter": "smooth_end", "ms": 300},
+              {"at": [0.0, 0.2], "alpha": 0, "angle": 90, "filter": "smooth_end", "ms": 1200},
+              {"at": [0.0, 0.2], "alpha": 0, "angle": 90, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_dust0",
+            "sprite": "particles/smoke_particle.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [-0.07, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 2000},
+              {"at": [-0.07, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0},
+              {"at": [-0.07, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [-0.07, 0.2], "alpha": 0, "angle": 35, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_dust1",
+            "sprite": "particles/smoke_particle.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.07, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 2000},
+              {"at": [0.07, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0},
+              {"at": [0.07, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.07, 0.2], "alpha": 0, "angle": -35, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_dust2",
+            "sprite": "particles/smoke_particle.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.0, 0.07], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 2000},
+              {"at": [0.0, 0.07], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0},
+              {"at": [0.0, 0.07], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.0, 0.07], "alpha": 0, "angle": 15, "filter": "smooth_end", "ms": 0}
+            ]
+          }
+        ]
+      },
+      "LevelHelp25Popup.stone": {
+        "_source": [
+          "DECODED: LevelHelp25Popup (constructor bytes 218244..219180, draw 219515..220074) as",
+          "HelpBlockController builds it on 1-25 and 1-32: m_stone is entities/rolling_stone.png with",
+          "rotateAngle 180. UILayer::draw; then, while the button is not dismissed, m_stone; then the two",
+          "portal statics. Loop 2200 ms.",
+          "MEASURED: 1-25 (rec/help_1-25.mp4) loop 2.23 s; stone track 60 frames median 2.1 px."
+        ],
+        "loop_ms": 2200,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_stone",
+            "sprite": "entities/rolling_stone.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.2, -0.4], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 200},
+              {"at": [0.2, -0.4], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 800},
+              {"at": [0.2, 0.0], "alpha": 255, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [-0.2, -0.1], "alpha": 255, "angle": 180, "filter": "linear", "ms": 0},
+              {"at": [-0.2, -0.1], "alpha": 255, "angle": 180, "filter": "smooth_end", "ms": 600},
+              {"at": [-0.2, -0.4], "alpha": 255, "angle": 180, "filter": "smooth_beginning", "ms": 600},
+              {"at": [-0.2, -0.2], "alpha": 0, "angle": 180, "filter": "smooth_beginning", "ms": 0}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "portal_right",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [0.2, 0.05]
+          },
+          {
+            "kind": "static",
+            "name": "portal_left",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [-0.2, -0.05]
+          }
+        ]
+      },
+      "LevelHelp25Popup.chara": {
+        "_source": [
+          "DECODED: the same class as HelpBlockController builds it on 3-09 (instructions 399..458 of its",
+          "update): m_stone is sprites/help_chara.png after SetupSpriteRects(4, 1), rotateAngle 0, and",
+          "nothing sets a frame, so the first. NOT RECORDED (spec U7): the one walk to its block died."
+        ],
+        "loop_ms": 2200,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_stone",
+            "sprite": "sprites/help_chara.png",
+            "size_units": [32, 48],
+            "origin": [0.5, 0.5],
+            "sheet": {"columns": 4, "rows": 1, "frame": 0},
+            "waypoints": [
+              {"at": [0.2, -0.4], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 200},
+              {"at": [0.2, -0.4], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 800},
+              {"at": [0.2, 0.0], "alpha": 255, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [-0.2, -0.1], "alpha": 255, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [-0.2, -0.1], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 600},
+              {"at": [-0.2, -0.4], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 600},
+              {"at": [-0.2, -0.2], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 0}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "portal_right",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [0.2, 0.05]
+          },
+          {
+            "kind": "static",
+            "name": "portal_left",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [-0.2, -0.05]
+          }
+        ]
+      },
+      "LevelHelpW2P3Popup": {
+        "_source": [
+          "DECODED: LevelHelpW2P3Popup (constructor bytes 216287..217232, draw 217551..218110): UILayer::draw;",
+          "then, while the button is not dismissed, m_fireball; then the two portal statics. Loop 4000 ms.",
+          "MEASURED: 2-03 (rec/help_2-03.mp4) loop 4.06 s; fireball track 121 frames median 8.8 px against",
+          "an unrotated template."
+        ],
+        "loop_ms": 4000,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_fireball",
+            "sprite": "sprites/fireball_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.4, 0.2], "alpha": 0, "angle": 0, "filter": "linear", "ms": 1000},
+              {"at": [0.25, 0.2], "alpha": 255, "angle": 0, "filter": "linear", "ms": 1000},
+              {"at": [0.1, 0.2], "alpha": 255, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [0.1, 0.2], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [-0.05, -0.2], "alpha": 0, "angle": 180, "filter": "linear", "ms": 0},
+              {"at": [-0.05, -0.2], "alpha": 255, "angle": 180, "filter": "linear", "ms": 1000},
+              {"at": [0.25, -0.2], "alpha": 255, "angle": 180, "filter": "linear", "ms": 1000},
+              {"at": [0.4, -0.2], "alpha": 0, "angle": 180, "filter": "linear", "ms": 0}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "portal_bottom",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [0.05, 0.2]
+          },
+          {
+            "kind": "static",
+            "name": "portal_top",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [-0.05, -0.2]
+          }
+        ]
+      },
+      "LevelHelpAntiportalAgent": {
+        "_source": [
+          "DECODED: LevelHelpAntiportalAgent (constructor bytes 220208..222470, draw 222840..223387):",
+          "UILayer::draw; then, while the button is not dismissed, m_ring, m_agent, m_hand, m_projectile;",
+          "then SetupSpriteRects(help_chara, 4, 1) and the chara static with no frame set, so the first",
+          "(INFERRED). m_ring's colour is the decoded ARGB(96, 0xA0, 0, 0) (spec U13, not checked against",
+          "frames). Loop 6500 ms.",
+          "MEASURED: 1-10 (rec/help_1-10.mp4) loop 6.58 s; hand track 17 frames median 0.7 px; projectile",
+          "37 frames median 13.5 px against an unrotated template."
+        ],
+        "loop_ms": 6500,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_ring",
+            "sprite": "sprites/ring_sprite.png",
+            "size_units": [128, 128],
+            "origin": [0.5, 0.5],
+            "tint_rgb": [160, 0, 0],
+            "waypoints": [
+              {"at": [0.2, -0.12], "alpha": 96, "angle": 0, "filter": "smooth_end", "ms": 3500},
+              {"at": [0.2, -0.12], "alpha": 96, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [0.2, -0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1000}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_agent",
+            "sprite": "entities/anti_portal_agent.png",
+            "size_units": [32, 32],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.2, -0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 3500},
+              {"at": [0.2, -0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [0.2, -0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1000}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_hand",
+            "sprite": "entities/tap_icon.png",
+            "size_units": [48, 48],
+            "origin": [0.5, 1.3],
+            "waypoints": [
+              {"at": [0.2, -0.25], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.25], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1000},
+              {"at": [0.2, -0.06], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.16], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 2500},
+              {"at": [0.2, -0.16], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_projectile",
+            "sprite": "sprites/projectile_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [-0.2, 0.07], "alpha": 0, "angle": 200, "filter": "linear", "ms": 2500},
+              {"at": [-0.2, 0.07], "alpha": 0, "angle": 200, "filter": "linear", "ms": 0},
+              {"at": [-0.2, 0.07], "alpha": 255, "angle": 200, "filter": "linear", "ms": 0},
+              {"at": [-0.2, 0.07], "alpha": 255, "angle": 200, "filter": "linear", "ms": 1000},
+              {"at": [0.18, -0.1], "alpha": 255, "angle": 200, "filter": "linear", "ms": 0},
+              {"at": [0.18, -0.1], "alpha": 0, "angle": 200, "filter": "linear", "ms": 3000}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "chara",
+            "sprite": "sprites/help_chara.png",
+            "size_units": [32, 48],
+            "origin": [0.5, 0.5],
+            "sheet": {"columns": 4, "rows": 1, "frame": 0},
+            "at": [-0.2, 0.07]
+          }
+        ]
+      },
+      "RedKeyLocationHelpPopup": {
+        "_source": [
+          "DECODED: RedKeyLocationHelpPopup (constructor bytes 224559..224708) is a StaticImageHelpPopup",
+          "(constructor 223521..223676, draw 223988..224425) whose popup sprite AND drawn image are both",
+          "sprites/red_key_help.png: UILayer::draw draws it as the card, and draw() draws it again at",
+          "computePos(0, 0) in the close button's colour. It has no waypoints, so no loop.",
+          "HelpBlockController dispatches achievement 62 before opening it, which the port",
+          "has no system for. NOT RECORDED (spec U7): the block sits at the level's right bound."
+        ],
+        "card": {
+          "sprite": "sprites/red_key_help.png",
+          "at_screen": [0.5, 0.5],
+          "origin": [0.5, 0.5],
+          "size_units": [256, 256]
+        },
+        "draw": [
+          {
+            "kind": "static",
+            "name": "image",
+            "sprite": "sprites/red_key_help.png",
+            "size_units": [256, 256],
+            "origin": [0.5, 0.5],
+            "at": [0.0, 0.0]
+          }
+        ]
+      }
+    }
   }
 }

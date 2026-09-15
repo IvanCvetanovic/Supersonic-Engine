@@ -25,6 +25,7 @@
 #include "sim/LevelEnd.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Pause.hpp"
+#include "sim/Popup.hpp"
 #include "sim/Scores.hpp"
 #include "sim/Sounds.hpp"
 #include "sim/Sprites.hpp"
@@ -301,10 +302,40 @@ public:
     bool PressPause(entt::registry& registry, Pause::Button button);
 
     // The level's FRAME clock: its age plus every millisecond game time stood
-    // still under a pause. What the original times by frame time the pause does
-    // not stop - the level-start caption, the blacks' wall clock - reads this;
-    // what runs on game time reads LevelAgeMs.
+    // still under a pause or a popup. What the original times by frame time
+    // neither stops - the level-start caption, the blacks' wall clock - reads
+    // this; what runs on game time reads LevelAgeMs.
     double LevelFrameMs() const { return m_levelAgeMs + m_stoppedMs; }
+
+    // Whether game time is stopped: a pause or a popup is up.
+    bool GameTimeStopped() const { return m_pause.open || m_popup.open; }
+
+    // ---- the tutorial and help popups -------------------------------------------
+    //
+    // ETHFramework's Popup over the level, laid out by sim/Popup.hpp from ui.json's
+    // popups block: 1-02 and 1-03 raise one as they load, and thirteen levels from
+    // a help block, on a touch released inside it. It STOPS GAME TIME as the pause
+    // does, for as long as it is up and through its fade out, while its own
+    // entrance and demonstration run on its clock; a touch down anywhere, or the
+    // back key, closes it. MenuScreen() stays Screen::None under it.
+    bool PopupOpen() const { return m_popup.open; }
+    const Popup::Rules& PopupRules() const { return m_popupRules; }
+    // The popup that is up, and its class; null when none is.
+    const Popup::Open* OpenPopup() const { return m_popup.open ? &m_popup.state : nullptr; }
+    const Popup::Class* OpenPopupClass() const { return m_popup.open ? m_popup.cls : nullptr; }
+    // Close the popup that is up, as a touch down does. False when none is up or
+    // it is already closing.
+    bool ClosePopup();
+    // The level's help blocks' touch rectangles on the view, as the last tick
+    // left the camera, in design units; empty in a level with none.
+    std::vector<Hud::Rect> HelpBlockRects() const;
+
+    // DEV ONLY: a touch at a point of the view - given as fractions of it - pressed
+    // on the layer's tick `tick` and released on the next, for a --fixed-step
+    // capture. With no point it lands on the centre of the level's first help
+    // block, wherever the camera has it on that tick. Only the popups read it: it
+    // opens a help block's popup, and closes one that is up.
+    void ScheduleDevTap(int tick, std::optional<glm::dvec2> viewFraction);
 
     // DEV ONLY: press one of these on the layer's tick `tick` (1 the first
     // OnFixedUpdate), as a tap would, for a --fixed-step capture that has no
@@ -805,18 +836,89 @@ private:
         Pause::Level level;
         double musicAddedMs{0.0};
         double musicDismissedMs{-1.0};
-        // The world as the tap left it: every simulated body's transform and
-        // state, put back after each physics step the app runs under the pause.
+    };
+    PauseScreen m_pause;
+
+    // GAME TIME STOPPED, by a pause or a popup: the world as it stood when it
+    // stopped - every simulated body's transform and state, put back after each
+    // physics step the app runs regardless - and the flipbooks that were playing,
+    // stopped for as long as it is.
+    struct Frozen {
         struct Held {
             entt::entity entity{entt::null};
             Supersonic::TransformComponent transform;
             Supersonic::RigidBodyComponent body;
         };
         std::vector<Held> held;
-        // The flipbooks that were playing, stopped for as long as it is up.
         std::vector<entt::entity> stoppedFlipbooks;
     };
-    PauseScreen m_pause;
+    Frozen m_frozen;
+    void freezeWorld(entt::registry& registry);
+    void thawWorld(entt::registry& registry);
+
+    // ---- the popups -------------------------------------------------------------
+    Popup::Rules m_popupRules;
+    struct PopupScreen {
+        bool open{false};
+        const Popup::Class* cls{nullptr};
+        Popup::Open state;
+        // Whether the level still owes the half of its tick that follows its input
+        // (BeforeStep): true for a popup a tap raised mid-tick, as a pause is; false
+        // for one raised as the level loads, whose first tick has not begun.
+        bool stepOnResume{false};
+    };
+    PopupScreen m_popup;
+    // Each popup picture's file resolved once per level, the hd twin where one
+    // exists; empty for one that cannot be read, which is then not drawn.
+    std::map<std::string, std::string> m_popupImages;
+    // The level's help blocks: each entity's place and collision box, in units.
+    struct HelpBlock {
+        glm::dvec2 atUnits{0.0};
+        glm::dvec2 boxUnits{0.0};
+    };
+    std::vector<HelpBlock> m_helpBlocks;
+    // A touch that went down on a help block: which, where in the window's pixels,
+    // and the furthest it has moved since (HelpBlockController's touchMoveLength).
+    struct HelpTouch {
+        bool armed{false};
+        int block{-1};
+        glm::dvec2 downPx{0.0};
+        double maxMovePx{0.0};
+    };
+    HelpTouch m_helpTouch;
+    // The plaque's dismissal, on GameLayer's clock (the level's age), once the
+    // frame clock has passed its dismissAfterMs; negative before.
+    double m_plaqueDismissAgeMs{-1.0};
+    // Its alpha as GameLayer's last update wrote it: a UISprite's colour is only
+    // written when its layer is updated, so under a stop it holds, and under a
+    // popup raised as the level loads it is still the nothing it was built with.
+    double m_plaqueAlpha{0.0};
+    // The pointer this tick as the popups read it - a real touch or a DEV one.
+    struct Touch {
+        bool pressed{false};
+        bool released{false};
+        bool held{false};
+        bool over{false};         // on the game at all
+        glm::dvec2 atView{0.0};   // design units on the view
+        glm::dvec2 atPx{0.0};     // the window's pixels, for the move a touch makes
+    };
+    Touch touchThisTick(const entt::registry& registry);
+    // A popup of `cls` over the level, game time stopped.
+    void openPopup(entt::registry& registry, const Popup::Class& cls, bool stepOnResume);
+    // One tick under a popup. True when it resumed the level on this tick and the
+    // level owes the rest of its tick.
+    bool popupTick(entt::registry& registry, float fixedDelta);
+    // The help blocks the level places, read as it loads.
+    void findHelpBlocks();
+    // A tap on a help block, read with the rest of the level's input: true when it
+    // took the touch, which then fires no portal.
+    bool helpBlockInput(entt::registry& registry);
+    // A file among the original's assets, the hd twin beside it where one exists.
+    std::string originalAsset(const std::string& relative) const;
+    // Whether the frame clock has passed the plaque's dismissal, checked on every
+    // tick a level is loaded, stopped or not; and, where GameLayer is updated
+    // (`updated`), the plaque's alpha.
+    void tickPlaqueDismissal(bool updated);
     // The switches: GlobalSoundSwitch sets the global volume, GlobalMusicSwitch
     // the music. Held for the session only - the original saves the volume
     // (GlobalVolumeManager::saveVolume), which the port does not yet.
@@ -840,6 +942,13 @@ private:
         float direction{0.0f};
     };
     std::vector<DevHold> m_devHolds;
+    struct DevTap {
+        int tick{0};
+        bool onHelpBlock{false};
+        glm::dvec2 viewFraction{0.0};
+        bool pressed{false}; // pressed on its tick, released on the one after
+    };
+    std::vector<DevTap> m_devTaps;
     int m_ticks{0};
 
     void buildControls();

@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -63,8 +64,45 @@ int main(int argc, char** argv) {
         float direction = 0.0f;
     };
     std::vector<Hold> holds;
+    // DEV ONLY: a touch pressed on a stated tick and released on the next. The
+    // popups' captures need a help block tapped, and a popup closed by a touch
+    // down on its card, at a known moment. `--tap help@300` taps the level's first
+    // help block where the camera has it; `--tap 640,200@300` taps that pixel of a
+    // 1280x720 window (the spec's own coordinates), whatever the window's size.
+    struct Tap {
+        int tick = 0;
+        std::optional<glm::dvec2> fraction;
+    };
+    std::vector<Tap> taps;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
+        if (arg == "--tap") {
+            const std::string value = i + 1 < argc ? argv[++i] : "";
+            const std::size_t at = value.find('@');
+            const std::string what = value.substr(0, at);
+            Tap tap;
+            bool ok = at != std::string::npos;
+            try {
+                if (ok) tap.tick = std::stoi(value.substr(at + 1));
+                if (ok && what != "help") {
+                    const std::size_t comma = what.find(',');
+                    ok = comma != std::string::npos;
+                    if (ok) {
+                        tap.fraction = glm::dvec2(std::stod(what.substr(0, comma)) / 1280.0,
+                                                  std::stod(what.substr(comma + 1)) / 720.0);
+                    }
+                }
+            } catch (const std::exception&) {
+                ok = false;
+            }
+            if (!ok || tap.tick < 1) {
+                std::cerr << "--tap wants help@<tick> or <x>,<y>@<tick> (pixels of 1280x720, tick at least 1), got '"
+                          << value << "'\n";
+                return EXIT_FAILURE;
+            }
+            taps.push_back(tap);
+            continue;
+        }
         if (arg == "--hold") {
             const std::string value = i + 1 < argc ? argv[++i] : "";
             const std::size_t at = value.find('@');
@@ -189,6 +227,10 @@ int main(int argc, char** argv) {
                   << "                    DEV: press the pause control (pause) or one of the pause's\n"
                   << "                    buttons (levels, resume, skip, achievements, sound, music) on\n"
                   << "                    the game's tick <tick>, for a capture; repeatable\n"
+                  << "  --tap <help|x,y>@<tick>\n"
+                  << "                    DEV: a touch down on the game's tick <tick> and up on the next,\n"
+                  << "                    on the level's first help block or at pixel x,y of 1280x720,\n"
+                  << "                    for a capture that opens or closes a popup; repeatable\n"
                   << "  --hold <left|right>@<from>-<to>\n"
                   << "                    DEV: hold a walk from the game's tick <from> to <to>, for a\n"
                   << "                    capture that walks into a door or a hazard; repeatable\n"
@@ -267,6 +309,7 @@ int main(int argc, char** argv) {
         auto game = std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start);
         for (const auto& [tick, press] : presses) game->ScheduleDevPress(tick, press);
         for (const Hold& hold : holds) game->ScheduleDevHold(hold.from, hold.to, hold.direction);
+        for (const Tap& tap : taps) game->ScheduleDevTap(tap.tick, tap.fraction);
         MagicPortals::MagicPortalsLayer& gameLayer = *game;
         app.PushLayer(std::move(game));
         if (!visit.levels.empty()) {

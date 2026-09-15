@@ -379,11 +379,15 @@ std::string CaptionText(const Rules& rules, int index) {
 }
 
 double PlaqueAlpha(const Rules& rules, double ageMs) {
+    // getUiTime() > 2000: strictly past.
+    return PlaqueAlphaFrom(rules, ageMs, ageMs > rules.plaque.dismissAfterMs ? rules.plaque.dismissAfterMs : -1.0);
+}
+
+double PlaqueAlphaFrom(const Rules& rules, double ageMs, double dismissAgeMs) {
     const Rules::Plaque& plaque = rules.plaque;
     if (ageMs < 0.0) return 0.0;
-    // getUiTime() > 2000: strictly past.
-    if (ageMs > plaque.dismissAfterMs) {
-        const double since = ageMs - plaque.dismissAfterMs;
+    if (dismissAgeMs >= 0.0 && ageMs >= dismissAgeMs) {
+        const double since = ageMs - dismissAgeMs;
         if (since >= plaque.dismissMs) return 0.0; // removeDismissedSprites
         return Byte(1.0 - SmoothEnd(since / plaque.dismissMs));
     }

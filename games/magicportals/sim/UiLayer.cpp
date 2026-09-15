@@ -60,6 +60,11 @@ int SpriteAlphaByte(const Rules& rules, int tintAlphaByte, double ms) {
     return ByteOf(Hud::SmoothEnd(Bias(ms, rules.spriteAppearMs)), tintAlphaByte);
 }
 
+int SpriteDismissAlphaByte(const Rules& rules, int tintAlphaByte, double ms) {
+    if (ms >= rules.spriteAppearMs) return 0;
+    return ByteOf(1.0 - Hud::SmoothEnd(Bias(ms, rules.spriteAppearMs)), tintAlphaByte);
+}
+
 int ButtonAlphaByte(const Rules& rules, double ms) {
     return ByteOf(Bias(ms, rules.buttonAppearMs), 255);
 }

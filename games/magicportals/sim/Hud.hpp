@@ -213,6 +213,16 @@ std::string CaptionText(const Rules& rules, int index);
 // The current-score plaque's alpha, and its medal's, which share it.
 double PlaqueAlpha(const Rules& rules, double ageMs);
 
+// The same on a level whose game time has stood still, `ageMs` into GameLayer's
+// own updates, dismissed at `dismissAgeMs` of them (negative: not yet).
+// Game::dismissCurrentMedalSprite dismisses the plaque once the FRAME clock
+// (GameStateController::getUiTime) passes dismissAfterMs, which a popup or a
+// pause does not stop; UISprite::dismiss resets its timer, and it is only
+// GameLayer's updates that run it. So the dismissal fades from whole on the
+// updates that follow, whatever the appearance had reached. PlaqueAlpha is this
+// with the dismissal where an unstopped level has it.
+double PlaqueAlphaFrom(const Rules& rules, double ageMs, double dismissAgeMs);
+
 // The medal art for a Scores tier, or empty for a level never finished.
 std::string MedalSprite(const Rules& rules, int medal);
 
