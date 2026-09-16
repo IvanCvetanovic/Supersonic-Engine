@@ -50,11 +50,13 @@
 // (Rules, Ambient). Drawn since step 45 as the design's G3: every sprite's colour
 // is multiplied by AmbientTerm(Ambient(...), emissive), by the engine's 2D sprite
 // path since step 47 (G4), which also adds each Look::lightmap over its sprite.
-// The lights and the halos are still drawn by nothing.
+// Since step 49 (G5) each Look::light is a 2D point light and its halo an added
+// quad, and which sprite takes which light is ReceiverMask and LightLayer below.
 
 #include "sim/Torch.hpp"
 #include "sim/Tscn.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -104,16 +106,68 @@ struct Scene {
 bool Read(const Tscn::Scene& scene, const std::string& resRoot, Scene& out, std::string& error);
 
 // The port's lighting.json: the two ambient lights the original's script sets
-// in place of a level file's own.
+// in place of a level file's own, and what the lights and halos need that no
+// level file says.
 struct Rules {
     glm::dvec3 darkestAmbient{0.0};  // DARKEST_AMBIENT_LIGHT, for a level that sets `darkest`
     glm::dvec3 torchLitAmbient{0.0}; // what a lit torch sets
+    // The normal maps' green channel points DOWN the image: hPixelLightDiff.ps
+    // decodes a texel as -(2 (c - 0.5)) against a light vector in Ethanon's y-down
+    // world (the remake's engine_math.md 4.5).
+    bool normalMapGreenDown = true;
+    // What every halo's formula colour is multiplied by. 1 is the formula itself;
+    // the value in the file is a _guess the design leaves to the halo gate
+    // (design_port.md 5.5, 8), with its measurements beside it.
+    double haloBrightnessScale = 1.0;
 };
 
-// False, with `error`, unless both are three finite numbers from 0 to 1. The
-// original's are well inside that, and an ambient above 1 is clipped by
-// AmbientTerm anyway, so a value outside it is a typing mistake, not a light.
+// False, with `error`, unless both lights are three finite numbers from 0 to 1,
+// normal_map_green_down is a bool, and halo_brightness_scale a finite number from
+// 0 to 1. The original's ambients are well inside that, and an ambient above 1 is
+// clipped by AmbientTerm anyway, so a value outside it is a typing mistake, not a
+// light; a halo scale above the formula's own brightness is not one the design
+// considers.
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
+
+// ---- which light reaches which sprite -------------------------------------------
+//
+// The engine lights a 2D sprite with every Light2DComponent whose layers share a
+// bit with the sprite's light mask. These are the two layers, and the rule that
+// hands them out: ETHEntitySpriteRenderer.cpp:70 skips a light's pass on a sprite
+// when both are static and lightmaps are on, because a static light is already
+// baked into a static sprite's add<id>.png - and it skips it even where no file
+// was baked (the design's section 5.2: the in-range static sprites without one
+// render at the ambient alone).
+inline constexpr std::uint8_t kLiveLights = 1u << 0;   // owned by an entity that is not static
+inline constexpr std::uint8_t kStaticLights = 1u << 1; // owned by a static entity
+
+// The mask a sprite takes: nothing unless it applies light (BeginLightPass,
+// ETHShaderManager.cpp:138); only the live lights when it is static; both when it
+// is not. Lightmaps are always on in the port until the design's step G6 bakes at
+// run time.
+std::uint8_t ReceiverMask(bool isStatic, bool applyLight);
+
+// The layer a light is on: a light is as static as its owner
+// (ETHEntityProperties.cpp:343-348).
+std::uint8_t LightLayer(bool ownerStatic);
+
+// How many of a particle system's particles are live, as a share of all of them:
+// ETHParticleManager counts a particle released and bigger than nothing
+// (ETHParticleManager.cpp:208-213) against the system's particle count. 1 when
+// there is no system (total 0), which is how both callers below read an owner
+// with no system in its first slot.
+double ParticleRatio(int active, int total);
+
+// A light's colour as the shader adds it: <Color> x the scene's lightIntensity x
+// the owner's live particle ratio when the owner is not static, and x 1 when it
+// is (ETHSpriteEntity::ComputeLightIntensity, ETHSpriteEntity.cpp:595-609;
+// ETHPixelLightDiffuseSpecular.cpp:136-146 multiplies in the intensity).
+glm::dvec3 LightColour(const Light& light, double intensity, bool ownerStatic, double ratio);
+
+// A halo's colour: <Color> x haloBrightness x the owner's live particle ratio,
+// for a static owner too, and NOT the scene's intensity (ETHRenderEntity::DrawHalo,
+// ETHRenderEntity.cpp:354-388); then Rules::haloBrightnessScale.
+glm::dvec3 HaloColour(const Light& light, double ratio, double scale);
 
 // The ambient light the original draws a level with now, from its events in
 // their order:

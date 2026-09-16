@@ -33,6 +33,7 @@
 #include "sim/Lighting.hpp"
 #include "sim/Units.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -294,6 +295,16 @@ void everyTorchLevelFindsThem() {
         CHECK_MSG(run.level.torch.wall.present == one.wall,
                   std::string(one.name) + (one.wall ? " ships a light wall" : " ships none"));
         if (run.level.torch.wall.present) ++walls;
+        // And not one <Light>: the unlit torch, light_off.ent, has none, so the port
+        // places no 2D light on these levels (step 49). What a lit torch adds -
+        // light_from_projectile.ent's light and the runtime bake - is the lighting
+        // design's step G6, not a level file's.
+        Lighting::Scene look;
+        std::string error;
+        CHECK_MSG(Lighting::Read(run.data.scene, kLevels + "/..", look, error), error);
+        const auto lit = std::count_if(look.nodes.begin(), look.nodes.end(),
+                                       [](const auto& node) { return node.second.light.has_value(); });
+        CHECK_MSG(lit == 0, std::string(one.name) + " places " + std::to_string(lit) + " light(s)");
     }
     CHECK_EQ(torches, static_cast<std::size_t>(10));
     CHECK_EQ(walls, 6);

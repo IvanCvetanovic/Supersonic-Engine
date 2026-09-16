@@ -15,6 +15,9 @@
 //  - every sprite of a level is drawn at its colour times min(1, ambient +
 //    emissive): 1-1's arches at its ambient, a dark level's scenery at 0.01, and
 //    a level's lightmaps are handed back when it goes (step 45).
+//  - a level's <Light>s are 2D lights with their halos, following their owners,
+//    a sprite takes the lights its mask lets through, and a shot carries its own
+//    light while it flies (step 49).
 //
 // No window and no Vulkan. The app steps physics once before each layer tick at
 // 60 Hz, so this suite does the same.
@@ -36,6 +39,7 @@
 #include "core/ViewportInfo.hpp"
 
 #include "sim/Art.hpp"
+#include "sim/Lighting.hpp"
 #include "sim/Units.hpp"
 
 #include <algorithm>
@@ -2824,6 +2828,304 @@ void LightmapsAreDrawnOverTheirSprites() {
     layer.OnDetach(registry);
 }
 
+// ---- the lights and their halos (step 49) ------------------------------------------
+//
+// A level's <Light>s are Light2DComponents at their owners, and their halos added
+// quads; a sprite that applies light takes the lights its mask lets through
+// (Lighting::ReceiverMask); the shot carries projectile.ent's light while it flies
+// (the lighting design's G5, sections 5.2 to 5.5).
+
+std::vector<entt::entity> LightsOf(entt::registry& registry) {
+    std::vector<entt::entity> out;
+    for (auto [entity, light] : registry.view<Light2DComponent>().each()) {
+        (void)light;
+        out.push_back(entity);
+    }
+    return out;
+}
+
+bool NearV(const glm::vec3& a, const glm::vec3& b, float eps = 1e-5f) {
+    return std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps;
+}
+
+std::string ShowV(const glm::vec3& v) {
+    return "(" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " + std::to_string(v.z) + ")";
+}
+
+// The one sprite of the level drawn with this image.
+entt::entity SpriteOf(entt::registry& registry, const char* tag, const std::string& file) {
+    for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        if (t.tag == tag && EndsWith(material.albedoTexturePath, file)) return entity;
+    }
+    return entt::null;
+}
+
+MagicPortals::Lighting::Rules LightingRules() {
+    MagicPortals::Lighting::Rules rules;
+    std::string error;
+    CHECK_MSG(MagicPortals::Lighting::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/lighting.json", rules, error),
+              error);
+    return rules;
+}
+
+void TheTorchIsALightAndAHalo() {
+    namespace Lighting = MagicPortals::Lighting;
+    using MagicPortals::Units::ToMetres;
+    const Lighting::Rules rules = LightingRules();
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
+              layer.LoadError() + layer.ArtError() + layer.LightingError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
+
+    // 1-1 places one light, light_ent_696's: static, at (288, 64) + (0, -12), 24
+    // above its z of -18, range 300, colour (1, 0.5, 0.1) at the level's intensity 3.
+    std::vector<entt::entity> lights = LightsOf(registry);
+    CHECK_EQ(lights.size(), std::size_t{1});
+    if (lights.size() != 1) return;
+    {
+        const Light2DComponent& light = registry.get<Light2DComponent>(lights[0]);
+        CHECK_MSG(light.layers == Lighting::kStaticLights, "a static owner's light is on the static layer");
+        CHECK_MSG(NearV(light.color * light.intensity, glm::vec3(3.0f, 1.5f, 0.3f)),
+                  "colour (1, 0.5, 0.1) x intensity 3: " + ShowV(light.color * light.intensity));
+        CHECK_MSG(::test::nearly(light.range, 6.0f, 1e-5f), "range 300 units, 6 m: " + std::to_string(light.range));
+        CHECK_MSG(::test::nearly(light.height, 0.12f, 1e-6f), "height -18 + 24 = 6 units, 0.12 m: " + std::to_string(light.height));
+        CHECK_MSG(light.enabled, "on");
+        const glm::vec3 at = registry.get<TransformComponent>(lights[0]).position;
+        const glm::vec3 want = MagicPortals::Units::ToWorld(288.0, 52.0);
+        CHECK_MSG(std::fabs(at.x - want.x) < 1e-5f && std::fabs(at.y - want.y) < 1e-5f,
+                  "at (288, 52) px, not turned with anything: " + ShowV(at));
+    }
+
+    // Its halo: halo.bmp, added, 300 units square at the same point, off the 2D
+    // sprite path, a quarter slot in front of the torch's picture and behind the
+    // flame the torch emits.
+    CHECK_EQ(Tagged(registry, "Magic Portals Halo"), 1);
+    const entt::entity halo = FirstTagged(registry, "Magic Portals Halo");
+    const entt::entity torch = SpriteOf(registry, "Magic Portals Sprite", "/torch_small.png");
+    CHECK(halo != entt::null && torch != entt::null);
+    if (halo == entt::null || torch == entt::null) return;
+    {
+        const MaterialComponent& material = registry.get<MaterialComponent>(halo);
+        CHECK_MSG(EndsWith(material.albedoTexturePath, "/assets/entities/halo.bmp") && material.unlit &&
+                      material.blend == MaterialComponent::BlendMode::Additive && !material.sprite2D.enabled,
+                  "halo.bmp, added, taking no ambient: " + material.albedoTexturePath);
+        const TransformComponent& transform = registry.get<TransformComponent>(halo);
+        CHECK_MSG(std::fabs(transform.scale.x - 6.0f) < 1e-5f && std::fabs(transform.scale.y - 6.0f) < 1e-5f,
+                  "300 units square: " + ShowV(transform.scale));
+        CHECK_MSG(glm::distance(MagicPortals::Units::ToPixels(transform.position), glm::dvec2(288.0, 52.0)) < 1e-3,
+                  "centred on the light, the offset unscaled: " + Point(MagicPortals::Units::ToPixels(transform.position)));
+        const float torchZ = registry.get<TransformComponent>(torch).position.z;
+        CHECK_MSG(transform.position.z > torchZ && transform.position.z < torchZ + 0.004f,
+                  "in front of the torch and behind the next slot: " + std::to_string(transform.position.z) + " over " +
+                      std::to_string(torchZ));
+        // Before any frame has run no particle of the flame is live, and the halo's
+        // brightness is their share (ETHRenderEntity.cpp:372-376): black.
+        CHECK_MSG(material.albedoColor == glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), "no live flame yet: a black halo");
+    }
+
+    // The flame lives on the frame. Its live share is a count of twelve, the halo
+    // is (1, 0.5, 0.1) x 0.7 x that share x lighting.json's scale, and the static
+    // torch's LIGHT does not follow it (ComputeLightIntensity is 1 for a static owner).
+    double sum = 0.0;
+    int frames = 0;
+    int offTwelfths = 0;
+    int offColour = 0;
+    for (int frame = 0; frame < 1260; ++frame) {
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        const glm::vec4 c = registry.get<MaterialComponent>(halo).albedoColor;
+        const double share = static_cast<double>(c.r) / (0.7 * rules.haloBrightnessScale);
+        if (std::fabs(share * 12.0 - std::round(share * 12.0)) > 1e-3 || share < -1e-6 || share > 1.0 + 1e-6) ++offTwelfths;
+        if (std::fabs(c.g - 0.5f * c.r) > 1e-6f || std::fabs(c.b - 0.1f * c.r) > 1e-6f || c.a != 1.0f) ++offColour;
+        if (frame >= 60) {
+            sum += share;
+            ++frames;
+        }
+    }
+    const double mean = frames > 0 ? sum / frames : 0.0;
+    CHECK_MSG(offTwelfths == 0, std::to_string(offTwelfths) + " frame(s) whose halo is not a whole number of twelfths");
+    CHECK_MSG(offColour == 0, std::to_string(offColour) + " frame(s) whose halo is not the light's colour");
+    CHECK_MSG(mean > 0.5 && mean <= 1.0, "the flame's mean live share over 20 s: " + std::to_string(mean));
+    std::printf("  the torch flame's live share over 20 s of frames: %.4f of 12 particles\n", mean);
+    CHECK_MSG(NearV(registry.get<Light2DComponent>(lights[0]).color, glm::vec3(3.0f, 1.5f, 0.3f)),
+              "and the static torch's light stays whole");
+
+    // Who takes it. The arches are static and apply light: the live layer only,
+    // their own normal map, their own depth. The sky applies none. The static
+    // portals' added halos apply none.
+    for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        (void)entity;
+        if (t.tag != "Magic Portals Sprite") continue;
+        const auto& s = material.sprite2D;
+        if (EndsWith(material.albedoTexturePath, "/arch_with_base_blur.png")) {
+            CHECK_MSG(s.lightMask == Lighting::kLiveLights && s.normalYDown &&
+                          EndsWith(material.normalTexturePath, "/normalmaps/arch_with_base_nm.png") &&
+                          ::test::nearly(s.height, ToMetres(-20.0), 1e-6f),
+                      "an arch: live lights only, arch_with_base_nm.png, height -20 units: mask " +
+                          std::to_string(s.lightMask) + ", " + material.normalTexturePath);
+        } else if (EndsWith(material.albedoTexturePath, "/portal_halo.png") ||
+                   EndsWith(material.albedoTexturePath, "/sky.png")) {
+            CHECK_MSG(s.lightMask == 0 && material.normalTexturePath.empty(),
+                      material.albedoTexturePath + " applies no light: no mask, no normal map");
+        }
+    }
+    if (OriginalArtIsThere("TheTorchIsALightAndAHalo (the player)")) {
+        const entt::entity mage = FirstTagged(registry, "Magic Portals Player Sprite");
+        CHECK(mage != entt::null);
+        if (mage != entt::null) {
+            const MaterialComponent& material = registry.get<MaterialComponent>(mage);
+            CHECK_MSG(material.sprite2D.lightMask == (Lighting::kLiveLights | Lighting::kStaticLights),
+                      "the player is not static: every light reaches it, the torch's included");
+            CHECK_MSG(EndsWith(material.normalTexturePath, "/entities/normalmaps/normalmap_77.png"),
+                      "through dark_mage.ent's normal map: " + material.normalTexturePath);
+            CHECK_MSG(material.sprite2D.height == 0.0f && material.sprite2D.normalYDown,
+                      "at main_char's depth, 0, the map's green down");
+        }
+    }
+
+    // The debug switch takes every mask away and nothing else.
+    layer.ForceLightMasksOff(true);
+    tickWith(layer, registry, kRest, {}, {});
+    int masked = 0;
+    for (auto [entity, material] : registry.view<MaterialComponent>().each()) {
+        (void)entity;
+        if (material.sprite2D.lightMask != 0) ++masked;
+    }
+    CHECK_MSG(masked == 0, std::to_string(masked) + " sprite(s) still take a light with the masks forced off");
+    CHECK_EQ(LightsOf(registry).size(), std::size_t{1});
+    CHECK_EQ(Tagged(registry, "Magic Portals Halo"), 1);
+    layer.ForceLightMasksOff(false);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(registry.get<MaterialComponent>(SpriteOf(registry, "Magic Portals Sprite", "/arch_with_base_blur.png"))
+                      .sprite2D.lightMask == Lighting::kLiveLights,
+              "and gives them back");
+
+    // A retry draws the same light and halo again, not a second set.
+    press(layer, registry, MagicPortalsLayer::kRetry);
+    CHECK_EQ(LightsOf(registry).size(), std::size_t{1});
+    CHECK_EQ(Tagged(registry, "Magic Portals Halo"), 1);
+
+    // 1-2 (level1) places two: its torch's, with a halo, and a static portal's
+    // blue one of range 90, with none.
+    press(layer, registry, MagicPortalsLayer::kSkip);
+    CHECK(IsAt(layer, "level1"));
+    lights = LightsOf(registry);
+    CHECK_EQ(lights.size(), std::size_t{2});
+    int torches = 0;
+    int portals = 0;
+    for (const entt::entity e : lights) {
+        const Light2DComponent& light = registry.get<Light2DComponent>(e);
+        CHECK_MSG(light.layers == Lighting::kStaticLights, "both owners are static");
+        if (NearV(light.color, glm::vec3(3.0f, 1.5f, 0.3f)) && ::test::nearly(light.height, ToMetres(8.0), 1e-6f)) ++torches;
+        if (NearV(light.color, glm::vec3(1.8f, 1.8f, 3.0f)) && ::test::nearly(light.range, ToMetres(90.0), 1e-6f) &&
+            light.height == 0.0f) {
+            ++portals;
+        }
+    }
+    CHECK_EQ(torches, 1);
+    CHECK_EQ(portals, 1);
+    CHECK_EQ(Tagged(registry, "Magic Portals Halo"), 1);
+
+    // The grid has none.
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK(layer.MenuScreen() == MagicPortalsLayer::Screen::Levels);
+    CHECK_MSG(LightsOf(registry).empty() && Tagged(registry, "Magic Portals Halo") == 0, "the menu has no light");
+    layer.OnDetach(registry);
+
+    // 2-05 (level4a) places none.
+    entt::registry second;
+    publishViewport(second);
+    MagicPortalsLayer dark(TestPaths(), "level4a");
+    dark.OnAttach(second);
+    CHECK_MSG(dark.SimLevel() != nullptr && dark.LightingError().empty(), dark.LoadError() + dark.LightingError());
+    CHECK_MSG(LightsOf(second).empty() && Tagged(second, "Magic Portals Halo") == 0, "level4a places no light");
+    dark.OnDetach(second);
+}
+
+void AShotCarriesItsOwnLight() {
+    namespace Lighting = MagicPortals::Lighting;
+    using MagicPortals::Units::ToMetres;
+    const Lighting::Rules rules = LightingRules();
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
+              layer.LoadError() + layer.ArtError() + layer.LightingError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
+    waitForFirstTap(layer, registry);
+    CHECK_EQ(LightsOf(registry).size(), std::size_t{2});
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Light"), 0);
+
+    tap(layer, registry, screenOf(registry, playerPx(registry, layer) + glm::dvec2(0.0, -48.0)));
+    CHECK_MSG(layer.SimLevel()->portals.flight.has_value(), "the tap fired: " + lastFailure(layer));
+    if (!layer.SimLevel()->portals.flight) return;
+    CHECK_EQ(LightsOf(registry).size(), std::size_t{3});
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Light"), 1);
+    const entt::entity shot = FirstTagged(registry, "Magic Portals Shot Light");
+    if (shot == entt::null) return;
+    // projectile.ent's: not static, so the live layer, which static walls take;
+    // range 70; (0.6, 0.6, 1) at level1's intensity 3, whole (no particle system);
+    // 12 below the shot's depth.
+    const auto followsTheShot = [&]() {
+        const glm::vec3 at = registry.get<TransformComponent>(shot).position;
+        const glm::vec3 want = MagicPortals::Units::ToWorld(layer.SimLevel()->portals.flight->atPx.x,
+                                                            layer.SimLevel()->portals.flight->atPx.y);
+        return std::fabs(at.x - want.x) < 1e-5f && std::fabs(at.y - want.y) < 1e-5f;
+    };
+    {
+        const Light2DComponent& light = registry.get<Light2DComponent>(shot);
+        CHECK_MSG(light.layers == Lighting::kLiveLights && light.enabled, "the shot's light is live");
+        CHECK_MSG(NearV(light.color * light.intensity, glm::vec3(1.8f, 1.8f, 3.0f)),
+                  "(0.6, 0.6, 1) x 3: " + ShowV(light.color * light.intensity));
+        CHECK_MSG(::test::nearly(light.range, ToMetres(70.0), 1e-6f), "range 70 units");
+        CHECK_MSG(::test::nearly(light.height, ToMetres(-12.0), 1e-6f), "12 below the shot's depth of 0");
+        CHECK_MSG(followsTheShot(), "where the shot is");
+    }
+    const glm::dvec2 from = layer.SimLevel()->portals.flight->atPx;
+    tickWith(layer, registry, kRest, {}, {});
+    if (layer.SimLevel()->portals.flight) {
+        CHECK_MSG(layer.SimLevel()->portals.flight->atPx != from, "the shot moved");
+        CHECK_MSG(followsTheShot(), "and its light with it");
+    }
+    if (OriginalArtIsThere("AShotCarriesItsOwnLight (the halo)")) {
+        CHECK_EQ(Tagged(registry, "Magic Portals Shot Halo"), 1);
+        const entt::entity halo = FirstTagged(registry, "Magic Portals Shot Halo");
+        if (halo != entt::null) {
+            const MaterialComponent& material = registry.get<MaterialComponent>(halo);
+            const glm::vec3 want = glm::vec3(0.6f, 0.6f, 1.0f) * 0.65f * static_cast<float>(rules.haloBrightnessScale);
+            CHECK_MSG(EndsWith(material.albedoTexturePath, "/entities/halo.bmp") &&
+                          material.blend == MaterialComponent::BlendMode::Additive && !material.sprite2D.enabled &&
+                          NearV(glm::vec3(material.albedoColor), want),
+                      "halo.bmp, added, (0.6, 0.6, 1) x 0.65 x the scale: " + ShowV(glm::vec3(material.albedoColor)));
+            const glm::vec3 scale = registry.get<TransformComponent>(halo).scale;
+            CHECK_MSG(std::fabs(scale.x - 1.0f) < 1e-5f && std::fabs(scale.y - 1.0f) < 1e-5f, "50 units: " + ShowV(scale));
+        }
+        // The shot's own picture takes no light: projectile.ent applies none.
+        const entt::entity picture = FirstTagged(registry, "Magic Portals Shot Sprite");
+        CHECK_MSG(picture != entt::null && registry.get<MaterialComponent>(picture).sprite2D.lightMask == 0,
+                  "the shot's picture takes no light");
+    }
+
+    // A static wall that applies light takes the live layer the shot is on.
+    int walls = 0;
+    for (auto [entity, t, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        (void)entity;
+        if (t.tag != "Magic Portals Sprite" || !material.sprite2D.enabled) continue;
+        if ((material.sprite2D.lightMask & Lighting::kLiveLights) != 0 && !material.overlayTexturePath.empty()) ++walls;
+    }
+    CHECK_MSG(walls > 0, "level1's lightmapped walls take the live layer");
+
+    landShot(layer, registry);
+    CHECK_EQ(LightsOf(registry).size(), std::size_t{2});
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Light"), 0);
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Halo"), 0);
+    layer.OnDetach(registry);
+    CHECK_MSG(LightsOf(registry).empty() && Tagged(registry, "Magic Portals Halo") == 0, "detached, none left");
+}
+
 void NothingBlinksWhileWalking() {
     NoSpriteBlinksWhileWalking("level1"); // 1-2, where the owner saw one go
     NoSpriteBlinksWhileWalking("level2"); // 1-3, where several do
@@ -2878,6 +3180,8 @@ void runTests() {
     AShotIsDimmedAndADarkLevelIsDark();
     ATimedCrystalFadesInItsAlphaAlone();
     LightmapsAreDrawnOverTheirSprites();
+    TheTorchIsALightAndAHalo();
+    AShotCarriesItsOwnLight();
 }
 
 } // namespace

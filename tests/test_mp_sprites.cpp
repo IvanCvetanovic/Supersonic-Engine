@@ -15,6 +15,7 @@
 #include "core/AudioClip.hpp"
 
 #include "sim/Art.hpp"
+#include "sim/Lighting.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Sprites.hpp"
 #include "sim/Tscn.hpp"
@@ -287,6 +288,31 @@ void ThePortalAndTheShotAreTheirEnts() {
     CHECK_MSG(mage.emissive == glm::dvec3(1.0), "dark_mage.ent: emissive 1");
     CHECK_MSG(beholder.emissive == glm::dvec3(1.0), "beholder.ent: emissive 1");
     CHECK_MSG(rules.spike.emissive == glm::dvec3(1.0), "beholder_spike.ent: emissive 1");
+
+    // And their lighting (step 49). Only the player applies light: not static,
+    // through normalmap_77.png. Only the shot has a light: projectile.ent's, live,
+    // range 70, (0.6, 0.6, 1) 12 below it, with halo.bmp at 50 and 0.65.
+    CHECK_MSG(!mage.isStatic && mage.applyLight && mage.normal == "normalmap_77.png" && !mage.light,
+              "dark_mage.ent: not static, applies light through normalmap_77.png, no light of its own");
+    CHECK_MSG(!rules.shot.isStatic && !rules.shot.applyLight && rules.shot.normal.empty(),
+              "projectile.ent: not static, applies no light");
+    CHECK_MSG(rules.shot.light.has_value(), "projectile.ent has a light");
+    if (rules.shot.light) {
+        const Lighting::Light& light = *rules.shot.light;
+        CHECK_MSG(light.range == 70.0 && light.offset == glm::dvec3(0.0, 0.0, -12.0) &&
+                      light.colour == glm::dvec3(0.6, 0.6, 1.0),
+                  "range 70, offset (0, 0, -12), colour (0.6, 0.6, 1)");
+        CHECK_MSG(light.halo == "halo.bmp" && light.haloOffset == glm::dvec2(0.0) &&
+                      light.haloSize == glm::dvec2(50.0) && light.haloBrightness == 0.65,
+                  "halo.bmp, centred, 50 units, brightness 0.65");
+        CHECK_MSG(rules.shot.z == 0.0, "measured from the shot's depth, 0");
+    }
+    for (const Art::Picture* picture : {static_cast<const Art::Picture*>(&rules.portal),
+                                        static_cast<const Art::Picture*>(&beholder),
+                                        static_cast<const Art::Picture*>(&rules.spike)}) {
+        CHECK_MSG(!picture->isStatic && !picture->applyLight && picture->normal.empty() && !picture->light,
+                  picture->sprite + ": not static, applies no light, no normal map, no light");
+    }
 }
 
 void APulseGoesThereAndBack() {
@@ -310,10 +336,12 @@ void APulseGoesThereAndBack() {
 void ASheetThatDoesNotSayHowFastIsRefused() {
     const std::filesystem::path path = Scratch() / "art.json";
     // Everything else in order, so the shot's missing rate is what is refused.
-    const std::string text = R"({"portal": {"sprite": "a.png", "additive": true, "emissive": [1, 1, 1]},
-                                 "shot": {"sprite": "b.png", "additive": true, "columns": 6, "emissive": [1, 1, 1]},
+    const std::string text = R"({"portal": {"sprite": "a.png", "additive": true, "emissive": [1, 1, 1],
+                                            "static": false, "apply_light": false},
+                                 "shot": {"sprite": "b.png", "additive": true, "columns": 6, "emissive": [1, 1, 1],
+                                          "static": false, "apply_light": false},
                                  "character": {"sprite": "c.png", "additive": false, "columns": 4, "rows": 4,
-                                               "emissive": [1, 1, 1],
+                                               "emissive": [1, 1, 1], "static": false, "apply_light": true,
                                                "start_frame": 4, "pivot_px": [0, 2],
                                                "rows_by_direction": {"left": 1, "right": 2},
                                                "animation": {"frames_per_second": 10, "idle_column": 0}}})";
@@ -331,9 +359,12 @@ void APictureWithoutItsEmissiveIsRefused() {
     const std::filesystem::path path = Scratch() / "art-no-emissive.json";
     for (const std::string& emissive : {std::string(), std::string(R"(, "emissive": [1, 1])"),
                                         std::string(R"(, "emissive": [1, -0.5, 1])")}) {
-        const std::string text = R"({"portal": {"sprite": "a.png", "additive": true)" + emissive + R"(},
-                                     "shot": {"sprite": "b.png", "additive": true, "emissive": [1, 1, 1]},
-                                     "character": {"sprite": "c.png", "additive": false, "emissive": [1, 1, 1]}})";
+        const std::string text = R"({"portal": {"sprite": "a.png", "additive": true, "static": false,
+                                                "apply_light": false)" + emissive + R"(},
+                                     "shot": {"sprite": "b.png", "additive": true, "emissive": [1, 1, 1],
+                                              "static": false, "apply_light": false},
+                                     "character": {"sprite": "c.png", "additive": false, "emissive": [1, 1, 1],
+                                                   "static": false, "apply_light": true}})";
         Write(path, std::vector<unsigned char>(text.begin(), text.end()));
         Art::Rules rules;
         std::string error;
@@ -341,6 +372,49 @@ void APictureWithoutItsEmissiveIsRefused() {
         CHECK_MSG(!ok, "refused: portal" + emissive);
         CHECK_MSG(error.find("portal's emissive") != std::string::npos, error);
     }
+}
+
+void APictureWithoutItsLightingIsRefused() {
+    // Which lights reach a picture decides whether the player is lit at all, and
+    // a light's every number is its .ent's: none of it is defaulted.
+    const std::filesystem::path path = Scratch() / "art-lighting.json";
+    const auto refused = [&](const std::string& portal, const std::string& shot, const std::string& says) {
+        const std::string text = R"({"portal": {"sprite": "a.png", "additive": true, "emissive": [1, 1, 1])" + portal +
+                                 R"(}, "shot": {"sprite": "b.png", "additive": true, "emissive": [1, 1, 1],
+                                                "static": false, "apply_light": false)" + shot +
+                                 R"(}, "character": {"sprite": "c.png", "additive": false, "emissive": [1, 1, 1],
+                                                     "static": false, "apply_light": true}})";
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Art::Rules rules;
+        std::string error;
+        const bool ok = Art::LoadRules(path.string(), rules, error);
+        CHECK_MSG(!ok, "refused: portal" + portal + " shot" + shot);
+        CHECK_MSG(error.find(says) != std::string::npos, error);
+    };
+    const std::string flags = R"(, "static": false, "apply_light": false)";
+    const std::string light = R"(, "light": {"range": 70, "offset": [0, 0, -12], "colour": [0.6, 0.6, 1],
+                                  "halo": "halo.bmp", "halo_offset": [0, 0], "halo_size": [50, 50],
+                                  "halo_brightness": 0.65}, "z": {"value": 0})";
+    refused("", "", "portal needs static and apply_light");
+    refused(R"(, "static": false)", "", "portal needs static and apply_light");
+    refused(R"(, "static": 0, "apply_light": false)", "", "portal needs static and apply_light");
+    refused(flags + R"(, "normal": "")", "", "portal's normal is not a file name");
+    // The shot's light, with each of its numbers taken out or broken in turn.
+    const auto without = [&light](const std::string& from, const std::string& to) {
+        std::string changed = light;
+        const std::size_t at = changed.find(from);
+        CHECK_MSG(at != std::string::npos, from);
+        if (at != std::string::npos) changed.replace(at, from.size(), to);
+        return changed;
+    };
+    refused(flags, without(R"("range": 70, )", ""), "shot's light needs a range above 0");
+    refused(flags, without(R"("range": 70)", R"("range": 0)"), "shot's light needs a range above 0");
+    refused(flags, without(R"([0, 0, -12])", "[0, -12]"), "shot's light needs");
+    refused(flags, without(R"([0.6, 0.6, 1])", "[0.6, -0.6, 1]"), "shot's light needs");
+    refused(flags, without(R"("halo": "halo.bmp", )", ""), "shot's light needs");
+    refused(flags, without(R"([50, 50])", "[50, 0]"), "shot's light needs");
+    refused(flags, without(R"("halo_brightness": 0.65)", R"("halo_brightness": "0.65")"), "shot's light needs");
+    refused(flags, without(R"(, "z": {"value": 0})", ""), "shot has a light and no z.value");
 }
 
 void TheOriginalsImagesAreCutAsTheEntsSay() {
@@ -357,6 +431,13 @@ void TheOriginalsImagesAreCutAsTheEntsSay() {
     CHECK_MSG(beholder && w == 2 * 128 && h == 128, "beholder.png is two frames of 128 x 128: " + error);
     const bool spike = Sprites::ImageSize(kOriginal + "/entities/beholder_spike.png", w, h, error);
     CHECK_MSG(spike && w == 16 && h == 32, "beholder_spike.png is 16 x 32: " + error);
+    // The player's normal map is sampled with the sheet's own coordinates, so it is
+    // cut 4 x 4 like the sheet: sixteen cells of 32 x 32 (step 49). And the shot's
+    // halo is halo.bmp, an 8-bit BMP the header reader sizes.
+    const bool normal = Sprites::ImageSize(kOriginal + "/entities/normalmaps/normalmap_77.png", w, h, error);
+    CHECK_MSG(normal && w == 4 * 32 && h == 4 * 32, "normalmap_77.png is sixteen cells of 32 x 32: " + error);
+    const bool halo2 = Sprites::ImageSize(kOriginal + "/entities/halo.bmp", w, h, error);
+    CHECK_MSG(halo2 && w == 64 && h == 64, "halo.bmp is 64 x 64: " + error);
 }
 
 // ---- the converted levels -----------------------------------------------------
@@ -644,6 +725,7 @@ int main() {
     APulseGoesThereAndBack();
     ASheetThatDoesNotSayHowFastIsRefused();
     APictureWithoutItsEmissiveIsRefused();
+    APictureWithoutItsLightingIsRefused();
 
     std::error_code original;
     if (std::filesystem::is_directory(kOriginal + "/entities", original)) {

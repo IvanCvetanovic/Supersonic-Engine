@@ -71,8 +71,13 @@ namespace MagicPortals {
 //    a lit torch - and the emissive its node or its .ent gives. The layer keeps
 //    each sprite's own colour (a crystal's fade, the beholder's red) apart from
 //    that factor, and hands both to the engine's 2D sprite path, premultiplied.
-//    A static sprite that applies light adds its baked lightmap over that. The
-//    lights and halos are not drawn yet.
+//    A static sprite that applies light adds its baked lightmap over that.
+//  - A level's <Light>s are the engine's 2D point lights, and their halos added
+//    quads, following their owners; the shot carries a light of its own. A
+//    sprite that applies light takes, per pixel through its normal map, every
+//    light that is not static when it is static itself - its static lights are
+//    in its lightmap - and every light when it is not, which is how the player
+//    is lit by a torch it walks past.
 //  - What the levels do not picture, the game draws as the original's own
 //    entities draw it (Art.hpp): the portals a shot opens, and the shot. Their
 //    images are read from the original's extracted assets; without them they
@@ -222,6 +227,14 @@ public:
     // Whether B has the bodies' boxes shown over the art.
     bool ShowingBoxes() const { return m_showBoxes; }
 
+    // DEV ONLY: every sprite's 2D light mask forced to 0, so no light reaches any
+    // sprite while the lights, the halos and everything else are drawn as before.
+    // It exists for one measurement: a capture with the lights and the same capture
+    // without them differ by exactly what the lights add (step 49's torch pass).
+    // Takes effect on the next tick's colouring.
+    void ForceLightMasksOff(bool off) { m_lightMasksOff = off; }
+    bool LightMasksForcedOff() const { return m_lightMasksOff; }
+
     // The level being played, or null when it did not load.
     const Game::Level* SimLevel() const { return m_loaded ? &m_level : nullptr; }
 
@@ -336,6 +349,16 @@ private:
         float fade{1.0f};
         glm::dvec3 emissive{0.0}; // its node's eth_emissive
         std::string lightmap;     // its node's eth_lightmap, on disk; empty = none
+        // Which lights reach it and how (Lighting::ReceiverMask): its node's
+        // eth_static, eth_apply_light, eth_normal (on disk; empty = none), and its
+        // eth_z, the original's unrounded depth, which is its lighting height.
+        bool isStatic{false};
+        bool applyLight{false};
+        std::string normal;
+        double lookZ{0.0};
+        // Where its entity stands now, in the level's pixels: its node's position,
+        // or its body's, or its patrolling zone's. What a light it owns follows.
+        glm::dvec2 ownerPx{0.0};
         entt::entity body{entt::null};
         int crystal{-1};      // in goals.crystals
         int staticPortal{-1}; // in portals.statics
@@ -383,13 +406,36 @@ private:
     // Every sprite of the level coloured for the ambient light now: after
     // everything above has made, unmade and placed this tick's quads.
     void syncLighting(entt::registry& registry);
+    // What a sprite is to the lights: whether it applies light and is static
+    // (Lighting::ReceiverMask), its normal map on disk, and its lighting height
+    // in the original's units. The default takes no light.
+    struct Receiver {
+        bool applyLight{false};
+        bool isStatic{false};
+        std::string normal;
+        double z{0.0};
+    };
     // A quad's light: its colour C as albedoColor, min(1, ambient + emissive) as
-    // its 2D sprite's ambient, its lightmap as the overlay, and a mixed blend made
-    // premultiplied - or, on a level whose lighting did not read, C alone on the
-    // plain unlit path. Each written only when it changes. The one place a level
-    // sprite's colour is written.
+    // its 2D sprite's ambient, its lightmap as the overlay, its height, normal map
+    // and light mask, and a mixed blend made premultiplied - or, on a level whose
+    // lighting did not read, C alone on the plain unlit path. Each written only
+    // when it changes. The one place a level sprite's colour is written.
     void tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour, const glm::dvec3& emissive,
-              const std::string& lightmap = {}) const;
+              const std::string& lightmap = {}, const Receiver& receiver = {}) const;
+    // The level's lights and their halos, one per Lighting::Look::light, made with
+    // the sprites and their particles.
+    void buildLights(entt::registry& registry);
+    // The level's lights, their halos, and the shot's light and halo, taken away.
+    void unloadLights(entt::registry& registry);
+    // Every light and halo placed at its owner, on or off as its owner is there
+    // or not, in the colour its owner's particles give it now; and the shot's
+    // made, placed and unmade with the shot. On the tick, after the sprites, so
+    // a suite that only ticks sees them; and on the frame, after the particles,
+    // which is when their count changes.
+    void syncLights(entt::registry& registry);
+    // The live share of the particles of the emitter at `emitter` in m_emitters
+    // (Lighting::ParticleRatio): 1 when there is none.
+    double particleRatioOf(int emitter) const;
     // Hands the held lightmaps back to the texture registry, when there is one.
     void releaseLightmaps(entt::registry& registry);
     void updateHud(entt::registry& registry);
@@ -472,6 +518,28 @@ private:
     std::vector<entt::entity> m_portalQuads; // one per placed portal, when its image is there
     entt::entity m_shotQuad{entt::null};    // the shot in flight, when its image is there
     entt::entity m_playerQuad{entt::null};  // the player, when its image is there
+    double m_playerZ{0.0};                  // the level's player marker's eth_z: the player's lighting height
+
+    // One of the level's <Light>s: the Light2DComponent standing for it, its halo's
+    // quad when it has one, and the sprite of the entity that owns it. Every light
+    // in the 128 levels has an owner that draws a sprite (72 of 72, counted in
+    // step 49), and a light whose owner draws none stands at its node.
+    struct PlacedLight {
+        std::string node;
+        Lighting::Light light;
+        bool ownerStatic{false};
+        double ownerZ{0.0};
+        int sprite{-1};        // its owner's picture in m_sprites, or -1
+        int emitter{-1};       // its owner's first <ParticleSystem> in m_emitters, when one was built
+        glm::dvec2 atPx{0.0};  // its node's position, for an owner with no picture
+        float haloZ{0.0f};     // just in front of its owner's picture, behind its particles
+        entt::entity entity{entt::null};
+        entt::entity halo{entt::null};
+    };
+    std::vector<PlacedLight> m_placedLights;
+    entt::entity m_shotLight{entt::null}; // the shot's own light while it flies
+    entt::entity m_shotHalo{entt::null};  // and its halo, when its image is there
+    bool m_lightMasksOff{false};          // ForceLightMasksOff
     float m_direction{0.0f};                // this tick's walk: -1 left, 1 right, 0 standing
     bool m_facingRight{false};              // which way the player last walked
     // Chapter 1's boss: its reach as a box, beholder.ent's sheet when the image
@@ -522,6 +590,8 @@ private:
         glm::dvec2 cellPx{0.0};
         std::string image;
         int crystal = -1; // when it decorates one: it stops with the crystal
+        int sprite = -1;  // the sprite in m_sprites whose entity it belongs to
+        int slot = 0;     // which of that entity's <ParticleSystem>s it is, from 0
         std::vector<Particle> particles;
     };
 

@@ -7024,3 +7024,87 @@ from either**: the md5 columns above are stage A's and final's, where all 21 ran
       mutations, each run after one relink.
 - **Neither repository was committed to.** The remake's working tree is clean: everything this
   step wrote is under the gitignored `out/parity/specs/lighting/work/e3/`.
+
+## Step 49 - the level's lights placed, the player lit by the torch it passes, and the halos drawn (built)
+
+The lighting design's step G5 (the remake's `out/parity/specs/lighting/design_port.md`,
+section 7.1: sections 5.3 lights, 5.4 the player and the shot, 5.5 halos; plan_port System 8
+folded in). **Step 48's engine loop now has lights to add.** Game-only: no file under `src/`,
+`assets/shaders/` or the engine tests changed.
+
+**The session that built this step ended before its verify and commit.** The implementation,
+its gate captures and a first ctest were taken on 2026-09-15; the build, the full ctest and the
+128-level sweep were retaken on 2026-09-16 on the same source, and the numbers below are those
+runs. No independent verifier ran on this step.
+
+**WHAT CHANGED.**
+- **`data/art.json`, `sim/Art`.** Every picture states its .ent's `static` and `apply_light`
+  (required, no default: a picture that said nothing would be unlit by a rule nobody read), its
+  `<Normal>` when it names one, and its `<Light>` when it has one, with every number required
+  and the `z` its height is measured from. The shot's light is projectile.ent's: range 70,
+  offset (0, 0, -12), colour (0.6, 0.6, 1), halo.bmp, halo brightness 0.65, size 50.
+- **`sim/Lighting`.** `ReceiverMask` and `LightLayer`: two layers, live and static. A sprite
+  that applies light takes only the live lights when it is static (its static lights are in its
+  lightmap; ETHEntitySpriteRenderer.cpp:70 skips that pass even where no file was baked) and
+  both when it is not, so the player is lit by the torches it walks past. `ParticleRatio`,
+  `LightColour` (x intensity, x the particle ratio for a live owner) and `HaloColour`
+  (x haloBrightness x the particle ratio for every owner, not the intensity;
+  ETHRenderEntity.cpp:354-388) are pure and pinned by the suites.
+- **`data/lighting.json`.** `normal_map_green_down` true (hPixelLightDiff.ps decodes against
+  a y-down world) and `halo_brightness_scale` 0.6, a `_guess` with its measurements beside it
+  (below).
+- **`MagicPortalsLayer`.** `buildLights` / `syncLights` / `unloadLights`: one
+  `Light2DComponent` per level `<Light>` (72 in the 128 levels, every one owned by an entity
+  that draws a sprite), placed at its owner every tick, its halo an additive quad just in front
+  of the owner and behind its particles, coloured by the owner's live particles; the shot's
+  light and halo made and unmade with the shot. Each level sprite now writes its height, normal
+  map and light mask with its colour.
+- **`main.cpp`.** `--light-masks-off`, DEV only: lights and halos drawn, no light reaching a
+  sprite. It exists for the torch pass, which differences a capture with and without it.
+
+**GATES** (captures in the remake's `work/g5/final/`, 1280x720, `--fixed-step`, frame 420).
+- **Static receivers do not double-light (+-0.3 of step 47 against `engine_tier1x`): passes.**
+  Every lightmapped class on 1-01, 1-09 and 2-26 reads the same to 0.01 before and after:
+  1-01 LM_E<1 0.45, LM_E=1 0.85; 1-09 LM_E<1 0.66, LM_E=1 0.12; 2-26 LM_E<1 0.24.
+- **Halo classes against the original (asked <= 6.0): two of three.** 1-01 LM_E<1_halo
+  8.20 -> **5.83**; 1-09 noLM_E=1_halo 5.04 -> **4.11**; 1-09 LM_E<1_halo 8.55 -> **6.17,
+  misses by 0.17**. No scale passes both LM_E<1_halo rows (0.5: 5.57 / 6.45; 0.65: 6.06 /
+  6.08; 0.75: 6.70 / 5.99; 1: 8.94 / 6.64), and the fit's own model drawn with 1x art reads
+  at least 5.84 on 1-09 at any brightness (2.97 with the original's hd art), so the rest is
+  plan_port System 6's.
+- **Orange R-B excess beside the 1-01 torch (asked within +-15 of 93/74/64/54 at
+  60/90/120/150 u): misses at three of four.** Measured 46.2 / 55.7 / 49.9 / 36.1 (diff -47.2 /
+  -18.0 / -14.0 / -17.8), from 20.7 / 48.7 / 48.9 / 36.1 before. Nearer the flame the original
+  is far more orange than the formula's halo at any scale the halo classes allow; not settled.
+- **compare.py mean_abs (1-01 asked <= 15): passes.** 1-01 15.86 -> **12.72**; 1-09 8.21 ->
+  8.01; 2-26 10.43 -> 10.29; 3-05 8.74 -> 8.47; 1-13, 2-05, 4-22 unchanged (17.62, 12.35, 4.95).
+- **The torch pass on the player (level0, a recorded right-walk replayed, frames 285-357, with
+  and without `--light-masks-off`): three of four.** The red add follows the section 1 formula
+  at scale 0.969 (asked 0.8-1.3), green at 1.000 (0.7-1.3), per-pixel error vs the prediction
+  0.12-0.63; green add frame means at most 4.89 (asked <= 5; single pixels reach 47); nothing
+  outside the player changed. **"Red rises monotonically with proximity" fails**: frame 345
+  (154.8 u) reads 19.94 after 20.00 at 167.0 u, and the prediction dips there too (20.45 ->
+  20.25), so the formula is not monotonic along this walk. This is the first end-to-end
+  measurement of engine_math.md 2.6's rotation sense, and it agrees.
+- **The portal shot on level1: passes.** Blue rises near the shot in every shot frame and more
+  than red and green (the light is (0.6, 0.6, 1)); the zero-shot frame changes nothing outside
+  the player.
+- **Torch flame (design section 10.3, asked R >= 240, G >= 235): passes**, 255 / 255.
+- **1-13** is still refused by the gate: the camera offset (0, -10) of step 44.
+
+**SWEEP.** All 128 levels at frame 420 on the 2026-09-16 build (`work/g5/final/sweep/`): 128 exit 0,
+validation active in every log and silent, no level drawn unlit or as boxes. The 13 logs with a
+`GONE` sprite line are the same 13 as step 47's sweep.
+
+**Tests.** test_mp_layer 463 -> 534, test_mp_lighting 444 -> 482, test_mp_sprites 209,
+test_mp_torch 112 checks, 0 failures. **Build: no warnings** (MSVC 14.50, Release, Ninja; GCC
+was not run). **ctest: 114 of 114, Not Run 0**, after one Smart App Control refusal
+(`test_blending`) resolved by deleting and relinking.
+
+**Left open.**
+- The halo brightness: 0.6 is tuned to one frame's flame (10 of 12 particles live); over 20 s
+  the flame is 0.7265 live, so the halo averages 0.44 of the formula where the fit found 0.5.
+  With the orange-excess miss, for the owner and for plan_port System 6.
+- The per-light 3D cull and vertical lights (`vPixelLight`, 10 `light_off` instances) are not
+  ported; G6 (darkest levels at run time, RGB565) is next.
+- The `ui2-screens` branch has not seen steps 48 or 49.

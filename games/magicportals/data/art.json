@@ -7,7 +7,12 @@
     "",
     "Each carries its .ent's <EmissiveColor>, because the original dims every sprite it draws",
     "to min(1, ambient + emissive) of its colour (ETHRenderEntity.cpp:113-117), these as much",
-    "as the level's own (step 45)."
+    "as the level's own (step 45).",
+    "",
+    "And each carries its .ent's lighting facts (step 49, the lighting design's G5): static and",
+    "applyLight, which decide which 2D lights reach it (Lighting::ReceiverMask); its <Normal>, a",
+    "file under the original's entities/normalmaps/, when it names one; and its <Light>, when it",
+    "has one, with the z the light's height is measured from."
   ],
 
   "darkest": {
@@ -34,7 +39,10 @@
     "sprite": "portal_halo.png",
     "additive": true,
     "emissive": [1.0, 1.0, 1.0],
-    "_emissive": "portal.ent's <EmissiveColor r=1 g=1 b=1>: min(1, ambient + 1) is 1, so it is never dimmed"
+    "_emissive": "portal.ent's <EmissiveColor r=1 g=1 b=1>: min(1, ambient + 1) is 1, so it is never dimmed",
+    "static": false,
+    "apply_light": false,
+    "_lighting": "portal.ent: <Entity static=0 applyLight=0>, no <Normal>, no <Light>. Takes no light and gives none"
   },
 
   "shot": {
@@ -43,6 +51,35 @@
     "additive": true,
     "emissive": [0.6, 0.6, 1.0],
     "_emissive": "projectile.ent's <EmissiveColor r=0.6 g=0.6 b=1>: under ambient A it is drawn at min(1, A + (0.6, 0.6, 1))",
+    "static": false,
+    "apply_light": false,
+    "_lighting": [
+      "projectile.ent: <Entity static=0 applyLight=0>, no <Normal>, and <Particles /> empty, so neither its",
+      "light nor its halo is scaled by a particle ratio. <Light active=1 static=0 range=70 haloBrightness=0.65",
+      "haloSize=50> with <Position x=0 y=0 z=-12>, <Color r=0.6 g=0.6 b=1>, <HaloBitmap>halo.bmp</HaloBitmap>",
+      "(the remake's data_inventory.md, 'projectile.ent'). It has no <Scale>, so the light's offset and",
+      "range and the halo's size are the file's own (ETHEntityRenderingManager.cpp:180-181,",
+      "ETHRenderEntity.cpp:378-385). A live light: it reaches every sprite that applies light, static",
+      "ones included."
+    ],
+    "light": {
+      "range": 70.0,
+      "offset": [0.0, 0.0, -12.0],
+      "colour": [0.6, 0.6, 1.0],
+      "halo": "halo.bmp",
+      "halo_offset": [0.0, 0.0],
+      "halo_size": [50.0, 50.0],
+      "halo_brightness": 0.65
+    },
+    "z": {
+      "_note": [
+        "The shot's own depth, which its light's height is measured from (z + the light's -12). The",
+        "script's AddEntity position for projectile.ent is not decoded. 0 is the port's own placement",
+        "of the shot, drawn in the player's slot among the art: the player is added at z 0."
+      ],
+      "_guess": true,
+      "value": 0.0
+    },
     "columns": 6,
     "rows": 1,
     "animation": {
@@ -61,6 +98,15 @@
     "additive": false,
     "emissive": [1.0, 1.0, 1.0],
     "_emissive": "dark_mage.ent's <EmissiveColor r=1 g=1 b=1>: never dimmed by the ambient (what script sets over it is the lighting design's section 5.8, not built)",
+    "static": false,
+    "apply_light": true,
+    "normal": "normalmap_77.png",
+    "_lighting": [
+      "dark_mage.ent: <Entity static=0 applyLight=1>, <Normal>normalmap_77.png</Normal>, no <Light>. Not",
+      "static, so every light reaches it, a static torch's included (ETHEntitySpriteRenderer.cpp:70),",
+      "which the remake's fit measured on the original walking past 1-1's torch (fit.md 7.1). Its",
+      "lighting height is the level's player marker's eth_z, not a number here."
+    ],
     "columns": 4,
     "rows": 4,
     "start_frame": 4,
@@ -104,6 +150,9 @@
     "additive": false,
     "emissive": [1.0, 1.0, 1.0],
     "_emissive": "beholder.ent's <EmissiveColor r=1 g=1 b=1>",
+    "static": false,
+    "apply_light": false,
+    "_lighting": "beholder.ent: <Entity static=0 applyLight=0>, no <Normal>, no <Light>",
     "columns": 2,
     "rows": 1,
     "pulse": {
@@ -123,6 +172,9 @@
     "additive": false,
     "emissive": [1.0, 1.0, 1.0],
     "_emissive": "beholder_spike.ent's <EmissiveColor r=1 g=1 b=1>",
+    "static": false,
+    "apply_light": false,
+    "_lighting": "beholder_spike.ent: <Entity static=0 applyLight=0>, no <Normal>, no <Light>",
     "pivot_px": [0, 10]
   }
 }

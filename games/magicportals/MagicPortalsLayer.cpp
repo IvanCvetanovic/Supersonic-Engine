@@ -337,6 +337,13 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
         std::sort(m_heldLightmaps.begin(), m_heldLightmaps.end());
         m_heldLightmaps.erase(std::unique(m_heldLightmaps.begin(), m_heldLightmaps.end()), m_heldLightmaps.end());
     }
+    // The player's lighting height: its marker's depth in the level file. The
+    // player is added where the marker stands, and the reader holds a look for
+    // the spriteless marker for exactly this (2-09's stands at z 2).
+    m_playerZ = 0.0;
+    if (const Tscn::Node* spawn = FirstOfRole(m_data, Roles::kPlayerSpawn); m_lit && spawn != nullptr) {
+        if (const auto look = m_look.nodes.find(spawn->name); look != m_look.nodes.end()) m_playerZ = look->second.z;
+    }
     buildDrawables(registry);
     m_aspect = viewportAspect(registry);
     // THE LEVEL OPENS ON THE PLAYER, by the owner's choice.
@@ -412,8 +419,10 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry, bool keepLightmaps
     // for, and so does what the level opened with.
     unloadControls();
     // The particles the level's entities were emitting go with them; a retry
-    // would otherwise pile a second pool on the first.
+    // would otherwise pile a second pool on the first. So do its lights, and the
+    // shot's.
     unloadEmitters(registry);
+    unloadLights(registry);
     // The next level starts its own comparison. Without this, the first tick
     // of a level would hear every counter fall back to zero as if it had
     // happened - a retry would play the whole level's sounds at once.
@@ -590,7 +599,8 @@ void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
         entities[node.name] = Roles::EntityName(node);
     }
 
-    for (const DrawnSprite& drawn : m_sprites) {
+    for (std::size_t index = 0; index < m_sprites.size(); ++index) {
+        const DrawnSprite& drawn = m_sprites[index];
         const auto found = entities.find(drawn.sprite.node);
         if (found == entities.end() || found->second.empty()) continue;
         std::string entity = found->second;
@@ -601,7 +611,8 @@ void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
         std::vector<Particles::System> systems;
         std::string error;
         if (!Particles::Load(m_paths.original + "/entities/" + entity + ".ent", systems, error)) continue;
-        for (const Particles::System& system : systems) {
+        for (std::size_t slot = 0; slot < systems.size(); ++slot) {
+            const Particles::System& system = systems[slot];
             const std::string image = m_paths.original + "/particles/" + system.bitmap;
             const glm::dvec2 sheet = imageSizePx(image);
             if (sheet.x <= 0.0 || sheet.y <= 0.0) {
@@ -616,6 +627,10 @@ void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
             emitter.image = image;
             emitter.cellPx = glm::dvec2(sheet.x / system.columns, sheet.y / system.rows);
             emitter.crystal = drawn.crystal;
+            // Which entity and which of its systems: a light's brightness follows
+            // the live share of its owner's FIRST system (syncLights).
+            emitter.sprite = static_cast<int>(index);
+            emitter.slot = static_cast<int>(slot);
             emitter.particles.resize(static_cast<std::size_t>(std::min(system.count, kMaxParticles)));
             m_emitters.push_back(std::move(emitter));
         }
@@ -1757,8 +1772,8 @@ entt::entity MagicPortalsLayer::makeSprite(entt::registry& registry, const char*
     registry.emplace<TransformComponent>(e);
     registry.emplace<MeshComponent>(e).primitiveType = "Quad";
     auto& material = registry.emplace<MaterialComponent>(e);
-    // Unlit, as the remake draws its canvas. The original's lights are not
-    // ported, which the remaster's doc records.
+    // Unlit, as the remake draws its canvas: the engine's PBR lights never reach
+    // it. What lights a level sprite is its 2D record, written by tint.
     material.unlit = true;
     material.transparent = true;
     material.blend = additive ? MaterialComponent::BlendMode::Additive : MaterialComponent::BlendMode::Alpha;
@@ -1853,7 +1868,13 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             // so this line says what the engine does rather than what the file
             // happens to hold.
             if (look->second.isStatic && look->second.applyLight) drawn.lightmap = look->second.lightmap;
+            // And what it is to the lights (design section 5.2).
+            drawn.isStatic = look->second.isStatic;
+            drawn.applyLight = look->second.applyLight;
+            drawn.normal = look->second.normal;
+            drawn.lookZ = look->second.z;
         }
+        drawn.ownerPx = sprite.atPx;
         drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
         drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
         drawn.zone = indexOf(m_level.portals.zones, sprite.node);
@@ -1886,6 +1907,8 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     m_artReady = true;
     // And what the level's own art does not show: the entities' particles.
     buildEmitters(registry);
+    // Then its lights, whose brightness their owners' particles set.
+    buildLights(registry);
 }
 
 void MagicPortalsLayer::syncSprites(entt::registry& registry) {
@@ -1894,6 +1917,9 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
         if (drawn.quad == entt::null) continue;
         const Sprites::Sprite& sprite = drawn.sprite;
         glm::dvec2 centrePx = Sprites::CentrePx(sprite);
+        // Where its ENTITY stands, which is what a light it owns is placed from:
+        // the sprite hangs off that point by its offset.
+        glm::dvec2 ownerPx = sprite.atPx;
         float rotation = Units::ToWorldRotation(sprite.rotation);
         bool gone = false;
         if (drawn.crystal >= 0) {
@@ -1911,6 +1937,7 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             // A patrolling zone carries its picture with it.
             const Portals::NoPortalZone& zone = m_level.portals.zones[static_cast<std::size_t>(drawn.zone)];
             centrePx += zone.CentreNowPx() - zone.centrePx;
+            ownerPx += zone.CentreNowPx() - zone.centrePx;
         } else if (drawn.body != entt::null) {
             // A body the level took away - a wall a stone broke - takes its picture.
             gone = !registry.valid(drawn.body);
@@ -1923,6 +1950,7 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
                                        offset.x * std::sin(rotation) + offset.y * std::cos(rotation));
                 centrePx =
                     Units::ToPixels(glm::vec3(body.position.x + turned.x, body.position.y + turned.y, 0.0f));
+                ownerPx = Units::ToPixels(body.position);
             }
         }
         if (gone) {
@@ -1931,6 +1959,7 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             continue;
         }
         placeSprite(registry, drawn.quad, centrePx, sprite.sizePx, drawn.z, rotation);
+        drawn.ownerPx = ownerPx;
     }
 
     // THE PLATFORM THE DARK DRAGON'S DEATH ADDS, which buildSprites cannot have
@@ -1962,6 +1991,11 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             // And its look: the platform the template's .ent is, lit as it is.
             made.colour = from.colour;
             made.emissive = from.emissive;
+            made.isStatic = from.isStatic;
+            made.applyLight = from.applyLight;
+            made.normal = from.normal;
+            made.lookZ = from.lookZ;
+            made.ownerPx = made.sprite.atPx;
             // But NOT its lightmap, which `made` leaves empty. A bake is the light
             // that fell where the template stands, and the original reads one per
             // entity already in the scene, named by its id (ETHScene.cpp:315-334,
@@ -2301,10 +2335,15 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
 //
 // PREMULTIPLIED, every mixed sprite of a lit level. The original adds a sprite's
 // live light at full weight where its base is weighted by alpha, which one draw
-// can only do premultiplied (design section 4.5). With nothing added yet it is
-// the straight mix to within a rounding, so it goes on here with the ambient
-// rather than as a second switch the lights would have to remember. The added
-// sprites stay added: no blendMode-1 instance applies light.
+// can only do premultiplied (design section 4.5). Where no light adds anything it
+// is the straight mix to within a rounding. The added sprites stay added: no
+// blendMode-1 instance applies light.
+//
+// AND WHAT REACHES IT (since step 49, the design's G5): its height, the original's
+// depth; its normal map, when it applies light; and its light mask
+// (Lighting::ReceiverMask), which lets a static sprite take only the lights that
+// are not static - the shot's - and the player every light, the torch's included.
+// The lights themselves, and their halos, are syncLights'.
 //
 // What is NOT coloured, and why:
 //   - the particles. Ethanon multiplies a particle system by
@@ -2320,27 +2359,51 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
                       : glm::dvec3(1.0);
 
     for (const DrawnSprite& drawn : m_sprites) {
+        Receiver receiver;
+        receiver.applyLight = drawn.applyLight;
+        receiver.isStatic = drawn.isStatic;
+        receiver.normal = drawn.normal;
+        receiver.z = drawn.lookZ;
         tint(registry, drawn.quad, drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade), drawn.emissive,
-             drawn.lightmap);
+             drawn.lightmap, receiver);
     }
     // What no level places, with its .ent's emissive (art.json, launchers.json).
     // None has a lightmap: a bake belongs to an entity the level file placed.
     const glm::vec4 white(1.0f);
-    tint(registry, m_playerQuad, white, m_artRules.character.emissive);
-    for (const entt::entity quad : m_portalQuads) tint(registry, quad, white, m_artRules.portal.emissive);
-    tint(registry, m_shotQuad, white, m_artRules.shot.emissive);
-    tint(registry, m_beholderQuad, m_beholderColour, m_artRules.beholder.emissive);
+    // And its .ent's lighting facts. Its normal map is the original's, beside the
+    // image it is drawn with; its height, for the player, its marker's depth.
+    const auto receiverOf = [this](const Art::Picture& picture, double z) {
+        Receiver receiver;
+        receiver.applyLight = picture.applyLight;
+        receiver.isStatic = picture.isStatic;
+        if (!picture.normal.empty()) receiver.normal = originalImage("normalmaps/" + picture.normal);
+        receiver.z = z;
+        return receiver;
+    };
+    tint(registry, m_playerQuad, white, m_artRules.character.emissive, {},
+         receiverOf(m_artRules.character, m_playerZ));
+    for (const entt::entity quad : m_portalQuads) {
+        tint(registry, quad, white, m_artRules.portal.emissive, {}, receiverOf(m_artRules.portal, 0.0));
+    }
+    tint(registry, m_shotQuad, white, m_artRules.shot.emissive, {}, receiverOf(m_artRules.shot, m_artRules.shot.z));
+    tint(registry, m_beholderQuad, m_beholderColour, m_artRules.beholder.emissive, {},
+         receiverOf(m_artRules.beholder, 0.0));
     // A spike is a box when its image is not there, and a box is not coloured.
     for (const entt::entity spike : m_spikes) {
         if (spike == entt::null || !registry.valid(spike)) continue;
         if (!registry.get<Supersonic::MaterialComponent>(spike).unlit) continue;
-        tint(registry, spike, white, m_artRules.spike.emissive);
+        tint(registry, spike, white, m_artRules.spike.emissive, {}, receiverOf(m_artRules.spike, kSpikeZIndex));
     }
+    // A thrown stone takes no light yet: rolling_stone.ent applies light, and
+    // launchers.json does not carry that or its normal map (step 49's open items).
     for (const ThrownBox& thrown : m_thrown) tint(registry, thrown.quad, white, thrown.emissive);
+
+    // The lights, placed after everything that owns one.
+    syncLights(registry);
 }
 
 void MagicPortalsLayer::tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour,
-                             const glm::dvec3& emissive, const std::string& lightmap) const {
+                             const glm::dvec3& emissive, const std::string& lightmap, const Receiver& receiver) const {
     using Supersonic::MaterialComponent;
     if (quad == entt::null || !registry.valid(quad)) return;
     auto& material = registry.get<MaterialComponent>(quad);
@@ -2349,23 +2412,217 @@ void MagicPortalsLayer::tint(entt::registry& registry, entt::entity quad, const 
     // the plain unlit path, its colour alone, mixed straight.
     MaterialComponent::Sprite2DLight sprite;
     MaterialComponent::BlendMode blend = material.blend;
+    std::string normal;
     if (m_lit) {
         sprite.enabled = true;
         sprite.ambient = glm::vec3(Lighting::AmbientTerm(m_ambient, emissive));
         if (blend == MaterialComponent::BlendMode::Alpha) blend = MaterialComponent::BlendMode::Premultiplied;
+        // What reaches it (design section 5.2). The height is the original's own
+        // depth, not the slot the port draws it in: a torch drawn in front of a
+        // wall is not nearer to it, and a light 24 units above its owner at z -18
+        // is 6 above the player at 0.
+        sprite.height = Units::ToMetres(receiver.z);
+        sprite.normalYDown = m_data.lighting.normalMapGreenDown;
+        sprite.lightMask = m_lightMasksOff ? std::uint8_t{0} : Lighting::ReceiverMask(receiver.isStatic, receiver.applyLight);
+        // A sprite that takes no light has no use for a normal map, and naming none
+        // keeps it in the material set it shares with its image's other copies.
+        // Without one the engine samples the flat map: a sprite that applies light
+        // and names no <Normal> is lit face-on, as Ethanon's default_nm.png lights it.
+        if (receiver.applyLight) normal = receiver.normal;
     } else if (blend == MaterialComponent::BlendMode::Premultiplied) {
         blend = MaterialComponent::BlendMode::Alpha;
     }
 
     // Each written only when it changes: a still level writes nothing a tick,
-    // and the overlay's path is in SyncResources' signature, which a rewrite of
-    // the same path would not move but a churn of it would.
+    // and the overlay's and the normal map's paths are in SyncResources'
+    // signature, which a rewrite of the same path would not move but a churn of
+    // it would.
     if (material.albedoColor != colour) material.albedoColor = colour;
     if (material.sprite2D != sprite) material.sprite2D = sprite;
     // Empty on an unlit level: buildSprites takes a lightmap only from a look
     // that read.
     if (material.overlayTexturePath != lightmap) material.overlayTexturePath = lightmap;
+    if (material.normalTexturePath != normal) material.normalTexturePath = normal;
     if (material.blend != blend) material.blend = blend;
+}
+
+// ---- the lights and their halos ---------------------------------------------------
+//
+// THE LIGHTS (design section 5.3). Each <Light> a level places is a Light2DComponent
+// at its owner plus the light's offset, not turned with the owner
+// (BuildChildLight, ETHEntityRenderingManager.cpp:174-184), with:
+//   - its height the owner's depth plus the offset's z, in the original's units
+//     like every sprite's (tint), so the one scale to metres cancels in the facing
+//     and the falloff;
+//   - its colour <Color> x the level's lightIntensity, and x the live share of the
+//     owner's first particle system when the owner is not static
+//     (Lighting::LightColour);
+//   - its layer its owner's staticness (Lighting::LightLayer), which is what keeps
+//     a torch out of the walls whose lightmaps already hold it;
+//   - off while its owner is not drawn: a light on a hidden entity emits nothing
+//     (ETHEntityRenderingManager.cpp:110-116).
+//
+// THE HALOS (design section 5.5, plan_port System 8). An added quad of the halo's
+// size in world units at the owner plus the light's UNSCALED offset, coloured
+// <Color> x haloBrightness x the owner's live particle share for any owner
+// (ETHRenderEntity.cpp:354-388), x lighting.json's scale, with no ambient and no
+// intensity, so it is not on the 2D sprite path at all. Drawn a quarter slot in
+// front of its owner's picture: over what is behind the owner (the arches and sky
+// of 1-1, which the remake's fit finds it adds over), under what is in front of
+// it (1-1's wall04, where it finds none), and behind the owner's particles, which
+// Ethanon draws after the halo at the same depth.
+//
+// THE SHOT carries projectile.ent's light and halo (art.json), made with the shot
+// and gone with it. Not static, so it reaches every sprite that applies light,
+// static walls included.
+//
+// All of it is presentation: nothing here reads back into Game::Level.
+
+void MagicPortalsLayer::buildLights(entt::registry& registry) {
+    using namespace Supersonic;
+    unloadLights(registry);
+    if (!m_lit || !m_artReady) return;
+    // In the file's order, so a level's lights are gathered in the same order
+    // every run; m_look's nodes are hashed.
+    for (const Tscn::Node& node : m_data.scene.nodes) {
+        if (node.parent != ".") continue;
+        const auto look = m_look.nodes.find(node.name);
+        if (look == m_look.nodes.end() || !look->second.light) continue;
+        PlacedLight placed;
+        placed.node = node.name;
+        placed.light = *look->second.light;
+        placed.ownerStatic = look->second.isStatic;
+        placed.ownerZ = look->second.z;
+        PositionOf(&node, placed.atPx);
+        for (std::size_t i = 0; i < m_sprites.size(); ++i) {
+            if (m_sprites[i].sprite.node == node.name) {
+                placed.sprite = static_cast<int>(i);
+                break;
+            }
+        }
+        for (std::size_t i = 0; placed.sprite >= 0 && i < m_emitters.size(); ++i) {
+            if (m_emitters[i].sprite == placed.sprite && m_emitters[i].slot == 0) {
+                placed.emitter = static_cast<int>(i);
+                break;
+            }
+        }
+        if (placed.sprite >= 0) {
+            placed.haloZ = m_sprites[static_cast<std::size_t>(placed.sprite)].z + 0.25f * kSpriteSlotZ;
+        } else {
+            // No picture to stand in front of: after the sprites at or below its
+            // z_index, as the beholder is placed.
+            int zIndex = 0;
+            double z = 0.0;
+            if (const Tscn::Value* value = node.Find("z_index"); value != nullptr && value->AsNumber(z)) {
+                zIndex = static_cast<int>(z);
+            }
+            const int below = static_cast<int>(std::count_if(m_sprites.begin(), m_sprites.end(), [zIndex](const DrawnSprite& d) {
+                return d.sprite.zIndex <= zIndex;
+            }));
+            placed.haloZ = SlotZ(below < m_playerSlot ? below : below + 1) - 0.5f * kSpriteSlotZ;
+        }
+        placed.entity = registry.create();
+        registry.emplace<TagComponent>(placed.entity, "Magic Portals 2D Light");
+        registry.emplace<TransformComponent>(placed.entity);
+        registry.emplace<Light2DComponent>(placed.entity);
+        if (!placed.light.halo.empty() && imageSizePx(placed.light.halo) != glm::dvec2(0.0)) {
+            placed.halo = makeSprite(registry, "Magic Portals Halo", placed.light.halo, true);
+        }
+        m_placedLights.push_back(std::move(placed));
+    }
+}
+
+void MagicPortalsLayer::unloadLights(entt::registry& registry) {
+    auto destroy = [&registry](entt::entity& e) {
+        if (e != entt::null && registry.valid(e)) registry.destroy(e);
+        e = entt::null;
+    };
+    for (PlacedLight& placed : m_placedLights) {
+        destroy(placed.entity);
+        destroy(placed.halo);
+    }
+    m_placedLights.clear();
+    destroy(m_shotLight);
+    destroy(m_shotHalo);
+}
+
+double MagicPortalsLayer::particleRatioOf(int emitter) const {
+    if (emitter < 0 || emitter >= static_cast<int>(m_emitters.size())) return Lighting::ParticleRatio(0, 0);
+    const Emitter& from = m_emitters[static_cast<std::size_t>(emitter)];
+    // A particle has a quad exactly while it is drawn: released, bigger than
+    // nothing, not spent and its system emitting (updateEmitters).
+    const int active = static_cast<int>(std::count_if(from.particles.begin(), from.particles.end(),
+                                                      [](const Particle& p) { return p.quad != entt::null; }));
+    return Lighting::ParticleRatio(active, from.system.count);
+}
+
+void MagicPortalsLayer::syncLights(entt::registry& registry) {
+    using namespace Supersonic;
+    if (!m_loaded || !m_lit) return;
+    const double intensity = m_look.intensity;
+    const double haloScale = m_data.lighting.haloBrightnessScale;
+
+    // A light, its halo and where they stand, in the colours `ratio` gives them.
+    const auto place = [&](entt::entity light, entt::entity halo, const Lighting::Light& from, const glm::dvec2& ownerPx,
+                           double ownerZ, bool ownerStatic, double ratio, float haloZ, bool present) {
+        if (light != entt::null && registry.valid(light)) {
+            const glm::vec3 at = Units::ToWorld(ownerPx.x + from.offset.x, ownerPx.y + from.offset.y);
+            registry.get<TransformComponent>(light).position = glm::vec3(at.x, at.y, 0.0f);
+            auto& component = registry.get<Light2DComponent>(light);
+            component.color = glm::vec3(Lighting::LightColour(from, intensity, ownerStatic, ratio));
+            component.intensity = 1.0f;
+            component.range = Units::ToMetres(from.range);
+            component.height = Units::ToMetres(ownerZ + from.offset.z);
+            component.layers = Lighting::LightLayer(ownerStatic);
+            component.enabled = present;
+        }
+        if (halo != entt::null && registry.valid(halo)) {
+            placeSprite(registry, halo, ownerPx + from.haloOffset, from.haloSize, haloZ, 0.0f);
+            registry.get<RenderableComponent>(halo).isVisible = present;
+            const glm::vec4 colour(glm::vec3(Lighting::HaloColour(from, ratio, haloScale)), 1.0f);
+            auto& material = registry.get<MaterialComponent>(halo);
+            if (material.albedoColor != colour) material.albedoColor = colour;
+        }
+    };
+
+    for (const PlacedLight& placed : m_placedLights) {
+        bool present = true;
+        glm::dvec2 ownerPx = placed.atPx;
+        if (placed.sprite >= 0) {
+            const DrawnSprite& owner = m_sprites[static_cast<std::size_t>(placed.sprite)];
+            present = owner.quad != entt::null && registry.valid(owner.quad);
+            ownerPx = owner.ownerPx;
+        }
+        place(placed.entity, placed.halo, placed.light, ownerPx, placed.ownerZ, placed.ownerStatic,
+              particleRatioOf(placed.emitter), placed.haloZ, present);
+    }
+
+    // The shot's, while it flies.
+    const Art::Picture& shot = m_artRules.shot;
+    if (!m_level.portals.flight || !shot.light) {
+        auto destroy = [&registry](entt::entity& e) {
+            if (e != entt::null && registry.valid(e)) registry.destroy(e);
+            e = entt::null;
+        };
+        destroy(m_shotLight);
+        destroy(m_shotHalo);
+        return;
+    }
+    if (m_shotLight == entt::null) {
+        m_shotLight = registry.create();
+        registry.emplace<TagComponent>(m_shotLight, "Magic Portals Shot Light");
+        registry.emplace<TransformComponent>(m_shotLight);
+        registry.emplace<Light2DComponent>(m_shotLight);
+    }
+    const std::string haloImage = originalImage(shot.light->halo);
+    if (m_shotHalo == entt::null && m_artReady && imageSizePx(haloImage) != glm::dvec2(0.0)) {
+        m_shotHalo = makeSprite(registry, "Magic Portals Shot Halo", haloImage, true);
+    }
+    // projectile.ent has no particle system, so nothing scales either. Its halo a
+    // quarter slot in front of its own picture, which is a quarter slot in front
+    // of the player's.
+    place(m_shotLight, m_shotHalo, *shot.light, m_level.portals.flight->atPx, shot.z, shot.isStatic,
+          Lighting::ParticleRatio(0, 0), SlotZ(m_playerSlot) + 0.5f * kSpriteSlotZ, true);
 }
 
 void MagicPortalsLayer::syncTurrets(entt::registry& registry) {
@@ -3372,6 +3629,8 @@ void MagicPortalsLayer::OnUpdate(entt::registry& registry, float deltaTime) {
     // the simulation's clock or the state hash. Carried before the camera's
     // early return, so a level drawn without one does not freeze them.
     updateEmitters(registry, deltaTime);
+    // And the lights and halos those particles brighten and dim.
+    syncLights(registry);
     // And the sounds the tick latched, played here for the same reason: a
     // sound is a picture with a speaker. Both are before the camera's early
     // return, so a level drawn without one is not also silent.

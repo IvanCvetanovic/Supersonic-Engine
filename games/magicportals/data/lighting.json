@@ -5,9 +5,9 @@
     "SCRIPT sets over them. The remake's out/parity/specs/lighting/design_port.md, section 5.9, and",
     "docs/planning/2026-09-11-magic-portals-remaster.md, step 45 (the design's G3).",
     "",
-    "Only what step G3 reads is here: the two ambient lights the script sets. The design's other",
-    "rows - the normal maps' green, the halo scale, the script emissive overrides and the 16-bit",
-    "framebuffer - arrive with the steps that read them (G4 to G6), not before."
+    "Only what a built step reads is here: the two ambient lights the script sets (G3, step 45), and",
+    "the normal maps' green and the halo scale (G5, step 49). The design's other rows - the script",
+    "emissive overrides and the 16-bit framebuffer - arrive with the steps that read them, not before."
   ],
 
   "darkest_ambient": {
@@ -31,5 +31,45 @@
       "GenerateLightmaps (bytes 467198..473086). Those two are the design's step G6, not this."
     ],
     "value": [0.1, 0.1, 0.25]
+  },
+
+  "normal_map_green_down": {
+    "_source": [
+      "Decoded, not tested for. The original's light shader, hPixelLightDiff.ps (shaders.h:1261-1304 in",
+      "the shipped library; the remake's engine_math.md 4.5), decodes a normal-map texel c as",
+      "-(2 (c - 0.5)) and dots it with (P - L) in Ethanon's world, whose y points DOWN the screen. So a",
+      "green above one half faces down the image, where the port's world is y-up: the engine flips it",
+      "(MaterialComponent::Sprite2DLight::normalYDown). The port's torch pass on the player (step 49)",
+      "is the measurement that would show the other sense."
+    ],
+    "value": true
+  },
+
+  "halo_brightness_scale": {
+    "_source": [
+      "What every <Light><HaloBitmap> halo's formula colour, <Color> x haloBrightness x the owner's live",
+      "particle ratio (ETHRenderEntity.cpp:354-388), is multiplied by. Ethanon has no such factor: 1 is",
+      "its formula. The design leaves the number to the halo gate (design_port.md 5.5 and 8), and the",
+      "gate says one is needed: at 1 the port reads 8.94 of 255 on 1-01's LM_E<1_halo blocks against",
+      "the original (asked 6.0), and the remake's fit, drawn with 1x art at the brightness the port drew",
+      "(its torch's flame 10 of 12 live at frame 420), reads 8.88 there, so it is the brightness and",
+      "not the art. The fit finds x0.5 of the formula's maximum on the arch with the strongest halo",
+      "signal in both 1-01 and 1-09 (fit.md 6)."
+    ],
+    "_measured": [
+      "Step 49, frame 420, the port against the original, LM_E<1_halo on 1-01 / on 1-09 / noLM_E=1_halo",
+      "on 1-09 (asked 6.0 each): 0.5: 5.57 / 6.45 / 4.26; 0.6: 5.83 / 6.17 / 4.11; 0.65: 6.06 / 6.08 /",
+      "4.03; 0.75: 6.70 / 5.99 / 3.88; 0.85: 7.50 / 6.14 / 3.74; 1: 8.94 / 6.64 / 3.53. No value passes",
+      "both LM_E<1_halo rows: drawn with 1x art the fit's own model reads at least 5.84 on 1-09 at any",
+      "brightness (2.97 with the original's hd art), and above 6 on 1-01 past an effective 0.55."
+    ],
+    "_guess": true,
+    "_note": [
+      "0.6 is the value those rows favour: 1-01 passes and 1-09 misses by 0.17, inside the 1x floor. It",
+      "is tuned to one frame's flame. Over 20 s the torch's flame is 0.7265 live (test_mp_layer), so",
+      "0.6 draws the halo at 0.44 of the formula on average, where 0.69 would match the fit's 0.5 on",
+      "average and 1 would be Ethanon's own arithmetic. For the owner, and for plan_port System 6."
+    ],
+    "value": 0.6
   }
 }

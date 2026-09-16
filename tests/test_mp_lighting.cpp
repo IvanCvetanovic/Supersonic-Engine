@@ -20,6 +20,9 @@
 // level file: the port's lighting.json, the ambient light a level is drawn with
 // as its torch is lit and put out, and the factor every sprite is multiplied by.
 // Those run anywhere too, on the port's own data and states this suite builds.
+//
+// And, since step 49 (G5), which light reaches which sprite, and the colours a
+// light and its halo are drawn in: arithmetic, which runs anywhere.
 
 #include "TestHarness.hpp"
 
@@ -27,6 +30,7 @@
 #include "sim/Tscn.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -237,6 +241,78 @@ void TheScriptsAmbientIsReadAndFollowsTheTorch() {
     refused(R"({"darkest_ambient": {"value": [0.01, "0.01", 0.01]}, )" + lit + "}", "darkest_ambient");
     refused(R"({"darkest_ambient": [0.01, 0.01, 0.01], )" + lit + "}", "darkest_ambient");
     refused(R"({"darkest_ambient": {"value": [0.01, 0.01, 0.01]}})", "torch_lit_ambient");
+
+    // Since step 49: the normal maps' green and the halo scale, each required.
+    CHECK_MSG(rules.normalMapGreenDown, "hPixelLightDiff.ps's decode: green points down the image");
+    CHECK_MSG(rules.haloBrightnessScale > 0.0 && rules.haloBrightnessScale <= 1.0,
+              "a halo scale from above 0 to the formula's own: " + std::to_string(rules.haloBrightnessScale));
+    const std::string both = R"("darkest_ambient": {"value": [0.01, 0.01, 0.01]}, )" + lit;
+    const std::string green = R"(, "normal_map_green_down": {"value": true})";
+    const std::string scale = R"(, "halo_brightness_scale": {"value": 0.5})";
+    refused("{" + both + scale + "}", "normal_map_green_down");
+    refused("{" + both + R"(, "normal_map_green_down": {"value": 1})" + scale + "}", "normal_map_green_down");
+    refused("{" + both + R"(, "normal_map_green_down": true)" + scale + "}", "normal_map_green_down");
+    refused("{" + both + green + "}", "halo_brightness_scale");
+    refused("{" + both + green + R"(, "halo_brightness_scale": {"value": 1.5})" + "}", "from 0 to 1");
+    refused("{" + both + green + R"(, "halo_brightness_scale": {"value": -0.5})" + "}", "from 0 to 1");
+    refused("{" + both + green + R"(, "halo_brightness_scale": {"value": "0.5"})" + "}", "halo_brightness_scale");
+    {
+        const std::string text = "{" + both + R"(, "normal_map_green_down": {"value": false})" + scale + "}";
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Lighting::Rules read;
+        std::string why;
+        CHECK_MSG(Lighting::LoadRules(path.string(), read, why), why);
+        CHECK_MSG(!read.normalMapGreenDown && read.haloBrightnessScale == 0.5, "and read as written");
+    }
+}
+
+// ---- which light reaches which sprite, and in what colour (step 49) ---------------
+
+void EachLightReachesTheSpritesItShould() {
+    // ETHEntitySpriteRenderer.cpp:70: a static sprite never takes a static light's
+    // pass while lightmaps are on; BeginLightPass refuses a sprite that applies no
+    // light. Two layers carry that.
+    CHECK_MSG(Lighting::kLiveLights != 0 && Lighting::kStaticLights != 0 &&
+                  (Lighting::kLiveLights & Lighting::kStaticLights) == 0,
+              "two separate bits");
+    CHECK_EQ(static_cast<int>(Lighting::ReceiverMask(false, false)), 0);
+    CHECK_EQ(static_cast<int>(Lighting::ReceiverMask(true, false)), 0);
+    CHECK_MSG(Lighting::ReceiverMask(true, true) == Lighting::kLiveLights,
+              "a static sprite that applies light: the live lights only, its static ones are baked");
+    CHECK_MSG(Lighting::ReceiverMask(false, true) == (Lighting::kLiveLights | Lighting::kStaticLights),
+              "a moving sprite that applies light: every light");
+    CHECK_MSG(Lighting::LightLayer(true) == Lighting::kStaticLights, "a static owner's light is static");
+    CHECK_MSG(Lighting::LightLayer(false) == Lighting::kLiveLights, "anything else's is live");
+    // The four pairings, as the engine's mask test reads them.
+    const auto reaches = [](bool receiverStatic, bool ownerStatic) {
+        return (Lighting::ReceiverMask(receiverStatic, true) & Lighting::LightLayer(ownerStatic)) != 0;
+    };
+    CHECK_MSG(!reaches(true, true), "a torch does not reach a wall whose lightmap holds it");
+    CHECK_MSG(reaches(true, false), "a shot does");
+    CHECK_MSG(reaches(false, true), "a torch reaches the player");
+    CHECK_MSG(reaches(false, false), "and so does a shot");
+
+    // active / total, and 1 with no system.
+    CHECK(Lighting::ParticleRatio(9, 12) == 0.75);
+    CHECK(Lighting::ParticleRatio(0, 12) == 0.0);
+    CHECK(Lighting::ParticleRatio(12, 12) == 1.0);
+    CHECK_MSG(Lighting::ParticleRatio(0, 0) == 1.0, "no particle system: whole");
+    CHECK_MSG(Lighting::ParticleRatio(13, 12) == 1.0 && Lighting::ParticleRatio(-1, 12) == 0.0, "held to 0..1");
+
+    // light_ent_696's light and halo. Products of decimals: to a tolerance.
+    const auto Near = [](const glm::dvec3& v, double x, double y, double z) {
+        return std::fabs(v.x - x) < 1e-12 && std::fabs(v.y - y) < 1e-12 && std::fabs(v.z - z) < 1e-12;
+    };
+    Lighting::Light torch;
+    torch.colour = glm::dvec3(1.0, 0.5, 0.1);
+    torch.haloBrightness = 0.7;
+    CHECK_MSG(Near(Lighting::LightColour(torch, 3.0, true, 0.25), 3.0, 1.5, 0.3),
+              "a static owner's light: colour x intensity, whatever its flame does");
+    CHECK_MSG(Near(Lighting::LightColour(torch, 3.0, false, 0.5), 1.5, 0.75, 0.15),
+              "a moving owner's: x its live share too");
+    CHECK_MSG(Near(Lighting::HaloColour(torch, 0.5, 1.0), 0.35, 0.175, 0.035),
+              "a halo: colour x haloBrightness x the live share, for a static owner too, and no intensity");
+    CHECK_MSG(Near(Lighting::HaloColour(torch, 1.0, 0.5), 0.35, 0.175, 0.035), "x lighting.json's scale");
 }
 
 // ---- the reader, on a scene this suite writes ------------------------------------
@@ -672,6 +748,7 @@ int main() {
     TheScriptsAmbientIsReadAndFollowsTheTorch();
     EveryKeyIsReadAndEveryAbsenceIsTheDefault();
     AnythingElseIsRefusedNamingTheLine();
+    EachLightReachesTheSpritesItShould();
 
     std::error_code ec;
     if (!std::filesystem::is_directory(kLevels, ec)) {

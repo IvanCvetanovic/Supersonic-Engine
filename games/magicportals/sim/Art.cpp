@@ -50,6 +50,57 @@ bool Emissive(const Json::Value& value, glm::dvec3& out) {
     return true;
 }
 
+bool Finite(const Json::Value& value) {
+    return value.IsNumber() && std::isfinite(value.AsNumber());
+}
+
+bool Numbers(const Json::Value& value, std::size_t count, double* out) {
+    if (!value.IsArray() || value.AsArray().size() != count) return false;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!Finite(value.AsArray()[i])) return false;
+        out[i] = value.AsArray()[i].AsNumber();
+    }
+    return true;
+}
+
+// A picture's <Light>, every number stated: a range above zero (ETHEntityProperties.cpp
+// keeps no other light), the offset in three, a colour of three none below zero,
+// and its halo - a file, where it stands, how big and how bright. And the depth its
+// height is measured from, which the light cannot be placed without.
+bool ReadLight(const Json::Value& entry, const Json::Value& z, const std::string& name, Picture& into,
+               std::string& error) {
+    Lighting::Light light;
+    double offset[3] = {0.0, 0.0, 0.0};
+    double colour[3] = {0.0, 0.0, 0.0};
+    double haloOffset[2] = {0.0, 0.0};
+    double haloSize[2] = {0.0, 0.0};
+    const bool ok = entry.IsObject() && Finite(entry["range"]) && entry["range"].AsNumber() > 0.0 &&
+                    Numbers(entry["offset"], 3, offset) && Numbers(entry["colour"], 3, colour) &&
+                    colour[0] >= 0.0 && colour[1] >= 0.0 && colour[2] >= 0.0 && entry["halo"].IsString() &&
+                    !entry["halo"].AsString("").empty() && Numbers(entry["halo_offset"], 2, haloOffset) &&
+                    Numbers(entry["halo_size"], 2, haloSize) && haloSize[0] > 0.0 && haloSize[1] > 0.0 &&
+                    Finite(entry["halo_brightness"]) && entry["halo_brightness"].AsNumber() >= 0.0;
+    if (!ok) {
+        error = name + "'s light needs a range above 0, offset, colour, halo, halo_offset, halo_size and "
+                       "halo_brightness";
+        return false;
+    }
+    if (!z.IsObject() || !Finite(z["value"])) {
+        error = name + " has a light and no z.value to measure its height from";
+        return false;
+    }
+    light.range = entry["range"].AsNumber();
+    light.offset = glm::dvec3(offset[0], offset[1], offset[2]);
+    light.colour = glm::dvec3(colour[0], colour[1], colour[2]);
+    light.halo = entry["halo"].AsString("");
+    light.haloOffset = glm::dvec2(haloOffset[0], haloOffset[1]);
+    light.haloSize = glm::dvec2(haloSize[0], haloSize[1]);
+    light.haloBrightness = entry["halo_brightness"].AsNumber();
+    into.light = light;
+    into.z = z["value"].AsNumber();
+    return true;
+}
+
 // `plays` false for a sheet whose frames are chosen rather than played, which
 // then need not say how fast.
 bool ReadPicture(const Json::Value& entry, const std::string& name, Picture& out, std::string& error,
@@ -68,6 +119,23 @@ bool ReadPicture(const Json::Value& entry, const std::string& name, Picture& out
         error = name + "'s emissive is not three numbers, none below zero";
         return false;
     }
+    // Which lights reach it, and none by default: a picture that said nothing
+    // would be unlit by a rule nobody read out of its .ent.
+    if (!entry.Has("static") || !entry["static"].IsBool() || !entry.Has("apply_light") ||
+        !entry["apply_light"].IsBool()) {
+        error = name + " needs static and apply_light, each true or false";
+        return false;
+    }
+    read.isStatic = entry["static"].AsBool();
+    read.applyLight = entry["apply_light"].AsBool();
+    if (entry.Has("normal")) {
+        if (!entry["normal"].IsString() || entry["normal"].AsString("").empty()) {
+            error = name + "'s normal is not a file name";
+            return false;
+        }
+        read.normal = entry["normal"].AsString("");
+    }
+    if (entry.Has("light") && !ReadLight(entry["light"], entry["z"], name, read, error)) return false;
     if ((entry.Has("columns") && !WholeAtLeastOne(entry["columns"], read.columns)) ||
         (entry.Has("rows") && !WholeAtLeastOne(entry["rows"], read.rows))) {
         error = name + "'s columns and rows are whole numbers from 1";

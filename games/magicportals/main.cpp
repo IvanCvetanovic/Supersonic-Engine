@@ -45,8 +45,15 @@ int main(int argc, char** argv) {
     // DEV ONLY: walk levels in one process and check the engine's material
     // descriptor sets go back to its pool (LevelVisit.hpp). Empty = a normal run.
     MagicPortals::LevelVisitLayer::Options visit;
+    // DEV ONLY: no 2D light reaches any sprite (MagicPortalsLayer::ForceLightMasksOff),
+    // for a capture to be compared with the same capture lit.
+    bool lightMasksOff = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
+        if (arg == "--light-masks-off") {
+            lightMasksOff = true;
+            continue;
+        }
         if (arg == "--visit-levels" || arg == "--visit-passes") {
             if (i + 1 >= argc) {
                 std::cerr << arg << " needs a value\n";
@@ -108,7 +115,9 @@ int main(int argc, char** argv) {
                   << "                    DEV: visit these levels in one process, taking the material set\n"
                   << "                    of every lightmapped sprite, which the level drops on leaving; the\n"
                   << "                    run fails unless the engine's descriptor sets return to its pool\n"
-                  << "  --visit-passes <n> DEV: how many times to walk that list (default 1)\n";
+                  << "  --visit-passes <n> DEV: how many times to walk that list (default 1)\n"
+                  << "  --light-masks-off DEV: draw the lights and halos but let no light reach a sprite,\n"
+                  << "                    for a capture to be compared with the same capture lit\n";
         return EXIT_SUCCESS;
     }
     if (!options.ok) {
@@ -178,6 +187,7 @@ int main(int argc, char** argv) {
 
         auto game = std::make_unique<MagicPortals::MagicPortalsLayer>(paths, start);
         MagicPortals::MagicPortalsLayer& gameLayer = *game;
+        gameLayer.ForceLightMasksOff(lightMasksOff);
         app.PushLayer(std::move(game));
         if (!visit.levels.empty()) {
             app.PushLayer(std::make_unique<MagicPortals::LevelVisitLayer>(gameLayer, paths, visit, visitResult));

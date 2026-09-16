@@ -364,8 +364,43 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     if (!light("darkest_ambient", read.darkestAmbient) || !light("torch_lit_ambient", read.torchLitAmbient)) {
         return false;
     }
+    const Json::Value& greenDown = root["normal_map_green_down"]["value"];
+    if (!root.Has("normal_map_green_down") || !root["normal_map_green_down"].IsObject() || !greenDown.IsBool()) {
+        error = path + ": normal_map_green_down.value is not true or false";
+        return false;
+    }
+    read.normalMapGreenDown = greenDown.AsBool();
+    const Json::Value& scale = root["halo_brightness_scale"]["value"];
+    if (!root.Has("halo_brightness_scale") || !root["halo_brightness_scale"].IsObject() || !scale.IsNumber() ||
+        !std::isfinite(scale.AsNumber()) || scale.AsNumber() < 0.0 || scale.AsNumber() > 1.0) {
+        error = path + ": halo_brightness_scale.value is not a number from 0 to 1";
+        return false;
+    }
+    read.haloBrightnessScale = scale.AsNumber();
     out = read;
     return true;
+}
+
+std::uint8_t ReceiverMask(bool isStatic, bool applyLight) {
+    if (!applyLight) return 0;
+    return isStatic ? kLiveLights : static_cast<std::uint8_t>(kLiveLights | kStaticLights);
+}
+
+std::uint8_t LightLayer(bool ownerStatic) {
+    return ownerStatic ? kStaticLights : kLiveLights;
+}
+
+double ParticleRatio(int active, int total) {
+    if (total <= 0) return 1.0;
+    return static_cast<double>(std::clamp(active, 0, total)) / static_cast<double>(total);
+}
+
+glm::dvec3 LightColour(const Light& light, double intensity, bool ownerStatic, double ratio) {
+    return light.colour * intensity * (ownerStatic ? 1.0 : ratio);
+}
+
+glm::dvec3 HaloColour(const Light& light, double ratio, double scale) {
+    return light.colour * light.haloBrightness * ratio * scale;
 }
 
 glm::dvec3 Ambient(const Rules& rules, const glm::dvec3& fileAmbient, bool darkest, const Torch::State& torch) {
