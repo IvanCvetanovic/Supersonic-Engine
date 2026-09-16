@@ -619,6 +619,7 @@ private:
     void tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour, const glm::dvec3& emissive,
               const std::string& lightmap = {}, const Receiver& receiver = {}) const;
     // The level's lights and their halos, one per Lighting::Look::light, made with
+        bool runtimeBake{false}; // the level has baked at run time (Lighting::RuntimeBake)
     // the sprites and their particles.
     void buildLights(entt::registry& registry);
     // The level's lights, their halos, and the shot's light and halo, taken away.
@@ -745,6 +746,13 @@ private:
     entt::entity m_beholderQuad{entt::null};
     glm::dvec2 m_beholderScale{1.0}; // its pulse as last set, which it keeps while it throws rocks
     glm::vec4 m_beholderColour{1.0f}; // C: (1, hp / max, hp / max), reddening as it is hurt
+    // light_from_projectile.ent's light and halo at each lit torch, in the order of
+    // Torch::State::lights; null while that torch is not lit (step 55).
+    struct TorchLight {
+        entt::entity light{entt::null};
+        entt::entity halo{entt::null};
+    };
+    std::vector<TorchLight> m_torchLights;
     std::vector<entt::entity> m_spikes; // one per spike in flight
     float m_beholderZ{0.5f};
     float m_spikeZ{0.5f};

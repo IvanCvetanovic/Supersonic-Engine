@@ -92,6 +92,7 @@ struct Spike : Picture {
 struct Rules {
     Picture portal;      // portal.ent
     Picture shot;        // projectile.ent
+    Picture torchLight;  // light_from_projectile.ent, added where a shot lights a torch
     Character character; // dark_mage.ent, the player
     Beholder beholder;   // beholder.ent, chapter 1's boss
     Spike spike;         // beholder_spike.ent, its spikes

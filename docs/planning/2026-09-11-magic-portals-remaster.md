@@ -8431,3 +8431,70 @@ timing flake is a known open item).
   menu at frame 120 differs, as it must: it is the loading screen now. **Byte-identical to the
   branch's build:** the main menu at frame 400, the credits, the dashboard on a gold save, and the
   Play tap's next screen.
+
+## Step 55 - the 16-bit surface, and the level a lit torch bakes at run time (built)
+
+The lighting design's step G6 (the remake's `out/parity/specs/lighting/design_port.md`, section 7.1:
+section 5.7 and `quantize Rgb565`), the last step of that plan. Game-only: the engine's
+`RenderSettings::OutputQuantize::Rgb565` has existed since step 43 and is now asked for.
+
+**WHAT CHANGED.**
+- **`data/lighting.json`, `sim/Lighting`: `framebuffer_rgb565` true**, required and a bool, with its
+  source (GL2JNIView.java:94, ConfigChooser.java:48-67: the original asks for a 5/6/5 surface and
+  does not dither). `OnAttach` reads the port's lighting.json and sets the scene's quantise, so the
+  menu has it as a level does. The screen overlay drawn after the composite (HUD, pause, menus) is
+  not quantised; the original's was.
+- **`Lighting::RuntimeBake(torch)`**: true from the first torch lit, for the rest of the level.
+  Lighting one calls GenerateLightmaps, and putting it out calls it again with no static light
+  left; nothing returns to the file's lightmaps (torch.json, design 5.7).
+  **`ReceiverMask(isStatic, applyLight, runtimeBake)`**: baked at run time, a static sprite takes
+  the static lights live too. `syncLighting` passes it, and draws no file lightmap while it holds
+  (every torch level is `darkest` and ships none, so this drops nothing today).
+- **`data/art.json` `torch_light`, `sim/Art`**: light_from_projectile.ent, which the shot that
+  lights a torch adds: static, applyLight, `light01_normal.png`, a static light of range 512 at
+  (0, -12, 24), colour (1, 0.5, 0.2), halo.bmp 300 at 0.7. Required like the shot's.
+- **`MagicPortalsLayer::syncLights`**: that light and its halo at each torch while it is lit,
+  made on the tick it is lit and destroyed when a signal puts it out. Its z is the torch's own
+  `eth_z` (the callback's AddEntity position is not decoded: art.json's `_guess`). Its halo is at
+  a particle share of 1: the entity's 12-particle flame and its sprite are not built.
+- **`data/torch.json`**: `_not_built` no longer lists GenerateLightmaps or the light.
+
+**GATES** (1280x720, `--fixed-step`, frame 420; the remake's `work/g6/final/`).
+- **5/6/5 moves the port toward `engine` and away from `engine_no565` (2-05 `noLM_E<1`): passes.**
+  Port vs `engine` 2.14, vs `engine_no565` 2.32 (vs the original 2.08; "<= 0.5 after System 6" is
+  for later).
+- **Every class against `engine_tier1x` moved closer**, the step-49 row -> this step:
+  1-01 LM_E<1 0.45 -> 0.23, LM_E=1 0.85 -> 0.81; 1-09 LM_E<1 0.66 -> 0.29, noLM_E=1 0.29 -> 0.19,
+  noLM_E=1_halo 2.39 -> 2.12; 2-26 LM_E<1 0.24 -> 0.19, noLM_E=1 0.91 -> 0.25; 4-22 noLM_E<1
+  0.82 -> 0.00, noLM_E=1 0.91 -> 0.23. Against the original: 4-22 noLM_E<1 0.95 -> 0.13,
+  noLM_E=1 2.18 -> 2.00; the halo rows of step 49 barely move (1-09 LM_E<1_halo 6.17 -> 6.16).
+- **compare.py mean_abs against the original**, step 49 -> 55: 1-01 12.72 -> 12.72, 1-09 8.01 ->
+  7.92, 1-13 17.62 -> 17.53, 2-05 12.35 -> 12.23, 2-26 10.29 -> 10.07, 3-05 8.47 -> 8.37, 4-22
+  4.95 -> 4.50.
+- **Torch flame** R 255, G 255 (asked >= 240, >= 235): passes.
+- **The lit torch (`test_mp_layer` ALitTorchBakesTheLevelAtRunTime, on 4-22):** a tap at the
+  torch lights it; one "Magic Portals Torch Light" on the static layer, range 512, colour in the
+  ratio (1, 0.5, 0.2), 12 above the torch; every sprite that applies light then takes both layers;
+  no overlay drawn; ambient (0.1, 0.1, 0.25). Before, the static walls took the live layer only.
+- **Not taken:** a capture of 4-22 lit. The design compares it by eye against footage L1, which
+  does not exist; one attempt with `--tap` missed the torch and was not repeated.
+- **Unchanged:** MainScene, Wolf Brigade and the HUD over level0 frame 1 byte-identical to the
+  merged build; the menu at frame 120 differs (its loading screen is drawn in the scene).
+
+**SWEEP.** All 128 levels at frame 420 (`work/g6/final/sweep/`): 128 exit 0, validation active in every
+log and silent, no level drawn unlit or as boxes. 14 logs carry a `GONE` sprite line against step
+49's 13: the new one is 2-32, where the player dies on tick 287 and, since step 51, the lost screen
+stands over a level that runs on while the dragon breaks a stone. Step 49's build retried at once
+and logged no death (the log line came with 84b61ab); a rerun of 2-32 on this build is identical.
+
+**Tests.** test_mp_lighting 482 -> 495 (the rule refused unless a bool; the runtime mask; RuntimeBake
+through lighting, put out and after), test_mp_layer 765 -> 777 (the quantise at every start; the lit
+torch above), test_mp_sprites 209 (its hand-written art.json files gain `torch_light`). **Build: no
+warnings** (MSVC 14.50; GCC was not run). **ctest: 118 suites pass**: 116 in one ctest run, the two
+it could not finish (`test_mp_sprites` failing before its fix, `test_mp_zerog` refused by Smart
+App Control) run directly after. The owner asked for no more relink-and-retry loops: every refused
+launch shows a Windows notification.
+
+**Left open.** The overlay is not quantised. The torch's own sprite and flame (visuals System 7).
+The torch light's z. The script's background lighten/darken (`lightenAllBackgroundEntitities`,
+design 5.8).

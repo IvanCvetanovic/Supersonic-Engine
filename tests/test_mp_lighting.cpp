@@ -256,13 +256,21 @@ void TheScriptsAmbientIsReadAndFollowsTheTorch() {
     refused("{" + both + green + R"(, "halo_brightness_scale": {"value": 1.5})" + "}", "from 0 to 1");
     refused("{" + both + green + R"(, "halo_brightness_scale": {"value": -0.5})" + "}", "from 0 to 1");
     refused("{" + both + green + R"(, "halo_brightness_scale": {"value": "0.5"})" + "}", "halo_brightness_scale");
+
+    // Since step 55: the 16-bit surface, required and a bool.
+    CHECK_MSG(rules.framebufferRgb565, "GL2JNIView.java:94: the original draws into 5/6/5");
+    refused("{" + both + green + scale + "}", "framebuffer_rgb565");
+    refused("{" + both + green + scale + R"(, "framebuffer_rgb565": {"value": 1})" + "}", "framebuffer_rgb565");
+    refused("{" + both + green + scale + R"(, "framebuffer_rgb565": true)" + "}", "framebuffer_rgb565");
     {
-        const std::string text = "{" + both + R"(, "normal_map_green_down": {"value": false})" + scale + "}";
+        const std::string text = "{" + both + R"(, "normal_map_green_down": {"value": false})" + scale +
+                                 R"(, "framebuffer_rgb565": {"value": false})" + "}";
         Write(path, std::vector<unsigned char>(text.begin(), text.end()));
         Lighting::Rules read;
         std::string why;
         CHECK_MSG(Lighting::LoadRules(path.string(), read, why), why);
-        CHECK_MSG(!read.normalMapGreenDown && read.haloBrightnessScale == 0.5, "and read as written");
+        CHECK_MSG(!read.normalMapGreenDown && read.haloBrightnessScale == 0.5 && !read.framebufferRgb565,
+                  "and read as written");
     }
 }
 
@@ -281,6 +289,21 @@ void EachLightReachesTheSpritesItShould() {
               "a static sprite that applies light: the live lights only, its static ones are baked");
     CHECK_MSG(Lighting::ReceiverMask(false, true) == (Lighting::kLiveLights | Lighting::kStaticLights),
               "a moving sprite that applies light: every light");
+    // Since step 55: once the level bakes at run time a static sprite takes the
+    // static lights live too; a sprite that applies no light still takes none.
+    CHECK_MSG(Lighting::ReceiverMask(true, true, true) == (Lighting::kLiveLights | Lighting::kStaticLights),
+              "baked at run time: a static sprite takes every light");
+    CHECK_MSG(Lighting::ReceiverMask(false, true, true) == (Lighting::kLiveLights | Lighting::kStaticLights),
+              "and a moving one as before");
+    CHECK_EQ(static_cast<int>(Lighting::ReceiverMask(true, false, true)), 0);
+    {
+        Torch::State torch;
+        CHECK_MSG(!Lighting::RuntimeBake(torch), "no torch lit: the file's lightmaps");
+        torch.lit = 1;
+        CHECK_MSG(Lighting::RuntimeBake(torch), "a torch lit: baked at run time");
+        torch.putOut = 1;
+        CHECK_MSG(Lighting::RuntimeBake(torch), "and put back out, still: GenerateLightmaps ran again, with no light");
+    }
     CHECK_MSG(Lighting::LightLayer(true) == Lighting::kStaticLights, "a static owner's light is static");
     CHECK_MSG(Lighting::LightLayer(false) == Lighting::kLiveLights, "anything else's is live");
     // The four pairings, as the engine's mask test reads them.

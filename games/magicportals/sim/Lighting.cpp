@@ -377,13 +377,23 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         return false;
     }
     read.haloBrightnessScale = scale.AsNumber();
+    const Json::Value& rgb565 = root["framebuffer_rgb565"]["value"];
+    if (!root.Has("framebuffer_rgb565") || !root["framebuffer_rgb565"].IsObject() || !rgb565.IsBool()) {
+        error = path + ": framebuffer_rgb565.value is not true or false";
+        return false;
+    }
+    read.framebufferRgb565 = rgb565.AsBool();
     out = read;
     return true;
 }
 
-std::uint8_t ReceiverMask(bool isStatic, bool applyLight) {
+std::uint8_t ReceiverMask(bool isStatic, bool applyLight, bool runtimeBake) {
     if (!applyLight) return 0;
-    return isStatic ? kLiveLights : static_cast<std::uint8_t>(kLiveLights | kStaticLights);
+    return isStatic && !runtimeBake ? kLiveLights : static_cast<std::uint8_t>(kLiveLights | kStaticLights);
+}
+
+bool RuntimeBake(const Torch::State& torch) {
+    return torch.lit > 0;
 }
 
 std::uint8_t LightLayer(bool ownerStatic) {

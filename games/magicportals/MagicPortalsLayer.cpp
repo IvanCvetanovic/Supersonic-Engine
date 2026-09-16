@@ -140,7 +140,8 @@ bool PositionOf(const Tscn::Node* node, glm::dvec2& out) {
 // for this encoding whatever the intensity says (BloomPass::RunsBloomChain);
 // zero makes the scene's own settings say the same.
 //
-// Not quantised to 5/6/5: the original's 16-bit target is the design's step G6.
+// Quantised to 5/6/5 as the original's 16-bit surface when lighting.json says so
+// (step 55, the design's G6): OnAttach reads it, since the rules come with a level.
 Supersonic::RenderSettings SceneRendering() {
     Supersonic::RenderSettings rendering;
     rendering.encoding = Supersonic::RenderSettings::SceneEncoding::DisplayEncoded;
@@ -178,6 +179,14 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
     // the menu as for a level. Assigned rather than emplaced: a --scene load
     // may already have put a RenderSettings of its own in the context.
     registry.ctx().insert_or_assign<Supersonic::RenderSettings>(SceneRendering());
+    {
+        Lighting::Rules lighting;
+        std::string why;
+        if (Lighting::LoadRules(m_paths.portData + "/lighting.json", lighting, why) && lighting.framebufferRgb565) {
+            registry.ctx().get<Supersonic::RenderSettings>().quantize =
+                Supersonic::RenderSettings::OutputQuantize::Rgb565;
+        }
+    }
 
     bindInput();
     loadSounds();
@@ -2694,12 +2703,15 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         placeBox(registry, m_statics[i], centrePx, sizePx, kMarkerZ, kMarkerDepth, 0.0f);
     }
 
+    const bool runtimeBake = m_lit && Lighting::RuntimeBake(m_level.torch);
+    static const std::string noLightmap;
     // No-portal zones, as the square round the circle a tap is refused in, where
     // each is now: a patrolling one moves.
     const std::vector<Portals::NoPortalZone>& zones = m_level.portals.zones;
     for (std::size_t i = 0; i < m_zones.size() && i < zones.size(); ++i) {
         const double sizePx = m_level.portals.rules.antiportalRadiusPx * zones[i].scale * 2.0;
         placeBox(registry, m_zones[i], zones[i].CentreNowPx(), glm::dvec2(sizePx), kZoneZ, kZoneDepth, 0.0f);
+        receiver.runtimeBake = runtimeBake;
     }
 
     // Hazards, at the box that kills: the remake's trigger, not the shape the
@@ -2758,8 +2770,9 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
 // add<id>.png of a static, light-applying sprite (design decisions 3 and 4, from
 // the fit: multiplying it scores 26.95 of 255 where adding it scores 0.92, and
 // the shipped PNG beats the ETC1 file on 11 of 11 entities). Every level that
-// places a torch is a `darkest` level and ships no lightmap (torch.json's census),
-// so no lit torch ever has one to drop; the runtime bake is the design's G6.
+// places a torch is a `darkest` level and ships no lightmap (torch.json's census).
+// Once a torch is lit the level bakes at run time (step 55, the design's G6): every
+// static sprite takes the static lights live, and a file lightmap would be dropped.
 //
 // PREMULTIPLIED, every mixed sprite of a lit level. The original adds a sprite's
 // live light at full weight where its base is weighted by alpha, which one draw
@@ -2793,7 +2806,7 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
         receiver.normal = drawn.normal;
         receiver.z = drawn.lookZ;
         tint(registry, drawn.quad, drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade), drawn.emissive,
-             drawn.lightmap, receiver);
+             runtimeBake ? noLightmap : drawn.lightmap, receiver);
     }
     // What no level places, with its .ent's emissive (art.json, launchers.json).
     // None has a lightmap: a bake belongs to an entity the level file placed.
@@ -2851,7 +2864,7 @@ void MagicPortalsLayer::tint(entt::registry& registry, entt::entity quad, const 
         // is 6 above the player at 0.
         sprite.height = Units::ToMetres(receiver.z);
         sprite.normalYDown = m_data.lighting.normalMapGreenDown;
-        sprite.lightMask = m_lightMasksOff ? std::uint8_t{0} : Lighting::ReceiverMask(receiver.isStatic, receiver.applyLight);
+        sprite.lightMask = m_lightMasksOff ? std::uint8_t{0} : Lighting::ReceiverMask(receiver.isStatic, receiver.applyLight, receiver.runtimeBake);
         // A sprite that takes no light has no use for a normal map, and naming none
         // keeps it in the material set it shares with its image's other copies.
         // Without one the engine samples the flat map: a sprite that applies light
@@ -2877,6 +2890,11 @@ void MagicPortalsLayer::tint(entt::registry& registry, entt::entity quad, const 
 // ---- the lights and their halos ---------------------------------------------------
 //
 // THE LIGHTS (design section 5.3). Each <Light> a level places is a Light2DComponent
+    for (TorchLight& torch : m_torchLights) {
+        destroy(torch.light);
+        destroy(torch.halo);
+    }
+    m_torchLights.clear();
 // at its owner plus the light's offset, not turned with the owner
 // (BuildChildLight, ETHEntityRenderingManager.cpp:174-184), with:
 //   - its height the owner's depth plus the offset's z, in the original's units
@@ -2932,6 +2950,44 @@ void MagicPortalsLayer::buildLights(entt::registry& registry) {
             if (m_emitters[i].sprite == placed.sprite && m_emitters[i].slot == 0) {
                 placed.emitter = static_cast<int>(i);
                 break;
+    // light_from_projectile.ent's, at each torch while it is lit (step 55, the
+    // design's G6): added by the shot that lights it and deleted by the signal that
+    // puts it out (torch.json). The torch's own depth is the entity's, which is a
+    // guess recorded in art.json. Its flame is not built, so its halo is at the
+    // share of a system with none.
+    const Art::Picture& torchLight = m_artRules.torchLight;
+    const std::vector<Torch::Light>& torches = m_level.torch.lights;
+    m_torchLights.resize(torches.size());
+    for (std::size_t i = 0; i < torches.size(); ++i) {
+        TorchLight& made = m_torchLights[i];
+        if (!torches[i].lit || !torchLight.light) {
+            if (made.light != entt::null && registry.valid(made.light)) registry.destroy(made.light);
+            if (made.halo != entt::null && registry.valid(made.halo)) registry.destroy(made.halo);
+            made = TorchLight{};
+            continue;
+        }
+        double ownerZ = torchLight.z;
+        float haloZ = SlotZ(m_playerSlot) - 0.5f * kSpriteSlotZ;
+        if (const auto look = m_look.nodes.find(torches[i].name); look != m_look.nodes.end()) ownerZ = look->second.z;
+        for (const DrawnSprite& drawn : m_sprites) {
+            if (drawn.sprite.node != torches[i].name) continue;
+            haloZ = drawn.z + 0.25f * kSpriteSlotZ;
+            break;
+        }
+        if (made.light == entt::null) {
+            made.light = registry.create();
+            registry.emplace<TagComponent>(made.light, "Magic Portals Torch Light");
+            registry.emplace<TransformComponent>(made.light);
+            registry.emplace<Light2DComponent>(made.light);
+        }
+        const std::string torchHalo = originalImage(torchLight.light->halo);
+        if (made.halo == entt::null && m_artReady && imageSizePx(torchHalo) != glm::dvec2(0.0)) {
+            made.halo = makeSprite(registry, "Magic Portals Torch Halo", torchHalo, true);
+        }
+        place(made.light, made.halo, *torchLight.light, torches[i].atPx, ownerZ, torchLight.isStatic,
+              Lighting::ParticleRatio(0, 0), haloZ, true);
+    }
+
             }
         }
         if (placed.sprite >= 0) {

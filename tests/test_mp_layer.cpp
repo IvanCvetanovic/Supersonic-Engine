@@ -3402,8 +3402,8 @@ void SkipOnALevelAlreadyFinished() {
 // port's scene says its numbers are display values (step 44, the lighting
 // design's G2): colour textures sampled undecoded, no tone map, no bloom, and a
 // flat black ground, so no sky pass. The setting is the layer's, not a level's,
-// so the menu and a start that fails get it too. Not quantised to 5/6/5 yet:
-// that is G6.
+// so the menu and a start that fails get it too. Quantised to 5/6/5 since step
+// 55 (G6), as lighting.json says the original's surface was.
 void SceneSettingsSayDisplayValues(entt::registry& registry, const std::string& start) {
     const RenderSettings* rendering = registry.ctx().find<RenderSettings>();
     CHECK_MSG(rendering != nullptr, "the layer puts RenderSettings in the context, starting at '" + start + "'");
@@ -3419,7 +3419,7 @@ void SceneSettingsSayDisplayValues(entt::registry& registry, const std::string& 
     CHECK_MSG(clear[0] == 0.0f && clear[1] == 0.0f && clear[2] == 0.0f,
               "and the target is cleared to that black, not to the linear literal");
     CHECK_EQ(rendering->bloomIntensity, 0.0f);
-    CHECK_MSG(rendering->quantize == RenderSettings::OutputQuantize::None, "not quantised before G6");
+    CHECK_MSG(rendering->quantize == RenderSettings::OutputQuantize::Rgb565, "quantised to 5/6/5 at '" + start + "'");
     CHECK_EQ(rendering->exposure, 1.0f);
 }
 
@@ -4081,6 +4081,72 @@ void AShotCarriesItsOwnLight() {
     const auto followsTheShot = [&]() {
         const glm::vec3 at = registry.get<TransformComponent>(shot).position;
         const glm::vec3 want = MagicPortals::Units::ToWorld(layer.SimLevel()->portals.flight->atPx.x,
+// Step 55 (the lighting design's G6): the shot that lights a torch adds
+// light_from_projectile.ent's static light there, and the level bakes at run
+// time from then on - every sprite that applies light takes the static lights
+// live, and nothing draws a file lightmap.
+void ALitTorchBakesTheLevelAtRunTime() {
+    namespace Lighting = MagicPortals::Lighting;
+    using MagicPortals::Units::ToMetres;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level21c");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
+              layer.LoadError() + layer.ArtError() + layer.LightingError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
+    if (layer.SimLevel()->torch.lights.empty()) {
+        CHECK_MSG(false, "level21c (4-22) places a torch");
+        return;
+    }
+    CloseTheLevelStartPopup(layer, registry);
+    waitForFirstTap(layer, registry);
+    const auto masks = [&registry]() {
+        std::vector<std::uint8_t> out;
+        for (auto [entity, tag, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+            (void)entity;
+            if (tag.tag == "Magic Portals Sprite" && material.sprite2D.lightMask != 0) out.push_back(material.sprite2D.lightMask);
+        }
+        return out;
+    };
+    const std::vector<std::uint8_t> before = masks();
+    CHECK_MSG(std::count(before.begin(), before.end(), Lighting::kLiveLights) > 0,
+              "unlit: its static walls take only the live lights");
+    CHECK_EQ(Tagged(registry, "Magic Portals Torch Light"), 0);
+
+    const glm::dvec2 torchPx = layer.SimLevel()->torch.lights[0].atPx;
+    tap(layer, registry, screenOf(registry, torchPx));
+    for (int tick = 0; tick < 240 && !layer.SimLevel()->torch.lights[0].lit; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+    }
+    CHECK_MSG(layer.SimLevel()->torch.lights[0].lit, "a shot at the torch lit it: " + lastFailure(layer));
+    if (!layer.SimLevel()->torch.lights[0].lit) return;
+    tickWith(layer, registry, kRest, {}, {});
+
+    CHECK_EQ(Tagged(registry, "Magic Portals Torch Light"), 1);
+    const entt::entity lamp = FirstTagged(registry, "Magic Portals Torch Light");
+    if (lamp != entt::null) {
+        const Light2DComponent& light = registry.get<Light2DComponent>(lamp);
+        const glm::vec3 colour = light.color * light.intensity;
+        CHECK_MSG(light.layers == Lighting::kStaticLights && light.enabled, "light_from_projectile.ent's light is static");
+        CHECK_MSG(::test::nearly(light.range, ToMetres(512.0), 1e-6f), "range 512 units");
+        CHECK_MSG(colour.r > 0.0f && ::test::nearly(colour.g / colour.r, 0.5f, 1e-5f) &&
+                      ::test::nearly(colour.b / colour.r, 0.2f, 1e-5f),
+                  "(1, 0.5, 0.2) x the level's intensity: " + ShowV(colour));
+        const glm::vec3 at = registry.get<TransformComponent>(lamp).position;
+        const glm::vec3 want = MagicPortals::Units::ToWorld(torchPx.x, torchPx.y - 12.0);
+        CHECK_MSG(std::fabs(at.x - want.x) < 1e-5f && std::fabs(at.y - want.y) < 1e-5f, "12 above the torch");
+    }
+    const std::vector<std::uint8_t> after = masks();
+    CHECK_MSG(!after.empty() && std::all_of(after.begin(), after.end(), [](std::uint8_t mask) {
+                  return mask == (Lighting::kLiveLights | Lighting::kStaticLights);
+              }),
+              "lit: every sprite that applies light takes every light");
+    CHECK_MSG(OverlaysOf(registry).empty(), "and nothing draws a file lightmap");
+    CHECK_MSG(layer.AmbientNow() == glm::dvec3(0.1, 0.1, 0.25), "at lighting.json's lit-torch ambient");
+    layer.OnDetach(registry);
+}
+
                                                             layer.SimLevel()->portals.flight->atPx.y);
         return std::fabs(at.x - want.x) < 1e-5f && std::fabs(at.y - want.y) < 1e-5f;
     };
@@ -4418,3 +4484,4 @@ int main() {
     runTests();
     return ::test::summary("test_mp_layer", 35);
 }
+    ALitTorchBakesTheLevelAtRunTime();

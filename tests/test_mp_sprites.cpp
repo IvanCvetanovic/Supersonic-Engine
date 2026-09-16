@@ -340,6 +340,8 @@ void ASheetThatDoesNotSayHowFastIsRefused() {
                                             "static": false, "apply_light": false},
                                  "shot": {"sprite": "b.png", "additive": true, "columns": 6, "emissive": [1, 1, 1],
                                           "static": false, "apply_light": false},
+                                 "torch_light": {"sprite": "d.png", "additive": false, "emissive": [0, 0, 0],
+                                                 "static": true, "apply_light": true},
                                  "character": {"sprite": "c.png", "additive": false, "columns": 4, "rows": 4,
                                                "emissive": [1, 1, 1], "static": false, "apply_light": true,
                                                "start_frame": 4, "pivot_px": [0, 2],
@@ -363,6 +365,8 @@ void APictureWithoutItsEmissiveIsRefused() {
                                                 "apply_light": false)" + emissive + R"(},
                                      "shot": {"sprite": "b.png", "additive": true, "emissive": [1, 1, 1],
                                               "static": false, "apply_light": false},
+                                     "torch_light": {"sprite": "d.png", "additive": false, "emissive": [0, 0, 0],
+                                                     "static": true, "apply_light": true},
                                      "character": {"sprite": "c.png", "additive": false, "emissive": [1, 1, 1],
                                                    "static": false, "apply_light": true}})";
         Write(path, std::vector<unsigned char>(text.begin(), text.end()));
@@ -382,7 +386,9 @@ void APictureWithoutItsLightingIsRefused() {
         const std::string text = R"({"portal": {"sprite": "a.png", "additive": true, "emissive": [1, 1, 1])" + portal +
                                  R"(}, "shot": {"sprite": "b.png", "additive": true, "emissive": [1, 1, 1],
                                                 "static": false, "apply_light": false)" + shot +
-                                 R"(}, "character": {"sprite": "c.png", "additive": false, "emissive": [1, 1, 1],
+                                 R"(}, "torch_light": {"sprite": "d.png", "additive": false, "emissive": [0, 0, 0],
+                                                       "static": true, "apply_light": true},
+                                     "character": {"sprite": "c.png", "additive": false, "emissive": [1, 1, 1],
                                                      "static": false, "apply_light": true}})";
         Write(path, std::vector<unsigned char>(text.begin(), text.end()));
         Art::Rules rules;

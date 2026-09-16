@@ -6,8 +6,8 @@
     "docs/planning/2026-09-11-magic-portals-remaster.md, step 45 (the design's G3).",
     "",
     "Only what a built step reads is here: the two ambient lights the script sets (G3, step 45), and",
-    "the normal maps' green and the halo scale (G5, step 49). The design's other rows - the script",
-    "emissive overrides and the 16-bit framebuffer - arrive with the steps that read them, not before."
+    "the normal maps' green and the halo scale (G5, step 49), and the 16-bit framebuffer (G6, step 55).",
+    "The design's other row - the script emissive overrides - arrives with the step that reads it."
   ],
 
   "darkest_ambient": {
@@ -71,5 +71,16 @@
       "average and 1 would be Ethanon's own arithmetic. For the owner, and for plan_port System 6."
     ],
     "value": 0.6
+  },
+
+  "framebuffer_rgb565": {
+    "_source": [
+      "The original asks Android for a 5/6/5 surface and draws into it without dithering: GL2JNIView.java:94",
+      "and ConfigChooser.java:48-67 in the shipped APK (the remake's engine_math.md 0.2). The remake's fit",
+      "of its pixels scores 0.28 of 255 on dark sprites with the 5/6/5 step and 0.62 without (fit.md 9).",
+      "The engine quantises the composite (RenderSettings::OutputQuantize::Rgb565); the screen overlay",
+      "drawn after it - the HUD, the pause, the menus - is not quantised."
+    ],
+    "value": true
   }
 }

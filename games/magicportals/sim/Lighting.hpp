@@ -119,6 +119,8 @@ struct Rules {
     // the value in the file is a _guess the design leaves to the halo gate
     // (design_port.md 5.5, 8), with its measurements beside it.
     double haloBrightnessScale = 1.0;
+    // The original draws into a 16-bit 5/6/5 surface without dithering.
+    bool framebufferRgb565 = true;
 };
 
 // False, with `error`, unless both lights are three finite numbers from 0 to 1,
@@ -145,7 +147,18 @@ inline constexpr std::uint8_t kStaticLights = 1u << 1; // owned by a static enti
 // ETHShaderManager.cpp:138); only the live lights when it is static; both when it
 // is not. Lightmaps are always on in the port until the design's step G6 bakes at
 // run time.
-std::uint8_t ReceiverMask(bool isStatic, bool applyLight);
+//
+// `runtimeBake`: once a torch has been lit the level bakes at run time
+// (GenerateLightmaps, torch.json), which is the same lights evaluated per pixel
+// (design section 5.7) - so a static sprite then takes the static lights live
+// too, and its file lightmap is dropped. It stays so for the rest of the level,
+// the torch put back out or not (RuntimeBake).
+std::uint8_t ReceiverMask(bool isStatic, bool applyLight, bool runtimeBake = false);
+
+// Whether the level has baked at run time: true from the first torch lit, for the
+// rest of the level. Putting the torch out calls GenerateLightmaps again, with no
+// static light left, and nothing goes back to the file's lightmaps.
+bool RuntimeBake(const Torch::State& torch);
 
 // The layer a light is on: a light is as static as its owner
 // (ETHEntityProperties.cpp:343-348).

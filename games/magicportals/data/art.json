@@ -92,6 +92,48 @@
     }
   },
 
+  "torch_light": {
+    "_source": [
+      "the original's light_from_projectile.ent, which ETHCallback_light_off adds when a shot lights a torch",
+      "(torch.json): Sprite torch_small.png, blendMode 0, SpriteCut 1 x 1, PivotAdjust (0, -16), one",
+      "ParticleSystem of 12 fire.png particles. Since step 55 (the lighting design's G6) only its light and",
+      "halo are drawn: its sprite and its flame are not built (torch.json's _not_built)."
+    ],
+    "sprite": "torch_small.png",
+    "additive": false,
+    "emissive": [0.0, 0.0, 0.0],
+    "_emissive": "light_from_projectile.ent's <EmissiveColor r=0 g=0 b=0>",
+    "static": true,
+    "apply_light": true,
+    "normal": "light01_normal.png",
+    "_lighting": [
+      "light_from_projectile.ent: <Entity static=1 applyLight=1>, <Normal>light01_normal.png</Normal>.",
+      "<Light active=1 static=1 range=512 haloBrightness=0.7 haloSize=300> with <Position x=0 y=-12 z=24>,",
+      "<Color r=1 g=0.5 b=0.2>, <HaloBitmap>halo.bmp</HaloBitmap>. A STATIC light: in a level that has",
+      "not baked at run time it would reach no static sprite, but lighting the torch is what makes the",
+      "level bake at run time (Lighting::RuntimeBake), so it reaches every sprite that applies light. Its",
+      "halo is scaled by the live share of its 12 particles, which the port does not build: drawn at 1."
+    ],
+    "light": {
+      "range": 512.0,
+      "offset": [0.0, -12.0, 24.0],
+      "colour": [1.0, 0.5, 0.2],
+      "halo": "halo.bmp",
+      "halo_offset": [0.0, 0.0],
+      "halo_size": [300.0, 300.0],
+      "halo_brightness": 0.7
+    },
+    "z": {
+      "_note": [
+        "The depth its light's height is measured from. The callback's AddEntity position is not decoded",
+        "(the bytecode listing was not at hand for step 55); the layer adds it at the torch's own eth_z,",
+        "and this value stands only where a torch has none."
+      ],
+      "_guess": true,
+      "value": 0.0
+    }
+  },
+
   "character": {
     "_source": "the original's dark_mage.ent: Sprite magic_portals_hd.png, blendMode 0, SpriteCut 4 x 4, startFrame 4, PivotAdjust (0, 2)",
     "sprite": "magic_portals_hd.png",
