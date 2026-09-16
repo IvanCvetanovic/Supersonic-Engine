@@ -8658,8 +8658,8 @@ both mean_abs and edge_iou; every run exits 0 with validation active and silent.
   `SetPositionXY(GetCameraPos() + pitch + (m_width x t, 0) + scrollPos)`. `GetCameraPos()` is the corner,
   the video camera's position (`ETHScriptWrapper.Scene.cpp:350-356`); names match by `==`
   (`ETHBucketManager.cpp:488-503`); a pivot adjust is stored over the scale and multiplied back at the draw
-  (`ETHEntity.cpp:1019-1022`; an unrotated sky is drawn by `GetScreenRect`, `ETHSpriteEntity.cpp:742-752`, less
-  `ComputeAbsoluteOrigin`, `ETHEntity.cpp:270-297`; the rotated branch at 702-708 gives the same centre).
+  (`ETHEntity.cpp:1019-1022`; an unrotated sky is drawn by `GetScreenRect`, `ETHSpriteEntity.cpp:742-751`, less
+  `ComputeAbsoluteOrigin`, `ETHEntity.cpp:270-296`; the rotated branch at 702-708 gives the same centre).
 - `update`: `position(t)` for every sky, THEN `scrollPos.x += scaledUnitsPerSecond(-m_scrollValue)` (the frame
   capped at 200 ms, times the time manager's `m_factor`, 1 or 0 while paused: `STimeManager.angelscript`
   8045..8162, checked in the remake's `specs/ui3/work/motion/dec_state.txt`), back to 0 once
