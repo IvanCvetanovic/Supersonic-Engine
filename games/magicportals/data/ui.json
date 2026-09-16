@@ -333,5 +333,1826 @@
       "dismiss_after_ms": 2000,
       "dismiss_ms": 1000
     }
+  },
+
+  "ui_layer": {
+    "_about": [
+      "THE TWO ANIMATION PRIMITIVES every UI layer the original raises over a level is built from:",
+      "the pause here, and the finished, lost and help screens after it. Read by sim/UiLayer.hpp.",
+      "Specified in the remake's gitignored out/parity/specs/ui2/spec.md section 0.4 (numbers from",
+      "pause_finished.md and popups_gameover.md beside it).",
+      "BOTH RUN ON UI FRAME TIME, which the pause does not stop: a layer animates while the game",
+      "is frozen under it (spec section 0.3). The port keeps that clock per layer, on the tick."
+    ],
+    "sprite": {
+      "_source": [
+        "DECODED: UISprite::init (bytes 84118..84502) builds its PositionInterpolator over 1000 ms",
+        "and zeroes the tint's alpha; UISprite::update (bytes 84559..84790) writes",
+        "ARGB(fTOu(getBias * a), r, g, b) every frame - getBias is the smoothEnd-filtered bias",
+        "sin(v * pi / 2), and `a` the alpha byte the sprite was added with (200 for the pause's",
+        "dim, 255 for a plaque).",
+        "MEASURED: sin over linear on every screen with footage, T 0.985..1.075 s (spec 0.4)."
+      ],
+      "appear_ms": 1000
+    },
+    "button": {
+      "_source": [
+        "DECODED: UIButton::UIButton (bytes 76108..76681) starts the button at",
+        "initPos = pos + normalize(pos - GetScreenSize() * 0.5) * g_scale.scale(32) * effectScale",
+        "(instructions 22..64; effectScale 1 from UILayer::addButton, bytes 62337..62682) and",
+        "eases it to pos over a 700 ms PositionInterpolator (instruction 95), filtered by",
+        "smoothEnd. `pos` is the button's own ANCHOR - its normalized position times the screen -",
+        "not its centre, which only differs for a button whose origin is not V2_HALF (the pause's",
+        "Achievements and switches). UIButton::update (bytes 76911..77152) sets the alpha to the",
+        "UNFILTERED bias, linear, while not dismissed (UIButton::setColor, bytes 31747..31953:",
+        "fTOu(alpha * 255)), and to 1 - the filtered bias once dismissed. UIButton::dismiss",
+        "(bytes 31534..31691) resets the interpolator from pos back to initPos over 700 ms.",
+        "MEASURED: linear T 0.680..0.73 s; slide rms 0.97..1.27 px against the 32 u model (spec 0.4);",
+        "ui3 motion.md 1.2 confirms UISwitch::UISwitch calls UIButton::UIButton, so the sound and",
+        "music switches enter the same way."
+      ],
+      "appear_ms": 700,
+      "dismiss_ms": 700,
+      "slide_units": 32
+    }
+  },
+
+  "pause": {
+    "_about": [
+      "THE PAUSE SCREEN, CustomGameMenuLayer (extends GameMenuLayer and SoundPanelLayer), which the",
+      "in-level pause control and the back key raise over the frozen level. Read by sim/Pause.hpp.",
+      "Specified in the remake's gitignored out/parity/specs/ui2/spec.md section 2; its evidence is",
+      "pause_finished.md section 1 (+ .json) beside it. Measured on pause_fresh_1-1.png and",
+      "pause_gold_1-4.png, 1280x720, 3 s after the tap.",
+      "",
+      "PLACED BY FRACTIONS OF THE SCREEN, NOT FROM CORNERS (spec 0.1): each element's anchor is",
+      "view * at_screen, and its top-left is that anchor less size_units * origin. Sizes stay in",
+      "units, so at another aspect the x positions move with the width and the sizes do not. The",
+      "switches and Achievements are flush in their corners only because their fraction is 0 or 1",
+      "with the matching origin. Every size is the sprite's 1x texel size in units; the hd twin is",
+      "what is drawn (spec 0.1).",
+      "",
+      "ALPHAS ARE DISPLAY-SPACE, drawn through the engine's screen overlay after restart, pause and",
+      "the level's blacks and before the level-start caption (spec 2.2)."
+    ],
+
+    "dim": {
+      "_source": [
+        "DECODED: GameMenuLayer::GameMenuLayer (bytes 100789..101246, instructions 19..54) adds",
+        "GameStateProperties.whiteSquareSprite over V2_ZERO .. GetScreenSize() in",
+        "backgroundColor, which Game::Game (bytes 110437..111736) sets to ARGB(200, 0, 0, 0) with",
+        "sprites/square.png - a 64x64 file opaque white in every texel, so the port draws the",
+        "black plainly. A UISprite: alpha fTOu(smoothEnd * 200).",
+        "MEASURED: world multiplied by k = 0.2149 (gold 1-4), 0.2131 / 0.2146 (fresh 1-1) against",
+        "the decoded 1 - 200/255 = 0.2157; flat in 80 px blocks 0.212..0.218, a pure multiply",
+        "(spec 2.2). Restart and pause read 0.100 / 0.100 under it, 0.47 x 0.2157."
+      ],
+      "alpha_byte": 200
+    },
+
+    "golden_plaque": {
+      "_source": [
+        "DECODED: CustomGameMenuLayer::CustomGameMenuLayer (bytes 278359..280345) sets",
+        "goldenScoreMedalPos = GetScreenSize() * (0.8, 0.31) (instructions 25..41; pushed",
+        "last-first) and adds sprites/golden_score_plaque.png there with origin (0.5, 0.38)",
+        "(instructions 72..92). A UISprite, always added.",
+        "MEASURED: hd sprite TL (934.0, 86.25) px at S 1.407, Pearson 0.9992 / 0.9991; the decode",
+        "puts it at (934.0, 86.4) (spec 2.1 P2)."
+      ],
+      "sprite": "golden_score_plaque.png",
+      "at_screen": [0.8, 0.31],
+      "origin": [0.5, 0.38],
+      "size_units": [64, 128]
+    },
+
+    "current_plaque": {
+      "_source": [
+        "DECODED: same constructor: currentScoreMedalPos = GetScreenSize() * (0.2, 0.36)",
+        "(instructions 43..59); only `if (score > 0)` (instructions 96..99, score =",
+        "ScoreManager::getScore for this level) it adds sprites/current_score_plaque.png there with",
+        "origin (0.5, 0.25) (101..121) and then getLargeSpriteMedalName(score) with V2_HALF",
+        "(125..150), which draws over it. getLargeSpriteMedalName (ScoreManager bytes",
+        "364204..364411): 3 gold, 2 silver, anything else bronze.",
+        "MEASURED: plaque TL (166.0, 169.25) S 1.406 Pearson 0.9995 (medal masked); medal",
+        "medal_gold_l TL (166.0, 169.25) S 1.4055 Pearson 0.9993, where medal_gold_m at 2x scores",
+        "0.979. Absent on fresh 1-1, present on gold 1-4 and gold 1-3 (spec 2.1 P3, P4; 2.3)."
+      ],
+      "sprite": "current_score_plaque.png",
+      "at_screen": [0.2, 0.36],
+      "origin": [0.5, 0.25],
+      "size_units": [64, 128],
+      "medal_origin": [0.5, 0.5],
+      "medal_size_units": [64, 64],
+      "medal_bronze": "medal_bronze_l.png",
+      "medal_silver": "medal_silver_l.png",
+      "medal_gold": "medal_gold_l.png"
+    },
+
+    "levels_button": {
+      "_source": [
+        "DECODED: GameMenuLayer::GameMenuLayer (instructions 58..86) adds 'back_button' with",
+        "GameStateProperties.backToMainMenuButton at gameMenuExitButtonPos, V2_HALF; Game::Game",
+        "sets them to sprites/back_to_main_menu.png and (0.42, 0.44). GameMenuLayer::update (bytes",
+        "101487..101852) opens createLevelSelectState when returnToLevelSelect is set (Game::Game",
+        "instructions 199..201), and CustomGameMenuLayer gives it getExitLevelButtonSound",
+        "(instructions 208..228).",
+        "MEASURED: Pearson 0.99929 at the decoded TL (447.6, 226.8); list_button.png, the port's",
+        "grid button, fits worse (0.99902, 1.3 px off, S 1.404) (spec 2.1 P5)."
+      ],
+      "sprite": "back_to_main_menu.png",
+      "at_screen": [0.42, 0.44],
+      "origin": [0.5, 0.5],
+      "size_units": [64, 64]
+    },
+
+    "resume_button": {
+      "_source": [
+        "DECODED: GameMenuLayer::GameMenuLayer (instructions 88..116): 'resume_button',",
+        "GameStateProperties.resumeGameButton at gameMenuResumeButtonPos, V2_HALF; Game::Game sets",
+        "sprites/resume_button.png and (0.58, 0.44). GameState::loop (instructions 73..138) calls",
+        "hideMenuPopup when it is pressed.",
+        "MEASURED: TL (652.25, 226.75) against the decoded (652.4, 226.8), Pearson 0.9994 (spec 2.1 P6)."
+      ],
+      "sprite": "resume_button.png",
+      "at_screen": [0.58, 0.44],
+      "origin": [0.5, 0.5],
+      "size_units": [64, 64]
+    },
+
+    "skip_button": {
+      "_source": [
+        "DECODED: CustomGameMenuLayer::CustomGameMenuLayer (instructions 154..205), inside the same",
+        "`score > 0` branch as the current plaque: 'skip', sprites/skip_level_button.png at",
+        "(0.5, 0.7), V2_HALF, with getSkipLevelButtonSound. CustomGameMenuLayer::update (bytes",
+        "280592..281012, instructions 20..36) calls goToNextLevel(levelIndex) when it is pressed.",
+        "MEASURED: TL (550, 414), Pearson 0.9993; absent on fresh 1-1 (spec 2.1 P7)."
+      ],
+      "sprite": "skip_level_button.png",
+      "at_screen": [0.5, 0.7],
+      "origin": [0.5, 0.5],
+      "size_units": [64, 64]
+    },
+
+    "achievements_button": {
+      "_source": [
+        "DECODED: CustomGameMenuLayer::CustomGameMenuLayer (instructions 230..279): 'scores',",
+        "sprites/scores.png at V2_ONE with origin V2_ONE, added only where",
+        "AchievementManager::getAchievementsFromLevel is not null; update (instructions 38..94)",
+        "opens an AchievementsPopup through UILayerManager::openPopup.",
+        "MEASURED: TL (920, 630), Pearson 0.9993 (spec 2.1 P8).",
+        "OWNER RULING: kept. The port has no achievements table and no AchievementsPopup yet (spec",
+        "section 7 U10), so it is drawn on every level - every captured level has one - and",
+        "pressing it does nothing visible."
+      ],
+      "sprite": "scores.png",
+      "at_screen": [1, 1],
+      "origin": [1, 1],
+      "size_units": [128, 32]
+    },
+
+    "sound_switch": {
+      "_source": [
+        "DECODED: SoundPanelLayer::SoundPanelLayer (bytes 73444..73806) adds 'sound_switch' through",
+        "UILayer::addGlobalSoundSwitch with SoundPanelProperties' soundSwitchOn/Off at",
+        "soundSwitchPos (0, 1) with origin (0, 1) (SoundPanelProperties::SoundPanelProperties,",
+        "bytes 51707..52281). GlobalSoundSwitch::manageSoundSwitch (bytes 32340..32535): switched",
+        "on, SetGlobalVolume(1); off, SetGlobalVolume(0); then GlobalVolumeManager::saveVolume.",
+        "(Decoded in the remake's ui3 work/static/dec_ui.txt.)",
+        "MEASURED: sound_high TL (0, 630) Pearson 0.9993 on both pauses; sound_mute at (0, 630)",
+        "Pearson 0.9992 on main_menu_sound_music_off.png, the same SoundPanelLayer (spec 2.1 P9)."
+      ],
+      "on_sprite": "sound_high.png",
+      "off_sprite": "sound_mute.png",
+      "at_screen": [0, 1],
+      "origin": [0, 1],
+      "size_units": [32, 32]
+    },
+
+    "music_switch": {
+      "_source": [
+        "DECODED: SoundPanelLayer::manageMusicSwitch (bytes 74288..74908), every update: with the",
+        "sound switch enabled and no music switch, it adds one through",
+        "UILayer::addGlobalMusicSwitch (a fresh UIButton, so a fresh entrance); with the sound",
+        "switch disabled and a music switch there, UIButton::dismiss - 700 ms out, and removed.",
+        "Game::Game places it at (0.09, 1), origin (0, 1).",
+        "MEASURED: music_on TL (115.25, 630) against the decoded 115.2, Pearson 0.9991; the slot is",
+        "empty on main_menu_sound_music_off.png (spec 2.1 P10, ui3 note: the main menu's own is",
+        "at 32 u, not here)."
+      ],
+      "on_sprite": "music_on.png",
+      "off_sprite": "music_off.png",
+      "at_screen": [0.09, 1],
+      "origin": [0, 1],
+      "size_units": [32, 32]
+    },
+
+    "title": {
+      "_source": [
+        "DECODED: GameMenuLayer::draw (bytes 101852..102330) draws levelNumberString +",
+        "(levelIndex + 1) with drawCenteredText at GetScreenSize() * levelNumberStringNormPos, in",
+        "the resume button's colour with its rgb set to white - so at the buttons' alpha. Game::Game",
+        "sets 'Part ' and (0.51, 0.23); the font resolves to Matura84_shadow.fnt on an hd screen",
+        "(ResourceSelector bytes 398764..399050) at half a unit per font pixel.",
+        "MEASURED: Matura84_shadow at 1.405 px per font px (rms 6.95 / 6.63, the next font 15.45);",
+        "centre (651.8..652.3, 165.1) against the decoded (652.8, 165.6) (spec 2.1 P11, U11)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "prefix": "Part ",
+      "units_per_font_px": 0.5,
+      "centre_of_screen": [0.51, 0.23]
+    },
+
+    "golden_number": {
+      "_source": [
+        "DECODED: CustomGameMenuLayer::draw (bytes 281012..281464) draws ScoreManager::",
+        "getGoldenScore for the level with drawCenteredText at goldenScoreMedalPos +",
+        "g_scale.scale(10, -4), getMatura42HardFontName at getScale / getHdSpriteDensity, in the",
+        "first button's colour with its rgb set to white.",
+        "MEASURED: Matura84_shadow at 1.40 (rms 5.70 / 7.68); centre (1051.6..1052.1, 210.95)",
+        "against the decoded (1052.1, 211.95); '0' on 1-1, '2' on 1-3 and 1-4 (spec 2.1 P12)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "units_per_font_px": 0.5,
+      "offset_units": [10, -4]
+    }
+  },
+
+  "level_end": {
+    "_about": [
+      "HOW A LEVEL ENDS: the beat after the door or the death, the HUD going, and the two screens",
+      "the original raises over the level that is still running - LevelFinishedLayer and",
+      "LevelLostLayer. Read by sim/LevelEnd.hpp, over ui_layer's primitives.",
+      "Specified in the remake's gitignored out/parity/specs/ui2/spec.md sections 3 and 4, and its",
+      "deltas D1..D9 (section 1.2); the evidence is pause_finished.md sections 2..3 and",
+      "popups_gameover.md section 4 beside it. Measured on finished_1-1.png, finish_1-1.mp4,",
+      "2-32_h6.3.png, death_2-10.mp4 and gameover_2-32.mp4, 1280x720.",
+      "",
+      "NEITHER SCREEN STOPS GAME TIME (spec D7): the level goes on being stepped behind both, as",
+      "it is through the beat. Placed as the pause is placed (spec 0.1): each anchor is view *",
+      "at_screen, its top-left that less size_units * origin; every size is the 1x texel size in",
+      "units and the hd twin is drawn, the finished medal excepted (96 u, scale 1.5).",
+      "ALPHAS ARE DISPLAY-SPACE (spec D9), drawn through the engine's screen overlay after restart",
+      "and pause and before the level's blacks, the walk pads and the level-start caption."
+    ],
+
+    "beats": {
+      "_source": [
+        "DECODED: GameStateController::GameStateController (bytes 121296..122160, instructions",
+        "24..29) writes 1400 to gameLostDelay and copies it into gameWonDelay; checkGameEnd",
+        "(bytes 125613..126638) raises levelFinishedLayer or levelLostLayer once gameEndElapsedTime",
+        "- game time from the door or the death - passes it. A scene end_delay entity can override",
+        "it; no level of the 128 places one (spec 3.4, U4).",
+        "MEASURED: door to the finished layer 1.41..1.50 s (finish_1-1.mp4, fitted t0 6.388..6.406);",
+        "first HUD-dismiss frame to the lost layer 1.438 s (death_2-10) and 1.349 s (gameover_2-32).",
+        "The emulator's clock runs 1.0..1.5% long (spec 0.3): the decode is taken."
+      ],
+      "won_delay_ms": 1400,
+      "lost_delay_ms": 1400
+    },
+
+    "hud": {
+      "_source": [
+        "DECODED: ScreenPad::draw (step 38) multiplies each pad's alpha byte by 0.98 and truncates,",
+        "a <- uint(a * 0.98), once per drawn frame after the game has ended, from whatever alpha the",
+        "pulse left; the pulse stops. Taken PER 60 Hz TICK here (spec U2): a --fixed-step run draws",
+        "a frame a tick, and a 60 fps device draws the same count.",
+        "MEASURED: 120 -> 0 in 81 frames on death_2-10 (rms 0.0069; a float 0.98^n fits 0.037); from",
+        "the door on finish_1-1, left pad rms 0.005 from 180 (spec 3.4, 4.1). 180 and 210 reach 0",
+        "after 99 and 106 frames.",
+        "AT THE DOOR restart and pause are CUT in one frame (gain 0.4705 -> -0.034, 4.992 -> 5.007 s);",
+        "AT A DEATH they are DISMISSED as UIButtons, 700 ms, alpha (1 - smoothEnd) of their own 120,",
+        "sliding 32 u out along the ray from the screen centre through each one's anchor (alpha",
+        "0.475 -> 0 over n138..n148, >= 28 u travel). finishGame (bytes 122645..122773) dismisses",
+        "GameLayer both ways; why the door cuts instead is unexplained (spec U1), and both",
+        "measurements are followed (spec D8). Button::draw (bytes 15237..15660) multiplies the",
+        "custom colour by the UIButton's own."
+      ],
+      "pad_decay_factor": 0.98
+    },
+
+    "finished": {
+      "veil": {
+        "_source": [
+          "DECODED: LevelFinishedLayer::LevelFinishedLayer (bytes 271777..273843, instruction 253",
+          "on) adds sprites/fade_edge.png at V2_ZERO, origin V2_ZERO, sized (screen.x * 1.5,",
+          "screen.y), tinted ARGB(200, 255, 255, 255): a black texture whose alpha ramps 255 -> 0",
+          "across its 64 texels, so the world under screen x keeps",
+          "k(x) = 1 - (200/255) * a_fade(64 x / 1.5 W), sampled linearly and clamped. A UISprite.",
+          "MEASURED: that geometry fits finished_1-1.png at rms 0.0063 (video 0.0066), against 0.034",
+          "flat and 0.0103 for a linear ramp; 10 px columns to x 1195 at rms 0.0099; sin fade-in",
+          "T 0.985 s (spec 3.1 F1, 3.2, D9). Below the walk pads, which fade on through it."
+        ],
+        "sprite": "fade_edge.png",
+        "tint_alpha_byte": 200,
+        "size_of_screen": [1.5, 1]
+      },
+      "title": {
+        "_source": [
+          "DECODED: same constructor: sprites/level_finished.png at (0.464, 0.278), V2_HALF. A",
+          "UISprite. Its 1x file is 256 x 64 texels.",
+          "MEASURED: hd TL (234.0, 110.25) px at S 1.406 against the decoded (233.92, 110.16);",
+          "Pearson 0.909 behind the medal's ribbon; sin T 0.995 s, no motion (spec 3.1 F2, D2).",
+          "It was 0.16 of the view tall (41 u) before this."
+        ],
+        "sprite": "level_finished.png",
+        "at_screen": [0.464, 0.278],
+        "origin": [0.5, 0.5],
+        "size_units": [256, 64]
+      },
+      "portals_plaque": {
+        "_source": [
+          "DECODED: same constructor: sprites/portals_created_plaque.png at the medal's (0.47, 0.55)",
+          "plus (0, 0.15) of the screen, V2_HALF, under the medal. A UISprite.",
+          "MEASURED: hd TL (511.5, 414.0) px at S 1.406 against the decoded (511.6, 414.0); the 1x",
+          "sprite at 2x fits worse (0.706); sin T 0.99 s (spec 3.1 F3, D3). It was 31 u tall."
+        ],
+        "sprite": "portals_created_plaque.png",
+        "at_screen": [0.47, 0.70],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "golden_plaque": {
+        "_source": [
+          "DECODED: same constructor, instructions 392..393: CMPIu score, 3; JNS skips it - so",
+          "sprites/golden_score_plaque.png at (0.23, 0.5) with origin (0.5, 0.33) is added ONLY",
+          "when the play's final score is below 3, i.e. not gold (spec D6, re-read while merging).",
+          "A UISprite. The port drew it for gold alone before this.",
+          "MEASURED: finished_1-1.png, gold, has none. Its placement is decode only (spec U4)."
+        ],
+        "sprite": "golden_score_plaque.png",
+        "at_screen": [0.23, 0.5],
+        "origin": [0.5, 0.33],
+        "size_units": [64, 128],
+        "shown_below_score": 3
+      },
+      "restart_button": {
+        "_source": [
+          "DECODED: same constructor: 'restart', sprites/button_restart.png at (0.75, 0.25),",
+          "V2_HALF (the pair pushed last-first). LevelFinishedLayer::update (bytes 274095..274980):",
+          "createGameState(currentLevel). A UIButton.",
+          "MEASURED: TL exactly (870, 90) px, Pearson 0.9993, scale 1.405..1.406; linear T 0.690 s;",
+          "slide rms 1.19 px against the 32 u model (spec 3.1 F5, D1). It was 41 u before this."
+        ],
+        "sprite": "button_restart.png",
+        "at_screen": [0.75, 0.25],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "next_button": {
+        "_source": [
+          "DECODED: same constructor: 'next', sprites/button_right.png at (0.75, 0.5), V2_HALF;",
+          "update: goToNextLevel(currentLevel). A UIButton.",
+          "MEASURED: TL (870, 270) px, Pearson 0.9993; linear T 0.685 s (spec 3.1 F6, D1)."
+        ],
+        "sprite": "button_right.png",
+        "at_screen": [0.75, 0.5],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "list_button": {
+        "_source": [
+          "DECODED: same constructor: 'menu', sprites/list_button.png at (0.75, 0.75), V2_HALF;",
+          "update: createLevelSelectState. A UIButton.",
+          "MEASURED: TL (870, 450) px, Pearson 0.9993; linear T 0.680 s (spec 3.1 F7, D1)."
+        ],
+        "sprite": "list_button.png",
+        "at_screen": [0.75, 0.75],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "medal": {
+        "_source": [
+          "DECODED: LevelFinishedLayer::draw (bytes 274980..276253, instructions 83..98) draws",
+          "getLargeSpriteMedalName(computeScore(counter.getCurrent(), golden, numCrystals,",
+          "maxCrystals)) with drawScaledSprite at screen * (0.47, 0.55), V2_HALF, scale(1.5): the",
+          "64 u medal at 96 u, every frame, in the restart button's colour - so at the buttons' alpha,",
+          "with no pop. ScoreManager::computeScore (bytes 363979..364204); getLargeSpriteMedalName",
+          "(bytes 364204..364411): 3 gold, 2 silver, anything else bronze.",
+          "MEASURED: medal_gold_l TL (467.0, 261.25) px at S 2.104 against the decoded (466.6, 261.0)",
+          "and 2.109; _m fits 0.952; linear T 0.695 s (spec 3.1 F8, 3.3, D4). It was 77 u."
+        ],
+        "at_screen": [0.47, 0.55],
+        "origin": [0.5, 0.5],
+        "size_units": [96, 96],
+        "bronze": "medal_bronze_l.png",
+        "silver": "medal_silver_l.png",
+        "gold": "medal_gold_l.png"
+      },
+      "counter": {
+        "_source": [
+          "DECODED: the same draw writes counter.getCurrent() with drawCenteredText at the medal's",
+          "position + scale(0, -7.5), getMatura64FontName - Matura128_shadow.fnt on an hd screen -",
+          "white at the buttons' alpha. The counter is ScoreCounter(0, numPortals, 100)",
+          "(ScoreCounter::ScoreCounter bytes 39408..39581, ::update 39728..39922): its Timer adds",
+          "the frame's time while this layer is current, and each time it reaches the stride it",
+          "resets to zero and steps one toward the end.",
+          "MEASURED: Matura128_shadow at 1.405 px per font px (rms 6.08; Matura64 15.47, Matura84",
+          "15.73), centre (601.1, 373.9) px against the decoded (601.6, 374.9) (spec 3.1 F9, 3.3, U11)."
+        ],
+        "font": "Matura128_shadow.fnt",
+        "units_per_font_px": 0.5,
+        "offset_units": [0, -7.5],
+        "stride_ms": 100
+      },
+      "golden_number": {
+        "_source": [
+          "DECODED: the same draw, with the golden plaque: the level's golden score centred at the",
+          "plaque's position + scale(10, 1), Matura84_shadow at half a unit per font px, at the",
+          "buttons' alpha. Decode only; nothing gold draws it (spec 3.1 F10, U4)."
+        ],
+        "font": "Matura84_shadow.fnt",
+        "units_per_font_px": 0.5,
+        "offset_units": [10, 1]
+      },
+      "crystal": {
+        "_source": [
+          "DECODED: the same draw, for a level with crystals: entities/crystal.png with",
+          "drawScaledSprite at the medal's position + scale(-30, 48), origin V2_ZERO, at getScale -",
+          "its 1x 32 x 32 texels as 32 u, the hd twin drawn - at the buttons' alpha (spec 3.1 F11,",
+          "D12). Decode only: its size is not measured (U4)."
+        ],
+        "sprite": "crystal.png",
+        "offset_units": [-30, 48],
+        "size_units": [32, 32]
+      },
+      "crystal_count": {
+        "_source": [
+          "DECODED: the same draw writes 'n/max' with DrawText - NOT centred, from its top-left - at",
+          "the crystal's position + scale(27, 3), Matura84_shadow at scale(0.7) / density: 0.35 u",
+          "per font px. n is a second ScoreCounter from 0 to the crystals collected, 100 ms a step",
+          "(spec 3.1 F12). Decode only (U4)."
+        ],
+        "font": "Matura84_shadow.fnt",
+        "units_per_font_px": 0.35,
+        "offset_units": [27, 3],
+        "stride_ms": 100
+      }
+    },
+
+    "lost": {
+      "veil": {
+        "_source": [
+          "DECODED: LevelLostLayer::LevelLostLayer (bytes 276429..277344) adds sprites/fade_edge.png",
+          "at V2_ZERO, origin V2_ZERO, sized (screen.x * 0.9, screen.y), tinted ARGB(180, 255, 255,",
+          "255): k(x) = 1 - (180/255) * a_fade(64 x / 0.9 W). There is no other dim. A UISprite.",
+          "MEASURED: settled column gains on death_2-10 0.29 at x 20 .. 0.997 at x 1140, within",
+          "0.036 of that model (x 860); a 1280-wide rect fits worse; sin T 0.995 s (spec 4.2, D9)."
+        ],
+        "sprite": "fade_edge.png",
+        "tint_alpha_byte": 180,
+        "size_of_screen": [0.9, 1]
+      },
+      "title": {
+        "_source": [
+          "DECODED: same constructor: sprites/game_over.png at (0.5, 0.35), V2_HALF. A UISprite.",
+          "MEASURED: 2-10 fit scale 1.405, plateau alpha 1.004; locate on 2-32_h6.3.png at 1.40625",
+          "Pearson 0.9909, centre (640, 252) px (spec 4.2 L2, D5). It was 56 u tall."
+        ],
+        "sprite": "game_over.png",
+        "at_screen": [0.5, 0.35],
+        "origin": [0.5, 0.5],
+        "size_units": [128, 128]
+      },
+      "restart_button": {
+        "_source": [
+          "DECODED: same constructor: 'restart', sprites/button_restart.png at (0.4, 0.6), V2_HALF",
+          "(PshC4 0.6f; PshC4 0.4f, last-first). LevelLostLayer::update (bytes 277576..278179):",
+          "createGameState(currentLevel). A UIButton.",
+          "MEASURED: fit scale 1.405; 2-32 locate 0.996 at centre (512, 432) px; linear T 0.700 s;",
+          "slide rms 1.27 px against 32 u (spec 4.1, 4.2 L3, D1)."
+        ],
+        "sprite": "button_restart.png",
+        "at_screen": [0.4, 0.6],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      },
+      "list_button": {
+        "_source": [
+          "DECODED: same constructor: 'menu', sprites/list_button.png at (0.6, 0.6), V2_HALF;",
+          "update: createLevelSelectState. A UIButton. The BuyButton beside it is OMITTED by the",
+          "owner's store ruling (spec 8).",
+          "MEASURED: fit scale 1.405; 2-32 locate 0.9908 at centre (768, 432) px (spec 4.2 L4, D1)."
+        ],
+        "sprite": "list_button.png",
+        "at_screen": [0.6, 0.6],
+        "origin": [0.5, 0.5],
+        "size_units": [64, 64]
+      }
+    }
+  },
+  "popups": {
+    "_about": [
+      "THE TUTORIAL AND HELP POPUPS, ETHFramework's Popup and the game's HelpPopup classes, which two",
+      "levels raise as they load and thirteen raise from a help block. Read by sim/Popup.hpp.",
+      "Specified in the remake's gitignored out/parity/specs/ui2/spec.md section 5; its evidence is",
+      "popups_gameover.md sections 1..3 (+ .json) beside it, and the recordings under rec/.",
+      "",
+      "ONE PAGE EACH, closed by a touch DOWN anywhere (HelpPopup sets tapScreenToClose, instructions",
+      "45..47; Popup::hasReceivedCloseCommand, bytes 73196..73437) or the back key (GetKeyState(14),",
+      "GSK_BACK, Ethanon toolkit/Source/src/gs2d/src/Input.h:51). Popup::Popup pauses game time",
+      "(instructions 147..166) and Popup::update resumes it only once everything is dismissed: the",
+      "world stands still under the fade out too, and the walk pads are not drawn at all.",
+      "",
+      "PLACED BY FRACTIONS OF THE SCREEN, as the pause (spec 0.1): each anchor is view * at_screen and",
+      "each top-left that anchor less size_units * origin. ALPHAS ARE DISPLAY-SPACE, drawn through",
+      "the screen overlay after restart, pause and the plaque and before the level's two blacks and",
+      "its caption (spec 5.2's order; UILayerManager sits before the FadeInControllers, step 45).",
+      "Sprites are named within the original's assets; the hd twin beside a file is drawn where one",
+      "exists."
+    ],
+    "dim": {
+      "_source": [
+        "DECODED: Popup::Popup (bytes 71281..72052, instructions 49..69) adds",
+        "ETHFramework/sprites/eth_framework_square.png over V2_ZERO .. GetScreenSize() in",
+        "ARGB(150, 0, 0, 0), a UISprite: alpha fTOu(smoothEnd * 150). The file is 64x64 opaque white,",
+        "so the port draws the black plainly, as the pause's dim.",
+        "MEASURED: world gain 0.4057 on 1-13 (n199..n355, rms 3.47) and 0.399 on 1-10, against the",
+        "decoded 1 - 150/255 = 0.4118 (spec 5.2 H1); in sin T 1.075 / 1.010 / 0.990 s, out 1.045 /",
+        "1.025 / 0.980 s (1-13 / 1-10 / 2-03)."
+      ],
+      "alpha_byte": 150
+    },
+    "card": {
+      "_source": [
+        "DECODED: Popup::Popup (instructions 87..115): the class's popup sprite at GetScreenSize() * 0.5,",
+        "V2_HALF, its own size; HelpPopup passes sprites/help_popup.png, which has no hd twin (340x256).",
+        "A UISprite.",
+        "MEASURED: centre (640.0, 360.0) px, scale 2.815 x 2.810 over 222,269 border px on 1-13 (spec",
+        "5.2 H2); drawn 340x256 units at 2.8125 px each."
+      ],
+      "sprite": "sprites/help_popup.png",
+      "at_screen": [0.5, 0.5],
+      "origin": [0.5, 0.5],
+      "size_units": [340, 256]
+    },
+    "close_button": {
+      "_source": [
+        "DECODED: HelpPopup::HelpPopup (bytes 204244..204540) hands Popup sprites/popup_close_button.png",
+        "at PORTAL_HELP_POPUP_POS = (0.92, 0.5) (global initialiser, bytes 308967..309018); Popup::Popup",
+        "adds it as the 'close' UIButton, V2_HALF (instructions 123..143). Its entrance and dismissal",
+        "are ui_layer.button's.",
+        "MEASURED: centre (1177.5, 360.0) px, 64 u; slide in from +x rms 0.97 px against 32 u, T 0.705",
+        "s, alpha linear (spec 5.2 H3, 5.3)."
+      ],
+      "sprite": "sprites/popup_close_button.png",
+      "at_screen": [0.92, 0.5],
+      "origin": [0.5, 0.5],
+      "size_units": [64, 64]
+    },
+    "highlight": {
+      "_source": [
+        "DECODED: setButtonHighlightEffects(button, 0.03, 150) (bytes 370863..371164): setBounce((1 -",
+        "0.03, 1 + 0.03), (1 + 0.03, 1 - 0.03), 400) and setBlink((0.95, 0.95, 0.95), V3_ONE, 150),",
+        "arguments pushed last-first. Button::bounce (bytes 17149..17549) reads the button's own",
+        "elapsed time: the stride's fraction, reversed on odd strides, smoothEnd, from scale A to B;",
+        "Button::blinkColor (17819..18318) the same, LINEAR, from brightness A to B, multiplied into",
+        "the rgb only (Button::draw, 15237..15660). Both stop at the close: UIButton::update calls",
+        "Button::update only while not dismissed.",
+        "MEASURED: 1-13 n210..n261 sx and sy 0.97..1.03 in antiphase (corr -0.993), stride 410 ms; sx",
+        "at 1.03 near 2.02 and 2.80 s after the tap and 0.97 near 2.38 and 3.18 s on the emulator's",
+        "clock, the odd and even multiples of 400 ms that put A at (0.97, 1.03); blink 0.957..1.0,",
+        "stride 151 ms (spec 0.4, A-H8)."
+      ],
+      "bounce_scale_a": [0.97, 1.03],
+      "bounce_scale_b": [1.03, 0.97],
+      "bounce_stride_ms": 400,
+      "blink_brightness_a": 0.95,
+      "blink_brightness_b": 1.0,
+      "blink_stride_ms": 150
+    },
+    "level_start": {
+      "_source": [
+        "DECODED: Game::managePopups (bytes 115157..115478), called from Game::preLoop (instruction",
+        "430), so on every load of the level, a retry included: world 0 index 1 opens LevelHelp1Popup",
+        "and index 2 LevelHelp2Popup through UILayerManager::openPopup, in the level's load frame.",
+        "MEASURED: rec/popup_1-02.mp4 and popup_1-03.mp4; the library's 1-02_popup.png and",
+        "1-03_popup.png; only these two of 127 sidecars have popup_pages > 0 (spec 5.1, 5.4)."
+      ],
+      "levels": [
+        {"scene": "level1", "label": "1-02", "popup": "LevelHelp1Popup"},
+        {"scene": "level2", "label": "1-03", "popup": "LevelHelp2Popup"}
+      ]
+    },
+    "help_block": {
+      "_source": [
+        "DECODED: HelpBlockController::update (bytes 226317..228622), skipped while game time is paused:",
+        "for each help_block.ent, TouchInputManager::getTouchStateInRect over its collision box times",
+        "scale(1.2) with origin V2_HALF at GetPositionXY() - GetCameraPos(). A touch down in it",
+        "disables the level's touches (no portal); while it moves, touchMoveLength keeps the longest",
+        "getTouchMoveSum; a release with touchMoveLength < 12 opens the level's class. The 13 world",
+        "and index branches are exactly the 13 scenes that place help_block.ent (spec 5.1). The 12 is",
+        "in the device's pixels, which the port reads as the window's (spec U8: its units unmeasured).",
+        "4-02's SpaceEasterEggHelpPopup is NOT BUILT: with the owner's video-button ruling it has no",
+        "content and, tapScreenToClose false, no way out, and spec U6 asks for an owner ruling rather",
+        "than a guess. Its block still takes the touch and opens nothing."
+      ],
+      "entity": "help_block.ent",
+      "box_scale": 1.2,
+      "max_move_px": 12,
+      "levels": [
+        {"scene": "level1", "label": "1-02", "popup": "LevelHelp1Popup"},
+        {"scene": "level2", "label": "1-03", "popup": "LevelHelp2Popup"},
+        {"scene": "level9", "label": "1-10", "popup": "LevelHelpAntiportalAgent"},
+        {"scene": "level10", "label": "1-11", "popup": "LevelHelpAntiportalAgent"},
+        {"scene": "level12", "label": "1-13", "popup": "LevelHelp15Popup"},
+        {"scene": "level18", "label": "1-19", "popup": "LevelHelp15Popup"},
+        {"scene": "level24", "label": "1-25", "popup": "LevelHelp25Popup.stone"},
+        {"scene": "level31", "label": "1-32", "popup": "LevelHelp25Popup.stone"},
+        {"scene": "level2a", "label": "2-03", "popup": "LevelHelpW2P3Popup"},
+        {"scene": "level5a", "label": "2-06", "popup": "LevelHelpW2P3Popup"},
+        {"scene": "level8b", "label": "3-09", "popup": "LevelHelp25Popup.chara"},
+        {"scene": "level0c", "label": "4-01", "popup": "RedKeyLocationHelpPopup"},
+        {"scene": "level1c", "label": "4-02", "popup": null}
+      ]
+    },
+    "classes": {
+      "_about": [
+        "EACH CLASS'S draw() AFTER UILayer::draw, in its own order: the tracks are WaypointSprites",
+        "(WaypointManager bytes 40242..42676; WaypointSprite::draw bytes 43056..43349), each drawn",
+        "in its own colour and not at all once the close button is dismissed; the statics are",
+        "drawScaledSprite at HelpPopup::computePos (bytes 204875..205105) = screen * (0.5 + at), tinted",
+        "with the close button's colour with its rgb set white (Button::getColor, FloatColor::setColor",
+        "V3_ONE), so they come in with its linear alpha and are drawn at alpha 0 from the close on.",
+        "A waypoint's `ms` is the move to the NEXT one, eased by ITS filter (position, alpha and angle",
+        "alike); 0 ms is a jump, and the loop wraps to the first. Angles are degrees counter-clockwise",
+        "on the screen: GLES2Sprite::DrawOptimal turns by RotateZ(-angle) (Ethanon",
+        "toolkit/Source/src/gs2d/src/Video/GLES2/GLES2Sprite.cpp:268-270), and the arrow at 23 degrees",
+        "points from the lower portal to the upper one only that way. Sizes are the 1x texel size in",
+        "units, the hd twin drawn where one exists (spec 5.5, MEASURED stone and hand scale 1.41).",
+        "The waypoint tables are the spec's section 5.5, DECODED from each constructor and checked on",
+        "the six recordings: loop periods 1.0..1.5% long on the emulator's clock (spec 0.3), track",
+        "medians 0.7..2.1 px for the hand and stone tracks."
+      ],
+      "LevelHelp1Popup": {
+        "_source": [
+          "DECODED: LevelHelp1Popup (constructor bytes 205113..207734, draw 208104..208915): UILayer::draw;",
+          "then, while the button is not dismissed, m_arrow, m_portal, m_hand; the two stones and the",
+          "portal static; then m_timer.set(0, 3, 150) as m_chara's frame and m_chara. Loop 5500 ms.",
+          "MEASURED: 1-02 (rec/popup_1-02.mp4) loop 5.56 s; hand track 49 frames median 0.7 px; stones",
+          "at (384, 540) and (896, 410.4) px scale 1.41 CCOEFF 0.997, portal at (896, 309.6) 0.981."
+        ],
+        "loop_ms": 5500,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_arrow",
+            "sprite": "sprites/teleport_arrow.png",
+            "size_units": [64, 16],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.0, 0.08], "alpha": 0, "angle": 23, "filter": "smooth_end", "ms": 1700},
+              {"at": [0.0, 0.08], "alpha": 0, "angle": 23, "filter": "smooth_end", "ms": 300},
+              {"at": [0.0, 0.08], "alpha": 100, "angle": 23, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.0, 0.08], "alpha": 100, "angle": 23, "filter": "smooth_end", "ms": 500},
+              {"at": [0.0, 0.08], "alpha": 0, "angle": 23, "filter": "smooth_end", "ms": 1500}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_portal",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1700},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 300},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_hand",
+            "sprite": "entities/tap_icon.png",
+            "size_units": [48, 48],
+            "origin": [0.5, 1.3],
+            "waypoints": [
+              {"at": [-0.2, -0.1], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [-0.2, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 3000},
+              {"at": [-0.2, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "stone_left",
+            "sprite": "sprites/single_stone_sprite.png",
+            "size_units": [64, 32],
+            "origin": [0.5, 0.5],
+            "at": [-0.2, 0.25]
+          },
+          {
+            "kind": "static",
+            "name": "stone_right",
+            "sprite": "sprites/single_stone_sprite.png",
+            "size_units": [64, 32],
+            "origin": [0.5, 0.5],
+            "at": [0.2, 0.07]
+          },
+          {
+            "kind": "static",
+            "name": "portal_right",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [0.2, -0.07]
+          },
+          {
+            "kind": "track",
+            "name": "m_chara",
+            "sprite": "sprites/help_chara.png",
+            "size_units": [32, 48],
+            "origin": [0.5, 0.5],
+            "sheet": {"columns": 4, "rows": 1, "frame_ms": 150},
+            "waypoints": [
+              {"at": [-0.4, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 1700},
+              {"at": [-0.4, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 300},
+              {"at": [-0.4, 0.12], "alpha": 255, "angle": 0, "filter": "linear", "ms": 1500},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "linear", "ms": 200},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 200},
+              {"at": [0.2, -0.07], "alpha": 255, "angle": 0, "filter": "linear", "ms": 1600},
+              {"at": [0.4, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0}
+            ]
+          }
+        ]
+      },
+      "LevelHelp2Popup": {
+        "_source": [
+          "DECODED: LevelHelp2Popup (constructor bytes 209049..211708, draw 212078..212768): UILayer::draw;",
+          "then, while the button is not dismissed, m_portal0, m_portal1, m_hand; the two stones; then",
+          "m_chara on its 150 ms frames. Loop 6400 ms.",
+          "MEASURED: 1-03 (rec/popup_1-03.mp4) loop 6.49 s; hand track 93 frames median 0.7 px, at",
+          "(384, 504) and (896, 360) px as decoded."
+        ],
+        "loop_ms": 6400,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_portal0",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1700},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 300},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 4400},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_portal1",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 4000},
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 100},
+              {"at": [0.2, -0.07], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.07], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 800}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_hand",
+            "sprite": "entities/tap_icon.png",
+            "size_units": [48, 48],
+            "origin": [0.5, 1.3],
+            "waypoints": [
+              {"at": [-0.2, -0.1], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [-0.2, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [-0.2, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 100},
+              {"at": [-0.2, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0},
+              {"at": [0.2, -0.27], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, 0.0], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1900},
+              {"at": [0.2, 0.0], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 400}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "stone_left",
+            "sprite": "sprites/single_stone_sprite.png",
+            "size_units": [64, 32],
+            "origin": [0.5, 0.5],
+            "at": [-0.2, 0.25]
+          },
+          {
+            "kind": "static",
+            "name": "stone_right",
+            "sprite": "sprites/single_stone_sprite.png",
+            "size_units": [64, 32],
+            "origin": [0.5, 0.5],
+            "at": [0.2, 0.07]
+          },
+          {
+            "kind": "track",
+            "name": "m_chara",
+            "sprite": "sprites/help_chara.png",
+            "size_units": [32, 48],
+            "origin": [0.5, 0.5],
+            "sheet": {"columns": 4, "rows": 1, "frame_ms": 150},
+            "waypoints": [
+              {"at": [-0.34, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 3700},
+              {"at": [-0.34, 0.12], "alpha": 255, "angle": 0, "filter": "linear", "ms": 1500},
+              {"at": [-0.2, 0.12], "alpha": 255, "angle": 0, "filter": "linear", "ms": 200},
+              {"at": [-0.2, 0.12], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [0.2, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 200},
+              {"at": [0.2, -0.07], "alpha": 255, "angle": 0, "filter": "linear", "ms": 800},
+              {"at": [0.3, -0.07], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0}
+            ]
+          }
+        ]
+      },
+      "LevelHelp15Popup": {
+        "_source": [
+          "DECODED: LevelHelp15Popup (constructor bytes 212902..215358, draw 215745..216153): UILayer::draw;",
+          "then, while the button is not dismissed, m_stone, m_wall, m_dust0, m_dust1, m_dust2. No",
+          "statics. Loop 3500 ms.",
+          "MEASURED: 1-13 (rec/help_1-13.mp4) loop 3.54 s; stone track 36 frames median 1.1 px; stone",
+          "composite fit scale 1.41 at (640, 144) px, alpha 0.998."
+        ],
+        "loop_ms": 3500,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_stone",
+            "sprite": "entities/rolling_stone.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.0, -0.3], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 500},
+              {"at": [0.0, -0.3], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 1500},
+              {"at": [0.0, 0.07], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 300},
+              {"at": [0.0, 0.07], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 1200}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_wall",
+            "sprite": "entities/breakable_wall_sand.png",
+            "size_units": [32, 128],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.0, 0.2], "alpha": 255, "angle": 90, "filter": "smooth_end", "ms": 500},
+              {"at": [0.0, 0.2], "alpha": 255, "angle": 90, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.0, 0.2], "alpha": 255, "angle": 90, "filter": "smooth_end", "ms": 300},
+              {"at": [0.0, 0.2], "alpha": 0, "angle": 90, "filter": "smooth_end", "ms": 1200},
+              {"at": [0.0, 0.2], "alpha": 0, "angle": 90, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_dust0",
+            "sprite": "particles/smoke_particle.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [-0.07, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 2000},
+              {"at": [-0.07, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0},
+              {"at": [-0.07, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [-0.07, 0.2], "alpha": 0, "angle": 35, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_dust1",
+            "sprite": "particles/smoke_particle.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.07, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 2000},
+              {"at": [0.07, 0.2], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0},
+              {"at": [0.07, 0.2], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.07, 0.2], "alpha": 0, "angle": -35, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_dust2",
+            "sprite": "particles/smoke_particle.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.0, 0.07], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 2000},
+              {"at": [0.0, 0.07], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0},
+              {"at": [0.0, 0.07], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.0, 0.07], "alpha": 0, "angle": 15, "filter": "smooth_end", "ms": 0}
+            ]
+          }
+        ]
+      },
+      "LevelHelp25Popup.stone": {
+        "_source": [
+          "DECODED: LevelHelp25Popup (constructor bytes 218244..219180, draw 219515..220074) as",
+          "HelpBlockController builds it on 1-25 and 1-32: m_stone is entities/rolling_stone.png with",
+          "rotateAngle 180. UILayer::draw; then, while the button is not dismissed, m_stone; then the two",
+          "portal statics. Loop 2200 ms.",
+          "MEASURED: 1-25 (rec/help_1-25.mp4) loop 2.23 s; stone track 60 frames median 2.1 px."
+        ],
+        "loop_ms": 2200,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_stone",
+            "sprite": "entities/rolling_stone.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.2, -0.4], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 200},
+              {"at": [0.2, -0.4], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 800},
+              {"at": [0.2, 0.0], "alpha": 255, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [-0.2, -0.1], "alpha": 255, "angle": 180, "filter": "linear", "ms": 0},
+              {"at": [-0.2, -0.1], "alpha": 255, "angle": 180, "filter": "smooth_end", "ms": 600},
+              {"at": [-0.2, -0.4], "alpha": 255, "angle": 180, "filter": "smooth_beginning", "ms": 600},
+              {"at": [-0.2, -0.2], "alpha": 0, "angle": 180, "filter": "smooth_beginning", "ms": 0}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "portal_right",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [0.2, 0.05]
+          },
+          {
+            "kind": "static",
+            "name": "portal_left",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [-0.2, -0.05]
+          }
+        ]
+      },
+      "LevelHelp25Popup.chara": {
+        "_source": [
+          "DECODED: the same class as HelpBlockController builds it on 3-09 (instructions 399..458 of its",
+          "update): m_stone is sprites/help_chara.png after SetupSpriteRects(4, 1), rotateAngle 0, and",
+          "nothing sets a frame, so the first. NOT RECORDED (spec U7): the one walk to its block died."
+        ],
+        "loop_ms": 2200,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_stone",
+            "sprite": "sprites/help_chara.png",
+            "size_units": [32, 48],
+            "origin": [0.5, 0.5],
+            "sheet": {"columns": 4, "rows": 1, "frame": 0},
+            "waypoints": [
+              {"at": [0.2, -0.4], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 200},
+              {"at": [0.2, -0.4], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 800},
+              {"at": [0.2, 0.0], "alpha": 255, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [-0.2, -0.1], "alpha": 255, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [-0.2, -0.1], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 600},
+              {"at": [-0.2, -0.4], "alpha": 255, "angle": 0, "filter": "smooth_beginning", "ms": 600},
+              {"at": [-0.2, -0.2], "alpha": 0, "angle": 0, "filter": "smooth_beginning", "ms": 0}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "portal_right",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [0.2, 0.05]
+          },
+          {
+            "kind": "static",
+            "name": "portal_left",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [-0.2, -0.05]
+          }
+        ]
+      },
+      "LevelHelpW2P3Popup": {
+        "_source": [
+          "DECODED: LevelHelpW2P3Popup (constructor bytes 216287..217232, draw 217551..218110): UILayer::draw;",
+          "then, while the button is not dismissed, m_fireball; then the two portal statics. Loop 4000 ms.",
+          "MEASURED: 2-03 (rec/help_2-03.mp4) loop 4.06 s; fireball track 121 frames median 8.8 px against",
+          "an unrotated template."
+        ],
+        "loop_ms": 4000,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_fireball",
+            "sprite": "sprites/fireball_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.4, 0.2], "alpha": 0, "angle": 0, "filter": "linear", "ms": 1000},
+              {"at": [0.25, 0.2], "alpha": 255, "angle": 0, "filter": "linear", "ms": 1000},
+              {"at": [0.1, 0.2], "alpha": 255, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [0.1, 0.2], "alpha": 0, "angle": 0, "filter": "linear", "ms": 0},
+              {"at": [-0.05, -0.2], "alpha": 0, "angle": 180, "filter": "linear", "ms": 0},
+              {"at": [-0.05, -0.2], "alpha": 255, "angle": 180, "filter": "linear", "ms": 1000},
+              {"at": [0.25, -0.2], "alpha": 255, "angle": 180, "filter": "linear", "ms": 1000},
+              {"at": [0.4, -0.2], "alpha": 0, "angle": 180, "filter": "linear", "ms": 0}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "portal_bottom",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [0.05, 0.2]
+          },
+          {
+            "kind": "static",
+            "name": "portal_top",
+            "sprite": "sprites/portal_help_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "at": [-0.05, -0.2]
+          }
+        ]
+      },
+      "LevelHelpAntiportalAgent": {
+        "_source": [
+          "DECODED: LevelHelpAntiportalAgent (constructor bytes 220208..222470, draw 222840..223387):",
+          "UILayer::draw; then, while the button is not dismissed, m_ring, m_agent, m_hand, m_projectile;",
+          "then SetupSpriteRects(help_chara, 4, 1) and the chara static with no frame set, so the first",
+          "(INFERRED). m_ring's colour is the decoded ARGB(96, 0xA0, 0, 0) (spec U13, not checked against",
+          "frames). Loop 6500 ms.",
+          "MEASURED: 1-10 (rec/help_1-10.mp4) loop 6.58 s; hand track 17 frames median 0.7 px; projectile",
+          "37 frames median 13.5 px against an unrotated template."
+        ],
+        "loop_ms": 6500,
+        "draw": [
+          {
+            "kind": "track",
+            "name": "m_ring",
+            "sprite": "sprites/ring_sprite.png",
+            "size_units": [128, 128],
+            "origin": [0.5, 0.5],
+            "tint_rgb": [160, 0, 0],
+            "waypoints": [
+              {"at": [0.2, -0.12], "alpha": 96, "angle": 0, "filter": "smooth_end", "ms": 3500},
+              {"at": [0.2, -0.12], "alpha": 96, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [0.2, -0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1000}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_agent",
+            "sprite": "entities/anti_portal_agent.png",
+            "size_units": [32, 32],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [0.2, -0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 3500},
+              {"at": [0.2, -0.12], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 500},
+              {"at": [0.2, -0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.12], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1000}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_hand",
+            "sprite": "entities/tap_icon.png",
+            "size_units": [48, 48],
+            "origin": [0.5, 1.3],
+            "waypoints": [
+              {"at": [0.2, -0.25], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.25], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1000},
+              {"at": [0.2, -0.06], "alpha": 255, "angle": 0, "filter": "smooth_end", "ms": 1500},
+              {"at": [0.2, -0.16], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 2500},
+              {"at": [0.2, -0.16], "alpha": 0, "angle": 0, "filter": "smooth_end", "ms": 0}
+            ]
+          },
+          {
+            "kind": "track",
+            "name": "m_projectile",
+            "sprite": "sprites/projectile_sprite.png",
+            "size_units": [64, 64],
+            "origin": [0.5, 0.5],
+            "waypoints": [
+              {"at": [-0.2, 0.07], "alpha": 0, "angle": 200, "filter": "linear", "ms": 2500},
+              {"at": [-0.2, 0.07], "alpha": 0, "angle": 200, "filter": "linear", "ms": 0},
+              {"at": [-0.2, 0.07], "alpha": 255, "angle": 200, "filter": "linear", "ms": 0},
+              {"at": [-0.2, 0.07], "alpha": 255, "angle": 200, "filter": "linear", "ms": 1000},
+              {"at": [0.18, -0.1], "alpha": 255, "angle": 200, "filter": "linear", "ms": 0},
+              {"at": [0.18, -0.1], "alpha": 0, "angle": 200, "filter": "linear", "ms": 3000}
+            ]
+          },
+          {
+            "kind": "static",
+            "name": "chara",
+            "sprite": "sprites/help_chara.png",
+            "size_units": [32, 48],
+            "origin": [0.5, 0.5],
+            "sheet": {"columns": 4, "rows": 1, "frame": 0},
+            "at": [-0.2, 0.07]
+          }
+        ]
+      },
+      "RedKeyLocationHelpPopup": {
+        "_source": [
+          "DECODED: RedKeyLocationHelpPopup (constructor bytes 224559..224708) is a StaticImageHelpPopup",
+          "(constructor 223521..223676, draw 223988..224425) whose popup sprite AND drawn image are both",
+          "sprites/red_key_help.png: UILayer::draw draws it as the card, and draw() draws it again at",
+          "computePos(0, 0) in the close button's colour. It has no waypoints, so no loop.",
+          "HelpBlockController dispatches achievement 62 before opening it, which the port",
+          "has no system for. NOT RECORDED (spec U7): the block sits at the level's right bound."
+        ],
+        "card": {
+          "sprite": "sprites/red_key_help.png",
+          "at_screen": [0.5, 0.5],
+          "origin": [0.5, 0.5],
+          "size_units": [256, 256]
+        },
+        "draw": [
+          {
+            "kind": "static",
+            "name": "image",
+            "sprite": "sprites/red_key_help.png",
+            "size_units": [256, 256],
+            "origin": [0.5, 0.5],
+            "at": [0.0, 0.0]
+          }
+        ]
+      }
+    }
+  },
+
+  "menu_state": {
+    "_about": [
+      "WHAT EVERY MENU STATE SHARES: the black it opens under, and how a menu button is pressed.",
+      "Read by sim/MenuState.hpp. Specified in the remake's gitignored out/parity/specs/ui3/spec.md",
+      "sections 0.3-0.4 (evidence: motion.md 1.1-1.3 and static.md 0 beside it). The entrance every",
+      "menu button makes is ui_layer.button's, unchanged (ui3 spec 0.4, 'UIButton entrance').",
+      "",
+      "ONE CLOCK, THE TICK'S. The original times the black by GetTime() (wall clock) and a button's",
+      "entrance, bounce and blink by the frame time it accumulates; the spec's port decision P4",
+      "starts both on the state's first frame. The port runs every menu clock on its 60 Hz tick, as",
+      "step 40 runs the level's blacks and step 45 the pause: a state's first tick is its 0 ms, so a",
+      "--fixed-step frame drawn k ticks after it is k / 60 s in. The title's bob, an absolute",
+      "GetTimeF() read, takes the layer's own tick clock since it attached."
+    ],
+    "fade": {
+      "_source": [
+        "DECODED: SStateManager::setState (bytes 8865..8956) swaps the state at once, and",
+        "BaseState::preLoop (bytes 11137..11245) adds a FadeInController (bytes 37911..38779) to",
+        "EVERY state: a full-screen eth_framework_square.png (64x64, opaque white) tinted",
+        "ARGB(iTOb(fTOu((1 - elapsed / 700) * 255)), 0, 0, 0) by drawBlackRect (bytes",
+        "314960..315187), drawn after the layer manager, until elapsed reaches 700 ms. A menu",
+        "state has ONE black (a level has two: level_start.overlay).",
+        "MEASURED: 16 of 16 recorded transitions, linear T median 0.698 s (0.680..0.755), linear",
+        "under smoothEnd in 15 of 16; the new state's first frame at gain 0.000..0.064; no",
+        "fade-out and no cross-fade (ui3 spec 0.4, A-S1)."
+      ],
+      "fade_ms": 700
+    },
+    "press": {
+      "_source": [
+        "DECODED: Button::update (bytes 15892..16865). A touch down records whether it went down",
+        "inside the button's rectangle (Button::isPointInButton, bytes 15741..15892: the sprite's",
+        "rectangle at the button's current place, no bounce, no offset); while that touch is held",
+        "inside, m_color is 0xFFCCCCCC, a multiply of 204/255 = 0.80; on the release (touch state",
+        "3), with the down inside and the last held place inside, the button is pressed. setState",
+        "swaps on that frame and the new scene draws from the next (ui3 motion.md 1.3). Page tiles",
+        "also refuse the press once the touch has travelled more than g_scale.scale(48) from where",
+        "it went down (Page::update bytes 54849..55450; TouchGapDetector::update bytes",
+        "93936..94422 keeps the LARGEST distance while held).",
+        "MEASURED: box brightness 0.795..0.815 for the whole hold (nav_gold 235-241, 540-543,",
+        "675-678, 787-790, 1036-1041); the release frame drawn untinted in the old state and the",
+        "new state's black on the next (nav_gold 84->85, 544->545, 1042->1043)."
+      ],
+      "tint_byte": 204,
+      "tile_travel_units": 48
+    }
+  },
+
+  "main_menu": {
+    "_about": [
+      "THE MAIN MENU, PortalMainMenu (MainMenu, MainMenuLayer, SoundPanelLayer). Read by",
+      "sim/MainMenu.hpp. Specified in the remake's gitignored out/parity/specs/ui3/spec.md section 2",
+      "(evidence: static.md 1 and motion.md 3 beside it; stills main_menu.png, main_menu_b.png,",
+      "main_menu_sound_music_off.png; recordings rec/launch_gold.mp4 and rec/nav_gold.mp4).",
+      "",
+      "PLACED BY FRACTIONS OF THE SCREEN, as the pause (ui2 spec 0.1): an anchor is view * at_screen",
+      "and a top-left is that anchor less size_units * origin; every size is the sprite's 1x texel",
+      "size in units and the hd twin is drawn. The one exception is the music switch, whose x is 32",
+      "UNITS from the left edge at any aspect (ui3 spec 0.1), not the pause's 0.09 of the width.",
+      "",
+      "DRAWN THROUGH THE SCREEN OVERLAY in display values (ui3 spec D21), the background too, with",
+      "the state's black (menu_state.fade) last, over everything.",
+      "",
+      "OWNER RULINGS (ui3 spec 9): the Facebook button at (1, 0) and the free build's buy button",
+      "are omitted; Achievements is kept."
+    ],
+    "background": {
+      "_source": [
+        "DECODED: PortalMainMenu::preLoop (bytes 200461..202148, instructions 370..389) adds",
+        "menu_bg.ent at GetScreenSize() * 0.5 with AddScaledEntity(getScale): main_menu_bg.png",
+        "(1x 512x256, hd 1024x512) at 512 x 256 units, centred - wider than a 16:9 screen's",
+        "455.11, so its top-left is (-80, 0) px at 720p. A static sprite: no particle, no light.",
+        "MEASURED: centre (640, 360), S 1.40625 on the hd twin, template rms 2.31 grey (ui3 spec",
+        "2.2 M0); 0 px of 33 s of idle footage move outside the title and TAP START (2.3)."
+      ],
+      "sprite": "entities/main_menu_bg.png",
+      "size_units": [512, 256],
+      "centre_of_screen": [0.5, 0.5]
+    },
+    "play_button": {
+      "_source": [
+        "DECODED: MainMenuLayer::MainMenuLayer (bytes 95602..96208, instructions 22..44) adds",
+        "'play_button', sprites/main_play_game_button.png at MainMenuProperties.buttonNormPos, which",
+        "PortalMainMenu::PortalMainMenu (bytes 199409..200273, instructions 51..61) sets to",
+        "(0.5, 0.66); a three-argument addButton takes origin V2_HALF (UILayer::addButton bytes",
+        "62797..62924). PortalMainMenu::preLoop (instructions 55..71) calls",
+        "setButtonHighlightEffects(button, 0.01, 400) (bytes 370863..371164): setBounce(scaleA",
+        "(0.99, 1.01), scaleB (1.01, 0.99), 400) and setBlink(colourA 0.95, colourB 1.0, 400); then",
+        "setBlinkAlpha(alphaA 0.25, alphaB 1.0). Button::bounce (bytes 17149..17549):",
+        "interpolate(A, B, smoothEnd(bias)), bias (t mod stride) / stride, reversed on odd strides,",
+        "about the origin. Button::blinkColor (bytes 17819..18318): colour and alpha interpolated",
+        "LINEARLY by the same reversed bias. Button::draw (bytes 15237..15660) multiplies the press",
+        "tint, the custom colour (whose alpha is the entrance's) and the blink colour, then the",
+        "alpha by the blink alpha, truncated to bytes. Its clock is its own frame time from preLoop.",
+        "MEASURED: centre exact; alpha 0.25 / 0.42 / 0.48 on the three stills; sx 0.990..1.010",
+        "against sy, corr -0.887, stride 0.4075 s; blink a linear triangle, stride 0.4055 s",
+        "(emulator clock ~1.3% slow); main_menu.png sits at a stride start (ui3 spec 2.2 M1, 0.7",
+        "I1 and I2; the 0.95 dip at the dim end is the spec's MERGE reading of the decode)."
+      ],
+      "sprite": "main_play_game_button.png",
+      "at_screen": [0.5, 0.66],
+      "origin": [0.5, 0.5],
+      "size_units": [256, 64],
+      "bounce": {
+        "scale_a": [0.99, 1.01],
+        "scale_b": [1.01, 0.99],
+        "stride_ms": 400
+      },
+      "blink": {
+        "colour_a": 0.95,
+        "colour_b": 1.0,
+        "alpha_a": 0.25,
+        "alpha_b": 1.0,
+        "stride_ms": 400
+      }
+    },
+    "title": {
+      "_source": [
+        "DECODED: PortalMainMenu::PortalMainMenu (instructions 10..34) sets titleSprite",
+        "sprites/game_main_title.png and titlePos (0.5, 0.25); MainMenuLayer::MainMenuLayer",
+        "(instructions 107..159) adds it as the button 'title' with origin V2_HALF, after",
+        "play_button, so it is drawn over it. PortalMainMenu::doTitleAnimation (bytes",
+        "202943..203108) sets its offset every frame to (0, sin(GetTimeF() * 0.002) *",
+        "g_scale.scale(1.4)): GetTimeF is in milliseconds, so a 3141.6 ms period of 1.4 units. The",
+        "offset moves the picture, not the button's rectangle (Button::draw adds it to m_pos;",
+        "Button::isPointInButton does not). PortalMainMenu::loop (instructions 50..86) opens",
+        "createLevelSelectState when it is pressed, as TAP START does.",
+        "MEASURED: TL (280, -181.25 / -179.75 / -183.5) px, Pearson 0.9996; bob period 3.141 s,",
+        "amplitude 3.933 px, rms 0.067 px, x std 0.007 px over 33 s (ui3 spec 2.2 M2, 0.7 I3). The",
+        "file hd/game_main_title_.png fits as well; the constructor names this one."
+      ],
+      "sprite": "game_main_title.png",
+      "at_screen": [0.5, 0.25],
+      "origin": [0.5, 0.5],
+      "size_units": [256, 256],
+      "bob": {
+        "amplitude_units": 1.4,
+        "radians_per_ms": 0.002
+      }
+    },
+    "credits_button": {
+      "_source": [
+        "DECODED: PortalMainMenu::preLoop (instructions 101..126): addButton('credits',",
+        "sprites/credits.png, (0, 0), origin (0, 0)); PortalMainMenu::loop (instructions 9..39) sets",
+        "the CreditsScreen state when it is pressed, and preLoop (instructions 216..240) gives it",
+        "getItemSelectButtonSoundName.",
+        "MEASURED: TL (0, 0) exact, Pearson 0.9993 (ui3 spec 2.2 M3). The credits screen is not built",
+        "yet (ui3 spec 3): pressing it makes its noise and leads nowhere."
+      ],
+      "sprite": "credits.png",
+      "at_screen": [0, 0],
+      "origin": [0, 0],
+      "size_units": [32, 32]
+    },
+    "achievements_button": {
+      "_source": [
+        "DECODED: PortalMainMenu::preLoop (instructions 132..157): addButton('scores',",
+        "sprites/scores.png, (1, 1), origin (1, 1)); PortalMainMenu::loop (instructions 88..131)",
+        "sets the ScoreDashboard state when it is pressed; getItemSelectButtonSoundName.",
+        "MEASURED: TL (920, 630) exact, Pearson 0.9993 (ui3 spec 2.2 M4).",
+        "OWNER RULING: kept. The dashboard is not built yet (ui3 spec 4): pressing it makes its noise",
+        "and leads nowhere."
+      ],
+      "sprite": "scores.png",
+      "at_screen": [1, 1],
+      "origin": [1, 1],
+      "size_units": [128, 32]
+    },
+    "sound_switch": {
+      "_source": [
+        "DECODED: MainMenuLayer::MainMenuLayer (instructions 1..7) builds its SoundPanelLayer first,",
+        "and PortalMainMenu::PortalMainMenu (instructions 87..124) sets soundSwitchPos (0, 1),",
+        "origin (0, 1), sprites/sound_high.png on and sound_mute.png off. UISwitch::UISwitch (bytes",
+        "84978..85212) calls UIButton::UIButton, so it makes the buttons' entrance (ui3 motion.md",
+        "1.2). GlobalSoundSwitch::manageSoundSwitch (bytes 32340..32535) sets the global volume;",
+        "SoundPanelLayer::manageMusicSwitch (bytes 74288..74908) dismisses the music switch while",
+        "it is off and adds a fresh one when it comes back on - the pause's own class",
+        "(pause.sound_switch).",
+        "MEASURED: sound_high TL (0, 630), 0.9993; sound_mute at (0, 630), 0.9992 on",
+        "main_menu_sound_music_off.png, with no music switch drawn (ui3 spec 2.2 M5, 2.4)."
+      ],
+      "on_sprite": "sound_high.png",
+      "off_sprite": "sound_mute.png",
+      "at_screen": [0, 1],
+      "origin": [0, 1],
+      "size_units": [32, 32]
+    },
+    "music_switch": {
+      "_source": [
+        "DECODED: PortalMainMenu::PortalMainMenu (instructions 64..69 and 141..197): buttonWidth =",
+        "g_scale.scale(32) and musicSwitchPos = (buttonWidth / GetScreenSize().x, 1), origin (0, 1),",
+        "sprites/music_on.png / music_off.png. So its x is 32 UNITS from the left edge whatever the",
+        "aspect, where the pause's is 0.09 of the width. SoundPanelLayer adds it, as on the pause.",
+        "MEASURED: TL (90, 630) exact at 720p, Pearson 0.9993 - scale(32) is 90 px, where 0.09 W",
+        "would be 115.2 (ui3 spec 0.1, 2.2 M6); its entrance from (-75.3, +49.3) px, rms 0.443 px",
+        "(A-S3). music_off is not captured (U13)."
+      ],
+      "on_sprite": "music_on.png",
+      "off_sprite": "music_off.png",
+      "at_units_x": 32,
+      "at_screen_y": 1,
+      "origin": [0, 1],
+      "size_units": [32, 32]
+    }
+  },
+
+  "loading": {
+    "_about": [
+      "THE LOADING SCREEN the original opens with, LoadingScreen, before the main menu. Read by",
+      "sim/Loading.hpp. OWNER RULING R4 (ui3 spec 8.2): built as the original. Specified in the",
+      "remake's gitignored out/parity/specs/ui3/spec.md section 2.1 (evidence: motion.md 2,",
+      "rec/launch_gold.mp4 frames 73-184, rec/intro_lib.mp4); decoded from LoadingScreen::preLoop",
+      "(bytes 176126..178170) and ::loop (bytes 178170..179373).",
+      "",
+      "NOTHING IS LOADED. The original loads resource.list's textures two a frame, so its walk takes",
+      "81 frames on any device and its 8.96 s on the emulator are that emulator's frame time. The",
+      "port keeps the 81 frames, one a tick (1.35 s), then the decoded 1000 ms hold. The engine",
+      "splash before it is Ethanon's, not the game script's, and is not drawn.",
+      "",
+      "The scene is scenes/loading_screen.esc on black: 'bg', 'character' and 'portal'. The",
+      "background and the character are drawn in the level's space as the level's art is, and the",
+      "portal as a level's placed portal is (art.json portal); the logo and the dots are drawn",
+      "through the screen overlay after the state's black (menu_state.fade), as the state's loop",
+      "draws them after its controllers."
+    ],
+    "background": {
+      "_source": [
+        "DECODED: LoadingScreen::preLoop (instructions 45..69) seeks the scene's 'bg' entity -",
+        "world_select_bg.png in scenes/loading_screen.esc, 512x256 texels, scaled by",
+        "SGlobalScale::scaleEntities (instruction 8) to 512 x 256 units - and puts it at",
+        "GetScreenSize() * 0.5: centred, as the main menu's background is.",
+        "MEASURED: the paper background of rec/launch_gold.mp4 frames 74-183 (ui3 motion.md 2)."
+      ],
+      "sprite": "entities/world_select_bg.png",
+      "size_units": [512, 256],
+      "centre_of_screen": [0.5, 0.5]
+    },
+    "character": {
+      "_source": [
+        "DECODED: LoadingScreen::preLoop (instructions 71..99) puts the scene's 'character'",
+        "(magic_portals_hd.png, SpriteCut 4 x 4, PivotAdjust (0, 2): dark_mage.ent's sheet, art.json",
+        "character) at m_charStartPos = GetScreenSize() * (0.35, 0.5). ::loop (instructions 16..65),",
+        "every frame still loading, sets its place to interpolate(start, portal, loaded / total) and",
+        "its frame to FrameTimer::set(8, 11, 90, repeat) (bytes 23254..23650): 8 on the first call,",
+        "then one on for each 90 ms of frame time, back to 8 past 11 - the sheet's row 2, walking",
+        "right. The frame the last texture loads it is hidden (instructions 221..226).",
+        "MEASURED: x 401 px on the first scene frame to 717 px on the last visible one (launch_gold",
+        "74-141, work/motion/loading_launch_gold.json), hidden from frame 142."
+      ],
+      "start_of_screen": [0.35, 0.5],
+      "first_frame": 8,
+      "last_frame": 11,
+      "stride_ms": 90
+    },
+    "portal": {
+      "_source": [
+        "DECODED: LoadingScreen::preLoop (instructions 101..119) puts the scene's 'portal' at",
+        "GetScreenSize() * (0.65, 0.5), which the character walks to. It is portal.ent as the scene",
+        "writes it out in full: portal_halo.png added (art.json portal) and its two particle",
+        "systems, the spiral and portal.png (sim/Particles.hpp reads them from the .ent).",
+        "Instructions 121..152 add black_halo.ent at its place, z scale(-4) below it:",
+        "black_halo.bmp at SpriteCut 1, Scale 4 - 128 units - with blendMode 4, gs2d's AM_MODULATE,",
+        "a multiply of what is behind it. The engine has no multiply blend, so the port draws it",
+        "as black at an alpha of 1 - the texel (black_halo.bmp is a grey without alpha), which is",
+        "the same arithmetic on display values.",
+        "MEASURED: centre x ~823..832 px (ui3 spec 2.1); the dark spiral and halo of",
+        "rec/launch_gold.mp4 frames 74-155."
+      ],
+      "at_screen": [0.65, 0.5],
+      "entity": "portal.ent",
+      "halo_sprite": "entities/black_halo.bmp",
+      "halo_scale": 4
+    },
+    "vanish": {
+      "_source": [
+        "DECODED: LoadingScreen::loop (instructions 221..250), the frame the last texture loads:",
+        "character.Hide(), vanishEffect(character's place, portal's place) and killPortal(portal).",
+        "vanishEffect (Portal.angelscript, bytes 356384..356958): direction = normalize(object -",
+        "portal); AddEntity('suck_effect.ent', portal + direction * g_scale.scale(32), angle",
+        "radianToDegree(getAngle(direction)) - 90, getScale), where getAngle(v) is atan2(v.x, v.y)",
+        "in [0, 2 pi) (Ethanon GameMath.h:711-715); and AddEntity('sparkles.ent', the object's",
+        "place). A particle's angle starts at angleStart + its spread + its entity's angle",
+        "(ETHParticleManager.cpp:517). killPortal (bytes 357278..357358) calls",
+        "KillParticleSystem(0) and (1): ETHParticleManager::Kill, after which no particle is",
+        "released or renewed and each lives out its life (ETHParticleManager.cpp:211, 259, 378);",
+        "the halo sprite stays.",
+        "MEASURED: the lilac burst on the portal's character side at launch_gold frame 160 and the",
+        "sparkles over the dark halo to frame 183 (ui3 motion.md 2)."
+      ],
+      "suck_entity": "suck_effect.ent",
+      "suck_offset_units": 32,
+      "suck_angle_offset_deg": -90,
+      "sparkles_entity": "sparkles.ent"
+    },
+    "load": {
+      "_source": [
+        "DECODED: LoadingScreen::LoadingScreen (bytes 175670..175912) sets m_texturesPerFrame 2;",
+        "::preLoop (instructions 153..214) splits resource.list by line, 162 entries; ::loop",
+        "(instructions 192..209) adds min(total - loaded, 2) a frame, so the last loads on the 81st",
+        "frame. From the next frame (instructions 253..272) m_loadedTime adds",
+        "GetLastFrameElapsedTime() each frame, and once it is over 1000 the menu state is set",
+        "(SGameStateFactory::createMenuState).",
+        "MEASURED: 1.03 s from the vanish (launch_gold 156) to the menu's first frame (184) on the",
+        "emulator's slow clock (ui3 spec 2.1)."
+      ],
+      "resources": 162,
+      "resources_per_frame": 2,
+      "hold_ms": 1000
+    },
+    "logo": {
+      "_source": [
+        "DECODED: LoadingScreen::loop (instructions 274..309), every frame:",
+        "drawScaledSprite('sprites/asanteegameslogo.png', GetScreenSize() * (0.5, 0.2), getScale,",
+        "white, V2_HALF) - 128x64 texels, 128 x 64 units - drawn by the state's loop after its",
+        "controllers, so never covered by the black.",
+        "MEASURED: over black on launch_gold frame 73, the loading state's first (ui3 spec 2.1)."
+      ],
+      "sprite": "asanteegameslogo.png",
+      "at_screen": [0.5, 0.2],
+      "origin": [0.5, 0.5],
+      "size_units": [128, 64]
+    },
+    "dots": {
+      "_source": [
+        "DECODED: LoadingScreen::preLoop (instructions 216..526) fills m_swapStrings with 26 strings",
+        "of ten characters, each twice: none, then a run of up to three dots entering at the left",
+        "and leaving at the right one column at a time ('.', '..', '...', ' ...', ...,",
+        "'       ...', '        ..', '         .'). ::loop (instructions 85..190), while loading,",
+        "draws drawCenteredText(m_swapStrings[loaded mod 26], Matura42 - Matura84_shadow.fnt on an",
+        "hd screen - at GetScreenSize() * (0.5, 0.8), getScale / density: half a unit per font px,",
+        "white), then '............' the same way in ARGB(40, 255, 255, 255). loaded goes up two a",
+        "frame, so each frame shows the next of the 13 patterns.",
+        "MEASURED: 'Asantee logo and dim dots on black' on launch_gold frame 73 (ui3 motion.md 2)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "units_per_font_px": 0.5,
+      "centre_of_screen": [0.5, 0.8],
+      "columns": 10,
+      "run": 3,
+      "strings_per_pattern": 2,
+      "track_dots": 12,
+      "track_alpha_byte": 40
+    }
+  },
+
+  "locking": {
+    "_about": [
+      "WHAT IS OPEN, from the port's save: owner ruling R3 (ui3 spec 8.2), locking as the original.",
+      "Read by sim/Locking.hpp. The dashboard reads it for its locks and for what a tap on a row",
+      "opens (ui3 spec 4.3, A11); chapter select and the level grid are to read the same block (ui3",
+      "spec 5.4, 6.4)."
+    ],
+    "_source": [
+      "DECODED: ScoreManager::computeWorldAccomplishment (bytes 166886..167160): fTOu(float(sum of the",
+      "world's scores) / float(numLevels * 3) * 100), and 0 for a world past the last. isWorldUnlocked",
+      "(bytes 312318..312431): world 0, or computeWorldAccomplishment(world - 1) >= 60.",
+      "isLevelUnlocked (bytes 312431..312702): the world unlocked, and then a level below 1 (a",
+      "chapter's own achievements carry level -1) or getScore(level - 1) > 0. isLevelAllowed limits",
+      "only the free build (GameVersion), which the port is not.",
+      "MEASURED: chapter 2 locked on the fresh and the bronze (33%) saves, every chapter open on the",
+      "gold save (ui3 spec 5.4, chapters_*.png)."
+    ],
+    "medal_max": 3,
+    "chapter_unlock_percent": 60
+  },
+
+  "credits": {
+    "_about": [
+      "THE CREDITS SCREEN, CreditsScreen with CreditsScreenLayer (a BackButtonLayer), opened by the",
+      "main menu's info button. Read by sim/Credits.hpp. Specified in the remake's gitignored",
+      "out/parity/specs/ui3/spec.md section 3 (evidence: static.md 2 and motion.md 6 beside it;",
+      "stills info.png and info_b.png; recording rec/info_gold.mp4).",
+      "",
+      "DRAWN THROUGH THE SCREEN OVERLAY in display values, as the main menu is, with the state's",
+      "black (menu_state.fade) last. Placed by fractions of the screen as main_menu is; a size is the",
+      "sprite's 1x texel size in units, and the hd twin is drawn where there is one.",
+      "",
+      "PORT DECISIONS (ui3 spec 8.1, each taken as recommended): P1, the fling's x0.95 once per 60 Hz",
+      "tick; P2, the scroll at the 720p speed in units at every resolution.",
+      "OWNER RULING (ui3 spec 9): the Facebook button at (0, 0) is omitted."
+    ],
+    "background": {
+      "_source": [
+        "DECODED: CreditsScreen::preLoop (bytes 179867..180187, instructions 27..55) adds menu_bg.ent",
+        "at GetScreenSize() * 0.5 with AddScaledEntity(getScale), as the main menu does (main_menu",
+        "background), then calls SetAlpha(0.5) on it (instructions 56..67).",
+        "MEASURED: the main menu's own outside the papyrus, gain 1.000, mean abs diff 0.00 (ui3 spec 3.1",
+        "C0): the SetAlpha has no visible effect, so it is drawn whole (spec U7)."
+      ],
+      "sprite": "entities/main_menu_bg.png",
+      "size_units": [512, 256],
+      "centre_of_screen": [0.5, 0.5]
+    },
+    "back_button": {
+      "_source": [
+        "DECODED: BackButtonLayer::BackButtonLayer (bytes 74915..75045) calls addBackButton((0.05,",
+        "0.5)), and addBackButton (bytes 75842..75969) adds 'back', sprites/back_button_credits_screen.png,",
+        "with the position as its origin too: inset from the edge by 0.05 of its own width.",
+        "CreditsScreenLayer::CreditsScreenLayer (bytes 180336..180878, instructions 88..105) calls",
+        "setCreditButtonBounceEffect(back, 0.03) (bytes 366348..366560): setBounce(vector2(1 - 0.03),",
+        "vector2(1 + 0.03), 300), pushed 300, max, min, so scale_a is the smaller; and gives it",
+        "getButtonSoundName. CreditsScreenLayer::update (bytes 181111..181697) sets the menu state when",
+        "BackButtonLayer::isBackButtonPressed (bytes 75969..76097): the button, or GetKeyState(14) hit,",
+        "the device back key.",
+        "MEASURED: TL (55.5, 269) / (55.25, 269) px at S 1.4213 mid-bounce, Pearson 0.994 / 0.998; a",
+        "uniform bounce 0.974..1.022, stride 0.300 s (ui3 spec 3.1 C1, 0.7 I7)."
+      ],
+      "sprite": "back_button_credits_screen.png",
+      "at_screen": [0.05, 0.5],
+      "origin": [0.05, 0.5],
+      "size_units": [64, 64],
+      "bounce": {
+        "scale_a": [0.97, 0.97],
+        "scale_b": [1.03, 1.03],
+        "stride_ms": 300
+      }
+    },
+    "papyrus": {
+      "_source": [
+        "DECODED: CreditsScreenLayer::CreditsScreenLayer (instructions 12..33) sets credits =",
+        "(GetScreenSize().x * 0.382 * 0.618, GetScreenSize().y); CreditsScreenLayer::draw (bytes",
+        "181697..181994, instructions 6..40) draws sprites/papyrus_bg.png at (credits.x, 0) with",
+        "getScale and origin V2_ZERO, after UILayer::draw. The file is 1x only, 256x256 texels.",
+        "MEASURED: TL (302.18, 0) px at 2.8125 px a texel, Pearson 0.9964 / 0.9967 (ui3 spec 3.1 C2)."
+      ],
+      "sprite": "papyrus_bg.png",
+      "x_of_width": [0.382, 0.618],
+      "size_units": [256, 256]
+    },
+    "strip": {
+      "_source": [
+        "DECODED: CreditsScreenLayer::draw (instructions 42..79) draws sprites/credit_name.png at",
+        "`credits` with getScale, origin V2_ZERO and ARGB(230, 255, 255, 255), after the papyrus. The",
+        "constructor (instructions 35..68) keeps minCreditPosY = -its height (256x512 texels at 1x: 512",
+        "units) and starts y at GetScreenSize().y. CreditsScreenLayer::update: while a touch is down",
+        "(touch state 1 or 2) y += GetTouchMove(0).y and moveSpeedY = that move; otherwise moveSpeedY",
+        "*= 0.95 and y -= UnitsPerSecond(64) - moveSpeedY, UnitsPerSecond being SCREEN pixels a second",
+        "of frame time, unscaled. Then y < minCreditPosY wraps to the screen's height, and y > the",
+        "screen's height to minCreditPosY. It loops for ever.",
+        "MEASURED: x exact, y 501.25 / 287.25 px on the two stills, best alpha 0.90 (230/255 = 0.902);",
+        "63.07..63.31 px/s over three passes and a 34.26 s loop of 2161.6 px (720 + 1440) on the",
+        "emulator's ~1.2% slow clock (ui3 spec 3.1 C3, 3.2).",
+        "PORT DECISION P2: 64 px/s is 22.76 units/s only on a 720 px screen, so the port scrolls",
+        "speed_screen_px_per_s / (speed_at_screen_px / 256) units a second at every resolution: 64 /",
+        "2.8125 = 22.7556, 768 units in 33.75 s. P1: the fling's decay is a tick's."
+      ],
+      "sprite": "credit_name.png",
+      "size_units": [256, 512],
+      "alpha_byte": 230,
+      "speed_screen_px_per_s": 64,
+      "speed_at_screen_px": 720,
+      "fling_decay_per_tick": 0.95
+    }
+  },
+
+  "dashboard": {
+    "_about": [
+      "THE ACHIEVEMENTS DASHBOARD, ScoreDashboard with DashboardLayer, opened by the main menu's",
+      "Achievements button; not the pause's AchievementsPopup (ui3 spec 4, ui2 U10). Read by",
+      "sim/Dashboard.hpp. Specified in the remake's gitignored out/parity/specs/ui3/spec.md section 4",
+      "(evidence: static.md 3 and motion.md 7 beside it; still achievements.png; recording",
+      "rec/achievements_gold.mp4).",
+      "",
+      "THE ROWS' CONTENT IS NOT HERE. The 82 achievements' titles, descriptions, icons and points,",
+      "the secret achievement's words and the ids a save unlocks are Asantee-authored, and live in",
+      "the remake's gitignored out/data/achievements.json (its tools/asbc/achievements.py), read at",
+      "run time beside chapters.json (sim/Achievements.hpp). Without that file the dashboard draws",
+      "all of this but the rows, and a total of 0.",
+      "",
+      "DRAWN THROUGH THE SCREEN OVERLAY in display values, with the state's black last.",
+      "",
+      "PORT DECISIONS (ui3 spec 8.1, each taken as recommended): P1, the momentum and both bands once",
+      "per 60 Hz tick; P3, the scroll bar from_right_units from the right edge at every resolution."
+    ],
+    "background": {
+      "_source": [
+        "DECODED: ScoreDashboard::preLoop (bytes 235636..236258, instructions 40..67) adds",
+        "world_select_bg.ent at GetScreenSize() * 0.5 with AddScaledEntity(getScale): 512 x 256",
+        "units, centred. The check-in button of GameVersion::useCheckinFeature (instructions 69..135)",
+        "is in none of the full game's captures.",
+        "MEASURED: TL (-80, 0) px, template rms 2.49 grey, 29.8 uncentred (ui3 spec 4.2 A0)."
+      ],
+      "sprite": "entities/world_select_bg.png",
+      "size_units": [512, 256],
+      "centre_of_screen": [0.5, 0.5]
+    },
+    "back_button": {
+      "_source": [
+        "DECODED: DashboardLayer::DashboardLayer (bytes 242229..242414) is a BackButtonLayer at",
+        "(-0.025, 0.5), which addBackButton takes as the origin too, with getButtonSoundName and no",
+        "effect. DashboardLayer::update (bytes 242647..242787) sets the menu state when",
+        "isBackButtonPressed, or GetKeyState(14) is hit.",
+        "MEASURED: TL (-27.5, 270) px, Pearson 0.9993; its scale constant (ui3 spec 4.2 A1, 0.7 I8)."
+      ],
+      "sprite": "back_button_credits_screen.png",
+      "at_screen": [-0.025, 0.5],
+      "origin": [-0.025, 0.5],
+      "size_units": [64, 64]
+    },
+    "rows": {
+      "_source": [
+        "DECODED: ScoreDashboard::ScoreDashboard (bytes 235040..235272) sets m_tileSize 44.",
+        "ScoreDashboard::loop (bytes 236258..240066): spriteSize = scale(44, 44); lineOffset =",
+        "spriteSize.y * 1.333; columnAdvance = scale(44 * 1.4); the cursor starts at (columnAdvance, 0),",
+        "each row is drawn at cursor + (0, m_scroll) and the cursor steps lineOffset a row; itemBgSize =",
+        "(min(lineOffset * 4, GetScreenSize().x - columnAdvance * 2), lineOffset). Where an",
+        "achievement's world is not the last one's, a header row comes first (instructions 99..178). A",
+        "row is drawn only where isRectInScreen(pos, (spriteSize.x, lineOffset), V2_ZERO) (bytes",
+        "319089..319410: out when pos + size < 0, or pos > the screen, on either axis). Each row: the",
+        "icon sprites/achievements/<getIconSprite> at pos and spriteSize, ARGB(64, 255, 255, 255) while",
+        "locked (instructions 207..277); sprites/lock_icon.png over it when the achievement is locked",
+        "and isLevelUnlocked(world, level) is not (279..325); sprites/itembg.png at pos + (spriteSize.x,",
+        "0) and itemBgSize, ARGB(180, ...) while locked (327..381); the texts (383..610) at ARGB(127,",
+        "...) while locked, the points in the icon's colour. A tap on it is",
+        "TouchInputManager::hasClickInRect(pos, itemBgSize + (spriteSize.x, 0), V2_ZERO) (bytes",
+        "160369..160919): a release inside, whose touch went down inside.",
+        "MEASURED: rows 1-3's icons TL (173.25, 164.96 k) px, Pearson 0.9992..0.9995; bars TL (297,",
+        "164.96 k), 659.8 x 164.96 px, 0.9983 (ui3 spec 4.1, 4.2 A5 and A6, 4.3)."
+      ],
+      "tile_units": 44,
+      "line_factor": 1.333,
+      "column_factor": 1.4,
+      "bar_lines": 4,
+      "icon_directory": "sprites/achievements/",
+      "bar_sprite": "itembg.png",
+      "lock_sprite": "lock_icon.png",
+      "locked_icon_alpha_byte": 64,
+      "locked_bar_alpha_byte": 180,
+      "locked_text_alpha_byte": 127,
+      "locked_points_alpha_byte": 64
+    },
+    "header": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 108..168): drawCenteredText('Chapter ' + (world +",
+        "1)) in getMatura42HardFontName(), Matura84_shadow.fnt on an hd screen (ui3 spec 0.6), at pos +",
+        "scale(132, 32), scale(1 / getHdSpriteDensity()): half a unit a font px, white.",
+        "MEASURED: centre (544.5, 89.0) px on row 0, rms 6.6 against Matura128's 20.8 (ui3 spec 4.2 A4)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "units_per_font_px": 0.5,
+      "prefix": "Chapter ",
+      "centre_units": [132, 32]
+    },
+    "title": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 478..510): DrawText(getTitle(isUnlocked), bgPos +",
+        "scale(9, 8)) in getVerdana20FontName(), Verdana40_shadow.fnt on hd, textColor, textScale *",
+        "0.75: 0.375 units a font px, from the top-left.",
+        "MEASURED: S 1.0547 px a font px, TL (322.3, 187.5) px on row 1, less 0.5; rms 10.6..11.8",
+        "against Verdana20's 35.5 (ui3 spec 4.2 A7)."
+      ],
+      "font": "Verdana40_shadow.fnt",
+      "units_per_font_px": 0.375,
+      "offset_units": [9, 8]
+    },
+    "description": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 516..548): DrawText(getDescription(isUnlocked),",
+        "bgPos + scale(13, 24)), Verdana40_shadow.fnt, textColor, textScale * 0.6: 0.3 units a font px.",
+        "MEASURED: S 0.8438, TL (333.6, 232.5) px on row 1, less 0.5 (ui3 spec 4.2 A8)."
+      ],
+      "font": "Verdana40_shadow.fnt",
+      "units_per_font_px": 0.3,
+      "offset_units": [13, 24]
+    },
+    "points": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 554..610): drawCenteredText('' + points, pos +",
+        "scale(m_tileSize * 0.5, 50)), Verdana40_shadow.fnt, textScale * 0.6, iconColor.",
+        "MEASURED: centre (234.6, 305.1) px on row 1, decoded (235.1, 305.6) (ui3 spec 4.2 A9)."
+      ],
+      "font": "Verdana40_shadow.fnt",
+      "units_per_font_px": 0.3,
+      "centre_units": [22, 50]
+    },
+    "new_label": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 394..454): for an achievement whose isNew is set,",
+        "DrawText('new!', bgPos + scale(182, 6)), Verdana40_shadow.fnt, ARGB(iTOb(max(127, GetTime() %",
+        "255)), 100, 255, 100), textScale * 0.6. GetTime is the wall clock in milliseconds; the port",
+        "reads the layer's own tick clock, as the title's bob does (main_menu.title).",
+        "Not captured (ui3 spec 4.2 A10, U2)."
+      ],
+      "font": "Verdana40_shadow.fnt",
+      "units_per_font_px": 0.3,
+      "offset_units": [182, 6],
+      "text": "new!",
+      "rgb_bytes": [100, 255, 100],
+      "alpha_floor_byte": 127,
+      "alpha_period_ms": 255
+    },
+    "plaque": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 815..837): drawScaledSprite(",
+        "'sprites/achievement_points.png', V2_ZERO, getScale): 64 x 64 units at the top-left, after the",
+        "rows. The word 'points' is in the sprite.",
+        "MEASURED: TL (0, 0) exact, Pearson 0.9994 (ui3 spec 4.2 A2)."
+      ],
+      "sprite": "achievement_points.png",
+      "at_units": [0, 0],
+      "size_units": [64, 64]
+    },
+    "total": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 839..897): drawCenteredText('' +",
+        "AchievementManager::getScore()) in Matura84_shadow.fnt at scale(32, 32), half a unit a font px,",
+        "white: the points of every unlocked achievement (computeAchievementPoints, bytes",
+        "248007..248216).",
+        "MEASURED: centre (89.5, 89.0) px reading 325 on the gold save, rms 8.1 against Matura128's 20.8",
+        "(ui3 spec 4.2 A3)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "units_per_font_px": 0.5,
+      "centre_units": [32, 32]
+    },
+    "scroll": {
+      "_source": [
+        "DECODED: ScoreDashboard::doScrolling (bytes 240601..241425), the loop's first call: stride =",
+        "scale(lineOffset) * (getNumAchievements + getNumWorlds) and minScroll = GetScreenSize().y -",
+        "stride. While a touch is down, or the wheel has turned, move = GetTouchMove(t).y +",
+        "scale(GetWheelState()) * 10; m_scroll += move; m_accumulatedScroll += move; m_moveSpeedY = move.",
+        "Otherwise, in this order: m_moveSpeedY *= 0.9; m_scroll += m_moveSpeedY; then m_scroll > 0 is",
+        "m_scroll *= 0.7, or else m_scroll < minScroll is m_scroll += |m_scroll - minScroll| * 0.3.",
+        "MEASURED: a glide's free per-frame factor 0.899 (rms 2.0 px), 781.8 px against 792.1 decoded; a",
+        "fling past the top follows the momentum and the x0.7 band to rms 0.33 px, overshoot 121.6 px",
+        "against 121.5 (ui3 spec 4.4). The bottom band was not exercised. PORT DECISION P1: a tick's."
+      ],
+      "momentum_decay_per_tick": 0.9,
+      "top_band_per_tick": 0.7,
+      "bottom_band_per_tick": 0.3,
+      "wheel_units_per_notch": 10
+    },
+    "scroll_bar": {
+      "_source": [
+        "DECODED: ScoreDashboard::drawScrollBar (bytes 240153..240601), called at the end of",
+        "doScrolling, so under the rows: barSize = scale(vector2(32, 256) * 0.25), 8 x 64 units of the",
+        "1x-only 32x256 file; x = GetScreenSize().x - scale(barSize.x / 3); y = (-m_scroll / (stride -",
+        "GetScreenSize().y)) * (GetScreenSize().y - barSize.y); ARGB(200, 255, 255, 255). barSize.x is",
+        "in pixels already there and is scaled again, so the inset is the screen's: 7.5 units at 720p.",
+        "MEASURED: TL (1258.91, 0) px at 0.703 px a texel, alpha 0.784, rms 2.62 against 62.2 with no bar",
+        "(ui3 spec 4.2 A12). PORT DECISION P3: 7.5 units from the right at every resolution."
+      ],
+      "sprite": "scroll_bar.png",
+      "size_units": [8, 64],
+      "from_right_units": 7.5,
+      "alpha_byte": 200
+    },
+    "start_button": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 612..796): a tap on a row whose level",
+        "isLevelUnlocked, and not the row tapped last, plays playAchievementPickSound, removes 'start'",
+        "and adds it again: sprites/popup_close_button.png at (bgPos + scale(174, -2)) / the screen,",
+        "origin V2_ZERO, with getStartAchievementSoundName. So it enters as a UIButton, and stays where",
+        "it was added while the list moves. A tap on a locked level's row plays",
+        "playAchievementPickDeniedSound and ScoreDashboard::displayLevelLockedNotification (bytes",
+        "241425..241713), whose placement is not decoded. Either records the row's world and level.",
+        "Then (instructions 899..921), once |m_accumulatedScroll| > scale(6), it is zeroed, the last row",
+        "forgotten and 'start' dismissed (dismissStartButton, bytes 242132..242222).",
+        "ScoreDashboard::updateButtons (bytes 241713..242132): 'start' pressed is openState(world, level)",
+        "(bytes 312702..312880): that level where both are 0 or more and it is unlocked, or else that",
+        "chapter's grid where the chapter is.",
+        "Not captured (ui3 spec 4.2 A13, 4.3, U2)."
+      ],
+      "sprite": "popup_close_button.png",
+      "size_units": [64, 64],
+      "offset_units": [174, -2],
+      "origin": [0, 0],
+      "dismiss_after_units": 6
+    }
   }
 }

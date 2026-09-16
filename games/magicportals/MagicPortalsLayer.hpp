@@ -18,13 +18,23 @@
 #include "core/AudioEngine.hpp"
 #include "core/BitmapFont.hpp"
 
+#include "sim/Achievements.hpp"
 #include "sim/Camera.hpp"
 #include "sim/Chapters.hpp"
+#include "sim/Credits.hpp"
+#include "sim/Dashboard.hpp"
 #include "sim/Game.hpp"
 #include "sim/Art.hpp"
 #include "sim/Hud.hpp"
+#include "sim/LevelEnd.hpp"
 #include "sim/Lighting.hpp"
+#include "sim/Loading.hpp"
+#include "sim/Locking.hpp"
+#include "sim/MainMenu.hpp"
+#include "sim/MenuState.hpp"
 #include "sim/Particles.hpp"
+#include "sim/Pause.hpp"
+#include "sim/Popup.hpp"
 #include "sim/Scores.hpp"
 #include "sim/Sounds.hpp"
 #include "sim/Sprites.hpp"
@@ -100,7 +110,9 @@ public:
     static constexpr const char* kRetry = "mp.retry";        // R
     static constexpr const char* kSkip = "mp.skip";          // N
     static constexpr const char* kBoxes = "mp.boxes";        // B: the bodies' boxes, over the art
-    static constexpr const char* kBack = "mp.back";          // Escape: out to the menu, and back through it
+    // Escape: the pause over a level being played and back out of it, as the
+    // original's back key (GameState::handleBackButton); up a screen in the menu.
+    static constexpr const char* kBack = "mp.back";
     // G: write down what the game believes it is drawing, right now.
     //
     // A diagnostic rather than a control, and it exists because a sprite that
@@ -115,9 +127,14 @@ public:
     struct Paths {
         std::string levels = MAGICPORTALS_LEVELS_DIR;
         std::string chapters = MAGICPORTALS_CHAPTERS_FILE;
+        // The original's achievements, extracted beside chapters.json: never in this
+        // repository (sim/Achievements.hpp). The dashboard draws no rows without it.
+        std::string achievements = MAGICPORTALS_ACHIEVEMENTS_FILE;
         std::string data = MAGICPORTALS_DATA_DIR;
         std::string portData = MAGICPORTALS_PORT_DATA_DIR;
-        std::filesystem::path prisms; // where LevelBuilder may write
+        // Where LevelBuilder may write, and the loading screen's black halo
+        // (loadingHaloImage). Nothing is written when it is empty.
+        std::filesystem::path prisms;
         // What res:// stands for: the converter writes the levels' art beside
         // the levels, so the directory above them (Sprites.hpp).
         std::string art = MAGICPORTALS_LEVELS_DIR "/..";
@@ -126,7 +143,7 @@ public:
         std::string original = MAGICPORTALS_ORIGINAL_DIR;
 
         // WHERE THE PLAYER'S MEDALS ARE KEPT, and empty by default - which
-        // means this layer never touches the filesystem.
+        // means this layer keeps no save on the filesystem.
         //
         // Injected rather than resolved here, which is WolfBrigadeLayer's
         // contract and exists for the reason its header states: "where may I
@@ -159,18 +176,21 @@ public:
     // built with a level's name never sees the menu at all, which is how every
     // suite, every headless render and --level enter the game.
     //
-    // The original's own three (MainMenu, WorldSelector, LevelSelector), less
-    // what needs state the port does not keep: no score, so no locking, no
-    // page counter, no swipe. What is drawn is its art, where its own
-    // normalized positions put it.
-    // `Finished` is the odd one: it sits OVER the level it finished, which
-    // stays loaded and drawn but stops ticking, so it is placed against the
-    // camera's view rather than against the menu's own box.
+    // The original's own menu STATES: LoadingScreen, PortalMainMenu,
+    // WorldSelector, LevelSelector, CreditsScreen and ScoreDashboard. Each opens
+    // under its own black (menu_state.fade) and presses its buttons as
+    // Button::update does (menu_state.press). The loading screen and the main menu
+    // are the remake's ui3 spec section 2 (sim/Loading.hpp, sim/MainMenu.hpp),
+    // credits and the achievements dashboard its sections 3 and 4
+    // (sim/Credits.hpp, sim/Dashboard.hpp), all drawn by EmitMenu; chapter select
+    // and the grid are still the port's own layout of the original's art, which
+    // ui3 sections 5 and 6 are to replace.
     // `Finished` and `Dead` are the odd two: each sits OVER the level it ended,
-    // which stays loaded and drawn but stops ticking, so both are placed against
-    // the camera's view rather than against the menu's own box. Everything that
+    // which stays loaded, drawn AND RUNNING - neither screen stops game time
+    // (the remake's ui2 spec, D7) - and both are drawn through the screen
+    // overlay on the view, as the pause is (sim/LevelEnd.hpp). Everything that
     // treats a screen as "the level is gone" has to name both.
-    enum class Screen { None, Main, Worlds, Levels, Finished, Dead };
+    enum class Screen { None, Loading, Main, Worlds, Levels, Credits, Achievements, Finished, Dead };
 
     // A button the menu drew, in the menu's pixel box (MenuBoxPx). Kept as
     // data so a click is tested against exactly what was drawn, and so a test
@@ -309,12 +329,167 @@ public:
     // design units; false in a level that places none.
     bool NoPortalSignRect(Hud::Rect& out) const;
 
+    // ---- the menu states: the loading screen, the main menu and the black -----
+    //
+    // Every menu state's clock runs on the tick (ui.json menu_state._about): zero
+    // on the state's first tick, which is the tick after the one whose release -
+    // or whose loading hold, or back key - asked for it, as the original's
+    // setState swaps between frames. The layer's own clock, which the title's bob
+    // reads, runs from attach.
+    const MenuState::Rules& MenuStateRules() const { return m_mainMenuRules.state; }
+    const MainMenu::Rules& MainMenuRules() const { return m_mainMenuRules; }
+    const Loading::Rules& LoadingRules() const { return m_loadingRules; }
+    // How long the menu state that is up has been current: ticks and milliseconds.
+    int MenuStateTicks() const { return m_menuClock.ticks; }
+    double MenuStateMs() const { return m_menuClock.ms; }
+    // The layer's own clock since it attached, in milliseconds of the tick.
+    double LayerClockMs() const { return m_layerClockMs; }
+    // The main menu's buttons a held touch that went down inside them is still
+    // inside (MainMenu::Bit): drawn at the press tint.
+    unsigned MainMenuHeld() const { return m_menuTouch.mainHeld; }
+    // The main menu's two switches, and the music switch's clock on this state.
+    Pause::Switches MainMenuSwitches() const;
+    // Press one of the main menu's buttons, as a release on it does - at once: a
+    // touch's release asks for it on the tick after. False when it led nowhere: no
+    // main menu is up, or the music switch is not there.
+    bool PressMainMenu(entt::registry& registry, MainMenu::Button button);
+
+    // ---- credits and the achievements dashboard -------------------------------
+    //
+    // The main menu's info and Achievements buttons open them; each back button,
+    // and the back key, goes back to the main menu on the tick after. Both are
+    // drawn by EmitMenu through the overlay, and keep their scroll across the
+    // per-tick layout and a resize.
+    const Credits::Rules& CreditsRules() const { return m_creditsRules; }
+    // The credits' strip as the last tick left it.
+    const Credits::Scroll& CreditsScroll() const { return m_credits; }
+    // Whether the credits' back button is held down inside: the press tint.
+    bool CreditsBackHeld() const { return m_creditsTouch.backHeld; }
+    const Dashboard::Rules& DashboardRules() const { return m_dashboardRules; }
+    const Locking::Rules& LockingRules() const { return m_lockingRules; }
+    // The rows as the dashboard opened with them, and its scroll and buttons.
+    const Dashboard::Board& DashboardBoard() const { return m_dashboardBoard; }
+    const Dashboard::State& DashboardState() const { return m_dashboardState; }
+    // The original's achievements, when Paths::achievements could be read; null
+    // otherwise, and AchievementsError says why.
+    const Achievements::Content* AchievementsContent() const {
+        return m_achievementsLoaded ? &m_achievements : nullptr;
+    }
+    const std::string& AchievementsError() const { return m_achievementsError; }
+    // Puts this frame's menu into the screen overlay: the main menu's pictures, the
+    // loading screen's logo and dots, and every menu state's black. Nothing when no
+    // menu state is up. OnUpdate calls it once a frame.
+    void EmitMenu(entt::registry& registry) const;
+
     // Puts this frame's HUD into the engine's screen overlay, in the original's
     // order of drawing. OnUpdate calls it once a frame; it is public so a suite
     // can ask for exactly the HUD without the rest of a frame. Nothing is drawn
     // when the registry publishes no overlay, which a bare suite registry does
     // not until it inserts one.
     void EmitHud(entt::registry& registry) const;
+
+    // ---- the pause screen -----------------------------------------------------
+    //
+    // CustomGameMenuLayer, over the level it pauses: the in-level pause control
+    // and Escape open it, and it STOPS GAME TIME - the level is not stepped, the
+    // world does not move, the pads are not drawn - while its own entrance runs
+    // on a clock of its own. Laid out by sim/Pause.hpp from ui.json and drawn
+    // through the screen overlay after restart, pause and the blacks. The level
+    // stays loaded under it and MenuScreen() stays Screen::None: the pause is a
+    // layer over a level, not a screen that replaces one.
+    bool Paused() const { return m_pause.open; }
+    // How long it has been up, in milliseconds of the tick's clock: zero on the
+    // tick it opened.
+    double PauseClockMs() const { return m_pause.clockMs; }
+    const Pause::Rules& PauseRules() const { return m_pauseRules; }
+    // What the open pause was raised over, read when it opened.
+    const Pause::Level& PausedLevel() const { return m_pause.level; }
+    // The two switches, and the music switch's clock on this pause.
+    Pause::Switches PauseSwitches() const;
+    // Whether the game makes a sound at all, and plays its music: the pause's
+    // two switches, which hold for the session.
+    bool SoundOn() const { return m_soundOn; }
+    bool MusicOn() const { return m_musicOn; }
+    // Press one of the pause's buttons, as a tap on it does. False when it led
+    // nowhere: no pause is up, the button is not there, or it is Achievements,
+    // which the port has no screen for yet.
+    bool PressPause(entt::registry& registry, Pause::Button button);
+
+    // The level's FRAME clock: its age plus every millisecond game time stood
+    // still under a pause or a popup. What the original times by frame time
+    // neither stops - the level-start caption, the blacks' wall clock - reads
+    // this; what runs on game time reads LevelAgeMs.
+    double LevelFrameMs() const { return m_levelAgeMs + m_stoppedMs; }
+
+    // Whether game time is stopped: a pause or a popup is up.
+    bool GameTimeStopped() const { return m_pause.open || m_popup.open; }
+
+    // ---- the tutorial and help popups -------------------------------------------
+    //
+    // ETHFramework's Popup over the level, laid out by sim/Popup.hpp from ui.json's
+    // popups block: 1-02 and 1-03 raise one as they load, and thirteen levels from
+    // a help block, on a touch released inside it. It STOPS GAME TIME as the pause
+    // does, for as long as it is up and through its fade out, while its own
+    // entrance and demonstration run on its clock; a touch down anywhere, or the
+    // back key, closes it. MenuScreen() stays Screen::None under it.
+    bool PopupOpen() const { return m_popup.open; }
+    const Popup::Rules& PopupRules() const { return m_popupRules; }
+    // The popup that is up, and its class; null when none is.
+    const Popup::Open* OpenPopup() const { return m_popup.open ? &m_popup.state : nullptr; }
+    const Popup::Class* OpenPopupClass() const { return m_popup.open ? m_popup.cls : nullptr; }
+    // Close the popup that is up, as a touch down does. False when none is up or
+    // it is already closing.
+    bool ClosePopup();
+    // The level's help blocks' touch rectangles on the view, as the last tick
+    // left the camera, in design units; empty in a level with none.
+    std::vector<Hud::Rect> HelpBlockRects() const;
+
+    // DEV ONLY: a touch at a point of the view - given as fractions of it - pressed
+    // on the layer's tick `tick` and released on `releaseTick` (the next, when that
+    // is not after `tick`), held where it went down in between, for a --fixed-step
+    // capture. With no point it lands on the centre of the level's first help
+    // block, wherever the camera has it on that tick. The popups and the menu
+    // states read it: it opens a help block's popup, closes one that is up, and
+    // presses a menu's buttons as a touch does.
+    void ScheduleDevTap(int tick, std::optional<glm::dvec2> viewFraction, int releaseTick = 0);
+    // DEV ONLY: a drag - a touch down at `from` on tick `tick`, moved at an even pace
+    // to reach `to` on `releaseTick`, and released there. Both are fractions of the
+    // view. The credits' and the dashboard's scroll captures need a finger that moves.
+    void ScheduleDevDrag(int tick, const glm::dvec2& from, const glm::dvec2& to, int releaseTick);
+
+    // DEV ONLY: press one of these on the layer's tick `tick` (1 the first
+    // OnFixedUpdate), as a tap would, for a --fixed-step capture that has no
+    // input. `Pause` is the in-level pause control; `Back` the back key on a menu
+    // state; the rest are the pause's own buttons. A press is taken on the first
+    // tick at or after its own on which what it presses is there to press.
+    enum class DevPress { Pause, Levels, Resume, Skip, Achievements, Sound, Music, Back };
+    void ScheduleDevPress(int tick, DevPress press);
+
+    // DEV ONLY: hold a walk from tick `from` to tick `to` inclusive, as a held
+    // arrow would: -1 left, 1 right. A --fixed-step capture has no input, and the
+    // finished and lost screens need a walk into a door or a hazard.
+    void ScheduleDevHold(int from, int to, float direction);
+
+    // ---- how a level ends -----------------------------------------------------
+    //
+    // The beat after the door or the death, the HUD going, and the finished and
+    // lost screens over the level that goes on running (sim/LevelEnd.hpp, from
+    // ui.json's level_end block).
+    const LevelEnd::Rules& LevelEndRules() const { return m_levelEndRules; }
+    // Whether the door was reached, or the player killed, on this level.
+    bool Finishing() const { return m_finishing; }
+    bool Dying() const { return m_dying; }
+    // Game time since the door or the death: what the beat is counted in.
+    double EndedMs() const { return m_dying ? m_dyingClockMs : m_finishClockMs; }
+    // The pads' alpha byte as it decays from the end on, once a tick.
+    int EndPadAlphaByte() const { return m_padEndByte; }
+    // How long the finished or lost screen has been current, in milliseconds of
+    // the tick's clock: zero on the tick it came up.
+    double EndScreenClockMs() const { return m_end.clockMs; }
+    // What the finished screen scores, and where its two counters have got to.
+    const LevelEnd::Play& EndPlay() const { return m_end.play; }
+    int PortalsCounted() const { return m_end.portals.current; }
+    int CrystalsCounted() const { return m_end.crystals.current; }
 
 private:
     // A body the level built, and the box standing for it. The box sits at the
@@ -376,15 +551,36 @@ private:
     // registry.
     void openMenu(entt::registry& registry, Screen screen);
     // The medal screen, over the level that was just finished: unlike every
-    // other screen this KEEPS the level, which simply stops ticking.
+    // other screen this KEEPS the level, which goes on running under it.
     void openFinished(entt::registry& registry);
     void layOutMenu();
     void buildMenu(entt::registry& registry);
+    // A menu state becomes current: its clock from nothing, no touch followed.
+    void beginMenuState();
+    // The loading screen's quads placed for this tick, and its hold counted.
+    void loadingTick(entt::registry& registry);
+    // The main menu's touch, as Button::update reads it.
+    void mainMenuInput(entt::registry& registry);
+    // Chapter select's and the grid's touch, the same way, on their world quads.
+    void menuQuadInput(entt::registry& registry);
+    // The credits' touch and the strip's tick (CreditsScreenLayer::update).
+    void creditsInput(entt::registry& registry, float fixedDelta);
+    // The dashboard's touch, wheel and tick (ScoreDashboard::loop, DashboardLayer).
+    void dashboardInput(entt::registry& registry);
+    // openState(world, level), from the dashboard's start button.
+    void openAchievement(entt::registry& registry, int world, int level);
+    // Whether a menu state is up, instead of a level or over one.
+    bool menuStateUp() const;
+    // A picture of the original's that the menu states draw, resolved once; empty
+    // when it cannot be read.
+    const std::string& menuPicture(const std::string& file) const;
+    // A font of the original's, read once for the run.
+    void loadUiFont(const std::string& name);
     void unloadMenu(entt::registry& registry);
     // Just the drawables, which a rebuilt screen replaces but a click on a
     // level takes away for good.
     void unloadMenuDrawables(entt::registry& registry);
-    void menuTick(entt::registry& registry);
+    void menuTick(entt::registry& registry, float fixedDelta);
     // One of the original's own menu images, which live beside its entities.
     std::string menuImage(const std::string& file) const;
 
@@ -592,8 +788,15 @@ private:
         int crystal = -1; // when it decorates one: it stops with the crystal
         int sprite = -1;  // the sprite in m_sprites whose entity it belongs to
         int slot = 0;     // which of that entity's <ParticleSystem>s it is, from 0
+        double angleDeg = 0.0; // its entity's angle, which every particle starts turned by
+        // ETHEntity::KillParticleSystem: no particle is released or renewed, and each
+        // lives out the life it has.
+        bool killed = false;
         std::vector<Particle> particles;
     };
+    // Every particle system of an entity of the original's, at a place: false when
+    // the .ent carries none or cannot be read.
+    bool addEntityEmitters(const std::string& entity, const glm::dvec2& atPx, float z, double angleDeg);
 
     // No emitter draws more than this, whatever its .ent asks for. Chapter 1
     // places 189 of them and the largest asks for 32, so this is a guard
@@ -694,6 +897,80 @@ private:
 
     // The menu. Screen::None while a level is played.
     Screen m_screen{Screen::None};
+
+    // ---- the menu states ---------------------------------------------------
+    MainMenu::Rules m_mainMenuRules;
+    Loading::Rules m_loadingRules;
+    // The state's clock: `fresh` until its first tick, which is its zero.
+    struct MenuClock {
+        bool fresh{true};
+        int ticks{0};
+        double ms{0.0};
+    };
+    MenuClock m_menuClock;
+    double m_layerClockMs{0.0};
+    // The one touch a menu follows (Button::update): where it went down and how
+    // far it has travelled; which main-menu buttons it went down inside and is
+    // still inside; and which of chapter select's or the grid's quads.
+    struct MenuTouch {
+        MenuState::Touch touch;
+        unsigned mainDown{0u};
+        unsigned mainHeld{0u};
+        std::optional<MenuButton> downOn;
+        bool heldInside{false};
+    };
+    MenuTouch m_menuTouch;
+    // What a release - or the loading screen's hold, or the back key - asked for,
+    // done on the next tick: the original's release frame is drawn in the old
+    // state, and the new one's black from the frame after (ui3 spec 0.4).
+    struct PendingMenu {
+        enum class Kind { None, MainButton, Button, Screen, Achievement };
+        Kind kind{Kind::None};
+        MainMenu::Button main{MainMenu::Button::Play};
+        MenuButton button;
+        Screen screen{Screen::None};
+        int world{-1}; // Achievement: openState's
+        int level{-1};
+    };
+    PendingMenu m_pendingMenu;
+    // The main menu's music switch, on the state's clock: when its entrance began
+    // and when it was last dismissed (SoundPanelLayer::manageMusicSwitch).
+    double m_mainMusicAddedMs{0.0};
+    double m_mainMusicDismissedMs{-1.0};
+    // The pictures the menu states draw through the overlay, by the name ui.json
+    // gives them, each resolved to its hd twin once.
+    std::map<std::string, std::string> m_menuPictures;
+    // Credits: its rules, the strip, and the one touch it follows.
+    Credits::Rules m_creditsRules;
+    Credits::Scroll m_credits;
+    struct CreditsTouch {
+        bool down{false};
+        glm::dvec2 lastAt{0.0};
+        bool downOnBack{false};
+        bool backHeld{false};
+    };
+    CreditsTouch m_creditsTouch;
+    // The dashboard: its rules, the rows it opened with, and its scroll and buttons.
+    Dashboard::Rules m_dashboardRules;
+    Dashboard::Board m_dashboardBoard;
+    Dashboard::State m_dashboardState;
+    Locking::Rules m_lockingRules;
+    // The original's achievements, read once at attach from Paths::achievements.
+    Achievements::Content m_achievements;
+    bool m_achievementsLoaded{false};
+    std::string m_achievementsError;
+    // The loading screen's scene, in the level's space.
+    entt::entity m_loadingBg{entt::null};
+    entt::entity m_loadingCharacter{entt::null};
+    entt::entity m_loadingPortal{entt::null};
+    entt::entity m_loadingHalo{entt::null};
+    // How many emitters the portal's own are, at the front of m_emitters.
+    std::size_t m_loadingPortalEmitters{0};
+    bool m_loadingVanished{false};
+    // black_halo.bmp as the multiply it is drawn with: black, at an alpha of one
+    // less its texel, written once beside the prisms; empty when it cannot be,
+    // or when Paths::prisms names no directory.
+    std::string loadingHaloImage();
     int m_menuWorld{0}; // whose levels the grid shows
     int m_menuPage{0};  // which page of that grid
     std::vector<MenuButton> m_menuButtons;
@@ -706,80 +983,36 @@ private:
     entt::entity m_menuBg{entt::null};      // the screen's background
     entt::entity m_menuTitle{entt::null};   // the game's title, on the main screen
 
-    // ---- the medal screen ---------------------------------------------------
+    // ---- the finished and lost screens ------------------------------------
     //
-    // LevelFinishedLayer draws a good deal more than a medal, and the port drew
-    // only the medal. Decoded from its constructor and its draw (bytes
-    // 271777..273843 and 274980..276253): a dimming veil over the frozen level,
-    // the "level finished" banner, the plaque naming the portals spent, the
-    // golden-score plaque when the play earned one, and a crystal beside the
-    // medal when the level had any.
-    //
-    // One vector rather than a member each: they differ only in image and
-    // placement, and nothing addresses an individual one.
-    struct Decoration {
-        entt::entity quad{entt::null};
-
-        // Normalized ON THE CAMERA'S VIEW, because that is how the original
-        // places them - against GetScreenSize - and the medal screen sits over
-        // the level rather than in the menu's own box.
-        glm::dvec2 atView{0.0};
-
-        // HOW IT IS SIZED, stated rather than inferred from a zero.
-        //
-        // Stretched: sizeView is the size, as a fraction of the view. Only the
-        // veil wants this - it is a gradient strip the original pulls one and a
-        // half screens wide, and sizing it from its own aspect would draw a
-        // hairline.
-        //
-        // ByHeight: heightView is its height as a fraction of the view and the
-        // width follows the IMAGE'S OWN aspect. Everything else wants this, for
-        // the reason the chapter icons needed it: an 84x128 image drawn square
-        // is an image nobody authored.
-        enum class Sizing { Stretched, ByHeight };
-        Sizing sizing{Sizing::ByHeight};
-        glm::dvec2 sizeView{0.0}; // Stretched
-        double heightView = 0.0;  // ByHeight
-        std::string image;        // resolved path, for asking its aspect
-
-        // A pixel offset from the medal, applied after atView. The crystal is
-        // placed at medalPos + (-30, 48) in the original's own pixels rather
-        // than at a fraction of the screen, and expressing that as a fraction
-        // would be a different position at a different window shape.
-        //
-        // No y flip: Units::ToWorld takes the remake's pixels with +y DOWN and
-        // flips once inside, so the original's screen-space offsets carry over
-        // verbatim. 48 is 48 further DOWN, as it is in the original.
-        glm::dvec2 offsetPx{0.0};
-
-        // WHERE ON THE SPRITE atView lands, as a fraction of it: (0.5, 0.5) is
-        // its centre, which is what almost everything here uses.
-        //
-        // The original's addSprite takes this as the sprite's origin, and the
-        // golden-score plaque is the one that does not centre: it is placed at
-        // vector2(0.23, 0.5) of the screen with an origin of vector2(0.5, 0.33),
-        // so a third of the way down rather than half. Drawing it centred put it
-        // visibly high, which is the "tiny plaque floating" in the first
-        // screenshot of this screen.
-        glm::dvec2 pivot{0.5, 0.5};
-
-        float z = 0.0f;
+    // Drawn through the screen overlay by EmitHud, laid out by sim/LevelEnd.hpp;
+    // nothing of them is in the registry. What the layer holds is what a
+    // picture cannot be a pure function of: the screen's clock, what the level
+    // ended with, and the ScoreCounters, which step on the tick.
+    LevelEnd::Rules m_levelEndRules;
+    struct EndScreen {
+        double clockMs{0.0}; // UI frame time since the screen became current
+        LevelEnd::Play play;
+        LevelEnd::Counter portals;  // ScoreCounter(0, portalsUsed, 100)
+        LevelEnd::Counter crystals; // and the crystals collected
     };
-    std::vector<Decoration> m_menuDecor;
-
-    // The portals-spent counter the medal is computed FROM.
-    //
-    // The original builds ScoreCounter(0, numPortals, 100): it starts at zero
-    // and steps ONE toward the play's portal count every 100 ms, and its draw
-    // recomputes the medal from getCurrent() on every frame. So the medal
-    // climbs bronze to silver to gold as the number rises, rather than being
-    // stamped at the end. That is a behaviour and not decoration - the port
-    // showing the final medal immediately was wrong in a way no screenshot
-    // would have revealed.
-    static constexpr double kCounterStrideMs = 100.0;
-    int m_counterShown = 0;        // where the count has got to
-    double m_counterClockMs = 0.0; // time owed to the next step
-    int m_medalDrawn = 0;          // which medal the quad currently wears
+    EndScreen m_end;
+    // The walk pads' alpha byte from the door or the death on, decayed a tick at a
+    // time; and whether clear-portals was up to be dismissed with restart and pause.
+    int m_padEndByte{0};
+    bool m_clearShownAtEnd{false};
+    // Each end-screen picture's file resolved once per level, and its size in
+    // texels; empty and zero for one that cannot be read, which is not drawn.
+    std::map<std::string, std::string> m_endImages;
+    std::map<std::string, glm::ivec2> m_endTexels;
+    // The screen up over the level as pieces, `ms` into it.
+    std::vector<LevelEnd::Piece> endPieces(const glm::dvec2& viewUnits, double ms) const;
+    // One tick of the screen: its clock, its counters and its buttons. True when
+    // a button was pressed, which may have taken the level away.
+    bool endScreenTick(entt::registry& registry, float fixedDelta);
+    // What the HUD keeps once a level has ended: the pads' last byte, and
+    // whether clear-portals goes with restart and pause.
+    void endHud();
 
     // THE BEAT BETWEEN GOING IN AND BEING SCORED.
     //
@@ -790,16 +1023,15 @@ private:
     // only once gameEndElapsedTime passes gameWonDelay does it raise the
     // levelFinishedLayer and play playVictorySound.
     //
-    // gameWonDelay is 1400 ms: the constructor writes 1400 to gameLostDelay and
-    // copies the same register into gameWonDelay (bytes 125310.., instructions
-    // 24-29). A level may override it - the constructor's later arm reads a
+    // gameWonDelay is 1400 ms (ui.json's level_end.beats, decoded): the
+    // constructor writes 1400 to gameLostDelay and copies the same register into
+    // gameWonDelay. A level may override it - the constructor's later arm reads a
     // `delay` entity's `time` - but NO LEVEL IN THE GAME PLACES ONE, checked
     // across all 128, so the override is recorded here and not built.
     //
     // This port showed the medal and played both sounds on the tick the exit
     // reported, with the character still standing in the doorway walking on the
     // spot. That is what the owner saw.
-    static constexpr double kFinishDelayMs = 1400.0;
     bool m_finishing = false;      // gone into the door, not yet scored
     double m_finishClockMs = 0.0;  // how long since
 
@@ -810,10 +1042,8 @@ private:
     //
     // checkGameEnd counts gameEndElapsedTime against gameLostDelay and only past
     // it raises the levelLostLayer and plays playDeathSound. gameLostDelay is
-    // the register gameWonDelay is copied FROM (constructor, instructions
-    // 24..29), so the two beats are the same 1400 ms and share the constant's
-    // decode rather than each carrying a number of its own.
-    static constexpr double kDeathDelayMs = kFinishDelayMs;
+    // the register gameWonDelay is copied FROM, so the two beats are the same
+    // 1400 ms - ui.json carries both, with the one decode.
     bool m_dying = false;         // killed, the lost screen not yet up
     double m_dyingClockMs = 0.0;  // how long since
 
@@ -831,10 +1061,6 @@ private:
     // sets m_current to -1, after which the restart button's own guard
     // (`if (m_current < 0) return false`) would make it silently do nothing.
     void openDead(entt::registry& registry);
-
-    // The medal the counter's CURRENT value earns, by the same computeScore the
-    // final one uses. Zero when there is nothing to show.
-    int MedalShown() const;
 
     // WHAT THE PLAYER HAS EARNED, across runs.
     //
@@ -875,6 +1101,7 @@ private:
         std::string image; // the picture, empty when it could not be read
         Hud::Rect rect;    // on the view, as last laid out
         bool shown{false};
+        double alpha{0.0}; // display-space, as last laid out
     };
     std::vector<ControlButton> m_controls;
 
@@ -909,15 +1136,158 @@ private:
     };
     NoPortalSign m_sign;
 
+    // ---- the pause ------------------------------------------------------------
+    Pause::Rules m_pauseRules;
+    struct PauseScreen {
+        bool open{false};
+        double clockMs{0.0}; // UI frame time since the tap, on the tick
+        Pause::Level level;
+        double musicAddedMs{0.0};
+        double musicDismissedMs{-1.0};
+    };
+    PauseScreen m_pause;
+
+    // GAME TIME STOPPED, by a pause or a popup: the world as it stood when it
+    // stopped - every simulated body's transform and state, put back after each
+    // physics step the app runs regardless - and the flipbooks that were playing,
+    // stopped for as long as it is.
+    struct Frozen {
+        struct Held {
+            entt::entity entity{entt::null};
+            Supersonic::TransformComponent transform;
+            Supersonic::RigidBodyComponent body;
+        };
+        std::vector<Held> held;
+        std::vector<entt::entity> stoppedFlipbooks;
+    };
+    Frozen m_frozen;
+    void freezeWorld(entt::registry& registry);
+    void thawWorld(entt::registry& registry);
+
+    // ---- the popups -------------------------------------------------------------
+    Popup::Rules m_popupRules;
+    struct PopupScreen {
+        bool open{false};
+        const Popup::Class* cls{nullptr};
+        Popup::Open state;
+        // Whether the level still owes the half of its tick that follows its input
+        // (BeforeStep): true for a popup a tap raised mid-tick, as a pause is; false
+        // for one raised as the level loads, whose first tick has not begun.
+        bool stepOnResume{false};
+    };
+    PopupScreen m_popup;
+    // Each popup picture's file resolved once per level, the hd twin where one
+    // exists; empty for one that cannot be read, which is then not drawn.
+    std::map<std::string, std::string> m_popupImages;
+    // The level's help blocks: each entity's place and collision box, in units.
+    struct HelpBlock {
+        glm::dvec2 atUnits{0.0};
+        glm::dvec2 boxUnits{0.0};
+    };
+    std::vector<HelpBlock> m_helpBlocks;
+    // A touch that went down on a help block: which, where in the window's pixels,
+    // and the furthest it has moved since (HelpBlockController's touchMoveLength).
+    struct HelpTouch {
+        bool armed{false};
+        int block{-1};
+        glm::dvec2 downPx{0.0};
+        double maxMovePx{0.0};
+    };
+    HelpTouch m_helpTouch;
+    // The plaque's dismissal, on GameLayer's clock (the level's age), once the
+    // frame clock has passed its dismissAfterMs; negative before.
+    double m_plaqueDismissAgeMs{-1.0};
+    // Its alpha as GameLayer's last update wrote it: a UISprite's colour is only
+    // written when its layer is updated, so under a stop it holds, and under a
+    // popup raised as the level loads it is still the nothing it was built with.
+    double m_plaqueAlpha{0.0};
+    // The pointer this tick as the popups read it - a real touch or a DEV one.
+    struct Touch {
+        bool pressed{false};
+        bool released{false};
+        bool held{false};
+        bool over{false};         // on the game at all
+        glm::dvec2 atView{0.0};   // design units on the view
+        glm::dvec2 atPx{0.0};     // the window's pixels, for the move a touch makes
+    };
+    Touch touchThisTick(const entt::registry& registry);
+    // A popup of `cls` over the level, game time stopped.
+    void openPopup(entt::registry& registry, const Popup::Class& cls, bool stepOnResume);
+    // One tick under a popup. True when it resumed the level on this tick and the
+    // level owes the rest of its tick.
+    bool popupTick(entt::registry& registry, float fixedDelta);
+    // The help blocks the level places, read as it loads.
+    void findHelpBlocks();
+    // A tap on a help block, read with the rest of the level's input: true when it
+    // took the touch, which then fires no portal.
+    bool helpBlockInput(entt::registry& registry);
+    // A file among the original's assets, the hd twin beside it where one exists.
+    std::string originalAsset(const std::string& relative) const;
+    // Whether the frame clock has passed the plaque's dismissal, checked on every
+    // tick a level is loaded, stopped or not; and, where GameLayer is updated
+    // (`updated`), the plaque's alpha.
+    void tickPlaqueDismissal(bool updated);
+    // The switches: GlobalSoundSwitch sets the global volume, GlobalMusicSwitch
+    // the music. Held for the session only - the original saves the volume
+    // (GlobalVolumeManager::saveVolume), which the port does not yet.
+    bool m_soundOn{true};
+    bool m_musicOn{true};
+    // Game time stood still this level, for LevelFrameMs.
+    double m_stoppedMs{0.0};
+    // Each pause picture's file resolved to the hd art once per level; empty
+    // for one that cannot be read, which is then not drawn.
+    std::map<std::string, std::string> m_pauseImages;
+    // The fonts the pause and the end screens write in, where they are not the
+    // caption's own; read once for the run.
+    std::map<std::string, Supersonic::BitmapFont> m_uiFonts;
+    const Supersonic::BitmapFont* uiFont(const std::string& name) const;
+
+    // DEV ONLY: the scheduled presses and holds, and the layer's own tick count.
+    std::vector<std::pair<int, DevPress>> m_devPresses;
+    struct DevHold {
+        int from{0};
+        int to{0};
+        float direction{0.0f};
+    };
+    std::vector<DevHold> m_devHolds;
+    struct DevTap {
+        int tick{0};
+        int releaseTick{0}; // held from its tick until this one, which releases it
+        bool onHelpBlock{false};
+        glm::dvec2 viewFraction{0.0};
+        bool pressed{false};
+        // A drag: where it goes, reached on the release tick, from the tick it went down.
+        std::optional<glm::dvec2> toFraction;
+        int pressedTick{0};
+    };
+    std::vector<DevTap> m_devTaps;
+    int m_ticks{0};
+
     void buildControls();
     void unloadControls();
+
+    // The pause. Opened only where the pause control could be pressed; closed
+    // as UILayer::hide(true) closes it, at once and forgetting its entrance.
+    bool pauseAllowed() const;
+    void openPause(entt::registry& registry);
+    void closePause(entt::registry& registry);
+    // Puts every body back where the tap left it, undoing the physics step the
+    // app runs before every tick whether or not the game's time is stopped.
+    void holdWorld(entt::registry& registry);
+    // One tick under the pause. True when it resumed the level on this tick.
+    bool pauseTick(entt::registry& registry, float fixedDelta);
+    // The rest of a level's tick once its input is read: what comes before the
+    // next physics step, the camera, the controls and the drawables.
+    void stepLevel(entt::registry& registry, float direction, float fixedDelta);
+    // The walk the keys alone ask for, with no pointer.
+    float keyDirection() const;
+    // Whether a scheduled DEV press of this kind is due, taking it if so.
+    bool devPressDue(DevPress press);
     // The control rectangles for this view and this age, and whether each is
     // shown. Pure layout.
     void layOutControls();
     // The no-portal sign a tick on, against the camera as this tick left it.
     void tickNoPortalSign(double dtMs);
-    // Every control hidden: a screen has gone up over the level.
-    void hideHud();
     // Which control the pointer is on, or nullptr. Asked once a tick, before a
     // shot is fired, because a tap that works a control must not also open a
     // portal under it.

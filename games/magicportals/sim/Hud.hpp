@@ -149,6 +149,10 @@ bool OnPad(const Rules& rules, Side side, const glm::dvec2& viewUnits, double ag
 // The pads' alpha, pulsing for the first strides of a level and flat after.
 double PadOpacity(const Rules& rules, double ageMs, bool tutorial);
 
+// The same as the byte ScreenPad::computeButtonColor writes, which is what the
+// pads decay from once a level has ended (LevelEnd::PadDecayByte).
+int PadAlphaByte(const Rules& rules, double ageMs, bool tutorial);
+
 // The ring the tutorial pads emit. `shown` is false outside the tutorial and
 // once the pulse has stopped.
 struct Ring {
@@ -209,6 +213,16 @@ std::string CaptionText(const Rules& rules, int index);
 // The current-score plaque's alpha, and its medal's, which share it.
 double PlaqueAlpha(const Rules& rules, double ageMs);
 
+// The same on a level whose game time has stood still, `ageMs` into GameLayer's
+// own updates, dismissed at `dismissAgeMs` of them (negative: not yet).
+// Game::dismissCurrentMedalSprite dismisses the plaque once the FRAME clock
+// (GameStateController::getUiTime) passes dismissAfterMs, which a popup or a
+// pause does not stop; UISprite::dismiss resets its timer, and it is only
+// GameLayer's updates that run it. So the dismissal fades from whole on the
+// updates that follow, whatever the appearance had reached. PlaqueAlpha is this
+// with the dismissal where an unstopped level has it.
+double PlaqueAlphaFrom(const Rules& rules, double ageMs, double dismissAgeMs);
+
 // The medal art for a Scores tier, or empty for a level never finished.
 std::string MedalSprite(const Rules& rules, int medal);
 
@@ -228,5 +242,17 @@ struct Glyph {
 // all at unitsPerFontPx. No kerning, because the original applies none.
 std::vector<Glyph> LayOutCaption(const Rules& rules, const Supersonic::BitmapFont& font, const std::string& text,
                                  const glm::dvec2& viewUnits);
+
+// The same rule for any centred text: the line's box, its summed advances by
+// the line height at `unitsPerFontPx`, centred on `centre` on the view. The
+// pause's "Part N" and its golden number are drawCenteredText too, at their own
+// places (Pause.hpp).
+std::vector<Glyph> LayOutText(const Supersonic::BitmapFont& font, const std::string& text, const glm::dvec2& centre,
+                              double unitsPerFontPx);
+
+// And text that is NOT centred: gs2d's DrawBitmapText as ETHScript's DrawText
+// calls it, the box's top-left at `topLeft` (the finished screen's crystal count).
+std::vector<Glyph> LayOutTextFrom(const Supersonic::BitmapFont& font, const std::string& text,
+                                  const glm::dvec2& topLeft, double unitsPerFontPx);
 
 } // namespace MagicPortals::Hud

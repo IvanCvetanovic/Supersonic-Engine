@@ -277,6 +277,10 @@ bool OnPad(const Rules& rules, Side side, const glm::dvec2& viewUnits, double ag
 }
 
 double PadOpacity(const Rules& rules, double ageMs, bool tutorial) {
+    return static_cast<double>(PadAlphaByte(rules, ageMs, tutorial)) / 255.0;
+}
+
+int PadAlphaByte(const Rules& rules, double ageMs, bool tutorial) {
     const Rules::Pads& pads = rules.pads;
     const int strides = tutorial ? pads.tutorialStrides : pads.strides;
     const int variation = tutorial ? pads.tutorialVariationByte : pads.variationByte;
@@ -288,7 +292,7 @@ double PadOpacity(const Rules& rules, double ageMs, bool tutorial) {
         if (std::fmod(stride, 2.0) == 1.0) bias = 1.0 - bias;
         alpha += static_cast<int>(bias * static_cast<double>(variation));
     }
-    return static_cast<double>(alpha) / 255.0;
+    return alpha;
 }
 
 Ring RingAt(const Rules& rules, double ageMs, bool tutorial) {
@@ -375,11 +379,15 @@ std::string CaptionText(const Rules& rules, int index) {
 }
 
 double PlaqueAlpha(const Rules& rules, double ageMs) {
+    // getUiTime() > 2000: strictly past.
+    return PlaqueAlphaFrom(rules, ageMs, ageMs > rules.plaque.dismissAfterMs ? rules.plaque.dismissAfterMs : -1.0);
+}
+
+double PlaqueAlphaFrom(const Rules& rules, double ageMs, double dismissAgeMs) {
     const Rules::Plaque& plaque = rules.plaque;
     if (ageMs < 0.0) return 0.0;
-    // getUiTime() > 2000: strictly past.
-    if (ageMs > plaque.dismissAfterMs) {
-        const double since = ageMs - plaque.dismissAfterMs;
+    if (dismissAgeMs >= 0.0 && ageMs >= dismissAgeMs) {
+        const double since = ageMs - dismissAgeMs;
         if (since >= plaque.dismissMs) return 0.0; // removeDismissedSprites
         return Byte(1.0 - SmoothEnd(since / plaque.dismissMs));
     }
@@ -397,15 +405,24 @@ std::string MedalSprite(const Rules& rules, int medal) {
 
 std::vector<Glyph> LayOutCaption(const Rules& rules, const Supersonic::BitmapFont& font, const std::string& text,
                                  const glm::dvec2& viewUnits) {
+    return LayOutText(font, text, rules.caption.centreOfView * viewUnits, rules.caption.unitsPerFontPx);
+}
+
+std::vector<Glyph> LayOutText(const Supersonic::BitmapFont& font, const std::string& text, const glm::dvec2& centre,
+                              double unitsPerFontPx) {
+    if (!font.IsLoaded()) return {};
+    // ComputeTextBoxSize: the widest line's summed advances, by lineHeight a line.
+    const glm::dvec2 box = glm::dvec2(font.Measure(text)) * unitsPerFontPx;
+    return LayOutTextFrom(font, text, centre - box * 0.5, unitsPerFontPx);
+}
+
+std::vector<Glyph> LayOutTextFrom(const Supersonic::BitmapFont& font, const std::string& text,
+                                  const glm::dvec2& topLeft, double unitsPerFontPx) {
     std::vector<Glyph> glyphs;
     if (!font.IsLoaded()) return glyphs;
-    const double scale = rules.caption.unitsPerFontPx;
+    const double scale = unitsPerFontPx;
     const glm::dvec2 page(font.PageSize());
     if (page.x <= 0.0 || page.y <= 0.0) return glyphs;
-
-    // ComputeTextBoxSize: the widest line's summed advances, by lineHeight a line.
-    const glm::dvec2 box = glm::dvec2(font.Measure(text)) * scale;
-    const glm::dvec2 origin = rules.caption.centreOfView * viewUnits - box * 0.5;
 
     double pen = 0.0;
     double lineTop = 0.0;
@@ -419,7 +436,7 @@ std::vector<Glyph> LayOutCaption(const Rules& rules, const Supersonic::BitmapFon
         if (found == nullptr) continue;
         if (found->width > 0 && found->height > 0) {
             Glyph glyph;
-            glyph.rect.min = origin + glm::dvec2(pen + found->xoffset, lineTop + found->yoffset) * scale;
+            glyph.rect.min = topLeft + glm::dvec2(pen + found->xoffset, lineTop + found->yoffset) * scale;
             glyph.rect.size = glm::dvec2(found->width, found->height) * scale;
             glyph.page = found->page;
             glyph.uvScale = glm::dvec2(found->width, found->height) / page;

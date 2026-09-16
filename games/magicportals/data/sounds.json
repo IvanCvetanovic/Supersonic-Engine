@@ -328,6 +328,14 @@
     "boss_button_raised": "playFinalDoorSound",
 
     "menu_button": "getButtonSoundName",
-    "level_button": "getRetryButtonSound"
+    "level_button": "getRetryButtonSound",
+    "_note_achievements": [
+      "The dashboard's rows (ScoreDashboard::loop, bytes 236258..240066, instructions 667..669 and",
+      "781..783): a tap on a row whose level is open plays playAchievementPickSound, on a locked one",
+      "playAchievementPickDeniedSound. Its start button plays getStartAchievementSoundName, which is",
+      "level_button's teleport, and its back button getButtonSoundName, menu_button's."
+    ],
+    "achievement_pick": "playAchievementPickSound",
+    "achievement_denied": "playAchievementPickDeniedSound"
   }
 }

@@ -216,11 +216,13 @@ struct PushConstantData {
 
 // One quad of the screen overlay (core/ScreenOverlay.hpp, screen_overlay.vert):
 // where it is as fractions of the image, which part of its texture it shows,
-// and the display-referred colour multiplied into it. 48 bytes.
+// the display-referred colour multiplied into it, and how it is turned about its
+// centre. 64 bytes.
 struct ScreenOverlayPushConstants {
-    glm::vec4 rect{0.0f, 0.0f, 1.0f, 1.0f}; // xy top-left, zw bottom-right, +y down
-    glm::vec4 uv{0.0f, 0.0f, 1.0f, 1.0f};   // xy uvMin, zw uvMax
+    glm::vec4 rect{0.0f, 0.0f, 1.0f, 1.0f};  // xy top-left, zw bottom-right, +y down
+    glm::vec4 uv{0.0f, 0.0f, 1.0f, 1.0f};    // xy uvMin, zw uvMax
     glm::vec4 color{1.0f};
+    glm::vec4 basis{1.0f, 0.0f, 0.0f, 1.0f}; // the turn: a 2x2's columns, xy and zw
 };
 
 // The depth pass has its own, because it needs a different second half: which
