@@ -9350,3 +9350,151 @@ reads no tier). Applied: **the owner's standing ruling, in favour of what the or
 - **00_order K16 errata:** five entities name `explosion.JPG`, not four; `ghost_utility_spawn.ent` concerns 12.2.
 - 7.2 (`fireball`), 10.4 (`burn_projectile`), 5.2 (the dragon) and 12.1 (`dark_dragon`) are unblocked on K16; 2-32's
   fire is built now but not seen until 5.2.
+
+## Step 61 - the tier file the original draws an image from, its size in whole units, and one rule for cutting a sheet (built)
+
+The entity-visuals order's step 0.2 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `system_6.md`
+section 4.1 C1; conflicts K5 and K9): a new pure module `sim/Tiers` that picks the hd or fullhd file of an image as
+the original's loader picks it, sizes it in whole units, and cuts a sheet into frames and their uv. Game-only: no
+file under `src/` or `assets/shaders/`. New: `sim/Tiers.{hpp,cpp}`, `data/tiers.json`, `tests/test_mp_tiers.cpp`,
+one line in each of `sim/CMakeLists.txt` and `tests/CMakeLists.txt`. **Nothing draws through it yet: level art
+(2.2), the port's own art and particles (2.3) and the sheets cut unevenly (5.1, 12.2) take it later. 1-01 f420 is
+byte-identical to step 60's, and this record carries the five decisions 00_order PRE-4 asks for (DECISIONS).**
+
+**WHAT THE ORIGINAL DOES.**
+- **Which file.** Every image goes through `ETHGraphicResourceManager::AddFile` (`ETHResourceManager.cpp:133-144`),
+  which asks `ETHSpriteDensityManager::ChooseSpriteVersion` (`ETHSpriteDensityManager.cpp:88-139`) for
+  `<dir>/fullhd/<file>` when the screen is at least `minScreenHeightForFullHdVersion` tall, then `<dir>/hd/<file>`
+  when it is at least `minScreenHeightForHdVersion` (or the fullhd height), each only if `FileExists`, else `<file>`
+  at density 1 (`:146-162`). Only the name is tried: whether the 1x file exists is never asked.
+- **Its numbers.** `app.enml`'s Default block: 480, 600, `hdDensityValue = 2`, `fullHdDensityValue = 2`, read at
+  `ETHAppEnmlFile.cpp:126-136`. The engine's own defaults are not the game's: fullhd density **4** and thresholds
+  720 / 1080 (`ETHSpriteDensityManager.cpp:35-45`). At 720 px fullhd is tried (720 >= 600), then hd: not because
+  `ShouldUseHdResources` holds (it excludes fullhd heights, `:61-64`) but because the hd branch also runs whenever
+  the fullhd test passed (`:105`). The `ld/` and `xld/` tiers need a screen at most 480 or 320 px tall, and the APK
+  ships neither folder.
+- **Its size.** `GLES2Sprite::SetSpriteDensityValue` (`GLES2Sprite.cpp:429-438`) makes the bitmap `texels / D`, a
+  float, and runs `SetupSpriteRects(1, 1)`, which reads `GetBitmapSize`, an int cast (`:389-392`), and strides in
+  whole units, `int(size) / columns` (`gs2d/src/Sprite.cpp:119-120`). An entity is its frame's size
+  (`ETHSpriteEntity.cpp:113`, `GetCurrentSize` `:652-683`, `Sprite::GetFrameSize` `Sprite.cpp:227-230`). **The
+  truncation comes after the divide:** hd `minion.png` 310 x 434 cut 4 x 4 is 38 x 54 u (76 x 108 texels), not
+  38.75 x 54.25; hd `ghost.png` 973 wide is 486 u and 121 u a frame (242 texels), not 121.625.
+- **Where a frame is sampled.** `texCoord * (rectSize / bitmapSize) + rectPos / bitmapSize` (gs2d
+  `projects/Android/GS2D/assets/shaders/default/default.vs:38-39`), `bitmapSize` the float `texels / D`. So column 3
+  of the hd minion starts at 228 texels; an even split puts it at 232.5 (00_order E1).
+- **The APK's tier folders**, each 1x image resolved by its own name (`test_mp_tiers`): `entities` 7 fullhd, 53 hd,
+  50 1x; `particles` 2 hd, 41 1x; `sprites` 67 hd, 13 1x; `ETHFramework/sprites` 1 hd, 15 1x. **Five draw at
+  another size than their 1x file:** the four skies `sky`, `icy_sky`, `red_sky`, `sky_purple` (455 x 256 -> 512 x
+  256 u) and `download_full_game_popup_button.png` (130 x 34 -> 128 x 32 u). `ghost.png` is not among them:
+  int(973 / 2) is its 1x 486. Four tier files have no 1x name and are reached by no 1x name:
+  `particles/hd/tesla_shock_.png`, `particles/hd/exclamation_mark_.png`, `sprites/hd/game_main_title_.png`,
+  `sprites/hd/world_icon3_.png`.
+
+**WHAT CHANGED.**
+- **`data/tiers.json`** `density_tiers`: `search ["fullhd", "hd"]`, `density {fullhd 2, hd 2}`, with `_source`
+  (app.enml, the loader, the engine-default trap), `_ruling` (R12, R13), `_not_ported` (ld/xld) and `_census`.
+- **`sim/Tiers`:** `LoadRules` refuses an empty search, a folder named twice or not one plain name, a folder with no
+  density or one at or below 0, and a density no search tries (keys starting `_` are notes). `Resolve(rules,
+  named)` returns the first `parent/<folder>/name` that is a regular file, else `named` at density 1, splitting at
+  the last `/` or `\` as `AssembleResourceName` does for a path that has one (a name with neither: LEFT FOR THE
+  OWNER). `Units` is `int(float(texels) / D)`. `FrameCut` gives the
+  image's units, a frame's whole units and texels, and its uv scale over the float `texels / D`; it refuses
+  texels, density, columns or rows at or below 0 and a frame of 0 units. `UvOffset(cut, column, row)`.
+- **`tests/test_mp_tiers.cpp`**, a new suite: rules, refusals, the choice on files it writes, the arithmetic, and
+  the original's tier folders (skipped without the extracted assets, never with 77; floors 60 and 300).
+
+**BASELINE.** Step 60's after, `visuals/0.1/after/` (1-01 f420 **`a1f8d7ae`**); PRE-3's `particles/after/`
+(`b19ce71a`) is superseded by step 59's `fix2/`, as step 60 records. The unmodified build's `MagicPortals.exe`
+(`b969287c`, step 60's post-review relink, never launched) was refused by Smart App Control (exit 126) and not
+relinked for a "before": the baseline rule makes step 60's after this step's before. After: `visuals/0.2/after/`.
+The step's binary `36c5a0a6` differs from `b969287c` in 4 bytes, the PE header's and the debug directory's
+timestamps; `.text` is identical. **No pixel moves, so the next step's "before" stays `visuals/0.1/after/` and its
+`sweep/`.**
+
+| Gate (00_order 0.2) | Required | Measured |
+|---|---|---|
+| `test_mp_tiers`: fullhd before hd | fullhd chosen where both exist | **passes**: a written `both.png` with both tiers gives `fullhd/both.png` at D 2; hd alone gives hd; fullhd alone gives fullhd. No image of the APK has both (census), so the order is pinned on written files |
+| fallback D 1 | the name itself at density 1 | **passes**: a written `plain.png`, and a directory named like a tier file, give the name at D 1; the APK's `projectile.png` 384 x 64 and `portal_halo.png` at D 1 |
+| the orphan `tesla_shock_.png` never chosen | not chosen | **passes**: 0 of the 249 1x images resolve to a file of another name; none reaches any of the 4 orphans; `particles/tesla_shock.png` draws itself at D 1; by its own name the orphan is found in hd at D 2, as the loader would |
+| 155/4 -> 38 u = 76 texels | 38 u, 76 texels | **passes**: hd `minion.png` 310 x 434 at D 2, 4 x 4: 38 x 54 u, 76 x 108 texels; column 3 at 228 texels (even split 232.5) |
+| 973/4 -> 121 u = 242 | 121 u, 242 texels | **passes**: `Units` 486 (486.5 truncated); 121 x 128 u, 242 x 256 texels; uv 121 / 486.5; column 3 at 726 texels |
+| 320 x 448 at 4 x 4 -> 40 x 56 | 40 x 56 u | **passes**: hd `magic_portals_hd.png`: 40 x 56 u, 80 x 112 texels, uv 0.25 |
+| 1024 x 512 -> 512 x 256 | 512 x 256 u | **passes**: fullhd `sky.png` 1024 x 512: 512 x 256 u |
+| 1-01 f420 byte-identical | `a1f8d7ae` | **`a1f8d7ae`: passes**; exit 0, validation ACTIVE and silent; the log differs from step 60's only in the output path and the timing summary |
+| review: the 128-level f420 sweep | 128 of 128 byte-identical to `visuals/0.1/after/sweep/` | **passes**: 128 identical, 0 different, 0 missing; 128 exits 0, no VUID or ERROR line (`0.2/verify1/`, binary `36c5a0a6`). `density_tiers` occurs 0 times in `MagicPortals.exe`: the object is not linked into the game |
+
+**DECISIONS (00_order PRE-4), recorded for the steps that build them.** R10, R12 and R13 are the owner's standing
+rulings: every ruling 00_order section 6 raises is decided in favour of what the original does, the bytecode decode,
+with measured footage winning where they disagree. The rest are 00_order's own resolutions (section 3, as amended by
+section 8.13), taken as written.
+1. **Tiers: route B (R13, the owner's standing ruling).** The port resolves the tier from the file name through
+   `Tiers::Resolve`; the converter copies the tier files beside the 1x copies and writes a manifest (2.1), and
+   `out/levels` stays byte-identical. The choice is fixed at the 720 px one (**R12, the owner's standing ruling**):
+   every library frame is 1280 x 720, and a window of another height draws that choice too.
+2. **The combined size rule (K9).** `units = Tiers::Units(texels, D)`, whole units; `sizePx = units x scale`
+   (`<Scale>`, 9.1); `offsetPx = offset x scale`, D never applied to an offset, since the `.tscn` offset stays in
+   world units under route B (E9). `system_6.md` C3's `sizePx = texels / drawn.density` is read as `Units`: every hd
+   level texture is exactly 2x and every fullhd one even, so no level size differs by the cast. The lightmap check
+   (`sim/Lighting.cpp:299-310`, `2 x lightmap == size` on 730 sprites, with its own `Sprites::Find` at `:194`)
+   compares against units before scale, and 9a's `imageSizePx` means units, not texels. Order: 2.2 before 9.1.
+3. **The owner-scale rule for halos (K7).** The converter already writes `eth_halo_size` x `<Scale>` (MPR
+   `tscn.py:315-332`), so a level placement passes owner scale 1 and its halo is scaled once, as the original's;
+   a spawned effect passes its `.ent`'s `<Scale>` x the script's scale. Pinned in 6.1's `test_mp_layer`.
+4. **The effect random stream (K8).** Step 59's placed emitters keep the one member generator in emitter order.
+   Every draw a level does not place (the eyes, effects, the aura, the shock ring's jitter) takes `m_effectRandom`,
+   introduced in 6.3, so no new emitter shifts a placed one's draws. The original's shock-ring jitter comes from a
+   shared MTRand re-seeded from the millisecond clock every frame (00_order section 8.13, D6); the separate stream
+   is the port's determinism choice, and the rule stands. Each consumer's gate includes "byte-identical outside the
+   new picture's box" against the step before.
+5. **The between-slot depth table (K13, as amended by 00_order section 8.13; K14).** 6.3 promotes `slotAfter`
+   (today the lambda at `MagicPortalsLayer.cpp:2323`) to a member and writes one table in `MagicPortalsLayer.hpp`:
+   each class's fraction between slots and the order of classes that share a `z_index`; `test_mp_layer` pins that
+   order, not uniqueness. At an equal draw hash the original keeps the multimap's insertion order
+   (`ETHEntityRenderingManager.cpp:74, 85, 106`), and the tie-break follows it. Steps before 6.3 (3.1, 4.3, 5.1) use
+   the lambda and 6.3 migrates them. The rows known now:
+   - **the player at z 4 (R10, the owner's standing ruling;** `GameCharacter` ctor instr 14-24), not after
+     `z_index <= 0` (`:2238`), so minions at z 2 draw behind it;
+   - already shared, `slotAfter(k)` = SlotZ(n) - 1/2: the beholder, spikes, thrown stones, lights with no owner;
+     from step 59, an owner's particle systems in (1/4, 1/2) of its slot and placed portals at the player's slot -
+     1/4;
+   - 3.1 timer dial `slotAfter(crystal z - 2)` (E3); 4.3 wells `slotAfter(-5)`; 5.1 minions `slotAfter(2)`; 12.1
+     dark dragon `slotAfter(8)`; 12.2 ghost at **knight z - 1** (port z 1; no tie with minions),
+     `ghost_appear_effect` at ghost z + 1, RAGE_MODE's minion at z 0;
+   - effects `slotAfter(round z)`, halo + 1/4, systems at `SlotFraction`;
+   - `door_locked_vanish` door z + 2 (unscaled); `shock_area` z -10 absolute; `door_highlight` z -22; `black_bar`
+     layerDepth 1.0, in front of everything; `dashed_door` wall z - 4 raw px; `roundabout_effect` z -5 (particles
+     +100); `hourglass`, `red_cross`, `portal_mark` and `red_waves` at z scale(32).
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): CMake re-ran for the two lists, then 51 steps (`Tiers.cpp`,
+`test_mp_tiers.cpp`, the sim library, every Magic Portals suite and `MagicPortals.exe` relinked). Printed no warning
+or error. After the review, two comments in `Tiers.hpp` were corrected (`SetupSpriteRects` is `Sprite.cpp:104-136`,
+not `:104-139`; what a name with no separator does) and this step's text with them. The review's other correction,
+`GetCurrentSize` ending at `:684`, was not taken: its `return` is line 682 and its closing brace 683, so `:652-683`
+stands. The rebuild (49 steps, `MagicPortals.exe` `fc6fe248...`, `test_mp_tiers.exe` `b3b157f5...`) printed no
+warning; it differs from the measured binaries in comments only and was not launched, so the numbers in this step are
+the measured binaries'.
+
+**THE SUITES**, run directly, once each:
+- **`test_mp_tiers` 527 checks, 0 failures** (`8f7688d7...`, first launch); the same binary again after only the
+  `_source` and `_ruling` text of `tiers.json` was corrected: 527, 0.
+- **ctest**, once: **120 of 121 pass, 0 fail, 1 not run**: Smart App Control refused `test_mp_geometry` (BAD_COMMAND).
+  It includes no `sim/Tiers` and was not relinked. `test_mp_tiers` passed in ctest too.
+
+**SMART APP CONTROL.** Two refusals, two notifications: `MagicPortals.exe` `b969287c` (the unmodified build's,
+exit 126) and `test_mp_geometry.exe` in ctest. `MagicPortals.exe` `36c5a0a6` and `test_mp_tiers.exe` ran on their
+first launch.
+
+**LEFT FOR THE OWNER.**
+- **R12's other windows.** Below 600 px the original tries no fullhd file, so its skies are the 1x 455 u ones, and
+  below 480 px no hd file either; the port draws the 720 choice at every window size.
+- **Letter case.** The port's `FileExists` is Windows', which ignores case; the APK's does not. No image name in the
+  original's `.ent`, `.esc`, `.par` or `.enml` files differs in case from a tier file (149 names, 134 tier files),
+  so nothing differs today.
+- **`download_full_game_popup_button.png`** is 128 x 32 u in hd against 130 x 34 at 1x: for 2.3's optional UI
+  fold-in, if that button is ever drawn (the store buttons are omitted by an earlier ruling).
+- **Path forms, for 2.2.** A name with no `/` or `\` is looked for in `<folder>/<name>` from the working directory;
+  the original finds no tier for it, since `GetFileDirectory` returns the whole name when it has no separator
+  (`gs2d/src/Platform/Platform.cpp:40-50`) and it tries `<name><folder>/<name>`. Nothing calls `Resolve` yet and
+  the planned callers pass a path; if one ever passes a bare name, `Resolve` should return it at D 1, pinned in
+  `test_mp_tiers`. A path given with `\` comes back mixed (`dir\hd/half.png`, as the suite pins): 2.2 checks that
+  nothing caches a texture by its path string, or one file loads twice.
