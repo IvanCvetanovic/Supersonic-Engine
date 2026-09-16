@@ -20,7 +20,11 @@
 #include "sim/Sprites.hpp"
 #include "sim/Tscn.hpp"
 
+#include <stb_image.h>
+
+#include <cctype>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -71,6 +75,26 @@ std::vector<unsigned char> BmpHeader(int32_t width, int32_t height) {
     }
     return bytes;
 }
+
+// A JPEG's start as a camera writes one: the start marker, a JFIF segment and a
+// quantisation table, then a frame header of `marker` (0xC0 baseline) at 8 bits
+// and three components - height BEFORE width, the reverse of a PNG. The scan
+// that would follow is left off: the reader stops at the frame header.
+std::vector<unsigned char> JpegHeader(uint16_t width, uint16_t height, unsigned char marker = 0xC0) {
+    std::vector<unsigned char> bytes = {0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 'J', 'F', 'I', 'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0};
+    bytes.insert(bytes.end(), {0xFF, 0xDB, 0, 67, 0});
+    bytes.insert(bytes.end(), 64, static_cast<unsigned char>(1));
+    bytes.insert(bytes.end(), {0xFF, marker, 0, 17, 8});
+    for (const uint16_t v : {height, width}) {
+        bytes.push_back(static_cast<unsigned char>(v >> 8));
+        bytes.push_back(static_cast<unsigned char>(v));
+    }
+    bytes.insert(bytes.end(), {3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1});
+    return bytes;
+}
+
+// Where JpegHeader's frame header starts: after the JFIF segment and the table.
+constexpr std::size_t kJpegFrameAt = 20 + 69;
 
 bool Near(double a, double b) { return std::fabs(a - b) < 1e-6; }
 
@@ -125,6 +149,92 @@ void AnythingElseIsRefusedByName() {
     const bool missing = Sprites::ImageSize((dir / "nothing.png").string(), w, h, error);
     CHECK(!missing);
     CHECK_MSG(error.find("nothing.png") != std::string::npos, error);
+}
+
+// A JPEG's size is in its frame header, behind its other segments (K16: the
+// particle systems of fireball, burn_projectile, dragon, dark_dragon and
+// ghost_utility_spawn draw particles/explosion.JPG).
+void AJpegSaysItsSizeInItsFrameHeader() {
+    const std::filesystem::path dir = Scratch();
+    int w = 0;
+    int h = 0;
+    std::string error;
+
+    // Not square, so a width and a height read the wrong way round would show.
+    Write(dir / "wide.jpg", JpegHeader(455, 256));
+    CHECK_MSG(Sprites::ImageSize((dir / "wide.jpg").string(), w, h, error), error);
+    CHECK_EQ(w, 455);
+    CHECK_EQ(h, 256);
+
+    // Progressive, with fill bytes before its frame header's marker and a byte of
+    // padding after the table, both of which the renderer's decoder passes over.
+    std::vector<unsigned char> padded = JpegHeader(32, 100, 0xC2);
+    padded.insert(padded.begin() + static_cast<std::ptrdiff_t>(kJpegFrameAt), {0x00, 0xFF, 0xFF});
+    Write(dir / "tall.jpg", padded);
+    CHECK_MSG(Sprites::ImageSize((dir / "tall.jpg").string(), w, h, error), error);
+    CHECK_EQ(w, 32);
+    CHECK_EQ(h, 100);
+
+    // Extended sequential, one component: a frame header of 11 bytes.
+    std::vector<unsigned char> grey = JpegHeader(7, 9, 0xC1);
+    grey.resize(kJpegFrameAt + 9);
+    grey[kJpegFrameAt + 3] = 11;
+    grey.insert(grey.end(), {1, 1, 0x11, 0}); // one component: its id, sampling and table
+    Write(dir / "grey.jpg", grey);
+    CHECK_MSG(Sprites::ImageSize((dir / "grey.jpg").string(), w, h, error), error);
+    CHECK_EQ(w, 7);
+    CHECK_EQ(h, 9);
+}
+
+// A JPEG cut short, or one the renderer's decoder (stb_image) would not read, has
+// no size: a size for it would put a particle system on a texture that draws as
+// the fallback.
+void AJpegTheRendererCannotReadIsRefused() {
+    const std::filesystem::path dir = Scratch();
+    const auto refused = [&dir](const char* name, const std::vector<unsigned char>& bytes, const char* says) {
+        int w = 0;
+        int h = 0;
+        std::string error;
+        Write(dir / name, bytes);
+        const bool sized = Sprites::ImageSize((dir / name).string(), w, h, error);
+        CHECK_MSG(!sized, std::string(name) + " was sized " + std::to_string(w) + " x " + std::to_string(h));
+        CHECK_MSG(error.find(name) != std::string::npos && error.find(says) != std::string::npos,
+                  std::string(name) + ": " + error);
+    };
+    const std::vector<unsigned char> whole = JpegHeader(64, 32);
+
+    std::vector<unsigned char> cut = whole;
+    cut.resize(kJpegFrameAt);
+    refused("cut_before_frame.jpg", cut, "cut short before its frame header");
+    cut = whole;
+    cut.resize(kJpegFrameAt + 6);
+    refused("cut_in_frame.jpg", cut, "cut short in its frame header");
+    cut = whole;
+    cut.resize(40); // inside the table, whose length says 67
+    refused("cut_in_table.jpg", cut, "cut short before its frame header");
+    refused("start_only.jpg", {0xFF, 0xD8}, "cut short before its frame header");
+
+    refused("lossless.jpg", JpegHeader(64, 32, 0xC3), "marker 0xC3");
+    refused("arithmetic.jpg", JpegHeader(64, 32, 0xC9), "marker 0xC9");
+    std::vector<unsigned char> scanFirst = whole;
+    scanFirst[kJpegFrameAt + 1] = 0xDA;
+    refused("scan_first.jpg", scanFirst, "marker 0xDA");
+
+    std::vector<unsigned char> twelve = whole;
+    twelve[kJpegFrameAt + 4] = 12;
+    refused("twelve_bit.jpg", twelve, "12 bits a sample");
+    std::vector<unsigned char> components = whole;
+    components[kJpegFrameAt + 9] = 2;
+    refused("two_components.jpg", components, "frame header the renderer does not decode");
+    std::vector<unsigned char> delayed = whole; // the height left to a later DNL segment
+    delayed[kJpegFrameAt + 5] = 0;
+    delayed[kJpegFrameAt + 6] = 0;
+    refused("delayed_height.jpg", delayed, "says it has no size");
+
+    std::vector<unsigned char> shortSegment = whole;
+    shortSegment[5] = 1;
+    refused("short_segment.jpg", shortSegment, "shorter than its own length");
+    refused("no_marker.jpg", {0xFF, 0xD8, 0x00, 0xFF, 0xC0}, "no marker after its start");
 }
 
 // Three entities, written out of drawing order, with every property the reader
@@ -488,6 +598,48 @@ void TheOriginalsImagesAreCutAsTheEntsSay() {
     CHECK_MSG(normal && w == 4 * 32 && h == 4 * 32, "normalmap_77.png is sixteen cells of 32 x 32: " + error);
     const bool halo2 = Sprites::ImageSize(kOriginal + "/entities/halo.bmp", w, h, error);
     CHECK_MSG(halo2 && w == 64 && h == 64, "halo.bmp is 64 x 64: " + error);
+    // The one JPEG a particle system names (K16): its frame header, after an Exif
+    // segment and two tables, says 32 x 32.
+    const bool explosion = Sprites::ImageSize(kOriginal + "/particles/explosion.JPG", w, h, error);
+    CHECK_MSG(explosion && w == 32 && h == 32, "explosion.JPG is 32 x 32: " + error);
+}
+
+// The header reader and the renderer's decoder agree on every image the original
+// ships: the same size where stb_image reads a header (stbi_info), and a refusal
+// where it does not. So no particle system or sprite is sized for a texture that
+// draws as the fallback, nor refused for one that would draw.
+void EveryOriginalImageIsSizedAsTheRendererReadsIt() {
+    int images = 0;
+    int jpegs = 0;
+    int disagree = 0;
+    std::error_code ec;
+    for (std::filesystem::recursive_directory_iterator it(kOriginal, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        std::string extension = it->path().extension().string();
+        for (char& c : extension) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (extension != ".png" && extension != ".bmp" && extension != ".jpg" && extension != ".jpeg") continue;
+        ++images;
+        if (extension == ".jpg" || extension == ".jpeg") ++jpegs;
+        const std::string path = it->path().string();
+        int w = 0;
+        int h = 0;
+        std::string error;
+        const bool sized = Sprites::ImageSize(path, w, h, error);
+        int sw = 0;
+        int sh = 0;
+        int channels = 0;
+        const bool read = stbi_info(path.c_str(), &sw, &sh, &channels) != 0;
+        if (sized != read || (sized && (w != sw || h != sh))) {
+            ++disagree;
+            CHECK_MSG(false, path + ": the reader says " + (sized ? std::to_string(w) + " x " + std::to_string(h) : error) +
+                                 ", stb_image " + (read ? std::to_string(sw) + " x " + std::to_string(sh) : "no size"));
+        }
+    }
+    std::printf("  the original's images: %d (%d JPEG), %d sized otherwise than stb_image reads them\n", images, jpegs,
+                disagree);
+    CHECK_MSG(images > 1000 && jpegs == 2, "the original ships over 1,000 images, two of them JPEGs: " +
+                                               std::to_string(images) + ", " + std::to_string(jpegs));
+    CHECK_EQ(disagree, 0);
 }
 
 // ---- the converted levels -----------------------------------------------------
@@ -1263,6 +1415,8 @@ void EveryAddedBitmapIsWithoutAlpha() {
 int main() {
     AnImageSaysItsSizeInItsHeader();
     AnythingElseIsRefusedByName();
+    AJpegSaysItsSizeInItsFrameHeader();
+    AJpegTheRendererCannotReadIsRefused();
     TheCanvasOrderIsZThenTheFile();
     WhatTheReaderDoesNotDrawIsNamed();
     ThePortalAndTheShotAreTheirEnts();
@@ -1283,6 +1437,7 @@ int main() {
     std::error_code original;
     if (std::filesystem::is_directory(kOriginal + "/entities", original)) {
         TheOriginalsImagesAreCutAsTheEntsSay();
+        EveryOriginalImageIsSizedAsTheRendererReadsIt();
         TheOriginalsParticlesAreRead();
         AnEntityWithoutParticlesSaysSoWithoutFailing();
         EveryAddedBitmapIsWithoutAlpha();

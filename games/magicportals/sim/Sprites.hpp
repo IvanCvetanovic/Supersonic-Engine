@@ -51,7 +51,11 @@ bool Find(const Tscn::Scene& scene, const std::string& resRoot, std::vector<Spri
 glm::dvec2 CentrePx(const Sprite& sprite);
 
 // An image's size, from its header: a PNG or a BMP, the two kinds of file the
-// converter copies. False, with `error` naming the file, for anything else.
+// converter copies, or a JPEG, which five of the original's entities name for a
+// particle system (particles/explosion.JPG). A JPEG is sized only when its
+// segments and frame header are laid out as the renderer's decoder reads them;
+// the tables and the components' sampling are left to the renderer. False, with
+// `error` naming the file, for anything else.
 bool ImageSize(const std::string& path, int& width, int& height, std::string& error);
 
 } // namespace MagicPortals::Sprites

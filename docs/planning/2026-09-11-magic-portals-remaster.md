@@ -9243,3 +9243,110 @@ tune to. Numbers from the verifier's third round (`verify3/measure_v3.txt`, bina
   `Sprites::ImageSize` reads PNG and BMP headers only ("particle image could not be read", 1 of 128 logs).
 - The plan's 2e footage check: 3-24's shock agents drawn with square cells, no library patch clean enough to gate;
   4-32's turned light wall is off the f420 view, pinned by `test_mp_layer` only.
+
+## Step 60 - a JPEG's size read from its frame header, and the particle systems that draw one built (built)
+
+The entity-visuals order's step 0.1 (the remake's `out/parity/visuals/briefs/00_order.md` section 7, conflict K16,
+found by that review): `sim/Sprites.cpp` `ImageSize` read PNG and BMP headers only, and `buildEmitters` and
+`addEntityEmitters` drop a system whose bitmap it cannot size, so every system on `particles/explosion.JPG` was never
+built. Game-only: no file under `src/` or `assets/shaders/`. No number enters `data/*.json`: 32 x 32 is the file's
+own, pinned by the suite, and nothing is tuned. **2-32's dragon now builds its fire; the sweep's one "particle image
+could not be read" is gone (1 of 128 logs -> 0), and every level's f420 is byte-identical to step 59's, 2-32's
+included: the dragon's node and its fire's spawn point lie outside the view until 5.2.**
+
+**WHAT THE ORIGINAL DOES.**
+- **Five** `.ent` files give a particle system the bitmap `explosion.JPG`: `fireball`, `burn_projectile`, `dragon`,
+  `dark_dragon` and `ghost_utility_spawn` (00_order K16 names the first four). Of the 128 levels only 2-32
+  (level31a) places one, `dragon_ent_1279`; the 28 `fireball.ent` strings are carrancas' `metadata/entity`, which
+  `buildEmitters` does not read (7.2's spawned fireball).
+- `explosion.JPG`: 1,358 bytes, JFIF, an Exif APP1 and two quantisation tables, then SOF0 at byte 182: 8 bits,
+  height 32, width 32, 3 components. The original's other JPEG, `entities/floor03_2.jpg` (SOF0, 256 x 256), is
+  named by no level.
+- The original decodes its textures with SOIL (`GLES2Texture.cpp:297` `SOIL_load_image_from_memory`, `SOIL.c:1463`),
+  whose `stb_image_aug.c` reads a JPEG (`:222`) of frame SOF0 or SOF1 (`:1265`): the dragon's fire is drawn there.
+- The port's renderer already reads it: `TextureRegistry::Acquire` is full stb_image (`TextureRegistry.cpp:13, 249`).
+  Only the renderer-free probe refused it.
+
+**WHAT CHANGED.**
+- **`sim/Sprites.cpp` `ImageSize`:** a file opening 0xFF 0xD8 is walked segment by segment to its frame header
+  (`JpegSize`), its marker walk and frame header held to what the renderer's stb_image accepts: before the frame
+  header only DQT, DHT, DRI and the APPn and COM segments, each skipped by its length (`stb_image.h:3099-3199`);
+  padding between segments and fill bytes before a marker passed over (`:2919-2928`, `:3375-3382`), but a byte other
+  than a marker straight after the start refused as stb refuses it; a frame of SOF0, SOF1 or SOF2 (`:3360`), 8 bits a
+  sample, 1, 3 or 4 components and a length of 8 + 3 a component (`:3262-3274`); **height before width**. Any other
+  marker first (lossless, arithmetic, a scan) is refused naming it; a file cut short anywhere before the size is
+  refused. Anything else is now "is not a PNG, a BMP or a JPEG". Not checked: the tables' contents and each
+  component's sampling factors and table index (`:3290-3293`); a file stb_image refuses for those is still sized, and
+  draws as the fallback texture. None of the original's images is such a file (below).
+- **`sim/Sprites.hpp`:** the comment says which JPEG and why.
+
+**BASELINE.** 00_order PRE-3 and this role's baseline rule name `visuals/particles/after/` (1-01 f420 `b19ce71a`,
+binary `0eb72b55`); step 59's record supersedes that folder with `fix2/`. Measured first, on the unmodified committed
+build (`c9f500b`, `MagicPortals.exe` `687e715c`): 1-01 f420 **`a1f8d7ae`** (`visuals/0.1/before/`), fix2's and
+`particles/commit/`'s, not `after/`'s. So "before" is `particles/fix2/` and its 128-level `sweep/` (binary `b74d8160`,
+which step 59 records as differing from `687e715c` in comments only); the same unmodified build also gave
+`0.1/before/2-32_level31a` (every 30th frame to f360). After: `visuals/0.1/after/` (`capture_01.sh after
+dragon|sweep`, `sweep_01.sh`), binary `e0684179`: 1-01 f420 still `a1f8d7ae`, the whole sweep unchanged, so the
+next step's "before" is `visuals/0.1/after/` and its `sweep/`.
+
+| Gate (00_order 0.1) | Required | Before | After |
+|---|---|---|---|
+| `test_mp_sprites`: `particles/explosion.JPG` | 32 x 32 | refused ("is neither a PNG nor a BMP") | **32 x 32: passes** |
+| `test_mp_sprites`: a truncated JPEG | refused | - | **refused: passes**, cut before the frame header, inside it, inside a table (whose length skips 49 bytes past the end of the file), and at the start marker alone; also refused by name: markers 0xC3 (lossless), 0xC9 (arithmetic) and 0xDA (a scan) before a frame, 12 bits a sample, 2 components, a height of 0 (left to DNL), a segment of length 1, no marker after the start. Sized: 455 x 256 baseline (not square, so a swap shows), 32 x 100 progressive behind fill bytes and padding, 7 x 9 one-component SOF1 |
+| `test_mp_layer` `EmitterReports` on level31a | lists the dragon's `explosion.JPG` system | not built | **passes**: `dragon_ent_1279` slot 0, cell 32 x 32, added, pool 5, size 24, the level's only `explosion.JPG` system; **584 particle draws over 120 frames** |
+| sweep: "particle image could not be read" | 0 of 128 logs | 1 (2-32) | **0 of 128: passes**; no "particle system not drawn" and no TextureRegistry "Could not load" in any; 128 exit 0, validation ACTIVE in 128 and silent |
+| sweep: every other level's f420 byte-identical to PRE-3, **read as `particles/fix2/sweep/`** (BASELINE) | 127 of 127 | - | **128 of 128 byte-identical: passes**; 2-32 unchanged too: the dragon's node (-164, -84) and its fire's spawn point, node + (96, 13) = (-68, -71), lie outside the view until 5.2 |
+
+**Beyond the gates.**
+- **The probe agrees with the renderer's decoder on every image the original ships:** `stbi_info` against
+  `ImageSize` over the 1,182 PNG, BMP and JPEG files under the extracted assets, 2 of them JPEGs: **0 disagree**
+  (`EveryOriginalImageIsSizedAsTheRendererReadsIt`). Before the change the two JPEGs would have been the
+  disagreements.
+- **The texture loads in the game:** 2-32's log reads `[TextureRegistry] Loaded .../particles/explosion.JPG (32x32, 3
+  source channels, linear, 6 mip level(s))`, and no "Could not load" in any of the 128 sweep logs.
+- **No frame shows it yet.** 2-32's frames f30 to f360 are byte-identical before and after (12 of 12): the port's
+  dragon stays at its placement (-164, -84), and its fire spawns at node + (96, 13) = (-68, -71), about (-191, -200)
+  px on screen: the view shows world (0, 0) to (455, 256) at f90 to f210 and pans right after. The dragon's picture
+  is not outside it: the uncut 452 x 360 `dragon_boss.png` (centre (-116, -91), right edge at world x 110) shows its
+  jaw at the top left, where the original shows one 226 x 180 cell of its 2 x 2 sheet (5.2, K3). 5.2 moves the
+  dragon with the sim and gates the fire riding its head.
+
+**BUILD: no warnings** (MSVC 14.50, Release, Ninja, /W4). The first build compiled `Sprites.cpp` and printed nothing
+for it; it stopped on the step's own fault in the two suites (a `\n` written as a line break inside two `printf`
+strings: C2001, with C4473 from the same lines). The second build (49 steps: the sim and game libraries, every Magic
+Portals suite and `MagicPortals.exe` relinked) printed no warning. After the review, the comments in `Sprites.cpp`
+and `Sprites.hpp` were narrowed to what the probe checks, and the Step 60 text on 2-32's view was corrected; the
+rebuilds (57 then 47 steps, last `MagicPortals.exe` `b969287c...`) printed no warning. They differ from the measured
+binaries in comments only and were not launched, so the numbers below are the measured binaries'.
+
+**THE SUITES**, run directly, once each:
+- **`test_mp_sprites` 336 -> 372 checks, 0 failures** (`d5a182ea...`, first launch):
+  `AJpegSaysItsSizeInItsFrameHeader`, `AJpegTheRendererCannotReadIsRefused`,
+  `EveryOriginalImageIsSizedAsTheRendererReadsIt`, and `explosion.JPG` pinned in `TheOriginalsImagesAreCutAsTheEntsSay`.
+- **`test_mp_layer` 854 -> 860 checks, 0 failures** (`TheDragonsFireIsBuiltFromItsJpeg`). Its first link
+  (`2a166a89...`) was refused by Smart App Control (exit 126, one notification); deleted, relinked once
+  (`650f72a6...`), ran.
+- **`test_mp_lighting` 495 checks, 0 failures** (`38509d26...`, first launch): it sizes 730 lightmaps through
+  `ImageSize`.
+- **ctest**, once: **112 of 120 pass, 0 fail, 8 not run**: Smart App Control refused test_mp_tscn, test_mp_levels,
+  test_mp_start, test_mp_chapters, test_mp_wells, test_mp_keys, test_mp_sky and test_mp_hud (BAD_COMMAND). The two of
+  them that reach `ImageSize` (through `Sprites::Find`) were deleted and relinked once: **test_mp_start**
+  (`438489ba...`) ran, **726 checks, 0 failures**; **test_mp_sky** (`1917b69f...`) was refused again (exit 126) and
+  is **not run**. The other six include no `sim/Sprites` and were not relinked. test_mp_sprites, test_mp_layer and
+  test_mp_lighting passed in ctest too.
+
+**SMART APP CONTROL.** `test_mp_layer.exe` `2a166a89...` refused once (above). `MagicPortals.exe` `e0684179...` ran
+on its first launch, and for all 129 captures. With ctest's eight refusals and test_mp_sky's second, ten
+notifications in all. The unmodified build `687e715c` ran twice for the baseline.
+
+**RULINGS.** None of 00_order's R1-R18 is a dependency of 0.1 (R13's route B leaves `out/levels` alone and this step
+reads no tier). Applied: **the owner's standing ruling, in favour of what the original does** - the original draws
+`dragon.ent`'s `explosion.JPG` system, so the port builds it.
+
+**LEFT FOR THE OWNER.**
+- **The decoders differ on one kind of JPEG.** The original's `stb_image_aug.c` takes SOF0 and SOF1 only; the port's
+  stb_image also SOF2 (progressive). The probe follows the port's renderer. Both shipped JPEGs are SOF0, so nothing
+  the game draws is affected.
+- **00_order K16 errata:** five entities name `explosion.JPG`, not four; `ghost_utility_spawn.ent` concerns 12.2.
+- 7.2 (`fireball`), 10.4 (`burn_projectile`), 5.2 (the dragon) and 12.1 (`dark_dragon`) are unblocked on K16; 2-32's
+  fire is built now but not seen until 5.2.
