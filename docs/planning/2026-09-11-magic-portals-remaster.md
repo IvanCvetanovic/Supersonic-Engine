@@ -8498,3 +8498,67 @@ launch shows a Windows notification.
 **Left open.** The overlay is not quantised. The torch's own sprite and flame (visuals System 7).
 The torch light's z. The script's background lighten/darken (`lightenAllBackgroundEntitities`,
 design 5.8).
+
+## Step 56 - chapter select and the level grid, paged as the original pages them (built)
+
+The remake's ui3 spec sections 0.5 (the pager), 5 (chapter select) and 6 (the level grid), with owner
+rulings R1 (two chapters a page) and R3 (locking as the original) and port decision P1 (the pager's
+per-frame rules once per 60 Hz tick). It closes the spec's deltas D9-D19: until now chapter select
+showed all four chapters at once, nothing was locked, the grid's tiles were 0.217 of the height, a
+page change was a cut, and both screens were world quads under the old layout. Game-only.
+
+**WHAT CHANGED.**
+- **`sim/Selector`** (new, pure): both LevelSelectors over one PageManager.
+  - The board a state opens with, from the save: chapters open at >= 60% of the one before, levels
+    open when the one before has a medal (`sim/Locking`), each chapter's percent, the warning where its
+    boss level is scored and it is short, the last open chapter or level highlighted.
+  - The pager: `SetPage` (offset = new - old), `Step` (x0.92 per getOffset call, twice with a
+    neighbour and once without, snapped below 0.0005; the rubber band at a third; getGlobalOffset),
+    the finger (the page follows it, a release past 0.2 swaps), the background's pan
+    clamp(global, 0, 1) x (512 - W), and the forward arrow's fade in float truncated to a byte.
+  - `Pieces`: W0-W9 and L0-L8 in the original's order, each at its entrance, bounce (I4-I6), press
+    tint and the "requires 60%" sawtooth (I9); `HitAt`: a tile of the current page where it is drawn,
+    or an arrow, none past the last page's forward.
+- **`data/ui.json` `selector`**: every number with its decode and measurement.
+- **`MagicPortalsLayer`**: `openMenu` builds the board and opens the pager on the opening page (the grid
+  on the page of its last open level, sliding in under the black; chapter select on the chapter last
+  played). `selectorInput` replaces `menuQuadInput`: the back key up a state from either page, a tile
+  acting on release unless the finger travelled 48 u, an arrow turning the page on its release tick
+  or, from page 1, going up a state. `EmitMenu` draws the pieces through the overlay, with the counter's
+  frames by UV. `PressMenu` refuses a locked chapter or level (a named `--level` still opens any
+  level). `buildMenu` puts nothing in the registry for these screens any more; `layOutMenu` lists every
+  tile at rest on its page and the settled arrows, for `PressMenu` and the suites.
+
+**MEASURED** (1280x720, `--fixed-step`, saves fresh and all-gold; TAP START tapped at tick 240, then
+an icon or W8 at 330; the remake's `out/parity/ui3/select/first/`), compare.py against the stills:
+
+| capture | still | mean_abs | edge IoU | offset |
+|---|---|---|---|---|
+| chapter select, fresh, page 1 | chapters_fresh_p1 | 1.72 | 0.824 | (0, 0) |
+| chapter select, gold, page 1 | chapters_gold_p1 | 2.08 | 0.825 | (0, 0) |
+| chapter select, gold, page 2 by W8 | chapters_gold_p2 | 1.93 | 0.849 | (0, 0) |
+| grid, fresh, chapter 1 | levels_fresh_w1_open | 2.55 | 0.893 | (0, 0) |
+| grid, gold, chapter 1, opening on page 2 | levels_gold_w1_p2 | 2.86 | 0.853 | (0, 0) |
+
+**test_mp_select (new), 112 checks**, from the spec's own pixels: W1 (460, 18), W2 (403.75, 180) /
+(640, 180) (chapter 1 bouncing about its centre), W3 (668.125, 270), W4 (431.875, 444.375), W5 centred
+(538.75, 523.125), W6 (533.125, 573.75) at half alpha 300 ms in, W7/W8 about (64, 360) / (1216, 360), W9
+(595, 648) digit and (640, 648) dot at ARGB(220,0,0,0); L3 (280 + 180c, 180r), L1 (-14.06, -126.56), L2
+(0, -5.625), L4 centred, L5 (820, 540), L6 (381.25, 101.25), L7/L8 about (0, 360) / (1280, 360), L0 at
+-160 px on page 2; the slide 0.92 x 0.8464^k new and 0.8464^(k+1) old, at rest by tick 44-47; the
+fade 255, 244, 234, 224, 215, 206 and 0 on the 72nd frame, +12 a frame and 255 on the 22nd; a -0.087
+drag snapping back, a -0.48 drag swapping to page 2 at +0.52, a +0.39 drag past page 1 drawn at 0.13.
+**test_mp_layer 777 -> 783**: the grid lists all 32 tiles, sixteen a page; the forward arrow turns the
+pager, a locked level refuses, back goes page 2 -> page 1 -> chapter select; the medal counted on the
+board and placed from the drawn piece.
+
+**Build: no warnings** (MSVC 14.50; GCC was not run). **ctest: 115 of 119 pass, 4 not run**: Smart App
+Control refused test_mp_chapters, test_mp_movers, test_mp_minions and test_mp_zerog, which were not
+relinked and run again at the owner's request (each refusal is a notification); none of their code
+changed here. test_mp_select, test_mp_layer, test_mp_frontdoor (194), test_mp_info (389) and
+test_mp_lighting (495) were run directly.
+
+**Left open.** The acceptance rows of spec 7.5 and 7.6 that need footage: the slide against nav_gold
+frame by frame, the arrows' entrance, the swipe paths. The denial path of a locked tile is omitted with
+the store (ruling). Silver chapter medals are not captured (U3). The dot of the page counter fits worse
+than the digit (U4).

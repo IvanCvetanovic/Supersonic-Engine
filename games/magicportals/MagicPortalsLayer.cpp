@@ -221,6 +221,7 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       MainMenu::LoadRules(m_paths.portData + "/ui.json", m_mainMenuRules, error) &&
                       Loading::LoadRules(m_paths.portData + "/ui.json", m_loadingRules, error) &&
                       Credits::LoadRules(m_paths.portData + "/ui.json", m_creditsRules, error) &&
+                      Selector::LoadRules(m_paths.portData + "/ui.json", m_selectorRules, error) &&
                       Dashboard::LoadRules(m_paths.portData + "/ui.json", m_dashboardRules, error) &&
                       Locking::LoadRules(m_paths.portData + "/ui.json", m_lockingRules, error);
     // ui.json is the port's own and committed, so a HUD that will not read is a
@@ -279,6 +280,20 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
         for (const std::string* file : more) {
             resolve(*file, false);
         }
+        // Chapter select and the grid: the background an entity, the rest sprites.
+        const Selector::Rules& selector = m_selectorRules;
+        resolve(selector.background.sprite, true);
+        const Selector::Rules::Chapters& c = selector.chapters;
+        const Selector::Rules::Levels& l = selector.levels;
+        for (const std::string* file :
+             {&c.title.sprite, &c.back.sprite, &c.forward.sprite, &c.lockSprite, &c.medalGold, &c.medalSilver,
+              &c.medalBronze, &c.counter.sprite, &l.back.sprite, &l.forward.sprite, &l.tileSprite,
+              &l.lockedTileSprite, &l.bossSprite, &l.medalGold, &l.medalSilver, &l.medalBronze}) {
+            resolve(*file, false);
+        }
+        int worlds = 0;
+        for (const Chapters::Level& level : m_chapters.levels) worlds = std::max(worlds, level.world + 1);
+        for (int w = 0; w < worlds; ++w) resolve(c.iconPrefix + std::to_string(w) + ".png", false);
         if (m_achievementsLoaded) {
             for (const Achievements::Entry& entry : m_achievements.entries) {
                 resolve(board.rows.iconDirectory + entry.icon, true);
@@ -1022,102 +1037,44 @@ void MagicPortalsLayer::layOutMenu() {
         return;
     }
 
-    if (m_screen == Screen::Worlds) {
-        // The original pages four worlds two at a time (PageProperties:
-        // numItems 4, columns 2, rows 1). A window is not a phone, so the port
-        // shows all four at once rather than carrying a swipe for one page.
-        int worlds = 0;
-        for (const Chapters::Level& level : m_chapters.levels) worlds = std::max(worlds, level.world + 1);
-        for (int w = 0; w < worlds; ++w) {
-            MenuButton icon;
-            icon.kind = MenuButton::Kind::World;
-            icon.world = w;
-            const double span = 0.66;
-            const double x = worlds > 1
-                                 ? 0.5 - span * 0.5 + span * (static_cast<double>(w) / static_cast<double>(worlds - 1))
-                                 : 0.5;
-            icon.centrePx = at(x, 0.55);
-            icon.sizePx = sized(("world_icon" + std::to_string(w) + ".png").c_str(), 0.34);
-            m_menuButtons.push_back(icon);
+    // CHAPTER SELECT AND THE GRID are drawn through the overlay by EmitMenu from
+    // sim/Selector, which also says what a touch is on (selectorInput). These are
+    // their tiles at rest on their own pages and the two arrows once their entrance
+    // is over, for PressMenu and the suites: the view is the menu's box.
+    if (m_screen == Screen::Worlds || m_screen == Screen::Levels) {
+        const Selector::Board& board = m_selectorBoard;
+        for (int item = 0; item < board.items; ++item) {
+            const Hud::Rect rect = Selector::ItemRect(m_selectorRules, board, item, box);
+            MenuButton button;
+            button.centrePx = rect.Centre();
+            button.sizePx = rect.size;
+            if (board.levels) {
+                button.kind = MenuButton::Kind::Level;
+                button.world = board.world;
+                button.level = board.tiles[static_cast<std::size_t>(item)].level;
+            } else {
+                button.kind = MenuButton::Kind::World;
+                button.world = item;
+            }
+            m_menuButtons.push_back(button);
         }
-        return;
-    }
-
-    // The grid, as the original builds it for levels: createLevelSelectState
-    // (WorldSelector.angelscript, bytes 365279..365960) sets columns 4 and rows
-    // 4, so SIXTEEN to a page. PageProperties' own defaults are 4 by 3, which
-    // is what the port first shipped and what the owner's screenshot of the
-    // original disproved - the level selector overrides them.
-    constexpr int kColumns = 4;
-    constexpr int kRows = 4;
-    constexpr int kPerPage = kColumns * kRows;
-    std::vector<int> entries;
-    for (std::size_t i = 0; i < m_chapters.levels.size(); ++i) {
-        if (m_chapters.levels[i].world == m_menuWorld) entries.push_back(static_cast<int>(i));
-    }
-    const int pages = std::max(1, (static_cast<int>(entries.size()) + kPerPage - 1) / kPerPage);
-    m_menuPage = std::clamp(m_menuPage, 0, pages - 1);
-
-    // A CENTRED BLOCK OF TOUCHING TILES, which is not what this first shipped.
-    //
-    // The original does not spread its buttons over a box at all. Page::Page
-    // (PageManager.angelscript) walks a cursor: it starts at getScreenOffset(),
-    // places a button, steps the cursor by getButtonSize().x, and wraps to the
-    // offset with cursor.y += getButtonSize().y when the next one would pass
-    // the screen's far edge. getButtonSize is GetSpriteSize(button) * g_scale -
-    // the tile's OWN size, with no gap - and getScreenOffset is
-    // ((screen - vector2(columns * buttonSize.x, rows * buttonSize.y)) / 2), so
-    // the block is simply centred. `columns` and `rows` are a COUNT there
-    // (numButtons = rows * columns), not a geometry.
-    //
-    // Spread over a 0.24..0.76 by 0.17..0.83 box at box.y * 0.14 each, as this
-    // did, the tiles float apart and the grid sits squat in the middle of the
-    // screen. That is the difference the owner saw against their capture.
-    //
-    // THE ONE NUMBER HERE IS MEASURED, NOT DECODED, and it says so. The
-    // original's absolute tile size is GetSpriteSize * (GetScreenSize().y / 480)
-    // - SGlobalScale's m_absoluteSize is 480 - and it picks an `hd` sprite at
-    // twice the density above that height, so the size on screen depends on the
-    // device and on which asset was loaded. Neither transfers to this port's
-    // fixed 256 px menu box. What does transfer is the PROPORTION, and in the
-    // owner's capture of the original the sixteen tiles are square at very near
-    // 0.217 of the screen's height, making the block 4 * 0.217 = 0.867 of the
-    // height and 54% of a 16:9 width. That is the fraction below, flagged the
-    // way art.json flags a _guess.
-    constexpr double kTileOfHeight = 0.217; // measured from the owner's capture
-    const double tile = box.y * kTileOfHeight;
-    const glm::dvec2 blockPx(tile * kColumns, tile * kRows);
-    const glm::dvec2 originPx = (box - blockPx) * 0.5;
-    for (int slot = 0; slot < kPerPage; ++slot) {
-        const int index = m_menuPage * kPerPage + slot;
-        if (index >= static_cast<int>(entries.size())) break;
-        const int column = slot % kColumns;
-        const int row = slot / kColumns;
-        MenuButton button;
-        button.kind = MenuButton::Kind::Level;
-        button.world = m_menuWorld;
-        button.level = entries[static_cast<std::size_t>(index)];
-        // The cursor's step is the tile itself, and centrePx is the middle of
-        // the tile the cursor's top-left corner opens.
-        button.centrePx = originPx + glm::dvec2(tile * column, tile * row) + glm::dvec2(tile * 0.5);
-        button.sizePx = glm::dvec2(tile);
-        m_menuButtons.push_back(button);
-    }
-    if (pages > 1) {
-        // Either side of the grid, level with its middle - which is where the
-        // owner's screenshot of the original shows them. The decoded
-        // normalized pair is ambiguous about which number is x, and a picture
-        // of the game settles it better than a guess at the argument order.
-        MenuButton back;
-        back.kind = MenuButton::Kind::Back;
-        back.centrePx = at(0.08, 0.5);
-        back.sizePx = glm::dvec2(box.y * 0.12);
-        m_menuButtons.push_back(back);
-        MenuButton forward;
-        forward.kind = MenuButton::Kind::Forward;
-        forward.centrePx = at(0.92, 0.5);
-        forward.sizePx = glm::dvec2(box.y * 0.12);
-        m_menuButtons.push_back(forward);
+        constexpr double kSettledMs = 1.0e9;
+        const bool levels = m_screen == Screen::Levels;
+        for (const auto& [kind, placed] :
+             {std::pair<MenuButton::Kind, const UiLayer::Placed*>{
+                  MenuButton::Kind::Back, levels ? &m_selectorRules.levels.back : &m_selectorRules.chapters.back},
+              std::pair<MenuButton::Kind, const UiLayer::Placed*>{
+                  MenuButton::Kind::Forward,
+                  levels ? &m_selectorRules.levels.forward : &m_selectorRules.chapters.forward}}) {
+            const Hud::Rect rect = UiLayer::RectAt(
+                *placed, UiLayer::ButtonAnchorAt(m_selectorRules.layer, UiLayer::Anchor(*placed, box), box, kSettledMs));
+            MenuButton button;
+            button.kind = kind;
+            button.world = m_selectorBoard.world;
+            button.centrePx = rect.Centre();
+            button.sizePx = rect.size;
+            m_menuButtons.push_back(button);
+        }
     }
 }
 
@@ -1176,99 +1133,8 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
         }
         return;
     }
-    m_menuBg = quadFor("Magic Portals Menu Background", menuImage("world_select_bg.png"));
-    for (const MenuButton& button : m_menuButtons) {
-        std::string image;
-        switch (button.kind) {
-        case MenuButton::Kind::Play:
-            image = menuImage("main_play_game_button.png");
-            break;
-        case MenuButton::Kind::World:
-            image = menuImage("world_icon" + std::to_string(button.world) + ".png");
-            break;
-        case MenuButton::Kind::Level: {
-            // The last level of a world is its boss, and the original gives it
-            // its own button.
-            const Chapters::Level& level = m_chapters.levels[static_cast<std::size_t>(button.level)];
-            const bool boss = level.index == 31;
-            image = menuImage(boss ? "boss_level_button.png" : "level_button.png");
-            break;
-        }
-        // THE TWO ARROW FILES ARE NAMED THE OTHER WAY ROUND FROM THEIR ART, and
-        // this port drew them by their names until the owner saw it.
-        //
-        // level_select_back.png is a sprite of a RIGHT-pointing triangle, and
-        // level_select_forward.png a LEFT-pointing one. The original's own
-        // createLevelSelectState hands `back` to PageProperties.backButton and
-        // `forward` to forwardButton, and PageProperties puts backButton at
-        // normalized (0, 0.5) and forwardButton at (1, 0.5) - so on screen the
-        // LEFT edge draws the file called "back", whose picture points RIGHT.
-        //
-        // In the original that still looks correct, because the pictures were
-        // authored for those slots and the names are simply misleading. Reading
-        // the names as the direction, as this did, put a right-pointing arrow on
-        // the left and a left-pointing one on the right: both aimed inward, which
-        // is what the owner reported. The owner's capture of the original settles
-        // it - a LEFT arrow on the left, a RIGHT arrow on the right - so each
-        // side takes the file whose picture points the way that side goes.
-        case MenuButton::Kind::Back:
-            image = menuImage("level_select_forward.png");
-            break;
-        case MenuButton::Kind::Forward:
-            image = menuImage("level_select_back.png");
-            break;
-        // The finished and lost screens' own, which never reach here: those two
-        // screens returned above, and draw their buttons through the overlay.
-        case MenuButton::Kind::Retry:
-        case MenuButton::Kind::Next:
-        case MenuButton::Kind::List:
-            continue;
-        }
-        m_menuQuads.push_back(quadFor("Magic Portals Menu Button", image));
-
-        entt::entity label = entt::null;
-        if (button.kind == MenuButton::Kind::Level) {
-            const Chapters::Level& level = m_chapters.levels[static_cast<std::size_t>(button.level)];
-            label = registry.create();
-            registry.emplace<TagComponent>(label, "Magic Portals Menu Label");
-            registry.emplace<TransformComponent>(label);
-            auto& text = registry.emplace<UITextComponent>(label);
-            text.worldSpace = true; // it follows the button it numbers
-            // PageProperties' numberOffset is vector2(0, 0) and its fontScale is
-            // 1, so the number sits on the button's own point rather than nudged
-            // below it. The size rides THE BUTTON rather than being a fixed 26 px:
-            // the tiles are now sized from the window, and a fixed number would
-            // swim about on them as the window changed shape. Taken from the
-            // button and not from the box, because that is what it sits on - and
-            // because layOutMenu's tile fraction is layOutMenu's own business.
-            text.fontSize = static_cast<float>(button.sizePx.y * 0.55);
-            text.offset = glm::vec2(0.0f, 0.0f);
-            text.text = std::to_string(level.index + 1);
-        }
-        m_menuLabels.push_back(label);
-
-        // THE MEDAL THIS LEVEL WAS CLEARED WITH, where it has been.
-        //
-        // LevelChooser::itemDrawCallback asks ScoreManager::getScore for the
-        // level and draws getSmallSpriteMedalName(score) only when that is not
-        // zero. The port kept no score, so this drew nothing at all and every
-        // button was bare - which is what the owner reported. `_m` is the
-        // original's own middle size, as against the `_l` the medal screen uses.
-        entt::entity medal = entt::null;
-        if (button.kind == MenuButton::Kind::Level) {
-            const Chapters::Level& cleared = m_chapters.levels[static_cast<std::size_t>(button.level)];
-            const int tier = m_scores.Get(cleared.world, cleared.index);
-            if (tier != Scores::kUnplayed) {
-                // Bronze for anything unrecognised, which is what
-                // getSmallSpriteMedalName does with a score it does not know.
-                const char* file = tier == Scores::kGold     ? "medal_gold_m.png"
-                                   : tier == Scores::kSilver ? "medal_silver_m.png"
-                                                             : "medal_bronze_m.png";
-                medal = quadFor("Magic Portals Menu Medal", menuImage(file));
-            }
-        }
-        m_menuMedals.push_back(medal);
-    }
+    // Chapter select and the grid put nothing in the registry either: EmitMenu
+    // draws them through the screen overlay (sim/Selector).
 }
 
 void MagicPortalsLayer::unloadMenuDrawables(entt::registry& registry) {
@@ -1363,6 +1229,22 @@ void MagicPortalsLayer::openMenu(entt::registry& registry, Screen screen) {
             loadUiFont(*font);
         }
     }
+    if (changed && (screen == Screen::Worlds || screen == Screen::Levels)) {
+        // LevelSelector::preLoop: what the save has opened, and setCurrentPage from
+        // page 0 to the opening page, which slides in under the black.
+        m_selectorBoard = screen == Screen::Worlds
+                              ? Selector::BuildChapters(m_selectorRules, m_lockingRules, m_scores, m_chapters)
+                              : Selector::BuildLevels(m_selectorRules, m_lockingRules, m_scores, m_chapters, m_menuWorld);
+        m_selectorState = Selector::Open(m_selectorBoard, Selector::OpeningPage(m_selectorBoard, m_menuWorld));
+        m_selectorDown = Selector::Hit{};
+        m_selectorHeld = Selector::Hit{};
+        const Selector::Rules& selector = m_selectorRules;
+        for (const std::string* font :
+             {&selector.chapters.percent.font, &selector.chapters.warning.font, &selector.levels.number.font,
+              &selector.levels.cornerChapter.font, &selector.levels.cornerPercent.font}) {
+            loadUiFont(*font);
+        }
+    }
     layOutMenu();
     buildMenu(registry);
     if (screen == Screen::Loading) loadUiFont(m_loadingRules.dots.font);
@@ -1392,24 +1274,39 @@ bool MagicPortalsLayer::PressMenu(entt::registry& registry, MenuButton button) {
         openMenu(registry, Screen::Worlds);
         return true;
     case MenuButton::Kind::World:
+        // WorldChooser::validateItem (owner ruling R3): a locked chapter does nothing.
+        if (m_screen == Screen::Worlds &&
+            !Locking::ChapterUnlocked(m_lockingRules, m_scores, m_chapters, button.world)) {
+            return false;
+        }
         m_menuWorld = button.world;
         m_menuPage = 0;
         openMenu(registry, Screen::Levels);
         return true;
-    case MenuButton::Kind::Level:
+    case MenuButton::Kind::Level: {
         if (button.level < 0 || button.level >= static_cast<int>(m_chapters.levels.size())) return false;
+        // LevelChooser::validateItem: a locked level does nothing.
+        const Chapters::Level& chosen = m_chapters.levels[static_cast<std::size_t>(button.level)];
+        if (!Locking::LevelUnlocked(m_lockingRules, m_scores, m_chapters, chosen.world, chosen.index)) return false;
         unloadMenu(registry);
         m_screen = Screen::None;
         loadLevel(registry, button.level);
         return true;
+    }
     case MenuButton::Kind::Back:
-        if (m_menuPage <= 0) return false;
-        --m_menuPage;
-        openMenu(registry, Screen::Levels);
+        // PageManager::update: the previous page, or from the first page a state
+        // up - chapter select from the grid, the main menu from chapter select.
+        if (m_screen != Screen::Worlds && m_screen != Screen::Levels) return false;
+        if (m_selectorState.page > 0) {
+            Selector::SetPage(m_selectorState, m_selectorState.page - 1);
+            return true;
+        }
+        openMenu(registry, m_screen == Screen::Levels ? Screen::Worlds : Screen::Main);
         return true;
     case MenuButton::Kind::Forward:
-        ++m_menuPage; // layOutMenu clamps it to the last page
-        openMenu(registry, Screen::Levels);
+        if (m_screen != Screen::Worlds && m_screen != Screen::Levels) return false;
+        if (m_selectorState.page >= m_selectorBoard.Pages() - 1) return false;
+        Selector::SetPage(m_selectorState, m_selectorState.page + 1);
         return true;
     case MenuButton::Kind::Retry:
         // The level is still loaded behind the medal; loadLevel rebuilds it.
@@ -1506,54 +1403,7 @@ void MagicPortalsLayer::menuTick(entt::registry& registry, float fixedDelta) {
         return;
     }
 
-    // Chapter select and the grid: the touch first, since a page button lays the
-    // screen out again, and then every quad where this tick has it.
-    menuQuadInput(registry);
-    if (m_screen != Screen::Worlds && m_screen != Screen::Levels) return;
-
-    if (m_menuBg != entt::null && registry.valid(m_menuBg)) {
-        placeSprite(registry, m_menuBg, box * 0.5, box, -1.0f, 0.0f);
-    }
-    const auto same = [](const MenuButton& a, const MenuButton& b) {
-        return a.kind == b.kind && a.world == b.world && a.level == b.level;
-    };
-    const float tint = static_cast<float>(m_mainMenuRules.state.pressTintByte) / 255.0f;
-    for (std::size_t i = 0; i < m_menuButtons.size() && i < m_menuQuads.size(); ++i) {
-        const MenuButton& button = m_menuButtons[i];
-        if (m_menuQuads[i] != entt::null && registry.valid(m_menuQuads[i])) {
-            placeSprite(registry, m_menuQuads[i], button.centrePx, button.sizePx, 0.5f, 0.0f);
-            // Button::update's 0xFFCCCCCC while the touch that went down on it is
-            // still inside it.
-            const bool held = m_menuTouch.heldInside && m_menuTouch.downOn && same(*m_menuTouch.downOn, button);
-            registry.get<MaterialComponent>(m_menuQuads[i]).albedoColor =
-                held ? glm::vec4(tint, tint, tint, 1.0f) : glm::vec4(1.0f);
-        }
-        if (i < m_menuLabels.size() && m_menuLabels[i] != entt::null && registry.valid(m_menuLabels[i])) {
-            const glm::vec3 centre = Units::ToWorld(button.centrePx.x, button.centrePx.y);
-            registry.get<TransformComponent>(m_menuLabels[i]).position = glm::vec3(centre.x, centre.y, 0.6f);
-        }
-        if (i < m_menuMedals.size() && m_menuMedals[i] != entt::null && registry.valid(m_menuMedals[i])) {
-            // FROM THE BUTTON'S TOP-LEFT, and as a proportion of it.
-            //
-            // The 3-argument drawScaledSprite (utilSprite.angelscript, bytes
-            // 318043..318245) pushes vector2(0, 0) as the origin and hands on,
-            // and drawSprite calls SetSpriteOrigin with it before
-            // DrawShapedSprite - so `pos` is where the sprite's TOP-LEFT goes,
-            // not its middle. level_button.png is 64x64 and medal_gold_m.png is
-            // 32x32, so the medal covers 36..68 of the button in both axes: a
-            // badge over its bottom-right corner, four pixels proud of it.
-            //
-            // AS FRACTIONS OF THE BUTTON, never off the file's own size: both
-            // numbers come from the original's SD pair - a 64 px button and a
-            // 32 px medal placed at (36, 36) - so as ratios they are 32/64 and
-            // 36/64 whatever resolution was actually loaded.
-            constexpr double kNativeButtonPx = 64.0;
-            const glm::dvec2 sizePx = button.sizePx * (32.0 / kNativeButtonPx);
-            const glm::dvec2 topLeft = button.centrePx - button.sizePx * 0.5;
-            placeSprite(registry, m_menuMedals[i],
-                        topLeft + button.sizePx * (36.0 / kNativeButtonPx) + sizePx * 0.5, sizePx, 0.55f, 0.0f);
-        }
-    }
+    if (m_screen == Screen::Worlds || m_screen == Screen::Levels) selectorInput(registry);
 }
 
 void MagicPortalsLayer::beginMenuState() {
@@ -1661,51 +1511,85 @@ void MagicPortalsLayer::mainMenuInput(entt::registry& registry) {
     m_pendingMenu.main = *first;
 }
 
-void MagicPortalsLayer::menuQuadInput(entt::registry& registry) {
+void MagicPortalsLayer::selectorInput(entt::registry& registry) {
     using Supersonic::Input;
-    // The back key goes up a state, on the next tick as a release does.
+    const Selector::Rules& rules = m_selectorRules;
+    // The back key goes up a state, on the next tick as a release does: from
+    // either page of the grid to chapter select, and from chapter select to the
+    // main menu (LevelSelector::loop, ui3 spec 5.6, 6.6).
     if (Input::TickWasPressed(kBack) || devPressDue(DevPress::Back)) {
         m_menuTouch = MenuTouch{};
+        m_selectorDown = Selector::Hit{};
+        m_selectorHeld = Selector::Hit{};
         m_pendingMenu.kind = PendingMenu::Kind::Screen;
         m_pendingMenu.screen = m_screen == Screen::Levels ? Screen::Worlds : Screen::Main;
         return;
     }
     const Touch touch = touchThisTick(registry);
-    // The quads are laid out in the menu's box, which is the view's units.
-    const auto under = [this](const glm::dvec2& at) -> const MenuButton* {
-        for (const MenuButton& button : m_menuButtons) {
-            if (std::fabs(at.x - button.centrePx.x) > button.sizePx.x * 0.5) continue;
-            if (std::fabs(at.y - button.centrePx.y) > button.sizePx.y * 0.5) continue;
-            return &button;
-        }
-        return nullptr;
-    };
-    const auto same = [](const MenuButton& a, const MenuButton& b) {
-        return a.kind == b.kind && a.world == b.world && a.level == b.level;
+    const glm::dvec2 view = MenuBoxPx();
+    const auto same = [](const Selector::Hit& a, const Selector::Hit& b) {
+        return a.control == b.control && a.item == b.item;
     };
     if (touch.pressed) {
         MenuState::TouchDown(m_menuTouch.touch, touch.atView);
-        const MenuButton* down = under(touch.atView);
-        m_menuTouch.downOn = down != nullptr ? std::optional<MenuButton>(*down) : std::nullopt;
+        m_selectorDown =
+            Selector::HitAt(rules, m_selectorBoard, m_selectorState, view, m_menuClock.ms, touch.atView);
+        Selector::TouchDown(m_selectorState, touch.atView.x);
     }
-    if (touch.held || touch.released) MenuState::TouchHeld(m_menuTouch.touch, touch.atView);
-    const MenuButton* on = touch.over ? under(touch.atView) : nullptr;
-    const bool inside = m_menuTouch.downOn && on != nullptr && same(*on, *m_menuTouch.downOn);
-    m_menuTouch.heldInside = inside && touch.held && !touch.released;
-    if (!touch.released) return;
-    const std::optional<MenuButton> down = m_menuTouch.downOn;
-    const bool tile =
-        down && (down->kind == MenuButton::Kind::World || down->kind == MenuButton::Kind::Level);
-    const bool takes = !tile || MenuState::TileTakes(m_mainMenuRules.state, m_menuTouch.touch);
-    m_menuTouch = MenuTouch{};
-    if (!inside || !takes) return;
-    if (down->kind == MenuButton::Kind::Back || down->kind == MenuButton::Kind::Forward) {
-        // A page of the same state: the original draws it from the release frame.
-        PressMenu(registry, *down);
-        return;
+    if (touch.held || touch.released) {
+        MenuState::TouchHeld(m_menuTouch.touch, touch.atView);
+        Selector::TouchMove(m_selectorState, touch.atView.x, view.x);
     }
-    m_pendingMenu.kind = PendingMenu::Kind::Button;
-    m_pendingMenu.button = *down;
+    const Selector::Hit on = touch.over ? Selector::HitAt(rules, m_selectorBoard, m_selectorState, view,
+                                                          m_menuClock.ms, touch.atView)
+                                        : Selector::Hit{};
+    const bool inside = m_selectorDown.control != Selector::Control::None && same(on, m_selectorDown);
+    m_selectorHeld = inside && touch.held && !touch.released ? m_selectorDown : Selector::Hit{};
+    if (touch.released) {
+        const Selector::Hit down = m_selectorDown;
+        // Page::update's TouchGapDetector: a tile refuses a finger that travelled.
+        const bool takes =
+            down.control != Selector::Control::Item || MenuState::TileTakes(rules.state, m_menuTouch.touch);
+        Selector::TouchUp(rules, m_selectorBoard, m_selectorState);
+        m_menuTouch = MenuTouch{};
+        m_selectorDown = Selector::Hit{};
+        if (inside && takes) {
+            MenuButton button;
+            button.world = m_selectorBoard.world;
+            switch (down.control) {
+            case Selector::Control::Back:
+                button.kind = MenuButton::Kind::Back;
+                break;
+            case Selector::Control::Forward:
+                button.kind = MenuButton::Kind::Forward;
+                break;
+            case Selector::Control::Item:
+                if (m_selectorBoard.levels) {
+                    button.kind = MenuButton::Kind::Level;
+                    button.level = m_selectorBoard.tiles[static_cast<std::size_t>(down.item)].level;
+                } else {
+                    button.kind = MenuButton::Kind::World;
+                    button.world = down.item;
+                }
+                break;
+            case Selector::Control::None:
+                break;
+            }
+            const bool pageTurn =
+                (button.kind == MenuButton::Kind::Back && m_selectorState.page > 0) ||
+                button.kind == MenuButton::Kind::Forward;
+            if (down.control != Selector::Control::None) {
+                if (pageTurn) {
+                    // A page of the same state: drawn from the release frame.
+                    PressMenu(registry, button);
+                } else {
+                    m_pendingMenu.kind = PendingMenu::Kind::Button;
+                    m_pendingMenu.button = button;
+                }
+            }
+        }
+    }
+    Selector::Step(rules, m_selectorBoard, m_selectorState);
 }
 
 void MagicPortalsLayer::creditsInput(entt::registry& registry, float fixedDelta) {
@@ -2020,8 +1904,31 @@ void MagicPortalsLayer::EmitMenu(entt::registry& registry) const {
         }
         return;
     }
-    // Chapter select and the grid are drawn in the level's space; their black is
-    // over all of it.
+    if (m_screen == Screen::Worlds || m_screen == Screen::Levels) {
+        // Every picture and word in the original's order (sim/Selector.hpp), then the
+        // state's black.
+        for (const Selector::Piece& piece :
+             Selector::Pieces(m_selectorRules, m_selectorBoard, m_selectorState, view, m_menuClock.ms, m_layerClockMs,
+                              m_selectorHeld.control, m_selectorHeld.item)) {
+            const glm::vec4 colour(glm::vec3(piece.rgbBytes) / 255.0f, static_cast<float>(piece.alphaByte) / 255.0f);
+            if (piece.kind == Selector::Kind::Sprite) {
+                const std::string& image = menuPicture(piece.file);
+                if (!image.empty()) add(piece.rect, image, colour, piece.uvMin, piece.uvMax);
+                continue;
+            }
+            const Supersonic::BitmapFont* font = uiFont(piece.file);
+            if (font == nullptr) continue;
+            const auto& pages = font->Pages();
+            const std::vector<Hud::Glyph> glyphs =
+                piece.centred ? Hud::LayOutText(*font, piece.words, piece.at, piece.unitsPerFontPx)
+                              : Hud::LayOutTextFrom(*font, piece.words, piece.at, piece.unitsPerFontPx);
+            for (const Hud::Glyph& glyph : glyphs) {
+                if (glyph.page < 0 || static_cast<std::size_t>(glyph.page) >= pages.size()) continue;
+                add(glyph.rect, pages[static_cast<std::size_t>(glyph.page)], colour, glyph.uvOffset,
+                    glyph.uvOffset + glyph.uvScale);
+            }
+        }
+    }
     add(whole, std::string(), glm::vec4(0.0f, 0.0f, 0.0f, black));
 }
 
@@ -2703,15 +2610,12 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         placeBox(registry, m_statics[i], centrePx, sizePx, kMarkerZ, kMarkerDepth, 0.0f);
     }
 
-    const bool runtimeBake = m_lit && Lighting::RuntimeBake(m_level.torch);
-    static const std::string noLightmap;
     // No-portal zones, as the square round the circle a tap is refused in, where
     // each is now: a patrolling one moves.
     const std::vector<Portals::NoPortalZone>& zones = m_level.portals.zones;
     for (std::size_t i = 0; i < m_zones.size() && i < zones.size(); ++i) {
         const double sizePx = m_level.portals.rules.antiportalRadiusPx * zones[i].scale * 2.0;
         placeBox(registry, m_zones[i], zones[i].CentreNowPx(), glm::dvec2(sizePx), kZoneZ, kZoneDepth, 0.0f);
-        receiver.runtimeBake = runtimeBake;
     }
 
     // Hazards, at the box that kills: the remake's trigger, not the shape the
@@ -2799,12 +2703,15 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
     m_ambient = m_lit ? Lighting::Ambient(m_data.lighting, m_look.ambient, m_level.darkest, m_level.torch)
                       : glm::dvec3(1.0);
 
+    const bool runtimeBake = m_lit && Lighting::RuntimeBake(m_level.torch);
+    static const std::string noLightmap;
     for (const DrawnSprite& drawn : m_sprites) {
         Receiver receiver;
         receiver.applyLight = drawn.applyLight;
         receiver.isStatic = drawn.isStatic;
         receiver.normal = drawn.normal;
         receiver.z = drawn.lookZ;
+        receiver.runtimeBake = runtimeBake;
         tint(registry, drawn.quad, drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade), drawn.emissive,
              runtimeBake ? noLightmap : drawn.lightmap, receiver);
     }
@@ -2890,11 +2797,6 @@ void MagicPortalsLayer::tint(entt::registry& registry, entt::entity quad, const 
 // ---- the lights and their halos ---------------------------------------------------
 //
 // THE LIGHTS (design section 5.3). Each <Light> a level places is a Light2DComponent
-    for (TorchLight& torch : m_torchLights) {
-        destroy(torch.light);
-        destroy(torch.halo);
-    }
-    m_torchLights.clear();
 // at its owner plus the light's offset, not turned with the owner
 // (BuildChildLight, ETHEntityRenderingManager.cpp:174-184), with:
 //   - its height the owner's depth plus the offset's z, in the original's units
@@ -2950,44 +2852,6 @@ void MagicPortalsLayer::buildLights(entt::registry& registry) {
             if (m_emitters[i].sprite == placed.sprite && m_emitters[i].slot == 0) {
                 placed.emitter = static_cast<int>(i);
                 break;
-    // light_from_projectile.ent's, at each torch while it is lit (step 55, the
-    // design's G6): added by the shot that lights it and deleted by the signal that
-    // puts it out (torch.json). The torch's own depth is the entity's, which is a
-    // guess recorded in art.json. Its flame is not built, so its halo is at the
-    // share of a system with none.
-    const Art::Picture& torchLight = m_artRules.torchLight;
-    const std::vector<Torch::Light>& torches = m_level.torch.lights;
-    m_torchLights.resize(torches.size());
-    for (std::size_t i = 0; i < torches.size(); ++i) {
-        TorchLight& made = m_torchLights[i];
-        if (!torches[i].lit || !torchLight.light) {
-            if (made.light != entt::null && registry.valid(made.light)) registry.destroy(made.light);
-            if (made.halo != entt::null && registry.valid(made.halo)) registry.destroy(made.halo);
-            made = TorchLight{};
-            continue;
-        }
-        double ownerZ = torchLight.z;
-        float haloZ = SlotZ(m_playerSlot) - 0.5f * kSpriteSlotZ;
-        if (const auto look = m_look.nodes.find(torches[i].name); look != m_look.nodes.end()) ownerZ = look->second.z;
-        for (const DrawnSprite& drawn : m_sprites) {
-            if (drawn.sprite.node != torches[i].name) continue;
-            haloZ = drawn.z + 0.25f * kSpriteSlotZ;
-            break;
-        }
-        if (made.light == entt::null) {
-            made.light = registry.create();
-            registry.emplace<TagComponent>(made.light, "Magic Portals Torch Light");
-            registry.emplace<TransformComponent>(made.light);
-            registry.emplace<Light2DComponent>(made.light);
-        }
-        const std::string torchHalo = originalImage(torchLight.light->halo);
-        if (made.halo == entt::null && m_artReady && imageSizePx(torchHalo) != glm::dvec2(0.0)) {
-            made.halo = makeSprite(registry, "Magic Portals Torch Halo", torchHalo, true);
-        }
-        place(made.light, made.halo, *torchLight.light, torches[i].atPx, ownerZ, torchLight.isStatic,
-              Lighting::ParticleRatio(0, 0), haloZ, true);
-    }
-
             }
         }
         if (placed.sprite >= 0) {
@@ -3026,6 +2890,11 @@ void MagicPortalsLayer::unloadLights(entt::registry& registry) {
         destroy(placed.halo);
     }
     m_placedLights.clear();
+    for (TorchLight& torch : m_torchLights) {
+        destroy(torch.light);
+        destroy(torch.halo);
+    }
+    m_torchLights.clear();
     destroy(m_shotLight);
     destroy(m_shotHalo);
 }
@@ -3079,6 +2948,44 @@ void MagicPortalsLayer::syncLights(entt::registry& registry) {
         }
         place(placed.entity, placed.halo, placed.light, ownerPx, placed.ownerZ, placed.ownerStatic,
               particleRatioOf(placed.emitter), placed.haloZ, present);
+    }
+
+    // light_from_projectile.ent's, at each torch while it is lit (step 55, the
+    // design's G6): added by the shot that lights it and deleted by the signal that
+    // puts it out (torch.json). The torch's own depth is the entity's, which is a
+    // guess recorded in art.json. Its flame is not built, so its halo is at the
+    // share of a system with none.
+    const Art::Picture& torchLight = m_artRules.torchLight;
+    const std::vector<Torch::Light>& torches = m_level.torch.lights;
+    m_torchLights.resize(torches.size());
+    for (std::size_t i = 0; i < torches.size(); ++i) {
+        TorchLight& made = m_torchLights[i];
+        if (!torches[i].lit || !torchLight.light) {
+            if (made.light != entt::null && registry.valid(made.light)) registry.destroy(made.light);
+            if (made.halo != entt::null && registry.valid(made.halo)) registry.destroy(made.halo);
+            made = TorchLight{};
+            continue;
+        }
+        double ownerZ = torchLight.z;
+        float haloZ = SlotZ(m_playerSlot) - 0.5f * kSpriteSlotZ;
+        if (const auto look = m_look.nodes.find(torches[i].name); look != m_look.nodes.end()) ownerZ = look->second.z;
+        for (const DrawnSprite& drawn : m_sprites) {
+            if (drawn.sprite.node != torches[i].name) continue;
+            haloZ = drawn.z + 0.25f * kSpriteSlotZ;
+            break;
+        }
+        if (made.light == entt::null) {
+            made.light = registry.create();
+            registry.emplace<TagComponent>(made.light, "Magic Portals Torch Light");
+            registry.emplace<TransformComponent>(made.light);
+            registry.emplace<Light2DComponent>(made.light);
+        }
+        const std::string torchHalo = originalImage(torchLight.light->halo);
+        if (made.halo == entt::null && m_artReady && imageSizePx(torchHalo) != glm::dvec2(0.0)) {
+            made.halo = makeSprite(registry, "Magic Portals Torch Halo", torchHalo, true);
+        }
+        place(made.light, made.halo, *torchLight.light, torches[i].atPx, ownerZ, torchLight.isStatic,
+              Lighting::ParticleRatio(0, 0), haloZ, true);
     }
 
     // The shot's, while it flies.

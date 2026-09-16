@@ -47,6 +47,7 @@
 #include "sim/MenuState.hpp"
 #include "sim/Pause.hpp"
 #include "sim/Popup.hpp"
+#include "sim/Selector.hpp"
 #include "sim/UiLayer.hpp"
 #include "sim/Units.hpp"
 
@@ -63,6 +64,7 @@
 
 using namespace Supersonic;
 using MagicPortals::MagicPortalsLayer;
+namespace Selector = MagicPortals::Selector;
 namespace Hud = MagicPortals::Hud;
 
 namespace {
@@ -1219,7 +1221,10 @@ void TheMenuWalksToALevel() {
     // Four columns and FOUR rows to a page - sixteen - which is what
     // createLevelSelectState sets for levels and what the owner's screenshot of
     // the original shows. PageProperties' own 4 by 3 defaults are overridden.
-    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Level), 16);
+    // Since step 56 the buttons are every tile of the chapter, each at rest on its
+    // own page (sim/Selector), and the pager says which page is up.
+    CHECK_EQ(MenuButtonsOfKind(layer, Kind::Level), 32);
+    CHECK_EQ(layer.SelectorBoard().perPage, 16);
     CHECK_EQ(MenuButtonsOfKind(layer, Kind::Forward), 1);
 
     const MagicPortalsLayer::MenuButton* first = MenuButtonOf(layer, Kind::Level, 0);
@@ -1236,6 +1241,7 @@ void TheMenuWalksToALevel() {
 // The second page holds what the first does not, and the page buttons reach it.
 void TheGridPagesThroughAWorld() {
     using Kind = MagicPortalsLayer::MenuButton::Kind;
+    using Screen = MagicPortalsLayer::Screen;
     entt::registry registry;
     publishViewport(registry);
     MagicPortalsLayer layer(TestPaths(), "");
@@ -1257,17 +1263,31 @@ void TheGridPagesThroughAWorld() {
         CHECK_MSG(false, "the grid has no forward button");
         return;
     }
-    layer.PressMenu(registry, *forward);
-    const MagicPortalsLayer::MenuButton* thirteenth = MenuButtonOf(layer, Kind::Level, 0);
-    if (thirteenth == nullptr) {
-        CHECK_MSG(false, "the second page has no level button");
+    CHECK_MSG(layer.PressMenu(registry, *forward) && layer.SelectorState().page == 1,
+              "the forward arrow turns the pager to page 2, in the same state");
+    CHECK(layer.MenuScreen() == Screen::Levels);
+    // Sixteen to a page, so the second page opens on the seventeenth level.
+    const Selector::Board& board = layer.SelectorBoard();
+    const int seventeenth = board.items > 16 ? board.tiles[16].level : -1;
+    CHECK_MSG(seventeenth >= 0 && layer.ChapterTable().levels[static_cast<std::size_t>(seventeenth)].name == "level16",
+              "the second page's first tile is level16");
+    // And a fresh save has not opened it (owner ruling R3): the press does nothing.
+    for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
+        if (button.kind != Kind::Level || button.level != seventeenth) continue;
+        CHECK_MSG(!layer.PressMenu(registry, button) && layer.MenuScreen() == Screen::Levels,
+                  "a locked level does nothing");
+        break;
+    }
+    // Back: page 1, and from page 1 up to chapter select.
+    const MagicPortalsLayer::MenuButton* back = MenuButtonOf(layer, Kind::Back);
+    if (back == nullptr) {
+        CHECK_MSG(false, "the grid has no back button");
         return;
     }
-    layer.PressMenu(registry, *thirteenth);
-    CHECK_MSG(layer.SimLevel() != nullptr, layer.LoadError());
-    // Sixteen to a page, so the second page opens on the seventeenth level.
-    CHECK_MSG(IsAt(layer, "level16"), std::string("the second page's first level is ") +
-                                          (layer.Current() != nullptr ? layer.Current()->name : "none"));
+    const MagicPortalsLayer::MenuButton up = *back;
+    CHECK_MSG(layer.PressMenu(registry, up) && layer.SelectorState().page == 0 && layer.MenuScreen() == Screen::Levels,
+              "back on page 2: page 1");
+    CHECK_MSG(layer.PressMenu(registry, up) && layer.MenuScreen() == Screen::Worlds, "back on page 1: chapter select");
 }
 
 // A named level is entered directly: --level, and every suite in this file,
@@ -2264,7 +2284,10 @@ void TheGridShowsTheMedalsEarned() {
     // says the level just cleared gained a medal AND that the fifteen nobody
     // has finished did not, which is the guard the original draws on
     // `getScore != 0`.
-    CHECK_MSG(Tagged(registry, "Magic Portals Menu Medal") == 1,
+    const Selector::Board& grid = layer.SelectorBoard();
+    CHECK_MSG(std::count_if(grid.tiles.begin(), grid.tiles.end(),
+                            [](const Selector::Tile& tile) { return tile.medal > 0; }) == 1 &&
+                  !grid.tiles.empty() && grid.tiles[0].medal > 0,
               "the level just cleared wears a medal on the grid, and only it does");
 
     // ON THE BUTTON, not beside it.
@@ -2274,7 +2297,13 @@ void TheGridShowsTheMedalsEarned() {
     // still at the origin and the check below would be measuring nothing.
     tickWith(layer, registry, kRest, {}, {});
 
-    const entt::entity medal = FirstTagged(registry, "Magic Portals Menu Medal");
+    // Drawn through the overlay since step 56: the medal is the grid's piece, and
+    // sim/Selector's suite pins it at the tile's top-left + (36, 36).
+    const std::vector<Selector::Piece> drawn = Selector::Pieces(layer.SelectorRules(), grid, layer.SelectorState(),
+                                                               layer.MenuBoxPx(), 1.0e9, 0.0, Selector::Control::None, -1);
+    const auto medalPiece = std::find_if(drawn.begin(), drawn.end(), [](const Selector::Piece& piece) {
+        return piece.file.rfind("medal_", 0) == 0;
+    });
     const MagicPortalsLayer::MenuButton* wearer = nullptr;
     for (const MagicPortalsLayer::MenuButton& button : layer.MenuButtons()) {
         if (button.kind != MagicPortalsLayer::MenuButton::Kind::Level || button.level != 0) continue;
@@ -2282,7 +2311,8 @@ void TheGridShowsTheMedalsEarned() {
         break;
     }
     CHECK_MSG(wearer != nullptr, "level0 has a button on the grid");
-    if (medal != entt::null && wearer != nullptr && registry.all_of<TransformComponent>(medal)) {
+    CHECK_MSG(medalPiece != drawn.end(), "the grid draws the medal");
+    if (medalPiece != drawn.end() && wearer != nullptr) {
         // The original draws it from the button's TOP-LEFT plus (36, 36) of a
         // 64px button, so its centre lands 20 in from the button's own centre
         // against a half-width of 32 - a badge on the corner. Measured from the
@@ -2291,8 +2321,7 @@ void TheGridShowsTheMedalsEarned() {
         // which counting the medals cannot.
         // MagicPortals::Units, qualified: this file brings in Supersonic and
         // the layer by name, not the whole of the game's namespace.
-        const glm::dvec2 at =
-            MagicPortals::Units::ToPixels(registry.get<TransformComponent>(medal).position);
+        const glm::dvec2 at = medalPiece->rect.Centre();
         const double dx = std::fabs(at.x - wearer->centrePx.x);
         const double dy = std::fabs(at.y - wearer->centrePx.y);
         CHECK_MSG(dx < wearer->sizePx.x * 0.5 && dy < wearer->sizePx.y * 0.5,
@@ -3351,7 +3380,7 @@ void ThePausesButtonsGoWhereTheOriginalsGo() {
     CHECK_MSG(!layer.Paused() && layer.MenuScreen() == MagicPortalsLayer::Screen::Levels &&
                   layer.SimLevel() == nullptr,
               "back to levels opens the grid");
-    CHECK_EQ(MenuButtonsOfKind(layer, MagicPortalsLayer::MenuButton::Kind::Level), 16);
+    CHECK_EQ(MenuButtonsOfKind(layer, MagicPortalsLayer::MenuButton::Kind::Level), 32);
 }
 
 void SkipOnALevelAlreadyFinished() {
@@ -4052,35 +4081,6 @@ void TheTorchIsALightAndAHalo() {
     dark.OnDetach(second);
 }
 
-void AShotCarriesItsOwnLight() {
-    namespace Lighting = MagicPortals::Lighting;
-    using MagicPortals::Units::ToMetres;
-    const Lighting::Rules rules = LightingRules();
-    entt::registry registry;
-    publishViewport(registry);
-    MagicPortalsLayer layer(TestPaths(), "level1");
-    layer.OnAttach(registry);
-    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
-              layer.LoadError() + layer.ArtError() + layer.LightingError());
-    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
-    CloseTheLevelStartPopup(layer, registry);
-    waitForFirstTap(layer, registry);
-    CHECK_EQ(LightsOf(registry).size(), std::size_t{2});
-    CHECK_EQ(Tagged(registry, "Magic Portals Shot Light"), 0);
-
-    tap(layer, registry, screenOf(registry, playerPx(registry, layer) + glm::dvec2(0.0, -48.0)));
-    CHECK_MSG(layer.SimLevel()->portals.flight.has_value(), "the tap fired: " + lastFailure(layer));
-    if (!layer.SimLevel()->portals.flight) return;
-    CHECK_EQ(LightsOf(registry).size(), std::size_t{3});
-    CHECK_EQ(Tagged(registry, "Magic Portals Shot Light"), 1);
-    const entt::entity shot = FirstTagged(registry, "Magic Portals Shot Light");
-    if (shot == entt::null) return;
-    // projectile.ent's: not static, so the live layer, which static walls take;
-    // range 70; (0.6, 0.6, 1) at level1's intensity 3, whole (no particle system);
-    // 12 below the shot's depth.
-    const auto followsTheShot = [&]() {
-        const glm::vec3 at = registry.get<TransformComponent>(shot).position;
-        const glm::vec3 want = MagicPortals::Units::ToWorld(layer.SimLevel()->portals.flight->atPx.x,
 // Step 55 (the lighting design's G6): the shot that lights a torch adds
 // light_from_projectile.ent's static light there, and the level bakes at run
 // time from then on - every sprite that applies light takes the static lights
@@ -4147,6 +4147,35 @@ void ALitTorchBakesTheLevelAtRunTime() {
     layer.OnDetach(registry);
 }
 
+void AShotCarriesItsOwnLight() {
+    namespace Lighting = MagicPortals::Lighting;
+    using MagicPortals::Units::ToMetres;
+    const Lighting::Rules rules = LightingRules();
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
+              layer.LoadError() + layer.ArtError() + layer.LightingError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
+    CloseTheLevelStartPopup(layer, registry);
+    waitForFirstTap(layer, registry);
+    CHECK_EQ(LightsOf(registry).size(), std::size_t{2});
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Light"), 0);
+
+    tap(layer, registry, screenOf(registry, playerPx(registry, layer) + glm::dvec2(0.0, -48.0)));
+    CHECK_MSG(layer.SimLevel()->portals.flight.has_value(), "the tap fired: " + lastFailure(layer));
+    if (!layer.SimLevel()->portals.flight) return;
+    CHECK_EQ(LightsOf(registry).size(), std::size_t{3});
+    CHECK_EQ(Tagged(registry, "Magic Portals Shot Light"), 1);
+    const entt::entity shot = FirstTagged(registry, "Magic Portals Shot Light");
+    if (shot == entt::null) return;
+    // projectile.ent's: not static, so the live layer, which static walls take;
+    // range 70; (0.6, 0.6, 1) at level1's intensity 3, whole (no particle system);
+    // 12 below the shot's depth.
+    const auto followsTheShot = [&]() {
+        const glm::vec3 at = registry.get<TransformComponent>(shot).position;
+        const glm::vec3 want = MagicPortals::Units::ToWorld(layer.SimLevel()->portals.flight->atPx.x,
                                                             layer.SimLevel()->portals.flight->atPx.y);
         return std::fabs(at.x - want.x) < 1e-5f && std::fabs(at.y - want.y) < 1e-5f;
     };
@@ -4464,6 +4493,7 @@ void runTests() {
     LightmapsAreDrawnOverTheirSprites();
     TheTorchIsALightAndAHalo();
     AShotCarriesItsOwnLight();
+    ALitTorchBakesTheLevelAtRunTime();
 }
 
 } // namespace
@@ -4484,4 +4514,3 @@ int main() {
     runTests();
     return ::test::summary("test_mp_layer", 35);
 }
-    ALitTorchBakesTheLevelAtRunTime();

@@ -260,6 +260,7 @@ add_mp_test(test_mp_frontdoor)
 # reads only the port's own committed data - its achievement lists are its own, never
 # the original's - so it never skips.
 add_mp_test(test_mp_info)
+add_mp_test(test_mp_select)
 
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.

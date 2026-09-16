@@ -1851,6 +1851,121 @@
     "chapter_unlock_percent": 60
   },
 
+  "selector": {
+    "_about": [
+      "CHAPTER SELECT AND THE LEVEL GRID: WorldSelector and PortalLevelSelector, two LevelSelectors",
+      "over one PageManager. Read by sim/Selector.hpp. Specified in the remake's gitignored",
+      "out/parity/specs/ui3/spec.md sections 0.5 (the pager), 5 (chapter select) and 6 (the grid);",
+      "stills chapters_*.png and levels_*.png, recordings rec/nav_gold.mp4, chapters_fresh.mp4 and",
+      "swipe_gold.mp4. Drawn through the screen overlay in display values, as the main menu is, with",
+      "the state's black (menu_state.fade) last. A size is the sprite's 1x texel size in units and the",
+      "hd twin is drawn. Owner rulings R1 (two chapters a page) and R3 (locking, the `locking` block)."
+    ],
+    "pager": {
+      "_source": [
+        "DECODED: Swyper::getOffset (bytes 21658..21861) multiplies the offset by 0.92 on every call",
+        "while no touch is down and snaps it to 0 below 0.0005; PageManager::draw (66209..66849) calls it",
+        "for the current page and again for its neighbour. Swyper::update (21085..21658): a release",
+        "past getMinOffsetToPageSwap 0.2 changes the page; with no neighbour the page is drawn at a third",
+        "of its offset. PageManager::fadeForwardArrows (69942..70342): x0.96 on the last page, +0.05",
+        "elsewhere, capped at 1, kept as a byte by FloatColor::getUInt (86968..87103).",
+        "MEASURED: new-page rms 0.00024-0.00028 screen widths over six slides; the fade's byte sequence",
+        "rms 0.025-0.040 (ui3 spec 0.5). PORT DECISION P1: once per 60 Hz tick."
+      ],
+      "decay_per_call": 0.92,
+      "snap_below": 0.0005,
+      "swap_offset": 0.2,
+      "rubber_band": 0.3333333333333333,
+      "arrow_fade_out_factor": 0.96,
+      "arrow_fade_in_step": 0.05
+    },
+    "background": {
+      "_source": [
+        "world_select_bg.ent at scale(256, 128) in the chapter scene and in every level_select<w>.esc: 512 x",
+        "256 units, its top-left at (-camera.x, 0); the camera pans clamp(getGlobalOffset, 0, 1) x (512 -",
+        "W) (PortalLevelSelector::loop 229331..229930, WorldSelector::loop 169733..170252). MEASURED rms",
+        "2.2-2.7 grey on every still, page 2 at -160 px (ui3 spec 5.2 W0, 6.2 L0)."
+      ],
+      "sprite": "entities/world_select_bg.png",
+      "size_units": [512, 256]
+    },
+    "arrow_bounce": {
+      "_source": "PageManager::enableBounceEffects (69267..69468): uniform 0.97 <-> 1.03, stride 400 ms, about the origin. MEASURED 0.964..1.020, stride 0.4075 s (ui3 spec 0.7 I4).",
+      "scale_a": [0.97, 0.97],
+      "scale_b": [1.03, 1.03],
+      "stride_ms": 400
+    },
+    "chapter_select": {
+      "_source": [
+        "WorldSelector ctor (167326..168612): 4 items, 2 columns x 1 row, arrows at (0.05, 0.5) / (0.95, 0.5)",
+        "with origin = normPos, the counter page_numbers.png ARGB(220,0,0,0) at (0.5, 0.9). The arrow files",
+        "are the wrong way round from their pictures (PageManager ctor instr 125-198). WorldChooser",
+        "(171140..173904): lock_icon over a locked chapter; the callback draws medal_*_l at the icon's",
+        "top-left + (42, 126) centred, the percent in Matura84_shadow at + (48, 122), and the warning at",
+        "+ (46, 140) at a quarter unit a font px while the boss level is scored and the chapter is short.",
+        "drawPageCounter (70531..71274): frames 0-7 the digits, 15 the dot. MEASURED exact TL on six stills",
+        "(ui3 spec 5.2 W1-W9); medal gold at 75% or more, bronze below 50% (U3: silver not captured)."
+      ],
+      "title": {"sprite": "select_chapter.png", "at_screen": [0.5, 0.025], "origin": [0.5, 0.0], "size_units": [128, 32]},
+      "back": {"sprite": "level_select_forward.png", "at_screen": [0.05, 0.5], "origin": [0.05, 0.5], "size_units": [64, 64]},
+      "forward": {"sprite": "level_select_back.png", "at_screen": [0.95, 0.5], "origin": [0.95, 0.5], "size_units": [64, 64]},
+      "icon_prefix": "world_icon",
+      "icon_size_units": [84, 128],
+      "per_page": 2,
+      "lock": {"sprite": "lock_icon.png", "size_units": [64, 64]},
+      "medal": {
+        "gold": "medal_gold_l.png", "silver": "medal_silver_l.png", "bronze": "medal_bronze_l.png",
+        "size_units": [64, 64], "centre_units": [42, 126], "gold_percent": 75, "bronze_below_percent": 50
+      },
+      "percent": {"font": "Matura84_shadow.fnt", "units_per_font_px": 0.5, "centre_units": [48, 122]},
+      "warning": {
+        "_source": "computeAccomplishmentWarningBlinkColor (365081..365279): alpha (t_ms mod 600) / 600 on the wall clock. MEASURED sawtooth 0.596 s (ui3 spec 0.7 I9).",
+        "font": "Matura84_shadow.fnt", "units_per_font_px": 0.25, "centre_units": [46, 140],
+        "words": "requires 60%", "sawtooth_ms": 600
+      },
+      "counter": {
+        "sprite": "page_numbers.png", "columns": 4, "rows": 4, "slot_units": [16, 16],
+        "at_screen": [0.5, 0.9], "tint_alpha_byte": 220, "dot_frame": 15
+      },
+      "highlight": {
+        "_source": "LevelSelector::enableActivatedButtonBounceEffect (104462..104917) with WorldSelector's props: uniform 0.99 <-> 1.01, stride 200 ms, about the centre. MEASURED stride 0.2025 s (ui3 spec 0.7 I5).",
+        "scale_a": [0.99, 0.99], "scale_b": [1.01, 1.01], "stride_ms": 200
+      }
+    },
+    "level_grid": {
+      "_source": [
+        "createLevelSelectState (365279..365960): 32 items, 4 x 4, level_button / level_locked_button",
+        "(instead, no overlay), numbers in Matura84_shadow at half a unit a font px, arrows at (0, 0.5) /",
+        "(1, 0.5) with origin = normPos, no counter. PortalLevelSelector::loop draws the chapter number in",
+        "Matura128_shadow at 1.5 u/fpx from (-5, -45) and the percent in Matura84_shadow at 0.225 u/fpx",
+        "from (0, -2), both ARGB(155,33,22,11). LevelChooser (173915..175659): boss_level_button over level",
+        "32, medal_*_m (gold 3, silver 2, else bronze) 32 units at the tile's top-left + (36, 36).",
+        "MEASURED exact TL (280 + 180c, 180r) px, boss tile at (820, 540), medals 0.9994 over 12 fits",
+        "(ui3 spec 6.2 L0-L8)."
+      ],
+      "back": {"sprite": "level_select_forward.png", "at_screen": [0.0, 0.5], "origin": [0.0, 0.5], "size_units": [64, 64]},
+      "forward": {"sprite": "level_select_back.png", "at_screen": [1.0, 0.5], "origin": [1.0, 0.5], "size_units": [64, 64]},
+      "tile": "level_button.png",
+      "locked_tile": "level_locked_button.png",
+      "boss_tile": "boss_level_button.png",
+      "tile_size_units": [64, 64],
+      "columns": 4,
+      "rows": 4,
+      "number": {"font": "Matura84_shadow.fnt", "units_per_font_px": 0.5},
+      "medal": {
+        "gold": "medal_gold_m.png", "silver": "medal_silver_m.png", "bronze": "medal_bronze_m.png",
+        "size_units": [32, 32], "at_units": [36, 36]
+      },
+      "corner_chapter": {"font": "Matura128_shadow.fnt", "units_per_font_px": 1.5, "at_units": [-5, -45]},
+      "corner_percent": {"font": "Matura84_shadow.fnt", "units_per_font_px": 0.225, "at_units": [0, -2]},
+      "corner_argb": [155, 33, 22, 11],
+      "highlight": {
+        "_source": "PortalLevelSelector ctor (228678..229027): uniform 0.98 <-> 1.02, stride 200 ms, about the centre. MEASURED 0.98..1.02, stride 0.205 s (ui3 spec 0.7 I6).",
+        "scale_a": [0.98, 0.98], "scale_b": [1.02, 1.02], "stride_ms": 200
+      }
+    }
+  },
+
   "credits": {
     "_about": [
       "THE CREDITS SCREEN, CreditsScreen with CreditsScreenLayer (a BackButtonLayer), opened by the",

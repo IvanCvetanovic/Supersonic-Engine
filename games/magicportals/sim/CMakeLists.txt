@@ -13,6 +13,7 @@ add_library(MagicPortalsSim STATIC
     Carry.cpp
     Chapters.cpp
     Credits.cpp
+    Selector.cpp
     Dashboard.cpp
     Demolish.cpp
     Diamonds.cpp

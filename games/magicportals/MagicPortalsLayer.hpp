@@ -36,6 +36,7 @@
 #include "sim/Pause.hpp"
 #include "sim/Popup.hpp"
 #include "sim/Scores.hpp"
+#include "sim/Selector.hpp"
 #include "sim/Sounds.hpp"
 #include "sim/Sprites.hpp"
 
@@ -361,6 +362,12 @@ public:
     // drawn by EmitMenu through the overlay, and keep their scroll across the
     // per-tick layout and a resize.
     const Credits::Rules& CreditsRules() const { return m_creditsRules; }
+    // Chapter select and the level grid (sim/Selector.hpp, step 56): what the save
+    // opened, laid out as the state opened, and the pager as the last tick left it.
+    const Selector::Rules& SelectorRules() const { return m_selectorRules; }
+    const Chapters::Table& ChapterTable() const { return m_chapters; }
+    const Selector::Board& SelectorBoard() const { return m_selectorBoard; }
+    const Selector::State& SelectorState() const { return m_selectorState; }
     // The credits' strip as the last tick left it.
     const Credits::Scroll& CreditsScroll() const { return m_credits; }
     // Whether the credits' back button is held down inside: the press tint.
@@ -562,7 +569,9 @@ private:
     // The main menu's touch, as Button::update reads it.
     void mainMenuInput(entt::registry& registry);
     // Chapter select's and the grid's touch, the same way, on their world quads.
-    void menuQuadInput(entt::registry& registry);
+    // Chapter select and the grid: a touch on a tile or an arrow, the finger on
+    // the pager, the back key, and one tick of the pager.
+    void selectorInput(entt::registry& registry);
     // The credits' touch and the strip's tick (CreditsScreenLayer::update).
     void creditsInput(entt::registry& registry, float fixedDelta);
     // The dashboard's touch, wheel and tick (ScoreDashboard::loop, DashboardLayer).
@@ -610,6 +619,7 @@ private:
         bool isStatic{false};
         std::string normal;
         double z{0.0};
+        bool runtimeBake{false}; // the level has baked at run time (Lighting::RuntimeBake)
     };
     // A quad's light: its colour C as albedoColor, min(1, ambient + emissive) as
     // its 2D sprite's ambient, its lightmap as the overlay, its height, normal map
@@ -619,7 +629,6 @@ private:
     void tint(entt::registry& registry, entt::entity quad, const glm::vec4& colour, const glm::dvec3& emissive,
               const std::string& lightmap = {}, const Receiver& receiver = {}) const;
     // The level's lights and their halos, one per Lighting::Look::light, made with
-        bool runtimeBake{false}; // the level has baked at run time (Lighting::RuntimeBake)
     // the sprites and their particles.
     void buildLights(entt::registry& registry);
     // The level's lights, their halos, and the shot's light and halo, taken away.
@@ -737,6 +746,13 @@ private:
     entt::entity m_shotLight{entt::null}; // the shot's own light while it flies
     entt::entity m_shotHalo{entt::null};  // and its halo, when its image is there
     bool m_lightMasksOff{false};          // ForceLightMasksOff
+    // light_from_projectile.ent's light and halo at each lit torch, in the order of
+    // Torch::State::lights; null while that torch is not lit (step 55).
+    struct TorchLight {
+        entt::entity light{entt::null};
+        entt::entity halo{entt::null};
+    };
+    std::vector<TorchLight> m_torchLights;
     float m_direction{0.0f};                // this tick's walk: -1 left, 1 right, 0 standing
     bool m_facingRight{false};              // which way the player last walked
     // Chapter 1's boss: its reach as a box, beholder.ent's sheet when the image
@@ -746,13 +762,6 @@ private:
     entt::entity m_beholderQuad{entt::null};
     glm::dvec2 m_beholderScale{1.0}; // its pulse as last set, which it keeps while it throws rocks
     glm::vec4 m_beholderColour{1.0f}; // C: (1, hp / max, hp / max), reddening as it is hurt
-    // light_from_projectile.ent's light and halo at each lit torch, in the order of
-    // Torch::State::lights; null while that torch is not lit (step 55).
-    struct TorchLight {
-        entt::entity light{entt::null};
-        entt::entity halo{entt::null};
-    };
-    std::vector<TorchLight> m_torchLights;
     std::vector<entt::entity> m_spikes; // one per spike in flight
     float m_beholderZ{0.5f};
     float m_spikeZ{0.5f};
@@ -962,6 +971,11 @@ private:
     Dashboard::Rules m_dashboardRules;
     Dashboard::Board m_dashboardBoard;
     Dashboard::State m_dashboardState;
+    Selector::Rules m_selectorRules;
+    Selector::Board m_selectorBoard;
+    Selector::State m_selectorState;
+    Selector::Hit m_selectorDown; // what a touch went down on
+    Selector::Hit m_selectorHeld; // and is still inside, drawn at the press tint
     Locking::Rules m_lockingRules;
     // The original's achievements, read once at attach from Paths::achievements.
     Achievements::Content m_achievements;
