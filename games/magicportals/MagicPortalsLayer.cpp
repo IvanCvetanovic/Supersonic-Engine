@@ -153,6 +153,14 @@ Supersonic::RenderSettings SceneRendering() {
     return rendering;
 }
 
+// An entity's name as its .ent file is named. A level names its entities both
+// ways: "portal_static" and "sky.ent".
+std::string BareEntityName(const Tscn::Node& node) {
+    std::string entity = Roles::EntityName(node);
+    if (entity.size() > 4 && entity.compare(entity.size() - 4, 4, ".ent") == 0) entity.resize(entity.size() - 4);
+    return entity;
+}
+
 } // namespace
 
 MagicPortalsLayer::MagicPortalsLayer(Paths paths, std::string startLevel)
@@ -669,17 +677,28 @@ int MedalFor(const MagicPortalsLayer::Cleared& cleared) {
 // burns, a static portal turns - none of it is in the level file.
 //
 // Drawn the way everything else in this port is: one textured quad per live
-// particle, added rather than mixed because every emitter in the game is
-// AM_ADD. Carried on the FRAME, in OnUpdate, because a particle is a picture:
-// it must not reach Game::Level, the fixed tick or the state hash.
+// particle, added or mixed as its system's alphaMode says. Carried on the FRAME,
+// in OnUpdate, because a particle is a picture: it must not reach Game::Level, the
+// fixed tick or the state hash.
 //
-// The arithmetic is Ethanon's own (ETHParticleManager::UpdateParticleSystem,
-// ResetParticle and PositionParticle), kept in its units: a frame-speed unit
-// is a sixtieth of a second, and every rate below is per one of those.
+// The arithmetic is Ethanon's own, in sim/Particles (UpdateParticleSystem,
+// ResetParticle, PositionParticle and DrawParticleSystem), kept in its units: a
+// frame-speed unit is a sixtieth of a second, and every rate is per one of those.
+// What this half decides is WHERE a system is and WHAT draws it (step 59):
+//   - it is carried by its entity's POSITION and angle, not the centre of the
+//     picture, and follows whatever moves the picture: a body, a patrolling zone, a
+//     carried key or diamond. It goes when the picture goes.
+//   - it draws in its entity's own slot, after the picture and the halo and before
+//     the next entity (Particles::SlotFraction).
+//   - its quad is square, turned counter-clockwise by a positive angle, and an
+//     added one's alpha is 1 (Particles::DrawColour).
 
 double MagicPortalsLayer::particleRandom(double from, double to) {
-    if (!(to > from)) return from;
-    std::uniform_real_distribution<double> spread(from, to);
+    // Randomizer::Float(min, max) takes the two either way round.
+    const double lo = std::min(from, to);
+    const double hi = std::max(from, to);
+    if (!(hi > lo)) return lo;
+    std::uniform_real_distribution<double> spread(lo, hi);
     return spread(m_particleRandom);
 }
 
@@ -692,23 +711,36 @@ void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
     std::map<std::string, std::string> entities; // node -> its entity's name
     for (const Tscn::Node& node : m_data.scene.nodes) {
         if (node.parent != ".") continue;
-        entities[node.name] = Roles::EntityName(node);
+        entities[node.name] = BareEntityName(node);
     }
 
     for (std::size_t index = 0; index < m_sprites.size(); ++index) {
         const DrawnSprite& drawn = m_sprites[index];
         const auto found = entities.find(drawn.sprite.node);
         if (found == entities.end() || found->second.empty()) continue;
-        std::string entity = found->second;
-        // A level names its entities both ways: "portal_static" and "sky.ent".
-        if (entity.size() > 4 && entity.compare(entity.size() - 4, 4, ".ent") == 0) {
-            entity.resize(entity.size() - 4);
-        }
+        const std::string& entity = found->second;
         std::vector<Particles::System> systems;
         std::string error;
         if (!Particles::Load(m_paths.original + "/entities/" + entity + ".ent", systems, error)) continue;
+        // Scaled as its entity is, before its pools are made (Particles::Scale):
+        // a static portal's script shrinks its rings and its iris with its halo.
+        if (drawn.scale != 1.0) {
+            for (Particles::System& system : systems) Particles::Scale(system, drawn.scale);
+        }
+        // Its entity's position and angle (ETHSpriteEntity.cpp:576): the node, not
+        // Sprites::CentrePx. A torch's picture hangs 16 below its node (PivotAdjust
+        // 0, -16) and its flame starts 12 above the NODE, not above the picture.
+        const Particles::Owner owner{drawn.ownerPx, drawn.ownerAngleDeg};
         for (std::size_t slot = 0; slot < systems.size(); ++slot) {
             const Particles::System& system = systems[slot];
+            if (!Particles::Drawable(system)) {
+                // No level places one (step 59's census); refused by name rather
+                // than drawn as a mix it is not.
+                SUPERSONIC_LOG_WARN("Magic Portals") << "particle system not drawn: " << entity << ".ent system "
+                                                     << slot << " asks for alphaMode " << system.alphaMode
+                                                     << ", which the port has no blend for" << std::endl;
+                continue;
+            }
             const std::string image = m_paths.original + "/particles/" + system.bitmap;
             const glm::dvec2 sheet = imageSizePx(image);
             if (sheet.x <= 0.0 || sheet.y <= 0.0) {
@@ -717,17 +749,21 @@ void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
             }
             Emitter emitter;
             emitter.system = system;
-            emitter.atPx = Sprites::CentrePx(drawn.sprite);
-            // Just in front of the art it decorates, and behind the markers.
-            emitter.z = drawn.z + 0.01f;
+            emitter.owner = owner;
+            // In its entity's own slot: after its picture and its halo, before the
+            // next entity, and each system after the one before it.
+            emitter.z = drawn.z + static_cast<float>(Particles::SlotFraction(static_cast<int>(slot),
+                                                                             static_cast<int>(systems.size()))) *
+                                      kSpriteSlotZ;
             emitter.image = image;
             emitter.cellPx = glm::dvec2(sheet.x / system.columns, sheet.y / system.rows);
-            emitter.crystal = drawn.crystal;
             // Which entity and which of its systems: a light's brightness follows
             // the live share of its owner's FIRST system (syncLights).
             emitter.sprite = static_cast<int>(index);
             emitter.slot = static_cast<int>(slot);
-            emitter.particles.resize(static_cast<std::size_t>(std::min(system.count, kMaxParticles)));
+            emitter.particles = Particles::MakePool(system, std::min(system.count, kMaxParticles), owner,
+                                                    [this](double from, double to) { return particleRandom(from, to); });
+            emitter.quads.assign(emitter.particles.size(), entt::null);
             m_emitters.push_back(std::move(emitter));
         }
     }
@@ -738,7 +774,15 @@ bool MagicPortalsLayer::addEntityEmitters(const std::string& entity, const glm::
     std::vector<Particles::System> systems;
     std::string error;
     if (!Particles::Load(m_paths.original + "/entities/" + entity, systems, error) || systems.empty()) return false;
-    for (const Particles::System& system : systems) {
+    const Particles::Owner owner{atPx, angleDeg};
+    for (std::size_t slot = 0; slot < systems.size(); ++slot) {
+        const Particles::System& system = systems[slot];
+        if (!Particles::Drawable(system)) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "particle system not drawn: " << entity << " system " << slot
+                                                 << " asks for alphaMode " << system.alphaMode
+                                                 << ", which the port has no blend for" << std::endl;
+            continue;
+        }
         const std::string image = m_paths.original + "/particles/" + system.bitmap;
         const glm::dvec2 sheet = imageSizePx(image);
         if (sheet.x <= 0.0 || sheet.y <= 0.0) {
@@ -747,13 +791,15 @@ bool MagicPortalsLayer::addEntityEmitters(const std::string& entity, const glm::
         }
         Emitter emitter;
         emitter.system = system;
-        emitter.atPx = atPx;
+        emitter.owner = owner;
         // A later system of the same entity draws over an earlier one.
         emitter.z = z + 0.001f * static_cast<float>(m_emitters.size());
         emitter.image = image;
         emitter.cellPx = glm::dvec2(sheet.x / system.columns, sheet.y / system.rows);
-        emitter.angleDeg = angleDeg;
-        emitter.particles.resize(static_cast<std::size_t>(std::min(system.count, kMaxParticles)));
+        emitter.slot = static_cast<int>(slot);
+        emitter.particles = Particles::MakePool(system, std::min(system.count, kMaxParticles), owner,
+                                                [this](double from, double to) { return particleRandom(from, to); });
+        emitter.quads.assign(emitter.particles.size(), entt::null);
         m_emitters.push_back(std::move(emitter));
     }
     return true;
@@ -794,9 +840,9 @@ std::string MagicPortalsLayer::loadingHaloImage() {
 
 void MagicPortalsLayer::unloadEmitters(entt::registry& registry) {
     for (Emitter& emitter : m_emitters) {
-        for (Particle& particle : emitter.particles) {
-            if (particle.quad != entt::null && registry.valid(particle.quad)) registry.destroy(particle.quad);
-            particle.quad = entt::null;
+        for (entt::entity& quad : emitter.quads) {
+            if (quad != entt::null && registry.valid(quad)) registry.destroy(quad);
+            quad = entt::null;
         }
     }
     m_emitters.clear();
@@ -805,113 +851,106 @@ void MagicPortalsLayer::unloadEmitters(entt::registry& registry) {
 void MagicPortalsLayer::updateEmitters(entt::registry& registry, float deltaTime) {
     using namespace Supersonic;
     if (m_emitters.empty()) return;
-    // The original caps a frame at 250 ms before turning it into its own unit,
-    // so a stall does not fling every particle across the level.
-    const double elapsedMs = std::min(static_cast<double>(deltaTime) * 1000.0, 250.0);
-    const double frameSpeed = elapsedMs / 1000.0 * 60.0;
+    const double elapsedMs = static_cast<double>(deltaTime) * 1000.0;
+    const Particles::Random random = [this](double from, double to) { return particleRandom(from, to); };
 
     for (Emitter& emitter : m_emitters) {
         const Particles::System& system = emitter.system;
-        // A collected crystal takes its sparkle with it.
-        bool emitting = true;
-        if (emitter.crystal >= 0 && emitter.crystal < static_cast<int>(m_level.goals.crystals.size())) {
-            const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(emitter.crystal)];
-            emitting = !crystal.collected && !crystal.expired;
+        const auto hide = [&registry](entt::entity& quad) {
+            if (quad != entt::null && registry.valid(quad)) registry.destroy(quad);
+            quad = entt::null;
+        };
+
+        // Its owner, as the last tick left it. An entity the level took away - a
+        // crystal taken, a static portal spent, a wall broken, a diamond spent -
+        // takes its particles with it, as a deleted entity's go with it.
+        if (emitter.sprite >= 0 && emitter.sprite < static_cast<int>(m_sprites.size())) {
+            const DrawnSprite& owner = m_sprites[static_cast<std::size_t>(emitter.sprite)];
+            if (owner.quad == entt::null) {
+                for (entt::entity& quad : emitter.quads) hide(quad);
+                emitter.active = 0;
+                continue;
+            }
+            emitter.owner = Particles::Owner{owner.ownerPx, owner.ownerAngleDeg};
         }
 
         const int frames = std::max(1, system.Frames());
-        const auto reset = [&](Particle& particle) {
-            particle.elapsedMs = 0.0;
-            particle.released = true;
-            particle.lifeMs = system.lifeTimeMs + particleRandom(-system.randomLifeTimeMs * 0.5,
-                                                                 system.randomLifeTimeMs * 0.5);
-            if (particle.lifeMs <= 0.0) particle.lifeMs = std::max(1.0, system.lifeTimeMs);
-            particle.size = system.size + particleRandom(-system.randomizeSize * 0.5, system.randomizeSize * 0.5);
-            particle.angleDir = system.angleDir + particleRandom(-system.randAngle * 0.5, system.randAngle * 0.5);
-            particle.angle = system.angleStart + particleRandom(0.0, system.randAngleStart) + emitter.angleDeg;
-            particle.velocityPx =
-                system.direction + glm::dvec2(particleRandom(-system.randomizeDir.x * 0.5, system.randomizeDir.x * 0.5),
-                                              particleRandom(-system.randomizeDir.y * 0.5, system.randomizeDir.y * 0.5));
-            particle.atPx = emitter.atPx + system.startPoint +
-                            glm::dvec2(particleRandom(-system.randStartPoint.x * 0.5, system.randStartPoint.x * 0.5),
-                                       particleRandom(-system.randStartPoint.y * 0.5, system.randStartPoint.y * 0.5));
-            // PLAY_ANIMATION walks the sheet by age; PICK_RANDOM_FRAME takes one.
-            particle.frame = system.animationMode == 2
-                                 ? static_cast<int>(particleRandom(0.0, static_cast<double>(frames)))
-                                 : 0;
-            if (particle.frame >= frames) particle.frame = frames - 1;
-        };
-
-        for (std::size_t i = 0; i < emitter.particles.size(); ++i) {
-            Particle& particle = emitter.particles[i];
-            const auto hide = [&]() {
-                if (particle.quad != entt::null && registry.valid(particle.quad)) registry.destroy(particle.quad);
-                particle.quad = entt::null;
-            };
-            if (!emitting) {
-                hide();
+        const int pool = static_cast<int>(emitter.particles.size());
+        emitter.active = 0;
+        for (int i = 0; i < pool; ++i) {
+            Particles::Particle& particle = emitter.particles[static_cast<std::size_t>(i)];
+            entt::entity& quad = emitter.quads[static_cast<std::size_t>(i)];
+            if (Particles::Step(system, particle, i, pool, emitter.owner, elapsedMs, emitter.killed, random)) {
+                ++emitter.active;
+            }
+            if (!Particles::Drawn(system, particle, emitter.killed)) {
+                hide(quad);
                 continue;
             }
 
-            particle.elapsedMs += elapsedMs;
-            if (!particle.released) {
-                if (emitter.killed) continue;
-                // Staggered across one lifetime, in pool order, unless the
-                // system releases the lot at once.
-                const double releaseAt = (system.lifeTimeMs + system.randomLifeTimeMs) *
-                                         (static_cast<double>(i) / static_cast<double>(emitter.particles.size()));
-                if (!system.allAtOnce && particle.elapsedMs <= releaseAt) continue;
-                reset(particle);
-            }
-
-            particle.velocityPx += system.gravity * frameSpeed;
-            particle.atPx += particle.velocityPx * frameSpeed;
-            particle.angle += particle.angleDir * frameSpeed;
-            particle.size = std::clamp(particle.size + system.growth * frameSpeed, system.minSize, system.maxSize);
-
-            const double age = particle.lifeMs > 0.0 ? particle.elapsedMs / particle.lifeMs : 1.0;
-            if (particle.elapsedMs > particle.lifeMs) {
-                ++particle.repeats;
-                if ((system.repeat > 0 && particle.repeats >= system.repeat) || emitter.killed) {
-                    hide();
-                    continue;
-                }
-                reset(particle);
-            }
-            if (system.animationMode == 1 && frames > 1) {
-                particle.frame = std::min(static_cast<int>(static_cast<double>(frames) * age), frames - 1);
-            }
-
-            if (particle.size <= 0.0) {
-                hide();
-                continue;
-            }
-            if (particle.quad == entt::null) {
-                particle.quad = makeSprite(registry, "Magic Portals Particle", emitter.image, system.additive);
+            if (quad == entt::null) {
+                quad = makeSprite(registry, "Magic Portals Particle", emitter.image, system.additive);
                 if (frames > 1) {
-                    auto& animation = registry.emplace<SpriteAnimationComponent>(particle.quad);
+                    auto& animation = registry.emplace<SpriteAnimationComponent>(quad);
                     animation.columns = static_cast<uint32_t>(system.columns);
                     animation.rows = static_cast<uint32_t>(system.rows);
                     animation.frameCount = 1;
-                    animation.playing = false; // the frame is this loop's, by age or at random
+                    animation.playing = false; // the frame is Step's, by age or at random
                 }
             }
             if (frames > 1) {
-                registry.get<SpriteAnimationComponent>(particle.quad).firstFrame =
-                    static_cast<uint32_t>(particle.frame);
+                registry.get<SpriteAnimationComponent>(quad).firstFrame = static_cast<uint32_t>(particle.frame);
             }
-            const glm::dvec4 colour = system.colour0 + (system.colour1 - system.colour0) * std::clamp(age, 0.0, 1.0);
-            registry.get<MaterialComponent>(particle.quad).albedoColor =
+            const glm::dvec4 colour = Particles::DrawColour(system, particle, m_ambient);
+            registry.get<MaterialComponent>(quad).albedoColor =
                 glm::vec4(static_cast<float>(colour.r), static_cast<float>(colour.g), static_cast<float>(colour.b),
                           static_cast<float>(colour.a));
-            // The bitmap's own shape at the particle's size, turned as the
-            // original turns it: its angle is degrees clockwise on the screen.
-            const double height = emitter.cellPx.x > 0.0 ? particle.size * (emitter.cellPx.y / emitter.cellPx.x)
-                                                         : particle.size;
-            placeSprite(registry, particle.quad, particle.atPx, glm::dvec2(particle.size, height), emitter.z,
-                        Units::ToWorldRotation(particle.angle * 3.14159265358979323846 / 180.0));
+            placeSprite(registry, quad, particle.atPx, Particles::QuadPx(particle), emitter.z,
+                        Particles::WorldRotation(particle));
         }
     }
+}
+
+std::vector<MagicPortalsLayer::EmitterReport> MagicPortalsLayer::EmitterReports() const {
+    std::vector<EmitterReport> reports;
+    reports.reserve(m_emitters.size());
+    for (const Emitter& emitter : m_emitters) {
+        EmitterReport report;
+        report.bitmap = emitter.system.bitmap;
+        report.systemSize = emitter.system.size;
+        report.cellPx = emitter.cellPx;
+        report.slot = emitter.slot;
+        report.additive = emitter.system.additive;
+        report.owner = emitter.owner;
+        report.z = emitter.z;
+        report.count = static_cast<int>(emitter.particles.size());
+        report.active = emitter.active;
+        report.drawn = static_cast<int>(
+            std::count_if(emitter.quads.begin(), emitter.quads.end(), [](entt::entity q) { return q != entt::null; }));
+        if (emitter.sprite >= 0 && emitter.sprite < static_cast<int>(m_sprites.size())) {
+            const DrawnSprite& owner = m_sprites[static_cast<std::size_t>(emitter.sprite)];
+            report.node = owner.sprite.node;
+            report.ownerGone = owner.quad == entt::null;
+            report.ownerZ = owner.z;
+            report.systems = static_cast<int>(std::count_if(m_emitters.begin(), m_emitters.end(), [&](const Emitter& e) {
+                return e.sprite == emitter.sprite;
+            }));
+        } else {
+            report.systems = 1;
+        }
+        double youngest = 0.0;
+        for (const Particles::Particle& particle : emitter.particles) {
+            if (!particle.released) continue;
+            if (!report.anyReleased || particle.elapsedMs < youngest) {
+                youngest = particle.elapsedMs;
+                report.newestBornPx = particle.bornPx;
+                report.newestAgeMs = particle.elapsedMs;
+                report.anyReleased = true;
+            }
+        }
+        reports.push_back(std::move(report));
+    }
+    return reports;
 }
 
 // ---- the menu ---------------------------------------------------------------
@@ -2228,7 +2267,28 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             drawn.normal = look->second.normal;
             drawn.lookZ = look->second.z;
         }
+        // A STATIC PORTAL IS DRAWN AS ITS SCRIPT REDRAWS IT (art.json static_portal):
+        // once, ETHCallback_portal_static scales the entity by 0.8 - its picture here,
+        // its particle systems in buildEmitters - and sets its colour red or blue by
+        // its node's `color`, over whatever colour the look gave it (SetColor writes
+        // the rgb of m_v4Color and keeps its alpha). Keyed by the entity, not by
+        // Portals' statics, which leave out one the level made inactive: its script
+        // still runs.
+        if (const Tscn::Node* node = m_data.scene.FindNode(sprite.node);
+            node != nullptr && BareEntityName(*node) == m_artRules.staticPortal.entity) {
+            const Tscn::Value* colour = node->Meta("color");
+            const std::string named =
+                colour != nullptr && colour->kind == Tscn::Value::Kind::String ? colour->text : std::string();
+            drawn.colour = glm::vec4(glm::vec3(m_artRules.staticPortal.TintFor(named)), drawn.colour.a);
+            drawn.scale = m_artRules.staticPortal.scale;
+        }
         drawn.ownerPx = sprite.atPx;
+        // Godot's rotation is clockwise and the converter wrote it as Ethanon's
+        // angle negated (tscn.py:433).
+        drawn.ownerAngleDeg = -sprite.rotation * 180.0 / 3.14159265358979323846;
+        drawn.key = indexOf(m_level.keys.keys, sprite.node);
+        drawn.keyhole = indexOf(m_level.keys.keyholes, sprite.node);
+        drawn.diamond = indexOf(m_level.diamonds.diamonds, sprite.node);
         drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
         drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
         drawn.zone = indexOf(m_level.portals.zones, sprite.node);
@@ -2242,6 +2302,10 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             drawn.body = body->second;
             // Bodies move on the tick and are drawn between ticks, as their boxes are.
             registry.emplace<InterpolatedTransformComponent>(drawn.quad);
+        }
+        if (drawn.key >= 0 || drawn.diamond >= 0) {
+            // Carried on the tick, as a body is moved, and drawn between ticks.
+            registry.emplace_or_replace<InterpolatedTransformComponent>(drawn.quad);
         }
         if (drawn.sky >= 0 || drawn.satellite) {
             // Placed on the tick from the camera the tick left, and drawn between
@@ -2291,6 +2355,7 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
         glm::dvec2 sizePx = sprite.sizePx;
         float rotation = Units::ToWorldRotation(sprite.rotation);
         bool gone = false;
+        double ownerAngleDeg = -sprite.rotation * 180.0 / 3.14159265358979323846;
         if (drawn.sky >= 0) {
             // Where StaticSky::position puts it from this tick's camera, whatever
             // the level said: the sprite's own offset kept, the pivot a scrolling
@@ -2312,6 +2377,27 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             if (crystal.timed && crystal.leftS < 2.0) {
                 drawn.fade = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
             }
+        } else if (drawn.key >= 0) {
+            // A key is not a body (Keys.hpp): where the carry left it, picture and
+            // sparkle together. The fly-in it plays once spent is not built
+            // (keys.json _not_built), so a spent key holds where it opened its
+            // keyhole and goes, sparkles and all, when that keyhole goes: no key is
+            // left lying where a door stood.
+            const Keys::Key& key = m_level.keys.keys[static_cast<std::size_t>(drawn.key)];
+            gone = key.spent && key.opened >= 0 && key.opened < static_cast<int>(m_level.keys.keyholes.size()) &&
+                   m_level.keys.keyholes[static_cast<std::size_t>(key.opened)].gone;
+            centrePx += key.atPx - sprite.atPx;
+            ownerPx = key.atPx;
+        } else if (drawn.diamond >= 0) {
+            const Diamonds::Diamond& diamond = m_level.diamonds.diamonds[static_cast<std::size_t>(drawn.diamond)];
+            gone = diamond.gone;
+            centrePx += diamond.atPx - sprite.atPx;
+            ownerPx = diamond.atPx;
+        } else if (drawn.keyhole >= 0) {
+            // It holds still, fades over keys.json's fade and deletes itself.
+            const Keys::Keyhole& keyhole = m_level.keys.keyholes[static_cast<std::size_t>(drawn.keyhole)];
+            gone = keyhole.gone;
+            drawn.fade = static_cast<float>(keyhole.alpha);
         } else if (drawn.staticPortal >= 0) {
             gone = !m_level.portals.statics[static_cast<std::size_t>(drawn.staticPortal)].live;
         } else if (drawn.zone >= 0) {
@@ -2332,6 +2418,8 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
                 centrePx =
                     Units::ToPixels(glm::vec3(body.position.x + turned.x, body.position.y + turned.y, 0.0f));
                 ownerPx = Units::ToPixels(body.position);
+                // The engine's +z turn is counter-clockwise on the screen, as Ethanon's angle is.
+                ownerAngleDeg = static_cast<double>(rotation) * 180.0 / 3.14159265358979323846;
             }
         }
         if (gone) {
@@ -2339,8 +2427,10 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             drawn.quad = entt::null;
             continue;
         }
-        placeSprite(registry, drawn.quad, centrePx, sizePx, drawn.z, rotation);
+        // At the scale a script gave its entity: 1 but for a static portal's 0.8.
+        placeSprite(registry, drawn.quad, centrePx, sizePx * drawn.scale, drawn.z, rotation);
         drawn.ownerPx = ownerPx;
+        drawn.ownerAngleDeg = ownerAngleDeg;
     }
 
     // THE PLATFORM THE DARK DRAGON'S DEATH ADDS, which buildSprites cannot have
@@ -2730,9 +2820,10 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
 // What is NOT coloured, and why:
 //   - the particles. Ethanon multiplies a particle system by
 //     min(1, luminance + ambient) only when it is alpha-blended
-//     (ETHParticleManager.cpp:382-389), and every one of the game's 102 is added
-//     (Particles.hpp). So updateEmitters is unchanged, by the rule rather than by
-//     omission.
+//     (ETHParticleManager.cpp:381-389). 879 of the levels' 889 systems are added
+//     and take nothing; the other ten (portal_static's portal.png, luminance 1, and
+//     gutter_mouth's water.png, 0.45) take that factor in Particles::DrawColour,
+//     from this ambient, and no light: a particle never applies one.
 //   - the boxes: placeholders the PBR path draws, which stand for things rather
 //     than being them. At a dark level's 0.01 they would vanish.
 //   - the menu, the medal screens and the HUD, none of which is in a level.
@@ -2939,11 +3030,11 @@ void MagicPortalsLayer::unloadLights(entt::registry& registry) {
 double MagicPortalsLayer::particleRatioOf(int emitter) const {
     if (emitter < 0 || emitter >= static_cast<int>(m_emitters.size())) return Lighting::ParticleRatio(0, 0);
     const Emitter& from = m_emitters[static_cast<std::size_t>(emitter)];
-    // A particle has a quad exactly while it is drawn: released, bigger than
-    // nothing, not spent and its system emitting (updateEmitters).
-    const int active = static_cast<int>(std::count_if(from.particles.begin(), from.particles.end(),
-                                                      [](const Particle& p) { return p.quad != entt::null; }));
-    return Lighting::ParticleRatio(active, from.system.count);
+    // GetNumActiveParticles, as this frame's update counted it (Particles::Step):
+    // released and bigger than nothing as the frame before left it. Not the quads
+    // drawn, which a colour whose alpha is spent takes away from a count the
+    // original keeps.
+    return Lighting::ParticleRatio(from.active, from.system.count);
 }
 
 void MagicPortalsLayer::syncLights(entt::registry& registry) {

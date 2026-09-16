@@ -260,6 +260,8 @@ void unlockingHoldsThenFadesThenTakesTheDoor() {
     const entt::entity door = keyhole->door;
     CHECK_MSG(door != entt::null && run.registry.valid(door), "the door is built and standing");
     const glm::dvec2 keyholeAt = keyhole->atPx;
+    CHECK_MSG(key->opened == -1, "a key has opened nothing yet");
+    const int keyholeIndex = static_cast<int>(keyhole - run.level.keys.keyholes.data());
 
     // Take the key, then carry it to the keyhole.
     PutAt(run.registry, run.level.player, key->atPx);
@@ -274,6 +276,8 @@ void unlockingHoldsThenFadesThenTakesTheDoor() {
     CHECK_EQ(run.level.keys.unlocked, 1);
     const Keys::Key* spent = run.level.keys.FindKey(kKey);
     if (spent != nullptr) CHECK_MSG(spent->spent, "and the key is spent");
+    // And it says which keyhole it opened, which the layer takes its picture away with.
+    if (spent != nullptr) CHECK_MSG(spent->opened == keyholeIndex, "the spent key names the keyhole it opened");
 
     // Still there through the hold: 1000 ms, and the fade has not begun.
     CHECK_MSG(run.registry.valid(door), "the door stands through the hold");

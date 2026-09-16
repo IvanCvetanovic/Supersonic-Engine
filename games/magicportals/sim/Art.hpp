@@ -89,6 +89,23 @@ struct Spike : Picture {
     double pivotYPx = 0.0;
 };
 
+// A static portal as its script redraws it (ETHCallback_portal_static, art.json's
+// static_portal). The level pictures the entity; the callback, once, scales it -
+// its picture AND its particle systems, which is what ETHEntity::Scale does - and
+// tints its picture red or blue by the node's `color`. Its particles are not
+// tinted: a particle is drawn in its own colour (ETHParticleManager.cpp:381-389).
+struct StaticPortal {
+    std::string entity;            // the entity name the callback is named for
+    double scale = 1.0;            // ETHEntity::Scale, applied once
+    std::string red;               // the `color` value that takes tintRed
+    glm::dvec3 tintRed{1.0};       // SetColor when it is
+    glm::dvec3 tintOtherwise{1.0}; // and when it is anything else, or absent
+
+    // GetString("color") == red ? tintRed : tintOtherwise. An absent value reads
+    // as "" there, which is not red.
+    glm::dvec3 TintFor(const std::string& colour) const { return colour == red ? tintRed : tintOtherwise; }
+};
+
 struct Rules {
     Picture portal;      // portal.ent
     Picture shot;        // projectile.ent
@@ -96,6 +113,8 @@ struct Rules {
     Character character; // dark_mage.ent, the player
     Beholder beholder;   // beholder.ent, chapter 1's boss
     Spike spike;         // beholder_spike.ent, its spikes
+    // portal_static: placed by the levels, redrawn by its script
+    StaticPortal staticPortal;
 };
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error);

@@ -250,6 +250,23 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     }
     read.spike.pivotXPx = spikePivot.x;
     read.spike.pivotYPx = spikePivot.y;
+
+    // A static portal as its callback redraws it. Every number is the bytecode's,
+    // and none has a default: a scale of 1 or a white tint would be the port's
+    // old picture, which is the one the footage refuses.
+    const Json::Value& portalStatic = root["static_portal"];
+    StaticPortal& statics = read.staticPortal;
+    if (!portalStatic.IsObject() || !portalStatic["entity"].IsString() || portalStatic["entity"].AsString("").empty() ||
+        !Finite(portalStatic["scale"]) || !(portalStatic["scale"].AsNumber() > 0.0) || !portalStatic["red"].IsString() ||
+        portalStatic["red"].AsString("").empty() || !Emissive(portalStatic["tint_red"], statics.tintRed) ||
+        !Emissive(portalStatic["tint_otherwise"], statics.tintOtherwise)) {
+        error = path + ": static_portal needs entity, a scale above 0, red, and tint_red and tint_otherwise, "
+                       "each three numbers none below 0";
+        return false;
+    }
+    statics.entity = portalStatic["entity"].AsString("");
+    statics.scale = portalStatic["scale"].AsNumber();
+    statics.red = portalStatic["red"].AsString("");
     out = std::move(read);
     return true;
 }

@@ -218,5 +218,34 @@
     "apply_light": false,
     "_lighting": "beholder_spike.ent: <Entity static=0 applyLight=0>, no <Normal>, no <Light>",
     "pivot_px": [0, 10]
+  },
+
+  "static_portal": {
+    "_source": [
+      "A PLACED entity the level pictures, but drawn as its script redraws it: ETHCallback_portal_static",
+      "(Portal.angelscript, bytecode bytes 360571..361404, the remake's out/parity/asbc/all_functions.txt).",
+      "Once, guarded by the uint 'scaled' (ops 1-12, JNZ -> 80 once it is set, ops 17-29 set it):",
+      "  ops 14-16  thisEntity.Scale(0.8f). ETHEntity::Scale(float) scales the entity AND every particle",
+      "             system it carries (ETHEntity.cpp:591-599 -> ETHSpriteEntity.cpp:512-518 ->",
+      "             ETHParticleManager.cpp:444-451, ETHParticleSystem.cpp:27-40, PARTICLE::Scale",
+      "             ETHParticleManager.h:160-164). The picture is drawn at its frame size times the",
+      "             scale (ETHSpriteEntity.cpp:652-682): portal_halo.png 64 -> 51.2 u, the rings 110 -> 88.",
+      "  ops 31-79  SetColor(GetString('color') == 'red' ? vector3(1, 0.3, 0.3) : vector3(0.3, 0.3, 1)).",
+      "             An AngelScript call pushes its last argument first (the order systems_3_4 read",
+      "             _portalColorA by, which footage confirmed), so ops 57-59 push z 0.3, y 0.3, x 1: red.",
+      "             0.3f is PshC4 1050253722 (0x3E99999A). SetColor writes m_v4Color (ETHEntity.cpp:493-498),",
+      "             which multiplies the SPRITE's min(1, ambient + emissive) (ETHRenderEntity.cpp:113-117);",
+      "             a particle is drawn in its own colour times ambient alone (ETHParticleManager.cpp:381-389),",
+      "             so the rings and the iris are not tinted.",
+      "A static entity with a callback runs it on every frame its bucket is drawn",
+      "(ETHScene.cpp:572 and 488, ETHActiveEntityHandler.cpp:70-74, 90-93 and 145-166), after its particles update.",
+      "Footage agrees on the order: red portals read pinker, R/B 0.82 against blue's 0.52 (scripted.md 2.3)."
+    ],
+    "entity": "portal_static",
+    "scale": 0.8,
+    "red": "red",
+    "tint_red": [1.0, 0.3, 0.3],
+    "tint_otherwise": [0.3, 0.3, 1.0],
+    "_not_applied": "Scale also scales the entity's collision box (m_controller->Scale). The port's static portal is entered by its trigger_size box, which is gameplay, and is left as it was."
   }
 }

@@ -78,6 +78,10 @@ struct Key : Carry::Carried {
     std::string name;   // the node's name
     std::string colour; // metadata/color, which every one of them carries
     bool spent = false; // it has opened its keyhole and is done
+    // Which keyhole in State::keyholes it opened, once spent; -1 before. What the
+    // picture follows: a spent key's fly-in is not built, so the layer takes it away
+    // when that keyhole goes.
+    int opened = -1;
 };
 
 struct Keyhole {

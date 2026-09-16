@@ -25,8 +25,10 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 using namespace MagicPortals;
@@ -313,6 +315,48 @@ void ThePortalAndTheShotAreTheirEnts() {
         CHECK_MSG(!picture->isStatic && !picture->applyLight && picture->normal.empty() && !picture->light,
                   picture->sprite + ": not static, applies no light, no normal map, no light");
     }
+
+    // A static portal as ETHCallback_portal_static redraws it (bytes 360571..361404):
+    // Scale(0.8f) once (ops 14-16), then SetColor by its `color` (ops 31-79), the
+    // vector3's last argument pushed first - so 'red' is (1, 0.3, 0.3) and anything
+    // else, an absent colour included, (0.3, 0.3, 1).
+    const Art::StaticPortal& statics = rules.staticPortal;
+    CHECK_MSG(statics.entity == "portal_static" && statics.scale == 0.8 && statics.red == "red",
+              "portal_static, scaled by 0.8, red by the colour 'red'");
+    CHECK_MSG(statics.tintRed == glm::dvec3(1.0, 0.3, 0.3) && statics.tintOtherwise == glm::dvec3(0.3, 0.3, 1.0),
+              "tinted (1, 0.3, 0.3) when red, (0.3, 0.3, 1) otherwise");
+    CHECK_MSG(statics.TintFor("red") == statics.tintRed && statics.TintFor("blue") == statics.tintOtherwise &&
+                  statics.TintFor("") == statics.tintOtherwise,
+              "GetString('color') == 'red': a blue portal and one with no colour both take the other tint");
+}
+
+// The static portal's script is not optional: without it the port draws the white,
+// unscaled halo the footage refuses (step 59's ring-excess row).
+void AStaticPortalWithoutItsScriptIsRefused() {
+    std::ifstream file(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", std::ios::binary);
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string real = buffer.str();
+    CHECK(real.find("\"static_portal\"") != std::string::npos);
+    const auto refused = [&real](const std::string& from, const std::string& to, const std::string& name) {
+        std::string text = real;
+        const std::size_t at = text.find(from);
+        CHECK_MSG(at != std::string::npos, from);
+        if (at == std::string::npos) return;
+        text.replace(at, from.size(), to);
+        const std::filesystem::path path = Scratch() / ("art-static-portal-" + name + ".json");
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Art::Rules rules;
+        std::string error;
+        const bool ok = Art::LoadRules(path.string(), rules, error);
+        CHECK_MSG(!ok, "refused: " + name);
+        CHECK_MSG(error.find("static_portal needs") != std::string::npos, name + ": " + error);
+    };
+    refused("\"static_portal\"", "\"static_portal_gone\"", "absent");
+    refused("\"scale\": 0.8", "\"scale\": 0", "scale 0");
+    refused("\"tint_red\": [1.0, 0.3, 0.3]", "\"tint_red\": [1.0, 0.3]", "two numbers");
+    refused("\"tint_otherwise\": [0.3, 0.3, 1.0]", "\"tint_otherwise\": [0.3, -0.3, 1.0]", "below zero");
+    refused("\"red\": \"red\"", "\"red\": \"\"", "no red");
 }
 
 void APulseGoesThereAndBack() {
@@ -722,22 +766,526 @@ void AnEntityWithoutParticlesSaysSoWithoutFailing() {
     CHECK(!Particles::Load((Scratch() / "no-such-file.ent").string(), systems, error));
 }
 
+// ---- a particle, moved and drawn as ETHParticleManager moves and draws it --------
+//
+// Synthetic systems and a generator that always answers the middle of its range,
+// so every spread is zero and every number below is the arithmetic alone.
+
+const Particles::Random kMiddle = [](double from, double to) { return (from + to) * 0.5; };
+
+bool NearD(double a, double b, double eps = 1e-9) {
+    return std::fabs(a - b) <= eps;
+}
+
+bool NearP(const glm::dvec2& a, const glm::dvec2& b, double eps = 1e-9) {
+    return NearD(a.x, b.x, eps) && NearD(a.y, b.y, eps);
+}
+
+std::string ShowP(const glm::dvec2& p) {
+    return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) + ")";
+}
+
+// light.ent's flame, as the file states it (the reader pins the real one above).
+Particles::System TorchFlame() {
+    Particles::System s;
+    s.bitmap = "fire.png";
+    s.count = 12;
+    s.alphaMode = Particles::kAlphaAdd;
+    s.additive = true;
+    s.animationMode = 2;
+    s.lifeTimeMs = 450.0;
+    s.size = 28.0;
+    s.growth = -1.4;
+    s.maxSize = 1000.0;
+    s.direction = glm::dvec2(0.0, -1.6);
+    s.startPoint = glm::dvec2(0.0, -12.0);
+    s.colour0 = glm::dvec4(1.0, 0.4, 0.2, 1.0);
+    s.colour1 = s.colour0;
+    s.luminance = glm::dvec3(0.0);
+    s.columns = 4;
+    return s;
+}
+
+// 2a: a particle starts at its entity's POSITION plus its start point, turned by
+// the entity's angle - not at the centre of the entity's picture. The torch of
+// 1-1 stands at (288, 64) with its picture hung 16 below (offset (0, 16)), so its
+// flame starts at (288, 52), where the port used to start it at (288, 68).
+void AParticleStartsAtItsEntitysPosition() {
+    const Particles::System flame = TorchFlame();
+    Particles::Particle p;
+    Particles::Reset(flame, p, Particles::Owner{glm::dvec2(288.0, 64.0), 0.0}, kMiddle);
+    CHECK_MSG(NearP(p.atPx, glm::dvec2(288.0, 52.0)) && NearP(p.bornPx, p.atPx),
+              "the flame starts 12 above the node: " + ShowP(p.atPx));
+    CHECK_MSG(NearP(p.velocityPx, glm::dvec2(0.0, -1.6)), "and rises: " + ShowP(p.velocityPx));
+
+    // The turn is Multiply(v, RotateZ(a)): (x cos + y sin, -x sin + y cos) in
+    // +y-down pixels. At 90 degrees right becomes up and up becomes left, which is
+    // counter-clockwise on the screen.
+    CHECK_MSG(NearP(Particles::Turn(glm::dvec2(10.0, 0.0), 90.0), glm::dvec2(0.0, -10.0), 1e-12),
+              "right turned 90 is up: " + ShowP(Particles::Turn(glm::dvec2(10.0, 0.0), 90.0)));
+    CHECK_MSG(NearP(Particles::Turn(glm::dvec2(0.0, -10.0), 90.0), glm::dvec2(-10.0, 0.0), 1e-12),
+              "up turned 90 is left");
+    CHECK_MSG(Particles::Turn(glm::dvec2(3.25, -12.0), 0.0) == glm::dvec2(3.25, -12.0), "unturned is exact");
+
+    // An entity at 90 (the one light_wall of the 128 levels that is turned): the
+    // start point, its spread and the direction turn with it; gravity does not.
+    Particles::System turned = flame;
+    turned.startPoint = glm::dvec2(12.0, 0.0);
+    turned.gravity = glm::dvec2(0.0, 0.5);
+    turned.angleStart = 10.0;
+    Particles::Particle q;
+    Particles::Reset(turned, q, Particles::Owner{glm::dvec2(100.0, 100.0), 90.0}, kMiddle);
+    CHECK_MSG(NearP(q.atPx, glm::dvec2(100.0, 88.0), 1e-12), "(12, 0) turned 90 is 12 above: " + ShowP(q.atPx));
+    CHECK_MSG(NearP(q.velocityPx, glm::dvec2(-1.6, 0.0), 1e-12), "rising turned 90 is leftward: " + ShowP(q.velocityPx));
+    CHECK_MSG(NearD(q.angleDeg, 100.0), "its angle starts at angleStart plus the entity's: " + std::to_string(q.angleDeg));
+    const bool active = Particles::Step(turned, q, 0, 1, Particles::Owner{glm::dvec2(100.0, 100.0), 90.0}, 1000.0 / 60.0,
+                                        false, kMiddle);
+    CHECK_MSG(!active, "a particle not yet released is not active");
+    CHECK_MSG(q.released, "released on its first frame, index 0 of 1");
+    CHECK_MSG(NearP(q.velocityPx, glm::dvec2(-1.6, 0.5), 1e-12), "gravity is added unturned: " + ShowP(q.velocityPx));
+}
+
+// 2b: the angle turns counter-clockwise on the screen when it grows, and the
+// engine's +z turn is counter-clockwise too, so the rotation the quad takes is
+// +angle. The port used to hand it over negated, and 1-1's portals spun the
+// wrong way (plan_port gap H: the original at -95 to -119 degrees a second,
+// clockwise positive).
+void AParticleTurnsCounterClockwise() {
+    Particles::System ring;
+    ring.count = 3;
+    ring.lifeTimeMs = 900.0;
+    ring.size = 110.0;
+    ring.growth = -2.0;
+    ring.minSize = 2.0;
+    ring.maxSize = 9100.0;
+    ring.angleDir = 1.8; // portal_static.ent's rings
+    ring.colour0 = glm::dvec4(0.0, 0.0, 0.0, 1.0);
+    ring.colour1 = glm::dvec4(0.5, 0.4, 1.0, 0.0);
+    Particles::Particle p;
+    const Particles::Owner owner{glm::dvec2(74.0, 166.0), 0.0};
+    Particles::Reset(ring, p, owner, kMiddle);
+    Particles::Step(ring, p, 0, 3, owner, 1000.0 / 60.0, false, kMiddle); // released; turns 1.8
+    const float first = Particles::WorldRotation(p);
+    for (int frame = 0; frame < 30; ++frame) Particles::Step(ring, p, 0, 3, owner, 1000.0 / 60.0, false, kMiddle);
+    const float later = Particles::WorldRotation(p);
+    const double perSecond = static_cast<double>(later - first) / 0.5 * 180.0 / 3.14159265358979323846;
+    CHECK_MSG(NearD(perSecond, 108.0, 1e-3), "108 degrees a second, counter-clockwise: " + std::to_string(perSecond));
+    CHECK_MSG(later > first, "the engine's rotation grows: counter-clockwise on the screen");
+    // The quad's own axis: +x turned by the rotation points up the screen (+y in
+    // the engine) for a quarter turn.
+    Particles::Particle quarter;
+    quarter.angleDeg = 90.0;
+    CHECK_MSG(NearD(Particles::WorldRotation(quarter), 3.14159265358979323846 / 2.0, 1e-6),
+              "a quarter turn is +pi/2 about +z: " + std::to_string(Particles::WorldRotation(quarter)));
+}
+
+// 2c: an added particle is drawn with alpha 1 and its colour lerped; an
+// alpha-blended one keeps its alpha and takes min(1, luminance + ambient).
+void AnAddedParticleIgnoresItsAlpha() {
+    Particles::System sparkle; // crystal.ent's
+    sparkle.count = 2;
+    sparkle.lifeTimeMs = 1000.0;
+    sparkle.size = 12.0;
+    sparkle.maxSize = 1000.0;
+    sparkle.colour0 = glm::dvec4(0.8, 0.8, 1.0, 1.0);
+    sparkle.colour1 = glm::dvec4(0.0, 0.0, 0.0, 0.0);
+    Particles::Particle p;
+    p.released = true;
+    p.size = 12.0;
+    p.colour = glm::dvec4(0.4, 0.4, 0.5, 0.5);
+    glm::dvec4 c = Particles::DrawColour(sparkle, p, glm::dvec3(0.01));
+    CHECK_MSG(NearD(c.r, 0.4) && NearD(c.g, 0.4) && NearD(c.b, 0.5) && c.a == 1.0,
+              "added: the lerped colour, alpha 1, no ambient: " + std::to_string(c.a));
+    CHECK_MSG(Particles::Drawn(sparkle, p, false), "and drawn");
+
+    Particles::System water = sparkle; // gutter_mouth.ent's
+    water.alphaMode = Particles::kAlphaPixel;
+    water.additive = false;
+    water.luminance = glm::dvec3(0.45);
+    water.colour0 = glm::dvec4(1.0);
+    c = Particles::DrawColour(water, p, glm::dvec3(0.3, 0.3, 0.35));
+    CHECK_MSG(NearD(c.r, 0.4 * 0.75) && NearD(c.b, 0.5 * 0.8) && NearD(c.a, 0.5),
+              "mixed: times min(1, 0.45 + ambient), its alpha kept: " + std::to_string(c.r) + " " + std::to_string(c.a));
+    c = Particles::DrawColour(water, p, glm::dvec3(0.9));
+    CHECK_MSG(NearD(c.r, 0.4) && NearD(c.a, 0.5), "and never lifted past 1");
+
+    // Not drawn once its colour's alpha is spent - in either blend (:375).
+    p.colour.a = 0.0;
+    CHECK(!Particles::Drawn(water, p, false));
+    CHECK(!Particles::Drawn(sparkle, p, false));
+    p.colour.a = 0.5;
+    p.size = 0.0;
+    CHECK_MSG(!Particles::Drawn(sparkle, p, false), "nor at no size");
+    p.size = 12.0;
+    p.elapsedMs = 1200.0;
+    p.lifeMs = 1000.0;
+    CHECK_MSG(Particles::Drawn(sparkle, p, false) && !Particles::Drawn(sparkle, p, true),
+              "past its life it is drawn only while its system is not killed");
+    sparkle.repeat = 1;
+    p.repeats = 1;
+    CHECK_MSG(!Particles::Drawn(sparkle, p, false), "and never once its lives are spent");
+
+    CHECK_MSG(Particles::Drawable(sparkle) && Particles::Drawable(water), "added and mixed are drawn");
+    Particles::System modulate = sparkle;
+    modulate.alphaMode = Particles::kAlphaModulate;
+    modulate.additive = false;
+    CHECK_MSG(!Particles::Drawable(modulate), "a multiply is refused, not mixed");
+}
+
+// 2d: a system draws in its entity's own slot, after the halo's quarter and
+// before the half the layer puts what stands between two slots at, one after
+// another in the file's order.
+void ASystemDrawsInsideItsEntitysSlot() {
+    CHECK_MSG(NearD(Particles::SlotFraction(0, 1), 0.375), "one system: 3/8");
+    CHECK_MSG(NearD(Particles::SlotFraction(0, 2), 1.0 / 3.0) && NearD(Particles::SlotFraction(1, 2), 5.0 / 12.0),
+              "two: 1/3 and 5/12");
+    for (int n = 1; n <= 8; ++n) {
+        double last = 0.25;
+        for (int t = 0; t < n; ++t) {
+            const double f = Particles::SlotFraction(t, n);
+            CHECK_MSG(f > last && f < 0.5, "system " + std::to_string(t) + " of " + std::to_string(n) + " at " +
+                                               std::to_string(f) + ", after " + std::to_string(last));
+            last = f;
+        }
+    }
+}
+
+// 2e: the quad is square whatever the cell is; tesla_shock_black_bg.png is cut
+// 5 x 2 from 256 x 64, a 51.2 x 32 cell, and is still drawn size by size.
+void AParticlesQuadIsSquare() {
+    Particles::Particle p;
+    p.size = 40.0;
+    CHECK_MSG(Particles::QuadPx(p) == glm::dvec2(40.0, 40.0), "40 by 40: " + ShowP(Particles::QuadPx(p)));
+}
+
+// ETHEntity::Scale on a system (ETHParticleSystem.cpp:27-40): every length times the
+// scale, and no time, angle or colour. And the layer's shortcut - making the pool
+// from the scaled system, where the original scales a pool it has made and run
+// for a frame - gives the same particles for a system whose start point, spreads
+// and direction are 0, as portal_static's rings are: sizes and their growth are
+// linear in the scale, and the draws are the same draws over scaled ranges.
+void AScaledSystemIsEthanonsScale() {
+    Particles::System s = TorchFlame();
+    s.gravity = glm::dvec2(0.5, -0.25);
+    s.randomizeDir = glm::dvec2(2.0, 4.0);
+    s.randStartPoint = glm::dvec2(6.0, 8.0);
+    s.randomizeSize = 10.0;
+    s.minSize = 2.0;
+    s.randomLifeTimeMs = 30.0;
+    s.angleStart = 15.0;
+    s.randAngleStart = 245.0;
+    s.angleDir = 1.8;
+    s.randAngle = 0.5;
+    Particles::System scaled = s;
+    Particles::Scale(scaled, 0.8);
+    CHECK_MSG(NearP(scaled.gravity, s.gravity * 0.8) && NearP(scaled.direction, s.direction * 0.8) &&
+                  NearP(scaled.randomizeDir, s.randomizeDir * 0.8) && NearP(scaled.startPoint, s.startPoint * 0.8) &&
+                  NearP(scaled.randStartPoint, s.randStartPoint * 0.8),
+              "gravity, direction, their spreads and the start point scale");
+    CHECK_MSG(NearD(scaled.size, s.size * 0.8) && NearD(scaled.randomizeSize, s.randomizeSize * 0.8) &&
+                  NearD(scaled.growth, s.growth * 0.8) && NearD(scaled.minSize, s.minSize * 0.8) &&
+                  NearD(scaled.maxSize, s.maxSize * 0.8),
+              "the size, its spread, its growth and its bounds scale");
+    CHECK_MSG(scaled.lifeTimeMs == s.lifeTimeMs && scaled.randomLifeTimeMs == s.randomLifeTimeMs &&
+                  scaled.angleStart == s.angleStart && scaled.randAngleStart == s.randAngleStart &&
+                  scaled.angleDir == s.angleDir && scaled.randAngle == s.randAngle && scaled.colour0 == s.colour0 &&
+                  scaled.colour1 == s.colour1 && scaled.luminance == s.luminance && scaled.count == s.count &&
+                  scaled.columns == s.columns && scaled.rows == s.rows,
+              "no time, angle, colour, count or cut does");
+
+    // portal_static.ent's rings, and the same rings as its script leaves them.
+    Particles::System ring;
+    ring.count = 3;
+    ring.lifeTimeMs = 900.0;
+    ring.randomLifeTimeMs = 300.0;
+    ring.size = 110.0;
+    ring.growth = -2.0;
+    ring.minSize = 2.0;
+    ring.maxSize = 9100.0;
+    ring.angleDir = 1.8;
+    ring.randAngleStart = 245.0;
+    ring.colour0 = glm::dvec4(0.0, 0.0, 0.0, 1.0);
+    ring.colour1 = glm::dvec4(0.5, 0.4, 1.0, 0.0);
+    Particles::System scaledRing = ring;
+    Particles::Scale(scaledRing, 0.8);
+    CHECK_MSG(scaledRing.size == 88.0 && NearD(scaledRing.growth, -1.6) && NearD(scaledRing.minSize, 1.6),
+              "the rings are born at 88 and shrink 1.6 a frame to 1.6");
+
+    // A generator whose k-th draw lies (k mod 16) / 16 along its range: one each, counted.
+    const auto sequence = [](int& k) {
+        return [&k](double from, double to) {
+            ++k;
+            return from + (to - from) * static_cast<double>(k % 16) / 16.0;
+        };
+    };
+    int drawsA = 0;
+    int drawsB = 0;
+    const Particles::Random a = sequence(drawsA);
+    const Particles::Random b = sequence(drawsB);
+    const Particles::Owner owner{glm::dvec2(334.0, 200.0), 0.0};
+    const double tick = 1000.0 / 60.0;
+    // The original's order: the pool made and run a frame at the file's scale, then
+    // scaled, particle and system (ETHParticleManager.cpp:444-451, .h:160-164).
+    std::vector<Particles::Particle> original = Particles::MakePool(ring, 3, owner, a);
+    for (int i = 0; i < 3; ++i) Particles::Step(ring, original[static_cast<std::size_t>(i)], i, 3, owner, tick, false, a);
+    for (Particles::Particle& p : original) {
+        p.size *= 0.8;
+        p.velocityPx *= 0.8;
+    }
+    // The layer's: made from the scaled system, run the same frame.
+    std::vector<Particles::Particle> port = Particles::MakePool(scaledRing, 3, owner, b);
+    for (int i = 0; i < 3; ++i) Particles::Step(scaledRing, port[static_cast<std::size_t>(i)], i, 3, owner, tick, false, b);
+    bool same = drawsA == drawsB;
+    for (int frame = 0; frame < 240 && same; ++frame) {
+        for (int i = 0; i < 3; ++i) {
+            const Particles::Particle& o = original[static_cast<std::size_t>(i)];
+            const Particles::Particle& q = port[static_cast<std::size_t>(i)];
+            if (!NearD(o.size, q.size, 1e-9) || !NearP(o.atPx, q.atPx, 1e-9) || !NearD(o.angleDeg, q.angleDeg, 1e-9) ||
+                o.released != q.released || o.repeats != q.repeats || o.colour != q.colour) {
+                same = false;
+            }
+        }
+        for (int i = 0; i < 3; ++i) {
+            Particles::Step(scaledRing, original[static_cast<std::size_t>(i)], i, 3, owner, tick, false, a);
+            Particles::Step(scaledRing, port[static_cast<std::size_t>(i)], i, 3, owner, tick, false, b);
+        }
+        same = same && drawsA == drawsB;
+    }
+    CHECK_MSG(same, "four seconds of the rings: scaling the made pool and making the pool scaled agree, draw for draw");
+}
+
+// And the loop's own order, which the port once had wrong: a renewed particle is
+// drawn in its colour at birth and at frame 0 of a played sheet on the frame it is
+// renewed; it counts as active by what the frame before left; the motion is capped
+// at 250 ms and the age is not; a killed system still releases, and renews nothing.
+void TheLoopKeepsEthanonsOrder() {
+    Particles::System s;
+    s.count = 4;
+    s.lifeTimeMs = 110.0;
+    s.size = 10.0;
+    s.maxSize = 100.0;
+    s.direction = glm::dvec2(1.0, 0.0);
+    s.colour0 = glm::dvec4(1.0, 0.0, 0.0, 1.0);
+    s.colour1 = glm::dvec4(0.0, 0.0, 1.0, 1.0);
+    s.columns = 4;
+    s.animationMode = 1;
+    const Particles::Owner owner{glm::dvec2(0.0), 0.0};
+    const double tick = 1000.0 / 60.0;
+
+    std::vector<Particles::Particle> pool = Particles::MakePool(s, 4, owner, kMiddle);
+    CHECK_EQ(static_cast<int>(pool.size()), 4);
+    // Staggered: index i is released once its age passes (110 + 0) * i / 4.
+    int releasedAfterOne = 0;
+    for (int i = 0; i < 4; ++i) {
+        Particles::Step(s, pool[static_cast<std::size_t>(i)], i, 4, owner, tick, false, kMiddle);
+        if (pool[static_cast<std::size_t>(i)].released) ++releasedAfterOne;
+    }
+    CHECK_MSG(releasedAfterOne == 1, "one frame of 16.7 ms releases index 0 only: " + std::to_string(releasedAfterOne));
+
+    Particles::Particle p = pool[0];
+    CHECK_MSG(NearD(p.elapsedMs, 0.0) && NearP(p.atPx, glm::dvec2(1.0, 0.0)), "released at 0 and moved one step");
+    // Five more frames: 83.3 ms of a life of 110, at 3/4 of the sheet.
+    for (int f = 0; f < 5; ++f) CHECK(Particles::Step(s, p, 0, 4, owner, tick, false, kMiddle));
+    CHECK_MSG(p.frame == 3 && NearD(p.colour.r, 1.0 - 83.3333333333 / 110.0, 1e-6), "frame 3, colour lerped by age");
+    // The sixth: 100 ms is inside its life; the seventh, 116.7, renews it.
+    CHECK(Particles::Step(s, p, 0, 4, owner, tick, false, kMiddle));
+    CHECK_MSG(p.repeats == 0, "inside its life it is not renewed");
+    CHECK(Particles::Step(s, p, 0, 4, owner, tick, false, kMiddle));
+    CHECK_MSG(p.repeats == 1 && p.elapsedMs == 0.0 && p.frame == 0 && p.colour == s.colour0 &&
+                  NearP(p.atPx, glm::dvec2(0.0)),
+              "renewed: colour at birth, frame 0, back at its start: frame " + std::to_string(p.frame) + " at " +
+                  ShowP(p.atPx));
+
+    // A frame of a whole second moves 250 ms' worth and ages the whole second.
+    Particles::Particle slow = pool[1];
+    slow.released = true;
+    slow.elapsedMs = 0.0;
+    slow.lifeMs = 5000.0;
+    slow.atPx = glm::dvec2(0.0);
+    Particles::Step(s, slow, 1, 4, owner, 1000.0, false, kMiddle);
+    CHECK_MSG(NearP(slow.atPx, glm::dvec2(15.0, 0.0)) && NearD(slow.elapsedMs, 1000.0),
+              "capped motion, whole age: " + ShowP(slow.atPx));
+
+    // Size 0 as the last frame left it is not active, whatever this frame does.
+    Particles::Particle shrunk = slow;
+    shrunk.size = 0.0;
+    CHECK_MSG(!Particles::Step(s, shrunk, 1, 4, owner, tick, false, kMiddle), "no size, not active");
+
+    // Killed: an unreleased particle is still released; a life that ends is not renewed.
+    Particles::Particle waiting = pool[3];
+    Particles::Step(s, waiting, 3, 4, owner, 200.0, true, kMiddle);
+    CHECK_MSG(waiting.released, "a killed system still releases");
+    Particles::Particle ending = slow;
+    ending.elapsedMs = 4990.0;
+    const bool counted = Particles::Step(s, ending, 1, 4, owner, tick, true, kMiddle);
+    CHECK_MSG(counted && ending.repeats == 1 && ending.elapsedMs > ending.lifeMs && !Particles::Drawn(s, ending, true),
+              "killed at the end of its life: counted, spent, not renewed, not drawn");
+}
+
+// The random numbers are drawn in the original's statement order: ResetParticle's
+// turn rate, life, size, direction x then y (ETHParticleManager.cpp:483-488), then
+// PositionParticle's angle, start x then y (:517-519), then the frame (:502). kMiddle
+// answers every draw alike, so it cannot see the order; this generator answers the
+// k-th draw (k + 1) / 16 of the way along its range, so a y drawn before its x
+// would put different numbers on both.
+void TheRandomNumbersAreDrawnInEthanonsOrder() {
+    Particles::System s;
+    s.count = 1;
+    s.lifeTimeMs = 500.0;
+    s.size = 20.0;
+    s.maxSize = 100.0;
+    s.direction = glm::dvec2(1.0, -1.0);
+    s.startPoint = glm::dvec2(10.0, 20.0);
+    s.randAngle = 2.0;
+    s.randomLifeTimeMs = 4.0;
+    s.randomizeSize = 6.0;
+    s.randomizeDir = glm::dvec2(8.0, 10.0);
+    s.randAngleStart = 12.0;
+    s.randStartPoint = glm::dvec2(14.0, 16.0);
+    s.columns = 2;
+    s.animationMode = 2; // PICK_RANDOM_FRAME: one more draw, last
+    const Particles::Owner owner{glm::dvec2(100.0, 200.0), 0.0};
+
+    std::vector<std::pair<double, double>> asked;
+    const Particles::Random sequence = [&asked](double from, double to) {
+        const double along = static_cast<double>(asked.size() + 1) / 16.0;
+        asked.emplace_back(from, to);
+        return from + (to - from) * along;
+    };
+
+    Particles::Particle p;
+    Particles::Reset(s, p, owner, sequence);
+    const std::vector<std::pair<double, double>> order{{-1.0, 1.0}, {-2.0, 2.0}, {-3.0, 3.0}, {-4.0, 4.0}, {-5.0, 5.0},
+                                                       {0.0, 12.0}, {-7.0, 7.0}, {-8.0, 8.0}, {0.0, 2.0}};
+    CHECK_MSG(asked == order, "Reset asks for its nine ranges in the original's order, " +
+                                  std::to_string(asked.size()) + " asked");
+    CHECK_MSG(NearD(p.angleDirDeg, -0.875) && NearD(p.lifeMs, 498.5) && NearD(p.size, 18.125),
+              "turn rate, life and size take draws 1 to 3");
+    CHECK_MSG(NearP(p.velocityPx, glm::dvec2(-1.0, -2.875)),
+              "direction x takes draw 4 and y draw 5: " + ShowP(p.velocityPx));
+    CHECK_MSG(NearD(p.angleDeg, 4.5), "the start angle takes draw 6: " + std::to_string(p.angleDeg));
+    CHECK_MSG(NearP(p.atPx, glm::dvec2(109.125, 220.0)), "start x takes draw 7 and y draw 8: " + ShowP(p.atPx));
+    CHECK_MSG(p.frame == 1, "and the frame draw 9: " + std::to_string(p.frame));
+
+    // A first release positions only: the angle, then x, then y.
+    asked.clear();
+    Particles::Release(s, p, owner, sequence);
+    const std::vector<std::pair<double, double>> released{{0.0, 12.0}, {-7.0, 7.0}, {-8.0, 8.0}};
+    CHECK_MSG(asked == released, "Release asks for three ranges, angle then x then y");
+    CHECK_MSG(NearD(p.angleDeg, 0.75), "the angle takes the first draw: " + std::to_string(p.angleDeg));
+    CHECK_MSG(NearP(p.atPx, glm::dvec2(104.75, 215.0)), "x takes the second draw and y the third: " + ShowP(p.atPx));
+}
+
+// The census the blend rules rest on, over all 190 files: 102 systems, 75 added,
+// 23 mixed and 4 multiplied; every added bitmap without alpha, which is what makes
+// an added particle's alpha of 1 exact rather than close; every mixed bitmap with
+// it; and every system with a <Luminance>.
+int PngColourType(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    std::vector<unsigned char> head(26, 0);
+    if (!file.read(reinterpret_cast<char*>(head.data()), 26)) return -1;
+    if (head[0] != 0x89 || head[1] != 'P') return -1;
+    return head[25];
+}
+
+void EveryAddedBitmapIsWithoutAlpha() {
+    int systemsRead = 0;
+    int added = 0;
+    int mixed = 0;
+    int multiplied = 0;
+    int addedWithAlpha = 0;
+    int mixedWithoutAlpha = 0;
+    std::string firstWrong;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(kOriginal + "/entities", ec)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".ent") continue;
+        std::vector<Particles::System> systems;
+        std::string error;
+        if (!Particles::Load(entry.path().string(), systems, error)) continue;
+        for (const Particles::System& system : systems) {
+            ++systemsRead;
+            const std::string bitmap = kOriginal + "/particles/" + system.bitmap;
+            const std::string ext = std::filesystem::path(system.bitmap).extension().string();
+            // A PNG says in its IHDR (colour types 4 and 6 carry alpha, and none of
+            // the game's is paletted); the game's BMPs are 8-bit grey and its JPG
+            // cannot carry any.
+            int type = PngColourType(bitmap);
+            const bool alpha = type == 4 || type == 6;
+            if (type < 0 && ext != ".bmp" && ext != ".JPG" && ext != ".jpg") {
+                if (firstWrong.empty()) firstWrong = system.bitmap + " is none of PNG, BMP or JPG";
+            }
+            if (system.alphaMode == Particles::kAlphaAdd) {
+                ++added;
+                if (alpha) {
+                    ++addedWithAlpha;
+                    if (firstWrong.empty()) firstWrong = system.bitmap + " is added and carries alpha";
+                }
+            } else if (system.alphaMode == Particles::kAlphaPixel) {
+                ++mixed;
+                if (!alpha) {
+                    ++mixedWithoutAlpha;
+                    if (firstWrong.empty()) firstWrong = system.bitmap + " is mixed and carries none";
+                }
+            } else if (system.alphaMode == Particles::kAlphaModulate) {
+                ++multiplied;
+            }
+        }
+    }
+    CHECK_EQ(systemsRead, 102);
+    CHECK_EQ(added, 75);
+    CHECK_EQ(mixed, 23);
+    CHECK_EQ(multiplied, 4);
+    CHECK_MSG(addedWithAlpha == 0 && mixedWithoutAlpha == 0, firstWrong);
+
+    // And the three the layer draws differently, read from the files.
+    std::vector<Particles::System> systems;
+    std::string error;
+    CHECK_MSG(Particles::Load(kOriginal + "/entities/portal_static.ent", systems, error) && systems.size() == 2, error);
+    if (systems.size() == 2) {
+        CHECK(systems[0].alphaMode == Particles::kAlphaAdd && systems[0].luminance == glm::dvec3(1.0));
+        CHECK_MSG(systems[1].alphaMode == Particles::kAlphaPixel && !systems[1].additive && systems[1].bitmap == "portal.png",
+                  "portal_static's iris is mixed");
+    }
+    CHECK_MSG(Particles::Load(kOriginal + "/entities/gutter_mouth.ent", systems, error) && systems.size() == 1, error);
+    if (systems.size() == 1) {
+        CHECK_MSG(systems[0].alphaMode == Particles::kAlphaPixel &&
+                      NearP(glm::dvec2(systems[0].luminance.r, systems[0].luminance.b), glm::dvec2(0.45), 1e-9),
+                  "gutter_mouth's water is mixed at luminance 0.45");
+    }
+    CHECK_MSG(Particles::Load(kOriginal + "/entities/light.ent", systems, error) && systems.size() == 1, error);
+    if (systems.size() == 1) {
+        CHECK(systems[0].luminance == glm::dvec3(0.0));
+        CHECK_MSG(NearP(systems[0].startPoint, glm::dvec2(0.0, -12.0)) && systems[0].randStartPoint == glm::dvec2(0.0),
+                  "the torch's flame starts 12 above its entity, with no spread");
+    }
+}
+
 int main() {
     AnImageSaysItsSizeInItsHeader();
     AnythingElseIsRefusedByName();
     TheCanvasOrderIsZThenTheFile();
     WhatTheReaderDoesNotDrawIsNamed();
     ThePortalAndTheShotAreTheirEnts();
+    AStaticPortalWithoutItsScriptIsRefused();
     APulseGoesThereAndBack();
     ASheetThatDoesNotSayHowFastIsRefused();
     APictureWithoutItsEmissiveIsRefused();
     APictureWithoutItsLightingIsRefused();
+    AParticleStartsAtItsEntitysPosition();
+    AParticleTurnsCounterClockwise();
+    AnAddedParticleIgnoresItsAlpha();
+    ASystemDrawsInsideItsEntitysSlot();
+    AParticlesQuadIsSquare();
+    AScaledSystemIsEthanonsScale();
+    TheLoopKeepsEthanonsOrder();
+    TheRandomNumbersAreDrawnInEthanonsOrder();
 
     std::error_code original;
     if (std::filesystem::is_directory(kOriginal + "/entities", original)) {
         TheOriginalsImagesAreCutAsTheEntsSay();
         TheOriginalsParticlesAreRead();
         AnEntityWithoutParticlesSaysSoWithoutFailing();
+        EveryAddedBitmapIsWithoutAlpha();
         TheOriginalsMp3sDecode();
     } else {
         std::printf("test_mp_sprites: the original's images SKIPPED - needs its extracted assets at %s.\n",

@@ -8879,3 +8879,367 @@ the capture has 1-20 at 10.86 / 0.4738.
 - **The level walk without saves**: `LevelVisit` should unlock or check `PressMenu`'s answer. Not this step's
   system.
 - The satellite (3-15 only) is behind scenery, so its pinning has no frame evidence.
+
+## Step 59 - the particles where their entities stand, turning the way the original turns them, and added whole
+(built)
+
+The visuals plan's System 2, sub-steps 2a to 2f (the remake's `out/parity/specs/visuals/plan_port.md`): the
+port of Ethanon's particle manager, corrected where the plan's footage and the engine source disagreed with
+it, and the static portals drawn as their script redraws them. Game-only: no file under `src/` or
+`assets/shaders/`. **One step and one commit**: the six sub-steps and the static portals' script change the same
+files (`sim/Particles`, `MagicPortalsLayer`, `sim/Art` with `data/art.json`, `sim/Keys`) and the same three suites
+(`test_mp_sprites`, `test_mp_layer`, `test_mp_keys`), so they do not separate by file. **The torch flame now rises
+from the torch's node: centroid (288.8, 46.9) u against the original's (288.0, 47.5), where it stood at (288.9,
+62.5), and its top is 18.5 u over 51 frames against the original's 18.5 over 58, where it stood at 35.9; 1-1's
+portal rings turn at -120 / -120 / -110 degrees a second (clockwise positive) against the original's -95 to -119,
+where they turned +100. A static portal is scaled by 0.8 and tinted red or blue, as `ETHCallback_portal_static`
+does: 1-1's ring excess is 0.82 / 0.98 / 1.62 of the original's, from 1.07 / 1.24 / 1.82 before the step, and its
+rings reach 81 / 77 / 79 px against the original's 81 / 79 / 83. Two Accept rows fail and are recorded, not tuned:
+the ring excess on portal 582, and the iris core's temporal s.d. on 604 and 582 (3.6 against 3 on the plan's 6
+frames, 3.4 and 3.2 on 51), both the rings' brightness, which no script lever reaches and the shipped engine's blend
+does not explain (RECORDED DEVIATIONS, below).**
+
+**WHAT THE ORIGINAL DOES** (the engine source; every rule below is pinned in a suite).
+- **Where.** An entity updates its systems at `GetPosition()` and `GetAngle()` (`ETHSpriteEntity.cpp:571-577`):
+  its position, not the centre of its picture, which a pivot adjust moves. `ResetParticle`
+  (`ETHParticleManager.cpp:473-505`) turns direction plus its spread by `RotateZ(angle)`; `PositionParticle`
+  (`:507-523`) sets the angle to angleStart + `Float(randAngleStart)` + the entity's angle, and the place to
+  (startPoint + spread) turned, plus the position. Gravity is never turned. `Multiply(Vector2, RotateZ(a))`
+  (`GameMath.h:829-838, 897-905`) is (x cos + y sin, -x sin + y cos) in +y-down pixels: a positive angle turns
+  counter-clockwise on the screen, as `DrawOptimal`'s `RotateZ(-angle)` draws it (`GLES2Sprite.cpp:270`) and as
+  the converter negates a node's angle (`tscn.py:433`).
+- **The random numbers**, one statement each: turn rate, life, size, direction x then y (`:483-488`), angle, start
+  x then y (`:517-519`), and a random frame last (`:502`).
+- **The loop** (`:188-267`). A particle whose lives are spent is skipped; the ACTIVE count is taken before the
+  frame moves it, released and bigger than nothing (`:208-213`); the age takes the whole frame and the motion
+  a frame capped at 250 ms (`:195-196, 217`); a particle is released by its pool index, killed or not
+  (`:219-231`); it moves, lerps its colour by w = age / life, plays its sheet by w, clamps its size; past its
+  life it is renewed even on its last life (`:256-261`), in its colour at birth and at frame 0 (`:490, 498`).
+  A pool is Reset at the owner when made, and a first release only positions (`:119-127, 225-230`).
+- **Drawn** (`:337-417`): not spent, not unreleased, not at size 0, not at colour alpha 0 or below (`:375`),
+  not past its life once killed (`:378`). AM_PIXEL and AM_ALPHA_TEST are multiplied by
+  min(1, luminance + ambient), AM_ADD by nothing (`:381-389`). The quad is **size by size** (`:413`). AM_ADD
+  blends GL_ONE, GL_ONE (`GLES2Video.cpp:792-795`): the colour's alpha is never read. The shipped
+  `libApplication.so` does the same (RECORDED DEVIATIONS, below).
+- **Depth.** An entity's pieces go into one map keyed by depth: its sprite, its halo, then each system in
+  order (`ETHEntityRenderingManager.cpp:74, 85, 106`); equal keys keep that order, before the next entity.
+- **A halo's brightness** is its owner's first system's active count over its pool (`ETHRenderEntity.cpp:369-376`).
+- **A static portal's script** (`ETHCallback_portal_static`, Portal.angelscript, bytecode bytes 360571..361404 in the
+  remake's `out/parity/asbc/all_functions.txt`). Once, guarded by the uint `scaled` (ops 1-12 and 17-29):
+  `thisEntity.Scale(0.8f)` (ops 14-16), then `SetColor(GetString("color") == "red" ? vector3(1, 0.3, 0.3) :
+  vector3(0.3, 0.3, 1))` (ops 31-79; a call pushes its last argument first, the order the antiportal's
+  `_portalColorA` was read by and footage confirmed). `Scale(float)` (`ETHScriptObjRegister.generic.cpp:341, 399`) is
+  `ETHEntity::Scale` (`ETHEntity.cpp:591-599`): the picture's scale, which it is drawn at (`GetCurrentSize`,
+  `ETHSpriteEntity.cpp:652-682`), AND every particle system, through `ETHParticleManager::ScaleParticleSystem`
+  (`ETHParticleManager.cpp:444-451`): `ETHParticleSystem::Scale` multiplies every length and no time, angle or colour
+  (`ETHParticleSystem.cpp:27-40`), and each live particle's size and velocity (`ETHParticleManager.h:160-164`).
+  `SetColor` writes `m_v4Color` (`ETHEntity.cpp:493-498`), which multiplies the sprite's min(1, ambient + emissive)
+  (`ETHRenderEntity.cpp:113-117`) and no particle (`ETHParticleManager.cpp:381-389`). A static entity with a callback
+  runs it on each frame its bucket is drawn, after its particles update (`ETHScene.cpp:488, 572`,
+  `ETHActiveEntityHandler.cpp:70-74, 90-93, 157-162`). No other particle lever a script has
+  (`SetParticleBitmap`, `ScaleParticleSystem`, `:428-429`) is called on a static portal. `Scale` also scales the
+  collision box; the port's static portal is entered by its trigger box, gameplay, and that is not applied.
+
+**THE CENSUS** (the remake's `out/parity/visuals/particles/census.py`, `bitmaps.py`).
+- The 190 `.ent` files hold 102 systems: **75 AM_ADD, 23 AM_PIXEL, 4 AM_MODULATE**. Every AM_ADD bitmap has no
+  alpha channel and every AM_PIXEL one has one, so an added particle's alpha of 1 is exact. All 102 state a
+  `<Luminance>`.
+- **AM_MODULATE: no engine change.** Its four systems are `black_fade`, `blood`, `dragon_knight` and
+  `ghost_minion`, which no level places; no emitter the port builds (level carriers, the loading screen's
+  `portal.ent`, `suck_effect.ent`, `sparkles.ent`) uses one. The multiply pipeline stays with plan_port 5b.
+- The 128 levels place **833 carriers with 889 systems: 879 added, 10 mixed** (portal_static's `portal.png`
+  x7, luminance 1; gutter_mouth's `water.png` x3, luminance 0.45).
+- What each rule reaches. 2a moves the 30 carriers with a picture offset (`light` 19 and `light_off` 10 at
+  (0, 16), `dragon` 1 at (48, -7)); for the other 803 the node is the centre. The owner's angle reaches one
+  placement: 4-32's `light_wall` at 90 degrees, whose RandStartPoint (32, 128) now lies along the wall. 2f
+  reaches 3 patrolling `anti_portal_agent`s, 2 swinging `shock_agent`s, 39 keys, 13 diamonds and 41 keyholes.
+  2e changes `sparkles.bmp` (265 x 253, 4.7% wider than tall, not the plan's 2%) and `tesla_shock_black_bg.png`
+  (51.2 x 32 cells); `fire.png`'s 64 x 64 cells were square already.
+- **Static portals: 7**, in 1-01 (603 and 582 red, 604 and 583 blue), 1-02 (one blue, with no `active`, read as
+  active) and 1-15 (one red, one blue). The bytecode's other `CALLSYS ETHEntity::Scale` sites, found by name and not
+  read: `SGlobalScale::scaleEntity`, `AntiPortalManager::AntiPortalManager`, `GameStateController::checkGameLost`,
+  `StaticSky::scaleSky`, `scaleToSize`, `addProjectileEntity`, `addProjectile`, `overTimeEntityAdder`,
+  `ETHCallback_ghost_appear_effect`, `ETHCallback_rocket_landing`, `ETHCallback_red_key_state`.
+- 1-1's four static portals carry their systems inline exactly as `portal_static.ent` states them but for
+  `StartPoint.z` (0 against 10, not applied: 9c), so the ring rows below measure the file the port reads
+  (`fix1/inline_582.py`).
+
+**WHAT CHANGED.**
+- **`sim/Particles`** (pure). The reader keeps `alphaMode` and reads `<Luminance>`, the tenth child. The
+  arithmetic moves out of the layer: `Owner`, `Particle`, `Turn`, `Reset`, `Release`, `MakePool`, `Step` (returns
+  whether the particle is active), `Drawn`, `DrawColour`, `QuadPx`, `WorldRotation`, `SlotFraction`, `Drawable`, and
+  `Scale` (`ETHParticleSystem::Scale`, field by field).
+  A life of exactly 0 is not divided by; a negative one is (portal_fail_in_antiportal.ent can draw -52.5 ms).
+  - **The random numbers in the original's order.** `Reset` draws the direction's spread and `Release` the start
+    point's x before y, in two statements, as `:487-488` and `:518-519` do. Drawn as the two arguments of one
+    `glm::dvec2`, the order was the compiler's (C++ leaves it open), and MSVC drew y first: putting it in order moved
+    1-1's f420 (md5 `b19ce71a` -> `7138a7bc`). The generator's stream is unchanged - only which of a pair takes which
+    number - so it moves only a system spread both ways (the torch's direction, a sparkle's start); the portal rings,
+    spread in neither, measure the same to the tenth. `std::uniform_real_distribution` is not pinned by the
+    standard either, so this alone does not promise the same frames from another standard library.
+- **`MagicPortalsLayer`.**
+  - **2a/2b:** an emitter's owner is its sprite's `ownerPx` and `ownerAngleDeg` (the node, turned as the
+    converter wrote it, or the body), and its quad turns by +angle.
+  - **2c:** `DrawColour` at alpha 1 for an added system; a mixed one keeps its alpha and takes
+    min(1, luminance + the level's ambient). A system the port has no blend for is refused by name in the log.
+  - **2d:** z = the owner's slot + `SlotFraction` of a slot: 3/8 for one system, 1/3 and 5/12 for two. **Not the
+    plan's 1/2 and 3/4**: half a slot is where the layer already puts what stands between two slots (the
+    beholder, a spike, a thrown stone, a light with no owner: `SlotZ(next) - 1/2`) and the player's slot less a
+    quarter is the placed portals', so the last sprite before the player's systems would tie with both. The
+    systems share (1/4, 1/2), after step 49's halo at 1/4. The loading screen's emitters keep their z.
+  - **2e:** `QuadPx`, size by size.
+  - **2f:** an emitter takes its owner again every frame, and when its picture is gone its quads go and its
+    count is 0 (this replaces the crystal-only rule). `syncSprites` now draws a key and a diamond where Keys and
+    Diamonds carry them - their pictures stayed where they were placed, so a sparkle that followed would have
+    left its picture - takes away a spent diamond and a gone keyhole, and fades a keyhole by its alpha. Keys and
+    diamonds interpolate between ticks as bodies do. **A spent key goes, picture and sparkles, when the keyhole it
+    opened goes**: `Keys::Key::opened`, which `Keys::Tick` sets to that keyhole's index as it spends the key (the
+    first round searched for the nearest unlocked keyhole of the key's colour instead). Its fly-in (plan 7f) is not
+    built, and without this a key would lie on the keyhole's spot for the rest of the level once its door had gone.
+  - **The static portals' script:** a sprite whose entity is art.json's `static_portal.entity` takes that block's
+    tint by its node's `color` over the look's colour (alpha kept), and its `scale`, which multiplies its picture
+    (`syncSprites`) and every system `buildEmitters` makes for it, before its pools are made (`Particles::Scale`).
+    Keyed by the entity, not by `Portals`' statics, which leave out one a level made inactive: its script still runs.
+    Scaling the system before `MakePool`, where the original scales a pool it has made and moved a frame, gives the
+    same particles when the start point, its spread and the direction are 0, as a static portal's are (pinned).
+  - `particleRatioOf` (the halos' and lights' share) reads the active count `Step` takes, not the quads drawn.
+  - The generator answers `Float(min, max)` either way round (blood.ent's RandomizeDir y is -0.3).
+  - `EmitterReports()` for the suites, with each system's size as built and its cell. `syncLighting`'s note that all
+    102 systems are added is corrected.
+- **`sim/Art` and `data/art.json`:** `static_portal`, every number with its bytecode offset and engine line: entity
+  `portal_static`, scale 0.8, `red` "red", `tint_red` (1, 0.3, 0.3), `tint_otherwise` (0.3, 0.3, 1). Required: a
+  file without it, or with a scale of 0, a tint of two numbers or below 0, or no red, is refused by name.
+
+**GATES.** Before: step 58's frames (the remake's `visuals/sky/after/`, binary `5a435cad`); the same binary
+gave `visuals/particles/before/spin/` (level0 every 3rd frame), byte-identical to those at f270 and f420. The
+brief's `g6/final` baseline predates step 58's sky, which moved every level, so it is not used. After:
+`visuals/particles/fix2/` (`capture_p.sh fix2 gate|spin|sweep`, `gates_p.sh fix2`, `fix2/sweep_fix2.sh`,
+`fix2/measure_fix2.py`), binary `b74d8160`: the step after its verifier's second round (the static portals' script,
+the spent key's keyhole, the tests below). Beside it where it moved, the first round's `fix1/` (binary `c7cd0d6f`),
+which that verifier re-measured. The torch's and the door's rows are the same between the two, and 2-01, the HUD and
+the menu byte-identical: the second round moved only the static portals. Original: the plan's `levels_v1` and
+footage, as its scripts read them. **The committed build's frames are `fix2/`'s**: rebuilt for the commit (a comment
+and this text), its `MagicPortals.exe` `687e715c...` draws 1-01 f420 at md5 `a1f8d7ae...`
+(`visuals/particles/commit/`), as `b74d8160` did in `fix2/` and in the verifier's `verify3/`. `visuals/particles/after/`
+and `final/` (1-01 f420 `b19ce71a...`) are the first build `0eb72b55`'s and superseded: the next step's "before" is
+`fix2/`, its gate frames and its 128-level `sweep/`.
+
+| Gate (plan_port) | Required | Before | After |
+|---|---|---|---|
+| 2a `torch.py` centroid, the plan's 6 frames f270-f420 | (288.0, 47.5) +-2 u | (288.9, 62.5) | **(288.8, 46.9): passes**; (288.2, 46.6) on 51 frames |
+| 2a `torch.py` top, **as amended**: 51 port frames against the original's 58 (`torch59.py`) | 18.5 +-3 u | 35.9 | **18.5: passes**; the robust top (the first row of five moving pixels) 19.2 against 20.6. The plan's 6 frames: 15.6, in by 0.1 u, below |
+| 2b ring spin, 1-1's 604 / 603 / 582 (`spin59.py`, 3-frame pairs f270-f420) | negative, 108 +-40 deg/s | +100 / +100 / +100 (0% negative) | **-120 / -120 / -110; 98% / 98% / 100% of pairs negative: passes** (fix1 -100 / -100 / -100; a pair resolves 20 deg/s) |
+| 2c+2d iris core r 0-8 px, grey / temporal s.d. (`portals59.py`, f270-f420) | <= 25 / <= 3 | 24.2 / 12.2, 29.1 / 8.1, 29.6 / 9.9 | **18.6 / 2.5, 22.2 / 3.6, 24.4 / 3.6: the grey passes, the s.d. FAILS on 604 and 582**, recorded, not tuned (fix1, before the scale: 13.9 / 1.7, 15.2 / 1.8, 16.5 / 2.0; original 14.0 / 0.5, 14.5 / 0.0, 14.8 / 0.1); 51 frames 19.0 / 2.8, 22.2 / 3.4, 24.4 / 3.2 |
+| 2c+2d ring excess r 25-45 px, 603 / 604 / 582 | original 96.6 / 94.7 / 65.6 +-25% | 103.2 / 117.6 / 119.5 (1.07 / 1.24 / 1.82x) | **79.0 / 93.2 / 106.5 (0.82 / 0.98 / 1.62x): FAILS on 582**, recorded, not tuned (fix1 1.22 / 1.44 / 2.08x); 51 frames 0.75 / 1.05 / 1.61x; against the 58 footage frames 0.84 / 1.21 / 1.33x. Its still part 0.65 / 1.09 / 1.03x the original's, its pulsing part 1.40 / 1.36 / 3.02x, below |
+| 2c+2d pulse s.d. r 45-70 px | >= 15 on two of three | 14.9 / 14.0 / 20.5 (one) | **25.8 / 29.4 / 16.3 (three): passes** (fix1 20.3 / 27.8 / 13.9) |
+| 2e square quads | a 51.2 x 32 cell drawn square | - | **passes, on a cell that is not square** (`test_mp_layer`, 3-24: its shock systems' cells 51.2 x 32, 634 shock-cell particle draws over 120 frames, 0 of every particle draw not square); 0 not square over 240 frames of 1-1 |
+| 2f, **as amended**: the owner on the moving picture every frame, births inside StartPoint +- RandStartPoint/2 | 300 of 300 frames; 0 births off | - | **passes: 300 of 300; 0 of 25 births off 4-15's swinging ring, 0 of 14 off 3-08's carried key**; 3-08's keyhole, the spent key and 3-16's struck diamond gone with their pictures. The plan's literal 0.5 u cannot hold with shock_agent's RandStartPoint 12 x 18 |
+| G4/G5 torch flame RGB | R >= 240, G >= 235 | (255.0, 255.0, 140.3) | **(255.0, 254.9, 130.8): passes** (original (253.2, 252.0, 159.1)) |
+| G2 door, 2-01, p95 R / p95 G | >= 230 / <= 50 | 255 / 49 | **247 / 40: passes** (original 247 / 36) |
+| lightgate, g6's five levels, both variants | not worse | step 58's | **no class worse by more than 0.05 but one, and that one only against the model**: 1-01 `LM_E<1_halo` port_vs_orig **5.80 -> 5.59 (better)**, port_vs_model **6.67 -> 7.30 (tier1x) and 6.84 -> 7.44 (worse)**, as fix1: the static portals' blocks are not in the fit. Against the fit's model fed the torch's live share, still worse by 0.49 / 0.60 on the f420 frame and by 0.06 / 0.07 on the 51-frame mean, below; 1-09's two halo classes better by 0.17-0.93 |
+| `compare.py`, the seven gate levels, mean_abs / edge_iou | edge_iou not down 0.02 | 1-01 14.01 / 0.4581, 1-09 7.92 / 0.4253, 1-13 12.34 / 0.2398, 2-05 6.06 / 0.3416, 2-26 10.08 / 0.4022, 3-05 4.85 / 0.4337, 4-22 4.51 / 0.5963 | **14.76 / 0.4577** (fix1 15.17 / 0.4527), 7.91 / 0.4245, 12.30 / 0.2400, 6.02 / 0.3415, **10.03 / 0.3992**, 4.85 / 0.4336, 4.45 / 0.5989: **passes**, the largest drop 2-26 -0.0030; every level locates at (0, 0) but 1-13, at (0, -10) before and after |
+| the 128-level sweep (`fix2/sweep_fix2.sh`) | exit 0, validation silent | 128 exit 0 | **128 of 128 exit 0, ACTIVE in 128 logs, no VUID or Validation Error; no system refused for its blend**; 'particle image could not be read' in 1 (2-32's `explosion.JPG`, as before); byte-identical to fix1 but 1-01 and 1-15, the two with static portals in view (1-02's, at (210, 158), lies under its help popup's opaque card at f420: `fix2/check_1-02_f420_small.png`); to step 58, 4: 1-02 and 1-03 (their help popups), 1-31 (no carrier in its f420 view) and 2-32 (under the game-over screen from tick 371). The draws' order alone changed 120 of the 128 |
+| HUD f1 / menu f120 | no unexplained change | - | HUD byte-identical; **menu f120 changed** (as fix1: `5c5cfed2` and `44b45d37`): 4,572 px in a 78 x 118 px box (the loading screen's sparkles, below) |
+
+**ATTRIBUTIONS.**
+- **The torch's top.** `torch.py`'s top is the highest row of a temporal-s.d. mask: an extreme that rises as frames
+  are added, and the plan set the port's 6 frames against the original's 58. On samples of one size
+  (`fix1/torchwin.py`) the two agree: 51 against 58 frames, 18.5 and 18.5; 6-frame windows 0.5 s apart, a median
+  of 16.7 in both (the port 12.8 to 21.0). How often the original fails its own +-3 row depends on the windows:
+  14.6 to 19.2 and 19% by `torchwin.py`'s, 14.6 to 19.6 and 25.8% of 31 windows by the verifier's (the nearest footage
+  frame to t0 + 0.5 k, t0 from 4.5 to 6.0 s in 0.05 s steps).
+  The plan's own 6 frames gave 14.2 before the draws were put in order and 15.6 after - one flame tip decides
+  it: a particle born at 52 u at a size up to 34.1, rising 1.6 u and shrinking 1.4 a frame, has its top edge at
+  52 - 17.05 - 0.9 x 24.4 = 13.0 u when it vanishes. **plan_port 2a now takes the row over 51 frames**; step 58's
+  frames give 35.9 on either sample, so the larger one flatters nothing.
+- **The ring excess, as the first round left it** (fix1, `fix1/ringsplit.py`: 51 port frames against the 58 footage
+  frames `torch59.py` reads, whose background ring agrees with the library's within 1.5 grey): 1.22 / 1.44 / 2.08x of
+  levels_v1, clipping B on 27 / 63 / 70% of the r 25-45 px annulus where the original clips on none. Its still part -
+  each pixel's temporal 10th percentile less the background - 1.44 / 2.10 / 1.69x the original's; with
+  `portal_halo.png` drawn black (`fix1/rig`, a copy of level0.tscn run with `--levels`) the white halo added 86.4 /
+  75.9 / 74.5, as much as the original's rings and halo together. The original's excess is coloured (603, red: 97,
+  49, 112; 604, blue: 80, 63, 104), the port's was near neutral. The rig level and its black image are work files
+  under the remake's gitignored `out/parity/visuals/particles/fix1/rig/`: nothing of them is in this repository.
+- **The static portals' script, which the verifier asked for.** The tint the plan looked for as `portalColorA/B` (the
+  antiportal's globals) is the callback's own `SetColor`, and a `Scale(0.8f)` stands before it (above). Both are drawn
+  now (fix2, binary `b74d8160`; `fix2/measure_fix2.py`, `fix2/ringsplit.py`, and `fix2_rig`, the same black-halo level
+  captured with `--levels` and `--art` - a first launch without `--art` drew boxes and was discarded):
+  - **The still part is the original's:** 41.1 / 51.7 / 68.3 against 63.6 / 47.3 / 66.6, **0.65 / 1.09 / 1.03x**. The
+    tinted halo adds 40.4 / 40.3 / 40.5 (fix2 less fix2_rig).
+  - **The scale is the footage's.** The temporal s.d. of grey falls to half its peak at 81 / 77 / 79 px from the
+    portal against the original's 81 / 79 / 83; unscaled it fell at 101 / 95 / 101, and the rings alone (halo black)
+    at 79 / 75 / 75 against 99 / 93 / 93 - the halo is still, so this is the rings' reach alone
+    (`fix2/pulse_extent.py`, `pulse_extent_rigs.py`). The glow's reach (grey 25 over the background) is 19.2 / 26.3
+    / 29.2 u against 21.3 / 28.8 / 27.7, from 26.0 / 31.6 / 31.6 (`fix2/radial_fix2.py`). 1-15's blue portal, which
+    the library shows smaller and bluer than fix1 drew it, is its size and colour (`fix2/crop_1-15_portals.png`).
+  - **What is left is the rings' brightness.** The pulsing part is 31.7 / 48.2 / 37.4 against 22.6 / 35.5 / 12.4,
+    **1.40 / 1.36 / 3.02x** (fix1 1.17 / 1.24 / 2.17x: a saturating white halo hid part of it), and bluer (582: 23,
+    27, 63 against 3, 16, 18). The clipped share of the annulus is 6 / 55 / 56% (604 in B, 582 in R), from 27 / 63 /
+    71%. No script lever reaches a static portal's particles, and the rings' draw is 2c's, so it is recorded, not
+    tuned; 582 fails the row at 1.62x.
+  - **The iris core's s.d.** rose with the scale: 2.5 / 3.6 / 3.6 on the plan's 6 frames against 3, from 1.7 / 1.8 /
+    2.0. It is ring light: with the halo black it is the same to 0.05 and only the grey falls by 8. `portal.png`'s
+    centre is soft (alpha 255, 239, 194, 150 at 0, 2, 4, 6 texels), and the 0.8 rings, collapsing to 1.6 u, spend
+    more of their brightest end inside the fixed 8 px window. The original holds 0.4 / 0.5 / 0.1 at the same scale
+    with weaker rings, whose pulse peaks at 49 / 55 / 57 px where the port's rings alone peak at 23 / 33 / 25.
+    The shipped engine does not fade added particles by their colour's alpha either: in the original's
+    `libApplication.so`, `gs2d::GLES2Video::SetAlphaMode` (Thumb, at 0x11eac0) calls `glBlendFunc(GL_ONE, GL_ONE)` for
+    mode 1 (AM_ADD), (0x302, 0x303) for AM_PIXEL and (0, GL_SRC_COLOR) for AM_MODULATE, and its default shader is
+    `gl_FragColor = v_color * texture2D(diffuse, v_texCoord)` (the verifier's `verify3/so/blend.py`).
+  - 1-01's mean_abs against the library is 14.76 (fix1 15.17, step 58 14.01), its edge_iou 0.4577 (fix1 0.4527).
+- **lightgate 1-01's halo class: worse against the model, better against the original.** One entity moves:
+  arch_ent_4, the right arch, bias (4.6, 4.5, 5.0) -> (3.1, 3.7, 4.8), nearer the original. The halo's brightness is
+  now Ethanon's active count over the pool (`ETHRenderEntity.cpp:369-376`), not the quads drawn, and the lighting
+  fit's model draws its halos at share 1. **Fed the torch's live share** (`fix2/fit/share_model.py`: the fit's own
+  `render()` first reproduces its stored `engine` and `engine_tier1x` predictions for all 491 blocks exactly, max
+  difference 0, then renders at `halo_b` 0.7322; a copy of the blocks file, read by `lightgate_share.py`), the model
+  moves toward the original (orig_vs_model 8.15 -> 5.00 and 10.83 -> 7.70), and the class reads 4.00 -> 4.49 and 3.40
+  -> 4.00 on the f420 frame. That frame is one phase of a 12-particle flicker: the halo share each frame is drawn at,
+  fitted over the 83 blocks whose halo term exceeds 15 (`fix2/fit/share_implied.py`), is 0.576 on step 58's frame,
+  0.526 on this one and 0.505 on the original's (the port's nearer). On the mean of the 51 frames f270-f420
+  (`fix2/fit/mean51_*.png`, step 58's from `visuals/particles/before/spin`) against the same model it is 4.60 ->
+  4.66 and 4.13 -> 4.20 (+0.06 / +0.07), the active count's mean against the drawn quads'. Against a model at the
+  original frame's 0.505 it is 3.26 -> 2.97 (engine) and 0.91 -> 1.35 (tier1x). Recorded: the class cannot be
+  two-sided on one frame of a flicker.
+- **halo_g5 (step 49's rings, by hand)**, R-B against the original, step 58 -> fix1 -> now. Its mask lies right of x
+  312 u and below y 70 u. 30 u -2.3 -> -5.3 -> -5.3, 40 u -7.8 -> -13.2 -> -13.2, 50 to 80 u worse by 4.8 to 1.5 in
+  both, 90 u -22.1 -> -22.6 -> -22.6, 100 u -15.2 -> -15.7 -> -15.5; **110 to 150 u now better than step 58**: -18.8
+  -> -19.3 -> -18.2, -17.8 -> -20.2 -> -16.3, -12.5 -> -17.5 -> -11.3, -17.2 -> -20.7 -> -12.6, -18.5 -> -21.5 ->
+  -11.9: 582 (334, 200) lies in the far bands, and its halo is now red and its rings smaller. **With a 70 u disc
+  about 582 taken out** (`fix2/halo_g5_mask582.py`) fix1 and now are identical, and against step 58 only the near
+  bands move: -3.0, -5.4, -4.8, -3.4, -2.1, -1.4 at 30 to 80 u, -0.5 to 0.0 beyond. That is the flame, which lit
+  those bands from 62.5 u and now stands 15 u higher, where the original's does. It was already outside plan 8a's
+  tolerance.
+- **menu f120** is the loading screen after the vanish: `sparkles.ent` over the dark halo, stars in both. Its
+  pools now draw their random numbers when made, and a sparkle's start is spread both ways, so the sparkles are
+  elsewhere, and whole. The suck burst (`suck_effect.ent`, one life of 500 ms from tick 81) is spent by about f112,
+  so no gate frame shows it. Every field of it but the angle is 0, so the sign fix only turns its picture the other
+  way: that is the decode's angle (ui.json `vanish`, `radianToDegree(getAngle(direction)) - 90`) drawn as Ethanon
+  draws an angle. **Checked by the verifier's second round** (`verify2/suck/suck_sheet.png`): `launch_gold.mp4` frames
+  155-165 show a lilac plume streaking left, toward the character, from the spiral, and the port's menu f81-f102
+  (`--screenshot-every 3`) streaks left from the spiral too; matched by appearance, the two clocks not being mapped.
+
+**THE SUITES.**
+- **`test_mp_sprites` 209 -> 336, 0 failures.** A flame at (288, 64) starts at (288, 52); (10, 0) turned 90 is
+  (0, -10) and (0, -10) is (-10, 0); an owner at 90 turns start and direction but not gravity, and adds 90 to
+  the angle; 30 frames of angleDir 1.8 turn +54 degrees of the engine's rotation, 108 a second; an added colour
+  at alpha 1, a mixed one x min(1, 0.45 + ambient) and never past 1; not drawn at alpha 0, size 0, spent, or
+  killed past its life; the slot fractions strictly inside (1/4, 1/2) for 1 to 8 systems; a square quad; the
+  loop's order (release by index, colour and sheet by age, renewal at colour0 and frame 0, the 250 ms cap, the
+  active count before the move, a killed system releasing but not renewing); **the draws' order**
+  (`TheRandomNumbersAreDrawnInEthanonsOrder`: a generator answering the k-th draw (k + 1)/16 along its range, so
+  Reset's nine ranges and Release's three are asked in the original's order and x and y take their own numbers);
+  and the census above, read from the 190 files. **The second round:** art.json's `static_portal` pinned
+  (portal_static, 0.8, (1, 0.3, 0.3) for "red" and (0.3, 0.3, 1) for "blue" and for no colour), and refused without
+  it, with a scale of 0, a tint of two numbers or below 0, or no red (`AStaticPortalWithoutItsScriptIsRefused`);
+  `Particles::Scale` field by field, nothing else touched, the rings born at 88 shrinking 1.6 a frame to 1.6, and
+  four seconds of a pool made scaled agreeing draw for draw with a pool made, run a frame and then scaled as the
+  original does (`AScaledSystemIsEthanonsScale`).
+- **`test_mp_layer` 790 -> 854, 0 failures.** `TheTorchAndThePortalsEmitAsTheOriginalDoes` (1-1, 240 frames):
+  the flame's 82 births all at (288, 52), its owner the node, its z 3/8 of a slot in front and the halo between;
+  2,548 ring frame pairs turned +1.8 degrees, 0 turned -1.8; no added draw with alpha other than 1, none not
+  square; four portals with rings then iris inside (1/4, 1/2). `AnEmitterFollowsItsOwner`: 4-15's ring swung 64
+  px with its emitter on it; 3-08's key carried from (174, 34) to (489.8, 202.3), picture and both sparkles on
+  it; that key carried to keyhole_1338 and spent, the keyhole fading over 30 ticks with its picture's alpha the
+  keyhole's on every one, then gone with its sparkle - **and the spent key drawn on every tick until then and gone
+  with it, picture and both sparkles**; a crystal taken, its sparkle gone with no active particle; 3-16's shock
+  diamond struck into a minion, its picture and spark gone and its twin's picture kept. The torch flame's mean
+  live share over 20 s is **0.7322** of 12, now **pinned to plan System 8's 0.74 +- 0.05** (0.69 to 0.79) where
+  the check had been anything over 0.5. A keyhole's fade dims on a lit level because the sprite path weights the
+  base by the alpha it is given (`shader.frag:477-478`, `base * alpha`), as the timed crystal's does. **The second
+  round:** `AStaticPortalGlows` - 603 and 582 tinted (1, 0.3, 0.3), 604 and 583 (0.3, 0.3, 1), every halo 51.2 units -
+  and `EverySpriteIsDrawnAtItsAmbient`, whose step-45 pin of the halos at (1, 1, 1) now reads two red and two blue
+  (its first run on this round's build failed there, 854 checks, 1 failure); 1-1's rings built at 88 and the irises
+  at 51.2, no ring drawn wider than 88; `AParticleOnANonSquareCellIsDrawnSquare` (3-24: its shock systems' cells
+  51.2 x 32, 634 shock-cell draws over 120 frames, 0 of any particle not square); `ATurnedOwnerTurnsItsParticles`
+  (4-32's light wall, a body: its emitter at 90.0002 degrees on every one of 240 frames, 16 births, none outside
+  RandStartPoint (32, 128) turned - 64 along x, 16 along y - and 12 further along x than an unturned 16).
+- **`test_mp_keys` 106 checks, 0 failures:** a key has opened nothing (-1) until it is spent, and then names the
+  keyhole it opened.
+
+**BUILD: no warnings** (MSVC 14.50, Release, Ninja, /W4; GCC and Clang not run). The first round's build compiled
+`Particles.cpp`, `MagicPortalsLayer.cpp`, `test_mp_sprites.cpp` and `test_mp_layer.cpp` and relinked the sim library,
+every Magic Portals suite and `MagicPortals.exe` (53 steps), and printed none; earlier in the step one build stopped
+on the step's own fault, two test helpers used before their definition (C3861). The second round's build (80 steps:
+`sim/Keys.hpp` reaches `Game.hpp`, so 33 objects compiled and 46 links) printed none, nor did the one-file rebuild of
+`test_mp_layer` after its halo pin was corrected.
+
+**ctest**, once before the first verifier's pass: 111 of 120 pass, 0 fail, 9 not run (Smart App Control refused
+test_mp_play, test_mp_turrets, test_mp_chapters, test_mp_torch, test_mp_bounce, test_mp_wells, test_mp_popup,
+test_mp_frontdoor and test_environmentmap). **And once in the second round: 117 of 120 pass, 0 fail, 3 not run**:
+Smart App Control refused test_mp_tscn, test_mp_start and test_mp_sky (BAD_COMMAND); the nine the first run refused
+all passed, test_mp_play (the determinism and state-hash guard) among them. test_mp_start, the one of the three that
+includes what this round changed (`sim/Game.hpp` reaches `sim/Keys.hpp`), was deleted, relinked once (`3aa8f6be...`)
+and ran: 726 checks, 0 failures. test_mp_tscn and test_mp_sky include only `sim/Tscn`, `sim/Sky`, `sim/Sprites` and
+`sim/Roles`, none of this step's code, and were not relinked. Run directly on this round's build, once each:
+test_mp_sprites 336 checks, test_mp_layer 854, test_mp_keys 106, 0 failures.
+
+**The commit round** (text only: the recorded deviations, the shipped blend, and `kAlphaTest`'s comment in
+`sim/Particles.hpp`, which said AM_ALPHA_TEST is drawn as AM_PIXEL where `GLES2Video.cpp:800-804` disables blending).
+The build compiled 6 objects and relinked 46 targets, and printed no warning. Run directly, once each, on the relinked
+exes (`0d3cdd6e...`, `f632e57e...`, `435f5aff...`, each on its first launch): **test_mp_sprites 336 checks,
+test_mp_layer 854, test_mp_keys 106, 0 failures.** ctest not rerun: it would launch 46 new links under Smart App
+Control, and nothing but a comment changed in code.
+
+**SMART APP CONTROL.** The step's first `MagicPortals.exe` (`e449477b...`) was refused on its first launch (exit
+126, one notification), deleted and relinked once; `0eb72b55...` and then `d26a4320...` ran. The first round's
+`c7cd0d6f...`, `2abaa76b...` (test_mp_sprites) and `db93e4bf...` (test_mp_layer) each ran on their first launch. In
+the second round `test_mp_sprites.exe` `09d12433...` was refused (exit 126, one notification), deleted and relinked
+once, and `e5c8441a...` ran; `MagicPortals.exe` `b74d8160...`, `test_mp_layer.exe` `1d9e192b...` and, after the halo
+pin, `e8227a32...`, and `test_mp_keys.exe` `24cbeebf...` ran on their first launch. Every After above is `b74d8160`.
+
+**THE VISUALS PLAN, where it is stale** (`plan_port.md`, section 1 and System 2).
+- Its "today" numbers predate the lighting steps. Gap I: (289.2, 60.9) and 30.9, now (288.9, 62.5) and 35.9.
+  Gap H: +110 to +150 degrees a second, now +100 on all three. 2c+2d: core 63-71 / 11-17 and ring excess
+  52.7 / 50.1 / 52.2, now 24-30 / 8-12 and 103 / 118 / 120 - the lighting (steps 43-47) doubled the rings, so the
+  ring-excess tolerance was set against a port half as bright, and against two library frames of a signal that
+  pulses (58 footage frames give 86.2 / 82.7 / 79.0 where the two give 96.6 / 94.7 / 65.6).
+- **Amended in plan_port System 2 (2026-09-16)**: 2a's top row taken over 51 frames against 58, and the original's
+  6-frame figure given for both windowings; 2d's fractions and why; 2e's level (3-23 places no shock agent, 3-24
+  places 2), `sparkles.bmp`'s 4.7%, and the layer test that pins it; 2f's 0.5 u, which RandStartPoint makes
+  impossible, as the StartPoint +- RandStartPoint/2 box; the ring-excess row recorded as failing on 582 after the
+  static portals' script, with its split and its reach; the core row's s.d. recorded as failing on 604 and 582, with
+  the rig.
+- Section 5's "exact static-portal tint" is decoded, and it is not `portalColorA/B`, which are the antiportal's; the
+  plan did not know of the 0.8 scale. Section 1 gap G's "red/blue look identical in the port" is answered.
+- Gap K cites `kSpriteSlotZ` at `MagicPortalsLayer.cpp:53`; it is :63.
+- Gap O and 2f: keys and diamonds did not only lack their sparkle's motion; their pictures never moved either.
+- Gap W: the engine has three blends, not two (step 46's premultiplied); and no system the levels place needs a
+  multiply.
+- Section 2 row 5 (the "every emitter is added" comment) is fixed in `sim/Particles.hpp`.
+- System 2's "all in `MagicPortalsLayer.cpp`": the arithmetic is now in `sim/Particles`.
+- System 1 is largely steps 43-47 and System 8 step 49, as step 57 recorded.
+
+**RECORDED DEVIATIONS.** The step is committed with two Accept rows failing, recorded and not tuned, by the owner's
+standing delegation toward what the original does: the port draws the engine's rule, and no root cause is found to
+tune to. Numbers from the verifier's third round (`verify3/measure_v3.txt`, binary `b74d8160`).
+- **2c+2d ring excess r 25-45 px, portal 582.** Required within +-25% of the original's 65.6. Measured **106.5,
+  1.62x** on the plan's 6 frames (105.3, 1.61x on 51); against the 58 footage frames (78.9) 1.35x on 6, 1.33x on 51.
+  Before the step 119.5 (1.82x). Attributed to the rings' brightness over their life: the original's pulse s.d.
+  peaks at 49-57 px from the portal, the port's rings alone at 23-33 px. Ruled out: the tint and the 0.8 scale (drawn;
+  the still part is 1.03x), the inline systems (`portal_static.ent`'s but for `StartPoint.z`), and the blend (the
+  shipped `SetAlphaMode` at 0x11eac0: AM_ADD is GL_ONE, GL_ONE). Follow-up: root-cause the rings' life-versus-
+  brightness curve against footage.
+- **2c+2d iris core r 0-8 px temporal s.d., portals 604 and 582.** Required <= 3. Measured **3.41 / 3.19** on 51 frames
+  (3.63 / 3.59 on the plan's 6); before the step 8.1 / 9.9 on 6 (8.39 / 8.95 on 51); the original 0.0 / 0.1 (library),
+  0.5 / 0.1 (footage). The grey passes (22.2 / 24.4 against 25). Same cause: ring light through `portal.png`'s soft
+  centre; with the halo drawn black the s.d. is the same to 0.05. Follow-up: the same as the row above.
+
+**LEFT FOR THE OWNER.**
+- **The two recorded deviations' root cause** (above): the rings' brightness over their life, against footage. The
+  reading that the shipped engine weights AM_ADD by alpha is closed: its `glBlendFunc` is GL_ONE, GL_ONE.
+- The static portal's `Scale(0.8)` also scales its collision box in the original; the port's trigger box is
+  gameplay and is unchanged.
+- **`StartPoint.z` as depth** stays with 9c (portal_static's `.ent` says 10, its levels 0).
+- A mixed system's particles are drawn in gather order; Ethanon sorts them by `startPoint.y - pos.y` when the
+  alpha mode it last set was AM_PIXEL (`:357-361`, which reads the previous mode). It reaches `water.png` only, and
+  no gate frame shows gutter_mouth: its min(1, luminance + ambient) lift is pinned by a unit test alone.
+- ui.json's `vanish` note says a killed portal releases no particle; Ethanon still releases (`:219-231`). Moot:
+  its four particles are released long before the kill.
+- The spent key's fly-in (Keys.hpp, plan 7f) is not built: a spent key holds on its keyhole and goes with it.
+- The lighting fit's model draws its halos at share 1: fed the torch's mean share it is nearer the original, but a
+  one-frame gate of a flickering halo stays one-sided; lightgate's `LM_E<1_halo` on 1-01 reads worse against it.
+- 2-32's `dragon.ent` system is still not built, as in step 58's sweep: its bitmap is `explosion.JPG`, and
+  `Sprites::ImageSize` reads PNG and BMP headers only ("particle image could not be read", 1 of 128 logs).
+- The plan's 2e footage check: 3-24's shock agents drawn with square cells, no library patch clean enough to gate;
+  4-32's turned light wall is off the f420 view, pinned by `test_mp_layer` only.

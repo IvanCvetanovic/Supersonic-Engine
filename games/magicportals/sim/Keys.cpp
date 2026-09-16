@@ -136,12 +136,14 @@ std::vector<entt::entity> State::Tick(entt::registry& registry, const std::vecto
         // And within the SAME range of a keyhole of its colour, it opens it. The
         // key is spent either way: the original sends one that has found its
         // keyhole down the fly-in branch, and it never polls again.
-        for (Keyhole& keyhole : keyholes) {
+        for (std::size_t index = 0; index < keyholes.size(); ++index) {
+            Keyhole& keyhole = keyholes[index];
             if (keyhole.unlocked || keyhole.colour != key.colour) continue;
             if (Squared(keyhole.atPx - key.atPx) >= range2) continue;
             keyhole.unlocked = true;
             keyhole.sinceUnlockMs = 0.0;
             key.spent = true;
+            key.opened = static_cast<int>(index);
             ++unlocked;
             break;
         }

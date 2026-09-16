@@ -910,6 +910,33 @@ void AStaticPortalGlows() {
     }
     CHECK_EQ(Tagged(registry, "Magic Portals Sprite"), 18);
     CHECK_EQ(added, 4);
+
+    // And as ETHCallback_portal_static redraws them (art.json static_portal): the
+    // halo at 0.8 of its 64 units, red (1, 0.3, 0.3) for 603 and 582, whose color is
+    // "red", and (0.3, 0.3, 1) for the blue 604 and 583.
+    CloseTheLevelStartPopup(layer, registry);
+    tickWith(layer, registry, kRest, {}, {});
+    layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+    const float halo = MagicPortals::Units::ToMetres(64.0 * 0.8);
+    int red = 0;
+    int blue = 0;
+    int otherSize = 0;
+    for (auto [entity, tag, material, transform] :
+         registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
+        (void)entity;
+        if (tag.tag != "Magic Portals Sprite" || material.albedoTexturePath.find("portal_halo.png") == std::string::npos) {
+            continue;
+        }
+        if (std::fabs(transform.scale.x - halo) > 1e-6f || std::fabs(transform.scale.y - halo) > 1e-6f) ++otherSize;
+        const glm::dvec2 at = MagicPortals::Units::ToPixels(transform.position);
+        const bool shouldBeRed = glm::distance(at, glm::dvec2(150.0, 74.0)) < 0.5 ||
+                                 glm::distance(at, glm::dvec2(334.0, 200.0)) < 0.5;
+        if (shouldBeRed && material.albedoColor == glm::vec4(1.0f, 0.3f, 0.3f, 1.0f)) ++red;
+        if (!shouldBeRed && material.albedoColor == glm::vec4(0.3f, 0.3f, 1.0f, 1.0f)) ++blue;
+    }
+    CHECK_MSG(red == 2 && blue == 2, "603 and 582 tinted red, 604 and 583 blue: " + std::to_string(red) + " red, " +
+                                         std::to_string(blue) + " blue");
+    CHECK_MSG(otherSize == 0, std::to_string(otherSize) + " halo(s) not at 51.2 units");
     layer.OnDetach(registry);
 }
 
@@ -1718,6 +1745,447 @@ void ParticlesGoWithTheirLevel() {
     for (int frame = 0; frame < 120; ++frame) layer.OnUpdate(registry, MagicPortalsLayer::kTick);
     CHECK_MSG(Tagged(registry, "Magic Portals Particle") <= before,
               "the level came back with more particles than it had");
+}
+
+// ---- the emitters conform (step 59, plan_port System 2) ------------------------
+
+// Defined further down, beside the checks that first needed them.
+bool EndsWith(const std::string& path, const std::string& file);
+entt::entity SpriteOf(entt::registry& registry, const char* tag, const std::string& file);
+
+// The first report of `node`'s system `slot`, or null.
+const MagicPortalsLayer::EmitterReport* ReportOf(const std::vector<MagicPortalsLayer::EmitterReport>& reports,
+                                                 const std::string& node, int slot) {
+    for (const MagicPortalsLayer::EmitterReport& report : reports) {
+        if (report.node == node && report.slot == slot) return &report;
+    }
+    return nullptr;
+}
+
+void PutPlayerAt(entt::registry& registry, const MagicPortalsLayer& layer, const glm::dvec2& atPx) {
+    auto& transform = registry.get<TransformComponent>(layer.SimLevel()->player);
+    const glm::vec3 world = MagicPortals::Units::ToWorld(atPx.x, atPx.y);
+    transform.position = glm::vec3(world.x, world.y, transform.position.z);
+}
+
+// 1-1's torch and static portals, as the original places and draws their systems:
+//  - 2a: the flame starts at the torch's NODE plus (0, -12), (288, 52), not at
+//    the centre of its picture 16 lower;
+//  - 2b: the rings turn counter-clockwise, the engine's rotation growing 1.8
+//    degrees a frame;
+//  - 2c: every added particle is drawn at alpha 1, the rings' fading colour
+//    notwithstanding;
+//  - 2d: each system in its entity's own slot, after the halo's quarter, the
+//    iris after the rings;
+//  - 2e: every quad square.
+void TheTorchAndThePortalsEmitAsTheOriginalDoes() {
+    if (!OriginalArtIsThere("TheTorchAndThePortalsEmitAsTheOriginalDoes")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level0");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    CloseTheLevelStartPopup(layer, registry);
+
+    const float slotZ = 0.004f; // kSpriteSlotZ: one sprite's slot
+    const double turnPerFrame = 1.8 * 3.14159265358979323846 / 180.0;
+    std::vector<std::pair<entt::entity, float>> lastRings;
+    int turnedLeft = 0;  // counter-clockwise: the engine's rotation grew by 1.8 degrees
+    int turnedRight = 0; // clockwise by the same
+    int addedNotWhole = 0;
+    int notSquare = 0;
+    int flameBirths = 0;
+    int flameBirthsOff = 0;
+    float widestRing = 0.0f;
+    for (int frame = 0; frame < 240; ++frame) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+
+        const std::vector<MagicPortalsLayer::EmitterReport> reports = layer.EmitterReports();
+        if (const auto* flame = ReportOf(reports, "light_ent_696", 0); flame != nullptr && flame->anyReleased &&
+                                                                        flame->newestAgeMs == 0.0) {
+            ++flameBirths;
+            if (flame->newestBornPx != glm::dvec2(288.0, 52.0)) ++flameBirthsOff;
+        }
+
+        std::vector<std::pair<entt::entity, float>> rings;
+        for (auto [entity, tag, material, transform] :
+             registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
+            if (tag.tag != "Magic Portals Particle") continue;
+            if (transform.scale.x != transform.scale.y) ++notSquare;
+            if (material.blend == MaterialComponent::BlendMode::Additive && material.albedoColor.a != 1.0f) {
+                ++addedNotWhole;
+            }
+            if (!EndsWith(material.albedoTexturePath, "/portal_particle.png")) continue;
+            widestRing = std::max(widestRing, transform.scale.x);
+            rings.emplace_back(entity, transform.rotation.z);
+            for (const auto& [was, rotation] : lastRings) {
+                if (was != entity) continue;
+                const double d = static_cast<double>(transform.rotation.z - rotation);
+                if (std::fabs(d - turnPerFrame) < 1e-4) ++turnedLeft;
+                if (std::fabs(d + turnPerFrame) < 1e-4) ++turnedRight;
+            }
+        }
+        lastRings = std::move(rings);
+    }
+    std::printf("  1-1's rings: %d frame pairs turned counter-clockwise, %d clockwise; %d flame births\n", turnedLeft,
+                turnedRight, flameBirths);
+    CHECK_MSG(turnedLeft > 200 && turnedRight == 0,
+              "the rings turn counter-clockwise: " + std::to_string(turnedLeft) + " left, " + std::to_string(turnedRight) +
+                  " right");
+    CHECK_MSG(addedNotWhole == 0, std::to_string(addedNotWhole) + " added particle draw(s) with an alpha other than 1");
+    CHECK_MSG(notSquare == 0, std::to_string(notSquare) + " particle draw(s) not square");
+    CHECK_MSG(widestRing <= MagicPortals::Units::ToMetres(88.0) + 1e-6f &&
+                  widestRing > MagicPortals::Units::ToMetres(80.0),
+              "no ring drawn wider than the 88 units it is born at: " + std::to_string(widestRing));
+    CHECK_MSG(flameBirths > 20 && flameBirthsOff == 0,
+              "the flame starts at (288, 52): " + std::to_string(flameBirthsOff) + " of " + std::to_string(flameBirths) +
+                  " births elsewhere");
+
+    const std::vector<MagicPortalsLayer::EmitterReport> reports = layer.EmitterReports();
+    const auto* flame = ReportOf(reports, "light_ent_696", 0);
+    CHECK(flame != nullptr);
+    if (flame != nullptr) {
+        CHECK_MSG(flame->owner.atPx == glm::dvec2(288.0, 64.0) && flame->owner.angleDeg == 0.0,
+                  "the flame's owner is the torch's node: " + Point(flame->owner.atPx));
+        CHECK_MSG(std::fabs(flame->z - (flame->ownerZ + 0.375f * slotZ)) < 1e-6f,
+                  "the torch's one system three eighths of a slot in front of it: " + std::to_string(flame->z) + " over " +
+                      std::to_string(flame->ownerZ));
+        const entt::entity halo = FirstTagged(registry, "Magic Portals Halo");
+        CHECK(halo != entt::null);
+        if (halo != entt::null) {
+            const float haloZ = registry.get<TransformComponent>(halo).position.z;
+            CHECK_MSG(haloZ > flame->ownerZ && haloZ < flame->z, "the halo between the torch and its flame");
+        }
+    }
+    int portals = 0;
+    for (const MagicPortalsLayer::EmitterReport& ring : reports) {
+        if (ring.slot != 0 || ring.bitmap != "portal_particle.png") continue;
+        const auto* iris = ReportOf(reports, ring.node, 1);
+        CHECK_MSG(iris != nullptr && iris->bitmap == "portal.png" && !iris->additive && ring.additive && ring.systems == 2,
+                  ring.node + ": the rings added, the iris mixed");
+        if (iris == nullptr) continue;
+        // Scaled with their entity by its script's 0.8: rings born at 88, not 110,
+        // and the iris 51.2, not 64.
+        CHECK_MSG(std::fabs(ring.systemSize - 88.0) < 1e-9 && std::fabs(iris->systemSize - 51.2) < 1e-9,
+                  ring.node + ": rings " + std::to_string(ring.systemSize) + ", iris " + std::to_string(iris->systemSize));
+        ++portals;
+        CHECK_MSG(ring.z > ring.ownerZ + 0.25f * slotZ && ring.z < iris->z && iris->z < ring.ownerZ + 0.5f * slotZ,
+                  ring.node + ": halo quarter < rings < iris < half a slot: " + std::to_string(ring.z - ring.ownerZ) +
+                      ", " + std::to_string(iris->z - ring.ownerZ));
+    }
+    CHECK_EQ(portals, 4);
+    layer.OnDetach(registry);
+}
+
+// 2f: an emitter follows what moves its picture, and its newest life starts where
+// the owner is on the frame it starts. A swinging shock ring (4-15's, the body
+// Fields moves), a carried key (3-08's, the key Keys trails behind the player),
+// and a crystal taken, whose sparkle goes with it.
+void AnEmitterFollowsItsOwner() {
+    if (!OriginalArtIsThere("AnEmitterFollowsItsOwner")) return;
+    {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level14c");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+        CloseTheLevelStartPopup(layer, registry);
+        const std::string ring = "shock_agent_2353";
+        double lowest = 1e9;
+        double highest = -1e9;
+        int off = 0;
+        int births = 0;
+        int birthsOff = 0;
+        for (int frame = 0; frame < 300; ++frame) {
+            tickWith(layer, registry, kRest, {}, {});
+            layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+            const auto* field = layer.SimLevel()->fields.FindField(ring);
+            const std::vector<MagicPortalsLayer::EmitterReport> reports = layer.EmitterReports();
+            const auto* emitter = ReportOf(reports, ring, 0);
+            if (field == nullptr || emitter == nullptr) {
+                ++off;
+                continue;
+            }
+            if (glm::distance(emitter->owner.atPx, field->atPx) > 0.01) ++off;
+            lowest = std::min(lowest, emitter->owner.atPx.y);
+            highest = std::max(highest, emitter->owner.atPx.y);
+            if (emitter->anyReleased && emitter->newestAgeMs == 0.0) {
+                ++births;
+                // shock_agent.ent: StartPoint (0, 0), RandStartPoint (12, 18).
+                const glm::dvec2 d = emitter->newestBornPx - emitter->owner.atPx;
+                if (std::fabs(d.x) > 6.0 + 1e-6 || std::fabs(d.y) > 9.0 + 1e-6) ++birthsOff;
+            }
+        }
+        std::printf("  4-15's ring: emitter y %.2f..%.2f px, %d births\n", lowest, highest, births);
+        CHECK_MSG(off == 0, std::to_string(off) + " frame(s) the ring's emitter was not on the ring");
+        CHECK_MSG(highest - lowest > 60.0, "and the ring swung its 64 px: " + std::to_string(highest - lowest));
+        CHECK_MSG(births > 20 && birthsOff == 0,
+                  std::to_string(birthsOff) + " of " + std::to_string(births) + " births away from the ring");
+        layer.OnDetach(registry);
+    }
+    {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level7b");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+        CloseTheLevelStartPopup(layer, registry);
+        const std::string name = "key_ent_1335";
+        const auto* lying = layer.SimLevel()->keys.FindKey(name);
+        CHECK(lying != nullptr);
+        if (lying == nullptr) return;
+        const glm::dvec2 lyingAt = lying->atPx;
+        PutPlayerAt(registry, layer, lyingAt);
+        tickWith(layer, registry, kRest, {}, {});
+        CHECK_MSG(layer.SimLevel()->keys.FindKey(name)->owner == layer.SimLevel()->player, "the player takes the key");
+        PutPlayerAt(registry, layer, glm::dvec2(lyingAt.x + 300.0, lyingAt.y));
+
+        const entt::entity picture = SpriteOf(registry, "Magic Portals Sprite", "/key.png");
+        CHECK(picture != entt::null);
+        int off = 0;
+        int births = 0;
+        int birthsOff = 0;
+        for (int frame = 0; frame < 300; ++frame) {
+            tickWith(layer, registry, kRest, {}, {});
+            layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+            const glm::dvec2 keyAt = layer.SimLevel()->keys.FindKey(name)->atPx;
+            if (picture != entt::null && registry.valid(picture)) {
+                const glm::dvec2 drawnAt = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(picture).position);
+                if (glm::distance(drawnAt, keyAt) > 1e-3) ++off;
+            }
+            const std::vector<MagicPortalsLayer::EmitterReport> reports = layer.EmitterReports();
+            for (int slot = 0; slot < 2; ++slot) {
+                const auto* sparkle = ReportOf(reports, name, slot);
+                if (sparkle == nullptr || sparkle->owner.atPx != keyAt) {
+                    ++off;
+                    continue;
+                }
+                if (!sparkle->anyReleased || sparkle->newestAgeMs != 0.0) continue;
+                ++births;
+                // key.ent: StartPoint (-2, -6) then (2, 6), RandStartPoint (8, 8) both.
+                const glm::dvec2 start = slot == 0 ? glm::dvec2(-2.0, -6.0) : glm::dvec2(2.0, 6.0);
+                const glm::dvec2 d = sparkle->newestBornPx - (keyAt + start);
+                if (std::fabs(d.x) > 4.0 + 1e-6 || std::fabs(d.y) > 4.0 + 1e-6) ++birthsOff;
+            }
+        }
+        const glm::dvec2 carriedTo = layer.SimLevel()->keys.FindKey(name)->atPx;
+        std::printf("  3-08's key: carried from %s to %s, %d sparkle births\n", Point(lyingAt).c_str(),
+                    Point(carriedTo).c_str(), births);
+        CHECK_MSG(glm::distance(carriedTo, lyingAt) > 100.0, "the key was carried: " + Point(carriedTo));
+        CHECK_MSG(off == 0, std::to_string(off) + " frame(s) the key's picture or a sparkle was not on the key");
+        CHECK_MSG(births > 10 && birthsOff == 0,
+                  std::to_string(birthsOff) + " of " + std::to_string(births) + " sparkle births away from the key");
+
+        // The key carried to its keyhole: the keyhole holds, fades in its alpha as
+        // Keys fades it, and goes with its sparkle (keys.json: 1000 ms, then 500).
+        const std::string hole = "keyhole_1338";
+        const auto* keyhole = layer.SimLevel()->keys.FindKeyhole(hole);
+        CHECK(keyhole != nullptr);
+        if (keyhole != nullptr) {
+            const glm::dvec2 holeAt = keyhole->atPx;
+            for (int tick = 0; tick < 30; ++tick) {
+                PutPlayerAt(registry, layer, holeAt);
+                tickWith(layer, registry, kRest, {}, {});
+                layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+            }
+            CHECK_MSG(layer.SimLevel()->keys.FindKeyhole(hole)->unlocked, "the key opened its keyhole");
+            CHECK_MSG(layer.SimLevel()->keys.FindKey(name)->spent, "and is spent");
+            int fading = 0;
+            int offAlpha = 0;
+            int keyGoneEarly = 0;
+            bool goneWithSparkle = false;
+            bool keyGoneWithIt = false;
+            for (int tick = 0; tick < 120; ++tick) {
+                tickWith(layer, registry, kRest, {}, {});
+                layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+                const auto* now = layer.SimLevel()->keys.FindKeyhole(hole);
+                const entt::entity quad = SpriteOf(registry, "Magic Portals Sprite", "/keyhole.png");
+                const std::vector<MagicPortalsLayer::EmitterReport> reports = layer.EmitterReports();
+                if (now->gone) {
+                    const auto* sparkle = ReportOf(reports, hole, 0);
+                    goneWithSparkle = quad == entt::null && sparkle != nullptr && sparkle->ownerGone &&
+                                      sparkle->drawn == 0;
+                    // The spent key, whose fly-in is not built, goes with the keyhole it
+                    // opened, both its sparkles with it, rather than lie where the door was.
+                    const auto* first = ReportOf(reports, name, 0);
+                    const auto* second = ReportOf(reports, name, 1);
+                    keyGoneWithIt = !registry.valid(picture) && first != nullptr && second != nullptr &&
+                                    first->ownerGone && first->drawn == 0 && second->ownerGone && second->drawn == 0;
+                    break;
+                }
+                // Until then it holds on the keyhole, drawn.
+                if (!registry.valid(picture)) ++keyGoneEarly;
+                if (quad == entt::null) {
+                    ++offAlpha;
+                    continue;
+                }
+                const float alpha = registry.get<MaterialComponent>(quad).albedoColor.a;
+                if (std::fabs(alpha - static_cast<float>(now->alpha)) > 1e-6f) ++offAlpha;
+                if (now->alpha > 0.0 && now->alpha < 1.0) ++fading;
+            }
+            std::printf("  3-08's keyhole: %d fading ticks, then gone\n", fading);
+            CHECK_MSG(fading >= 25 && offAlpha == 0,
+                      std::to_string(fading) + " fading ticks, " + std::to_string(offAlpha) +
+                          " with the picture's alpha not the keyhole's");
+            CHECK_MSG(goneWithSparkle, "the faded keyhole's picture and sparkle went");
+            CHECK_MSG(keyGoneEarly == 0, std::to_string(keyGoneEarly) + " tick(s) the spent key went before its keyhole");
+            CHECK_MSG(keyGoneWithIt, "and the spent key's picture and both its sparkles went with the keyhole");
+        }
+
+        // A crystal taken takes its sparkle.
+        const auto& crystals = layer.SimLevel()->goals.crystals;
+        CHECK(!crystals.empty());
+        if (!crystals.empty()) {
+            const std::string crystal = crystals.front().name;
+            const auto* before = ReportOf(layer.EmitterReports(), crystal, 0);
+            CHECK(before != nullptr && !before->ownerGone);
+            if (before != nullptr) {
+                PutPlayerAt(registry, layer, before->owner.atPx);
+                for (int tick = 0; tick < 5 && !layer.SimLevel()->goals.crystals.front().collected; ++tick) {
+                    tickWith(layer, registry, kRest, {}, {});
+                    layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+                }
+                layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+                const auto* after = ReportOf(layer.EmitterReports(), crystal, 0);
+                CHECK_MSG(layer.SimLevel()->goals.crystals.front().collected, "the crystal is taken");
+                CHECK_MSG(after != nullptr && after->ownerGone && after->drawn == 0 && after->active == 0,
+                          "and its sparkle went with it");
+            }
+        }
+        layer.OnDetach(registry);
+    }
+    {
+        // 3-16's shock diamond, taken and struck into a minion (test_mp_diamonds'
+        // two frames): its picture and its spark go with it, and its twin stays.
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level15b");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+        CloseTheLevelStartPopup(layer, registry);
+        const std::string name = "shock_diamond_ent_1741";
+        const auto* diamond = layer.SimLevel()->diamonds.Find(name);
+        CHECK(diamond != nullptr && !layer.SimLevel()->minions.minions.empty());
+        if (diamond == nullptr || layer.SimLevel()->minions.minions.empty()) return;
+        const glm::dvec2 lyingAt = diamond->atPx;
+        const entt::entity minion = layer.SimLevel()->minions.minions[0].body;
+        const auto pictures = [&registry]() {
+            int n = 0;
+            for (auto [entity, tag, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+                (void)entity;
+                if (tag.tag == "Magic Portals Sprite" && EndsWith(material.albedoTexturePath, "/shock_diamond.png")) ++n;
+            }
+            return n;
+        };
+        CHECK_EQ(pictures(), 2);
+        for (int frame = 0; frame < 2 && registry.valid(minion); ++frame) {
+            PutPlayerAt(registry, layer, lyingAt);
+            auto& at = registry.get<TransformComponent>(minion);
+            const glm::vec3 world = MagicPortals::Units::ToWorld(lyingAt.x + 8.0, lyingAt.y);
+            at.position = glm::vec3(world.x, world.y, at.position.z);
+            tickWith(layer, registry, kRest, {}, {});
+            layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        }
+        const auto* spent = layer.SimLevel()->diamonds.Find(name);
+        const auto* spark = ReportOf(layer.EmitterReports(), name, 0);
+        CHECK_MSG(spent != nullptr && spent->gone, "the diamond struck the minion and spent itself");
+        CHECK_MSG(pictures() == 1, "its picture went and its twin's stayed: " + std::to_string(pictures()));
+        CHECK_MSG(spark != nullptr && spark->ownerGone && spark->drawn == 0, "and its spark went with it");
+        layer.OnDetach(registry);
+    }
+}
+
+// 2e on a cell that is NOT square: 3-24's shock agents draw tesla_shock_black_bg.png,
+// cut 5 x 2 from 256 x 64, cells of 51.2 x 32 - and every quad is still size by size
+// (ETHParticleManager.cpp:413). 1-1's cells are all square, so this is where a quad
+// taking its cell's shape would show.
+void AParticleOnANonSquareCellIsDrawnSquare() {
+    if (!OriginalArtIsThere("AParticleOnANonSquareCellIsDrawnSquare")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level23b");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    CloseTheLevelStartPopup(layer, registry);
+
+    int shocks = 0;
+    for (const MagicPortalsLayer::EmitterReport& report : layer.EmitterReports()) {
+        if (report.bitmap != "tesla_shock_black_bg.png") continue;
+        ++shocks;
+        CHECK_MSG(std::fabs(report.cellPx.x - 51.2) < 1e-9 && std::fabs(report.cellPx.y - 32.0) < 1e-9,
+                  report.node + ": a 51.2 x 32 cell, " + std::to_string(report.cellPx.x) + " x " +
+                      std::to_string(report.cellPx.y));
+    }
+    CHECK_MSG(shocks > 0, "3-24 places a system on tesla_shock_black_bg.png");
+
+    int shockDraws = 0;
+    int notSquare = 0;
+    for (int frame = 0; frame < 120; ++frame) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        for (auto [entity, tag, material, transform] :
+             registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
+            (void)entity;
+            if (tag.tag != "Magic Portals Particle") continue;
+            if (transform.scale.x != transform.scale.y) ++notSquare;
+            if (EndsWith(material.albedoTexturePath, "/tesla_shock_black_bg.png")) ++shockDraws;
+        }
+    }
+    std::printf("  3-24: %d shock-cell particle draws over 120 frames, %d not square\n", shockDraws, notSquare);
+    CHECK_MSG(shockDraws > 0, "a shock particle was drawn");
+    CHECK_MSG(notSquare == 0, std::to_string(notSquare) + " particle draw(s) not square");
+    layer.OnDetach(registry);
+}
+
+// 2a/2b's owner angle where the layer converts it: 4-32's light wall, the one turned
+// carrier of the 128 levels (the converter wrote rotation -1.5708, Ethanon's 90), a
+// body, so its angle comes from its TransformComponent. Its sparkles' RandStartPoint
+// (32, 128) is turned with it: births lie within 64 of the wall along x and 16 along y.
+void ATurnedOwnerTurnsItsParticles() {
+    if (!OriginalArtIsThere("ATurnedOwnerTurnsItsParticles")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level31c");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    CloseTheLevelStartPopup(layer, registry);
+
+    const std::string wall = "light_wall_ent_2079";
+    int births = 0;
+    int outside = 0;
+    int alongWall = 0; // further along x than an unturned box's 16 reaches
+    int angleOff = 0;
+    for (int frame = 0; frame < 240; ++frame) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        const std::vector<MagicPortalsLayer::EmitterReport> reports = layer.EmitterReports();
+        const auto* sparkle = ReportOf(reports, wall, 0);
+        if (sparkle == nullptr || sparkle->ownerGone) {
+            ++angleOff;
+            continue;
+        }
+        if (std::fabs(sparkle->owner.angleDeg - 90.0) > 0.01) ++angleOff;
+        if (!sparkle->anyReleased || sparkle->newestAgeMs != 0.0) continue;
+        ++births;
+        const glm::dvec2 d = sparkle->newestBornPx - sparkle->owner.atPx;
+        if (std::fabs(d.x) > 64.0 + 1e-3 || std::fabs(d.y) > 16.0 + 1e-3) ++outside;
+        if (std::fabs(d.x) > 16.0 + 1e-3) ++alongWall;
+    }
+    const auto* last = ReportOf(layer.EmitterReports(), wall, 0);
+    std::printf("  4-32's light wall: angle %.4f, %d births, %d along the wall past 16\n",
+                last != nullptr ? last->owner.angleDeg : -1.0, births, alongWall);
+    CHECK_MSG(angleOff == 0, std::to_string(angleOff) + " frame(s) the wall's emitter was not at 90 degrees");
+    CHECK_MSG(births > 3 && outside == 0,
+              std::to_string(outside) + " of " + std::to_string(births) + " births outside the turned box");
+    CHECK_MSG(alongWall > 0, "and the spread lies along the wall, not across it");
+    layer.OnDetach(registry);
 }
 
 // ---- what the camera drops while it pans --------------------------------------
@@ -3630,10 +4098,16 @@ void EverySpriteIsDrawnAtItsAmbient() {
     CHECK_MSG(AllAre(torch, 0.35f, 0.30f, 0.35f), "the torch's own sprite is emissive 0 too: " + Show(torch));
     const std::vector<glm::vec4> door = ColoursOf(registry, "Magic Portals Sprite", "window01.png");
     CHECK_MSG(AllAre(door, 1.0f, 1.0f, 1.0f), "the door, emissive 0.7: min(1, 0.35 + 0.7) is 1: " + Show(door));
-    // Added sprites are dimmed like mixed ones; the static portals are emissive 1.
+    // Added sprites are dimmed like mixed ones; the static portals are emissive 1,
+    // so min(1, ambient + 1) leaves them whole - times the colour their script sets
+    // (art.json static_portal): two red (1, 0.3, 0.3), two blue (0.3, 0.3, 1).
     const std::vector<glm::vec4> halos = ColoursOf(registry, "Magic Portals Sprite", "portal_halo.png");
     CHECK_EQ(halos.size(), std::size_t{4});
-    CHECK_MSG(AllAre(halos, 1.0f, 1.0f, 1.0f), "the static portals' halos: " + Show(halos));
+    const auto tinted = [&halos](float r, float g, float b) {
+        return std::count_if(halos.begin(), halos.end(), [&](const glm::vec4& c) { return AllAre({c}, r, g, b); });
+    };
+    CHECK_MSG(tinted(1.0f, 0.3f, 0.3f) == 2 && tinted(0.3f, 0.3f, 1.0f) == 2,
+              "the static portals' halos, two red and two blue: " + Show(halos));
     // The boxes are placeholders the PBR path draws, never dimmed: a static
     // body's stays the layer's grey (0.42, 0.44, 0.50).
     int greyBoxes = 0;
@@ -4047,7 +4521,11 @@ void TheTorchIsALightAndAHalo() {
     const double mean = frames > 0 ? sum / frames : 0.0;
     CHECK_MSG(offTwelfths == 0, std::to_string(offTwelfths) + " frame(s) whose halo is not a whole number of twelfths");
     CHECK_MSG(offColour == 0, std::to_string(offColour) + " frame(s) whose halo is not the light's colour");
-    CHECK_MSG(mean > 0.5 && mean <= 1.0, "the flame's mean live share over 20 s: " + std::to_string(mean));
+    // The share is GetNumActiveParticles over the pool (the halo's, ETHRenderEntity.cpp:
+    // 372-376; the count, ETHParticleManager.cpp:208-213), which the visuals plan's
+    // System 8 puts at 0.74 +- 0.05 for this flame (particles.md 7.1): each of its
+    // particles spends about a quarter of its life at size 0.
+    CHECK_MSG(mean >= 0.69 && mean <= 0.79, "the flame's mean live share over 20 s: " + std::to_string(mean));
     std::printf("  the torch flame's live share over 20 s of frames: %.4f of 12 particles\n", mean);
     CHECK_MSG(NearV(registry.get<Light2DComponent>(lights[0]).color, glm::vec3(3.0f, 1.5f, 0.3f)),
               "and the static torch's light stays whole");
@@ -4527,6 +5005,10 @@ void runTests() {
     ATileRefusesATouchThatTravelled();
     ALevelsEntitiesEmit();
     ParticlesGoWithTheirLevel();
+    TheTorchAndThePortalsEmitAsTheOriginalDoes();
+    AnEmitterFollowsItsOwner();
+    AParticleOnANonSquareCellIsDrawnSquare();
+    ATurnedOwnerTurnsItsParticles();
     FinishingALevelShowsTheMedal();
     TheMedalScreenIsTheOriginals();
     TheGridShowsTheMedalsEarned();

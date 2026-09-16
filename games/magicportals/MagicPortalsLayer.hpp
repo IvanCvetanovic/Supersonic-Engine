@@ -69,12 +69,13 @@ namespace MagicPortals {
 //    view.json's height of the level, 256 px, at the window's shape.
 //  - Every sprite the level names (Sprites.hpp) is a textured quad, unlit and
 //    blended as the level says, in Godot's canvas order. A sprite follows its
-//    node's body, or the crystal, static portal or no-portal zone it pictures,
-//    and goes when that goes. The sky follows none of those: the original pins
-//    it to the camera every frame (sim/Sky.hpp), and so does the port. The
-//    bodies are also boxes in the colour of what they are, hidden behind the
-//    art until B shows them - and shown anyway when the art cannot be read,
-//    which is a level still played, drawn plainly.
+//    node's body, or the crystal, static portal, no-portal zone, key, keyhole or
+//    diamond it pictures, and goes when that goes; its entity's particle systems
+//    follow and go with it (sim/Particles.hpp). The sky follows none of those:
+//    the original pins it to the camera every frame (sim/Sky.hpp), and so does
+//    the port. The bodies are also boxes in the colour of what they are, hidden
+//    behind the art until B shows them - and shown anyway when the art cannot be
+//    read, which is a level still played, drawn plainly.
 //  - The scene holds display values, as the original's 8-bit framebuffer did
 //    (RenderSettings::SceneEncoding::DisplayEncoded, set at attach): a texture
 //    is sampled as the bytes in its file, tints and blends work on those bytes,
@@ -307,6 +308,29 @@ public:
     // not running on a space level, or where the art was not read.
     const Sky::Controller& SkyController() const { return m_sky; }
 
+    // What each particle system is doing, for the suites, in the order they were
+    // built: whom it follows, where it draws, and the place its newest life began.
+    struct EmitterReport {
+        std::string node;   // its owner's node; empty for one no level sprite carries
+        std::string bitmap; // Particles::System::bitmap
+        double systemSize = 0.0; // Particles::System::size as built: its entity's scale applied
+        glm::dvec2 cellPx{0.0};  // one cell of its bitmap, which a quad stretches square
+        int slot = 0;       // which of its entity's systems
+        int systems = 0;    // of how many
+        bool additive = false;
+        Particles::Owner owner; // as this frame's update took it
+        bool ownerGone = false; // its picture was taken away, and it with it
+        float z = 0.0f;
+        float ownerZ = 0.0f; // its owner's picture's
+        int count = 0;       // the pool
+        int active = 0;      // GetNumActiveParticles
+        int drawn = 0;       // particles with a quad this frame
+        bool anyReleased = false;
+        glm::dvec2 newestBornPx{0.0}; // the released particle with the youngest life
+        double newestAgeMs = 0.0;     // and its age: 0 when it began this frame
+    };
+    std::vector<EmitterReport> EmitterReports() const;
+
     // A screen point (Input's coordinates) as the point in the level under it,
     // in the remake's pixels. False when there is no viewport or camera.
     bool ScreenToLevelPx(const entt::registry& registry, const glm::vec2& screenPoint, glm::dvec2& outPx) const;
@@ -536,6 +560,9 @@ private:
         // them is syncLighting's.
         glm::vec4 colour{1.0f};
         float fade{1.0f};
+        // The scale a script gave its entity (ETHEntity::Scale), which multiplies its
+        // picture and its particle systems: a static portal's 0.8, and 1 otherwise.
+        double scale{1.0};
         glm::dvec3 emissive{0.0}; // its node's eth_emissive
         std::string lightmap;     // its node's eth_lightmap, on disk; empty = none
         // Which lights reach it and how (Lighting::ReceiverMask): its node's
@@ -548,7 +575,13 @@ private:
         // Where its entity stands now, in the level's pixels: its node's position,
         // or its body's, or its patrolling zone's. What a light it owns follows.
         glm::dvec2 ownerPx{0.0};
+        // And its angle, Ethanon's (counter-clockwise positive): its node's, or its
+        // body's. What its particles are turned by.
+        double ownerAngleDeg{0.0};
         entt::entity body{entt::null};
+        int key{-1};          // in keys.keys: drawn where the key is, carried or not
+        int keyhole{-1};      // in keys.keyholes: faded as it fades, and gone with it
+        int diamond{-1};      // in diamonds.diamonds: drawn where it is, gone once spent
         int crystal{-1};      // in goals.crystals
         int staticPortal{-1}; // in portals.statics
         int zone{-1};         // in portals.zones
@@ -784,23 +817,8 @@ private:
     // one with, and the box is the picture rather than a stand-in for one.
     std::vector<entt::entity> m_fireballs;
 
-    // One live particle of an emitter's, and the quad standing for it.
-    struct Particle {
-        glm::dvec2 atPx{0.0};
-        glm::dvec2 velocityPx{0.0}; // the original's `dir`, per frame-speed unit
-        double angle = 0.0;         // degrees, clockwise on the screen
-        double angleDir = 0.0;
-        double size = 0.0;
-        double lifeMs = 0.0; // its own, spread from the system's
-        double elapsedMs = 0.0;
-        int repeats = 0;
-        int frame = 0;
-        bool released = false;
-        entt::entity quad{entt::null};
-    };
-
     // One <ParticleSystem> of one placement: the system as the .ent states it,
-    // where it sits, and its pool.
+    // who carries it, and its pool, moved by sim/Particles' arithmetic.
     //
     // PER FRAME, and never on the tick. Nothing here touches Game::Level, the
     // simulation's clock or the state hash - a particle is a picture, and the
@@ -809,18 +827,23 @@ private:
     // engine's is one process-global stream that every other drawer shares.
     struct Emitter {
         Particles::System system;
-        glm::dvec2 atPx{0.0}; // the placement it decorates, which does not move
-        float z = 0.0f;       // in front of that placement's own art
+        // Where it was made. An emitter of a level's sprite takes its owner's place
+        // and angle again every frame from m_sprites (ownerPx, ownerAngleDeg), so it
+        // follows what moves the picture; one with no sprite stays here.
+        Particles::Owner owner;
+        float z = 0.0f; // in front of its owner's picture and its halo (Particles::SlotFraction)
         glm::dvec2 cellPx{0.0};
         std::string image;
-        int crystal = -1; // when it decorates one: it stops with the crystal
-        int sprite = -1;  // the sprite in m_sprites whose entity it belongs to
-        int slot = 0;     // which of that entity's <ParticleSystem>s it is, from 0
-        double angleDeg = 0.0; // its entity's angle, which every particle starts turned by
-        // ETHEntity::KillParticleSystem: no particle is released or renewed, and each
-        // lives out the life it has.
+        int sprite = -1; // the sprite in m_sprites whose entity it belongs to: it goes when that goes
+        int slot = 0;    // which of that entity's <ParticleSystem>s it is, from 0
+        // ETHEntity::KillParticleSystem: no particle is renewed, and each lives out
+        // the life it has.
         bool killed = false;
-        std::vector<Particle> particles;
+        // ETHParticleManager::GetNumActiveParticles as of this frame's update: what a
+        // light and a halo take the share of.
+        int active = 0;
+        std::vector<Particles::Particle> particles;
+        std::vector<entt::entity> quads; // one per particle, null while it is not drawn
     };
     // Every particle system of an entity of the original's, at a place: false when
     // the .ent carries none or cannot be read.
