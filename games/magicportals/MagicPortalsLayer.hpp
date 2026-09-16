@@ -17,13 +17,17 @@
 #include "core/AudioEngine.hpp"
 #include "core/BitmapFont.hpp"
 
+#include "sim/Achievements.hpp"
 #include "sim/Camera.hpp"
 #include "sim/Chapters.hpp"
+#include "sim/Credits.hpp"
+#include "sim/Dashboard.hpp"
 #include "sim/Game.hpp"
 #include "sim/Art.hpp"
 #include "sim/Hud.hpp"
 #include "sim/LevelEnd.hpp"
 #include "sim/Loading.hpp"
+#include "sim/Locking.hpp"
 #include "sim/MainMenu.hpp"
 #include "sim/MenuState.hpp"
 #include "sim/Particles.hpp"
@@ -108,6 +112,9 @@ public:
     struct Paths {
         std::string levels = MAGICPORTALS_LEVELS_DIR;
         std::string chapters = MAGICPORTALS_CHAPTERS_FILE;
+        // The original's achievements, extracted beside chapters.json: never in this
+        // repository (sim/Achievements.hpp). The dashboard draws no rows without it.
+        std::string achievements = MAGICPORTALS_ACHIEVEMENTS_FILE;
         std::string data = MAGICPORTALS_DATA_DIR;
         std::string portData = MAGICPORTALS_PORT_DATA_DIR;
         // Where LevelBuilder may write, and the loading screen's black halo
@@ -155,18 +162,20 @@ public:
     // suite, every headless render and --level enter the game.
     //
     // The original's own menu STATES: LoadingScreen, PortalMainMenu,
-    // WorldSelector and LevelSelector. Each opens under its own black
-    // (menu_state.fade) and presses its buttons as Button::update does
-    // (menu_state.press). The loading screen and the main menu are the remake's
-    // ui3 spec section 2 (sim/Loading.hpp, sim/MainMenu.hpp, drawn by EmitMenu);
-    // chapter select and the grid are still the port's own layout of the
-    // original's art, which ui3 sections 5 and 6 are to replace.
+    // WorldSelector, LevelSelector, CreditsScreen and ScoreDashboard. Each opens
+    // under its own black (menu_state.fade) and presses its buttons as
+    // Button::update does (menu_state.press). The loading screen and the main menu
+    // are the remake's ui3 spec section 2 (sim/Loading.hpp, sim/MainMenu.hpp),
+    // credits and the achievements dashboard its sections 3 and 4
+    // (sim/Credits.hpp, sim/Dashboard.hpp), all drawn by EmitMenu; chapter select
+    // and the grid are still the port's own layout of the original's art, which
+    // ui3 sections 5 and 6 are to replace.
     // `Finished` and `Dead` are the odd two: each sits OVER the level it ended,
     // which stays loaded, drawn AND RUNNING - neither screen stops game time
     // (the remake's ui2 spec, D7) - and both are drawn through the screen
     // overlay on the view, as the pause is (sim/LevelEnd.hpp). Everything that
     // treats a screen as "the level is gone" has to name both.
-    enum class Screen { None, Loading, Main, Worlds, Levels, Finished, Dead };
+    enum class Screen { None, Loading, Main, Worlds, Levels, Credits, Achievements, Finished, Dead };
 
     // A button the menu drew, in the menu's pixel box (MenuBoxPx). Kept as
     // data so a click is tested against exactly what was drawn, and so a test
@@ -297,9 +306,31 @@ public:
     Pause::Switches MainMenuSwitches() const;
     // Press one of the main menu's buttons, as a release on it does - at once: a
     // touch's release asks for it on the tick after. False when it led nowhere: no
-    // main menu is up, the music switch is not there, or it is info or
-    // Achievements, whose screens the port does not have yet.
+    // main menu is up, or the music switch is not there.
     bool PressMainMenu(entt::registry& registry, MainMenu::Button button);
+
+    // ---- credits and the achievements dashboard -------------------------------
+    //
+    // The main menu's info and Achievements buttons open them; each back button,
+    // and the back key, goes back to the main menu on the tick after. Both are
+    // drawn by EmitMenu through the overlay, and keep their scroll across the
+    // per-tick layout and a resize.
+    const Credits::Rules& CreditsRules() const { return m_creditsRules; }
+    // The credits' strip as the last tick left it.
+    const Credits::Scroll& CreditsScroll() const { return m_credits; }
+    // Whether the credits' back button is held down inside: the press tint.
+    bool CreditsBackHeld() const { return m_creditsTouch.backHeld; }
+    const Dashboard::Rules& DashboardRules() const { return m_dashboardRules; }
+    const Locking::Rules& LockingRules() const { return m_lockingRules; }
+    // The rows as the dashboard opened with them, and its scroll and buttons.
+    const Dashboard::Board& DashboardBoard() const { return m_dashboardBoard; }
+    const Dashboard::State& DashboardState() const { return m_dashboardState; }
+    // The original's achievements, when Paths::achievements could be read; null
+    // otherwise, and AchievementsError says why.
+    const Achievements::Content* AchievementsContent() const {
+        return m_achievementsLoaded ? &m_achievements : nullptr;
+    }
+    const std::string& AchievementsError() const { return m_achievementsError; }
     // Puts this frame's menu into the screen overlay: the main menu's pictures, the
     // loading screen's logo and dots, and every menu state's black. Nothing when no
     // menu state is up. OnUpdate calls it once a frame.
@@ -376,6 +407,10 @@ public:
     // states read it: it opens a help block's popup, closes one that is up, and
     // presses a menu's buttons as a touch does.
     void ScheduleDevTap(int tick, std::optional<glm::dvec2> viewFraction, int releaseTick = 0);
+    // DEV ONLY: a drag - a touch down at `from` on tick `tick`, moved at an even pace
+    // to reach `to` on `releaseTick`, and released there. Both are fractions of the
+    // view. The credits' and the dashboard's scroll captures need a finger that moves.
+    void ScheduleDevDrag(int tick, const glm::dvec2& from, const glm::dvec2& to, int releaseTick);
 
     // DEV ONLY: press one of these on the layer's tick `tick` (1 the first
     // OnFixedUpdate), as a tap would, for a --fixed-step capture that has no
@@ -465,6 +500,14 @@ private:
     void mainMenuInput(entt::registry& registry);
     // Chapter select's and the grid's touch, the same way, on their world quads.
     void menuQuadInput(entt::registry& registry);
+    // The credits' touch and the strip's tick (CreditsScreenLayer::update).
+    void creditsInput(entt::registry& registry, float fixedDelta);
+    // The dashboard's touch, wheel and tick (ScoreDashboard::loop, DashboardLayer).
+    void dashboardInput(entt::registry& registry);
+    // openState(world, level), from the dashboard's start button.
+    void openAchievement(entt::registry& registry, int world, int level);
+    // Whether a menu state is up, instead of a level or over one.
+    bool menuStateUp() const;
     // A picture of the original's that the menu states draw, resolved once; empty
     // when it cannot be read.
     const std::string& menuPicture(const std::string& file) const;
@@ -750,11 +793,13 @@ private:
     // done on the next tick: the original's release frame is drawn in the old
     // state, and the new one's black from the frame after (ui3 spec 0.4).
     struct PendingMenu {
-        enum class Kind { None, MainButton, Button, Screen };
+        enum class Kind { None, MainButton, Button, Screen, Achievement };
         Kind kind{Kind::None};
         MainMenu::Button main{MainMenu::Button::Play};
         MenuButton button;
         Screen screen{Screen::None};
+        int world{-1}; // Achievement: openState's
+        int level{-1};
     };
     PendingMenu m_pendingMenu;
     // The main menu's music switch, on the state's clock: when its entrance began
@@ -764,6 +809,25 @@ private:
     // The pictures the menu states draw through the overlay, by the name ui.json
     // gives them, each resolved to its hd twin once.
     std::map<std::string, std::string> m_menuPictures;
+    // Credits: its rules, the strip, and the one touch it follows.
+    Credits::Rules m_creditsRules;
+    Credits::Scroll m_credits;
+    struct CreditsTouch {
+        bool down{false};
+        glm::dvec2 lastAt{0.0};
+        bool downOnBack{false};
+        bool backHeld{false};
+    };
+    CreditsTouch m_creditsTouch;
+    // The dashboard: its rules, the rows it opened with, and its scroll and buttons.
+    Dashboard::Rules m_dashboardRules;
+    Dashboard::Board m_dashboardBoard;
+    Dashboard::State m_dashboardState;
+    Locking::Rules m_lockingRules;
+    // The original's achievements, read once at attach from Paths::achievements.
+    Achievements::Content m_achievements;
+    bool m_achievementsLoaded{false};
+    std::string m_achievementsError;
     // The loading screen's scene, in the level's space.
     entt::entity m_loadingBg{entt::null};
     entt::entity m_loadingCharacter{entt::null};
@@ -1061,6 +1125,9 @@ private:
         bool onHelpBlock{false};
         glm::dvec2 viewFraction{0.0};
         bool pressed{false};
+        // A drag: where it goes, reached on the release tick, from the tick it went down.
+        std::optional<glm::dvec2> toFraction;
+        int pressedTick{0};
     };
     std::vector<DevTap> m_devTaps;
     int m_ticks{0};

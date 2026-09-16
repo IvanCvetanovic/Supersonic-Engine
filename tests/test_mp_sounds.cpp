@@ -256,6 +256,9 @@ void ThePortsOwnTableIsTheOriginals() {
     playsFor("wall_broken", "playDemolitionSound");
     playsFor("menu_button", "getButtonSoundName");
     playsFor("level_button", "getRetryButtonSound");
+    // The dashboard's rows: a tap on an open level's row, and on a locked one's.
+    playsFor("achievement_pick", "playAchievementPickSound");
+    playsFor("achievement_denied", "playAchievementPickDeniedSound");
 }
 
 // The one case that opens the original's own files.

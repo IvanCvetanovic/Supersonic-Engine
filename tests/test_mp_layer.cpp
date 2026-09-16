@@ -1519,13 +1519,20 @@ void TheMainMenusSwitchesAndCornerButtons() {
 
     touchAt(45.0, 45.0);
     tickWith(layer, registry, kRest, {}, {});
-    CHECK_MSG(layer.MenuScreen() == Screen::Main, "info leads nowhere yet");
+    CHECK_MSG(layer.MenuScreen() == Screen::Credits, "info opens the credits (ui3 spec 3)");
+    std::vector<std::string> sounds = layer.LatchedSounds();
+    CHECK_MSG(std::count(sounds.begin(), sounds.end(), "level_button") == 1,
+              "with getItemSelectButtonSoundName's noise");
+    press(layer, registry, MagicPortalsLayer::kBack);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.MenuScreen() == Screen::Main, "the back key goes back to the main menu");
+    for (int tick = 0; tick < 43; ++tick) tickWith(layer, registry, kRest, {}, {});
     touchAt(1100.0, 675.0);
     tickWith(layer, registry, kRest, {}, {});
-    CHECK_MSG(layer.MenuScreen() == Screen::Main, "nor does Achievements");
-    const std::vector<std::string> sounds = layer.LatchedSounds();
+    CHECK_MSG(layer.MenuScreen() == Screen::Achievements, "Achievements opens the dashboard (ui3 spec 4)");
+    sounds = layer.LatchedSounds();
     CHECK_MSG(std::count(sounds.begin(), sounds.end(), "level_button") == 2,
-              "but each makes getItemSelectButtonSoundName's noise");
+              "with the same noise: the latch keeps both presses'");
 }
 
 // A-S6: a page tile refuses a touch that travelled more than 48 u while held.

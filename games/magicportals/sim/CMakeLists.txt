@@ -5,12 +5,15 @@
 # renderer. See docs/planning/2026-09-10-magic-portals-spike.md.
 
 add_library(MagicPortalsSim STATIC
+    Achievements.cpp
     Art.cpp
     Boss.cpp
     Bounce.cpp
     Camera.cpp
     Carry.cpp
     Chapters.cpp
+    Credits.cpp
+    Dashboard.cpp
     Demolish.cpp
     Diamonds.cpp
     Fields.cpp
@@ -28,6 +31,7 @@ add_library(MagicPortalsSim STATIC
     LevelEnd.cpp
     Lighting.cpp
     Loading.cpp
+    Locking.cpp
     MainMenu.cpp
     MenuState.cpp
     Minions.cpp
@@ -91,11 +95,20 @@ set(SUPERSONIC_MAGICPORTALS_CHAPTERS "${SUPERSONIC_MAGICPORTALS_LEVELS}/../data/
 set(SUPERSONIC_MAGICPORTALS_ORIGINAL "${SUPERSONIC_MAGICPORTALS_LEVELS}/../../reference/extracted/assets"
     CACHE PATH "The original's extracted assets (Magic-Portals-Remake/reference/extracted/assets)")
 
+# And the original's achievements, achievements.json: the remake's
+# tools/asbc/achievements.py's reading of the decode, written beside chapters.json in
+# the same gitignored out/. Its titles, descriptions, icons and points are the
+# original's, so they are never in this repository; the dashboard draws no rows
+# without the file.
+set(SUPERSONIC_MAGICPORTALS_ACHIEVEMENTS "${SUPERSONIC_MAGICPORTALS_LEVELS}/../data/achievements.json"
+    CACHE FILEPATH "The original's achievements, extracted (Magic-Portals-Remake/out/data/achievements.json)")
+
 target_compile_definitions(MagicPortalsSim PUBLIC
     MAGICPORTALS_ORIGINAL_DIR="${SUPERSONIC_MAGICPORTALS_ORIGINAL}"
     MAGICPORTALS_LEVELS_DIR="${SUPERSONIC_MAGICPORTALS_LEVELS}"
     MAGICPORTALS_DATA_DIR="${SUPERSONIC_MAGICPORTALS_DATA}"
     MAGICPORTALS_CHAPTERS_FILE="${SUPERSONIC_MAGICPORTALS_CHAPTERS}"
+    MAGICPORTALS_ACHIEVEMENTS_FILE="${SUPERSONIC_MAGICPORTALS_ACHIEVEMENTS}"
     MAGICPORTALS_PORT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../data")
 
 target_include_directories(MagicPortalsSim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

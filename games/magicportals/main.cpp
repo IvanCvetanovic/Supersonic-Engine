@@ -77,8 +77,52 @@ int main(int argc, char** argv) {
         std::optional<glm::dvec2> fraction;
     };
     std::vector<Tap> taps;
+    // DEV ONLY: a touch that MOVES. The credits' strip and the achievements
+    // dashboard scroll with a finger, and a --fixed-step run has none.
+    // `--drag 640,500:640,300@300-330` goes down at that pixel of 1280x720 on tick
+    // 300, moves at an even pace, and is let go at the second on tick 330.
+    struct Drag {
+        int tick = 0;
+        int releaseTick = 0;
+        glm::dvec2 from{0.0};
+        glm::dvec2 to{0.0};
+    };
+    std::vector<Drag> drags;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
+        if (arg == "--drag") {
+            const std::string value = i + 1 < argc ? argv[++i] : "";
+            Drag drag;
+            bool ok = false;
+            try {
+                const std::size_t at = value.find('@');
+                const std::size_t colon = value.find(':');
+                const std::size_t dash = at == std::string::npos ? std::string::npos : value.find('-', at);
+                if (at != std::string::npos && colon != std::string::npos && colon < at && dash != std::string::npos) {
+                    const auto point = [](const std::string& text, glm::dvec2& out) {
+                        const std::size_t comma = text.find(',');
+                        if (comma == std::string::npos) return false;
+                        out = glm::dvec2(std::stod(text.substr(0, comma)) / 1280.0,
+                                         std::stod(text.substr(comma + 1)) / 720.0);
+                        return true;
+                    };
+                    drag.tick = std::stoi(value.substr(at + 1, dash - at - 1));
+                    drag.releaseTick = std::stoi(value.substr(dash + 1));
+                    ok = point(value.substr(0, colon), drag.from) &&
+                         point(value.substr(colon + 1, at - colon - 1), drag.to);
+                }
+            } catch (const std::exception&) {
+                ok = false;
+            }
+            if (!ok || drag.tick < 1 || drag.releaseTick <= drag.tick) {
+                std::cerr << "--drag wants <x>,<y>:<x>,<y>@<tick>-<release tick> (pixels of 1280x720, tick at least "
+                             "1, a release after it), got '"
+                          << value << "'\n";
+                return EXIT_FAILURE;
+            }
+            drags.push_back(drag);
+            continue;
+        }
         if (arg == "--tap") {
             const std::string value = i + 1 < argc ? argv[++i] : "";
             const std::size_t at = value.find('@');
@@ -244,6 +288,10 @@ int main(int argc, char** argv) {
                   << "                    (or held there until <release>), on the level's first help block\n"
                   << "                    or at pixel x,y of 1280x720, for a capture that opens or closes a\n"
                   << "                    popup or presses a menu's button; repeatable\n"
+                  << "  --drag <x,y>:<x,y>@<tick>-<release>\n"
+                  << "                    DEV: a touch down at the first pixel of 1280x720 on <tick>,\n"
+                  << "                    moved evenly to the second and let go there on <release>, for a\n"
+                  << "                    capture that scrolls the credits or the achievements; repeatable\n"
                   << "  --hold <left|right>@<from>-<to>\n"
                   << "                    DEV: hold a walk from the game's tick <from> to <to>, for a\n"
                   << "                    capture that walks into a door or a hazard; repeatable\n"
@@ -323,6 +371,7 @@ int main(int argc, char** argv) {
         for (const auto& [tick, press] : presses) game->ScheduleDevPress(tick, press);
         for (const Hold& hold : holds) game->ScheduleDevHold(hold.from, hold.to, hold.direction);
         for (const Tap& tap : taps) game->ScheduleDevTap(tap.tick, tap.fraction, tap.releaseTick);
+        for (const Drag& drag : drags) game->ScheduleDevDrag(drag.tick, drag.from, drag.to, drag.releaseTick);
         MagicPortals::MagicPortalsLayer& gameLayer = *game;
         app.PushLayer(std::move(game));
         if (!visit.levels.empty()) {

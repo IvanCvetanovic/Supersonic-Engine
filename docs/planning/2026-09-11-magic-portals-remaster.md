@@ -6818,3 +6818,75 @@ No music plays until the main menu's `playMenuMusic`.
   - after the from-scratch recompile, 3, then none, and a full run passed all 116;
   - after the guard, `test_layerstack` (BAD_COMMAND), then none, and 116 again.
 - **No other document's table moves.** Only this plan lists the suites' checks.
+
+## Step 49 - the credits, the achievements dashboard, and the locking both are read from (built)
+
+The remake's ui3 spec, sections 3 (credits) and 4 (the achievements dashboard), with the
+owner's rulings of section 8.2 (R3: locking as the original, from the port's save) and the
+port decisions P1-P3 of section 8.1 taken as recommended. **The main menu's info button now
+opens the credits and its Achievements button the dashboard**; each back button and the back
+key return to the main menu. Game-only: no file under `src/`, `assets/shaders/` or the engine
+tests changed.
+
+**The session that built this step ended before its verify and commit.** The code, the suite
+and smoke captures were written on 2026-09-15; the suite was first compiled, fixed, and the
+full ctest and the captures below taken on 2026-09-16. No independent verifier ran, and the
+spec's section 7.3 and 7.4 acceptance rows were not each measured: see "Left open".
+
+**WHAT CHANGED.**
+- **`sim/Credits`** (pure): CreditsScreen and CreditsScreenLayer as `ui.json`'s `credits`
+  block: the back button's place, entrance and bounce (0.97-1.03, stride 300 ms), the
+  papyrus, and the one image of names that scrolls up it; the scroll steps once a tick (P1).
+- **`sim/Dashboard`** (pure): ScoreDashboard and DashboardLayer as the `dashboard` block:
+  the rows and chapter headers, the scroll with momentum x0.9 a tick, the top band x0.7 and
+  the bottom band x0.3 (P1), the scroll bar (P3), the points plaque, the back button, and the
+  start button a tap on a row raises.
+- **`sim/Achievements`**: the 82 achievements as the remake's gitignored
+  `out/data/achievements.json` holds them (`SUPERSONIC_MAGICPORTALS_ACHIEVEMENTS`), and what
+  the port's medals unlock of them, re-derived as PortalMainMenu::
+  checkPreviouslyUnlockAchievements does. **The content is Asantee's and is not in this
+  repository**: it is extracted by the remake's `tools/asbc/achievements.py`, no suite embeds
+  one, and without the file the dashboard draws no rows.
+- **`sim/Locking`** (pure, ruling R3): isWorldUnlocked, isLevelUnlocked and
+  computeWorldAccomplishment over the port's medals, as `ui.json`'s `locking` block. The
+  dashboard is its first reader; chapter select and the level grid are to read the same
+  functions. A named `--level` still opens any level.
+- **`MagicPortalsLayer`**: the Credits and Achievements screens in the menu state, drawn by
+  EmitMenu through the screen overlay. **`main.cpp`**: `--drag`, DEV only, a finger down,
+  moved and released on given ticks, because a `--fixed-step` run has no pointer.
+  **`data/sounds.json`**: the dashboard's sound events.
+
+**MEASURED** (1280x720, `--fixed-step`, frame 420, the menu button tapped at tick 240;
+captures in the remake's `out/parity/ui3/infoach/check/`).
+- **Credits against `info.png`: compare.py mean_abs 6.79, edge IoU 0.549, offset (0, 0).**
+  The frame differs by the omitted Facebook button (owner ruling) and by where the names have
+  scrolled to at the moment each was taken.
+- **Dashboard against `achievements.png` (gold medals on all 128 levels): mean_abs 2.89,
+  edge IoU 0.840, offset (0, 0).** Rows, headers, icons, plaque, back button and scroll bar sit
+  where the original draws them. The plaque reads 315 points where the original reads 325: the
+  original's save holds an achievement the port's medals cannot unlock (below).
+- **test_mp_info (new), 389 checks**: the credits' and the dashboard's layout constants and
+  timelines, the glide (x0.9 a tick, 9x the last move) and the fling past the top (back within
+  1 px in at most 55 ticks), the bands, the bar, row taps and the start button, and locking.
+  Its first run failed one check of its own making: it asked the fling to peak above the 48 u
+  it was released at, where the decoded order (decay, move, then band) lands the next tick at
+  41.16; the check now asks for the release as the peak and the return from it. Three
+  `CHECK_NEAR`s on doubles, which the harness compares as float and MSVC warned on, became
+  `Near`. **test_mp_layer 592 checks**: its "info leads nowhere yet" and "nor does
+  Achievements" became the screens they now open, and the back key's return.
+
+**Build: no warnings** (MSVC 14.50, Release, Ninja; GCC was not run). **ctest: 117 of 117,
+Not Run 0**, after Smart App Control refused 8 suites and then 2, each resolved by deleting
+and relinking; `test_jobs` failed once on the busy machine and passed on the rerun (its
+timing flake is a known open item).
+
+**Left open.**
+- The section 7.3 and 7.4 acceptance rows one by one against `info*.png`, `achievements.png`
+  and `rec/` (the credits' scroll speed and drag/fling, the dashboard's recorded glide and
+  fling paths, fonts and text positions): only the suites' model numbers and the two frames
+  above were measured.
+- Achievement unlock conditions beyond what medals decide are not decoded
+  (`AchievementManager`); the 10-point difference above is one of them.
+- Locked-tile denial, the credits' drag/fling and the dashboard's bottom band against
+  recordings, silver-medal states (spec 8.3).
+- Chapter select and the level grid (spec 5 and 6) are the next step.

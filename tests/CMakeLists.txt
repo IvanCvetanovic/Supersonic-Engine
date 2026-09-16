@@ -254,6 +254,13 @@ add_mp_test(test_mp_popup)
 # never skips.
 add_mp_test(test_mp_frontdoor)
 
+# Credits and the achievements dashboard, and what the save has opened: ui.json's
+# credits, dashboard and locking with sim/Credits, sim/Dashboard, sim/Achievements and
+# sim/Locking, pinned against the remake's ui3 spec, sections 3 and 4. Pure, and it
+# reads only the port's own committed data - its achievement lists are its own, never
+# the original's - so it never skips.
+add_mp_test(test_mp_info)
+
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.
 add_mp_test(test_mp_layer)

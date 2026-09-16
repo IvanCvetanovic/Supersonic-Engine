@@ -187,6 +187,16 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
         SUPERSONIC_LOG_WARN("Magic Portals") << "medals not loaded: " << why << std::endl;
     }
 
+    // The original's achievements (sim/Achievements.hpp). They are not this
+    // repository's, so a machine without the remake's out/ has none: the dashboard
+    // then draws no rows, and this says why, once. Not a reason to refuse the start.
+    if (std::string why; Achievements::Load(m_paths.achievements, m_achievements, why)) {
+        m_achievementsLoaded = true;
+    } else {
+        m_achievementsError = why;
+        SUPERSONIC_LOG_WARN("Magic Portals") << "no achievement rows: " << why << std::endl;
+    }
+
     std::string error;
     const bool read = Chapters::Load(m_paths.chapters, m_chapters, error) &&
                       Camera::LoadRules(m_paths.data + "/portals.json", m_cameraRules, error) &&
@@ -197,7 +207,10 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error) &&
                       Popup::LoadRules(m_paths.portData + "/ui.json", m_popupRules, error) &&
                       MainMenu::LoadRules(m_paths.portData + "/ui.json", m_mainMenuRules, error) &&
-                      Loading::LoadRules(m_paths.portData + "/ui.json", m_loadingRules, error);
+                      Loading::LoadRules(m_paths.portData + "/ui.json", m_loadingRules, error) &&
+                      Credits::LoadRules(m_paths.portData + "/ui.json", m_creditsRules, error) &&
+                      Dashboard::LoadRules(m_paths.portData + "/ui.json", m_dashboardRules, error) &&
+                      Locking::LoadRules(m_paths.portData + "/ui.json", m_lockingRules, error);
     // ui.json is the port's own and committed, so a HUD that will not read is a
     // fault in this repository and stops the start as loudly as a missing level.
     m_hudReady = read;
@@ -240,6 +253,25 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
             &m_loadingRules.logo.sprite};
         for (const std::string* file : sprites) {
             resolve(*file, false);
+        }
+        // Credits and the dashboard: the backgrounds are entities again, and the
+        // achievements' icons live in their own directory, with no hd twins.
+        const Credits::Rules& credits = m_creditsRules;
+        const Dashboard::Rules& board = m_dashboardRules;
+        resolve(credits.background.sprite, true);
+        resolve(board.background.sprite, true);
+        const std::initializer_list<const std::string*> more = {
+            &credits.back.sprite,     &credits.papyrus.sprite,  &credits.strip.sprite, &board.back.sprite,
+            &board.rows.barSprite,    &board.rows.lockSprite,   &board.plaque.sprite,  &board.bar.sprite,
+            &board.start.sprite};
+        for (const std::string* file : more) {
+            resolve(*file, false);
+        }
+        if (m_achievementsLoaded) {
+            for (const Achievements::Entry& entry : m_achievements.entries) {
+                resolve(board.rows.iconDirectory + entry.icon, true);
+            }
+            resolve(board.rows.iconDirectory + m_achievements.secret.icon, true);
         }
     }
     if (m_current < 0 && m_screen == Screen::None) {
@@ -865,8 +897,9 @@ void MagicPortalsLayer::layOutMenu() {
         return glm::dvec2(height * aspect, height);
     };
 
-    // The loading screen has no button.
-    if (m_screen == Screen::Loading) return;
+    // The loading screen has no button; credits and the dashboard say what a touch
+    // is on themselves (sim/Credits.hpp, sim/Dashboard.hpp).
+    if (m_screen == Screen::Loading || m_screen == Screen::Credits || m_screen == Screen::Achievements) return;
     if (m_screen == Screen::Main) {
         // DRAWN THROUGH THE OVERLAY by EmitMenu from sim/MainMenu, which also says
         // what a touch is on. This is TAP START as it sits once its entrance is
@@ -1031,9 +1064,13 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
     };
 
     // The finished and lost screens put nothing in the registry: they are drawn
-    // over their level through the screen overlay (EmitHud). Nor does the main
-    // menu, which EmitMenu draws, background and all, in display values.
-    if (m_screen == Screen::Finished || m_screen == Screen::Dead || m_screen == Screen::Main) return;
+    // over their level through the screen overlay (EmitHud). Nor do the main
+    // menu, credits and the dashboard, which EmitMenu draws, backgrounds and all,
+    // in display values.
+    if (m_screen == Screen::Finished || m_screen == Screen::Dead || m_screen == Screen::Main ||
+        m_screen == Screen::Credits || m_screen == Screen::Achievements) {
+        return;
+    }
     if (m_screen == Screen::Loading) {
         // scenes/loading_screen.esc: its background, its character and its portal,
         // in the level's space as a level's art is. Sized by the 1x files, drawn
@@ -1233,9 +1270,27 @@ void MagicPortalsLayer::openMenu(entt::registry& registry, Screen screen) {
     m_loadError.clear();
     // A STATE CHANGE opens under a black of its own, with every clock from
     // nothing (BaseState::preLoop). Another page of the same grid is not one.
-    if (screen != m_screen) beginMenuState();
+    const bool changed = screen != m_screen;
+    if (changed) beginMenuState();
     m_screen = screen;
     m_aspect = viewportAspect(registry);
+    if (changed && screen == Screen::Credits) {
+        // CreditsScreenLayer's constructor: the strip's top on the bottom edge.
+        m_credits = Credits::Start(MenuBoxPx());
+        m_creditsTouch = CreditsTouch{};
+    }
+    if (changed && screen == Screen::Achievements) {
+        // ScoreDashboard::preLoop: a fresh list at the top, and what the save has
+        // unlocked of it now.
+        m_dashboardBoard = Dashboard::Build(m_achievementsLoaded ? &m_achievements : nullptr, m_lockingRules, m_scores,
+                                            m_chapters);
+        m_dashboardState = Dashboard::State{};
+        for (const std::string* font :
+             {&m_dashboardRules.header.font, &m_dashboardRules.title.font, &m_dashboardRules.description.font,
+              &m_dashboardRules.points.font, &m_dashboardRules.total.font, &m_dashboardRules.newLabel.text.font}) {
+            loadUiFont(*font);
+        }
+    }
     layOutMenu();
     buildMenu(registry);
     if (screen == Screen::Loading) loadUiFont(m_loadingRules.dots.font);
@@ -1324,6 +1379,9 @@ void MagicPortalsLayer::menuTick(entt::registry& registry, float fixedDelta) {
         case PendingMenu::Kind::Screen:
             openMenu(registry, pending.screen);
             break;
+        case PendingMenu::Kind::Achievement:
+            openAchievement(registry, pending.world, pending.level);
+            break;
         case PendingMenu::Kind::None:
             break;
         }
@@ -1365,6 +1423,14 @@ void MagicPortalsLayer::menuTick(entt::registry& registry, float fixedDelta) {
     }
     if (m_screen == Screen::Main) {
         mainMenuInput(registry);
+        return;
+    }
+    if (m_screen == Screen::Credits) {
+        creditsInput(registry, fixedDelta);
+        return;
+    }
+    if (m_screen == Screen::Achievements) {
+        dashboardInput(registry);
         return;
     }
 
@@ -1570,6 +1636,124 @@ void MagicPortalsLayer::menuQuadInput(entt::registry& registry) {
     m_pendingMenu.button = *down;
 }
 
+void MagicPortalsLayer::creditsInput(entt::registry& registry, float fixedDelta) {
+    using Supersonic::Input;
+    // BackButtonLayer::isBackButtonPressed's key: the main menu, on the next tick.
+    if (Input::TickWasPressed(kBack) || devPressDue(DevPress::Back)) {
+        m_creditsTouch = CreditsTouch{};
+        m_pendingMenu.kind = PendingMenu::Kind::Screen;
+        m_pendingMenu.screen = Screen::Main;
+        return;
+    }
+    const Touch touch = touchThisTick(registry);
+    const glm::dvec2 view = MenuBoxPx();
+    const double ms = m_menuClock.ms;
+    // GetTouchState 1 or 2: pressed this tick, or still held.
+    const bool touching = touch.pressed || (touch.held && !touch.released);
+    if (touch.pressed) {
+        m_creditsTouch.down = true;
+        m_creditsTouch.lastAt = touch.atView;
+        m_creditsTouch.downOnBack = Credits::BackHitRect(m_creditsRules, view, ms).Contains(touch.atView);
+    }
+    // GetTouchMove: how far it went since the last tick, nothing on the tick it went down.
+    double move = 0.0;
+    if (touching) {
+        move = touch.atView.y - m_creditsTouch.lastAt.y;
+        m_creditsTouch.lastAt = touch.atView;
+    }
+    // The state's first tick is where the constructor put the strip; it moves from
+    // the next, a tick's worth each.
+    if (m_menuClock.ticks > 0) {
+        Credits::Step(m_creditsRules, m_credits, view, static_cast<double>(fixedDelta) * 1000.0, touching, move);
+    }
+    const bool inside = touch.over && Credits::BackHitRect(m_creditsRules, view, ms).Contains(touch.atView);
+    m_creditsTouch.backHeld = m_creditsTouch.down && m_creditsTouch.downOnBack && touching && inside;
+    if (!touch.released) return;
+    const bool pressed = m_creditsTouch.down && m_creditsTouch.downOnBack && inside;
+    m_creditsTouch = CreditsTouch{};
+    if (!pressed) return;
+    // getButtonSoundName, and the menu state on the next tick.
+    latch("menu_button");
+    m_pendingMenu.kind = PendingMenu::Kind::Screen;
+    m_pendingMenu.screen = Screen::Main;
+}
+
+void MagicPortalsLayer::dashboardInput(entt::registry& registry) {
+    using Supersonic::Input;
+    // DashboardLayer::update: the back key goes where the back button goes.
+    if (Input::TickWasPressed(kBack) || devPressDue(DevPress::Back)) {
+        m_pendingMenu.kind = PendingMenu::Kind::Screen;
+        m_pendingMenu.screen = Screen::Main;
+        return;
+    }
+    const Touch touch = touchThisTick(registry);
+    Dashboard::Touch input;
+    input.pressed = touch.pressed;
+    input.held = touch.held;
+    input.released = touch.released;
+    input.over = touch.over;
+    input.at = touch.atView;
+    input.wheelNotches = static_cast<double>(Input::TickScroll());
+    const Dashboard::Outcome outcome =
+        Dashboard::Tick(m_dashboardRules, m_dashboardBoard, m_dashboardState, MenuBoxPx(), m_menuClock.ms, input);
+    if (outcome.pick) latch("achievement_pick");
+    // displayLevelLockedNotification's placement is not decoded (spec U2): the
+    // denial is heard, and nothing is drawn for it.
+    if (outcome.denied) latch("achievement_denied");
+    if (outcome.back) {
+        latch("menu_button");
+        m_pendingMenu.kind = PendingMenu::Kind::Screen;
+        m_pendingMenu.screen = Screen::Main;
+        return;
+    }
+    if (outcome.start) {
+        // getStartAchievementSoundName, and openState on the next tick.
+        latch("level_button");
+        m_pendingMenu.kind = PendingMenu::Kind::Achievement;
+        m_pendingMenu.world = outcome.world;
+        m_pendingMenu.level = outcome.level;
+    }
+}
+
+void MagicPortalsLayer::openAchievement(entt::registry& registry, int world, int level) {
+    // openState (bytes 312702..312880): the level, where there is one and it is
+    // open; otherwise the chapter's grid, where the chapter is open.
+    if (world >= 0 && level >= 0) {
+        if (!Locking::LevelUnlocked(m_lockingRules, m_scores, m_chapters, world, level)) return;
+        for (std::size_t i = 0; i < m_chapters.levels.size(); ++i) {
+            const Chapters::Level& entry = m_chapters.levels[i];
+            if (entry.world != world || entry.index != level) continue;
+            unloadMenu(registry);
+            m_screen = Screen::None;
+            loadLevel(registry, static_cast<int>(i));
+            return;
+        }
+        return;
+    }
+    if (world >= 0 && Locking::ChapterUnlocked(m_lockingRules, m_scores, m_chapters, world)) {
+        m_menuWorld = world;
+        m_menuPage = 0;
+        openMenu(registry, Screen::Levels);
+    }
+}
+
+bool MagicPortalsLayer::menuStateUp() const {
+    switch (m_screen) {
+    case Screen::Loading:
+    case Screen::Main:
+    case Screen::Worlds:
+    case Screen::Levels:
+    case Screen::Credits:
+    case Screen::Achievements:
+        return true;
+    case Screen::None:
+    case Screen::Finished:
+    case Screen::Dead:
+        return false;
+    }
+    return false;
+}
+
 const std::string& MagicPortalsLayer::menuPicture(const std::string& file) const {
     static const std::string none;
     const auto found = m_menuPictures.find(file);
@@ -1613,12 +1797,17 @@ bool MagicPortalsLayer::PressMainMenu(entt::registry& registry, MainMenu::Button
         openMenu(registry, Screen::Worlds);
         return true;
     case MainMenu::Button::Credits:
-    case MainMenu::Button::Achievements:
-        // getItemSelectButtonSoundName, which sounds.json maps with the level's
-        // own buttons. The credits screen and the dashboard are ui3 spec sections 3
-        // and 4, not built yet: the press leads nowhere.
+        // PortalMainMenu::loop: the CreditsScreen state (ui3 spec 3), with
+        // getItemSelectButtonSoundName, which sounds.json maps with the level's own
+        // buttons.
         latch("level_button");
-        return false;
+        openMenu(registry, Screen::Credits);
+        return true;
+    case MainMenu::Button::Achievements:
+        // And the ScoreDashboard state (ui3 spec 4), with the same noise.
+        latch("level_button");
+        openMenu(registry, Screen::Achievements);
+        return true;
     case MainMenu::Button::Sound: {
         // GlobalSoundSwitch::manageSoundSwitch, and SoundPanelLayer's music switch
         // dismissed while the sound is off and added afresh when it is back: the
@@ -1653,9 +1842,7 @@ void MagicPortalsLayer::EmitMenu(entt::registry& registry) const {
     auto* const* slot = registry.ctx().find<ScreenOverlay*>();
     if (slot == nullptr || *slot == nullptr) return;
     ScreenOverlay& overlay = **slot;
-    const bool menu = m_screen == Screen::Loading || m_screen == Screen::Main || m_screen == Screen::Worlds ||
-                      m_screen == Screen::Levels;
-    if (!m_hudReady || !menu) return;
+    if (!m_hudReady || !menuStateUp()) return;
     const glm::dvec2 view = MenuBoxPx();
     if (view.x <= 0.0 || view.y <= 0.0) return;
 
@@ -1700,6 +1887,46 @@ void MagicPortalsLayer::EmitMenu(entt::registry& registry) const {
             add(piece.rect, image, glm::vec4(grey, grey, grey, static_cast<float>(piece.alphaByte) / 255.0f));
         }
         // The state's black, drawn after the layer manager: over all of it.
+        add(whole, std::string(), glm::vec4(0.0f, 0.0f, 0.0f, black));
+        return;
+    }
+    if (m_screen == Screen::Credits) {
+        // The background, the back button (UILayer::draw), then the papyrus and the
+        // strip (CreditsScreenLayer::draw), and the state's black over all of it.
+        for (const Credits::Piece& piece :
+             Credits::Pieces(m_creditsRules, view, m_menuClock.ms, m_credits, m_creditsTouch.backHeld)) {
+            const std::string& image = menuPicture(piece.file);
+            if (image.empty()) continue;
+            const float grey = static_cast<float>(piece.rgbByte) / 255.0f;
+            add(piece.rect, image, glm::vec4(grey, grey, grey, static_cast<float>(piece.alphaByte) / 255.0f));
+        }
+        add(whole, std::string(), glm::vec4(0.0f, 0.0f, 0.0f, black));
+        return;
+    }
+    if (m_screen == Screen::Achievements) {
+        // Every picture and word in ScoreDashboard::loop's order (sim/Dashboard.hpp),
+        // then the state's black.
+        for (const Dashboard::Piece& piece : Dashboard::Pieces(m_dashboardRules, m_dashboardBoard, m_dashboardState,
+                                                               view, m_menuClock.ms, m_layerClockMs)) {
+            const glm::vec4 colour(glm::vec3(piece.rgbBytes) / 255.0f, static_cast<float>(piece.alphaByte) / 255.0f);
+            if (piece.kind == Dashboard::Kind::Sprite) {
+                const std::string& image = menuPicture(piece.file);
+                if (!image.empty()) add(piece.rect, image, colour);
+                continue;
+            }
+            const Supersonic::BitmapFont* font = uiFont(piece.file);
+            if (font == nullptr) continue;
+            const auto& pages = font->Pages();
+            // drawCenteredText centres the summed box; DrawText draws from its top-left.
+            const std::vector<Hud::Glyph> glyphs =
+                piece.centred ? Hud::LayOutText(*font, piece.words, piece.at, piece.unitsPerFontPx)
+                              : Hud::LayOutTextFrom(*font, piece.words, piece.at, piece.unitsPerFontPx);
+            for (const Hud::Glyph& glyph : glyphs) {
+                if (glyph.page < 0 || static_cast<std::size_t>(glyph.page) >= pages.size()) continue;
+                add(glyph.rect, pages[static_cast<std::size_t>(glyph.page)], colour, glyph.uvOffset,
+                    glyph.uvOffset + glyph.uvScale);
+            }
+        }
         add(whole, std::string(), glm::vec4(0.0f, 0.0f, 0.0f, black));
         return;
     }
@@ -2536,9 +2763,7 @@ void MagicPortalsLayer::updateHud(entt::registry& registry) {
         if (e != entt::null && registry.valid(e)) registry.get<UITextComponent>(e).text = std::move(text);
     };
     std::string status;
-    const bool menu = m_screen == Screen::Loading || m_screen == Screen::Main || m_screen == Screen::Worlds ||
-                      m_screen == Screen::Levels;
-    if (menu) {
+    if (menuStateUp()) {
         // NO TEXT on a menu state (ui3 spec D7): every picture the original draws
         // there is its own art, and its own fonts where it writes anything.
     } else if (m_current < 0) {
@@ -3478,7 +3703,9 @@ void MagicPortalsLayer::updateMusic(entt::registry& registry) {
     std::string wanted;
     if (!m_soundOn || !m_musicOn) {
         // Either switch off: no music at all.
-    } else if (m_screen == Screen::Main || m_screen == Screen::Worlds || m_screen == Screen::Levels) {
+    } else if (m_screen == Screen::Main || m_screen == Screen::Worlds || m_screen == Screen::Levels ||
+               m_screen == Screen::Credits || m_screen == Screen::Achievements) {
+        // The menu's track goes on under credits and the dashboard, which play none.
         wanted = "menu";
     } else if (m_loaded) {
         // Game.angelscript starts playGameMusic(isBossFight); the port's boss
@@ -3874,6 +4101,15 @@ void MagicPortalsLayer::ScheduleDevTap(int tick, std::optional<glm::dvec2> viewF
     m_devTaps.push_back(tap);
 }
 
+void MagicPortalsLayer::ScheduleDevDrag(int tick, const glm::dvec2& from, const glm::dvec2& to, int releaseTick) {
+    DevTap tap;
+    tap.tick = tick;
+    tap.releaseTick = std::max(releaseTick, tick + 1);
+    tap.viewFraction = from;
+    tap.toFraction = to;
+    m_devTaps.push_back(tap);
+}
+
 MagicPortalsLayer::Touch MagicPortalsLayer::touchThisTick(const entt::registry& registry) {
     using Supersonic::Input;
     Touch touch;
@@ -3886,6 +4122,12 @@ MagicPortalsLayer::Touch MagicPortalsLayer::touchThisTick(const entt::registry& 
             continue;
         }
         glm::dvec2 at = it->viewFraction * view;
+        if (it->toFraction && it->pressed) {
+            // A drag, at an even pace from where it went down to where it is let go.
+            const double span = static_cast<double>(std::max(it->releaseTick - it->pressedTick, 1));
+            const double along = std::clamp(static_cast<double>(m_ticks - it->pressedTick) / span, 0.0, 1.0);
+            at = (it->viewFraction + (*it->toFraction - it->viewFraction) * along) * view;
+        }
         if (it->onHelpBlock) {
             // Only a block the view shows: a player cannot touch one off the
             // screen. A tap with none is dropped, so it does not hold the pointer
@@ -3909,8 +4151,10 @@ MagicPortalsLayer::Touch MagicPortalsLayer::touchThisTick(const entt::registry& 
             touch.pressed = true;
             touch.held = true;
             // Its release is counted from the tick it went down on, which may be
-            // later than the one it asked for.
-            it->releaseTick = std::max(it->releaseTick, m_ticks + 1);
+            // later than the one it asked for; a drag keeps its length.
+            const int late = std::max(m_ticks - it->tick, 0);
+            it->releaseTick = std::max(it->releaseTick + (it->toFraction ? late : 0), m_ticks + 1);
+            it->pressedTick = m_ticks;
             SUPERSONIC_LOG_INFO("Magic Portals") << "DEV tap down on tick " << m_ticks << " at (" << at.x << ", "
                                                  << at.y << ") units" << std::endl;
         } else if (m_ticks < it->releaseTick) {

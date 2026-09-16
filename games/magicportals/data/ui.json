@@ -1828,5 +1828,331 @@
       "track_dots": 12,
       "track_alpha_byte": 40
     }
+  },
+
+  "locking": {
+    "_about": [
+      "WHAT IS OPEN, from the port's save: owner ruling R3 (ui3 spec 8.2), locking as the original.",
+      "Read by sim/Locking.hpp. The dashboard reads it for its locks and for what a tap on a row",
+      "opens (ui3 spec 4.3, A11); chapter select and the level grid are to read the same block (ui3",
+      "spec 5.4, 6.4)."
+    ],
+    "_source": [
+      "DECODED: ScoreManager::computeWorldAccomplishment (bytes 166886..167160): fTOu(float(sum of the",
+      "world's scores) / float(numLevels * 3) * 100), and 0 for a world past the last. isWorldUnlocked",
+      "(bytes 312318..312431): world 0, or computeWorldAccomplishment(world - 1) >= 60.",
+      "isLevelUnlocked (bytes 312431..312702): the world unlocked, and then a level below 1 (a",
+      "chapter's own achievements carry level -1) or getScore(level - 1) > 0. isLevelAllowed limits",
+      "only the free build (GameVersion), which the port is not.",
+      "MEASURED: chapter 2 locked on the fresh and the bronze (33%) saves, every chapter open on the",
+      "gold save (ui3 spec 5.4, chapters_*.png)."
+    ],
+    "medal_max": 3,
+    "chapter_unlock_percent": 60
+  },
+
+  "credits": {
+    "_about": [
+      "THE CREDITS SCREEN, CreditsScreen with CreditsScreenLayer (a BackButtonLayer), opened by the",
+      "main menu's info button. Read by sim/Credits.hpp. Specified in the remake's gitignored",
+      "out/parity/specs/ui3/spec.md section 3 (evidence: static.md 2 and motion.md 6 beside it;",
+      "stills info.png and info_b.png; recording rec/info_gold.mp4).",
+      "",
+      "DRAWN THROUGH THE SCREEN OVERLAY in display values, as the main menu is, with the state's",
+      "black (menu_state.fade) last. Placed by fractions of the screen as main_menu is; a size is the",
+      "sprite's 1x texel size in units, and the hd twin is drawn where there is one.",
+      "",
+      "PORT DECISIONS (ui3 spec 8.1, each taken as recommended): P1, the fling's x0.95 once per 60 Hz",
+      "tick; P2, the scroll at the 720p speed in units at every resolution.",
+      "OWNER RULING (ui3 spec 9): the Facebook button at (0, 0) is omitted."
+    ],
+    "background": {
+      "_source": [
+        "DECODED: CreditsScreen::preLoop (bytes 179867..180187, instructions 27..55) adds menu_bg.ent",
+        "at GetScreenSize() * 0.5 with AddScaledEntity(getScale), as the main menu does (main_menu",
+        "background), then calls SetAlpha(0.5) on it (instructions 56..67).",
+        "MEASURED: the main menu's own outside the papyrus, gain 1.000, mean abs diff 0.00 (ui3 spec 3.1",
+        "C0): the SetAlpha has no visible effect, so it is drawn whole (spec U7)."
+      ],
+      "sprite": "entities/main_menu_bg.png",
+      "size_units": [512, 256],
+      "centre_of_screen": [0.5, 0.5]
+    },
+    "back_button": {
+      "_source": [
+        "DECODED: BackButtonLayer::BackButtonLayer (bytes 74915..75045) calls addBackButton((0.05,",
+        "0.5)), and addBackButton (bytes 75842..75969) adds 'back', sprites/back_button_credits_screen.png,",
+        "with the position as its origin too: inset from the edge by 0.05 of its own width.",
+        "CreditsScreenLayer::CreditsScreenLayer (bytes 180336..180878, instructions 88..105) calls",
+        "setCreditButtonBounceEffect(back, 0.03) (bytes 366348..366560): setBounce(vector2(1 - 0.03),",
+        "vector2(1 + 0.03), 300), pushed 300, max, min, so scale_a is the smaller; and gives it",
+        "getButtonSoundName. CreditsScreenLayer::update (bytes 181111..181697) sets the menu state when",
+        "BackButtonLayer::isBackButtonPressed (bytes 75969..76097): the button, or GetKeyState(14) hit,",
+        "the device back key.",
+        "MEASURED: TL (55.5, 269) / (55.25, 269) px at S 1.4213 mid-bounce, Pearson 0.994 / 0.998; a",
+        "uniform bounce 0.974..1.022, stride 0.300 s (ui3 spec 3.1 C1, 0.7 I7)."
+      ],
+      "sprite": "back_button_credits_screen.png",
+      "at_screen": [0.05, 0.5],
+      "origin": [0.05, 0.5],
+      "size_units": [64, 64],
+      "bounce": {
+        "scale_a": [0.97, 0.97],
+        "scale_b": [1.03, 1.03],
+        "stride_ms": 300
+      }
+    },
+    "papyrus": {
+      "_source": [
+        "DECODED: CreditsScreenLayer::CreditsScreenLayer (instructions 12..33) sets credits =",
+        "(GetScreenSize().x * 0.382 * 0.618, GetScreenSize().y); CreditsScreenLayer::draw (bytes",
+        "181697..181994, instructions 6..40) draws sprites/papyrus_bg.png at (credits.x, 0) with",
+        "getScale and origin V2_ZERO, after UILayer::draw. The file is 1x only, 256x256 texels.",
+        "MEASURED: TL (302.18, 0) px at 2.8125 px a texel, Pearson 0.9964 / 0.9967 (ui3 spec 3.1 C2)."
+      ],
+      "sprite": "papyrus_bg.png",
+      "x_of_width": [0.382, 0.618],
+      "size_units": [256, 256]
+    },
+    "strip": {
+      "_source": [
+        "DECODED: CreditsScreenLayer::draw (instructions 42..79) draws sprites/credit_name.png at",
+        "`credits` with getScale, origin V2_ZERO and ARGB(230, 255, 255, 255), after the papyrus. The",
+        "constructor (instructions 35..68) keeps minCreditPosY = -its height (256x512 texels at 1x: 512",
+        "units) and starts y at GetScreenSize().y. CreditsScreenLayer::update: while a touch is down",
+        "(touch state 1 or 2) y += GetTouchMove(0).y and moveSpeedY = that move; otherwise moveSpeedY",
+        "*= 0.95 and y -= UnitsPerSecond(64) - moveSpeedY, UnitsPerSecond being SCREEN pixels a second",
+        "of frame time, unscaled. Then y < minCreditPosY wraps to the screen's height, and y > the",
+        "screen's height to minCreditPosY. It loops for ever.",
+        "MEASURED: x exact, y 501.25 / 287.25 px on the two stills, best alpha 0.90 (230/255 = 0.902);",
+        "63.07..63.31 px/s over three passes and a 34.26 s loop of 2161.6 px (720 + 1440) on the",
+        "emulator's ~1.2% slow clock (ui3 spec 3.1 C3, 3.2).",
+        "PORT DECISION P2: 64 px/s is 22.76 units/s only on a 720 px screen, so the port scrolls",
+        "speed_screen_px_per_s / (speed_at_screen_px / 256) units a second at every resolution: 64 /",
+        "2.8125 = 22.7556, 768 units in 33.75 s. P1: the fling's decay is a tick's."
+      ],
+      "sprite": "credit_name.png",
+      "size_units": [256, 512],
+      "alpha_byte": 230,
+      "speed_screen_px_per_s": 64,
+      "speed_at_screen_px": 720,
+      "fling_decay_per_tick": 0.95
+    }
+  },
+
+  "dashboard": {
+    "_about": [
+      "THE ACHIEVEMENTS DASHBOARD, ScoreDashboard with DashboardLayer, opened by the main menu's",
+      "Achievements button; not the pause's AchievementsPopup (ui3 spec 4, ui2 U10). Read by",
+      "sim/Dashboard.hpp. Specified in the remake's gitignored out/parity/specs/ui3/spec.md section 4",
+      "(evidence: static.md 3 and motion.md 7 beside it; still achievements.png; recording",
+      "rec/achievements_gold.mp4).",
+      "",
+      "THE ROWS' CONTENT IS NOT HERE. The 82 achievements' titles, descriptions, icons and points,",
+      "the secret achievement's words and the ids a save unlocks are Asantee-authored, and live in",
+      "the remake's gitignored out/data/achievements.json (its tools/asbc/achievements.py), read at",
+      "run time beside chapters.json (sim/Achievements.hpp). Without that file the dashboard draws",
+      "all of this but the rows, and a total of 0.",
+      "",
+      "DRAWN THROUGH THE SCREEN OVERLAY in display values, with the state's black last.",
+      "",
+      "PORT DECISIONS (ui3 spec 8.1, each taken as recommended): P1, the momentum and both bands once",
+      "per 60 Hz tick; P3, the scroll bar from_right_units from the right edge at every resolution."
+    ],
+    "background": {
+      "_source": [
+        "DECODED: ScoreDashboard::preLoop (bytes 235636..236258, instructions 40..67) adds",
+        "world_select_bg.ent at GetScreenSize() * 0.5 with AddScaledEntity(getScale): 512 x 256",
+        "units, centred. The check-in button of GameVersion::useCheckinFeature (instructions 69..135)",
+        "is in none of the full game's captures.",
+        "MEASURED: TL (-80, 0) px, template rms 2.49 grey, 29.8 uncentred (ui3 spec 4.2 A0)."
+      ],
+      "sprite": "entities/world_select_bg.png",
+      "size_units": [512, 256],
+      "centre_of_screen": [0.5, 0.5]
+    },
+    "back_button": {
+      "_source": [
+        "DECODED: DashboardLayer::DashboardLayer (bytes 242229..242414) is a BackButtonLayer at",
+        "(-0.025, 0.5), which addBackButton takes as the origin too, with getButtonSoundName and no",
+        "effect. DashboardLayer::update (bytes 242647..242787) sets the menu state when",
+        "isBackButtonPressed, or GetKeyState(14) is hit.",
+        "MEASURED: TL (-27.5, 270) px, Pearson 0.9993; its scale constant (ui3 spec 4.2 A1, 0.7 I8)."
+      ],
+      "sprite": "back_button_credits_screen.png",
+      "at_screen": [-0.025, 0.5],
+      "origin": [-0.025, 0.5],
+      "size_units": [64, 64]
+    },
+    "rows": {
+      "_source": [
+        "DECODED: ScoreDashboard::ScoreDashboard (bytes 235040..235272) sets m_tileSize 44.",
+        "ScoreDashboard::loop (bytes 236258..240066): spriteSize = scale(44, 44); lineOffset =",
+        "spriteSize.y * 1.333; columnAdvance = scale(44 * 1.4); the cursor starts at (columnAdvance, 0),",
+        "each row is drawn at cursor + (0, m_scroll) and the cursor steps lineOffset a row; itemBgSize =",
+        "(min(lineOffset * 4, GetScreenSize().x - columnAdvance * 2), lineOffset). Where an",
+        "achievement's world is not the last one's, a header row comes first (instructions 99..178). A",
+        "row is drawn only where isRectInScreen(pos, (spriteSize.x, lineOffset), V2_ZERO) (bytes",
+        "319089..319410: out when pos + size < 0, or pos > the screen, on either axis). Each row: the",
+        "icon sprites/achievements/<getIconSprite> at pos and spriteSize, ARGB(64, 255, 255, 255) while",
+        "locked (instructions 207..277); sprites/lock_icon.png over it when the achievement is locked",
+        "and isLevelUnlocked(world, level) is not (279..325); sprites/itembg.png at pos + (spriteSize.x,",
+        "0) and itemBgSize, ARGB(180, ...) while locked (327..381); the texts (383..610) at ARGB(127,",
+        "...) while locked, the points in the icon's colour. A tap on it is",
+        "TouchInputManager::hasClickInRect(pos, itemBgSize + (spriteSize.x, 0), V2_ZERO) (bytes",
+        "160369..160919): a release inside, whose touch went down inside.",
+        "MEASURED: rows 1-3's icons TL (173.25, 164.96 k) px, Pearson 0.9992..0.9995; bars TL (297,",
+        "164.96 k), 659.8 x 164.96 px, 0.9983 (ui3 spec 4.1, 4.2 A5 and A6, 4.3)."
+      ],
+      "tile_units": 44,
+      "line_factor": 1.333,
+      "column_factor": 1.4,
+      "bar_lines": 4,
+      "icon_directory": "sprites/achievements/",
+      "bar_sprite": "itembg.png",
+      "lock_sprite": "lock_icon.png",
+      "locked_icon_alpha_byte": 64,
+      "locked_bar_alpha_byte": 180,
+      "locked_text_alpha_byte": 127,
+      "locked_points_alpha_byte": 64
+    },
+    "header": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 108..168): drawCenteredText('Chapter ' + (world +",
+        "1)) in getMatura42HardFontName(), Matura84_shadow.fnt on an hd screen (ui3 spec 0.6), at pos +",
+        "scale(132, 32), scale(1 / getHdSpriteDensity()): half a unit a font px, white.",
+        "MEASURED: centre (544.5, 89.0) px on row 0, rms 6.6 against Matura128's 20.8 (ui3 spec 4.2 A4)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "units_per_font_px": 0.5,
+      "prefix": "Chapter ",
+      "centre_units": [132, 32]
+    },
+    "title": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 478..510): DrawText(getTitle(isUnlocked), bgPos +",
+        "scale(9, 8)) in getVerdana20FontName(), Verdana40_shadow.fnt on hd, textColor, textScale *",
+        "0.75: 0.375 units a font px, from the top-left.",
+        "MEASURED: S 1.0547 px a font px, TL (322.3, 187.5) px on row 1, less 0.5; rms 10.6..11.8",
+        "against Verdana20's 35.5 (ui3 spec 4.2 A7)."
+      ],
+      "font": "Verdana40_shadow.fnt",
+      "units_per_font_px": 0.375,
+      "offset_units": [9, 8]
+    },
+    "description": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 516..548): DrawText(getDescription(isUnlocked),",
+        "bgPos + scale(13, 24)), Verdana40_shadow.fnt, textColor, textScale * 0.6: 0.3 units a font px.",
+        "MEASURED: S 0.8438, TL (333.6, 232.5) px on row 1, less 0.5 (ui3 spec 4.2 A8)."
+      ],
+      "font": "Verdana40_shadow.fnt",
+      "units_per_font_px": 0.3,
+      "offset_units": [13, 24]
+    },
+    "points": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 554..610): drawCenteredText('' + points, pos +",
+        "scale(m_tileSize * 0.5, 50)), Verdana40_shadow.fnt, textScale * 0.6, iconColor.",
+        "MEASURED: centre (234.6, 305.1) px on row 1, decoded (235.1, 305.6) (ui3 spec 4.2 A9)."
+      ],
+      "font": "Verdana40_shadow.fnt",
+      "units_per_font_px": 0.3,
+      "centre_units": [22, 50]
+    },
+    "new_label": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 394..454): for an achievement whose isNew is set,",
+        "DrawText('new!', bgPos + scale(182, 6)), Verdana40_shadow.fnt, ARGB(iTOb(max(127, GetTime() %",
+        "255)), 100, 255, 100), textScale * 0.6. GetTime is the wall clock in milliseconds; the port",
+        "reads the layer's own tick clock, as the title's bob does (main_menu.title).",
+        "Not captured (ui3 spec 4.2 A10, U2)."
+      ],
+      "font": "Verdana40_shadow.fnt",
+      "units_per_font_px": 0.3,
+      "offset_units": [182, 6],
+      "text": "new!",
+      "rgb_bytes": [100, 255, 100],
+      "alpha_floor_byte": 127,
+      "alpha_period_ms": 255
+    },
+    "plaque": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 815..837): drawScaledSprite(",
+        "'sprites/achievement_points.png', V2_ZERO, getScale): 64 x 64 units at the top-left, after the",
+        "rows. The word 'points' is in the sprite.",
+        "MEASURED: TL (0, 0) exact, Pearson 0.9994 (ui3 spec 4.2 A2)."
+      ],
+      "sprite": "achievement_points.png",
+      "at_units": [0, 0],
+      "size_units": [64, 64]
+    },
+    "total": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 839..897): drawCenteredText('' +",
+        "AchievementManager::getScore()) in Matura84_shadow.fnt at scale(32, 32), half a unit a font px,",
+        "white: the points of every unlocked achievement (computeAchievementPoints, bytes",
+        "248007..248216).",
+        "MEASURED: centre (89.5, 89.0) px reading 325 on the gold save, rms 8.1 against Matura128's 20.8",
+        "(ui3 spec 4.2 A3)."
+      ],
+      "font": "Matura84_shadow.fnt",
+      "units_per_font_px": 0.5,
+      "centre_units": [32, 32]
+    },
+    "scroll": {
+      "_source": [
+        "DECODED: ScoreDashboard::doScrolling (bytes 240601..241425), the loop's first call: stride =",
+        "scale(lineOffset) * (getNumAchievements + getNumWorlds) and minScroll = GetScreenSize().y -",
+        "stride. While a touch is down, or the wheel has turned, move = GetTouchMove(t).y +",
+        "scale(GetWheelState()) * 10; m_scroll += move; m_accumulatedScroll += move; m_moveSpeedY = move.",
+        "Otherwise, in this order: m_moveSpeedY *= 0.9; m_scroll += m_moveSpeedY; then m_scroll > 0 is",
+        "m_scroll *= 0.7, or else m_scroll < minScroll is m_scroll += |m_scroll - minScroll| * 0.3.",
+        "MEASURED: a glide's free per-frame factor 0.899 (rms 2.0 px), 781.8 px against 792.1 decoded; a",
+        "fling past the top follows the momentum and the x0.7 band to rms 0.33 px, overshoot 121.6 px",
+        "against 121.5 (ui3 spec 4.4). The bottom band was not exercised. PORT DECISION P1: a tick's."
+      ],
+      "momentum_decay_per_tick": 0.9,
+      "top_band_per_tick": 0.7,
+      "bottom_band_per_tick": 0.3,
+      "wheel_units_per_notch": 10
+    },
+    "scroll_bar": {
+      "_source": [
+        "DECODED: ScoreDashboard::drawScrollBar (bytes 240153..240601), called at the end of",
+        "doScrolling, so under the rows: barSize = scale(vector2(32, 256) * 0.25), 8 x 64 units of the",
+        "1x-only 32x256 file; x = GetScreenSize().x - scale(barSize.x / 3); y = (-m_scroll / (stride -",
+        "GetScreenSize().y)) * (GetScreenSize().y - barSize.y); ARGB(200, 255, 255, 255). barSize.x is",
+        "in pixels already there and is scaled again, so the inset is the screen's: 7.5 units at 720p.",
+        "MEASURED: TL (1258.91, 0) px at 0.703 px a texel, alpha 0.784, rms 2.62 against 62.2 with no bar",
+        "(ui3 spec 4.2 A12). PORT DECISION P3: 7.5 units from the right at every resolution."
+      ],
+      "sprite": "scroll_bar.png",
+      "size_units": [8, 64],
+      "from_right_units": 7.5,
+      "alpha_byte": 200
+    },
+    "start_button": {
+      "_source": [
+        "DECODED: ScoreDashboard::loop (instructions 612..796): a tap on a row whose level",
+        "isLevelUnlocked, and not the row tapped last, plays playAchievementPickSound, removes 'start'",
+        "and adds it again: sprites/popup_close_button.png at (bgPos + scale(174, -2)) / the screen,",
+        "origin V2_ZERO, with getStartAchievementSoundName. So it enters as a UIButton, and stays where",
+        "it was added while the list moves. A tap on a locked level's row plays",
+        "playAchievementPickDeniedSound and ScoreDashboard::displayLevelLockedNotification (bytes",
+        "241425..241713), whose placement is not decoded. Either records the row's world and level.",
+        "Then (instructions 899..921), once |m_accumulatedScroll| > scale(6), it is zeroed, the last row",
+        "forgotten and 'start' dismissed (dismissStartButton, bytes 242132..242222).",
+        "ScoreDashboard::updateButtons (bytes 241713..242132): 'start' pressed is openState(world, level)",
+        "(bytes 312702..312880): that level where both are 0 or more and it is unlocked, or else that",
+        "chapter's grid where the chapter is.",
+        "Not captured (ui3 spec 4.2 A13, 4.3, U2)."
+      ],
+      "sprite": "popup_close_button.png",
+      "size_units": [64, 64],
+      "offset_units": [174, -2],
+      "origin": [0, 0],
+      "dismiss_after_units": 6
+    }
   }
 }
