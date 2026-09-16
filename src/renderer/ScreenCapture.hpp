@@ -18,9 +18,12 @@ namespace Supersonic {
 //
 // Deliberately slow and simple. It waits for the device to go idle, copies the
 // whole image through a host-visible staging buffer, and writes the file
-// synchronously. This runs once at the end of a --frames run, not per frame, so
-// none of that matters; doing it properly with a fence and a ring buffer would
-// be machinery in service of a path nothing takes twice.
+// synchronously. This runs at the end of a --frames run, and with
+// --screenshot-every once every N frames - only ever because a command line
+// asked for pictures, so the stall is paid by capture runs, whose wall-clock
+// nobody reads (their profiler worst cases are the readback, not the game).
+// Doing it properly with a fence and a ring buffer would be machinery in
+// service of that.
 namespace ScreenCapture {
 
 // Writes `image` to `path` as a PNG. The image must have been created with

@@ -6,6 +6,7 @@
 // added the window size, and was fixed in only one of the two headers.
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace Supersonic {
 
@@ -28,6 +29,20 @@ struct LaunchOptions {
     // Empty means no capture. Written after the last frame, so it pairs with
     // --frames: the point is a picture CI can compare, not a live viewfinder.
     std::string screenshotPath;
+
+    // --screenshot-every N: also write every Nth rendered frame, beside
+    // screenshotPath and named by ScreenshotPathForFrame. Zero means the flag
+    // was not given.
+    //
+    // It exists because a check of anything that MOVES - a walk cycle, a
+    // flicker, a patrol - wants several frames of one run, and each extra
+    // frame otherwise costs a whole process launch that loads everything
+    // again to reach a frame the previous launch had already drawn.
+    //
+    // It rides on screenshotPath rather than taking a pattern of its own so
+    // the last frame is still written exactly where it always was: a script
+    // that compares that file keeps working with the flag added.
+    int screenshotEvery = 0;
 
     // Feed the simulation a constant delta instead of the measured one.
     //
@@ -89,6 +104,27 @@ struct LaunchOptions {
     // exits non-zero, and a test can assert on the message.
     bool ok = true;
     std::string error;
+
+    // What was accepted but is probably not what was meant. Carried like the
+    // error rather than printed by Parse, so a suite can assert on it and the
+    // one SupersonicApp every game constructs logs it - rather than each of
+    // the four mains remembering to.
+    std::vector<std::string> warnings;
+
+    // Whether --screenshot-every asks for a capture after `renderedFrames`
+    // frames have been drawn. Never at zero: nothing has been drawn yet, and
+    // 0 % N would otherwise ask for a picture of no frame.
+    //
+    // Here rather than inside the frame loop because SupersonicApp needs a
+    // device and a window before it exists, so no suite could reach a rule
+    // written there.
+    bool CapturesFrame(long long renderedFrames) const;
+
+    // Where that capture goes: screenshotPath with "_f<frame>" before its
+    // extension, so shots/run.png at frame 30 is shots/run_f30.png. The frame
+    // is not zero-padded, matching the _f420 names captures are already
+    // filed under.
+    std::string ScreenshotPathForFrame(long long renderedFrames) const;
 
     static LaunchOptions Parse(int argc, const char* const* argv);
     static const char* Usage();

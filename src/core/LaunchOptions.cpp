@@ -5,15 +5,35 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 
 namespace Supersonic {
+
+bool LaunchOptions::CapturesFrame(long long renderedFrames) const {
+    return screenshotEvery > 0 && !screenshotPath.empty() && renderedFrames > 0 &&
+           renderedFrames % screenshotEvery == 0;
+}
+
+std::string LaunchOptions::ScreenshotPathForFrame(long long renderedFrames) const {
+    // std::filesystem for the split rather than the last '.', which would take
+    // "captures.v2/run" apart at the directory. replace_filename keeps the
+    // separator the caller typed, so the log names the file as it was asked for.
+    std::filesystem::path path(screenshotPath);
+    const std::string stamped = path.stem().string() + "_f" + std::to_string(renderedFrames) +
+                                path.extension().string();
+    path.replace_filename(stamped);
+    return path.string();
+}
 
 const char* LaunchOptions::Usage() {
     return "Usage: SupersonicEngine [options]\n"
            "  --frames <n>    render exactly n frames, then exit (0 = until closed)\n"
            "  --scene <path>  load this scene instead of the manifest's startup scene\n"
            "  --screenshot <path>  write a PNG of the last frame and exit\n"
+           "  --screenshot-every <n>  with --screenshot, also write every nth frame\n"
+           "                    as <path-stem>_f<frame><ext>; pair it with\n"
+           "                    --fixed-step, or the frames are wall-clock apart\n"
            "  --fixed-step [s]  simulate at a constant delta (default 1/60) so a\n"
            "                    run reproduces exactly; without it the simulation\n"
                     "                    follows the real clock\n"
@@ -113,6 +133,24 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
         } else if (arg == "--screenshot") {
             if (!value(options.screenshotPath)) return fail("--screenshot needs a path");
             if (options.screenshotPath.empty()) return fail("--screenshot needs a path");
+        } else if (arg == "--screenshot-every") {
+            std::string raw;
+            if (!value(raw)) return fail("--screenshot-every needs a frame count");
+
+            // Whole, as --frames is, so "30f" is not quietly read as 30.
+            char* end = nullptr;
+            const long parsed = std::strtol(raw.c_str(), &end, 10);
+            if (end == raw.c_str() || (end && *end != '\0')) {
+                return fail("--screenshot-every wants a whole number, got '" + raw + "'");
+            }
+            // Refused rather than read as "never": zero is what a script
+            // computing N from a run length produces by accident, and a flag
+            // that then wrote nothing would look like a broken capture.
+            if (parsed < 1) {
+                return fail("--screenshot-every wants a count of at least 1, got '" + raw + "'");
+            }
+            if (parsed > 1000000) return fail("--screenshot-every is implausibly large: " + raw);
+            options.screenshotEvery = static_cast<int>(parsed);
         } else if (arg == "--fixed-step") {
             // The seconds are optional, so the common case is just the flag.
             // Peeked rather than consumed: the next argument may be another
@@ -159,6 +197,25 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
     if (!options.recordPath.empty() && !options.replayPath.empty()) {
         return fail("--record and --replay cannot both be given: a run cannot "
                     "record the input it is being fed");
+    }
+
+    // After the loop for the same reason: --screenshot may come after it.
+    // Refused, not ignored, because the stamped names are derived from that
+    // path and there is nothing sensible to invent in its place.
+    if (options.screenshotEvery > 0 && options.screenshotPath.empty()) {
+        return fail("--screenshot-every needs --screenshot <path>: the frames it "
+                    "writes are named after that path");
+    }
+
+    // A warning rather than a refusal: frames N apart on the real clock are
+    // still pictures, just not ones that reproduce, and an interactive look at
+    // a run is a fair use. What it must not do is pass silently for a
+    // measurement, since frame N is then not N/60 s of game time.
+    if (options.screenshotEvery > 0 && options.fixedDelta <= 0.0f) {
+        options.warnings.push_back(
+            "--screenshot-every without --fixed-step: the simulation follows the real "
+            "clock, so the frames are not a fixed game time apart and will not "
+            "reproduce from one run to the next");
     }
 
     return options;

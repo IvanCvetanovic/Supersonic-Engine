@@ -108,6 +108,13 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     : m_options(options) {
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Initializing Engine Subsystems..." << std::endl;
 
+    // What the command line accepted but probably did not mean. Said here, the
+    // one place every game and the editor pass through, and first, so it is
+    // not buried under a device's worth of initialisation lines.
+    for (const std::string& warning : m_options.warnings) {
+        SUPERSONIC_LOG_WARN("LaunchOptions") << warning;
+    }
+
     // Asset writes target these; create them before anything tries to save.
     std::error_code ec;
     std::filesystem::create_directories("assets/scenes", ec);
@@ -977,6 +984,18 @@ void SupersonicApp::Run() {
             statsSamples.push_back(m_renderer->GetRenderStats());
         }
 
+        // --screenshot-every, at the top of the loop where `frame` is the count
+        // already drawn and the presented image is that frame's. BEFORE the exit
+        // test, which breaks: after it, the last multiple of N would never be
+        // written, and 420 frames at N = 30 would leave 13 files rather than 14.
+        //
+        // The readback stalls the queue each time. The simulation does not see
+        // it - under --fixed-step the delta is a constant - but the profiler's
+        // worst frames and wall time in such a run are not the game's.
+        if (m_options.CapturesFrame(frame)) {
+            writeScreenshot(m_options.ScreenshotPathForFrame(frame));
+        }
+
         if (m_options.maxFrames > 0 && frame >= m_options.maxFrames) {
             SUPERSONIC_LOG_INFO("SupersonicApp") << "Rendered " << frame
                       << " frame(s) as requested; exiting." << std::endl;
@@ -985,20 +1004,7 @@ void SupersonicApp::Run() {
             // the PNG is the frame that was actually presented rather than
             // whatever survives shutdown.
             if (!m_options.screenshotPath.empty()) {
-                std::string error;
-                const auto& offscreen = m_editorLayer->GetOffscreen();
-                const bool ok = ScreenCapture::WritePng(
-                    *m_vulkanDevice, m_renderer->GetCommandPool(),
-                    offscreen.GetPresentedImage(),
-                    offscreen.GetWidth(), offscreen.GetHeight(),
-                    m_options.screenshotPath, error);
-                if (ok) {
-                    SUPERSONIC_LOG_INFO("SupersonicApp")
-                        << "Wrote " << m_options.screenshotPath << " ("
-                        << offscreen.GetWidth() << "x" << offscreen.GetHeight() << ").";
-                } else {
-                    SUPERSONIC_LOG_ERROR("SupersonicApp") << "Screenshot failed: " << error;
-                }
+                writeScreenshot(m_options.screenshotPath);
             }
 
             // Report where the frames went. Without this the profiler is
@@ -1770,6 +1776,23 @@ void SupersonicApp::Run() {
     SUPERSONIC_LOG_INFO("SupersonicApp") << "Window close requested. Waiting for GPU idle..." << std::endl;
     if (m_vulkanDevice && m_vulkanDevice->GetDevice()) {
         m_vulkanDevice->GetDevice().waitIdle();
+    }
+}
+
+void SupersonicApp::writeScreenshot(const std::string& path) {
+    std::string error;
+    const auto& offscreen = m_editorLayer->GetOffscreen();
+    const bool ok = ScreenCapture::WritePng(
+        *m_vulkanDevice, m_renderer->GetCommandPool(),
+        offscreen.GetPresentedImage(),
+        offscreen.GetWidth(), offscreen.GetHeight(),
+        path, error);
+    if (ok) {
+        SUPERSONIC_LOG_INFO("SupersonicApp")
+            << "Wrote " << path << " ("
+            << offscreen.GetWidth() << "x" << offscreen.GetHeight() << ").";
+    } else {
+        SUPERSONIC_LOG_ERROR("SupersonicApp") << "Screenshot " << path << " failed: " << error;
     }
 }
 

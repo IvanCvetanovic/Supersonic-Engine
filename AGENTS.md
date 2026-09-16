@@ -119,6 +119,30 @@ viewport shows, already tone-mapped and encoded - so a rendering change can be
 looked at rather than only reasoned about.
 
 ```bash
+# Every 30th frame of one reproducible run: shot_f30.png ... shot_f420.png,
+# fourteen files, and the last frame still written to shot.png itself.
+./build/Debug/SupersonicEngine.exe --frames 420 --fixed-step     --scene assets/scenes/MainScene.scene --screenshot shot.png --screenshot-every 30
+```
+
+`--screenshot-every <N>` is for checking anything that moves. Each extra frame
+used to cost a whole launch that loads everything again to reach a frame the
+last launch had already drawn; one run now writes them all.
+
+- The stamped name is the path's stem, `_f<frame>`, then its extension; the
+  frame is the count of frames drawn, not zero-padded.
+- `<path>` is still written at the end of a `--frames` run, read back from
+  the same presented image as the last stamped frame in the same loop
+  iteration, so the two are byte-identical and a script comparing `<path>`
+  keeps working.
+- Refused, with a non-zero exit, without `--screenshot` or with N below 1.
+- It does not need `--frames`, and without it keeps writing every N frames
+  until the window closes - pass `--frames` unless that is what you want.
+- Without `--fixed-step` it runs but logs a warning: frame N is then not a
+  fixed game time, and the frames will not reproduce.
+- Every capture stalls the queue, so the profiler's worst frames and the wall
+  time of such a run are the readback's, not the scene's.
+
+```bash
 # Open at a chosen size. In game mode this is the render resolution too.
 ./build/Debug/SupersonicEngine.exe --frames 300 --window 1920x1080
 ```

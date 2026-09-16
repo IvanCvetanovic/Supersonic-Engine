@@ -8562,3 +8562,74 @@ test_mp_lighting (495) were run directly.
 frame by frame, the arrows' entrance, the swipe paths. The denial path of a locked tile is omitted with
 the store (ruling). Silver chapter medals are not captured (U3). The dot of the page counter fits worse
 than the digit (U4).
+
+## Step 57 - several frames of one capture run, and the last one still where it was (built)
+
+The visuals plan's Step 0 (the remake's `out/parity/specs/visuals/plan_port.md`, section 3), which it puts
+before every temporal gate: the walk (3a), the patrol (5a), the effects (7b/7c), the flicker (8a) and the
+sway (10a) each want several frames of one run, and until now each frame cost a launch that loaded the level
+again to reach a frame the last launch had already drawn. Engine-only: no file under `games/magicportals`
+changes, and every game's main already hands unknown flags to `LaunchOptions`.
+
+**WHAT CHANGED.**
+- **`LaunchOptions`: `--screenshot-every <N>`**, `screenshotEvery` (0 = not given).
+  - Refused (non-zero exit) without `--screenshot`, checked after the loop so the order the two are typed
+    in does not matter, and for N below 1, a suffix or more than 1,000,000, as `--frames` is.
+  - Without `--fixed-step` it is accepted with a warning in the new `warnings`: frame N is then not N/60 s
+    of game time. The plan left refuse-or-warn open; warn, because real-clock frames are still pictures.
+  - `CapturesFrame(frames)`: N > 0, a path, frames > 0 and a multiple of N.
+    `ScreenshotPathForFrame(frames)`: the stem, `_f<frame>` unpadded, the extension, by
+    `std::filesystem` so a dot in a directory is not an extension and the typed separator stays.
+- **`SupersonicApp::Run`**: the stamped capture at the top of the loop, where `frame` is the count already
+  drawn, and BEFORE the `--frames` exit test, which breaks (after it, frame 420 at N = 30 would be lost and
+  13 files written). `writeScreenshot(path)` is now the one function both read back through, and on the last frame both
+  read the same presented image in the same loop iteration, so the last stamped frame and
+  `--screenshot`'s file are the same bytes. The constructor logs the parse warnings, so all four mains
+  (engine, Magic Portals, Wolf Brigade, HUSK) get them without an edit.
+- **Docs:** `Usage()`; AGENTS.md "Running without a person watching"; README Shipped; ARCHITECTURE 8c
+  beside `--fixed-step`; `ScreenCapture.hpp`, whose "runs once, not per frame" was no longer true.
+
+**GATES** (1280x720, `--fixed-step`; the remake's `out/parity/visuals/step0/`, `capture.sh`).
+- **`level0 --frames 420 --screenshot X --screenshot-every 30` writes 14 stamped files plus X: passes.**
+  `_f30`, `_f60` ... `_f420`, exit 0, validation active and silent.
+- **Its `_f420` is byte-identical to X, to a plain `--frames 420 --screenshot` run and to the lighting
+  baseline `work/g6/final/1-01_level0_f420.png`: passes** (all four md5 59c8b12a...).
+- **Mid-run readbacks do not perturb the run:** its `_f270`, `_f300`, `_f330`, `_f360` and `_f390` are
+  byte-identical to g6's five separate launches stopped at those frames (5 of 5).
+- **Refusals:** no `--screenshot`: exit 1, "--screenshot-every needs --screenshot <path>..."; N = 0: exit 1,
+  "wants a count of at least 1, got '0'"; neither writes a file.
+- **Warning:** `--frames 30 --screenshot-every 10` without `--fixed-step`: exit 0, the warning is line 3 of
+  the log, `_f10`, `_f20`, `_f30` and X written.
+- **MainScene and Wolf Brigade unaffected:** plain frame-120 captures byte-identical to g6's. MainScene with
+  `--screenshot-every 60` writes `_f60` and `_f120`, and `_f120` and X equal the plain capture.
+- **Cost:** the 420-frame run took 10.9 s against 7.9 s plain, about 0.2 s a capture (the readback and PNG
+  write); the same 14 frames as launches would take about 14 x 7.9 = 110 s. The profiler's worst frames in
+  such a run are the readback's.
+
+**Tests.** test_launchoptions 93 -> 138: read and not given; refused without `--screenshot` in either order;
+0, -1, -30, "soon", "30f", "", "1.5", 1000001 and a bare flag refused, 1 accepted; the warning without the
+step, none with it given after the flag, none for plain `--screenshot`; 420 frames at N = 30 capture exactly
+14 (first 30, last 420, never frame 0), none without the flag or without a path; the names (`shots/run.png`
+-> `shots/run_f30.png`, `captures.v2/run` -> `captures.v2/run_f60`, `a/run.tar.png` -> `a/run.tar_f90.png`,
+a backslash path on Windows). **Build: no warnings** (MSVC 14.50; the three changed first-party files recompiled
+alone at /W4 give none, ScreenCapture.cpp builds at /W0 as stb's host; GCC was not run). **ctest:** **93 of 119 pass, none fail, 26 not run**: Smart App Control
+refused test_sat, test_raycast, test_convexhull, test_decomposition, test_draworder, test_nav, test_sprite,
+test_uilayer, test_wb_gestures, test_wb_audio, test_wb_selection, test_husk_foundation, test_mp_tscn,
+test_mp_turrets, test_mp_minions, test_mp_darkdragon, test_mp_launchers, test_mp_popup, test_mp_frontdoor,
+test_environmentmap, test_spotlight, test_replay, test_mixer, test_undo, test_audio and test_hierarchy
+(every exe relinked, since the change is in the core library). They were not relinked and run again: each
+refusal is a notification on the owner's screen, and none of them calls the parser or the capture.
+test_launchoptions was also run directly.
+
+**Left open.**
+- **Without `--frames` the flag is unbounded**, for the owner to decide: `CapturesFrame` does not read
+  `maxFrames`, so an interactive run writes a PNG and stalls the queue every N frames until the window
+  closes, where plain `--screenshot` writes nothing without `--frames`. Not refused: the spec names two
+  refusals and one warning.
+- **The plan's section 0 predates the lighting steps and this one.** 0.1 describes the per-frame launch
+  this step removes and cites `SupersonicApp.cpp:1238` for the fixed step (1241 at 87886c6, 1247 now).
+  0.2's numbers come from `original/levels_v1/`, which still exists; the current library is
+  `original/levels/` (`_t8.0`, `_h6.3`), and 0.2's own re-point has not been done. 0.3's
+  mean_abs (1-01 31.6, 1-09 30.4, 2-05 31.9, 3-05 23.4, 4-22 42.4) and its "3x too bright" premise are
+  superseded by step 55's 12.72, 7.92, 12.23, 8.37, 4.50, so its edge_iou floors need a new baseline.
+  Systems 1 (colour transfer) and 8 (halos) are largely steps 43-47 and 49.

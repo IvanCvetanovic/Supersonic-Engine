@@ -2348,6 +2348,22 @@ simulation is pinned — the profiler still measures real elapsed time per zone 
 and it stays opt-in, because a game that ignores how long a frame took plays in
 slow motion the moment it drops below its target rate.
 
+**`--screenshot-every <N>`** writes every Nth frame of such a run beside
+`--screenshot <path>`, as `<stem>_f<frame><ext>`, so a check of something that
+moves takes one launch rather than one per frame. The capture sits at the top of
+the frame loop, where the frame count is the number already drawn, and before
+the `--frames` exit test — after it, the last multiple of N would be skipped by
+the break — so the last stamped frame and `<path>` are two readbacks of the same
+presented image, through one function in the same loop iteration. Which
+frames and under which names are `LaunchOptions::CapturesFrame` and
+`ScreenshotPathForFrame`, pure for the reason `ResolveWindowSize` is. Without
+`--fixed-step` the flag warns rather than refuses: the frames are still
+pictures, but frame N is no longer N ticks of game time. The readback does not
+perturb the simulation — the first measurement took Magic Portals' level 1-01
+at N = 30 over 420 frames, and frames 270 to 420 matched separate runs stopped
+at each frame byte for byte — but it stalls the queue, so the profiler's worst
+frames in such a run are the readback's.
+
 The three things this section used to end by listing as not done are done, and
 each was a separate confusion rather than a missing feature:
 

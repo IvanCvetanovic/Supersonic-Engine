@@ -91,6 +91,12 @@ private:
     // Write the recording out, or report whether the replay reproduced.
     void finishRecording();
 
+    // Read the frame just presented back and write it as a PNG. One function
+    // for --screenshot and --screenshot-every: on the last frame both read the
+    // same presented image, through this function, in the same loop iteration,
+    // so the two files cannot differ by a byte.
+    void writeScreenshot(const std::string& path);
+
 public:
     // Whether a --replay run disagreed with the hashes it was checked against.
     //

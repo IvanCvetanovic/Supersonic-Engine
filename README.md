@@ -716,6 +716,13 @@ Android "not functional"; extending that register forward costs nothing.
 - [x] A game declares the window it opens at, in its manifest, with `--window
       1920x1080` to override it for one run. It is the render resolution too:
       in game mode the offscreen target follows the window
+- [x] Several frames of one run: `--screenshot-every 30` beside `--screenshot
+      shot.png` writes `shot_f30.png` … `shot_f420.png` over `--frames 420`,
+      and `shot.png` as before. Under `--fixed-step` the stamped frames
+      measured so far (Magic Portals 1-01, frames 270 to 420) matched
+      separate runs stopped at each frame byte for byte, so a check of
+      something that moves costs one launch instead of one per frame
+      ([AGENTS.md](AGENTS.md#running-without-a-person-watching))
 - [x] Nearest-neighbour texture filtering, asked for by the asset's `.meta` and
       not by the material that uses it — so pixel art stays sharp, and two
       materials naming one file cannot disagree about it
