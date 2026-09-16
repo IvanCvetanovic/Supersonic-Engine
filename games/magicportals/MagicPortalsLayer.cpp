@@ -214,6 +214,7 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       Camera::LoadRules(m_paths.data + "/portals.json", m_cameraRules, error) &&
                       Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error) &&
                       Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error) &&
+                      Sky::LoadRules(m_paths.portData + "/sky.json", m_skyRules, error) &&
                       Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error) &&
                       Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error) &&
                       LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error) &&
@@ -2156,6 +2157,7 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     std::vector<Sprites::Sprite> sprites;
     m_artError.clear();
     m_sign = NoPortalSign{};
+    m_sky = Sky::Controller{};
     if (!Sprites::Find(m_data.scene, m_paths.art, sprites, m_artError)) {
         // Played anyway, as boxes: the art is the original's, and a machine
         // without it can still play the port.
@@ -2185,6 +2187,14 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             sprites.erase(it);
             break;
         }
+    }
+    // THE SKY IS NOT DRAWN WHERE THE LEVEL PUTS IT EITHER. StaticSky moves it to
+    // the camera every frame (sim/Sky.hpp), and it needs each sky's picture size
+    // to do it, so it is built here, from the same sprites. A level whose skies
+    // cannot be sized keeps them where the level put them, and says why.
+    if (std::string why; !Sky::Build(m_skyRules, m_data.scene, sprites, m_viewHeightPx, m_sky, why)) {
+        SUPERSONIC_LOG_WARN("Magic Portals") << "the sky is drawn where the level put it: " << why << std::endl;
+        m_sky = Sky::Controller{};
     }
     m_playerSlot = static_cast<int>(std::count_if(sprites.begin(), sprites.end(),
                                                   [](const Sprites::Sprite& s) { return s.zIndex <= 0; }));
@@ -2222,10 +2232,24 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
         drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
         drawn.zone = indexOf(m_level.portals.zones, sprite.node);
+        if (m_sky.running) {
+            for (std::size_t t = 0; t < m_sky.skies.size(); ++t) {
+                if (m_sky.skies[t].node == sprite.node) drawn.sky = static_cast<int>(t);
+            }
+            drawn.satellite = m_sky.hasSatellite && m_sky.satelliteNode == sprite.node;
+        }
         if (const auto body = m_level.built.entities.find(sprite.node); body != m_level.built.entities.end()) {
             drawn.body = body->second;
             // Bodies move on the tick and are drawn between ticks, as their boxes are.
             registry.emplace<InterpolatedTransformComponent>(drawn.quad);
+        }
+        if (drawn.sky >= 0 || drawn.satellite) {
+            // Placed on the tick from the camera the tick left, and drawn between
+            // ticks as the camera is: both interpolate with the same alpha, so
+            // the sky keeps its place on the screen on the frames between.
+            if (!registry.all_of<InterpolatedTransformComponent>(drawn.quad)) {
+                registry.emplace<InterpolatedTransformComponent>(drawn.quad);
+            }
         }
         drawn.sprite = std::move(sprite);
         m_sprites.push_back(std::move(drawn));
@@ -2264,9 +2288,22 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
         // Where its ENTITY stands, which is what a light it owns is placed from:
         // the sprite hangs off that point by its offset.
         glm::dvec2 ownerPx = sprite.atPx;
+        glm::dvec2 sizePx = sprite.sizePx;
         float rotation = Units::ToWorldRotation(sprite.rotation);
         bool gone = false;
-        if (drawn.crystal >= 0) {
+        if (drawn.sky >= 0) {
+            // Where StaticSky::position puts it from this tick's camera, whatever
+            // the level said: the sprite's own offset kept, the pivot a scrolling
+            // strip takes subtracted, and at the size scaleSky gave it.
+            const auto t = static_cast<std::size_t>(drawn.sky);
+            const glm::dvec2 view = ViewPx();
+            ownerPx = Sky::PositionPx(m_skyRules, m_sky, t, m_follow.centrePx, view);
+            centrePx += Sky::DrawnCentrePx(m_skyRules, m_sky, t, m_follow.centrePx, view) - sprite.atPx;
+            sizePx = Sky::DrawnSizePx(m_sky, t);
+        } else if (drawn.satellite) {
+            ownerPx = Sky::SatellitePx(m_sky, m_follow.centrePx, ViewPx());
+            centrePx += ownerPx - sprite.atPx;
+        } else if (drawn.crystal >= 0) {
             const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
             gone = crystal.collected || crystal.expired;
             // A timed crystal fades as it runs out: the remake's guess, as the
@@ -2302,7 +2339,7 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             drawn.quad = entt::null;
             continue;
         }
-        placeSprite(registry, drawn.quad, centrePx, sprite.sizePx, drawn.z, rotation);
+        placeSprite(registry, drawn.quad, centrePx, sizePx, drawn.z, rotation);
         drawn.ownerPx = ownerPx;
     }
 
@@ -4353,6 +4390,9 @@ void MagicPortalsLayer::stepLevel(entt::registry& registry, float direction, flo
     tickNoPortalSign(Hud::HandOver(m_hudRules, m_levelAgeMs, static_cast<double>(fixedDelta) * 1000.0,
                                    m_sign.heldMs));
     syncDrawables(registry);
+    // StaticSky::update's order: every sky placed (syncSprites, just now), and
+    // only then its scroll moved on, so the next tick draws what this one left.
+    if (m_sky.running) Sky::Advance(m_skyRules, m_sky, static_cast<double>(fixedDelta));
 }
 
 // ---- the pause ----------------------------------------------------------------

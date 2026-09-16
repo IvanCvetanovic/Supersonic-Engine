@@ -227,6 +227,10 @@ add_mp_test(test_mp_sprites)
 # it writes and runs anywhere; only the part that reads the converted levels is
 # skipped without them, and never with 77.
 add_mp_test(test_mp_lighting)
+# The sky the original pins to the camera: sky.json and sim/Sky's arithmetic, pure,
+# and a census of what the converted levels place, which is skipped without them
+# and never with 77.
+add_mp_test(test_mp_sky)
 # The sounds: the decoded AudioManager as data, and that every file it names is
 # really in the original's soundfx/. The reader runs anywhere; only the part
 # that opens the original's own files is skipped without them, never with 77.

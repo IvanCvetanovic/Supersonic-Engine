@@ -48,6 +48,7 @@ add_library(MagicPortalsSim STATIC
     Roles.cpp
     Scores.cpp
     Shot.cpp
+    Sky.cpp
     Sounds.cpp
     Sprites.cpp
     Trigger.cpp

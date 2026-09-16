@@ -2578,6 +2578,68 @@ void TheHudStaysOnTheViewAsTheCameraMoves() {
     layer.OnDetach(registry);
 }
 
+// The sky is not drawn where the level puts it: StaticSky pins it to the camera
+// every frame (sim/Sky.hpp, step 58). level30 is 768 wide and places its
+// icy_sky.png at (228.5, 128), 0.94 px right of the view's centre at the level's
+// corner, so drawn where the level said it fails on the first tick. Walking
+// right pans the camera, and the sky must be the view's centre on every tick AND
+// on every frame drawn between ticks, where both are interpolated.
+void TheSkyStaysOnTheViewAsTheCameraMoves() {
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level30");
+    layer.OnAttach(registry);
+    if (!layer.LoadError().empty() || !layer.ArtError().empty()) {
+        CHECK_MSG(false, layer.LoadError() + layer.ArtError());
+        return;
+    }
+    const MagicPortals::Sky::Controller& sky = layer.SkyController();
+    CHECK_MSG(sky.running && sky.skies.size() == 1 && !sky.scroll && !sky.hasSatellite,
+              "level30 has one still sky and no satellite");
+    entt::entity quad = entt::null;
+    for (auto [entity, tag, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+        if (tag.tag == "Magic Portals Sprite" && material.albedoTexturePath.find("icy_sky.png") != std::string::npos) {
+            quad = entity;
+        }
+    }
+    CHECK(quad != entt::null);
+    if (quad == entt::null) return;
+    CHECK_MSG(registry.all_of<InterpolatedTransformComponent>(quad), "interpolated, as the camera is");
+    const auto near = [](const glm::vec3& a, const glm::vec3& b) {
+        return std::fabs(a.x - b.x) <= 1e-5f && std::fabs(a.y - b.y) <= 1e-5f;
+    };
+    const glm::dvec2 opened = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(quad).position);
+    CHECK_MSG(glm::length(opened - layer.CameraCentrePx()) < 1e-3,
+              "at load, the view's centre " + Point(layer.CameraCentrePx()) + ", not the level's (228.5, 128): " +
+                  Point(opened));
+
+    const double startX = layer.CameraCentrePx().x;
+    int ticksOff = 0;
+    int framesOff = 0;
+    int frames = 0;
+    for (int tick = 0; tick < 240; ++tick) {
+        InterpolationSystem::BeginTick(registry);
+        tickWith(layer, registry, kRest, {MagicPortalsLayer::kRight},
+                 tick == 0 ? std::vector<std::string>{MagicPortalsLayer::kRight} : std::vector<std::string>{});
+        InterpolationSystem::EndTick(registry);
+        if (layer.MenuScreen() != MagicPortalsLayer::Screen::None) break;
+        const glm::vec3 camera = registry.get<CameraComponent>(primaryCamera(registry)).position;
+        if (!near(registry.get<TransformComponent>(quad).position, camera)) ++ticksOff;
+        for (int f = 1; f <= 4; ++f) {
+            InterpolationSystem::Apply(registry, static_cast<float>(f) / 4.0f);
+            ++frames;
+            const glm::vec3 drawnCamera = registry.get<CameraComponent>(primaryCamera(registry)).position;
+            if (!near(registry.get<TransformComponent>(quad).position, drawnCamera)) ++framesOff;
+        }
+    }
+    std::printf("  level30: camera %.1f -> %.1f px, sky off the view's centre on %d tick(s) and %d of %d frame(s)\n",
+                startX, layer.CameraCentrePx().x, ticksOff, framesOff, frames);
+    CHECK_MSG(layer.CameraCentrePx().x > startX + 20.0, "the camera panned");
+    CHECK_EQ(ticksOff, 0);
+    CHECK_EQ(framesOff, 0);
+    layer.OnDetach(registry);
+}
+
 void AClearPortalsButtonComesWithAPortal() {
     if (!OriginalArtIsThere("AClearPortalsButtonComesWithAPortal")) return;
     entt::registry registry;
@@ -4474,6 +4536,7 @@ void runTests() {
     NothingBlinksWhileWalking();
     TheHudIsTheOriginals();
     TheHudStaysOnTheViewAsTheCameraMoves();
+    TheSkyStaysOnTheViewAsTheCameraMoves();
     AClearPortalsButtonComesWithAPortal();
     APlaqueForALevelWithAMedal();
     TheTutorialRingsAndAWeightlessLevelHasNoPads();

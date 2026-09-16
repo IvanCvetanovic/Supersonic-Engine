@@ -8633,3 +8633,249 @@ test_launchoptions was also run directly.
   mean_abs (1-01 31.6, 1-09 30.4, 2-05 31.9, 3-05 23.4, 4-22 42.4) and its "3x too bright" premise are
   superseded by step 55's 12.72, 7.92, 12.23, 8.37, 4.50, so its edge_iou floors need a new baseline.
   Systems 1 (colour transfer) and 8 (halos) are largely steps 43-47 and 49.
+
+## Step 58 - the sky the original pins to the camera, and the ground it covers (built)
+
+Step 44's LEFT FOR THE OWNER: black ground on 34 of the 128 levels, up to half a frame, because the
+original moves its sky to the camera every frame and the port drew it where the level put it. This step
+ports that controller, `StaticSky` (`Sky.angelscript`). Game-only: no file under `src/` or `assets/shaders/`.
+**Measured on captures of all 128 levels: the bare ground goes from 3,634,104 px on 34 levels to 1,593 px on
+3, and those 1,593 are sprites drawing their own black; all eleven library levels step 44 names improve on
+both mean_abs and edge_iou; every run exits 0 with validation active and silent.**
+
+**WHAT THE ORIGINAL DOES** (the asbc listing, md5 `48fe65ce...`; byte ranges and instruction numbers in
+`data/sky.json`'s `_source`).
+- `Game::preLoop` builds `SpaceSky()` when `Game.spaceBg`, else `StaticSky(sceneMax.x, 'sky', true)`, and adds
+  it after the camera, portal and earthquake controllers. `readProperties` sets `spaceBg` when the first
+  `properties` carries `space_bg` at all (`CheckCustomData != 0`, not its value).
+- The constructor collects the entities named exactly `sky` and `sky.ent`, runs `scaleSky`, and keeps
+  `SeekEntity('satellite')` with its own position as `originalPos`.
+- `scaleSky`, per sky t: `Scale(screen.y / GetSize().y)`; `m_width` = the scaled width; `m_scrollValue` =
+  `GetFloat('scroll')`, `m_scroll` = it > 0 (one member each: the last sky's stand); `position(t)`;
+  `scrollPos` = 0; for a scrolling sky `SetPivotAdjust(size x (1, 0))` at t = 0 and `(-1, 0)` at the last,
+  with the size read before the scale, the second call replacing the first on a lone sky.
+- `position(t)`: pitch = screen x 0.5, or for a scrolling strip size x 0.5 moved by a size at its ends;
+  `SetPositionXY(GetCameraPos() + pitch + (m_width x t, 0) + scrollPos)`. `GetCameraPos()` is the corner,
+  the video camera's position (`ETHScriptWrapper.Scene.cpp:350-356`); names match by `==`
+  (`ETHBucketManager.cpp:488-503`); a pivot adjust is stored over the scale and multiplied back at the draw
+  (`ETHEntity.cpp:1019-1022`; an unrotated sky is drawn by `GetScreenRect`, `ETHSpriteEntity.cpp:742-752`, less
+  `ComputeAbsoluteOrigin`, `ETHEntity.cpp:270-297`; the rotated branch at 702-708 gives the same centre).
+- `update`: `position(t)` for every sky, THEN `scrollPos.x += scaledUnitsPerSecond(-m_scrollValue)` (the frame
+  capped at 200 ms, times the time manager's `m_factor`, 1 or 0 while paused: `STimeManager.angelscript`
+  8045..8162, checked in the remake's `specs/ui3/work/motion/dec_state.txt`), back to 0 once
+  `abs >= m_width`; the satellite at `GetCameraPos() + originalPos`.
+- In the level's own units the scale is view height / picture height (`g_scale` = screen.y / 256 is applied to
+  every entity first, main.angelscript's `preLoop`), and every sky picture is 256 u tall at every tier: 1.
+  So the port changes where a sky is drawn and not its size. A sky entity is `ET_HORIZONTAL`, origin
+  `EO_CENTER` (`ETHEntity.cpp:27-44`, `273-296`), and all 96 sky and satellite `Sprite2D`s carry no offset,
+  so the entity's position is its picture's centre.
+
+**MEASURED ON THE ORIGINAL** (the remake's `out/parity/visuals/sky/where_orig_sky.py`, which slides the tier
+the original draws, fullhd at 512x256 u or 1x, over its library frame). **At t8.0 the best sky centre is
+(640, 360) px of 1280x720, to within 1 px, on 16 of 16 levels**: 1-09, 1-20, 1-21, 2-01, 2-02, 2-05, 2-07,
+2-09, 2-26, 2-29, 3-05, 4-20, 4-32 exactly (159,282 to 589,269 px agree), 1-01 at (640, 359), 2-03 at
+(640, 361) and 1-13 at (641, 360) (101,052 px agree there, 100,890 at the centre; the same at h6.3;
+`fix2/where_orig_1-13.txt`). The verifier's own metric (the lowest quarter of per-pixel differences)
+agrees, within 1 px, on seven of them. Among them 1-01's level puts its sky 2 u right and 8 u up of that
+centre, 3-05's 28.4 u right, and the port's cameras on 2-01, 2-05, 1-13 and 4-32 have moved 57 u right, 44 u
+down, 88 u down and 313 u right.
+
+**NO SKY SCROLLS, so the scroll branch is carried and tested but no level reaches it.**
+- No sky carries a `scroll` variable: none of the 133 `.esc` files and none of the sky `.ent`s has one,
+  and `GetFloat` answers 0 for a missing name (`ETHEntity.cpp:851-856`).
+- The `scrolling_sky` = 1 on 37 levels' `properties` is another variable, and the string occurs nowhere in the
+  listing's 1,473 functions (nor anywhere in `android_game.bin`, the verifier's byte search).
+- The original's frames agree: on 3-05, a `scrolling_sky` level, the band y 0..199, x 150..599 is all sky
+  (100% within 10 of `satellite_sky` pinned at the centre) and is byte-identical in h2.8 and h6.3 (one run,
+  3.5 s apart) and in t4.5 and t8.0 of another. The same band of 3-06 is as still, but only 70.3% of it is sky.
+
+**SPACE LEVELS: StaticSky does not run there, and SpaceSky is not ported.** The 19 `space_bg` levels
+(4-01 to 4-19) take the other branch. SpaceSky (156379..158171) is outside step 44's excerpt and not small: it
+places `planet_bg.ent`, `spiral`, `space_sky` and `eclipse.ent` about the camera, turns and scales the spiral
+and runs the planet through `linearMotion`. `linearMotion` (`utilEntityEffect.angelscript`, 327527..328407)
+and `scaleToSize` (329349..329538) are in the listing but not yet read. What the listing shows is recorded in
+`sky.json`'s `space_sky._not_ported`. Step 44 counted no bare ground on those levels; their frames are
+byte-identical to g6's.
+
+**WHAT CHANGED.**
+- **`data/sky.json`** (new): `static_sky` - `properties`, `space_bg`, `["sky", "sky.ent"]`, `satellite`,
+  `scroll`, `screen_pitch` 0.5, `frame_cap_ms` 200 - with `_source` (with the Ethanon citations above),
+  `_units` (with the fullhd tiers measured, below), `_census` and `_measured` (the 16 levels, the still band).
+- **`sim/Sky.{hpp,cpp}`** (new, pure): `LoadRules` (refuses no names, a pitch or cap of 0); `Build` from the
+  scene and the level's sprites (a space level or one with neither a sky nor a satellite does not run; a sky
+  without a picture is an error); `PositionPx`, `DrawnCentrePx` (less the pivot), `DrawnSizePx`,
+  `SatellitePx`; `Advance`, the scroll half of `update`.
+- **`MagicPortalsLayer`**: `sky.json` read at attach with the port's other data. `buildSprites` builds the
+  controller from the same sprites, after the no-portal sign is taken out, and marks the sky and satellite
+  quads. It returns early when the art will not read, so a level drawn as boxes has a controller that does not
+  run. `syncSprites` places them from `m_follow.centrePx` and `ViewPx()` on every tick, and `stepLevel` advances
+  the scroll after `syncDrawables`, in `update`'s order. The quads carry `InterpolatedTransformComponent`: the
+  camera is moved on the tick and drawn between ticks, and both interpolate by the same alpha. `SkyController()`
+  is exposed for the suites.
+
+**THE SUITES.**
+- **`test_mp_sky` (new): 361 checks, 0 failures.** It pins:
+  - the rules, and a pitch of 0 refused;
+  - a still sky at the view's centre for three cameras, 1-01's move of (-1.944, +8) u, scale 1, width 455, and
+    scale 2 under a 512-tall view;
+  - `space_bg` "1" and "0" both building nothing, and `scrolling_sky` not scrolling;
+  - `space_sky`, `sky_dark.ent` and a wall not being skies; a sky without a picture refused;
+  - the satellite at the corner plus its place (the first named exactly `satellite`);
+  - a still strip at +455 u a sky;
+  - a scrolling strip's positions (682.5, 682.5, 682.5 u from the corner), pivots (+455, 0, -455) and drawn
+    centres (227.5, 682.5, 1137.5); -1 u a tick at 60 u/s, -12 on a 1 s frame, the wrap after 455 or 456
+    ticks and never a whole width off;
+  - a lone scrolling sky drawn at 682.5; the last sky's scroll and width standing.
+  - **The census, printed:** 128 levels, 95 with one sky (93 `sky`, 2 `sky.ent`), 19 space, 13 neither, 1
+    satellite alone (3-15), 37 `scrolling_sky` keys, 0 scrolling, 0 skies at a scale other than 1, every sky
+    at the view's centre. All 34 bare-ground levels have a StaticSky sky (checked by a script).
+- **`test_mp_layer`: `TheSkyStaysOnTheViewAsTheCameraMoves` added; 790 checks, 0 failures.** level30 places its
+  sky 0.94 u off the view's centre, so it fails on the first tick without this step. It walks right for 240
+  ticks with four interpolated frames a tick: **camera 227.6 -> 324.0 px, the sky quad off the camera on 0 of
+  240 ticks and 0 of 960 frames.** `TheLevelsArtIsDrawn`, `NoSpriteOnScreenIsCulled` and
+  `NoSpriteBlinksWhileWalking` see the moved sky and pass.
+- Run directly on the final source and data: `test_mp_sky` 361/0 (the relinked `505ada8e...`, and before the
+  relink `8cfcf0eb...` against the final `sky.json`), `test_mp_layer` 790/0 (`4ae45192...`, not relinked by the
+  last build). Earlier rounds, directly: test_mp_sprites 209/0, test_mp_lighting 495/0, test_mp_camera 15/0,
+  test_mp_play 145/0, test_mp_start 726/0.
+- **ctest, once, by the implementer: 93 of 119 pass, 0 fail, 26 not run** (refused by Smart App Control:
+  test_launchoptions, test_convexhull, test_wb_buildings, test_wb_match, test_mp_tscn, test_mp_geometry,
+  test_mp_minions, test_mp_ghost, test_mp_zerog, test_mp_dragon, test_mp_diamonds, test_mp_boss, test_mp_hud,
+  test_mp_levelend, test_mp_info, test_mp_select, test_environmentmap, test_input, test_spotlight,
+  test_lightselection, test_resourcesync, test_replay, test_camera, test_uicanvas, test_worldshapes and
+  test_blending). Not rerun: it would launch the 26 refused exes again; the suites that link the sky,
+  test_mp_sky and test_mp_layer, ran directly.
+
+**BUILD: no warnings** (MSVC 14.50, Release, Ninja, /W4; GCC not run). The first build stopped on two faults of
+this step, a broken string in the new layer test (C2001) and a discarded `[[nodiscard]]` `get_or_emplace`
+(C4834, replaced by `all_of` then `emplace`); every build since printed no warning, and the verifier compiled
+`Sky.cpp`, `MagicPortalsLayer.cpp`, `test_mp_sky.cpp` and `test_mp_layer.cpp` again with ninja's /W4 commands:
+0 warnings. The last build relinked `MagicPortals.exe` and `test_mp_sky.exe` only.
+
+**SMART APP CONTROL** (enforce mode, `VerifiedAndReputablePolicyState` = 1). Four links of `MagicPortals.exe`
+were refused before any capture (`117e713b...`, `3fae84a5...`, `e0021483...`, `6b2d0d04...`). The fix round
+deleted it and relinked once, with only a test comment and `sky.json` text changed since: **`5a435cad...`
+ran**, and every capture below is that binary. A relink writes a new link time, so the file is new to the
+policy; nobody relinked again.
+
+**GATES.** Before: g6's frames (`work/g6/final/`, ad1e97c; 87886c6 and step 57 changed no level frame). After:
+the remake's `out/parity/visuals/sky/after/` from `capture_sky.sh after`, `capture_sky.sh after sweep`
+(128 levels at f420) and `gates_sky.sh after` (`gates.txt`); the attributions in `fix2/`.
+
+| Gate | Required | Before (g6) | After (measured) |
+|---|---|---|---|
+| (1) bare ground, step 44's mask (`census_sky.py`), all 128 at f420 | the 34 levels lose their black where the original draws sky | 34 levels, 3,634,104 px of the 3,659,902-px mask | **3 levels, 1,593 px** (1-10 128, 1-23 13, 2-32 1,452): sprites' own black, below |
+| (2) `compare.py` against t8.0, mean_abs / edge_iou | not worse | 2-02 34.16 / 0.3444; 4-32 30.08 / 0.4720; 4-20 19.95 / 0.3891; 2-07 24.87 / 0.2675; 2-09 24.54 / 0.2457; 1-21 50.08 / 0.3232; 1-20 44.40 / 0.4270; 2-01 12.43 / 0.3698; 2-05 12.23 / 0.3263; 2-03 12.73 / 0.3742; 2-29 12.94 / 0.3964 | **all eleven better on both**: 9.30 / 0.3795; 4.02 / 0.5524; 1.87 / 0.5366; 9.38 / 0.2695; 9.97 / 0.2528; 19.37 / 0.3605; 10.86 / 0.4738; 7.50 / 0.3710; 6.06 / 0.3416; 5.09 / 0.3810; 7.85 / 0.4003 |
+| (3) `lightgate` 2-26 `noLM_E=1`; g6's other gates | not worse | 2-26 `noLM_E=1` port_vs_orig 1.92, port_vs_model 0.25 (both variants) | **1.95 and 0.29** (+0.03, +0.04: the 0.16 px re-sample, below); every other class of 1-01, 1-09, 2-05 and 4-22 within +-0.03; torch and door json identical. **Two numbers worse, both the 1x sky picture's tier (content scale and grade, System 6), not its place:** 1-01 mean_abs **12.72 -> 14.01** (unchanged pixels 11.05 -> 11.05; the fullhd picture in the same place scores 10.97); 1-01's halo rings further from the original (ring 60 R-B diff -47.2 -> -58.1, ring 70 -44.9 -> -51.3), reproduced by the bare picture's move within 0.6 on rings 50 to 150 |
+| (4) zero-offset levels byte-identical, or every changed pixel explained | as required | port sky centres 1-01 (644, 336), 3-05 (720, 360), 1-09/2-26/4-22 at 227.5 u | **none byte-identical, as predicted**; the sky at (640, 360) exactly on all; changed pixels are the sky or what is drawn over it (below) |
+| (5) a scrolling sky moves between two frames | as required | no level's sky scrolls | **not applicable**; `--screenshot-every 60` on 3-05 and 2-01: the sky at (640, 360) on f120 to f420 |
+| (6) all 128 exit 0, validation active and silent | as required | g6 sweep: 128 exit 0 | **128 of 128 exit 0, "ACTIVE" in 128 logs, no VUID or Validation Error**; the 21 gate-set launches exit 0 |
+| `test_mp_sky` | arithmetic and census pinned | - | **361 checks, 0 failures** |
+| `test_mp_layer` | sky on the camera, ticks and frames | - | **790 checks, 0 failures**; 0 of 240 ticks and 0 of 960 frames off the camera |
+
+**(1) THE BARE GROUND, level by level** (`after/census.json`, `fix2/after_detail.txt`).
+- 31 of the 34 are clear: 3,658,309 of the mask's 3,659,902 px now show something.
+- Every sky picture the port draws is opaque, 256 u tall and at least 455 u wide against the view's 455.11 u:
+  0.111 u narrower, a 0.156 px strip each side, under half a pixel, so it covers every pixel centre. And it is
+  the farthest thing back. So a pixel still exactly black is drawn black by a sprite in front of it:
+  - 1-23: 13 px, one column (x 1185, y 589..601), the dark right edge of a stone pillar, dark in t8.0 too;
+  - 1-10: 128 px, a strip 8 px tall (x 997..1169, y 450..457), the black top border of a stone block;
+  - 2-32: 1,452 px inside a block lit nearly black (x 1018..1123, y 585..674), 0 in g6 as well.
+- None of the port's 1x sky pictures has a (0, 0, 0) texel (`fix2/fullhd_padding.txt`). The fullhd tiers'
+  black is padding the port does not draw (below). sky_purple (1-25) has 3 texels that a floor to RGB565 would
+  make 0; 1-25 counts 0 bare px.
+- **New black, 809 px on 35 levels**, pixels exactly 0 after and not in g6. Everywhere but 2-05 they were at most
+  8 in g6, one RGB565 step from black under the moved sky. 2-05's 290 were at most 20, and the original has
+  them at 0 (median and p90): mean |port - original| there 8.4 -> 0.3.
+
+**(3) AND THE g6 GATES. Two gate numbers get worse, and both come from the 1x sky picture's tier (its content
+scale and grade), the finding under THE VISUALS PLAN below: placed where the original draws it, the port's
+picture is compared with a different picture.**
+- `gates_sky.sh` now prints every lightgate class beside g6's json. `noLM_E=1` (sky blocks):
+  - 2-26 +0.03 port_vs_orig, +0.04 port_vs_model; 4-22 +0.02, and +0.02 / +0.03 port_vs_model;
+  - 1-09 port_vs_model +0.02 (tier1x) and +0.01 (engine); its halo class -0.01 to -0.02.
+  - These skies moved 0.056 u = 0.16 px (the view's centre is 227.556 u, their levels say 227.5), which
+    re-samples every sky texel: the whole change is at most 0.04 of 255. The lightmapped classes are 0.00.
+- `compare.py` on g6's seven: 1-09 7.92 / 0.4255 -> 7.92 / 0.4253; 1-13 17.53 / 0.2317 -> **12.34 / 0.2398**;
+  2-05 12.23 / 0.3263 -> **6.06 / 0.3416**; 2-26 10.07 / 0.4024 -> 10.08 / 0.4022; 3-05 8.37 / 0.4097 ->
+  **4.85 / 0.4337**; 4-22 4.50 / 0.5965 -> 4.51 / 0.5963.
+- 1-13's lightgate (engine_tier1x) is refused for its camera offset, rc 2, as it already was in g6
+  (`work/g6/gates_final.txt:11`); not this step. Its `compare.py` improves 17.53 -> 12.34, above.
+- **1-01 12.72 / 0.4546 -> 14.01 / 0.4581: the mean_abs rise is the 1x picture's tier (its content scale
+  and grade), not the place**
+  (`fix2/attrib_1-01.txt`). The pixels the move did not change score 11.05 before and after; the 295,930 it
+  changed go 16.26 -> 20.27. Put the original's fullhd `sky.png` pinned at (640, 360) into the 206,540 px that
+  show the port's sky and the frame scores **10.97** (3.86 on those pixels); the 1x picture back at the level's
+  place scores 13.15.
+- **Torch and door json: identical. HUD f1 and menu f120: byte-identical.**
+- **The halo gate** (1-01, R-B by ring over the right arch) moves AWAY from the original, because the sky
+  under the halo moved (`fix2/attrib_halo.txt`): port R-B ring 60 46.2 -> 35.3 (against the original 93.4:
+  diff -47.2 -> -58.1), ring 70 50.4 -> 44.0 (-44.9 -> -51.3); diffs 50 -40.0 -> -42.7, 80 -31.0 -> -36.2, 90
+  -17.9 -> -22.1, 120 -14.1 -> -17.8, 150 -17.9 -> -18.5; rings 30, 40, 100, 110, 130 and 140 0.0 to 1.5
+  closer. `gates_sky.sh`'s "halo ok" is only the script's exit; the comparison with g6's `halo.txt` is by
+  hand. The same rings over the bare 1x picture, level place -> pinned, move by the same amount to within 0.6
+  on rings 50 to 150 (ring 60 -10.7 against -10.9), and within 1.4 on rings 30 and 40, where the halo itself
+  is most of the pixel. The original's own background under them, the fullhd picture pinned, is 10 to 44
+  higher in R-B on rings 50 to 150: System 6's picture tier again.
+
+**(4) EVERY CHANGED PIXEL** (`fix2/changed_explained.txt`, `where_port_sharp.txt`).
+- Where the sky is drawn, by the lowest quarter of per-pixel differences over +-4 px: exactly (640, 360) on
+  1-01, 1-09, 1-13, 1-20, 1-21, 2-01, 2-02, 2-05, 2-26, 3-05, 4-22 and 4-32. The predicted moves:
+  1-01 (-1.94, +8) u; 3-05 -28.4 u; 1-09, 2-26 and 4-22 +0.056 u; 2-05 (-2.9, +42) u; 1-13 (+0.06, +88) u.
+- Changed px, and the share where the 1x sky shows within 10 in either frame (grown by 2 px): 1-01 295,930
+  (69.6%), 1-09 11,576 (97.9%), 1-13 110,205 (91.3%), 2-05 472,396 (97.7%), 2-26 9,031 (89.2%), 3-05 411,734
+  (95.3%), 4-22 4,860 (91.7%). The rest is sky under something drawn over it, looked at on 1-01, 1-13 and 3-05
+  (`fix2/rest_sheet.png`): the portal halos and torch light in 1-01's windows, the window's soft edge and a
+  crystal's glow on 1-13, pillar edges and the translucent HUD and control buttons on 3-05.
+- **37 levels byte-identical:** the 19 space levels, the 13 with neither, and five that run the controller.
+  Every one is placed pinned: "the sky is drawn where the level put it" is in 0 of the 128 sweep logs, and
+  each log's sprite dump at load (1 world unit = 50 u) has the pinned position, read per log:
+  - 3-32: `satellite_sky` at x 4.55111 = 227.56 u, not its level's 256, a 28.4 u move; 4-30: `dark_sky` at
+    227.56 u; 3-13: `dark_sky` at 284.44 u, its camera's corner at load (56.89 u) plus 227.56. No sky pixel is
+    visible in either frame of these three (the sky locate's best is at its +-4 px edge, scores 10 to 52
+    against 1.8 to 6.6 where a sky shows): scenery covers them.
+  - 3-27: `satellite_sky` at 256 u (5.12), its corner at load 28.44 u; g6 already drew it at (640, 360).
+  - 3-15: its satellite at (140, 182) u, the corner (0, 0) plus its place, and not visible in either frame:
+    the stone backdrop covers (394, 512) px (`fix2/3-15_satellite_crop.png`). So no frame shows the satellite
+    path; `test_mp_sky` pins it.
+
+**(5) STILL.** 3-05 and 2-01, `--screenshot-every 60`: sky at (640, 360) px on f120, f180, ... f420 (510,903
+to 516,497 and 415,235 to 418,302 px agree). f60 is the level's fade-in (mean 28.3 against 46.0 at f120),
+where the count within 10 does not find it; the picture shows it in place. 2-01's camera stands 57 u right
+on f300 to f420: g6 drew its sky at (482, 360) on all five frames, the port now at (640, 360)
+(`fix2/where_port_2-01_g6_vs_after.txt`). A camera moving under a pinned sky is `test_mp_layer`'s level30 walk.
+
+**(6) AND THE LEVEL WALK.** `MagicPortals --visit-levels lightmapped --visit-passes 2`, not run since step 47:
+- With no saves it exits 1: 392 failures, the first "opening 1-3 ... moved the cache from 36 to 36". 1-3 is
+  locked. `PressMenu` does nothing for a locked level (`MagicPortalsLayer.cpp:1291`, step 54) and
+  `LevelVisitLayer::open` does not look at its answer, so the walk measures a level that never opened.
+- With `--saves` pointing at the remake's `out/parity/ui1/saves_gold`: **exit 0 in 20 s, 134 visits, 1,460
+  lightmap sets, peak 101, baseline 80 at all 67 pass-2 visits, 0 failures**, validation active, "Subsystem
+  resources destroyed cleanly" (`fix2/visit_saves_gold.log`). Step 47 had peak 91, baseline 70; steps 48 to 56
+  are between, and the sky takes no lightmap set.
+
+**THE ROUND-1 SIMULATION IS SUPERSEDED.** It predicted mean_abs falls and edge_iou on 1-20 falling to 0.3659;
+the capture has 1-20 at 10.86 / 0.4738.
+
+**THE VISUALS PLAN, where this step makes it stale** (the remake's `out/parity/specs/visuals/plan_port.md`).
+- No row or system of it owns the camera-pinned sky. Gap D and System 6 treat the sky's width only.
+- System 6's gate `sky4.py` on 1-01 (fit_a 0.925, fit_b 2.2 px) was measured on a sky drawn at the level's
+  (229.5, 120). Pinned, it moves (-5.5, +22.5) px, so fit_b needs a new baseline before System 6 is gated.
+- **Gap D and System 6 stand.** The fullhd tiers of sky, icy_sky, red_sky and sky_purple are 1024x512 texels
+  with 57 black columns each side (`fix2/fullhd_padding.txt`), 455 u of picture inside 512 u; satellite_sky is
+  512 u in both tiers. But the 1x file is not that picture at 1:1 on two of them (the verifier's
+  `verify3/tier_geom.txt` and `tier_geom2.txt`): 1x `sky.png` is the whole fullhd image resampled to about
+  554x277 and cropped (NCC 0.9990, against 0.8717 at 1:1), a content scale of 1.082 whose inverse, 0.924, is
+  gap D's 0.9275 and `sky4.py`'s fit_a 0.925, and it is still 3.5 apart per pixel after a per-channel gain and
+  offset, a grade. red_sky is about 1.047x (NCC 0.9751 against 0.9080) and 9.4 apart after that fit. icy_sky
+  and sky_purple are 1:1 (NCC 1.0000 and 0.9970). That tier, content scale and grade, is 1-01's mean_abs and
+  halo rings above, and it is on red_sky (1-20 and 1-21 among the library levels). An earlier reading of this
+  step, that only the grade differs, compared the pictures at 1:1 only.
+
+**LEFT FOR THE OWNER.**
+- **SpaceSky**, for the 19 space levels, once `linearMotion` and `scaleToSize` are read.
+- **System 6** stands as the plan writes it (the fullhd tier's content scale and grade on `sky.png`, and on
+  `red_sky.png`); only `sky4.py`'s fit_b baseline needs retaking on the pinned sky.
+- **The level walk without saves**: `LevelVisit` should unlock or check `PressMenu`'s answer. Not this step's
+  system.
+- The satellite (3-15 only) is behind scenery, so its pinning has no frame evidence.

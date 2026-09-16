@@ -37,6 +37,7 @@
 #include "sim/Popup.hpp"
 #include "sim/Scores.hpp"
 #include "sim/Selector.hpp"
+#include "sim/Sky.hpp"
 #include "sim/Sounds.hpp"
 #include "sim/Sprites.hpp"
 
@@ -69,9 +70,11 @@ namespace MagicPortals {
 //  - Every sprite the level names (Sprites.hpp) is a textured quad, unlit and
 //    blended as the level says, in Godot's canvas order. A sprite follows its
 //    node's body, or the crystal, static portal or no-portal zone it pictures,
-//    and goes when that goes. The bodies are also boxes in the colour of what
-//    they are, hidden behind the art until B shows them - and shown anyway when
-//    the art cannot be read, which is a level still played, drawn plainly.
+//    and goes when that goes. The sky follows none of those: the original pins
+//    it to the camera every frame (sim/Sky.hpp), and so does the port. The
+//    bodies are also boxes in the colour of what they are, hidden behind the
+//    art until B shows them - and shown anyway when the art cannot be read,
+//    which is a level still played, drawn plainly.
 //  - The scene holds display values, as the original's 8-bit framebuffer did
 //    (RenderSettings::SceneEncoding::DisplayEncoded, set at attach): a texture
 //    is sampled as the bytes in its file, tints and blends work on those bytes,
@@ -299,6 +302,10 @@ public:
     glm::dvec2 CameraCentrePx() const { return m_follow.centrePx; }
     glm::dvec2 ViewPx() const;
     glm::dvec2 BoundsPx() const { return m_boundsPx; }
+
+    // The level's camera-pinned sky (sim/Sky.hpp), as the level's art built it:
+    // not running on a space level, or where the art was not read.
+    const Sky::Controller& SkyController() const { return m_sky; }
 
     // A screen point (Input's coordinates) as the point in the level under it,
     // in the remake's pixels. False when there is no viewport or camera.
@@ -545,6 +552,8 @@ private:
         int crystal{-1};      // in goals.crystals
         int staticPortal{-1}; // in portals.statics
         int zone{-1};         // in portals.zones
+        int sky{-1};          // in m_sky.skies: pinned to the camera, not where the level put it
+        bool satellite{false}; // m_sky's satellite, pinned the same way
     };
 
     void bindInput();
@@ -721,6 +730,8 @@ private:
     int m_playerSlot{0}; // the drawing slot the player takes among the sprites
     std::map<std::string, glm::dvec2> m_imageSizes;
     Art::Rules m_artRules;                  // the port's art.json
+    Sky::Rules m_skyRules;                  // the port's sky.json
+    Sky::Controller m_sky;                  // the level's StaticSky, built with its sprites
     std::vector<entt::entity> m_portalQuads; // one per placed portal, when its image is there
     entt::entity m_shotQuad{entt::null};    // the shot in flight, when its image is there
     entt::entity m_playerQuad{entt::null};  // the player, when its image is there
