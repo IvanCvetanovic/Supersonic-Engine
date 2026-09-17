@@ -9764,3 +9764,236 @@ of 18, the pickup 80 of 80, 1080 p f630-f632). Its record nits (this headline, t
   - system_5's first-frame elapsed spike.
 - **The dial is not interpolated between ticks.** Neither is the crystal, which does not move yet. When 3.2
   bobs the crystal, give both the same interpolation.
+
+## Step 81 - the bob the original gives a crystal and a key lying free, in one helper for every scripted motion (built)
+
+The visuals plan's step 3.2 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; its brief
+`systems_9_10.md` 10b, with section 3.0's decode of `linearMotion`). Track B, on the `visuals-b` tree. Game-only: no
+file under `src/` or `assets/shaders/`. New: `sim/Motion.{hpp,cpp}`, `data/motions.json`, `tests/test_mp_motion.cpp`,
+one line in each of `sim/CMakeLists.txt` and `tests/CMakeLists.txt`. **Every crystal (470 in 128 levels) and every
+key no one carries (39) now bobs as `linearMotion` moves it: 1.5 units, pi seconds, a phase of its own, sparkles and
+a timed crystal's dial with it. On 1-06 the capture fits 1.51 / 1.48 / 1.50 u and a period of pi (3.135-3.144 s by
+the verification's fit; the template tracker's 3.16 s is its bias), each crystal's phase its drawn start angle;
+footage of the original on the same level measures 1.46 / 1.50 u and 3.18 / 3.19 s. 1-01 f420 is byte-identical, the
+8 levels with no crystal or key are byte-identical on all three sweep frames, and every pixel the sweep changes lies
+within 18.5 u of a crystal or a key (4-29's f570 and f780 not measured: its before run took an input).**
+
+**WHAT THE ORIGINAL DOES** (the listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce...`; every number with
+its instruction in `data/motions.json`).
+- **`linearMotion(thisEntity, vertical, angle, startAngle)`** (utilEntityEffect.angelscript, bytes 327527..328407),
+  one call a frame:
+  - the first call (no `originalPos` datum, ins 1-12) stores the entity's position (ins 13-27) and `angle =
+    startAngle` (ins 28-39);
+  - every call: `angle += unitsPerSecond(speed)` (ins 53-68), `speed x min(200, frame ms) / 1000 x m_factor`
+    (STimeManager, bytes 8045..8162; m_factor 0 while paused); one turn, `PI x 2f`, taken off only when the angle is
+    strictly above it, and once (ins 70-98: CMPf, JNP; not a modulo);
+  - `offset = cos(angle) x stride x sign(speed)` (ins 112-129: `cos`, never `sin`, 00_order E2/K4);
+  - `(0, offset)` when vertical, else `(offset, 0)`, times `rotateZ(degreeToRadian(angle))` (ins 131-178), which
+    `multiply(vector3, matrix4x4)` takes as `(x cos a + y sin a, -x sin a + y cos a)` (Ethanon `GameMath.h` RotateZ and
+    Multiply, bound at `ETHScriptWrapper.Math.generic.cpp:55`): a positive angle turns the axis counter-clockwise on
+    the +y-down screen;
+  - `SetPosition(originalPos + that x g_scale.getScale())` (ins 180-208).
+  - **The angle is stepped before the offset is read, in the same call**, and the frame draws the position the call
+    wrote (00_order 8.0 rule 6): the first frame drawn is already at `cos(startAngle + one step)`.
+- **`ETHCallback_crystal`** (bytes 424324..424766): with no `speed` datum (ins 1-12; 0 of 470 crystals has one) it
+  sets `speed` 2 and `stride` 1.5 (ins 14-38), then every frame calls `linearMotion(this, true, 0f, randF(PI))` (ins
+  83-96; a call pushes its last argument first, 00_order 8.0 rule 3). `randF(PI)` is `Randomizer::Float`, uniform on
+  [0, PI] (`ETHScriptWrapper.generic.cpp:338`, `Randomizer.cpp:44-47`), drawn every frame and read only on the first.
+  So **a period of PI seconds, an amplitude of 1.5 units and a phase of its own**. `crystal.ent` is `static=1`.
+- **`ETHCallback_key`** (bytes 438490..442683): the same defaults (ins 14-38); a key that found its keyhole goes to its
+  fly-in (ins 204-220) and a carried one (`ownerID >= 0`, ins 653-665) to the carried branch; only otherwise
+  `linearMotion(this, true, 0f, randF(PI))` (ins 666-679), before the pick-up scan. The carried branch rewrites
+  `originalPos` from `GetPosition()` every frame (ins 978-991) and never writes `angle` (0 writes of `'angle'` in the
+  callback or `fixKeyAngle`): **a dropped key bobs about where it was dropped, from the angle it was taken at**.
+- **Units.** `g_scale.getScale()` is `m_scaleFactor = screen height / 256` (00_order 8.12a): in the port's level units
+  the amplitude is the stride.
+- **Neither node carries a light or a halo:** no `eth_light` or `eth_halo` key on any of the 470 crystal or 39 key
+  nodes. The key's script adds one: `ETHCallback_key` ins 119-186 call `AddLight` every frame for a red, unhidden key
+  at `GetPosition() + (6 x scale, 0, 0)`, range `48 x scale`, **before** that frame's `linearMotion`, so the light
+  stands at the previous frame's bobbed position. The port does not draw it (`keys.json:92` records it unported); when
+  it is ported it must read that previous position.
+
+**THE OWNER'S STANDING RULINGS APPLIED** (every ruling 00_order section 6 raises is decided for what the original
+does, the bytecode decode, with measured footage winning where they disagree).
+- **R8, `SGlobalScale`'s divisor /256** (00_order 8.12a): `getScale()` is 1 in the port's units and the amplitude is
+  the stride, 1.5 units. Footage agrees (1.46 / 1.50 u); the 1.1-1.2 u systems_9_10 10b read on the library is its
+  estimator's (GATES).
+- **R12, the fixed 720 selection:** nothing here depends on the window; the bob is in level units.
+- **00_order's own resolutions taken as written:** K4/E2 (`cos`, read at ins 123, confirmed by D8); K6/E5 (the port's
+  60 Hz tick is the frame the callbacks run on); K8 and PRE-4 decision 4 (the start angles come from their own stream,
+  never the placed emitters' generator); K11 with K2's final-centre rule (the bob moves the crystal's `centrePx` and
+  `ownerPx` in `syncSprites`, and 3.1's dial reads that drawn centre after it); K13 (a bob moves nothing in z).
+- **Footage against the decode:** they agree on amplitude; the period differs by 1.4%, which the original's own
+  clock explains (LEFT FOR THE OWNER), so the decode stands.
+- **Not this step's:** R7 (`Mover`'s `sin(2 speed t) stride / 2` against this same decode's `cos(speed t) stride`,
+  gameplay for a movers step) and R18 (3.1's).
+
+**WHAT CHANGED.**
+- **`sim/Motion`** (new; no renderer, registry or `Game::Level`):
+  - `Rules`/`Row` and `LoadRules` for `motions.json`: `linear_motion` `frame_cap_ms` and `wrap_rad`, and a `crystal`
+    and a `key` row (`entities` as bare names, `speed`, `stride`, `vertical`, `axis_deg`, `start_angle_from`/`_to`).
+    Refused by name: a cap or wrap at or below 0, a row missing, no entity or a name with a dot, a speed of 0 or a
+    stride at or below 0, a range upside down, `vertical` not a bool.
+  - `Linear` (the `angle` datum and whether the first call has run), `Start`, `Advance` (start on the first call, the
+    capped step, one turn off strictly above it) and `OffsetPx` (zero before the first call; the whole of
+    `linearMotion`'s vector: sign, horizontal case, axis turn), so 3.3's sway and 12.2's hover take rows, not code.
+  - `Phases`: start angles from a `std::mt19937`, uniform on the row's range, in the order asked; `LevelSeed(base,
+    name)`: the base xor FNV-1a of the level's name.
+- **`data/motions.json`** (new): the decode above with its instructions; `start_angle_to` is AngelScript's float `PI`
+  (3.1415927410125732) and `wrap_rad` `PI x 2f` (6.2831854820251465). No `_guess`: the one number that is not the
+  original's is the port's seed, a determinism choice beside the layer's other seeds.
+- **`MagicPortalsLayer`:**
+  - reads `motions.json` at attach with the rest of the port's data;
+  - `buildSprites` gives every drawn crystal or key a row names (both spellings: the callback is the name less `.ent`)
+    a `Motion::Linear` (`DrawnSprite::motion`), its start angle drawn in the level's drawing order (`m_sprites`':
+    z_index, then the file's order, `Sprites.cpp:239-243`) from `Phases(LevelSeed(kMotionSeed, level name))`: a level's phases are its own, do not depend on what was played before
+    it, and **no other generator draws once more** (K8);
+  - `advanceMotions`, once a tick in `stepLevel` **before** `syncDrawables`: one `Advance` for each crystal not taken
+    or expired and each key not carried and not spent (`motionRuns`). A paused or popped-up level is not stepped: the
+    original's `m_factor` 0;
+  - `syncSprites` adds the offset to a live crystal's and an unowned key's `centrePx` **and** `ownerPx`: the picture,
+    its sparkles (step 59's emitters read `ownerPx`) and a timed crystal's dial (`syncTimers` reads the drawn centre)
+    move together. A carried key is drawn where the carry puts it;
+  - `MotionReports()` for the suites; `unloadLevel` clears the motions.
+- **Not changed:** `Goals`, `Keys`, the pick-up tests (LEFT FOR THE OWNER).
+- **No interpolation added** (step 80 asked that the crystal and its dial take the same interpolation once the
+  crystal moves: they take the same, none). The bob's fastest step is 1.5 x 2 / 60 = 0.05 units a tick (0.14 px at
+  720 p), and `InterpolatedTransformComponent` on the dial would draw its scale a tick behind its cell (a
+  `SpriteAnimationComponent` frame set on the tick). A key keeps the interpolation it had for its carry.
+- **Fixed inside the step: one seed for every level.** The first build (`MagicPortals.exe` `4b59f2c4`) seeded every
+  level's stream with `kMotionSeed` alone, so every level's first crystal had the same phase as every other level's
+  first, its second the second's, and so on. Gate 2's truth check found it: the 54 crystals it kept had 5 distinct
+  start angles between them, and their true statistic was 0.810 / 0.454 / 0.493 u against random phases' 1.14 / 0.67 /
+  0.53. `LevelSeed` mixes in the level's name; that build's captures are kept as `3.2/superseded_one_seed/` and none
+  of its numbers is used below.
+
+**BASELINE.** The last committed step in this tree is step 80 (`0be2725`), and main's steps 60 and 61 were merged in
+after it (`345932b`), so a fresh "before" was captured on the committed build before any change: `ninja` had no work
+and `MagicPortals.exe` `028fa603` drew 1-01 f420 **`a1f8d7ae`**, step 80's and step 61's. Before, in the remake's
+`out/parity/visuals/3.2/before/` (`capture_32.sh before`): `single/` (1-01 f420), `gate/` (1-06 every 6th frame to
+f420) and `sweep/` (all 128 levels at **f420, f570 and f780**, +0 / +150 / +360 ticks, gate 2's spacing). Two of the
+128 launches stalled mid-run, `level26a` after f510 and `level29c` after f570: alive, writing nothing and all but idle
+for 5 and 51 minutes (the second while another track's `MagicPortals.exe` ran beside it). Both were killed and re-run
+once on the same binary (`watch_one.sh`), and both ran to f780: **not reproduced**. **And one before launch took an
+input a `--fixed-step` run cannot produce:** 4-29's log, alone of the 260 before and after logs, loads
+`projectile.png`, `portal_launch.mp3`, `portal_created.mp3` and `clear_portals_button.png`, and its frames show a
+placed portal's halo and the clear-portals button in the corner; the run had no `--tap` or `--hold`, and step 60's
+sweep of the same level shows neither. Whether a stray click reached the window or the port fired a tap by itself was
+not chased (no engine bug hunt), but a capture gate elsewhere can be spoiled the same way: its log's loads are the
+tell. 4-29's f420 is measured against step 60's sweep instead (GATES). The stalls and this may be one class of thing.
+The after set ran under a watchdog (`watchdog.sh`), which killed nothing, and no after log loads a shot. After:
+`3.2/after/`, binary `d48cd9b1`. **The next step's "before" is `3.2/after/` and its `sweep/`.**
+
+**GATES.** 1280x720, `--fixed-step`. Scripts in `3.2/work/`, run by `analyse_32.sh`: `footage_bob.py` (a template
+tracker, `TM_CCOEFF_NORMED` with a sub-pixel peak, on the original's F13 footage and on the port), `gate_bob.py`
+(bob2.py's extent method, which systems_9_10 10b(5) names; the order's gate 1 names no method), `truth_slope.py`, `extent_transfer.py`, `period_port.py`
+(bob_period.py's statistic), `truth_period.py`, `nonreg.py`.
+
+**The port's true offsets are known.** `std::mt19937(LevelSeed(20260917, name))` through MSVC's
+`generate_canonical<double, 53>` (two 32-bit outputs an angle), in `m_sprites`' drawing order (z_index, then the
+file's order), is replicated in numpy (`truth_period.py`; replicated in file order instead, 1-06's crystals, which
+share a z_index, still matched, and chapter 3's keys did not). On 1-06 it gives 2.735 (`crystal_ent_818`), 1.481
+(844), 1.502 (812), 1.476 (813) and 2.462 (817); the tracker's fitted phases on the capture are 1.571, 1.563, 1.541
+and 2.466, each its start angle to 0.09 rad (under 3 ticks). So each estimator can be read against the truth, and gate
+2 can be computed on it.
+
+| Gate (00_order 3.2; systems_9_10 10b(5) where marked) | Required | Before | After |
+|---|---|---|---|
+| 1-06 (level5) every 6th frame to f420: amplitude | A 1.5 +- 0.25 u | no bob (the tracker reads 0.04-0.10 u on the still frames) | **1.514 / 1.480 / 1.498 u on crystals 812 / 844 / 813: passes** (tracker, 54-61 frames f60-f420). 818 is off screen; 817 is half under the HUD's restart button, which the template takes in (0.969 u, slope 0.64 against the truth), and is not counted |
+| the same: period | T pi +- 0.1 s | - | **passes: pi.** The verification's masked-shift fit on the same frames (f72-f420) reads **3.139 / 3.135 / 3.144 s** on 844 / 812 / 813 (3.141 s on 817) at rms 0.023-0.053 u. The tracker read 3.165 / 3.156 / 3.167 s on 812 / 844 / 813: its bias, not the port's period (THE VERIFICATION) |
+| the same: phases | at least 2 distinct | - | **passes, on two**: 817's 2.466 against 1.54-1.57 for the other three. **Those three bob almost in step on the capture, and that is the seed's draw, not a fault:** their start angles are 1.476, 1.481 and 1.502, within 0.026 rad of each other, and each measures its own to 0.09 rad (the verification's fit: 1.472 / 1.479 / 1.476 / 2.444 rad on 844 / 812 / 813 / 817, each within 0.023 rad of its replicated start angle at tick offset 0). `test_mp_layer` asserts all 5 start angles distinct |
+| the same: x drift (systems_9_10 10b(5)) | < 0.3 u | tracker x range 0.43 / 0.38 / 0.21 u on the still frames | **passes: 0 by construction** (vertical, axis 0: `OffsetPx` x is 0 on every tick in `test_mp_layer`). The verification's masked-shift estimator measures an x range of **0.000 / 0.014 / 0.007 u** on 844 / 812 / 813 and 0.156 u on 817 under the HUD. The tracker's 0.45 / 0.36 / 0.20 u is its own noise, as its still-frame readings show |
+| **the same, by bob2.py's extent method, as systems_9_10 10b(5) names it** (the order's gate 1 names no method) | the gates above | - | **The brief's method fails on this bob; the bob does not.** Its keep rules drop 844 and 813 on 1-06's blue ground (0 of 66 kept); 812 reads A **1.185 u**, T 3.150 s, x drift 0.36 u; 817 (HUD) 1.772 u. **Against the true offsets** (`truth_slope.json`) the extent readings follow with slope **0.79 / 0.86 / 0.39** on 812 / 844 / 813 (rms error 0.27 / 0.18 / 0.74 u), the tracker's with **1.005 / 0.983 / 0.995** (0.06 / 0.15 / 0.14 u). 1.5 x 0.79 = 1.18 u: **the 1.1-1.2 u systems_9_10 10b read on the library is this estimator's**, as the brief inferred. Shifting the whole window instead (`extent_transfer.py`) reads 1.01-1.64 u: the loss comes from a crystal moving over ground that does not, which only a real render has. The verification's run of the method: 844 1.287 u / 3.121 s, 812 1.190 u / 3.138 s, 813 0.585 u / 3.023 s, 817 1.849 u / 3.160 s; over the sweep it follows the true offsets at rms 0.54-0.58 u, the masked-shift estimator at 0.034 u |
+| `bob_period.py` statistic, chapter 1, +0 / +150 / +360 ticks (f420 / f570 / f780) | within +-0.25 u of 1.10 / 0.52 / 0.66 | 0 / 0 / 0 | **passes on the population** (THE VERIFICATION): the true offsets of all chapter 1's crystals still present (111 / 106 / 106) give **1.157 / 0.676 / 0.546 u** (+0.057 / +0.156 / -0.114), and bob2.py's own pipeline over all 128 levels **1.146 / 0.683 / 0.517 u** (+0.046 / +0.163 / -0.143). **Chapter 1's measurable subset** (41 crystals, 19 levels) reads **0.773 u at 3.5 s (+0.253)** by bob2.py's pipeline, the masked-shift estimator and those crystals' true offsets alike: that is which crystals can be measured, not the bob. **This record's first reading, 0.948 / 0.563 / 0.425 u over 54 crystals in 25 levels (-0.152 / +0.043 / -0.235), does not reproduce** on the byte-identical sweep: it went through the estimator above, whose readings follow the true offsets with slope 0.64 here (rms error 0.66 u). **On the true offsets** of the same 54 crystals the statistic is 1.282 / 0.759 / 0.577 u (+0.182 / +0.239 / -0.083), and over all 114 of chapter 1's crystals 1.159 / 0.672 / 0.545 (random phases' 1.143 / 0.670 / 0.534). So at 6.0 s the -0.235 splits into -0.083 of these crystals' phases and -0.152 of the estimator. **All 128 levels: 1.015 / 0.602 / 0.448 u over 240 crystals in 106 levels (-0.085 / +0.082 / -0.212)**; true 1.224 / 0.737 / 0.529, the estimator's slope 0.83 (rms error 0.45 u): at 6.0 s -0.131 of phases and -0.081 of the estimator |
+| **The original on footage** (F13's fall clip on 1-06, 369 native frames over 14.0 s at their pts, the death's earthquake left out; not an order gate: F4, which the brief left optional) | - | - | **A 1.459 / 1.500 u, T 3.182 / 3.187 s** on crystals 817 / 844, by the same tracker (the HUD has left 817 by then); the clip's halves agree to 0.04 u and 0.01 s; x range 0.19 / 0.13 u. The amplitude is the decode's; the period is pi x 1.013-1.014, which the original's clock predicts at the clip's frame rate (LEFT FOR THE OWNER). **F4 is retired** |
+| `test_mp_motion` | clamp, wrap, cos phase, pause, determinism | - | **78 checks, 0 failures: passes** (`af2db34a`). The cap (a 500 ms frame steps 200); the wrap strictly above a turn, once (3 turns are 2 after one call); the first call steps before the offset is read; `1.5 cos(angle)` over 20,000 ticks and their wraps, y in [-1.5, 1.5], back where it was pi seconds on; sign and axis (horizontal at 90 degrees is up the screen); a paused frame holds; the same seed draws the same 5,000 angles on [0, PI], mean 1.5831; 128 level names give 128 seeds and 128 first angles; 10 refusals by name; census: 128 levels, 35 `crystal` + 435 `crystal.ent`, 8 `key` + 31 `key.ent`, none with `speed` or `stride` |
+| `test_mp_layer`: the layer's call | once a tick, before the draw; picture and sparkles moved; paused, nothing moves; the level's own phases | - | **998 checks, 0 failures: passes** (`9a821eb0`; 966 before). `ACrystalBobsAsItsScriptDoes` (1-06): at load all 5 still and unstarted; **2,100 steps in 420 ticks, 0 held**, each exactly `Advance` of the tick; quad, `centrePx` and sparkle owner at node + offset every tick; all 5 swing the full +-1.5 u; **0 moves over 120 paused ticks**. `ALyingKeyBobsAndACarriedOneDoesNot` (3-08): 200 ticks bobbing with its sparkle; taken, no offset and its angle frozen over 120 carried ticks. `ABobsPhasesAreTheLevelsOwn`: 1-06 draws the same phases twice and after 1-05 and a skip, and 1-05 shares none of them. `ATimedCrystalsDialBobsWithIt` (1-27): the dial on its crystal's drawn centre on 240 of 240 ticks, y 206.5-209.5 |
+| Unowned keys on pixels (not an order gate; the suite covers the key's rules) | a lying key at its true offset | no bob | **passes where measured: 33 samples of 11 keys in 11 levels** (3-11 to 3-14, 3-22, 3-25, 3-27, 3-28, 4-15, 4-16, 4-31; f420 / f570 / f780), by the tracker against the true offsets: **slope 1.012, mean error 0.063 u, max 0.265 u**, true offsets -1.48..1.46 u (`key_bob.py`, `key_bob_summary.json`). Not measured: at 10 levels nothing changes within 20 u of where the fitted camera puts the key node; at 3-17, 3-21, 4-19 and 4-30 that camera (fitted to all changed pixels, `nonreg.py`) puts the template on a crystal or beside the key, or a halo swamps it (`keys_odd_crops.png`); 4-29's before is the disturbed run. No capture carries or drops a key: that path is the suite's alone |
+| 3.1's dial | unchanged but where it is | - | **passes**: its suites print as before (35 dials in 20 levels; drawn shrinking on 32 ticks from 1.1497; taken on tick 61 at 1.0265, then 31 ticks) |
+| Out of `Game::Level`, deterministic (brief 10b(4)) | the bob is the layer's; a run draws the same twice | - | **passes.** No file of `sim/Game`, `sim/Goals` or `sim/Keys` changed. The engine's registry hash does take every quad's transform (`StateHash.cpp:118-146`), as it already takes the sky's (step 58) and the dial's (step 80); the bob moves it as a function of the tick and the level's seed alone: 1-06 f420 from the gate run and from the sweep run, two launches, are byte-identical (`2ac11e0d`) |
+| Non-regression: 1-01 f420 | byte-identical | `a1f8d7ae` | **`a1f8d7ae`: passes** (1-01 places no crystal or key) |
+| Non-regression: the sweep (f420 / f570 / f780) | levels with no crystal or key byte-identical; every other change at a crystal or key | - | **passes on 382 of 384 frames** (`nonreg_after.json`): the **8 levels with no crystal or key byte-identical** on all three; 0 changed frames without one; 336 changed frames in 114 levels, **every changed pixel within 18.5 u** (Chebyshev) of a crystal or key node, the camera fitted per frame; 46 frames identical. **4-29's before run was disturbed**: its log alone of the 260 loads `projectile.png` and `portal_launch.mp3` (a portal shot and placed; the corner's clear-portals button shows), which step 60's sweep and the after run do not show. Its f420 is measured against step 60's sweep instead (no timed crystal there, so steps 61 and 80 changed nothing): within 14.4 u. **Its f570 and f780: NOT MEASURED** (no clean before) |
+| No lightgate row can move | - | - | **passes by census**: no crystal or key node carries a light or a halo (the key script's own `AddLight` is unported, WHAT THE ORIGINAL DOES) |
+| Validation | exit 0, silent | - | **passes**: 130 after launches (single, gate, 128-level sweep) exit 0, validation ACTIVE in 130 of 130 logs, no VUID or Validation Error; the watchdog killed nothing. Before: 132 launches, the two stalls killed (127), 130 of 130 logs ACTIVE and silent |
+
+**THE SUITES.**
+- **`test_mp_motion`** (new) **78 checks, 0 failures** (`af2db34a`, run directly; 73 on the one-seed build's
+  `89c68a99`).
+- **`test_mp_layer` 966 -> 998 checks, 0 failures** (`9a821eb0`, run directly; 997 on the one-seed build's
+  `8984e382`, whose first link `3ddf4877` Smart App Control refused and which was deleted and relinked once).
+- **ctest, once, on the one-seed build: 113 of 122 pass, 0 fail, 9 not run.** Smart App Control refused
+  (BAD_COMMAND) `test_wb_gestures`, `test_mp_levels`, `test_mp_geometry`, `test_mp_timed`, `test_mp_demolish`,
+  `test_mp_keys`, `test_mp_sprites`, `test_mp_info` and `test_camera`; none names `MagicPortalsLayer`, `Motion::` or
+  `motions.json` (grep), and none was relinked. `test_mp_play`, `test_mp_start`, `test_mp_lighting`, `test_mp_sky`,
+  `test_mp_tiers`, `test_mp_zerog`, `test_mp_motion` and `test_mp_layer` passed under it. The seed fix changed
+  `sim/Motion` and the layer only, and the two suites of those were run again (above); ctest was not.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): the `test_mp_motion` and `test_mp_layer` targets, the full build
+(47 steps, 44 links, `4b59f2c4`) and the seed fix's full build (48 links, `MagicPortals.exe` `d48cd9b1`) printed no
+warning or error beyond the environment's `vswhere.exe` notice (`3.2/work/build_*.log`). After the measurements, the
+comments that said the start angles are drawn in "node order" were corrected to drawing order (the layer, `Motion.hpp`,
+`motions.json`'s `_about`) and the tree rebuilt once more (6 compiles, 48 links, no warning): `MagicPortals.exe`
+`b1beb820`, `test_mp_motion.exe` `417d27c9` and `test_mp_layer.exe` `f2c2ab2e` differ from the measured `d48cd9b1`,
+`af2db34a` and `9a821eb0` in comments only and were not launched.
+
+**SMART APP CONTROL.** One refusal, one notification: `test_mp_layer.exe` `3ddf4877` (relinked once). ctest's nine
+BAD_COMMANDs. `MagicPortals.exe` `4b59f2c4` and `d48cd9b1`, `test_mp_motion.exe` `89c68a99` and `af2db34a` and
+`test_mp_layer.exe` `8984e382` and `9a821eb0` ran on their first launch.
+
+**THE VERIFICATION** (the remake's `out/parity/visuals/3.2/verify1/`) re-derived the decode from the listing before
+reading the code (`linearMotion`, `ETHCallback_crystal`, `ETHCallback_key`), found the code matching it, and passed
+every gate it could run. Smart App Control refused `MagicPortals.exe` `b1beb820` on its first launch; relinked once
+from the same source as `f4b93852`, it drew all 384 sweep frames, the 70 gate frames and the composite (`2ac11e0d`)
+byte-identical to `3.2/after/`, which settles the comment-only rebuild; 1-01 f420 `a1f8d7ae`; 130 launches exit 0,
+validation silent, no log loads a shot. The four changed translation units, compiled to scratch objects with ninja's
+own /W4 commands: 0 warnings. `test_mp_motion` (`417d27c9`) 78 and `test_mp_layer` (`f2c2ab2e`) 998 checks, 0
+failures, run once each; ctest was not run again.
+- **Gate 1 by a masked, truncated-L1, sub-pixel shift** of each tick's before frame onto its after frame (f72-f420, 59
+  samples; f6-f66 are the level's fade-in): A **1.489 / 1.482 / 1.477 u** on 844 / 812 / 813 and 1.409 u on 817 (half
+  under the HUD), T **3.139 / 3.135 / 3.144 / 3.141 s**, fit rms 0.023-0.053 u. Against the true offsets over the
+  sweep: 704 samples of 245 crystals in 101 levels, slope 0.987, rms 0.034 u. Unowned keys: 36 samples of 12 keys in
+  12 levels, slope 0.972, rms 0.107 u.
+- **Gate 2 retaken** (its row): chapter 1's measurable crystals read 1.261 / 0.793 / 0.571 u by extent, 1.263 / 0.773
+  / 0.583 by bob2.py's pipeline and 1.301 / 0.773 / 0.610 on their true offsets; the population passes.
+- **F13 retaken** with its own tracker (a static-slab reference, the shake frames left out): 844 A 1.487 u, T 3.190 s;
+  817 1.486 u, 3.187 s; x range 0.10 / 0.15 u.
+- **Non-regression retaken:** the same 8 levels byte-identical (24 of 24 frames), 46 frames identical; of 338 changed
+  frames, 332 have every changed pixel within 18.49 u of a crystal or key node under one camera per level, 3-09's three
+  read 14.0-14.1 u on a grid-refined camera, and 4-29's f420 14.4 u against step 60's sweep (its f570 and f780 not
+  run).
+- Its record nits (gate 1's attribution, the x-drift row, the period figures, gate 2's row, the key's scripted light)
+  were fixed in text only before the commit; nothing that runs was rebuilt.
+
+**LEFT FOR THE OWNER.**
+- **The original's clock drops a fraction of a millisecond every frame (a proposed ruling).** Android's loop hands
+  `ETHEngine::Update` the frame's float milliseconds (`gs2d/src/Platform/android/main.cpp:180`, `ComputeElapsedTimeF`
+  at `Application.cpp:36-50`), and `ETHEngine.cpp:147` stores `static_cast<unsigned long>` of it for
+  `GetLastFrameElapsedTime`. Every `unitsPerSecond` motion and every `elapsedTime +=` clock therefore runs at
+  `floor(dt) / dt` of real time. F13's clip runs at a median 33.3 ms a frame (mean 34.7): a loss of about 0.5 ms a
+  frame predicts a period of **3.188 s**, and the footage measures **3.182 / 3.187 s**. At 60 frames a second (16.67 ms
+  -> 16) it would be 3.27 s. The port steps the exact 1000/60 ms, as the sky (step 58) and the dial (step 80) do, so its
+  period is pi (the gate's pi +- 0.1 holds both). Modelling it needs a frame rate for the original and would move step
+  80's dial clock, step 58's scroll, 3.3's sway and the movers with it: one ruling for all of them.
+- **Pick-up from the bobbed position** (systems_9_10 10b(4), gameplay): the original's crystal and key test their
+  `scale(26)` range from the position `linearMotion` wrote, up to 1.5 u from the node; the port's `Goals` box and
+  `Keys` range stay on the node. And the original bobs a key on the frame it is taken (ins 666-679 before the scan at
+  680-857), where the port's `Keys` tick takes it first. Neither is changed here.
+- **Step 80's interpolation hand-off is declined with a number** (WHAT CHANGED): 0.05 u a tick, and interpolating the
+  dial would split its scale from its cell by a tick.
+- **A static crystal's bucket clock.** `crystal.ent` is `static=1`, so the original starts and holds a crystal's bob
+  only while its bucket is on screen (00_order 8.12c); with a random phase, the port's start on tick 1 cannot be told
+  apart. `key.ent` is `static=0`.
+- **systems_9_10 10b(5)** names bob2.py's extent method for gate 1's fit (00_order section 7's gate 1 names none), and
+  that method follows 0.39-0.86 of the true offset on the port's renders (rms 0.54-0.58 u over the sweep). Amending
+  10b(5), and 00_order's gate 2, to a validated estimator or to the true offsets now that the port's phases are known
+  (704 samples, slope 0.987, rms 0.034 u) is the owner's. Gate 2's statistic reads through the same estimator (slope
+  0.64 on chapter 1's sweep, 0.83 on all), and on chapter 1's measurable subset it is +0.25-0.27 at 3.5 s by every method.
+- **A dropped key's bob is pinned by no test.** It bobs about the drop point from the angle it was taken at (ins
+  978-991), and `Keys::Tick` drops a key through `Carry::Drop` when its carrier ceases, but
+  `ALyingKeyBobsAndACarriedOneDoesNot` covers a lying and a carried key only, and no capture drops one.
+- **`kMotionSeed` (20260917) is a constant in `MagicPortalsLayer.hpp`**, beside the particle and sound seeds (20260912,
+  20260913); when the seeds are consolidated, all three move to data with a port-decision note.
+- **F4 is retired by F13** (00_order section 5).
+- **Two capture stalls that did not reproduce, and one capture that took input** (BASELINE, GATES): a launch that
+  writes frames and then stops, alive and idle; and a `--fixed-step` run of 4-29 that shot and placed a portal, which
+  a run without input cannot. Not chased (no engine bug hunt); recorded in case either recurs.

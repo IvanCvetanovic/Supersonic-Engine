@@ -223,6 +223,7 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error) &&
                       Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error) &&
                       Sky::LoadRules(m_paths.portData + "/sky.json", m_skyRules, error) &&
+                      Motion::LoadRules(m_paths.portData + "/motions.json", m_motionRules, error) &&
                       Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error) &&
                       Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error) &&
                       LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error) &&
@@ -535,6 +536,7 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry, bool keepLightmaps
     m_thrown.clear();
     for (DrawnSprite& drawn : m_sprites) destroy(drawn.quad);
     m_sprites.clear();
+    m_motions.clear();
     for (TimerDial& dial : m_timers) destroy(dial.quad);
     m_timers.clear();
     // The walk arrows and the corner buttons go with the level they were built
@@ -2264,6 +2266,12 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         }
         return -1;
     };
+    // The start angles of the crystals' and keys' bobs, drawn in the level's drawing
+    // order (Sprites::Find's: z_index, then the file's order) from a stream seeded
+    // afresh for this level, from kMotionSeed and its name.
+    m_motions.clear();
+    Motion::Phases phases(Motion::LevelSeed(
+        kMotionSeed, m_current >= 0 ? m_chapters.levels[static_cast<std::size_t>(m_current)].name : std::string()));
     for (Sprites::Sprite& sprite : sprites) {
         DrawnSprite drawn;
         drawn.quad = makeSprite(registry, "Magic Portals Sprite", sprite.texture, sprite.additive);
@@ -2314,6 +2322,20 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
         drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
         drawn.zone = indexOf(m_level.portals.zones, sprite.node);
+        // ETHCallback_crystal and ETHCallback_key each call linearMotion with their
+        // row's arguments; the callback is named by the entity less its .ent, so both
+        // spellings of a placement bob. A crystal or key under any other entity runs
+        // another script and does not.
+        if (const Tscn::Node* node = m_data.scene.FindNode(sprite.node); node != nullptr) {
+            const std::string entity = BareEntityName(*node);
+            const Motion::Row* row = nullptr;
+            if (drawn.crystal >= 0 && m_motionRules.crystal.Names(entity)) row = &m_motionRules.crystal;
+            if (drawn.key >= 0 && m_motionRules.key.Names(entity)) row = &m_motionRules.key;
+            if (row != nullptr) {
+                drawn.motion = static_cast<int>(m_motions.size());
+                m_motions.push_back(Motion::Start(*row, phases.Next(*row)));
+            }
+        }
         if (m_sky.running) {
             for (std::size_t t = 0; t < m_sky.skies.size(); ++t) {
                 if (m_sky.skies[t].node == sprite.node) drawn.sky = static_cast<int>(t);
@@ -2430,6 +2452,14 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             // counts it down on the dial behind it (syncTimers).
             const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
             gone = crystal.collected || crystal.expired;
+            // Where its bob has put it (advanceMotions, this tick): picture and
+            // sparkles together, and its dial after them. The pick-up box stays on
+            // the node: the picture moves, not the crystal Goals takes.
+            if (!gone && drawn.motion >= 0) {
+                const glm::dvec2 bob = Motion::OffsetPx(m_motions[static_cast<std::size_t>(drawn.motion)]);
+                centrePx += bob;
+                ownerPx += bob;
+            }
         } else if (drawn.key >= 0) {
             // A key is not a body (Keys.hpp): where the carry left it, picture and
             // sparkle together. The fly-in it plays once spent is not built
@@ -2441,6 +2471,14 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
                    m_level.keys.keyholes[static_cast<std::size_t>(key.opened)].gone;
             centrePx += key.atPx - sprite.atPx;
             ownerPx = key.atPx;
+            // Lying unowned, it bobs about where it lies: where the level put it, or
+            // where it was dropped (ETHCallback_key rewrites originalPos on every
+            // carried frame). Carried or spent, it does not.
+            if (!gone && motionRuns(drawn)) {
+                const glm::dvec2 bob = Motion::OffsetPx(m_motions[static_cast<std::size_t>(drawn.motion)]);
+                centrePx += bob;
+                ownerPx += bob;
+            }
         } else if (drawn.diamond >= 0) {
             const Diamonds::Diamond& diamond = m_level.diamonds.diamonds[static_cast<std::size_t>(drawn.diamond)];
             gone = diamond.gone;
@@ -2532,6 +2570,53 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             m_platformDrawn = true;
         }
     }
+}
+
+bool MagicPortalsLayer::motionRuns(const DrawnSprite& drawn) const {
+    if (drawn.motion < 0 || drawn.quad == entt::null) return false;
+    if (drawn.crystal >= 0) {
+        // ETHCallback_crystal runs while the crystal is there; taken or expired, it
+        // is deleted.
+        const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
+        return !crystal.collected && !crystal.expired;
+    }
+    if (drawn.key >= 0) {
+        // ETHCallback_key ins 204-220 send a key that found its keyhole to its fly-in,
+        // and ins 653-665 a carried one to the carried branch: neither bobs.
+        const Keys::Key& key = m_level.keys.keys[static_cast<std::size_t>(drawn.key)];
+        return key.owner == entt::null && !key.spent;
+    }
+    return false;
+}
+
+void MagicPortalsLayer::advanceMotions(float fixedDelta) {
+    // The tick is the frame the callbacks run on. A paused or popped-up level is not
+    // stepped, which is the original's m_factor 0: the angle holds.
+    const double frameMs = static_cast<double>(fixedDelta) * 1000.0;
+    for (const DrawnSprite& drawn : m_sprites) {
+        if (!motionRuns(drawn)) continue;
+        Motion::Advance(m_motionRules, m_motions[static_cast<std::size_t>(drawn.motion)], frameMs);
+    }
+}
+
+std::vector<MagicPortalsLayer::MotionReport> MagicPortalsLayer::MotionReports() const {
+    std::vector<MotionReport> reports;
+    reports.reserve(m_motions.size());
+    for (const DrawnSprite& drawn : m_sprites) {
+        if (drawn.motion < 0) continue;
+        MotionReport report;
+        report.node = drawn.sprite.node;
+        report.crystal = drawn.crystal >= 0;
+        report.drawn = drawn.quad != entt::null;
+        report.quad = drawn.quad;
+        report.moving = motionRuns(drawn);
+        report.motion = m_motions[static_cast<std::size_t>(drawn.motion)];
+        report.offsetPx = report.moving ? Motion::OffsetPx(report.motion) : glm::dvec2(0.0);
+        report.centrePx = drawn.centrePx;
+        report.ownerPx = drawn.ownerPx;
+        reports.push_back(std::move(report));
+    }
+    return reports;
 }
 
 // ETHCallback_timer, once a tick (art.json timer has the bytecode). The port's
@@ -4594,6 +4679,9 @@ void MagicPortalsLayer::stepLevel(entt::registry& registry, float direction, flo
     // over in one piece when they start, as the original's load hands it.
     tickNoPortalSign(Hud::HandOver(m_hudRules, m_levelAgeMs, static_cast<double>(fixedDelta) * 1000.0,
                                    m_sign.heldMs));
+    // linearMotion's calls BEFORE the pictures are placed: a call steps the angle and
+    // writes the position in one, and the frame draws what it wrote (motions.json).
+    advanceMotions(fixedDelta);
     syncDrawables(registry);
     // StaticSky::update's order: every sky placed (syncSprites, just now), and
     // only then its scroll moved on, so the next tick draws what this one left.

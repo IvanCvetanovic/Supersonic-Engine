@@ -59,6 +59,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -4513,6 +4514,276 @@ void ATakenCrystalsDialShrinksAway() {
     layer.OnDetach(registry);
 }
 
+// ---- the crystals' and keys' bob (the visuals plan's 3.2) -------------------------
+//
+// ETHCallback_crystal and ETHCallback_key call linearMotion once a frame: speed 2,
+// stride 1.5, vertical, from a start angle of randF(PI) (motions.json). The layer
+// makes that call once a tick for a crystal while it lives and a key while no one
+// carries it and it is not spent, BEFORE it places the pictures, and moves the
+// picture and what its entity carries by the offset: never Game::Level.
+
+MagicPortals::Motion::Rules MotionRules() {
+    MagicPortals::Motion::Rules rules;
+    std::string error;
+    CHECK_MSG(MagicPortals::Motion::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/motions.json", rules, error),
+              error);
+    return rules;
+}
+
+std::optional<MagicPortalsLayer::MotionReport> MotionOf(const MagicPortalsLayer& layer, const std::string& node) {
+    for (const MagicPortalsLayer::MotionReport& report : layer.MotionReports()) {
+        if (report.node == node) return report;
+    }
+    return std::nullopt;
+}
+
+glm::dvec2 QuadPx(entt::registry& registry, entt::entity quad) {
+    if (quad == entt::null || !registry.valid(quad)) return glm::dvec2(-1e9);
+    return MagicPortals::Units::ToPixels(registry.get<TransformComponent>(quad).position);
+}
+
+void ACrystalBobsAsItsScriptDoes() {
+    if (!OriginalArtIsThere("ACrystalBobsAsItsScriptDoes")) return;
+    namespace Motion = MagicPortals::Motion;
+    const Motion::Rules rules = MotionRules();
+    // 1-06 (level5): five crystals, the capture gate's level.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level5");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+
+    // At load no call has run: every crystal where the level put it, each with a
+    // start angle of its own on [0, PI].
+    const std::vector<MagicPortalsLayer::MotionReport> atLoad = layer.MotionReports();
+    CHECK_MSG(atLoad.size() == 5 && layer.SimLevel()->goals.crystals.size() == 5,
+              std::to_string(atLoad.size()) + " bobbing pictures");
+    std::set<double> starts;
+    int wrongAtLoad = 0;
+    for (const MagicPortalsLayer::MotionReport& report : atLoad) {
+        starts.insert(report.motion.startAngle);
+        const bool ok = report.crystal && report.drawn && report.moving && !report.motion.started &&
+                        report.offsetPx == glm::dvec2(0.0) && report.motion.startAngle >= 0.0 &&
+                        report.motion.startAngle <= static_cast<double>(3.141592654f) &&
+                        glm::distance(QuadPx(registry, report.quad), report.centrePx) < 1e-3;
+        if (!ok) ++wrongAtLoad;
+    }
+    CHECK_MSG(wrongAtLoad == 0, std::to_string(wrongAtLoad) + " crystals not still, unstarted and in range at load");
+    CHECK_MSG(starts.size() == atLoad.size(), "a start angle each: " + std::to_string(starts.size()) + " distinct");
+    CloseTheLevelStartPopup(layer, registry);
+
+    // Every tick the level runs: one call, the tick's step, and the picture and the
+    // sparkles moved by its offset from where the level put them.
+    std::vector<MagicPortalsLayer::MotionReport> previous = layer.MotionReports();
+    std::vector<double> lowest(atLoad.size(), 1e9);
+    std::vector<double> highest(atLoad.size(), -1e9);
+    int stepped = 0;
+    int held = 0;
+    int wrong = 0;
+    std::string first;
+    for (int tick = 0; tick < 420; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        const std::vector<MagicPortalsLayer::MotionReport> now = layer.MotionReports();
+        const std::vector<MagicPortalsLayer::EmitterReport> emitters = layer.EmitterReports();
+        if (now.size() != atLoad.size()) {
+            ++wrong;
+            break;
+        }
+        for (std::size_t i = 0; i < now.size(); ++i) {
+            const MagicPortalsLayer::MotionReport& report = now[i];
+            Motion::Linear expected = previous[i].motion;
+            Motion::Advance(rules, expected, static_cast<double>(MagicPortalsLayer::kTick) * 1000.0);
+            const bool didStep = report.motion.angle != previous[i].motion.angle || report.motion.started != previous[i].motion.started;
+            if (didStep) {
+                ++stepped;
+                if (report.motion.angle != expected.angle || !report.motion.started) {
+                    if (wrong++ == 0) first = report.node + " on tick " + std::to_string(tick) + ": angle";
+                }
+            } else {
+                ++held;
+            }
+            const glm::dvec2 offset = Motion::OffsetPx(report.motion);
+            const auto* sparkle = ReportOf(emitters, report.node, 0);
+            const bool placed = report.offsetPx == offset && std::fabs(offset.x) == 0.0 &&
+                                glm::distance(report.centrePx, atLoad[i].centrePx + offset) < 1e-9 &&
+                                glm::distance(report.ownerPx, atLoad[i].ownerPx + offset) < 1e-9 &&
+                                glm::distance(QuadPx(registry, report.quad), report.centrePx) < 1e-3 &&
+                                sparkle != nullptr && sparkle->owner.atPx == report.ownerPx;
+            if (!placed && wrong++ == 0) {
+                first = report.node + " on tick " + std::to_string(tick) + ": drawn at " + Point(report.centrePx) +
+                        ", offset " + Point(report.offsetPx);
+            }
+            lowest[i] = std::min(lowest[i], offset.y);
+            highest[i] = std::max(highest[i], offset.y);
+        }
+        previous = now;
+    }
+    int fullSwing = 0;
+    for (std::size_t i = 0; i < atLoad.size(); ++i) {
+        if (highest[i] > 1.49 && lowest[i] < -1.49 && highest[i] <= 1.5 && lowest[i] >= -1.5) ++fullSwing;
+    }
+    std::printf("  1-06's crystals: %d steps, %d held, %d of %zu swung 1.5 either way over 7 s\n", stepped, held,
+                fullSwing, atLoad.size());
+    CHECK_MSG(wrong == 0, std::to_string(wrong) + " wrong; the first " + first);
+    CHECK_MSG(stepped >= 5 * 400, "a call a tick: " + std::to_string(stepped));
+    CHECK_EQ(fullSwing, static_cast<int>(atLoad.size()));
+
+    // THE PAUSE: m_factor 0, so the angle holds and nothing moves under it.
+    CHECK_MSG(TapThePauseControl(layer, registry), "the pause control is there to tap");
+    CHECK(layer.Paused());
+    const std::vector<MagicPortalsLayer::MotionReport> paused = layer.MotionReports();
+    int movedUnderThePause = 0;
+    for (int tick = 0; tick < 120; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        const std::vector<MagicPortalsLayer::MotionReport> now = layer.MotionReports();
+        for (std::size_t i = 0; i < now.size() && i < paused.size(); ++i) {
+            if (now[i].motion.angle != paused[i].motion.angle || now[i].centrePx != paused[i].centrePx ||
+                QuadPx(registry, now[i].quad) != QuadPx(registry, paused[i].quad)) {
+                ++movedUnderThePause;
+            }
+        }
+    }
+    CHECK_MSG(layer.Paused() && movedUnderThePause == 0,
+              std::to_string(movedUnderThePause) + " crystal-ticks moved under the pause");
+    layer.OnDetach(registry);
+}
+
+void ALyingKeyBobsAndACarriedOneDoesNot() {
+    if (!OriginalArtIsThere("ALyingKeyBobsAndACarriedOneDoesNot")) return;
+    namespace Motion = MagicPortals::Motion;
+    // 3-08 (level7b): key_ent_1335, taken up by the player.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level7b");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    CloseTheLevelStartPopup(layer, registry);
+    const std::string name = "key_ent_1335";
+    int keys = 0;
+    for (const MagicPortalsLayer::MotionReport& report : layer.MotionReports()) {
+        if (!report.crystal) ++keys;
+    }
+    CHECK_MSG(keys == static_cast<int>(layer.SimLevel()->keys.keys.size()) && keys == 1, "the level's one key bobs");
+    const auto* key = layer.SimLevel()->keys.FindKey(name);
+    CHECK(key != nullptr);
+    if (key == nullptr) return;
+    const glm::dvec2 lyingAt = key->atPx;
+
+    // Lying: about where it lies, sparkles and all.
+    int wrong = 0;
+    for (int tick = 0; tick < 200; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        const std::optional<MagicPortalsLayer::MotionReport> report = MotionOf(layer, name);
+        const auto* sparkle = ReportOf(layer.EmitterReports(), name, 0);
+        const glm::dvec2 offset = report ? Motion::OffsetPx(report->motion) : glm::dvec2(0.0);
+        if (!report || !report->moving || !report->motion.started || report->offsetPx != offset ||
+            glm::distance(report->ownerPx, lyingAt + offset) > 1e-9 ||
+            glm::distance(QuadPx(registry, report->quad), report->centrePx) > 1e-3 || sparkle == nullptr ||
+            sparkle->owner.atPx != report->ownerPx) {
+            ++wrong;
+        }
+    }
+    CHECK_MSG(wrong == 0, std::to_string(wrong) + " ticks the lying key was not drawn about where it lies, bobbed");
+
+    // Taken: no call, so no offset, and its angle holds for when it is dropped.
+    PutPlayerAt(registry, layer, lyingAt);
+    tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.SimLevel()->keys.FindKey(name)->owner == layer.SimLevel()->player, "the player takes the key");
+    const std::optional<MagicPortalsLayer::MotionReport> taken = MotionOf(layer, name);
+    CHECK(taken.has_value());
+    if (!taken) return;
+    int carriedWrong = 0;
+    for (int tick = 0; tick < 120; ++tick) {
+        PutPlayerAt(registry, layer, glm::dvec2(lyingAt.x + 2.0 * tick, lyingAt.y));
+        tickWith(layer, registry, kRest, {}, {});
+        const std::optional<MagicPortalsLayer::MotionReport> report = MotionOf(layer, name);
+        const auto* carried = layer.SimLevel()->keys.FindKey(name);
+        if (!report || report->moving || report->offsetPx != glm::dvec2(0.0) ||
+            report->motion.angle != taken->motion.angle || report->ownerPx != carried->atPx ||
+            glm::distance(QuadPx(registry, report->quad), report->centrePx) > 1e-3) {
+            ++carriedWrong;
+        }
+    }
+    CHECK_MSG(carriedWrong == 0, std::to_string(carriedWrong) + " carried ticks bobbed or moved the angle");
+    layer.OnDetach(registry);
+}
+
+void ABobsPhasesAreTheLevelsOwn() {
+    if (!OriginalArtIsThere("ABobsPhasesAreTheLevelsOwn")) return;
+    const auto startsOf = [](const MagicPortalsLayer& layer) {
+        std::vector<std::pair<std::string, double>> starts;
+        for (const MagicPortalsLayer::MotionReport& report : layer.MotionReports()) {
+            starts.emplace_back(report.node, report.motion.startAngle);
+        }
+        return starts;
+    };
+    std::vector<std::pair<std::string, double>> fresh[2];
+    for (int run = 0; run < 2; ++run) {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level5");
+        layer.OnAttach(registry);
+        fresh[run] = startsOf(layer);
+        layer.OnDetach(registry);
+    }
+    CHECK_MSG(fresh[0].size() == 5 && fresh[0] == fresh[1], "1-06 draws the same phases on every run");
+    std::set<double> firstFive;
+    for (const auto& [node, start] : fresh[0]) firstFive.insert(start);
+    // After another level: re-seeded, so what was played before does not move them.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level4");
+    layer.OnAttach(registry);
+    CHECK_MSG(!layer.MotionReports().empty(), "1-05 has crystals of its own");
+    // Its own phases, not 1-06's: each level's stream is seeded with its name.
+    int shared = 0;
+    for (const MagicPortalsLayer::MotionReport& report : layer.MotionReports()) {
+        if (firstFive.count(report.motion.startAngle) != 0) ++shared;
+    }
+    CHECK_MSG(shared == 0, std::to_string(shared) + " of 1-05's start angles are 1-06's");
+    press(layer, registry, MagicPortalsLayer::kSkip);
+    CHECK(IsAt(layer, "level5"));
+    CHECK_MSG(startsOf(layer) == fresh[0], "1-06 after 1-05 draws 1-06's phases");
+    layer.OnDetach(registry);
+}
+
+void ATimedCrystalsDialBobsWithIt() {
+    // The dial takes its crystal's drawn centre every tick (ETHCallback_timer ins
+    // 93-100, SetPositionXY(crystal.GetPositionXY())), which is the bobbed one.
+    if (!OriginalArtIsThere("ATimedCrystalsDialBobsWithIt")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level26");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    const std::string name = "crystal_1264";
+    double lowest = 1e9;
+    double highest = -1e9;
+    int apart = 0;
+    for (int tick = 0; tick < 240; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        const std::optional<MagicPortalsLayer::TimerReport> dial = DialOf(layer, name);
+        const std::optional<MagicPortalsLayer::MotionReport> crystal = MotionOf(layer, name);
+        if (!dial || !crystal || dial->atPx != crystal->centrePx) {
+            ++apart;
+            continue;
+        }
+        lowest = std::min(lowest, dial->atPx.y);
+        highest = std::max(highest, dial->atPx.y);
+    }
+    std::printf("  1-27's dial: y %.3f..%.3f with its crystal\n", lowest, highest);
+    CHECK_MSG(apart == 0, std::to_string(apart) + " ticks the dial was not on its bobbing crystal");
+    CHECK_MSG(highest - lowest > 2.99 && highest - lowest <= 3.0 + 1e-9,
+              "and swung the crystal's 3 units: " + std::to_string(highest - lowest));
+    layer.OnDetach(registry);
+}
+
 // ---- the lightmaps (step 47) ------------------------------------------------------
 //
 // A static sprite that applies light adds its baked lightmap, the level's
@@ -5294,6 +5565,10 @@ void runTests() {
     EveryTimedCrystalHasADialBehindIt();
     ATimedCrystalCountsDownOnItsDialAndNeverFades();
     ATakenCrystalsDialShrinksAway();
+    ACrystalBobsAsItsScriptDoes();
+    ALyingKeyBobsAndACarriedOneDoesNot();
+    ABobsPhasesAreTheLevelsOwn();
+    ATimedCrystalsDialBobsWithIt();
     LightmapsAreDrawnOverTheirSprites();
     TheTorchIsALightAndAHalo();
     AShotCarriesItsOwnLight();

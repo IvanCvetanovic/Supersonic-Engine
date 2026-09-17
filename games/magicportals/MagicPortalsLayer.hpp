@@ -32,6 +32,7 @@
 #include "sim/Locking.hpp"
 #include "sim/MainMenu.hpp"
 #include "sim/MenuState.hpp"
+#include "sim/Motion.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Pause.hpp"
 #include "sim/Popup.hpp"
@@ -346,6 +347,21 @@ public:
     };
     std::vector<TimerReport> TimerReports() const;
 
+    // Each crystal's and key's linearMotion (sim/Motion, motions.json), for the
+    // suites, in the level's drawing order (m_sprites'): as the last tick left it.
+    struct MotionReport {
+        std::string node;           // the entity's node
+        bool crystal = false;       // a crystal's, or else a key's
+        bool drawn = false;         // its picture is there
+        entt::entity quad{entt::null}; // that picture
+        bool moving = false;        // its script calls linearMotion now: a live crystal, an unowned unspent key
+        Motion::Linear motion;      // the start angle, the angle, whether the first call has run
+        glm::dvec2 offsetPx{0.0};   // what the last call put on its picture, 0 while it does not move
+        glm::dvec2 centrePx{0.0};   // where its picture was last drawn
+        glm::dvec2 ownerPx{0.0};    // where its entity stands: its particles' origin
+    };
+    std::vector<MotionReport> MotionReports() const;
+
     // A screen point (Input's coordinates) as the point in the level under it,
     // in the remake's pixels. False when there is no viewport or camera.
     bool ScreenToLevelPx(const entt::registry& registry, const glm::vec2& screenPoint, glm::dvec2& outPx) const;
@@ -605,6 +621,7 @@ private:
         int zone{-1};         // in portals.zones
         int sky{-1};          // in m_sky.skies: pinned to the camera, not where the level put it
         bool satellite{false}; // m_sky's satellite, pinned the same way
+        int motion{-1};       // in m_motions: a crystal or key its script bobs
     };
 
     void bindInput();
@@ -666,6 +683,12 @@ private:
     // The timed crystals' dials, after syncSprites has placed their crystals: on
     // the tick, as ETHCallback_timer runs a frame.
     void syncTimers(entt::registry& registry);
+    // One linearMotion call for every crystal and key whose script makes one this
+    // tick (sim/Motion), BEFORE syncSprites draws where it leaves them.
+    void advanceMotions(float fixedDelta);
+    // Whether a picture's script calls linearMotion now: a crystal while it lives,
+    // a key while no one carries it and it has not found its keyhole.
+    bool motionRuns(const DrawnSprite& drawn) const;
     void syncBoss(entt::registry& registry);
     // The carrancas' fireballs. Its own function rather than a block inside
     // syncBoss: they belong to a turret, not to the beholder, and every level
@@ -786,6 +809,16 @@ private:
     Art::Rules m_artRules;                  // the port's art.json
     Sky::Rules m_skyRules;                  // the port's sky.json
     Sky::Controller m_sky;                  // the level's StaticSky, built with its sprites
+    Motion::Rules m_motionRules;            // the port's motions.json
+    // One per crystal and key whose picture is drawn, in the level's drawing order
+    // (DrawnSprite::motion). Picture-side only: never Game::Level or the state hash.
+    std::vector<Motion::Linear> m_motions;
+    // The start angles' stream, re-seeded for every level it builds with this mixed
+    // with the level's name (Motion::LevelSeed), so a level's phases are its own,
+    // do not depend on what was played before it, and no other generator's draws
+    // move (00_order K8). The original's are randF(PI) off a clock-seeded generator
+    // and cannot be recovered; this is the port's determinism choice.
+    static constexpr std::uint32_t kMotionSeed = 20260917u;
     std::vector<entt::entity> m_portalQuads; // one per placed portal, when its image is there
     entt::entity m_shotQuad{entt::null};    // the shot in flight, when its image is there
     entt::entity m_playerQuad{entt::null};  // the player, when its image is there
