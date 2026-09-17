@@ -3,6 +3,7 @@
 #include "core/DetMath.hpp"
 #include "core/Json.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <fstream>
@@ -179,6 +180,42 @@ glm::dvec2 Pulse::ScaleAt(double elapsedMs) const {
     return fromScale + (toScale - fromScale) * eased;
 }
 
+int Timer::FrameAt(double elapsedMs, double timeMs) const {
+    if (!(timeMs > 0.0)) return frames - 1;
+    // uTOf, DIVf, MULIf 8f and fTOi (ETHCallback_timer ins 233-239), then
+    // max(frame, 0) and min(7) (ins 242-248): single precision, as the script's
+    // floats are, so a cell turns on the same millisecond.
+    const float at = static_cast<float>(elapsedMs) / static_cast<float>(timeMs) * static_cast<float>(frames);
+    return static_cast<int>(std::clamp(at, 0.0f, static_cast<float>(frames - 1)));
+}
+
+double Timer::LegMs(double elapsedMs, double timeMs) const {
+    return std::max(pulseMinLegMs, timeMs - elapsedMs);
+}
+
+glm::dvec2 Timer::PulseAt(double elapsedMs, double timeMs) const {
+    // bounce(thisEntity, V2_ONE, vector2(1.15, 1.15), max(400, timeLeft)) (ins
+    // 204-231): its blinkElapsedTime starts at 0 and takes the same frame times
+    // as elapsedTime, so the two are one clock. Only the leg changes each frame.
+    Pulse pulse;
+    pulse.fromScale = glm::dvec2(pulseFrom);
+    pulse.toScale = glm::dvec2(pulseTo);
+    pulse.strideMs = LegMs(elapsedMs, timeMs);
+    return pulse.ScaleAt(elapsedMs);
+}
+
+double Timer::DecayOver(double seconds) const {
+    return std::pow(shrinkPerFrame, seconds * decayFramesPerSecond);
+}
+
+bool Timer::Gone(double scaleX) const {
+    // GetScale().x < 0.1f (ETHCallback_timer ins 184-199). GetScale is what
+    // SetScale stored, and bounce stored g_scale.scale(the pulse) (ins 90-102):
+    // the port's scale x m_scaleFactor. Only this test is in those units; the
+    // port draws the cell at its own.
+    return scaleX * screenPxPerUnit < goneBelowScale;
+}
+
 bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
@@ -267,6 +304,49 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     statics.entity = portalStatic["entity"].AsString("");
     statics.scale = portalStatic["scale"].AsNumber();
     statics.red = portalStatic["red"].AsString("");
+
+    // The dial behind a timed crystal: timer.ent's picture, whose cell is chosen
+    // rather than played, and the numbers its script runs it by. None has a
+    // default: without them the port would draw no dial, or the fade the
+    // original never had.
+    if (!root.Has("timer")) {
+        error = path + ": timer is an object";
+        return false;
+    }
+    const Json::Value& timerEntry = root["timer"];
+    if (!ReadPicture(timerEntry, "timer", static_cast<Picture&>(read.timer), why, false)) {
+        error = path + ": " + why;
+        return false;
+    }
+    Timer& timer = read.timer;
+    const auto between = [&timerEntry](const char* key, double above, double atMost) {
+        return Finite(timerEntry[key]) && timerEntry[key].AsNumber() > above && timerEntry[key].AsNumber() <= atMost;
+    };
+    const Json::Value& decayRate = timerEntry["decay_frames_per_second"];
+    const bool clockOk = WholeAtLeastOne(timerEntry["frames"], timer.frames) && timer.frames <= timer.Frames() &&
+                         between("alpha", 0.0, 1.0) && Finite(timerEntry["z_offset"]) &&
+                         timerEntry["z_offset"].AsNumber() == std::floor(timerEntry["z_offset"].AsNumber()) &&
+                         between("pulse_from", 0.0, 1e9) && between("pulse_to", 0.0, 1e9) &&
+                         between("pulse_min_leg_ms", 0.0, 1e9) && between("shrink_per_frame", 0.0, 1.0) &&
+                         timerEntry["shrink_per_frame"].AsNumber() < 1.0 && between("gone_below_scale", 0.0, 1.0) &&
+                         timerEntry["gone_below_scale"].AsNumber() < 1.0 && decayRate.IsObject() &&
+                         Finite(decayRate["value"]) && decayRate["value"].AsNumber() > 0.0 &&
+                         between("screen_px_per_unit", 0.0, 1e9);
+    if (!clockOk) {
+        error = path + ": timer needs frames from 1 to its cells, alpha above 0 and at most 1, a whole z_offset, "
+                       "pulse_from, pulse_to and pulse_min_leg_ms above 0, shrink_per_frame and gone_below_scale "
+                       "between 0 and 1, decay_frames_per_second.value above 0 and screen_px_per_unit above 0";
+        return false;
+    }
+    timer.alpha = timerEntry["alpha"].AsNumber();
+    timer.zOffset = static_cast<int>(timerEntry["z_offset"].AsNumber());
+    timer.pulseFrom = timerEntry["pulse_from"].AsNumber();
+    timer.pulseTo = timerEntry["pulse_to"].AsNumber();
+    timer.pulseMinLegMs = timerEntry["pulse_min_leg_ms"].AsNumber();
+    timer.shrinkPerFrame = timerEntry["shrink_per_frame"].AsNumber();
+    timer.decayFramesPerSecond = decayRate["value"].AsNumber();
+    timer.goneBelowScale = timerEntry["gone_below_scale"].AsNumber();
+    timer.screenPxPerUnit = timerEntry["screen_px_per_unit"].AsNumber();
     out = std::move(read);
     return true;
 }

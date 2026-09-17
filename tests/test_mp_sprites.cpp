@@ -359,6 +359,58 @@ void AStaticPortalWithoutItsScriptIsRefused() {
     refused("\"red\": \"red\"", "\"red\": \"\"", "no red");
 }
 
+// The dial behind a timed crystal (art.json timer): timer.ent's facts, pinned. The
+// clock it runs by is test_mp_timed's.
+void TheTimerIsTimerEnt() {
+    Art::Rules rules;
+    std::string error;
+    const bool ok = Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", rules, error);
+    CHECK_MSG(ok, error);
+    const Art::Timer& timer = rules.timer;
+    CHECK_MSG(timer.sprite == "timer.png" && !timer.additive && timer.columns == 4 && timer.rows == 2,
+              "timer.ent: timer.png, cut 4 x 2, mixed");
+    CHECK_MSG(timer.frames == 8 && timer.frames == timer.Frames(), "the time in eight cells, every cell of the cut");
+    CHECK_MSG(timer.emissive == glm::dvec3(1.0) && !timer.isStatic && !timer.applyLight && timer.normal.empty() &&
+                  !timer.light,
+              "emissive 1, not static, applies no light, no normal map, no light");
+    CHECK_MSG(timer.framesPerSecond == 0.0, "its cell is chosen by the time, never played");
+    CHECK_MSG(timer.alpha == 0.5 && timer.zOffset == -2, "SetAlpha(0.5f), 2 behind its crystal");
+}
+
+// Without the timer the port would draw no dial - or the remake's fade, which the
+// original never had.
+void ATimerWithoutItsClockIsRefused() {
+    std::ifstream file(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", std::ios::binary);
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string real = buffer.str();
+    const auto refused = [&real](const std::string& from, const std::string& to, const std::string& name,
+                                 const std::string& says) {
+        std::string text = real;
+        const std::size_t at = text.find(from);
+        CHECK_MSG(at != std::string::npos, from);
+        if (at == std::string::npos) return;
+        text.replace(at, from.size(), to);
+        const std::filesystem::path path = Scratch() / ("art-timer-" + name + ".json");
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Art::Rules rules;
+        std::string error;
+        const bool ok = Art::LoadRules(path.string(), rules, error);
+        CHECK_MSG(!ok, "refused: " + name);
+        CHECK_MSG(error.find(says) != std::string::npos, name + ": " + error);
+    };
+    refused("\"timer\": {", "\"timer_gone\": {", "absent", "timer is an object");
+    refused("\"sprite\": \"timer.png\",", "", "no sprite", "timer needs sprite and additive");
+    refused("\"frames\": 8,", "\"frames\": 9,", "more frames than cells", "timer needs frames");
+    refused("\"alpha\": 0.5,", "\"alpha\": 0,", "alpha 0", "timer needs frames");
+    refused("\"z_offset\": -2,", "\"z_offset\": -2.5,", "a z_offset between depths", "timer needs frames");
+    refused("\"pulse_to\": 1.15,", "", "no pulse_to", "timer needs frames");
+    refused("\"pulse_min_leg_ms\": 400.0,", "\"pulse_min_leg_ms\": 0,", "a leg of 0", "timer needs frames");
+    refused("\"shrink_per_frame\": 0.9,", "\"shrink_per_frame\": 1.0,", "no shrink", "timer needs frames");
+    refused("\"gone_below_scale\": 0.1", "\"gone_below_scale\": 0", "never gone", "timer needs frames");
+    refused("\"screen_px_per_unit\": 2.8125,", "\"screen_px_per_unit\": 0,", "no scale factor", "timer needs frames");
+}
+
 void APulseGoesThereAndBack() {
     // bounce(): from one scale to the other in a stride, eased by smoothEnd, and
     // back in the next.
@@ -488,6 +540,14 @@ void TheOriginalsImagesAreCutAsTheEntsSay() {
     CHECK_MSG(normal && w == 4 * 32 && h == 4 * 32, "normalmap_77.png is sixteen cells of 32 x 32: " + error);
     const bool halo2 = Sprites::ImageSize(kOriginal + "/entities/halo.bmp", w, h, error);
     CHECK_MSG(halo2 && w == 64 && h == 64, "halo.bmp is 64 x 64: " + error);
+    // The timed crystal's dial: eight cells of 32 x 32, and no hd or fullhd twin, so
+    // the 1x picture is the one every screen draws.
+    const bool timer = Sprites::ImageSize(kOriginal + "/entities/timer.png", w, h, error);
+    CHECK_MSG(timer && w == 4 * 32 && h == 2 * 32, "timer.png is eight cells of 32 x 32: " + error);
+    std::error_code ec;
+    CHECK_MSG(!std::filesystem::exists(kOriginal + "/entities/hd/timer.png", ec) &&
+                  !std::filesystem::exists(kOriginal + "/entities/fullhd/timer.png", ec),
+              "timer.png has no hd or fullhd twin");
 }
 
 // ---- the converted levels -----------------------------------------------------
@@ -1267,6 +1327,8 @@ int main() {
     WhatTheReaderDoesNotDrawIsNamed();
     ThePortalAndTheShotAreTheirEnts();
     AStaticPortalWithoutItsScriptIsRefused();
+    TheTimerIsTimerEnt();
+    ATimerWithoutItsClockIsRefused();
     APulseGoesThereAndBack();
     ASheetThatDoesNotSayHowFastIsRefused();
     APictureWithoutItsEmissiveIsRefused();

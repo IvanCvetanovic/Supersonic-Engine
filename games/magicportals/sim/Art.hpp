@@ -106,6 +106,43 @@ struct StaticPortal {
     glm::dvec3 TintFor(const std::string& colour) const { return colour == red ? tintRed : tintOtherwise; }
 };
 
+// The dial the original adds behind a timed crystal, as timer.ent draws it and
+// its script runs it (art.json's timer; addTimerToCrystal and ETHCallback_timer).
+// It is added `zOffset` behind the crystal at alpha `alpha`, and every frame
+// follows it. While the time lasts it shows one of `frames` cells by the time
+// elapsed, and pulses from pulseFrom to pulseTo and back by bounce(), each way
+// a leg of max(pulseMinLegMs, the time left): the pulse quickens as time runs
+// out. From the frame the time is up, or from the frame after the one that
+// finds the crystal taken, it shrinks and fades by shrinkPerFrame a frame and is
+// deleted when its scale, as the original stores it, drops below goneBelowScale
+// (Gone). The crystal never fades: it goes at its time.
+struct Timer : Picture {
+    int frames = 1;                 // the cells the time is divided into
+    double alpha = 1.0;             // SetAlpha when it is added
+    int zOffset = 0;                // its depth from the crystal's
+    double pulseFrom = 1.0;         // bounce()'s two scales
+    double pulseTo = 1.0;
+    double pulseMinLegMs = 0.0;     // the shortest leg of the pulse
+    double shrinkPerFrame = 1.0;    // scale and alpha, a frame, once the time is up
+    double decayFramesPerSecond = 0.0; // the frames that shrink is counted in
+    double goneBelowScale = 0.0;    // deleted once its stored scale x drops below this
+    double screenPxPerUnit = 0.0;   // m_scaleFactor: its stored scale over the port's
+
+    // The cell shown `elapsedMs` into a time of `timeMs`: int(elapsed / time x
+    // frames) in floats, as the script computes it, clamped to the cells.
+    int FrameAt(double elapsedMs, double timeMs) const;
+    // A leg of the pulse at that moment: max(pulseMinLegMs, time - elapsed).
+    double LegMs(double elapsedMs, double timeMs) const;
+    // Its scale at that moment: bounce() with this moment's leg, whose count of
+    // legs so far - the elapsed time over the leg - says which way it goes.
+    glm::dvec2 PulseAt(double elapsedMs, double timeMs) const;
+    // What its scale and alpha are multiplied by over `seconds` of shrinking.
+    double DecayOver(double seconds) const;
+    // Whether a dial of `scaleX` in the port's units is deleted: ins 184-199 test
+    // the entity's stored scale, which bounce set as the pulse x m_scaleFactor.
+    bool Gone(double scaleX) const;
+};
+
 struct Rules {
     Picture portal;      // portal.ent
     Picture shot;        // projectile.ent
@@ -115,6 +152,7 @@ struct Rules {
     Spike spike;         // beholder_spike.ent, its spikes
     // portal_static: placed by the levels, redrawn by its script
     StaticPortal staticPortal;
+    Timer timer;         // timer.ent, the dial behind a timed crystal
 };
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error);

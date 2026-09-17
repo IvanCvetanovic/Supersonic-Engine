@@ -57,6 +57,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -4204,56 +4207,267 @@ void AShotIsDimmedAndADarkLevelIsDark() {
     layer.OnDetach(registry);
 }
 
-void ATimedCrystalFadesInItsAlphaAlone() {
-    // A timed crystal's fade used to be written straight into its albedo. Since
-    // step 45 it is a factor on C's alpha that syncLighting multiplies with the
-    // ambient term, so this pins that the fade still arrives, and only in alpha.
-    // 1-15 (level14): crystal_861 goes at 12 s, and like its four untimed
-    // neighbours it is emissive 1 under the file's (0.25, 0.25, 0.4), so every
-    // crystal's colour stays whole.
+// ---- the timed crystals' dials (the visuals plan's 3.1) -------------------------
+//
+// The original never fades a timed crystal. addTimerToCrystal adds timer.ent 2
+// behind it at alpha 0.5, and ETHCallback_timer shows the time elapsed in eight
+// cells, pulses it faster as the time runs out, and shrinks it away where it
+// stood: from the frame the time is up, or from the frame after the one that
+// finds the crystal taken (art.json timer).
+
+// A timed crystal's dial as the layer reports it after the last tick, or none.
+// A copy: TimerReports() returns by value, so a pointer into it would dangle.
+std::optional<MagicPortalsLayer::TimerReport> DialOf(const MagicPortalsLayer& layer, const std::string& crystal) {
+    for (const MagicPortalsLayer::TimerReport& report : layer.TimerReports()) {
+        if (report.crystal == crystal) return report;
+    }
+    return std::nullopt;
+}
+
+MagicPortals::Art::Timer TimerRules() {
+    MagicPortals::Art::Rules rules;
+    std::string error;
+    CHECK_MSG(MagicPortals::Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", rules, error), error);
+    return rules.timer;
+}
+
+void EveryTimedCrystalHasADialBehindIt() {
+    // Every level whose file carries a `time`, as the layer loads it: 35 timed
+    // crystals in 20 levels (the brief's census), one dial each, behind its
+    // crystal, at alpha 0.5 and whole on every level - chapter 4's dark ones too,
+    // since timer.ent's emissive is 1.
+    if (!OriginalArtIsThere("EveryTimedCrystalHasADialBehindIt")) return;
+    std::vector<std::string> names;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(kLevels, ec)) {
+        if (entry.path().extension() != ".tscn") continue;
+        std::ifstream file(entry.path(), std::ios::binary);
+        std::ostringstream text;
+        text << file.rdbuf();
+        if (text.str().find("metadata/time") != std::string::npos) names.push_back(entry.path().stem().string());
+    }
+    std::sort(names.begin(), names.end());
+    int crystals = 0;
+    int levels = 0;
+    int misplaced = 0;
+    std::string first;
+    for (const std::string& name : names) {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), name);
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
+                  name + ": " + layer.LoadError() + layer.ArtError() + layer.LightingError());
+        if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) {
+            layer.OnDetach(registry);
+            continue;
+        }
+        int timed = 0;
+        for (const MagicPortals::Goals::Crystal& crystal : layer.SimLevel()->goals.crystals) {
+            if (crystal.timed) ++timed;
+        }
+        const std::vector<MagicPortalsLayer::TimerReport> dials = layer.TimerReports();
+        CHECK_MSG(static_cast<int>(dials.size()) == timed && Tagged(registry, "Magic Portals Timer") == timed,
+                  name + ": " + std::to_string(timed) + " timed crystals, " + std::to_string(dials.size()) + " dials");
+        for (const MagicPortalsLayer::TimerReport& dial : dials) {
+            const MagicPortals::Goals::Crystal* crystal = layer.SimLevel()->goals.FindCrystal(dial.crystal);
+            const bool ok = crystal != nullptr && crystal->timed && dial.drawn && !dial.shrinking &&
+                            dial.z < dial.crystalZ && dial.frame == 0 && dial.alpha == 0.5 &&
+                            dial.scale == glm::dvec2(1.0);
+            if (!ok && misplaced++ == 0) {
+                first = name + " " + dial.crystal + ": z " + std::to_string(dial.z) + " against its crystal's " +
+                        std::to_string(dial.crystalZ) + ", cell " + std::to_string(dial.frame);
+            }
+        }
+        const std::vector<glm::vec4> colours = ColoursOf(registry, "Magic Portals Timer", "timer.png");
+        CHECK_MSG(static_cast<int>(colours.size()) == timed && (timed == 0 || AllAre(colours, 1.0f, 1.0f, 1.0f, 0.5f)),
+                  name + "'s dials at (1, 1, 1, 0.5): " + Show(colours));
+        crystals += timed;
+        if (timed > 0) ++levels;
+        layer.OnDetach(registry);
+        CHECK_MSG(Tagged(registry, "Magic Portals Timer") == 0, name + ": no dial outlives the layer");
+    }
+    std::printf("  %d timed crystals with a dial in %d levels\n", crystals, levels);
+    CHECK_MSG(crystals == 35 && levels == 20,
+              std::to_string(crystals) + " timed crystals in " + std::to_string(levels) + " levels");
+    CHECK_MSG(misplaced == 0, std::to_string(misplaced) + " dials not whole and behind their crystals; the first " + first);
+}
+
+void ATimedCrystalCountsDownOnItsDialAndNeverFades() {
+    // REPLACES step 45's ATimedCrystalFadesInItsAlphaAlone, deliberately: that pin
+    // held the remake's guessed fade, 0.4 + 0.6 |sin(12 t)| over the last 2 s,
+    // which the original does not have. 1-27 (level26): crystal_1264 goes at 10 s.
+    if (!OriginalArtIsThere("ATimedCrystalCountsDownOnItsDialAndNeverFades")) return;
+    const MagicPortals::Art::Timer timer = TimerRules();
     entt::registry registry;
     publishViewport(registry);
-    MagicPortalsLayer layer(TestPaths(), "level14");
+    MagicPortalsLayer layer(TestPaths(), "level26");
     layer.OnAttach(registry);
     CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty() && layer.LightingError().empty(),
               layer.LoadError() + layer.ArtError() + layer.LightingError());
-    if (layer.SimLevel() == nullptr || !layer.ArtError().empty() || !layer.LightingError().empty()) return;
-    // Found again after every tick: a death would reload the level under it.
-    auto timed = [&layer]() -> const MagicPortals::Goals::Crystal* {
-        return layer.SimLevel() != nullptr ? layer.SimLevel()->goals.FindCrystal("crystal_861") : nullptr;
-    };
-    CHECK_MSG(timed() != nullptr && timed()->timed && timed()->lifeS == 12.0, "level14's crystal_861, 12 s");
-    if (timed() == nullptr || !timed()->timed) return;
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    const std::string name = "crystal_1264";
+    const entt::entity quad = SpriteOf(registry, "Magic Portals Timer", "timer.png");
+    CHECK_MSG(quad != entt::null && layer.TimerReports().size() == 1, "one dial, crystal_1264's");
+    if (quad == entt::null || !DialOf(layer, name)) return;
+    const std::size_t pictures = ColoursOf(registry, "Magic Portals Sprite", "crystal.png").size();
 
-    const std::vector<glm::vec4> before = ColoursOf(registry, "Magic Portals Sprite", "crystal.png");
-    CHECK_EQ(before.size(), std::size_t{5});
-    CHECK_MSG(AllAre(before, 1.0f, 1.0f, 1.0f, 1.0f), "with more than 2 s left, every crystal whole: " + Show(before));
-
-    // Into its last 2 s, on to a tick whose fade is well below one.
-    float fade = 1.0f;
-    for (int tick = 0; tick < 12 * 60; ++tick) {
+    int tick = 0;
+    int cellsOff = 0;
+    int pulseOff = 0;
+    int quadOff = 0;
+    int dimmed = 0;
+    int lastTwoSeconds = 0;
+    glm::dvec2 lastScale(1.0);
+    std::string first;
+    bool expired = false;
+    while (tick < 700) {
         tickWith(layer, registry, kRest, {}, {});
-        const MagicPortals::Goals::Crystal* crystal = timed();
-        if (crystal == nullptr || crystal->expired || crystal->collected) break;
-        if (crystal->leftS >= 2.0) continue;
-        // syncSprites' own arithmetic, on the leftS this tick drew with.
-        fade = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal->leftS * 12.0)));
-        if (fade < 0.8f) break;
+        ++tick;
+        const MagicPortals::Goals::Crystal* crystal =
+            layer.SimLevel() != nullptr ? layer.SimLevel()->goals.FindCrystal(name) : nullptr;
+        const std::optional<MagicPortalsLayer::TimerReport> dial = DialOf(layer, name);
+        if (crystal == nullptr || !dial || crystal->collected) break;
+        if (crystal->expired) {
+            expired = true;
+            break;
+        }
+        const double elapsedMs = (crystal->lifeS - crystal->leftS) * 1000.0;
+        if (dial->frame != tick * 8 / 600 || dial->frame != timer.FrameAt(elapsedMs, 10000.0)) {
+            if (cellsOff++ == 0) first = "tick " + std::to_string(tick) + " cell " + std::to_string(dial->frame);
+        }
+        const glm::dvec2 pulse = timer.PulseAt(elapsedMs, 10000.0);
+        if (dial->scale != pulse || pulse.x < 1.0 || pulse.x > 1.15 + 1e-9 || dial->alpha != 0.5 || dial->shrinking) {
+            ++pulseOff;
+        }
+        // The quad itself: the cell, 32 units times the pulse, at the dial's depth.
+        const auto& animation = registry.get<SpriteAnimationComponent>(quad);
+        const auto& transform = registry.get<TransformComponent>(quad);
+        const float sizeM = MagicPortals::Units::ToMetres(32.0 * dial->scale.x);
+        if (animation.firstFrame != static_cast<uint32_t>(dial->frame) || std::fabs(transform.scale.x - sizeM) > 1e-6f ||
+            transform.position.z != dial->z) {
+            ++quadOff;
+        }
+        // The crystal stays whole to its last tick.
+        if (crystal->leftS < 2.0) {
+            ++lastTwoSeconds;
+            const std::vector<glm::vec4> colours = ColoursOf(registry, "Magic Portals Sprite", "crystal.png");
+            if (colours.size() != pictures || !AllAre(colours, 1.0f, 1.0f, 1.0f, 1.0f)) ++dimmed;
+        }
+        lastScale = dial->scale;
     }
-    const MagicPortals::Goals::Crystal* crystal = timed();
-    CHECK_MSG(crystal != nullptr && !crystal->expired && !crystal->collected && crystal->leftS < 2.0 && fade < 0.8f,
-              "reached a fading tick of crystal_861, fade " + std::to_string(fade));
-    if (crystal == nullptr || fade >= 0.8f) return;
+    CHECK_MSG(expired && tick == 600, "crystal_1264 expired on tick " + std::to_string(tick) + ", the 600th");
+    CHECK_MSG(cellsOff == 0, std::to_string(cellsOff) + " ticks off the cell (tick x 8) / 600; the first " + first);
+    CHECK_MSG(pulseOff == 0, std::to_string(pulseOff) + " ticks off the pulse, in 1..1.15 at alpha 0.5");
+    CHECK_MSG(quadOff == 0, std::to_string(quadOff) + " ticks the quad did not draw the dial's cell and size");
+    CHECK_MSG(lastTwoSeconds >= 119 && dimmed == 0,
+              "no crystal dimmed on " + std::to_string(lastTwoSeconds) + " ticks of its last 2 s: " +
+                  std::to_string(dimmed) + " were");
+    if (!expired) return;
 
-    const std::vector<glm::vec4> after = ColoursOf(registry, "Magic Portals Sprite", "crystal.png");
-    CHECK_EQ(after.size(), std::size_t{5});
-    const auto fading = std::count_if(after.begin(), after.end(), [fade](const glm::vec4& c) {
-        return AllAre({c}, 1.0f, 1.0f, 1.0f, fade);
-    });
-    const auto whole =
-        std::count_if(after.begin(), after.end(), [](const glm::vec4& c) { return AllAre({c}, 1.0f, 1.0f, 1.0f); });
-    CHECK_MSG(fading == 1, "one crystal at (1, 1, 1, fade " + std::to_string(fade) + "): " + Show(after));
-    CHECK_MSG(whole == 4, "and the four untimed ones whole: " + Show(after));
+    // The tick it expires: its picture gone, the dial shrinking from its last pulse,
+    // on its last cell, and gone once that pulse x 2.8125 x 0.9 a tick is below 0.1
+    // (ins 184-199 test the stored scale): from 1.1497, drawn shrinking on 32 ticks.
+    const std::optional<MagicPortalsLayer::TimerReport> dial = DialOf(layer, name);
+    CHECK_MSG(ColoursOf(registry, "Magic Portals Sprite", "crystal.png").size() == pictures - 1,
+              "the crystal's picture goes at its time");
+    CHECK(dial.has_value());
+    if (!dial) return;
+    CHECK_MSG(dial->drawn && dial->shrinking && dial->frame == 7, "the dial shrinks on its last cell");
+    CHECK_MSG(std::fabs(dial->scale.x - lastScale.x * 0.9) < 1e-6 && std::fabs(dial->alpha - 0.45) < 1e-6,
+              "x 0.9 on the tick: " + std::to_string(dial->scale.x) + " from " + std::to_string(lastScale.x) +
+                  ", alpha " + std::to_string(dial->alpha));
+    int shrinking = 1;
+    int grew = 0;
+    double scale = dial->scale.x;
+    while (shrinking < 60) {
+        tickWith(layer, registry, kRest, {}, {});
+        const std::optional<MagicPortalsLayer::TimerReport> now = DialOf(layer, name);
+        if (!now || !now->drawn) break;
+        if (now->scale.x >= scale) ++grew;
+        scale = now->scale.x;
+        ++shrinking;
+    }
+    std::printf("  crystal_1264's dial: drawn shrinking on %d ticks from %.4f\n", shrinking, lastScale.x);
+    CHECK_MSG(shrinking == 32 && grew == 0,
+              "gone after " + std::to_string(shrinking) + " shrinking ticks (32), none growing");
+    CHECK_MSG(Tagged(registry, "Magic Portals Timer") == 0, "and its quad with it");
+    layer.OnDetach(registry);
+}
+
+void ATakenCrystalsDialShrinksAway() {
+    // A crystal taken early. ETHCallback_timer has already read elapsedTime, a frame
+    // on, into a local when it finds the crystal gone (ins 1-27). It adds the whole
+    // time to the datum (ins 80-91) but compares the local (ins 102-103), so that
+    // frame still pulses and sets the cell, where the dial stood, and the x 0.9
+    // starts on the NEXT frame. Then it shrinks away with no burst.
+    if (!OriginalArtIsThere("ATakenCrystalsDialShrinksAway")) return;
+    const MagicPortals::Art::Timer timer = TimerRules();
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level26");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    const std::string name = "crystal_1264";
+    const std::size_t pictures = ColoursOf(registry, "Magic Portals Sprite", "crystal.png").size();
+    for (int tick = 0; tick < 60; ++tick) tickWith(layer, registry, kRest, {}, {});
+    const std::optional<MagicPortalsLayer::TimerReport> before = DialOf(layer, name);
+    CHECK(before.has_value() && before->drawn && !before->shrinking);
+    if (!before) return;
+    const glm::dvec2 atPx = before->atPx;
+    PutPlayerAt(registry, layer, atPx);
+    int taken = 60;
+    for (int ticks = 0; ticks < 5; ++ticks) {
+        tickWith(layer, registry, kRest, {}, {});
+        ++taken;
+        const MagicPortals::Goals::Crystal* crystal = layer.SimLevel()->goals.FindCrystal(name);
+        if (crystal != nullptr && crystal->collected) break;
+    }
+    const MagicPortals::Goals::Crystal* crystal = layer.SimLevel()->goals.FindCrystal(name);
+    CHECK_MSG(crystal != nullptr && crystal->collected && !crystal->expired, "the player takes crystal_1264");
+    std::optional<MagicPortalsLayer::TimerReport> dial = DialOf(layer, name);
+    CHECK(dial.has_value());
+    if (crystal == nullptr || !crystal->collected || !dial) return;
+    // THE TICK IT IS TAKEN: its picture goes, and the dial takes one more live
+    // frame. Goals' clock stopped on this tick; the dial's own is a tick on.
+    const double elapsedMs =
+        (crystal->lifeS - crystal->leftS) * 1000.0 + static_cast<double>(MagicPortalsLayer::kTick) * 1000.0;
+    const glm::dvec2 pulse = timer.PulseAt(elapsedMs, 10000.0);
+    CHECK_MSG(std::fabs(elapsedMs - taken * 1000.0 / 60.0) < 1e-3,
+              "the dial's clock on the tick it is taken, tick " + std::to_string(taken) + ": " +
+                  std::to_string(elapsedMs) + " ms");
+    CHECK_MSG(ColoursOf(registry, "Magic Portals Sprite", "crystal.png").size() == pictures - 1,
+              "the crystal's picture goes on the tick it is taken");
+    CHECK_MSG(dial->drawn && !dial->shrinking && glm::length(dial->scale - pulse) < 1e-12 && dial->scale.x >= 1.0 &&
+                  dial->alpha == 0.5 && dial->frame == timer.FrameAt(elapsedMs, 10000.0) && dial->atPx == atPx,
+              "on the tick it is taken the dial pulses once more where it stood, unshrunk: scale " +
+                  std::to_string(dial->scale.x) + " against " + std::to_string(pulse.x) + ", alpha " +
+                  std::to_string(dial->alpha));
+    const glm::dvec2 takenScale = dial->scale;
+    const int takenFrame = dial->frame;
+    // THE NEXT TICK: x 0.9 on that pulse and on alpha 0.5, on the same cell, still there.
+    tickWith(layer, registry, kRest, {}, {});
+    dial = DialOf(layer, name);
+    CHECK(dial.has_value());
+    if (!dial) return;
+    CHECK_MSG(dial->drawn && dial->shrinking && std::fabs(dial->scale.x - takenScale.x * 0.9) < 1e-6 &&
+                  std::fabs(dial->alpha - 0.45) < 1e-6 && dial->frame == takenFrame && dial->atPx == atPx,
+              "on the next tick it shrinks where it stood: " + std::to_string(dial->scale.x) + " from " +
+                  std::to_string(takenScale.x) + ", alpha " + std::to_string(dial->alpha));
+    int shrinking = 1;
+    while (shrinking < 60) {
+        tickWith(layer, registry, kRest, {}, {});
+        const std::optional<MagicPortalsLayer::TimerReport> now = DialOf(layer, name);
+        if (!now || !now->drawn) break;
+        ++shrinking;
+    }
+    std::printf("  crystal_1264 taken on tick %d: its dial pulses at %.4f, then drawn shrinking on %d ticks\n", taken,
+                takenScale.x, shrinking);
+    // From 1.0265, under 0.1 / (2.8125 x 0.9^32) = 1.0355: gone on its 32nd x 0.9,
+    // drawn shrinking on 31 ticks.
+    CHECK_MSG(shrinking == 31, "and is gone after " + std::to_string(shrinking) + " shrinking ticks (31)");
+    CHECK_MSG(Tagged(registry, "Magic Portals Timer") == 0, "with its quad");
     layer.OnDetach(registry);
 }
 
@@ -5034,7 +5248,9 @@ void runTests() {
     TheSceneHoldsDisplayValues();
     EverySpriteIsDrawnAtItsAmbient();
     AShotIsDimmedAndADarkLevelIsDark();
-    ATimedCrystalFadesInItsAlphaAlone();
+    EveryTimedCrystalHasADialBehindIt();
+    ATimedCrystalCountsDownOnItsDialAndNeverFades();
+    ATakenCrystalsDialShrinksAway();
     LightmapsAreDrawnOverTheirSprites();
     TheTorchIsALightAndAHalo();
     AShotCarriesItsOwnLight();

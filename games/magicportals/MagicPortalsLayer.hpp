@@ -331,6 +331,21 @@ public:
     };
     std::vector<EmitterReport> EmitterReports() const;
 
+    // Each timed crystal's dial (art.json timer), for the suites, in the crystals'
+    // order: as the last tick left it.
+    struct TimerReport {
+        std::string crystal;     // the crystal's node
+        bool drawn = false;      // its quad is there
+        bool shrinking = false;  // the time is up, or the crystal was taken a tick ago or more
+        float z = 0.0f;
+        float crystalZ = 0.0f;   // its crystal's picture's
+        int frame = 0;           // the cell it shows
+        glm::dvec2 scale{1.0};   // its pulse or its shrink
+        double alpha = 0.0;      // the alpha tint is given
+        glm::dvec2 atPx{0.0};    // where it is drawn, in the level's pixels
+    };
+    std::vector<TimerReport> TimerReports() const;
+
     // A screen point (Input's coordinates) as the point in the level under it,
     // in the remake's pixels. False when there is no viewport or camera.
     bool ScreenToLevelPx(const entt::registry& registry, const glm::vec2& screenPoint, glm::dvec2& outPx) const;
@@ -555,11 +570,14 @@ private:
         Sprites::Sprite sprite;
         entt::entity quad{entt::null};
         float z{0.0f};
-        // C, the instance colour, as its node gives it (eth_color), and a timed
-        // crystal's fade, which multiplies its alpha. What the ambient does to
-        // them is syncLighting's.
+        // C, the instance colour, as its node gives it (eth_color), and a
+        // keyhole's fade, which multiplies its alpha. What the ambient does to
+        // them is syncLighting's. A timed crystal does not fade: its dial counts
+        // it down (m_timers).
         glm::vec4 colour{1.0f};
         float fade{1.0f};
+        // Where its picture was last drawn, in the level's pixels.
+        glm::dvec2 centrePx{0.0};
         // The scale a script gave its entity (ETHEntity::Scale), which multiplies its
         // picture and its particle systems: a static portal's 0.8, and 1 otherwise.
         double scale{1.0};
@@ -645,6 +663,9 @@ private:
     float readInput(entt::registry& registry);
     void syncDrawables(entt::registry& registry);
     void syncSprites(entt::registry& registry);
+    // The timed crystals' dials, after syncSprites has placed their crystals: on
+    // the tick, as ETHCallback_timer runs a frame.
+    void syncTimers(entt::registry& registry);
     void syncBoss(entt::registry& registry);
     // The carrancas' fireballs. Its own function rather than a block inside
     // syncBoss: they belong to a turret, not to the beholder, and every level
@@ -809,6 +830,27 @@ private:
     std::vector<entt::entity> m_spikes; // one per spike in flight
     float m_beholderZ{0.5f};
     float m_spikeZ{0.5f};
+
+    // A timed crystal's dial (art.json timer), which the original adds behind the
+    // crystal and which outlives it: once the time is up or the crystal is taken,
+    // the crystal's picture goes and the dial shrinks away where it last stood -
+    // from the tick the time is up, or from the tick after the one it is taken on.
+    // Its own quads, not m_sprites', whose indices are the drawing slots.
+    struct TimerDial {
+        int crystal{-1};          // in goals.crystals
+        int sprite{-1};           // the crystal's picture in m_sprites, whose drawn centre it takes
+        entt::entity quad{entt::null};
+        glm::dvec2 cellPx{0.0};   // one cell of timer.png
+        float z{0.0f};            // after the sprites at or below the crystal's z_index + zOffset
+        double lookZ{0.0};        // the crystal's eth_z + zOffset: its lighting height
+        glm::dvec2 atPx{0.0};     // where it is drawn: the crystal's centre, kept once it is gone
+        glm::dvec2 scale{1.0};    // the pulse, then the shrink
+        double alpha{0.0};
+        int frame{0};
+        bool taken{false};        // the crystal was taken: its last live tick is drawn, then it shrinks
+        bool shrinking{false};
+    };
+    std::vector<TimerDial> m_timers;
 
     // The carrancas' fireballs, one quad per fireball in flight (Turrets.hpp).
     //

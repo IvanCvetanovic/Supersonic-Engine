@@ -535,6 +535,8 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry, bool keepLightmaps
     m_thrown.clear();
     for (DrawnSprite& drawn : m_sprites) destroy(drawn.quad);
     m_sprites.clear();
+    for (TimerDial& dial : m_timers) destroy(dial.quad);
+    m_timers.clear();
     // The walk arrows and the corner buttons go with the level they were built
     // for, and so does what the level opened with.
     unloadControls();
@@ -948,6 +950,25 @@ std::vector<MagicPortalsLayer::EmitterReport> MagicPortalsLayer::EmitterReports(
                 report.anyReleased = true;
             }
         }
+        reports.push_back(std::move(report));
+    }
+    return reports;
+}
+
+std::vector<MagicPortalsLayer::TimerReport> MagicPortalsLayer::TimerReports() const {
+    std::vector<TimerReport> reports;
+    reports.reserve(m_timers.size());
+    for (const TimerDial& dial : m_timers) {
+        TimerReport report;
+        report.crystal = m_level.goals.crystals[static_cast<std::size_t>(dial.crystal)].name;
+        report.drawn = dial.quad != entt::null;
+        report.shrinking = dial.shrinking;
+        report.z = dial.z;
+        report.crystalZ = m_sprites[static_cast<std::size_t>(dial.sprite)].z;
+        report.frame = dial.frame;
+        report.scale = dial.scale;
+        report.alpha = dial.alpha;
+        report.atPx = dial.atPx;
         reports.push_back(std::move(report));
     }
     return reports;
@@ -2283,6 +2304,7 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             drawn.scale = m_artRules.staticPortal.scale;
         }
         drawn.ownerPx = sprite.atPx;
+        drawn.centrePx = Sprites::CentrePx(sprite);
         // Godot's rotation is clockwise and the converter wrote it as Ethanon's
         // angle negated (tscn.py:433).
         drawn.ownerAngleDeg = -sprite.rotation * 180.0 / 3.14159265358979323846;
@@ -2336,6 +2358,41 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     }
     m_beholderZ = slotAfter(adderZ);
     m_spikeZ = slotAfter(kSpikeZIndex);
+    // A TIMED CRYSTAL'S DIAL (art.json timer), which addTimerToCrystal adds
+    // `zOffset` behind its crystal: after the sprites at or below the crystal's
+    // z_index + zOffset and before the next, so what stands between the two
+    // covers it, as depth would in the original. One per timed crystal whose
+    // picture is drawn; the crystal's box has none. A `time` of 0 never runs
+    // down in Goals, so it has no dial to count.
+    const Art::Timer& timer = m_artRules.timer;
+    const std::string timerImage = originalImage(timer.sprite);
+    const glm::dvec2 timerSheetPx = imageSizePx(timerImage);
+    for (std::size_t i = 0; i < m_sprites.size(); ++i) {
+        const DrawnSprite& drawn = m_sprites[i];
+        if (drawn.crystal < 0) continue;
+        const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
+        if (!crystal.timed || !(crystal.lifeS > 0.0)) continue;
+        if (timerSheetPx == glm::dvec2(0.0)) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "no dial behind the timed crystals: " << timerImage
+                                                 << " could not be read" << std::endl;
+            break;
+        }
+        TimerDial dial;
+        dial.crystal = drawn.crystal;
+        dial.sprite = static_cast<int>(i);
+        dial.quad = makeSprite(registry, "Magic Portals Timer", timerImage, timer.additive);
+        auto& animation = registry.emplace<SpriteAnimationComponent>(dial.quad);
+        animation.columns = static_cast<uint32_t>(timer.columns);
+        animation.rows = static_cast<uint32_t>(timer.rows);
+        animation.frameCount = 1;
+        animation.playing = false;
+        dial.cellPx = timerSheetPx / glm::dvec2(timer.columns, timer.rows);
+        dial.z = slotAfter(drawn.sprite.zIndex + timer.zOffset);
+        dial.lookZ = drawn.lookZ + static_cast<double>(timer.zOffset);
+        dial.atPx = drawn.centrePx;
+        dial.alpha = timer.alpha;
+        m_timers.push_back(dial);
+    }
     m_artReady = true;
     // And what the level's own art does not show: the entities' particles.
     buildEmitters(registry);
@@ -2369,14 +2426,10 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             ownerPx = Sky::SatellitePx(m_sky, m_follow.centrePx, ViewPx());
             centrePx += ownerPx - sprite.atPx;
         } else if (drawn.crystal >= 0) {
+            // A timed crystal does not fade: the original goes at its time, and
+            // counts it down on the dial behind it (syncTimers).
             const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
             gone = crystal.collected || crystal.expired;
-            // A timed crystal fades as it runs out: the remake's guess, as the
-            // box's is, and here as the alpha the remake fades.
-            drawn.fade = 1.0f;
-            if (crystal.timed && crystal.leftS < 2.0) {
-                drawn.fade = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
-            }
         } else if (drawn.key >= 0) {
             // A key is not a body (Keys.hpp): where the carry left it, picture and
             // sparkle together. The fly-in it plays once spent is not built
@@ -2429,6 +2482,7 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
         }
         // At the scale a script gave its entity: 1 but for a static portal's 0.8.
         placeSprite(registry, drawn.quad, centrePx, sizePx * drawn.scale, drawn.z, rotation);
+        drawn.centrePx = centrePx;
         drawn.ownerPx = ownerPx;
         drawn.ownerAngleDeg = ownerAngleDeg;
     }
@@ -2477,6 +2531,65 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             m_sprites.push_back(std::move(made));
             m_platformDrawn = true;
         }
+    }
+}
+
+// ETHCallback_timer, once a tick (art.json timer has the bytecode). The port's
+// tick is the frame the script runs on, and the crystal's clock is Goals', whose
+// time left counts down from the level's first tick as the dial's elapsedTime
+// counts up from the frame it is added on. While the time lasts: the crystal's
+// drawn centre, the cell of the time elapsed, and the pulse whose leg shortens as
+// it runs out. Once the time is up, on the tick Goals expires the crystal, the
+// dial keeps its last place, cell and scale, shrinks and fades a frame's worth a
+// tick, and goes once its scale as the original stores it, x m_scaleFactor, is
+// below goneBelowScale (Art::Timer::Gone). A crystal taken early gives the dial one
+// more live tick first (below), and shrinks it from the next. The crystal_vanish
+// burst at the time is not drawn (the visuals plan's 10.2).
+void MagicPortalsLayer::syncTimers(entt::registry& registry) {
+    using namespace Supersonic;
+    const Art::Timer& timer = m_artRules.timer;
+    const double tickMs = static_cast<double>(kTick) * 1000.0;
+    for (TimerDial& dial : m_timers) {
+        if (dial.quad == entt::null) continue;
+        const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(dial.crystal)];
+        const double timeMs = crystal.lifeS * 1000.0;
+        double elapsedMs = (crystal.lifeS - crystal.leftS) * 1000.0;
+        if (crystal.expired || dial.taken) {
+            dial.shrinking = true;
+        } else if (crystal.collected) {
+            // TAKEN THIS TICK. ETHCallback_timer adds the frame to elapsedTime (ins
+            // 1-13) and copies it into a local (ins 24-27) before it looks for the
+            // crystal. Finding it gone, it adds the whole time to the datum (ins
+            // 80-91), skips SetPositionXY (ins 92) and compares the LOCAL (ins
+            // 102-103): this frame still pulses and sets its cell (ins 204-252)
+            // where the dial stood, and the x 0.9 starts on the next. Goals stops
+            // a crystal's clock on the tick it is taken, where the script's local
+            // already holds this frame: its elapsed is Goals' and one tick more.
+            // Taken on the tick its time runs out, that local is past the time,
+            // and the dial shrinks at once (ins 102 is strict).
+            dial.taken = true;
+            elapsedMs += tickMs;
+            if (elapsedMs > timeMs) dial.shrinking = true;
+        }
+        if (dial.shrinking) {
+            const double decay = timer.DecayOver(kTick);
+            dial.scale *= decay;
+            dial.alpha *= decay;
+            if (timer.Gone(dial.scale.x)) {
+                registry.destroy(dial.quad);
+                dial.quad = entt::null;
+                continue;
+            }
+        } else {
+            if (!dial.taken) dial.atPx = m_sprites[static_cast<std::size_t>(dial.sprite)].centrePx;
+            dial.frame = timer.FrameAt(elapsedMs, timeMs);
+            dial.scale = timer.PulseAt(elapsedMs, timeMs);
+            dial.alpha = timer.alpha;
+        }
+        auto& animation = registry.get<SpriteAnimationComponent>(dial.quad);
+        animation.firstFrame = static_cast<uint32_t>(dial.frame);
+        animation.frame = 0;
+        placeSprite(registry, dial.quad, dial.atPx, dial.cellPx * dial.scale, dial.z, 0.0f);
     }
 }
 
@@ -2640,16 +2753,9 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         glm::dvec2 centrePx, sizePx;
         boxPx(crystal.box, centrePx, sizePx);
         placeBox(registry, m_crystals[i], centrePx, glm::dvec2(14.0), kMarkerZ, kMarkerDepth, 0.785398f);
-        // A timed crystal dims and brightens as it runs out: the remake's fade,
-        // 0.4 + 0.6 |sin(12 t)| over its last two seconds, as brightness over the
-        // dark ground rather than as alpha. A guess, as the remake's is
-        // (behaviours.gd:227-230). The original has crystal_temp_alert.mp3, so it
-        // warns somehow, but not necessarily like this. Nothing depends on it.
-        float brightness = 1.0f;
-        if (crystal.timed && crystal.leftS < 2.0) {
-            brightness = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
-        }
-        registry.get<MaterialComponent>(m_crystals[i]).albedoColor = glm::vec4(kCrystalColour * brightness, 1.0f);
+        // A timed crystal's box does not blink either: the remake's guessed fade
+        // is gone with its picture's (syncSprites), and a box has no dial.
+        registry.get<MaterialComponent>(m_crystals[i]).albedoColor = glm::vec4(kCrystalColour, 1.0f);
     }
     {
         glm::dvec2 centrePx, sizePx;
@@ -2755,6 +2861,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     }
 
     syncSprites(registry);
+    syncTimers(registry);
 
     // The art in place of the boxes, unless B asks for them or there is no art.
     // What no level pictures - the player, the portals a shot opens, the shot -
@@ -2858,6 +2965,13 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
     };
     tint(registry, m_playerQuad, white, m_artRules.character.emissive, {},
          receiverOf(m_artRules.character, m_playerZ));
+    // A timed crystal's dial at its alpha, which the sprite path weights its base
+    // by (shader.frag:477-478), as a keyhole's fade is. timer.ent's emissive 1
+    // makes min(1, ambient + 1) whole on every level, chapter 4's dark ones too.
+    for (const TimerDial& dial : m_timers) {
+        tint(registry, dial.quad, glm::vec4(1.0f, 1.0f, 1.0f, static_cast<float>(dial.alpha)),
+             m_artRules.timer.emissive, {}, receiverOf(m_artRules.timer, dial.lookZ));
+    }
     for (const entt::entity quad : m_portalQuads) {
         tint(registry, quad, white, m_artRules.portal.emissive, {}, receiverOf(m_artRules.portal, 0.0));
     }

@@ -9243,3 +9243,269 @@ tune to. Numbers from the verifier's third round (`verify3/measure_v3.txt`, bina
   `Sprites::ImageSize` reads PNG and BMP headers only ("particle image could not be read", 1 of 128 logs).
 - The plan's 2e footage check: 3-24's shock agents drawn with square cells, no library patch clean enough to gate;
   4-32's turned light wall is off the f420 view, pinned by `test_mp_layer` only.
+
+## Step 80 - the dial the original counts a timed crystal down on, and the fade it never had (built)
+
+The visuals plan's step 3.1 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; its briefs
+`systems_9_10.md` 10c and `system_5.md` 5c-1, resolved by the order's K2, E3 and E4). Track B, on the
+`visuals-b` tree, numbered from 80 so it does not collide with track A. Game-only: no file under `src/` or
+`assets/shaders/`. **All 35 timed crystals in 20 levels now have the original's dial behind them, and none
+fades. On 1-27's 10 s crystal the dial shows the cell the tick count gives on 17 of 17 sampled frames, at
+alpha 0.459-0.528. When the crystal goes the dial shrinks away where it stood until the scale the original
+stores, the pulse x 720/256, is below 0.1: drawn shrinking on 32 ticks (600-631), and nothing from f632. On 1-24's
+5,000 and 6,000 ms crystals the cell holds on 16 of 16 frames. Nothing changes outside the dials but 2 single
+pixels (4-5 levels) at level23's particles on f390 and f420, a draw-order tie, and 1-01 f420 is
+byte-identical.**
+
+**BASELINE.** The order names step 59's `visuals/particles/after/` (1-01 f420 `b19ce71a`). Step 59's own record
+says that set belongs to its first build and is superseded by `fix2/` and `commit/` (1-01 f420 `a1f8d7ae`).
+This tree's build of step 59 drew `a1f8d7ae`, so it reproduces the committed step and nothing was re-captured for
+the baseline. This step's "before" frames for its gate levels were captured on that build before any change (the
+remake's `out/parity/visuals/3.1/before/`). The binary's md5 was not written down there, so its identity is its
+output: `before/1-01_level0_f420.png` = `particles/commit/`'s, `a1f8d7ae` (`before/provenance.txt`).
+
+**WHAT THE ORIGINAL DOES** (the listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce...`; every number
+with its instruction in `data/art.json`'s `timer._source`).
+- **`addTimerToCrystal`** (ETHCallback_crystal.angelscript, bytes 424766..425217) runs when a crystal carries a
+  uint `time`.
+  - It adds `timer.ent` at `crystal.GetPosition() - vector3(0, 0, 2)`: 2 BEHIND the crystal (ins 12-25; a call
+    pushes its last argument first). It is added at the global scale, which is 1 in port units.
+  - It copies `time`, sets `elapsedTime` 0 and `crystalID`, and calls `SetAlpha(0.5f)` (ins 100-102).
+- **`timer.ent`:** `timer.png` 128 x 64 with no hd or fullhd twin, SpriteCut 4 x 2, blendMode 0, static 0,
+  applyLight 0, EmissiveColor (1, 1, 1). Cell 0 shows eight wedges and cell 7 one.
+- **`ETHCallback_timer`** (bytes 425217..426274), every frame:
+  - `elapsedTime` += the frame's ms (ins 1-13), copied into a local (ins 24-27). It finds the crystal by id. If
+    the crystal has been taken, it adds the whole `time` to the datum (ins 80-91); otherwise it sets its XY to
+    the crystal's (ins 93-100).
+  - **The frame that finds the crystal taken** still compares the local (ins 102): it pulses and sets the cell
+    once more, for its elapsed time with that frame in it, where the dial stood. The x 0.9 starts on the next
+    frame.
+  - While `elapsed <= time` (ins 102-103):
+    - `bounce(this, V2_ONE, (1.15, 1.15), max(400, time - elapsed))` (ins 204-231);
+    - `SetFrame(min(max(int(float(elapsed) / float(time) * 8f), 0), 7))` (ins 233-252).
+  - After that, every frame:
+    - `SetScale(GetScale() * 0.9f)` and `SetAlpha(GetAlpha() * 0.9f)` (ins 105-125);
+    - if the crystal is still there, `crystal_vanish.ent` at +scale(20) z, scale(1.3), the vanish sound and
+      `DeleteEntity(crystal)` (ins 127-182);
+    - `DeleteEntity(this)` once `GetScale().x < 0.1f` (ins 184-199). **That is the scale the entity stores,
+      not the pulse.** `bounce` stores `g_scale.scale(the pulse)` (ins 90-102: the vector2
+      `SGlobalScale::scale`, bytes 5878..5975, whose ins 3-8 multiply by `m_scaleFactor`), and
+      `ETHEntity::GetScale` returns what `SetScale` stored (Ethanon `ETHEntity.cpp:601-613`). `m_scaleFactor` is
+      `GetScreenSize().y / 256` (`updateScaleFactor`, bytes 5592..5699, ins 6-14; 00_order 8.12a), 2.8125 at
+      720 p. `bounce` runs on every live frame, the last included, so the shrink starts from pulse x 2.8125
+      whatever `AddEntity` was given.
+    - The callback runs before the frame is mapped for drawing (`ETHScene.cpp:467-484`), and `DeleteEntity`
+      takes the dial out of its bucket at once (`ETHBucketManager.cpp:434-460`). So the dial is drawn
+      shrinking on one frame fewer than the multiplies it takes to go: from exactly 1, gone on the 32nd (31
+      drawn); from 1.15, on the 33rd (32 drawn). 32 turns to 33 at a pulse of 0.1 / (2.8125 x 0.9^32) = 1.0355.
+- **`bounce`** (utilEntityEffect.angelscript, bytes 327057..327527):
+  - `blinkElapsedTime` starts at 0 and takes the same frame times, so it is `elapsedTime`.
+  - `invert = (elapsed / stride) % 2 == 1` in uints, and `bias = float(elapsed % stride) / float(stride)`,
+    `1 - bias` when inverted.
+  - The scale is interpolated by `smoothEnd(bias)`. The stride is re-read every frame, so the pulse quickens as
+    the time runs out.
+- **The crystal never fades.** The remake's `0.4 + 0.6 |sin(12 t)|` over the last 2 s (behaviours.gd:227-230)
+  is not in the original: the crystal goes at its time.
+
+**THE OWNER'S STANDING RULINGS APPLIED** (00_order section 6 and K2, each decided for what the original does).
+- **K2, the dial's home and draw.**
+  - Data: `art.json` `timer`, an `Art::Picture` read strictly, with its clock beside it (not systems_9_10's
+    `motions.json`).
+  - Depth: `slotAfter(crystal z_index - 2)`, the decode (E3), not a fixed fraction of a slot.
+  - Colour: through `tint` (E4, not the brief's "around it"). `min(1, ambient + 1)` is 1 on every level, and
+    the sprite path weights the base by the alpha (`shader.frag:477-478`).
+  - Decay: x 0.9 per 1/60 s of frame time, the port's tick, by K2. The original multiplies once a frame and
+    its frame rate is not decoded, so `decay_frames_per_second` 60 is marked `_guess`.
+  - Position: the crystal quad's drawn centre, so 3.2's bob can land before or after this step.
+- **R18, strict `elapsed > time` per frame against the port's `leftS <= 0` per tick.** Decided for the
+  original. `sim/Goals` is unchanged because the two agree on the expiry tick for all 35 crystals. `Tick`
+  takes `1/60` as a float, 8.7e-10 s over a sixtieth, so `leftS` never lands on 0: `<= 0` and `< 0` both
+  expire on tick `time x 60 / 1000` for all 26 distinct times (3,900-25,000 ms), computed. **That agreement
+  comes from `kTick`'s float, not from the decode:** every time is a whole number of ticks, so under exact
+  1000/60 ms frames `elapsed == time` on that tick and the strict compare expires one tick (16.7 ms) later, on
+  `time x 60 / 1000 + 1`, for all 26 (the second verification's `census_r18_v2.json`). The original's own tick
+  also depends on the whole milliseconds `getLastFrameElapsedTime` returns (ins 3), which are not decoded.
+  R18 is record-only (systems_9_10 10c), so Goals is unchanged.
+- **R12, the fixed 720 selection, for the dial's deletion.** The original's `m_scaleFactor` follows the screen's
+  height, so its dial lasted longer on a taller screen. The port takes the 720 p value, 720 / 256 = 2.8125, as
+  `art.json` `timer.screen_px_per_unit` (the same choice as `ui.json`'s `speed_at_screen_px` 720), so the dial's
+  life does not depend on the window. Only the deletion test uses it; the dial is drawn at the pulse in the
+  port's units, which measures right (the scale gate).
+- **D9, closed (00_order section 8):** `smoothEnd` (Interpolator.angelscript, bytes 313899..313971, ins 1-4) is
+  `CpyGtoV4 PIb; MULf; CALLSYS sin`, so `sin(v x PIb)` with `PIb = 1.570796327f` (Ethanon `GameMath.h:40`), as
+  `Art::Pulse` already takes it.
+
+**WHAT CHANGED.**
+- **`sim/Art`:** `Timer : Picture`, plus the pure functions below. `LoadRules` requires `timer` and refuses it
+  by name when it is absent, has no sprite, has more frames than cells, alpha 0, a fractional `z_offset`, no
+  `pulse_to`, a leg of 0, a shrink of 1, `gone_below_scale` 0 or `screen_px_per_unit` 0.
+  - `FrameAt`: float arithmetic, clamped to 0..7.
+  - `LegMs`: `max(400, time - elapsed)`.
+  - `PulseAt`: `Pulse::ScaleAt` with this moment's leg.
+  - `DecayOver`: `0.9 ^ (seconds x 60)`.
+  - `Gone`: `scale x screen_px_per_unit < gone_below_scale`, the test on the stored scale.
+- **`data/art.json` `timer`:** `timer.png`, 4 x 2, emissive 1, not static, applies no light, `frames 8`,
+  `alpha 0.5`, `z_offset -2`, `pulse_from 1`, `pulse_to 1.15`, `pulse_min_leg_ms 400`,
+  `shrink_per_frame 0.9`, `decay_frames_per_second` 60 (`_guess`), `gone_below_scale 0.1`,
+  `screen_px_per_unit 2.8125`. Each has its instruction.
+- **`MagicPortalsLayer`.**
+  - **`m_timers`:** one quad per timed crystal whose picture is drawn, tagged "Magic Portals Timer". Built in
+    `buildSprites` with the `slotAfter` lambda (6.3 will move it into the table, K13), with a
+    `SpriteAnimationComponent` 4 x 2 that does not play.
+  - **`syncTimers`**, on the tick after `syncSprites`, through the ticks `stepLevel` runs, so a pause stops it.
+    - While the crystal lives: the crystal's drawn centre, the cell and the pulse from Goals' clock
+      (`elapsed = life - left`).
+    - From the tick Goals expires the crystal: the last centre, cell and scale, x `DecayOver(tick)` on scale
+      and alpha, gone once `Gone` holds (the scale x 2.8125 below 0.1).
+    - **On the tick it is taken** (`TimerDial::taken`): one more live tick where the dial stood, with the cell
+      and pulse for Goals' elapsed plus that tick. Goals' clock stops on that tick, and the original's
+      frame count has one more frame in it. The shrink starts on the next tick. A crystal taken on the tick its
+      time runs out shrinks at once, as ins 102's strict compare does (not reached by any suite). (Fixed after
+      the first verification, which found the port shrinking on the pickup tick itself.)
+  - **`syncLighting`** tints the dial at `(1, 1, 1, alpha)` with timer.ent's emissive.
+  - **`unloadLevel`** frees the dials. `DrawnSprite::centrePx` keeps where a picture was last drawn.
+    `TimerReports()` is added for the suites.
+- **Deleted:** the crystal picture's alpha fade (`syncSprites`) and the crystal box's brightness blink
+  (`syncDrawables`). `DrawnSprite::fade` stays because a keyhole uses it.
+- **Not built:** the `crystal_vanish.ent` burst (the plan's 10.2) and `playCrystalTempAlertSound` when the dial
+  is added. The vanish sound was already latched on `crystal_expired`.
+
+**GATES.** 1280x720, `--fixed-step`. Every capture, the scripts and the crops are in the remake's
+`out/parity/visuals/3.1/`: `capture_31.sh after`, `timer31.py` -> `timer31.json`. Before: `3.1/before/`, on step
+59's build. The frames were fitted on `MagicPortals.exe` `0f946db8`. After the pickup-tick fix,
+`capture_31.sh fix1` on the final build, `f8e34d64`, drew all **266 frames md5-identical** to `after/`
+(`fix1/work/md5_vs_after.json`; the fix's first link, `48f166e4`, drew the same 266).
+No capture those fits used sends input, so none takes a crystal, and every capture gate below stands as fitted. The
+third fix round's captures, on `MagicPortals.exe` `7ea83c0a` (`fix3/capture_fix3.sh`), repeat them and add one
+that takes crystals (`fix3/cap/pickup`).
+
+`timer31.py` fits the dial on after minus before, where the difference is `alpha x coverage x (255 - before)`.
+It fits the centre, the cell (0-7) and the scale, solves alpha by least squares, and leaves out the crystal
+and near-white ground.
+
+| Gate (00_order 3.1) | Required | Before | After |
+|---|---|---|---|
+| `test_mp_timed`: the cell | `int(age / time x 8)` at 0, time/8 - 1 ms, time/8 and time - 1 ms | the remake's fade; no cell | **passes.** 0 wrong at those 4 points, both sides of every one of the 8 boundaries, and at and past the time, for 10 times from 3,900 to 25,000 ms. On Goals' own clock, level26's crystal shows `(tick x 8) / 600` on all 599 ticks it lives and expires on tick 600 |
+| `test_mp_timed`: alpha, pulse leg | 0.5; `max(400, left)` | - | **passes.** Alpha 0.5. Legs 10,000 / 401 / 400 / 400 at 0 / 9,599 / 9,600 / 9,999 ms of 10,000. `PulseAt` equals `bounce()` within 1e-5 on every ms of 5,000 and 10,000 ms, all in 1..1.15. |
+| `test_mp_timed`: the deletion (brief 10c; ETHCallback_timer ins 184-199) | gone once the stored scale, pulse x m_scaleFactor, is below 0.1 | - | **passes.** `Gone` is `scale x 2.8125 < 0.1`: 0.09 stays, 0.035 goes. From 1 the dial goes on the 32nd x 0.9, from 1.15 on the 33rd, from 1.1497 on the 33rd, from 1.0265 on the 32nd, and 1.035 / 1.036 fall either side of 1.0355. The port's count equals the script's own float arithmetic (`stored *= 0.9f` until `< 0.1f`) on all 151 pulses from 1.000 to 1.150. **The third verification failed the first build of this:** it deleted when the pulse itself dropped below 0.1 (from 1.15 on the 24th frame, from 1 on the 22nd), 9 ticks early |
+| `test_mp_layer`: one dial per timed crystal | 35 in 20 levels | 0 | **35 in 20: passes**, each drawn at `(1, 1, 1, 0.5)` after `ApplySprite2D`, chapter 4's levels included, and none left after `OnDetach` |
+| `test_mp_layer`: the crystal's alpha | stays 1 | 0.4-1 over the last 2 s | **passes**: every `crystal.png` at `(1, 1, 1, 1)` on every tick of crystal_1264's last 2 s (at least 119, asserted). **The pin `ATimedCrystalFadesInItsAlphaAlone` is REPLACED, deliberately, not relaxed**: it held the remake's guess |
+| `test_mp_layer`: the dial's depth | behind its crystal | - | **35 of 35 behind their crystals: passes** |
+| Brief 10c: a taken crystal's dial | starts shrinking the tick after it is taken; gone below 0.1 | - | **passes** (`ATakenCrystalsDialShrinksAway`). Taken on tick 61: that tick the crystal's picture goes, and the dial is drawn unshrunk where it stood, at pulse 1.0265 = `PulseAt(1,016.67 ms)`, the cell `FrameAt` gives and alpha 0.5. The next tick it is x 0.9 and alpha 0.45 on the same cell. Then it is drawn shrinking on **31 ticks**: 1.0265 x 2.8125 x 0.9^32 < 0.1 (asserted exactly). The first verification failed this: the port shrank on the pickup tick. The second found the suite reading freed memory (THE SUITES). The third failed the deletion unit (22 ticks, on the pulse). **On pixels** (`fix3/cap/pickup`, level23 `--hold right@1-110`, every frame): the player takes the 5,000 ms crystal on tick 38 (its picture gone at f38 over a dial of 7 wedges, cell 1; smaller from f39), at pulse 1.0339, under 1.0355. This build's frames equal the previous build's (`verify3b/cap/pickup`, `f8e34d64`) on f1-f60 and f70-f100 and differ only on f61-f69, in a 9 x 15 px box round the dial (39 px down to 1 px): the previous build drew 22 shrinking ticks (f39-f60), this one 31 (f39-f69) |
+| level26 f60-f900 every 30, `timer31.py`: the cell | from the tick count | no dial | **17 of 17 live fits, f90-f570: passes** (f60 is under the level's opening black) |
+| the same: alpha | 0.50 +- 0.05 | - | **0.459-0.528, median 0.493: passes**; level23 0.466-0.528, median 0.492 |
+| the same: scale | in [1.0, 1.15] | - | **passes.** The verifier's half-coverage radius, calibrated on `timer.png` (`verify1/dial_v1.json`): 0.999-1.164 over 33 live frames on level26 and level23. It tracks the expected `bounce()` with max \|residual\| 0.023 / 0.031 and correlation 0.978 / 0.974. Readings above 1.15 fall only where 1.15 is expected. `timer31.py`'s fit read 1.04-1.12, compressed by its estimator (ATTRIBUTIONS) |
+| the same: no dial and no crystal 30 frames after expiry | nothing at f630 | the crystal faded out, gone at f600 | **FAILS AS WRITTEN, by the decode; measured at +32 (f632) instead.** The order's +30 comes from systems_9_10 10c's "~22 frames", which took the 0.1 on the pulse. On this build (`MagicPortals.exe` `7ea83c0a`, `fix3/work/tail_fix3.json`), in a 60 px disc round the dial against the run's f700: 696, 461, 290, 192, 117, 72, 46, 34, 23, 14, 9 and 7 px at f600-f622, then **3, 2, 1 and 1 px at f624-f630** (the last at (1124, 583), 8 levels), and 0 from f632 to f700. A single-frame run to f632 is byte-identical to the every-2 run's f632, so single-frame runs land on the same frames; the one to f631 shows 0 px in the disc at 720 p (cell 7 is one wedge, 3.55 px across at alpha 0.017). At 1920 x 1080 (`fix3/cap/w1080`, `tail1080_fix3.json`) f630 and f631 each differ from f640 by 1 px in the disc, and f632 by 0. **So: drawn through f630 measured at 720 p; f631 drawn by the suite's count (ticks 600-631) and by the 1080 p reading, below one grey level at 720 p; 0 px from f632 at both heights.** The crystal is gone from f600. Against the previous build's every-2 run (`verify3b/cap/l26e2`), 347 of 351 frames are byte-identical; f624, f626, f628 and f630 differ in 3, 2, 1 and 1 px, all within 2 px of the dial's centre (`newold_fix3.json`). Before this round, on `f8e34d64`, which deleted on the pulse: The shrink every 2 frames (the second verification's capture on `f8e34d64`, recounted in a 60 px disc round the dial against the run's f640, `fix2/work/tail_fix2.json`): 696, 461, 290, 192, 117, 72, 46, 34, 23, 14, 9 and 7 px at f600-f622, the last 7 in a 3 px box at the dial's centre, then 0 from f624. **The dial is last drawn on tick 622 (f622; gone at f624).** The first record said f621: its every-3 capture (`fix1/work/shrink_tail.json`) has no f622. The changes after that in the first record's 240 px box are outside the disc: the level's own animation (the verifier located them at x 1188-1194, y 569-589, `verify1/`). That build's test_mp_layer: drawn shrinking on 23 ticks (600-622) from 1.1497; now 32 (600-631) |
+| level23 f270 -> f420: advance 4 (5,000 ms) and 3 (6,000 ms) | as written | - | **NOT MEASURABLE AS WRITTEN.** The port's clock starts on the level's first tick, as the dial's `elapsedTime` starts when its crystal's first frame adds it, so both crystals are gone by f420 (ticks 300 and 360). **Amended to what the gate claims, that the cell tracks the clock: over any window the advance is `int(t2 / T x 8) - int(t1 / T x 8)`. That passes on every window measured.** Over 150 ticks (2.5 s) it is exactly 4 on a 5,000 ms crystal. On a 6,000 ms crystal it is 3 or 4 by phase (8 x 2.5 / 6 = 3.33), so the order's fixed "3" is underspecified. Measured, 5,000 ms: f90 -> f240 cell 2 -> 6 and f120 -> f270 3 -> 7, +4 and +4. 6,000 ms: f90 -> f240 2 -> 5, f150 -> f300 3 -> 6 and f180 -> f330 4 -> 7, +3 each, and f120 -> f270 2 -> 6, +4. Each is the closed form's, and all 16 fits equal `int(tick / 60 / time x 8)`. 30 frames after each expiry (f330, f390), no crystal. This build's every-30 run equals the previous build's on 17 of 19 frames: f390 differs by 1 px at the 6,000 ms dial ((404, 429), 8 levels: it shrinks from its expiry tick 360, so f390 is its 31st shrinking tick, and it is drawn to tick 391) and 1 px at level23's fire ((1241, 699), 5 levels), and f420 by 1 px at the fire ((1265, 718), 4 levels). f330's 5,000 ms dial (shrinking from tick 300, drawn to tick 331) shows 0 px at 720 p |
+| Library cross-check (brief 10c) | 1-27_t8.0: cell 6; 1-15_t4.5: cell 3 | no dial | **cell 6 at 1-27 f480 and cell 3 at 1-15 f270**, by eye (`lib_vs_port_1-27.png`, `lib_vs_port_1-15.png`). 1-24 t2.0 / t4.5 against f120 / f270: the 5,000 ms dial is 3 / 7 in both. The 6,000 ms dial is 3 / 6 in the library and 2 / 6 in the port: the library is a cell ahead, within its 0.02-0.5 s capture latency (`zoom_1191_t2.0_vs_f120.png`). By eye the library shows 3 then 6 there, where system_5 recorded 3 then 5; left to the owner |
+| Non-regression | nothing else moves | - | **1-01 f420 `a1f8d7ae`, byte-identical: passes** (on `7ea83c0a` too; level26's every-30 run to f480 is byte-identical to the previous build's on 17 of 17 frames). The two 1 px changes at level23's fire, 4-5 levels, are ATTRIBUTED (INFERRED, not traced): the dial's quad is now destroyed 9 ticks later, which changes the registry's storage order, and with it the gather order that breaks ties between equal-depth blended draws (`RenderSystem.cpp:158-176`). Before this round, on `f8e34d64`: level26: 0 px changed outside 60 px of the dial on 30 frames. level23: every changed blob is a dial at its crystal |
+| Validation | exit 0, silent | - | 6 launches exit 0, no VUID or Validation Error in any log. On `7ea83c0a`: 11 launches (7 at 1280 x 720, 4 at 1920 x 1080) exit 0, none |
+
+**ATTRIBUTIONS.**
+- **The drawn scale is right, and `timer31.py`'s fit reads it compressed.**
+  - That fit correlates with the expected pulse at 0.78 and reads 1.04-1.12 where the tick count gives
+    1.00-1.15. On the shrink frames it reads 0.88 and 0.61 against 1.035 and 0.754.
+  - The verifier's half-coverage radius, calibrated on `timer.png`, reads the same frames at 0.999-1.164, max
+    \|residual\| 0.031, correlation 0.97-0.98. It reads the shrink at 1.002 / 0.747 / 0.541 against 1.035 /
+    0.754 / 0.550 (`verify1/dial_v1.json`, `shrink_v1.json`). The compression is the fit's estimator, not the
+    build.
+  - `test_mp_layer` pins the exact scale: on every one of 599 ticks the quad is 32 u x `PulseAt` at the dial's
+    z, with 0 ticks off.
+- **level23's third timed crystal** (12,000 ms, at (496, 144)) is outside the view for all 540 frames and is
+  not measured.
+- **4-06 f120** (`view_4-06_f120.png`): the three chapter-4 dials are drawn whole, as the suite's colours say.
+
+**THE SUITES** (run directly, once each, on this build).
+- **`test_mp_timed` 84 checks, 0 failures** (80 before the third fix round; minimum raised 30 -> 60):
+  - `TheDialsNumbersAreTheScripts`, `TheDialShowsTheTimeElapsed` (with level26's 600 ticks on Goals' clock),
+    `TheDialPulsesFasterAsTheTimeRunsOut` and `TheDialShrinksAwayOnceTheTimeIsUp` (the deletion row above).
+- **`test_mp_sprites` 336 -> 374** (371 before the third fix round):
+  - `TheTimerIsTimerEnt` pins the `.ent` facts;
+  - `ATimerWithoutItsClockIsRefused` covers the ten refusals, `screen_px_per_unit` 0 the tenth;
+  - `timer.png` is 128 x 64 with no hd or fullhd twin.
+- **`test_mp_layer` 854 -> 966** (961 before the pickup-tick fix). **The second verification's run failed it
+  (966 checks, 1 failure at :4456) on `b32d47ed`, the binary this record had passed on.** The tests read the
+  dial through `DialOf`, a pointer into the vector `TimerReports()` returns by value, and six sites passed it
+  the temporary, so every read after that statement was of freed memory. `DialOf` now returns a copy
+  (`std::optional<TimerReport>`). Relinked once, `ac056aaa`: **966 checks, 0 failures**, the same log as
+  before but for that failure:
+  - `EveryTimedCrystalHasADialBehindIt`;
+  - `ATimedCrystalCountsDownOnItsDialAndNeverFades`, which replaces the fade pin: the cell, pulse, alpha, the
+    quad's cell and size on every tick, the crystal whole, x 0.9 and alpha 0.45 on the expiry tick, cell 7,
+    and drawn shrinking on exactly 32 ticks (23 before the third fix round, on the pulse);
+  - `ATakenCrystalsDialShrinksAway`: taken on tick 61. That tick the crystal's picture goes, and the dial is
+    drawn unshrunk where it stood, at `PulseAt` and `FrameAt` of Goals' elapsed plus the tick and alpha 0.5.
+    The next tick it is x 0.9 and alpha 0.45 on the same cell, then drawn shrinking on exactly 31 ticks (22,
+    with 21-24 asserted, before the third fix round).
+  - Third fix round, `12e4cf6a`: **966 checks, 0 failures**. It prints 35 dials in 20 levels, "drawn shrinking
+    on 32 ticks from 1.1497" and "taken on tick 61 ... then drawn shrinking on 31 ticks".
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4). The `MagicPortals` target compiled `sim/Art.cpp` and
+`MagicPortalsLayer.cpp` and printed nothing but the environment's `vswhere.exe` notice. The full build (47
+steps: the three suites compiled, 46 links) printed none. The fix round's full rebuild (the layer, `sim/Art.hpp`'s
+includers and `test_mp_layer.cpp` compiled, 46 links) printed none, and a second full build had no work to do.
+The second fix round's `test_mp_layer` target (`test_mp_layer.cpp` compiled, 1 link) printed none. The third
+fix round's full build (54 steps: `sim/Art.cpp`, `MagicPortalsLayer.cpp`, `main.cpp`, `LevelVisit.cpp` and the
+three suites compiled, 44 executables linked) printed nothing but the `vswhere.exe` notice
+(`fix3/build.log`).
+
+**ctest, once: 102 of 120 pass, 0 fail, 18 not run.** Smart App Control refused (BAD_COMMAND) test_joints,
+test_renderplan, test_tilemap, test_mp_levels, test_mp_portal, test_mp_statics, test_mp_diamonds, test_mp_boss,
+test_mp_lighting, test_mp_sky, test_mp_hud, test_mp_info, test_serialize, test_frustum, test_determinism,
+test_camera, test_uicanvas and test_audio. None of the 18 names `Art::`, `art.json` or the layer (grep), so
+they were not relinked. test_mp_timed, test_mp_sprites, test_mp_layer and test_mp_play passed under ctest too.
+
+**SMART APP CONTROL.** `MagicPortals.exe` `0f946db8`, `test_mp_timed.exe` `c2a2f424`, `test_mp_sprites.exe`
+`e26a77b0` and `test_mp_layer.exe` `0e34f184` each ran on their first launch. The only refusals were ctest's 18.
+In the fix round, the first links (`MagicPortals.exe` `48f166e4`, `test_mp_layer.exe` `a3c20977`) ran on their
+first launch. Comment-only header edits then relinked every suite. `test_mp_layer` `b32d47ed`, `test_mp_timed`
+`26e6f881` and `test_mp_sprites` `f60877e4` each ran on its first launch (966 / 80 / 371 checks, 0 failures;
+`test_mp_layer`'s 0 there was undefined behaviour, and the second verification's run of it failed, THE SUITES).
+Smart App Control refused `MagicPortals.exe` `210cb33a` (exit 126). It was deleted and relinked once, and
+`f8e34d64` ran. ctest was not re-run. In the second fix round only `test_mp_layer` was relinked (`ac056aaa`,
+ran on its first launch: 966 checks, 0 failures). `test_mp_timed` (`26e6f881`), `test_mp_sprites` (`f60877e4`)
+and `MagicPortals.exe` (`f8e34d64`) are the same binaries, so they were not re-run and no capture was retaken.
+In the third fix round (the deletion on the stored scale) the full build relinked every executable; only the
+three suites and the game were launched. `test_mp_timed` `5fdbb686` (84 checks), `test_mp_sprites` `ee4fab80`
+(374) and `test_mp_layer` `12e4cf6a` (966) each ran once on their first launch, 0 failures
+(`fix3/suites/`). `MagicPortals.exe` `7ea83c0a` ran on its first launch and on all 11 capture launches
+(`fix3/capture_fix3.sh`, `fix3/cap/`). No refusal. ctest was not re-run: this role's one run was spent, and
+none of the 18 suites it could not run names `Art::`, `art.json` or the layer.
+
+**THE FOURTH VERIFICATION** (the remake's `out/parity/visuals/3.1/verify4b/`) retook every gate on the same
+binaries (`7ea83c0a` / `5fdbb686` / `ee4fab80` / `12e4cf6a`) and passed: the suites 84 / 374 / 966 checks, 0
+failures; its captures byte-identical to `fix3/`'s (gate480 16 of 16, the every-2 tail 330 of 330, level23 18
+of 18, the pickup 80 of 80, 1080 p f630-f632). Its record nits (this headline, the citation below, one
+`art.json` indent) were fixed in text only before the commit; nothing was rebuilt that runs. **The next step's
+"before"** is `3.1/fix3/cap/` (1-01 f420 `a1f8d7ae`).
+
+**LEFT FOR THE OWNER.**
+- **The order's "no dial and no crystal 30 frames after expiry" gate** inherits systems_9_10 10c's "~22
+  frames", which read ins 184-199's 0.1 on the pulse rather than the stored scale. By the decode the dial is still
+  drawn, faintly, at +30 and +31; this record measures the gate at +32 (f632). Amending 00_order section 7 (and
+  10c's frame count) is the owner's.
+- **Timed crystals are static entities** (`static="1"` on level23.esc's inline crystals and on crystal.ent), and a
+  static entity's callback runs only once its bucket is drawn (`ETHActiveEntityHandler.cpp:70-73`, 00_order
+  8.12c). So the original starts a crystal's `addTimerToCrystal`, and the dial's clock, when the crystal's bucket
+  is first on screen; the port starts every crystal's clock and dial on tick 1 (Goals). The two agree for every
+  crystal in view at load, which is every capture gate here. A sim and Goals divergence beside R18, not a 3.1
+  change (the third verification).
+- **The dial's life at other screen heights.** The port fixes `screen_px_per_unit` at the 720 p 2.8125 (R12); the
+  original's followed the device (2.8125 x height / 720), so a 1080-line phone kept its dials 4 ticks longer.
+- **The order's level23 gate** (f270 -> f420) assumes the library's clock. On the port's it lands after both
+  crystals have gone. Amended above to the closed form `int(t2 / T x 8) - int(t1 / T x 8)` over windows inside
+  each life. Its fixed "3" for the 6,000 ms crystal cannot hold on every 150-tick window: 3.33 cells in 2.5 s is
+  +3 or +4 by phase. system_5.md's "3 -> 5" for the library's 6,000 ms dial reads 3 -> 6 by eye (twice).
+- **The library's clock on 1-24.** Its t2.0 / t4.5 cells, 5,000 ms 3 -> 7 and 6,000 ms 3 -> 6, all fit one
+  clock that leads the frame's name by 0.25-0.5 s (5,000 ms: 3.6-4.0 and 7.6-8.0 cells elapsed; 6,000 ms:
+  3.0-3.33 and 6.33-6.67), within the library's capture latency. The second verification read them as the two
+  crystals' clocks differing by at least 1/16 s; this record does not need that. Open, not a 3.1 blocker.
+- **`playCrystalTempAlertSound`** when a dial is added is not latched (sounds.json maps it; no port event
+  raises it).
+- **The `crystal_vanish` burst** at the time is 10.2's.
+- **What the brief left open stays open:**
+  - the dial's +1.4 u y residual;
+  - the dial/crystal tie (the port puts the dial after the sprites at or below z_index - 2);
+  - system_5's first-frame elapsed spike.
+- **The dial is not interpolated between ticks.** Neither is the crystal, which does not move yet. When 3.2
+  bobs the crystal, give both the same interpolation.
