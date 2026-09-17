@@ -22,6 +22,7 @@
 
 #include <stb_image.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -373,10 +374,49 @@ void ThePortalAndTheShotAreTheirEnts() {
     const Art::Character& mage = rules.character;
     CHECK_MSG(mage.sprite == "magic_portals_hd.png" && !mage.additive && mage.columns == 4 && mage.rows == 4,
               "dark_mage.ent: its sheet, cut 4 x 4, mixed");
-    CHECK_MSG(mage.startFrame == 4 && mage.pivotXPx == 0.0 && mage.pivotYPx == 2.0,
-              "starting on frame 4, its pivot 2 px below the middle");
+    CHECK_MSG(mage.pivotXPx == 0.0 && mage.pivotYPx == 2.0, "its pivot 2 px below the middle");
     CHECK_MSG(mage.leftRow == 1 && mage.rightRow == 2, "the rows the decoded DIRECTION enum gives left and right");
-    CHECK_MSG(mage.startFrame / mage.columns == mage.leftRow, "and the start frame stands on the left row");
+    // GameCharacter's constructor sets direction 2, and every update with no walk
+    // stands it on SetFrame(idleColumn, direction): frame 8, facing right. The
+    // .ent's startFrame 4 is set once and replaced, so the port does not carry it.
+    CHECK_MSG(mage.initialDirection == 2 && mage.initialDirection == mage.rightRow,
+              "made facing right: GameCharacter's direction 2 is the right row");
+    CHECK_MSG(mage.idleColumn == 0 && mage.initialDirection * mage.columns + mage.idleColumn == 8,
+              "standing on idleColumn 0, so a level starts on frame 8");
+    CHECK_MSG(mage.strideMs == 90.0 && std::fabs(mage.framesPerSecond - 1000.0 / 90.0) < 1e-9,
+              "a column every 90 ms, SideScrollerCharacter's frameStride");
+    // Its arm out (SideScrollerCharacter::detectPushing and findFinalDirection): a
+    // ray 0.6 of the frame's width along the velocity applyForces sets, 6 units
+    // higher at its far end, the body's own x velocity times 0.86 off the ground at
+    // 60 Hz; row 0 pushing left, row 3 any other way - the sheet's two arm-out rows.
+    const Art::Push& push = mage.push;
+    CHECK_MSG(push.reachFrameWidthShare == 0.6 && push.reachFrameWidthShare * 40.0 == 24.0,
+              "push: 0.6 of getSize().x, 24 units of a 40-unit frame");
+    CHECK_MSG(push.offsetPx == glm::dvec2(0.0, -6.0), "push: scale(-6) on y, 6 units above the far end");
+    CHECK_MSG(push.airVelocityShare == 0.86, "push: min(1, GetFPSRate() / 60 x 0.86) at 60 Hz");
+    CHECK_MSG(push.leftRow == 0 && push.otherRow == 3 && push.leftRow != mage.leftRow &&
+                  push.otherRow != mage.rightRow,
+              "push: rows 0 and 3, neither a walking row");
+    // On a no_gravity level: MainCharacter's constructor swaps the sheet and
+    // nothing else (the normal map stays normalmap_77.png), and linearMotion turns
+    // the standing column every 280 ms and hovers the pivot 1.2 screen pixels on a
+    // cosine at 3 rad/s from PI + PIb, wrapped at 2 PI.
+    CHECK_MSG(mage.noGravitySprite == "dark_mage_in_space.png" && mage.normal == "normalmap_77.png",
+              "no_gravity: dark_mage_in_space.png, through the same normal map");
+    const Art::NoGravityMotion& weightless = mage.noGravity;
+    CHECK_MSG(weightless.columnStrideMs == 280.0, "no_gravity: set(0, 3, 280, true)");
+    CHECK_MSG(weightless.hoverScreenPx == 1.2 && weightless.hoverAtScreenPx == 720.0 &&
+                  weightless.hoverRadiansPerSecond == 3.0,
+              "no_gravity: cos(angle) * 1.2 screen px, taken at 720, turning 3 rad a second");
+    CHECK_MSG(std::fabs(weightless.hoverStartRadians - (3.1415927 + 1.5707963)) < 1e-6 &&
+                  std::fabs(weightless.hoverWrapRadians - 2.0 * 3.1415927) < 1e-6,
+              "no_gravity: from PI + PIb, wrapped at PI * 2");
+    CHECK_MSG(std::fabs(weightless.HoverUnits(0.0f, 256.0) - 1.2 * 256.0 / 720.0) < 1e-9 &&
+                  std::fabs(weightless.HoverUnits(3.1415927f, 256.0) + 1.2 * 256.0 / 720.0) < 1e-6,
+              "no_gravity: 0.4267 units either way on a 256-unit view: " +
+                  std::to_string(weightless.HoverUnits(0.0f, 256.0)));
+    CHECK_MSG(Art::PlayerSheet(mage, true) == mage.noGravitySprite && Art::PlayerSheet(mage, false) == mage.sprite,
+              "the sheet worn: the suit only where no_gravity is set");
 
     // Chapter 1's boss and its spikes (step 11b): the .ent files' facts, and the
     // pulse bounce() gives it in each thing it does, decoded from its script.
@@ -550,15 +590,143 @@ void ASheetThatDoesNotSayHowFastIsRefused() {
                                                  "static": true, "apply_light": true},
                                  "character": {"sprite": "c.png", "additive": false, "columns": 4, "rows": 4,
                                                "emissive": [1, 1, 1], "static": false, "apply_light": true,
-                                               "start_frame": 4, "pivot_px": [0, 2],
+                                               "initial_direction": 2, "pivot_px": [0, 2],
                                                "rows_by_direction": {"left": 1, "right": 2},
-                                               "animation": {"frames_per_second": 10, "idle_column": 0}}})";
+                                               "animation": {"stride_ms": 90, "idle_column": 0}}})";
     Write(path, std::vector<unsigned char>(text.begin(), text.end()));
     Art::Rules rules;
     std::string error;
     const bool ok = Art::LoadRules(path.string(), rules, error);
     CHECK(!ok);
     CHECK_MSG(error.find("frames_per_second") != std::string::npos, error);
+}
+
+// The player's walk is decoded, so none of it is defaulted: without the way it
+// is made facing, the sheet starts on a frame nobody read, and without its
+// stride it walks at a rate nobody decoded.
+void APlayerWithoutItsWalkIsRefused() {
+    std::ifstream file(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", std::ios::binary);
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string real = buffer.str();
+    const auto refusedSaying = [&real](const std::string& from, const std::string& to, const std::string& name,
+                                       const std::string& says) {
+        std::string text = real;
+        const std::size_t at = text.find(from);
+        CHECK_MSG(at != std::string::npos && text.find(from, at + 1) == std::string::npos, "once: " + from);
+        if (at == std::string::npos) return;
+        text.replace(at, from.size(), to);
+        const std::filesystem::path path = Scratch() / ("art-walk-" + name + ".json");
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Art::Rules rules;
+        std::string error;
+        const bool ok = Art::LoadRules(path.string(), rules, error);
+        CHECK_MSG(!ok, "refused: " + name);
+        CHECK_MSG(error.find(says) != std::string::npos, name + ": " + error);
+    };
+    const auto refused = [&refusedSaying](const std::string& from, const std::string& to, const std::string& name) {
+        refusedSaying(from, to, name, "character needs initial_direction");
+    };
+    refused("\"initial_direction\": 2,", "", "no initial direction");
+    refused("\"initial_direction\": 2,", "\"initial_direction\": 4,", "a direction below the sheet");
+    refused("\"initial_direction\": 2,", "\"initial_direction\": 1.5,", "a direction between rows");
+    refused("\"stride_ms\": 90,", "", "no stride");
+    refused("\"stride_ms\": 90,", "\"stride_ms\": 0,", "a stride of 0");
+    refused("\"idle_column\": 0", "\"idle_column\": 4", "an idle column past the sheet");
+    // And what a no_gravity level changes, none of it defaulted either.
+    const auto weightless = [&refusedSaying](const std::string& from, const std::string& to, const std::string& name) {
+        refusedSaying(from, to, name, "character needs no_gravity_sprite");
+    };
+    weightless("\"no_gravity_sprite\": \"dark_mage_in_space.png\",", "", "no suit");
+    weightless("\"no_gravity_sprite\": \"dark_mage_in_space.png\",", "\"no_gravity_sprite\": \"\",", "an empty suit");
+    weightless("\"column_stride_ms\": 280,", "", "no zero-g stride");
+    weightless("\"column_stride_ms\": 280,", "\"column_stride_ms\": 0,", "a zero-g stride of 0");
+    weightless("\"hover_screen_px\": 1.2,", "", "no hover");
+    weightless("\"hover_at_screen_px\": 720,", "\"hover_at_screen_px\": 0,", "a hover at no screen");
+    weightless("\"hover_radians_per_second\": 3.0,", "", "no hover rate");
+    weightless("\"hover_start_radians\": 4.71238898,", "\"hover_start_radians\": \"PI + PIb\",", "a start not a number");
+    weightless("\"hover_wrap_radians\": 6.28318531", "\"hover_wrap_radians\": -1", "a wrap below 0");
+    // And its arm out, none of it defaulted.
+    const auto arm = [&refusedSaying](const std::string& from, const std::string& to, const std::string& name) {
+        refusedSaying(from, to, name, "character needs push.");
+    };
+    arm("\"reach_frame_width_share\": 0.6,", "", "no reach");
+    arm("\"reach_frame_width_share\": 0.6,", "\"reach_frame_width_share\": 0,", "a reach of 0");
+    arm("\"offset_px\": [0, -6],", "\"offset_px\": [-6],", "an offset of one number");
+    arm("\"air_velocity_share\": 0.86,", "", "no air share");
+    arm("\"other\": 3", "\"other\": 4", "a push row past the sheet");
+    arm("\"left\": 0,", "\"left\": 0.5,", "a push row between rows");
+}
+
+// FrameTimer::set (FrameTimer.angelscript, bytes 23254..23650), as the player's
+// column runs on it: the time is always added; a changed range resets to its
+// first frame with no time; otherwise ONE frame a call once the time reaches the
+// stride, however much time there is, and past the last back to the first.
+void AFrameTimerStepsOneFrameACall() {
+    Art::FrameTimer timer;
+    CHECK_MSG(timer.Set(0, 3, 280.0, true, 16.0) == 0 && timer.timeMs == 0.0 && timer.last == 3,
+              "the first set(0, 3) resets the constructor's (0, 0): frame 0, no time");
+    CHECK_MSG(timer.Set(0, 3, 280.0, true, 279.0) == 0 && timer.timeMs == 279.0, "279 ms: still frame 0");
+    CHECK_MSG(timer.Set(0, 3, 280.0, true, 1.0) == 1 && timer.timeMs == 0.0, "280 ms reached: frame 1, the stride taken off");
+    CHECK_MSG(timer.Set(0, 3, 280.0, true, 600.0) == 2 && timer.timeMs == 320.0,
+              "600 ms at once is one frame, the rest kept: " + std::to_string(timer.timeMs));
+    CHECK_MSG(timer.Set(0, 3, 280.0, true, 0.0) == 3 && timer.timeMs == 40.0, "and the next call takes the next");
+    CHECK_MSG(timer.Set(0, 3, 280.0, true, 240.0) == 0 && timer.timeMs == 0.0, "past the last, back to the first");
+    CHECK_MSG(timer.Set(0, 3, 90.0, true, 90.0) == 1, "a different stride on the same range does not reset it");
+    CHECK_MSG(timer.Set(4, 7, 90.0, true, 500.0) == 4 && timer.timeMs == 0.0, "a different range resets it");
+    Art::FrameTimer once;
+    once.Set(0, 1, 10.0, false, 0.0);
+    once.Set(0, 1, 10.0, false, 10.0);
+    CHECK_MSG(once.Set(0, 1, 10.0, false, 15.0) == 1 && once.timeMs == 0.0,
+              "not repeating, it holds its last with no time");
+}
+
+// MainCharacter on a no_gravity level, one update at a time at the port's tick:
+// the column an update draws is the one the update before left, and it turns
+// every 280 ms; a walking update draws the walk's own and adds its time twice;
+// the hover angle starts at PI + PIb, turns 3 rad a second and wraps at 2 PI.
+void AWeightlessPlayerTurnsItsColumnAndHovers() {
+    Art::Rules rules;
+    std::string error;
+    CHECK_MSG(Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", rules, error), error);
+    const Art::Character& mage = rules.character;
+    const double tickMs = static_cast<double>(1.0f / 60.0f) * 1000.0;
+    Art::NoGravityPlayer player;
+    CHECK_MSG(!player.moved && player.idleColumn == 0, "made standing on column 0, not yet moved");
+    std::vector<int> drawn;
+    for (int update = 1; update <= 70; ++update) drawn.push_back(Art::UpdateNoGravity(mage, player, false, tickMs));
+    // The first update resets the timer; 17 more updates of 16.67 ms reach 280 on
+    // update 18, and update 19 draws it.
+    const auto firstDrawing = [&drawn](int column) {
+        const auto at = std::find(drawn.begin(), drawn.end(), column);
+        return at == drawn.end() ? -1 : static_cast<int>(at - drawn.begin()) + 1;
+    };
+    CHECK_MSG(firstDrawing(1) == 19 && firstDrawing(2) == 36 && firstDrawing(3) == 53,
+              "column 1 first drawn on update " + std::to_string(firstDrawing(1)) + ", 2 on " +
+                  std::to_string(firstDrawing(2)) + ", 3 on " + std::to_string(firstDrawing(3)));
+    CHECK_MSG(drawn.front() == 0 && drawn[17] == 0 && drawn.back() == 0 && firstDrawing(0) == 1,
+              "and back to column 0 by update 70: " + std::to_string(drawn.back()));
+    const float angle70 = static_cast<float>(mage.noGravity.hoverStartRadians);
+    CHECK_MSG(player.moved && std::fabs(player.angle - std::fmod(angle70 + 70.0f * 3.0f / 60.0f, 6.2831853f)) < 1e-3f,
+              "70 updates turn the angle 3.5 rad from PI + PIb, wrapped once: " + std::to_string(player.angle));
+
+    Art::NoGravityPlayer first;
+    Art::UpdateNoGravity(mage, first, false, tickMs);
+    CHECK_MSG(std::fabs(first.angle - (4.71238898f + 0.05f)) < 1e-5f &&
+                  std::fabs(mage.noGravity.HoverUnits(first.angle, 256.0) -
+                            1.2 * std::sin(0.05) * 256.0 / 720.0) < 1e-4,
+              "the first update already turns it: cos(3 PI / 2 + 0.05), 0.02 units up");
+
+    // Walking: updateFrame's set(0, 3, 90) and linearMotion's set(0, 3, 280) share
+    // one timer, so a walking update adds its time twice.
+    Art::NoGravityPlayer walker;
+    Art::UpdateNoGravity(mage, walker, true, tickMs); // the reset, by updateFrame's set
+    CHECK_MSG(walker.timer.timeMs == tickMs, "linearMotion's set adds the same update's time again: " +
+                                                 std::to_string(walker.timer.timeMs));
+    std::vector<int> walks;
+    for (int update = 2; update <= 4; ++update) walks.push_back(Art::UpdateNoGravity(mage, walker, true, tickMs));
+    CHECK_MSG(walks == std::vector<int>({0, 0, 1}),
+              "so the 90 ms walk column turns on update 4, 50 ms after the reset: " + std::to_string(walks.back()));
 }
 
 void APictureWithoutItsEmissiveIsRefused() {
@@ -1485,6 +1653,9 @@ int main() {
     ATimerWithoutItsClockIsRefused();
     APulseGoesThereAndBack();
     ASheetThatDoesNotSayHowFastIsRefused();
+    APlayerWithoutItsWalkIsRefused();
+    AFrameTimerStepsOneFrameACall();
+    AWeightlessPlayerTurnsItsColumnAndHovers();
     APictureWithoutItsEmissiveIsRefused();
     APictureWithoutItsLightingIsRefused();
     AParticleStartsAtItsEntitysPosition();

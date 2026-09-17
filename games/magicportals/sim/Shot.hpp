@@ -49,6 +49,15 @@ struct Hit {
 std::optional<Hit> FirstBody(entt::registry& registry, const glm::dvec2& fromPx, const glm::dvec2& toPx,
                              entt::entity ignore);
 
+// The first body the segment meets as the original's GetClosestContact finds it
+// (ETHPhysicsSimulator.cpp:251-268): every body but `ignore`, a trigger as well
+// as a solid one - Box2D's world ray cast asks no fixture whether it is a sensor
+// (b2World.cpp:978-995) - and never one the segment starts inside or on, which
+// Box2D's shape ray casts do not report (b2PolygonShape.cpp:189-258,
+// b2CircleShape.cpp:47-82).
+std::optional<Hit> ClosestContact(entt::registry& registry, const glm::dvec2& fromPx, const glm::dvec2& toPx,
+                                  entt::entity ignore);
+
 // How far along the segment it first enters the box, or none.
 std::optional<double> Enters(const glm::dvec2& fromPx, const glm::dvec2& toPx, const Trigger::Box& box);
 

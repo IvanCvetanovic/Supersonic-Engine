@@ -21,6 +21,7 @@
 #include "TestHarness.hpp"
 
 #include "core/Components.hpp"
+#include "sim/Art.hpp"
 #include "sim/Game.hpp"
 #include "sim/Player.hpp"
 #include "sim/Roles.hpp"
@@ -399,6 +400,37 @@ void ThreeOfThemHoldAGravityWell() {
     CHECK_EQ(levels, 3);
 }
 
+// The fourth thing the flag turns on is a picture: MainCharacter's constructor
+// swaps in dark_mage_in_space.png when its noGravity argument is set (art.json
+// character.no_gravity_sprite). The flag, not the space sky: level0c (4-01) sets
+// space_bg and no no_gravity, and the original's player wears the normal sheet
+// there.
+void TheSuitIsWornWhereGravityIsOffAndNowhereElse() {
+    Art::Rules art;
+    std::string error;
+    const bool read = Art::LoadRules(kPortData + "/art.json", art, error);
+    CHECK_MSG(read, error);
+    if (!read) return;
+    const auto sheetOf = [&art](const char* name, bool& noGravity) {
+        Game::Data data;
+        entt::registry registry;
+        Game::Level level;
+        noGravity = false;
+        if (!Open(name, data, registry, level)) return std::string();
+        noGravity = level.noGravity;
+        return Art::PlayerSheet(art.character, level.noGravity);
+    };
+    bool noGravity = false;
+    const std::string weightless = sheetOf(kWeightless, noGravity);
+    CHECK_MSG(noGravity && weightless == "dark_mage_in_space.png", std::string(kWeightless) + " wears " + weightless);
+    const std::string spaceSky = sheetOf("level0c", noGravity);
+    CHECK_MSG(!noGravity && spaceSky == "magic_portals_hd.png", "level0c, under the space sky, wears " + spaceSky);
+    const std::string normal = sheetOf(kNormal, noGravity);
+    CHECK_MSG(!noGravity && normal == "magic_portals_hd.png", std::string(kNormal) + " wears " + normal);
+    std::printf("  %s wears %s; level0c and %s wear %s\n", kWeightless, weightless.c_str(), kNormal,
+                spaceSky.c_str());
+}
+
 void runTests() {
     TheRulesRead();
     TheRecoilPushesAwayFromWhereYouAimed();
@@ -413,6 +445,7 @@ void runTests() {
     TheShoveIsAddedToWhatYouAlreadyHad();
     AndNoTapShovesAnyoneInANormalLevel();
     ThreeOfThemHoldAGravityWell();
+    TheSuitIsWornWhereGravityIsOffAndNowhereElse();
 }
 
 } // namespace

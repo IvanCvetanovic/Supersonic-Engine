@@ -9499,6 +9499,745 @@ first launch.
   `test_mp_tiers`. A path given with `\` comes back mixed (`dir\hd/half.png`, as the suite pins): 2.2 checks that
   nothing caches a texture by its path string, or one file loads twice.
 
+## Step 62 - the player made facing right, a column every 90 ms, and a walk that keeps its column across a stop (built)
+
+The entity-visuals order's step 1.1 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `systems_3_4.md`
+section 2 3a): the player stood on `dark_mage.ent`'s start frame 4, facing left, walked at a 10 fps `_guess`, and
+began every walk on column 0. Game-only: no file under `src/` or `assets/shaders/`. Changed: `data/art.json`,
+`sim/Art.{hpp,cpp}`, `MagicPortalsLayer.cpp`, `tests/test_mp_sprites.cpp`, `tests/test_mp_layer.cpp`. **Every level
+now opens on frame 8, facing right as the original does (normal f8 0.970 on 1-01 and 0.926 on 1-09, from 0.808 and
+0.804); the walk turns a column every 90 ms (B-onset period 21.6 frames); 125 of 128 f420 frames change, each only in
+the player's cell. The sweep gate, as written, is met in 52 of the 54 levels it names: the two misses, 1-02 and 1-03,
+open under their tutorial popup, and they are the only levels whose library frame was taken after that popup was
+dismissed. Read with the popup in the same state on both sides it passes both ways: closed, 54 of 54; up, the
+original's own popup grabs lock no player either, so the two leave the set and 52 of 52 pass.** A run stopped by a
+power loss at 02:43 implemented, built and measured this step before writing its record; its sources, binaries and
+captures were checked again for this record (BUILD). It is committed with six RECORDED DEVIATIONS (below), the
+sweep gate's 52 of 54 among them, by the owner's delegated decision.
+
+**WHAT THE ORIGINAL DOES** (the remake's bytecode listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce`).
+- **It is made facing right.** `GameCharacter::GameCharacter` (bytes 119493..119839) instructions 39-41 set
+  `direction = 2`, MOVING_RIGHT. `SideScrollerCharacter::SideScrollerCharacter` (152667..153096) instructions 64-68
+  call `SetFrame(4)`, and the first update replaces it: `SideScrollerCharacter::updateFrame` (130241..130614), on
+  every update with no walk (instructions 88-102), calls `SetFrame(idleColumn, findFinalDirection(direction))`, row 2
+  column 0: frame 8 (`ETHEntity::SetFrame(column, row)` is `row * cutX + column`, `ETHEntity.cpp:765-779`). The
+  `.ent`'s `startFrame` is read by nothing: `ETHEntityProperties::ReadFromXMLFile` (`ETHEntityProperties.cpp:226`)
+  reads `SpriteCut` (`:267`) and no `startFrame`, no file under the engine's `src/engine` names it, and the editor's
+  use of it is commented out (`EntityEditor.cpp:335-340`). The rows are the direction, unflipped: no `FlipX` or
+  `SetFlipX` call anywhere in the listing.
+- **A column every 90 ms.** The same constructor sets `frameStride = 90` (instructions 9-11) and `idleColumn = 0`
+  (80-82). A walking update (63-86) calls
+  `SetFrame(timer.set(0, 3, frameStride, true), findFinalDirection(direction))`. `FrameTimer::set` (23254..23650) adds
+  the update's elapsed milliseconds (6-11); resets to `first` with no time only when `first` or `last` differs from
+  the last call's (13-44); else steps one column once the time reaches the stride and takes the stride off (45-76).
+  The remake's rec11 measured 92 ms a column (`specs/visuals/scripted.md` 1.4), and footage F12 (1-1, right held)
+  90.8 ms (Beyond the gates).
+- **The column carries.** The walk always passes (0, 3), so the timer resets once, on the first walk, against the
+  constructor's (0, 0) (`FrameTimer::FrameTimer`, 22535..22652). A stop shows `idleColumn` and does not call the
+  timer, so the column and its time survive a stop and a turn. Nothing calls it while paused or finished
+  (`MainCharacter::update`, 128578..128850, instructions 6-21). No clip of the original resolves a column across a
+  stop: F12 holds right once, and footage F9's take r7b (`F9_flyin_3-18.mp4`, 3-18) walks right, stops and steps back
+  left, but at about 17 fps (median frame gap 50 ms, `F9.md` section 4) it samples a 90 ms column less than twice. So
+  this part rests on the decode; the port was measured against it in the exe (Beyond the gates).
+
+**WHAT CHANGED.**
+- **`data/art.json` `character`:** `start_frame` removed; `initial_direction 2`, with `_initial_direction` (the decode
+  above, and frame 8 in all 54 lit levels where the original's player is located); `animation` loses `_guess` and
+  `frames_per_second 10` for `stride_ms 90`, with its `_source`; `idle_column 0` is now decoded; the rows note records
+  that nothing flips. systems_3_4 3a asked for `frames_per_second 11.111111`: the port carries the decoded quantity,
+  the stride, and derives the rate.
+- **`sim/Art`:** `Character` drops `startFrame` and adds `initialDirection` (required, a row of the sheet) and
+  `strideMs` (required, finite, above 0); `framesPerSecond = 1000 / strideMs`. The character is read with
+  `ReadPicture(..., plays = false)`, so `frames_per_second` is not asked of it.
+- **`MagicPortalsLayer.cpp`:** `buildDrawables` (`:2135`, `:2144`) faces the player `initialDirection == rightRow` on
+  `firstFrame = initialDirection x columns + idleColumn`, frame 8. `syncDrawables` (`:2601-2614`) no longer zeroes
+  `frame` and `elapsed` when the row or the run changes, and needs no stored column (the brief's options a and b):
+  standing is a run of 1, whose cell is `firstFrame + frame % 1`, the idle column, and
+  `SpriteAnimationSystem::Advance` leaves a stopped flipbook's frame and time alone. The app advances flipbooks before
+  the layer, so the tick a stop begins adds one tick the original does not and the tick a walk resumes adds none: the
+  time at the end of the resuming tick is the original's. Under a pause or a popup, `freezeWorld` (`:4532`, steps 50
+  and 52) already stops the walking flipbook and `thawWorld` restarts it, so no walk time runs there either (read, not
+  captured).
+- **Tests.** `test_mp_sprites` `ThePortalAndTheShotAreTheirEnts`: step 9d's `startFrame == 4` and "the start frame
+  stands on the left row" (`:264-267` at `e891731`) replaced by `initialDirection 2 == rightRow`, frame 8 and the 90
+  ms stride; `ASheetThatDoesNotSayHowFastIsRefused`'s written character updated; new `APlayerWithoutItsWalkIsRefused`
+  (no direction, a direction past the sheet or between rows, no stride, a stride of 0, an idle column past the sheet).
+  `test_mp_layer` `ThePlayerIsTheDarkMage`: frame 8, on column 0 with no time; new `TheWalkKeepsItsColumnAndItsTime`
+  on level8, ticked as the app ticks (flipbooks, then the layer): column 1 after 7 walking ticks, kept through a stop,
+  half a second standing and a turn, and 63 ticks of walking time, 1050 ms, on column 3 with 60 ms over.
+
+**BASELINE.** Before: step 60's `visuals/0.1/after/` and its `sweep/` (1-01 f420 `a1f8d7ae`), which step 61 records as
+unchanged; nothing has merged since (HEAD `823e3d7`). After: `visuals/1.1/after/`
+(`capture_11.sh after gates|stride|sweep|popups`, `sweep_11.sh`), `MagicPortals.exe` `a2415771`. **Pixels move on 125
+levels, so the next step's "before" is `visuals/1.1/after/` and its `sweep/` (1-01 f420 `6d5f4435`).**
+
+| Gate (00_order 1.1) | Required | Before | After |
+|---|---|---|---|
+| `player_scan` level0 (1-01) f420 | normal f8 >= 0.90 and >= f4 + 0.08 | f8 0.808, f4 0.971 | **f8 0.970, f4 0.807 (+0.162): passes** |
+| `player_scan` level8 (1-09) f420 | the same | f8 0.804, f4 0.930 | **f8 0.926, f4 0.796 (+0.130): passes** |
+| centre x | within 3 px of 101 and 396 | 101 and 397 (f4) | **101 and 396 (f8), +0 each: passes** |
+| sweep: normal f8 wins where the original's h6.3 normal f8 wins at >= 0.85 | all 54 | 0 of 54 | **52 of 54 at f420: NOT MET as written. With the popup in the same state on both sides it passes: closed, 54 of 54; up, 52 of 52.** 1-02 and 1-03 open with their tutorial popup, which at f420 covers the player (1-02's partly) before and after (best space f8 0.797 and 0.812, leads 0.004 and 0.003, no lock). The original opens them with the same popup, and its library frames of exactly these two were taken after it was dismissed: `tools/parity/capture_original.py` `capture_level` saves `<tag>_popup.png` as the popup first shows, taps it away and starts the h-clock only when the level shows, and `1-02.json` and `1-03.json` are the only sidecars of the 127 with `popup_pages` above 0 (2-32 has none, a failed settle, and is not in the 54). **Popup up on both sides:** the original's grabs (`original/levels/1-02_popup.png`, `1-03_popup.png`; by eye at half size the same card, hand, blocks and portal as the port's f420, plus a "Part 2" and "Part 3" title the port does not draw, and on 1-02 the scene sitting further right on screen, not measured) lock no player either: best space f4 0.793 (lead 0.003) and space f8 0.784 (lead 0.0015), normal f8 0.788 and 0.780. With them choosing the set, 1-02 and 1-03 leave it, and normal f8 wins in 52 of 52. **Popup closed on both sides** (`--tap 1178,358@300-305`, `after/popups/`, byte-identical in `fix1/popups/` and the second verification's `verify2/popups/`): **normal f8 wins, 0.894 (+0.080) and 0.903 (+0.097)**, against the original's h6.3 0.906 and 0.894, centre x 1100 and 287 in both; the player stands still in both, so the time since the dismissal does not move the cell; 54 of 54. One scan, all three readings (`visuals/1.1/fix2/sweepgate_states.py`, which takes the popup levels from the sidecars): f420 52 of 54, closed 54 of 54, up 52 of 52, lowest winner 0.8575 with lead 0.050 (1-29) in each. No clip of the original shows the popup still up at 7 s (F2, on 1-3, starts after its dismissal). Amending the wording is the owner's (LEFT FOR THE OWNER) |
+| stride: level0 `--hold right@300-420 --screenshot-every 3`, B-onset period | 21.6 +- 1.0 frames | - | **21.6: passes.** B (cell 9) onsets at 306, 330, 351, 372, 393, 414, the mean (414 - 306) / 5; they are the onsets a 90 ms stride at 60 Hz gives a walk from frame 300 sampled every 3rd frame (5.4 ticks a column, 21.6 a cycle). The order is A B A C throughout (f339, mid-fall, reads C over B by 0.0018 in `work/stride.py`'s A/B/C scan and by 0.0008 in the second verification's six-cell scan (`verify2/stride3_seq.json`), between two onsets). Every frame, the brief's fallback, gives period 21.5 (Beyond the gates) |
+| `test_mp_sprites` (`:264-267` replaced) | 0 failures | 372 checks (step 60) | **392 checks, 0 failures** |
+| `test_mp_layer` | 0 failures | 860 checks (step 60) | **875 checks, 0 failures** |
+| `test_mp_start` | 0 failures | 726 checks (step 60) | **726 checks, 0 failures** |
+
+**Beyond the gates.**
+- **Where the frames changed** (`work/diffbox.py` against `0.1/after/sweep/`): 125 of 128 f420 frames, 122 of them
+  with every changed pixel inside the located player's 112.5 x 157.5 px quad. The other three changed in one box no
+  larger than a cell, 79 x 142 (1-02), 108 x 142 (2-15) and 109 x 142 (2-28), where the locator has no lock (best
+  0.797, 0.790, 0.803: the popup, and chapter 2's silhouettes, lighting design 5.8); by eye each is the mage turned
+  from facing left to facing right. Byte-identical: **1-03** (the popup card covers the player) and **2-12** and
+  **2-32**, whose player has died by f420 (ticks 180 and 287), so none is drawn.
+- **By eye**, before, after and the original side by side (`visuals/1.1/review/`): on 1-01, 2-15 and 2-28 the player
+  turns from facing left to facing right, as the original's stands; on 1-02 and 1-03 with the popup dismissed it faces
+  right, as the original's does.
+- The sweep: 128 exits 0, validation ACTIVE in 128 and silent, no "Could not load".
+- **The stride, every frame** (the second verification's `visuals/1.1/verify2/stride1/`, level0 `--frames 400 --hold
+  right@300-400 --screenshot-every 1`): B onsets at 306, 328, 349, 371 and 392, period 21.5 frames. That is the 90 ms
+  stride at 5.4 ticks a column, tick for tick. In exact arithmetic the second onset reaches 90 ms exactly, on 327;
+  accumulated in float as `SpriteAnimationSystem::Advance` does (`src/core/SpriteAnimationSystem.cpp:55-59`), it falls
+  just short and lands on 328, as measured (a float32 model run in `visuals/1.1/fix2/`, not a capture; the component's
+  `framesPerSecond` is a float, `src/core/Components.hpp:1631`).
+- **The column across a stop and a turn, in the exe** (the second verification's `verify2/stopturn/`, level0 right held
+  300-306 and 340-346, then left 347-370, every frame): B at 306; standing A from 307 to 339; B on the first resumed
+  frame, 340; A at 344; after the turn a at 347, c at 350, a at 355, b at 361, a again from 366. That is the
+  carried-column model tick for tick. A reset would show A at 340 and B at 346, and a after the turn until b at 353.
+  This measures the port against the decode, not against the original.
+- **The original's stride, footage F12** (1-1, right held, a VFR screen recording; `verify2/f12_stride_result.txt`):
+  12 B onsets from 1084 to 5081 ms, after dropping one noise onset in the portal flash (score 0.816). The
+  least-squares cycle is 363.2 ms: 90.8 ms a column, 21.79 frames at 60 Hz, largest residual 39.6 ms, about one
+  recorded frame. The decode's stride is 90 ms.
+- The rest height is unchanged: the port's player stands 7 or 8 px above the original's (1-01 y 223 against 230; the
+  popups' 296 against 303 and 566 against 573), systems_3_4 3f's hand-off.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4). The first run's one build of 54 steps (`Art.cpp`,
+`MagicPortalsLayer.cpp` and the two suites compiled; the sim and game libraries, every Magic Portals suite and
+`MagicPortals.exe` relinked) printed no warning; its log (written at 02:14, half an hour before the power loss) stops
+at `[53/54]`, `test_mp_layer.exe` linked. The review built the tree again: `ninja: no work to do`, so that build
+completed, and `MagicPortals.exe` `a2415771`, `test_mp_sprites` `82b93f0c`, `test_mp_layer` `42b13c53` and
+`test_mp_start` `ae4af977` are the binaries measured here. After that only `art.json`'s `animation._source` text
+changed: the zero-g note (LEFT FOR THE OWNER), and in the review's fix round its last sentence, which had every update
+adding its time twice; it now says what the decode says, a walking update adds it twice (`updateFrame` 63-86, then
+`linearMotion` 163-171) and a standing update once. Nothing was built: the game and the suites read `art.json` from the
+source tree (`MAGICPORTALS_PORT_DATA_DIR`, `sim/CMakeLists.txt:115`), and nothing reads a `_source`. The fix round's
+recaptures on the same `a2415771` (`visuals/1.1/fix1/capture.txt`) are byte-identical: 1-01 and 1-09 f420 `6d5f4435`
+and `8d35b6b6`, the popups `0ed3b65a` and `4e5460d0`, validation ACTIVE and silent in all four. The second fix round
+changed only this record: no source, data or binary, no build and no launch; its readings are scans of the captures
+above and of the original's library (`visuals/1.1/fix2/`). The commit changed this record only again (RECORDED
+DEVIATIONS, the F9 wording, the portal-tap decode, the sweep note's scope): the build reported `ninja: no work to do`,
+and nothing was launched.
+
+**THE SUITES**, run directly, once each on the first run's binaries: `test_mp_sprites` 392 / 0, `test_mp_layer` 875 /
+0, `test_mp_start` 726 / 0; `test_mp_sprites` once more after the `_source` text changed, 392 / 0; after the fix
+round's text edit `test_mp_sprites` 392 / 0 and `test_mp_layer` 875 / 0, no SKIPPED (`fix1/`). **ctest not run**:
+the first run stopped before it, and the review changed no compiled source. The other relinked Magic Portals suites
+have not run on this build.
+
+**SMART APP CONTROL.** No refusal is recorded: every capture log exits 0 (none 126) and the three suites ran on their
+first links, as `test_mp_sprites` did again. The review launched no `MagicPortals.exe`. The fix round launched it
+four times and the two suites once each, every one exit 0, no refusal. The second verification launched it 135
+times (`visuals/1.1/verify2/capture_rc.txt`), every one exit 0, no refusal. The second fix round launched nothing.
+
+**RULINGS.** The owner's standing ruling, every ruling of 00_order section 6 decided in favour of what the original
+does: the player is made facing right on frame 8, walks a column every 90 ms, and keeps its column across a stop and a
+turn. **R10 (player z 4, the owner's standing ruling) is not applied here:** 1.1 moves no depth and no lighting
+height, so the player keeps its slot after `z_index <= 0` and its marker's `eth_z` until 5.1 and 6.3's depth table
+(step 61, decision 5). No other ruling bears on 1.1.
+
+**RECORDED DEVIATIONS.** The step is committed with these six, recorded and not tuned, by the owner's delegated
+decision under the standing ruling toward what the original does.
+- **Sweep (00_order section 7 step 1.1).** Required: normal f8 wins in all 54 levels where the original's h6.3 normal
+  f8 wins at >= 0.85. Measured **52 of 54 at f420**. Misses: 1-02 (best is space f8 0.7967, lead 0.004; normal f8
+  0.7927) and 1-03 (best is space f8 0.8123, lead 0.0025; normal f8 0.8098). Cause: the level-start tutorial popup
+  covers the player in the port's f420 frame, while the original's h6.3 reference frames for exactly these two
+  levels were taken after the popup was closed (their sidecars have `popup_pages 1`; `capture_original.py:86-113`).
+  With the popup closed in the port (`--tap 1178,358@300-305`) it is 54 of 54: 0.894 at x 1100 and 0.903 at x 287,
+  against the original's 0.906 and 0.894. With the popup up on both sides the set is 52 of 52. Lowest winner: 1-29
+  at 0.8575, lead 0.050. Owner: the 00_order gate wording; capture 1-02 and 1-03 with the popup closed, as the
+  library did. This concerns only those two chapter-1 levels, not a rewrite of every sweep gate; 1.2's gates are
+  chapter 4 and unaffected. The gate row above stays NOT MET as written.
+- **Plan text against the port's data shape.** systems_3_4 3a asked for `character.animation`
+  `frames_per_second 11.111111`; the port stores the decoded `stride_ms 90` (`SideScrollerCharacter` constructor
+  instructions 9-11), with the frame rate derived as 1000 / stride, and `idle_column 0`. The decode is identical and
+  recorded above, but it changes the shape of the block 1.2's 280 ms zero-gravity column will read. Owner: 1.2
+  builds on `stride_ms`.
+- **The zero-gravity player.** `MainCharacter::linearMotion` runs every update only when `noGravity` is set
+  (instructions 3-6) and calls `FrameTimer` `set(0, 3, 280, true)` (163-171). So on the 18 `no_gravity` levels the
+  standing player cycles columns every 280 ms, a walking update adds its time twice, and the player hovers by
+  1.2 cos(a) on y. 1.1's timer holds only with gravity; this is recorded in `art.json`'s `animation._source` and
+  below. Owner: step 1.2.
+- **The player turned toward a portal tap.** The original does it and the port never does:
+  `PortalManager::managePortalInsertion` instructions 101-124 (listing line 27784) call `setDirection(1)` if the
+  player is right of the tap, else `setDirection(2)`, on an accepted request with no `projectile.ent` alive. Not in
+  any brief; no 1.1 gate measures it, so it is not a regression. Owner: 1.3 or a new 1.x step (below). Fix:
+  `m_facingRight = !(playerX > tapX)` under the sim's acceptance; pin it in `test_mp_layer` (a tap left of the
+  standing level0 player gives `firstFrame` 4).
+- **The evidence for the carried column.** This record said no clip of the original walks, stops and walks on (F12
+  holds right once). Footage F9's r7b (`F9_flyin_3-18.mp4`) walks right, stops and steps back left, but at about
+  17 fps (median gap 50 ms) it cannot resolve a 90 ms column. Carry-over still rests on the decode plus the port's
+  tick-for-tick stop-and-turn capture (Beyond the gates). Owner: the sentence is corrected at commit (WHAT THE
+  ORIGINAL DOES, LEFT FOR THE OWNER); a 60 fps stop-and-resume clip would confirm it.
+- **A fragile invariant.** Carry-over depends on `syncDrawables` (`MagicPortalsLayer.cpp:2611-2614`) writing
+  `playing` and `frameCount` together, because `SpriteAnimationSystem::Advance` resets `frame` to 0 when a playing
+  flipbook's count is 1. That cannot happen today, and `TheWalkKeepsItsColumnAndItsTime` guards it on level8.
+  Owner: 1.2 (the 280 ms zero-gravity column) and 1.3 (pushing rows) keep that test running, or comment the
+  coupling, if they touch that block.
+
+**LEFT FOR THE OWNER.**
+- **The zero-g player's column, for 1.2 (found here; no brief names it).** On the 18 `no_gravity` levels
+  `MainCharacter::update` calls `MainCharacter::linearMotion` (bytes 132139..132833) after `updateFrame` (instructions
+  57, 66). It calls the same timer every update, walking or not, as `set(0, 3, 280, true)` (163-171), and writes the
+  column into `idleColumn` (172-174): there the standing column turns every 280 ms, and a walking update adds its time
+  twice. The same function moves the pivot by (0, 1.2 cos a), `a` starting at `PI + PIb` and turning
+  `unitsPerSecond(3)`, wrapped at 2 PI (3-161). The port stands on column 0 there, and `art.json` says its timer
+  claims hold with gravity only. No level the gates measure is a `no_gravity` level (4-01 is not). At f420, 1.1
+  changed only the facing there, where the player now walks the 90 ms stride with carry-over. On 4-19 the changed box
+  is the normal sheet turned right (normal f8 0.837), where the original's h6.3 draws the space suit. The suit and
+  the 280 ms column are 1.2's to fix, not a 1.1 regression.
+- **The sweep gate's wording (00_order section 7 step 1.1; RECORDED DEVIATIONS, first row).** The library's frames
+  of 1-02 and 1-03 were taken after its capture dismissed their level-start popup (`capture_original.py:86-113`
+  `capture_level`; `popup_pages 1` in their sidecars, the only two), so at f420 the port, which opens them under
+  that popup as the original does, cannot meet "all 54". Capturing those two with the popup dismissed
+  (`--tap 1178,358@300-305`), as the library did, meets it: 54 of 54. Taking the set from the original's own popup
+  grabs for those levels instead, so both sides have the popup up, also meets it, 52 of 52. This concerns only
+  those two chapter-1 levels, not a rewrite of every sweep gate: 1.2's gates are chapter 4 and unaffected. The
+  gate row stays NOT MET as written until the owner amends the wording.
+- **The player turns to face a portal tap, for 1.3 or a new 1.x step (found in review; no brief names it).**
+  `PortalManager::managePortalInsertion` (bytes 143178..144166, listing line 27784), on a request that passes the
+  cooldown, `ScreenPad::isValidPoint` and `PortalManager::isValidPoint` (instructions 43-73) with no
+  `projectile.ent` alive (80-99), compares `GameCharacter::getPosXY().x` with the tap's `absTouchPos.x` (101-124):
+  `setDirection(1)`, left, when the player stands right of the tap, else `setDirection(2)`; the next standing
+  `updateFrame` shows that row. The port turns the player only as it walks (`MagicPortalsLayer.cpp:2595-2596`).
+  Footage F2 (section 4.5: both taps right of the player, who stays on cell 8) agrees with the decode. No 1.1 gate
+  measures it, so it is not a regression. Fix: on an accepted shot with no shot in flight, under the sim's own
+  acceptance, set `m_facingRight = !(playerX > tapX)`; pin it in `test_mp_layer` (a tap left of the standing level0
+  player gives `firstFrame` 4). A clip that taps left of the player would confirm it.
+- **2-12's player dies on tick 180** in the port's f420 capture, where the original's h6.3 plays on (its 2-32 is at
+  game over as the port's is): gameplay, not investigated here.
+- **The column across a stop** is measured in the port against the decode (Beyond the gates), not against the
+  original. Footage F9's r7b walks right, stops and steps back left, but at about 17 fps (median gap 50 ms) it
+  cannot resolve a 90 ms column; a 60 fps clip of the original that walks, stops and walks on would confirm it.
+
+## Step 63 - the suit the player wears where gravity is off, the column it turns standing, and the pivot it hovers on (built)
+
+The entity-visuals order's step 1.2 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `systems_3_4.md`
+section 2 3b; conflict K15), with what step 62 handed it: on the 18 `no_gravity` levels the player stood in
+`magic_portals_hd.png` on column 0. Game-only: no file under `src/` or `assets/shaders/`. Changed: `data/art.json`,
+`sim/Art.{hpp,cpp}`, `MagicPortalsLayer.{hpp,cpp}`, `tests/test_mp_sprites.cpp`, `tests/test_mp_zerog.cpp`,
+`tests/test_mp_layer.cpp`. **The 18 levels now draw `dark_mage_in_space.png` (space f8 wins on all 18, 0.811 to
+0.971), its column turning every 280 ms and its picture hovering 1.2 screen pixels on a 2.09 s cosine, both measured
+in the exe tick for tick against the decode and in footage F10 of the original; 4-01, which sets `space_bg` and not
+`no_gravity`, keeps the normal sheet; 110 of 128 f420 frames are byte-identical to step 62's, and the 18 that change
+change only inside the player's quad.**
+
+**WHAT THE ORIGINAL DOES** (the remake's bytecode listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce`).
+- **The suit, keyed on `no_gravity`.** `MainCharacter::MainCharacter` (bytes 126650..127790) instructions 239-269:
+  when its `noGravity` argument is set, `SetUInt("no_gravity", 1)` and `SetSprite("dark_mage_in_space.png")`;
+  `Game::preLoop` (112536..114414) 65-75 passes `Game.noGravity`. `ETHSpriteEntity::SetSprite`
+  (`ETHSpriteEntity.cpp:177-201`) keeps the sprite cut and the frame and loads no normal map, and the listing calls no
+  `SetNormal`: the suit is lit through `normalmap_77.png`. Its 1x file is 160 x 224 like the normal sheet's, so the
+  40 x 56 frame and the pivot are unchanged.
+- **A column every 280 ms, standing.** `MainCharacter::update` (128578..128850), on every update neither paused nor
+  finished (6-21), runs `SideScrollerCharacter::update` (57), whose `updateFrame` stands the player on `idleColumn`
+  (88-102), and then `MainCharacter::linearMotion` (132139..132833; 66). Where `noGravity` is set (3-6) it calls the
+  character's `FrameTimer` as `set(0, 3, 280, true)` and writes the column into `idleColumn` (163-174). So the
+  standing column turns every 280 ms, and an update draws the column the update before left. `FrameTimer::set`
+  (23254..23650) adds the frame's elapsed ms, resets to `first` with no time when the range changes (the first
+  update, against the constructor's 0 and 0), else steps one column once the time reaches the stride. A walking
+  update also calls `set(0, 3, 90, true)` (`updateFrame` 63-86) and draws that, adding its time twice. Row 2 of the
+  suit reads A B A C: frames 8 and 10 are the same image.
+- **Keys walk it in zero-g too.** `MainCharacter::update` skips only `ScreenPad::update` where `noGravity` is set
+  (23-32); it still copies the pad's direction into `moveVec` (34-44) and adds `getKeyboardMoveVec` (46-54) on every
+  update, before `SideScrollerCharacter::update` (57). So a held key draws the walk's 90 ms column with the doubled
+  time in the original as in the port (whose body does not move, `Game::BeforeStep`; whether the original's body
+  moves is not measured). Android has no keyboard, so no clip shows it.
+- **The hover.** `linearMotion` 8-57, on its first call, sets `linearMotionAngle` to `PI + PIb` and keeps the pivot
+  as `originalPivotAdjust`; 59-78 add `unitsPerSecond(3)`, 3 rad a second of frame time
+  (`STimeManager::unitsPerSecond`, 8045..8162: min(200, elapsed ms) / 1000 times the time factor); 92-112 take
+  `PI * 2` off once past it; 114-161 `SetPivotAdjust(originalPivotAdjust + vector2(0, cos(angle) * 1.2))` (arguments
+  pushed last-first: x 0, y the offset). `GetPivotAdjust` returns the stored pivot times the entity's scale and
+  `SetPivotAdjust` divides by it (`ETHEntity.cpp:1019-1026`); the draw multiplies it back (`ETHEntity.cpp:296`,
+  `ETHSpriteEntity.cpp:702`). The player is added at `getScale()` (`GameCharacter::GameCharacter` 10-24), screen
+  height / 256 (00_order 8.12a), so the 1.2 is **screen pixels, 0.4267 units at 720 px**, not 1.2 units; a larger
+  pivot y draws the image higher. Period 2 PI / 3 = 2.094 s. `updateEyes` (listing line 25999) places the eyes from
+  `GetPosition`, not the pivot: they do not hover (for 7.1).
+
+**WHAT CHANGED.**
+- **`data/art.json` `character`:** `no_gravity_sprite` `dark_mage_in_space.png`, with `_no_gravity_sprite` (the
+  decode, the normal map kept, `space_bg` not the key); `no_gravity_motion` {`column_stride_ms 280`,
+  `hover_screen_px 1.2`, `hover_at_screen_px 720`, `hover_radians_per_second 3.0`, `hover_start_radians 4.71238898`,
+  `hover_wrap_radians 6.28318531`}, with its `_source`. The `animation._source` "NOT BUILT" note becomes a pointer to
+  it.
+- **`sim/Art`:** `Character` gains `noGravitySprite` and `NoGravityMotion noGravity`, all required (refused when
+  absent, empty, not finite or not above 0; the start angle need only be finite). New pure pieces:
+  `PlayerSheet(mage, noGravity)`; `FrameTimer::Set`, `FrameTimer::set` as decoded; `NoGravityPlayer` (the timer,
+  `idleColumn`, the float angle, whether `linearMotion` has run); `UpdateNoGravity` (one update: the walk's column or
+  the idle column drawn, then the angle turned and wrapped and the idle column set);
+  `NoGravityMotion::HoverUnits(angle, viewUnitsTall)` = 1.2 x `DetMath::cos` x view units / 720.
+- **`MagicPortalsLayer`:** `buildDrawables` makes the player's quad from `PlayerSheet(mage, m_level.noGravity)` and
+  resets `m_noGravityPlayer`. `stepLevel`, before `syncDrawables`, runs `UpdateNoGravity` once a level step on a
+  `no_gravity` level while the player is drawn and neither finishing nor dying (no step runs under a pause or a
+  popup). `syncDrawables` stands the flipbook still on that column there (never playing), cuts `cellPx` from the same
+  sheet (K15: 2.3 resolves `PlayerSheet`'s name), and adds `HoverUnits` to the pivot's y once `linearMotion` has run.
+  Levels with gravity take the unchanged path (step 62's flipbook), byte for byte. The loading screen keeps
+  `mage.sprite`.
+- **Tests.** `test_mp_sprites`: `ThePortalAndTheShotAreTheirEnts` pins the suit, the normal map, 280, 1.2, 720, 3,
+  `PI + PIb`, `PI * 2`, `HoverUnits` +-0.4267 on a 256-unit view and `PlayerSheet`; `APlayerWithoutItsWalkIsRefused`
+  refuses nine broken `no_gravity` keys; new `AFrameTimerStepsOneFrameACall` (a reset on a new range only, one frame
+  a call with the rest of the time kept, repeat and hold) and `AWeightlessPlayerTurnsItsColumnAndHovers` (columns 1,
+  2, 3 first drawn on updates 19, 36, 53 and 0 again by 70; the angle after 70 updates; the first update's 0.02 units;
+  a walking update's doubled time, the 90 ms column on update 4). `test_mp_zerog`
+  `TheSuitIsWornWhereGravityIsOffAndNowhereElse`: level1c wears the suit, level0c and level0 the normal sheet.
+  `test_mp_layer` `AWeightlessPlayerWearsTheSuit`: on level1c the quad's albedo is the suit and its normal map
+  `normalmap_77.png`, 40 x 56, on the timer's column on every one of 140 ticks (first drawn on ticks 1, 19, 36, 53),
+  its pivot on the body within 0.002 units with the hover, which reaches +0.4266 and -0.4266 units; on level0c the
+  normal sheet, on column 0, unhovered.
+
+**BASELINE.** Before: step 62's `visuals/1.1/after/` and its `sweep/` (1-01 f420 `6d5f4435`; `MagicPortals.exe`
+`a2415771`, the committed build's, unchanged since; HEAD `441ce6e`), its chapter 4 scanned again with this step's
+cells (`visuals/1.2/work/sweep_12.py`). After: `visuals/1.2/after/` (`capture_12.sh after timing|sweep`), binary
+`2c9da967`. **Pixels move on 18 levels, so the next step's "before" is `visuals/1.2/after/` and its `sweep/` (1-01
+f420 still `6d5f4435`).**
+
+| Gate (00_order 1.2) | Required | Before | After |
+|---|---|---|---|
+| `player_scan` over chapter 4 (normal and space f4 and f8, each located over the whole frame): space f8 wins on 4-02...4-19 | 18 of 18 | 0 of 18 (normal f8 wins all 18, 0.837-0.977) | **18 of 18: passes.** 0.811 (4-19) to 0.971 (4-13, 4-14), leads 0.014 (4-19) to 0.143 (4-11). The original's h6.3: space f8 wins all 18, 0.801-0.948 |
+| normal f8 wins on 4-01 | wins | 0.952, +0.122 | **0.952, +0.122: passes** (the frame is byte-identical) |
+| space f8 >= 0.90 on 4-03, 4-04, 4-11, 4-16, 4-17 | >= 0.90 | 0.838, 0.830, 0.834, 0.837, 0.804 | **0.965, 0.965, 0.970, 0.966, 0.939: passes** (the original: 0.944, 0.942, 0.945, 0.948, 0.927) |
+| centre within 3 px of the original's on 4-04, 4-11, 4-17 | +-3 px | (0, +3), (0, +3), (0, +3) | **(+2, +2), (+1, +2), (+1, +2): passes.** `compare.py` against h6.3 gives camera offset (0, 0) on all three, 4-11 included (it was not on `systems_3_4`'s (0, 0) list) |
+| `normalmap_77` kept | the suit through `normalmap_77.png` | - | **passes**: `test_mp_layer` `AWeightlessPlayerWearsTheSuit`, level1c's quad `.../entities/dark_mage_in_space.png` through `.../entities/normalmaps/normalmap_77.png`; `dark_mage_in_space_nm.png` is read by nothing |
+| ctest `test_mp_zerog` (level1c suit, level0c not) | 0 failures | - | **88 checks (4 of them new), 0 failures** |
+| `test_mp_sprites` | 0 failures | 392 checks (step 62) | **442 checks, 0 failures** |
+| `test_mp_start` | 0 failures | 726 checks (step 62) | **726 checks, 0 failures** |
+| `test_mp_layer` | 0 failures | 875 checks (step 62) | **893 checks, 0 failures** |
+
+**Beyond the gates.**
+- **What changed where** (`work/sweep_12.py`, `work/centres_diff.py`, against `1.1/after/sweep/`): 110 of 128 f420
+  frames byte-identical, 4-01 among them; the 18 that change are exactly 4-02...4-19, each only inside the located
+  player's 112.5 x 157.5 px quad (boxes 95-96 x 145-148 px, 10,158-10,647 pixels). 128 exits 0, validation ACTIVE in
+  128 and silent, no "Could not load".
+- **The frame at f420.** The model draws column 0 on tick 420 (frame 8, so the f8 gates read the column they name),
+  with 263 of the stride's 280 ms accumulated: the timer turns on update 421, and column 1 is drawn from tick 422.
+  The hover there is +1.00 screen pixel (0.357 units). A later change to zero-g timing that moves the column by a tick
+  moves these 18 frames, and an f8 comparison would then read a neighbouring cell. The suit's integer lock sits 1 px
+  higher than the normal sheet's did on 15 of the 18 and level on 3 (4-06, 4-07, 4-14); two templates are compared
+  there, so the hover is measured by the timing captures below, not by this.
+- **The column and the hover in the exe, every frame** (`capture_12.sh after timing`: 4-03 and 4-05 to f140;
+  `work/timing.py`, `work/timing2.py`). Frame N shows tick N. The level's fade in covers frames 1-70; after it the
+  difference inside the player's box peaks on exactly frames 86, 103, 120 and 137 (33,001-40,580, against at most
+  8,813 and 12,491 on any other frame), the model's column changes, and the cells read A (f71) B (f86) A (f103) C
+  (f120) A (f137); f70, the model's change to A, ties with C by 0.0001 at the fade's end. The centre y over frames
+  60-140 fits y = a + b sin(3t) + c cos(3t) with b = **-1.209 px** (4-03) and **-1.241 px** (4-05) against the decoded
+  -1.2, c 0.057 and 0.052, residual 0.021 and 0.064 px (0.578 and 0.598 without the hover).
+- **The original, footage F10** (`F10_recoil_4-05.mp4`, 4-05, 340 frames at about 17 fps over 20 s;
+  `work/f10_columns.py`, `work/f10_stride.py`): of 251 frames whose suit scores above 0.75 and whose class leads
+  its row's others by 0.001, a column model agrees with 82.5% at its best stride, **282.75 ms**, with 72.5% at exactly
+  280, and with at most 50.2% at 90, 140, 200, 250, 275, 310, 360 or 560 ms; a player standing on column 0 would agree
+  with 55.4%. 282.75 / 280 = 1.0098 is the emulator's
+  clock as F12 measured it for the walk (90.8 / 90 = 1.0089, step 62). The hover, in the first second before the
+  first shot moves the player (`work/f10_hover.py`, 18 frames, sub-pixel): a 3 rad/s fit gives 1.09 px (residual
+  0.126 px); fixed at 1.2 px the residual is 0.134, at 3.375 px (1.2 units) 0.777. The screen-pixel reading holds
+  against the original.
+- **The state hash.** `StateHash.cpp:203-207` hashes a flipbook's `frame`, `elapsed` and `playing`. On the 18 levels
+  a standing player's flipbook hashes as before (still, frame 0, no time); with a walk key held it now stands still
+  where step 62's played, so that hash moves there. No Magic Portals suite pins a hash (only the engine's
+  `test_determinism` computes one). The zero-g column and hover live in the layer (`m_noGravityPlayer`), not in
+  `Game::Level`, so they are outside the simulation's hash by design, stepped from `fixedDelta` alone.
+  `TheWalkKeepsItsColumnAndItsTime` (step 62's guard on the `playing` / `frameCount` coupling) still passes.
+- **The original's own stills** (`work/orig_columns.py`): its two library frames of a level disagree on the column in
+  6 of the 18 (4-08, 4-13, 4-14, 4-17, 4-18, 4-19), leads 0.001-0.005; corroboration only.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): the sim and game libraries first (4 steps), then the tree, 51
+steps (the three suites compiled; every Magic Portals suite and `MagicPortals.exe` relinked), no warning or error; a
+second run: `ninja: no work to do`. After the captures and the direct suite runs, a comment block in
+`Art.hpp` was moved above the struct it describes: 55 steps, no warning; each rebuilt binary differs from the
+measured one in 4 bytes (the PE and debug-directory timestamps), `.text` identical (`MagicPortals.exe` `2c9da967` ->
+`26101dcb`). The full ctest ran on the rebuilt binaries.
+
+**THE SUITES**, run directly, once each on the measured binaries: `test_mp_zerog` 88 / 0, `test_mp_layer` 893 / 0,
+`test_mp_start` 726 / 0, and `test_mp_sprites` 442 / 0 after one relink (below). **ctest, once: 111 of 121 pass, 0
+fail, 10 not run**: Smart App Control refused `test_mp_geometry`, `test_mp_movers`, `test_mp_hinge`,
+`test_mp_minions`, `test_mp_darkdragon`, `test_mp_diamonds`, `test_mp_shot`, `test_mp_sky`, `test_mp_sounds` and
+`test_mp_hud` (BAD_COMMAND): this step's build relinked every Magic Portals suite (each links `MagicPortalsSim`,
+which holds the changed `Art.cpp`), and these ten fresh links were refused. None of the ten names `Art::` or links the
+layer (grepped), so leaving them unrun leaves none of this step's code unexercised; none was relinked again.
+`test_mp_sprites`, `test_mp_zerog`, `test_mp_start`, `test_mp_layer`, `test_mp_tiers` and `test_mp_play` passed in
+ctest.
+
+**SMART APP CONTROL.** Eleven refusals, eleven notifications: `test_mp_sprites.exe` `c4639620` on its first launch
+(exit 126; deleted and relinked once as `7371948c`, which ran) and the ten freshly linked ctest suites above.
+`MagicPortals.exe` `2c9da967` ran all 130 of its launches (2 timing, 128 sweep), every one exit 0.
+
+**RULINGS.** The owner's standing ruling, every ruling of 00_order section 6 decided in favour of what the original
+does: the suit is keyed on `no_gravity` as `MainCharacter`'s constructor keys it, keeps dark_mage.ent's normal map,
+turns its standing column every 280 ms and hovers its pivot, as `linearMotion` does (step 62 handed both to 1.2).
+The hover's units are not a ruling: R12 fixes the texture tier at the 720 px selection and says nothing of a pivot
+offset. Taking the original's 1.2 screen pixels at the 720 px screen every library frame was taken at, 0.4267 units
+at every window, is a **port decision** following ui.json's credits strip (P2), left for the owner below. R10
+(player z 4) is not applied: 1.2 moves no depth and no lighting height (step 61, decision 5). No other ruling bears
+on 1.2.
+
+**RECORDED DEVIATIONS** (from the brief's text; the one from the original is the hover at other window heights,
+LEFT FOR THE OWNER).
+- **`systems_3_4` 3b: "Zero-g never walks, so frame 8 is what shows."** Decoded otherwise (`linearMotion` 163-174):
+  the column turns every 280 ms while the player stands. The f8 gates are met as written because tick 420 draws
+  column 0; at another frame the suit draws f9 or f11, and an f8 gate would compare a neighbouring cell by
+  0.001-0.005. Owner: a zero-g gate names the frame's column, or compares the sheets.
+- **Data shape.** The brief asked for `no_gravity_sprite` alone; the column and the hover add `no_gravity_motion`.
+- **Step 62's "hovers by 1.2 cos(a) on y"** is 1.2 screen pixels, 0.4267 units at 720 px (above). As units it would
+  be +-3.4 px, which F10 refuses.
+
+**LEFT FOR THE OWNER.**
+- **The hover at other window heights (a port decision, the P2 pattern; R12 covers the tier only).** The original
+  adds 1.2 screen pixels whatever the screen, so its hover is 1.2 x 256 / height units: 0.64 at 480 px, 0.28 at 1080.
+  The port takes the 720 px value, 0.4267 units, at every window.
+- **The eyes (7.1).** `updateEyes` reads `GetPosition`, not the pivot, so the eyes stay put while the suit hovers.
+- **x +1 or +2 px.** The suit's located centre sits 1-2 px right of the original's on 16 of the 18 (4-05 +0, 4-18
+  below), where the normal sheet's sat at 0 or -1: the port draws the 1x sheet, the original the hd one (2.3).
+- **Positions this step did not move** (the same before and after): the port's player stands 26 px higher on 4-02,
+  7 px higher on 4-13, 10 px lower on 4-16 and 10 px further right on 4-18 than the original's h6.3 (gameplay, not
+  investigated).
+
+## Step 64 - the arm out against what the player walks into, a step behind the ray that finds it (built)
+
+The entity-visuals order's step 1.3 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `systems_3_4.md`
+section 3c): walked into a wall, the player walked on the spot on its walking row, and the sheet's two arm-out rows were
+never drawn. Game-only: no file under `src/` or `assets/shaders/`. Changed: `data/art.json`, `sim/Art.{hpp,cpp}`,
+`sim/Shot.{hpp,cpp}`, `sim/Player.{hpp,cpp}`, `MagicPortalsLayer.{hpp,cpp}`, `tests/test_mp_sprites.cpp`,
+`tests/test_mp_layer.cpp`. **Walked into a wall the player now draws row 3, arm out to the right, or row 0 to the left,
+on the walk's own column and time, from the step after its ray first meets the wall to the step its walk stops on, as
+SideScrollerCharacter does; never where gravity is off. In the exe, 1-22 held right into its breakable wall draws row 3
+on all 120 held frames after the first (step 63's build: row 2) and row 2 again from the second frame after the release;
+a replay of each wall walk recorded on step 63's build reproduces its state hash on this one, 250 of 250 ticks; the
+original draws the same arm against 3-18's corridor wall in footage F9. With no walk held nothing moves: all 128 f420
+frames are byte-identical to step 63's.**
+
+**WHAT THE ORIGINAL DOES** (the remake's bytecode listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce`).
+- **The row.** `SideScrollerCharacter::findFinalDirection` (bytes 131207..131341) instructions 3-19 return
+  `pushing ? (direction == 1 ? 0 : 3) : direction`: pushing left draws row 0, pushing any other way row 3; the 1,
+  MOVING_LEFT, is a `CMPIu` immediate read as its `vK` operand, as every such immediate in these briefs is (INFERRED
+  there, and the rows agree: the sheet's row 0 holds the arm out left and row 3 right). `updateFrame` (130241..130614)
+  asks it for the walking row (63-67) and the standing row (89-93) alike.
+- **A step behind.** `SideScrollerCharacter::update` (153242..153396) calls `updateFrame` (instruction 18) before
+  `applyForces` (29), and `applyForces` (129676..130142) calls `detectPushing` (96). So an update draws what the update
+  before found: the first update against a wall draws the walk, and the update a walk stops on still draws the push.
+- **The ray.** `detectPushing` (130614..131207): when `dirVec.x == 0`, `pushing = false` (3-6, 108-111); else a ray from
+  `getPosXY()` to `getPosXY() + normalize(dirVec) * 0.6 * getSize().x + vector2(0, scale(-6))` (8-52), and `pushing =
+  GetClosestContact(from, to, point, normal, "dark_mage.ent") != null` (59-106). The -6 is pushed first, so it is y, 6
+  above the far end. Both lengths carry the player's scale f, screen height / 256 (00_order 8.12a), 2.8125 at 720 px:
+  `getSize()` is `ETHEntity::GetSize`, the frame times the entity's scale (`ETHSpriteEntity::GetCurrentSize`,
+  `ETHSpriteEntity.cpp:652-682`), and the player's scale is the `getScale()` it is added at
+  (`GameCharacter::GameCharacter` 10-24), which `AddEntity` multiplies into it (`ETHScriptWrapper.Scene.cpp:146-148`,
+  `ETHSpriteEntity.cpp:61`) with the engine's global scale, 1 here (`ETHGlobalScaleManager.cpp:26-29`; the listing calls
+  no `SetScaleFactor`); and `scale(-6)` is -6 f. So the reach is 0.6 x 40 f = 24 f and the lift 6 f: 24 and 6 level
+  units at every screen, f cancelling, unlike step 63's raw 1.2 screen pixels.
+- **Along the velocity just set, not straight ahead.** `dirVec` is what `applyForces` hands `SetLinearVelocity` (86-91):
+  `vector2(moveVec.x * speedScale, linearVel.y)` (38-56), the walk across the body's vertical velocity; and where
+  `isTouchingGround` is not set (63-84) its x is `linearVel.x * min(1, GetFPSRate() / 60 * 0.86)`, the body's own x
+  velocity, whatever the pad says. On flat ground that is straight ahead; on a slope or in the air the ray tilts with
+  the body.
+- **Sensors count; a body the ray starts inside does not.** `ETHPhysicsSimulator::GetClosestContact(a, b, point, normal,
+  ignore)` (`ETHPhysicsSimulator.cpp:251-268`) ignores by entity name alone (`ETHEntityNameArrayChooser`,
+  `ETHEntityChooser.cpp:49-63`), and `ETHRayCastCallback::ReportFixture` (`ETHRayCastCallback.cpp:40-51`) keeps every
+  other fixture reported. Box2D's world ray cast asks no fixture whether it is a sensor (`b2World.cpp:978-995`), and a
+  sensor entity has fixtures (`ETHPhysicsSimulator.cpp:109`): the converted levels' 91 `Area2D` bodies are 46 buttons,
+  21 shock agents, 17 `anti_sight_wall`s, 4 `destroyier`s, 2 `death_area`s and 1 `anchor`. Box2D's shape ray casts
+  report nothing for a ray that starts inside or on the shape (`b2PolygonShape.cpp:189-258`, `index` stays -1;
+  `b2CircleShape.cpp:47-82`, `a < 0`).
+- **Its own feet are not ignored.** `char_feet.ent` (a 14 x 10 sensor) is added 18 units below the centre
+  (`addFeetOffset`, 128877..129480, half the 36-unit collision box through `scale()`) and moved there by `manageFeet`
+  (131341..131709, instructions 14-40), which `update` calls after `applyForces` (32): a steep ray could meet it, and a
+  falling body carries its centre down towards feet placed the update before. The port has no feet body. What the
+  original draws while falling was measured instead: footage F13's fall (`F13_fall_1-06.mp4`, 1-06; the right pad
+  held 1000 ms from about the first moving frame, #32 at 1.160 s, past the last frame with the player, #53 at 1.877 s,
+  `F13.md` sections 2-3) draws row 2, walking its columns, on every frame from #26 to #53, leading every other row by
+  0.079-0.133 (`visuals/1.3/work/f13_rows.py`). In the port a ray from the capsule's centre, 22 units above its bottom,
+  reaches at most 18 below it, so it cannot meet the floor a falling player lands on (argued, not captured).
+- **Never where gravity is off.** `MainCharacter::MainCharacter` (126650..127790) instructions 10-17 and 35 pass
+  `noGravity` to `SideScrollerCharacter`'s constructor as `forceNoImpulse`; the constructor (152667..153096) sets
+  `pushing = false` (73-75) and keeps the flag (77-78), and `update` skips `applyForces` while it is set (20-29). So on
+  the 18 `no_gravity` levels `pushing` never changes. `systems_3_4` 3c had this INFERRED; it is decoded.
+- **Seen in the original.** No clip was taken for it (plan F11), but footage F9's take r6 (`F9_key_3-18.mp4`, 3-18,
+  about 17 fps) holds the right pad from 24.593 to 26.697 s (`work/F9/r6_events.json`, "s2_chase_A_to_wall") into the
+  corridor wall (`F9.md` section 2, #419-#421). Recorded frames #419-#424 (26.31-26.65 s) draw row 3 at the player, arm
+  against the wall, and #431-#434 (27.04-27.32 s), after the release, row 2 standing
+  (`visuals/1.3/work/f9_rows_local.py`: row 3 leads the best other row by 0.008-0.021 and row 2 by 0.006-0.027, at
+  scores 0.81-0.83 on chapter 3's dark figures; by eye in `work/f9_wall_crops.png`, beside cells 12, 13, 8 and 9).
+  Frames #425-#429, as B's shot crosses the corridor, lock no row at the player. The one-step lag is below what 17 fps
+  resolves.
+
+**WHAT CHANGED.**
+- **`data/art.json` `character.push`:** `reach_frame_width_share 0.6`, `offset_px [0, -6]`, `air_velocity_share 0.86`
+  (the 0.86 at the port's fixed 60 Hz tick; the decode's `GetFPSRate() / 60` scales it, so a change of tick rate reopens it) and `rows {left 0, other 3}`, with a `_source` holding the decode above; the
+  rows note no longer says the arm-out rows are not built. After the captures and suites, only its `_source` text
+  changed (the two footage readings above); `test_mp_sprites` ran again on the same binary, 464 / 0.
+- **`sim/Art`:** `Character` gains `Push push`, required: refused without a reach or an air share above 0, an offset of
+  two numbers, or rows inside the sheet.
+- **`sim/Shot`:** `ClosestContact(registry, from, to, ignore)`, GetClosestContact's rule: every body but `ignore`,
+  triggers included, and never one the segment starts inside or on. It and `FirstBody` are now one walk (`Meets`) with
+  the two differences as flags; `FirstBody`'s behaviour is unchanged (`test_mp_shot` 90 / 0, `test_mp_play` 145 / 0).
+- **`sim/Player`:** `PushAim` (applyForces' `dirVec` in the port's terms: grounded by `Player::Grounded`, the walk
+  `direction x walk_speed_px_s` across the body's vertical velocity; off the ground the body's x velocity x 0.86 across
+  the same, remake pixels a second) and `Pushing` (no x, no push; else `Shot::ClosestContact` from the body's centre to
+  `centre + normalize(aim) x reach + offset`, ignoring the player's own body). Nothing either returns is kept by
+  `Game::Level`.
+- **`MagicPortalsLayer`:** `m_pushing` (reset in `buildDrawables`, `:2140`). `stepLevel` (`:4494-4503`) asks
+  `Pushing` before `Game::BeforeStep`, of the body as the physics step left it and before `Steer` sets its velocity,
+  as `applyForces` reads it; only where gravity is on, the player is drawn and neither going into the door nor dying;
+  and stores it after `syncDrawables` (`:4542`), so `syncDrawables` (`:2618`) draws the step before's:
+  `m_pushing ? (facing left ? push.leftRow : push.otherRow) : facing row`, walking or standing, on the column either
+  would draw. The count and `playing` are untouched, so step 62's carried column and its `playing` / `frameCount`
+  coupling are as they were (`TheWalkKeepsItsColumnAndItsTime` passes). The reach is 0.6 of `playerCellPx` (`:2201`),
+  the same frame the player is drawn with, in units: its comment holds 2.3 to `int(texels / D)` so the hd sheet
+  cannot double it (K9).
+- **Tests.** `test_mp_sprites` `ThePortalAndTheShotAreTheirEnts` pins the push block (0.6 and 24 of a 40-unit frame, (0,
+  -6), 0.86, rows 0 and 3, neither a walking row); `APlayerWithoutItsWalkIsRefused` refuses six broken push keys.
+  `test_mp_layer`: `APlayerWalkedIntoAWallPushesIt` (1-22 right: standing beside the wall frame 8; the first walking
+  step firstFrame 8, the second 12 with 4 frames playing; 7 steps in column 1 as an open walk's; a second on still 12;
+  the step the walk stops on 12 standing, the step after 8 on the same column and time. 1-01 left: firstFrame 4 walking,
+  then 0, found with the body at 24 or less and more than 23 a step before); `APlayerPushesATriggerItHasNotEntered` (a
+  trigger box 30-40 units ahead in 1-09's open floor: arm out while the ray reaches it, in while the body is inside it
+  and once past it); `AWeightlessPlayerNeverPushes` (4-02, a trigger box 15 units ahead and right held for 60 steps: row
+  2 on every step).
+
+**BASELINE.** Before: step 63's `visuals/1.2/after/` and its `sweep/` (1-01 f420 `6d5f4435`). The committed build (HEAD
+`a0207e1`, `MagicPortals.exe` `26101dcb`) reproduced it before anything changed (`visuals/1.3/before/`), and recorded
+the two wall walks there (`capture_13.sh before record`: 1-22 `--hold right@100-220`, 1-01 `--hold left@100-220`, every
+frame to f250, `--record`). After: `visuals/1.3/after/` (`capture_13.sh after baseline|replay|walls|sweep`), binary
+`a936f44f`. **No f420 frame moves (all 128 byte-identical to step 63's), so the next step's "before" stays
+`visuals/1.2/after/` and its `sweep/` (1-01 f420 `6d5f4435`).**
+
+| Gate (00_order 1.3) | Required | Before | After |
+|---|---|---|---|
+| `test_mp_layer`: holding right into level0's wall gives `firstFrame 12` | 12 | walking into a wall draws the walking row (1-22 right: row 2, cells 8-11; 1-01 left: row 1) | **MET on a substituted level: the gate names level0, which has no wall to its right to hold into (RECORDED DEVIATIONS).** 1-22 (`level21`) right into its breakable wall: `firstFrame 12`, 4 frames, playing, from the second walking step on. level0 left into its level wall: `firstFrame 0`, found with the body at 24 units or less |
+| release gives row 2 | row 2 | row 2 | **Row 2 on the step after the release; the release step itself still draws row 3** (`firstFrame 12`, standing), as `update` orders it (RECORDED DEVIATIONS). Then `firstFrame 8` on the same column and time |
+| a replayed wall walk's state hash identical before and after (`StateHash.cpp:203-207`) | identical | recorded on `26101dcb`: 250 ticks, 6 checkpoints each; replayed on `26101dcb` as a control, "Replay reproduced 250 of 250 recorded tick(s) across 6 checkpoint(s)" twice | **Identical: on `a936f44f` both recordings, "Replay reproduced 250 of 250 recorded tick(s) across 6 checkpoint(s)"** (`after/replay/`), checkpoints at ticks 0, 60, 120, 180, 240 and 250, two of them inside the push; the last frames `41911971` and `dc8df4f9` byte-identical to the recording runs'. `--hold` is the layer's own input, not recorded, so each replay was given the same flags |
+| `test_mp_layer` | 0 failures | 893 checks (step 63) | **916 checks, 0 failures** |
+| `test_mp_sprites` | 0 failures | 442 checks (step 63) | **464 checks, 0 failures** |
+| `test_mp_zerog` | 0 failures | 88 checks | **88 checks, 0 failures** |
+| `test_mp_start` | 0 failures | 726 checks | **726 checks, 0 failures** |
+
+**Beyond the gates.**
+- **The rows in the exe, every frame** (`work/rows.py`, the 16 hd cells at 1.40625 in a box about the player; frame N
+  shows tick N). 1-22 right held 100-220: f95-f100 row 2; **f101-f220 row 3 on all 120 frames** (lowest score 0.886,
+  lowest lead over another row 0.022); **f221, the release, row 3** (cell 14, which is cell 12's image: row 3 reads A B
+  A C as row 2 does); f222-f250 row 2 (0.951, lead 0.106). Before, row 2 on every frame. The column runs the same frames
+  on both builds, A, B or C alike on all 156 frames f95-f250 (B on f106-f110, C on f117-f121, B on f128-f132, and so
+  on), so the row took nothing from the column's time. 1-01 left held 100-220 (the level's left edge cuts the cell, so
+  each cell lost its 24 left hd columns, `work/rows_left.py`): after, row 0 on f113-f221 (109 frames, lead 0.023 or
+  more) and row 1 from f222; before, row 1 from f113 on. f109-f112 lock nothing (the medal plaque is over the player).
+- **Where the frames changed** (`work/diffwalls.py`, before against after, all 250 frames of each): 1-22 exactly
+  f101-f221, each inside a box no larger than 112 x 141 px about the player's cell; 1-01 exactly f109-f221, inside the
+  cell at the screen's left edge. Every other frame byte-identical.
+- **The sweep** (`capture_13.sh after sweep`, `work/sweep_cmp.sh`): all 128 f420 frames byte-identical to step 63's
+  `visuals/1.2/after/sweep/`; 128 exits 0, validation ACTIVE in 128 and silent, no "Could not load". No sweep run holds
+  a walk or taps, and a player that neither walks on the ground nor moves sideways off it aims no x.
+- **The ray's tilt in the port: verified only straight ahead.** `PushAim` puts the decode's `dirVec` in the port's
+  movement: on the ground `direction x` the commanded 160 px/s (`player.json`, `_guess`) across the body's vertical
+  velocity, off it the body's x velocity x 0.86 across the same. Where both point straight ahead, grounded on flat
+  ground, which is every case above, the ray is the original's. The tilt on a slope or in the air is not measured: the
+  original's x is `moveVec.x * speedScale`, `scale(3)` times the frame's elapsed over the physics step (`applyForces`
+  15-36), whose ratio to its vertical velocity was not decoded here, and off the ground the port's body moves by its own
+  air control (RECORDED DEVIATIONS).
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): 85 steps (`Art.cpp`, `Player.cpp`, `Shot.cpp` and every sim file
+that includes `Art.hpp`, `MagicPortalsLayer.cpp`, `main.cpp` and every Magic Portals suite compiled; the sim and game
+libraries, every Magic Portals suite and `MagicPortals.exe` relinked), no warning or error. The ten files the edits'
+scripts had left with LF endings were given CRLF, as `core.autocrlf true` checks out (the index stores LF, so the diff
+is unchanged), and their times set before the build's first object so nothing recompiles for it: a second run,
+`ninja: no work to do`, `MagicPortals.exe` still `a936f44f`, the binary every capture above measured.
+
+**THE SUITES**, run directly, once each on the measured binaries: `test_mp_sprites` 464 / 0, `test_mp_layer` 916 / 0,
+`test_mp_zerog` 88 / 0, `test_mp_start` 726 / 0, and for `Shot` and `Player` `test_mp_shot` 90 / 0 and `test_mp_play`
+145 / 0; `test_mp_sprites` once more after `art.json`'s `_source` text changed, 464 / 0. **ctest, once: 106 of 121 pass,
+1 fails, 14 not run.** Not run: Smart App Control refused `test_mp_turrets`, `test_mp_timed`, `test_mp_hazards`,
+`test_mp_fire`, `test_mp_hinge`, `test_mp_ghost`, `test_mp_torch`, `test_mp_bounce`, `test_mp_dragon`, `test_mp_keys`,
+`test_mp_fields`, `test_mp_sky`, `test_mp_popup` and `test_mp_info` (BAD_COMMAND), each freshly relinked by this build
+(every Magic Portals suite links `MagicPortalsSim`). None names `Art::`, `Shot::`, `Player::` or the layer (grepped),
+though `test_mp_dragon`'s dragon reaches `Shot::FirstBody` through `sim/Dragon.cpp`; `test_mp_shot`, `test_mp_play`,
+`test_mp_portal` and `test_mp_darkdragon`, which reach it too, passed. None was relinked again. **Fails: `test_jobs`**
+(`tests/test_jobs.cpp:139`, "the dispatch must have run on more than one thread": 4 workers started, fewer than two
+threads recorded), and once more run directly the same. **It does not block this step:** its binary is from 16
+September, this build did not relink it, it links nothing this step changed, and it passed in step 63's ctest. A
+`MagicPortals.exe` this step did not launch was running on the machine just after the rerun (INFERRED the parallel
+track's); a loaded machine dispatching every small task to one worker would fail exactly this check, but that was not
+measured.
+
+**SMART APP CONTROL.** Fourteen refusals, fourteen notifications: the ctest suites above. `MagicPortals.exe` `26101dcb`
+(step 63's) ran all 5 of its launches (baseline, two recordings, two control replays) and `a936f44f` all 133 (baseline,
+two replays, two wall walks, 128 sweep), every one exit 0; the six suites run directly each ran on its first launch.
+
+**RULINGS.** The owner's standing ruling, every ruling of 00_order section 6 decided in favour of what the original
+does: the arm-out rows are drawn as `findFinalDirection` draws them, a step behind the ray, from a ray aimed along the
+velocity `applyForces` sets, meeting sensors, never a body it starts inside, and never where gravity is off. **R10
+(player z 4) is not applied:** 1.3 moves no depth and no lighting height (step 61, decision 5). **R11 (rest height)**
+is not touched: the ray starts at the port's body centre, wherever the body rests. No other ruling bears on 1.3.
+
+**RECORDED DEVIATIONS** (from the brief's and the gate's text, and one from the original: the aim off the ground).
+- **The gate's level.** "Holding right into level0's wall": level0 has no wall the player can walk into on its right.
+  Its marker is at (36, 86); `portal_static_603` stands at (150, 74) with a 32 x 32 trigger, in front of `wall04` (face
+  at x 186), and takes the player to the lower floor, whose way right ends at the door (693, 177). So row 3 is gated on
+  1-22's breakable wall, 18 units right of its marker, and level0 gates row 0 against its left level wall.
+- **"Release gives row 2."** On the step after the release. The release step draws row 3, standing: `update` runs
+  `updateFrame` before `applyForces`. Pinned in `APlayerWalkedIntoAWallPushesIt` and measured on f221 above.
+- **`systems_3_4` 3c's ray.** The brief casts "from the body centre to (+-24, -6) u" against "solid colliders,
+  excluding the player", with zero-g INFERRED. The decode aims it along `dirVec` (tilted by the vertical velocity, and
+  off the ground by the body's own x velocity), meets triggers as well (the original's sensors), skips a body the ray
+  starts inside, and decodes zero-g. Built as decoded; `APlayerPushesATriggerItHasNotEntered` pins the trigger rule.
+- **Data shape.** The brief's `reach_width_share` is `reach_frame_width_share`, and `air_velocity_share` is added for
+  the airborne aim.
+- **The aim off the ground (from the original).** The original's airborne `dirVec.x` is its body's x velocity, which its
+  own air movement decays by 0.86 an update with the pad ignored (`applyForces` 63-84); the port's airborne body moves
+  by `player.json` `air_control 0.65` (`_guess`), so a push found in the air follows a velocity the original would not
+  have. Grounded pushes, every gate above, are unaffected. Owner: the air movement below.
+
+**LEFT FOR THE OWNER.**
+- **The player turned toward a portal tap** (step 62's hand-off to "1.3 or a new 1.x step"). Not built here: it is
+  `PortalManager::managePortalInsertion`'s `setDirection`, not the push, and one system is one step. For a new 1.x step,
+  with step 62's decode, fix and test.
+- **The body the ray starts from.** The port's capsule is 20 units wide and 44 tall (`player.json` `body`, `_guess`);
+  `dark_mage.ent`'s collision box is 14 by 36, and the port's player rests 2.84 units higher than the original's
+  (systems_3_4 3f, R11). The push begins the same 24 units from the centre, but the port's player stops 3 units further
+  from a wall than the original's, whose arm touches it in F9 #420-#424; and the ray's far end, 6 above the centre, sits
+  about 3 units higher over the floor than the original's, which against a low obstacle (a 30-unit small crate, a
+  button's 16-unit box) can decide whether it is met. Measured here only against walls taller than both. With R11, the
+  body's owner.
+- **The original's air movement (found here, gameplay).** Off the ground `applyForces` (63-84) replaces the pad's x with
+  the body's own x velocity times 0.86 every update at 60 fps: the original has no air control and its horizontal speed
+  decays in the air. The port keeps `player.json` `air_control 0.65` (`_guess`). Not built: the gameplay owner's.
+- **`test_jobs` fails** in this step's ctest and once more run directly (`tests/test_jobs.cpp:139`, a dispatch that ran
+  on one thread). Not caused by this step (THE SUITES) and not blocking it; whether it is load and not a job-system
+  fault is the engine's owner's, not investigated here.
+- **The eyes (7.1).** `updateEyes` reads `GetFrame() > 7`: pushing right (12-15) counts as right and pushing left
+  (0-3) as left, so the arm-out rows keep the eye on its side.
+- **`AWeightlessPlayerNeverPushes` does not isolate the zero-g guard.** `Game::BeforeStep` skips `Player::Steer` where
+  gravity is off (`sim/Game.cpp:288`), so the held pad gives the weightless body no x velocity and, unless
+  `Player::Grounded` holds there, `PushAim` no x: the test can pass with the layer's `!m_level.noGravity` check
+  removed. A check before its 60 steps that
+  `Player::Pushing` meets the added trigger box (aim (160, 0), reach 24, offset (0, -6)) would pin the decoded
+  `forceNoImpulse` rule itself. Found at review; the guard is built as decoded, the stronger test is left for the
+  next step that touches the layer's tests.
+- **`test_mp_dragon` has not run on this build.** Smart App Control refused it in the one ctest (THE SUITES), and it
+  reaches the refactored `Shot::FirstBody` through `sim/Dragon.cpp`. `FirstBody` is the old walk by reading (`Meets`
+  with triggers skipped and a start inside kept, as before) and by `test_mp_shot` 90 / 0 and `test_mp_play` 145 / 0;
+  run `test_mp_dragon` directly with the next step's suites and record it there.
+
+## Step 65 - the tier file the original draws, copied by the converter beside each 1x texture, and a record of every choice (built)
+
+The entity-visuals order's step 2.1 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `system_6.md`
+section 4.1 C2): the converter now copies, for every texture a level names, the `hd/` or `fullhd/` file the original
+draws at 720 px beside the 1x copy, and records each choice in `out/assets/entity_tiers.json`. **Remake-only: no file
+of this repository changes but this record.** Changed in the remake (`Magic-Portals-Remake`): new
+`tools/converter/src/ethanon2godot/tiers.py`; `__main__.py`, `tests/test_smoke.py`, `docs/ethanon-formats.md`,
+`README.md`, `DEVLOG.md`. **Over the 128 levels it copies 45 tier files (38 hd, 7 fullhd) of 66 textures, reports
+exactly the four skies as changing size (512 x 256 units against 455 x 256), and leaves `out/levels` byte-identical
+(128 of 128). Nothing draws them yet: 2.2 resolves level art through `sim/Tiers` (step 61), and this build's 1-01 f420
+is byte-identical to step 64's with the files in place.**
+
+**WHAT THE ORIGINAL DOES** (step 61 has the full decode; `docs/ethanon-formats.md`'s new "2026-09-17 (tiers)" block
+carries it for the converter, cited).
+- **Which file.** `ETHGraphicResourceManager::AddFile` (`ETHResourceManager.cpp:133-144`) asks `ChooseSpriteVersion`
+  (`ETHSpriteDensityManager.cpp:88-139`) for `fullhd/<file>`, then `hd/<file>` (also whenever the fullhd test passed,
+  `:105`), then `xld/` and `ld/` on short screens, each by `FileExists`, else the name at density 1. Only the tier
+  names are tried: a tier file is drawn whether or not a 1x file is beside it.
+- **Which numbers.** `ETHAppEnmlFile`'s defaults (hd 2, fullhd **4**, thresholds 720 / 1080, `:39-52`), overridden
+  key by key by the `default`, `window` and platform blocks in that order (`:59-66`, `:111-148`); the platform is
+  `android` (`Platform.android.cpp:31-34`). The shipped `app.enml` has `default` (480, 600, 2, 2) and `ios` only, so
+  at 720 px the search is fullhd at D 2, then hd at D 2.
+- **Which size.** `int(texels / D)` (`GLES2Sprite.cpp:429-438`, `:389-392`), step 61's `Tiers::Units`.
+
+**WHAT CHANGED** (the remake).
+- **`tiers.py`** (new, beside `lighting.py` and `uiassets.py`): `read_density_settings(app.enml)` reads the numbers as
+  `ETHAppEnmlFile` does (a missing or unparsable file keeps the defaults, with a warning); `search_order(settings,
+  height = 720)` is `ChooseSpriteVersion`'s four tests and their order; `units` truncates after the divide;
+  `copy_entity_textures` copies each texture's 1x file, then the first tier file the search finds to
+  `entities/<tier>/<name>`, and merges the manifest across `--world` runs. **A destination holding the same bytes is not
+  rewritten, and nothing is deleted**, because the port's capture runs read `out/assets` while the converter runs. A
+  tier file of another size is copied and reported, not refused as `uiassets._copy_hd` refuses one.
+- **Manifest** `out/assets/entity_tiers.json`: `{"format": 1, "choice": {"screen_height_px": 720, "search":
+  [{"tier": "fullhd", "density": 2}, {"tier": "hd", "density": 2}]}, "files": {"entities/<name>": {"drawn", "tier",
+  "density", "texels", "units"}}}`, a row for every texture, 1x ones included (`drawn` the 1x path, D 1).
+- **`__main__.py` `--copy-textures`** calls it and prints `entity textures: 1x copied n, unchanged n; tier files copied
+  n, unchanged n`, `entity texture tiers: …`, one `tier size change:` line per tier file whose units differ from its 1x
+  file, and `tier file without a 1x file:` (the old "texture not found" warning is `SKIPPED` when neither exists).
+  `tscn.py` does not change: the `.tscn` still names the 1x path (route B).
+- **`tests/test_smoke.py`**, five tests on hand-written header-only PNGs: the search read from `app.enml` (720, 599,
+  480, 479, 320; the defaults without a file, fullhd D 4; `window` and `android` overriding, `ios` not);
+  `int(973 / 2)` = 486; the copy (hd over 1x, fullhd chosen over hd, an unreferenced hd file never copied, a tier file
+  with no 1x file copied and reported, a missing texture skipped, the manifest rows, exactly one size change); a second
+  run rewriting no identical file and no identical manifest (their mtimes kept) while replacing a stale one; and the
+  CLI over two `--world` runs merging one manifest, with no tier in the `.tscn`.
+
+**BASELINE.** Before: step 64's `visuals/1.3/after/` (1-01 f420 `6d5f4435`) and the remake at `b6569cf` with `out/` as
+the four earlier converter runs left it, snapshotted in `visuals/2.1/before/` (128 level md5s, `chapters.json`,
+`lighting_files.json`, the 112 files under `out/assets/entities/`; no `hd/`, `fullhd/` or `entity_tiers.json`). **The
+run:** the four `--world N --copy-textures` runs wrote to `out/staging_tiers/`, not `out/`, so no level or 1x file under
+`out/` was rewritten while the parallel track captured; every output was compared with `out/`, and then only the 45 new
+tier files and the manifest were copied into `out/assets/` without overwriting (`cp -n -p`). `out/` is now what the four
+runs would have written in place. After: `visuals/2.1/after/`, binary `a936f44f` (step 64's, not rebuilt). **No pixel
+moves, so the next step's "before" stays `visuals/1.2/after/` and its `sweep/` (1-01 f420 `6d5f4435`).**
+
+| Gate (00_order 2.1) | Required | Before | After |
+|---|---|---|---|
+| `pytest` fixture and `ruff` | pass, with the section 4.1 fixture | 80 passed; ruff clean | **85 passed** (5 new); **ruff: all checks passed** |
+| 45 files copied (38 hd, 7 fullhd) | 45 = 38 + 7 | 0: `--copy-textures` copied 1x files only; no `out/assets/entities/hd/` or `fullhd/` | **45**: tier files copied 27 + 3 + 8 + 7 over worlds 0-3; `hd/` 38 files, `fullhd/` 7, each byte-identical to its APK file. Textures by tier 7 fullhd, 38 hd, 21 1x of 66 |
+| size-change report lists exactly `icy_sky`, `red_sky`, `sky`, `sky_purple` | those four | no report | **exactly those four**, all in world 0's run: `entities/fullhd/<sky>.png: 512x256 units against the 1x file's 455x256`. The other 41 tier files' units equal their 1x sizes |
+| `out/levels` md5-identical | 128 of 128 | 128 md5s in `before/levels_md5.txt` | **128 of 128 identical**, both the staging run's output and `out/levels` itself after the copy; `chapters.json` and `lighting_files.json` identical too |
+| `git status` clean of `out/` | nothing from `out/` or `reference/` | clean | **clean of `out/`**: ` M` `__main__.py`, `test_smoke.py`, `docs/ethanon-formats.md`, `README.md`, `DEVLOG.md`, `??` `tiers.py`; `git check-ignore` gives `.gitignore:66:out/` for the manifest, a fullhd sky and the staging output |
+| `docs/ethanon-formats.md` note and DEVLOG | written | — | **written**: the "2026-09-17 (tiers)" block (which file, which numbers, which size, the copy and its manifest, the measured counts, the orphan `particles/hd` and `sprites/hd` files), a pointer at section 8.5 to the three statements it supersedes, and a DEVLOG entry |
+
+**Beyond the gates.**
+- **Placements.** Over the 2,883 sprite placements of `out/levels`, the manifest's tiers give **2,248 hd / 146 fullhd /
+  489 1x**, the split `system_6.md` counted and 2.2 pins in `test_mp_start`.
+- **Stderr** of all four runs is empty: no texture lacks a 1x file or a readable size, and `app.enml` was read.
+- **Out of the port's way.** Nothing in this repository reads `out/assets/entities/hd/` or `fullhd/` (grep: the layer's
+  `hd/` lookups go to the extracted APK) or walks `out/assets/entities/`. With the files in place, 1-01 f420 on
+  `a936f44f` is **`6d5f4435`**, byte-identical to step 64's; exit 0, validation ACTIVE, and the log differs from step
+  64's only in the output path. The suites that read `out/`, run directly once each: `test_mp_sprites` 464 / 0,
+  `test_mp_start` 726 / 0, `test_mp_lighting` 495 / 0, `test_mp_levels` 128 / 0.
+
+**BUILD.** Nothing to build: no file of this repository but this record changed. **THE SUITES:** the four above, on
+step 64's binaries; **ctest not run**, since no source, data or test here changed and step 64's run stands for these
+binaries. **SMART APP CONTROL:** no refusal; `MagicPortals.exe` `a936f44f` ran its one launch and each suite its
+first.
+
+**RULINGS.** The owner's standing rulings, every ruling of 00_order section 6 decided in favour of what the original
+does: **R13, route B** (the port resolves the tier from the file name; the converter copies the tier files and a
+manifest, and `out/levels` stays byte-identical) and **R12, the tier fixed at the 720 px choice** (the converter's
+search runs at a fixed 720 px height, whatever window the port opens). No other ruling bears on 2.1.
+
+**RECORDED DEVIATIONS** (from `system_6.md` C2's text).
+- **Where the code lives.** C2 puts the copy in `__main__.py`; it is in a new `tiers.py`, which `__main__.py` calls,
+  as the lighting and UI copies are organised.
+- **The manifest's shape.** C2's rows sit under `"files"` beside `"format"` (as `lighting_files.json` does), and each
+  row adds `"density"`; a `"choice"` object records the height and search the run used. C2's `units` is `w/D`; it is
+  written `int(w/D)`, step 61's decision 2.
+- **The densities** are read from `app.enml`, not fixed at 2: the engine's own default is 4 for fullhd, and a run
+  against another project would otherwise size it wrong silently.
+- **A tier file with no 1x file** is copied (the loader never asks for the 1x file) and reported; C2 names no rule.
+- **The staging run** (BASELINE): C2 regenerates `out/` in place; here the run went to `out/staging_tiers/` and only
+  new files were copied into `out/`.
+
+**LEFT FOR THE OWNER.**
+- **`_vertical_offset` reads the 1x height** (`tscn.py`). It equals the units of all 10 `type = 2` placements
+  (`torch_small.png`, hd exactly 2x), but a vertical sprite whose tier changes size would be placed from the wrong
+  height. None exists.
+- **Stale tier files.** The copy never deletes, so a tier file dropped from a later APK would stay in `out/` (the
+  manifest row would say what is drawn). Deliberate while another track reads `out/`.
+- **Two copies of the same numbers.** The converter reads the search and densities from `app.enml`; the port's
+  `data/tiers.json` (step 61) fixes them as `search ["fullhd", "hd"]`, D 2 and 2. They agree today (the manifest's
+  `choice` says so), and nothing checks that they keep agreeing: were the two ever to differ, the manifest's `units`
+  and `Tiers::Units` would disagree silently. Latent while the APK is read-only; 2.2 may compare the two.
+- **`out/staging_tiers/`** is left in place (gitignored), with the run's stdout and stderr in `visuals/2.1/run/`.
+- **The manifest's `choice` is the last run's.** `_merge_manifest` keeps every earlier run's `files` rows but writes
+  this run's `choice` without comparing it with the stored one, so a later run under another `app.enml` or screen
+  height would leave rows computed under two rules. All four runs share one choice today (fullhd D 2, hd D 2 at
+  720 px), so the manifest is correct; a check or a two-run test with different densities is not written.
+- **Letter case, in the converter too.** `tiers.py` finds a tier file with `Path.is_file`, which ignores case on
+  Windows; the original's `FileExists` on Android does not (step 61's caveat, on the port's side). An exact-case
+  listing finds no case-only match among the 66 textures, so nothing differs today.
+
 ## Step 80 - the dial the original counts a timed crystal down on, and the fade it never had (built)
 
 The visuals plan's step 3.1 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; its briefs

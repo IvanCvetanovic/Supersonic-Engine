@@ -142,17 +142,23 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     return true;
 }
 
-std::optional<Hit> FirstBody(entt::registry& registry, const glm::dvec2& fromPx, const glm::dvec2& toPx,
-                             entt::entity ignore) {
+namespace {
+
+// What the segment from `fromPx` to `toPx` meets first, other than `ignore`.
+// `sensors` lets a trigger be met; `fromInside` lets a body the segment starts
+// inside (or on) be met at once, at 0.
+std::optional<Hit> Meets(entt::registry& registry, const glm::dvec2& fromPx, const glm::dvec2& toPx, entt::entity ignore,
+                         bool sensors, bool fromInside) {
     const dvec2 a = Metres(fromPx);
     const dvec2 b = Metres(toPx);
     std::optional<Hit> first;
-    const auto consider = [&first](entt::entity body, std::optional<double> along) {
-        if (along && (!first || *along < first->along)) first = Hit{body, *along};
+    const auto consider = [&first, fromInside](entt::entity body, std::optional<double> along) {
+        if (!along || (!fromInside && *along <= 0.0)) return;
+        if (!first || *along < first->along) first = Hit{body, *along};
     };
 
     for (auto [entity, transform, box] : registry.view<TransformComponent, BoxColliderComponent>().each()) {
-        if (entity == ignore || box.isTrigger) continue;
+        if (entity == ignore || (box.isTrigger && !sensors)) continue;
         const Frame frame(transform);
         const dvec2 centre(box.center.x, box.center.y);
         const dvec2 half(box.size.x * 0.5, box.size.y * 0.5);
@@ -161,13 +167,13 @@ std::optional<Hit> FirstBody(entt::registry& registry, const glm::dvec2& fromPx,
         consider(entity, IntoPolygon(a, b, corners));
     }
     for (auto [entity, transform, sphere] : registry.view<TransformComponent, SphereColliderComponent>().each()) {
-        if (entity == ignore || sphere.isTrigger) continue;
+        if (entity == ignore || (sphere.isTrigger && !sensors)) continue;
         const Frame frame(transform);
         consider(entity, IntoCircle(a, b, frame(dvec2(sphere.center.x, sphere.center.y)), sphere.radius));
     }
     for (auto [entity, transform, hull, outline] :
          registry.view<TransformComponent, ConvexHullColliderComponent, LevelBuilder::PlanePolygon>().each()) {
-        if (entity == ignore || hull.isTrigger) continue;
+        if (entity == ignore || (hull.isTrigger && !sensors)) continue;
         const Frame frame(transform);
         std::vector<dvec2> points;
         points.reserve(outline.points.size());
@@ -175,6 +181,18 @@ std::optional<Hit> FirstBody(entt::registry& registry, const glm::dvec2& fromPx,
         consider(entity, IntoPolygon(a, b, points));
     }
     return first;
+}
+
+} // namespace
+
+std::optional<Hit> FirstBody(entt::registry& registry, const glm::dvec2& fromPx, const glm::dvec2& toPx,
+                             entt::entity ignore) {
+    return Meets(registry, fromPx, toPx, ignore, false, true);
+}
+
+std::optional<Hit> ClosestContact(entt::registry& registry, const glm::dvec2& fromPx, const glm::dvec2& toPx,
+                                  entt::entity ignore) {
+    return Meets(registry, fromPx, toPx, ignore, true, false);
 }
 
 std::optional<double> Enters(const glm::dvec2& fromPx, const glm::dvec2& toPx, const Trigger::Box& box) {

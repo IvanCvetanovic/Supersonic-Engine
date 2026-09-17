@@ -7,8 +7,9 @@
 // boss and its spikes - the original draws with its own entities, and art.json
 // says which image each of those .ent files names, whether it is added, and how
 // its sheet is cut. Those are the .ent's facts, and test_mp_sprites pins them.
-// How fast a sheet plays is not decoded, so it is carried as a _guess and
-// pinned by nothing.
+// How fast a sheet plays is mostly not decoded, so it is carried as a _guess and
+// pinned by nothing - except the player's walk, whose stride and standing
+// frame are decoded from its script (Character).
 //
 // Each also carries its .ent's <EmissiveColor>: the original draws every sprite
 // at min(1, ambient + emissive) of its colour (Lighting::AmbientTerm), what no
@@ -51,16 +52,87 @@ struct Picture {
     int Frames() const { return columns * rows; }
 };
 
-// The player, as dark_mage.ent draws it: a sheet whose rows are directions and
-// whose columns are a walk.
-struct Character : Picture {
-    int startFrame = 0;    // the .ent's startFrame
-    double pivotXPx = 0.0; // its PivotAdjust: the point of the image, from its
-    double pivotYPx = 0.0; // centre, that stands on the entity
-    int leftRow = 0;       // derived from the decoded DIRECTION enum, not testimony
-    int rightRow = 0;
-    int idleColumn = 0;    // _guess
+// What MainCharacter::linearMotion does to the player on a no_gravity level,
+// every update (art.json character.no_gravity_motion): turns the standing column
+// on the character's own FrameTimer, and hovers the picture on its pivot.
+struct NoGravityMotion {
+    double columnStrideMs = 0.0;       // set(0, 3, 280, true)
+    double hoverScreenPx = 0.0;        // cos(angle) times this, added to the pivot's y in screen pixels
+    double hoverAtScreenPx = 0.0;      // the screen height the port takes those pixels at
+    double hoverRadiansPerSecond = 0.0; // unitsPerSecond's argument
+    double hoverStartRadians = 0.0;    // PI + PIb, set on the first update
+    double hoverWrapRadians = 0.0;     // PI * 2, taken off once the angle is past it
+
+    // The hover's offset to the pivot's y, in units of a view `viewUnitsTall` tall.
+    double HoverUnits(float angle, double viewUnitsTall) const;
 };
+
+// When the player draws its arm out (art.json character.push):
+// SideScrollerCharacter::detectPushing's ray, and the rows findFinalDirection
+// swaps in while it meets something.
+struct Push {
+    double reachFrameWidthShare = 0.0; // 0.6 of getSize().x, the frame's width
+    glm::dvec2 offsetPx{0.0};          // scale(-6) on y: added to the ray's far end, in level units
+    double airVelocityShare = 0.0;     // off the ground the ray follows the body's x velocity times this
+    int leftRow = 0;                   // the row pushing left draws
+    int otherRow = 0;                  // the row pushing any other way draws
+};
+
+// The player, as dark_mage.ent draws it and its script frames it: a sheet whose
+// rows are directions and whose columns are a walk. The row it shows IS its
+// direction, and it starts facing initialDirection - not on the .ent's
+// startFrame, which its constructor sets and its first update replaces. The
+// column is a FrameTimer over the whole row, stepped a stride at a time only
+// on the updates it walks, so it carries across a stop and a turn (art.json) -
+// except on a no_gravity level, where it wears another sheet and the same timer
+// turns the column it stands on (NoGravityMotion).
+struct Character : Picture {
+    double pivotXPx = 0.0;     // its PivotAdjust: the point of the image, from its
+    double pivotYPx = 0.0;     // centre, that stands on the entity
+    int initialDirection = 0;  // GameCharacter's direction when it is made: a row
+    int leftRow = 0;           // derived from the decoded DIRECTION enum, not testimony
+    int rightRow = 0;
+    int idleColumn = 0;        // the column it stands on
+    double strideMs = 0.0;     // frameStride: a column's time; framesPerSecond is 1000 / strideMs
+    Push push;                 // the arm out against what it walks into
+    // The sheet MainCharacter's constructor swaps in on a no_gravity level. Only
+    // the image: the cut, the frame, the pivot and the normal map stay dark_mage.ent's.
+    std::string noGravitySprite;
+    NoGravityMotion noGravity;
+};
+
+// The sheet the player wears on a level: the suit where it sets no_gravity.
+const std::string& PlayerSheet(const Character& mage, bool noGravity);
+
+// The ETHFramework FrameTimer (FrameTimer.angelscript) a character keeps, from
+// its constructor's first and last of 0. Set is FrameTimer::set (bytes
+// 23254..23650): the time is added; a changed first or last resets it to first
+// with no time; else it steps ONE frame once the time reaches the stride, the
+// stride taken off, past last back to first when it repeats and held on last
+// with no time when it does not.
+struct FrameTimer {
+    int first = 0;
+    int last = 0;
+    int frame = 0;
+    double timeMs = 0.0;
+
+    int Set(int firstFrame, int lastFrame, double strideMs, bool repeat, double elapsedMs);
+};
+
+// The player's own state on a no_gravity level, as MainCharacter keeps it.
+struct NoGravityPlayer {
+    FrameTimer timer;
+    int idleColumn = 0;   // the column the last update left for the next to stand on
+    float angle = 0.0f;   // linearMotionAngle, a float as the entity's custom data is
+    bool moved = false;   // linearMotion has run: the angle is set, and the pivot hovers
+};
+
+// One update of MainCharacter on a no_gravity level, from updateFrame to
+// linearMotion, `elapsedMs` of frame time. Returns the column the update draws:
+// the walk's, set(0, 3, stride, true), on a walking update; else the idle column
+// the update before left. Then linearMotion turns the angle and sets the idle
+// column, set(0, 3, columnStrideMs, true).
+int UpdateNoGravity(const Character& mage, NoGravityPlayer& player, bool walking, double elapsedMs);
 
 // How a picture pulses: from one scale to the other and back, each way a
 // stride, eased by smoothEnd - the original's bounce().

@@ -37,6 +37,7 @@
 #include "core/ScreenOverlay.hpp"
 #include "core/TransformSystem.hpp"
 #include "core/SimulationClock.hpp"
+#include "core/SpriteAnimationSystem.hpp"
 #include "core/ViewportInfo.hpp"
 
 #include "sim/Art.hpp"
@@ -1045,11 +1046,12 @@ void WithoutTheOriginalThePortalIsABox() {
 }
 
 void ThePlayerIsTheDarkMage() {
-    // dark_mage.ent's sheet. A level starts on its start frame, standing. It
-    // walks through a row of four while a direction is held, on the row that
-    // direction reads, turns when it turns, and stands on the idle column of
-    // the way it last walked. Which row and column are art.json's; only the
-    // start frame is pinned here.
+    // dark_mage.ent's sheet. A level starts standing on the idle column of the
+    // way GameCharacter is made facing: frame 8, the right row. It walks through
+    // a row of four while a direction is held, on the row that direction reads,
+    // turns when it turns, and stands on the idle column of the way it last
+    // walked. Which row and column are art.json's; the start frame is pinned
+    // here.
     if (!OriginalArtIsThere("ThePlayerIsTheDarkMage")) return;
     MagicPortals::Art::Rules rules;
     std::string error;
@@ -1078,8 +1080,10 @@ void ThePlayerIsTheDarkMage() {
                   material.blend == MaterialComponent::BlendMode::Premultiplied && animation().columns == 4 &&
                   animation().rows == 4,
               "dark_mage.ent's sheet, cut 4 x 4, mixed (premultiplied)");
-    CHECK_MSG(animation().firstFrame == 4 && animation().frameCount == 1 && !animation().playing,
-              "standing on the start frame");
+    CHECK_MSG(animation().firstFrame == 8 && animation().firstFrame == rowStart(mage.rightRow) &&
+                  animation().frameCount == 1 && !animation().playing && animation().frame == 0 &&
+                  animation().elapsed == 0.0f,
+              "standing on frame 8, facing right, its walk not begun");
     CHECK_MSG(Shown(registry, "Magic Portals Player") == 0, "and its box stands behind it");
     const glm::dvec2 drawn = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(mageQuad).position);
     const glm::dvec2 body = playerPx(registry, layer);
@@ -1099,6 +1103,280 @@ void ThePlayerIsTheDarkMage() {
               "and turned to walk left");
     layer.OnDetach(registry);
     CHECK_EQ(Tagged(registry, "Magic Portals Player Sprite"), 0);
+}
+
+// One tick as SupersonicApp runs it when a flipbook matters: the physics step,
+// then the sprite flipbooks, then the layer ("Before the layers",
+// SupersonicApp.cpp), with `down` held for the tick.
+void tickWithFlipbooks(MagicPortalsLayer& layer, entt::registry& registry, std::vector<std::string> down) {
+    PhysicsSystem::Update(registry, MagicPortalsLayer::kTick);
+    SpriteAnimationSystem::Update(registry, MagicPortalsLayer::kTick);
+    Input::TickInput input;
+    input.mousePosition = kRest;
+    input.down = std::move(down);
+    Input::BeginReplayedTick(input);
+    layer.OnFixedUpdate(registry, MagicPortalsLayer::kTick);
+    Input::EndReplayedTick();
+}
+
+void TheWalkKeepsItsColumnAndItsTime() {
+    // SideScrollerCharacter::updateFrame steps its FrameTimer only on the updates
+    // it walks, and always as set(0, 3, 90, true): the timer resets on the first
+    // walk alone, and the column and its time carry across a stop and a turn, a
+    // column every 90 ms (art.json character.animation). Ticked as the app ticks,
+    // the flipbook before the layer.
+    if (!OriginalArtIsThere("TheWalkKeepsItsColumnAndItsTime")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level8");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    entt::entity mageQuad = entt::null;
+    for (auto [entity, tag] : registry.view<TagComponent>().each()) {
+        if (tag.tag == "Magic Portals Player Sprite") mageQuad = entity;
+    }
+    CHECK(mageQuad != entt::null);
+    if (mageQuad == entt::null) return;
+    const auto run = [&](const char* key, int ticks) {
+        for (int tick = 0; tick < ticks; ++tick) {
+            tickWithFlipbooks(layer, registry, key ? std::vector<std::string>{key} : std::vector<std::string>{});
+        }
+        CHECK_MSG(registry.valid(mageQuad), "the player is still there");
+        return registry.valid(mageQuad);
+    };
+    const auto animation = [&registry, mageQuad]() -> const SpriteAnimationComponent& {
+        return registry.get<SpriteAnimationComponent>(mageQuad);
+    };
+
+    // The first walking tick starts on column 0 with no time; the six after it
+    // add 100 ms, one stride and 10 ms over.
+    if (!run(MagicPortalsLayer::kRight, 7)) return;
+    CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 4 && animation().playing &&
+                  animation().frame == 1,
+              "walking right, on column 1 after 100 ms: " + std::to_string(animation().frame));
+    // The tick it stops on, the flipbook has already taken its tick (the app's
+    // order): one tick of time the original does not add, which the tick the
+    // walk resumes on does not add either.
+    if (!run(nullptr, 1)) return;
+    const uint32_t column = animation().frame;
+    const float time = animation().elapsed;
+    CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 1 && !animation().playing && column == 1,
+              "standing on the idle column, the walk's column kept");
+    if (!run(nullptr, 30)) return;
+    CHECK_MSG(animation().frame == column && animation().elapsed == time, "and half a second standing adds no time");
+    if (!run(MagicPortalsLayer::kRight, 1)) return;
+    CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 4 && animation().frame == column &&
+                  animation().elapsed == time,
+              "walking again from the column it stopped on, not from column 0");
+    if (!run(MagicPortalsLayer::kLeft, 1)) return;
+    CHECK_MSG(animation().firstFrame == 4 && animation().frameCount == 4 && animation().frame == column,
+              "turned left on the same column");
+
+    // Eight ticks of walking time so far (6 + the stop's 1 + the turn's 1).
+    // Back and forth for 55 more, turning once: 63 ticks, 1050 ms, eleven 90 ms
+    // columns and 60 ms over, wherever it turned.
+    if (!run(MagicPortalsLayer::kRight, 28) || !run(MagicPortalsLayer::kLeft, 27)) return;
+    CHECK_MSG(animation().firstFrame == 4 && animation().frame == 3 &&
+                  std::fabs(animation().elapsed - 0.060f) < 0.001f,
+              "1050 ms of walking is 11 columns of 90 ms (column 3) and 60 ms: column " +
+                  std::to_string(animation().frame) + ", " + std::to_string(animation().elapsed) + " s");
+    layer.OnDetach(registry);
+}
+
+// A trigger box standing in the level at `centrePx`, as the converter's Area2D
+// bodies are built (LevelBuilder: a box collider, isTrigger): something a player
+// walks through, and a sensor fixture in the original.
+entt::entity addTriggerBox(entt::registry& registry, const glm::dvec2& centrePx, const glm::dvec2& sizePx) {
+    const entt::entity box = registry.create();
+    registry.emplace<TransformComponent>(box).position = MagicPortals::Units::ToWorld(centrePx.x, centrePx.y);
+    auto& collider = registry.emplace<BoxColliderComponent>(box);
+    collider.size = glm::vec3(MagicPortals::Units::ToMetres(sizePx.x), MagicPortals::Units::ToMetres(sizePx.y), 1.0f);
+    collider.isTrigger = true;
+    return box;
+}
+
+// SideScrollerCharacter::detectPushing and findFinalDirection (art.json
+// character.push): walked into a wall the player draws its arm out, row 3 facing
+// right and row 0 facing left, on the walk's own column and time. updateFrame
+// runs before applyForces, so the step the ray first meets the wall still draws
+// the walk, and the step the walk stops on still draws the push.
+void APlayerWalkedIntoAWallPushesIt() {
+    if (!OriginalArtIsThere("APlayerWalkedIntoAWallPushesIt")) return;
+    {
+        // 1-22 (level21): its breakable wall stands 18 units right of the marker,
+        // inside the ray's 24 from the first step.
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level21");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr) return;
+        const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+        CHECK(mageQuad != entt::null);
+        if (mageQuad == entt::null) return;
+        const auto animation = [&registry, mageQuad]() -> const SpriteAnimationComponent& {
+            return registry.get<SpriteAnimationComponent>(mageQuad);
+        };
+        const auto say = [&animation]() {
+            return " (first " + std::to_string(animation().firstFrame) + ", count " +
+                   std::to_string(animation().frameCount) + ", frame " + std::to_string(animation().frame) + ")";
+        };
+        for (int tick = 0; tick < 60; ++tick) tickWithFlipbooks(layer, registry, {});
+        CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 1,
+                  "settled, standing on frame 8 beside the wall, which a standing player does not push" + say());
+        tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 4 && animation().playing,
+                  "the first walking step draws the walk: the push is found after it is drawn" + say());
+        tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        CHECK_MSG(animation().firstFrame == 12 && animation().frameCount == 4 && animation().playing,
+                  "the next draws row 3, arm out to the right, still walking its columns" + say());
+        for (int tick = 0; tick < 5; ++tick) tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        CHECK_MSG(animation().firstFrame == 12 && animation().frame == 1,
+                  "7 walking steps in, column 1 as an open walk's: the row takes nothing from the column" + say());
+        for (int tick = 0; tick < 60; ++tick) tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        const glm::dvec2 at =
+            MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position);
+        CHECK_MSG(animation().firstFrame == 12 && at.x < 285.0,
+                  "a second against the wall, still pushing it, stopped short of its face at 285: x " +
+                      std::to_string(at.x) + say());
+        tickWithFlipbooks(layer, registry, {});
+        CHECK_MSG(animation().firstFrame == 12 && animation().frameCount == 1 && !animation().playing,
+                  "the step it stops on stands on row 3" + say());
+        const uint32_t column = animation().frame;
+        const float time = animation().elapsed;
+        tickWithFlipbooks(layer, registry, {});
+        CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 1 && animation().frame == column &&
+                      animation().elapsed == time,
+                  "and the step after stands facing right again, on row 2" + say());
+        layer.OnDetach(registry);
+    }
+    {
+        // 1-01 (level0): the level's left wall, its face at x 0, 36 units left of
+        // the marker. Walking left the ray first meets it with the body at 24 or
+        // less, and the step after draws row 0.
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level0");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr) return;
+        const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+        CHECK(mageQuad != entt::null);
+        if (mageQuad == entt::null) return;
+        for (int tick = 0; tick < 60; ++tick) tickWithFlipbooks(layer, registry, {});
+        std::vector<double> xs;
+        int pushedOn = -1;
+        bool walkedLeftFirst = true;
+        for (int tick = 0; tick < 120 && pushedOn < 0; ++tick) {
+            xs.push_back(
+                MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position).x);
+            tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kLeft});
+            const auto& animation = registry.get<SpriteAnimationComponent>(mageQuad);
+            if (animation.firstFrame == 0) {
+                pushedOn = tick;
+            } else if (animation.firstFrame != 4) {
+                walkedLeftFirst = false;
+            }
+        }
+        CHECK_MSG(walkedLeftFirst, "walking left on row 1 until the push");
+        CHECK_MSG(pushedOn >= 2, "row 0 once the wall is in reach: step " + std::to_string(pushedOn));
+        if (pushedOn >= 2) {
+            // xs[k] is where step k - 1's physics left the body, which is where
+            // step k - 1 cast its ray; step k draws what that ray found.
+            const double found = xs[static_cast<std::size_t>(pushedOn)];
+            const double before = xs[static_cast<std::size_t>(pushedOn - 1)];
+            CHECK_MSG(found <= 24.0 && before > 23.0,
+                      "found with the body at " + std::to_string(found) + " and not a step before, at " +
+                          std::to_string(before) + ": a reach of 24 to the wall's face at 0");
+        }
+        layer.OnDetach(registry);
+    }
+}
+
+// GetClosestContact meets a sensor as it meets a wall - Box2D's ray asks no
+// fixture whether it is one - and never a body the ray starts inside. A trigger
+// box set in 1-09's open floor (level8): the arm goes out as it comes within
+// reach, back in while the player walks through it, and stays in once past.
+void APlayerPushesATriggerItHasNotEntered() {
+    if (!OriginalArtIsThere("APlayerPushesATriggerItHasNotEntered")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level8");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+    CHECK(mageQuad != entt::null);
+    if (mageQuad == entt::null) return;
+    for (int tick = 0; tick < 60; ++tick) tickWithFlipbooks(layer, registry, {});
+    const auto bodyPx = [&registry, &layer]() {
+        return MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position);
+    };
+    const glm::dvec2 start = bodyPx();
+    // 10 wide, from 30 to 40 ahead of the body, and 60 tall about its centre.
+    const double nearFace = start.x + 30.0;
+    const double farFace = start.x + 40.0;
+    addTriggerBox(registry, glm::dvec2(start.x + 35.0, start.y), glm::dvec2(10.0, 60.0));
+    bool pushedApproaching = false;
+    bool pushedInside = false;
+    bool pushedPast = false;
+    bool sawInside = false;
+    bool sawPast = false;
+    double lastX = start.x;
+    // Stopped well short of 1-09's breakable wall, 164 units right of the marker.
+    for (int tick = 0; tick < 90 && lastX < start.x + 100.0; ++tick) {
+        // What this step draws is what the step before found, where its physics
+        // left the body.
+        const double foundAt = lastX;
+        tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        lastX = bodyPx().x;
+        const bool pushing = registry.get<SpriteAnimationComponent>(mageQuad).firstFrame == 12;
+        if (tick == 0) continue; // the first step draws what standing found
+        if (foundAt < nearFace - 0.5 && foundAt + 23.0 > nearFace) {
+            pushedApproaching = pushedApproaching || pushing;
+        } else if (foundAt > nearFace + 0.5 && foundAt < farFace - 0.5) {
+            sawInside = true;
+            pushedInside = pushedInside || pushing;
+        } else if (foundAt > farFace + 0.5) {
+            sawPast = true;
+            pushedPast = pushedPast || pushing;
+        }
+    }
+    CHECK_MSG(pushedApproaching, "the arm out as the trigger comes within the ray's reach");
+    CHECK_MSG(sawInside && !pushedInside, "and in while the body is inside it, which the ray starts inside");
+    CHECK_MSG(sawPast && !pushedPast, "and in once past it: walked to x " + std::to_string(lastX));
+    layer.OnDetach(registry);
+}
+
+// MainCharacter passes noGravity to SideScrollerCharacter as forceNoImpulse, and
+// update skips applyForces while it is set: pushing stays the constructor's
+// false. On 4-02 (level1c) a trigger box within reach of the suit, and a walk held
+// towards it, draws no arm; the same kind of box and walk on 1-09 does
+// (APlayerPushesATriggerItHasNotEntered).
+void AWeightlessPlayerNeverPushes() {
+    if (!OriginalArtIsThere("AWeightlessPlayerNeverPushes")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1c");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    CHECK(layer.SimLevel()->noGravity);
+    const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+    CHECK(mageQuad != entt::null);
+    if (mageQuad == entt::null) return;
+    const glm::dvec2 at =
+        MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position);
+    addTriggerBox(registry, glm::dvec2(at.x + 15.0, at.y), glm::dvec2(6.0, 80.0));
+    bool pushed = false;
+    for (int tick = 0; tick < 60; ++tick) {
+        tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        const uint32_t first = registry.get<SpriteAnimationComponent>(mageQuad).firstFrame;
+        pushed = pushed || first / 4 != 2;
+    }
+    CHECK_MSG(!pushed, "row 2 on every step, never the arm out");
+    layer.OnDetach(registry);
 }
 
 void Level31DrawsTheBeholder() {
@@ -5754,6 +6032,91 @@ void ADeathDismissesTheHudAndTheLostScreenComesIn() {
     layer.OnDetach(registry);
 }
 
+// MainCharacter on a no_gravity level (art.json character.no_gravity_sprite and
+// no_gravity_motion): dark_mage_in_space.png, lit through dark_mage.ent's own
+// normal map, standing on the column its FrameTimer turns every 280 ms - the one
+// the update before left - with its pivot hovering 1.2 screen pixels on a
+// cosine. level0c sets space_bg and not no_gravity: the normal sheet, on column
+// 0, unhovered.
+void AWeightlessPlayerWearsTheSuit() {
+    if (!OriginalArtIsThere("AWeightlessPlayerWearsTheSuit")) return;
+    MagicPortals::Art::Rules rules;
+    std::string error;
+    CHECK_MSG(MagicPortals::Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", rules, error),
+              error);
+    const MagicPortals::Art::Character& mage = rules.character;
+    const double tickMs = static_cast<double>(MagicPortalsLayer::kTick) * 1000.0;
+    for (const std::string name : {"level1c", "level0c"}) {
+        const bool weightless = name == "level1c";
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), name);
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr) continue;
+        CHECK_MSG(layer.SimLevel()->noGravity == weightless, name + ": no_gravity as the level sets it");
+        const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+        CHECK(mageQuad != entt::null);
+        if (mageQuad == entt::null) continue;
+        {
+            const MaterialComponent& material = registry.get<MaterialComponent>(mageQuad);
+            const char* sheet = weightless ? "/entities/dark_mage_in_space.png" : "/entities/magic_portals_hd.png";
+            CHECK_MSG(EndsWith(material.albedoTexturePath, sheet) &&
+                          EndsWith(material.normalTexturePath, "/entities/normalmaps/normalmap_77.png"),
+                      name + ": " + material.albedoTexturePath + " through " + material.normalTexturePath);
+            const glm::vec3 scale = registry.get<TransformComponent>(mageQuad).scale;
+            const double perMetre = MagicPortals::Units::kPixelsPerMetre;
+            CHECK_MSG(std::fabs(scale.x * perMetre - 40.0) < 1e-3 && std::fabs(scale.y * perMetre - 56.0) < 1e-3,
+                      name + ": a 40 x 56 frame of its sheet");
+        }
+        MagicPortals::Art::NoGravityPlayer mirror;
+        std::array<int, 4> firstTick{-1, -1, -1, -1};
+        int offColumn = 0;
+        double worst = 0.0;
+        double highest = -1.0;
+        double lowest = 1.0;
+        for (int tick = 1; tick <= 140; ++tick) {
+            tickWith(layer, registry, kRest, {}, {});
+            if (!registry.valid(mageQuad)) break;
+            int column = 0;
+            double hover = 0.0;
+            if (weightless) {
+                column = MagicPortals::Art::UpdateNoGravity(mage, mirror, false, tickMs);
+                hover = mage.noGravity.HoverUnits(mirror.angle, layer.ViewPx().y);
+            }
+            const SpriteAnimationComponent& animation = registry.get<SpriteAnimationComponent>(mageQuad);
+            const int shown = static_cast<int>(animation.firstFrame) - mage.rightRow * mage.columns;
+            if (shown != column || animation.frameCount != 1 || animation.playing) ++offColumn;
+            if (shown >= 0 && shown < 4 && firstTick[static_cast<std::size_t>(shown)] < 0) {
+                firstTick[static_cast<std::size_t>(shown)] = tick;
+            }
+            const glm::dvec2 drawn = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(mageQuad).position);
+            const glm::dvec2 body = playerPx(registry, layer);
+            worst = std::max(worst, std::fabs(drawn.x - body.x) + std::fabs(drawn.y - (body.y - 2.0 - hover)));
+            highest = std::max(highest, body.y - 2.0 - drawn.y);
+            lowest = std::min(lowest, body.y - 2.0 - drawn.y);
+        }
+        CHECK_MSG(offColumn == 0, name + ": " + std::to_string(offColumn) + " tick(s) off the timer's column");
+        CHECK_MSG(worst < 2e-3, name + ": the pivot, hovered, on the body: worst " + std::to_string(worst));
+        if (weightless) {
+            CHECK_MSG(firstTick == (std::array<int, 4>{1, 19, 36, 53}),
+                      name + ": columns 0, 1, 2, 3 first drawn on ticks " + std::to_string(firstTick[0]) + ", " +
+                          std::to_string(firstTick[1]) + ", " + std::to_string(firstTick[2]) + ", " +
+                          std::to_string(firstTick[3]));
+            const double amplitude = 1.2 * 256.0 / 720.0;
+            CHECK_MSG(std::fabs(highest - amplitude) < 2e-3 && std::fabs(lowest + amplitude) < 2e-3,
+                      name + ": a hover of 0.4267 units each way over 2.33 s: " + std::to_string(highest) + " / " +
+                          std::to_string(lowest));
+            std::printf("  %s: dark_mage_in_space.png, columns first drawn on ticks 1, %d, %d, %d; hover %+.4f / %+.4f units\n",
+                        name.c_str(), firstTick[1], firstTick[2], firstTick[3], highest, lowest);
+        } else {
+            CHECK_MSG(firstTick == (std::array<int, 4>{1, -1, -1, -1}) && highest < 1e-3 && lowest > -1e-3,
+                      name + ": standing on column 0, unhovered");
+        }
+        layer.OnDetach(registry);
+    }
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     Level31DrawsTheBeholder();
@@ -5769,6 +6132,11 @@ void runTests() {
     APortalAndAShotAreTheOriginals();
     WithoutTheOriginalThePortalIsABox();
     ThePlayerIsTheDarkMage();
+    TheWalkKeepsItsColumnAndItsTime();
+    APlayerWalkedIntoAWallPushesIt();
+    APlayerPushesATriggerItHasNotEntered();
+    AWeightlessPlayerNeverPushes();
+    AWeightlessPlayerWearsTheSuit();
     ABrokenWallTakesItsBoxWithIt();
     ARetryTakesTheThrownStonesAway();
     TheChapterEnds();

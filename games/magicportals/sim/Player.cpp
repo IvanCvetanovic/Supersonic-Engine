@@ -4,6 +4,7 @@
 #include "core/Json.hpp"
 #include "core/PhysicsSystem.hpp"
 #include "sim/LevelBuilder.hpp"
+#include "sim/Shot.hpp"
 #include "sim/Units.hpp"
 
 #include <algorithm>
@@ -93,6 +94,25 @@ bool Grounded(entt::registry& registry, entt::entity player, const Tuning& tunin
     const glm::vec3 centre = registry.get<TransformComponent>(player).position;
     const glm::vec3 feet = centre - glm::vec3(0.0f, Units::ToMetres(tuning.heightPx * 0.5 - 1.0), 0.0f);
     return Supersonic::PhysicsSystem::IsGrounded(registry, feet, Units::ToMetres(4.0), player);
+}
+
+glm::dvec2 PushAim(entt::registry& registry, entt::entity player, const Tuning& tuning, float direction,
+                   double airShare) {
+    const auto* rigid = registry.try_get<RigidBodyComponent>(player);
+    const glm::dvec2 velocityPx = rigid != nullptr ? Units::ToPixels(rigid->velocity) : glm::dvec2(0.0);
+    // applyForces instructions 38-56: the walk across the vertical velocity;
+    // 63-84: where isTouchingGround is not set, the body's own x instead.
+    if (Grounded(registry, player, tuning)) return glm::dvec2(direction * tuning.walkSpeedPx, velocityPx.y);
+    return glm::dvec2(velocityPx.x * airShare, velocityPx.y);
+}
+
+bool Pushing(entt::registry& registry, entt::entity player, const glm::dvec2& aimPx, double reachPx,
+             const glm::dvec2& offsetPx) {
+    // detectPushing instructions 3-6: no x, no push, whatever lies ahead.
+    if (aimPx.x == 0.0) return false;
+    const glm::dvec2 fromPx = Units::ToPixels(registry.get<TransformComponent>(player).position);
+    const glm::dvec2 toPx = fromPx + aimPx / std::sqrt(aimPx.x * aimPx.x + aimPx.y * aimPx.y) * reachPx + offsetPx;
+    return Shot::ClosestContact(registry, fromPx, toPx, player).has_value();
 }
 
 void Steer(entt::registry& registry, entt::entity player, const Tuning& tuning, float direction, float dt) {
