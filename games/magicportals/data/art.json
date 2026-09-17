@@ -135,7 +135,7 @@
   },
 
   "character": {
-    "_source": "the original's dark_mage.ent: Sprite magic_portals_hd.png, blendMode 0, SpriteCut 4 x 4, startFrame 4, PivotAdjust (0, 2)",
+    "_source": "the original's dark_mage.ent: Sprite magic_portals_hd.png, blendMode 0, SpriteCut 4 x 4, PivotAdjust (0, 2); its startFrame 4 is never shown (_initial_direction)",
     "sprite": "magic_portals_hd.png",
     "additive": false,
     "emissive": [1.0, 1.0, 1.0],
@@ -151,7 +151,19 @@
     ],
     "columns": 4,
     "rows": 4,
-    "start_frame": 4,
+    "initial_direction": 2,
+    "_initial_direction": [
+      "DECODED (the remake's out/parity/asbc/all_functions.txt, md5 48fe65ce): GameCharacter::GameCharacter",
+      "(bytes 119493..119839) instructions 39-41 set direction = 2, MOVING_RIGHT. The row a character",
+      "stands on IS its direction: SideScrollerCharacter::updateFrame (bytes 130241..130614) instructions",
+      "88-102, every update with no walk, SetFrame(idleColumn, findFinalDirection(direction)), which is",
+      "row 2 column 0, frame 8, facing right. dark_mage.ent's startFrame 4 is not what shows:",
+      "SideScrollerCharacter::SideScrollerCharacter (bytes 152667..153096) instructions 64-68 SetFrame(4),",
+      "replaced by the first update, and Ethanon's .ent reader has no startFrame read at all",
+      "(ETHEntityProperties.cpp reads type, static, shape, blendMode at :228-236; the clone names",
+      "startFrame only in its editor). MEASURED: the original stands on frame 8 in all 54 lit levels",
+      "where the player is located (the remake's visuals/briefs/systems_3_4.md 3a)."
+    ],
     "pivot_px": [0, 2],
     "rows_by_direction": {
       "_note": [
@@ -160,20 +172,37 @@
         "(the remake's tools/asbc), and Ethanon's own sample picks a character's row by its",
         "direction and its column by a frame timer (Sample-project/main.angelscript:102). The",
         "sheet's row 1 faces left and row 2 right. The owner confirmed on 11 September that the",
-        "character turns as it walks; not which rows do it. Rows 0 and 3, arm out, are not",
-        "used: the character's `pushing` suggests them, and nothing says when."
+        "character turns as it walks; not which rows do it. DECODED since: updateFrame calls",
+        "SetFrame(column, findFinalDirection(direction)), and no FlipX or SetFlipX is called anywhere",
+        "in the bytecode, so walking left is row 1 unflipped. Rows 0 and 3, arm out, are the pushing",
+        "rows (findFinalDirection, bytes 131207..131341), not built here."
       ],
       "left": 1,
       "right": 2
     },
     "animation": {
-      "_note": [
-        "How fast it walks through its four columns (the original's frameStride), and which",
-        "column it stands on (idleColumn). Neither value is decoded. The start frame, 4, is",
-        "column 0 of the left row, the only anchor for the second."
+      "_source": [
+        "DECODED: SideScrollerCharacter::SideScrollerCharacter instructions 9-11 set frameStride = 90",
+        "(ms), and instructions 80-82 idleColumn = 0. updateFrame instructions 63-86, every update",
+        "with a walk, SetFrame(timer.set(0, 3, frameStride, true), findFinalDirection(direction)); with",
+        "none (88-102), SetFrame(idleColumn, ...) and the timer is not called. FrameTimer::set (bytes",
+        "23254..23650) adds the frame's elapsed ms (instructions 6-11), resets to `first` with no time",
+        "only when first or last differ from the last call's (13-44; the first walk's, against the",
+        "constructor's 0 and 0, bytes 22535..22652), else steps ONE column once the time reaches the",
+        "stride and takes the stride off (45-76). first and last are always 0 and 3, so the column",
+        "and its time carry across a stop and a turn, and on a level with gravity a stop adds no time.",
+        "Not called while paused or finished: MainCharacter::update (bytes 128578..128850) 6-21. The",
+        "loading screen's character keeps the same 90 ms (ui.json character.stride_ms).",
+        "NOT BUILT (the entity-visuals order's 1.2, the zero-g player): on the 18 no_gravity levels",
+        "MainCharacter::update calls MainCharacter::linearMotion (bytes 132139..132833) after updateFrame",
+        "(instructions 57, 66), and it calls the same timer every update, walking or not, as",
+        "set(0, 3, 280, true) (163-171) and writes the column into idleColumn (172-174): there the",
+        "standing column turns every 280 ms, and a walking update adds its time to the timer twice",
+        "(updateFrame 63-86, then linearMotion 163-171; a standing update adds it once).",
+        "MEASURED: 0.369 s a cycle of four, 92 ms a column, over 7 cycles of rec11 walking right",
+        "(the remake's specs/visuals/scripted.md section 1.4)."
       ],
-      "_guess": true,
-      "frames_per_second": 10.0,
+      "stride_ms": 90,
       "idle_column": 0
     }
   },

@@ -373,10 +373,17 @@ void ThePortalAndTheShotAreTheirEnts() {
     const Art::Character& mage = rules.character;
     CHECK_MSG(mage.sprite == "magic_portals_hd.png" && !mage.additive && mage.columns == 4 && mage.rows == 4,
               "dark_mage.ent: its sheet, cut 4 x 4, mixed");
-    CHECK_MSG(mage.startFrame == 4 && mage.pivotXPx == 0.0 && mage.pivotYPx == 2.0,
-              "starting on frame 4, its pivot 2 px below the middle");
+    CHECK_MSG(mage.pivotXPx == 0.0 && mage.pivotYPx == 2.0, "its pivot 2 px below the middle");
     CHECK_MSG(mage.leftRow == 1 && mage.rightRow == 2, "the rows the decoded DIRECTION enum gives left and right");
-    CHECK_MSG(mage.startFrame / mage.columns == mage.leftRow, "and the start frame stands on the left row");
+    // GameCharacter's constructor sets direction 2, and every update with no walk
+    // stands it on SetFrame(idleColumn, direction): frame 8, facing right. The
+    // .ent's startFrame 4 is set once and replaced, so the port does not carry it.
+    CHECK_MSG(mage.initialDirection == 2 && mage.initialDirection == mage.rightRow,
+              "made facing right: GameCharacter's direction 2 is the right row");
+    CHECK_MSG(mage.idleColumn == 0 && mage.initialDirection * mage.columns + mage.idleColumn == 8,
+              "standing on idleColumn 0, so a level starts on frame 8");
+    CHECK_MSG(mage.strideMs == 90.0 && std::fabs(mage.framesPerSecond - 1000.0 / 90.0) < 1e-9,
+              "a column every 90 ms, SideScrollerCharacter's frameStride");
 
     // Chapter 1's boss and its spikes (step 11b): the .ent files' facts, and the
     // pulse bounce() gives it in each thing it does, decoded from its script.
@@ -498,15 +505,45 @@ void ASheetThatDoesNotSayHowFastIsRefused() {
                                                  "static": true, "apply_light": true},
                                  "character": {"sprite": "c.png", "additive": false, "columns": 4, "rows": 4,
                                                "emissive": [1, 1, 1], "static": false, "apply_light": true,
-                                               "start_frame": 4, "pivot_px": [0, 2],
+                                               "initial_direction": 2, "pivot_px": [0, 2],
                                                "rows_by_direction": {"left": 1, "right": 2},
-                                               "animation": {"frames_per_second": 10, "idle_column": 0}}})";
+                                               "animation": {"stride_ms": 90, "idle_column": 0}}})";
     Write(path, std::vector<unsigned char>(text.begin(), text.end()));
     Art::Rules rules;
     std::string error;
     const bool ok = Art::LoadRules(path.string(), rules, error);
     CHECK(!ok);
     CHECK_MSG(error.find("frames_per_second") != std::string::npos, error);
+}
+
+// The player's walk is decoded, so none of it is defaulted: without the way it
+// is made facing, the sheet starts on a frame nobody read, and without its
+// stride it walks at a rate nobody decoded.
+void APlayerWithoutItsWalkIsRefused() {
+    std::ifstream file(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", std::ios::binary);
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string real = buffer.str();
+    const auto refused = [&real](const std::string& from, const std::string& to, const std::string& name) {
+        std::string text = real;
+        const std::size_t at = text.find(from);
+        CHECK_MSG(at != std::string::npos && text.find(from, at + 1) == std::string::npos, "once: " + from);
+        if (at == std::string::npos) return;
+        text.replace(at, from.size(), to);
+        const std::filesystem::path path = Scratch() / ("art-walk-" + name + ".json");
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Art::Rules rules;
+        std::string error;
+        const bool ok = Art::LoadRules(path.string(), rules, error);
+        CHECK_MSG(!ok, "refused: " + name);
+        CHECK_MSG(error.find("character needs initial_direction") != std::string::npos, name + ": " + error);
+    };
+    refused("\"initial_direction\": 2,", "", "no initial direction");
+    refused("\"initial_direction\": 2,", "\"initial_direction\": 4,", "a direction below the sheet");
+    refused("\"initial_direction\": 2,", "\"initial_direction\": 1.5,", "a direction between rows");
+    refused("\"stride_ms\": 90,", "", "no stride");
+    refused("\"stride_ms\": 90,", "\"stride_ms\": 0,", "a stride of 0");
+    refused("\"idle_column\": 0", "\"idle_column\": 4", "an idle column past the sheet");
 }
 
 void APictureWithoutItsEmissiveIsRefused() {
@@ -1423,6 +1460,7 @@ int main() {
     AStaticPortalWithoutItsScriptIsRefused();
     APulseGoesThereAndBack();
     ASheetThatDoesNotSayHowFastIsRefused();
+    APlayerWithoutItsWalkIsRefused();
     APictureWithoutItsEmissiveIsRefused();
     APictureWithoutItsLightingIsRefused();
     AParticleStartsAtItsEntitysPosition();

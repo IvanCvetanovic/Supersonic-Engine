@@ -37,6 +37,7 @@
 #include "core/ScreenOverlay.hpp"
 #include "core/TransformSystem.hpp"
 #include "core/SimulationClock.hpp"
+#include "core/SpriteAnimationSystem.hpp"
 #include "core/ViewportInfo.hpp"
 
 #include "sim/Art.hpp"
@@ -1041,11 +1042,12 @@ void WithoutTheOriginalThePortalIsABox() {
 }
 
 void ThePlayerIsTheDarkMage() {
-    // dark_mage.ent's sheet. A level starts on its start frame, standing. It
-    // walks through a row of four while a direction is held, on the row that
-    // direction reads, turns when it turns, and stands on the idle column of
-    // the way it last walked. Which row and column are art.json's; only the
-    // start frame is pinned here.
+    // dark_mage.ent's sheet. A level starts standing on the idle column of the
+    // way GameCharacter is made facing: frame 8, the right row. It walks through
+    // a row of four while a direction is held, on the row that direction reads,
+    // turns when it turns, and stands on the idle column of the way it last
+    // walked. Which row and column are art.json's; the start frame is pinned
+    // here.
     if (!OriginalArtIsThere("ThePlayerIsTheDarkMage")) return;
     MagicPortals::Art::Rules rules;
     std::string error;
@@ -1074,8 +1076,10 @@ void ThePlayerIsTheDarkMage() {
                   material.blend == MaterialComponent::BlendMode::Premultiplied && animation().columns == 4 &&
                   animation().rows == 4,
               "dark_mage.ent's sheet, cut 4 x 4, mixed (premultiplied)");
-    CHECK_MSG(animation().firstFrame == 4 && animation().frameCount == 1 && !animation().playing,
-              "standing on the start frame");
+    CHECK_MSG(animation().firstFrame == 8 && animation().firstFrame == rowStart(mage.rightRow) &&
+                  animation().frameCount == 1 && !animation().playing && animation().frame == 0 &&
+                  animation().elapsed == 0.0f,
+              "standing on frame 8, facing right, its walk not begun");
     CHECK_MSG(Shown(registry, "Magic Portals Player") == 0, "and its box stands behind it");
     const glm::dvec2 drawn = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(mageQuad).position);
     const glm::dvec2 body = playerPx(registry, layer);
@@ -1095,6 +1099,85 @@ void ThePlayerIsTheDarkMage() {
               "and turned to walk left");
     layer.OnDetach(registry);
     CHECK_EQ(Tagged(registry, "Magic Portals Player Sprite"), 0);
+}
+
+// One tick as SupersonicApp runs it when a flipbook matters: the physics step,
+// then the sprite flipbooks, then the layer ("Before the layers",
+// SupersonicApp.cpp), with `down` held for the tick.
+void tickWithFlipbooks(MagicPortalsLayer& layer, entt::registry& registry, std::vector<std::string> down) {
+    PhysicsSystem::Update(registry, MagicPortalsLayer::kTick);
+    SpriteAnimationSystem::Update(registry, MagicPortalsLayer::kTick);
+    Input::TickInput input;
+    input.mousePosition = kRest;
+    input.down = std::move(down);
+    Input::BeginReplayedTick(input);
+    layer.OnFixedUpdate(registry, MagicPortalsLayer::kTick);
+    Input::EndReplayedTick();
+}
+
+void TheWalkKeepsItsColumnAndItsTime() {
+    // SideScrollerCharacter::updateFrame steps its FrameTimer only on the updates
+    // it walks, and always as set(0, 3, 90, true): the timer resets on the first
+    // walk alone, and the column and its time carry across a stop and a turn, a
+    // column every 90 ms (art.json character.animation). Ticked as the app ticks,
+    // the flipbook before the layer.
+    if (!OriginalArtIsThere("TheWalkKeepsItsColumnAndItsTime")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level8");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    entt::entity mageQuad = entt::null;
+    for (auto [entity, tag] : registry.view<TagComponent>().each()) {
+        if (tag.tag == "Magic Portals Player Sprite") mageQuad = entity;
+    }
+    CHECK(mageQuad != entt::null);
+    if (mageQuad == entt::null) return;
+    const auto run = [&](const char* key, int ticks) {
+        for (int tick = 0; tick < ticks; ++tick) {
+            tickWithFlipbooks(layer, registry, key ? std::vector<std::string>{key} : std::vector<std::string>{});
+        }
+        CHECK_MSG(registry.valid(mageQuad), "the player is still there");
+        return registry.valid(mageQuad);
+    };
+    const auto animation = [&registry, mageQuad]() -> const SpriteAnimationComponent& {
+        return registry.get<SpriteAnimationComponent>(mageQuad);
+    };
+
+    // The first walking tick starts on column 0 with no time; the six after it
+    // add 100 ms, one stride and 10 ms over.
+    if (!run(MagicPortalsLayer::kRight, 7)) return;
+    CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 4 && animation().playing &&
+                  animation().frame == 1,
+              "walking right, on column 1 after 100 ms: " + std::to_string(animation().frame));
+    // The tick it stops on, the flipbook has already taken its tick (the app's
+    // order): one tick of time the original does not add, which the tick the
+    // walk resumes on does not add either.
+    if (!run(nullptr, 1)) return;
+    const uint32_t column = animation().frame;
+    const float time = animation().elapsed;
+    CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 1 && !animation().playing && column == 1,
+              "standing on the idle column, the walk's column kept");
+    if (!run(nullptr, 30)) return;
+    CHECK_MSG(animation().frame == column && animation().elapsed == time, "and half a second standing adds no time");
+    if (!run(MagicPortalsLayer::kRight, 1)) return;
+    CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 4 && animation().frame == column &&
+                  animation().elapsed == time,
+              "walking again from the column it stopped on, not from column 0");
+    if (!run(MagicPortalsLayer::kLeft, 1)) return;
+    CHECK_MSG(animation().firstFrame == 4 && animation().frameCount == 4 && animation().frame == column,
+              "turned left on the same column");
+
+    // Eight ticks of walking time so far (6 + the stop's 1 + the turn's 1).
+    // Back and forth for 55 more, turning once: 63 ticks, 1050 ms, eleven 90 ms
+    // columns and 60 ms over, wherever it turned.
+    if (!run(MagicPortalsLayer::kRight, 28) || !run(MagicPortalsLayer::kLeft, 27)) return;
+    CHECK_MSG(animation().firstFrame == 4 && animation().frame == 3 &&
+                  std::fabs(animation().elapsed - 0.060f) < 0.001f,
+              "1050 ms of walking is 11 columns of 90 ms (column 3) and 60 ms: column " +
+                  std::to_string(animation().frame) + ", " + std::to_string(animation().elapsed) + " s");
+    layer.OnDetach(registry);
 }
 
 void Level31DrawsTheBeholder() {
@@ -5031,6 +5114,7 @@ void runTests() {
     APortalAndAShotAreTheOriginals();
     WithoutTheOriginalThePortalIsABox();
     ThePlayerIsTheDarkMage();
+    TheWalkKeepsItsColumnAndItsTime();
     ABrokenWallTakesItsBoxWithIt();
     ARetryTakesTheThrownStonesAway();
     TheChapterEnds();

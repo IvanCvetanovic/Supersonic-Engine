@@ -2127,11 +2127,12 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
     }
     buildSprites(registry);
 
-    // The player, as dark_mage.ent draws it, facing as its start frame faces
-    // (Art.hpp): each level starts on it.
+    // The player, as dark_mage.ent draws it, standing on the idle column of the
+    // way GameCharacter faces it when it is made (Art.hpp): each level starts
+    // there, and its walk's column and time start from nothing.
     const Art::Character& mage = m_artRules.character;
     const std::string sheet = originalImage(mage.sprite);
-    m_facingRight = mage.startFrame / mage.columns == mage.rightRow;
+    m_facingRight = mage.initialDirection == mage.rightRow;
     m_direction = 0.0f;
     if (m_artReady && imageSizePx(sheet) != glm::dvec2(0.0)) {
         m_playerQuad = makeSprite(registry, "Magic Portals Player Sprite", sheet, mage.additive);
@@ -2140,7 +2141,7 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
         animation.columns = static_cast<uint32_t>(mage.columns);
         animation.rows = static_cast<uint32_t>(mage.rows);
         animation.framesPerSecond = static_cast<float>(mage.framesPerSecond);
-        animation.firstFrame = static_cast<uint32_t>(mage.startFrame);
+        animation.firstFrame = static_cast<uint32_t>(mage.initialDirection * mage.columns + mage.idleColumn);
         animation.frameCount = 1;
         animation.playing = false;
     }
@@ -2597,13 +2598,19 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             const bool walking = m_direction != 0.0f;
             const uint32_t first = static_cast<uint32_t>(row * mage.columns + (walking ? 0 : mage.idleColumn));
             const uint32_t count = walking ? static_cast<uint32_t>(mage.columns) : 1u;
+            // The walk's column and its time are NOT reset by a stop or a turn:
+            // the original's FrameTimer is always set(0, 3), so it resets only
+            // on the first walk, which the frame and time a level starts with
+            // already are. Standing, the flipbook is a still - the cell is
+            // firstFrame + frame % 1 - and SpriteAnimationSystem::Advance leaves a
+            // stopped one's frame and time alone, as updateFrame adds no time to a
+            // timer it does not call. The app advances it before this sync, so
+            // the tick a stop begins adds one tick the original does not and the
+            // tick a walk resumes adds none: the time at the end of that tick is
+            // the original's, and the stop between shows the idle column.
             auto& animation = registry.get<SpriteAnimationComponent>(m_playerQuad);
-            if (animation.firstFrame != first || animation.frameCount != count) {
-                animation.firstFrame = first;
-                animation.frameCount = count;
-                animation.frame = 0;
-                animation.elapsed = 0.0f;
-            }
+            animation.firstFrame = first;
+            animation.frameCount = count;
             animation.playing = walking;
             const glm::dvec2 cellPx =
                 imageSizePx(originalImage(mage.sprite)) / glm::dvec2(mage.columns, mage.rows);

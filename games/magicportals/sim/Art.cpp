@@ -204,28 +204,35 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     if (!ReadPicture(root["portal"], "portal", read.portal, why) ||
         !ReadPicture(root["shot"], "shot", read.shot, why) ||
         !ReadPicture(root["torch_light"], "torch_light", read.torchLight, why, false) ||
-        !ReadPicture(root["character"], "character", static_cast<Picture&>(read.character), why)) {
+        // The player's rate is its stride, read with the rest of its walk below.
+        !ReadPicture(root["character"], "character", static_cast<Picture&>(read.character), why, false)) {
         error = path + ": " + why;
         return false;
     }
-    // What the player's sheet adds: where it starts, where it stands, which row
-    // walks which way, and which column it stands on.
+    // What the player's sheet adds: which way it faces when it is made, where it
+    // stands, which row walks which way, which column it stands on, and a
+    // column's time. None has a default: a start facing or a stride nobody
+    // decoded is the picture the footage refused.
     const Json::Value& character = root["character"];
     Character& mage = read.character;
     const Json::Value& pivot = character["pivot_px"];
     const Json::Value& rowsBy = character["rows_by_direction"];
-    if (!character.Has("start_frame") || !WholeBelow(character["start_frame"], mage.Frames(), mage.startFrame) ||
-        !pivot.IsArray() || pivot.AsArray().size() != 2 || !pivot.AsArray()[0].IsNumber() ||
-        !pivot.AsArray()[1].IsNumber() || !rowsBy.IsObject() || !rowsBy.Has("left") ||
-        !WholeBelow(rowsBy["left"], mage.rows, mage.leftRow) || !rowsBy.Has("right") ||
-        !WholeBelow(rowsBy["right"], mage.rows, mage.rightRow) || !character["animation"].Has("idle_column") ||
-        !WholeBelow(character["animation"]["idle_column"], mage.columns, mage.idleColumn)) {
-        error = path + ": character needs start_frame, pivot_px, rows_by_direction.left and .right, and "
-                       "animation.idle_column, each inside its sheet";
+    const Json::Value& walk = character["animation"];
+    if (!character.Has("initial_direction") ||
+        !WholeBelow(character["initial_direction"], mage.rows, mage.initialDirection) || !pivot.IsArray() ||
+        pivot.AsArray().size() != 2 || !pivot.AsArray()[0].IsNumber() || !pivot.AsArray()[1].IsNumber() ||
+        !rowsBy.IsObject() || !rowsBy.Has("left") || !WholeBelow(rowsBy["left"], mage.rows, mage.leftRow) ||
+        !rowsBy.Has("right") || !WholeBelow(rowsBy["right"], mage.rows, mage.rightRow) || !walk.IsObject() ||
+        !walk.Has("idle_column") || !WholeBelow(walk["idle_column"], mage.columns, mage.idleColumn) ||
+        !Finite(walk["stride_ms"]) || !(walk["stride_ms"].AsNumber() > 0.0)) {
+        error = path + ": character needs initial_direction, pivot_px, rows_by_direction.left and .right and "
+                       "animation.idle_column, each inside its sheet, and animation.stride_ms above 0";
         return false;
     }
     mage.pivotXPx = pivot.AsArray()[0].AsNumber();
     mage.pivotYPx = pivot.AsArray()[1].AsNumber();
+    mage.strideMs = walk["stride_ms"].AsNumber();
+    mage.framesPerSecond = 1000.0 / mage.strideMs;
 
     // Chapter 1's boss and its spikes, whose frames are chosen, not played.
     if (!root.Has("beholder") || !root.Has("spike")) {

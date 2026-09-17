@@ -7,8 +7,9 @@
 // boss and its spikes - the original draws with its own entities, and art.json
 // says which image each of those .ent files names, whether it is added, and how
 // its sheet is cut. Those are the .ent's facts, and test_mp_sprites pins them.
-// How fast a sheet plays is not decoded, so it is carried as a _guess and
-// pinned by nothing.
+// How fast a sheet plays is mostly not decoded, so it is carried as a _guess and
+// pinned by nothing - except the player's walk, whose stride and standing
+// frame are decoded from its script (Character).
 //
 // Each also carries its .ent's <EmissiveColor>: the original draws every sprite
 // at min(1, ambient + emissive) of its colour (Lighting::AmbientTerm), what no
@@ -51,15 +52,20 @@ struct Picture {
     int Frames() const { return columns * rows; }
 };
 
-// The player, as dark_mage.ent draws it: a sheet whose rows are directions and
-// whose columns are a walk.
+// The player, as dark_mage.ent draws it and its script frames it: a sheet whose
+// rows are directions and whose columns are a walk. The row it shows IS its
+// direction, and it starts facing initialDirection - not on the .ent's
+// startFrame, which its constructor sets and its first update replaces. The
+// column is a FrameTimer over the whole row, stepped a stride at a time only
+// on the updates it walks, so it carries across a stop and a turn (art.json).
 struct Character : Picture {
-    int startFrame = 0;    // the .ent's startFrame
-    double pivotXPx = 0.0; // its PivotAdjust: the point of the image, from its
-    double pivotYPx = 0.0; // centre, that stands on the entity
-    int leftRow = 0;       // derived from the decoded DIRECTION enum, not testimony
+    double pivotXPx = 0.0;     // its PivotAdjust: the point of the image, from its
+    double pivotYPx = 0.0;     // centre, that stands on the entity
+    int initialDirection = 0;  // GameCharacter's direction when it is made: a row
+    int leftRow = 0;           // derived from the decoded DIRECTION enum, not testimony
     int rightRow = 0;
-    int idleColumn = 0;    // _guess
+    int idleColumn = 0;        // the column it stands on
+    double strideMs = 0.0;     // frameStride: a column's time; framesPerSecond is 1000 / strideMs
 };
 
 // How a picture pulses: from one scale to the other and back, each way a
