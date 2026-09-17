@@ -93,7 +93,8 @@
       "gain and offset, a grade; red_sky is about 1.047x (NCC 0.9751 against 0.9080) and 9.4",
       "apart after that fit; icy_sky and sky_purple are 1:1 (NCC 1.0000 and 0.9970). That",
       "picture tier, content scale and grade, is the visuals plan's System 6, not this step's",
-      "placement."
+      "placement. Step 66 draws it: a sky's picture is the tier file tiers.json finds, at its",
+      "units, so the four fullhd skies are 512 u wide and still scaled 1 (sim/Sprites)."
     ],
     "_measured": [
       "Where the ORIGINAL draws its sky, on its own library frames (the remake's",

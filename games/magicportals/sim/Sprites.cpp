@@ -159,7 +159,8 @@ glm::dvec2 CentrePx(const Sprite& sprite) {
     return sprite.atPx + glm::dvec2(o.x * c - o.y * s, o.x * s + o.y * c);
 }
 
-bool Find(const Tscn::Scene& scene, const std::string& resRoot, std::vector<Sprite>& out, std::string& error) {
+bool Find(const Tscn::Scene& scene, const std::string& resRoot, const Tiers::Rules& tiers, std::vector<Sprite>& out,
+          std::string& error) {
     out.clear();
     std::vector<Sprite> found;
     for (const Tscn::Node& node : scene.nodes) {
@@ -183,15 +184,24 @@ bool Find(const Tscn::Scene& scene, const std::string& resRoot, std::vector<Spri
             error = At(node) + owner->name + "'s texture is not a res:// image";
             return false;
         }
-        sprite.texture = resRoot + "/" + image->path.substr(kRes.size());
-        int width = 0;
-        int height = 0;
+        // The file the original's loader draws for the name (ChooseSpriteVersion),
+        // sized as its density sizes it: whole units, truncated after the divide.
+        const Tiers::Resolved drawn = Tiers::Resolve(tiers, resRoot + "/" + image->path.substr(kRes.size()));
+        sprite.texture = drawn.path;
+        sprite.tier = drawn.tier;
+        sprite.density = drawn.density;
         std::string why;
-        if (!ImageSize(sprite.texture, width, height, why)) {
+        if (!ImageSize(sprite.texture, sprite.texels.x, sprite.texels.y, why)) {
             error = At(node) + owner->name + "'s texture: " + why;
             return false;
         }
-        sprite.sizePx = glm::dvec2(width, height);
+        const glm::ivec2 units = Tiers::Units(sprite.texels, sprite.density);
+        if (units.x <= 0 || units.y <= 0) {
+            error = At(node) + owner->name + "'s texture: " + sprite.texture + " is less than one unit at density " +
+                    std::to_string(sprite.density);
+            return false;
+        }
+        sprite.sizePx = glm::dvec2(units);
 
         if (const Tscn::Value* offset = node.Find("offset"); offset != nullptr) {
             if (offset->kind != Tscn::Value::Kind::Vector2) {

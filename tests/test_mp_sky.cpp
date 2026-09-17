@@ -17,6 +17,10 @@
 //   space        a level carrying space_bg at all builds no StaticSky.
 //   the census   over the 128 converted levels: 95 one sky, 19 space, 13 neither,
 //                one satellite alone; no sky scrolls; every sky's scale is 1.
+//   the tier     a sky is drawn from the file the original draws (tiers.json,
+//                step 66): the fullhd sky.png, icy_sky.png, red_sky.png and
+//                sky_purple.png are 1024 x 512 over 455 x 256 1x files, so 28
+//                skies grow to 512 u wide, and stay one screen tall and centred.
 //
 // The arithmetic is pure and runs anywhere. The census reads the converted levels
 // and their art from outside this repository, and is skipped without them, never
@@ -27,10 +31,12 @@
 #include "sim/Roles.hpp"
 #include "sim/Sky.hpp"
 #include "sim/Sprites.hpp"
+#include "sim/Tiers.hpp"
 #include "sim/Tscn.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -55,6 +61,13 @@ bool Near(const glm::dvec2& a, const glm::dvec2& b, double eps = 1e-9) {
 
 std::string Px(const glm::dvec2& p) {
     return "(" + std::to_string(p.x) + ", " + std::to_string(p.y) + ")";
+}
+
+Tiers::Rules TheTiers() {
+    Tiers::Rules rules;
+    std::string error;
+    CHECK_MSG(Tiers::LoadRules(kPortData + "/tiers.json", rules, error), error);
+    return rules;
 }
 
 Sky::Rules TheRules() {
@@ -375,11 +388,78 @@ void ALoneScrollingSkyIsBothEnds() {
               "though the first took its pivot while it was the one scaled");
 }
 
+// A FULLHD SKY (step 66): the level names sky.png, 455 x 256; the original draws
+// fullhd/sky.png, 1024 x 512 at density 2, so 512 x 256 units. scaleSky's scale
+// is still the view's height over the picture's, 1, and the sky is 512 u wide and
+// drawn at the view's centre wherever the camera is: the wider picture changes
+// its width and nothing about where it stands.
+void AFullhdSkyIsWiderAndStillCentred() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "supersonic-test-mp-sky";
+    std::error_code ec;
+    std::filesystem::create_directories(dir / "assets" / "entities" / "fullhd", ec);
+    const auto png = [](const std::filesystem::path& path, uint32_t width, uint32_t height) {
+        std::vector<unsigned char> bytes = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 'I', 'H', 'D', 'R'};
+        for (const uint32_t v : {width, height}) {
+            for (int shift = 24; shift >= 0; shift -= 8) bytes.push_back(static_cast<unsigned char>(v >> shift));
+        }
+        bytes.push_back(8);
+        bytes.push_back(6);
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    };
+    png(dir / "assets" / "entities" / "sky.png", 455, 256);
+    png(dir / "assets" / "entities" / "fullhd" / "sky.png", 1024, 512);
+
+    Tscn::Scene scene;
+    std::string error;
+    CHECK_MSG(Tscn::Parse(R"([gd_scene format=3]
+
+[ext_resource type="Texture2D" path="res://assets/entities/sky.png" id="tex_0"]
+
+[node name="level" type="Node2D"]
+
+[node name="sky_629" type="Node2D" parent="."]
+position = Vector2(227.5, 128)
+z_index = -100
+metadata/entity_name = "sky"
+
+[node name="Sprite" type="Sprite2D" parent="sky_629"]
+texture = ExtResource("tex_0")
+)",
+                          scene, error),
+              error);
+    const Sky::Rules rules = TheRules();
+    for (const bool withTiers : {true, false}) {
+        std::vector<Sprites::Sprite> sprites;
+        const bool found = Sprites::Find(scene, dir.string(), withTiers ? TheTiers() : Tiers::Rules{}, sprites, error);
+        CHECK_MSG(found && sprites.size() == 1, error);
+        if (!found || sprites.size() != 1) return;
+        Sky::Controller sky;
+        CHECK_MSG(Sky::Build(rules, scene, sprites, kViewHeight, sky, error), error);
+        if (sky.skies.size() != 1) {
+            CHECK(false);
+            return;
+        }
+        const double width = withTiers ? 512.0 : 455.0;
+        CHECK_MSG(sky.skies[0].imagePx == glm::dvec2(width, 256.0) && sky.skies[0].scale == 1.0 &&
+                      sky.widthPx == width && Sky::DrawnSizePx(sky, 0) == glm::dvec2(width, 256.0),
+                  std::string(withTiers ? "the fullhd sky" : "the 1x sky") + " is " + std::to_string(width) +
+                      " x 256 u at scale 1, drawn " + Px(Sky::DrawnSizePx(sky, 0)));
+        for (const glm::dvec2& camera : {kView * 0.5, glm::dvec2(1000.0, 300.0), glm::dvec2(-40.0, 612.5)}) {
+            CHECK_MSG(Near(Sky::DrawnCentrePx(rules, sky, 0, camera, kView), camera),
+                      "and its centre is the view's: " + Px(Sky::DrawnCentrePx(rules, sky, 0, camera, kView)) +
+                          " for " + Px(camera));
+        }
+    }
+}
+
 // ---- the converted levels ---------------------------------------------------
 
 void EveryLevelsSky() {
     const Sky::Rules rules = TheRules();
+    const Tiers::Rules tiers = TheTiers();
     int one = 0, space = 0, neither = 0, satelliteAlone = 0, levels = 0, named = 0, namedEnt = 0;
+    int wide = 0, narrow = 0, otherWidth = 0; // skies of 512 u (fullhd), 455 u (1x), and any other
     int scrolling = 0, scaledOtherThanOne = 0, notTheViewsCentre = 0, scrollingSkyKey = 0;
     std::string firstWrong;
     std::error_code ec;
@@ -390,7 +470,7 @@ void EveryLevelsSky() {
         Tscn::Scene scene;
         std::vector<Sprites::Sprite> sprites;
         std::string error;
-        if (!Tscn::Load(entry.path().string(), scene, error) || !Sprites::Find(scene, kLevels + "/..", sprites, error)) {
+        if (!Tscn::Load(entry.path().string(), scene, error) || !Sprites::Find(scene, kLevels + "/..", tiers, sprites, error)) {
             CHECK_MSG(false, level + ": " + error);
             continue;
         }
@@ -420,6 +500,13 @@ void EveryLevelsSky() {
         if (sky.scroll) ++scrolling;
         for (std::size_t t = 0; t < sky.skies.size(); ++t) {
             if (sky.skies[t].scale != 1.0) ++scaledOtherThanOne;
+            if (sky.skies[t].imagePx == glm::dvec2(512.0, 256.0)) {
+                ++wide;
+            } else if (sky.skies[t].imagePx == glm::dvec2(455.0, 256.0)) {
+                ++narrow;
+            } else {
+                ++otherWidth;
+            }
             const glm::dvec2 camera(500.0, 300.0);
             if (!Near(Sky::DrawnCentrePx(rules, sky, t, camera, kView), camera)) {
                 ++notTheViewsCentre;
@@ -441,6 +528,15 @@ void EveryLevelsSky() {
     CHECK_EQ(scrollingSkyKey, 37);
     CHECK_EQ(scrolling, 0);
     CHECK_EQ(scaledOtherThanOne, 0);
+    // Drawn from its tier. 51 skies are 512 u wide: the 28 whose 455 x 256 file
+    // has a 1024 x 512 fullhd copy (sky 3, red_sky 7, icy_sky 14, sky_purple 4),
+    // wider than their 1x files, and the 23 satellite_sky.png, whose 512 x 256
+    // file is already that wide and whose fullhd copy is exactly twice it. The
+    // other 44 are dark_sky.png, with no tier file, 455 u.
+    std::printf("  skies by drawn width: %d at 512 u, %d at 455 u, %d other\n", wide, narrow, otherWidth);
+    CHECK_EQ(wide, 51);
+    CHECK_EQ(narrow, 44);
+    CHECK_EQ(otherWidth, 0);
     CHECK_MSG(notTheViewsCentre == 0, "every sky at the view's centre, first wrong " + firstWrong);
 }
 
@@ -457,6 +553,7 @@ int main() {
     AStillStripSitsSideBySide();
     AScrollingStripAndItsEnds();
     ALoneScrollingSkyIsBothEnds();
+    AFullhdSkyIsWiderAndStillCentred();
 
     std::error_code ec;
     if (!std::filesystem::is_directory(kLevels, ec)) {

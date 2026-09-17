@@ -38,7 +38,8 @@
 // at c times that. An even split (the engine's SpriteAnimationComponent,
 // CellTransform) samples column 3 of the hd minion.png 4.5 texels off.
 //
-// Nothing draws through this yet. Level art (2.2), the port's own art and particles
+// Level art draws through it since step 66 (00_order 2.2): Sprites::Find resolves
+// every image a level names and sizes it in units. The port's own art and particles
 // (2.3) and the sheets cut unevenly (5.1, 12.2) take it in the steps that follow;
 // the order and its decisions are the planning doc's step 61.
 //
@@ -80,7 +81,8 @@ struct Resolved {
 // name with neither is looked for in <folder>/<name> from the working directory,
 // where the original finds no tier: GetFileDirectory returns the whole name when
 // it has no separator (gs2d/src/Platform/Platform.cpp:40-50), so it tries
-// <name><folder>/<name>. Nothing calls this yet, and the planned callers pass a path.
+// <name><folder>/<name>. Its callers pass a path: Sprites::Find passes res:// resolved
+// against the levels' parent, always with '/'.
 Resolved Resolve(const Rules& rules, const std::string& named);
 
 // An uncut image's size in units: int(texels / density), per axis. The float

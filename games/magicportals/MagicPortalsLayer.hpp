@@ -40,6 +40,7 @@
 #include "sim/Sky.hpp"
 #include "sim/Sounds.hpp"
 #include "sim/Sprites.hpp"
+#include "sim/Tiers.hpp"
 
 namespace MagicPortals {
 
@@ -766,6 +767,7 @@ private:
     std::map<std::string, glm::dvec2> m_imageSizes;
     Art::Rules m_artRules;                  // the port's art.json
     Sky::Rules m_skyRules;                  // the port's sky.json
+    Tiers::Rules m_tierRules;               // the port's tiers.json: which file of a level's image is drawn
     Sky::Controller m_sky;                  // the level's StaticSky, built with its sprites
     std::vector<entt::entity> m_portalQuads; // one per placed portal, when its image is there
     entt::entity m_shotQuad{entt::null};    // the shot in flight, when its image is there
@@ -1195,7 +1197,7 @@ private:
     // places it off the level and its script pins it to the camera's corner.
     struct NoPortalSign {
         bool present{false};
-        std::string image;         // the hd twin where there is one
+        std::string image;         // the file its sprite is drawn from: the tier file (hd) where there is one
         glm::dvec2 sizeUnits{0.0}; // the entity's size, as its .ent draws it
         Hud::Follow follow;        // its centre, in the level's units
         Hud::Rect onView;          // as the last tick left it

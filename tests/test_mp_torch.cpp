@@ -31,6 +31,7 @@
 #include "core/Components.hpp"
 #include "sim/Game.hpp"
 #include "sim/Lighting.hpp"
+#include "sim/Tiers.hpp"
 #include "sim/Units.hpp"
 
 #include <algorithm>
@@ -49,6 +50,14 @@ namespace {
 
 const std::string kLevels = MAGICPORTALS_LEVELS_DIR;
 const std::string kData = MAGICPORTALS_DATA_DIR;
+
+// tiers.json's search, which the layer reads a level's lighting through.
+Tiers::Rules TheTiers() {
+    Tiers::Rules rules;
+    std::string error;
+    CHECK_MSG(Tiers::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/tiers.json", rules, error), error);
+    return rules;
+}
 constexpr float kStep = 1.0f / 60.0f;
 
 // level25c is one of the six that ship a light wall.
@@ -228,7 +237,7 @@ void theAmbientFollowsTheTorch() {
 
     Lighting::Scene look;
     std::string error;
-    const bool read = Lighting::Read(run.data.scene, kLevels + "/..", look, error);
+    const bool read = Lighting::Read(run.data.scene, kLevels + "/..", TheTiers(), look, error);
     CHECK_MSG(read, error);
     const auto ambientNow = [&run, &look]() {
         return Lighting::Ambient(run.data.lighting, look.ambient, run.level.darkest, run.level.torch);
@@ -301,7 +310,7 @@ void everyTorchLevelFindsThem() {
         // design's step G6, not a level file's.
         Lighting::Scene look;
         std::string error;
-        CHECK_MSG(Lighting::Read(run.data.scene, kLevels + "/..", look, error), error);
+        CHECK_MSG(Lighting::Read(run.data.scene, kLevels + "/..", TheTiers(), look, error), error);
         const auto lit = std::count_if(look.nodes.begin(), look.nodes.end(),
                                        [](const auto& node) { return node.second.light.has_value(); });
         CHECK_MSG(lit == 0, std::string(one.name) + " places " + std::to_string(lit) + " light(s)");

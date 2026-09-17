@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -224,6 +225,7 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       Camera::LoadViewHeight(m_paths.portData + "/view.json", m_viewHeightPx, error) &&
                       Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error) &&
                       Sky::LoadRules(m_paths.portData + "/sky.json", m_skyRules, error) &&
+                      Tiers::LoadRules(m_paths.portData + "/tiers.json", m_tierRules, error) &&
                       Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error) &&
                       Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error) &&
                       LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error) &&
@@ -412,7 +414,7 @@ bool MagicPortalsLayer::loadLevel(entt::registry& registry, int index) {
         // Its lighting, read once with it. A level whose lighting will not read
         // is still played, its sprites in their own colours - as a level whose
         // art will not read is still played as boxes - and says why.
-        m_lit = Lighting::Read(m_data.scene, m_paths.art, m_look, m_lightingError);
+        m_lit = Lighting::Read(m_data.scene, m_paths.art, m_tierRules, m_look, m_lightingError);
         if (m_lit) {
             m_lightingError.clear();
         } else {
@@ -2213,12 +2215,40 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     m_artError.clear();
     m_sign = NoPortalSign{};
     m_sky = Sky::Controller{};
-    if (!Sprites::Find(m_data.scene, m_paths.art, sprites, m_artError)) {
+    if (!Sprites::Find(m_data.scene, m_paths.art, m_tierRules, sprites, m_artError)) {
         // Played anyway, as boxes: the art is the original's, and a machine
         // without it can still play the port.
         SUPERSONIC_LOG_WARN("Magic Portals") << "Drawing the level as boxes: " << m_artError << std::endl;
         m_playerSlot = 0;
         return;
+    }
+    // Which tier each image was drawn from, once a load. A converter output
+    // without its hd/ and fullhd/ copies draws every image at 1x and says
+    // nothing else, so this line is where that shows, and where a sweep's logs
+    // can count the tiers without a suite.
+    {
+        std::vector<std::string> names;
+        for (const Tiers::Tier& tier : m_tierRules.search) names.push_back(tier.folder);
+        names.emplace_back();
+        std::vector<int> placements(names.size(), 0);
+        std::vector<std::vector<std::string>> textures(names.size());
+        for (const Sprites::Sprite& sprite : sprites) {
+            const auto at = static_cast<std::size_t>(std::find(names.begin(), names.end(), sprite.tier) - names.begin());
+            if (at == names.size()) continue; // Find only ever returns a searched folder or none
+            ++placements[at];
+            if (std::find(textures[at].begin(), textures[at].end(), sprite.texture) == textures[at].end()) {
+                textures[at].push_back(sprite.texture);
+            }
+        }
+        std::ostringstream line;
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            line << (i == 0 ? "" : ", ") << placements[i] << " " << (names[i].empty() ? "1x" : names[i]);
+        }
+        line << " (placements); ";
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            line << (i == 0 ? "" : ", ") << textures[i].size() << " " << (names[i].empty() ? "1x" : names[i]);
+        }
+        SUPERSONIC_LOG_INFO("Magic Portals") << "level art tiers: " << line.str() << " (textures)" << std::endl;
     }
     // THE NO-PORTAL SIGN IS NOT DRAWN WHERE THE LEVEL PUTS IT. Its node sits off
     // the level at (-61, -24), and its script eases it to the camera's corner
@@ -2232,13 +2262,11 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             m_sign.present = true;
             m_sign.sizeUnits = it->sizePx;
             m_sign.follow.at = Sprites::CentrePx(*it);
-            // The hd twin, which the original draws on any screen over 480 px
-            // and which the captures match (0.977 against 0.818 for the 1x art
-            // at twice its size). The converter copies only the 1x.
-            const std::string hd =
-                m_paths.original + "/entities/hd/" + std::filesystem::path(it->texture).filename().string();
-            std::error_code ec;
-            m_sign.image = std::filesystem::exists(hd, ec) ? hd : it->texture;
+            // Its sprite's own file, which Sprites::Find resolved to the hd tier
+            // the original draws on any screen over 480 px (the captures match
+            // it: 0.977 against 0.818 for the 1x art at twice its size), at its
+            // units, 64 x 64.
+            m_sign.image = it->texture;
             sprites.erase(it);
             break;
         }

@@ -838,6 +838,7 @@ void TheLevelsArtIsDrawn() {
     float skyZ = 0.0f;
     float farthest = 1e9f;
     glm::vec3 skyScale(0.0f);
+    std::string skyPath;
     for (auto [entity, tag, material, transform] :
          registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
         (void)entity;
@@ -854,13 +855,17 @@ void TheLevelsArtIsDrawn() {
             skyFound = true;
             skyZ = transform.position.z;
             skyScale = transform.scale;
+            skyPath = material.albedoTexturePath;
         }
         if (transform.position.z < farthest) farthest = transform.position.z;
     }
     CHECK_MSG(drawnAsArt, "each unlit, mixed (premultiplied) as level8 says, with an image that is there");
     CHECK_MSG(skyFound && skyZ == farthest, "the sky is the farthest back");
-    CHECK_MSG(std::fabs(skyScale.x - 455.0f / 50.0f) < 1e-4f && std::fabs(skyScale.y - 256.0f / 50.0f) < 1e-4f,
-              "at its image's own size");
+    // Its image is the fullhd icy_sky.png the original draws (tiers.json, step 66):
+    // 1024 x 512 texels at density 2, 512 x 256 units, one screen tall at scale 1.
+    CHECK_MSG(skyFound && skyPath.find("fullhd") != std::string::npos, "the sky is drawn from its fullhd file: " + skyPath);
+    CHECK_MSG(std::fabs(skyScale.x - 512.0f / 50.0f) < 1e-4f && std::fabs(skyScale.y - 256.0f / 50.0f) < 1e-4f,
+              "at its image's own size in units");
 
     const int bodies = Tagged(registry, "Magic Portals Body");
     CHECK(bodies > 0);

@@ -27,6 +27,7 @@
 #include "TestHarness.hpp"
 
 #include "sim/Lighting.hpp"
+#include "sim/Tiers.hpp"
 #include "sim/Tscn.hpp"
 
 #include <algorithm>
@@ -47,6 +48,15 @@ using namespace MagicPortals;
 namespace {
 
 const std::string kLevels = MAGICPORTALS_LEVELS_DIR;
+const std::string kPortData = MAGICPORTALS_PORT_DATA_DIR;
+
+// tiers.json's search, which the layer reads a level's art and lighting through.
+Tiers::Rules TheTiers() {
+    Tiers::Rules rules;
+    std::string error;
+    CHECK_MSG(Tiers::LoadRules(kPortData + "/tiers.json", rules, error), error);
+    return rules;
+}
 
 std::filesystem::path Scratch() {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "supersonic-test-mp-lighting";
@@ -348,7 +358,7 @@ void EveryKeyIsReadAndEveryAbsenceIsTheDefault() {
     CHECK_MSG(parsed, error);
     if (!parsed) return;
     Lighting::Scene look;
-    const bool ok = Lighting::Read(scene, res, look, error);
+    const bool ok = Lighting::Read(scene, res, Tiers::Rules{}, look, error);
     CHECK_MSG(ok, error);
     if (!ok) return;
 
@@ -537,7 +547,7 @@ void AnythingElseIsRefusedNamingTheLine() {
         look.intensity = -1.0;
         look.nodes["stale"] = Lighting::Look{};
         error.clear();
-        const bool ok = Lighting::Read(scene, res, look, error);
+        const bool ok = Lighting::Read(scene, res, Tiers::Rules{}, look, error);
         CHECK_MSG(!ok, std::string(r.what) + " is refused");
         CHECK_MSG(error.find(r.says) != std::string::npos, std::string(r.what) + ": said \"" + error + "\"");
         const std::string line = "line " + std::to_string(LineOf(r.text, r.header)) + ": ";
@@ -547,6 +557,37 @@ void AnythingElseIsRefusedNamingTheLine() {
     }
     CHECK_EQ(refused, static_cast<int>(refusals.size()));
     std::printf("  %d refusals, each naming its line\n", refused);
+}
+
+// A LIGHTMAP IS HALF ITS SPRITE IN UNITS, whatever file the sprite is drawn from
+// (planning doc step 61, decision 2; step 66). The lamp's hd file is 64 x 128
+// texels, four times its 16 x 32 lightmap, and 32 x 64 units, twice it: the
+// reader checks the units the layer draws the sprite at, through the same tier
+// search, so an hd sprite keeps its lightmap and a lightmap of the texels' half
+// is still refused.
+void ALightmapIsHalfItsSpritesUnits() {
+    const std::string res = WriteImages();
+    const std::filesystem::path hd = std::filesystem::path(res) / "assets" / "entities" / "hd";
+    std::error_code ec;
+    std::filesystem::create_directories(hd, ec);
+    Write(hd / "lamp.png", PngHeader(64, 128));
+    const Tiers::Rules tiers = TheTiers();
+
+    Tscn::Scene scene;
+    std::string error;
+    CHECK_MSG(Tscn::Parse(kRoom, scene, error), error);
+    Lighting::Scene look;
+    CHECK_MSG(Lighting::Read(scene, res, tiers, look, error), "the hd lamp keeps its 16 x 32 lightmap: " + error);
+    CHECK_MSG(look.nodes.count("lamp_7") == 1 && !look.nodes["lamp_7"].lightmap.empty(), "and it is read");
+
+    Tscn::Scene texelsHalf;
+    CHECK_MSG(Tscn::Parse(Replace(kRoom, "room/add7.png", "room/big7.png"), texelsHalf, error), error);
+    error.clear();
+    const bool read = Lighting::Read(texelsHalf, res, tiers, look, error);
+    CHECK_MSG(!read && error.find("is 32x64, and twice that is not its sprite's 32x64") != std::string::npos,
+              "a lightmap half the hd file's texels is refused against the units: " + error);
+
+    std::filesystem::remove(hd / "lamp.png", ec);
 }
 
 // ---- the converted levels ---------------------------------------------------------
@@ -583,6 +624,7 @@ void LevelsCarryWhatTheConverterReported() {
     CHECK_EQ(files.size(), std::size_t{128});
 
     const std::string res = kLevels + "/..";
+    const Tiers::Rules tiers = TheTiers();
     Totals t;
     std::map<std::string, Lighting::Scene> kept; // the levels pinned by name below
     const std::set<std::string> keep = {"level0", "level1", "level7", "level10a", "level21c", "level8a", "level0a"};
@@ -592,7 +634,7 @@ void LevelsCarryWhatTheConverterReported() {
         Tscn::Scene scene;
         Lighting::Scene look;
         std::string error;
-        const bool ok = Tscn::Load(file.string(), scene, error) && Lighting::Read(scene, res, look, error);
+        const bool ok = Tscn::Load(file.string(), scene, error) && Lighting::Read(scene, res, tiers, look, error);
         CHECK_MSG(ok, level + ": " + error);
         if (!ok) continue;
         ++t.levels;
@@ -772,6 +814,7 @@ int main() {
     EveryKeyIsReadAndEveryAbsenceIsTheDefault();
     AnythingElseIsRefusedNamingTheLine();
     EachLightReachesTheSpritesItShould();
+    ALightmapIsHalfItsSpritesUnits();
 
     std::error_code ec;
     if (!std::filesystem::is_directory(kLevels, ec)) {

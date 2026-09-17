@@ -68,7 +68,10 @@
       "0.6 is the value those rows favour: 1-01 passes and 1-09 misses by 0.17, inside the 1x floor. It",
       "is tuned to one frame's flame. Over 20 s the torch's flame is 0.7265 live (test_mp_layer), so",
       "0.6 draws the halo at 0.44 of the formula on average, where 0.69 would match the fit's 0.5 on",
-      "average and 1 would be Ethanon's own arithmetic. For the owner, and for plan_port System 6."
+      "average and 1 would be Ethanon's own arithmetic. For the owner, and for plan_port System 6.",
+      "System 6 landed in step 66 (the level's hd and fullhd art). At frame 420 and 0.6 the halo rows",
+      "then read 1-01 LM_E<1_halo 3.28, LM_E=1_halo 1.16; 1-09 LM_E<1_halo 2.95, noLM_E=1_halo 3.50",
+      "(asked 6.0 each; 5.59, 20.72, 5.99 and 3.80 with 1x art), so the value was not reopened."
     ],
     "value": 0.6
   },

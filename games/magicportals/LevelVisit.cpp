@@ -14,6 +14,7 @@
 
 #include "sim/Chapters.hpp"
 #include "sim/Lighting.hpp"
+#include "sim/Tiers.hpp"
 #include "sim/Tscn.hpp"
 
 namespace MagicPortals {
@@ -63,6 +64,15 @@ void LevelVisitLayer::OnAttach(entt::registry& registry) {
         return;
     }
 
+    // The tier search the layer reads each level's art and lighting through, so the
+    // lightmaps listed are the ones the layer holds.
+    Tiers::Rules tiers;
+    if (!Tiers::LoadRules(m_paths.portData + "/tiers.json", tiers, error)) {
+        fail("tiers: " + error);
+        m_phase = Phase::Done;
+        return;
+    }
+
     const bool everyLevel = m_options.levels == "all";
     const bool lightmapped = m_options.levels == "lightmapped";
     std::vector<int> chosen;
@@ -89,7 +99,7 @@ void LevelVisitLayer::OnAttach(entt::registry& registry) {
         Tscn::Scene scene;
         Lighting::Scene lighting;
         if (!Tscn::Load(m_paths.levels + "/" + entry.name + ".tscn", scene, error) ||
-            !Lighting::Read(scene, m_paths.art, lighting, error)) {
+            !Lighting::Read(scene, m_paths.art, tiers, lighting, error)) {
             fail(entry.name + "'s lighting: " + error);
             continue;
         }

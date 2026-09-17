@@ -10237,3 +10237,287 @@ search runs at a fixed 720 px height, whatever window the port opens). No other 
 - **Letter case, in the converter too.** `tiers.py` finds a tier file with `Path.is_file`, which ignores case on
   Windows; the original's `FileExists` on Android does not (step 61's caveat, on the port's side). An exact-case
   listing finds no case-only match among the 66 textures, so nothing differs today.
+
+## Step 66 - a level's art drawn from the tier file the original draws, at its size in whole units (built)
+
+The entity-visuals order's step 2.2 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `system_6.md`
+section 4.1 C3; conflict K9): every image a level names was drawn from its 1x file, while the original draws the
+`fullhd/` or `hd/` file beside it at texels / 2 units. `Sprites::Find` now resolves each name through step 61's
+`Tiers::Resolve` and sizes it `Tiers::Units`, and `Lighting::Read` checks lightmaps against the same units. Game-only:
+no file under `src/` or `assets/shaders/`. Changed: `sim/Sprites.{hpp,cpp}`, `sim/Lighting.{hpp,cpp}`, `sim/Tiers.hpp`
+(comments), `MagicPortalsLayer.{hpp,cpp}`, `LevelVisit.cpp`, `tests/test_mp_sprites.cpp`, `tests/test_mp_sky.cpp`,
+`tests/test_mp_start.cpp`, `tests/test_mp_lighting.cpp`, `tests/test_mp_torch.cpp`, `tests/test_mp_layer.cpp`, and the
+notes in `data/lighting.json` and `data/sky.json`. **2,248 placements now draw an hd file and 146 a fullhd file (489
+stay 1x); the only size that changes is the four skies', 455 -> 512 u on 28 chapter-1 levels. 1-01's floor detail reads
+1.147 against the original's 1.162 (0.576 before), the hd class's detail ratio 0.992 (0.563), the pinned sky's content
+scale 1.000 / 1.001 (0.922 / 0.927), 1-01's `compare.py` 7.14 / 0.762 (14.69 / 0.462), and 1-09 `LM_E=1` 1.16 (11.74)
+and 1-01 `LM_E=1_halo` 1.16 (20.72) against the original. Every gate 00_order 2.2 lists passes (and row 11's
+bare-ground clause, which it does not list, as amended below), and the HUD and the menu are byte-identical. All 128
+f420 frames change and all 128 exit 0 with validation silent. Every quad keeps its centre and size except the 28 skies'
+width, and against the original's library frames `compare.py` falls on 74 of 81 levels, including all 26 fullhd-sky
+levels that have one. `system_6.md` row 11's bare-ground census counts exactly-black pixels, and as written it rises
+from 1,593 to 5,312. None of the new ones is on the 52 levels whose sky quad changed. All 3,744 lie under a sky that
+did not change, so they are art drawn black. All 2,840 of them that a library frame shows are 12 grey or darker in the
+original at `compare.py`'s offset. By the owner's standing ruling the row is met as amended and re-baselined at 5,312
+(RECORDED DEVIATIONS).**
+
+**WHAT THE ORIGINAL DOES** (step 61 has the decode, cited; step 65 the converter's copy).
+- **Which file.** `ETHGraphicResourceManager::AddFile` (`ETHResourceManager.cpp:133-144`) asks `ChooseSpriteVersion`
+  (`ETHSpriteDensityManager.cpp:88-139`) for `<dir>/fullhd/<file>`, then `<dir>/hd/<file>`, else the file at density
+  1; at 720 px `app.enml` makes both tiers density 2.
+- **Which size.** `GLES2Sprite::SetSpriteDensityValue` (`GLES2Sprite.cpp:429-438`) makes the bitmap texels / D and
+  `GetBitmapSize` truncates it (`:389-392`): an entity is `int(texels / D)` units (`ETHSpriteEntity.cpp:113`,
+  `GetCurrentSize` `:652-683`). Every hd level texture is exactly twice its 1x file, so its units are the 1x size;
+  the fullhd `sky`, `icy_sky`, `red_sky` and `sky_purple` are 1024 x 512 over 455 x 256, so 512 x 256 u.
+- **Where.** A level's offset is the editor's pivot in units and is not scaled by the density (step 61, decision 2):
+  the converter writes it in world units, so it is read as it is.
+
+**WHAT CHANGED.**
+- **`sim/Sprites`.** `Find(scene, resRoot, tiers, out, error)`: `Tiers::Resolve(tiers, resRoot + "/" + res path)`;
+  `Sprite` gains `tier`, `density` and `texels`; `texture` is the drawn file; `sizePx = Tiers::Units(texels,
+  density)`, whole units, refused below one unit; `offsetPx` unchanged. `Tiers::Rules{}` searches nothing and draws
+  every file as named (the suites' written scenes use it).
+- **`sim/Lighting`.** `Read(scene, resRoot, tiers, out, error)` passes the rules to its own `Sprites::Find`, so the
+  lightmap check (`2 x lightmap == sprite`, `Lighting.cpp:311`) compares against the units the layer draws (K9).
+- **`MagicPortalsLayer`.** `OnAttach` reads `data/tiers.json` into `m_tierRules` with the other port data (a file that
+  will not read stops the start, as `sky.json` does); `loadLevel`'s `Lighting::Read` and `buildSprites`' `Find` pass it.
+  `buildSprites` logs `level art tiers: <n> fullhd, <n> hd, <n> 1x (placements); ... (textures)` once a load, so a
+  converter output without its tier copies, which would draw every image at 1x and say nothing else, shows in the log.
+  **The no-portal sign's private `hd/` lookup is deleted**: `Find` now gives the sign its hd file (a byte-identical copy
+  under `out/assets/entities/hd/`) at 64 x 64 u: the same bytes as the file the lookup found, at the same size.
+- **`LevelVisit`** (`--visit-levels`, dev only) reads `tiers.json` too, so the lightmaps it lists are the layer's.
+- **`sim/Tiers.hpp`:** the "nothing draws through this yet" and "nothing calls this yet" comments.
+- **Tests.**
+  - `test_mp_sprites`: new `ASpriteIsDrawnFromItsTier` on written files (hd in place of 1x at the 1x size with the
+    offset untouched; fullhd tried before hd and drawn at its own 512 x 256; 21 texels at D 2 is 10 u; a tier file with
+    no 1x file drawn; no tier file drawn as named at D 1; `Rules{}` draws the 1x; a tier file under one unit refused; a
+    name with neither file refused by name). `Level8sArt`: the sky is `fullhd/icy_sky.png` 1024 x 512 texels at 512 x
+    256
+    u (was 455 x 256); the torch, crystal and breakable wall are their hd files at the same units; `wall_w3`,
+    `black.bmp` and the static portals' `portal_halo.png` stay 1x. `TheCanvasOrderIsZThenTheFile` pins `Rules{}`'s D 1.
+  - `test_mp_start` `EveryLevelsArtReads`: **2,248 hd / 146 fullhd / 489 1x placements, 38 / 7 / 21 textures, 28
+    placements at another size than their 1x file**, and the converter's `entity_tiers.json` compared placement by
+    placement (tier, density, units): 2,883 agree, 0 differ, which is the check step 65 left open between `app.enml`'s
+    numbers and `tiers.json`'s. Lighting reads with the rules.
+  - `test_mp_sky`: new `AFullhdSkyIsWiderAndStillCentred` (a written fullhd sky: 512 x 256 u, scale 1, width 512, drawn
+    at the view's centre for three cameras; 455 through `Rules{}`); the census counts skies by drawn width: 51 at 512 u
+    (the 28, and the 23 `satellite_sky.png` already 512 wide), 44 `dark_sky.png` at 455, 0 other; every scale still 1.
+  - `test_mp_lighting`: new `ALightmapIsHalfItsSpritesUnits` (a written hd lamp 64 x 128 keeps its 16 x 32 lightmap; a
+    32 x 64 one, half the texels, is refused against the units); the converted levels read with the rules, 730
+    lightmaps.
+  - `test_mp_torch`: the rules passed. `test_mp_layer` `TheLevelsArtIsDrawn`: level8's sky quad is its fullhd file at
+    512 / 50 by 256 / 50 m (was 455 / 50), which the first run of this build failed as written (THE SUITES).
+
+**BASELINE.** Before: step 64's `visuals/1.3/after/` and its `sweep/` (1-01 f420 `6d5f4435`), which step 65 leaves
+unchanged. Step 65 names `visuals/1.2/after/` as the next before; its 128 f420 frames are byte-identical to
+`1.3/after/sweep/`'s (compared here), as step 64 records. The committed build, `MagicPortals.exe`
+`a936f44f`, was launched on the gate set before any edit (`visuals/2.2/before/`, `capture_22.sh before`): all
+thirteen f420 frames it shares with `1.3/after/sweep/` (the twelve gate levels' and 2-01's) are byte-identical to it.
+After: `visuals/2.2/after/` and its `sweep/`, `MagicPortals.exe` `cde4df49`; gates `gates_22.sh`, `work/*_22.py`.
+**Pixels move on 128 levels, so the next step's "before" is `visuals/2.2/after/` and its `sweep/` (1-01 f420
+`22a89e11`). The bare-ground census's baseline moves with it: 5,312 px in 12 levels on that `sweep/`
+(`fix1/census_fix1_22.json`), and the next copy of `census_sky.py` points its `G6` there.**
+
+| Gate (00_order 2.2; `system_6.md` section 5 row) | Required | Before | After |
+|---|---|---|---|
+| floor detail, 1-01 (`sharp_floor.py`, row 1) | >= 1.05 (original 1.162) | 0.576 | **1.147: passes** |
+| detail by tier, hd class (`sharp_by_tier.py`, row 2; 27 placements, 9 textures, 6 levels) | median >= 0.90; each texture with n >= 2 >= 0.85 | median 0.563 (IQR 0.536-0.699) | **median 0.992 (IQR 0.977-1.000); n >= 2: `STONE03A4x10` 0.989, `_half` 0.951, `bar3` 0.990, `bar4` 0.984, `single_stone` 1.001: passes.** Report only (row 2b): `white_ring` 0.392 (n 1, additive over other art), the 1x class 0.979 (0.992 before), `wall_w3` 0.985 (0.418) |
+| sky content scale, pinned (`sky_pinned.py`, row 3) | a, c in 0.99-1.01; abs b, abs d <= 5 px; patch scales 1.00 +- 0.02 | a 0.9219, b 9.3; c 0.9267, d 6.8; scales 0.88-0.94 | **a 1.0000, b 0.0; c 1.0013, d -0.6; scales 0.98-1.02, 6 patches: passes** |
+| `compare.py` 1-01 vs `t8.0` (row 4) | mean_abs <= 11.0, edge_iou >= 0.438 | 14.69 / 0.4615 | **7.14 / 0.7616: passes** |
+| `compare.py` 1-07 (`sky`), 1-20, 1-21 (`red_sky`) (row 4c) | mean_abs lower; edge_iou not lower by > 0.01 | 14.99 / 0.4612; 10.63 / 0.4792; 19.38 / 0.3623 | **11.60 / 0.7356; 1.87 / 0.8222; 10.71 / 0.6730: passes.** Report-only 1-05 10.59 -> 6.54 and 1-08 16.66 -> 10.33 |
+| `compare.py`, the other six g6 levels (row 4b) | none worse by > 0.2 mean_abs or 0.02 edge_iou | 1-09 7.84 / 0.4274; 1-13 12.13 / 0.2477; 2-05 6.00 / 0.3463; 2-26 9.95 / 0.4044; 3-05 4.85 / 0.4345; 4-22 4.42 / 0.6032 | **2.60 / 0.7666; 11.65 / 0.2761; 5.54 / 0.4511; 10.11 / 0.4390 (+0.16, inside 0.2); 1.60 / 0.7680; 2.81 / 0.6087: passes** |
+| `lightgate.py --variant engine`, 1-09 `LM_E=1` (row 5) | <= 2.08 | 11.74 | **1.16 (bias -1.5 / -0.7 / -1.1): passes** |
+| 1-09 `noLM_E=1` (row 5) | <= 2.71 | 8.98 | **1.79 (-2.3 / -1.1 / -2.1): passes** |
+| every halo class (row 6) | <= 6.0 | 1-01 `LM_E=1_halo` 20.72, `LM_E<1_halo` 5.59; 1-09 `LM_E<1_halo` 5.99, `noLM_E=1_halo` 3.80 | **1.16, 3.28; 2.95, 3.50: passes.** System 8's residual does not reopen (RETIRED) |
+| the other halo-free classes (row 5) | 1-01 `LM_E<1` <= 2.53, `LM_E=1` <= 2.23; 1-09 `LM_E<1` <= 2.0; 2-26 `LM_E<1` <= 2.27, `noLM_E=1` <= 2.92 and within 0.05 of today; 4-22 `noLM_E=1` <= 2.10, `noLM_E<1` <= 2.0 | 2.98, 2.23; 2.30; 2.34, 1.95; 2.02, 0.13 | **1.54, 1.69; 0.58; 1.23, 1.95 (+0.00); 1.12, 0.14: passes.** The design's abs bias <= 2.5 is missed by 2-26 `noLM_E=1` R -3.7, before and after alike (1x `dark_sky`, not this step's) |
+| model agreement, `port_vs_model(engine)` (row 5c) | <= 1.0 on row 5's classes | 1-01 1.90 / 1.43; 1-09 2.13 / 11.76 / 8.02; 2-26 1.93 / 0.29; 4-22 1.21 / 0.01 | **0.24 / 0.81; 0.29 / 0.10 / 0.19; 0.19 / 0.29; 0.25 / 0.00: passes.** 2-05 `noLM_E<1` (row 5b's class, not 5c's) 2.15 -> 1.46 |
+| halo R-B rings, 1-01 right arch (`halo_g5.py`, row 7) | every ring 50-150 closer to 0 than after step 58; ring 60 closer by >= 10 | step 58: 50 -42.7, 60 -58.1, 70 -51.3, 80 -36.2, 90 -22.1, 120 -17.8, 150 -18.5; this baseline: -47.5, -61.5, -53.4, -37.7, -22.6, -16.3, -11.9 | **-19.8, -17.4, -16.0, -10.7, -6.4, +0.1, +3.3 (100 -5.2, 110 -2.5, 130 -0.4, 140 +1.0): every ring closer; ring 60 by 40.7 against step 58: passes** |
+| geometry (row 8) | centres within 1 px; size unchanged | - | **the layer's quad dump in all 128 sweep logs, step 64's against this build's, quad by quad in order: the same state and file name each, 0 centres more than 1 px (0.0071 m) apart, 0 sizes changed but the 28 sky quads' width, 9.1 -> 10.24 m (455 -> 512 u). `locate.py` `platform_ent_7` at (360, 675) before and after (0.918, 0.922): passes** |
+| 1x art untouched (row 9) | 0 changed px on the 1x-only masks | - | **0 of 275,277 mask px: passes** (the review's rerun eroding at a rect's border too: 0 of 272,340). `work/mask1x_22.py`: opaque (alpha 255, eroded 3 px, but not where the mask meets the rect's border) 1x placements, not additive, rotated, dynamic or pinned, less every tier placement in front; known cameras on the six gate levels; the mask is non-empty on 4-22 (`wall_w3` 183,736, `pilar` 45,067) and 3-05 (`pilar` 51,690). The frames changed elsewhere: 746,109 px on 1-01, 76,930 on 4-22 |
+| torch (row 10; design section 10 amendment 3) | R >= 240, G >= 235 | 255.0 / 254.9 / 130.8 | **255.0 / 255.0 / 134.6: passes** |
+| door (row 10) | not worse | red excess 108.6, p95 G 40.0 (original 108.3, 36.0) | **108.4, 36.0: not worse (closer)** |
+| sweep, 128 levels at f420 (row 11) | 128 exit 0, validation silent; bare ground <= 1,593 px (as amended by the owner's standing ruling: 0 new bare px on a level whose sky quad changes, and every other new one art that the original draws black); the fullhd-sky levels' `compare.py` not worse where in-level | 128 exit 0; bare 1,593 px in 3 levels | **128 exit 0, validation ACTIVE in 128 and silent: passes. The fullhd-sky levels' `compare.py`: 26 of 26 with a library frame lower, 0 worse: passes. Bare ground: 5,312 px in 12 levels, over 1,593 as written. As amended: on the 52 levels whose sky quad changed, 141 -> 130 and 0 new; all 3,744 new px are on 10 levels whose sky quad has the same file, centre and size; of the 2,840 of them that a library frame shows, 2,603 are <= 12 grey in the original at the same pixel and all 2,840 at `compare.py`'s own per-level offset for this build (the other 904, on 2-22, 2-23 and 2-32, have no library frame): passes as amended (RECORDED DEVIATIONS). Re-baselined at 5,312** |
+| `test_mp_start` tier totals | 2,248 / 146 / 489 | - (not counted) | **2,248 hd / 146 fullhd / 489 1x: passes** (textures 38 / 7 / 21; 28 placements resized) |
+| `test_mp_sprites` level8 sky (`:493` at step 64) | 512 x 256 | 455 x 256 | **`fullhd/icy_sky.png` 1024 x 512 texels, 512 x 256 u: passes** |
+| `test_mp_lighting` | 730 lightmaps | 730 | **730: passes** (and the written hd lamp keeps its lightmap) |
+| UI unchanged (row 12) | HUD f1 and menu f120 byte-identical | `5c5cfed2`, `44b45d37` | **byte-identical: passes.** The sign itself: the HUD draws it on 1-15, 2-07 and 2-28. Before, it came from the extracted APK's `hd/`; now it comes from `out/assets/entities/hd/` (`TextureRegistry` lines). The two files are byte-identical (md5 `1ab8d260`), both at 64 x 64 u. On its 399 opaque stroke pixels (alpha >= 250, `work/sign_22.py`) 5, 1 and 0 differ, and the mean grey is 79.92, 80.56 and 80.56 before and after alike. The rest of its box changes with the hd art behind it |
+
+**Beyond the gates.**
+- **The whole sweep against the library** (`work/compare28_22.py`, the 81 levels with a `t8.0` frame): `mean_abs`
+  is lower on 74, median 10.41 -> 7.91. Only 4-18 is worse by more than 0.2 `mean_abs` or 0.02 `edge_iou`: 54.48 ->
+  54.72 and 0.1137 -> 0.1114, a pair whose frames differ everywhere. The review's triptych (`verify1/tri_4-18.png`)
+  shows why: the original draws the gravity wells' large translucent field circles, which the port draws in neither
+  frame, and `compare.py` puts the views 80 px apart (offset (-80, 0)), before and after alike. Neither is the
+  tiers'.
+- **The bare-ground pixels** (`work/bare_attrib_22.py`; in the review's fix round `fix1/census_fix1_22.py` and
+  `fix1/newbare_orig_22.py`): the census's 1,593 -> 5,312 is 3,744 mask pixels newly exactly black and 25 no longer.
+  - **By sky** (the f420 logs' sky quads, file with its tier folder, centre and size, before against after): on the
+    52 levels whose sky quad changed, bare ground goes 141 -> 130, 0 new, 11 no longer (1-10). 28 of them are the four
+    skies, 1x -> fullhd at 455 -> 512 u; 24 are `satellite_sky.png`, 1x -> fullhd at 512 u both times, same centres.
+    All 3,744 new ones are on 10 levels whose sky quad has the same file, centre and size (`dark_sky.png`, 1x), and
+    32 levels dump no sky quad and have 0 either way. A mask pixel under an unchanged sky turns black only when
+    something is drawn over it.
+  - **Against the original** (`t8.0`): 2,840 of the new ones are on levels with a library frame. At the same pixel,
+    2,603 are <= 12 grey in the original, 100 are 13-40 and 137 above 40 (2-07 135, 2-03 2). At the offset
+    `compare.py` gives this build (2-07 (0, -10), 2-03 (0, 1), the other five (0, 0);
+    `fix1/newbare_orig_offset_22.txt`), all 2,840 are <= 12. 2-22 (151), 2-23 (632) and 2-32 (121) have no `t8.0`.
+    On 2-07 `compare.py` gave (0, 0) before. The review's own grey-MAE search puts 2-07 at (0, -10) in both the
+    before frame (8.54) and the after frame (8.11), so that (0, 0) was a phase-correlation miss, not a camera that
+    moved, and reading the new pixels at (0, -10) is not circular.
+  - Of the new ones:
+    - 3,612 lie inside a carranca's quad on 7 chapter-2 levels (2-02 415, 2-03 732, 2-05 175, 2-07 731, 2-22 151,
+      2-23 632, 2-29 776: each of them, every pixel). Each quad's rect comes from the after log's own dump, placed
+      against the camera centre its pinned sky quad gives, grown 3 px.
+    - 2,199 of the 3,613 on those 7 levels and 2-01 border a pixel that was 12 grey or darker before. The hd
+      `carranca.png` covers 858 more opaque texels than the 1x file resampled to its size, and 0 fewer: the 1x
+      drawing's edge is cut short. Marked on 2-02, 2-03 and 2-29, the new pixels trace the head and jaw outline, and
+      the original's frame draws that outline too (the review's `verify1/carranca/`). `locate.py` does not lock onto
+      the dark, lit carranca (best 0.78), so it is not used.
+    - 1 is on 2-01, outside any carranca quad the dump lists.
+    - 121 are on 2-32, 115 of them 8 grey or darker before. They trace the border of an hd
+      `single_stone_contrast.png` on the game-over frame (`fix1/new_bare_2-32.png`).
+    - 10 are on 4-20, each beside pixels that were near-black before.
+
+  No sky quad moved and chapter 2's `dark_sky.png` is 1x and unchanged, so no ground was uncovered.
+- **The tiers from the logs:** the `level art tiers` line sums over the 128 sweep logs to 2,248 hd / 146 fullhd / 489
+  1x, as `test_mp_start` counts. `TextureRegistry` loads 4,959 images over the sweep both before and after.
+- **Path-string caching** (left to 2.2 by step 61): no level loads a file name twice that it did not load twice
+  before. `Find` joins `res://` to the levels' parent with `/`, so every tier path comes back with one separator.
+  1-02 and 1-03 load `tap_icon.png` twice both before and after: the level's copy (now its hd file under
+  `out/assets`) and the tutorial popup's hd file in the extracted APK. The files are byte-identical but load as two
+  textures.
+- **2-05, the lighting design's section 10 amendment 1.** One launch of `cde4df49` (`--frames 510
+  --screenshot-every 30`); its f420 is byte-identical to the sweep's. `noLM_E<1` against `engine` reads 0.08, bias
+  -0.1 / 0.0 / -0.1, at each of frames 330, 360, 390, 450, 480 and 510: median 0.08 (asked 2.0, abs bias 1.0; step
+  45's 1x reading was 0.42). No before was taken on `a936f44f`.
+- **By eye** (`work/triptych_1-01.png`, `crop_1-01.png`, `crop_2-03_bare.png`, `crop_bare_2-02_2-29.png`): 1-01's sky
+  is the original's cloud field at the original's scale, and the stones carry the hd files' grain. On 2-02, 2-03 and
+  2-29 the carranca's outline now matches the original's frame.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4). First build, 85 steps: `Sprites.cpp`, `Lighting.cpp`, the layer,
+`LevelVisit.cpp` and every file that includes `Sprites.hpp`, `Lighting.hpp` or the layer's header compiled, and the sim
+and game libraries, every Magic Portals suite and `MagicPortals.exe` `cde4df49` relinked. No warning or error.
+`test_mp_layer`'s pin (THE SUITES): 3 steps, no warning. After every capture and gate came the `Tiers.hpp` comments,
+`test_mp_start`'s manifest check and the two notes in `lighting.json` and `sky.json`: 86 steps, no warning. That build's
+`MagicPortals.exe` `5bcab01b` differs from the measured `cde4df49` in 4 bytes, the PE header's and the debug directory's
+timestamps (`.text`, `.data` and `.pdata` hash identical). Every capture above is `cde4df49`'s; the review launched
+`5bcab01b` (SMART APP CONTROL). The game and the suites read the json from the source tree
+(`MAGICPORTALS_PORT_DATA_DIR`), and nothing reads a `_note`. The
+eight files the edit scripts had left with LF endings (`LevelVisit.cpp`, `sim/Sprites.{hpp,cpp}`, `sim/Tiers.hpp`,
+`tests/test_mp_{lighting,sky,start,torch}.cpp`) were then given CRLF, as `core.autocrlf true` checks out, with their
+times kept: a build after it, `ninja: no work to do`, `MagicPortals.exe` still `5bcab01b`.
+
+**THE SUITES**, run directly, once each on the measured binaries: `test_mp_sprites` 496 / 0 (464), `test_mp_sky` 380 /
+0, `test_mp_lighting` 503 / 0 (495), `test_mp_start` 3,143 / 0 (726: +2,394, one check per tier placement that its 1x
+file sizes, since replaced by one count, and +23 new checks), `test_mp_torch` 123 / 0, `test_mp_tiers` 527 / 0,
+`test_mp_layer` **916 / 1**: `TheLevelsArtIsDrawn` still pinned level8's sky quad at 455 u, the size this step changes;
+the pin was updated to the fullhd 512 u and `test_mp_layer` relinked and run once more, 917 / 0. `test_mp_start` ran
+once more on the final build, with the manifest check: **752 / 0** (2,883 agree, 0 differ). **ctest, once, on the final
+build: 111 of 121 pass, 0 fail, 10 not run.** Smart App Control refused `test_mp_turrets`, `test_mp_scores`,
+`test_mp_camera`, `test_mp_timed`, `test_mp_fire`, `test_mp_hinge`, `test_mp_zerog`, `test_mp_lighting`, `test_mp_sky`
+and `test_mp_levelend` (BAD_COMMAND), each relinked by the comment-only rebuild, and none was relinked again.
+`test_mp_lighting` and `test_mp_sky` passed directly on `cde4df49`'s build (above), whose sources differ from the final
+build's only in `Tiers.hpp` comments and `test_mp_start.cpp`. `test_mp_sprites`, `test_mp_start`, `test_mp_torch`,
+`test_mp_tiers`, `test_mp_layer` and `test_mp_levels` passed in ctest. So did **`test_mp_dragon`**, which step 64 left
+to run, and `test_jobs`, which failed in step 64's ctest. **In the step's review both refused suites this step touches
+ran directly on the final binaries, with no Smart App Control block: `test_mp_lighting` 503 / 0 (730 lightmaps in 67
+levels) and `test_mp_sky` 380 / 0 (51 skies at 512 u, 44 at 455 u, 0 other).** The other eight refused suites were not
+run again. None of them names `Sprites::Find`, `Lighting::Read` or `Tiers::`. The review's fix round changed only this
+record, so it built and ran nothing. **`LevelVisit`'s `tiers.json` read**, which now stops the walk if the file will
+not read and which no suite runs, was walked in the review on `5bcab01b`:
+`--visit-levels lightmapped --visit-passes 2 --saves saves_gold` exits 0 in 19 s, 134 visits, 730 lightmaps a pass,
+1,460 sets, peak 100 in the pool, 0 failures (`verify2/visit_saves_gold.log`). Without `--saves` it exits 1 with 197
+failures, the locked levels step 58 records (`verify2/visit_lightmapped.log`).
+
+**SMART APP CONTROL.** Ten refusals, ten notifications: the ctest suites above. `MagicPortals.exe` `a936f44f` ran all 24
+of its launches (the before set), and `cde4df49` ran all 153 (the after set 24, the sweep 128, amendment 1's 2-05).
+Every launch exited 0. The seven suites run directly each ran on its first launch, and `test_mp_layer` and
+`test_mp_start` ran again on their relinks. In the review the final `5bcab01b` was refused nothing in 155 launches:
+the gate set's 24 and the sweep's 128, each exit 0 with its frame byte-identical to `cde4df49`'s (1-01 f420
+`22a89e11`), amendment 1's 2-05, and the two level walks (THE SUITES).
+
+**RULINGS.** The owner's standing rulings, every ruling of 00_order section 6 decided in favour of what the original
+does: **R13, route B** (the port resolves the tier from the name the level gives; `out/levels` is not touched) and
+**R12, the tier fixed at the 720 px choice** (`tiers.json`'s search, whatever the window). Step 61's decision 2, the
+combined size rule of K9, is what `Find` builds: units `int(texels / D)`, the offset never scaled by D, the lightmap
+check against units before any scale; 9.1's `<Scale>` multiplies these units later (K9's order, 2.2 before 9.1). No
+other ruling bears on 2.2 (R10's player depth is 5.1 and 6.3's). **The on-screen original is ground truth**, the owner's
+standing ruling, decides `system_6.md` row 11: a pixel the original draws black is art, not bare ground, so the row is
+read as amended and re-baselined (RECORDED DEVIATIONS).
+
+**RETIRED** (`system_6.md` section 5, 00_order 2.2): `sky4.py`'s baseline (replaced by `sky_pinned.py`, gate 3), the
+`tone2.py` rows (System 1's premise, superseded by lighting E1/G2), and the lighting design's section 10 amendment 2:
+the lightmapped classes are gated against `--variant engine`, the best-tier model, from this step on, and
+`engine_tier1x` is the before model (it now reads 11.78 on 1-09 `LM_E=1` against this build, the 1x model the port no
+longer draws). **System 8's residual** (00_order section 1): 1-09 `LM_E<1_halo` is 2.95 with hd art, under 6.0, so
+`lighting.json` `halo_brightness_scale` (0.6, `_guess`) is not reopened; its note records the step.
+
+**RECORDED DEVIATIONS** (from `system_6.md` C3's and section 5's text).
+- **Bare ground (row 11): required <= 1,593 px, measured 5,312; met as amended, re-baselined at 5,312.** The census
+  (`visuals/sky/census_sky.py`, here against step 64's sweep) counts step 44's bare-ground mask pixels that are exactly
+  black, so black art on a mask pixel counts as bare ground. The row guards against a sky that moves off ground it
+  used to cover ("the fullhd padding is 0.16 px"). On the 52 levels whose sky quad changed it falls 141 -> 130, with 0
+  new pixels. All 3,744 new ones lie under a sky quad with the same file, centre and size before and after, which
+  carries the row. Of the 2,840 that a library frame shows, 2,603 are <= 12 grey in the original at the same pixel,
+  and all 2,840 at `compare.py`'s own per-level offset for this build (Beyond the gates).
+  3,612 are the hd carranca's fuller outline: the 1x file's edge is cut short, and the hd file covers 858 more opaque
+  texels. 121 are the border of 2-32's hd stone, 10 are on 4-20 and 1 is on 2-01. The 904 on 2-22, 2-23 and 2-32 have
+  no library frame and rest on the unchanged sky and the quad they lie in (the carranca on 2-22 and 2-23, the stone on
+  2-32). By the owner's standing ruling (the on-screen original is ground truth) the row is read as amended: 0 new bare
+  pixels on a level whose sky quad changes, and every other new one art that the original draws black. It passes as
+  amended, and the census is re-baselined on
+  `visuals/2.2/after/sweep/`: 5,312 px in 12 levels. The amended reading was measured in the review's fix round from the
+  sweep already taken; no exe was launched for it.
+- **`sizePx = texels / drawn.density`** is built as `Tiers::Units`, the truncated divide (step 61, decision 2). No level
+  texture differs by the cast.
+- **"Pin that the quad size is unchanged"** (plan_port 6b) is false for the 28 skies, as the brief says; the sky pins
+  in `test_mp_sprites`, `test_mp_layer` and the `test_mp_sky` census are rewritten to 512 u.
+- **`test_mp_layer`** also pinned the sky's size (`TheLevelsArtIsDrawn`); C3's list of suites to update did not name it.
+- **The geometry guard (gate 8)** is measured on the layer's own quad dump over 128 levels, not by `locate.py` alone:
+  the 720 x 720 arch cannot be matched inside a 720 px frame, and the torch's flame-lit template scores 0.61 and 0.62
+  at centres 118 px apart on two identical-geometry frames. `locate.py` on `platform_ent_7` (0.92) is reported.
+- **The 1x-only mask (gate 9)** covers the six gate levels whose f420 camera is known. On four of them no opaque 1x
+  pixel is left once the tier sprites in front are taken out, so the mask is 275,277 px over 4-22 and 3-05.
+  `mask1x_22.py`'s `cv2.erode` keeps its default border, so a mask pixel on a rect's edge is not eroded; the review's
+  rerun with `borderType=cv2.BORDER_CONSTANT, borderValue=0` (`verify2/scripts/mask1x_22_rerun_borderfix.py`) reads
+  272,340 px, 0 changed, and the next copy of the script passes it. The review widened the mask by rect
+  (`verify1/unchanged1x_v1.py`; `fix1/unchanged1x_detail_22.txt`). It read the 96 levels that dump a sky quad, each 1x
+  quad's rect shrunk 4 px and each tier quad's grown 4 px, placed against the sky quad's first dump line. It finds 398
+  changed px inside a 1x rect and outside every tier rect, in rects that are not where the frame draws the quad:
+  - 2-32, 211 in the corner of the dragon's 1x rect (max diff 44). Every changed pixel of that game-over frame is on the
+    hd arrow and hd stones (`fix1/diff_2-32.png`): the camera moved after the dump line the rect was placed from;
+  - 2-10, 166 (max diff 25): a 7-row band that is the bottom edge of the hd block above the crate, inside the crate's
+    rect as the load-time dump places it; the crate is unchanged (`verify2/look/2-10_crate_before_after_diff.png`);
+  - 2-22's crate, 11 (max diff 8); 2-31's `joint_pivot`, 7 (5); 4-25's `pilar`, 3 (4).
+
+  The rects come from the quad dump at load, and a dynamic body settles after it. The review's second mask, over the
+  same 96 levels, keeps only the 1x quads whose placement a template match confirms and erodes at the border too:
+  353,740 px on 18 levels, 420 changed, all on the dynamic crates of 1-05 (136), 1-08 (53), 1-15 (105) and 3-05 (126)
+  (`verify2/mask1x_v2_fixed.json`). Matched in the frame, those crates sit 3-8 px below their dump rects, and every
+  changed pixel is outside the crate (`verify2/crate_true_position.txt`, `verify2/look/crate_*.png`). So the leftover
+  pixels lie in rects misplaced by a body that settled or a camera that moved, and no 1x interior changed. The 32
+  levels that dump no sky quad were not read.
+- **`test_mp_start`** compares the converter's manifest with `Find`, which C3 does not ask for (step 65 left it open).
+
+**LEFT FOR THE OWNER.**
+- **`system_6.md` row 11 as amended.** The step reads it under the owner's standing ruling (the on-screen original is
+  ground truth), and the review measured the amended reading independently, but the owner has not ruled on this row
+  itself. Confirm the amended wording and the re-baseline to 5,312 px on `visuals/2.2/after/sweep/`.
+- **The eight suites Smart App Control refused in the one ctest** (`test_mp_turrets`, `test_mp_scores`,
+  `test_mp_camera`, `test_mp_timed`, `test_mp_fire`, `test_mp_hinge`, `test_mp_zerog`, `test_mp_levelend`) have not
+  run on this build. None reads level art through `Sprites::Find` or `Lighting::Read`. Run them with the next step's
+  suites.
+- **4-18's `mean_abs` against the original** rose by 0.24 (54.48 -> 54.72). The pair is far apart for reasons that are
+  not the tiers' (Beyond the gates): the gravity wells' field circles and a view 80 px off.
+- **Carried from step 65, unchanged here.** `_vertical_offset` reads the 1x height, and no vertical sprite changes
+  size. Stale tier files are never deleted. Letter case is ignored on Windows (none differs). `test_mp_start` now
+  checks the manifest against `tiers.json`, but only when `out/assets/entity_tiers.json` exists; without it the
+  comparison is skipped, and the tier totals still fail.
+- **For 2.3.** The player, the loading screen, the beholder, thrown stones and particles still read 1x files or
+  private `hd/` lookups. The no-portal sign's size still comes from `Find`, which is right: its hd file is 64 x 64 u.
+  VRAM was not measured here; `system_6.md` measured +4 MiB median and 13.44 MiB worst.
+- **For 2.3 or 9.1 (latent, found in review).** A tier file with an odd texel count would draw all its texels into
+  `int(texels / D)` units. The layer's quad samples UV 0 to 1, but the original's rect over the bitmap size would
+  sample 20 of 21 texels (`default.vs:38-39`, as step 61 cites). `test_mp_sprites` `ASpriteIsDrawnFromItsTier` pins
+  21 texels at D 2 as 10 u. No level texture is affected: all 111 tier PNGs under `out/assets` are even on both sides.
+  When a step touches the quad UVs, an uncut sprite should take `uvScale = units / (texels / D)`, as `FrameCut` does.

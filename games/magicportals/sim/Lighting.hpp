@@ -53,6 +53,7 @@
 // Since step 49 (G5) each Look::light is a 2D point light and its halo an added
 // quad, and which sprite takes which light is ReceiverMask and LightLayer below.
 
+#include "sim/Tiers.hpp"
 #include "sim/Torch.hpp"
 #include "sim/Tscn.hpp"
 
@@ -100,10 +101,13 @@ struct Scene {
     std::unordered_map<std::string, Look> nodes;
 };
 
-// Replaces `out`. `resRoot` is the directory res:// stands for, as for
-// Sprites::Find. False, with `error` reading "line N: <node>: why", for anything
-// the reader refuses; `out` is then empty.
-bool Read(const Tscn::Scene& scene, const std::string& resRoot, Scene& out, std::string& error);
+// Replaces `out`. `resRoot` is the directory res:// stands for, and `tiers` the
+// search a sprite's image goes through, as for Sprites::Find: pass the rules the
+// layer draws with, so a lightmap is checked against the units its sprite is
+// drawn at (planning doc step 61, decision 2). False, with `error` reading
+// "line N: <node>: why", for anything the reader refuses; `out` is then empty.
+bool Read(const Tscn::Scene& scene, const std::string& resRoot, const Tiers::Rules& tiers, Scene& out,
+          std::string& error);
 
 // The port's lighting.json: the two ambient lights the original's script sets
 // in place of a level file's own, and what the lights and halos need that no

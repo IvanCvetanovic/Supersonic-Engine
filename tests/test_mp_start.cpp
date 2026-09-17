@@ -20,11 +20,13 @@
 #include "TestHarness.hpp"
 
 #include "core/Components.hpp"
+#include "core/Json.hpp"
 #include "sim/Game.hpp"
 #include "sim/Lighting.hpp"
 #include "sim/Player.hpp"
 #include "sim/Roles.hpp"
 #include "sim/Sprites.hpp"
+#include "sim/Tiers.hpp"
 #include "sim/Tscn.hpp"
 #include "sim/Units.hpp"
 
@@ -32,7 +34,10 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
+#include <set>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -43,6 +48,7 @@ namespace {
 
 const std::string kLevels = MAGICPORTALS_LEVELS_DIR;
 const std::string kData = MAGICPORTALS_DATA_DIR;
+const std::string kPortData = MAGICPORTALS_PORT_DATA_DIR;
 constexpr float kStep = 1.0f / 60.0f;
 constexpr int kLandingTicks = 180;
 constexpr int kLevelsPerChapter = 32;
@@ -258,14 +264,46 @@ void Level30StillPlays() {
     CHECK(outcome.Plays());
 }
 
+// tiers.json's search, which the layer reads a level's art and lighting through.
+Tiers::Rules TheTiers() {
+    Tiers::Rules rules;
+    std::string error;
+    CHECK_MSG(Tiers::LoadRules(kPortData + "/tiers.json", rules, error), error);
+    return rules;
+}
+
 // Every level's art, read as the layer reads it (Sprites.hpp). The reader is
 // strict, and a level whose art it refuses is drawn as boxes while this
 // inventory still counts it as playing - so every level is read here, whether
 // or not it starts. The totals are the converter's, pinned.
+//
+// And the tier each placement is drawn from (step 66): the converter copies the
+// hd and fullhd files beside the 1x ones (the remake's entity_tiers.json), and a
+// missing copy draws its images at 1x with no other sign, so the split is pinned
+// here - 2,248 hd, 146 fullhd, 489 1x placements of 66 textures, 38 / 7 / 21.
 void EveryLevelsArtReads() {
+    const Tiers::Rules tiers = TheTiers();
     int sprites = 0;
     int added = 0;
     int read = 0;
+    std::map<std::string, int> placements; // by tier, "" for the file named
+    std::map<std::string, std::set<std::string>> textures;
+    int resized = 0;  // placements whose units are not their 1x file's size
+    int unsized = 0;  // tier placements whose 1x file cannot be sized
+    // The converter's record of the same choice (the remake's out/assets/entity_tiers.json,
+    // step 65), made from app.enml rather than tiers.json: the two sets of numbers are
+    // checked against each other here, placement by placement.
+    const std::string manifestPath = kLevels + "/../assets/entity_tiers.json";
+    Supersonic::Json::Value manifest;
+    std::string manifestText;
+    if (std::ifstream file(manifestPath, std::ios::binary); file) {
+        manifestText.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }
+    const bool haveManifest = !manifestText.empty() && Supersonic::Json::Parser(manifestText).Parse(manifest) &&
+                              manifest["files"].IsObject();
+    int agreed = 0;
+    int disagreed = 0;
+    std::string firstDisagreement;
     for (const Chapter& chapter : kChapters) {
         for (int i = 0; i < kLevelsPerChapter; ++i) {
             const std::string name = "level" + std::to_string(i) + chapter.suffix;
@@ -273,21 +311,74 @@ void EveryLevelsArtReads() {
             std::vector<Sprites::Sprite> found;
             std::string error;
             const bool ok = Tscn::Load(kLevels + "/" + name + ".tscn", scene, error) &&
-                            Sprites::Find(scene, kLevels + "/..", found, error);
+                            Sprites::Find(scene, kLevels + "/..", tiers, found, error);
             CHECK_MSG(ok, name + "'s art: " + error);
             if (!ok) continue;
             ++read;
             sprites += static_cast<int>(found.size());
             for (const Sprites::Sprite& sprite : found) {
                 if (sprite.additive) ++added;
+                const std::filesystem::path drawn(sprite.texture);
+                ++placements[sprite.tier];
+                textures[sprite.tier].insert(drawn.filename().string());
+                if (haveManifest) {
+                    const Supersonic::Json::Value& row = manifest["files"]["entities/" + drawn.filename().string()];
+                    const std::string tier = row["tier"].AsString() == "1x" ? std::string() : row["tier"].AsString();
+                    const bool same = row.IsObject() && tier == sprite.tier && row["units"].IsArray() &&
+                                      row["units"].AsArray().size() == 2 &&
+                                      row["units"].AsArray()[0].AsNumber() == sprite.sizePx.x &&
+                                      row["units"].AsArray()[1].AsNumber() == sprite.sizePx.y &&
+                                      row["density"].AsNumber() == static_cast<double>(sprite.density);
+                    if (same) {
+                        ++agreed;
+                    } else if (++disagreed == 1) {
+                        firstDisagreement = name + " " + drawn.filename().string();
+                    }
+                }
+                if (sprite.tier.empty()) continue;
+                // The 1x file the level names, beside the tier folder.
+                const std::filesystem::path oneX = drawn.parent_path().parent_path() / drawn.filename();
+                int w = 0;
+                int h = 0;
+                std::string why;
+                if (!Sprites::ImageSize(oneX.string(), w, h, why)) {
+                    ++unsized;
+                } else if (sprite.sizePx != glm::dvec2(w, h)) {
+                    ++resized;
+                }
             }
         }
     }
     std::printf("  art: %d of %d levels read, %d sprites, %d of them added\n", read, kLevelsPerChapter * 4, sprites,
                 added);
+    std::printf("  tiers: %d hd, %d fullhd, %d 1x placements; %zu hd, %zu fullhd, %zu 1x textures; %d placements "
+                "drawn at another size than their 1x file\n",
+                placements["hd"], placements["fullhd"], placements[""], textures["hd"].size(),
+                textures["fullhd"].size(), textures[""].size(), resized);
     CHECK_EQ(read, kLevelsPerChapter * 4);
     CHECK_EQ(sprites, 2883);
     CHECK_EQ(added, 99);
+    CHECK_EQ(placements["hd"], 2248);
+    CHECK_EQ(placements["fullhd"], 146);
+    CHECK_EQ(placements[""], 489);
+    CHECK_EQ(placements.size(), std::size_t{3});
+    CHECK_EQ(textures["hd"].size(), std::size_t{38});
+    CHECK_EQ(textures["fullhd"].size(), std::size_t{7});
+    CHECK_EQ(textures[""].size(), std::size_t{21});
+    // Only the four skies change size, 455 x 256 at 1x and 512 x 256 u in
+    // fullhd: once in each of the 28 chapter-1 levels that place one
+    // (system_6.md section 0). Every other tier file is exactly twice its 1x file.
+    CHECK_EQ(resized, 28);
+    CHECK_EQ(unsized, 0);
+    if (haveManifest) {
+        std::printf("  the converter's entity_tiers.json: %d placements agree on tier, density and units, %d do not\n",
+                    agreed, disagreed);
+        CHECK_MSG(disagreed == 0, "the converter's manifest and tiers.json choose alike; first otherwise " +
+                                      firstDisagreement);
+        CHECK_EQ(agreed, 2883);
+    } else {
+        std::printf("  the converter's entity_tiers.json SKIPPED - not at %s\n", manifestPath.c_str());
+    }
 }
 
 // Every level's lighting, read as the layer will read it (Lighting.hpp). Nothing
@@ -296,6 +387,7 @@ void EveryLevelsArtReads() {
 // converter's own report for the four worlds (the remake's b572fec), pinned.
 // test_mp_lighting pins what individual levels say.
 void EveryLevelsLightingReads() {
+    const Tiers::Rules tiers = TheTiers();
     int read = 0;
     int lightmaps = 0;
     int lightmappedLevels = 0;
@@ -312,7 +404,7 @@ void EveryLevelsLightingReads() {
             Lighting::Scene lighting;
             std::string error;
             const bool ok = Tscn::Load(kLevels + "/" + name + ".tscn", scene, error) &&
-                            Lighting::Read(scene, kLevels + "/..", lighting, error);
+                            Lighting::Read(scene, kLevels + "/..", tiers, lighting, error);
             CHECK_MSG(ok, name + "'s lighting: " + error);
             if (!ok) continue;
             ++read;
@@ -374,7 +466,7 @@ void DarkestLevelsStartAndCarryTheFlag() {
         CHECK_MSG(level.darkest, std::string(name) + " sets darkest, and Game::Level says so");
         if (level.darkest) ++carried;
         Lighting::Scene look;
-        const bool read = Lighting::Read(data.scene, kLevels + "/..", look, error);
+        const bool read = Lighting::Read(data.scene, kLevels + "/..", TheTiers(), look, error);
         CHECK_MSG(read, std::string(name) + "'s lighting: " + error);
         if (read) {
             CHECK_MSG(Lighting::Ambient(data.lighting, look.ambient, level.darkest, level.torch) ==
@@ -397,7 +489,7 @@ void DarkestLevelsStartAndCarryTheFlag() {
             Game::Start(data, registry, level, error)) {
             CHECK_MSG(!level.darkest, "level0 is not a dark level");
             Lighting::Scene look;
-            if (Lighting::Read(data.scene, kLevels + "/..", look, error)) {
+            if (Lighting::Read(data.scene, kLevels + "/..", TheTiers(), look, error)) {
                 CHECK_MSG(Lighting::Ambient(data.lighting, look.ambient, level.darkest, level.torch) ==
                               glm::dvec3(0.35, 0.3, 0.35),
                           "and is drawn at its file's own ambient");

@@ -184,14 +184,15 @@ bool Path(const std::string& text, const std::string& resRoot, std::string& out,
 
 } // namespace
 
-bool Read(const Tscn::Scene& scene, const std::string& resRoot, Scene& out, std::string& error) {
+bool Read(const Tscn::Scene& scene, const std::string& resRoot, const Tiers::Rules& tiers, Scene& out,
+          std::string& error) {
     out = Scene{};
 
     // The sprites' own sizes, for the lightmap's. Sprites::Find is the reader the
     // layer draws with, so a lightmap is checked against the size the layer will
     // stretch it over rather than against a second reading of the same file.
     std::vector<Sprites::Sprite> sprites;
-    if (!Sprites::Find(scene, resRoot, sprites, error)) return false;
+    if (!Sprites::Find(scene, resRoot, tiers, sprites, error)) return false;
     std::unordered_map<std::string, glm::dvec2> spriteSizePx;
     for (const Sprites::Sprite& sprite : sprites) spriteSizePx.emplace(sprite.node, sprite.sizePx);
 
@@ -296,9 +297,13 @@ bool Read(const Tscn::Scene& scene, const std::string& resRoot, Scene& out, std:
             if (!look.applyLight) return fail(node, "eth_lightmap on a node that does not apply light");
             if (!drawsSprite) return fail(node, "eth_lightmap on a node that draws no sprite");
 
-            // Every shipped lightmap is half its 1x sprite on both axes (730 of
+            // Every shipped lightmap is half its sprite on both axes (730 of
             // 730), and the lightmap is sampled at the sprite's own coordinates,
             // so any other ratio means the pair is not what the original baked.
+            // Half its size in units, the tier file's texels over its density,
+            // not in texels: an hd sprite's file is four times its lightmap on
+            // each axis, and the 730 hold only against units (planning doc step
+            // 61, decision 2).
             int width = 0;
             int height = 0;
             if (!Sprites::ImageSize(look.lightmap, width, height, why)) return fail(node, "eth_lightmap: " + why);

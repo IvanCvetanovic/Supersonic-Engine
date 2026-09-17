@@ -18,6 +18,7 @@
 #include "sim/Lighting.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Sprites.hpp"
+#include "sim/Tiers.hpp"
 #include "sim/Tscn.hpp"
 
 #include <stb_image.h>
@@ -42,6 +43,15 @@ namespace {
 
 const std::string kLevels = MAGICPORTALS_LEVELS_DIR;
 const std::string kOriginal = MAGICPORTALS_ORIGINAL_DIR;
+const std::string kPortData = MAGICPORTALS_PORT_DATA_DIR;
+
+// tiers.json's search, which the layer draws a level's images through.
+Tiers::Rules TheTiers() {
+    Tiers::Rules rules;
+    std::string error;
+    CHECK_MSG(Tiers::LoadRules(kPortData + "/tiers.json", rules, error), error);
+    return rules;
+}
 
 std::filesystem::path Scratch() {
     const std::filesystem::path dir = std::filesystem::temp_directory_path() / "supersonic-test-mp-sprites";
@@ -289,7 +299,7 @@ void TheCanvasOrderIsZThenTheFile() {
 
     std::vector<Sprites::Sprite> sprites;
     std::string error;
-    const bool found = Sprites::Find(scene, dir.string(), sprites, error);
+    const bool found = Sprites::Find(scene, dir.string(), Tiers::Rules{}, sprites, error);
     CHECK_MSG(found, error);
     CHECK_EQ(sprites.size(), std::size_t{3});
     if (sprites.size() != 3) return;
@@ -302,6 +312,8 @@ void TheCanvasOrderIsZThenTheFile() {
     const Sprites::Sprite& back = sprites[0];
     CHECK_MSG(back.texture == dir.string() + "/assets/b.png", back.texture);
     CHECK(back.sizePx == glm::dvec2(8.0, 8.0));
+    CHECK_MSG(back.tier.empty() && back.density == 1.0f && back.texels == glm::ivec2(8, 8),
+              "with no tier searched, the file named at density 1");
     CHECK_EQ(back.zIndex, -3);
     CHECK(Near(back.rotation, 1.5708));
     CHECK(back.offsetPx == glm::dvec2(4.0, 0.0));
@@ -336,7 +348,7 @@ void WhatTheReaderDoesNotDrawIsNamed() {
         if (!ParseScene(text.c_str(), scene)) return;
         std::vector<Sprites::Sprite> sprites;
         std::string error;
-        const bool found = Sprites::Find(scene, dir.string(), sprites, error);
+        const bool found = Sprites::Find(scene, dir.string(), Tiers::Rules{}, sprites, error);
         CHECK_MSG(!found, what);
         CHECK_MSG(error.find(expect) != std::string::npos, std::string(what) + ": " + error);
     };
@@ -354,6 +366,90 @@ void WhatTheReaderDoesNotDrawIsNamed() {
     refused(OneSprite(texture, "[node name=\"Body\" type=\"StaticBody2D\" parent=\"wall_1\"]\n\n",
                       "[node name=\"Sprite\" type=\"Sprite2D\" parent=\"wall_1/Body\"]\ntexture = ExtResource(\"tex_0\")\n"),
             "wall_1/Body", "a sprite under a body is refused");
+}
+
+// THE TIER A SPRITE IS DRAWN FROM (tiers.json; planning doc steps 61 and 66).
+// The level names the 1x file; the original's loader draws <dir>/fullhd/<file>,
+// else <dir>/hd/<file>, else the file, and sizes it int(texels / density) units.
+// The offset is the level's and no density touches it.
+void ASpriteIsDrawnFromItsTier() {
+    const std::filesystem::path dir = Scratch() / "tiers";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    for (const char* folder : {"assets", "assets/hd", "assets/fullhd"}) {
+        std::filesystem::create_directories(dir / folder, ec);
+    }
+    Write(dir / "assets" / "crystal.png", PngHeader(32, 32));
+    Write(dir / "assets" / "hd" / "crystal.png", PngHeader(64, 64));
+    // A fullhd file wider than twice its 1x file: the original's four skies.
+    Write(dir / "assets" / "sky.png", PngHeader(455, 256));
+    Write(dir / "assets" / "fullhd" / "sky.png", PngHeader(1024, 512));
+    Write(dir / "assets" / "hd" / "sky.png", PngHeader(910, 512)); // fullhd is tried first
+    // An odd tier file: 21 texels at density 2 is 10 units, not 10.5.
+    Write(dir / "assets" / "odd.png", PngHeader(10, 10));
+    Write(dir / "assets" / "hd" / "odd.png", PngHeader(21, 21));
+    // A tier file with no 1x file beside it is still drawn: only the tier names are tried.
+    Write(dir / "assets" / "hd" / "only.png", PngHeader(64, 128));
+    Write(dir / "assets" / "plain.png", PngHeader(40, 100));
+    // A tier file smaller than one unit.
+    Write(dir / "assets" / "hd" / "speck.png", PngHeader(1, 4));
+
+    // One entity with its sprite, naming `texture`, with whatever `offset` line is given.
+    const auto scene = [](const std::string& texture, const std::string& offset) {
+        return OneSprite("[ext_resource type=\"Texture2D\" path=\"res://assets/" + texture + "\" id=\"tex_0\"]\n", "",
+                         "[node name=\"Sprite\" type=\"Sprite2D\" parent=\"wall_1\"]\ntexture = ExtResource(\"tex_0\")\n" +
+                             offset);
+    };
+    const Tiers::Rules tiers = TheTiers();
+    const auto drawn = [&dir, &scene](const Tiers::Rules& rules, const std::string& texture, Sprites::Sprite& out,
+                                      std::string& error, const std::string& offset = std::string()) {
+        Tscn::Scene parsed;
+        if (!ParseScene(scene(texture, offset).c_str(), parsed)) return false;
+        std::vector<Sprites::Sprite> sprites;
+        const bool found = Sprites::Find(parsed, dir.string(), rules, sprites, error);
+        if (found && sprites.size() == 1) out = sprites[0];
+        return found && sprites.size() == 1;
+    };
+
+    Sprites::Sprite sprite;
+    std::string error;
+    CHECK_MSG(drawn(tiers, "crystal.png", sprite, error, "offset = Vector2(0, 16)\n"), error);
+    CHECK_MSG(sprite.texture == dir.string() + "/assets/hd/crystal.png" && sprite.tier == "hd" && sprite.density == 2.0f,
+              "an hd file is drawn in place of the 1x file: " + sprite.texture);
+    CHECK_MSG(sprite.texels == glm::ivec2(64, 64) && sprite.sizePx == glm::dvec2(32.0, 32.0),
+              "at its texels over its density, which is the 1x file's size");
+    CHECK_MSG(sprite.offsetPx == glm::dvec2(0.0, 16.0), "and the level's offset, untouched by the density");
+    CHECK_MSG(Sprites::CentrePx(sprite) == glm::dvec2(0.0, 16.0), "so it stands where the 1x file stood");
+
+    CHECK_MSG(drawn(tiers, "sky.png", sprite, error), error);
+    CHECK_MSG(sprite.tier == "fullhd" && sprite.texture == dir.string() + "/assets/fullhd/sky.png",
+              "fullhd is tried before hd: " + sprite.texture);
+    CHECK_MSG(sprite.texels == glm::ivec2(1024, 512) && sprite.sizePx == glm::dvec2(512.0, 256.0),
+              "and a tier file that is not twice its 1x file is drawn at its own units, not the 1x size");
+
+    CHECK_MSG(drawn(tiers, "odd.png", sprite, error), error);
+    CHECK_MSG(sprite.texels == glm::ivec2(21, 21) && sprite.sizePx == glm::dvec2(10.0, 10.0),
+              "whole units, truncated after the divide");
+
+    CHECK_MSG(drawn(tiers, "only.png", sprite, error), error);
+    CHECK_MSG(sprite.tier == "hd" && sprite.sizePx == glm::dvec2(32.0, 64.0), "a tier file with no 1x file is drawn");
+
+    CHECK_MSG(drawn(tiers, "plain.png", sprite, error), error);
+    CHECK_MSG(sprite.tier.empty() && sprite.density == 1.0f && sprite.texture == dir.string() + "/assets/plain.png" &&
+                  sprite.sizePx == glm::dvec2(40.0, 100.0),
+              "a file with no tier file is drawn as named, at density 1");
+
+    CHECK_MSG(drawn(Tiers::Rules{}, "crystal.png", sprite, error), error);
+    CHECK_MSG(sprite.tier.empty() && sprite.sizePx == glm::dvec2(32.0, 32.0) &&
+                  sprite.texture == dir.string() + "/assets/crystal.png",
+              "and with no search, every file is drawn as named");
+
+    error.clear();
+    CHECK_MSG(!drawn(tiers, "speck.png", sprite, error) && error.find("less than one unit") != std::string::npos,
+              "a tier file under one unit is refused, by name: " + error);
+    error.clear();
+    CHECK_MSG(!drawn(tiers, "gone.png", sprite, error) && error.find("assets/gone.png") != std::string::npos,
+              "a name with neither a tier file nor its own file is refused, by the name: " + error);
 }
 
 // ---- art.json: what no level pictures ------------------------------------------
@@ -816,7 +912,7 @@ bool LoadLevel(const std::string& level, std::vector<Sprites::Sprite>& out) {
     Tscn::Scene scene;
     std::string error;
     const bool ok = Tscn::Load(kLevels + "/" + level + ".tscn", scene, error) &&
-                    Sprites::Find(scene, kLevels + "/..", out, error);
+                    Sprites::Find(scene, kLevels + "/..", TheTiers(), out, error);
     CHECK_MSG(ok, level + ": " + error);
     return ok;
 }
@@ -830,6 +926,12 @@ const Sprites::Sprite* Of(const std::vector<Sprites::Sprite>& sprites, const std
 
 std::string FileOf(const Sprites::Sprite* sprite) {
     return sprite != nullptr ? std::filesystem::path(sprite->texture).filename().string() : std::string();
+}
+
+// The folder the drawn file sits in: "fullhd" or "hd" for a tier file, "entities" for the 1x file.
+std::string FolderOf(const Sprites::Sprite* sprite) {
+    return sprite != nullptr ? std::filesystem::path(sprite->texture).parent_path().filename().string()
+                             : std::string();
 }
 
 void Level8sArt() {
@@ -853,24 +955,34 @@ void Level8sArt() {
     CHECK_MSG(added == 0, "level8 has no glow");
     CHECK_MSG(!sprites.empty() && sprites.front().node == "sky_629", "the sky, at z_index -100, is drawn first");
 
+    // Each drawn from the tier file the original draws (tiers.json), at its units.
+    // The fullhd sky is 1024 x 512 over a 455 x 256 1x file, so it is 512 u wide:
+    // the one size the tiers change (step 66). The hd files are exactly twice
+    // their 1x files, so they keep the 1x size; the rest have no tier file.
     const Sprites::Sprite* sky = Of(sprites, "sky_629");
-    CHECK(sky != nullptr && FileOf(sky) == "icy_sky.png" && sky->sizePx == glm::dvec2(455.0, 256.0) &&
-          sky->atPx == glm::dvec2(227.5, 128.0) && sky->zIndex == -100);
+    CHECK_MSG(sky != nullptr && FileOf(sky) == "icy_sky.png" && FolderOf(sky) == "fullhd" && sky->tier == "fullhd" &&
+                  sky->texels == glm::ivec2(1024, 512) && sky->sizePx == glm::dvec2(512.0, 256.0) &&
+                  sky->atPx == glm::dvec2(227.5, 128.0) && sky->zIndex == -100,
+              "the sky, fullhd/icy_sky.png at 512 x 256: " + (sky != nullptr ? sky->texture : std::string()));
     const Sprites::Sprite* wall = Of(sprites, "wall_w3_ent_832");
-    CHECK(wall != nullptr && FileOf(wall) == "wall_w3.png" && wall->sizePx == glm::dvec2(256.0, 256.0) &&
-          wall->atPx == glm::dvec2(640.0, 128.0) && wall->zIndex == -20 && wall->offsetPx == glm::dvec2(0.0));
+    CHECK(wall != nullptr && FileOf(wall) == "wall_w3.png" && FolderOf(wall) == "entities" && wall->tier.empty() &&
+          wall->sizePx == glm::dvec2(256.0, 256.0) && wall->atPx == glm::dvec2(640.0, 128.0) && wall->zIndex == -20 &&
+          wall->offsetPx == glm::dvec2(0.0));
     const Sprites::Sprite* torch = Of(sprites, "light_ent_648");
-    CHECK(torch != nullptr && FileOf(torch) == "torch_small.png" && torch->sizePx == glm::dvec2(32.0, 64.0) &&
-          torch->offsetPx == glm::dvec2(0.0, 16.0) && torch->zIndex == -16);
+    CHECK_MSG(torch != nullptr && FileOf(torch) == "torch_small.png" && FolderOf(torch) == "hd" &&
+                  torch->texels == glm::ivec2(64, 128) && torch->sizePx == glm::dvec2(32.0, 64.0) &&
+                  torch->offsetPx == glm::dvec2(0.0, 16.0) && torch->zIndex == -16,
+              "the torch, hd, its offset the level's");
     const Sprites::Sprite* doorway = Of(sprites, "door_bg_ent_596");
-    CHECK_MSG(doorway != nullptr && FileOf(doorway) == "black.bmp" && doorway->sizePx == glm::dvec2(40.0, 100.0) &&
-                  doorway->zIndex == -18,
+    CHECK_MSG(doorway != nullptr && FileOf(doorway) == "black.bmp" && doorway->tier.empty() &&
+                  doorway->sizePx == glm::dvec2(40.0, 100.0) && doorway->zIndex == -18,
               "the one BMP the converter copies, sized from its header");
     const Sprites::Sprite* wallToBreak = Of(sprites, "breakable_wall_625");
-    CHECK(wallToBreak != nullptr && FileOf(wallToBreak) == "breakable_wall_sand.png" &&
+    CHECK(wallToBreak != nullptr && FileOf(wallToBreak) == "breakable_wall_sand.png" && FolderOf(wallToBreak) == "hd" &&
           wallToBreak->sizePx == glm::dvec2(32.0, 128.0) && wallToBreak->zIndex == -2);
     const Sprites::Sprite* crystal = Of(sprites, "crystal_ent_790");
-    CHECK(crystal != nullptr && FileOf(crystal) == "crystal.png" && crystal->sizePx == glm::dvec2(32.0, 32.0) &&
+    CHECK(crystal != nullptr && FileOf(crystal) == "crystal.png" && FolderOf(crystal) == "hd" &&
+          crystal->texels == glm::ivec2(64, 64) && crystal->sizePx == glm::dvec2(32.0, 32.0) &&
           crystal->atPx == glm::dvec2(83.0, 32.0) && crystal->zIndex == 0);
 
     // Two platforms at one z_index: the file's order decides.
@@ -891,7 +1003,7 @@ void Level0sStaticPortalsAreAdded() {
     CHECK_EQ(added, 4);
     for (const char* name : {"portal_static_604", "portal_static_603", "portal_static_582", "portal_static_583"}) {
         const Sprites::Sprite* portal = Of(sprites, name);
-        CHECK_MSG(portal != nullptr && portal->additive && FileOf(portal) == "portal_halo.png" &&
+        CHECK_MSG(portal != nullptr && portal->additive && FileOf(portal) == "portal_halo.png" && portal->tier.empty() &&
                       portal->sizePx == glm::dvec2(64.0, 64.0),
                   std::string(name) + " is the halo, added");
     }
@@ -1587,6 +1699,7 @@ int main() {
     AJpegTheRendererCannotReadIsRefused();
     TheCanvasOrderIsZThenTheFile();
     WhatTheReaderDoesNotDrawIsNamed();
+    ASpriteIsDrawnFromItsTier();
     ThePortalAndTheShotAreTheirEnts();
     AStaticPortalWithoutItsScriptIsRefused();
     APulseGoesThereAndBack();
