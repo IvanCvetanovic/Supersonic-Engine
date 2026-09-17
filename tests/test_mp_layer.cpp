@@ -2191,6 +2191,48 @@ void ATurnedOwnerTurnsItsParticles() {
     layer.OnDetach(registry);
 }
 
+// K16: 2-32's dragon carries dragon.ent's one system, whose bitmap is
+// particles/explosion.JPG. While the header reader knew only PNGs and BMPs it
+// was dropped ("particle image could not be read"); it is built now, on its
+// 32 x 32 cell, added, a pool of 5 at its entity's node, and it draws.
+void TheDragonsFireIsBuiltFromItsJpeg() {
+    if (!OriginalArtIsThere("TheDragonsFireIsBuiltFromItsJpeg")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level31a");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    CloseTheLevelStartPopup(layer, registry);
+
+    const std::string dragon = "dragon_ent_1279";
+    const std::vector<MagicPortalsLayer::EmitterReport> built = layer.EmitterReports();
+    const auto* fire = ReportOf(built, dragon, 0);
+    CHECK_MSG(fire != nullptr, "2-32's dragon has its explosion.JPG system");
+    if (fire != nullptr) {
+        CHECK_MSG(fire->bitmap == "explosion.JPG" && fire->cellPx == glm::dvec2(32.0, 32.0),
+                  fire->bitmap + " on a cell of " + Point(fire->cellPx));
+        CHECK_MSG(fire->additive && fire->systems == 1 && fire->count == 5 && std::fabs(fire->systemSize - 24.0) < 1e-9,
+                  "dragon.ent's one system: added, a pool of 5, size 24");
+    }
+    const int jpegSystems = static_cast<int>(std::count_if(
+        built.begin(), built.end(), [](const MagicPortalsLayer::EmitterReport& r) { return r.bitmap == "explosion.JPG"; }));
+    CHECK_MSG(jpegSystems == 1, "one explosion.JPG system on 2-32: " + std::to_string(jpegSystems));
+
+    int fireDraws = 0;
+    for (int frame = 0; frame < 120; ++frame) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        for (auto [entity, tag, material] : registry.view<TagComponent, MaterialComponent>().each()) {
+            (void)entity;
+            if (tag.tag == "Magic Portals Particle" && EndsWith(material.albedoTexturePath, "/explosion.JPG")) ++fireDraws;
+        }
+    }
+    std::printf("  2-32's dragon: %d explosion.JPG particle draws over 120 frames\n", fireDraws);
+    CHECK_MSG(fireDraws > 0, "the dragon's fire is drawn");
+    layer.OnDetach(registry);
+}
+
 // ---- what the camera drops while it pans --------------------------------------
 
 // The owner reported sprites appearing and disappearing WHILE WALKING, with the
@@ -5223,6 +5265,7 @@ void runTests() {
     AnEmitterFollowsItsOwner();
     AParticleOnANonSquareCellIsDrawnSquare();
     ATurnedOwnerTurnsItsParticles();
+    TheDragonsFireIsBuiltFromItsJpeg();
     FinishingALevelShowsTheMedal();
     TheMedalScreenIsTheOriginals();
     TheGridShowsTheMedalsEarned();

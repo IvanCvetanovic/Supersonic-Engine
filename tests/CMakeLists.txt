@@ -231,6 +231,11 @@ add_mp_test(test_mp_lighting)
 # and a census of what the converted levels place, which is skipped without them
 # and never with 77.
 add_mp_test(test_mp_sky)
+# The texture tiers and the one cut rule: tiers.json and sim/Tiers - which file of an
+# image the original draws, its size in units and its frames' uv - on files the suite
+# writes, and over the original's own tier folders, which are skipped without them and
+# never with 77.
+add_mp_test(test_mp_tiers)
 # The sounds: the decoded AudioManager as data, and that every file it names is
 # really in the original's soundfx/. The reader runs anywhere; only the part
 # that opens the original's own files is skipped without them, never with 77.

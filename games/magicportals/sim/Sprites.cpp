@@ -33,6 +33,73 @@ int64_t LittleEndian16(const unsigned char* p) { return static_cast<int64_t>(uin
 
 std::string At(const Tscn::Node& node) { return "line " + std::to_string(node.line) + ": "; }
 
+// A JPEG keeps its size in its frame header, which may stand behind any number
+// of tables and application segments, so the segments are walked to it. The
+// marker walk and the frame header's layout are held to what stb_image, the
+// renderer's decoder (TextureRegistry::Acquire), accepts:
+//  - before the frame header only the tables (DQT, DHT, DRI) and the application
+//    and comment segments, each skipped by its length (stb_image.h:3099-3199);
+//    padding between segments and fill bytes before a marker are passed over
+//    (:2919-2927, :3375-3382);
+//  - the frame header is SOF0, SOF1 or SOF2 alone (:3360): lossless, hierarchical
+//    and arithmetic-coded frames are refused;
+//  - its length is 8 + 3 a component, of 1, 3 or 4 components, at 8 bits a sample
+//    (:3262-3274); the height comes before the width.
+// Not checked: the tables' contents and each component's sampling factors and
+// table index (:3290-3293). A file stb_image refuses for those is still sized
+// here, and the renderer draws it as the fallback.
+// `file` stands just past the start marker (0xFF 0xD8). An empty answer is a size.
+std::string JpegSize(std::istream& file, int64_t& width, int64_t& height) {
+    const auto next = [&file](int& byte) {
+        byte = file.get();
+        return byte != std::char_traits<char>::eof();
+    };
+    const auto bigEndian16 = [](const unsigned char* p) { return (int{p[0]} << 8) | int{p[1]}; };
+    bool first = true;
+    for (;;) {
+        int byte = 0;
+        if (!next(byte)) return "is cut short before its frame header";
+        // stb_image scans for the next marker only after a segment it has read.
+        if (byte != 0xFF && first) return "has no marker after its start";
+        while (byte != 0xFF) {
+            if (!next(byte)) return "is cut short before its frame header";
+        }
+        while (byte == 0xFF) {
+            if (!next(byte)) return "is cut short before its frame header";
+        }
+        first = false;
+        const int marker = byte;
+
+        if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2) {
+            unsigned char frame[8] = {}; // length, precision, height, width, components
+            if (!file.read(reinterpret_cast<char*>(frame), sizeof frame)) return "is cut short in its frame header";
+            const int length = bigEndian16(frame);
+            const int components = frame[7];
+            if (frame[2] != 8) {
+                return "is a JPEG of " + std::to_string(frame[2]) + " bits a sample, which the renderer does not decode";
+            }
+            if ((components != 1 && components != 3 && components != 4) || length != 8 + 3 * components) {
+                return "has a frame header the renderer does not decode";
+            }
+            height = bigEndian16(frame + 3);
+            width = bigEndian16(frame + 5);
+            return {};
+        }
+        const bool table = marker == 0xDB || marker == 0xC4 || marker == 0xDD;
+        const bool application = (marker >= 0xE0 && marker <= 0xEF) || marker == 0xFE;
+        if (!table && !application) {
+            const char digits[] = "0123456789ABCDEF";
+            return std::string("is a JPEG with marker 0x") + digits[marker >> 4] + digits[marker & 0xF] +
+                   " before its frame header, which the renderer does not decode";
+        }
+        unsigned char size[2] = {};
+        if (!file.read(reinterpret_cast<char*>(size), sizeof size)) return "is cut short before its frame header";
+        const int length = bigEndian16(size);
+        if (length < 2) return "has a segment shorter than its own length";
+        file.seekg(length - 2, std::ios::cur);
+    }
+}
+
 } // namespace
 
 bool ImageSize(const std::string& path, int& width, int& height, std::string& error) {
@@ -63,8 +130,17 @@ bool ImageSize(const std::string& path, int& width, int& height, std::string& er
             w = LittleEndian32(header + 18);
             h = std::llabs(LittleEndian32(header + 22));
         }
+    } else if (got >= 2 && header[0] == 0xFF && header[1] == 0xD8) {
+        // A short file has set the stream's end; the walk starts again after the
+        // start marker.
+        file.clear();
+        file.seekg(2);
+        if (const std::string why = JpegSize(file, w, h); !why.empty()) {
+            error = path + " " + why;
+            return false;
+        }
     } else {
-        error = path + " is neither a PNG nor a BMP";
+        error = path + " is not a PNG, a BMP or a JPEG";
         return false;
     }
     if (w <= 0 || h <= 0 || w > INT32_MAX || h > INT32_MAX) {
