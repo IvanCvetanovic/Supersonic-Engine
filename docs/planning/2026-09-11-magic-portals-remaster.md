@@ -10122,3 +10122,118 @@ is not touched: the ray starts at the port's body centre, wherever the body rest
   reaches the refactored `Shot::FirstBody` through `sim/Dragon.cpp`. `FirstBody` is the old walk by reading (`Meets`
   with triggers skipped and a start inside kept, as before) and by `test_mp_shot` 90 / 0 and `test_mp_play` 145 / 0;
   run `test_mp_dragon` directly with the next step's suites and record it there.
+
+## Step 65 - the tier file the original draws, copied by the converter beside each 1x texture, and a record of every choice (built)
+
+The entity-visuals order's step 2.1 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `system_6.md`
+section 4.1 C2): the converter now copies, for every texture a level names, the `hd/` or `fullhd/` file the original
+draws at 720 px beside the 1x copy, and records each choice in `out/assets/entity_tiers.json`. **Remake-only: no file
+of this repository changes but this record.** Changed in the remake (`Magic-Portals-Remake`): new
+`tools/converter/src/ethanon2godot/tiers.py`; `__main__.py`, `tests/test_smoke.py`, `docs/ethanon-formats.md`,
+`README.md`, `DEVLOG.md`. **Over the 128 levels it copies 45 tier files (38 hd, 7 fullhd) of 66 textures, reports
+exactly the four skies as changing size (512 x 256 units against 455 x 256), and leaves `out/levels` byte-identical
+(128 of 128). Nothing draws them yet: 2.2 resolves level art through `sim/Tiers` (step 61), and this build's 1-01 f420
+is byte-identical to step 64's with the files in place.**
+
+**WHAT THE ORIGINAL DOES** (step 61 has the full decode; `docs/ethanon-formats.md`'s new "2026-09-17 (tiers)" block
+carries it for the converter, cited).
+- **Which file.** `ETHGraphicResourceManager::AddFile` (`ETHResourceManager.cpp:133-144`) asks `ChooseSpriteVersion`
+  (`ETHSpriteDensityManager.cpp:88-139`) for `fullhd/<file>`, then `hd/<file>` (also whenever the fullhd test passed,
+  `:105`), then `xld/` and `ld/` on short screens, each by `FileExists`, else the name at density 1. Only the tier
+  names are tried: a tier file is drawn whether or not a 1x file is beside it.
+- **Which numbers.** `ETHAppEnmlFile`'s defaults (hd 2, fullhd **4**, thresholds 720 / 1080, `:39-52`), overridden
+  key by key by the `default`, `window` and platform blocks in that order (`:59-66`, `:111-148`); the platform is
+  `android` (`Platform.android.cpp:31-34`). The shipped `app.enml` has `default` (480, 600, 2, 2) and `ios` only, so
+  at 720 px the search is fullhd at D 2, then hd at D 2.
+- **Which size.** `int(texels / D)` (`GLES2Sprite.cpp:429-438`, `:389-392`), step 61's `Tiers::Units`.
+
+**WHAT CHANGED** (the remake).
+- **`tiers.py`** (new, beside `lighting.py` and `uiassets.py`): `read_density_settings(app.enml)` reads the numbers as
+  `ETHAppEnmlFile` does (a missing or unparsable file keeps the defaults, with a warning); `search_order(settings,
+  height = 720)` is `ChooseSpriteVersion`'s four tests and their order; `units` truncates after the divide;
+  `copy_entity_textures` copies each texture's 1x file, then the first tier file the search finds to
+  `entities/<tier>/<name>`, and merges the manifest across `--world` runs. **A destination holding the same bytes is not
+  rewritten, and nothing is deleted**, because the port's capture runs read `out/assets` while the converter runs. A
+  tier file of another size is copied and reported, not refused as `uiassets._copy_hd` refuses one.
+- **Manifest** `out/assets/entity_tiers.json`: `{"format": 1, "choice": {"screen_height_px": 720, "search":
+  [{"tier": "fullhd", "density": 2}, {"tier": "hd", "density": 2}]}, "files": {"entities/<name>": {"drawn", "tier",
+  "density", "texels", "units"}}}`, a row for every texture, 1x ones included (`drawn` the 1x path, D 1).
+- **`__main__.py` `--copy-textures`** calls it and prints `entity textures: 1x copied n, unchanged n; tier files copied
+  n, unchanged n`, `entity texture tiers: …`, one `tier size change:` line per tier file whose units differ from its 1x
+  file, and `tier file without a 1x file:` (the old "texture not found" warning is `SKIPPED` when neither exists).
+  `tscn.py` does not change: the `.tscn` still names the 1x path (route B).
+- **`tests/test_smoke.py`**, five tests on hand-written header-only PNGs: the search read from `app.enml` (720, 599,
+  480, 479, 320; the defaults without a file, fullhd D 4; `window` and `android` overriding, `ios` not);
+  `int(973 / 2)` = 486; the copy (hd over 1x, fullhd chosen over hd, an unreferenced hd file never copied, a tier file
+  with no 1x file copied and reported, a missing texture skipped, the manifest rows, exactly one size change); a second
+  run rewriting no identical file and no identical manifest (their mtimes kept) while replacing a stale one; and the
+  CLI over two `--world` runs merging one manifest, with no tier in the `.tscn`.
+
+**BASELINE.** Before: step 64's `visuals/1.3/after/` (1-01 f420 `6d5f4435`) and the remake at `b6569cf` with `out/` as
+the four earlier converter runs left it, snapshotted in `visuals/2.1/before/` (128 level md5s, `chapters.json`,
+`lighting_files.json`, the 112 files under `out/assets/entities/`; no `hd/`, `fullhd/` or `entity_tiers.json`). **The
+run:** the four `--world N --copy-textures` runs wrote to `out/staging_tiers/`, not `out/`, so no level or 1x file under
+`out/` was rewritten while the parallel track captured; every output was compared with `out/`, and then only the 45 new
+tier files and the manifest were copied into `out/assets/` without overwriting (`cp -n -p`). `out/` is now what the four
+runs would have written in place. After: `visuals/2.1/after/`, binary `a936f44f` (step 64's, not rebuilt). **No pixel
+moves, so the next step's "before" stays `visuals/1.2/after/` and its `sweep/` (1-01 f420 `6d5f4435`).**
+
+| Gate (00_order 2.1) | Required | Before | After |
+|---|---|---|---|
+| `pytest` fixture and `ruff` | pass, with the section 4.1 fixture | 80 passed; ruff clean | **85 passed** (5 new); **ruff: all checks passed** |
+| 45 files copied (38 hd, 7 fullhd) | 45 = 38 + 7 | 0: `--copy-textures` copied 1x files only; no `out/assets/entities/hd/` or `fullhd/` | **45**: tier files copied 27 + 3 + 8 + 7 over worlds 0-3; `hd/` 38 files, `fullhd/` 7, each byte-identical to its APK file. Textures by tier 7 fullhd, 38 hd, 21 1x of 66 |
+| size-change report lists exactly `icy_sky`, `red_sky`, `sky`, `sky_purple` | those four | no report | **exactly those four**, all in world 0's run: `entities/fullhd/<sky>.png: 512x256 units against the 1x file's 455x256`. The other 41 tier files' units equal their 1x sizes |
+| `out/levels` md5-identical | 128 of 128 | 128 md5s in `before/levels_md5.txt` | **128 of 128 identical**, both the staging run's output and `out/levels` itself after the copy; `chapters.json` and `lighting_files.json` identical too |
+| `git status` clean of `out/` | nothing from `out/` or `reference/` | clean | **clean of `out/`**: ` M` `__main__.py`, `test_smoke.py`, `docs/ethanon-formats.md`, `README.md`, `DEVLOG.md`, `??` `tiers.py`; `git check-ignore` gives `.gitignore:66:out/` for the manifest, a fullhd sky and the staging output |
+| `docs/ethanon-formats.md` note and DEVLOG | written | — | **written**: the "2026-09-17 (tiers)" block (which file, which numbers, which size, the copy and its manifest, the measured counts, the orphan `particles/hd` and `sprites/hd` files), a pointer at section 8.5 to the three statements it supersedes, and a DEVLOG entry |
+
+**Beyond the gates.**
+- **Placements.** Over the 2,883 sprite placements of `out/levels`, the manifest's tiers give **2,248 hd / 146 fullhd /
+  489 1x**, the split `system_6.md` counted and 2.2 pins in `test_mp_start`.
+- **Stderr** of all four runs is empty: no texture lacks a 1x file or a readable size, and `app.enml` was read.
+- **Out of the port's way.** Nothing in this repository reads `out/assets/entities/hd/` or `fullhd/` (grep: the layer's
+  `hd/` lookups go to the extracted APK) or walks `out/assets/entities/`. With the files in place, 1-01 f420 on
+  `a936f44f` is **`6d5f4435`**, byte-identical to step 64's; exit 0, validation ACTIVE, and the log differs from step
+  64's only in the output path. The suites that read `out/`, run directly once each: `test_mp_sprites` 464 / 0,
+  `test_mp_start` 726 / 0, `test_mp_lighting` 495 / 0, `test_mp_levels` 128 / 0.
+
+**BUILD.** Nothing to build: no file of this repository but this record changed. **THE SUITES:** the four above, on
+step 64's binaries; **ctest not run**, since no source, data or test here changed and step 64's run stands for these
+binaries. **SMART APP CONTROL:** no refusal; `MagicPortals.exe` `a936f44f` ran its one launch and each suite its
+first.
+
+**RULINGS.** The owner's standing rulings, every ruling of 00_order section 6 decided in favour of what the original
+does: **R13, route B** (the port resolves the tier from the file name; the converter copies the tier files and a
+manifest, and `out/levels` stays byte-identical) and **R12, the tier fixed at the 720 px choice** (the converter's
+search runs at a fixed 720 px height, whatever window the port opens). No other ruling bears on 2.1.
+
+**RECORDED DEVIATIONS** (from `system_6.md` C2's text).
+- **Where the code lives.** C2 puts the copy in `__main__.py`; it is in a new `tiers.py`, which `__main__.py` calls,
+  as the lighting and UI copies are organised.
+- **The manifest's shape.** C2's rows sit under `"files"` beside `"format"` (as `lighting_files.json` does), and each
+  row adds `"density"`; a `"choice"` object records the height and search the run used. C2's `units` is `w/D`; it is
+  written `int(w/D)`, step 61's decision 2.
+- **The densities** are read from `app.enml`, not fixed at 2: the engine's own default is 4 for fullhd, and a run
+  against another project would otherwise size it wrong silently.
+- **A tier file with no 1x file** is copied (the loader never asks for the 1x file) and reported; C2 names no rule.
+- **The staging run** (BASELINE): C2 regenerates `out/` in place; here the run went to `out/staging_tiers/` and only
+  new files were copied into `out/`.
+
+**LEFT FOR THE OWNER.**
+- **`_vertical_offset` reads the 1x height** (`tscn.py`). It equals the units of all 10 `type = 2` placements
+  (`torch_small.png`, hd exactly 2x), but a vertical sprite whose tier changes size would be placed from the wrong
+  height. None exists.
+- **Stale tier files.** The copy never deletes, so a tier file dropped from a later APK would stay in `out/` (the
+  manifest row would say what is drawn). Deliberate while another track reads `out/`.
+- **Two copies of the same numbers.** The converter reads the search and densities from `app.enml`; the port's
+  `data/tiers.json` (step 61) fixes them as `search ["fullhd", "hd"]`, D 2 and 2. They agree today (the manifest's
+  `choice` says so), and nothing checks that they keep agreeing: were the two ever to differ, the manifest's `units`
+  and `Tiers::Units` would disagree silently. Latent while the APK is read-only; 2.2 may compare the two.
+- **`out/staging_tiers/`** is left in place (gitignored), with the run's stdout and stderr in `visuals/2.1/run/`.
+- **The manifest's `choice` is the last run's.** `_merge_manifest` keeps every earlier run's `files` rows but writes
+  this run's `choice` without comparing it with the stored one, so a later run under another `app.enml` or screen
+  height would leave rows computed under two rules. All four runs share one choice today (fullhd D 2, hd D 2 at
+  720 px), so the manifest is correct; a check or a two-run test with different densities is not written.
+- **Letter case, in the converter too.** `tiers.py` finds a tier file with `Path.is_file`, which ignores case on
+  Windows; the original's `FileExists` on Android does not (step 61's caveat, on the port's side). An exact-case
+  listing finds no case-only match among the 66 textures, so nothing differs today.
