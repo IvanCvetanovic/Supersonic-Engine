@@ -799,6 +799,11 @@ private:
     std::vector<TorchLight> m_torchLights;
     float m_direction{0.0f};                // this tick's walk: -1 left, 1 right, 0 standing
     bool m_facingRight{false};              // which way the player last walked
+    // On a no_gravity level the column is not the flipbook's: MainCharacter's own
+    // timer and hover, stepped once a level step (Art::UpdateNoGravity), and the
+    // column this step draws.
+    Art::NoGravityPlayer m_noGravityPlayer;
+    int m_noGravityColumn{0};
     // Chapter 1's boss: its reach as a box, beholder.ent's sheet when the image
     // is there, and its spikes. The beholder is drawn at its adder's z_index
     // among the art, and a spike at the -4 the original adds it at.

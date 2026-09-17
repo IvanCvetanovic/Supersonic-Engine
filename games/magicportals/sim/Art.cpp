@@ -179,6 +179,60 @@ glm::dvec2 Pulse::ScaleAt(double elapsedMs) const {
     return fromScale + (toScale - fromScale) * eased;
 }
 
+double NoGravityMotion::HoverUnits(float angle, double viewUnitsTall) const {
+    // SetPivotAdjust(originalPivotAdjust + vector2(0, cos(angle) * 1.2)): screen
+    // pixels, since the pivot is kept times the entity's scale and drawn times it
+    // again; units as a screen hoverAtScreenPx tall shows them.
+    return hoverScreenPx * static_cast<double>(Supersonic::DetMath::cos(angle)) * viewUnitsTall / hoverAtScreenPx;
+}
+
+const std::string& PlayerSheet(const Character& mage, bool noGravity) {
+    return noGravity ? mage.noGravitySprite : mage.sprite;
+}
+
+int FrameTimer::Set(int firstFrame, int lastFrame, double strideMs, bool repeat, double elapsedMs) {
+    timeMs += elapsedMs;
+    if (firstFrame != first || lastFrame != last) {
+        frame = firstFrame;
+        first = firstFrame;
+        last = lastFrame;
+        timeMs = 0.0;
+        return frame;
+    }
+    if (timeMs >= strideMs) {
+        ++frame;
+        timeMs -= strideMs;
+        if (frame > last) {
+            if (repeat) {
+                frame = first;
+            } else {
+                frame = last;
+                timeMs = 0.0;
+            }
+        }
+    }
+    return frame;
+}
+
+int UpdateNoGravity(const Character& mage, NoGravityPlayer& player, bool walking, double elapsedMs) {
+    const int lastColumn = mage.columns - 1;
+    // SideScrollerCharacter::updateFrame: a walk draws its own set; a stand draws
+    // the idle column as the update before left it.
+    const int drawn = walking ? player.timer.Set(0, lastColumn, mage.strideMs, true, elapsedMs) : player.idleColumn;
+    // MainCharacter::linearMotion.
+    const NoGravityMotion& motion = mage.noGravity;
+    if (!player.moved) {
+        player.angle = static_cast<float>(motion.hoverStartRadians);
+        player.moved = true;
+    }
+    player.angle += static_cast<float>(motion.hoverRadiansPerSecond * elapsedMs / 1000.0);
+    if (player.angle > static_cast<float>(motion.hoverWrapRadians)) {
+        player.angle -= static_cast<float>(motion.hoverWrapRadians);
+    }
+    player.idleColumn = player.timer.Set(0, lastColumn, motion.columnStrideMs, true, elapsedMs);
+    return drawn;
+}
+
 bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
@@ -233,6 +287,30 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     mage.pivotYPx = pivot.AsArray()[1].AsNumber();
     mage.strideMs = walk["stride_ms"].AsNumber();
     mage.framesPerSecond = 1000.0 / mage.strideMs;
+
+    // And what a no_gravity level changes: the sheet it wears, the column that
+    // turns while it stands, and its hover. None is defaulted - without them the
+    // suit is the sheet the footage refused on 18 levels.
+    const Json::Value& weightless = character["no_gravity_motion"];
+    const auto positive = [](const Json::Value& value) { return Finite(value) && value.AsNumber() > 0.0; };
+    if (!character["no_gravity_sprite"].IsString() || character["no_gravity_sprite"].AsString("").empty() ||
+        !weightless.IsObject() || !positive(weightless["column_stride_ms"]) ||
+        !positive(weightless["hover_screen_px"]) || !positive(weightless["hover_at_screen_px"]) ||
+        !positive(weightless["hover_radians_per_second"]) || !Finite(weightless["hover_start_radians"]) ||
+        !positive(weightless["hover_wrap_radians"])) {
+        error = path + ": character needs no_gravity_sprite, and no_gravity_motion's column_stride_ms, "
+                       "hover_screen_px, hover_at_screen_px, hover_radians_per_second and hover_wrap_radians "
+                       "above 0 and a hover_start_radians";
+        return false;
+    }
+    mage.noGravitySprite = character["no_gravity_sprite"].AsString("");
+    NoGravityMotion& motion = mage.noGravity;
+    motion.columnStrideMs = weightless["column_stride_ms"].AsNumber();
+    motion.hoverScreenPx = weightless["hover_screen_px"].AsNumber();
+    motion.hoverAtScreenPx = weightless["hover_at_screen_px"].AsNumber();
+    motion.hoverRadiansPerSecond = weightless["hover_radians_per_second"].AsNumber();
+    motion.hoverStartRadians = weightless["hover_start_radians"].AsNumber();
+    motion.hoverWrapRadians = weightless["hover_wrap_radians"].AsNumber();
 
     // Chapter 1's boss and its spikes, whose frames are chosen, not played.
     if (!root.Has("beholder") || !root.Has("spike")) {

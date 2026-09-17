@@ -5099,6 +5099,91 @@ void ADeathDismissesTheHudAndTheLostScreenComesIn() {
     layer.OnDetach(registry);
 }
 
+// MainCharacter on a no_gravity level (art.json character.no_gravity_sprite and
+// no_gravity_motion): dark_mage_in_space.png, lit through dark_mage.ent's own
+// normal map, standing on the column its FrameTimer turns every 280 ms - the one
+// the update before left - with its pivot hovering 1.2 screen pixels on a
+// cosine. level0c sets space_bg and not no_gravity: the normal sheet, on column
+// 0, unhovered.
+void AWeightlessPlayerWearsTheSuit() {
+    if (!OriginalArtIsThere("AWeightlessPlayerWearsTheSuit")) return;
+    MagicPortals::Art::Rules rules;
+    std::string error;
+    CHECK_MSG(MagicPortals::Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", rules, error),
+              error);
+    const MagicPortals::Art::Character& mage = rules.character;
+    const double tickMs = static_cast<double>(MagicPortalsLayer::kTick) * 1000.0;
+    for (const std::string name : {"level1c", "level0c"}) {
+        const bool weightless = name == "level1c";
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), name);
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr) continue;
+        CHECK_MSG(layer.SimLevel()->noGravity == weightless, name + ": no_gravity as the level sets it");
+        const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+        CHECK(mageQuad != entt::null);
+        if (mageQuad == entt::null) continue;
+        {
+            const MaterialComponent& material = registry.get<MaterialComponent>(mageQuad);
+            const char* sheet = weightless ? "/entities/dark_mage_in_space.png" : "/entities/magic_portals_hd.png";
+            CHECK_MSG(EndsWith(material.albedoTexturePath, sheet) &&
+                          EndsWith(material.normalTexturePath, "/entities/normalmaps/normalmap_77.png"),
+                      name + ": " + material.albedoTexturePath + " through " + material.normalTexturePath);
+            const glm::vec3 scale = registry.get<TransformComponent>(mageQuad).scale;
+            const double perMetre = MagicPortals::Units::kPixelsPerMetre;
+            CHECK_MSG(std::fabs(scale.x * perMetre - 40.0) < 1e-3 && std::fabs(scale.y * perMetre - 56.0) < 1e-3,
+                      name + ": a 40 x 56 frame of its sheet");
+        }
+        MagicPortals::Art::NoGravityPlayer mirror;
+        std::array<int, 4> firstTick{-1, -1, -1, -1};
+        int offColumn = 0;
+        double worst = 0.0;
+        double highest = -1.0;
+        double lowest = 1.0;
+        for (int tick = 1; tick <= 140; ++tick) {
+            tickWith(layer, registry, kRest, {}, {});
+            if (!registry.valid(mageQuad)) break;
+            int column = 0;
+            double hover = 0.0;
+            if (weightless) {
+                column = MagicPortals::Art::UpdateNoGravity(mage, mirror, false, tickMs);
+                hover = mage.noGravity.HoverUnits(mirror.angle, layer.ViewPx().y);
+            }
+            const SpriteAnimationComponent& animation = registry.get<SpriteAnimationComponent>(mageQuad);
+            const int shown = static_cast<int>(animation.firstFrame) - mage.rightRow * mage.columns;
+            if (shown != column || animation.frameCount != 1 || animation.playing) ++offColumn;
+            if (shown >= 0 && shown < 4 && firstTick[static_cast<std::size_t>(shown)] < 0) {
+                firstTick[static_cast<std::size_t>(shown)] = tick;
+            }
+            const glm::dvec2 drawn = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(mageQuad).position);
+            const glm::dvec2 body = playerPx(registry, layer);
+            worst = std::max(worst, std::fabs(drawn.x - body.x) + std::fabs(drawn.y - (body.y - 2.0 - hover)));
+            highest = std::max(highest, body.y - 2.0 - drawn.y);
+            lowest = std::min(lowest, body.y - 2.0 - drawn.y);
+        }
+        CHECK_MSG(offColumn == 0, name + ": " + std::to_string(offColumn) + " tick(s) off the timer's column");
+        CHECK_MSG(worst < 2e-3, name + ": the pivot, hovered, on the body: worst " + std::to_string(worst));
+        if (weightless) {
+            CHECK_MSG(firstTick == (std::array<int, 4>{1, 19, 36, 53}),
+                      name + ": columns 0, 1, 2, 3 first drawn on ticks " + std::to_string(firstTick[0]) + ", " +
+                          std::to_string(firstTick[1]) + ", " + std::to_string(firstTick[2]) + ", " +
+                          std::to_string(firstTick[3]));
+            const double amplitude = 1.2 * 256.0 / 720.0;
+            CHECK_MSG(std::fabs(highest - amplitude) < 2e-3 && std::fabs(lowest + amplitude) < 2e-3,
+                      name + ": a hover of 0.4267 units each way over 2.33 s: " + std::to_string(highest) + " / " +
+                          std::to_string(lowest));
+            std::printf("  %s: dark_mage_in_space.png, columns first drawn on ticks 1, %d, %d, %d; hover %+.4f / %+.4f units\n",
+                        name.c_str(), firstTick[1], firstTick[2], firstTick[3], highest, lowest);
+        } else {
+            CHECK_MSG(firstTick == (std::array<int, 4>{1, -1, -1, -1}) && highest < 1e-3 && lowest > -1e-3,
+                      name + ": standing on column 0, unhovered");
+        }
+        layer.OnDetach(registry);
+    }
+}
+
 void runTests() {
     TheLayerPlaysLevel30();
     Level31DrawsTheBeholder();
@@ -5115,6 +5200,7 @@ void runTests() {
     WithoutTheOriginalThePortalIsABox();
     ThePlayerIsTheDarkMage();
     TheWalkKeepsItsColumnAndItsTime();
+    AWeightlessPlayerWearsTheSuit();
     ABrokenWallTakesItsBoxWithIt();
     ARetryTakesTheThrownStonesAway();
     TheChapterEnds();

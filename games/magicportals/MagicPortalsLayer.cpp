@@ -2129,11 +2129,15 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
 
     // The player, as dark_mage.ent draws it, standing on the idle column of the
     // way GameCharacter faces it when it is made (Art.hpp): each level starts
-    // there, and its walk's column and time start from nothing.
+    // there, and its walk's column and time start from nothing. On a no_gravity
+    // level in the suit MainCharacter's constructor swaps in, with its timer and
+    // hover not yet moved.
     const Art::Character& mage = m_artRules.character;
-    const std::string sheet = originalImage(mage.sprite);
+    const std::string sheet = originalImage(Art::PlayerSheet(mage, m_level.noGravity));
     m_facingRight = mage.initialDirection == mage.rightRow;
     m_direction = 0.0f;
+    m_noGravityPlayer = Art::NoGravityPlayer{};
+    m_noGravityColumn = mage.idleColumn;
     if (m_artReady && imageSizePx(sheet) != glm::dvec2(0.0)) {
         m_playerQuad = makeSprite(registry, "Magic Portals Player Sprite", sheet, mage.additive);
         registry.emplace<InterpolatedTransformComponent>(m_playerQuad);
@@ -2595,8 +2599,12 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             if (m_direction > 0.0f) m_facingRight = true;
             if (m_direction < 0.0f) m_facingRight = false;
             const int row = m_facingRight ? mage.rightRow : mage.leftRow;
-            const bool walking = m_direction != 0.0f;
-            const uint32_t first = static_cast<uint32_t>(row * mage.columns + (walking ? 0 : mage.idleColumn));
+            const bool weightless = m_level.noGravity;
+            // On a no_gravity level the flipbook stands still on the column
+            // MainCharacter's timer gives this step (stepLevel), walking or not.
+            const bool walking = m_direction != 0.0f && !weightless;
+            const int column = weightless ? m_noGravityColumn : (walking ? 0 : mage.idleColumn);
+            const uint32_t first = static_cast<uint32_t>(row * mage.columns + column);
             const uint32_t count = walking ? static_cast<uint32_t>(mage.columns) : 1u;
             // The walk's column and its time are NOT reset by a stop or a turn:
             // the original's FrameTimer is always set(0, 3), so it resets only
@@ -2612,11 +2620,17 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             animation.firstFrame = first;
             animation.frameCount = count;
             animation.playing = walking;
-            const glm::dvec2 cellPx =
-                imageSizePx(originalImage(mage.sprite)) / glm::dvec2(mage.columns, mage.rows);
+            // The sheet it was built with (buildDrawables), whose frame is cut from it.
+            const glm::dvec2 cellPx = imageSizePx(originalImage(Art::PlayerSheet(mage, weightless))) /
+                                      glm::dvec2(mage.columns, mage.rows);
             // The image stands with its pivot on the entity, as Ethanon draws it
-            // (ETHSpriteEntity::ComputeInScreenSpriteCenter).
-            placeSprite(registry, m_playerQuad, at - glm::dvec2(mage.pivotXPx, mage.pivotYPx), cellPx,
+            // (ETHSpriteEntity::ComputeInScreenSpriteCenter). linearMotion hovers
+            // that pivot once it has run: a larger y draws the image higher.
+            double pivotYPx = mage.pivotYPx;
+            if (weightless && m_noGravityPlayer.moved) {
+                pivotYPx += mage.noGravity.HoverUnits(m_noGravityPlayer.angle, ViewPx().y);
+            }
+            placeSprite(registry, m_playerQuad, at - glm::dvec2(mage.pivotXPx, pivotYPx), cellPx,
                         SlotZ(m_playerSlot), 0.0f);
         }
     }
@@ -4487,6 +4501,14 @@ void MagicPortalsLayer::stepLevel(entt::registry& registry, float direction, flo
     // over in one piece when they start, as the original's load hands it.
     tickNoPortalSign(Hud::HandOver(m_hudRules, m_levelAgeMs, static_cast<double>(fixedDelta) * 1000.0,
                                    m_sign.heldMs));
+    // MainCharacter::update on a no_gravity level, once a step: never under a
+    // pause or a popup, where no step runs, and not once the player has gone into
+    // the door or died, where its picture is gone (the original skips the update
+    // when finished).
+    if (m_level.noGravity && m_playerQuad != entt::null && !m_finishing && !m_dying) {
+        m_noGravityColumn = Art::UpdateNoGravity(m_artRules.character, m_noGravityPlayer, m_direction != 0.0f,
+                                                 static_cast<double>(fixedDelta) * 1000.0);
+    }
     syncDrawables(registry);
     // StaticSky::update's order: every sky placed (syncSprites, just now), and
     // only then its scroll moved on, so the next tick draws what this one left.

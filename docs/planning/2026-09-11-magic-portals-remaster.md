@@ -9718,3 +9718,183 @@ decision under the standing ruling toward what the original does.
 - **The column across a stop** is measured in the port against the decode (Beyond the gates), not against the
   original. Footage F9's r7b walks right, stops and steps back left, but at about 17 fps (median gap 50 ms) it
   cannot resolve a 90 ms column; a 60 fps clip of the original that walks, stops and walks on would confirm it.
+
+## Step 63 - the suit the player wears where gravity is off, the column it turns standing, and the pivot it hovers on (built)
+
+The entity-visuals order's step 1.2 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `systems_3_4.md`
+section 2 3b; conflict K15), with what step 62 handed it: on the 18 `no_gravity` levels the player stood in
+`magic_portals_hd.png` on column 0. Game-only: no file under `src/` or `assets/shaders/`. Changed: `data/art.json`,
+`sim/Art.{hpp,cpp}`, `MagicPortalsLayer.{hpp,cpp}`, `tests/test_mp_sprites.cpp`, `tests/test_mp_zerog.cpp`,
+`tests/test_mp_layer.cpp`. **The 18 levels now draw `dark_mage_in_space.png` (space f8 wins on all 18, 0.811 to
+0.971), its column turning every 280 ms and its picture hovering 1.2 screen pixels on a 2.09 s cosine, both measured
+in the exe tick for tick against the decode and in footage F10 of the original; 4-01, which sets `space_bg` and not
+`no_gravity`, keeps the normal sheet; 110 of 128 f420 frames are byte-identical to step 62's, and the 18 that change
+change only inside the player's quad.**
+
+**WHAT THE ORIGINAL DOES** (the remake's bytecode listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce`).
+- **The suit, keyed on `no_gravity`.** `MainCharacter::MainCharacter` (bytes 126650..127790) instructions 239-269:
+  when its `noGravity` argument is set, `SetUInt("no_gravity", 1)` and `SetSprite("dark_mage_in_space.png")`;
+  `Game::preLoop` (112536..114414) 65-75 passes `Game.noGravity`. `ETHSpriteEntity::SetSprite`
+  (`ETHSpriteEntity.cpp:177-201`) keeps the sprite cut and the frame and loads no normal map, and the listing calls no
+  `SetNormal`: the suit is lit through `normalmap_77.png`. Its 1x file is 160 x 224 like the normal sheet's, so the
+  40 x 56 frame and the pivot are unchanged.
+- **A column every 280 ms, standing.** `MainCharacter::update` (128578..128850), on every update neither paused nor
+  finished (6-21), runs `SideScrollerCharacter::update` (57), whose `updateFrame` stands the player on `idleColumn`
+  (88-102), and then `MainCharacter::linearMotion` (132139..132833; 66). Where `noGravity` is set (3-6) it calls the
+  character's `FrameTimer` as `set(0, 3, 280, true)` and writes the column into `idleColumn` (163-174). So the
+  standing column turns every 280 ms, and an update draws the column the update before left. `FrameTimer::set`
+  (23254..23650) adds the frame's elapsed ms, resets to `first` with no time when the range changes (the first
+  update, against the constructor's 0 and 0), else steps one column once the time reaches the stride. A walking
+  update also calls `set(0, 3, 90, true)` (`updateFrame` 63-86) and draws that, adding its time twice. Row 2 of the
+  suit reads A B A C: frames 8 and 10 are the same image.
+- **Keys walk it in zero-g too.** `MainCharacter::update` skips only `ScreenPad::update` where `noGravity` is set
+  (23-32); it still copies the pad's direction into `moveVec` (34-44) and adds `getKeyboardMoveVec` (46-54) on every
+  update, before `SideScrollerCharacter::update` (57). So a held key draws the walk's 90 ms column with the doubled
+  time in the original as in the port (whose body does not move, `Game::BeforeStep`; whether the original's body
+  moves is not measured). Android has no keyboard, so no clip shows it.
+- **The hover.** `linearMotion` 8-57, on its first call, sets `linearMotionAngle` to `PI + PIb` and keeps the pivot
+  as `originalPivotAdjust`; 59-78 add `unitsPerSecond(3)`, 3 rad a second of frame time
+  (`STimeManager::unitsPerSecond`, 8045..8162: min(200, elapsed ms) / 1000 times the time factor); 92-112 take
+  `PI * 2` off once past it; 114-161 `SetPivotAdjust(originalPivotAdjust + vector2(0, cos(angle) * 1.2))` (arguments
+  pushed last-first: x 0, y the offset). `GetPivotAdjust` returns the stored pivot times the entity's scale and
+  `SetPivotAdjust` divides by it (`ETHEntity.cpp:1019-1026`); the draw multiplies it back (`ETHEntity.cpp:296`,
+  `ETHSpriteEntity.cpp:702`). The player is added at `getScale()` (`GameCharacter::GameCharacter` 10-24), screen
+  height / 256 (00_order 8.12a), so the 1.2 is **screen pixels, 0.4267 units at 720 px**, not 1.2 units; a larger
+  pivot y draws the image higher. Period 2 PI / 3 = 2.094 s. `updateEyes` (listing line 25999) places the eyes from
+  `GetPosition`, not the pivot: they do not hover (for 7.1).
+
+**WHAT CHANGED.**
+- **`data/art.json` `character`:** `no_gravity_sprite` `dark_mage_in_space.png`, with `_no_gravity_sprite` (the
+  decode, the normal map kept, `space_bg` not the key); `no_gravity_motion` {`column_stride_ms 280`,
+  `hover_screen_px 1.2`, `hover_at_screen_px 720`, `hover_radians_per_second 3.0`, `hover_start_radians 4.71238898`,
+  `hover_wrap_radians 6.28318531`}, with its `_source`. The `animation._source` "NOT BUILT" note becomes a pointer to
+  it.
+- **`sim/Art`:** `Character` gains `noGravitySprite` and `NoGravityMotion noGravity`, all required (refused when
+  absent, empty, not finite or not above 0; the start angle need only be finite). New pure pieces:
+  `PlayerSheet(mage, noGravity)`; `FrameTimer::Set`, `FrameTimer::set` as decoded; `NoGravityPlayer` (the timer,
+  `idleColumn`, the float angle, whether `linearMotion` has run); `UpdateNoGravity` (one update: the walk's column or
+  the idle column drawn, then the angle turned and wrapped and the idle column set);
+  `NoGravityMotion::HoverUnits(angle, viewUnitsTall)` = 1.2 x `DetMath::cos` x view units / 720.
+- **`MagicPortalsLayer`:** `buildDrawables` makes the player's quad from `PlayerSheet(mage, m_level.noGravity)` and
+  resets `m_noGravityPlayer`. `stepLevel`, before `syncDrawables`, runs `UpdateNoGravity` once a level step on a
+  `no_gravity` level while the player is drawn and neither finishing nor dying (no step runs under a pause or a
+  popup). `syncDrawables` stands the flipbook still on that column there (never playing), cuts `cellPx` from the same
+  sheet (K15: 2.3 resolves `PlayerSheet`'s name), and adds `HoverUnits` to the pivot's y once `linearMotion` has run.
+  Levels with gravity take the unchanged path (step 62's flipbook), byte for byte. The loading screen keeps
+  `mage.sprite`.
+- **Tests.** `test_mp_sprites`: `ThePortalAndTheShotAreTheirEnts` pins the suit, the normal map, 280, 1.2, 720, 3,
+  `PI + PIb`, `PI * 2`, `HoverUnits` +-0.4267 on a 256-unit view and `PlayerSheet`; `APlayerWithoutItsWalkIsRefused`
+  refuses nine broken `no_gravity` keys; new `AFrameTimerStepsOneFrameACall` (a reset on a new range only, one frame
+  a call with the rest of the time kept, repeat and hold) and `AWeightlessPlayerTurnsItsColumnAndHovers` (columns 1,
+  2, 3 first drawn on updates 19, 36, 53 and 0 again by 70; the angle after 70 updates; the first update's 0.02 units;
+  a walking update's doubled time, the 90 ms column on update 4). `test_mp_zerog`
+  `TheSuitIsWornWhereGravityIsOffAndNowhereElse`: level1c wears the suit, level0c and level0 the normal sheet.
+  `test_mp_layer` `AWeightlessPlayerWearsTheSuit`: on level1c the quad's albedo is the suit and its normal map
+  `normalmap_77.png`, 40 x 56, on the timer's column on every one of 140 ticks (first drawn on ticks 1, 19, 36, 53),
+  its pivot on the body within 0.002 units with the hover, which reaches +0.4266 and -0.4266 units; on level0c the
+  normal sheet, on column 0, unhovered.
+
+**BASELINE.** Before: step 62's `visuals/1.1/after/` and its `sweep/` (1-01 f420 `6d5f4435`; `MagicPortals.exe`
+`a2415771`, the committed build's, unchanged since; HEAD `441ce6e`), its chapter 4 scanned again with this step's
+cells (`visuals/1.2/work/sweep_12.py`). After: `visuals/1.2/after/` (`capture_12.sh after timing|sweep`), binary
+`2c9da967`. **Pixels move on 18 levels, so the next step's "before" is `visuals/1.2/after/` and its `sweep/` (1-01
+f420 still `6d5f4435`).**
+
+| Gate (00_order 1.2) | Required | Before | After |
+|---|---|---|---|
+| `player_scan` over chapter 4 (normal and space f4 and f8, each located over the whole frame): space f8 wins on 4-02...4-19 | 18 of 18 | 0 of 18 (normal f8 wins all 18, 0.837-0.977) | **18 of 18: passes.** 0.811 (4-19) to 0.971 (4-13, 4-14), leads 0.014 (4-19) to 0.143 (4-11). The original's h6.3: space f8 wins all 18, 0.801-0.948 |
+| normal f8 wins on 4-01 | wins | 0.952, +0.122 | **0.952, +0.122: passes** (the frame is byte-identical) |
+| space f8 >= 0.90 on 4-03, 4-04, 4-11, 4-16, 4-17 | >= 0.90 | 0.838, 0.830, 0.834, 0.837, 0.804 | **0.965, 0.965, 0.970, 0.966, 0.939: passes** (the original: 0.944, 0.942, 0.945, 0.948, 0.927) |
+| centre within 3 px of the original's on 4-04, 4-11, 4-17 | +-3 px | (0, +3), (0, +3), (0, +3) | **(+2, +2), (+1, +2), (+1, +2): passes.** `compare.py` against h6.3 gives camera offset (0, 0) on all three, 4-11 included (it was not on `systems_3_4`'s (0, 0) list) |
+| `normalmap_77` kept | the suit through `normalmap_77.png` | - | **passes**: `test_mp_layer` `AWeightlessPlayerWearsTheSuit`, level1c's quad `.../entities/dark_mage_in_space.png` through `.../entities/normalmaps/normalmap_77.png`; `dark_mage_in_space_nm.png` is read by nothing |
+| ctest `test_mp_zerog` (level1c suit, level0c not) | 0 failures | - | **88 checks (4 of them new), 0 failures** |
+| `test_mp_sprites` | 0 failures | 392 checks (step 62) | **442 checks, 0 failures** |
+| `test_mp_start` | 0 failures | 726 checks (step 62) | **726 checks, 0 failures** |
+| `test_mp_layer` | 0 failures | 875 checks (step 62) | **893 checks, 0 failures** |
+
+**Beyond the gates.**
+- **What changed where** (`work/sweep_12.py`, `work/centres_diff.py`, against `1.1/after/sweep/`): 110 of 128 f420
+  frames byte-identical, 4-01 among them; the 18 that change are exactly 4-02...4-19, each only inside the located
+  player's 112.5 x 157.5 px quad (boxes 95-96 x 145-148 px, 10,158-10,647 pixels). 128 exits 0, validation ACTIVE in
+  128 and silent, no "Could not load".
+- **The frame at f420.** The model draws column 0 on tick 420 (frame 8, so the f8 gates read the column they name),
+  with 263 of the stride's 280 ms accumulated: the timer turns on update 421, and column 1 is drawn from tick 422.
+  The hover there is +1.00 screen pixel (0.357 units). A later change to zero-g timing that moves the column by a tick
+  moves these 18 frames, and an f8 comparison would then read a neighbouring cell. The suit's integer lock sits 1 px
+  higher than the normal sheet's did on 15 of the 18 and level on 3 (4-06, 4-07, 4-14); two templates are compared
+  there, so the hover is measured by the timing captures below, not by this.
+- **The column and the hover in the exe, every frame** (`capture_12.sh after timing`: 4-03 and 4-05 to f140;
+  `work/timing.py`, `work/timing2.py`). Frame N shows tick N. The level's fade in covers frames 1-70; after it the
+  difference inside the player's box peaks on exactly frames 86, 103, 120 and 137 (33,001-40,580, against at most
+  8,813 and 12,491 on any other frame), the model's column changes, and the cells read A (f71) B (f86) A (f103) C
+  (f120) A (f137); f70, the model's change to A, ties with C by 0.0001 at the fade's end. The centre y over frames
+  60-140 fits y = a + b sin(3t) + c cos(3t) with b = **-1.209 px** (4-03) and **-1.241 px** (4-05) against the decoded
+  -1.2, c 0.057 and 0.052, residual 0.021 and 0.064 px (0.578 and 0.598 without the hover).
+- **The original, footage F10** (`F10_recoil_4-05.mp4`, 4-05, 340 frames at about 17 fps over 20 s;
+  `work/f10_columns.py`, `work/f10_stride.py`): of 251 frames whose suit scores above 0.75 and whose class leads
+  its row's others by 0.001, a column model agrees with 82.5% at its best stride, **282.75 ms**, with 72.5% at exactly
+  280, and with at most 50.2% at 90, 140, 200, 250, 275, 310, 360 or 560 ms; a player standing on column 0 would agree
+  with 55.4%. 282.75 / 280 = 1.0098 is the emulator's
+  clock as F12 measured it for the walk (90.8 / 90 = 1.0089, step 62). The hover, in the first second before the
+  first shot moves the player (`work/f10_hover.py`, 18 frames, sub-pixel): a 3 rad/s fit gives 1.09 px (residual
+  0.126 px); fixed at 1.2 px the residual is 0.134, at 3.375 px (1.2 units) 0.777. The screen-pixel reading holds
+  against the original.
+- **The state hash.** `StateHash.cpp:203-207` hashes a flipbook's `frame`, `elapsed` and `playing`. On the 18 levels
+  a standing player's flipbook hashes as before (still, frame 0, no time); with a walk key held it now stands still
+  where step 62's played, so that hash moves there. No Magic Portals suite pins a hash (only the engine's
+  `test_determinism` computes one). The zero-g column and hover live in the layer (`m_noGravityPlayer`), not in
+  `Game::Level`, so they are outside the simulation's hash by design, stepped from `fixedDelta` alone.
+  `TheWalkKeepsItsColumnAndItsTime` (step 62's guard on the `playing` / `frameCount` coupling) still passes.
+- **The original's own stills** (`work/orig_columns.py`): its two library frames of a level disagree on the column in
+  6 of the 18 (4-08, 4-13, 4-14, 4-17, 4-18, 4-19), leads 0.001-0.005; corroboration only.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): the sim and game libraries first (4 steps), then the tree, 51
+steps (the three suites compiled; every Magic Portals suite and `MagicPortals.exe` relinked), no warning or error; a
+second run: `ninja: no work to do`. After the captures and the direct suite runs, a comment block in
+`Art.hpp` was moved above the struct it describes: 55 steps, no warning; each rebuilt binary differs from the
+measured one in 4 bytes (the PE and debug-directory timestamps), `.text` identical (`MagicPortals.exe` `2c9da967` ->
+`26101dcb`). The full ctest ran on the rebuilt binaries.
+
+**THE SUITES**, run directly, once each on the measured binaries: `test_mp_zerog` 88 / 0, `test_mp_layer` 893 / 0,
+`test_mp_start` 726 / 0, and `test_mp_sprites` 442 / 0 after one relink (below). **ctest, once: 111 of 121 pass, 0
+fail, 10 not run**: Smart App Control refused `test_mp_geometry`, `test_mp_movers`, `test_mp_hinge`,
+`test_mp_minions`, `test_mp_darkdragon`, `test_mp_diamonds`, `test_mp_shot`, `test_mp_sky`, `test_mp_sounds` and
+`test_mp_hud` (BAD_COMMAND): this step's build relinked every Magic Portals suite (each links `MagicPortalsSim`,
+which holds the changed `Art.cpp`), and these ten fresh links were refused. None of the ten names `Art::` or links the
+layer (grepped), so leaving them unrun leaves none of this step's code unexercised; none was relinked again.
+`test_mp_sprites`, `test_mp_zerog`, `test_mp_start`, `test_mp_layer`, `test_mp_tiers` and `test_mp_play` passed in
+ctest.
+
+**SMART APP CONTROL.** Eleven refusals, eleven notifications: `test_mp_sprites.exe` `c4639620` on its first launch
+(exit 126; deleted and relinked once as `7371948c`, which ran) and the ten freshly linked ctest suites above.
+`MagicPortals.exe` `2c9da967` ran all 130 of its launches (2 timing, 128 sweep), every one exit 0.
+
+**RULINGS.** The owner's standing ruling, every ruling of 00_order section 6 decided in favour of what the original
+does: the suit is keyed on `no_gravity` as `MainCharacter`'s constructor keys it, keeps dark_mage.ent's normal map,
+turns its standing column every 280 ms and hovers its pivot, as `linearMotion` does (step 62 handed both to 1.2).
+The hover's units are not a ruling: R12 fixes the texture tier at the 720 px selection and says nothing of a pivot
+offset. Taking the original's 1.2 screen pixels at the 720 px screen every library frame was taken at, 0.4267 units
+at every window, is a **port decision** following ui.json's credits strip (P2), left for the owner below. R10
+(player z 4) is not applied: 1.2 moves no depth and no lighting height (step 61, decision 5). No other ruling bears
+on 1.2.
+
+**RECORDED DEVIATIONS** (from the brief's text; the one from the original is the hover at other window heights,
+LEFT FOR THE OWNER).
+- **`systems_3_4` 3b: "Zero-g never walks, so frame 8 is what shows."** Decoded otherwise (`linearMotion` 163-174):
+  the column turns every 280 ms while the player stands. The f8 gates are met as written because tick 420 draws
+  column 0; at another frame the suit draws f9 or f11, and an f8 gate would compare a neighbouring cell by
+  0.001-0.005. Owner: a zero-g gate names the frame's column, or compares the sheets.
+- **Data shape.** The brief asked for `no_gravity_sprite` alone; the column and the hover add `no_gravity_motion`.
+- **Step 62's "hovers by 1.2 cos(a) on y"** is 1.2 screen pixels, 0.4267 units at 720 px (above). As units it would
+  be +-3.4 px, which F10 refuses.
+
+**LEFT FOR THE OWNER.**
+- **The hover at other window heights (a port decision, the P2 pattern; R12 covers the tier only).** The original
+  adds 1.2 screen pixels whatever the screen, so its hover is 1.2 x 256 / height units: 0.64 at 480 px, 0.28 at 1080.
+  The port takes the 720 px value, 0.4267 units, at every window.
+- **The eyes (7.1).** `updateEyes` reads `GetPosition`, not the pivot, so the eyes stay put while the suit hovers.
+- **x +1 or +2 px.** The suit's located centre sits 1-2 px right of the original's on 16 of the 18 (4-05 +0, 4-18
+  below), where the normal sheet's sat at 0 or -1: the port draws the 1x sheet, the original the hd one (2.3).
+- **Positions this step did not move** (the same before and after): the port's player stands 26 px higher on 4-02,
+  7 px higher on 4-13, 10 px lower on 4-16 and 10 px further right on 4-18 than the original's h6.3 (gameplay, not
+  investigated).
