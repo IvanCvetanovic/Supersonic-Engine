@@ -614,7 +614,8 @@ private:
         // Where its picture was last drawn, in the level's pixels.
         glm::dvec2 centrePx{0.0};
         // The scale a script gave its entity (ETHEntity::Scale), which multiplies its
-        // picture and its particle systems: a static portal's 0.8, and 1 otherwise.
+        // picture and its particle systems: a static portal's 0.8, an antiportal's
+        // manager's 0.5 times its node's scale, and 1 otherwise.
         double scale{1.0};
         glm::dvec3 emissive{0.0}; // its node's eth_emissive
         std::string lightmap;     // its node's eth_lightmap, on disk; empty = none

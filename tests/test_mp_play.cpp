@@ -790,9 +790,9 @@ void AtTheCapTheOldestGivesWay() {
 
 void ANoPortalZoneRefusesATap() {
     // level30 has no no-portal zone, so this one is the test's: at (300, 100)
-    // with scale 2, refusing taps within twice the ANTIPORTAL radius - half the
-    // field's own white_ring.png frame, which placement.json decodes as 64, and
-    // not the portal's own 14. It is not checked here against a level that has a
+    // with scale 2, refusing taps within twice the ANTIPORTAL radius - the circle
+    // the port plays, whose decoded value placement.json records as 32, and not
+    // the portal's own 14. It is not checked here against a level that has a
     // zone; test_mp_movers does that on level10.
     Play play;
     std::string error;
@@ -820,10 +820,11 @@ void ANoPortalZoneRefusesATap() {
 //     297250..297291);
 //   - an antiportal's is half the FIELD ENTITY'S OWN SIZE - GetSize().x * 0.5 in
 //     isPointInAntiPortalField - and GetCurrentSize is the sprite's frame times
-//     the entity's scale. white_ring.png is 128 px and its SpriteCut is 1x1, so
-//     the radius is 64, times the node's own scale.
+//     the entity's scale. white_ring.png is 128 px and its SpriteCut is 1x1, and
+//     AntiPortalManager's constructor scales every field by 0.5 over the node's
+//     own scale, so the radius is 32 times the node's scale.
 //
-// So every no-portal field in the game was a quarter of its size, on the 45
+// So the port's 16 makes every no-portal field half the original's, on the 52
 // levels that carry one. placement.json holds the derivation.
 //
 // Asserting the VALUES alone would not catch the bug this fixes: one field doing
@@ -833,14 +834,18 @@ void ThePlacementRadiiAreDecodedAndDistinct() {
     // A portal's own radius is DECODED and played: 14.
     CHECK_NEAR(static_cast<float>(g_portalRules.entryRadiusPx), 14.0f);
 
-    // An antiportal's is the remake's 16, kept on purpose. The decode says 64 -
-    // half white_ring.png's 128 px frame, times the node's scale - and
-    // placement.json carries that number beside this one with the reason it is
-    // not played: level6 puts a projectile blocker inside what would then be a
-    // 192 px field, which would make the blocker pointless. Asserting 16 here is
-    // asserting what the port PLAYS, so that changing it is a deliberate act
-    // rather than a silent one.
+    // An antiportal's is the remake's 16, still played. The decode says 32 - half
+    // white_ring.png's 128 px frame, times the manager's 0.5 and the node's scale -
+    // and footage F3 brackets the original's refusal on 1-7 at 31.6-32.4 x scale;
+    // placement.json carries it beside this one, and the owner's ruling R1 takes it
+    // in a step of its own. Asserting 16 here is asserting what the port PLAYS, so
+    // that changing it is a deliberate act rather than a silent one.
     CHECK_NEAR(static_cast<float>(g_portalRules.antiportalRadiusPx), 16.0f);
+
+    // The manager's Scale, which the ring is drawn by (64 x scale across) and the
+    // decoded radius comes from, read with the entity it collects.
+    CHECK_NEAR(static_cast<float>(g_portalRules.antiportalManagerScale), 0.5f);
+    CHECK_MSG(g_portalRules.antiportalEntity == "antiportal", "the manager collects antiportal");
 
     // The point of the split: two numbers, not one. The port carried a single
     // collision_radius_px for both, which is the bug this undoes, and a rename

@@ -10904,3 +10904,204 @@ launch and on all 132; the committed build's `f4b93852` on its 4 before launches
 - **Alpha on pixels reads 0.527-0.547 for a drawn 0.55** by the core-over-ring estimator on the port (the same
   estimator reads the original's 0.535-0.566): an estimator's spread, not a gate miss, but not settled to 0.01. Against
   exact ground (the texture's 255 over the 52-54 the swing uncovers) 1-08's arrow reads 0.552.
+
+## Step 83 - the antiportal's ring drawn at the size its manager halves it to (built)
+
+The visuals plan's step 4.1 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; its brief
+`systems_3_4.md` 4a). Track B, on the `visuals-b` tree. Game-only: no file under `src/` or `assets/shaders/`.
+Changed: `data/placement.json`, `sim/Portals.{hpp,cpp}`, `MagicPortalsLayer.{hpp,cpp}`, `tests/test_mp_layer.cpp`,
+`tests/test_mp_play.cpp`. **The 71 antiportals in 52 levels are drawn 64 x their node's scale across, not a flat
+128 units. On 1-07, 1-10 and 1-12 the brief's edge scan reads the ring at 32.3-33.5 x scale (the original
+31.25-34.0). On all five gate rings the half-max edge sits at 31.19-31.50 x scale (two methods), against the original's
+31.28-32.04 and F3's measured 31.8. On 2-26 the edge scan fails as ordered: it reads 30.50 x scale, the first of six
+tied halves, because the white rim clips at 255. There the ring's outermost drawn pixel sits at 32.06 x scale about
+a centre 1.2 px from the node, on a quad whose half is 32, and a clipping-immune estimator reads 32.10 against the
+original's 31.82-32.03. That row stays NOT MET as written; the step is committed with it recorded as a deviation,
+by the plan owner's delegated decision, and it is carried open in the remake's `docs/parity-backlog.md`
+(RECORDED DEVIATIONS). What the port plays is
+unchanged: the refusal stays 16 x scale until a later step plays R1. The 76 levels with no antiportal are
+byte-identical, and every changed pixel in the other 52 lies inside the annulus a ring can light.**
+
+**WHAT THE ORIGINAL DOES** (the listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce...`; every number with
+its instruction in `data/placement.json` `antiportal.manager`).
+- **`AntiPortalManager::AntiPortalManager`** (bytes 104925..105343): ins 16-37 `GetEntityArray('antiportal')` and
+  `('antiportal.ent')` into `fields`; for each field (loop 40-103) `SetUInt('elapsedTime', 0)`,
+  `SetColor(vector3(1, 0, 0))` and **`Scale(0.5f)`** (ins 83-92). `ETHEntity::Scale(float)` multiplies
+  `m_properties.scale` and its particle systems (`ETHEntity.cpp:591-597`); `antiportal.ent` has none.
+- **The picture and the rule read that one scale.** The draw passes `GetCurrentSize()` (`ETHRenderEntity.cpp:122`),
+  frame x `m_properties.scale` (`ETHSpriteEntity.cpp:652-685`); `isPointInAntiPortalField` (bytes 334800..335020)
+  takes `GetSize().x * 0.5f` (ins 14-17). `Game::preLoop` scales every entity by its node's `scale` (ins 37) before
+  it builds the manager (ins 85), and both multiply. So the ring is 128 x 0.5 x scale = **64 x scale units across**
+  and the field its half, **32 x scale**: one circle. placement.json's old 64 radius missed the `Scale(0.5)`.
+- **Footage F3** (1-07, `antiportal_687`, scale 3; the remake's `out/parity/footage/F3.md` 6.1): the drawn red
+  disc's edge fits at 268.1 px = 31.8 x scale (536 px = 190.7 u across against 192); taps are refused at 267 px
+  and accepted at 273 px, (31.6, 32.4] x scale.
+- **The census:** 64 `antiportal` and 7 `antiportal.ent` placements in 52 levels, every one with a `scale`
+  (1.3-13). The zone role also holds 21 `anti_portal_agent` placements and 1 `no_portal`, which are not the
+  manager's fields.
+
+**THE OWNER'S STANDING RULINGS APPLIED** (every ruling 00_order section 6 raises is decided for what the original
+does, the bytecode decode, with measured footage winning where they disagree).
+- **R1, the refusal radius: 32 x scale**, where the decode and F3's taps agree. This step only draws, as 00_order
+  orders ("4.1 draws 64 x scale whatever the ruling"). `radius_px` stays 16 and is pinned where it was, and
+  placement.json's `_decoded_radius_px_not_applied` now records 32 with F3's bracket. Playing it is its own step.
+  The zone box (`syncDrawables`, shown only with boxes) stays the circle the port plays, so box and ring differ
+  until then. F3 (6.3) also answers the old note's objection: level6's projectile blocker kills a shot aimed past
+  the field's edge, so it is not pointless inside a 96 u field.
+- **R12, the tier fixed at the 720 selection, and R13, route B:** the 0.5 multiplies the sprite's size in units,
+  so the hd file (256 texels / D 2 = 128 u) keeps the quad's size once step 2.2 resolves it. Its ring reaches
+  further into the quad (below), so the measured edge will move out by about 1-1.5 %. `out/levels` is untouched.
+- **R17, `anti_portal_agent` as zones:** not decided here. The rule is keyed on the manager's own entity, so the
+  agents' and `no_portal`'s pictures keep their size.
+
+**WHAT CHANGED.**
+- **`data/placement.json` `antiportal.manager`:** `entity "antiportal"` and `scale 0.5`, with `_source` (the
+  instructions above) and `_measured` (F3). The `_source` and `_radius_note` lines that read 64 are corrected.
+- **`sim/Portals`:** `Rules::antiportalEntity` and `antiportalManagerScale`, read by `LoadPlacement` and required
+  (an object, a name without a dot, a scale above zero). Nothing in the sim reads them. At commit the header's
+  comment above `LoadPlacement` was re-wrapped to the file's own width (133 chars against `.editorconfig`'s 100);
+  the rebuild it costs is below.
+- **`MagicPortalsLayer::buildSprites`:** a picture whose node is a zone and whose entity (either spelling) is the
+  manager's takes `DrawnSprite::scale = 0.5 x the zone's scale`. That is the channel the static portal's 0.8
+  already uses, so `syncSprites` places the quad at `sizePx x scale` and needs no new line. **The node's `scale` is
+  its custom data, which `SGlobalScale::scaleEntity` applies (bytes 6072..6337, ins 5-36: `CheckCustomData('scale')`,
+  `GetFloat`, `Scale(getScale() x scale)`); the port reads it for a no-portal zone only. It is not the Sprite2D
+  `scale` that step 9.1 (K9) has `Find` apply: that is the entity's `<Scale>` element (`antiportal.ent` carries
+  `x="1.000000" y="1.000000"`, so it multiplies by 1), and it multiplies on top of this line rather than
+  replacing it.**
+
+**BASELINE.** A merge (`d3311c9`, main's steps 62-65 into `visuals-b`) landed after step 82, so step 82's
+`3.3/after/` is not this step's "before". `ninja` had no work, and the committed build's `MagicPortals.exe`
+(`61f1df32`, the merge's) drew 1-01 f420 `6d5f4435`, the same as syncB2's. On it, before any change, this step
+captured all 128 levels at f420 (the remake's `out/parity/visuals/4.1/before/sweep/`, `capture_41.sh`). After:
+`4.1/after/sweep/`, binary `e72e069f`. The fix round changed one comment in `buildSprites` and added one test. Its
+first rebuild (`e9a7407f`) recaptured all 128 into `4.1/fix1/sweep/`: **128 of 128 byte-identical to `4.1/after/`**
+(`fix1/same_f1.txt`). A second wording fix to that comment, with the same line count, gave the tree's final binary
+`af65d8be`, whose 1-01, 1-07, 1-10, 1-12, 2-26 and 3-29 at f420 are byte-identical to `4.1/after/`
+(`fix1/final/capture.txt`). **The next step's "before" is `4.1/after/sweep/`.** A second fix round, this record's
+own, touched no file under `games/`, `tests/` or `src/`: the binary is still `af65d8be`, and its recapture of the
+six gate levels (`4.1/fix2/capture_f2.sh`, `sweep/`) is byte-identical to `4.1/after/` on all six, 1-01
+`6d5f4435` included. The commit round re-wrapped one comment in `sim/Portals.hpp`, a header seven executables
+include, so it relinked them: `MagicPortals.exe` `8680806b`, `test_mp_layer` `b1b232bd`, `test_mp_play`
+`4713575c`, `test_mp_shot` `89f59840`, `test_mp_movers` `e2d91e3a`. On the new `MagicPortals.exe` the six gate
+levels at f420 (`4.1/commit/capture_commit.sh`, `sweep/`) are **byte-identical to `4.1/after/` on all six**, 1-01
+`6d5f4435`, each exit 0 with validation ACTIVE and no VUID or Validation Error.
+
+**GATES.** 1280x720, `--fixed-step`, f420. Scripts in `4.1/work/`:
+- `edge_41.py`: work_s34's `antiportal_edge.py` reading this step's sweeps. Its port scan is widened to the union
+  of 40-70.5 u and 24-40 x scale, so one scan reads before and after.
+- `halfmax_41.py`: the radial half-max edge, on luminance for the port and on red excess for the original's
+  library frames.
+- `nonreg_41.py`: the sweep comparison.
+
+The camera is (0, 0) on the gate levels (the brief's compare.py offsets). On 2-26, three static patches of the
+after frame match the original's at (0, 0), with scores 0.78-0.88.
+
+| Gate (00_order 4.1; systems_3_4 4a(5) where marked) | Required | Before | After |
+|---|---|---|---|
+| Edge scan, 1-07 `antiportal_687`, scale 3 | half/scale 31.5-34.0 | 21.33 (64.0 u) | **33.50: passes** (26 sectors) |
+| the same, 1-10 `antiportal_574`, scale 4.5 | 31.5-34.0 | 13.67 | **32.50: passes** (15 sectors). `antiportal_638` has fewer than 8 sectors on screen in both runs, so it is not measured, as in the brief |
+| the same, 1-12 `antiportal_762`, scale 1.8 | 31.5-34.0 | 35.39 | **32.33: passes** (36 sectors) |
+| the same, 1-12 `antiportal_574`, scale 2.5 | 31.5-34.0 | 24.25 | **33.00: passes** (15 sectors) |
+| the same, 2-26 `antiportal_955`, scale 3.6 | 31.5-34.0 | 17.08 | **30.50: NOT MET as written** (20 sectors; RECORDED DEVIATIONS). The estimator keeps the first maximum. Its summed step is 509.5 at six halves, 30.5 / 30.75 / 31.0 / 31.25 / 31.5 / 33.25 x scale (next best 505.0), and on a 0.05 x scale grid 34 halves from 30.30 to 33.45 tie (`verify1/gates_impl_after.json`, `verify2/edge_v2_after.json`). The cause is clipping, re-measured this round (`fix2/clip_f2.txt`): from 30.5 to 32.5 x scale the inside band's median is (255, 255, 255) in all three channels, with 54-66 % of its pixels at 255 in all three, against an outside band summing to 217-221. The original's six frames of the same ring do not clip there at all (over 30.5-33.5 x scale at most 0.5 % of that band is at 255 in all three channels, 3.0 % in any one; inside median R 107-132 against an outside 66-74), so their maximum is unambiguous at 33.25 |
+| Substitute for 2-26 (not an order gate): the outermost pixel changed against `4.1/before/`, / scale. Valid only for scale > 2, where the new quad's half (32 x scale) lies beyond the old flat 64 u | 32.0 x scale, +-1 px | - | **2-26: 32.06 (+0.61 px). Refitted on its six unoccluded 30-degree sectors, on both sides of the ring: 31.95 x scale about a centre (-1.17, +0.14) px from the node at camera (0, 0), residual 0.13 px.** The other rings: 1-07 32.05 (+0.40 px; refit 31.96 about (-0.70, -0.85) px), 1-10 32.05 (+0.63 px), 1-12 `antiportal_574` 32.16 (+1.10 px, just outside; its unoccluded sectors all lie on one side, so a 1 px camera offset cannot be separated out). 1-12 `antiportal_762` (scale 1.8) cannot be read this way. `fix1/measure_f1.py`, `camera_f1.py` |
+| The original, the same scan (brief, 6 library frames each) | - | 31.25-34.0 on the five (2-26: 31.25-33.25) | **4 of its 30 frame readings sit below the gate's own 31.5 floor**: 1-10 `antiportal_574` reads 31.25 at t2.0, t4.5 and t8.0 (31.5, 31.5 and 32.0 in the h frames), and 2-26 reads 31.25 at h6.3 (33.25 in its other five). Re-read this round with the same estimator and grid (`fix2/edge_f2.py`, `edge_f2.json`), which reproduces the verifier's numbers ring for ring |
+| Half-max edge (not an order gate) | - | - | **port 31.42 / 31.28 / 31.42 / 31.50 / 31.35** x scale (1-07, 1-10, 1-12 x2, 2-26), from `halfmax_41.py`: 0.5 u annuli, the first bin past the crossing, not interpolated. The verifier's interpolated crossing on 0.25 u annuli reads **31.33 / 31.25 / 31.19 / 31.37 / 31.23** (`verify1/gates_v1.py`); the two differ by method only. The original reads 31.92 / 31.28 / 31.69-31.97 / 31.70 / 31.76-32.04 (6 frames each). The port sits 0-0.6 inside: white_ring.png's own half-max edge lies at 0.975-0.985 of its half and `hd/white_ring.png`'s at 0.995, and the port draws the 1x file until step 2.2 |
+| F3's original disc, 1-07 (not an order gate) | - | - | the original 31.8 x scale; the port 31.42 by half-max (31.33 interpolated), 33.50 by the edge scan |
+| plan_port `antiportal3.py` rim (4a(5)), the port's median-luminance peak | rim/scale 28-33 | 20.17 / 15.56 / 33.06 / 23.20 / 15.69 | **29.83 / 30.44 / 29.72 / 29.60 / 28.19: passes** (1-07, 1-10, 1-12 x2, 2-26; the original 29.4-31.3), from `work/edge_41.py`. The verifier's `verify2/rim_v2.py` (2 u annuli, mean RGB) reads 30.00 / 29.89 / 30.00 / 29.80 / 28.06 on the same frames: one gate at two annulus widths, not two runs diverging |
+| `test_mp_layer` | level11 `antiportal_762` quad 115.2 u; `anti_portal_agent` unchanged | - | **1,105 checks, 0 failures: passes** (`26a129b2`, the fix round's final build, and `2eb5efda` before its comment wording; `052b079c` before the fix round read 1,102). `AnAntiportalIsDrawnAtHalfItsNodesScale` (11 checks): 762 at 115.2 u, 574 at 160.0 u and `anti_portal_agent_ent_599` at its 32 u, each drawn once; the rules read `antiportal` and 0.5, the radius is still 16, and 762's box is still 57.6 u. `AnAntiportalSpelledWithEntIsDrawnTheSame` (3 checks): 3-29 (`level28b`) `antiportal_ent_2204`, scale 5, at 320 u, drawn once |
+| `test_mp_shot`, `test_mp_movers` | unchanged | - | **90 and 53 checks, 0 failures: pass**, unedited (`288094ae`, `21228547`) |
+| `test_mp_play` | the played radius pinned | - | **147 checks, 0 failures** (`fb1cc496`): 16 still asserted, the manager's 0.5 and entity pinned beside it, and the comments that read 64 corrected |
+| Non-regression: the sweep, f420, against `4.1/before/` | a level with no antiportal byte-identical; changes only inside a ring's quad | - | **passes on 128 of 128** (`nonreg_41.json`). The **76 levels with no antiportal are byte-identical**. Of the 52 with one, 17 are byte-identical: 11 have every ring at scale 2 (64 x 2 is the old 128 u), 4 have their rings off screen at camera (0, 0) (1-27, 2-32, 3-03, 3-31), and in 3-19 and 4-32 the ring shows in neither build nor in the original's library frames (verifier, `verify1/nonreg_v1.json`). In the other 35, every changed pixel lies inside the annulus the old or the new ring can light ([0.6h - 3 px, h + 3 px], h = 64 u or 32 x scale u), which is tighter than the quad's square: **18 at camera (0, 0), and 17 at a camera the search found** (`verify2/nonreg_v2.json`). The implementer's square passed 5 more at (0, 0) by covering the disc's dark middle; on the annuli 1-29, 2-30, 3-07, 3-13 and 4-25 need about (154, 0), (154, 1), (156, 3), (154, -2) and (109, -1), the ~155 px scroll clamp. A found camera is a fitted parameter, but a tightly constrained one: each of the 17 has a minimum set of 53-232 offsets spanning at most 16 x 20 px, and their change masks are ring-shaped by eye (`verify1/camera_v1.png`) |
+| 1-01 f420 | byte-identical | `6d5f4435` | **`6d5f4435`: passes** (`e72e069f`; `e9a7407f` and `af65d8be` in the fix round) |
+| Validation | exit 0, silent | 128 launches | **passes**: 128 after launches exit 0, validation ACTIVE in 128 of 128 logs, no VUID or Validation Error, no stall. The before run and the fix round's 128 are the same |
+
+**THE SUITES.** `test_mp_layer`, `test_mp_play`, `test_mp_shot` and `test_mp_movers` were run directly, once each,
+as above, and once each again on the commit round's relinked binaries: **1,105 / 147 / 90 / 53 checks, 0 failures**,
+the same counts. **ctest, once, after the full build: 119 of 122 pass, 0 fail, 3 not run.** Smart App Control refused
+(BAD_COMMAND) `test_mp_hinge`, `test_mp_minions` and `test_mp_sky`. None names an antiportal, `placement.json` or
+`DrawnSprite` (grep), and none was relinked. `test_mp_start`, `test_mp_sprites`, `test_mp_wells` and the four above
+passed under it.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): the four suites (15 steps) and the full build (66 steps, 42
+links). Logs are in `4.1/work/build_*.log`. The fix round's full builds rebuilt only `MagicPortalsGame`,
+`MagicPortals.exe` and `test_mp_layer.exe`, each time with no warnings (`4.1/fix1/build_full.log`,
+`build_comment2.log`). A run between the two had no work. The commit round's rebuild of everything that includes
+`sim/Portals.hpp` - 80 steps, 48 links - is also warning-free (`4.1/commit/build_commit.log`).
+
+**SMART APP CONTROL.** Three refusals, from ctest's launches of the three suites above. `MagicPortals.exe`
+`e72e069f` ran on its first launch and on all 128; the four suites ran on their first launch. In the fix round,
+`MagicPortals.exe` `e9a7407f` and `af65d8be` and `test_mp_layer.exe` `2eb5efda` and `26a129b2` each ran on their
+first launch. Nothing was refused, and neither ctest nor the other suites was run again. The second fix round
+built nothing and re-ran no suite, because no source changed, and its six captures ran on the already-linked
+`af65d8be`: none refused. The commit round linked five binaries it then launched - `MagicPortals.exe` `8680806b`
+(six captures) and the four suites - and **each ran on its first launch, none refused**. ctest was not run again
+(once per role), so `test_mp_hinge`, `test_mp_minions` and `test_mp_sky` remain not run; none of the three names
+an antiportal, `placement.json` or `DrawnSprite`.
+
+**RECORDED DEVIATIONS.** One gate row is **NOT MET as written** (2-26's edge scan), recorded and not tuned. The
+step is **committed with it recorded, by the plan owner's delegated decision**, and the deviation is carried as an
+open item in the remake's `docs/parity-backlog.md`. That decision commits the step; it does **not** accept the
+substitute measurement as satisfying the gate, which stays what it is labelled below, not an order gate. The
+standing rulings (00_order section 6) decide what the original does, not how a gate is worded. Nothing below
+re-specifies the row: the reading stays the estimator's first maximum.
+- **Edge scan, 2-26 `antiportal_955` at node scale 3.6 (00_order section 7 step 4.1,
+  `work_s34/antiportal_edge.py`).** Required half/scale 31.5-34.0; measured **30.50**, against **17.08 before**, so
+  the row moved 13.4 of the 14.4 it was short. **The verifier reproduced it independently** - its own capture, its
+  own re-implementation of the estimator (`verify3/edge_v3.py`) and **both grids**, the brief's fixed 40-70.5 u
+  port grid and the per-scale 24s-40s grid: the same tie, the same first maximum, so the grid is not the cause.
+  The cause is saturation, not size. The ring is additive white until step 4.2, and over this level's light
+  ground its rim clips: from 30.5 to 32.5 x scale the inside band's median is (255, 255, 255) in all three
+  channels, with 54-66 % of its pixels at 255 in all three, against an outside band summing to 217-221
+  (`fix2/clip_f2.txt`, re-measured in the second fix round). So the step across the edge is the same 509.5 from
+  30.5 to 31.5 x scale and at 33.25, and the estimator's strict `>` keeps the lowest.
+  - **The same estimator misses the band on the original's own frames too:** 4 of its 30 frame readings across the
+    five rings are 31.25, below the 31.5 floor (1-10 at t2.0, t4.5 and t8.0; 2-26 at h6.3). And the original's
+    2-26 rim does not clip - over 30.5-33.5 x scale at most 0.5 % of the inside band is at 255 in all three
+    channels (3.0 % in any one), and its inside median R is 107-132 against an outside 66-74 - so its maximum
+    lands cleanly at 33.25 where the port's plateaus (`fix2/edge_f2.json`, `fix2/clip_f2.json`). The port's rim
+    clips because the ring is drawn additive white; step 4.2's red ring is what removes the plateau.
+  - **Ruled out:** coverage (20 sectors at the best half, more than the 15 on the passing 1-10 and 1-12
+    `antiportal_574`), and the camera (below).
+  - **The drawn size, measured without reading brightness:** the outermost pixel that differs from `4.1/before/`
+    lies at **32.06 x scale** (+0.61 px past the quad's half). Refitted on its six unoccluded 30-degree sectors on
+    both sides, it gives **31.95 x scale about a centre (-1.17, +0.14) px from the node** at camera (0, 0), residual
+    0.13 px.
+  - **Corroboration, an estimator clipping cannot move:** the verifier's steepest radial fall, calibrated on
+    `white_ring.png`'s own fall (`verify3/drop_v3.py`), reads **32.10 x scale on this ring against the original's
+    31.82-32.03** over its six library frames, and 32.08 / 31.91 / 31.96 / 31.84 against 31.91-32.07 / 31.91 /
+    31.96 / 31.84-32.04 on the other four. Its circle fit reads 31.31 x scale against the original's 31.48-31.80
+    (`verify1/circlefit_impl_after.json`), and the half-max edge 31.23 interpolated and 31.35 binned, as on the
+    other four rings. The quad is what `test_mp_layer` pins: 115.2 u on level11 and 320 u on level28b.
+  - **The follow-up, and who owns it.** Step 4.2 (Blink and spin) **removes the cause**: its own gates put `c_G`
+    and `c_B` at or under 0.03, so the rim stops being additive white. But 4.2's gate list in 00_order section 7
+    names only 3-12, 4-02, 4-07 and 1-07 and orders **no size re-read**, so an explicit 2-26 `antiportal_955`
+    edge-scan re-read has to be added to 4.2's gates - or the row's wording amended in 00_order section 7 (last
+    maximum, tie midpoint, or a brightness-independent reading). **Without that addition this NOT MET row has no
+    owner and would silently disappear.** Scheduling it is the orchestrator's; the row above stays NOT MET as
+    written until it is re-read.
+
+**LEFT FOR LATER STEPS** (no question about what the original does is open here: R1 is ruled, above. What is open
+is which repair 2-26's failed row gets - a re-read added to step 4.2's gates, or a re-worded row in 00_order
+section 7 - RECORDED DEVIATIONS).
+- **Playing R1, a follow-up step not yet scheduled in 00_order section 7.** `radius_px` 16 -> 32, the zone box made
+  the ring, and `test_mp_play`'s and `test_mp_layer`'s 16 pins and `test_mp_shot`'s and `test_mp_movers`' refusal
+  cases re-read.
+- **2-26's edge scan** fails as ordered on a clipped white rim (RECORDED DEVIATIONS). Step 4.2's red ring removes
+  the cause, but 4.2's ordered gates contain no size re-read: one has to be added to them.
+- **The ring's edge sits about 1.5 % inside the original's** until step 2.2 draws `hd/white_ring.png`.
+- **K9 and step 9.1 do not touch this step's line.** 9.1's Sprite2D `scale` is the placement's `<Scale>` (33 of
+  them are not 1, by the brief's census in `systems_9_10` section 1: 31 barrel bombs, an eclipse and a rolling
+  stone, no antiportal among them), and it multiplies on top. **`antiportal.ent`'s own `<Scale>` is 1 x 1** - the
+  load-bearing part here - **but nine other entity files do carry one**: `barrel_bomb` and
+  `barrel_bomb_low_emissive` 1.3, `black_halo` 4.0, `eclipse` 2.0, `explosion_large` 1.4, `fireball` 1.2,
+  `small_explosion` and `small_explosion_no_light` 0.8, `wall02_blur` 2.0 (all 190 `.ent` re-scanned at commit;
+  they are UTF-16, which is why a plain grep first read them as having none). It matters for the hand-off: 32 of
+  the census's 33 scaled placements carry their entity file's own value (the 31 barrel bombs and the eclipse) and
+  only `rolling_stone` 0.8 overrides its `.ent`'s 1.0, so 9.1 has to read both channels. The node's custom-data
+  `scale` applied here is `SGlobalScale::scaleEntity`'s, a different channel. `antiportal.ent` also ships a
+  CustomData `scale` of 2 as its default, and all 71 placements carry their own (1.3-13, every one, read from
+  `out/levels`), so that default reaches nothing today.
+- **An unowned `scaleEntities` gap.** The one other node with a custom-data `scale`, `crate_no_emissive_796`
+  (level0a, 0.75), is drawn unscaled today. It is not 9.1's, and no step in 00_order owns it.
+- The ring is still white and still; its blink and spin are step 4.2's.

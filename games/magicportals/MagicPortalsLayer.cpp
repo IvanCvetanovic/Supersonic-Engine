@@ -2340,6 +2340,23 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
         drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
         drawn.zone = indexOf(m_level.portals.zones, sprite.node);
+        // AN ANTIPORTAL IS DRAWN AT HALF ITS NODE'S SCALE (placement.json
+        // antiportal.manager): Game::preLoop scales the entity by its node's `scale`
+        // and AntiPortalManager's constructor then calls Scale(0.5) on every entity
+        // it collects, so white_ring.png's 128 units are drawn 64 x scale across.
+        // Keyed by the entity, as the manager collects it: an anti_portal_agent or a
+        // no_portal zone is not one of its fields and keeps its own size.
+        //
+        // The node's `scale` is its custom data, which SGlobalScale::scaleEntity
+        // applies (CheckCustomData, GetFloat, Scale); the port reads it for a zone
+        // only. It is not the Sprite2D `scale` that step 9.1 (00_order, K9) has
+        // Sprites::Find apply: that one is the entity's <Scale> element, 1 for
+        // antiportal.ent, and multiplies on top of this line, not in place of it.
+        if (const Tscn::Node* node = m_data.scene.FindNode(sprite.node);
+            drawn.zone >= 0 && node != nullptr && BareEntityName(*node) == m_level.portals.rules.antiportalEntity) {
+            drawn.scale = m_level.portals.rules.antiportalManagerScale *
+                          m_level.portals.zones[static_cast<std::size_t>(drawn.zone)].scale;
+        }
         // ETHCallback_crystal and ETHCallback_key each call linearMotion with their
         // row's arguments; the callback is named by the entity less its .ent, so both
         // spellings of a placement bob. A crystal or key under any other entity runs
@@ -2573,7 +2590,8 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             drawn.quad = entt::null;
             continue;
         }
-        // At the scale a script gave its entity: 1 but for a static portal's 0.8.
+        // At the scale a script gave its entity: 1 but for a static portal's 0.8 and
+        // an antiportal's 0.5 times its node's scale.
         placeSprite(registry, drawn.quad, centrePx, sizePx * drawn.scale, drawn.z, rotation);
         drawn.centrePx = centrePx;
         drawn.ownerPx = ownerPx;
@@ -3036,7 +3054,8 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     }
 
     // No-portal zones, as the square round the circle a tap is refused in, where
-    // each is now: a patrolling one moves.
+    // each is now: a patrolling one moves. The circle the port PLAYS, which is not
+    // the ring's half until the refusal radius is the original's (placement.json).
     const std::vector<Portals::NoPortalZone>& zones = m_level.portals.zones;
     for (std::size_t i = 0; i < m_zones.size() && i < zones.size(); ++i) {
         const double sizePx = m_level.portals.rules.antiportalRadiusPx * zones[i].scale * 2.0;

@@ -945,6 +945,105 @@ void AStaticPortalGlows() {
     layer.OnDetach(registry);
 }
 
+void AnAntiportalIsDrawnAtHalfItsNodesScale() {
+    // AntiPortalManager's constructor calls Scale(0.5) on every antiportal it
+    // collects, over the node's own scale (placement.json antiportal.manager), so
+    // white_ring.png's 128 units are drawn 64 x scale across. 1-12 (level11) places
+    // antiportal_762 at (180, 140), scale 1.8, and antiportal_574 at (464, 184),
+    // scale 2.5, under anti_portal_agent_ent_599, which the manager does not collect.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level11");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    const MagicPortals::Portals::Rules& rules = layer.SimLevel()->portals.rules;
+    CHECK_MSG(rules.antiportalEntity == "antiportal", "the manager collects antiportal: " + rules.antiportalEntity);
+    CHECK_NEAR(static_cast<float>(rules.antiportalManagerScale), 0.5f);
+    CHECK_NEAR(static_cast<float>(rules.antiportalRadiusPx), 16.0f); // the circle the port plays is not this step's
+    CloseTheLevelStartPopup(layer, registry);
+    tickWith(layer, registry, kRest, {}, {});
+    layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+
+    struct Seen {
+        const char* image;
+        glm::dvec2 atPx;
+        double sizeU; // across, in the level's units
+        int found;
+    };
+    std::array<Seen, 3> pictures{{{"white_ring.png", {180.0, 140.0}, 64.0 * 1.8, 0},
+                                  {"white_ring.png", {464.0, 184.0}, 64.0 * 2.5, 0},
+                                  {"anti_portal_agent.png", {464.0, 184.0}, 32.0, 0}}};
+    for (auto [entity, tag, material, transform] :
+         registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
+        (void)entity;
+        if (tag.tag != "Magic Portals Sprite") continue;
+        const glm::dvec2 at = MagicPortals::Units::ToPixels(transform.position);
+        for (Seen& seen : pictures) {
+            if (material.albedoTexturePath.find(seen.image) == std::string::npos || glm::distance(at, seen.atPx) > 0.5) {
+                continue;
+            }
+            const float across = MagicPortals::Units::ToMetres(seen.sizeU);
+            CHECK_MSG(std::fabs(transform.scale.x - across) < 1e-5f && std::fabs(transform.scale.y - across) < 1e-5f,
+                      std::string(seen.image) + " at (" + std::to_string(seen.atPx.x) + ", " +
+                          std::to_string(seen.atPx.y) + ") is " + std::to_string(seen.sizeU) + " units across, not " +
+                          std::to_string(transform.scale.x / MagicPortals::Units::ToMetres(1.0)));
+            ++seen.found;
+        }
+    }
+    for (const Seen& seen : pictures) {
+        CHECK_MSG(seen.found == 1, std::string(seen.image) + " drawn once at (" + std::to_string(seen.atPx.x) + ", " +
+                                       std::to_string(seen.atPx.y) + "): " + std::to_string(seen.found));
+    }
+    // The zones' boxes stay the circle the port plays, 16 x scale: the ring and the
+    // box differ until the refusal radius is the original's.
+    int boxesOnTheRule = 0;
+    for (auto [entity, tag, transform] : registry.view<TagComponent, TransformComponent>().each()) {
+        (void)entity;
+        if (tag.tag != "Magic Portals No-Portal Zone") continue;
+        const glm::dvec2 at = MagicPortals::Units::ToPixels(transform.position);
+        if (glm::distance(at, glm::dvec2(180.0, 140.0)) < 0.5 &&
+            std::fabs(transform.scale.x - MagicPortals::Units::ToMetres(16.0 * 1.8 * 2.0)) < 1e-5f) {
+            ++boxesOnTheRule;
+        }
+    }
+    CHECK_EQ(boxesOnTheRule, 1);
+    layer.OnDetach(registry);
+}
+
+void AnAntiportalSpelledWithEntIsDrawnTheSame() {
+    // The manager collects both spellings, GetEntityArray("antiportal") and
+    // ("antiportal.ent"). 3-29 (level28b) places antiportal_ent_2204 at (372, 160),
+    // scale 5, so its ring is 64 x 5 = 320 units across.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level28b");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    CloseTheLevelStartPopup(layer, registry);
+    tickWith(layer, registry, kRest, {}, {});
+    layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+
+    const glm::dvec2 nodePx(372.0, 160.0);
+    const float across = MagicPortals::Units::ToMetres(64.0 * 5.0);
+    int found = 0;
+    for (auto [entity, tag, material, transform] :
+         registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
+        (void)entity;
+        if (tag.tag != "Magic Portals Sprite" || material.albedoTexturePath.find("white_ring.png") == std::string::npos ||
+            glm::distance(MagicPortals::Units::ToPixels(transform.position), nodePx) > 0.5) {
+            continue;
+        }
+        CHECK_MSG(std::fabs(transform.scale.x - across) < 1e-5f && std::fabs(transform.scale.y - across) < 1e-5f,
+                  "antiportal_ent_2204 is 320 units across, not " +
+                      std::to_string(transform.scale.x / MagicPortals::Units::ToMetres(1.0)));
+        ++found;
+    }
+    CHECK_EQ(found, 1);
+    layer.OnDetach(registry);
+}
+
 void WithoutTheArtTheLevelIsBoxes() {
     // The art is the original's and lives outside the repository. Where it
     // cannot be read, the level is still played, drawn as boxes, and says why.
@@ -6128,6 +6227,8 @@ void runTests() {
     AFallOutOfTheLevelIsADeath();
     TheLevelsArtIsDrawn();
     AStaticPortalGlows();
+    AnAntiportalIsDrawnAtHalfItsNodesScale();
+    AnAntiportalSpelledWithEntIsDrawnTheSame();
     WithoutTheArtTheLevelIsBoxes();
     APortalAndAShotAreTheOriginals();
     WithoutTheOriginalThePortalIsABox();

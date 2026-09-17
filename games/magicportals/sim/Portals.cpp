@@ -158,8 +158,25 @@ bool LoadPlacement(const std::string& path, Rules& out, std::string& error) {
         return false;
     }
 
+    // The manager's entity and its Scale: both required. Without them the ring
+    // would be drawn at some size the file never said.
+    const Json::Value& manager = antiportal["manager"];
+    if (!manager.IsObject() || !manager["entity"].IsString() || !manager["scale"].IsNumber()) {
+        error = path + ": antiportal.manager is an object with a string entity and a number scale";
+        return false;
+    }
+    const std::string managed = manager["entity"].AsString();
+    const double managerScale = manager["scale"].AsNumber(0.0);
+    // The name the manager collects, without .ent: it collects both spellings.
+    if (managed.empty() || managed.find('.') != std::string::npos || managerScale <= 0.0) {
+        error = path + ": antiportal.manager.entity is a name without a dot, and its scale is above zero";
+        return false;
+    }
+
     out.entryRadiusPx = entry;
     out.antiportalRadiusPx = field;
+    out.antiportalEntity = managed;
+    out.antiportalManagerScale = managerScale;
     return true;
 }
 
