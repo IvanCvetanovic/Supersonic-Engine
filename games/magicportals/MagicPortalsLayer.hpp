@@ -314,8 +314,9 @@ public:
     struct EmitterReport {
         std::string node;   // its owner's node; empty for one no level sprite carries
         std::string bitmap; // Particles::System::bitmap
+        std::string image;  // the file drawn for it: its tier file where one exists (drawnImage)
         double systemSize = 0.0; // Particles::System::size as built: its entity's scale applied
-        glm::dvec2 cellPx{0.0};  // one cell of its bitmap, which a quad stretches square
+        glm::dvec2 cellPx{0.0};  // one cell of its bitmap in units, split evenly, which a quad stretches square
         int slot = 0;       // which of its entity's systems
         int systems = 0;    // of how many
         bool additive = false;
@@ -712,9 +713,21 @@ private:
     // An image's size, read once per file (Sprites::ImageSize); zero when it
     // cannot be read.
     glm::dvec2 imageSizePx(const std::string& path);
-    // The player's frame in units: its sheet's size cut by its columns and rows.
+    // An image the port draws for itself, by the name its data gives: the file the
+    // original's loader draws for it (the tier file where one exists, Sprites::Drawn
+    // over m_tierRules), and its size in whole units. Read once per name; texels and
+    // units 0 when it cannot be read, with `path` the file tried. The player, the
+    // portal, the shot, the beholder and its spikes, a thrown stone, the loading
+    // screen's character, portal and halo, their halos and normal maps, and every
+    // particle bitmap (00_order 2.3). The menus and the HUD keep their own lookups
+    // (menuImage, originalAsset).
+    const Sprites::Image& drawnImage(const std::string& named);
+    // One frame of a sheet in units, as the original cuts it (Tiers::FrameCut:
+    // whole units, truncated after the divide); zero when it cannot be cut.
+    static glm::dvec2 frameUnits(const Sprites::Image& sheet, int columns, int rows);
+    // The player's frame in units: its sheet's tier file cut by its columns and rows.
     glm::dvec2 playerCellPx(bool noGravity);
-    // An image among the original's entities.
+    // An image among the original's entities, by name (drawnImage finds the file drawn).
     std::string originalImage(const std::string& sprite) const;
 
     Paths m_paths;
@@ -765,6 +778,7 @@ private:
     bool m_showBoxes{false};
     int m_playerSlot{0}; // the drawing slot the player takes among the sprites
     std::map<std::string, glm::dvec2> m_imageSizes;
+    std::map<std::string, Sprites::Image> m_drawnImages; // drawnImage's, by the name asked for
     Art::Rules m_artRules;                  // the port's art.json
     Sky::Rules m_skyRules;                  // the port's sky.json
     Tiers::Rules m_tierRules;               // the port's tiers.json: which file of a level's image is drawn

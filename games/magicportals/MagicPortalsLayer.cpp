@@ -163,6 +163,19 @@ std::string BareEntityName(const Tscn::Node& node) {
     return entity;
 }
 
+// One cell of a particle system's bitmap in units, as the port samples it: the
+// bitmap's texels over its density, split evenly by the system's SpriteCut (the
+// engine's SpriteAnimationComponent). The original strides a cut particle sheet in
+// whole units (ETHParticleManager::DrawParticleSystem calls SetupSpriteRects,
+// ETHParticleManager.cpp:397-401; gs2d Sprite.cpp:119-120), so on a sheet whose
+// units are not a multiple of its columns - tesla_shock_black_bg.png, 256 over 5 -
+// its cell is 51 units where this is 51.2. A quad is drawn at the particle's own
+// size either way (Particles::QuadPx); only where a cell is sampled differs.
+glm::dvec2 ParticleCellUnits(const Sprites::Image& image, const Particles::System& system) {
+    return glm::dvec2(image.texels) / static_cast<double>(image.density) /
+           glm::dvec2(system.columns, system.rows);
+}
+
 } // namespace
 
 MagicPortalsLayer::MagicPortalsLayer(Paths paths, std::string startLevel)
@@ -744,10 +757,11 @@ void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
                                                      << ", which the port has no blend for" << std::endl;
                 continue;
             }
-            const std::string image = m_paths.original + "/particles/" + system.bitmap;
-            const glm::dvec2 sheet = imageSizePx(image);
-            if (sheet.x <= 0.0 || sheet.y <= 0.0) {
-                SUPERSONIC_LOG_WARN("Magic Portals") << "particle image could not be read: " << image << std::endl;
+            // The bitmap's tier file where one exists (ETHParticleManager.cpp:107 loads
+            // it through AddFile too).
+            const Sprites::Image& image = drawnImage(m_paths.original + "/particles/" + system.bitmap);
+            if (image.units.x <= 0 || image.units.y <= 0) {
+                SUPERSONIC_LOG_WARN("Magic Portals") << "particle image could not be read: " << image.path << std::endl;
                 continue;
             }
             Emitter emitter;
@@ -758,8 +772,8 @@ void MagicPortalsLayer::buildEmitters(entt::registry& registry) {
             emitter.z = drawn.z + static_cast<float>(Particles::SlotFraction(static_cast<int>(slot),
                                                                              static_cast<int>(systems.size()))) *
                                       kSpriteSlotZ;
-            emitter.image = image;
-            emitter.cellPx = glm::dvec2(sheet.x / system.columns, sheet.y / system.rows);
+            emitter.image = image.path;
+            emitter.cellPx = ParticleCellUnits(image, system);
             // Which entity and which of its systems: a light's brightness follows
             // the live share of its owner's FIRST system (syncLights).
             emitter.sprite = static_cast<int>(index);
@@ -786,10 +800,9 @@ bool MagicPortalsLayer::addEntityEmitters(const std::string& entity, const glm::
                                                  << ", which the port has no blend for" << std::endl;
             continue;
         }
-        const std::string image = m_paths.original + "/particles/" + system.bitmap;
-        const glm::dvec2 sheet = imageSizePx(image);
-        if (sheet.x <= 0.0 || sheet.y <= 0.0) {
-            SUPERSONIC_LOG_WARN("Magic Portals") << "particle image could not be read: " << image << std::endl;
+        const Sprites::Image& image = drawnImage(m_paths.original + "/particles/" + system.bitmap);
+        if (image.units.x <= 0 || image.units.y <= 0) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "particle image could not be read: " << image.path << std::endl;
             continue;
         }
         Emitter emitter;
@@ -797,8 +810,8 @@ bool MagicPortalsLayer::addEntityEmitters(const std::string& entity, const glm::
         emitter.owner = owner;
         // A later system of the same entity draws over an earlier one.
         emitter.z = z + 0.001f * static_cast<float>(m_emitters.size());
-        emitter.image = image;
-        emitter.cellPx = glm::dvec2(sheet.x / system.columns, sheet.y / system.rows);
+        emitter.image = image.path;
+        emitter.cellPx = ParticleCellUnits(image, system);
         emitter.slot = static_cast<int>(slot);
         emitter.particles = Particles::MakePool(system, std::min(system.count, kMaxParticles), owner,
                                                 [this](double from, double to) { return particleRandom(from, to); });
@@ -812,7 +825,9 @@ std::string MagicPortalsLayer::loadingHaloImage() {
     // Only into a directory the caller named: an empty Paths::prisms would put the
     // file in the working directory, so the halo is then left undrawn instead.
     if (m_paths.prisms.empty()) return {};
-    const std::string source = m_paths.original + "/" + m_loadingRules.haloSprite;
+    // black_halo.ent's picture as the loader finds it (drawnImage): black_halo.bmp has
+    // no tier file, so it is the file named.
+    const std::string source = drawnImage(m_paths.original + "/" + m_loadingRules.haloSprite).path;
     std::error_code ec;
     std::filesystem::create_directories(m_paths.prisms, ec);
     const std::filesystem::path target = m_paths.prisms / "black_halo_multiply.png";
@@ -920,6 +935,7 @@ std::vector<MagicPortalsLayer::EmitterReport> MagicPortalsLayer::EmitterReports(
     for (const Emitter& emitter : m_emitters) {
         EmitterReport report;
         report.bitmap = emitter.system.bitmap;
+        report.image = emitter.image;
         report.systemSize = emitter.system.size;
         report.cellPx = emitter.cellPx;
         report.slot = emitter.slot;
@@ -1145,12 +1161,15 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
     }
     if (m_screen == Screen::Loading) {
         // scenes/loading_screen.esc: its background, its character and its portal,
-        // in the level's space as a level's art is. Sized by the 1x files, drawn
-        // with the hd twins (sim/Loading.hpp; ui.json loading).
+        // in the level's space as a level's art is. The background is sized by
+        // ui.json and drawn with its hd twin (sim/Loading.hpp); the character and the
+        // portal's halo are the level's pictures, each the file the loader draws at
+        // its units (drawnImage).
         m_loadingBg = quadFor("Magic Portals Loading Background", originalAsset(m_loadingRules.background.sprite));
-        const std::string halo = originalImage(m_artRules.portal.sprite);
-        if (imageSizePx(halo).y > 0.0) {
-            m_loadingPortal = makeSprite(registry, "Magic Portals Loading Portal", halo, m_artRules.portal.additive);
+        const Sprites::Image& halo = drawnImage(originalImage(m_artRules.portal.sprite));
+        if (halo.units.y > 0) {
+            m_loadingPortal =
+                makeSprite(registry, "Magic Portals Loading Portal", halo.path, m_artRules.portal.additive);
         }
         // black_halo.ent under it, as the multiply it is (ui.json loading.portal).
         if (const std::string multiply = loadingHaloImage(); !multiply.empty()) {
@@ -1164,9 +1183,9 @@ void MagicPortalsLayer::buildMenu(entt::registry& registry) {
         addEntityEmitters(m_loadingRules.portalEntity, portalAt, 0.32f, 0.0);
         m_loadingPortalEmitters = m_emitters.size();
         const Art::Character& mage = m_artRules.character;
-        const std::string sheet = originalAsset("entities/" + mage.sprite);
-        if (imageSizePx(sheet).y > 0.0) {
-            m_loadingCharacter = makeSprite(registry, "Magic Portals Loading Character", sheet, mage.additive);
+        const Sprites::Image& sheet = drawnImage(originalImage(mage.sprite));
+        if (frameUnits(sheet, mage.columns, mage.rows) != glm::dvec2(0.0)) {
+            m_loadingCharacter = makeSprite(registry, "Magic Portals Loading Character", sheet.path, mage.additive);
             auto& animation = registry.emplace<SpriteAnimationComponent>(m_loadingCharacter);
             animation.columns = static_cast<uint32_t>(mage.columns);
             animation.rows = static_cast<uint32_t>(mage.rows);
@@ -1473,8 +1492,8 @@ void MagicPortalsLayer::loadingTick(entt::registry& registry) {
     }
     const glm::dvec2 portal = Loading::PortalAt(rules, view);
     if (m_loadingPortal != entt::null && registry.valid(m_loadingPortal)) {
-        placeSprite(registry, m_loadingPortal, portal, imageSizePx(originalImage(m_artRules.portal.sprite)), 0.3f,
-                    0.0f);
+        placeSprite(registry, m_loadingPortal, portal,
+                    glm::dvec2(drawnImage(originalImage(m_artRules.portal.sprite)).units), 0.3f, 0.0f);
     }
     if (m_loadingHalo != entt::null && registry.valid(m_loadingHalo)) {
         // black_halo.ent, OVER the portal's halo and under its particles. The
@@ -1484,7 +1503,8 @@ void MagicPortalsLayer::loadingTick(entt::registry& registry) {
         // halo, and frames 74-155 show the spiral light on dark - so the port draws
         // what the frames show. Why is not settled.
         placeSprite(registry, m_loadingHalo, portal,
-                    imageSizePx(m_paths.original + "/" + rules.haloSprite) * rules.haloScale, 0.31f, 0.0f);
+                    glm::dvec2(drawnImage(m_paths.original + "/" + rules.haloSprite).units) * rules.haloScale, 0.31f,
+                    0.0f);
     }
     if (!Loading::CharacterShown(rules, frame) && !m_loadingVanished) {
         // The frame the last texture loads: vanishEffect and killPortal.
@@ -1497,7 +1517,7 @@ void MagicPortalsLayer::loadingTick(entt::registry& registry) {
     if (m_loadingCharacter != entt::null && registry.valid(m_loadingCharacter)) {
         if (Loading::CharacterShown(rules, frame)) {
             const Art::Character& mage = m_artRules.character;
-            const glm::dvec2 cell = imageSizePx(originalImage(mage.sprite)) / glm::dvec2(mage.columns, mage.rows);
+            const glm::dvec2 cell = frameUnits(drawnImage(originalImage(mage.sprite)), mage.columns, mage.rows);
             registry.get<Supersonic::SpriteAnimationComponent>(m_loadingCharacter).firstFrame =
                 static_cast<uint32_t>(Loading::CharacterFrame(rules, frame, tickMs));
             // The image stands with its pivot on the entity, as the level's player.
@@ -2136,14 +2156,17 @@ void MagicPortalsLayer::buildDrawables(entt::registry& registry) {
     // level in the suit MainCharacter's constructor swaps in, with its timer and
     // hover not yet moved.
     const Art::Character& mage = m_artRules.character;
-    const std::string sheet = originalImage(Art::PlayerSheet(mage, m_level.noGravity));
+    // Its sheet's tier file (drawnImage): hd/magic_portals_hd.png, or the suit's
+    // hd/dark_mage_in_space.png, each 320 x 448 at density 2, cut 4 x 4 into the
+    // 40 x 56 frames the 1x file's even split gave (playerCellPx).
+    const Sprites::Image& sheet = drawnImage(originalImage(Art::PlayerSheet(mage, m_level.noGravity)));
     m_facingRight = mage.initialDirection == mage.rightRow;
     m_direction = 0.0f;
     m_pushing = false; // SideScrollerCharacter's constructor
     m_noGravityPlayer = Art::NoGravityPlayer{};
     m_noGravityColumn = mage.idleColumn;
-    if (m_artReady && imageSizePx(sheet) != glm::dvec2(0.0)) {
-        m_playerQuad = makeSprite(registry, "Magic Portals Player Sprite", sheet, mage.additive);
+    if (m_artReady && playerCellPx(m_level.noGravity) != glm::dvec2(0.0)) {
+        m_playerQuad = makeSprite(registry, "Magic Portals Player Sprite", sheet.path, mage.additive);
         registry.emplace<InterpolatedTransformComponent>(m_playerQuad);
         auto& animation = registry.emplace<SpriteAnimationComponent>(m_playerQuad);
         animation.columns = static_cast<uint32_t>(mage.columns);
@@ -2200,13 +2223,43 @@ std::string MagicPortalsLayer::originalImage(const std::string& sprite) const {
     return m_paths.original + "/entities/" + sprite;
 }
 
+const Sprites::Image& MagicPortalsLayer::drawnImage(const std::string& named) {
+    // THE FILE THE ORIGINAL DRAWS, as for a level's art (step 66): every image the
+    // original loads goes through AddFile and ChooseSpriteVersion, the pictures its
+    // script adds and their particle bitmaps as much as the level's sprites
+    // (ETHSpriteEntity.cpp:95-104, ETHParticleManager.cpp:107). The APK ships hd
+    // files for the player's two sheets, the beholder, the rolling stone, and two
+    // particle bitmaps no built effect names yet; each is exactly twice its 1x file,
+    // so each is drawn at the same units and only its sampling changes. The portal's
+    // halo, the shot, the spike, halo.bmp and the normal maps have no tier file and
+    // come back as named, at density 1.
+    if (const auto known = m_drawnImages.find(named); known != m_drawnImages.end()) return known->second;
+    // One that cannot be read keeps units 0, and each caller draws nothing for it
+    // (a particle system's says so by name, as before).
+    Sprites::Image image;
+    std::string error;
+    if (!Sprites::Drawn(m_tierRules, named, image, error)) image.texels = image.units = glm::ivec2(0);
+    return m_drawnImages.emplace(named, std::move(image)).first->second;
+}
+
+glm::dvec2 MagicPortalsLayer::frameUnits(const Sprites::Image& sheet, int columns, int rows) {
+    Tiers::Cut cut;
+    std::string error;
+    if (sheet.units.x <= 0 || sheet.units.y <= 0 ||
+        !Tiers::FrameCut(sheet.texels, sheet.density, columns, rows, cut, error)) {
+        return glm::dvec2(0.0);
+    }
+    return glm::dvec2(cut.frameUnits);
+}
+
 glm::dvec2 MagicPortalsLayer::playerCellPx(bool noGravity) {
     // The sheet it was built with (buildDrawables), whose frame is cut from it.
     // Units, not texels: the push ray's reach is a share of this width (getSize,
-    // the frame times the entity's scale), so a tier read here (00_order 2.3)
-    // has to keep it int(texels / D) or the reach doubles with the hd sheet.
+    // the frame times the entity's scale), so the hd sheet (320 x 448 at density
+    // 2) keeps its frame at int(texels / D) / 4 = 40 x 56, the 1x file's, and the
+    // reach does not double.
     const Art::Character& mage = m_artRules.character;
-    return imageSizePx(originalImage(Art::PlayerSheet(mage, noGravity))) / glm::dvec2(mage.columns, mage.rows);
+    return frameUnits(drawnImage(originalImage(Art::PlayerSheet(mage, noGravity))), mage.columns, mage.rows);
 }
 
 void MagicPortalsLayer::buildSprites(entt::registry& registry) {
@@ -2577,11 +2630,15 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             made.emissive = thrown.emissive;
             made.box = makeBox(registry, "Magic Portals Thrown", glm::vec3(0.0f), glm::vec3(1.0f), kStoneColour);
             registry.emplace<InterpolatedTransformComponent>(made.box);
-            // Drawn as what it is, with the image the converter copied for its .ent.
-            const std::string texture = m_paths.art + "/assets/entities/" + thrown.sprite;
-            if (m_artReady && !thrown.sprite.empty() && imageSizePx(texture) != glm::dvec2(0.0)) {
-                made.quad = makeSprite(registry, "Magic Portals Thrown Sprite", texture, false);
-                registry.emplace<InterpolatedTransformComponent>(made.quad);
+            // Drawn as what it is, with the image the converter copied for its .ent:
+            // its tier file where the converter copied one (drawnImage), as the
+            // level's own stones are, hd/rolling_stone.png at 64 units.
+            if (m_artReady && !thrown.sprite.empty()) {
+                const Sprites::Image& image = drawnImage(m_paths.art + "/assets/entities/" + thrown.sprite);
+                if (image.units != glm::ivec2(0)) {
+                    made.quad = makeSprite(registry, "Magic Portals Thrown Sprite", image.path, false);
+                    registry.emplace<InterpolatedTransformComponent>(made.quad);
+                }
             }
             m_thrown.push_back(made);
             drawn = m_thrown.end() - 1;
@@ -2591,7 +2648,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
                  body.rotation.z);
         if (drawn->quad != entt::null) {
             placeSprite(registry, drawn->quad, Units::ToPixels(body.position),
-                        imageSizePx(m_paths.art + "/assets/entities/" + thrown.sprite),
+                        glm::dvec2(drawnImage(m_paths.art + "/assets/entities/" + thrown.sprite).units),
                         SlotZ(m_playerSlot) - 0.5f * kSpriteSlotZ, body.rotation.z);
         }
     }
@@ -2738,15 +2795,16 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     }
     // And one picture per placed portal, portal.ent's halo, when the original's
     // image is there: just behind the player, which walks into it.
-    const std::string halo = originalImage(m_artRules.portal.sprite);
-    const glm::dvec2 haloPx = imageSizePx(halo);
+    const Sprites::Image& halo = drawnImage(originalImage(m_artRules.portal.sprite));
+    const glm::dvec2 haloPx(halo.units);
     const bool haloReady = m_artReady && haloPx != glm::dvec2(0.0);
     while (m_portalQuads.size() > (haloReady ? placed.size() : 0)) {
         if (registry.valid(m_portalQuads.back())) registry.destroy(m_portalQuads.back());
         m_portalQuads.pop_back();
     }
     while (haloReady && m_portalQuads.size() < placed.size()) {
-        m_portalQuads.push_back(makeSprite(registry, "Magic Portals Portal Sprite", halo, m_artRules.portal.additive));
+        m_portalQuads.push_back(
+            makeSprite(registry, "Magic Portals Portal Sprite", halo.path, m_artRules.portal.additive));
     }
     for (std::size_t i = 0; i < m_portalQuads.size(); ++i) {
         placeSprite(registry, m_portalQuads[i], placed[i].atPx, haloPx, SlotZ(m_playerSlot) - 0.25f * kSpriteSlotZ,
@@ -2763,10 +2821,10 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         placeBox(registry, m_shot, m_level.portals.flight->atPx, glm::dvec2(kShotSizePx), kMarkerZ, kMarkerDepth,
                  0.0f);
         const Art::Picture& bolt = m_artRules.shot;
-        const std::string sheet = originalImage(bolt.sprite);
-        const glm::dvec2 sheetPx = imageSizePx(sheet);
-        if (m_shotQuad == entt::null && m_artReady && sheetPx != glm::dvec2(0.0)) {
-            m_shotQuad = makeSprite(registry, "Magic Portals Shot Sprite", sheet, bolt.additive);
+        const Sprites::Image& sheet = drawnImage(originalImage(bolt.sprite));
+        const glm::dvec2 cellPx = frameUnits(sheet, bolt.columns, bolt.rows);
+        if (m_shotQuad == entt::null && m_artReady && cellPx != glm::dvec2(0.0)) {
+            m_shotQuad = makeSprite(registry, "Magic Portals Shot Sprite", sheet.path, bolt.additive);
             // Played on the tick by the engine's SpriteAnimationSystem.
             auto& animation = registry.emplace<SpriteAnimationComponent>(m_shotQuad);
             animation.columns = static_cast<uint32_t>(bolt.columns);
@@ -2775,8 +2833,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
             animation.loop = true;
         }
         if (m_shotQuad != entt::null) {
-            placeSprite(registry, m_shotQuad, m_level.portals.flight->atPx,
-                        glm::dvec2(sheetPx.x / bolt.columns, sheetPx.y / bolt.rows),
+            placeSprite(registry, m_shotQuad, m_level.portals.flight->atPx, cellPx,
                         SlotZ(m_playerSlot) + 0.25f * kSpriteSlotZ, 0.0f);
         }
     } else {
@@ -2916,7 +2973,7 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
         Receiver receiver;
         receiver.applyLight = picture.applyLight;
         receiver.isStatic = picture.isStatic;
-        if (!picture.normal.empty()) receiver.normal = originalImage("normalmaps/" + picture.normal);
+        if (!picture.normal.empty()) receiver.normal = drawnImage(originalImage("normalmaps/" + picture.normal)).path;
         receiver.z = z;
         return receiver;
     };
@@ -3172,9 +3229,9 @@ void MagicPortalsLayer::syncLights(entt::registry& registry) {
             registry.emplace<TransformComponent>(made.light);
             registry.emplace<Light2DComponent>(made.light);
         }
-        const std::string torchHalo = originalImage(torchLight.light->halo);
-        if (made.halo == entt::null && m_artReady && imageSizePx(torchHalo) != glm::dvec2(0.0)) {
-            made.halo = makeSprite(registry, "Magic Portals Torch Halo", torchHalo, true);
+        const Sprites::Image& torchHalo = drawnImage(originalImage(torchLight.light->halo));
+        if (made.halo == entt::null && m_artReady && torchHalo.units != glm::ivec2(0)) {
+            made.halo = makeSprite(registry, "Magic Portals Torch Halo", torchHalo.path, true);
         }
         place(made.light, made.halo, *torchLight.light, torches[i].atPx, ownerZ, torchLight.isStatic,
               Lighting::ParticleRatio(0, 0), haloZ, true);
@@ -3197,9 +3254,9 @@ void MagicPortalsLayer::syncLights(entt::registry& registry) {
         registry.emplace<TransformComponent>(m_shotLight);
         registry.emplace<Light2DComponent>(m_shotLight);
     }
-    const std::string haloImage = originalImage(shot.light->halo);
-    if (m_shotHalo == entt::null && m_artReady && imageSizePx(haloImage) != glm::dvec2(0.0)) {
-        m_shotHalo = makeSprite(registry, "Magic Portals Shot Halo", haloImage, true);
+    const Sprites::Image& haloImage = drawnImage(originalImage(shot.light->halo));
+    if (m_shotHalo == entt::null && m_artReady && haloImage.units != glm::ivec2(0)) {
+        m_shotHalo = makeSprite(registry, "Magic Portals Shot Halo", haloImage.path, true);
     }
     // projectile.ent has no particle system, so nothing scales either. Its halo a
     // quarter slot in front of its own picture, which is a quarter slot in front
@@ -3260,10 +3317,12 @@ void MagicPortalsLayer::syncBoss(entt::registry& registry) {
         // beholder.ent's sheet: its eye open or shut, going red as it is hurt,
         // and pulsing as bounce() has it, but for while it throws rocks (art.json).
         const Art::Beholder& picture = m_artRules.beholder;
-        const std::string sheet = originalImage(picture.sprite);
-        const glm::dvec2 sheetPx = imageSizePx(sheet);
-        if (m_beholderQuad == entt::null && m_artReady && sheetPx != glm::dvec2(0.0)) {
-            m_beholderQuad = makeSprite(registry, "Magic Portals Beholder Sprite", sheet, picture.additive);
+        // hd/beholder.png, 512 x 256 at density 2: two frames of 128 x 128 units,
+        // as the 1x file's (drawnImage, frameUnits).
+        const Sprites::Image& sheet = drawnImage(originalImage(picture.sprite));
+        const glm::dvec2 cellPx = frameUnits(sheet, picture.columns, picture.rows);
+        if (m_beholderQuad == entt::null && m_artReady && cellPx != glm::dvec2(0.0)) {
+            m_beholderQuad = makeSprite(registry, "Magic Portals Beholder Sprite", sheet.path, picture.additive);
             registry.emplace<InterpolatedTransformComponent>(m_beholderQuad);
             auto& animation = registry.emplace<SpriteAnimationComponent>(m_beholderQuad);
             animation.columns = static_cast<uint32_t>(picture.columns);
@@ -3281,7 +3340,6 @@ void MagicPortalsLayer::syncBoss(entt::registry& registry) {
             case Boss::Phase::Dead: m_beholderScale = picture.dead.ScaleAt(beholder.pulseMs); break;
             case Boss::Phase::ThrowRock: break;
             }
-            const glm::dvec2 cellPx = sheetPx / glm::dvec2(picture.columns, picture.rows);
             placeSprite(registry, m_beholderQuad, beholder.atPx, cellPx * m_beholderScale, m_beholderZ, 0.0f);
             const float left = static_cast<float>(std::max(beholder.hp, 0)) / static_cast<float>(boss.rules.maxHp);
             m_beholderColour = glm::vec4(1.0f, left, left, 1.0f);
@@ -3291,15 +3349,15 @@ void MagicPortalsLayer::syncBoss(entt::registry& registry) {
     // Its spikes: beholder_spike.ent turned to where each flies and standing on
     // its pivot, or small boxes without the image.
     const Art::Spike& spike = m_artRules.spike;
-    const std::string image = originalImage(spike.sprite);
-    const glm::dvec2 imagePx = imageSizePx(image);
+    const Sprites::Image& image = drawnImage(originalImage(spike.sprite));
+    const glm::dvec2 imagePx(image.units);
     const bool pictured = m_artReady && imagePx != glm::dvec2(0.0);
     while (m_spikes.size() > boss.spikes.size()) {
         destroy(m_spikes.back());
         m_spikes.pop_back();
     }
     while (m_spikes.size() < boss.spikes.size()) {
-        m_spikes.push_back(pictured ? makeSprite(registry, "Magic Portals Spike", image, spike.additive)
+        m_spikes.push_back(pictured ? makeSprite(registry, "Magic Portals Spike", image.path, spike.additive)
                                     : makeBox(registry, "Magic Portals Spike", glm::vec3(0.0f), glm::vec3(1.0f),
                                               kSpikeColour));
     }

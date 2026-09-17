@@ -152,6 +152,26 @@ bool ImageSize(const std::string& path, int& width, int& height, std::string& er
     return true;
 }
 
+bool Drawn(const Tiers::Rules& tiers, const std::string& named, Image& out, std::string& error) {
+    const Tiers::Resolved resolved = Tiers::Resolve(tiers, named);
+    Image drawn;
+    drawn.path = resolved.path;
+    drawn.tier = resolved.tier;
+    drawn.density = resolved.density;
+    out = drawn;
+    glm::ivec2 texels(0);
+    if (!ImageSize(drawn.path, texels.x, texels.y, error)) return false;
+    const glm::ivec2 units = Tiers::Units(texels, drawn.density);
+    if (units.x <= 0 || units.y <= 0) {
+        error = drawn.path + " is less than one unit at density " + std::to_string(drawn.density);
+        return false;
+    }
+    drawn.texels = texels;
+    drawn.units = units;
+    out = drawn;
+    return true;
+}
+
 glm::dvec2 CentrePx(const Sprite& sprite) {
     const double c = std::cos(sprite.rotation);
     const double s = std::sin(sprite.rotation);
@@ -186,22 +206,18 @@ bool Find(const Tscn::Scene& scene, const std::string& resRoot, const Tiers::Rul
         }
         // The file the original's loader draws for the name (ChooseSpriteVersion),
         // sized as its density sizes it: whole units, truncated after the divide.
-        const Tiers::Resolved drawn = Tiers::Resolve(tiers, resRoot + "/" + image->path.substr(kRes.size()));
+        Image drawn;
+        std::string why;
+        const bool sized = Drawn(tiers, resRoot + "/" + image->path.substr(kRes.size()), drawn, why);
         sprite.texture = drawn.path;
         sprite.tier = drawn.tier;
         sprite.density = drawn.density;
-        std::string why;
-        if (!ImageSize(sprite.texture, sprite.texels.x, sprite.texels.y, why)) {
+        if (!sized) {
             error = At(node) + owner->name + "'s texture: " + why;
             return false;
         }
-        const glm::ivec2 units = Tiers::Units(sprite.texels, sprite.density);
-        if (units.x <= 0 || units.y <= 0) {
-            error = At(node) + owner->name + "'s texture: " + sprite.texture + " is less than one unit at density " +
-                    std::to_string(sprite.density);
-            return false;
-        }
-        sprite.sizePx = glm::dvec2(units);
+        sprite.texels = drawn.texels;
+        sprite.sizePx = glm::dvec2(drawn.units);
 
         if (const Tscn::Value* offset = node.Find("offset"); offset != nullptr) {
             if (offset->kind != Tscn::Value::Kind::Vector2) {

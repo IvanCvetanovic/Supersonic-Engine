@@ -58,6 +58,26 @@ struct Sprite {
     bool additive = false;     // blend_mode 1: added to what is behind it rather than mixed
 };
 
+// An image drawn by name, as the original's loader draws every image it loads -
+// a level's sprites, the entities the script adds, their halos and normal maps,
+// particle bitmaps (ETHGraphicResourceManager::AddFile, ETHResourceManager.cpp:133-144;
+// ETHParticleManager.cpp:107, :170 for a particle's): the file Tiers::Resolve finds
+// for the name, its texels from its header, and its size in whole units. Find draws
+// a level's art through it, and the layer the port's own pictures and every particle
+// bitmap (00_order 2.3).
+struct Image {
+    std::string path;     // the file drawn: the tier file, or the name itself
+    std::string tier;     // the folder it was found in ("fullhd", "hd"); empty for the name itself
+    float density = 1.0f; // texels per unit in that file: 1 for the name itself
+    glm::ivec2 texels{0}; // the drawn file's own size, from its header
+    glm::ivec2 units{0};  // Tiers::Units(texels, density): whole units
+};
+
+// False, with `error`, for a drawn file that cannot be sized (ImageSize's reason)
+// or that is less than one unit on an axis at its density. `out` then still says
+// which file was tried, with texels and units 0.
+bool Drawn(const Tiers::Rules& tiers, const std::string& named, Image& out, std::string& error);
+
 // Every sprite of a level, in drawing order: by z_index, then as the file lists
 // them. `resRoot` is the directory res:// stands for, and `tiers` the search each
 // named image goes through (data/tiers.json; Tiers::Rules{} searches nothing and

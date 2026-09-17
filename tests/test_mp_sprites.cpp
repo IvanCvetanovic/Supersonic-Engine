@@ -16,6 +16,7 @@
 
 #include "sim/Art.hpp"
 #include "sim/Lighting.hpp"
+#include "sim/Loading.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Sprites.hpp"
 #include "sim/Tiers.hpp"
@@ -450,6 +451,34 @@ void ASpriteIsDrawnFromItsTier() {
     error.clear();
     CHECK_MSG(!drawn(tiers, "gone.png", sprite, error) && error.find("assets/gone.png") != std::string::npos,
               "a name with neither a tier file nor its own file is refused, by the name: " + error);
+
+    // The same rule by name, with no scene: what the layer draws the port's own
+    // pictures and every particle bitmap through (00_order 2.3).
+    const std::string assets = dir.string() + "/assets/";
+    Sprites::Image image;
+    error.clear();
+    CHECK_MSG(Sprites::Drawn(tiers, assets + "crystal.png", image, error), error);
+    CHECK_MSG(image.path == assets + "hd/crystal.png" && image.tier == "hd" && image.density == 2.0f &&
+                  image.texels == glm::ivec2(64, 64) && image.units == glm::ivec2(32, 32),
+              "by name: the hd file, 64 texels, 32 units: " + image.path);
+    CHECK_MSG(Sprites::Drawn(tiers, assets + "sky.png", image, error) && image.tier == "fullhd" &&
+                  image.units == glm::ivec2(512, 256),
+              "fullhd before hd, at its own units");
+    CHECK_MSG(Sprites::Drawn(tiers, assets + "odd.png", image, error) && image.units == glm::ivec2(10, 10),
+              "whole units by name too");
+    CHECK_MSG(Sprites::Drawn(tiers, assets + "plain.png", image, error) && image.tier.empty() &&
+                  image.density == 1.0f && image.path == assets + "plain.png" && image.units == glm::ivec2(40, 100),
+              "no tier file: the name itself at density 1");
+    error.clear();
+    CHECK_MSG(!Sprites::Drawn(tiers, assets + "speck.png", image, error) &&
+                  error == assets + "hd/speck.png is less than one unit at density " + std::to_string(2.0f) &&
+                  image.path == assets + "hd/speck.png" && image.units == glm::ivec2(0),
+              "under one unit refused, saying which file it tried: " + error);
+    error.clear();
+    CHECK_MSG(!Sprites::Drawn(tiers, assets + "gone.png", image, error) &&
+                  error.find("assets/gone.png") != std::string::npos && image.path == assets + "gone.png" &&
+                  image.texels == glm::ivec2(0) && image.units == glm::ivec2(0),
+              "unreadable refused by the file tried, with no size: " + error);
 }
 
 // ---- art.json: what no level pictures ------------------------------------------
@@ -866,6 +895,130 @@ void TheOriginalsImagesAreCutAsTheEntsSay() {
     // segment and two tables, says 32 x 32.
     const bool explosion = Sprites::ImageSize(kOriginal + "/particles/explosion.JPG", w, h, error);
     CHECK_MSG(explosion && w == 32 && h == 32, "explosion.JPG is 32 x 32: " + error);
+}
+
+// 00_order 2.3: the pictures the port draws for itself and every particle bitmap, by
+// the names its data gives, through the rule a level's art takes (Sprites::Drawn).
+// The APK's hd files for the player's two sheets, the beholder, the rolling stone and
+// two particle bitmaps are each exactly twice their 1x file, so every frame keeps the
+// 1x file's units, and the engine's even split (SpriteAnimationComponent) cuts each
+// sheet where Tiers::FrameCut does. The rest have no tier file and draw as named.
+void ThePortsOwnPicturesAreDrawnFromTheirTiers() {
+    Art::Rules rules;
+    std::string error;
+    CHECK_MSG(Art::LoadRules(kPortData + "/art.json", rules, error), error);
+    Loading::Rules loading;
+    CHECK_MSG(Loading::LoadRules(kPortData + "/ui.json", loading, error), error);
+    const Tiers::Rules tiers = TheTiers();
+    const std::string entities = kOriginal + "/entities/";
+
+    struct Sheet {
+        std::string name;
+        int columns;
+        int rows;
+        std::string tier;
+        glm::ivec2 texels;
+        glm::ivec2 frame;
+    };
+    const Sheet sheets[] = {
+        {rules.character.sprite, rules.character.columns, rules.character.rows, "hd", {320, 448}, {40, 56}},
+        {rules.character.noGravitySprite, rules.character.columns, rules.character.rows, "hd", {320, 448}, {40, 56}},
+        {rules.beholder.sprite, rules.beholder.columns, rules.beholder.rows, "hd", {512, 256}, {128, 128}},
+        {rules.shot.sprite, rules.shot.columns, rules.shot.rows, "", {384, 64}, {64, 64}},
+        {rules.portal.sprite, rules.portal.columns, rules.portal.rows, "", {64, 64}, {64, 64}},
+        {rules.spike.sprite, rules.spike.columns, rules.spike.rows, "", {16, 32}, {16, 32}},
+        {"normalmaps/" + rules.character.normal, 1, 1, "", {128, 128}, {128, 128}},
+        {"normalmaps/" + rules.torchLight.normal, 1, 1, "", {32, 64}, {32, 64}},
+    };
+    for (const Sheet& sheet : sheets) {
+        Sprites::Image image;
+        error.clear();
+        const bool drawn = Sprites::Drawn(tiers, entities + sheet.name, image, error);
+        std::string expected = entities + sheet.name;
+        if (!sheet.tier.empty()) {
+            const std::size_t slash = expected.rfind('/');
+            expected = expected.substr(0, slash) + "/" + sheet.tier + expected.substr(slash);
+        }
+        CHECK_MSG(drawn && image.path == expected && image.tier == sheet.tier && image.texels == sheet.texels &&
+                      image.density == (sheet.tier.empty() ? 1.0f : 2.0f),
+                  sheet.name + ": drawn from " + image.path + " " + error);
+        Tiers::Cut cut;
+        CHECK_MSG(Tiers::FrameCut(image.texels, image.density, sheet.columns, sheet.rows, cut, error) &&
+                      cut.frameUnits == sheet.frame,
+                  sheet.name + ": a frame of its units " + error);
+        // The 1x file's even split, which the port drew the frame at before.
+        int w = 0;
+        int h = 0;
+        CHECK_MSG(Sprites::ImageSize(entities + sheet.name, w, h, error) &&
+                      glm::dvec2(w, h) / glm::dvec2(sheet.columns, sheet.rows) == glm::dvec2(sheet.frame),
+                  sheet.name + ": the same frame as its 1x file's");
+        CHECK_MSG(std::fabs(cut.uvScale.x - 1.0 / sheet.columns) < 1e-12 &&
+                      std::fabs(cut.uvScale.y - 1.0 / sheet.rows) < 1e-12,
+                  sheet.name + ": cut where an even split cuts it");
+    }
+
+    // The halos, and black_halo.ent's picture for the loading screen: no tier file.
+    for (const std::string& named : {entities + rules.shot.light->halo, entities + rules.torchLight.light->halo,
+                                     kOriginal + "/" + loading.haloSprite}) {
+        Sprites::Image image;
+        CHECK_MSG(Sprites::Drawn(tiers, named, image, error) && image.path == named && image.density == 1.0f,
+                  named + " is drawn as named: " + image.path);
+    }
+
+    // Every particle bitmap every .ent names: two have an hd file, each twice its 1x
+    // file, and none is unreadable or refused.
+    std::vector<std::string> bitmaps;
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(kOriginal + "/entities", ec), end; !ec && it != end; it.increment(ec)) {
+        if (it->path().extension() != ".ent") continue;
+        std::vector<Particles::System> systems;
+        if (!Particles::Load(it->path().generic_string(), systems, error)) continue;
+        for (const Particles::System& system : systems) {
+            if (std::find(bitmaps.begin(), bitmaps.end(), system.bitmap) == bitmaps.end()) {
+                bitmaps.push_back(system.bitmap);
+            }
+        }
+    }
+    std::sort(bitmaps.begin(), bitmaps.end());
+    std::vector<std::string> tiered;
+    int unread = 0;
+    for (const std::string& bitmap : bitmaps) {
+        Sprites::Image image;
+        const std::string named = kOriginal + "/particles/" + bitmap;
+        if (!Sprites::Drawn(tiers, named, image, error)) {
+            ++unread;
+            std::printf("  particle bitmap not drawn: %s\n", error.c_str());
+            continue;
+        }
+        if (image.tier.empty()) {
+            CHECK_MSG(image.path == named && image.density == 1.0f, bitmap);
+            continue;
+        }
+        tiered.push_back(bitmap + " " + image.tier);
+        int w = 0;
+        int h = 0;
+        CHECK_MSG(Sprites::ImageSize(named, w, h, error) && image.units == glm::ivec2(w, h),
+                  bitmap + ": its tier file keeps the 1x file's units");
+    }
+    std::printf("  %zu particle bitmaps named by the .ent files; drawn from a tier file: %zu\n", bitmaps.size(),
+                tiered.size());
+    CHECK_MSG(bitmaps.size() >= 20, std::to_string(bitmaps.size()) + " particle bitmaps");
+    CHECK_EQ(unread, 0);
+    CHECK_MSG(tiered == std::vector<std::string>({"crystal_particle.png hd", "question_mark.png hd"}),
+              "crystal_particle.png and question_mark.png draw from hd, and nothing else");
+
+    // The thrown stone, from the converter's copies beside the levels.
+    std::error_code converted;
+    if (!std::filesystem::is_directory(kLevels + "/../assets/entities/hd", converted)) {
+        std::printf("  the thrown stone's tier file SKIPPED - needs the converter's copies beside %s\n",
+                    kLevels.c_str());
+        return;
+    }
+    Sprites::Image stone;
+    const std::string named = kLevels + "/../assets/entities/rolling_stone.png";
+    CHECK_MSG(Sprites::Drawn(tiers, named, stone, error) && stone.tier == "hd" &&
+                  stone.texels == glm::ivec2(128, 128) && stone.units == glm::ivec2(64, 64),
+              "a thrown rolling_stone.png: its hd copy, 64 units: " + stone.path + " " + error);
 }
 
 // The header reader and the renderer's decoder agree on every image the original
@@ -1721,6 +1874,7 @@ int main() {
     std::error_code original;
     if (std::filesystem::is_directory(kOriginal + "/entities", original)) {
         TheOriginalsImagesAreCutAsTheEntsSay();
+        ThePortsOwnPicturesAreDrawnFromTheirTiers();
         EveryOriginalImageIsSizedAsTheRendererReadsIt();
         TheOriginalsParticlesAreRead();
         AnEntityWithoutParticlesSaysSoWithoutFailing();

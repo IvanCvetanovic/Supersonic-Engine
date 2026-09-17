@@ -244,6 +244,9 @@ entt::entity FirstTagged(entt::registry& registry, const char* tag) {
     return entt::null;
 }
 
+// Defined further down, beside the checks that first needed it.
+bool EndsWith(const std::string& path, const std::string& file);
+
 // The original's extracted images - what no level pictures is drawn with - are
 // outside this repository like the levels, but a machine can have the levels and
 // not them. What needs them says so and is skipped.
@@ -772,6 +775,15 @@ void ARetryTakesTheThrownStonesAway() {
     CHECK_EQ(layer.SimLevel()->launchers.live.size(), std::size_t{1});
     CHECK_EQ(thrownBoxes(), 1);
     CHECK_MSG(Tagged(registry, "Magic Portals Thrown Sprite") == 1, "drawn as the rolling stone it is");
+    if (const entt::entity stone = FirstTagged(registry, "Magic Portals Thrown Sprite"); stone != entt::null) {
+        // The converter's hd copy, 128 texels at density 2: 64 units (00_order 2.3).
+        const std::string& texture = registry.get<MaterialComponent>(stone).albedoTexturePath;
+        const glm::vec3 scale = registry.get<TransformComponent>(stone).scale;
+        const double perMetre = MagicPortals::Units::kPixelsPerMetre;
+        CHECK_MSG(EndsWith(texture, "/assets/entities/hd/rolling_stone.png") &&
+                      std::fabs(scale.x * perMetre - 64.0) < 1e-3 && std::fabs(scale.y * perMetre - 64.0) < 1e-3,
+                  "its hd file at 64 units: " + texture);
+    }
     CHECK_EQ(spheres(), loadedSpheres + 1);
 
     press(layer, registry, MagicPortalsLayer::kRetry);
@@ -1077,10 +1089,18 @@ void ThePlayerIsTheDarkMage() {
         return registry.get<SpriteAnimationComponent>(mageQuad);
     };
     const MaterialComponent& material = registry.get<MaterialComponent>(mageQuad);
-    CHECK_MSG(material.albedoTexturePath.find("magic_portals_hd.png") != std::string::npos &&
+    CHECK_MSG(EndsWith(material.albedoTexturePath, "/entities/hd/magic_portals_hd.png") &&
                   material.blend == MaterialComponent::BlendMode::Premultiplied && animation().columns == 4 &&
                   animation().rows == 4,
-              "dark_mage.ent's sheet, cut 4 x 4, mixed (premultiplied)");
+              "dark_mage.ent's sheet, its hd file, cut 4 x 4, mixed (premultiplied): " + material.albedoTexturePath);
+    {
+        // 320 x 448 texels at density 2, cut 4 x 4: 40 x 56 units a frame, the 1x
+        // file's (00_order 2.3).
+        const glm::vec3 scale = registry.get<TransformComponent>(mageQuad).scale;
+        const double perMetre = MagicPortals::Units::kPixelsPerMetre;
+        CHECK_MSG(std::fabs(scale.x * perMetre - 40.0) < 1e-3 && std::fabs(scale.y * perMetre - 56.0) < 1e-3,
+                  "a 40 x 56 frame of it");
+    }
     CHECK_MSG(animation().firstFrame == 8 && animation().firstFrame == rowStart(mage.rightRow) &&
                   animation().frameCount == 1 && !animation().playing && animation().frame == 0 &&
                   animation().elapsed == 0.0f,
@@ -1399,10 +1419,19 @@ void Level31DrawsTheBeholder() {
     CHECK(quad != entt::null);
     if (quad == entt::null) return;
     const auto& material = registry.get<MaterialComponent>(quad);
-    CHECK_MSG(material.albedoTexturePath.find("beholder.png") != std::string::npos, material.albedoTexturePath);
+    CHECK_MSG(EndsWith(material.albedoTexturePath, "/entities/hd/beholder.png"),
+              "its hd sheet: " + material.albedoTexturePath);
     CHECK(material.albedoColor == glm::vec4(1.0f));
     const auto& animation = registry.get<SpriteAnimationComponent>(quad);
     CHECK(animation.columns == 2u && animation.rows == 1u && animation.firstFrame == 0u);
+    {
+        // 512 x 256 texels at density 2, cut 2 x 1: a 128 x 128-unit frame, times the
+        // pulse bounce() gives each axis now (never 2x or 1/2 of it).
+        const glm::vec3 scale = registry.get<TransformComponent>(quad).scale;
+        const glm::dvec2 frame = glm::dvec2(scale.x, scale.y) * MagicPortals::Units::kPixelsPerMetre;
+        CHECK_MSG(frame.x > 128.0 * 0.8 && frame.x < 128.0 * 1.25 && frame.y > 128.0 * 0.8 && frame.y < 128.0 * 1.25,
+                  "a 128-unit frame at its pulse: " + Point(frame));
+    }
     const glm::dvec2 at = layer.SimLevel()->boss.beholder->atPx;
     const glm::dvec2 drawn = MagicPortals::Units::ToPixels(registry.get<TransformComponent>(quad).position);
     CHECK_MSG(glm::distance(drawn, at) < 1e-3, "drawn at " + Point(drawn) + ", the beholder at " + Point(at));
@@ -1719,6 +1748,15 @@ void TheLoadingScreenLeadsToTheMenu() {
     CHECK_EQ(Tagged(registry, "Magic Portals Loading Background"), 1);
     CHECK_EQ(Tagged(registry, "Magic Portals Loading Character"), 1);
     CHECK_EQ(Tagged(registry, "Magic Portals Loading Portal"), 1);
+    if (const entt::entity mage = FirstTagged(registry, "Magic Portals Loading Character"); mage != entt::null) {
+        // The level's sheet, as the level draws it: the hd file at a 40 x 56 frame.
+        const std::string& texture = registry.get<MaterialComponent>(mage).albedoTexturePath;
+        const glm::vec3 scale = registry.get<TransformComponent>(mage).scale;
+        const double perMetre = MagicPortals::Units::kPixelsPerMetre;
+        CHECK_MSG(EndsWith(texture, "/entities/hd/magic_portals_hd.png") &&
+                      std::fabs(scale.x * perMetre - 40.0) < 1e-3 && std::fabs(scale.y * perMetre - 56.0) < 1e-3,
+                  "the loading screen's character: " + texture);
+    }
     {
         const std::vector<ScreenOverlay::Quad> frame = MenuFrame(registry, layer);
         const int logo = IndexOfImage(frame, "asanteegameslogo.png");
@@ -2033,7 +2071,6 @@ void ParticlesGoWithTheirLevel() {
 // ---- the emitters conform (step 59, plan_port System 2) ------------------------
 
 // Defined further down, beside the checks that first needed them.
-bool EndsWith(const std::string& path, const std::string& file);
 entt::entity SpriteOf(entt::registry& registry, const char* tag, const std::string& file);
 
 // The first report of `node`'s system `slot`, or null.
@@ -2404,6 +2441,8 @@ void AParticleOnANonSquareCellIsDrawnSquare() {
         CHECK_MSG(std::fabs(report.cellPx.x - 51.2) < 1e-9 && std::fabs(report.cellPx.y - 32.0) < 1e-9,
                   report.node + ": a 51.2 x 32 cell, " + std::to_string(report.cellPx.x) + " x " +
                       std::to_string(report.cellPx.y));
+        // No tier file: drawn from the bitmap named (00_order 2.3).
+        CHECK_MSG(EndsWith(report.image, "/particles/tesla_shock_black_bg.png"), report.image);
     }
     CHECK_MSG(shocks > 0, "3-24 places a system on tesla_shock_black_bg.png");
 
@@ -5327,7 +5366,8 @@ void AWeightlessPlayerWearsTheSuit() {
         if (mageQuad == entt::null) continue;
         {
             const MaterialComponent& material = registry.get<MaterialComponent>(mageQuad);
-            const char* sheet = weightless ? "/entities/dark_mage_in_space.png" : "/entities/magic_portals_hd.png";
+            const char* sheet =
+                weightless ? "/entities/hd/dark_mage_in_space.png" : "/entities/hd/magic_portals_hd.png";
             CHECK_MSG(EndsWith(material.albedoTexturePath, sheet) &&
                           EndsWith(material.normalTexturePath, "/entities/normalmaps/normalmap_77.png"),
                       name + ": " + material.albedoTexturePath + " through " + material.normalTexturePath);

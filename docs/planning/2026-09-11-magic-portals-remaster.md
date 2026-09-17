@@ -10521,3 +10521,208 @@ longer draws). **System 8's residual** (00_order section 1): 1-09 `LM_E<1_halo` 
   sample 20 of 21 texels (`default.vs:38-39`, as step 61 cites). `test_mp_sprites` `ASpriteIsDrawnFromItsTier` pins
   21 texels at D 2 as 10 u. No level texture is affected: all 111 tier PNGs under `out/assets` are even on both sides.
   When a step touches the quad UVs, an uncut sprite should take `uvScale = units / (texels / D)`, as `FrameCut` does.
+
+## Step 67 - the port's own pictures and every particle bitmap drawn from the tier file the original draws (built)
+
+The entity-visuals order's step 2.3 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; `system_6.md`
+section 4.1 C4; conflict K15): step 66 drew a level's art from its `hd/` or `fullhd/` file, but what no level places
+still read the 1x file - the player (`magic_portals_hd.png`, and the suit `dark_mage_in_space.png` on the 18
+`no_gravity` levels), the beholder, a thrown stone, the portal's halo, the shot, the spikes, their halos and normal
+maps, the loading screen's character, portal and halo, and every particle bitmap. They now take the same rule: a new
+`Sprites::Drawn` resolves a name through step 61's `Tiers::Resolve`, sizes the file drawn and gives its whole units;
+`Sprites::Find` is rebuilt on it; and the layer reads every one of those images through `drawnImage`, cutting sheets
+with `Tiers::FrameCut`. Game-only: no file under `src/` or `assets/shaders/`. Changed: `sim/Sprites.{hpp,cpp}`,
+`MagicPortalsLayer.{hpp,cpp}`, `tests/test_mp_sprites.cpp`, `tests/test_mp_layer.cpp`. **Six images gain a tier file
+and every drawn size stays: the player's two sheets, the beholder and the thrown stone are each exactly twice their 1x
+file, and the two particle bitmaps with an hd file are named by no built effect. 110 levels now load
+`entities/hd/magic_portals_hd.png`, 18 the suit's hd file, 1-32 `hd/beholder.png` and three levels the converter's
+`hd/rolling_stone.png`; the same 4,959 textures load over the sweep. 1-01's player locates at 0.9817 against the
+original's own 0.9716 (0.9708 before), and its detail inside the figure goes 0.56 to 1.21 of the original's. 125 of
+128 f420 frames change and 0 of them anywhere but in the player, the beholder or the thrown stone; the three that do
+not draw no player. The HUD and the menu are byte-identical, and so are all 40 frames of the loading screen.**
+
+**WHAT THE ORIGINAL DOES** (step 61 has the loader's decode, cited; step 66 applies it to a level's art).
+- **Every image it loads takes one path.** An entity's sprite, its normal map and its halo are each asked of
+  `ETHGraphicResourceManager::GetPointer` (`ETHSpriteEntity.cpp:95`, `:99`, `:104`), and so is a particle system's
+  bitmap (`ETHParticleManager.cpp:107-108`, and `:170` for a script's `SetParticleBitmap`). `GetPointer` loads through
+  `AddFile` (`ETHResourceManager.cpp:109`), which draws the file `ChooseSpriteVersion` picks and sets its density
+  (`:133-144`). So the pictures the script adds and every particle bitmap are drawn from their `hd/` file where the APK
+  has one, at texels / 2 units, exactly as a level's art is.
+- **Which of them have a tier file** (`test_mp_sprites`): the player's two sheets, `hd/magic_portals_hd.png` and
+  `hd/dark_mage_in_space.png` (320 x 448 over 160 x 224), `hd/beholder.png` (512 x 256 over 256 x 128),
+  `hd/rolling_stone.png` (128 x 128 over 64 x 64), and two particle bitmaps, `hd/crystal_particle.png` and
+  `hd/question_mark.png` (64 x 64 over 32 x 32), which only `crystal_pick.ent`, `crystal_vanish.ent` and `question.ent`
+  name and no step has built. Each is exactly twice its 1x file, so every drawn size stays. `portal_halo.png`,
+  `projectile.png`, `beholder_spike.png`, `halo.bmp`, `black_halo.bmp`, the two normal maps and the other 27 particle
+  bitmaps the 190 `.ent` files name have none, and are drawn as named at density 1.
+- **How a sheet is cut:** in whole units after the divide (`Tiers::FrameCut`, step 61). The hd player sheet is 4 x 4
+  frames of 40 x 56 units (80 x 112 texels), the beholder 2 x 1 of 128 x 128, the shot 6 x 1 of 64 x 64 - each an even
+  split exactly, so the engine's `SpriteAnimationComponent` samples every one of these frames where the original does.
+  A cut particle sheet is the one place where the original's whole-unit stride and the port's even split differ
+  (RECORDED DEVIATIONS).
+- **The 1x sheet is not the hd sheet shrunk in place.** In `magic_portals_hd.png` the 1x figure's alpha centroid sits
+  0.68 to 0.81 units BELOW the hd figure's (frames 4, 8, 9), and the suit's 0.5 units right of it as well; the 1x sheet
+  matches the hd sheet area-downsampled and moved down one texel (mean alpha difference 3.2 against 9.6 unmoved). So at
+  the same entity position and pivot the original's figure stands about 0.8 units higher than the port's 1x figure did,
+  and this step moves the player up by that much (BEYOND THE GATES).
+
+**WHAT CHANGED.**
+- **`sim/Sprites`.** New `Image` (the file drawn, its tier, density, texels and units) and
+  `Drawn(tiers, named, out, error)`: `Tiers::Resolve`, `ImageSize`, `Tiers::Units`; false for a file that cannot be
+  sized or is under one unit on an axis, with `out` still naming the file it tried. `Find` is rebuilt on it and refuses
+  with the same words as before.
+- **`MagicPortalsLayer`.** `drawnImage(named)` reads a name through `Sprites::Drawn` over `m_tierRules` once and keeps
+  it (`m_drawnImages`); `frameUnits(sheet, columns, rows)` cuts a sheet through `Tiers::FrameCut`. Through them now:
+  - the player's sheet (`buildDrawables`) and its frame (`playerCellPx`, which is also the push ray's reach: 40 units
+    either way, since the hd sheet's frame is `int(320 / 2) / 4`);
+  - the loading screen's character (the hd file its `originalAsset` lookup already found, now sized by `frameUnits`),
+    its portal halo, and `black_halo.bmp` (the multiply image's source and its size);
+  - a placed portal's halo, the shot and its frame, the torch's and the shot's halos, the normal maps of the port's own
+    pictures, the beholder and its frame, a spike;
+  - a thrown stone: the converter's `hd/rolling_stone.png` at 64 units, the file the levels' own stones draw;
+  - every particle system (`buildEmitters`, `addEntityEmitters`): its bitmap's tier file. `cellPx` is the bitmap's
+    texels over its density, split evenly - today's number for every bitmap a level or the loading screen draws, all of
+    them density 1. `EmitterReport` gains `image`, the file drawn.
+  - **Left alone:** the menus' and the HUD's pictures (`menuImage`, `originalAsset`, the finished screen's crystal),
+    which `system_6.md` C4 makes optional (LEFT FOR THE OWNER), and a level's own halos, normal maps and lightmaps,
+    read as `sim/Lighting` names them - no halo, normal map or lightmap in the APK has a tier file (`system_6.md`
+    section 0).
+- **Tests.**
+  - `test_mp_sprites`: `ASpriteIsDrawnFromItsTier` adds `Drawn` by name on the files it writes (hd for the 1x name,
+    fullhd before hd, whole units, no tier file at density 1, and both refusals naming the file tried). New
+    `ThePortsOwnPicturesAreDrawnFromTheirTiers` over the original's own files, by the names `art.json` and `ui.json`
+    give: the two player sheets and the beholder from `hd/` at the 1x file's frames (40 x 56, 128 x 128), each cut
+    where an even split cuts it; the shot, the halo, the spike and the two normal maps as named; the three halos as
+    named; every particle bitmap the `.ent` files name (29, 0 unreadable), with exactly `crystal_particle.png` and
+    `question_mark.png` from `hd/` at their 1x files' units; and the converter's `hd/rolling_stone.png` at 64 units.
+  - `test_mp_layer`: level8's player quad is `entities/hd/magic_portals_hd.png` at 40 x 56 units; level1c's suit is
+    `entities/hd/dark_mage_in_space.png` (the pin that named the 1x path, replaced deliberately); level31's beholder is
+    `entities/hd/beholder.png` at a 128-unit frame times its pulse; level23's thrown stone is
+    `assets/entities/hd/rolling_stone.png` at 64 units; the loading screen's character is the hd sheet at 40 x 56; and
+    3-24's shock systems draw `particles/tesla_shock_black_bg.png` as named, at the 51.2 x 32 cell they had.
+
+**BASELINE.** Before: step 66's after, `visuals/2.2/after/` and its `sweep/` (1-01 f420 `22a89e11`), taken on
+`MagicPortals.exe` `cde4df49`, whose frames the committed `5bcab01b` reproduced in 155 launches (step 66). No commit
+has landed since, and this step's first build replaced that binary, so no "before" was re-captured and none was
+needed: every before number below is read off those frames. After: `visuals/2.3/after/` and its `sweep/`,
+`MagicPortals.exe` `634e9284`; scripts `capture_23.sh` and `work/{scan23,diffbox23,player23,logs23}.py`. **Pixels move
+on 125 levels, so the next step's "before" is `visuals/2.3/after/` and its `sweep/` (1-01 f420 `52549d7f`).**
+
+| Gate (00_order 2.3; `system_6.md` section 5 row) | Required | Before | After |
+|---|---|---|---|
+| player locate on the hd sheet, 1-01 f420 (row 15) | >= 0.95 | 0.9708 | **0.9817: passes** (the original's own frame scores 0.9716; `locate.py`, `cell_magic_portals_hd_f8.png` at 1.40625, size still 112 x 158, centre x 101 either way) |
+| HUD f1 byte-identical (row 12) | byte-identical | `5c5cfed2` | **`5c5cfed2`: passes.** f1 is under the level's opening black (steps 38, 40), so this gate pins the HUD's own layout, not the level's art; it is also how it survived step 66 |
+| menu f120 byte-identical (row 12) | byte-identical | `44b45d37` | **`44b45d37`: passes.** And all 40 frames of a `--screenshot-every 3` run to f120, the loading screen's character among them, are byte-identical to step 59's `particles/verify2/suck/` series |
+| `test_mp_boss` (row 13) | passes | - | **126 checks, 0 failures** |
+| `test_mp_frontdoor` (row 13) | passes | - | **194 checks, 0 failures** |
+| `test_mp_layer` (row 13) | passes | - | **923 checks, 0 failures** (one pin replaced deliberately, THE SUITES) |
+
+**Beyond the gates.**
+- **The sweep** (`work/logs23.py`, `work/diffbox23.py`): 128 of 128 exit 0, validation ACTIVE in 128 and silent in all
+  128; 0 logs say "particle image could not be read", before and after alike; 4,959 textures load either way. The only
+  files that change are the six: `entities/magic_portals_hd.png` 110 loads -> `entities/hd/...` 110,
+  `dark_mage_in_space.png` 18 -> 18 hd, `beholder.png` 1 -> 1 hd (1-32), and the thrown stone's
+  `assets/entities/rolling_stone.png` 3 -> 0 with `assets/entities/hd/rolling_stone.png` 25 -> 28.
+- **Where the frames change.** 125 of 128 change; 3 are byte-identical and draw no player (1-03 is wholly behind its
+  tutorial popup, 2-12 and 2-32 are game-over frames). Of the 125, 119 have every changed pixel inside the located
+  player's 112.5 x 157.5 unit quad. The other six were read one by one (`work/look/*.png`): on 1-02, 1-20, 2-15 and
+  2-28 the one changed box is the player itself, at a place the locate's masked score (0.78-0.81 on those levels, before
+  and after alike) does not lock onto; on 1-26 the second box is the thrown stone and on 1-32 it is the beholder, both
+  visibly sharper. Changed pixels per frame: 6,975 least, 8,549 median, 49,373 most (1-32, the beholder).
+- **Detail inside the figure** (`work/player23.py`: std(Laplacian) / std(grey) over the cell's opaque pixels in the
+  located box, port against the original's library frame): 1-01 0.56 -> **1.21** of the original's, 1-09 0.60 ->
+  **1.17**, 4-05 (the suit, `h6.3`) 0.59 -> **1.22**. The synthetic prediction for the same cell resampled to its drawn
+  size is 1x 1.23 against hd 2.48, a ratio of 2.02; the port measures 2.16, 1.97 and 2.08. The port now reads ABOVE
+  the original's library frame (1.17 to 1.22 of it) because it draws the hd file unfiltered - 1.41 px a texel, mip 0 -
+  and reads 2.39 against the bare hd cell's 2.48, while the library frame is a recording of the original and the softer
+  of the two. Nothing is sharpened: the quad, its size and its sampling are the original's rule.
+- **The player locates better nearly everywhere**: over the 128 f420 frames the best score rises on 117 levels and
+  falls on 6 (the largest fall 0.0082, on 1-20), median 0.9516 -> 0.9591, and 106 -> 112 levels score at least 0.90.
+- **The player moved up 2.3 px, and that is the sheet, not the quad.** The quad is where it was (same position, same
+  40 x 56 units); the hd file draws the figure about 0.8 units higher inside it. Measured against the original's
+  library frames with a sub-pixel peak fit: on 1-01 the original's figure is 7.35 px below the port's before and
+  **9.67** after, on 1-09 7.43 -> **9.81**, and on 4-05, a `no_gravity` level whose player hangs at its marker rather
+  than resting on a body, **-1.30 -> +0.67**, which is agreement to two thirds of a pixel. So the tier file brings the
+  zero-g player onto the original's and widens the gravity levels' gap by exactly the same 2.3 px: that gap is the
+  body's rest height, ruling R11 (`placement.json` `height_px 44 _guess`), which this step does not touch
+  (LEFT FOR THE OWNER).
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4). 59 steps: `Sprites.cpp`, `Lighting.cpp` and `Sky.cpp` (they include
+`Sprites.hpp`), the sim library, the layer, `LevelVisit.cpp`, `main.cpp`, every Magic Portals suite and
+`MagicPortals.exe` `634e9284` relinked, with no warning or error. Then `test_mp_layer` alone, 3 steps, after its
+beholder pin was corrected (THE SUITES), and `test_mp_start` relinked once after Smart App Control refused it in ctest.
+Every capture and every number in this step is `634e9284`'s. The four sources and two suites keep their CRLF endings.
+
+**THE SUITES**, run directly, once each: **`test_mp_sprites` 574 / 0** (from 496: the new tier checks by name and the
+port's own pictures), **`test_mp_boss` 126 / 0**, **`test_mp_frontdoor` 194 / 0**, **`test_mp_layer` 923 / 1 then
+923 / 0**. The one failure was this step's own new pin, written as if the beholder's pulse were one number: it is a
+`glm::dvec2` and `bounce()` gives each axis its own, so the pin now reads each axis on its own (the x read 128.82
+units on that tick, where an even 128 is the frame). **ctest, once: 114 of 121 pass, 0 fail, 7 not run** - Smart
+App Control refused `test_mp_tscn`,
+`test_mp_levels`, `test_mp_start`, `test_mp_chapters`, `test_mp_timed`, `test_mp_dragon` and `test_mp_shot`
+(BAD_COMMAND). Of the seven, only `test_mp_start` reads anything this step changed; it was deleted, relinked once and
+run directly: **752 / 0**, with the tier totals unchanged (2,248 hd / 146 fullhd / 489 1x placements, 38 / 7 / 21
+textures, 28 placements at another size than their 1x file) and the converter's manifest still agreeing on all 2,883.
+The other six name neither `Sprites::` nor the layer and were not relinked. `test_mp_zerog`, `test_mp_lighting`,
+`test_mp_sky`, `test_mp_torch`, `test_mp_tiers` and `test_mp_launchers` all passed inside ctest.
+
+**SMART APP CONTROL.** Seven refusals, seven notifications, all of them in the one ctest: the seven suites above.
+`MagicPortals.exe` `634e9284` ran all 131 of its launches (the two gate runs, the loading-screen series and the
+128-level sweep), each exit 0. `test_mp_sprites`, `test_mp_boss`, `test_mp_frontdoor`, `test_mp_layer` and the relinked
+`test_mp_start` each ran on their first launch.
+
+**RULINGS.** The owner's standing rulings, every ruling of 00_order section 6 decided in favour of what the original
+does: **R13, route B** - the port resolves the tier from the name, for its own pictures as for a level's, and nothing
+under `out/levels` is touched - and **R12, the tier fixed at the 720 px choice**, which `tiers.json` carries for every
+name this step resolves. Step 61's decision 2 (the combined size rule, K9) is what `Sprites::Drawn` and `frameUnits`
+build: units `int(texels / D)`, a frame `int(texels / D) / columns`, and no density on an offset or a pivot.
+**K15** is met: `buildDrawables` resolves the sheet step 63 chooses for the level, and `playerCellPx` cuts that same
+sheet. R10's player depth and R11's rest height are not this step's; R11 is now measurable to a tenth of a pixel
+(BEYOND THE GATES). The owner's note that the port draws the hd UI set whatever the window is doing stands: `menuImage`
+and `originalAsset` are untouched.
+
+**RECORDED DEVIATIONS.**
+- **A cut particle sheet is still split evenly.** The original strides a particle sheet in whole units like any other
+  sheet - `ETHParticleManager::DrawParticleSystem` calls `SetupSpriteRects(spriteCut.x, spriteCut.y)` and then
+  `SetRect(currentFrame)` (`ETHParticleManager.cpp:397-401`; gs2d `Sprite.cpp:119-120`) - so on a sheet whose units are
+  not a multiple of its columns the original's cell is narrower than an even split's. Two of the 29 bitmaps are such
+  sheets: `tesla_shock_black_bg.png` (256 over 5 columns: 51 units against 51.2) and `shock_strike.png` (512 over 5:
+  102 against 102.4). The port draws a particle quad at the particle's own size either way
+  (`Particles::QuadPx`), so only where a cell is sampled differs - at most 1.6 texels of a 102-texel frame on the last
+  column. `system_6.md` C4 asks only that the bitmap be resolved, and no step owns the particle cut; `cellPx` and the
+  `test_mp_layer` pin keep 51.2 x 32. Left as found, with the citation, for the step that builds the shock effects
+  (13.1) or for the owner.
+- **The UI fold-in was not taken.** `system_6.md` C4 offers re-expressing `menuImage`, `originalAsset` and the finished
+  screen's crystal through `Resolve` and gates it on the HUD and the menu. Those two frames exercise neither the
+  finished screen's own pictures nor the pause screen nor the popups, so folding them in would change code that no gate
+  in this step covers. They already take the hd twin by their own lookups.
+- **`test_mp_layer`'s level1c pin** named the 1x suit path (`/entities/dark_mage_in_space.png`), which the hd path does
+  not end with; it was rewritten to the hd path deliberately, as step 66 rewrote the sky's size pins.
+
+**LEFT FOR THE OWNER.**
+- **R11, the player's rest height.** With the hd sheet the port's player stands 9.67 px (**3.44 units**) above the
+  original's on 1-01 and 9.81 px (3.49 units) on 1-09, where the suit on 4-05, which hangs at its marker, agrees to
+  0.67 px. R11's own -2.84 u (`systems_3_4` 3f, `placement.json` `height_px 44 _guess`) was read while the port drew
+  the 1x sheet, so it is short by the 0.8 u of sheet shift this step isolated: the residual to close now reads
+  3.44 units.
+- **The six suites Smart App Control refused and this step did not relink** (`test_mp_tscn`, `test_mp_levels`,
+  `test_mp_chapters`, `test_mp_timed`, `test_mp_dragon`, `test_mp_shot`) have not run on this build. None names
+  `Sprites::`, `Tiers::` or the layer. Run them with the next step's suites.
+- **The UI fold-in** above, and **the particle cut** above.
+- **`ParticleCellUnits` divides raw texels, not whole units.** A particle system's cell is the bitmap's texels over
+  its density split by its `SpriteCut` (`MagicPortalsLayer.cpp`, `ParticleCellUnits`), where step 61's combined size
+  rule (K9) would take `int(texels / D)` first - everything else this step resolves goes through `Tiers::Units` or
+  `Tiers::FrameCut`. No pixel moves today: the only two particle bitmaps with a tier file are 64 x 64 over 32 x 32,
+  even on both axes, and only `crystal_pick.ent`, `crystal_vanish.ent` and `question.ent` name them, none of which a
+  step has built. It goes live the first time an effect is built on a tier bitmap whose texels are odd. The fix is
+  one line - `Tiers::Units(image.texels, image.density)` in place of the divide - and it leaves the even split above
+  as the separate deviation it is; it is not taken here, because this step's follow-ups were text only.
+- **Two format findings for the remake's `docs/ethanon-formats.md`**, which this step may not commit: (a) a particle
+  bitmap, a normal map and a halo are loaded by the same `ChooseSpriteVersion` path as a sprite
+  (`ETHSpriteEntity.cpp:95`, `:99`, `:104`; `ETHParticleManager.cpp:107-108`, `:170`; `ETHResourceManager.cpp:109`);
+  (b) a cut particle sheet is strided in whole units like any other sheet
+  (`ETHParticleManager.cpp:397-401` -> gs2d `Sprite.cpp:119-120`), which is where the 51 against 51.2 above comes
+  from.
+- **Carried from step 66, unchanged here.** A tier file with an odd texel count would draw all its texels into
+  `int(texels / D)` units; none of the six images this step resolves is odd on either axis. Stale tier files are never
+  deleted, and Windows ignores letter case where the APK's filesystem did not.
