@@ -537,6 +537,7 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry, bool keepLightmaps
     for (DrawnSprite& drawn : m_sprites) destroy(drawn.quad);
     m_sprites.clear();
     m_motions.clear();
+    m_placed.clear();
     for (TimerDial& dial : m_timers) destroy(dial.quad);
     m_timers.clear();
     // The walk arrows and the corner buttons go with the level they were built
@@ -2270,6 +2271,7 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     // order (Sprites::Find's: z_index, then the file's order) from a stream seeded
     // afresh for this level, from kMotionSeed and its name.
     m_motions.clear();
+    m_placed.clear();
     Motion::Phases phases(Motion::LevelSeed(
         kMotionSeed, m_current >= 0 ? m_chapters.levels[static_cast<std::size_t>(m_current)].name : std::string()));
     for (Sprites::Sprite& sprite : sprites) {
@@ -2334,6 +2336,28 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             if (row != nullptr) {
                 drawn.motion = static_cast<int>(m_motions.size());
                 m_motions.push_back(Motion::Start(*row, phases.Next(*row)));
+            }
+            // A PLACED PICTURE'S OWN CALLBACK (motions.json `placed`): the hint arrow,
+            // the dashed circle and square, the tapping hand. Its swing takes the
+            // node's speed and stride and a constant start angle, so it draws nothing
+            // from `phases`; its SetAlpha writes the colour's alpha, as Ethanon's
+            // writes m_v4Color.w (no node of these carries an eth_color); its turn is
+            // syncSprites'.
+            if (const Motion::Placed* placed = m_motionRules.FindPlaced(entity); placed != nullptr) {
+                PlacedScript script;
+                script.row = static_cast<std::size_t>(placed - m_motionRules.placed.data());
+                if (placed->moves) {
+                    std::string why;
+                    script.moves = Motion::FromNode(*placed, *node, script.motion, why);
+                    // GetFloat of a datum a node lacks is 0, and a speed of 0 moves nothing.
+                    if (!script.moves) {
+                        SUPERSONIC_LOG_WARN("Magic Portals") << "drawn without its swing: " << why << std::endl;
+                    }
+                }
+                script.turn.degPerS = placed->spinDegPerS;
+                if (placed->setsAlpha) drawn.colour.a = static_cast<float>(placed->alpha);
+                drawn.placed = static_cast<int>(m_placed.size());
+                m_placed.push_back(script);
             }
         }
         if (m_sky.running) {
@@ -2496,6 +2520,21 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             const Portals::NoPortalZone& zone = m_level.portals.zones[static_cast<std::size_t>(drawn.zone)];
             centrePx += zone.CentreNowPx() - zone.centrePx;
             ownerPx += zone.CentreNowPx() - zone.centrePx;
+        } else if (drawn.placed >= 0) {
+            // Where its own callback put it this tick (advanceMotions): swung by its
+            // linearMotion, and turned by AddToAngle about its own point,
+            // counter-clockwise as Ethanon's angle and the engine's +z both turn.
+            const PlacedScript& script = m_placed[static_cast<std::size_t>(drawn.placed)];
+            if (script.moves) {
+                const glm::dvec2 swing = Motion::OffsetPx(script.motion);
+                centrePx += swing;
+                ownerPx += swing;
+            }
+            if (script.turn.turnedDeg != 0.0) {
+                const double turnedRad = script.turn.turnedDeg * 3.14159265358979323846 / 180.0;
+                rotation = Units::ToWorldRotation(sprite.rotation - turnedRad);
+                ownerAngleDeg += script.turn.turnedDeg;
+            }
         } else if (drawn.body != entt::null) {
             // A body the level took away - a wall a stone broke - takes its picture.
             gone = !registry.valid(drawn.body);
@@ -2597,6 +2636,38 @@ void MagicPortalsLayer::advanceMotions(float fixedDelta) {
         if (!motionRuns(drawn)) continue;
         Motion::Advance(m_motionRules, m_motions[static_cast<std::size_t>(drawn.motion)], frameMs);
     }
+    // The placed pictures' callbacks run every frame their picture is there: the
+    // arrow's, the circle's and the hand's linearMotion, and the circle's AddToAngle.
+    for (const DrawnSprite& drawn : m_sprites) {
+        if (drawn.placed < 0 || drawn.quad == entt::null) continue;
+        PlacedScript& script = m_placed[static_cast<std::size_t>(drawn.placed)];
+        if (script.moves) Motion::Advance(m_motionRules, script.motion, frameMs);
+        Motion::Advance(m_motionRules, script.turn, frameMs);
+    }
+}
+
+std::vector<MagicPortalsLayer::PlacedReport> MagicPortalsLayer::PlacedReports() const {
+    std::vector<PlacedReport> reports;
+    reports.reserve(m_placed.size());
+    for (const DrawnSprite& drawn : m_sprites) {
+        if (drawn.placed < 0) continue;
+        const PlacedScript& script = m_placed[static_cast<std::size_t>(drawn.placed)];
+        PlacedReport report;
+        report.node = drawn.sprite.node;
+        report.entity = m_motionRules.placed[script.row].entity;
+        report.drawn = drawn.quad != entt::null;
+        report.quad = drawn.quad;
+        report.moves = script.moves;
+        report.motion = script.motion;
+        report.offsetPx = script.moves ? Motion::OffsetPx(script.motion) : glm::dvec2(0.0);
+        report.turnedDeg = script.turn.turnedDeg;
+        report.alpha = drawn.colour.a * drawn.fade;
+        report.centrePx = drawn.centrePx;
+        report.ownerPx = drawn.ownerPx;
+        report.ownerAngleDeg = drawn.ownerAngleDeg;
+        reports.push_back(std::move(report));
+    }
+    return reports;
 }
 
 std::vector<MagicPortalsLayer::MotionReport> MagicPortalsLayer::MotionReports() const {

@@ -20,8 +20,13 @@
 // WHAT CALLS IT here (the visuals plan's 3.2): every crystal while it lives
 // (ETHCallback_crystal) and every key while no one carries it and it has not
 // found its keyhole (ETHCallback_key), each with speed 2, stride 1.5, vertical,
-// axis 0 and a start angle randF(PI). The sway of 3.3 and the ghost's hover of
-// 12.2 take the same helper with other rows.
+// axis 0 and a start angle randF(PI). And (3.3) the placed pictures whose own
+// callbacks call it with the node's `speed` and `stride` (motions.json `placed`):
+// the hint arrow along its own angle, the dashed circle up and down, the tapping
+// hand along its angle less 90; each from a start angle of 0. The same rows say
+// which of them SetAlpha(0.55) and which turn a set number of degrees a second
+// (the dashed circle, AddToAngle(unitsPerSecond(8))). The ghost's hover of 12.2
+// takes the same helper with another row.
 //
 // Renderer-free and free of the registry and of Game::Level: a motion moves a
 // PICTURE (and what its entity carries - its particles), never a body, a trigger
@@ -33,6 +38,10 @@
 #include <vector>
 
 #include <glm/glm.hpp>
+
+namespace MagicPortals::Tscn {
+struct Node;
+}
 
 namespace MagicPortals::Motion {
 
@@ -49,12 +58,31 @@ struct Row {
     bool Names(const std::string& bareEntity) const;
 };
 
+// One row of motions.json's `placed`: what one placed picture's own callback does
+// to it every frame. Its linearMotion takes the NODE's speed and stride (the
+// custom data the level gives it), so the row holds the rest of the call.
+struct Placed {
+    std::string entity;          // the entity name, without .ent, whose callback it is
+    bool moves = false;          // it calls linearMotion
+    bool vertical = true;        // that call's `vertical`
+    bool axisFromNode = false;   // its `angle` is GetAngle() (the node's) plus axisAddDeg, or axisAddDeg alone
+    double axisAddDeg = 0.0;
+    double startAngle = 0.0;     // its `startAngle`, a constant
+    bool setsAlpha = false;      // it calls SetAlpha(alpha) every frame
+    double alpha = 1.0;
+    double spinDegPerS = 0.0;    // AddToAngle(unitsPerSecond(this)): degrees a second, counter-clockwise; 0 none
+};
+
 // The port's motions.json.
 struct Rules {
     double frameCapMs = 0.0; // unitsPerSecond's min(200, frame)
     double wrapRad = 0.0;    // 2 PI: above it, one turn is taken off
     Row crystal;             // ETHCallback_crystal's
     Row key;                 // ETHCallback_key's, while unowned and not spent
+    std::vector<Placed> placed; // the placed pictures' callbacks, one entity each
+
+    // The row whose callback a placement of this entity (without .ent) runs, or null.
+    const Placed* FindPlaced(const std::string& bareEntity) const;
 };
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
@@ -82,6 +110,25 @@ void Advance(const Rules& rules, Linear& motion, double frameMs);
 // in the level's units (+y down). Zero before the first call: until then the
 // entity is where the level put it.
 glm::dvec2 OffsetPx(const Linear& motion);
+
+// A placed picture's linearMotion, from its row and its node: the node's own
+// `speed` and `stride` (quoted numbers, as the converter writes custom data) and,
+// for a row whose axis is the node's, the node's angle - Ethanon's, which the
+// converter wrote as the Godot rotation negated in radians (tscn.py:432-433).
+// False, naming the node, when either datum is missing or not a number, or the
+// rotation is not a number.
+bool FromNode(const Placed& row, const Tscn::Node& node, Linear& out, std::string& error);
+
+// What AddToAngle(unitsPerSecond(degPerS)) has turned an entity by since the
+// level put it down, in Ethanon's degrees (counter-clockwise on the screen).
+struct Turn {
+    double degPerS = 0.0;
+    double turnedDeg = 0.0; // kept within one turn: the same drawn angle as the original's unbounded one
+};
+
+// One call's AddToAngle over a frame of `frameMs`: degPerS x min(cap, frame) / 1000,
+// unitsPerSecond's step, so a paused frame (0) turns nothing.
+void Advance(const Rules& rules, Turn& turn, double frameMs);
 
 // randF(PI)'s stand-in: the original draws each start angle from a generator
 // re-seeded from its clock, so its phases are unrecoverable and only their

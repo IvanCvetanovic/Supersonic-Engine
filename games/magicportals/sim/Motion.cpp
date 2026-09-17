@@ -1,6 +1,7 @@
 #include "sim/Motion.hpp"
 
 #include "core/Json.hpp"
+#include "sim/Tscn.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -76,10 +77,102 @@ bool ReadRow(const std::string& path, const Json::Value& root, const char* name,
     return true;
 }
 
+bool ReadPlaced(const std::string& path, const Json::Value& root, const Rules& rules, std::vector<Placed>& out,
+                std::string& error) {
+    if (!root.Has("placed") || !root["placed"].IsArray()) {
+        error = path + ": placed is missing or not an array";
+        return false;
+    }
+    std::vector<Placed> read;
+    for (const Json::Value& block : root["placed"].AsArray()) {
+        const std::string where = path + ": placed[" + std::to_string(read.size()) + "]";
+        if (!block.IsObject()) {
+            error = where + " is not an object";
+            return false;
+        }
+        Placed row;
+        row.entity = block["entity"].AsString();
+        // Without the extension, as the crystal's and key's rows: both spellings of
+        // a placement run ETHCallback_ + the name less .ent.
+        if (row.entity.empty() || row.entity.find('.') != std::string::npos) {
+            error = where + ".entity is not a bare entity name";
+            return false;
+        }
+        // One callback an entity: a second row, or one the crystal or key row already
+        // names, would give a placement two scripts where the original runs one.
+        const bool taken = rules.crystal.Names(row.entity) || rules.key.Names(row.entity) ||
+                           std::any_of(read.begin(), read.end(),
+                                       [&row](const Placed& other) { return other.entity == row.entity; });
+        if (taken) {
+            error = where + ": " + row.entity + " already has a row";
+            return false;
+        }
+        const Json::Value& linear = block["linear_motion"];
+        if (linear.IsObject()) {
+            row.moves = true;
+            if (!linear.Has("vertical") || !linear["vertical"].IsBool()) {
+                error = where + ".linear_motion.vertical is missing or not true or false";
+                return false;
+            }
+            row.vertical = linear["vertical"].AsBool();
+            const std::string axis = linear["axis"].AsString();
+            if (axis != "node" && axis != "fixed") {
+                error = where + ".linear_motion.axis is neither \"node\" nor \"fixed\"";
+                return false;
+            }
+            row.axisFromNode = axis == "node";
+            for (const auto& [key, into] : {std::pair<const char*, double*>{"axis_add_deg", &row.axisAddDeg},
+                                            std::pair<const char*, double*>{"start_angle", &row.startAngle}}) {
+                if (!linear.Has(key) || !linear[key].IsNumber()) {
+                    error = where + ".linear_motion." + key + " is missing or not a number";
+                    return false;
+                }
+                *into = linear[key].AsNumber();
+            }
+        } else if (!block.Has("linear_motion") || linear.GetType() != Json::Type::Null) {
+            error = where + ".linear_motion is missing, or neither an object nor null";
+            return false;
+        }
+        const Json::Value& alpha = block["set_alpha"];
+        if (alpha.IsNumber()) {
+            row.setsAlpha = true;
+            row.alpha = alpha.AsNumber();
+            if (!(row.alpha >= 0.0 && row.alpha <= 1.0)) {
+                error = where + ".set_alpha is not within 0..1";
+                return false;
+            }
+        } else if (!block.Has("set_alpha") || alpha.GetType() != Json::Type::Null) {
+            error = where + ".set_alpha is missing, or neither a number nor null";
+            return false;
+        }
+        if (!block.Has("spin_deg_s") || !block["spin_deg_s"].IsNumber()) {
+            error = where + ".spin_deg_s is missing or not a number";
+            return false;
+        }
+        row.spinDegPerS = block["spin_deg_s"].AsNumber();
+        // A row that neither moves, nor sets an alpha, nor turns is no callback the
+        // port has to run: most likely a typo for one that does.
+        if (!row.moves && !row.setsAlpha && row.spinDegPerS == 0.0) {
+            error = where + ": " + row.entity + " neither moves, sets an alpha nor turns";
+            return false;
+        }
+        read.push_back(std::move(row));
+    }
+    out = std::move(read);
+    return true;
+}
+
 } // namespace
 
 bool Row::Names(const std::string& bareEntity) const {
     return std::find(entities.begin(), entities.end(), bareEntity) != entities.end();
+}
+
+const Placed* Rules::FindPlaced(const std::string& bareEntity) const {
+    for (const Placed& row : placed) {
+        if (row.entity == bareEntity) return &row;
+    }
+    return nullptr;
 }
 
 bool LoadRules(const std::string& path, Rules& out, std::string& error) {
@@ -115,7 +208,8 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
         error = path + ": linear_motion.frame_cap_ms and linear_motion.wrap_rad are above zero";
         return false;
     }
-    if (!ReadRow(path, root, "crystal", read.crystal, error) || !ReadRow(path, root, "key", read.key, error)) {
+    if (!ReadRow(path, root, "crystal", read.crystal, error) || !ReadRow(path, root, "key", read.key, error) ||
+        !ReadPlaced(path, root, read, read.placed, error)) {
         return false;
     }
     out = std::move(read);
@@ -158,6 +252,39 @@ glm::dvec2 OffsetPx(const Linear& motion) {
     const double s = std::sin(a);
     // Ins 180-208: x getScale(), which is 1 in the port's units.
     return glm::dvec2(along.x * c + along.y * s, -along.x * s + along.y * c);
+}
+
+bool FromNode(const Placed& row, const Tscn::Node& node, Linear& out, std::string& error) {
+    Linear read;
+    // linearMotion ins 41-51 and 100-110: GetFloat('speed') and GetFloat('stride'),
+    // the node's own custom data.
+    const Tscn::Value* speed = node.Meta("speed");
+    const Tscn::Value* stride = node.Meta("stride");
+    if (speed == nullptr || !speed->AsNumber(read.speed) || stride == nullptr || !stride->AsNumber(read.stride)) {
+        error = node.name + " has no speed and stride for its linearMotion";
+        return false;
+    }
+    double rotation = 0.0;
+    if (const Tscn::Value* turned = node.Find("rotation");
+        turned != nullptr && (turned->kind != Tscn::Value::Kind::Number || !turned->AsNumber(rotation))) {
+        error = node.name + "'s rotation is not a number";
+        return false;
+    }
+    read.vertical = row.vertical;
+    // GetAngle() is Ethanon's angle, which the converter wrote negated in radians.
+    const double nodeAngleDeg = -rotation * 180.0 / 3.14159265358979323846;
+    read.axisDeg = (row.axisFromNode ? nodeAngleDeg : 0.0) + row.axisAddDeg;
+    read.startAngle = row.startAngle;
+    out = read;
+    return true;
+}
+
+void Advance(const Rules& rules, Turn& turn, double frameMs) {
+    // AddToAngle(g_timeManager.unitsPerSecond(degPerS)): the frame capped, x m_factor.
+    turn.turnedDeg += turn.degPerS * std::min(rules.frameCapMs, std::max(0.0, frameMs)) / 1000.0;
+    // Ethanon's m_angle is never wrapped; one turn off draws the same angle and keeps
+    // the float the quad is handed small.
+    if (turn.turnedDeg >= 360.0 || turn.turnedDeg <= -360.0) turn.turnedDeg = std::fmod(turn.turnedDeg, 360.0);
 }
 
 std::uint32_t LevelSeed(std::uint32_t base, const std::string& level) {

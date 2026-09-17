@@ -362,6 +362,25 @@ public:
     };
     std::vector<MotionReport> MotionReports() const;
 
+    // Each placed picture whose own callback motions.json's `placed` names (the hint
+    // arrow, the dashed circle and square, the tapping hand), for the suites, in the
+    // level's drawing order: as the last tick left it.
+    struct PlacedReport {
+        std::string node;              // the entity's node
+        std::string entity;            // its row's entity, without .ent
+        bool drawn = false;            // its picture is there
+        entt::entity quad{entt::null}; // that picture
+        bool moves = false;            // its linearMotion runs (its row calls one and its node has speed and stride)
+        Motion::Linear motion;         // that call's arguments and angle
+        glm::dvec2 offsetPx{0.0};      // what the last call put on its picture
+        double turnedDeg = 0.0;        // what AddToAngle has turned it by, counter-clockwise
+        float alpha = 1.0f;            // the alpha its colour is drawn at
+        glm::dvec2 centrePx{0.0};      // where its picture was last drawn
+        glm::dvec2 ownerPx{0.0};       // where its entity stands
+        double ownerAngleDeg = 0.0;    // and its angle, Ethanon's
+    };
+    std::vector<PlacedReport> PlacedReports() const;
+
     // A screen point (Input's coordinates) as the point in the level under it,
     // in the remake's pixels. False when there is no viewport or camera.
     bool ScreenToLevelPx(const entt::registry& registry, const glm::vec2& screenPoint, glm::dvec2& outPx) const;
@@ -622,6 +641,15 @@ private:
         int sky{-1};          // in m_sky.skies: pinned to the camera, not where the level put it
         bool satellite{false}; // m_sky's satellite, pinned the same way
         int motion{-1};       // in m_motions: a crystal or key its script bobs
+        int placed{-1};       // in m_placed: a picture its own callback sways, fades or turns
+    };
+    // A placed picture's callback (motions.json `placed`): its row, its
+    // linearMotion when it has one, and its turn.
+    struct PlacedScript {
+        std::size_t row{0}; // in m_motionRules.placed
+        bool moves{false};
+        Motion::Linear motion;
+        Motion::Turn turn;
     };
 
     void bindInput();
@@ -684,7 +712,8 @@ private:
     // the tick, as ETHCallback_timer runs a frame.
     void syncTimers(entt::registry& registry);
     // One linearMotion call for every crystal and key whose script makes one this
-    // tick (sim/Motion), BEFORE syncSprites draws where it leaves them.
+    // tick (sim/Motion), and one call of every placed picture's callback, BEFORE
+    // syncSprites draws where they leave them.
     void advanceMotions(float fixedDelta);
     // Whether a picture's script calls linearMotion now: a crystal while it lives,
     // a key while no one carries it and it has not found its keyhole.
@@ -813,6 +842,9 @@ private:
     // One per crystal and key whose picture is drawn, in the level's drawing order
     // (DrawnSprite::motion). Picture-side only: never Game::Level or the state hash.
     std::vector<Motion::Linear> m_motions;
+    // One per drawn picture a `placed` row names (DrawnSprite::placed). Picture-side
+    // only, like m_motions; its start angles are constants and draw from no stream.
+    std::vector<PlacedScript> m_placed;
     // The start angles' stream, re-seeded for every level it builds with this mixed
     // with the level's name (Motion::LevelSeed), so a level's phases are its own,
     // do not depend on what was played before it, and no other generator's draws

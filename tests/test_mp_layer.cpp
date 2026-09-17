@@ -4818,6 +4818,259 @@ std::vector<std::string> SortedOverlayPaths(const std::vector<Overlaid>& overlay
     return out;
 }
 
+// ---- 3.3: the placed pictures' own callbacks (motions.json `placed`) -----------------
+//
+// ETHCallback_hand_drawn_arrow sways the hint arrow along its own angle by its node's
+// stride and fades it to 0.55; ETHCallback_dashed_circle bobs the circle up and down,
+// fades it and turns it 8 degrees a second; ETHCallback_dashed_square only fades;
+// ETHCallback_hand_tap sways the hand along its angle less 90, at the alpha the level
+// gives it. Once a tick, before the draw, as the crystals' bob.
+
+std::optional<MagicPortalsLayer::PlacedReport> PlacedOf(const MagicPortalsLayer& layer, const std::string& node) {
+    for (const MagicPortalsLayer::PlacedReport& report : layer.PlacedReports()) {
+        if (report.node == node) return report;
+    }
+    return std::nullopt;
+}
+
+float QuadAlpha(entt::registry& registry, entt::entity quad) {
+    if (quad == entt::null || !registry.valid(quad)) return -1.0f;
+    return registry.get<MaterialComponent>(quad).albedoColor.a;
+}
+
+float QuadTurn(entt::registry& registry, entt::entity quad) {
+    if (quad == entt::null || !registry.valid(quad)) return -1e9f;
+    return registry.get<TransformComponent>(quad).rotation.z;
+}
+
+void AnArrowSwaysAlongItsAngleAtItsAlpha() {
+    if (!OriginalArtIsThere("AnArrowSwaysAlongItsAngleAtItsAlpha")) return;
+    namespace Motion = MagicPortals::Motion;
+    const Motion::Rules rules = MotionRules();
+    // 1-08 (level7): the capture gate's arrow at angle 0, and the dashed square beside it.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level7");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    const std::string arrowNode = "hand_drawn_arrow_ent_600";
+    const std::string squareNode = "dashed_square_ent_676";
+    CHECK_EQ(layer.PlacedReports().size(), std::size_t{2});
+    const std::optional<MagicPortalsLayer::PlacedReport> arrow = PlacedOf(layer, arrowNode);
+    const std::optional<MagicPortalsLayer::PlacedReport> square = PlacedOf(layer, squareNode);
+    CHECK(arrow.has_value() && square.has_value());
+    if (!arrow || !square) return;
+    // At load: no call yet, where the level put them, both at the alpha their scripts set.
+    CHECK(arrow->entity == "hand_drawn_arrow" && arrow->drawn && arrow->moves && !arrow->motion.started &&
+          arrow->offsetPx == glm::dvec2(0.0) && arrow->motion.speed == 4.0 && arrow->motion.stride == 2.5 &&
+          !arrow->motion.vertical && arrow->motion.axisDeg == 0.0 && arrow->alpha == 0.55f);
+    CHECK(square->entity == "dashed_square" && square->drawn && !square->moves && square->alpha == 0.55f);
+    const glm::dvec2 arrowAt = arrow->centrePx;
+    const glm::dvec2 squareAt = square->centrePx;
+    const float arrowTurn = QuadTurn(registry, arrow->quad);
+    CloseTheLevelStartPopup(layer, registry);
+
+    Motion::Linear expected = arrow->motion;
+    double lowest = 1e9;
+    double highest = -1e9;
+    int wrong = 0;
+    std::string first;
+    double firstOffset = 0.0;
+    for (int tick = 0; tick < 480; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        const std::optional<MagicPortalsLayer::PlacedReport> now = PlacedOf(layer, arrowNode);
+        const std::optional<MagicPortalsLayer::PlacedReport> still = PlacedOf(layer, squareNode);
+        if (!now || !still) {
+            ++wrong;
+            break;
+        }
+        Motion::Advance(rules, expected, static_cast<double>(MagicPortalsLayer::kTick) * 1000.0);
+        const glm::dvec2 offset = Motion::OffsetPx(expected);
+        if (tick == 0) firstOffset = now->offsetPx.x;
+        const bool placed = now->motion.angle == expected.angle && now->offsetPx == offset && offset.y == 0.0 &&
+                            glm::distance(now->centrePx, arrowAt + offset) < 1e-9 &&
+                            glm::distance(QuadPx(registry, now->quad), now->centrePx) < 1e-3 &&
+                            std::fabs(QuadAlpha(registry, now->quad) - 0.55f) < 1e-6f &&
+                            QuadTurn(registry, now->quad) == arrowTurn && now->turnedDeg == 0.0;
+        const bool fades = still->centrePx == squareAt && std::fabs(QuadAlpha(registry, still->quad) - 0.55f) < 1e-6f &&
+                           glm::distance(QuadPx(registry, still->quad), squareAt) < 1e-3;
+        if ((!placed || !fades) && wrong++ == 0) {
+            first = "tick " + std::to_string(tick) + ": arrow at " + Point(now->centrePx) + " offset " +
+                    Point(now->offsetPx) + " alpha " + std::to_string(QuadAlpha(registry, now->quad)) + ", square at " +
+                    Point(still->centrePx) + " alpha " + std::to_string(QuadAlpha(registry, still->quad));
+        }
+        lowest = std::min(lowest, offset.x);
+        highest = std::max(highest, offset.x);
+    }
+    std::printf("  1-08's arrow: first tick +%.4f, x %.4f..%.4f over 8 s; the square still\n", firstOffset, lowest,
+                highest);
+    CHECK_MSG(wrong == 0, std::to_string(wrong) + " wrong; the first " + first);
+    // cos(0 + one step): a whole stride forward on the first tick.
+    CHECK_MSG(firstOffset > 2.49 && firstOffset <= 2.5, "the first tick's swing: " + std::to_string(firstOffset));
+    CHECK(highest > 2.49 && highest <= 2.5 && lowest < -2.49 && lowest >= -2.5);
+
+    // THE PAUSE: m_factor 0, so neither moves nor fades back.
+    CHECK_MSG(TapThePauseControl(layer, registry), "the pause control is there to tap");
+    CHECK(layer.Paused());
+    const std::optional<MagicPortalsLayer::PlacedReport> paused = PlacedOf(layer, arrowNode);
+    int moved = 0;
+    for (int tick = 0; tick < 120 && paused; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        const std::optional<MagicPortalsLayer::PlacedReport> now = PlacedOf(layer, arrowNode);
+        if (!now || now->motion.angle != paused->motion.angle || now->centrePx != paused->centrePx ||
+            QuadPx(registry, now->quad) != QuadPx(registry, paused->quad) ||
+            std::fabs(QuadAlpha(registry, now->quad) - 0.55f) > 1e-6f) {
+            ++moved;
+        }
+    }
+    CHECK_MSG(paused && layer.Paused() && moved == 0, std::to_string(moved) + " ticks the arrow moved under the pause");
+    layer.OnDetach(registry);
+}
+
+void AnArrowAndAHandSwayAlongTheirOwnAngles() {
+    if (!OriginalArtIsThere("AnArrowAndAHandSwayAlongTheirOwnAngles")) return;
+    // The direction a swing takes on the +y-down screen for an axis of `deg`,
+    // counter-clockwise: (cos, -sin).
+    const auto along = [](double deg) {
+        return glm::dvec2(std::cos(glm::radians(deg)), -std::sin(glm::radians(deg)));
+    };
+    const auto crossOf = [](const glm::dvec2& a, const glm::dvec2& b) { return a.x * b.y - a.y * b.x; };
+    struct Case {
+        const char* level;
+        const char* node;
+        double axisDeg;   // the swing's axis: the node's angle, less 90 for a hand
+        double stride;
+        bool fades;
+    };
+    const Case cases[] = {
+        {"level9", "hand_drawn_arrow_ent_623", 45.0, 2.5, true},   // 1-10, rotation -0.7854
+        {"level11", "hand_drawn_arrow_ent_655", -50.0, 2.5, true}, // 1-12, rotation 0.8727
+        {"level15", "hand_tap_ent_768", 5.0, 4.0, false},          // 1-16, at 95 degrees
+        {"level15", "hand_tap_ent_765", -90.0, 4.0, false},        // 1-16, at 0: down the screen
+    };
+    for (const Case& one : cases) {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), one.level);
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+        const std::optional<MagicPortalsLayer::PlacedReport> atLoad = PlacedOf(layer, one.node);
+        CHECK_MSG(atLoad.has_value() && atLoad->moves, std::string(one.node) + " swings");
+        if (!atLoad) continue;
+        CHECK_MSG(std::fabs(atLoad->motion.axisDeg - one.axisDeg) < 0.01,
+                  std::string(one.node) + "'s axis " + std::to_string(atLoad->motion.axisDeg));
+        CloseTheLevelStartPopup(layer, registry);
+        const glm::dvec2 axis = along(atLoad->motion.axisDeg);
+        double far = 0.0;
+        double across = 0.0;
+        int wrong = 0;
+        for (int tick = 0; tick < 150; ++tick) {
+            tickWith(layer, registry, kRest, {}, {});
+            layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+            const std::optional<MagicPortalsLayer::PlacedReport> now = PlacedOf(layer, one.node);
+            if (!now) {
+                ++wrong;
+                break;
+            }
+            const glm::dvec2 moved = now->centrePx - atLoad->centrePx;
+            far = std::max(far, std::fabs(glm::dot(moved, axis)));
+            across = std::max(across, std::fabs(crossOf(axis, moved)));
+            if (tick == 0 && glm::dot(moved, axis) < one.stride * 0.99) ++wrong; // a whole stride forward first
+            const float alpha = QuadAlpha(registry, now->quad);
+            if (one.fades ? std::fabs(alpha - 0.55f) > 1e-6f : alpha != 1.0f) ++wrong;
+            if (glm::distance(QuadPx(registry, now->quad), now->centrePx) > 1e-3) ++wrong;
+        }
+        std::printf("  %s %s: along %.4f, across %.2g\n", one.level, one.node, far, across);
+        CHECK_MSG(wrong == 0 && far > one.stride * 0.99 && far <= one.stride + 1e-9 && across < 1e-9,
+                  std::string(one.level) + " " + one.node + ": " + std::to_string(wrong) + " wrong, along " +
+                      std::to_string(far) + ", across " + std::to_string(across));
+        layer.OnDetach(registry);
+    }
+}
+
+void ADashedCircleBobsAndTurns() {
+    if (!OriginalArtIsThere("ADashedCircleBobsAndTurns")) return;
+    namespace Motion = MagicPortals::Motion;
+    const Motion::Rules rules = MotionRules();
+    // 1-05 (level4): the capture gate's two circles, and its crystals.
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level4");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr || !layer.ArtError().empty()) return;
+    const std::vector<MagicPortalsLayer::PlacedReport> atLoad = layer.PlacedReports();
+    CHECK_EQ(atLoad.size(), std::size_t{2});
+    if (atLoad.size() != 2) return;
+
+    // K8: a placed row draws no start angle, so 1-05's crystals take the stream's
+    // draws in order exactly as before.
+    MagicPortals::Motion::Phases phases(Motion::LevelSeed(20260917u, "level4"));
+    int drift = 0;
+    for (const MagicPortalsLayer::MotionReport& report : layer.MotionReports()) {
+        if (report.motion.startAngle != phases.Next(report.crystal ? rules.crystal : rules.key)) ++drift;
+    }
+    CHECK_MSG(!layer.MotionReports().empty() && drift == 0,
+              std::to_string(drift) + " crystal start angles not the stream's draws in order");
+
+    std::vector<float> turnAtLoad;
+    for (const MagicPortalsLayer::PlacedReport& report : atLoad) {
+        CHECK(report.entity == "dashed_circle" && report.moves && report.motion.vertical && report.motion.axisDeg == 0.0 &&
+              report.motion.speed == 1.5 && report.motion.stride == 0.6 && report.turnedDeg == 0.0 &&
+              report.alpha == 0.55f);
+        turnAtLoad.push_back(QuadTurn(registry, report.quad));
+    }
+    CloseTheLevelStartPopup(layer, registry);
+
+    Motion::Turn turn;
+    turn.degPerS = 8.0;
+    std::vector<Motion::Linear> expected;
+    for (const MagicPortalsLayer::PlacedReport& report : atLoad) expected.push_back(report.motion);
+    double lowest = 1e9;
+    double highest = -1e9;
+    int wrong = 0;
+    std::string first;
+    for (int tick = 0; tick < 600; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+        Motion::Advance(rules, turn, static_cast<double>(MagicPortalsLayer::kTick) * 1000.0);
+        const std::vector<MagicPortalsLayer::PlacedReport> now = layer.PlacedReports();
+        if (now.size() != atLoad.size()) {
+            ++wrong;
+            break;
+        }
+        for (std::size_t i = 0; i < now.size(); ++i) {
+            Motion::Advance(rules, expected[i], static_cast<double>(MagicPortalsLayer::kTick) * 1000.0);
+            const glm::dvec2 offset = Motion::OffsetPx(expected[i]);
+            // Counter-clockwise: the engine's +z, as Ethanon's angle.
+            const float turned = turnAtLoad[i] + static_cast<float>(glm::radians(turn.turnedDeg));
+            const bool ok = now[i].offsetPx == offset && offset.x == 0.0 &&
+                            glm::distance(now[i].centrePx, atLoad[i].centrePx + offset) < 1e-9 &&
+                            glm::distance(QuadPx(registry, now[i].quad), now[i].centrePx) < 1e-3 &&
+                            now[i].turnedDeg == turn.turnedDeg &&
+                            std::fabs(now[i].ownerAngleDeg - (atLoad[i].ownerAngleDeg + turn.turnedDeg)) < 1e-9 &&
+                            std::fabs(QuadTurn(registry, now[i].quad) - turned) < 1e-5f &&
+                            std::fabs(QuadAlpha(registry, now[i].quad) - 0.55f) < 1e-6f;
+            if (!ok && wrong++ == 0) {
+                first = now[i].node + " on tick " + std::to_string(tick) + ": offset " + Point(now[i].offsetPx) +
+                        ", turned " + std::to_string(now[i].turnedDeg) + ", quad turn " +
+                        std::to_string(QuadTurn(registry, now[i].quad));
+            }
+            lowest = std::min(lowest, offset.y);
+            highest = std::max(highest, offset.y);
+        }
+    }
+    std::printf("  1-05's circles: y %.4f..%.4f, turned %.3f degrees over 10 s\n", lowest, highest, turn.turnedDeg);
+    CHECK_MSG(wrong == 0, std::to_string(wrong) + " wrong; the first " + first);
+    CHECK(highest > 0.599 && highest <= 0.6 && lowest < -0.599 && lowest >= -0.6);
+    CHECK_MSG(std::fabs(turn.turnedDeg - 80.0) < 1e-3, "10 s at 8 degrees a second: " + std::to_string(turn.turnedDeg));
+    layer.OnDetach(registry);
+}
+
 void LightmapsAreDrawnOverTheirSprites() {
     // 1-1 (level0): nine lightmaps, one of them the torch's.
     {
@@ -5569,6 +5822,9 @@ void runTests() {
     ALyingKeyBobsAndACarriedOneDoesNot();
     ABobsPhasesAreTheLevelsOwn();
     ATimedCrystalsDialBobsWithIt();
+    AnArrowSwaysAlongItsAngleAtItsAlpha();
+    AnArrowAndAHandSwayAlongTheirOwnAngles();
+    ADashedCircleBobsAndTurns();
     LightmapsAreDrawnOverTheirSprites();
     TheTorchIsALightAndAHalo();
     AShotCarriesItsOwnLight();

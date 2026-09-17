@@ -9997,3 +9997,171 @@ failures, run once each; ctest was not run again.
 - **Two capture stalls that did not reproduce, and one capture that took input** (BASELINE, GATES): a launch that
   writes frames and then stops, alive and idle; and a `--fixed-step` run of 4-29 that shot and placed a portal, which
   a run without input cannot. Not chased (no engine bug hunt); recorded in case either recurs.
+
+## Step 82 - the sway the original gives a hint arrow, a dashed circle and a tapping hand, and the alpha it draws them at (built)
+
+The visuals plan's step 3.3 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; its brief
+`systems_9_10.md` 10a, on section 3.0's `linearMotion`). Track B, on the `visuals-b` tree. Game-only: no file under
+`src/` or `assets/shaders/`. Changed: `sim/Motion.{hpp,cpp}`, `data/motions.json`, `MagicPortalsLayer.{hpp,cpp}`,
+`tests/test_mp_motion.cpp`, `tests/test_mp_layer.cpp`. **The 25 placements of the four entities whose own callbacks
+move or fade them now do what those callbacks do: 8 hint arrows sway along their own angle and 7 tapping hands
+along theirs less 90, by their node's stride at their node's speed; 9 dashed circles bob up and down and turn 8
+degrees a second counter-clockwise; arrows, circles and the one dashed square are drawn at alpha 0.55. On 1-08 the
+capture fits the arrow at 2.502 u and 1.5708 s, a whole stride forward from the first tick, alpha 0.552 against the
+ground it uncovers; on 1-05 the circle turns 8.003 degrees a second, bobs 0.58 u vertically with a period of 4.24 s,
+alpha 0.54; on 1-10 the 45-degree arrow moves along 44.4-44.7 degrees by a gradient template. The
+original's own circle on 1-05 turns +20.3 / +20.8 degrees over 2.5 s and +26.6 / +27.2 over 3.5 s in both library
+runs, and on F10's footage of 4-05 7.92 degrees a second over 20 s, counter-clockwise; its arrow's core is drawn at
+the port's grey (163), its square at alpha 0.566 and its hand at alpha 1, swinging down the screen. Of the sweep's 384 frames, the 348 of the 116 levels that place none of the four are byte-identical, 1-01 f420
+is byte-identical (its arrow is off the start view), and every changed pixel lies inside a moved picture's reach.**
+
+**WHAT THE ORIGINAL DOES** (the listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce...`; every number with
+its instruction in `data/motions.json` `placed`). Each callback runs every frame (MiscCallbacks.angelscript); a call
+pushes its last argument first and `SetV1 vN, v0`/`v1` push the constants 0/1 (00_order 8.0 rules 1 and 3).
+- **`ETHCallback_hand_drawn_arrow`** (bytes 343339..343470): `linearMotion(this, false, GetAngle(), 0f)` (ins 1-13),
+  then `SetAlpha(0.55f)` (ins 15-17). So it swings along its own angle, from a whole stride forward.
+- **`ETHCallback_dashed_circle`** (bytes 342895..343043): `linearMotion(this, true, 0f, 0f)` (ins 1-10: the axis is
+  the CONSTANT 0, so its own turn never tilts the bob), `SetAlpha(0.55f)` (ins 12-14), then
+  `AddToAngle(g_timeManager.unitsPerSecond(8f))` (ins 16-23): 8 degrees a second, capped at 200 ms a frame and 0
+  while paused, as the swing's step. `AddToAngle` adds to `m_angle` (`ETHEntityController.cpp:145-148`) and the
+  draw turns the picture by it (`ETHRenderEntity.cpp:105`, `GLES2Sprite.cpp:268-270`), counter-clockwise on the
+  screen, the converter's rotation negated (`tscn.py:432-433`).
+- **`ETHCallback_dashed_square`** (bytes 343043..343129): `SetAlpha(0.55f)` and nothing else. Its speed 1.5 and stride
+  0.6 are read by no call: it does not move.
+- **`ETHCallback_hand_tap`** (bytes 344140..344990): `linearMotion(this, false, GetAngle() - 90f, 0f)` (ins 1-14; ins
+  5 `SUBIf 90f`) and **no `SetAlpha`**. Ins 16-172: unless paused, a release within `scale(30)` of it adds
+  `smoke_vanish.ent` and deletes it (System 7's, not built here).
+- `linearMotion` is step 81's: the angle stepped before the offset is read, `cos(angle) x stride x sign(speed)`
+  along its axis turned by `rotateZ`, `x getScale()`, 1 in the port's units. `SetAlpha` writes `m_v4Color.w`
+  (`ETHEntity.cpp:505-508`), which the ambient pass multiplies into the draw (`ETHRenderEntity.cpp:113-117`).
+- **The census** (`test_mp_motion`): 8 `hand_drawn_arrow.ent` (1-01, 1-08, 1-09, 1-10 at 45 degrees, 1-12 at +50 and
+  -50, 2-32 twice), 9 `dashed_circle.ent` (1-02, 1-03 x2, 1-05 x2, 1-16 x2, 4-05 x2), 1 `dashed_square.ent` (1-08), 7
+  `hand_tap.ent` (1-02, 1-03 x2, 1-16 x2 with one at 95 degrees, 1-27 x2). Every one carries both `speed` and
+  `stride`: arrows 4 / 2.5 (a period of pi/2 s), circles and the square 1.5 / 0.6 (4.19 s), hands 3 / 4 (2.09 s). No
+  node carries an `eth_color`, a light or a halo, none of the four `.ent` files has a particle system, and each of the
+  25 nodes has one child, a `Sprite2D`: no body, so `syncSprites`' new branch shadows none and no quad takes
+  interpolation.
+- Three of the four are `static=1`, so the original runs their callbacks only while their bucket is on screen
+  (00_order 8.12c); `hand_tap.ent` is `static=0`.
+
+**THE OWNER'S STANDING RULINGS APPLIED** (every ruling 00_order section 6 raises is decided for what the original
+does, the bytecode decode, with measured footage winning where they disagree).
+- **R8, `SGlobalScale`'s divisor /256** (00_order 8.12a): `getScale()` is 1 in the port's units, so the swing's
+  amplitude is the node's stride. The capture (2.502 u) and the original's library (its arrow within -1.45..+2.03 u
+  of the node on four frames) agree.
+- **R12, the fixed 720 selection:** nothing here depends on the window.
+- **00_order's own resolutions taken as written:** E5/K6 (the 60 Hz tick is the frame the callbacks run on); K4/E2
+  (`cos`, step 81's helper unchanged); **K8** (no row draws a start angle, so step 81's start-angle stream draws
+  exactly what it drew: the sweep shows it, 116 levels that place none of the four, crystals and keys on nearly all of
+  them, byte-identical on all 348 frames, and in the other 12 no changed pixel outside a placed picture's reach; pinned
+  on 1-05's crystals in `test_mp_layer`); **K13** (no picture changes slot).
+- **Footage:** F10's clip of 4-05 shows its top dashed circle for 20 s and measures the turn (GATES); F2's 1-03 view
+  holds none of that level's circles or hands. The arrow's and square's original side is the library.
+- **Not this step's:** R7 (`Mover`'s `sin(2 speed t) stride / 2` for platforms and zones, against this same decode).
+
+**WHAT CHANGED.**
+- **`sim/Motion`:**
+  - `Placed` rows and `Rules::placed`, read from `motions.json` `placed`: `entity` (bare), `linear_motion` (an object
+    with `vertical`, `axis` `"node"` or `"fixed"`, `axis_add_deg`, `start_angle`; or null), `set_alpha` (0..1, or null
+    for a callback that never calls it), `spin_deg_s`. Refused by name: a missing or non-array `placed`, a name with
+    a dot, an entity with two rows or one the crystal or key row names, an unknown axis, an alpha outside 0..1, a
+    missing key, a row that neither moves, fades nor turns. `Rules::FindPlaced`.
+  - `FromNode`: a placed picture's `Linear` from its node's own `speed` and `stride` and, for an axis from the node,
+    its angle (the Godot rotation negated); refused, naming the node, without them.
+  - `Turn` and `Advance(Rules, Turn, frameMs)`: `AddToAngle(unitsPerSecond(deg))`, capped and paused as the swing,
+    kept within one turn (the same drawn angle as Ethanon's unbounded float).
+  - Step 81's `Advance(Linear)`, `OffsetPx`, `Phases` and `LevelSeed` are unchanged.
+- **`data/motions.json` `placed`:** the four rows above with their instructions; `_placed_notes` for the census, the
+  bucket clock and the untouched stream. No `_guess`.
+- **`MagicPortalsLayer`:**
+  - `buildSprites` gives every drawn picture whose entity (either spelling) a `placed` row names a `PlacedScript`
+    (`DrawnSprite::placed`): its `Linear` from `FromNode`, its turn rate, and `SetAlpha`'s alpha written into the
+    colour's alpha (an assignment, as `SetAlpha`'s; no node of these has an `eth_color`). A node without speed and
+    stride is logged and drawn still, as `GetFloat`'s 0 would leave it. It draws nothing from the start-angle stream.
+  - `advanceMotions` steps them once a tick after the crystals and keys, before `syncDrawables`; a paused or popped-up
+    level is not stepped.
+  - `syncSprites`, in a branch of its own after the zones (the crystal and key branches untouched): the swing added to
+    `centrePx` and `ownerPx`, the turn to the quad's rotation (counter-clockwise, the engine's +z) and to
+    `ownerAngleDeg`.
+  - `PlacedReports()` for the suites; `unloadLevel` clears the scripts.
+- **No interpolation added**, as step 81 declined it for the bob: the fastest of these steps is the hand's 4 x 3 / 60 =
+  0.2 u a tick (0.56 px at 720 p; the arrow's 0.167 u, 0.47 px), and under `--fixed-step` an interpolated quad is
+  drawn a tick behind its tick (the accumulator is spent each frame, so the frame's alpha is 0), which would put every
+  capture of these pictures one tick behind the rest of the level.
+
+**BASELINE.** HEAD is step 81 (`5ba5b86`) and no merge has landed since. `ninja -n` had no work and the build's
+`MagicPortals.exe` (`f4b93852`, step 81's verification relink) drew 1-01 f420 **`a1f8d7ae`**, step 81's. Before
+changing anything this step captured its gate levels on that binary (the remake's `out/parity/visuals/3.3/before/gate/`:
+1-08 and 1-10 every 6th frame to f480, 1-05 to f780): their f420 frames, and 1-05's f780, are byte-identical to
+`3.2/after/sweep/`, so **step 81's `3.2/after/` and its `sweep/` are this step's "before"**. After:
+`3.3/after/`, binary `3e470ce6` (`capture_33.sh`, each launch under a 300 s stall timeout, which fired
+on none of 132). **The next step's "before" is `3.3/after/` and its `sweep/`.**
+
+**GATES.** 1280x720, `--fixed-step`. Scripts in `3.3/work/`: `gates_33.py` (TMPL: arrow.py's grey-texture template,
+after minus the before frame of the same tick; SHIFT: 3.2 verify1's truncated-L1 shift of each after frame onto the
+first fitted one; for the circle TMPL over position and turn), `arrow45.py` (edge template), `circle_dots.py` (the
+circle's 11 dots), `arrow_alpha_exact.py`, `orig_circle.py`, `f10_circles.py`, `orig_arrow.py` (arrow.py on the after
+sweep), `square_alpha.py`, `hand_alpha.py`, `nonreg_33.py`.
+**The port's true motion is known exactly** (no start angle is drawn): after n ticks the arrow is at 2.5 cos(4 n
+tick) along its axis, the circle at 0.6 cos(1.5 n tick) down the screen, turned 8 n tick degrees, tick float(1/60);
+frame f is drawn after f ticks (fitted n0 = 0, as step 81's), so each estimator is read against it. Fits start at
+f72, after the level's fade-in.
+
+| Gate (00_order 3.3; systems_9_10 10a(5) where marked) | Required | Before | After |
+|---|---|---|---|
+| 1-08 (level7) every 6th frame to f480, the arrow: amplitude | A 2.5 +- 0.3 u | still: the template's after-minus-before displacement is 0 by construction, the core-over-ring estimator reads alpha 1.000 on 69 of 69 frames | **2.502 u: passes** (TMPL, 69 frames f72-f480; against the truth slope 1.0006, rms 0.003 u, max error 0.007 u). SHIFT 2.488 u (slope 0.995, rms 0.007 u) |
+| the same: period | 1.571 +- 0.05 s | - | **1.5708 s: passes** (TMPL and SHIFT alike) |
+| the same: a whole stride forward on the first tick | +A +- 0.3 u | - | **passes: +2.498 u**, the TMPL fit at tick 1 (frame f is drawn after f ticks, n0 = 0 fitted against the truth; the truth 2.5 cos(4/60) = +2.494 u). The fade-in hides frames before f72; `test_mp_layer` pins the first tick's offset at +2.4944 u exactly |
+| the same: across the axis (10a(5)) | mean < 0.3 u | - | **passes: -0.016 u** (max 0.021 u); the free SHIFT moves along 0.06 degrees |
+| the same: drawn alpha | 0.55 +- 0.03 | 1.000 (69 of 69) | **passes. The parity statement: on the four library frames whose camera lines up, the original's arrow core reads grey 163 over ground 51-57, and the port's after frame reads 163** (`orig_arrow.py`, arrow.py against the after sweep; systems_9_10's 0.535-0.549). `test_mp_layer` pins the quad's `albedoColor.a` at 0.55 exactly. **On pixels, against exact ground: 0.552** median (the verification's `3.3/verify1/alpha_swing.py`: 1,484-1,836 core pixels over 18 ticks, the texture's 255 over the ground 52-54 that the opposite swing end uncovers). The ring-median estimators read lower, their ring sampling brighter ground than the core covers, and later alpha gates should not rest on them: arrow.py's core-over-ring estimator reads **0.547** median over the gate's 69 frames (5th-95th percentile 0.494-0.556; 54 of 69 within 0.52-0.58). **arrow.py itself, as 10a(5) names it, reads `alpha_port` 0.495 on the sweep's f420**: its ring median there is 73, ground brighter than what the core covers, which is also where the 0.494 tail comes from. From pixels whose ground another frame shows (`arrow_alpha_exact.py`, 3,264 core pixels at one swing end against the ground at the other): **0.542** median (0.500-0.555) |
+| 1-10 (level9) every 6th frame to f480: the arrow's direction | within +-5 degrees of 45 | still | **passes: 44.7 / 44.4 / 44.6 degrees** (the verification's `3.3/verify1/arrowfit.py`: the gradient magnitude of each after frame matched against the before run's still arrow, over the whole box / with the halo's corner masked / the head only; 69 frames f72-f480, amplitude 2.46-2.49 u, slope against the truth 0.985-0.995, period 1.570 s; the same method reads 2.503 u and 0.02 degrees on 1-08). The step's own two estimators read 41.6 and 42.2 degrees and 0.90-0.92 of the travel: an edge template (`arrow45.py`, scores 0.45-0.83) and the free SHIFT (across rms 0.013 u), both pulled by the halo the arrow crosses (the free SHIFT reads slope 0.995 and 0.06 degrees on 1-08's arrow over plain ground); the drawing is on 45 degrees. arrow.py's grey template does not find this arrow (scores 0.12). `test_mp_layer` pins the drawn quad on 45.0001 degrees (across < 1e-9 u) |
+| 1-05 (level4) every 6th frame to f780, the dashed circle: vertical | vertical | still, unturned (DOTS: turn -0.10 degrees mean, 0.43 max) | **passes**: DOTS x range **0.147 u** (rms 0.031 u) against a y swing of 0.58 u, after the ring's own turned offset is taken off (the dots sit (-4.3, -2.1) px off the picture's centre and turn with it). TMPL's x range 1.53 u is its noise over the crystal the circle rings |
+| the same: amplitude | 0.6 +- 0.2 u | - | **passes: 0.583 u** (DOTS: 11 dots, 9-11 found; against the truth slope 0.970, rms 0.104 u). TMPL 0.571 u (rms 0.12 u) |
+| the same: period | 4.19 +- 0.2 s | - | **passes: 4.241 s** (DOTS); TMPL 4.157 s |
+| the same: turn | 8 +- 1 degrees a second | 0 | **passes: 8.003** (TMPL, 119 frames, against the truth rms 0.17 degrees, max 0.54) and **8.006** (DOTS, rms 0.18) degrees a second, **counter-clockwise**. The art's 11 dots are not quite even (a turn of 33 degrees scores 0.943 against itself), so the absolute turn is read too: on the after sweep's f420 / f570 / f780 TMPL reads 23.2 / 10.3 / 5.55 degrees against the truth's 23.27 / 10.55 / 5.82 modulo the spacing |
+| the same: alpha (10a(5)) | 0.55 +- 0.05 | 1.0 | **passes: 0.541** median (0.527-0.543, core-over-ring on the matched pose) |
+| **The original's circle** (not an order gate) | - | - | **8 degrees a second, counter-clockwise, on two sources.** Library 1-05 (`orig_circle.py`): the h run turns **+20.8 degrees over 2.5 s and +26.6 over 3.5 s**, the t run **+20.3 and +27.2** (8 counter-clockwise predicts +20.0 / +28.0; clockwise would read +12.7 / +4.7 modulo the spacing); alpha 0.541-0.555, the port's 0.527-0.541 by the same estimator. **F10's clip of 4-05** (`f10_circles.py`, the top circle `dashed_circle_ent_2121`, 225 of 340 native frames at their pts; the rest score under 0.40, most while a placed portal covers it): **7.93 degrees a second over 11.4 s** (180 frames, rms 0.38 degrees), 7.73 over the first 2.3 s, **7.92 over the whole 20.1 s**; the bottom circle over the planet's surface scores 0.19-0.22 and is not measured |
+| 1-08's dashed square (not an order gate) | alpha 0.55, still | alpha 1.000 | **alpha 0.538** (core 152 over ring 32), the same position on f420 and f480; the original's **0.566** (core 156 over ring 27) on the four library frames whose camera lines up |
+| 1-16's tapping hand `hand_tap_ent_765`, unrotated (not an order gate: the one value resting on a call's absence) | alpha 1, swings 4 u down the screen | alpha 1.005 (core 255), at its node | **alpha 1.005 (core 255) on f420 / f570 / f780, y 441.1 / 436.5 / 450.2 px, x 547.91-547.92 px** (`hand_alpha.py`). **The original: core 255, alpha 1.005, on all six library frames**, confirming that `ETHCallback_hand_tap` sets no alpha; and its hand stands at y 436.6-458.3 px with x 547.93-547.94 px, -3.8 to +3.9 u about the node, straight down the screen (camera within 0.16 px) |
+| `test_mp_motion` (10a(5)) | the clamp, the wrap, cos phase, the axis's turn and sign, pause | 78 checks | **146 checks, 0 failures: passes** (`44cc8acb`). The four rows and 14 refusals by name; `FromNode` (1-10's 45.0 degrees, up the diagonal a whole stride on the first tick; 6,000 ticks along the axis and 0 across; pi/2 s a period; the circle's constant axis whatever its node's angle; the hand at 0 down the screen and at 95 along 5; three refusals); `Turn` (60 ticks 8 degrees, a paused frame nothing, a 500 ms frame 1.6, 20,000 ticks within a turn, backwards); the census of 25 placements |
+| `test_mp_layer` (10a(5)) | the arrow's quad moves; nothing moves while paused | 998 checks | **1,035 checks, 0 failures: passes** (`12cb3baf`). `AnArrowSwaysAlongItsAngleAtItsAlpha` (1-08: 480 ticks at `Advance` of the tick, quad and centre on the offset, material alpha 0.55, the square still at 0.55; 0 moves over 120 paused ticks); `AnArrowAndAHandSwayAlongTheirOwnAngles` (1-10 at 45, 1-12 at -50, 1-16's hands at 95 and 0: along 2.4999 / 3.9999 u, across <= 3e-14 u, the hands at alpha 1); `ADashedCircleBobsAndTurns` (1-05: 600 ticks, quad rotation the engine's +z by the turn, 80.000 degrees in 10 s, y +-0.6; the crystals' start angles the stream's draws in order: K8) |
+| `test_mp_start` (10a(5)) | passes | - | **passes** (ctest) |
+| Non-regression: the sweep (f420 / f570 / f780) against `3.2/after/sweep/` | levels placing none of the four byte-identical; every other change at one of them | - | **passes on 384 of 384 frames** (`nonreg_33.json`): the **116 levels that place none of the four are byte-identical on all 348 of their frames**. Of the 12 that do, 1-01 (its arrow at x 614 is off the start view), 1-02 and 1-03 (their tutorial popup covers the level and holds it) and 2-32's f780 (the game-over screen) are byte-identical; 26 frames in 9 levels change, and **every changed pixel lies inside its picture's reach** (Chebyshev from the nearest of the four's nodes: the arrow 36.5 u, the turning circle 47.9, the square 34, the hand 68; every pixel at least 6.6 u inside; farthest 48.0 u, at 1-16's hands), the camera voted per frame |
+| Non-regression: 1-01 f420 | byte-identical | `a1f8d7ae` | **`a1f8d7ae`: passes** |
+| No emitter, light, halo or slot moves | - | - | **passes by census**: none of the four `.ent` files has a particle system; no node carries a light, a halo or an `eth_color`; no slot changes (K13) |
+| Out of `Game::Level`, deterministic | the motions are the layer's; a run draws the same twice | - | **passes**: no file under `sim/` but `Motion` changed. The gate run and the sweep run, two launches, draw 1-05 f420 / f570 / f780, 1-08 f420 and 1-10 f420 byte-identical |
+| Validation | exit 0, silent | - | **passes**: 132 after launches (single, 3 gate levels, 128-level sweep) exit 0, validation ACTIVE in 132 of 132 logs, no VUID or Validation Error; no stall (300 s timeout never fired); no log loads a shot. Before: 4 launches, the same |
+
+**THE SUITES.**
+- **`test_mp_motion` 78 -> 146 checks, 0 failures** (`44cc8acb`, run directly).
+- **`test_mp_layer` 998 -> 1,035 checks, 0 failures** (`12cb3baf`, run directly).
+- Both were first linked as `4371feaf` and `ad2f6d8c`, which Smart App Control refused; each was deleted and relinked
+  once, and the relinks ran.
+- **ctest, once, after the full build: 116 of 122 pass, 0 fail, 6 not run.** Smart App Control refused (BAD_COMMAND)
+  `test_mp_geometry`, `test_mp_turrets`, `test_mp_chapters`, `test_mp_timed`, `test_mp_lighting` and `test_mp_select`;
+  none names `MagicPortalsLayer`, `Motion::` or `motions.json` (grep), and none was relinked. `test_mp_start`,
+  `test_mp_motion`, `test_mp_layer`, `test_mp_levels`, `test_mp_play`, `test_mp_sprites`, `test_mp_sky` and
+  `test_mp_tiers` passed under it.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): `test_mp_motion` (4 steps), `MagicPortals` and `test_mp_layer` (8
+steps), the relink of both suites, and the full build (44 steps, 43 links, leaving `MagicPortals.exe`,
+`test_mp_motion.exe` and `test_mp_layer.exe` as they were); logs in `3.3/work/build_*.log`.
+
+**SMART APP CONTROL.** Two refusals, two notifications, from the first links of `test_mp_motion.exe` and
+`test_mp_layer.exe` (each relinked once), and ctest's six BAD_COMMANDs. `MagicPortals.exe` `3e470ce6` ran on its first
+launch and on all 132; the committed build's `f4b93852` on its 4 before launches.
+
+**LEFT FOR THE OWNER.**
+- **The bucket clock.** `hand_drawn_arrow.ent`, `dashed_circle.ent` and `dashed_square.ent` are `static=1`: the
+  original starts an arrow's swing and a circle's bob and turn on the frame its bucket is first on screen and holds
+  them while it is not (00_order 8.12c). The port runs all 25 from the level's first tick. On the gate levels the
+  pictures are on screen from the start; every arrow, circle or square first seen after the start view takes a
+  different phase from the original's, at least 1-01's arrow at x 614 (off the start view, which is why 1-01 f420 is
+  unchanged) and 2-32's second arrow at x 2112; no still can tell it from a player's timing.
+- **The hand's tap.** `ETHCallback_hand_tap` deletes the hand, with `smoke_vanish.ent`, when a release lands within
+  `scale(30)` of it (ins 16-172). Not built (System 7's effects runtime); the port's hands sway for the whole level.
+- **The original's whole-millisecond clock** (step 81's proposed ruling): it would stretch these periods by the same
+  `floor(dt) / dt` as the bob's; the port steps the exact 1000/60 ms.
+- **Alpha on pixels reads 0.527-0.547 for a drawn 0.55** by the core-over-ring estimator on the port (the same
+  estimator reads the original's 0.535-0.566): an estimator's spread, not a gate miss, but not settled to 0.01. Against
+  exact ground (the texture's 255 over the 52-54 the swing uncovers) 1-08's arrow reads 0.552.
