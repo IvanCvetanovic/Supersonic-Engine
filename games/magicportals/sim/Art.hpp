@@ -67,6 +67,17 @@ struct NoGravityMotion {
     double HoverUnits(float angle, double viewUnitsTall) const;
 };
 
+// When the player draws its arm out (art.json character.push):
+// SideScrollerCharacter::detectPushing's ray, and the rows findFinalDirection
+// swaps in while it meets something.
+struct Push {
+    double reachFrameWidthShare = 0.0; // 0.6 of getSize().x, the frame's width
+    glm::dvec2 offsetPx{0.0};          // scale(-6) on y: added to the ray's far end, in level units
+    double airVelocityShare = 0.0;     // off the ground the ray follows the body's x velocity times this
+    int leftRow = 0;                   // the row pushing left draws
+    int otherRow = 0;                  // the row pushing any other way draws
+};
+
 // The player, as dark_mage.ent draws it and its script frames it: a sheet whose
 // rows are directions and whose columns are a walk. The row it shows IS its
 // direction, and it starts facing initialDirection - not on the .ent's
@@ -83,6 +94,7 @@ struct Character : Picture {
     int rightRow = 0;
     int idleColumn = 0;        // the column it stands on
     double strideMs = 0.0;     // frameStride: a column's time; framesPerSecond is 1000 / strideMs
+    Push push;                 // the arm out against what it walks into
     // The sheet MainCharacter's constructor swaps in on a no_gravity level. Only
     // the image: the cut, the frame, the pivot and the normal map stay dark_mage.ent's.
     std::string noGravitySprite;

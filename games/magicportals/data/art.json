@@ -175,10 +175,54 @@
         "character turns as it walks; not which rows do it. DECODED since: updateFrame calls",
         "SetFrame(column, findFinalDirection(direction)), and no FlipX or SetFlipX is called anywhere",
         "in the bytecode, so walking left is row 1 unflipped. Rows 0 and 3, arm out, are the pushing",
-        "rows (findFinalDirection, bytes 131207..131341), not built here."
+        "rows (findFinalDirection, bytes 131207..131341): push."
       ],
       "left": 1,
       "right": 2
+    },
+    "push": {
+      "_source": [
+        "DECODED (the remake's out/parity/asbc/all_functions.txt, md5 48fe65ce). THE ROW:",
+        "SideScrollerCharacter::findFinalDirection (bytes 131207..131341) instructions 3-19 return",
+        "`pushing ? (direction == 1 ? 0 : 3) : direction` (the 1, MOVING_LEFT, is the CMPIu immediate",
+        "read as its vK operand, INFERRED as every such immediate is): pushing left draws row 0, pushing",
+        "any other way row 3 (the sheet's rows 0 and 3 hold the arm out left and right). Walking or",
+        "standing alike: updateFrame (bytes 130241..130614) passes it the direction at 63-67 and 89-93.",
+        "THE LAG: SideScrollerCharacter::update (bytes 153242..153396) calls updateFrame (instruction",
+        "18) BEFORE applyForces (29), which calls detectPushing (applyForces, bytes 129676..130142,",
+        "instruction 96): an update draws the push the update before found, so the first update",
+        "against a wall draws the walk and the update a walk stops on still draws the push.",
+        "THE RAY: detectPushing (bytes 130614..131207): when dirVec.x == 0, pushing = false (3-6,",
+        "108-111); else a ray from getPosXY() to getPosXY() + normalize(dirVec) x 0.6 x getSize().x +",
+        "vector2(0, scale(-6)) (8-52; the arguments pushed last-first put the -6 on y, 6 above, and",
+        "scale() makes it 6 level units, not screen pixels), and pushing = GetClosestContact(from, to,",
+        "point, normal, 'dark_mage.ent') != null (59-106). getSize() is ETHEntity::GetSize, the",
+        "sprite's frame size times the entity's scale (ETHSpriteEntity::GetCurrentSize,",
+        "ETHSpriteEntity.cpp:652-682): 0.6 x 40 = 24 units at the player's getScale(). dirVec is the",
+        "velocity applyForces has just set (instructions 38-56 and 86-91): x = moveVec.x x speedScale,",
+        "the walk, y = the body's vertical velocity; and where isTouchingGround is not set (63-84),",
+        "x = the body's own x velocity x min(1, GetFPSRate() / 60 x 0.86), 0.86 at the port's fixed",
+        "60 Hz tick (air_velocity_share). GetClosestContact(a, b, point, normal, ignore)",
+        "(ETHPhysicsSimulator.cpp:251-268) ignores entities by name alone (ETHEntityNameArrayChooser,",
+        "ETHEntityChooser.cpp:49-63) and keeps every other fixture the ray reports",
+        "(ETHRayCastCallback.cpp:40-51), sensors included: Box2D's world ray cast has no sensor test",
+        "(b2World.cpp:978-995) and a sensor entity has fixtures (ETHPhysicsSimulator.cpp:109). A",
+        "fixture the ray starts inside is not reported (b2PolygonShape.cpp:189-258, b2CircleShape.cpp:",
+        "47-82). NEVER WHERE GRAVITY IS OFF: MainCharacter::MainCharacter (bytes 126650..127790)",
+        "instructions 10-17 and 35 pass noGravity as SideScrollerCharacter's forceNoImpulse, whose",
+        "constructor (bytes 152667..153096) sets pushing = false (73-75) and keeps the flag (77-78),",
+        "and update skips applyForces while it is set (20-29): pushing never changes there.",
+        "MEASURED: no clip was taken for it (plan F11), but footage F9's take r6 (3-18) holds the right",
+        "pad into the corridor wall and draws row 3 at the wall and row 2 after the release, and F13's",
+        "fall (1-06, pad held) draws row 2 on every frame of the fall (planning doc step 64)."
+      ],
+      "reach_frame_width_share": 0.6,
+      "offset_px": [0, -6],
+      "air_velocity_share": 0.86,
+      "rows": {
+        "left": 0,
+        "other": 3
+      }
     },
     "animation": {
       "_source": [

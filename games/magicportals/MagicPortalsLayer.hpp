@@ -711,6 +711,8 @@ private:
     // An image's size, read once per file (Sprites::ImageSize); zero when it
     // cannot be read.
     glm::dvec2 imageSizePx(const std::string& path);
+    // The player's frame in units: its sheet's size cut by its columns and rows.
+    glm::dvec2 playerCellPx(bool noGravity);
     // An image among the original's entities.
     std::string originalImage(const std::string& sprite) const;
 
@@ -799,6 +801,10 @@ private:
     std::vector<TorchLight> m_torchLights;
     float m_direction{0.0f};                // this tick's walk: -1 left, 1 right, 0 standing
     bool m_facingRight{false};              // which way the player last walked
+    // SideScrollerCharacter.pushing: whether the last step's ray met something
+    // (Player::Pushing). The next step draws with it, as updateFrame runs before
+    // applyForces; never set where gravity is off.
+    bool m_pushing{false};
     // On a no_gravity level the column is not the flipbook's: MainCharacter's own
     // timer and hover, stepped once a level step (Art::UpdateNoGravity), and the
     // column this step draws.

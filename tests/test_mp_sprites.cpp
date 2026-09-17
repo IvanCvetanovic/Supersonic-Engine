@@ -385,6 +385,18 @@ void ThePortalAndTheShotAreTheirEnts() {
               "standing on idleColumn 0, so a level starts on frame 8");
     CHECK_MSG(mage.strideMs == 90.0 && std::fabs(mage.framesPerSecond - 1000.0 / 90.0) < 1e-9,
               "a column every 90 ms, SideScrollerCharacter's frameStride");
+    // Its arm out (SideScrollerCharacter::detectPushing and findFinalDirection): a
+    // ray 0.6 of the frame's width along the velocity applyForces sets, 6 units
+    // higher at its far end, the body's own x velocity times 0.86 off the ground at
+    // 60 Hz; row 0 pushing left, row 3 any other way - the sheet's two arm-out rows.
+    const Art::Push& push = mage.push;
+    CHECK_MSG(push.reachFrameWidthShare == 0.6 && push.reachFrameWidthShare * 40.0 == 24.0,
+              "push: 0.6 of getSize().x, 24 units of a 40-unit frame");
+    CHECK_MSG(push.offsetPx == glm::dvec2(0.0, -6.0), "push: scale(-6) on y, 6 units above the far end");
+    CHECK_MSG(push.airVelocityShare == 0.86, "push: min(1, GetFPSRate() / 60 x 0.86) at 60 Hz");
+    CHECK_MSG(push.leftRow == 0 && push.otherRow == 3 && push.leftRow != mage.leftRow &&
+                  push.otherRow != mage.rightRow,
+              "push: rows 0 and 3, neither a walking row");
     // On a no_gravity level: MainCharacter's constructor swaps the sheet and
     // nothing else (the normal map stays normalmap_77.png), and linearMotion turns
     // the standing column every 280 ms and hovers the pivot 1.2 screen pixels on a
@@ -582,6 +594,16 @@ void APlayerWithoutItsWalkIsRefused() {
     weightless("\"hover_radians_per_second\": 3.0,", "", "no hover rate");
     weightless("\"hover_start_radians\": 4.71238898,", "\"hover_start_radians\": \"PI + PIb\",", "a start not a number");
     weightless("\"hover_wrap_radians\": 6.28318531", "\"hover_wrap_radians\": -1", "a wrap below 0");
+    // And its arm out, none of it defaulted.
+    const auto arm = [&refusedSaying](const std::string& from, const std::string& to, const std::string& name) {
+        refusedSaying(from, to, name, "character needs push.");
+    };
+    arm("\"reach_frame_width_share\": 0.6,", "", "no reach");
+    arm("\"reach_frame_width_share\": 0.6,", "\"reach_frame_width_share\": 0,", "a reach of 0");
+    arm("\"offset_px\": [0, -6],", "\"offset_px\": [-6],", "an offset of one number");
+    arm("\"air_velocity_share\": 0.86,", "", "no air share");
+    arm("\"other\": 3", "\"other\": 4", "a push row past the sheet");
+    arm("\"left\": 0,", "\"left\": 0.5,", "a push row between rows");
 }
 
 // FrameTimer::set (FrameTimer.angelscript, bytes 23254..23650), as the player's

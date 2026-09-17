@@ -1180,6 +1180,201 @@ void TheWalkKeepsItsColumnAndItsTime() {
     layer.OnDetach(registry);
 }
 
+// A trigger box standing in the level at `centrePx`, as the converter's Area2D
+// bodies are built (LevelBuilder: a box collider, isTrigger): something a player
+// walks through, and a sensor fixture in the original.
+entt::entity addTriggerBox(entt::registry& registry, const glm::dvec2& centrePx, const glm::dvec2& sizePx) {
+    const entt::entity box = registry.create();
+    registry.emplace<TransformComponent>(box).position = MagicPortals::Units::ToWorld(centrePx.x, centrePx.y);
+    auto& collider = registry.emplace<BoxColliderComponent>(box);
+    collider.size = glm::vec3(MagicPortals::Units::ToMetres(sizePx.x), MagicPortals::Units::ToMetres(sizePx.y), 1.0f);
+    collider.isTrigger = true;
+    return box;
+}
+
+// SideScrollerCharacter::detectPushing and findFinalDirection (art.json
+// character.push): walked into a wall the player draws its arm out, row 3 facing
+// right and row 0 facing left, on the walk's own column and time. updateFrame
+// runs before applyForces, so the step the ray first meets the wall still draws
+// the walk, and the step the walk stops on still draws the push.
+void APlayerWalkedIntoAWallPushesIt() {
+    if (!OriginalArtIsThere("APlayerWalkedIntoAWallPushesIt")) return;
+    {
+        // 1-22 (level21): its breakable wall stands 18 units right of the marker,
+        // inside the ray's 24 from the first step.
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level21");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr) return;
+        const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+        CHECK(mageQuad != entt::null);
+        if (mageQuad == entt::null) return;
+        const auto animation = [&registry, mageQuad]() -> const SpriteAnimationComponent& {
+            return registry.get<SpriteAnimationComponent>(mageQuad);
+        };
+        const auto say = [&animation]() {
+            return " (first " + std::to_string(animation().firstFrame) + ", count " +
+                   std::to_string(animation().frameCount) + ", frame " + std::to_string(animation().frame) + ")";
+        };
+        for (int tick = 0; tick < 60; ++tick) tickWithFlipbooks(layer, registry, {});
+        CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 1,
+                  "settled, standing on frame 8 beside the wall, which a standing player does not push" + say());
+        tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 4 && animation().playing,
+                  "the first walking step draws the walk: the push is found after it is drawn" + say());
+        tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        CHECK_MSG(animation().firstFrame == 12 && animation().frameCount == 4 && animation().playing,
+                  "the next draws row 3, arm out to the right, still walking its columns" + say());
+        for (int tick = 0; tick < 5; ++tick) tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        CHECK_MSG(animation().firstFrame == 12 && animation().frame == 1,
+                  "7 walking steps in, column 1 as an open walk's: the row takes nothing from the column" + say());
+        for (int tick = 0; tick < 60; ++tick) tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        const glm::dvec2 at =
+            MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position);
+        CHECK_MSG(animation().firstFrame == 12 && at.x < 285.0,
+                  "a second against the wall, still pushing it, stopped short of its face at 285: x " +
+                      std::to_string(at.x) + say());
+        tickWithFlipbooks(layer, registry, {});
+        CHECK_MSG(animation().firstFrame == 12 && animation().frameCount == 1 && !animation().playing,
+                  "the step it stops on stands on row 3" + say());
+        const uint32_t column = animation().frame;
+        const float time = animation().elapsed;
+        tickWithFlipbooks(layer, registry, {});
+        CHECK_MSG(animation().firstFrame == 8 && animation().frameCount == 1 && animation().frame == column &&
+                      animation().elapsed == time,
+                  "and the step after stands facing right again, on row 2" + say());
+        layer.OnDetach(registry);
+    }
+    {
+        // 1-01 (level0): the level's left wall, its face at x 0, 36 units left of
+        // the marker. Walking left the ray first meets it with the body at 24 or
+        // less, and the step after draws row 0.
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), "level0");
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr) return;
+        const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+        CHECK(mageQuad != entt::null);
+        if (mageQuad == entt::null) return;
+        for (int tick = 0; tick < 60; ++tick) tickWithFlipbooks(layer, registry, {});
+        std::vector<double> xs;
+        int pushedOn = -1;
+        bool walkedLeftFirst = true;
+        for (int tick = 0; tick < 120 && pushedOn < 0; ++tick) {
+            xs.push_back(
+                MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position).x);
+            tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kLeft});
+            const auto& animation = registry.get<SpriteAnimationComponent>(mageQuad);
+            if (animation.firstFrame == 0) {
+                pushedOn = tick;
+            } else if (animation.firstFrame != 4) {
+                walkedLeftFirst = false;
+            }
+        }
+        CHECK_MSG(walkedLeftFirst, "walking left on row 1 until the push");
+        CHECK_MSG(pushedOn >= 2, "row 0 once the wall is in reach: step " + std::to_string(pushedOn));
+        if (pushedOn >= 2) {
+            // xs[k] is where step k - 1's physics left the body, which is where
+            // step k - 1 cast its ray; step k draws what that ray found.
+            const double found = xs[static_cast<std::size_t>(pushedOn)];
+            const double before = xs[static_cast<std::size_t>(pushedOn - 1)];
+            CHECK_MSG(found <= 24.0 && before > 23.0,
+                      "found with the body at " + std::to_string(found) + " and not a step before, at " +
+                          std::to_string(before) + ": a reach of 24 to the wall's face at 0");
+        }
+        layer.OnDetach(registry);
+    }
+}
+
+// GetClosestContact meets a sensor as it meets a wall - Box2D's ray asks no
+// fixture whether it is one - and never a body the ray starts inside. A trigger
+// box set in 1-09's open floor (level8): the arm goes out as it comes within
+// reach, back in while the player walks through it, and stays in once past.
+void APlayerPushesATriggerItHasNotEntered() {
+    if (!OriginalArtIsThere("APlayerPushesATriggerItHasNotEntered")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level8");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+    CHECK(mageQuad != entt::null);
+    if (mageQuad == entt::null) return;
+    for (int tick = 0; tick < 60; ++tick) tickWithFlipbooks(layer, registry, {});
+    const auto bodyPx = [&registry, &layer]() {
+        return MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position);
+    };
+    const glm::dvec2 start = bodyPx();
+    // 10 wide, from 30 to 40 ahead of the body, and 60 tall about its centre.
+    const double nearFace = start.x + 30.0;
+    const double farFace = start.x + 40.0;
+    addTriggerBox(registry, glm::dvec2(start.x + 35.0, start.y), glm::dvec2(10.0, 60.0));
+    bool pushedApproaching = false;
+    bool pushedInside = false;
+    bool pushedPast = false;
+    bool sawInside = false;
+    bool sawPast = false;
+    double lastX = start.x;
+    // Stopped well short of 1-09's breakable wall, 164 units right of the marker.
+    for (int tick = 0; tick < 90 && lastX < start.x + 100.0; ++tick) {
+        // What this step draws is what the step before found, where its physics
+        // left the body.
+        const double foundAt = lastX;
+        tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        lastX = bodyPx().x;
+        const bool pushing = registry.get<SpriteAnimationComponent>(mageQuad).firstFrame == 12;
+        if (tick == 0) continue; // the first step draws what standing found
+        if (foundAt < nearFace - 0.5 && foundAt + 23.0 > nearFace) {
+            pushedApproaching = pushedApproaching || pushing;
+        } else if (foundAt > nearFace + 0.5 && foundAt < farFace - 0.5) {
+            sawInside = true;
+            pushedInside = pushedInside || pushing;
+        } else if (foundAt > farFace + 0.5) {
+            sawPast = true;
+            pushedPast = pushedPast || pushing;
+        }
+    }
+    CHECK_MSG(pushedApproaching, "the arm out as the trigger comes within the ray's reach");
+    CHECK_MSG(sawInside && !pushedInside, "and in while the body is inside it, which the ray starts inside");
+    CHECK_MSG(sawPast && !pushedPast, "and in once past it: walked to x " + std::to_string(lastX));
+    layer.OnDetach(registry);
+}
+
+// MainCharacter passes noGravity to SideScrollerCharacter as forceNoImpulse, and
+// update skips applyForces while it is set: pushing stays the constructor's
+// false. On 4-02 (level1c) a trigger box within reach of the suit, and a walk held
+// towards it, draws no arm; the same kind of box and walk on 1-09 does
+// (APlayerPushesATriggerItHasNotEntered).
+void AWeightlessPlayerNeverPushes() {
+    if (!OriginalArtIsThere("AWeightlessPlayerNeverPushes")) return;
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level1c");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    CHECK(layer.SimLevel()->noGravity);
+    const entt::entity mageQuad = FirstTagged(registry, "Magic Portals Player Sprite");
+    CHECK(mageQuad != entt::null);
+    if (mageQuad == entt::null) return;
+    const glm::dvec2 at =
+        MagicPortals::Units::ToPixels(registry.get<TransformComponent>(layer.SimLevel()->player).position);
+    addTriggerBox(registry, glm::dvec2(at.x + 15.0, at.y), glm::dvec2(6.0, 80.0));
+    bool pushed = false;
+    for (int tick = 0; tick < 60; ++tick) {
+        tickWithFlipbooks(layer, registry, {MagicPortalsLayer::kRight});
+        const uint32_t first = registry.get<SpriteAnimationComponent>(mageQuad).firstFrame;
+        pushed = pushed || first / 4 != 2;
+    }
+    CHECK_MSG(!pushed, "row 2 on every step, never the arm out");
+    layer.OnDetach(registry);
+}
+
 void Level31DrawsTheBeholder() {
     // beholder.ent's sheet where the beholder is, its eye open and its colour
     // whole, with the box of its reach behind the art. The player walks under
@@ -5200,6 +5395,9 @@ void runTests() {
     WithoutTheOriginalThePortalIsABox();
     ThePlayerIsTheDarkMage();
     TheWalkKeepsItsColumnAndItsTime();
+    APlayerWalkedIntoAWallPushesIt();
+    APlayerPushesATriggerItHasNotEntered();
+    AWeightlessPlayerNeverPushes();
     AWeightlessPlayerWearsTheSuit();
     ABrokenWallTakesItsBoxWithIt();
     ARetryTakesTheThrownStonesAway();

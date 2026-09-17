@@ -51,6 +51,23 @@ entt::entity Spawn(entt::registry& registry, const glm::dvec2& atPx, const Tunin
 // capsule, reaching three below it - the spike's landing test.
 bool Grounded(entt::registry& registry, entt::entity player, const Tuning& tuning);
 
+// SideScrollerCharacter::applyForces' dirVec (art.json character.push): the
+// velocity it sets, which detectPushing aims its ray along. On the ground the
+// walk, `direction` times the walk speed, across the body's vertical velocity;
+// off it the body's own x velocity times `airShare`, across the same. In the
+// remake's pixels a second, +y down. Asked BEFORE Steer, of the velocity the
+// physics step left, as applyForces reads it before it sets its own.
+glm::dvec2 PushAim(entt::registry& registry, entt::entity player, const Tuning& tuning, float direction,
+                   double airShare);
+
+// SideScrollerCharacter::detectPushing: whether a ray from the body's centre,
+// `reachPx` along `aimPx` with `offsetPx` added to its far end, meets any body
+// but the player's own as GetClosestContact would (Shot::ClosestContact). Never
+// when the aim has no x. A picture's question: nothing it answers is kept by the
+// level.
+bool Pushing(entt::registry& registry, entt::entity player, const glm::dvec2& aimPx, double reachPx,
+             const glm::dvec2& offsetPx);
+
 // One tick of steering, before the physics step. `direction` is -1, 0 or 1: the
 // remake's two-button pad (docs/original-gameplay.md section 1).
 void Steer(entt::registry& registry, entt::entity player, const Tuning& tuning, float direction, float dt);
