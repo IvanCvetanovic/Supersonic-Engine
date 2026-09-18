@@ -11375,19 +11375,22 @@ deleted and relinked once each time; the binary the step was measured with was t
 needed none after. ctest's five refusals above were not retried (one ctest per role), so those five suites are
 not run - and fix round 2, which relinked every suite, launched none of them beyond the two this step changed.
 The commit round's relinked `test_mp_layer.exe` ran on its first launch as well, and no exe was launched in
-that round beyond the two suites: **not one delete-and-relink and not one notification in the whole step.**
+that round beyond the two suites: **not one delete-and-relink and not one notification in the commit round**
+(the step's own count stands above: two relinks of `test_mp_layer.exe` and ctest's five refusals).
 
 **RECORDED DEVIATIONS.** Two of the four colour rows are **NOT MET as written** (1-07 `antiportal_687` and
-4-07 `antiportal_2166`), and with them the `c_G`/`c_B` bound read on magnitude on three rings (3-12 `1376` and
-`1533` on blue, 4-07 on green and blue) and 5 of the census sanity check's 22 camera-confirmed rings; all recorded and
-not tuned. The brief's own fallback ratio is INAPPLICABLE to the first two rows rather than failed by them
-(its own row above and its own row below), and the census check stays a sanity check and not a gate. A SIXTH
-deviation is recorded by this step and is PORT-WIDE rather than 4.2's: the original's script-facing clock is
-a floor of each frame's milliseconds and this port's is not. **The two failing colour
+4-07 `antiportal_2166`), and with them the `c_G`/`c_B` bound read on magnitude on three rings (3-12 `1376`
+and `1533` on blue, 4-07 on green and blue) and 5 of the census sanity check's 22 camera-confirmed rings;
+all recorded and not tuned. The brief's own fallback ratio is INAPPLICABLE to the first two rows rather
+than failed by them (its own row above and its own row below), and the census check stays a sanity check
+and not a gate. A FIFTH deviation is recorded by this step and is PORT-WIDE rather than 4.2's: the
+original's script-facing clock is a floor of each frame's milliseconds and this port's is not. **Five
+deviations, and six rows below once the fallback's non-verdict is counted.** **The two failing colour
 rows do not share a cause**: 1-07's is the port's own draw order, 4-07's is cover both builds draw the same
 way. The step is written up with them recorded, by the plan owner's delegated decision, and they land as open
-items in the remake's `docs/parity-backlog.md` in **this step's commit round** (as step 83's did, in
-`f12f814`). Nothing below re-specifies the rows: the reading stays
+items in the remake's `docs/parity-backlog.md` in **this step's commit round** (as step 83's did in
+`f12f814`): five open items and step 83's own row closed, in the remake's `10f9c9e`. Nothing below
+re-specifies the rows: the reading stays
 the brief's median over sectors at the decoded half.
 - **1-07 `antiportal_687`, scale 3** (required max 0.36-0.42 and min 0.18-0.24; measured **0.2875 / 0.1786**,
   ratio 1.61) and **4-07 `antiportal_2166`, scale 3** (measured **0.2679 / 0.1089**, ratio 2.46).
