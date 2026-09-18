@@ -11105,3 +11105,429 @@ section 7 - RECORDED DEVIATIONS).
 - **An unowned `scaleEntities` gap.** The one other node with a custom-data `scale`, `crate_no_emissive_796`
   (level0a, 0.75), is drawn unscaled today. It is not 9.1's, and no step in 00_order owns it.
 - The ring is still white and still; its blink and spin are step 4.2's.
+
+## Step 84 - the red an antiportal's ring blinks, and the ten degrees a second it turns (built)
+
+The visuals plan's step 4.2 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; its brief
+`systems_3_4.md` 4b), after step 83's size. Track B, on the `visuals-b` tree. Game-only: no file under `src/`
+or `assets/shaders/`. Changed: `data/art.json`, `sim/Art.{hpp,cpp}`, `MagicPortalsLayer.{hpp,cpp}`,
+`tests/test_mp_sprites.cpp`, `tests/test_mp_layer.cpp`. **The 71 antiportals in 52 levels (64 spelled
+`antiportal`, 7 `antiportal.ent`) are no longer drawn white and still. Each blinks red on a triangle, 0.2 to
+0.4 and back, a leg of 300 ms, and turns 10 degrees a second, both frozen by a pause. On the port's own frames
+every one of the six gate rings turns its blink round at frames 360, 378, 396 and 414, which is where the
+port's own clock - the level's age, 1/60 s a tick - puts the ends of two 600 ms periods, so the measured
+period is 36 frames on six of six (what the ORIGINAL's phase is at t = 0 is not decided by this: it rests on
+an INFERRED immediate, below); green and blue never move (at most 2 parts in 255 over a whole period, against
+a red that moves 17 to 42); and the red reads 0.396 at the top and 0.213 at the bottom on 3-12 `1376` and 4-02
+`2074`. The other two rows read 0.288/0.179 (1-07 `687`) and 0.268/0.109 (4-07 `2166`) and are NOT MET as
+written, recorded as deviations with two DIFFERENT causes, each measured rather than tuned: on 1-07 THE PORT
+DRAWS THE RING BEHIND ART THE ORIGINAL DRAWS IT IN FRONT OF - 12 of that ring's readable sectors carry no
+blink step in the port and do carry one in the original (the frames, the threshold and how the count moves with
+them are in RECORDED DEVIATIONS) - a port-side draw-order divergence, not a property of
+the level; on 4-07 the ring's own `eth_z` -12 puts it behind that level's art in BOTH builds (not one sector of
+36 is dead in the port alone), so that cover is faithful and what is left of its gap is unexplained. The 76
+levels with no antiportal are byte-identical. Step 83's own NOT MET row is closed here: its cause was the
+white rim clipping, and with the ring drawn red the edge scan reads 2-26 `antiportal_955` at 33.25 x scale,
+the original's own reading, against 30.50 then.**
+
+**WHAT THE ORIGINAL DOES** (the listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce...`; every number
+with its instruction in `data/art.json` `antiportal`).
+- **`ETHCallback_antiportal`** (AntiPortalManager.angelscript, bytes 335020..335206), every frame: ins 1-25
+  `blinkColor(thisEntity, _portalColorA, _portalColorB, 300)` - a call pushes its last argument first, so
+  ins 1's 300 is the stride, ins 4-8 copy `_portalColorB` and ins 12-16 `_portalColorA`; ins 27-34
+  `AddToAngle(g_timeManager.unitsPerSecond(10f))` (ins 27 `PshC4 1092616192` is 10f). A callback is named for
+  the entity less its `.ent` (`ETHASUtil.cpp:63-67`), so both spellings of the 71 placements run it.
+- **The two colours** are that file's own globals (initialisers at bytes 306547..306598 and 306617..306668):
+  each pushes 0f, 0f and then 0.2f (`PshC4 1045220557`) or 0.4f (`1053609165`) into `vector3`, so under
+  last-first pushes they are `vector3(0.2, 0, 0)` and `vector3(0.4, 0, 0)`: **red, and red alone**. They are the
+  ANTIPORTAL's colours; the static portal's are `art.json`'s `static_portal`, from another callback (step 59).
+- **`blinkColor`** (utilEntityEffect.angelscript, bytes 326140..326616): ins 1-25 set the uint
+  `blinkElapsedTime` to 0 on the first call; ins 26-41 add `getLastFrameElapsedTime()` to it; ins 43-53 read it
+  back; ins 55-61 `invert = (elapsed / stride) % 2 == 1`; ins 63-67 `bias = float(elapsed % stride) /
+  float(stride)`; ins 69-75 invert it on an odd leg; ins 77-90 `SetColor(interpolate(colorA, colorB, bias))`,
+  and `interpolate(a, b, t)` is `a + (b - a) t` (Interpolator.angelscript, bytes 314616..314759). **A triangle:
+  0.2 at 0 ms, 0.4 at 300, 0.2 at 600.**
+- **The two clocks are not the same one.** `blinkColor` adds `g_timeManager.getLastFrameElapsedTime()`
+  (STimeManager.angelscript bytes 7894..7961), which is `uint(float(GetLastFrameElapsedTime()) x m_factor)` -
+  ins 3 the engine call, ins 5 `uTOf`, ins 8 `MULf`, ins 9 `fTOu` - and is **not capped at 200**;
+  `unitsPerSecond` (bytes 8045..8162, ins 3-18) is `speed x min(200, frame ms) / 1000 x m_factor`, which **is**
+  (ins 5 pushes the 200, ins 9 calls `min`). **Both are capped at 1000 ms by the loop itself**
+  (`Min(1000.0f, ComputeElapsedTimeF(video))`, `android/main.cpp:180-181`). `m_factor` is 1 and `pause()` sets
+  it to 0, so both stand still under a pause, and they part company only on a frame longer than 200 ms.
+- **And that clock is a FLOOR of each frame's milliseconds, summed as a `uint`** - decoded here, and **not what
+  the port runs at**. The Android loop measures a frame as a float of milliseconds (`ComputeElapsedTimeF`,
+  `Application.cpp:36-50`, off `clock_gettime(CLOCK_MONOTONIC)`: `AndroidGLES2Video.cpp:66-69`, so the fraction
+  is real and not a timer's quantum) and `ETHEngine::Update` stores `static_cast<unsigned long>` of it
+  (`ETHEngine.cpp:147`). **The shipped library does exactly that**: in `libApplication.so`
+  `gs2d::ETHEngine::Update(float)` at `0xb4100` calls `ETHDrawableManager::RemoveTheDead` (+0x0e), then
+  `__aeabi_f2uiz` at `0x1cb364` (+0x14) and `ETHScriptWrapper::SetLastFrameElapsedTime(unsigned long)` at
+  `0xf2038` (+0x18) - read out of the shipped ARM code, not only the MIT source. The C++ scene keeps the float
+  (`ETHEngine.cpp:166`); what the SCRIPT reads is the truncated `uint` (`uint GetLastFrameElapsedTime()`,
+  `ETHScriptWrapper.generic.cpp:323`, `ETHScriptWrapper.System.cpp:100-107`), and `blinkColor` sums it into the
+  entity's own `uint` `blinkElapsedTime`. **So at a steady 60 Hz the original's blink clock gains 16 ms a
+  frame, not 16.667, and a 600 ms triangle takes 625 ms of wall clock.** The script's second truncation (ins 9
+  `fTOu`) changes nothing while `m_factor` is 1, since `uint(16 x 1.0f)` is 16. `unitsPerSecond` reads the same
+  integer, so **the turn is slow by the same factor**. This closes what step 80 left open (its "the whole
+  milliseconds `getLastFrameElapsedTime` returns ... are not decoded"); what it means for this port is in WHAT
+  THIS STEP DOES NOT DO, and it is a port-wide note, not a colour step's change.
+- **What is drawn.** `SetColor` writes `m_v4Color`'s rgb and keeps its alpha (`ETHEntity.cpp:493-498`); the
+  sprite is drawn at `min(1, ambient + emissive) x m_v4Color` (`ETHRenderEntity.cpp:113-117`). **All 71
+  placements carry emissive (1, 1, 1)** (`antiportal.ent`'s `EmissiveColor`; census of `out/levels`, 71 of 71),
+  so that term is 1 on every level, chapter 4's dark ones included, and the ring is drawn at the blink's own
+  colour, added (`blendMode 1`). **No placement carries an `eth_color`** (71 of 71), so writing the rgb and
+  multiplying it in are the same here; the port writes it, as `SetColor` does. `AddToAngle` adds to `m_angle`
+  (`ETHEntity.cpp:444-447`, `ETHEntityController.cpp:145-148`), which the draw turns the picture by
+  (`ETHRenderEntity.cpp:105`, `:122`), counter-clockwise on the screen; the converter wrote each node's angle
+  negated (`tscn.py:432-433`).
+- **The turn is nearly invisible and is built anyway.** `white_ring.png` is symmetric about its centre to 1 %
+  (the brief's hd rim angular s.d. 2.3 on a mean of 242), so no capture can gate it; `test_mp_layer` pins it.
+- **The footage agrees on the hue and the ceiling:** 105 library frames of the 20 camera-confirmed rings give
+  `c_R` median 0.218, p90 0.322 and max 0.396 against the decoded ceiling of 0.400, with `c_G` median 0.017 and
+  `c_B` 0.000 (systems_3_4 4b, `work_s34/antiportal_census.py`). The low median is the brief's open note and is
+  not the port's to fit: the library holds a few fixed delays into each level, so its phases are not uniform,
+  and a ring sits behind the level's art at `eth_z` -4 to -16. **The gate is the port's own time series**, as
+  00_order 4.2 orders.
+
+**THE OWNER'S STANDING RULINGS APPLIED** (every ruling 00_order section 6 raises is decided for what the
+original does - the bytecode decode, with measured footage winning where they disagree).
+- **No ruling in section 6 is load-bearing for this step.** R1 (the refusal radius) and R17
+  (`anti_portal_agent` as zones) belong to 4a and were recorded in step 83; this step changes no rule the port
+  plays and no size. What it keys on is the callback's entity, so `anti_portal_agent` and `no_portal`, whose
+  callbacks are other ones, neither blink nor turn - pinned in `test_mp_layer`.
+- **R12 (the tier fixed at the 720 selection) and R13 (route B)** carry over from step 83: the port still draws
+  the 1x `white_ring.png` until step 2.2 resolves tiers. The blink is a colour, so a tier will not move it; it
+  will move the measured `c` by a percent or two, because the estimator normalises against `hd/white_ring.png`
+  (whose peak texel is 255 against the 1x file's 243).
+- **F8 is retired** (00_order section 5): the antiportal's pulse needed footage only while it was a guess.
+
+**WHAT CHANGED.**
+- **`data/art.json` `antiportal`:** `entity "antiportal"`, `blink` (`from` (0.2, 0, 0), `to` (0.4, 0, 0),
+  `stride_ms` 300) and `spin_deg_per_s` 10, with the instructions above as `_source` and the census as
+  `_measured`. Its home is `art.json` beside `static_portal`, the other callback that redraws a placed entity;
+  the manager's `Scale(0.5)` stays in `placement.json`, where step 83 put it - two facts about one entity, each
+  in the file it was decoded from.
+- **`sim/Art`:** `Antiportal` with the two colours, the leg and the turn, and one pure
+  `Antiportal::ColourAt(elapsedMs)` - the leg count says which way this leg runs, the remainder how far along -
+  read and required by `LoadRules` (an object, a name without a dot, `from` and `to` each three numbers none
+  below 0, a stride above 0 and a finite turn). The original's clock is a `uint` sum of FLOORED frame
+  milliseconds and the port's is its own tick, 1000/60 ms: at 60 Hz the port's blink and turn run **4.17 %
+  fast** of the original's, which this step decodes, records and does not emulate (below).
+- **`MagicPortalsLayer::buildSprites`:** a picture whose node's entity is the callback's, either spelling, is
+  marked `DrawnSprite::antiportal`, and the level's rings start their turn from nothing at `art.json`'s rate.
+- **`advanceMotions`:** one `Motion::Turn` for all the level's rings, stepped once a tick beside the placed
+  pictures' turns. The original turns each ring by its own callback, and they run on the same frames with the
+  same step, so they hold one angle between them. Its step is `unitsPerSecond`'s, capped at `motions.json`'s
+  `frame_cap_ms` - the one implementation of that rule the port has - where the blink's clock is not capped at
+  200 (only at the loop's own 1000 ms).
+- **`syncSprites`:** a marked picture is drawn turned by that angle about its own point, over whatever angle the
+  level gave it (`Units::ToWorldRotation(rotation - turned)`, the converter's negation, as step 82's dashed
+  circle is turned).
+- **`syncLighting`:** a marked picture's colour is `ColourAt(m_levelAgeMs)` in the rgb with its own alpha kept.
+  `m_levelAgeMs` is the game time since the level's first tick and a pause stands it still, as `m_factor` 0
+  stands `blinkElapsedTime` still; a retry starts it again from 0, as the original's fresh `Game` does
+  (`loadLevel:380-384`, and `unloadLevel` clears the turn with it).
+- **Tests.** `test_mp_sprites`: `TheAntiportalBlinksRedAndTurns` pins the entity, the two colours, the 300 ms leg
+  and the 10 degrees, `ColourAt` at 0, 150, 300, 450, 600, 900, 1200, 75 and 525 ms and against the decode read
+  straight on every millisecond of a period; `AnAntiportalWithoutItsBlinkIsRefused` refuses eight bad rows.
+  `test_mp_layer`: `AnAntiportalBlinksRedAndTurnsAndAPauseHoldsBoth` on 1-12 (two rings and an agent) checks 80
+  ticks of colour against `ColourAt(LevelAgeMs())`, that both rings blink and turn together, that the agent's
+  picture stays white, that the turn is a sixth of a degree a tick, that the blink reaches both ends, and that a
+  pause holds the age, the colour and the angle and that the resume takes up where it left off.
+
+**BASELINE.** Step 83's `4.1/after/sweep/` is this step's "before", as its record says. The committed build's
+`MagicPortals.exe` (`8680806b`, step 83's commit round) drew 1-01 f420 `6d5f4435`, `4.1/after`'s md5, and the
+four gate levels' f420 byte-identical to `4.1/after/sweep/` (1-07 `4dddb094`, 3-12 `c9f9643b`, 4-02 `d8496782`,
+4-07 `3ef4e75d`) - all five re-checked here. On it, before any change, this step captured the four gate levels
+at `--frames 420 --screenshot-every 3` (the remake's `out/parity/visuals/4.2/before/gates/`, `capture_42.sh`;
+frames below 348 are deleted again, so 25 frames are kept - two whole periods). After: `4.2/after/`, binary
+`2175ce88`. **Fix round 2 relinked the tree** (a comment in `sim/Art.cpp` and `art.json` `_source` prose, below),
+so the binary is now `a3c09512`; the four gate levels were captured again on it (`4.2/fix2/gates_relinked/`,
+`capture_relinked.sh`) and **all 100 frames are byte-identical** to `4.2/after/gates/` and to that round's own
+pre-edit captures (`4.2/fix2/gates/`), which is what a change to a comment and to ignored JSON strings must do.
+
+**GATES.** 1280x720, `--fixed-step`. Scripts in `4.2/work/`:
+- `blink_42.py`: `work_s34/antiportal_edge.py`'s colour reading (per 10-degree sector, inside median over
+  [0.90, 0.95] x half less outside median over [1.03, 1.09] x half, over `hd/white_ring.png`'s own step),
+  frame by frame at the **fixed decoded half of 32 x the node's scale** - never scanned, because a scanned half
+  moves frame to frame and would confound the blink with the estimator's choice (step 83's 2-26 row). It also
+  reports the same sectors' upper quartile, the fit of the whole series to the decoded triangle, and what
+  changed outside the rings.
+- `sectors_42.py`, `clip_42.py`: the same reading sector by sector on the two frames whose drawn colour is
+  decoded exactly (f378 is 6,300 ms: the top of leg 21, `c_R` 0.400; f360 is 6,000 ms: the bottom of leg 20,
+  0.200), and how much of the band it reads is clipped or covered.
+- `census_42.py`, `edge_after_42.json`, `nonreg_42.py`: the brief's census and step 83's edge scan and sweep
+  comparison, re-run on this step's sweep; the sweep comparison's ring reach is the quad both builds draw.
+- **The camera is checked, not assumed.** The green the red blink takes away is correlated (by FFT) with the
+  ring's own radial profile at the decoded size: the peak sits within (-1.2, -10.9) to (-0.4, +5.0) px of the
+  node at camera (0, 0) on all six gate rings - 0.4 to 1.2 px in x on every one of them, and the two largest y
+  residuals (-10.9 and -4.0) are 3-12 `1375` and 4-02 `2074`, whose centres sit 17 and 45 px from the top edge
+  with most of the ring off the screen. The reading is taken at the node.
+
+| Gate (00_order section 7, 4.2) | Required | Before | After |
+|---|---|---|---|
+| 3-12 `antiportal_1376` (scale 3.1), `c_R` | max 0.36-0.42, min 0.18-0.24 | 0.932 flat | **0.3964 / 0.2135: passes** |
+| 4-02 `antiportal_2074` (scale 2.0), `c_R` | max 0.36-0.42, min 0.18-0.24 | 1.004 flat | **0.3964 / 0.2178: passes** |
+| 1-07 `antiportal_687` (scale 3.0), `c_R` | max 0.36-0.42, min 0.18-0.24 | 0.396 flat | **0.2875 / 0.1786: NOT MET as written** - the port draws this ring BEHIND art the original draws it in front of (RECORDED DEVIATIONS) |
+| 4-07 `antiportal_2166` (scale 3.0), `c_R` | max 0.36-0.42, min 0.18-0.24 | 0.860 flat | **0.2679 / 0.1089: NOT MET as written** - the same art covers this one in BOTH builds, its `eth_z` -12 putting it behind that art either way (RECORDED DEVIATIONS) |
+| The brief's fallback for a ring that reads low: the ratio max/min | 1.8-2.2 | - | 3-12 `1376` **1.86** and 4-02 **1.82**; 1-07 **1.61** and 4-07 **2.46**. **The fallback cannot decide those two**: it presumes the estimator is a pure gain, and the fit below measures an offset of +0.076 on 1-07 and -0.035 on 4-07, which moves the ratio in opposite directions whatever the colour is. **Its own precondition is not met either**: 4b(5) offers the ratio "if the port's max reads about 10 % low ON A RING WHOSE WHITE RING READ 0.9 today", and those two rings' white rings read **0.3964** (1-07) and **0.8604** (4-07), not 0.9, while their maxima are 28 % and 33 % low, not about 10 %. The fallback was written for a pure-gain shortfall and these two are a draw order and an offset, so this row carries **NO VERDICT** on them: the 1.61 and the 2.46 are readings, not gate measurements, and the two `c_R` rows above stand alone as the recorded deviations |
+| Period | 36 +- 2 frames | - | **36 on six of six rings**, and the turning points are at frames 360, 378, 396 and 414 on every one: exactly the decoded clock's (a trough at 36k, a peak at 18 + 36k, from 600 ms at 1/60 s) |
+| `c_G`, `c_B` | <= 0.03 | G 0.257-0.963, B 0.233-0.967 (a white ring) | **The bound is read on MAGNITUDE** (the decode gives green and blue exactly 0, so either sign is a colour the original does not draw); the signed reading is quoted min / median / max over the 25 gate frames. `c_G`: 1-07 +0.0000/+0.0087/+0.0087, 3-12 `1376` +0.0174 flat, `1375` 0.0000 flat, `1533` +0.0174 flat, 4-02 0.0000 flat, 4-07 **-0.0436/-0.0349/-0.0349**. `c_B`: 1-07 0.0000 flat, 3-12 `1376` **+0.0349** flat, `1375` 0.0000 flat, `1533` **+0.0392** flat, 4-02 0.0000 flat, 4-07 **-0.0349** flat. **Of the FOUR rings this gate names, 2 are inside 0.03 in magnitude on both channels (1-07, 4-02) and 2 are outside it (3-12 `1376` on blue, 4-07 on green and blue); of the six rings read, 3 are inside** (1-07, 3-12 `1375`, 4-02); 3-12 `1376` and `1533` are 1.1 and 2.1 grey levels over it and 4-07's green runs to -0.0436, ten grey levels below zero and 3.1 over the bound in magnitude (1.1 at its median) - **NOT MET as written on those three** (RECORDED DEVIATIONS). One grey level of the difference the estimator reads is `1 / (T_in - T_out)` = 1/229.55 = **0.00436 in `c`** (`blink_42.py`'s own normalisation), which is what every grey-level count here converts by. As a SIGNED bound of the row's own words 4-07 would pass and only two rings would miss; the magnitude reading is the one recorded. All of it is CONSTANT: over a whole period the green moves at most 0.0087 and the blue 0.0000 on every one of the six, against a red that moves 0.074-0.183. What is left is the background's own step at that radius, not the ring |
+| Pause | freezes it | - | **passes** (`test_mp_layer`): 40 paused ticks leave the level's age, the ring's colour and its angle where they stood, and the resume goes on from there |
+| `test_mp_sprites` `AntiportalColour` (the port calls it `Antiportal::ColourAt`) | 0.2 / 0.3 / 0.4 / 0.3 / 0.2 at 0, 150, 300, 450, 600 ms | - | **540 checks, 0 failures: passes**, and every millisecond of a period matches the decode read straight |
+| `test_mp_layer` | the blink, the turn and the pause on a level | - | **1,120 checks, 0 failures: passes** (1,105 at step 83) |
+| Non-regression, the gate frames | nothing outside the rings | - | **0 changed pixels outside the rings on all four levels** (of 57,785, 142,534, 35,535 and 92,630 changed) |
+| **2-26 `antiportal_955` edge scan, step 83's NOT MET row re-read here** (its backlog entry asks this step for it) | half/scale 31.5-34.0 | **30.50** (step 83) | **33.25: passes** - the original's own reading on that ring (33.25 in five of its six library frames). Step 83's cause is gone with the white: the same scan now reads `c` (0.305, -0.009, 0.000) there, so the rim no longer clips against that level's bright ground and the maximum is unambiguous |
+| The other four rings of step 83's size gate, re-read the same way | half/scale 31.5-34.0 | 33.50 / 32.50 / 32.33 / 33.00 | **33.25 / 32.00 / 32.89 / 33.00: pass** (1-07 `687`, 1-10 `574`, 1-12 `762`, 1-12 `574`; `edge_after_42.json`). 1-10 `antiportal_638` still has fewer than 8 sectors on screen, as in step 83 and in the brief |
+| Sanity check (systems_3_4 4b(5)): the census over the sweep, at the decoded half. **A ring is admitted when the camera is confirmed: its matched-filter peak (the ring's own radial profile, correlated by FFT with what the blink changed) sits within 12 px of its node** (`census_42.py`), which is what makes the reading at the node legitimate | port `c_R` in [0.15, 0.42], `c_G` and `c_B` <= 0.06 | camera-confirmed rings: `c_R` median 0.719, 4 of 22 in the band, G/B within 0.06 on 3 of 22 | **`c_R` median 0.259, p90 0.322, max 0.322, and G/B within 0.06 on 21 of 22; 17 of the 22 sit in the band: NOT MET as written on 5 of them**, all LOW and none high. At f420 every ring in the sweep is drawn at the same `c_R` **0.3333** (7,000 ms, leg 23, bias 0.667), so this spread is the estimator and the art in front of the rings, not the blink: the best-read rings reach 0.322, **97 % of what is drawn**. **On at least one level that art is art the ORIGINAL draws the ring in FRONT of** (1-07, RECORDED DEVIATIONS), so an unknown share of the low readings may be that same open draw-order divergence rather than the estimator; the backlog item's sweep of the other 51 levels that place a ring is what settles which. Four of the five low rings read 0.000-0.196 on the WHITE ring too (1-21 `822` and 4-30 `ent_2005` read exactly 0 in both builds), and the fifth (2-12 `ent_1053`) reads 0.139 against its own white 0.196. The brief calls this check "too loose to catch a wrong implementation" and the original's own census p10 is 0.115, under the band's floor. Over all 54 readable rings: median 0.193, 31 in the band, G/B within 0.06 on 52. **The counts move with the admission rule and are quoted with it**: admitting instead every level whose ring quads at the nodes contain every changed pixel (the check confirming its own camera) gives 33 rings on 27 levels - `c_R` median 0.233, 22 in the band, 11 below it (-0.092 to 0.144), G/B over 0.06 on 2 - the same verdict, NOT MET with every miss low (`4.2/fix1/work/census_f1.py`, re-measured in the fix round). **It stays a SANITY CHECK - the brief's own word for it - and is not to be promoted to a section 7 gate** |
+| Non-regression, the sweep at f420 | a level with no antiportal byte-identical | - | **passes: 76 of 76 byte-identical**; of the 52 that place one, 7 are unchanged (no ring on screen at f420) and **45 have every changed pixel inside a ring's own quad** (`nonreg_42.json`, `all_pass` true). **How the quads were placed, so the 45 can be re-read**: a quad of the decoded half about each ring's node, plus 2 px, and one camera offset per level - (0, 0) first, else the offset that leaves the fewest changed pixels outside, searched on a 2 u grid and then at 0.25 u, the level passing only at zero outside (`nonreg_42.py`'s own docstring). The camera is not logged, and a patrolling zone carries its picture with it (`MagicPortalsLayer.cpp:2566-2569`), so on such a level the searched offset absorbs the patrol: the claim is that SOME such placement contains every changed pixel, not that the quads at the nodes do |
+| 1-01 f420 | byte-identical | `6d5f4435` | **`6d5f4435`: passes** (1-01 places no antiportal) |
+| Validation | exit 0, silent | - | **passes: 145 launches** (5 before, 132 after, 8 in fix round 2: 4 on the pre-edit binary and 4 on the relinked one), every one exit 0, validation layers ACTIVE in all 145 logs and **0 validation messages** |
+
+Two readings that are **not** order gates, reported because two rows above were not met:
+- **The same sectors' upper quartile, and the sectors themselves.** A sector where the level's art covers the
+  ring, or where it clips, can only read LOW, so the median is dragged down wherever a ring hides behind the
+  scenery - which is the brief's own explanation of the original's low census median. The p75 over sectors
+  reads, top and bottom: 1-07 **0.395 / 0.218**, 3-12 `1376` **0.427 / 0.218**, `1375` **0.392 / 0.179**,
+  `1533` **0.392 / 0.218**, 4-02 **0.430 / 0.241**, 4-07 **0.396 / 0.192** - within the gate's own bands on five
+  of six rings top and bottom, and at most 2 grey levels outside them on the sixth. Sector by sector on the
+  peak frame f378, where the drawn colour is exactly 0.400 (`sectors_42.txt`): 4-02 reads **20 of its 22
+  sectors within 0.04 of it and none below half**, 3-12 `1376` **20 of 32** (6 below half) - and the two rings
+  whose rows failed read **6 of 26** (1-07, 10 below half) and **10 of 36** (4-07, 14 below half). Which sectors
+  those are, and why each build loses them, is the RECORDED DEVIATIONS below; the p75 is reported, never the
+  row.
+- **The fit of each series to the decoded triangle** (`c = gain x decoded + offset`): gain 0.23-0.99, offset
+  -0.035 to +0.142, and the reading never sits further than **0.040** from that line (rms 0.006-0.018). The
+  SHAPE is the decoded triangle on all six rings; what differs between rings is a constant gain and offset,
+  which is what partial cover and the background's own step look like, and not a colour.
+
+**THE FIX ROUND (2026-09-18).** The step was verified, its two failing rows challenged on their attribution,
+and the record corrected here: **no source file changed and no gate moved**. The four gate levels were
+captured again from the same binary (`2175ce88`, 4 launches, every one `rc=0`, validation layers ACTIVE and
+silent) into `4.2/fix1/gates/`: all 100 frames are byte-identical to `4.2/after/gates/` and to the verifier's,
+and `blink_42.py` re-run on them reproduces the four colour rows, the period and its turning points, the
+`c_G`/`c_B` readings, the p75, the fit and the gate frames' changed-pixel counts to the digit
+(`4.2/fix1/work/blink_f1.json`); the census was re-measured under a second admission rule
+(`census_f1.py`) and reaches the same verdict. What the round
+changed is the WRITE-UP: 1-07's cause (draw order, measured three ways), 4-07's (`eth_z` -12, the same cover
+in both builds), the `c_G`/`c_B` row read on magnitude with min / median / max per ring, the census's
+admission rule beside its counts, and how the sweep comparison placed its quads. Both suites were run once
+more, directly: 540 and 1,120 checks, 0 failures.
+
+**FIX ROUND 2 (2026-09-18).** The second verification passed the blink itself and failed the step on the two
+colour rows again, on the `c_G`/`c_B` bound and on the census - all four already recorded above - and raised
+one MEDIUM defect **in this record**: the claim that the original's clock and the port's "differ by under a
+millisecond and by no drawn colour". **It was wrong, and it is corrected above**: the original's script clock
+is a `uint` of FLOORED frame milliseconds, so at 60 Hz the port's blink and turn run **4.17 % fast**, not
+"under a millisecond" apart. The decode was re-derived here from the source AND from the shipped library
+(`__aeabi_f2uiz` between `ComputeElapsedTimeF` and `SetLastFrameElapsedTime` inside
+`gs2d::ETHEngine::Update(float)`), and the same round corrected three smaller record defects: the blink clock
+is **not** capped at 200 but **is** capped at 1000 ms by the loop; the 1-07 sector count now carries the frames,
+the band, the readable rule and the threshold that produce it (and the red-only test that discriminates it);
+and the backlog items are written as landing in this step's commit round rather than as already there.
+It also closed the same
+imprecision where it survived elsewhere in the file this step edits: `art.json`'s `timer` block said
+`elapsedTime += the frame's milliseconds`, and the listing has `ETHCallback_timer` ins 1-13 reading the very
+same `g_timeManager.getLastFrameElapsedTime()`, so the line now names the floored `uint` and points at the
+port-wide note; `antiportal`'s `_measured` now points at the two RECORDED DEVIATIONS, so the data file cannot
+be read as if its gate rows all passed. **No behaviour changed**: the round touched a comment in
+`sim/Art.cpp`, `art.json` prose and this record, and `test_mp_sprites` was run again after the `art.json`
+edit (540 checks, 0 failures) because that file is what `LoadRules` parses. The gates were re-measured twice - once on the pre-edit binary `2175ce88` (4 launches,
+`4.2/fix2/gates/`) and once on the relinked `a3c09512` (4 launches, `4.2/fix2/gates_relinked/`) - and all 200
+frames are byte-identical to `4.2/after/gates/`. On both, `blink_42.py` reproduces every row: 1-07 **0.2875 /
+0.1786**, 3-12 `1376` **0.3964 / 0.2135**, 4-02 **0.3964 / 0.2178**, 4-07 **0.2679 / 0.1089**, period **36 on
+six of six**, the turning points at f360/378/396/414, the `c_G`/`c_B` readings and **0 changed pixels outside
+the rings** on all four levels. `cover_f2.py` reproduces 28 readable sectors on 1-07 with 15 dead in the port,
+4 in the original and **12 dead in the port alone**, and 0 dead in the port alone on 4-07. Both suites ran once
+each on the relinked binaries: **540 and 1,120 checks, 0 failures**.
+
+**THE SUITES.** `test_mp_sprites` and `test_mp_layer` were run directly, once each, on this tree's binaries -
+`2b4473c6` and `dc0f93b5` when the step was built, and again after fix round 2's relink on `3abb6db2` and
+`32efaffe`: **540 and 1,120 checks, 0 failures** each time. **ctest, once, after the full build: 117 of 122
+pass, 0 fail, 5 not run.** Smart App Control refused (BAD_COMMAND) `test_mp_geometry`, `test_mp_hazards`,
+`test_mp_minions`, `test_mp_ghost` and `test_mp_lighting`. **None of the five covers what this step changed**:
+none includes `MagicPortalsLayer.hpp` or `sim/Art.hpp` (include lists), and none names an antiportal,
+`art.json`, `Art::LoadRules`, `syncLighting` or `albedoColor` (grep). `test_mp_lighting` is the reader
+`sim/Lighting` on the converter's metadata, not the layer's tint. **That ctest verdict is CARRIED, and fix
+round 2's rebuild relinked all 46 executables** (one TU compiled, `sim/Art.cpp`, whose comment changed; the
+five refused suites are among them at build steps 10, 17, 21, 23 and 28 of 49). None of the five was launched
+again - relinking them and running them would cost the owner five Smart App Control notifications for a
+comment - so **they stay not run**, and the two suites that do cover the change were re-run directly on their
+own relinked binaries. The commit round's rebuild relinked `test_mp_layer.exe` alone of the suites, and both
+were run directly once each on it: **540 and 1,120 checks, 0 failures**. ctest stays CARRIED at 117 of 122,
+0 fail, 5 not run.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): the game target (8 steps), the two suites, and the full
+build (46 steps, 43 links). Log in `4.2/work/build_full.log`. Fix round 2's comment change rebuilt the tree
+(49 steps, `4.2/fix2/work/build_f2.log`, **0 lines matching "warning"**) and a second build then reported
+`ninja: no work to do`, so the binaries the gates were measured on are the ones this tree's sources make.
+**The commit round changed one more comment** - `MagicPortalsLayer.cpp`'s note on the blink's clock still
+said "uncapped" where `art.json` now says "not capped at 200, only at the loop's own 1000 ms" - and rebuilt
+the tree: 5 steps, one TU compiled, `MagicPortals.exe` and `test_mp_layer.exe` relinked, **0 lines matching
+"warning"** (`4.2/commit/build_commit.log`). No capture was re-taken in it: a comment moves no pixel, and
+the gate frames were already byte-identical across two links of the same sources.
+
+**SMART APP CONTROL.** Fix round 2's freshly linked `MagicPortals.exe` (`a3c09512`) and both freshly linked
+suites ran on their FIRST launch: no refusal, no delete-and-relink, no notification.
+`MagicPortals.exe` (`2175ce88`) ran on its first launch and on all 137 captures
+(`capture.txt`, every line `rc=0`). Both suites ran on their first launch in the round that closed the step.
+The capture round's log records `test_mp_layer.exe` refused on the first launch after each of its two links and
+deleted and relinked once each time; the binary the step was measured with was that relink (`dc0f93b5`), and it
+needed none after. ctest's five refusals above were not retried (one ctest per role), so those five suites are
+not run - and fix round 2, which relinked every suite, launched none of them beyond the two this step changed.
+The commit round's relinked `test_mp_layer.exe` ran on its first launch as well, and no exe was launched in
+that round beyond the two suites: **not one delete-and-relink and not one notification in the whole step.**
+
+**RECORDED DEVIATIONS.** Two of the four colour rows are **NOT MET as written** (1-07 `antiportal_687` and
+4-07 `antiportal_2166`), and with them the `c_G`/`c_B` bound read on magnitude on three rings (3-12 `1376` and
+`1533` on blue, 4-07 on green and blue) and 5 of the census sanity check's 22 camera-confirmed rings; all recorded and
+not tuned. The brief's own fallback ratio is INAPPLICABLE to the first two rows rather than failed by them
+(its own row above and its own row below), and the census check stays a sanity check and not a gate. A SIXTH
+deviation is recorded by this step and is PORT-WIDE rather than 4.2's: the original's script-facing clock is
+a floor of each frame's milliseconds and this port's is not. **The two failing colour
+rows do not share a cause**: 1-07's is the port's own draw order, 4-07's is cover both builds draw the same
+way. The step is written up with them recorded, by the plan owner's delegated decision, and they land as open
+items in the remake's `docs/parity-backlog.md` in **this step's commit round** (as step 83's did, in
+`f12f814`). Nothing below re-specifies the rows: the reading stays
+the brief's median over sectors at the decoded half.
+- **1-07 `antiportal_687`, scale 3** (required max 0.36-0.42 and min 0.18-0.24; measured **0.2875 / 0.1786**,
+  ratio 1.61) and **4-07 `antiportal_2166`, scale 3** (measured **0.2679 / 0.1089**, ratio 2.46).
+- **The reading is dragged down by sectors the ring is not drawn in, and the two rings lose them for
+  DIFFERENT reasons.** On the peak frame, where the port draws exactly 0.400, 1-07 has 6 of its 26 sectors
+  within 0.04 of that and 10 at or below half of it; 4-07 has 10 of 36 within 0.04 and 14 at or below half
+  (`sectors_42.txt`). The two rings whose rows pass have 20 of 22 and 20 of 32 within 0.04. The same estimator
+  read those two rings' WHITE ring, on the committed build before this change, at 0.396 (1-07) and 0.860
+  (4-07) where an unoccluded white ring reads 0.93-1.00 (3-12 `1376`, 4-02), so the loss is older than this
+  step; in its inside band on that before frame 47 % of the pixels are at 255 in some channel (4-07: 67 %,
+  4-02: 98 %) against 1 % and 5 % on the after frames (`clip_42.txt`), so what remains is cover and not
+  clipping. WHICH BUILD COVERS IT is then the question, and it is measured: a sector the ring is drawn in must
+  MOVE when the blink moves, so the port's f378 - f360 (0.400 against 0.200) and two of the original's own
+  library frames are read in the same band (`4.2/fix1/work/cover_f1.py`, the verifier's `cover_v1.py`
+  independently).
+  - **1-07 `687` is a PORT-SIDE DRAW-ORDER DIVERGENCE.** **The rule, so the count can be reproduced**
+    (`4.2/fix1/work/cover_f1.py`, re-run on this round's own frames as `4.2/fix2/work/cover_f2.py`): the port's
+    f378 minus its f360 against the ORIGINAL's `1-07_t8.0.png` minus `1-07_h2.8.png`, read in the gate
+    estimator's own inside band ([0.90, 0.95] x the decoded half) about the node at camera (0, 0), as the RED
+    EXCESS `R - (G + B) / 2` so that a brightness change in the art cannot pass for the ring; a sector is
+    readable when both pairs put at least 6 pixels in it (**28** of the 36 here) and **dead when its step is
+    under 3 grey levels**. On that rule **15 carry no blink step in the port and 4 carry none in the original:
+    12 sectors are dead in the port alone** (10-degree sectors 130-150 and 200-280). **The count moves with the
+    rule; the finding does not.** The gate estimator's stricter readable rule (6 pixels in the OUTSIDE band
+    too) admits 26 sectors, and the discriminating test - the ORIGINAL's spread over ALL SIX of that level's
+    library frames, per channel - puts **8 of the port-dead sectors (140, 150, 210, 220, 230, 240, 250, 260) at
+    16 to 25 grey levels in RED with green and blue at exactly 0.0**, which on that level only the ring's own
+    blink does (9 under the verifier's looser ratio rule, `spread_R > 2 x max(spread_G, spread_B)`;
+    `4.2/fix2/work/sector_rgb_f2.py`). The same test on 4-07 finds **0** such sectors, which is the other row's
+    cause read the same way. Four points in the band show it without any estimator: above the centre (sector
+    270, over `single_block_plat_ent_784`), up-left (225 and 240, over `block00_ent_702`) and down-left (140,
+    over `platform_ent_7`), the port's f378, f360 and its WHITE before-frame are byte-equal - the ring
+    contributes nothing there - while the original's two frames differ by +8.9, +8.7, +9.0 and +9.6 in RED
+    with green and blue equal, the same red step its clear sectors show (+8.2 at sector 0). **The original
+    draws that ring OVER those blocks and the port draws it under them** (`4.2/verify1/crop_107.png` and
+    `ringdiff_107.png` show the same thing by eye: a complete annulus in the original, an annulus with the
+    blocks cut out of it in the port).
+  - **The port's side of it is traced.** `Sprites::Find` orders a level's pictures by `z_index` and then by
+    the scene file's order, and `buildSprites` draws each at `SlotZ(sprite.order)`
+    (`MagicPortalsLayer.cpp:2302`), so among equal `z_index` the FILE decides: of `level6.tscn`'s 27 nodes
+    the ring is the 12th and `platform_ent_7` (16th), `block00_ent_702` (20th) and
+    `single_block_plat_ent_784` (23rd) all come after it, all four at `z_index` 0 - and those three are
+    exactly the art the lost sectors lie under. (Those ordinals are the scene file's; `sprite.order` counts
+    only the nodes that carry a picture, which shifts the numbers and not the order.)
+  - **The original's side is named but NOT settled.** Ethanon renders one multimap of pieces keyed by a draw
+    hash; for a type-0 (`ET_HORIZONTAL`) entity - which `antiportal.ent`, `block00.ent`,
+    `single_block_plat.ent` and `platform.ent` all are (`type="0"`) - that hash is its z normalised over
+    the scene's height range (`ETHEntityRenderingManager.cpp:68-73`, `:119-131`,
+    `ETHSpriteEntity.cpp:611-630`), and that range is the whole level's before the frame starts
+    (`ETHScene.cpp:277-279`, `:531-532`), so two entities at the same z TIE and the tie falls to the order
+    they were inserted: the visible buckets row by row, y then x (`ETHScene.cpp:542-576`,
+    `ETHBucketManager.cpp:81-91`), and inside a bucket the load order (`ETHScene.cpp:277`, `push_back`).
+    1-07's ring and all three blocks sit at z 0 in `level6.esc`, so the original's order there IS that
+    insertion order. On the `.esc`'s own coordinates and the engine's default 256 u bucket (`Game::start`
+    calls the four-string `LoadScene`, which pushes no bucket size: `ETHScriptWrapper.generic.cpp:314`,
+    `ETHScriptWrapper.Scene.cpp:620-624`, `ETHTypes.h:58`) the rule predicts the ring over `block00_ent_702`
+    and `platform_ent_7` - both in a bucket the loop reaches before the ring's - and UNDER
+    `single_block_plat_ent_784`, which shares the ring's bucket and loads after it; the measurement has the
+    ring over all three. Bucketed instead at the size the level is DRAWN at (the same 256 buckets over
+    positions scaled to the screen, whether by the engine's `SetFixedHeight` or the game's own
+    `SGlobalScale`, `GetScreenSize().y / 480`, bytes 5592..5699) the same rule predicts all three, at 1.5 and
+    at 2.8125 alike - but no entity of `level6.esc` carries the `scalable` custom data that
+    `SGlobalScale::scaleEntities` needs to move one (bytes 6072..6337 scale the entity AND `SetPosition` it,
+    which would re-bucket it; 0 of that level's 54 entities are marked), so which coordinates the shipped
+    engine buckets is exactly the open question. **The mechanism is named, the tie-break is not settled**;
+    it belongs to the backlog item, not to a colour step, and this step changes no draw order.
+  - **It is not systematic.** On the other three gate rings the two builds agree: 4-07's 11 dead sectors are
+    a SUBSET of the original's 14 there and none is dead in the port alone, 4-02 loses none in either, and
+    3-12 `1376` loses ten in each, two sectors apart, which the original's 4 % larger ring accounts for.
+  - **4-07 `2166` is NOT that, and its cover is faithful.** Its node carries `eth_z` **-12** (`level6c.esc`
+    `<Position z="-12">`, `out/levels/level6c.tscn` `z_index = -12`), so it is behind that level's z 0
+    blocks in the original by its own depth and behind them in the port by its own slot: no tie, and 0 of its
+    36 sectors is dead in the port alone.
+- **The census's low rings are not all explained either.** Its 5 (or, under the wider admission rule, 11) low
+  readings are attributed to the estimator and to art in front of the rings, and on 1-07 that art is art the
+  ORIGINAL draws the ring in front of: until the backlog item's sweep runs, how many of those low rings are
+  the same draw-order divergence is NOT known, and the attribution is held open rather than claimed.
+- **What the port draws is not low.** On the same frames the upper quartile over sectors reads 0.395 / 0.218
+  (1-07) and 0.396 / 0.192 (4-07), and each ring's whole 25-frame series lies within 0.015 and 0.009 of the
+  decoded triangle up to one gain and one offset. The exact colour is pinned where it cannot be argued with:
+  `test_mp_layer` reads the quad's own `albedoColor` on 80 consecutive ticks of 1-12 and requires
+  `ColourAt(LevelAgeMs())` in the red with green and blue exactly 0.
+- **What cover does NOT explain on 4-07, and is left open.** The brief's census reads `2166` at max **0.377**
+  with the same estimator on the ORIGINAL's own frames, against this port's 0.268: the same art in front of
+  the same ring. So the gain and the offset this estimator picks up are scene-dependent, and the port's
+  background around that ring is not yet the original's pixel for pixel (chapter 4's lighting, the systems it
+  draws, and the 1x ring against the original's tier are all still open steps). That part of the gap is
+  recorded, not explained.
+- **`c_B` +0.0349 (3-12 `1376`) and +0.0392 (`1533`), and 4-07's `c_G` -0.0436 at its extreme with its
+  `c_B` -0.0349** against a bound of 0.03 read on magnitude: 1.1, 2.1 and 3.1 grey levels outside it (4-07
+  at its extreme, 1.1 at its median; one grey level is 0.00436 in `c`), leaving **2 of the 4 rings this gate
+  names inside it on both channels (1-07 and 4-02) and 3 of the 6 rings read** (3-12 `1375` with those two).
+  4-07's row is quoted min / median / max (-0.0436 / -0.0349 / -0.0349) because its extreme and its median
+  differ by 2 grey levels, and it is NEGATIVE, so a bound read as written on the signed value would pass it;
+  the magnitude reading is recorded. None of the three moves at all across a period (0.0000, where over the
+  six rings the green moves at most 0.0087 and the blue 0.0000 against a red that moves 0.074-0.183), so
+  they are the background's own step at that radius and not the ring, and they are recorded here rather
+  than argued away.
+- **The brief's fallback ratio carries NO VERDICT on either failing row**, and its readings are not gate
+  measurements. systems_3_4 4b(5) offers it "if the port's max reads about 10 % low ON A RING WHOSE WHITE
+  RING READ 0.9 today": 1-07's white ring read **0.3964** and 4-07's **0.8604**, not 0.9, and the two maxima
+  are **28 % and 33 % low, not about 10 %**. It presumes a pure-gain shortfall and these two are a draw
+  order and an offset. Its 1.86 and 1.82 on the rows that pass, and its 1.61 and 2.46 on the rows that do
+  not, are recorded as readings only; the two `c_R` rows stand alone as the deviations.
+- **PORT-WIDE, recorded here and owed a decision: the original's script clock is a FLOOR of each frame's
+  milliseconds and this port's is not.** At a steady 60 Hz the original advances 16 ms a tick where the port
+  advances 1000/60, so the blink and the turn run **4.17 % fast** here: a 600 ms period against 625 ms of
+  wall clock, opposite phase after 450 ticks (7.5 s). The decode, the shipped library's own evidence and
+  why a colour step does not emulate it are in WHAT THIS STEP DOES NOT DO below. It is not a section 7 4.2
+  gate row; it lands as a port-wide open item in the remake's `docs/parity-backlog.md` in this step's commit
+  round, for the owner's call on which frame rate the original is to be matched at, and one re-capture of
+  the committed baselines after it.
+
+**WHAT THIS STEP DOES NOT DO.**
+- **The start phase is INFERRED.** `blinkColor` ins 58's immediate 1 is read as `== 1`, and no still shows a
+  phase. 00_order 4.2(6) does not gate it.
+- **Ethanon runs a static entity's callback only while its bucket is on screen** (`antiportal.ent` is
+  `static=1`), so the original starts a ring's blink and turn when it is first seen. The port runs every ring
+  from the level's first tick, as it runs `motions.json`'s placed pictures: a recorded divergence.
+- **The port splits a tick into ageing and stepping.** The tick a pause opens on ages the level and draws
+  nothing; the tick that resumes steps it. So across a pause the blink takes that tick up and the turn skips it:
+  a sixth of a degree and a hundredth of a leg, once per pause. The original stops one clock with one factor.
+  Pinned in `test_mp_layer` rather than hidden.
+- **It does not move a ring's draw order.** 1-07's row fails on order and not on colour (above); correcting
+  it means settling what the original orders two type-0 entities at z 0 by, which moves every level's
+  pictures and cannot be a colour step's change. It lands as an open item in the remake's
+  `docs/parity-backlog.md` in this step's commit round, with a sweep for other levels where the port hides a
+  ring the original shows; the
+  row is to be re-read AS WRITTEN once the order is settled, not re-specified to a cover-immune reading.
+- **It does not slow the port's clock to the original's, and the two run 4.17 % apart.** The original's
+  script clock is a `uint` of FLOORED frame milliseconds (decoded above), so at a steady 60 Hz it advances
+  16 ms a tick where this port advances 1000/60: **the blink and the turn both run 4.17 % fast** here (a
+  600 ms period against the original's 625 ms of wall clock at that frame rate; read the other way round, the
+  original runs 4.0 % slow of wall clock), and the two reach opposite phase after **450 ticks, 7.5 s**. It is
+  not corrected here for a reason of SCOPE and not of taste: `STimeManager::getLastFrameElapsedTime` is the ONE
+  clock every scripted motion reads - this blink, `unitsPerSecond` and so every `Motion` the port steps, and
+  the timer dial's `elapsedTime` with them - so flooring it moves every committed step's captures and is a
+  port-wide change with its own step and the owner's own call. It is also frame-rate dependent in the original
+  (`floor(33.3)` loses 1 %, `floor(16.7)` loses 4 %), which is a second reason to record it rather than bake
+  one device's rate into a `--fixed-step` port. **A port-wide open item in the remake's
+  `docs/parity-backlog.md`**, landed in this step's commit round, and the answer to step 80's
+  `getLastFrameElapsedTime` note.
+- The zone's box (`syncDrawables`, shown only with boxes) is not coloured: a box is not a picture.

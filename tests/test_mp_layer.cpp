@@ -1011,6 +1011,121 @@ void AnAntiportalIsDrawnAtHalfItsNodesScale() {
     layer.OnDetach(registry);
 }
 
+// A RING BLINKS RED AND TURNS (art.json antiportal). ETHCallback_antiportal runs
+// every frame: blinkColor(this, (0.2, 0, 0), (0.4, 0, 0), 300) writes the entity's
+// colour, and AddToAngle(unitsPerSecond(10)) turns its picture. 1-12 (level11)
+// places antiportal_762 and antiportal_574 under anti_portal_agent_ent_599, whose
+// callback is another one: it neither blinks nor turns.
+void AnAntiportalBlinksRedAndTurnsAndAPauseHoldsBoth() {
+    namespace Art = MagicPortals::Art;
+    Art::Rules art;
+    std::string artError;
+    CHECK_MSG(Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", art, artError), artError);
+    entt::registry registry;
+    publishViewport(registry);
+    MagicPortalsLayer layer(TestPaths(), "level11");
+    layer.OnAttach(registry);
+    CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+    if (layer.SimLevel() == nullptr) return;
+    CloseTheLevelStartPopup(layer, registry);
+
+    // The rings, by their picture and where their nodes stand, and the agent beside
+    // one of them, by its own.
+    const auto quadAt = [&registry](const char* image, glm::dvec2 atPx) {
+        entt::entity found = entt::null;
+        for (auto [entity, tag, material, transform] :
+             registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
+            if (tag.tag != "Magic Portals Sprite") continue;
+            if (material.albedoTexturePath.find(image) == std::string::npos) continue;
+            if (glm::distance(MagicPortals::Units::ToPixels(transform.position), atPx) > 0.5) continue;
+            found = entity;
+        }
+        return found;
+    };
+    const auto colourOf = [&registry](entt::entity quad) {
+        return registry.get<MaterialComponent>(quad).albedoColor;
+    };
+    const auto rotationOf = [&registry](entt::entity quad) {
+        return registry.get<TransformComponent>(quad).rotation.z;
+    };
+    tickWith(layer, registry, kRest, {}, {});
+    const entt::entity ring762 = quadAt("white_ring.png", {180.0, 140.0});
+    const entt::entity ring574 = quadAt("white_ring.png", {464.0, 184.0});
+    const entt::entity agent = quadAt("anti_portal_agent.png", {464.0, 184.0});
+    CHECK_MSG(ring762 != entt::null && ring574 != entt::null && agent != entt::null,
+              "1-12 draws two rings and an agent");
+    if (ring762 == entt::null || ring574 == entt::null || agent == entt::null) return;
+
+    // Over two whole periods: the colour is the blink's at the level's age, red
+    // alone, at the alpha the level gave it; both rings share one blink; the agent
+    // is left alone; and the turn is 10 degrees a second, counter-clockwise, which
+    // the engine's +z is (the node's own angle is 0 on both).
+    double lows = 0.0, highs = 0.0;
+    int wrong = 0, turnWrong = 0, agentWrong = 0, sharedWrong = 0;
+    // The turn is counted in the ticks that STEP the level, and the level's age in
+    // the ticks that are not stopped; a tick that hands a popup or a pause back to
+    // the level steps it without ageing it, so the two are compared a tick at a time.
+    const float turnATick = static_cast<float>(art.antiportal.spinDegPerS * MagicPortalsLayer::kTick *
+                                               3.14159265358979323846 / 180.0);
+    float lastTurn = rotationOf(ring762);
+    for (int tick = 0; tick < 80; ++tick) {
+        tickWith(layer, registry, kRest, {}, {});
+        const glm::dvec3 want = art.antiportal.ColourAt(layer.LevelAgeMs());
+        const glm::vec4 got = colourOf(ring762);
+        if (std::fabs(got.r - static_cast<float>(want.x)) > 1e-6f || got.g != 0.0f || got.b != 0.0f ||
+            got.a != 1.0f) {
+            ++wrong;
+        }
+        if (colourOf(ring574) != got) ++sharedWrong;
+        if (colourOf(agent) != glm::vec4(1.0f)) ++agentWrong;
+        // 10 degrees a second at the port's 1/60 s tick, counter-clockwise (the node's
+        // own angle is 0 on both), and the same angle for every ring the level placed.
+        if (std::fabs(rotationOf(ring762) - (lastTurn + turnATick)) > 1e-5f ||
+            rotationOf(ring574) != rotationOf(ring762)) {
+            ++turnWrong;
+        }
+        lastTurn = rotationOf(ring762);
+        lows = (lows == 0.0 || want.x < lows) ? want.x : lows;
+        highs = std::max(highs, want.x);
+    }
+    CHECK_MSG(wrong == 0, "every tick's ring is the blink's colour, red alone: " + std::to_string(wrong) + " wrong");
+    CHECK_MSG(sharedWrong == 0, "both rings blink together: " + std::to_string(sharedWrong) + " ticks apart");
+    CHECK_MSG(agentWrong == 0, "anti_portal_agent is another callback's and stays white");
+    CHECK_MSG(turnWrong == 0, "10 degrees a second, both rings: " + std::to_string(turnWrong) + " ticks wrong");
+    CHECK_MSG(std::fabs(lows - 0.2) < 1e-6 && std::fabs(highs - 0.4) < 1e-6,
+              "over 80 ticks it reaches both ends: " + std::to_string(lows) + " to " + std::to_string(highs));
+
+    // A PAUSE HOLDS BOTH (the original's m_factor 0): the level's age stands still,
+    // so the blink does, and no tick steps the turn.
+    const glm::vec4 heldColour = colourOf(ring762);
+    const float heldTurn = rotationOf(ring762);
+    const double heldAge = layer.LevelAgeMs();
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK_MSG(layer.Paused(), "Escape pauses 1-12");
+    for (int tick = 0; tick < 40; ++tick) tickWith(layer, registry, kRest, {}, {});
+    CHECK_MSG(layer.LevelAgeMs() <= heldAge + MagicPortalsLayer::kTick * 1000.0 + 1e-9,
+              "the level's age stands still under the pause: " + std::to_string(layer.LevelAgeMs() - heldAge) + " ms");
+    CHECK_MSG(colourOf(ring762) == heldColour && rotationOf(ring762) == heldTurn,
+              "and so do the ring's colour and its angle");
+    // And it takes up where it left off, rather than jumping the pause's length.
+    press(layer, registry, MagicPortalsLayer::kBack);
+    CHECK_MSG(!layer.Paused(), "and Escape again resumes it");
+    tickWith(layer, registry, kRest, {}, {});
+    const glm::vec4 after = colourOf(ring762);
+    const glm::dvec3 want = art.antiportal.ColourAt(layer.LevelAgeMs());
+    CHECK_MSG(std::fabs(after.r - static_cast<float>(want.x)) < 1e-6f, "the blink goes on from where it stood");
+    // Two ticks' worth, not forty: the tick the pause opened on aged the level before
+    // it stopped and drew nothing, so the blink takes that tick up on the tick that
+    // resumes, and this one is the next. (The original stops one clock with one
+    // factor; the port splits a tick into ageing and stepping, and the turn, which is
+    // stepped, skips that tick instead. A sixth of a degree and a hundredth of the
+    // blink, once per pause.)
+    const float perTick = static_cast<float>(0.2 * MagicPortalsLayer::kTick * 1000.0 / art.antiportal.strideMs);
+    CHECK_MSG(std::fabs(after.r - heldColour.r) <= 2.5f * perTick,
+              "two ticks' worth on, not 40: " + std::to_string(after.r - heldColour.r));
+    CHECK_MSG(rotationOf(ring762) > heldTurn, "and the turn goes on too");
+}
+
 void AnAntiportalSpelledWithEntIsDrawnTheSame() {
     // The manager collects both spellings, GetEntityArray("antiportal") and
     // ("antiportal.ent"). 3-29 (level28b) places antiportal_ent_2204 at (372, 160),
@@ -6229,6 +6344,7 @@ void runTests() {
     AStaticPortalGlows();
     AnAntiportalIsDrawnAtHalfItsNodesScale();
     AnAntiportalSpelledWithEntIsDrawnTheSame();
+    AnAntiportalBlinksRedAndTurnsAndAPauseHoldsBoth();
     WithoutTheArtTheLevelIsBoxes();
     APortalAndAShotAreTheOriginals();
     WithoutTheOriginalThePortalIsABox();

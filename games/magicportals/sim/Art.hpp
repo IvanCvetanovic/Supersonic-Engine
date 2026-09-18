@@ -178,6 +178,25 @@ struct StaticPortal {
     glm::dvec3 TintFor(const std::string& colour) const { return colour == red ? tintRed : tintOtherwise; }
 };
 
+// The ring a level places round a no-portal field, as its own callback redraws it
+// every frame (art.json's antiportal; ETHCallback_antiportal). The callback is
+// named for the entity less its .ent, so both spellings of a placement run it.
+// It blinks the picture between two colours - a triangle wave, each leg a stride
+// long - and turns it spinDegPerS degrees a second. The picture's size is not
+// this callback's: the manager scales it once (placement.json antiportal.manager).
+struct Antiportal {
+    std::string entity;    // the entity name, without .ent, whose callback it is
+    glm::dvec3 from{1.0};  // blinkColor's colorA, at the start of every leg
+    glm::dvec3 to{1.0};    // and its colorB, at the end of one
+    double strideMs = 0.0; // a leg: the period is two of them
+    double spinDegPerS = 0.0; // AddToAngle(unitsPerSecond(this)), counter-clockwise
+
+    // blinkColor's colour `elapsedMs` into the blink: the leg count says which way
+    // this leg runs, and the remainder how far along it is. SetColor writes the rgb
+    // alone (ETHEntity.cpp:493-498), so the alpha is the caller's to keep.
+    glm::dvec3 ColourAt(double elapsedMs) const;
+};
+
 // The dial the original adds behind a timed crystal, as timer.ent draws it and
 // its script runs it (art.json's timer; addTimerToCrystal and ETHCallback_timer).
 // It is added `zOffset` behind the crystal at alpha `alpha`, and every frame
@@ -224,6 +243,8 @@ struct Rules {
     Spike spike;         // beholder_spike.ent, its spikes
     // portal_static: placed by the levels, redrawn by its script
     StaticPortal staticPortal;
+    // antiportal: placed by the levels, blinked and turned by its script
+    Antiportal antiportal;
     Timer timer;         // timer.ent, the dial behind a timed crystal
 };
 

@@ -539,6 +539,7 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry, bool keepLightmaps
     m_sprites.clear();
     m_motions.clear();
     m_placed.clear();
+    m_antiportalTurn = Motion::Turn{};
     for (TimerDial& dial : m_timers) destroy(dial.quad);
     m_timers.clear();
     // The walk arrows and the corner buttons go with the level they were built
@@ -2288,6 +2289,10 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     // afresh for this level, from kMotionSeed and its name.
     m_motions.clear();
     m_placed.clear();
+    // And the rings' turn, from nothing, at the rate their callback adds
+    // (art.json antiportal).
+    m_antiportalTurn = Motion::Turn{};
+    m_antiportalTurn.degPerS = m_artRules.antiportal.spinDegPerS;
     Motion::Phases phases(Motion::LevelSeed(
         kMotionSeed, m_current >= 0 ? m_chapters.levels[static_cast<std::size_t>(m_current)].name : std::string()));
     for (Sprites::Sprite& sprite : sprites) {
@@ -2356,6 +2361,15 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             drawn.zone >= 0 && node != nullptr && BareEntityName(*node) == m_level.portals.rules.antiportalEntity) {
             drawn.scale = m_level.portals.rules.antiportalManagerScale *
                           m_level.portals.zones[static_cast<std::size_t>(drawn.zone)].scale;
+        }
+        // AND IT BLINKS AND TURNS (art.json antiportal): ETHCallback_antiportal is
+        // named for the entity less its .ent, so it runs for every placement of it,
+        // either spelling, whatever the port made of the node. The size above is the
+        // manager's and this is the callback's: two facts about one entity, each
+        // where the file it was decoded from keeps it.
+        if (const Tscn::Node* node = m_data.scene.FindNode(sprite.node);
+            node != nullptr && BareEntityName(*node) == m_artRules.antiportal.entity) {
+            drawn.antiportal = true;
         }
         // ETHCallback_crystal and ETHCallback_key each call linearMotion with their
         // row's arguments; the callback is named by the entity less its .ent, so both
@@ -2585,6 +2599,16 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
                 ownerAngleDeg = static_cast<double>(rotation) * 180.0 / 3.14159265358979323846;
             }
         }
+        // WHAT ITS OWN CALLBACK HAS TURNED IT BY (art.json antiportal): a ring turns
+        // about its own point, over whatever angle the level gave it,
+        // counter-clockwise as Ethanon's angle and the engine's +z both turn. Its
+        // picture is symmetric, so this moves almost no pixel; it is still what the
+        // original does, and a sheet or a tier that is not symmetric would show it.
+        if (drawn.antiportal) {
+            const double turnedRad = m_antiportalTurn.turnedDeg * 3.14159265358979323846 / 180.0;
+            rotation = Units::ToWorldRotation(sprite.rotation - turnedRad);
+            ownerAngleDeg += m_antiportalTurn.turnedDeg;
+        }
         if (gone) {
             registry.destroy(drawn.quad);
             drawn.quad = entt::null;
@@ -2678,6 +2702,14 @@ void MagicPortalsLayer::advanceMotions(float fixedDelta) {
         if (script.moves) Motion::Advance(m_motionRules, script.motion, frameMs);
         Motion::Advance(m_motionRules, script.turn, frameMs);
     }
+    // And ETHCallback_antiportal's AddToAngle, once for every ring the level placed:
+    // they are turned by the same step on the same frames, so the port keeps one
+    // angle for them (m_antiportalTurn). Its step is unitsPerSecond's, capped at
+    // motions.json's frame_cap_ms, where the blink's clock (the level's age) is not:
+    // getLastFrameElapsedTime is not capped at 200 - only at the loop's own 1000 ms
+    // (Min(1000.0f, ComputeElapsedTimeF(video)), android/main.cpp:180-181; art.json
+    // antiportal).
+    Motion::Advance(m_motionRules, m_antiportalTurn, frameMs);
 }
 
 std::vector<MagicPortalsLayer::PlacedReport> MagicPortalsLayer::PlacedReports() const {
@@ -3158,8 +3190,16 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
         receiver.normal = drawn.normal;
         receiver.z = drawn.lookZ;
         receiver.runtimeBake = runtimeBake;
-        tint(registry, drawn.quad, drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade), drawn.emissive,
-             runtimeBake ? noLightmap : drawn.lightmap, receiver);
+        glm::vec4 colour = drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade);
+        // A RING'S BLINK (art.json antiportal): its callback writes the entity's rgb
+        // every frame and keeps its alpha (SetColor, ETHEntity.cpp:493-498), over
+        // whatever colour the level gave it - no placement gives one. Its clock is
+        // the level's age, the game time since its first tick, which a pause stands
+        // still as the original's m_factor 0 stands blinkElapsedTime still.
+        if (drawn.antiportal) {
+            colour = glm::vec4(glm::vec3(m_artRules.antiportal.ColourAt(m_levelAgeMs)), colour.a);
+        }
+        tint(registry, drawn.quad, colour, drawn.emissive, runtimeBake ? noLightmap : drawn.lightmap, receiver);
     }
     // What no level places, with its .ent's emissive (art.json, launchers.json).
     // None has a lightmap: a bake belongs to an entity the level file placed.

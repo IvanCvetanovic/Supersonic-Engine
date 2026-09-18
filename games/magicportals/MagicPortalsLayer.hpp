@@ -642,6 +642,7 @@ private:
         int sky{-1};          // in m_sky.skies: pinned to the camera, not where the level put it
         bool satellite{false}; // m_sky's satellite, pinned the same way
         int motion{-1};       // in m_motions: a crystal or key its script bobs
+        bool antiportal{false}; // ETHCallback_antiportal blinks and turns it (art.json)
         int placed{-1};       // in m_placed: a picture its own callback sways, fades or turns
     };
     // A placed picture's callback (motions.json `placed`): its row, its
@@ -848,6 +849,11 @@ private:
     // One per drawn picture a `placed` row names (DrawnSprite::placed). Picture-side
     // only, like m_motions; its start angles are constants and draw from no stream.
     std::vector<PlacedScript> m_placed;
+    // What ETHCallback_antiportal's AddToAngle has turned the level's rings by. One
+    // for all of them: the original turns each ring by its own callback, and they
+    // run on the same frames with the same step, so they hold one angle between
+    // them. Reset with the level, like the level's age, which the blink reads.
+    Motion::Turn m_antiportalTurn;
     // The start angles' stream, re-seeded for every level it builds with this mixed
     // with the level's name (Motion::LevelSeed), so a level's phases are its own,
     // do not depend on what was played before it, and no other generator's draws

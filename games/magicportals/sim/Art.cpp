@@ -180,6 +180,24 @@ glm::dvec2 Pulse::ScaleAt(double elapsedMs) const {
     return fromScale + (toScale - fromScale) * eased;
 }
 
+glm::dvec3 Antiportal::ColourAt(double elapsedMs) const {
+    if (!(strideMs > 0.0)) return from;
+    // blinkColor ins 55-75, in the order it runs them: which leg this is
+    // (elapsedTime / stride), which way it runs (that count odd), and how far along
+    // it is (the remainder over the stride). The two clocks do NOT run at one rate: the
+    // original sums a FLOOR of each frame's milliseconds as a uint (ETHEngine.cpp:147
+    // truncates the loop's float, and libApplication.so's Update(float) calls
+    // __aeabi_f2uiz before SetLastFrameElapsedTime), so at 60 Hz it gains 16 ms a frame
+    // where this port's tick gains 1000/60 - the port runs 4.17 % fast. It is the clock
+    // every scripted motion reads, so flooring it is a port-wide change and not this
+    // function's: see art.json antiportal _source and the record's step 84.
+    const double ms = std::max(0.0, elapsedMs);
+    const double legs = std::floor(ms / strideMs);
+    double bias = (ms - legs * strideMs) / strideMs;
+    if (std::fmod(legs, 2.0) == 1.0) bias = 1.0 - bias;
+    return from + (to - from) * bias;
+}
+
 int Timer::FrameAt(double elapsedMs, double timeMs) const {
     if (!(timeMs > 0.0)) return frames - 1;
     // uTOf, DIVf, MULIf 8f and fTOi (ETHCallback_timer ins 233-239), then
@@ -409,6 +427,26 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     statics.entity = portalStatic["entity"].AsString("");
     statics.scale = portalStatic["scale"].AsNumber();
     statics.red = portalStatic["red"].AsString("");
+
+    // The ring round a no-portal field as its callback blinks and turns it. None of
+    // it has a default either: without the blink the port draws the white ring the
+    // footage refuses, and a spin of 0 would be a picture the script turns and the
+    // port does not.
+    const Json::Value& anti = root["antiportal"];
+    Antiportal& antiportal = read.antiportal;
+    const Json::Value& blink = anti["blink"];
+    if (!anti.IsObject() || !anti["entity"].IsString() || anti["entity"].AsString("").empty() ||
+        anti["entity"].AsString("").find('.') != std::string::npos || !blink.IsObject() ||
+        !Emissive(blink["from"], antiportal.from) || !Emissive(blink["to"], antiportal.to) ||
+        !Finite(blink["stride_ms"]) || !(blink["stride_ms"].AsNumber() > 0.0) ||
+        !Finite(anti["spin_deg_per_s"])) {
+        error = path + ": antiportal needs entity, a name without a dot, and blink with from and to, each three "
+                       "numbers none below 0, a stride_ms above 0 and a finite spin_deg_per_s";
+        return false;
+    }
+    antiportal.entity = anti["entity"].AsString("");
+    antiportal.strideMs = blink["stride_ms"].AsNumber();
+    antiportal.spinDegPerS = anti["spin_deg_per_s"].AsNumber();
 
     // The dial behind a timed crystal: timer.ent's picture, whose cell is chosen
     // rather than played, and the numbers its script runs it by. None has a

@@ -509,6 +509,82 @@ void AStaticPortalWithoutItsScriptIsRefused() {
     refused("\"red\": \"red\"", "\"red\": \"\"", "no red");
 }
 
+// The ring round a no-portal field as ETHCallback_antiportal redraws it (art.json
+// antiportal): the two colours, the leg and the turn, and the triangle blinkColor
+// makes of them. The layer's use of it is test_mp_layer's.
+void TheAntiportalBlinksRedAndTurns() {
+    Art::Rules rules;
+    std::string error;
+    const bool ok = Art::LoadRules(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", rules, error);
+    CHECK_MSG(ok, error);
+    const Art::Antiportal& anti = rules.antiportal;
+    CHECK_MSG(anti.entity == "antiportal", "the callback is named for the entity: " + anti.entity);
+    CHECK_MSG(anti.from == glm::dvec3(0.2, 0.0, 0.0) && anti.to == glm::dvec3(0.4, 0.0, 0.0),
+              "_portalColorA (0.2, 0, 0) and _portalColorB (0.4, 0, 0): red, and red alone");
+    CHECK_MSG(anti.strideMs == 300.0 && anti.spinDegPerS == 10.0, "blinkColor(.., 300) and 10 degrees a second");
+    // AntiportalColour: 0.2 at 0, 0.4 at a stride, 0.2 at two - a triangle whose
+    // period is 600 ms, with green and blue 0 the whole way.
+    const auto red = [&anti](double ms) { return anti.ColourAt(ms); };
+    const auto near = [](const glm::dvec3& got, double r) {
+        return std::fabs(got.x - r) < 1e-9 && got.y == 0.0 && got.z == 0.0;
+    };
+    CHECK_MSG(near(red(0.0), 0.2), "0 ms: 0.2");
+    CHECK_MSG(near(red(150.0), 0.3), "150 ms: half way up");
+    CHECK_MSG(near(red(300.0), 0.4), "300 ms: the top");
+    CHECK_MSG(near(red(450.0), 0.3), "450 ms: half way down");
+    CHECK_MSG(near(red(600.0), 0.2), "600 ms: back, one period on");
+    CHECK_MSG(near(red(900.0), 0.4) && near(red(1200.0), 0.2), "and on: 900 the top, 1200 the bottom");
+    CHECK_MSG(near(red(75.0), 0.25) && near(red(525.0), 0.25), "a quarter and three quarters of the way round");
+    // Under a pause the port hands it the same millisecond twice, which must draw
+    // the same colour, and a negative one never happens but must not read past 0.
+    CHECK_MSG(red(123.25) == red(123.25) && near(red(-5.0), 0.2), "steady, and nothing before the level starts");
+    // The whole period, against the decode read straight: bias = (ms % 300) / 300,
+    // inverted on an odd leg.
+    for (int ms = 0; ms <= 1200; ++ms) {
+        const int leg = ms / 300;
+        double bias = static_cast<double>(ms % 300) / 300.0;
+        if (leg % 2 == 1) bias = 1.0 - bias;
+        const glm::dvec3 got = red(static_cast<double>(ms));
+        if (std::fabs(got.x - (0.2 + 0.2 * bias)) > 1e-9 || got.y != 0.0 || got.z != 0.0) {
+            CHECK_MSG(false, "ms " + std::to_string(ms) + ": " + std::to_string(got.x));
+            break;
+        }
+    }
+    CHECK(true);
+}
+
+// Without the blink the port draws the white ring the footage refuses, and without
+// the turn a ring its script turns would stand still.
+void AnAntiportalWithoutItsBlinkIsRefused() {
+    std::ifstream file(std::string(MAGICPORTALS_PORT_DATA_DIR) + "/art.json", std::ios::binary);
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string real = buffer.str();
+    CHECK(real.find("\"antiportal\"") != std::string::npos);
+    const auto refused = [&real](const std::string& from, const std::string& to, const std::string& name) {
+        std::string text = real;
+        const std::size_t at = text.find(from);
+        CHECK_MSG(at != std::string::npos, from);
+        if (at == std::string::npos) return;
+        text.replace(at, from.size(), to);
+        const std::filesystem::path path = Scratch() / ("art-antiportal-" + name + ".json");
+        Write(path, std::vector<unsigned char>(text.begin(), text.end()));
+        Art::Rules rules;
+        std::string error;
+        const bool ok = Art::LoadRules(path.string(), rules, error);
+        CHECK_MSG(!ok, "refused: " + name);
+        CHECK_MSG(error.find("antiportal needs") != std::string::npos, name + ": " + error);
+    };
+    refused("\"antiportal\": {", "\"antiportal_gone\": {", "absent");
+    refused("\"entity\": \"antiportal\",", "\"entity\": \"\",", "no entity");
+    refused("\"entity\": \"antiportal\",", "\"entity\": \"antiportal.ent\",", "a name with its extension");
+    refused("\"from\": [0.2, 0.0, 0.0]", "\"from\": [0.2, 0.0]", "two numbers");
+    refused("\"to\": [0.4, 0.0, 0.0]", "\"to\": [0.4, -0.1, 0.0]", "below zero");
+    refused("\"stride_ms\": 300.0", "\"stride_ms\": 0", "a leg of 0");
+    refused("\"blink\": {", "\"blink_gone\": {", "no blink");
+    refused("\"spin_deg_per_s\": 10.0", "\"spin_deg_per_s\": \"10\"", "a turn that is not a number");
+}
+
 // The dial behind a timed crystal (art.json timer): timer.ent's facts, pinned. The
 // clock it runs by is test_mp_timed's.
 void TheTimerIsTimerEnt() {
@@ -1649,6 +1725,8 @@ int main() {
     WhatTheReaderDoesNotDrawIsNamed();
     ThePortalAndTheShotAreTheirEnts();
     AStaticPortalWithoutItsScriptIsRefused();
+    TheAntiportalBlinksRedAndTurns();
+    AnAntiportalWithoutItsBlinkIsRefused();
     TheTimerIsTimerEnt();
     ATimerWithoutItsClockIsRefused();
     APulseGoesThereAndBack();
