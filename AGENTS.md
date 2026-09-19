@@ -53,6 +53,18 @@ cmake --build build --parallel
 > building `--config Debug` produces a Debug binary. CMake prints a note about
 > this at configure time.
 
+### As a subproject of a game
+
+A game builds the engine with `add_subdirectory(engine)` and gets
+`SupersonicCore`, `Supersonic::TestHarness` and `supersonic_add_test` - no
+editor, plugin, engine suites or games, which default ON only when the engine
+is the top-level project. The contract and a minimal `CMakeLists.txt` are in
+[README.md](README.md#building-a-game-against-the-engine). Two things to keep
+true when changing the engine's CMake: nothing a game needs may live only in a
+directory-scoped setting (a subproject's parent inherits none of them - carry
+it on `SupersonicCore`'s interface instead), and nothing may be added that a
+subproject build would define twice.
+
 ### Test
 
 ```bash

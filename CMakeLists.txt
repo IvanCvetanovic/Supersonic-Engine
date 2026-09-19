@@ -5,6 +5,31 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Whether the engine is being built for itself, or as part of a game's build
+# that added this directory with add_subdirectory(). The editor, the script
+# plugin, the engine's own suites and the games under games/ are the engine's
+# business and default ON only in the first case; a game gets SupersonicCore,
+# the test harness (cmake/SupersonicTesting.cmake) and nothing it did not ask
+# for.
+#
+# PROJECT_IS_TOP_LEVEL is set by project() on CMake 3.21 and later. The minimum
+# stays 3.20 rather than rising to claim it: raising it would also switch on
+# 3.21's policies across the whole tree - CMP0126 changes what set(CACHE) does
+# to a variable of the same name - in a change meant to alter nothing. An older
+# CMake gets the comparison the variable stands for.
+if (DEFINED PROJECT_IS_TOP_LEVEL)
+    set(SUPERSONIC_IS_TOP_LEVEL ${PROJECT_IS_TOP_LEVEL})
+else()
+    string(COMPARE EQUAL "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}" SUPERSONIC_IS_TOP_LEVEL)
+endif()
+
+# The engine checkout's root, for a project building the engine as a
+# subproject that has to name something in it - the working directory of a
+# suite that reads the engine's assets, say. A cache entry because a
+# directory's variables do not reach its parent.
+set(SUPERSONIC_ENGINE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL
+    "Root of the Supersonic Engine checkout being built")
+
 # Default to Debug for single-config generators (Ninja/Makefiles). Multi-config
 # generators (Visual Studio, Xcode) ignore CMAKE_BUILD_TYPE and use --config.
 get_property(_isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -19,22 +44,26 @@ endif()
 # Target Platform Detection
 if (ANDROID)
     message(STATUS "Targeting Android NDK platform (Vulkan NativeActivity)")
-    add_compile_definitions(SUPERSONIC_PLATFORM_ANDROID=1)
+    set(SUPERSONIC_PLATFORM_DEFINITION SUPERSONIC_PLATFORM_ANDROID=1)
 elseif (APPLE)
     if (IOS)
         message(STATUS "Targeting iOS platform (MoltenVK Metal)")
-        add_compile_definitions(SUPERSONIC_PLATFORM_IOS=1)
+        set(SUPERSONIC_PLATFORM_DEFINITION SUPERSONIC_PLATFORM_IOS=1)
     else()
         message(STATUS "Targeting macOS platform (MoltenVK Metal)")
-        add_compile_definitions(SUPERSONIC_PLATFORM_MACOS=1)
+        set(SUPERSONIC_PLATFORM_DEFINITION SUPERSONIC_PLATFORM_MACOS=1)
     endif()
 elseif (WIN32)
     message(STATUS "Targeting Windows platform (Win32 Vulkan)")
-    add_compile_definitions(SUPERSONIC_PLATFORM_WINDOWS=1)
+    set(SUPERSONIC_PLATFORM_DEFINITION SUPERSONIC_PLATFORM_WINDOWS=1)
 else()
     message(STATUS "Targeting Linux platform (X11/Wayland Vulkan)")
-    add_compile_definitions(SUPERSONIC_PLATFORM_LINUX=1)
+    set(SUPERSONIC_PLATFORM_DEFINITION SUPERSONIC_PLATFORM_LINUX=1)
 endif()
+# Directory-scoped, so it reaches every target in this tree, the vendored ones
+# included. SupersonicCore also carries it PUBLIC (below), which is what takes
+# it to a game that builds the engine as a subproject.
+add_compile_definitions(${SUPERSONIC_PLATFORM_DEFINITION})
 
 # ---------------------------------------------------------------------------
 # Vulkan
@@ -207,8 +236,14 @@ list(REMOVE_ITEM ENGINE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 # dropped from a target that never names it and the script silently vanishes -
 # switch to OBJECT if that day comes.
 add_library(SupersonicCore STATIC ${ENGINE_SOURCES} ${IMGUI_SOURCES})
-add_executable(SupersonicEngine ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
-target_link_libraries(SupersonicEngine PRIVATE SupersonicCore)
+
+# The editor is the engine's own application, not something a game linking the
+# library needs - see SUPERSONIC_IS_TOP_LEVEL above.
+option(SUPERSONIC_BUILD_EDITOR "Build the editor executable, SupersonicEngine" ${SUPERSONIC_IS_TOP_LEVEL})
+if (SUPERSONIC_BUILD_EDITOR)
+    add_executable(SupersonicEngine ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
+    target_link_libraries(SupersonicEngine PRIVATE SupersonicCore)
+endif()
 
 # Keep the IDE tree mirroring the source tree instead of one flat blob.
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src PREFIX "src" FILES ${ENGINE_SOURCES})
@@ -250,6 +285,15 @@ target_compile_definitions(SupersonicCore PUBLIC
     GLFW_INCLUDE_NONE
 )
 
+# What the directory settings at the top give every target in this tree, given
+# to the library's consumers as well, because a game that builds the engine as
+# a subproject is not in this tree and inherits neither. The engine's headers
+# are C++20, so a consumer compiling them as anything older fails on the first
+# one; the platform definition keeps its compile lines the ones this tree's own
+# games have.
+target_compile_features(SupersonicCore PUBLIC cxx_std_20)
+target_compile_definitions(SupersonicCore PUBLIC ${SUPERSONIC_PLATFORM_DEFINITION})
+
 # Vendored code we do not maintain: ImGui/ImGuizmo, and the VMA implementation,
 # which is header-only and lives in its own TU precisely so it can be silenced
 # without silencing first-party code.
@@ -268,11 +312,15 @@ set(VENDORED_SOURCES
 # who ever links this library - to it as well.
 if (MSVC)
     target_compile_options(SupersonicCore PRIVATE /W4 /permissive-)
-    target_compile_options(SupersonicEngine PRIVATE /W4 /permissive-)
+    if (SUPERSONIC_BUILD_EDITOR)
+        target_compile_options(SupersonicEngine PRIVATE /W4 /permissive-)
+    endif()
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")
 else()
     target_compile_options(SupersonicCore PRIVATE -Wall -Wextra -Wpedantic)
-    target_compile_options(SupersonicEngine PRIVATE -Wall -Wextra -Wpedantic)
+    if (SUPERSONIC_BUILD_EDITOR)
+        target_compile_options(SupersonicEngine PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
     set_source_files_properties(${VENDORED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 
@@ -368,11 +416,41 @@ endif()
 
 # Assets are loaded with paths relative to the working directory, so make F5
 # in Visual Studio launch from the project root rather than the build folder.
-set_target_properties(SupersonicEngine PROPERTIES
-    VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+if (SUPERSONIC_BUILD_EDITOR)
+    set_target_properties(SupersonicEngine PROPERTIES
+        VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-if (_isMultiConfig)
-    set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT SupersonicEngine)
+    if (_isMultiConfig)
+        set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT SupersonicEngine)
+    endif()
+endif()
+
+# Where a GAME finds the engine's runtime files - assets/shaders first of all -
+# when it is run from a directory that does not hold them. ChooseAssetRoot in
+# src/platform/ExecutablePath.hpp is the whole rule: the executable's own
+# folder when it is packaged, then the working directory, then this.
+#
+# Empty when the engine is built for itself. Its editor and every game in its
+# tree run from this root, and a build that bakes no path behaves exactly as it
+# did before the rule. When the engine is built as part of another project it
+# defaults to this checkout, which is what lets a game in its own repository
+# run from its own root, or from anywhere. A relative value is taken from here.
+if (NOT DEFINED SUPERSONIC_ASSET_ROOT)
+    if (SUPERSONIC_IS_TOP_LEVEL)
+        set(SUPERSONIC_ASSET_ROOT "" CACHE PATH
+            "Directory holding the engine's assets/, for a game run from elsewhere (empty: none)")
+    else()
+        set(SUPERSONIC_ASSET_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH
+            "Directory holding the engine's assets/, for a game run from elsewhere (empty: none)")
+    endif()
+endif()
+if (SUPERSONIC_ASSET_ROOT)
+    get_filename_component(_supersonicAssetRoot "${SUPERSONIC_ASSET_ROOT}" ABSOLUTE
+        BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    message(STATUS "Engine asset root for games run from elsewhere: ${_supersonicAssetRoot}")
+    # One translation unit reads it, so changing it rebuilds that one only.
+    set_property(SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ExecutablePath.cpp
+        APPEND PROPERTY COMPILE_DEFINITIONS "SUPERSONIC_ASSET_ROOT=\"${_supersonicAssetRoot}\"")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -440,8 +518,14 @@ if (GLSL_COMPILER)
         list(APPEND SPIRV_OUTPUTS "${_outPath}")
     endforeach()
 
+    # Only the editor depends on it. A game building the engine as a
+    # subproject therefore leaves the committed .spv alone unless it builds
+    # this target by name - they sit in the engine's source tree, which is the
+    # game's submodule.
     add_custom_target(Shaders DEPENDS ${SPIRV_OUTPUTS})
-    add_dependencies(SupersonicEngine Shaders)
+    if (SUPERSONIC_BUILD_EDITOR)
+        add_dependencies(SupersonicEngine Shaders)
+    endif()
 else()
     message(WARNING
         "No GLSL compiler found (glslc/glslangValidator). The committed .spv blobs in "
@@ -452,17 +536,24 @@ endif()
 # ---------------------------------------------------------------------------
 # Hot-reloadable script plugin
 # ---------------------------------------------------------------------------
-option(SUPERSONIC_BUILD_SCRIPT_PLUGIN "Build the sample hot-reload script plugin" ON)
+option(SUPERSONIC_BUILD_SCRIPT_PLUGIN "Build the sample hot-reload script plugin" ${SUPERSONIC_IS_TOP_LEVEL})
 if (SUPERSONIC_BUILD_SCRIPT_PLUGIN)
     add_subdirectory(plugins)
     # Not a link dependency - the engine loads it at runtime and tolerates its
     # absence - but building it by default makes the feature work out of the box.
-    add_dependencies(SupersonicEngine GameScripts)
+    if (SUPERSONIC_BUILD_EDITOR)
+        add_dependencies(SupersonicEngine GameScripts)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+# The rule every suite is built by, and the harness it includes. Unconditional:
+# a game that builds the engine as a subproject turns the engine's suites off
+# and builds its own with these.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/SupersonicTesting.cmake)
+
 # ---------------------------------------------------------------------------
 # Games built on the engine
 # ---------------------------------------------------------------------------
@@ -475,6 +566,11 @@ endif()
 # headless harnesses print, so the simulation has to be built whenever the tests
 # are. It is pure logic - no renderer, no window - and costs a handful of
 # translation units.
+#
+# All of it only when the engine is built for itself. A game that builds the
+# engine as a subproject defines targets of its own, and these would be a second
+# copy of them - or of another game nobody asked for.
+if (SUPERSONIC_IS_TOP_LEVEL)
 add_subdirectory(games/wolfbrigade/sim)
 
 option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike executable" OFF)
@@ -502,8 +598,12 @@ add_subdirectory(games/husk)
 # (docs/planning/2026-09-10-magic-portals-spike.md).
 option(SUPERSONIC_BUILD_MAGICPORTALS "Build the Magic Portals spike tool" OFF)
 add_subdirectory(games/magicportals)
+endif() # SUPERSONIC_IS_TOP_LEVEL
 
-option(SUPERSONIC_BUILD_TESTS "Build engine unit tests" ON)
+# The engine's own suites. Off by default when the engine is built as part of
+# another project, whose ctest would otherwise run them as its own. They also
+# link the games above, which that project does not have.
+option(SUPERSONIC_BUILD_TESTS "Build engine unit tests" ${SUPERSONIC_IS_TOP_LEVEL})
 if (SUPERSONIC_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

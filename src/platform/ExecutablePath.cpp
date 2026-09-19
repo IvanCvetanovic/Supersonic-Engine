@@ -86,17 +86,65 @@ bool LooksLikeAPackagedFolder(const std::filesystem::path& directory) {
     // silently stops anchoring and dies on a missing .spv - so
     // test_executable_path builds a folder the way the packager describes one
     // and asserts this agrees, rather than leaving the two to drift.
+    return HoldsEngineAssets(directory);
+}
+
+bool HoldsEngineAssets(const std::filesystem::path& directory) {
+    if (directory.empty()) return false;
     std::error_code exists;
     return std::filesystem::is_directory(directory / "assets" / "shaders", exists) && !exists;
 }
 
-bool AnchorAssetRootToExecutable() {
-    const std::filesystem::path directory = ExecutableDirectory();
-    if (!LooksLikeAPackagedFolder(directory)) return false;
+AssetRootChoice ChooseAssetRoot(
+    const std::filesystem::path& executableDirectory,
+    const std::filesystem::path& workingDirectory,
+    const std::filesystem::path& configuredRoot,
+    const std::function<bool(const std::filesystem::path&)>& holdsEngineAssets) {
+    // An empty path is never asked about. An unknown executable directory or
+    // an unset root must not turn into a question about the filesystem root.
+    const auto holds = [&](const std::filesystem::path& candidate) {
+        return !candidate.empty() && holdsEngineAssets(candidate);
+    };
 
+    if (holds(executableDirectory)) {
+        return {AssetRootSource::PackagedFolder, executableDirectory};
+    }
+    if (holds(workingDirectory)) {
+        return {AssetRootSource::WorkingDirectory, workingDirectory};
+    }
+    if (holds(configuredRoot)) {
+        return {AssetRootSource::ConfiguredRoot, configuredRoot};
+    }
+    return {AssetRootSource::Unresolved, workingDirectory};
+}
+
+std::filesystem::path ConfiguredAssetRoot() {
+#if defined(SUPERSONIC_ASSET_ROOT)
+    // Written by CMake as a narrow string literal, like every other path a
+    // build bakes in here. A checkout path is plain ASCII in practice.
+    return std::filesystem::path(SUPERSONIC_ASSET_ROOT);
+#else
+    return {};
+#endif
+}
+
+AssetRootChoice AnchorAssetRoot() {
     std::error_code ec;
-    std::filesystem::current_path(directory, ec);
-    return !ec;
+    std::filesystem::path working = std::filesystem::current_path(ec);
+    if (ec) working.clear();
+
+    AssetRootChoice choice =
+        ChooseAssetRoot(ExecutableDirectory(), working, ConfiguredAssetRoot(), HoldsEngineAssets);
+
+    const bool moves = choice.source == AssetRootSource::PackagedFolder ||
+                       choice.source == AssetRootSource::ConfiguredRoot;
+    if (moves) {
+        std::filesystem::current_path(choice.root, ec);
+        // A directory that could not be entered is not where anything
+        // resolves from, whatever the rule said.
+        if (ec) return {AssetRootSource::Unresolved, working};
+    }
+    return choice;
 }
 
 std::filesystem::path AssetRoot() {

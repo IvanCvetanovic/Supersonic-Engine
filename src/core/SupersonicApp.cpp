@@ -115,6 +115,54 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
         SUPERSONIC_LOG_WARN("LaunchOptions") << warning;
     }
 
+    // Read before the window exists, because it decides the title on it.
+    //
+    // A DECLARED manifest wins outright and skips the lookup. A game linking
+    // the engine knows it is a game; requiring it to also ship a file beside
+    // its own executable to be believed made "run it from the build tree" a
+    // different program from "run the packaged copy".
+    m_manifest = manifest ? *manifest : GameRuntime::Load();
+
+    // A game settles where its assets resolve from before anything opens a
+    // file by relative path. This has to happen BEFORE the renderer is built:
+    // the first thing to break otherwise is shader loading, which throws during
+    // pipeline creation with a message about a .spv - a long way from the
+    // launcher's working directory that actually caused it. And before the
+    // scene folder below is created and the plugin fallback is looked up, or a
+    // game run from its own repository would leave an assets/scenes in it.
+    //
+    // The editor is deliberately left alone. It is launched from the project
+    // root on purpose, and a build tree is not laid out like a packaged folder.
+    if (m_manifest.isGame) {
+        const AssetRootChoice anchored = AnchorAssetRoot();
+        switch (anchored.source) {
+        case AssetRootSource::PackagedFolder:
+            SUPERSONIC_LOG_INFO("SupersonicApp")
+                << "Packaged game: assets resolve from " << AssetRoot().string();
+            break;
+        case AssetRootSource::WorkingDirectory:
+            // Not a warning, because the ordinary case reaches it: a game run
+            // out of its build tree from the engine's root, where resolving
+            // from the working directory is exactly right.
+            SUPERSONIC_LOG_INFO("SupersonicApp")
+                << "No assets beside the executable; they resolve from "
+                << AssetRoot().string() << " as the editor's do.";
+            break;
+        case AssetRootSource::ConfiguredRoot:
+            SUPERSONIC_LOG_INFO("SupersonicApp")
+                << "No assets beside the executable or in the working directory; they "
+                   "resolve from the engine the build named (SUPERSONIC_ASSET_ROOT), "
+                << AssetRoot().string() << ".";
+            break;
+        case AssetRootSource::Unresolved:
+            SUPERSONIC_LOG_WARN("SupersonicApp")
+                << "No assets/shaders beside the executable, in the working directory or "
+                   "at the build's SUPERSONIC_ASSET_ROOT; they resolve from "
+                << AssetRoot().string() << " and the first shader will not open.";
+            break;
+        }
+    }
+
     // Asset writes target these; create them before anything tries to save.
     std::error_code ec;
     std::filesystem::create_directories("assets/scenes", ec);
@@ -144,39 +192,6 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     ScriptEngine::RegisterBuiltInScripts();
     m_hotReload = std::make_unique<HotReloadEngine>();
     m_hotReload->WatchPlugin(scriptPluginPath());
-
-    // Read before the window exists, because it decides the title on it.
-    //
-    // A DECLARED manifest wins outright and skips the lookup. A game linking
-    // the engine knows it is a game; requiring it to also ship a file beside
-    // its own executable to be believed made "run it from the build tree" a
-    // different program from "run the packaged copy".
-    m_manifest = manifest ? *manifest : GameRuntime::Load();
-
-    // A packaged game re-anchors to its own folder before anything opens a file
-    // by relative path. This has to happen BEFORE the renderer is built: the
-    // first thing to break otherwise is shader loading, which throws during
-    // pipeline creation with a message about a .spv - a long way from the
-    // launcher's working directory that actually caused it.
-    //
-    // The editor is deliberately left alone. It is launched from the project
-    // root on purpose, and a build tree is not laid out like a packaged folder.
-    if (m_manifest.isGame) {
-        if (AnchorAssetRootToExecutable()) {
-            SUPERSONIC_LOG_INFO("SupersonicApp")
-                << "Packaged game: assets resolve from " << AssetRoot().string();
-        } else {
-            // Not a warning any more, because the ordinary case reaches it: a
-            // game run out of its build tree has its executable in build/ and
-            // its assets at the project root, and resolving from the working
-            // directory is then exactly right. Anchoring only happens when the
-            // assets are genuinely beside the executable, which is what a
-            // packaged folder looks like and a build tree does not.
-            SUPERSONIC_LOG_INFO("SupersonicApp")
-                << "No assets beside the executable; they resolve from "
-                << AssetRoot().string() << " as the editor's do.";
-        }
-    }
 
     // THREE SOURCES, ONE ANSWER, and the order is the point: the flag is for
     // one run, the manifest is what the game ships as, and the default is what

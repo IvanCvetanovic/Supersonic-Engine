@@ -12,26 +12,12 @@
 
 set(SUPERSONIC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+# The rule itself - the harness, SupersonicCore and the GLM configuration its
+# interface carries, /W4, add_test - is supersonic_add_test in
+# cmake/SupersonicTesting.cmake, where a game building the engine as a
+# subproject reaches it too. The engine's own suites keep this name for it.
 function(add_engine_test name)
-    # ${ARGN} is accepted and ignored so a stale extra-sources argument is a
-    # no-op rather than a configure error. Nothing should pass one any more.
-    add_executable(${name} ${name}.cpp)
-    target_include_directories(${name} PRIVATE ${SUPERSONIC_SRC}/tests)
-
-    # Everything else - the src/ include root, the vendored header paths, the
-    # GLM configuration that MUST match the engine's, and Threads - arrives
-    # through SupersonicCore's PUBLIC interface. That is the point: the ODR
-    # constraint on GLM_FORCE_DEPTH_ZERO_TO_ONE is now enforced by the build
-    # graph instead of by a duplicated block kept in step by hand.
-    target_link_libraries(${name} PRIVATE SupersonicCore)
-
-    if (MSVC)
-        target_compile_options(${name} PRIVATE /W4)
-    else()
-        target_compile_options(${name} PRIVATE -Wall -Wextra)
-    endif()
-
-    add_test(NAME ${name} COMMAND ${name})
+    supersonic_add_test(${name} ${ARGN})
 endfunction()
 
 add_engine_test(test_transform)

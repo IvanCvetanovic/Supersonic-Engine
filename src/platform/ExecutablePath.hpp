@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 
 namespace Supersonic {
 
@@ -20,8 +21,68 @@ std::filesystem::path ExecutablePath();
 // Directory containing the running binary. Empty if the path is unknown.
 std::filesystem::path ExecutableDirectory();
 
+// Where a game's engine files were found, which is also what the log says.
+enum class AssetRootSource {
+    // assets/shaders beside the executable: a packaged game.
+    PackagedFolder,
+    // assets/shaders in the directory it was launched from: the engine's own
+    // root, which is how every game ran while the games lived in its tree.
+    WorkingDirectory,
+    // assets/shaders under the root the build named: a game built in its own
+    // repository with the engine as a subproject, launched from anywhere.
+    ConfiguredRoot,
+    // None of them. The working directory is kept and the first .spv will not
+    // open - the failure a run with no engine files has always had.
+    Unresolved,
+};
+
+struct AssetRootChoice {
+    AssetRootSource source = AssetRootSource::Unresolved;
+    std::filesystem::path root;
+};
+
+// Which directory a GAME's relative paths resolve from. First match wins:
+//
+//   1. the executable's directory, when it holds the engine's files - a
+//      packaged folder, which is true however the game was launched;
+//   2. the working directory, when it holds them - a run from the engine's
+//      root, and every run made before a game could live outside it;
+//   3. `configuredRoot`, when it holds them - the engine checkout a game's own
+//      repository builds against, named by the build (ConfiguredAssetRoot);
+//   4. otherwise the working directory, unchanged.
+//
+// ONE ANSWER FOR EVERY PATH. The engine opens its files by relative path from
+// many places - seventeen .spv in two renderers, the pipeline cache, the scene
+// and prefab folders, the asset database's scan - and a game passes relative
+// paths of its own. Moving the working directory once keeps them all agreeing,
+// which is what the packaged-game anchoring already did; resolving each call
+// site against a root instead would be one new rule per call site, and the
+// first one missed would read a file from the wrong tree without a word.
+//
+// The packaged folder outranks the configured root on purpose. A build bakes
+// the root as an absolute path on the machine that built it; a packaged copy
+// of that game has to ignore it and use its own folder, or it would go looking
+// for its shaders in someone's source checkout. And the working directory
+// outranks it because that keeps every existing run exactly as it was: a run
+// from the engine's root never looks at the configured root at all.
+//
+// Pure: `holdsEngineAssets` is the only question asked of the filesystem, so
+// the rule is tested without touching one. The program asks HoldsEngineAssets.
+AssetRootChoice ChooseAssetRoot(
+    const std::filesystem::path& executableDirectory,
+    const std::filesystem::path& workingDirectory,
+    const std::filesystem::path& configuredRoot,
+    const std::function<bool(const std::filesystem::path&)>& holdsEngineAssets);
+
+// The root the BUILD named for rule 3: SUPERSONIC_ASSET_ROOT. CMake sets it to
+// the engine's own checkout when the engine is built as part of another
+// project, and leaves it empty when the engine is built for itself, so the
+// engine's own build carries no path and behaves as it always did. Empty means
+// there is no third rule.
+std::filesystem::path ConfiguredAssetRoot();
+
 // Makes the working directory the one every relative asset path is meant to be
-// relative to, and reports where that ended up.
+// relative to, and reports where that ended up. For a GAME only.
 //
 // The engine had two anchors that did not agree. GameRuntime::Load finds
 // game.manifest relative to the EXECUTABLE, because a game is normally launched
@@ -35,15 +96,23 @@ std::filesystem::path ExecutableDirectory();
 // creation on a .spv it cannot open - before initECS, before the scene is even
 // reached, so none of the other broken paths get far enough to be blamed.
 //
-// Whichever anchor wins, both have to use it. For a packaged game the
-// executable's directory wins, because that is the one that is true no matter
-// how the game was launched. For the editor the working directory is left
-// alone: it is launched from the project root on purpose, and the build tree is
-// not laid out like a packaged folder.
-bool AnchorAssetRootToExecutable();
+// Whichever anchor wins, both have to use it; ChooseAssetRoot decides which.
+// For the editor the working directory is left alone: it is launched from the
+// project root on purpose, and the build tree is not laid out like a packaged
+// folder.
+//
+// The directory moves for rules 1 and 3 only. Every RELATIVE path resolves
+// from the new one afterwards, including a relative --screenshot, --record or
+// --replay - as it always has for a packaged game.
+AssetRootChoice AnchorAssetRoot();
+
+// Whether `directory` holds the engine's runtime files. The question
+// ChooseAssetRoot asks of each candidate: assets/shaders, and why that and not
+// assets alone is in LooksLikeAPackagedFolder, which is the same question.
+bool HoldsEngineAssets(const std::filesystem::path& directory);
 
 // Whether `directory` is laid out the way a PACKAGED game is, rather than the
-// way a build tree is. The judgement behind the anchoring above.
+// way a build tree is. The judgement behind rule 1 above.
 //
 // Split out so it can be tested. Anchoring is an action with a process-wide
 // effect - it moves the working directory - and a test that called it would

@@ -203,6 +203,51 @@ so <kbd>F5</kbd> works with no further setup.
 Full command reference, including validation-layer setup, shader compilation and
 the script hot-reload loop: **[AGENTS.md](AGENTS.md)**.
 
+### Building a game against the engine
+
+A game lives in its own repository and builds the engine as a subproject — a
+git submodule pinned to a commit, say, at `engine/`:
+
+```cmake
+cmake_minimum_required(VERSION 3.20)
+project(MyGame LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+add_subdirectory(engine)              # the library; no editor, plugin, suites or games
+
+add_executable(MyGame main.cpp MyGameLayer.cpp)
+target_link_libraries(MyGame PRIVATE SupersonicCore)
+
+enable_testing()                      # the engine enables it only for its own suites
+add_subdirectory(tests)               # supersonic_add_test(test_mygame) in there
+```
+
+Built that way, the engine contributes these and nothing else:
+
+| | |
+|---|---|
+| `SupersonicCore` | The engine. Its include roots, the GLM configuration every translation unit must share, C++20 and the platform definition all arrive through its PUBLIC interface |
+| `Supersonic::TestHarness` | `tests/TestHarness.hpp` on the include path |
+| `supersonic_add_test(name)` | One suite from `<name>.cpp` in the calling directory: the harness, `SupersonicCore`, `/W4` (`-Wall -Wextra` elsewhere) and `add_test`. The engine's own suites are built by the same function (`cmake/SupersonicTesting.cmake`) |
+| `Shaders` | Recompiles the GLSL into the engine's `assets/shaders`. Only the editor depends on it, so a game's build leaves the committed SPIR-V alone unless it builds this by name |
+| `SUPERSONIC_ENGINE_DIR` | The engine checkout's root |
+| `SUPERSONIC_ASSET_ROOT` | Where the game finds the engine's runtime files when run from anywhere else — below |
+| `SUPERSONIC_BUILD_EDITOR`, `SUPERSONIC_BUILD_SCRIPT_PLUGIN`, `SUPERSONIC_BUILD_TESTS` | ON only when the engine is the top-level project; the games under `games/` likewise |
+
+**A game runs from anywhere.** A game opens the engine's files — every shader
+first — by paths relative to its working directory, which is why the editor is
+launched from the project root. A game settles that directory before anything
+is opened: its executable's own folder if it is packaged, else the working
+directory if it holds `assets/shaders`, else `SUPERSONIC_ASSET_ROOT`, which
+CMake sets to the engine checkout when the engine is a subproject and leaves
+empty when it is built for itself. The rule and its reasons are in
+[ARCHITECTURE.md](ARCHITECTURE.md#where-a-games-files-resolve-from); the one
+thing it costs is that a relative `--screenshot`, `--record` or `--replay` path
+then resolves from the engine's root, so pass those as absolute paths.
+
 ---
 
 ## How a frame runs
@@ -319,7 +364,7 @@ verified by a screenshot of geometry it never touched.
 | `test_uiinput` | UI hit testing, press and release routing |
 | `test_screenoverlay` | The screen overlay drawn after the tone map: where a quad lands in clip space and texture space, that order is draw order, the blend it is drawn with, and that the shader carries the same vertex table. And the composite under it: the four numbers each scene encoding sends, and that the shader's branches are numbered as the enum is |
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
-| `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths |
+| `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths, and where a game's files resolve from: its own folder, the working directory, or the engine root the build named |
 | `test_launchoptions` | Argument parsing, missing values, malformed counts |
 | `test_json` | Depth limit, trailing content, duplicate keys, malformed input |
 | `test_scenemanager` | Deferred loads, Save As, failed-save and failed-load behaviour |

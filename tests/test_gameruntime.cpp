@@ -7,8 +7,13 @@
 
 #include "TestHarness.hpp"
 #include "core/GameRuntime.hpp"
+#include "platform/ExecutablePath.hpp"
 
+#include <filesystem>
+#include <functional>
+#include <set>
 #include <string>
+#include <vector>
 
 using namespace Supersonic;
 
@@ -202,6 +207,129 @@ static void testHalfAnOverrideIsNotAnOverride() {
     CHECK_EQ(h, uint32_t{1080});
 }
 
+// WHERE A GAME'S ENGINE FILES COME FROM: ChooseAssetRoot, asked of made-up
+// directories. The filesystem is never touched - the predicate is a set - so
+// these hold on any machine and move nobody's working directory.
+namespace {
+
+namespace fs = std::filesystem;
+
+// The candidates a game in its own repository sees: its executable deep in the
+// game's build tree, launched from the game's root, and the engine checkout
+// the build named.
+const fs::path kExecutable = fs::path("/repos/game/build/game");
+const fs::path kGameRoot = fs::path("/repos/game");
+const fs::path kEngineRoot = fs::path("/repos/game/engine");
+
+struct Layout {
+    std::set<fs::path> holding;
+    std::vector<fs::path> asked;
+
+    std::function<bool(const fs::path&)> Predicate() {
+        return [this](const fs::path& candidate) {
+            asked.push_back(candidate);
+            return holding.count(candidate) > 0;
+        };
+    }
+};
+
+bool Asked(const Layout& layout, const fs::path& candidate) {
+    for (const fs::path& p : layout.asked) {
+        if (p == candidate) return true;
+    }
+    return false;
+}
+
+} // namespace
+
+static void testAPackagedFolderOutranksEverything() {
+    // Rule 1. A packaged copy of a game that was built against a checkout still
+    // carries that checkout's path; it must use its own folder, or it would go
+    // looking for its shaders in somebody's source tree.
+    Layout layout;
+    layout.holding = {kExecutable, kGameRoot, kEngineRoot};
+    const AssetRootChoice choice =
+        ChooseAssetRoot(kExecutable, kGameRoot, kEngineRoot, layout.Predicate());
+    CHECK(choice.source == AssetRootSource::PackagedFolder);
+    CHECK(choice.root == kExecutable);
+
+    Layout packagedOnly;
+    packagedOnly.holding = {kExecutable, kEngineRoot};
+    const AssetRootChoice packaged =
+        ChooseAssetRoot(kExecutable, kGameRoot, kEngineRoot, packagedOnly.Predicate());
+    CHECK_MSG(packaged.source == AssetRootSource::PackagedFolder,
+              "the configured root must never outrank the executable's own folder");
+}
+
+static void testARunFromTheEnginesRootIsLeftAsItWas() {
+    // Rule 2, and the one that keeps every existing run identical: a game run
+    // from a directory that holds the engine's files resolves from it, and the
+    // configured root is not even asked about.
+    Layout layout;
+    layout.holding = {kGameRoot, kEngineRoot};
+    const AssetRootChoice choice =
+        ChooseAssetRoot(kExecutable, kGameRoot, kEngineRoot, layout.Predicate());
+    CHECK(choice.source == AssetRootSource::WorkingDirectory);
+    CHECK_MSG(choice.root.native() == kGameRoot.native(),
+              "the working directory must come back exactly as it was given");
+    CHECK_MSG(!Asked(layout, kEngineRoot),
+              "a working directory that holds the files must decide on its own");
+}
+
+static void testAGameInItsOwnRepositoryFindsTheEngine() {
+    // Rule 3: launched from the game's root, which has no assets/shaders, the
+    // game resolves from the engine checkout its build named - wherever it was
+    // launched from.
+    Layout layout;
+    layout.holding = {kEngineRoot};
+    const AssetRootChoice choice =
+        ChooseAssetRoot(kExecutable, kGameRoot, kEngineRoot, layout.Predicate());
+    CHECK(choice.source == AssetRootSource::ConfiguredRoot);
+    CHECK(choice.root == kEngineRoot);
+
+    const fs::path elsewhere = fs::path("/tmp/anywhere");
+    const AssetRootChoice fromElsewhere =
+        ChooseAssetRoot(kExecutable, elsewhere, kEngineRoot, layout.Predicate());
+    CHECK(fromElsewhere.source == AssetRootSource::ConfiguredRoot);
+    CHECK(fromElsewhere.root == kEngineRoot);
+}
+
+static void testARootWithoutTheFilesIsNoRoot() {
+    // A configured root that does not hold the shaders - a checkout moved or
+    // deleted since the build - is passed over, and the run fails on its first
+    // .spv from the working directory, exactly as a run with no engine files
+    // always has.
+    Layout layout;
+    const AssetRootChoice choice =
+        ChooseAssetRoot(kExecutable, kGameRoot, kEngineRoot, layout.Predicate());
+    CHECK(choice.source == AssetRootSource::Unresolved);
+    CHECK(choice.root.native() == kGameRoot.native());
+    CHECK(Asked(layout, kEngineRoot));
+}
+
+static void testTheEnginesOwnBuildNamesNoRoot() {
+    // The engine built for itself bakes no root. With none, there is no third
+    // rule: nothing is asked about an empty path, which would otherwise be a
+    // question about the filesystem root, and the answer is the working
+    // directory, as it was before the rule existed.
+    Layout layout;
+    const AssetRootChoice choice =
+        ChooseAssetRoot(kExecutable, kGameRoot, fs::path{}, layout.Predicate());
+    CHECK(choice.source == AssetRootSource::Unresolved);
+    CHECK(choice.root.native() == kGameRoot.native());
+    CHECK_MSG(!Asked(layout, fs::path{}), "an empty root must never be asked about");
+
+    Layout unknownExecutable;
+    unknownExecutable.holding = {kGameRoot};
+    const AssetRootChoice fromRoot =
+        ChooseAssetRoot(fs::path{}, kGameRoot, fs::path{}, unknownExecutable.Predicate());
+    CHECK(fromRoot.source == AssetRootSource::WorkingDirectory);
+    CHECK_MSG(!Asked(unknownExecutable, fs::path{}),
+              "an unknown executable directory must not become the filesystem root");
+
+    CHECK(!HoldsEngineAssets(fs::path{}));
+}
+
 static void runTests() {
     testRoundTrip();
     testTitleWithQuotesSurvives();
@@ -219,6 +347,12 @@ static void runTests() {
 
     testTheFlagBeatsTheManifestWhichBeatsTheDefault();
     testHalfAnOverrideIsNotAnOverride();
+
+    testAPackagedFolderOutranksEverything();
+    testARunFromTheEnginesRootIsLeftAsItWas();
+    testAGameInItsOwnRepositoryFindsTheEngine();
+    testARootWithoutTheFilesIsNoRoot();
+    testTheEnginesOwnBuildNamesNoRoot();
 }
 
 TEST_MAIN("test_gameruntime", 50)

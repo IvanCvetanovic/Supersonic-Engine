@@ -2687,6 +2687,37 @@ the offscreen target and the pipelines are being built, before `initECS` and
 before the scene is loaded, so none of the other broken paths are ever reached.
 Whichever anchor wins, both columns have to use it.
 
+#### Where a game's files resolve from
+
+A game settles the question once, first thing in `SupersonicApp`'s constructor,
+by moving the working directory (`AnchorAssetRoot`). The editor never does:
+it is launched from the project root on purpose. `ChooseAssetRoot` is the rule,
+and the first directory that holds `assets/shaders` wins:
+
+| | Directory | The case it is |
+|---|---|---|
+| 1 | the executable's | a packaged game, however it was launched |
+| 2 | the working directory | a run from the engine's root — every run made while the games lived in the engine's tree |
+| 3 | `SUPERSONIC_ASSET_ROOT`, baked by the build | a game in its own repository, with the engine as a subproject, launched from anywhere |
+| 4 | the working directory, unchanged | none of them: the first `.spv` does not open, as a run with no engine files never could |
+
+The working directory moves for rows 1 and 3 only, so a run from the engine's
+root is untouched — and the engine built for itself bakes no root at all
+(CMake leaves `SUPERSONIC_ASSET_ROOT` empty when the engine is the top-level
+project, and sets it to the engine's checkout when it is not). The packaged
+folder outranks the baked root because the root is an absolute path on the
+machine that built the game; a packaged copy has to ignore it.
+
+It moves the directory rather than resolving each path against a root because
+the engine opens its files by relative path from many places — seventeen `.spv`
+in two renderers, the pipeline cache, the scene and prefab folders, the asset
+database's scan, every path inside a scene — and a game passes relative paths of
+its own. One move keeps all of them agreeing; a root applied per call site is a
+new rule at each one, and the first one missed reads from the wrong tree without
+a word. The cost is the one a packaged game already had: once a game has moved,
+a relative `--screenshot`, `--record` or `--replay` resolves from the new
+directory too, so a caller who wants the file elsewhere passes an absolute path.
+
 ### 10. The in-game UI canvas
 
 `UICanvas` is screen-space layout arithmetic and nothing else: no ImGui, no
