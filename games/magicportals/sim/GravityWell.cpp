@@ -6,6 +6,7 @@
 #include "sim/Units.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -32,6 +33,18 @@ constexpr double kPiOverTwo = 1.57079632679489661923;
 // every C runtime - the contract Mover::Oscillation and Bounce::Bob keep.
 double SmoothEnd(double v) {
     return static_cast<double>(Supersonic::DetMath::sin(static_cast<float>(v * kPiOverTwo)));
+}
+
+// Three finite numbers, none below zero: a colour the original could paint, or an
+// .ent's <EmissiveColor>. The same rule Art.cpp reads its own by.
+bool Colour(const Json::Value& value, glm::dvec3& out) {
+    if (!value.IsArray() || value.AsArray().size() != 3) return false;
+    for (std::size_t i = 0; i < 3; ++i) {
+        const Json::Value& channel = value.AsArray()[i];
+        if (!channel.IsNumber() || !std::isfinite(channel.AsNumber()) || channel.AsNumber() < 0.0) return false;
+        out[static_cast<glm::length_t>(i)] = channel.AsNumber();
+    }
+    return true;
 }
 
 } // namespace
@@ -69,6 +82,42 @@ bool LoadRules(const std::string& path, Rules& out, std::string& error) {
     if (!number("force", "length_with_gravity", read.forceWithGravity)) return false;
     if (!number("force", "reference_frame_ms", read.referenceFrameMs)) return false;
     if (!number("zone", "shrink_px", read.zoneShrinkPx)) return false;
+
+    // THE RING, required in full. Every field of it is a fact about the entity the
+    // agent's callback adds - antiportal.ent, renamed - and a default for any of
+    // them would be a guess drawn on five levels.
+    const Json::Value& ring = root["ring"];
+    if (!ring.IsObject()) {
+        error = path + ": ring is missing";
+        return false;
+    }
+    if (!ring["sprite"].IsString() || ring["sprite"].AsString().empty()) {
+        error = path + ": ring.sprite is a file among the original's entities";
+        return false;
+    }
+    read.ring.sprite = ring["sprite"].AsString();
+    for (const char* key : {"additive", "apply_light", "static"}) {
+        if (!ring[key].IsBool()) {
+            error = path + ": ring." + std::string(key) + " is true or false";
+            return false;
+        }
+    }
+    read.ring.additive = ring["additive"].AsBool();
+    read.ring.applyLight = ring["apply_light"].AsBool();
+    read.ring.isStatic = ring["static"].AsBool();
+    if (!Colour(ring["colour"], read.ring.colour)) {
+        error = path + ": ring.colour is three numbers, none below zero";
+        return false;
+    }
+    if (!Colour(ring["emissive"], read.ring.emissive)) {
+        error = path + ": ring.emissive is three numbers, none below zero";
+        return false;
+    }
+    if (!ring["z"].IsNumber() || !std::isfinite(ring["z"].AsNumber())) {
+        error = path + ": ring.z is a finite number";
+        return false;
+    }
+    read.ring.z = ring["z"].AsNumber();
 
     // A well with no pull is a solid circle with a no-portal zone round it, and
     // five levels would look built and play wrong.

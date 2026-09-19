@@ -11534,3 +11534,301 @@ the brief's median over sectors at the decoded half.
   `docs/parity-backlog.md`**, landed in this step's commit round, and the answer to step 80's
   `getLastFrameElapsedTime` note.
 - The zone's box (`syncDrawables`, shown only with boxes) is not coloured: a box is not a picture.
+
+## Step 85 - the green ring a gravity well wears, and the size its own callback gives it (built)
+
+The visuals plan's step 4.3 (the remake's `out/parity/visuals/briefs/00_order.md` section 7; its brief
+`systems_3_4.md` 4c), after step 84's blink. Track B, on the `visuals-b` tree. Game-only: no file under
+`src/` or `assets/shaders/`. Changed: `data/gravitywell.json`, `sim/GravityWell.{hpp,cpp}`,
+`MagicPortalsLayer.cpp`, `tests/test_mp_wells.cpp`, `tests/test_mp_layer.cpp`. **The ten gravity wells of
+chapter 4 are no longer bare circles. Each now wears the ring its own callback adds - `white_ring.png`, added,
+constant green, drawn `radius x 2 - 24` units across at depth -5 - which no level file mentions anywhere: it
+exists only in `ETHCallback_gravity_agent`. All five gate rings pass. At the ring's own edge (half = radius -
+12) the port reads `c` (0.253, 0.497, 0.253) on 4-17 and (0.253, 0.479, 0.213), (0.250, 0.512, 0.268),
+(0.268, 0.521, 0.253) and (0.253, 0.514, 0.253) on the four 4-18 wells, against a decoded (0.25, 0.5, 0.25)
+and a required green in [0.40, 0.60] with red and blue in [0.15, 0.32]; all five read 0.035 or less, either
+sign, before. The same estimator on the ORIGINAL's library frames reads those rings at a median (0.253, 0.529,
+0.296), (0.253, 0.481, 0.213), (0.249, 0.503, 0.275), (0.253, 0.449, 0.214) and (0.253, 0.481, 0.240). Of the
+nine rings either build can read, the port is within 0.072 of the original's median on eight; the ninth, 4-19
+`2691`, whose centre is 26 px beyond the right edge, reads 0.119 lower in green; the tenth, 4-21 `1758`, has
+too little rim on screen for the estimator in either, but both builds draw its arc. Over the full 128-level
+sweep the 123 levels with no well are byte-identical, and on the five that place one every changed pixel lies
+inside the quad of a ring this step draws.** The step was built and measured
+on 2026-09-18 and finished after a power loss (THE RESUME, below), which also corrected this record's draft.
+
+**WHAT THE ORIGINAL DOES** (the listing `out/parity/asbc/all_functions.txt`, md5 `48fe65ce...`; every number
+with its instruction in `data/gravitywell.json` `ring`).
+- **`ETHCallback_gravity_agent`** (assets/ETHCallback_gravity_agent.angelscript, bytes 458374..459326) is
+  guarded: ins 0-12 read `CheckCustomData('area_created')` and jump to the per-frame tail at ins 174 when it is
+  set, and ins 13-25 set it. So ins 26-173 run **once**, on the first frame the agent's callback runs.
+  `gravity_agent.ent` is `static="1"`, and a static entity's callback runs only while its bucket is visible
+  (00_order section 8.12c: `ETHActiveEntityHandler.cpp:70-92`, `ETHScene.cpp:541-574`), so that is the first
+  frame the AGENT'S BUCKET is on screen, not necessarily the level's first.
+  - **ins 28-50** `AddEntity('antiportal.ent', vector3(GetPositionXY(), -5), 0, @area, 'gravity_area', 1)`. A
+    call pushes its last argument first: ins 28 `PshC4 1065353216` is the scale 1f, ins 29-32 the alternative
+    NAME, ins 34 the angle 0f and ins 35 `PshC4 -1063256064` the **-5f** that becomes the entity's z, built
+    into the position vector3 at ins 36-41.
+  - **ins 64-79** `radius = scale(GetFloat('radius'))`; **ins 81-102** `scaleToSize(area, vector2(2 x radius -
+    scale(24), the same))` - ins 81 `MULIf ... 1073741824` is x 2f, ins 82-86 `scale(24f)`, ins 87 `SUBf`, ins
+    89 copies the width into the height, ins 102 is the call.
+  - **ins 104-113** `area.SetFloat('squaredRadius', radius x radius)`, the force's own number;
+    **ins 117-131** `area.SetColor(vector3(0.5, 1, 0.5) * 0.5)`, so **(0.25, 0.5, 0.25): green**. ins 119-123
+    build the vector3 (symmetric, so the push order cannot be got wrong here) and ins 117's 0.5f is `opMul`'s
+    argument; **ins 133-146** `area.SetInt('ownerID', GetID())`, the handle the roundabout (below) finds the
+    agent by.
+- **The alternative name is why it neither blinks nor turns.** `AddEntity`'s fifth argument replaces the
+  entity's name (`ETHScene.cpp:261-266`), and a callback is named for the entity less its `.ent`
+  (`ETHASUtil.cpp:63-67`), so this `antiportal.ent` runs **`ETHCallback_gravity_area`** - the force
+  (bytes 461443..462571) - and never `ETHCallback_antiportal`, which step 84 built. Nothing in
+  `gravity_area`'s 208 instructions (0 to 207) sets a colour, an angle or a scale - its one `Scale` is
+  `SGlobalScale::scale` at ins 158, the force's own units - so the ring is constant.
+- **And why the manager never halves it.** `AntiPortalManager`'s constructor (bytes 104925..105343) fills
+  `fields` from `GetEntityArray('antiportal')` (ins 16-20) and `('antiportal.ent')` (ins 31-35) once, called
+  from `Game::preLoop` ins 85, before any callback has run; by the time this entity exists it is called
+  `gravity_area`. Step 83's `Scale(0.5)` (`placement.json antiportal.manager`) therefore does **not** apply
+  here, and the drawn size is exactly what `scaleToSize` sets.
+- **A size, not a radius.** `scaleToSize` (utilEntityEffect.angelscript, bytes 329349..329538) reads
+  `GetSize()` and calls `Scale(size / currentSize)` (ins 1-25), so the entity is drawn **2 x radius - 24**
+  units across. The port's no-portal zone (step 33) is **half of that**, radius - 12: what an antiportal
+  field's own test, `GetSize().x * 0.5` (`isPointInAntiPortalField`, bytes 334800..335020, ins 14-17), would
+  give. **The original never runs that test on this entity**, which is not one of the manager's fields (above),
+  so there a well refuses no portal (R2, below). The port now derives the size first and the zone from it
+  (`Well::RingSizePx`, then `ZoneRadiusPx`), so taking the zone away cannot move the picture.
+- **What is drawn.** `antiportal.ent` is `<Sprite> white_ring.png`, `blendMode 1` (added), `applyLight 0`,
+  `static 1`, `<EmissiveColor> (1, 1, 1)` and `<SpriteCut> 1 x 1` (the file, read again in the resume). The
+  emissive makes `min(1, ambient + emissive)` whole on every one of these five dark chapter-4 levels, so the
+  ring is drawn at the callback's own colour; `SetColor` writes the rgb and keeps the alpha
+  (`ETHEntity.cpp:493-498`). Its `<CustomData>` float `scale` 2 is read only by `SGlobalScale::scaleEntity`
+  (bytes 6072..6337, ins 5-28), which this callback never calls; `scaleToSize` sets an absolute size whatever
+  scale the entity starts at.
+- **Found in passing, and NOT built: the AGENT's own turn, which is parked.** ins 148-157 start the agent's
+  `effectAngleTime` at **3000** and ins 161-170 its `effectAngleSign` at 1. The per-frame tail, ins 174-230,
+  adds `getLastFrameElapsedTime` to the time and calls `SetAngle(elastic(smoothEnd(min(3000, t) / 3000)) x 360
+  x sign)`; with t at 3000 from the start, `smoothEnd(1)` is `sin(PIb)` = 1 and `elastic` returns 1 unchanged
+  (ins 5-13), so **the agent stands at exactly 360 degrees from its first frame and does not turn**. The
+  3,000 ms elastic turn plays only after `computeRoundabout` (bytes 459694..461443, ins 392-413) zeroes the
+  owner's `effectAngleTime` and sets the lap's sign, when a body laps the well: step 11.2's (00_order section
+  8.4). **This record's draft had it as a one-off turn over the agent's first 3,000 ms, overlooking that ins
+  148 starts the time at 3000; that was wrong, and the same sentence in `gravitywell.json`'s `_source` was
+  corrected with it.**
+
+**THE OWNER'S STANDING RULINGS APPLIED** (every ruling 00_order section 6 raises is decided for what the
+original does - the bytecode decode, with measured footage winning where they disagree).
+- **R2 (the `gravity_area` well is probably not a refusal field in the original).** Decided for the original,
+  and the decode settles it (00_order sections 8.4 and 8.14): `'gravity_area'` appears in exactly two
+  functions of the whole listing (this callback at ins 29, `checkForLevelAchievements` at ins 1542), neither
+  the manager's, and the manager's `fields` are filled before the area exists. **In the original a gravity well
+  refuses no portal, and a shot does not die on one.** **This step does not build that.** It is a GAMEPLAY
+  hand-off in no batch (section 6's own heading; 4.3's "R2 is not blocking"), with its own captures, so
+  `Portals::State::zones` and the two refusals at `test_mp_wells.cpp:312-313` (`:221-222` before this step's
+  insertions above them) stand exactly as step 33 wrote them, and are owed that step. This step makes it
+  cheap: the ring is sized from `Well::RingSizePx` and the zone from the ring, so removing the zone cannot move
+  a pixel.
+- **R12 (the tier fixed at the 720 selection) and R13 (route B).** The port still draws the 1x
+  `white_ring.png` until step 2.2 resolves tiers, as in steps 83 and 84. The estimator normalises against
+  `hd/white_ring.png` (peak 255 against the 1x file's 243), so a tier will move the measured `c` by a percent
+  or two and not the colour. It is expected to move the measured size outward, by about the 1.7 units the two
+  files' rims differ by (the size row below); the size estimator is too camera-sensitive to measure that
+  gap itself.
+- **K13 (depth between slots).** The ring is drawn at `slotAfter(-5)`, the between-slot rule 00_order gives
+  this step: after the level's pictures at or below z -5 and before the next. On 4-17 that is 5 of the level's
+  16 pictures behind it (`space_sky` z -100, `spiral` -96, `planet_bg` -90, `door_bg` -19 and the door -14)
+  and 11 in front at z 0, the agent's own picture among them, pinned in `test_mp_layer`. Step 6.3 migrates the
+  lambda into its table; this step uses it in `buildSprites`, as 00_order orders.
+- **R1 and R17 are not load-bearing here.** They are step 4a's, recorded in step 83, and this ring is not one
+  of the manager's fields at all.
+
+**WHAT CHANGED.**
+- **`data/gravitywell.json` `ring`:** `sprite white_ring.png`, `additive true`, `colour [0.25, 0.5, 0.25]`,
+  `emissive [1, 1, 1]`, `apply_light false`, `static true`, `z -5`, with the instructions above as `_source`
+  and the brief's library readings as `_measured`. Its home is `gravitywell.json` because every row of it is a
+  fact about the entity THIS callback adds; `art.json`'s `antiportal` stays the levels' own ring.
+- **`sim/GravityWell`:** a `Ring` on `Rules`, read strictly by `LoadRules` (an object; a non-empty sprite;
+  three bools; `colour` and `emissive` each three finite numbers none below zero; a finite `z`), and
+  `Well::RingSizePx(rules)` = `radius x 2 - shrink`, with `ZoneRadiusPx` now derived from it. The file is
+  required: a `gravitywell.json` missing any of it refuses every level rather than drawing a default on five.
+- **`MagicPortalsLayer::buildSprites`:** one picture per well, after the loop over the level's own sprites and
+  after every `slotAfter` above it has been taken - the lambda counts what is in `m_sprites`, so a ring pushed
+  earlier would put a timer dial a slot deeper. A picture with no node, as the dark dragon's dropped platform
+  is, and with no lightmap for the same reason: a bake belongs to an entity the level file placed, named by
+  its id. `syncSprites` places it where the well stands and `syncLighting` tints it, both through the paths
+  every other picture uses. Where `white_ring.png` cannot be read the level says so once and draws no ring;
+  with no art at all the level is boxes and a box has no ring.
+  - **Built with the level, not when the agent's callback first runs, and the difference is recorded.** The
+    brief suggests the dropped platform's place, `syncSprites`; the platform is built there because it does not
+    exist until the dragon dies. A well exists when `Game::Start` reads the level, so its ring is built with
+    the level's other pictures, which keeps `slotAfter` in the one function that owns it and costs no per-frame
+    test. The original adds its ring on the first frame the static agent's callback runs, which is the first
+    frame its bucket is visible: a well on screen at the start gets its ring one frame after the port's does,
+    and one that starts off screen gets it when the camera first shows it. No gate reads either (the gate
+    frames are f420); recorded rather than emulated, as step 84 recorded the same rule for the antiportal's
+    callback.
+- **Tests.** `test_mp_wells`: `TheRulesRead` gains the ring's seven rows; `TheRingIsTheZoneSeen` walks the five
+  levels and pins all ten sizes (level16c 188; level17c 188, 256, 188, 188; level18c 256, 104, 104; level20c
+  496; level27c 232) and that the zone is half the picture at every one; `ARingThatIsNotTheEntitysIsRefused`
+  refuses eight bad rows. `test_mp_layer`: `AGravityWellWearsAGreenRing` attaches all five levels, finds ten
+  quads at the ten nodes, and checks each one's picture, size, added blend and colour (0.25, 0.5, 0.25, 1),
+  the depth split on 4-17, and that level0 has none.
+- **A deliberate deviation from the brief's wording, recorded.** 00_order 4.3 asks for "`test_mp_wells`: 10
+  quads over 5 levels". A quad is the layer's, and `test_mp_wells` links `MagicPortalsSim` only -
+  `test_mp_layer` is the one suite that links `MagicPortalsGame`, and the harness the walk needs
+  (`publishViewport`, `TestPaths`, `CloseTheLevelStartPopup`, `tickWith`) lives in its own translation unit.
+  **The gate is met, split across the two suites**: the ten quads and their colour in `test_mp_layer`, the ten
+  sizes and the arithmetic behind them in `test_mp_wells`. Linking the game into a second suite for one step
+  was the alternative and was not taken.
+
+**BASELINE.** Step 84's `4.2/after/sweep/` is this step's "before", as 00_order's baseline rule says. The
+committed build (HEAD `5a544ac`, `MagicPortals.exe` `534a6ca2`) was captured before any change
+(`4.3/before/gates/`, `capture_43.sh`) and reproduced **all six** of step 84's md5s exactly: 1-01 `6d5f4435`,
+4-17 `dde2de1e`, 4-18 `ffef77c5`, 4-19 `fd180653`, 4-21 `7b8f179d`, 4-28 `52fa7a2e` - re-checked in the resume
+against `4.2/after/sweep/`'s files and its capture log, and all 128 of that sweep's frames still match their
+logged md5s. So the whole of `4.2/after/sweep` is this step's before, and the five well levels' "today"
+readings come from those same frames. After: `4.3/after/`, binary `9b1da36b`.
+
+**GATES.** 1280x720, `--fixed-step`, f420. Scripts in `4.3/work/`:
+- `wells.py`: the colour estimator is `work_s34/antiportal_edge.py`'s, unchanged - per 10-degree sector, inside
+  median over r in [0.90, 0.95] x half less outside median over [1.03, 1.09] x half, over `hd/white_ring.png`'s
+  own step - read at the **decoded half of radius - 12**, never scanned. On this picture `T_out` is **0**, so
+  `antiportal_census.py`'s normalisation (divide by `T_in` = 229.55) and `antiportal_edge.py`'s (by
+  `T_in - T_out`) are the same number; one grey level is 0.00436 in `c`.
+- **The camera is measured, not assumed.** The before and after frames differ only where this step draws, so
+  `after - before` IS the ring: each ring's centre is found by correlating that difference with its own picture
+  at the decoded size, by FFT over the whole frame, and a level's offset is the median of the per-ring peaks
+  within 100 px of the node. Measured: 4-17 (-2, +1), 4-18 (0, +1), 4-19 (-32.5, -4), 4-21 (+12, 0), 4-28
+  (-2, -7) px, and the readings are taken at the node plus that offset. **That estimate is not the only
+  admissible camera** (the non-regression row below finds it 12 px and 6 px from any placement that contains
+  every change on 4-21 and 4-28, where it rests on one ring more than half off the screen), so every reading
+  was taken again at each admissible camera (`camera_43.py`, `camera_43.txt`): **the five gate rings read green
+  0.475-0.521, red 0.250-0.268 and blue 0.213-0.268 at every one of them**, so no verdict depends on it.
+- **The same estimator is run on the original's library frames**, with its camera found the same way against
+  the frame's own green, so the two columns below are one measurement made twice.
+
+| Gate (00_order section 7, 4.3) | Required | Before | After |
+|---|---|---|---|
+| 4-17 `gravity_agent_ent_2439` (r 106, half 94), at half | `c_G` in [0.40, 0.60]; `c_R`, `c_B` in [0.15, 0.32] | (0.000, 0.009, 0.000) | **(0.253, 0.497, 0.253): passes** (36 sectors; the original's six frames read a median (0.253, 0.529, 0.296)) |
+| 4-18 `gravity_agent_ent_2511` (r 106) | the same | (0.000, -0.022, -0.035) | **(0.253, 0.479, 0.213): passes** (19 sectors; original median (0.253, 0.481, 0.213)) |
+| 4-18 `gravity_agent_2508` (r 140, half 128) | the same | (0.000, -0.009, -0.017) | **(0.250, 0.512, 0.268): passes** (12 sectors - its centre is 25 px beyond the right edge; original median (0.249, 0.503, 0.275)) |
+| 4-18 `gravity_agent_ent_2491` (r 106) | the same | (0.000, 0.017, 0.017) | **(0.268, 0.521, 0.253): passes** (28 sectors; original median (0.253, 0.449, 0.214)) |
+| 4-18 `gravity_agent_ent_2490` (r 106) | the same | (0.000, 0.017, 0.017) | **(0.253, 0.514, 0.253): passes** (28 sectors; original median (0.253, 0.481, 0.240)) |
+| `test_mp_wells`: ten quads over five levels, level16c 188 u | ten rings, 188 units at level16c | no ring anywhere | **passes, split across two suites** (the deviation above): `test_mp_layer` finds **10 quads over the 5 levels** at the ten nodes, level16c's **188.0 units** across, added, (0.25, 0.5, 0.25, 1), and `test_mp_wells` pins all ten sizes and that each zone is half its ring |
+| `test_mp_wells` | green, once | floor 45 | **98 checks, 0 failures: passes**; the suite's floor is raised 45 -> 75 |
+| `test_mp_layer` | green | 1,120 checks (step 84) | **1,183 checks, 0 failures: passes** |
+
+Rows this step measured that 00_order does not require, reported because they are what makes the five above
+trustworthy:
+
+| Reading | Measured |
+|---|---|
+| The other five wells, at the same half (the matched-filter camera; `camera_43.txt` for the others) | 4-19 `2439` **(0.248, 0.457, 0.213)** and `2516` **(0.216, 0.396, 0.179)** against the original's medians (0.248, 0.397, 0.206) and (0.253, 0.420, 0.215): 0.060 over in green on the first, and 0.024 to 0.037 under on all three channels on the second, whose green is 0.004 under the band the five gate rings are held to. At the searched camera (-29, 0) they read (0.248, 0.475, 0.218) and (0.218, 0.423, 0.179). The brief calls its 4-19 r140 reading (`2439`) "weak" and did not read the two r64 wells at all. 4-19 `2691` **(0.131, 0.296, 0.159)** against the original's (0.123, 0.415, 0.206): **0.119 under in green**, a ring whose centre is 26 px beyond the right edge (16 sectors). 4-28 `1915` **(0.248, 0.475, 0.218)** against (0.248, 0.492, 0.235) (three frames), (0.248, 0.484, 0.253) at the searched camera. 4-21 `1758`'s centre is at (1294, 101) at camera (0, 0), 14 px beyond the right edge ((1306, 101) at the matched-filter camera, which the next row rejects for 4-21), and its half 248 units, 697.5 px: fewer than 8 sectors carry both bands on the screen, in the port and in all six of the original's frames, so no colour reading is claimed; but **both builds draw the arc of it that reaches the screen** (the next row). **Held to the original's frame-to-frame RANGE instead of its median, the port is inside it on 2 of the 9 readable rings (4-18 `2511` and `2508`) and outside on 7**, the other three gate rings among them (4-17 `2439` and 4-18 `2491`, `2490`); the range is narrow (six frames a level, and 4-28's three read one value), so it is quoted, not gated - the gates are the band |
+| Non-regression on the five well levels, read on the sweep frames themselves (`nonreg_all.py`) | Changed pixels 122,435 (4-17), 325,452 (4-18), 102,825 (4-19), 194,038 (4-21), 95,470 (4-28), and **0 outside the rings' own quads on all five at one camera offset per level** - the quads being 2 x half squares about the nodes plus 2 px. Which offset is recorded, because it matters: at the matched-filter camera 0 outside on 4-17, 4-18 and 4-19 but **837 on 4-21 and 130 on 4-28**, whose camera rests on one ring more than half off the screen; at camera (0, 0) 0 outside on 4-17, 4-18, 4-21 and 4-28 but **1,533 on 4-19**, whose camera has scrolled about 30 px; at the offset the search picks ((+2, 0), (+1, 0), (-29, 0), (0, 0), (-3, -1) px) 0 on all five. So the claim is that SOME single placement per level contains every changed pixel, and on every level the matched filter's or (0, 0) is one. **On 4-21 containment is a weak statement**: at camera (0, 0) that one quad, 699.5 px either side of a centre 14 px off the screen, covers the right 685 of the frame's 1,280 columns and every row. **4-21's evidence is the arc itself instead**, measured in the commit round (`4.3/commit/arc_421.py`, `arc_421.txt`): the green excess G - (R + B) / 2, median over the on-screen pixels of the census rim band [0.90, 0.95) x half against its outside band [1.03, 1.09) x half, reads **58.5 against 3.0 in all six of the original's frames (h0.3 to t8.0)**, 58.5 against 3.0 in the port's after frame and 3.0 against 3.0 in its before frame (55.0 after at the matched-filter camera). The original draws that arc from 0.3 s on, as the port now does. **The draft of this step put the searched offsets "within 3 px of the camera on every level"; they are 12 px from it on 4-21 and 6 px on 4-28** |
+| The upper quartile over the same sectors, where art in front can only read low | 4-17 (0.253, 0.528, 0.340); 4-18 (0.253, 0.497, 0.248), (0.293, 0.562, 0.358), (0.288, 0.585, 0.331), (0.288, 0.571, 0.358) |
+| **The drawn SIZE, which no gate asks for and which is the other half of the decode.** The half is scanned rather than assumed on 4-17: step 83's rule, the half whose summed R+G+B edge step is strongest, at 0.25-unit steps (`size_43.py`, `size_43.json`) | Port **96.00** units against the original's **97.50** (`4-17_t8.0`) and **97.75** (`4-17_h6.3`) at the cameras above. Both sit 2 to 4 % above the decoded half of 94, because the estimator's bands are not symmetric about a rim. **The reading moves with the camera, so the gap is a range, not a number** (the verifier's `4.3/verify1c/size_sens.txt`, `size_scan.txt`): within 2 px of (0, 0) the port reads **95.50-96.25**, and within 3 px of each frame's camera the original reads **96.75-97.75** (t8.0) and **94.25-98.00** (h6.3); a camera 12 to 13 px off even puts the original below the port. **The TIER is the likely direction of the gap, not a measured 1.5 to 1.75 units**: the port draws the 1x `white_ring.png`, whose rim falls to half its peak at r 0.976 of the picture's half (91.8 units at a half of 94), and the original the 720 tier's `hd/white_ring.png`, whose rim does so at r 0.994 (93.4 units): 1.7 units apart in the files themselves (R12, R13; step 2.2's). Read straight off the port's `after - before`, the ring is lit (one grey level or more, summed) out to the 0.25-unit annulus at 93.75 units and not beyond: the 1x picture's outermost texel (r 0.986, 92.6 units) and its bilinear spread, at a half of 94. A half of 106 (the well's own radius) or of 47 (the manager's halving) is what neither build draws. **The draft of this step quoted 95.75 / 95.25 / 95.50 from a scan it did not keep; re-measured in the resume, the numbers are these, and the ranges were added in the commit round** |
+| 1-01 f420 | **`6d5f4435`, byte-identical** in the gates and in the sweep (1-01 places no well) |
+| Non-regression, the sweep at f420 (`4.3/after/sweep/` against `4.2/after/sweep/`, all 128; `nonreg.py`, `nonreg_all.py`, `nonreg_all.json`) | **123 byte-identical and 5 moved, and the five are exactly the levels that place a well** (4-17, 4-18, 4-19, 4-21, 4-28): no level without a well moved and none with one stood still. **Each of the five sweep frames is byte-identical to its gate frame** from a separate run of the same exe (`ed6c28e4`, `2c64f317`, `3ff406a1`, `6e40589a`, `2a8ca8f4`) - the `--fixed-step` determinism the baseline rule rests on - and the containment row above was read on the sweep frames. 101 frames were taken before the power loss (2026-09-18 19:46 to 2026-09-19 08:53, across the laptop's sleep) and the 27 from 4-06 on after it (09:19 to 09:23), all on `9b1da36b` |
+| Validation | **141 launches with a logged exit: 140 exit 0** (6 on the committed build `534a6ca2`, 134 on `9b1da36b`: 6 gates and 128 sweep) **and 1 exit 126**, Smart App Control refusing the first link `b26bd730` (below), whose log the relaunch overwrote at the same path - so 141 logged launches leave 140 logs; two more launches of `9b1da36b` (4-06, 4-07 at 08:54) were cut off by the power loss and their files deleted. **Validation layers ACTIVE in all 140 surviving logs** (6 before-gate, 6 after-gate, 128 sweep) **and 0 validation messages** (`VUID`, `Validation Error`, `validation error`) in any; 0 NUL bytes in any |
+
+**THE RESUME (2026-09-19).** The laptop slept during the sweep (its log jumps from 19:54 to 21:56 at 2-26 and
+to 08:48 at 2-27) and shut down uncleanly at 08:54 while capturing 4-07. What that left, and what was done
+about it:
+- **Checked before anything was trusted.** `after/capture.txt` held 98 NUL bytes where the 4-06 line had been
+  (the line's own length), `after/sweep/4-06_level5c_f420.png` was 1,084,417 NUL bytes, and the 4-06 and 4-07
+  logs ended in NUL padding. The other 101 sweep frames and all six gate frames match their logged md5s, and
+  all 113 surviving logs hold no NUL byte. The log was rebuilt from its 10 readable gate lines and the
+  sweep's own copy (`sweep43.log`, identical to the damaged file's readable lines); the damaged file is kept
+  as `after/capture_damaged_by_power_loss.txt`, and the three damaged files (the 4-06 frame and the 4-06 and
+  4-07 logs) were deleted.
+- **The binaries were confirmed current without relinking.** The build's own `ninja -n` stops at CMake's glob
+  re-check, so it was run on a verbatim copy of `build.ninja`, which ninja does not try to regenerate: **no
+  work to do** for `MagicPortals`, `test_mp_layer` and `test_mp_wells`, and `MagicPortals.exe` is still
+  `9b1da36b`. The 27 missing levels were captured on it by `capture_43_resume.sh`, `capture_43.sh`'s sweep
+  limited to those tags with the same `run()` and its stop at 126: 27 of 27 exit 0, no refusal.
+- **The record was corrected against the decode and the frames**: the agent's turn (WHAT THE ORIGINAL DOES),
+  the static agent's first frame, the R2 wording, "within 0.072 on every one of the nine rings" (eight of
+  nine), 4-21 "off the screen" (an arc of it is drawn), the searched quads' distance from the camera, the port
+  "inside the original's spread" on 4-19 (outside it on both), the brief's "weak" (its r140 row, not `2516`),
+  the manager's halving (a half of 47, not 32) and the size row (re-measured).
+- **One data-file correction, prose only.** `gravitywell.json` `ring._source` said the agent turns once over
+  its first 3,000 ms; it now says what ins 148-157 and `computeRoundabout` do, names the scale custom datum,
+  gives the call's range as ins 81-102 and states R2 as decided. `LoadRules` reads the ring's seven values and
+  ignores `_source`, and the file is read from the source tree at run time
+  (`MAGICPORTALS_PORT_DATA_DIR`), not built, so nothing was relinked; the 128 sweep frames and the gates were
+  taken before the edit, and both suites were run after it, parsing the edited file.
+- **Two code comments carried the same looseness and were corrected in the commit round** (below), not
+  relinked for here: `MagicPortalsLayer.cpp`'s and `test_mp_layer.cpp`'s "on its first tick" (the first
+  frame the static agent's callback runs), and the layer's "sizes it to the well's reach" (the ring's edge is
+  12 units inside the force's reach).
+
+**THE SUITES.** `test_mp_wells` (`5b830c12`) and `test_mp_layer` (`99df591a`), linked in the build round, were
+run directly once each in the resume, after the data-file edit: **98 and 1,183 checks, 0 failures** - the
+counts the build round reported on the same binaries. **ctest was NOT run.** The dry run shows the full build
+would compile 23 more test objects and relink 43 more executables (the 42 other `test_mp_*` suites and
+`MagicPortalsSpike.exe`: their objects include `GravityWell.hpp` or they link `MagicPortalsSim.lib`), each a
+fresh unsigned binary Smart App Control may refuse with a notification to the owner; those suites are stale
+against this change and **not run for this step**. None of them was named by 4.3's gates; the commit round
+compiled and linked all of them with 0 warnings and left their run to the merge's ctest (THE COMMIT ROUND).
+
+**BUILD.** The binaries are the build round's: `MagicPortals.exe` `9b1da36b` (linked 2026-09-18 19:40),
+`test_mp_layer.exe` and `test_mp_wells.exe` (19:39). Their build log is not among that round's files, so **the
+warning count was re-measured without touching the build**: the four changed translation units
+(`GravityWell.cpp`, `MagicPortalsLayer.cpp`, `test_mp_layer.cpp`, `test_mp_wells.cpp`) compiled with the
+build's own command lines (MSVC, Release, /W4), objects written to a scratch folder and nothing linked:
+**0 warnings, 0 errors** (`4.3/resume/compile4.log`); the dry run then still reported no work to do. The
+commit round then ran the full build (below).
+
+**SMART APP CONTROL.** In the build round the first link of `MagicPortals.exe` (`b26bd730`) was refused on its
+first launch (rc 126, 19:40:26, `after/capture_damaged_by_power_loss.txt`); it was deleted and relinked once,
+and the relink (`9b1da36b`) ran on its first launch and on all 134 captures since. The resume linked nothing
+and launched `9b1da36b` 27 times and the two suites once each: **no refusal, no delete-and-relink, no
+notification.** The commit round launched its fresh `test_mp_layer.exe` once and its fresh `MagicPortals.exe`
+six times, each first launch accepted: no refusal there either.
+
+**THE COMMIT ROUND (2026-09-19).** Text only; no behaviour changed.
+- **The two loose comments corrected**: the layer's now says the callback adds the ring the first time it runs
+  (a static agent's first frame on screen) and sizes it to radius x 2 - 24, its edge 12 units inside the
+  well's reach; `test_mp_layer.cpp`'s says "the first time it runs".
+- **The record corrected from the verifier's findings**: 4-21's arc is now measured in the original rather than
+  called open (the other-wells and non-regression rows, No bucket below), 4-21 `1758`'s centre is quoted at
+  camera (0, 0), and the size row gives ranges over admissible cameras, with the tier as the likely direction
+  of the gap rather than a measured 1.5 to 1.75 units (it and the R12/R13 bullet).
+- **The full build of this tree**: 72 steps, 25 objects compiled (the 23 test objects that include
+  `GravityWell.hpp` and had never been compiled with it, plus the two files above) and 46 links, **0 warnings**
+  (`4.3/commit/build_commit.log`, rc 0); a dry run on a copy of `build.ninja` then reports no work to do.
+  `MagicPortals.exe` is now `b1dbbac3`, `test_mp_layer.exe` `668d95ce`; `test_mp_wells.exe` did not relink
+  (`5b830c12`).
+- **The two suites, run directly once each**: `test_mp_wells` **98 checks, 0 failures**, `test_mp_layer`
+  **1,183 checks, 0 failures** (`4.3/commit/test_mp_*.txt`).
+- **The gate frames, recaptured on `b1dbbac3`** (`capture_43.sh commit`): 1-01, 4-17, 4-18, 4-19, 4-21 and 4-28
+  at f420 are **all six byte-identical** to the gate frames above (`6d5f4435`, `ed6c28e4`, `2c64f317`,
+  `3ff406a1`, `6e40589a`, `2a8ca8f4`), rc 0, validation ACTIVE in 6 of 6 logs with 0 messages. A comment moves
+  no pixel, and the relink moved none.
+- **ctest NOT run, by the owner's Smart App Control rule**: the other 42 `test_mp_*` suites and
+  `MagicPortalsSpike.exe` are freshly linked, unsigned binaries, and none is named by 4.3's gates. They run in
+  the merge of `visuals-b` into main, whose tree relinks them anyway.
+
+**RECORDED DEVIATIONS.** Two, and neither is a gate row that fails.
+- **The `test_mp_wells` gate is met across two suites** (WHAT CHANGED): the ten quads in `test_mp_layer`, the
+  sizes in `test_mp_wells`.
+- **The ring exists from the level's first frame in the port**, where the original adds it on the first frame
+  the static agent's bucket is visible (WHAT CHANGED); no gate frame can see the difference.
+
+**WHAT THIS STEP DOES NOT DO.**
+- **The agent's turn after a lap** (`computeRoundabout` ins 392-413 and the agent's ins 174-230): the agent's
+  picture, not the ring's, and step 11.2's with the `roundabout_effect`. Until then the port draws the agent
+  still, which is what the original does until the first lap.
+- **Nothing about the refusal.** R2 is decided for the original and written down with its decode, and
+  `test_mp_wells.cpp:312-313` still asserts the zone step 33 gave the port. Taking it away, and letting a shot
+  through a well, is a gameplay step.
+- **No tier.** The 1x `white_ring.png` is what is drawn, as in steps 83 and 84 (R12, R13); step 2.2 owns it,
+  and the size row above estimates what it will move.
+- **No bucket.** The port draws every picture whatever its bucket, as it did before. On 4-21 that is what the
+  original does: `1758`'s arc, whose centre is off the screen, is drawn in all six of its library frames from
+  0.3 s (the non-regression row, `4.3/commit/arc_421.txt`). The visible-bucket margin itself (00_order section
+  8's D8 row) is still unmeasured.
+- **No change to `buildLights`' count of the pictures below a light.** Its ownerless branch
+  (`MagicPortalsLayer.cpp:3406`) counts every `m_sprites` entry at or below a light's z as a whole slot, and
+  the rings are the first between-slot pictures in `m_sprites`. No pixel moves today - four of the five well
+  levels place no light, and level27c's `fire_agent_ent_1919` has its own picture and so takes the
+  `placed.sprite >= 0` branch - but a light with no picture on a well level would sit a slot too deep. Step
+  6.3's slot table should leave between-slot pictures out of that count and pin it in `test_mp_layer`.
+- **The zone's box** (`syncDrawables`, shown only with boxes) is still `antiportalRadiusPx x scale x 2` and so
+  is not the well's own circle. A box is not a picture, and step 4a left the same gap for the levels' rings.

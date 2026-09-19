@@ -2486,6 +2486,52 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         dial.alpha = timer.alpha;
         m_timers.push_back(dial);
     }
+    // A GRAVITY WELL'S GREEN RING (gravitywell.json `ring`), which no level file
+    // pictures: ETHCallback_gravity_agent adds an antiportal.ent at the agent's own
+    // position the first time it runs (a static agent's first frame on screen),
+    // sizes it to radius x 2 - 24, its edge 12 units inside the well's reach, and
+    // paints it green. Built here with the level instead; step 85 records why.
+    // A picture with no node, like the dark dragon's dropped platform, and the ten
+    // of them across five levels are the only wells in the game.
+    //
+    // Added after every slotAfter above has been taken, because that lambda counts
+    // what is in m_sprites: a ring pushed before the dials would put a dial a slot
+    // deeper. All ten sit at one depth, the -5 AddEntity gives them, and they are
+    // added, so the order between them cannot show.
+    const GravityWell::Ring& ring = m_level.wells.rules.ring;
+    const std::string ringImage = originalImage(ring.sprite);
+    const int ringZIndex = static_cast<int>(std::floor(ring.z));
+    if (!m_level.wells.wells.empty() && imageSizePx(ringImage) == glm::dvec2(0.0)) {
+        SUPERSONIC_LOG_WARN("Magic Portals")
+            << "no ring round the gravity wells: " << ringImage << " could not be read" << std::endl;
+    } else {
+        const float ringZ = slotAfter(ringZIndex);
+        for (const GravityWell::Well& well : m_level.wells.wells) {
+            DrawnSprite made;
+            made.sprite.node = well.name + "#ring";
+            made.sprite.texture = ringImage;
+            made.sprite.atPx = well.atPx;
+            // The SIZE scaleToSize gives it - radius x 2 less the shrink - and not
+            // white_ring.png's own 128, which is only what that scale is measured
+            // from. The manager's 0.5 is not in it: this entity is called
+            // `gravity_area` before the manager ever looks for an antiportal.
+            made.sprite.sizePx = glm::dvec2(well.RingSizePx(m_level.wells.rules));
+            made.sprite.additive = ring.additive;
+            made.sprite.zIndex = ringZIndex;
+            made.z = ringZ;
+            made.colour = glm::vec4(static_cast<glm::vec3>(ring.colour), 1.0f);
+            made.emissive = ring.emissive;
+            made.isStatic = ring.isStatic;
+            made.applyLight = ring.applyLight;
+            made.lookZ = ring.z;
+            made.centrePx = well.atPx;
+            made.ownerPx = well.atPx;
+            // No lightmap: a bake belongs to an entity the level file placed, named
+            // by its id, and this one is added while the level runs.
+            made.quad = makeSprite(registry, "Magic Portals Well Ring", ringImage, ring.additive);
+            m_sprites.push_back(std::move(made));
+        }
+    }
     m_artReady = true;
     // And what the level's own art does not show: the entities' particles.
     buildEmitters(registry);

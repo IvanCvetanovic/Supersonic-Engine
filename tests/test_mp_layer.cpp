@@ -41,6 +41,7 @@
 #include "core/ViewportInfo.hpp"
 
 #include "sim/Art.hpp"
+#include "sim/GravityWell.hpp"
 #include "sim/LevelEnd.hpp"
 #include "sim/Lighting.hpp"
 #include "sim/Loading.hpp"
@@ -1157,6 +1158,92 @@ void AnAntiportalSpelledWithEntIsDrawnTheSame() {
     }
     CHECK_EQ(found, 1);
     layer.OnDetach(registry);
+}
+
+// A GRAVITY WELL WEARS A GREEN RING (gravitywell.json `ring`), and no level file
+// says so: ETHCallback_gravity_agent adds an antiportal.ent at the agent's own
+// position the first time it runs, sizes it to radius * 2 - 24 and paints it
+// (0.25, 0.5, 0.25). It is renamed `gravity_area` on the way in, so the callback it
+// gets is the force and not ETHCallback_antiportal - this ring neither blinks nor
+// turns, and the manager never halves it. Ten of them, across the five levels that
+// place a well.
+void AGravityWellWearsAGreenRing() {
+    const struct Level {
+        const char* name;
+        std::size_t rings;
+    } levels[] = {{"level16c", 1}, {"level17c", 4}, {"level18c", 3}, {"level20c", 1}, {"level27c", 1}};
+
+    std::size_t total = 0;
+    for (const Level& one : levels) {
+        entt::registry registry;
+        publishViewport(registry);
+        MagicPortalsLayer layer(TestPaths(), one.name);
+        layer.OnAttach(registry);
+        CHECK_MSG(layer.SimLevel() != nullptr && layer.ArtError().empty(), layer.LoadError() + layer.ArtError());
+        if (layer.SimLevel() == nullptr) continue;
+        CloseTheLevelStartPopup(layer, registry);
+        tickWith(layer, registry, kRest, {}, {});
+        layer.OnUpdate(registry, MagicPortalsLayer::kTick);
+
+        const MagicPortals::GravityWell::State& wells = layer.SimLevel()->wells;
+        CHECK_MSG(wells.wells.size() == one.rings, std::string(one.name) + " places its wells");
+        std::size_t found = 0;
+        float ringZ = 0.0f;
+        for (const MagicPortals::GravityWell::Well& well : wells.wells) {
+            const float across = MagicPortals::Units::ToMetres(well.RingSizePx(wells.rules));
+            for (auto [entity, tag, material, transform] :
+                 registry.view<TagComponent, MaterialComponent, TransformComponent>().each()) {
+                (void)entity;
+                if (tag.tag != "Magic Portals Well Ring") continue;
+                if (glm::distance(MagicPortals::Units::ToPixels(transform.position), well.atPx) > 0.5) continue;
+                CHECK_MSG(material.albedoTexturePath.find("white_ring.png") != std::string::npos,
+                          well.name + " wears white_ring.png, not " + material.albedoTexturePath);
+                CHECK_MSG(std::fabs(transform.scale.x - across) < 1e-5f && std::fabs(transform.scale.y - across) < 1e-5f,
+                          well.name + " is drawn " + std::to_string(well.RingSizePx(wells.rules)) +
+                              " units across, not " +
+                              std::to_string(transform.scale.x / MagicPortals::Units::ToMetres(1.0)));
+                CHECK_MSG(material.blend == MaterialComponent::BlendMode::Additive, well.name + "'s ring is added");
+                CHECK_MSG(material.albedoColor == glm::vec4(0.25f, 0.5f, 0.25f, 1.0f),
+                          well.name + "'s ring is green, not (" + std::to_string(material.albedoColor.r) + ", " +
+                              std::to_string(material.albedoColor.g) + ", " + std::to_string(material.albedoColor.b) +
+                              ")");
+                ringZ = transform.position.z;
+                ++found;
+            }
+        }
+        CHECK_MSG(found == one.rings, std::string(one.name) + ": " + std::to_string(found) + " ring(s) of " +
+                                          std::to_string(one.rings));
+        CHECK_EQ(Tagged(registry, "Magic Portals Well Ring"), static_cast<int>(one.rings));
+        total += found;
+
+        // AND IT IS DRAWN AT THE DEPTH THE CALLBACK GIVES IT, -5: after the level's
+        // own pictures at or below that and before the next, so the door and the two
+        // backgrounds of 4-17 stay behind it and its eleven nearer pictures cover it.
+        if (std::string(one.name) == "level16c" && found == 1) {
+            int behind = 0;
+            int inFront = 0;
+            for (auto [entity, tag, transform] : registry.view<TagComponent, TransformComponent>().each()) {
+                (void)entity;
+                if (tag.tag != "Magic Portals Sprite") continue;
+                if (transform.position.z < ringZ) ++behind;
+                if (transform.position.z > ringZ) ++inFront;
+            }
+            CHECK_MSG(behind == 5 && inFront == 11,
+                      "4-17 draws 5 of its 16 pictures behind the ring and 11 in front: " + std::to_string(behind) +
+                          " and " + std::to_string(inFront));
+        }
+        layer.OnDetach(registry);
+    }
+    CHECK_EQ(total, std::size_t{10});
+
+    // A level with no well has no ring, and nothing white_ring.png-shaped that the
+    // wells' tag could have caught: level0 places neither.
+    entt::registry none;
+    publishViewport(none);
+    MagicPortalsLayer plain(TestPaths(), "level0");
+    plain.OnAttach(none);
+    CHECK_EQ(Tagged(none, "Magic Portals Well Ring"), 0);
+    plain.OnDetach(none);
 }
 
 void WithoutTheArtTheLevelIsBoxes() {
@@ -6344,6 +6431,7 @@ void runTests() {
     AStaticPortalGlows();
     AnAntiportalIsDrawnAtHalfItsNodesScale();
     AnAntiportalSpelledWithEntIsDrawnTheSame();
+    AGravityWellWearsAGreenRing();
     AnAntiportalBlinksRedAndTurnsAndAPauseHoldsBoth();
     WithoutTheArtTheLevelIsBoxes();
     APortalAndAShotAreTheOriginals();

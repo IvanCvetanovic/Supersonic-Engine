@@ -27,6 +27,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <system_error>
 
@@ -73,6 +75,95 @@ void TheRulesRead() {
     CHECK(::test::nearly(static_cast<float>(rules.zoneShrinkPx), 24.0f));
     std::printf("  pulls at %.2f m/s in zero gravity and %.2f with, per %.4f ms frame\n", rules.forceZeroGravity,
                 rules.forceWithGravity, rules.referenceFrameMs);
+
+    // And the ring the agent adds with that zone: antiportal.ent's own file, and
+    // the green its callback paints it at instr 117-131.
+    const GravityWell::Ring& ring = rules.ring;
+    CHECK_MSG(ring.sprite == "white_ring.png" && ring.additive, "white_ring.png, added (blendMode 1)");
+    CHECK_MSG(ring.colour == glm::dvec3(0.25, 0.5, 0.25), "SetColor(vector3(0.5, 1, 0.5) * 0.5): green");
+    CHECK_MSG(ring.emissive == glm::dvec3(1.0), "antiportal.ent's EmissiveColor (1, 1, 1)");
+    CHECK_MSG(!ring.applyLight && ring.isStatic, "applyLight 0, static 1");
+    CHECK_MSG(ring.z == -5.0, "AddEntity's vector3(pos, -5)");
+}
+
+// THE RING IS THE ZONE SEEN, and the size is the primary of the two: scaleToSize
+// gives the added antiportal a SIZE of radius * 2 - 24, and the refusal is half of
+// it (GetSize().x * 0.5). Read in that order, so a ruling about the refusal
+// (00_order R2) cannot move the picture.
+void TheRingIsTheZoneSeen() {
+    GravityWell::Rules rules;
+    std::string error;
+    if (!GravityWell::LoadRules(kPortData + "/gravitywell.json", rules, error)) return;
+
+    const struct Level {
+        const char* name;
+        double sizes[4];
+        std::size_t count;
+    } levels[] = {{"level16c", {188.0, 0.0, 0.0, 0.0}, 1},
+                  {"level17c", {188.0, 256.0, 188.0, 188.0}, 4},
+                  {"level18c", {256.0, 104.0, 104.0, 0.0}, 3},
+                  {"level20c", {496.0, 0.0, 0.0, 0.0}, 1},
+                  {"level27c", {232.0, 0.0, 0.0, 0.0}, 1}};
+
+    std::size_t rings = 0;
+    for (const Level& one : levels) {
+        Game::Data data;
+        entt::registry registry;
+        Game::Level level;
+        if (!Open(one.name, data, registry, level)) continue;
+        if (level.wells.wells.size() != one.count) continue;
+        for (std::size_t i = 0; i < level.wells.wells.size(); ++i) {
+            const GravityWell::Well& well = level.wells.wells[i];
+            const double size = well.RingSizePx(rules);
+            CHECK_MSG(::test::nearly(static_cast<float>(size), static_cast<float>(one.sizes[i])),
+                      well.name + " is drawn " + std::to_string(one.sizes[i]) + " units across, not " +
+                          std::to_string(size));
+            // The refusal is half the picture, at every placement.
+            CHECK(::test::nearly(static_cast<float>(well.ZoneRadiusPx(rules)), static_cast<float>(size * 0.5)));
+            ++rings;
+        }
+        std::printf("  %s: %zu ring(s), the first %.0f units across\n", one.name, level.wells.wells.size(),
+                    level.wells.wells.front().RingSizePx(rules));
+    }
+    CHECK_EQ(rings, std::size_t{10});
+}
+
+// A ring is antiportal.ent's own row, and none of it may be guessed: a file that
+// is missing any of it is refused rather than drawn at a default on five levels.
+void ARingThatIsNotTheEntitysIsRefused() {
+    std::ifstream file(kPortData + "/gravitywell.json", std::ios::binary);
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string real = buffer.str();
+    CHECK(real.find("\"ring\": {") != std::string::npos);
+
+    const std::filesystem::path scratch = std::filesystem::temp_directory_path() / "supersonic-test-mp-wells";
+    std::error_code ec;
+    std::filesystem::create_directories(scratch, ec);
+    const auto refused = [&real, &scratch](const std::string& from, const std::string& to, const std::string& name) {
+        std::string text = real;
+        const std::size_t at = text.find(from);
+        CHECK_MSG(at != std::string::npos, from);
+        if (at == std::string::npos) return;
+        text.replace(at, from.size(), to);
+        const std::filesystem::path path = scratch / ("gravitywell-ring-" + name + ".json");
+        std::ofstream out(path, std::ios::binary);
+        out << text;
+        out.close();
+        GravityWell::Rules rules;
+        std::string error;
+        const bool ok = GravityWell::LoadRules(path.string(), rules, error);
+        CHECK_MSG(!ok, "refused: " + name);
+        CHECK_MSG(error.find("ring") != std::string::npos, name + ": " + error);
+    };
+    refused("\"ring\": {", "\"ring_gone\": {", "absent");
+    refused("\"sprite\": \"white_ring.png\"", "\"sprite\": \"\"", "no picture");
+    refused("\"additive\": true", "\"additive\": 1", "a blend that is not a bool");
+    refused("\"colour\": [0.25, 0.5, 0.25]", "\"colour\": [0.25, 0.5]", "two channels");
+    refused("\"colour\": [0.25, 0.5, 0.25]", "\"colour\": [0.25, -0.5, 0.25]", "below zero");
+    refused("\"emissive\": [1.0, 1.0, 1.0]", "\"emissive\": \"1 1 1\"", "an emissive that is not three numbers");
+    refused("\"apply_light\": false", "\"apply_light\": \"no\"", "a lighting flag that is not a bool");
+    refused("\"z\": -5.0", "\"z\": \"-5\"", "a depth that is not a number");
 }
 
 // The census, counted by reading every node's radius.
@@ -263,6 +354,8 @@ void runTests() {
     TheRulesRead();
     TenWellsAcrossFiveLevels();
     TheZoneIsTwelvePixelsInsideTheWell();
+    TheRingIsTheZoneSeen();
+    ARingThatIsNotTheEntitysIsRefused();
     ItPullsInwardAndFadesToNothingAtTheRim();
     ItPullsHarderWhereTheWorldHasGravity();
     NoPortalOpensInsideAWell();
@@ -284,5 +377,5 @@ int main() {
         return 77;
     }
     runTests();
-    return ::test::summary("test_mp_wells", 45);
+    return ::test::summary("test_mp_wells", 75);
 }
