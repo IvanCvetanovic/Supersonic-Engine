@@ -12347,6 +12347,12 @@ pictures and every particle bitmap).
   no tier file. **The gravity well's ring does not** (`originalImage(ring.sprite)` in `buildSprites`): its 10 rings
   on 4-17, 4-18, 4-19, 4-21 and 4-28 draw the 1x `white_ring.png` (128 x 128) where the original draws
   `hd/white_ring.png` (256 x 256 at density 2, the same 128 units). Open; the merge does not fix it.
+- **A gate row the merge moved (found at step 74).** On the merged build step 72's 4.2 row for 4-02 `antiportal_2074`
+  reads a `c_R` maximum of **0.4269** against 0.36-0.42, where step 72 read 0.3964; its minimum stays 0.2178. The ring
+  draws the decoded 0.400 on both builds: the peak's sector median sits one 5-bit red level higher (98 grey, 91 at
+  step 72) now that the ring draws `hd/white_ring.png` over step 66's hd art. Step 74 first recorded it as the merge's
+  deviation. **That reading is taken about the node's pixel index; about the ring's drawn centre it reads 0.3964 /
+  0.2178, step 72's value** (step 74's third verification), so the row passes on both builds.
 - **Measured on the merged build** (`MagicPortals.exe` `c4739a37`): MSVC /W4, 87 steps, **0 warnings**. Run directly,
   once each, 0 failures: `test_mp_layer` **1,190** (923 + 1,183 - 916: main's, the branch's, less their base's, so no
   check was dropped), `test_mp_sprites` **650** (574 + 540 - 464), `test_mp_timed` 84, `test_mp_wells` 98,
@@ -12363,3 +12369,257 @@ pictures and every particle bitmap).
   the 45 are captured again with the 1x ring), 6,613 on the rims of main's hd rings at the old size and colour, which
   steps 71 and 72 replace (there the frame is the branch's), and 2,441 within one RGB565 step of main's (4 of them
   two steps).
+
+## Step 74 - the gravity well's ring and the timed crystal's dial drawn from the tier file the original draws (built)
+
+The merge of `visuals-b` (step 73's merge note) left the two pictures track B adds for itself off the route steps 66
+and 67 made every other picture take: `buildSprites` read the dial (step 68) and the gravity well's ring (step 73)
+through `originalImage` straight into `makeSprite`, not through step 67's `drawnImage`. Both now go through it, and
+nothing else changes. Game-only: no file under `src/` or `assets/shaders/`, and no data file. Changed:
+`MagicPortalsLayer.cpp`, `tests/test_mp_sprites.cpp`, `tests/test_mp_layer.cpp`. **The ten rings on 4-17, 4-18, 4-19,
+4-21 and 4-28 now draw `entities/hd/white_ring.png` (256 x 256 texels at density 2, 128 x 128 units) where they drew
+the 1x `white_ring.png` (128 x 128 at density 1, the same 128 units), at the same size, place, depth and colour: in
+all 128 sweep logs the only quads that change are those ten, and only their file. The dial still draws
+`entities/timer.png` as named (no tier file; 128 x 64 units, cells 32 x 32), now because the resolver says so, and
+every dial frame is byte-identical. Of the 128 f420 frames 123 are byte-identical to the merge's; the five that
+change are exactly the well levels, every changed pixel inside a ring's quad. All five of step 73's gate rings still
+pass, reading green 0.497-0.531 (0.479-0.529 on the merge's build) with red and blue 0.213-0.283. The other track-B
+gates this change cannot touch were re-read on the merged art: their frames are byte-identical across this change
+(473 of 473 gate-series frames), and where they moved from their recorded values they moved at the merge, with
+step 66's hd art (RECORDED DEVIATIONS).**
+
+**WHAT THE ORIGINAL DOES** (step 67 has the loader's decode, cited; step 66 applies it to a level's art).
+- **Both pictures take the one path every image takes.** `ETHCallback_gravity_agent` adds `antiportal.ent` (step 73,
+  ins 28-50) and `addTimerToCrystal` adds `timer.ent` (step 68); an added entity's sprite is asked of
+  `ETHGraphicResourceManager::GetPointer` (`ETHSpriteEntity.cpp:95`), which loads through `AddFile`
+  (`ETHResourceManager.cpp:109`, `:133-144`) and so draws the file `ChooseSpriteVersion`
+  (`ETHSpriteDensityManager.cpp:88-139`) picks, at `int(texels / D)` units (`GLES2Sprite.cpp:429-438`, `:389-392`).
+- **The ring:** `antiportal.ent`'s `<Sprite> white_ring.png` has an `hd/` twin, 256 x 256 at density 2: 128 x 128
+  units, the 1x file's. It is byte-identical (md5 `fa08a216`) to the converter's
+  `out/assets/entities/hd/white_ring.png`, which `entity_tiers.json` lists as the file drawn for
+  `entities/white_ring.png` (hd, density 2, 256 x 256 texels, 128 x 128 units) and which the levels' own antiportal
+  rings already draw through step 66's resolver.
+- **The dial:** `timer.ent`'s `timer.png` has neither an `hd/` nor a `fullhd/` twin (pinned since step 68), so the
+  original draws the file as named at density 1: 128 x 64 units, eight cells of 32 x 32.
+
+**WHAT CHANGED.**
+- **`MagicPortalsLayer::buildSprites`.**
+  - The dial: its sheet is `drawnImage(originalImage(timer.sprite))` and its cell `frameUnits(sheet, 4, 2)`, 32 x 32
+    units (it was the 1x file's texels over 4 x 2, the same 32 x 32); `makeSprite` takes the drawn path, which is
+    `timer.png`'s own, character for character.
+  - The ring: `drawnImage(originalImage(ring.sprite))`, resolved only on a level that places a well (as `imageSizePx`
+    was read only there before). The quad's texture is the drawn path, and its `Sprites::Sprite` carries the drawn
+    file's `tier`, `density` and `texels` as `Find` fills them for a level's picture. Its size is still
+    `Well::RingSizePx` (`scaleToSize`'s), never the file's.
+  - Both warnings name the file tried. `drawnImage`'s comment lists the two among the pictures with and without a
+    tier file.
+  - **After it every `originalImage` in the layer goes through `drawnImage` but one**: the finished screen's crystal,
+    which keeps its own `hd/` lookup - the UI fold-in step 67 declined and left to the owner. So the two the merge
+    named are all there were.
+  - The `level art tiers` log line (the only reader of `Sprite::tier`) counts `Find`'s sprites before the rings are
+    appended, so it and `test_mp_start`'s pinned totals are untouched: the line is identical in all 128 sweep logs,
+    summing to 2,248 hd / 146 fullhd / 489 1x placements.
+- **Tests.**
+  - `test_mp_sprites` `ThePortsOwnPicturesAreDrawnFromTheirTiers`: two more rows by the names the data gives -
+    `art.json` `timer`'s sprite as named at density 1, 128 x 64 texels, a 32 x 32 frame; `gravitywell.json` `ring`'s
+    sprite from `hd/`, 256 x 256 texels at density 2, a 128 x 128 frame; each the same frame as its 1x file's and cut
+    where an even split cuts it.
+  - `test_mp_layer` `AGravityWellWearsAGreenRing`: the ring's file is pinned as ending `/entities/hd/white_ring.png`.
+    **The pin it replaces, deliberately, was a substring `white_ring.png`, which the 1x file passes as well**, so it
+    could not tell the two routes apart. `EveryTimedCrystalHasADialBehindIt` counts the dials by
+    `/entities/timer.png` (it matched `timer.png`, which an `hd/` path would also end with).
+- **Not changed, on purpose.** `gravitywell.json`'s `sprite` stays `white_ring.png`, the name the entity gives: the
+  port resolves the tier from it (R13, route B). `test_mp_wells` and `test_mp_timed` link `MagicPortalsSim` only and
+  cannot see a quad's file (step 73's recorded split), so they are untouched and the ring's ten sizes stay pinned in
+  `test_mp_wells`. No other picture, number or data file.
+
+**BASELINE.** Before: the merge's build, SE `e81c21b`, `MagicPortals.exe` `c4739a37`: its sweep
+`visuals/merge_b2/sweep/` (1-01 f420 `52549d7f`) and, captured on that same binary before this change was built, the
+gate series of steps 68, 70 and 72 (`visuals/merge_tiers/before/`: `capture_mt.sh before anchor dial sway blink`,
+12 launches, 1-01 f420 `52549d7f` again). After: `visuals/merge_tiers/after/` and its `sweep/`, `MagicPortals.exe`
+`ddf507ef`. Scripts in `merge_tiers/work/`: `sweep_mt.py`, `same_series.py`, `wells_mt.py` (step 73's `wells.py`
+estimator, cropped and checked against it: it reproduces step 73's four 4-18 readings to the digit), and each
+step's own script re-pointed, estimator unchanged - `timer_mt.py` (step 68's `timer31.py`), `dial_check_mt.py`,
+`sway_mt.py` (step 70's `gates_33.py`), `alpha_exact_mt.py`, `alpha_swing_mt.py`, and step 71's `edge_41.py` and
+step 72's `blink_42.py` as they are. **The next step's "before" is `visuals/merge_tiers/after/` and its `sweep/`
+(1-01 f420 `52549d7f`).**
+
+**GATES.** 1280 x 720, `--fixed-step`. "Recorded" is the step's own record on `visuals-b` (1x art throughout);
+"merge" is `c4739a37`; "this step" is `ddf507ef`. For steps 68, 70, 71 and 72 the two builds' frames are
+byte-identical (the non-regression rows), so their readings are one reading.
+
+| Gate (the order; the planning step) | Required | Recorded | Merge | This step |
+|---|---|---|---|---|
+| 4.3 (step 73): 4-17 `gravity_agent_ent_2439`, `c` at half 94 | `c_G` in [0.40, 0.60]; `c_R`, `c_B` in [0.15, 0.32] | (0.253, 0.497, 0.253) | (0.253, 0.497, 0.250) | **(0.253, 0.505, 0.250): passes** (36 sectors; original median (0.253, 0.529, 0.296)) |
+| 4.3: 4-18 `gravity_agent_ent_2511` | the same | (0.253, 0.479, 0.213) | (0.253, 0.479, 0.213) | **(0.253, 0.497, 0.218): passes** (19; original (0.253, 0.481, 0.213)) |
+| 4.3: 4-18 `gravity_agent_2508` (half 128) | the same | (0.250, 0.512, 0.268) | (0.250, 0.512, 0.250) | **(0.248, 0.512, 0.248): passes** (12; original (0.249, 0.503, 0.275)) |
+| 4.3: 4-18 `gravity_agent_ent_2491` | the same | (0.268, 0.521, 0.253) | (0.253, 0.529, 0.266) | **(0.283, 0.531, 0.266): passes** (28; original (0.253, 0.449, 0.214)) |
+| 4.3: 4-18 `gravity_agent_ent_2490` | the same | (0.253, 0.514, 0.253) | (0.253, 0.505, 0.250) | **(0.253, 0.531, 0.270): passes** (28; original (0.253, 0.481, 0.240)) |
+| 4.3: the same five at every admissible camera | the same band | green 0.475-0.521, red 0.250-0.268, blue 0.213-0.268 | - | **green 0.497-0.531, red 0.248-0.283, blue 0.213-0.283 at all four cameras: passes** |
+| 4.1 (step 71): edge scan, half / scale, 1-07 `687`, 1-10 `574`, 1-12 `762`, 1-12 `574`, 2-26 `955` | 31.5-34.0 | 33.50 / 32.50 / 32.33 / 33.00 / **30.50 not met**; re-read at step 72: 33.25 / 32.00 / 32.89 / 33.00 / 33.25 | 33.25 / 31.75 / 33.61 / 34.00 / 33.25 | **the same: passes, 1-12 `574` at the band's top** (`edge_merge.json` = `edge_after.json`). 1-10 `638` has fewer than 8 sectors on screen, as before |
+| 4.1: `antiportal3.py` rim / scale (4a(5)), the same five | 28-33 | 29.83 / 30.44 / 29.72 / 29.60 / 28.19; not re-read at step 72 | 29.17 / 15.56 / 30.83 / 23.20 / 30.42 | **the same: NOT MET on 1-10 `574` and 1-12 `574`** - already 15.56 and 19.20 on step 72's own sweep (`4.2/work/edge_after_42.json`), not this step's or the merge's (RECORDED DEVIATIONS) |
+| 4.2 (step 72): `c_R` max / min, 3-12 `1376` | max 0.36-0.42, min 0.18-0.24 | 0.3964 / 0.2135 | 0.3964 / 0.2135 | **the same: passes** |
+| 4.2: 4-02 `2074` | the same | 0.3964 / 0.2178 | 0.4269 / 0.2178 at the node's pixel index | **passes about the ring's drawn centre, 0.3964 / 0.2178** (0.3964-0.4117 between the two centre estimates). `blink_42.py` as run reads 0.4269: it centres on the node's pixel index, and its matched-filter check reads nothing when before = after. Drawn centre (+0.40, -1.20) px by point symmetry of `fix1/unq`'s blink amplitude and (+0.40, -0.74) by a rim circle fit (`merge_tiers/verify3/`; THE SECOND FIX ROUND). The original's own ring reads at most 0.396 on its six library frames |
+| 4.2: 1-07 `687` | the same | 0.2875 / 0.1786, not met | 0.2679 / 0.1612 | **the same: NOT MET, as recorded at step 72** (the draw-order cover) |
+| 4.2: 4-07 `2166` | the same | 0.2679 / 0.1089, not met | 0.2679 / 0.1438 | **the same: NOT MET, as recorded** (its `eth_z` -12 cover) |
+| 4.2: period | 36 +- 2 frames | 36 on six of six | 36 on five; 3-12 `1533` (scale 1.3, half 41.6 u) turns at 360, 366, 369, 396, 414 | **the same: 36 on the four named rings and 3-12 `1375`; `1533`, which no row names, reads 9 / 30 / 45** |
+| 4.2: `c_G`, `c_B` (magnitude) | <= 0.03 | inside on 1-07, 4-02, 3-12 `1375`; over on 3-12 `1376` (B 0.0349), `1533` (B 0.0392), 4-07 (G -0.0436, B -0.0349) | 4-07 now G and B -0.0174 flat; the rest as recorded | **the same: inside on 4 of 6, 3 of the 4 named.** 3-12 `1376` reads G +0.0174 and B +0.0349 flat through all 25 frames: one 6-bit green and one 5-bit blue step of the ground across the band, which a ring coloured (`c`, 0, 0) cannot add to. The second verification's own estimator reads that blue 0.0177 at the node: the reading depends on the estimator |
+| 3.3 (step 70): 1-08 arrow, drawn alpha | 0.55 +- 0.03 | core-over-ring median 0.547; `arrow_alpha_exact` 0.542 (0.500-0.555); the verifier's exact-ground 0.552 | 0.547 (0.521-0.560, 69 frames); 0.548 (p5-p95 0.533-0.559, 2,680 px) | **the same: passes.** The verifier's `alpha_swing.py` reads 0 pixels here: it keeps only ground its still before frame barely reaches, and that frame is step 69's 1x arrow on 1x art, which differs from every frame of this art around the stroke. **Not run as a reading.** The second verification's temporal hi / lo estimator reads 0.576 (the circle 0.542): in the band too, 0.03 above core-over-ring |
+| 3.3: 1-05 dashed circle, alpha | 0.55 +- 0.05 | 0.541 (0.527-0.543) | 0.541 (0.527-0.543) | **the same: passes** (`dashed_circle.png` has no tier file). Its turn reads 8.0005 degrees a second (8.003 recorded), the arrow's swing 2.499 u (2.502) over 1.5708 s (1.5708) |
+| 3.1 (step 68): the cell, level26 and level23 | from the tick count | 17 of 17, 16 of 16 | 17 of 17, 16 of 16 | **the same: passes** |
+| 3.1: alpha | 0.50 +- 0.05 | 0.459-0.528 (median 0.493); 0.466-0.528 (0.492) | 0.447-0.535 (0.487); 0.459-0.524 (0.494) | **passes against a before of the same art** (THE FIX ROUND): less a dial-less run of this binary on the same ticks, level26 **0.471-0.518 (median 0.494)** and level23 **0.454-0.517 (0.491)**, every live fit in the band. As written, less step 59's before on 1x art, level26 f480 still reads 0.447, 0.003 under (RECORDED DEVIATIONS) |
+| 3.1: scale (`timer31.py`'s fit, compressed as step 68 records) | in [1.0, 1.15] | 1.04-1.11; 1.04-1.12 | 1.03-1.12 | **the same: passes.** The verifier's calibrated radius was not re-run |
+| 3.1: library cross-check (1-27 `t8.0` cell 6, 1-15 `t4.5` cell 3), by eye | as written | cell 6 at f480, cell 3 at f270 | - | **passes**: 1-27 f480 and 1-15 f270 are among the 51 dial frames byte-identical across this change, and were read by eye on the merged art in verification (`merge_tiers/verify1/lib_1-27_t8.0_vs_f480.png`, `lib_1-15_t4.5_vs_f270.png`): the same cell in each pair |
+| 3.1: nothing 30 frames after expiry (level26) | nothing at f630 | 3, 2, 1, 1 px at f624-f630; 0 from f632 | 3 px at f624 (within 5 px of the dial's centre), 0 of the dial's at f627-f636 | **the same: passes on pixels.** In a 60 px disc against the run's f690, less the 151 px that move once the dial and crystal are gone; the 1 px left at f627-f636, (1178, 576), is 52.8 px out, the untimed neighbour's bob (step 69). By the decode the dial is still drawn to tick 631 (step 68), below one RGB565 step here. Less the fix round's dial-less run, f630 to f900 are byte-identical: no dial pixel at f630 |
+| Non-regression, the gate series of steps 68, 70 and 72 | byte-identical | - | - | **473 of 473 frames byte-identical** (the dial 75, the sway 293, the blink 104, 1-01 1; `same_series.json`) |
+| Non-regression, the sweep at f420 against `merge_b2/sweep` | a level with no well byte-identical; changes only inside the rings | - | - | **123 byte-identical, and the 5 that change are the well levels.** At one camera per level no changed pixel lies outside the rings' quads: 4-17 and 4-18 at step 73's matched-filter camera, (0, 0) and the new frame's own; 4-19 at step 73's searched (-29, 0) and the new frame's own (-29, +0.5), where step 73 found it; 4-21 and 4-28 at (0, 0). 87,387 / 260,862 / 63,971 / 152,166 / 69,825 px changed. **On 4-21 containment is as weak as step 73 says**: one quad of 697.5 px half about a centre off the screen |
+| What the logs load and draw, all 128 | only the ring's file changes | - | - | **passes.** `TextureRegistry` loads differ on the 5 well levels only, `entities/white_ring.png` 128 x 128 -> `entities/hd/white_ring.png` 256 x 256; the quad dump differs in exactly 10 lines, the ten rings, each only in its file (same centre, same size) |
+| 1-01 f420 | byte-identical | - | `52549d7f` | **`52549d7f`: passes** |
+| `test_mp_sprites` | the two files, their tiers and sizes | - | 650 | **659 checks, 0 failures: passes** |
+| `test_mp_layer` | the ring's hd file, the dial's `timer.png` | - | 1,190 | **1,190 checks, 0 failures: passes** (two pins tightened, none added) |
+| Validation | exit 0, silent | - | 12 launches | **140 launches exit 0, validation ACTIVE in 140 logs, 0 messages**; every png opens at 1280 x 720 and matches its logged md5 (both sweeps). The fix round's 4 more: exit 0, ACTIVE, 0 messages |
+
+**Beyond the gates.**
+- **Where 4.3's green moved, and why.** Merge to this step, the five gate rings' green reads +0.008, +0.018, 0.000,
+  +0.002 and +0.026: what step 73 foresaw ("a tier will move the measured `c` by a percent or two and not the
+  colour"). The estimator normalises by `hd/white_ring.png`'s own band; the 1x file drawn at the same size puts
+  225.8 grey in that band against the hd file's 229.6, 1.6 % less. Against the original's medians the port is now
+  0.024 under on 4-17 (0.032 before), within 0.016 on 2511 and 2508, and over on 2491 (+0.082, from +0.080) and 2490
+  (+0.050, from +0.024).
+- **The size, which step 73 expected the tier to move outward** (its size row: the 1x rim falls to half at r 0.976 of
+  the half, the hd rim at 0.994). `size_43.py`'s scan on 4-17 reads 95.50 -> **95.75** u at step 73's camera, 95.50
+  -> **98.75** at (0, 0), and within 2 px of (0, 0) **95.50-98.75** against 94.25-95.50 before; the original read
+  96.75-97.75 (`t8.0`) and 94.25-98.00 (`h6.3`) in step 73. Outward, as foreseen, and as camera-sensitive as step 73
+  found it: a range, not a number.
+- **The view did not move** since step 73's own frames: each well level's frame phase-correlates with `4.3/after/`'s
+  at under 0.4 px.
+- **4-18 and 4-28 now load `white_ring.png`'s hd file twice**, the extracted APK's for the wells and the converter's
+  copy for their antiportals: byte-identical files, two textures, as step 66 records for `tap_icon.png`. Before, they
+  loaded the 1x and the hd file.
+
+**THE FIX ROUND (2026-09-19).** The verification failed the step on one MEDIUM row, 4-02's blink maximum, and named
+four LOW ones, all recorded above. **No source file, data file or binary changed**, and no gate frame moved. The round
+measured with 4 more launches of the same `MagicPortals.exe` `ddf507ef`, each under a temporary edit of the port's
+data: its folder is compiled in (`games/magicportals/sim/CMakeLists.txt:116`), so no scratch copy can be pointed
+at. Each edit was restored after its run and checked by md5 (`art.json` `646afccd`, `lighting.json` `ba545655`),
+and `git status` is clean there. Scripts and frames are in `merge_tiers/fix1/`.
+- **4-02: the 0.0069 over is the 16-bit composite's quantisation, laid on exactly the decoded triangle.** Every
+  reading of the series is a whole number of 5-bit red levels: medians of 50, 58, ... 98 grey, a level (8.2 grey)
+  apart (`lattice_4-02.py`). At the peak the sectors read 11, 12 and 13 levels, and their median reads 12: 98 grey,
+  where the unquantised median is 94. The level below, 11, would read 0.3921.
+  - With `framebuffer_rgb565` false, the same run reads **0.4095 / 0.2069**, inside the band (gain 1.020 on the
+    decoded triangle, residual at most 0.0021).
+  - The ring's own add alone reads **0.4051 / 0.2047** (gain 1.012, residual at most 0.0018). That is the run less
+    one with the blink's colour (0, 0, 0). The ground alone reads -0.0022, flat (`blink_unq.py`).
+  - Quantising the unquantised frames as the composite does gives the real frames' reading on all 25 frames. It does
+    not give every pixel: the unquantised capture is itself rounded to 8 bits, and about 8,200 px of the ring's disc,
+    each within 0.15 of a level of a rounding boundary, fall on its other side. The only pixels further off are the
+    HUD's, top right, drawn after the quantisation.
+  - So the port draws the decoded 0.400. On this ring, over this ground, the row can pass only if the port draws
+    less than the decode, which the rulings forbid. Over another ground the same 0.400 can put the median on 11
+    levels (0.3921): what fails here is the band against one ground's rounding, not the colour. (Superseded by the
+    third verification: about the ring's drawn centre the row reads 0.3964 and passes; THE SECOND FIX ROUND.)
+- **A MODEL, INFERRED and not a capture** (`blink_model.py`): a GL blend into a 16-bit surface adds the ring onto a
+  ground already stored at 5/6/5. Modelled that way, the peak reads **0.3964**. That is inside the band, and it is
+  the original's own library maximum on this ring (0.396 in systems_3_4's census).
+  - The engine quantises once, at the composite (`lighting.json` `framebuffer_rgb565`'s `_source`). So where the
+    ground sits between two levels, a ring can read one step higher than a 16-bit surface would make it.
+  - Whether the original blends at 16 bits is not decoded. Neither is the emulator's surface in the footage. It is
+    an engine-wide model that would move every frame, so it is left for the owner and not taken up here.
+- **3.1's alpha, re-based as the verification asked.** The before is a dial-less run of the same binary on the same
+  ticks: `art.json` `timer.alpha` 1e-6, since the loader wants a value above 0. On every frame it differs from the
+  after only within 70 px of the dials (`dialless_check.py`).
+  - `timer_fix1.py` is `timer_mt.py` with only its before re-pointed. It reads level26 **0.471-0.518 (median
+    0.494)** and level23 **0.454-0.517 (0.491)**, every live fit in the band.
+  - The cell is right on 17 of 17 and 16 of 16, and the scale is 1.03-1.12. Level26's rms falls to 1.55-14.41,
+    against 9.01-15.8 on step 59's before.
+  - Level26's f630 to f900 are byte-identical to the dial-less run's. Level23's `crystal_1191` (6,000 ms, gone at
+    tick 360) leaves 1 px, 8 grey off, at f390. The decode still draws a dial for some 30 frames after its time
+    (to tick 631 on level26, step 68).
+- **3-12 `1376`'s G 0.0174 and B 0.0349** are flat through all 25 frames of the blink, while its red swings 0.21-0.40.
+  They are one 6-bit green step and one 5-bit blue step of the ground across the band.
+- **Not changed:** the 4.1 rim row, and 1-07's and 4-07's colour rows (step 72's). The round ran no suite and
+  relinked nothing.
+
+**THE SECOND FIX ROUND (2026-09-19).** The second verification retook every row on its own 13 launches of
+`ddf507ef` (148 of 148 frames byte-identical to `merge_tiers/after/`) and failed the step on 4-02's blink maximum
+alone, read with the gate's own `blink_42.py` at 0.4269 / 0.2178. **No source file, data file or binary changed; no
+build, launch or suite** (nothing to relink: the dry run still reports no work). Text only: step 73's merge note now
+records the move, and the rows above carry the verification's readings. Scripts in `merge_tiers/fix2/`.
+- **Re-measured:** `blink_42.py`, this step's frames against the merge's, reads **0.4269 / 0.2178** on both. At the
+  gate's half each 3-frame sample moves the sector median exactly one 5-bit level (50, 58, ... 98 grey): the fit to
+  the decoded triangle has gain 1.045 and residual 0.0000.
+- **Three deltas, kept apart.** Step 72's build to the merge's: the peak's median 91 -> 98 grey (0.3964 -> 0.4269),
+  one red level. On the merged build, unquantised to quantised: 94 -> 98 grey (0.4095 -> 0.4269). Unquantised to the
+  decode: 0.4095 against 0.400, gain 1.020 on the triangle.
+- **The half the reading assumes moves it further over, never under** (`half_sens.py`, `blink_42.py`'s `edge`
+  copied, the node's centre). At 32, 32.7 and 33.4 x scale (the decoded half to the 4.1 scan's) the peak stays on the
+  same 5-bit level, 98, 99 and 99 grey (0.4269, 0.4313, 0.4313), and the trough on 50 (0.2178). Unquantised, the same
+  halves read 0.4095, 0.4269 and 0.4335, 0.0095 to 0.0335 over the decoded 0.400: a spread of 0.024 from the half
+  alone, and no half in that range brings the peak into the band.
+- **The original's own ring on this level**, read the same way (the census's `edge`: `hd/white_ring.png`'s `T_in`,
+  the same bands, the decoded half): six library frames at 0.179, 0.253, 0.253, 0.288, 0.322 and 0.396, each a whole
+  number of 5-bit levels (41, 58, 58, 66, 74 and 91 grey). Its maximum is 11 levels, the fix round's 16-bit blend
+  model's peak; the port's is one level above it. Its lowest, 0.179, lies under the row's minimum band.
+- **The brief's max / min fallback is not open.** systems_3_4 4b(5) reports max / min "instead of tuning" only "if
+  the port's max reads about 10 % low"; this one reads 6.7 % high. LEFT FOR THE OWNER now lists three options.
+- The row stays **NOT MET as written**, the merge's deviation. Nothing in this step can move it without drawing less
+  than the decoded 0.400.
+- **Superseded by the third verification**, which kept these readings and not their attribution: `blink_42.py` reads
+  about the node's pixel index. About the ring's drawn centre, (+0.40, -1.20) px from it by point symmetry of
+  `fix1/unq`'s blink amplitude and (+0.40, -0.74) by a rim circle fit, the same frames read **0.3964 / 0.2178**,
+  step 72's value, in the band (0.3964-0.4117 between the two; `merge_tiers/verify3/`). The row passes, it is no
+  deviation, and LEFT FOR THE OWNER keeps only the tool fix.
+
+**BUILD: no warnings** (MSVC, Release, Ninja, /W4): 8 steps - `test_mp_sprites.cpp`, `MagicPortalsLayer.cpp` and
+`test_mp_layer.cpp` compiled, `MagicPortalsGame.lib`, `MagicPortals.exe`, `test_mp_sprites.exe` and
+`test_mp_layer.exe` linked; nothing printed but the environment's `vswhere.exe` notice (`merge_tiers/build.log`).
+The three sources keep CRLF endings. No other executable was relinked. A dry run on a copy of `build.ninja` (the
+build's own `-n` stops at CMake's glob re-check, as step 73 found) then reports **no work to do**, for the three
+targets and for the whole tree: the binaries measured are the ones these sources make.
+
+**THE SUITES**, run directly, once each: **`test_mp_sprites` 659 / 0** (650 at the merge: the loaded well rules and
+two rows of four checks) and **`test_mp_layer` 1,190 / 0** (`merge_tiers/suites/`). **ctest was not run**, by
+choice: this build relinked no other suite, so every other test binary is the one the merge's single ctest ran
+(119 of 121 pass, 0 fail). `test_mp_lighting` and `test_mp_geometry` stay not run from the merge (Smart App
+Control); neither links `MagicPortalsGame`, and neither was rebuilt. The suites the track-B steps' gate rows name
+that this change neither touched nor relinked stand on the merge's run of the same binaries: `test_mp_wells` 98,
+`test_mp_timed` 84, `test_mp_motion` 146 and `test_mp_play` 147 (each run directly by the merge), and `test_mp_shot`
+and `test_mp_movers` (passed in the merge's ctest). None links `MagicPortalsGame`, so the layer's change cannot
+reach them.
+
+**SMART APP CONTROL.** No refusal and no notification. `MagicPortals.exe` `ddf507ef` ran on its first launch (1-01)
+and on all 140; `test_mp_sprites.exe` `b46425cf` and `test_mp_layer.exe` `717a547b` each ran on their first launch.
+The merge's `c4739a37` ran the 12 before launches. The fix round's 4 launches of `ddf507ef` ran as well. The second
+fix round launched nothing.
+
+**RULINGS.** The owner's standing rulings, every ruling of 00_order section 6 decided in favour of what the original
+does: **R13, route B** (the tier is resolved from the name the data gives; `gravitywell.json` and `art.json` are not
+edited and `out/levels` is not touched) and **R12, the tier fixed at the 720 selection** (`tiers.json`'s search).
+Step 61's decision 2, `int(texels / D)` units: the ring's 128 and the dial's 32 x 32 cells are built from it.
+
+**RECORDED DEVIATIONS.** None is this step's: each reads the same on the merge's build, frame for frame.
+- **4.2's 1-07 `687` and 4-07 `2166` colour rows, and 3-12 `1376`'s blue**: step 72's recorded deviations, unchanged
+  (the draw-order cover, `eth_z` -12, and the ground's own blue step). 3-12's blue reads 0.0349 with the step's
+  instrument and 0.0177 with the second verification's at the node: it depends on the estimator.
+- **4.1's rim row, 1-10 `574` 15.56 and 1-12 `574` 23.20 x scale against 28-33.** The median-luminance peak stopped
+  landing on the ring when step 72 made it a dim red (15.56 and 19.20 on step 72's own sweep), and step 72 re-read
+  only the edge scan. Neither this step nor the merge moved it into or out of the band.
+- **3.1's alpha as the row is written, level26 f480 0.447 against 0.45.** `timer31.py` fits after - before, and
+  the row's before is step 59's, on 1x art. On the merged hd art the ground under the dial no longer cancels: the fit's
+  rms doubles, 3.5-10.9 -> 9.0-15.8, and the same frame read 0.459 at step 68. Re-based on a dial-less run of this
+  build (the fix round), every live fit passes: 0.471-0.518 and 0.454-0.517.
+- **3.3's exact-ground alpha** (the verifier's `alpha_swing.py`) cannot be read without a still arrow on this art;
+  the gate rests on the two readings that pass.
+- **Every reading of steps 68, 70, 71 and 72 above was taken on both builds and is identical** (`*_before.json`
+  against `*_after.json`, `edge_merge.json` against `edge_after.json`, `blink_merge.json` against `blink_after.json`),
+  as byte-identical frames must give.
+
+**LEFT FOR THE OWNER.**
+- **`blink_42.py` should locate each ring's drawn centre before reading** (a tool fix, not a ruling), and refuse a
+  matched-filter camera with corr 0. 1-07 and 4-07 stay out of band at every centre within 1 px (max <= 0.285).
+- **Step 70's exact-ground arrow alpha**, which still wants a still frame of the merged art: the two readings that
+  pass differ by 0.03 (0.547 core-over-ring, 0.576 temporal hi / lo). Step 68's alpha is re-based (the fix round).
+- **Carried, untouched here:** step 67's `ParticleCellUnits` latent divide, step 73's `buildLights` slot count, step
+  71's R1 refusal and step 72's 1-07 draw order, the MPR `docs/parity-backlog.md` still citing steps 83-85, and the
+  UI fold-in (step 67).

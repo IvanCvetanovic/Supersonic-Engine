@@ -1213,8 +1213,12 @@ void AGravityWellWearsAGreenRing() {
                 (void)entity;
                 if (tag.tag != "Magic Portals Well Ring") continue;
                 if (glm::distance(MagicPortals::Units::ToPixels(transform.position), well.atPx) > 0.5) continue;
-                CHECK_MSG(material.albedoTexturePath.find("white_ring.png") != std::string::npos,
-                          well.name + " wears white_ring.png, not " + material.albedoTexturePath);
+                // Its tier file, as the original's loader picks it: hd/white_ring.png
+                // (256 texels at density 2, the 1x file's 128 units). A substring
+                // "white_ring.png" would pass the 1x file as well, so the pin names
+                // the folder.
+                CHECK_MSG(EndsWith(material.albedoTexturePath, "/entities/hd/white_ring.png"),
+                          well.name + " wears hd/white_ring.png, not " + material.albedoTexturePath);
                 CHECK_MSG(std::fabs(transform.scale.x - across) < 1e-5f && std::fabs(transform.scale.y - across) < 1e-5f,
                           well.name + " is drawn " + std::to_string(well.RingSizePx(wells.rules)) +
                               " units across, not " +
@@ -4945,9 +4949,11 @@ void EveryTimedCrystalHasADialBehindIt() {
                         std::to_string(dial.crystalZ) + ", cell " + std::to_string(dial.frame);
             }
         }
-        const std::vector<glm::vec4> colours = ColoursOf(registry, "Magic Portals Timer", "timer.png");
+        // Each dial draws timer.png as named, from the original's entities/: it has no
+        // hd or fullhd twin, so the tier route (drawnImage) gives back the 1x file.
+        const std::vector<glm::vec4> colours = ColoursOf(registry, "Magic Portals Timer", "/entities/timer.png");
         CHECK_MSG(static_cast<int>(colours.size()) == timed && (timed == 0 || AllAre(colours, 1.0f, 1.0f, 1.0f, 0.5f)),
-                  name + "'s dials at (1, 1, 1, 0.5): " + Show(colours));
+                  name + "'s dials, entities/timer.png at (1, 1, 1, 0.5): " + Show(colours));
         crystals += timed;
         if (timed > 0) ++levels;
         layer.OnDetach(registry);

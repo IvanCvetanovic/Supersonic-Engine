@@ -2253,10 +2253,11 @@ const Sprites::Image& MagicPortalsLayer::drawnImage(const std::string& named) {
     // original loads goes through AddFile and ChooseSpriteVersion, the pictures its
     // script adds and their particle bitmaps as much as the level's sprites
     // (ETHSpriteEntity.cpp:95-104, ETHParticleManager.cpp:107). The APK ships hd
-    // files for the player's two sheets, the beholder, the rolling stone, and two
-    // particle bitmaps no built effect names yet; each is exactly twice its 1x file,
-    // so each is drawn at the same units and only its sampling changes. The portal's
-    // halo, the shot, the spike, halo.bmp and the normal maps have no tier file and
+    // files for the player's two sheets, the beholder, the rolling stone, a gravity
+    // well's ring (white_ring.png) and two particle bitmaps no built effect names
+    // yet; each is exactly twice its 1x file, so each is drawn at the same units and
+    // only its sampling changes. The portal's halo, the shot, the spike, a timed
+    // crystal's dial (timer.png), halo.bmp and the normal maps have no tier file and
     // come back as named, at density 1.
     if (const auto known = m_drawnImages.find(named); known != m_drawnImages.end()) return known->second;
     // One that cannot be read keeps units 0, and each caller draws nothing for it
@@ -2538,29 +2539,34 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     // covers it, as depth would in the original. One per timed crystal whose
     // picture is drawn; the crystal's box has none. A `time` of 0 never runs
     // down in Goals, so it has no dial to count.
+    //
+    // Its sheet is the tier file the original draws (drawnImage, as every picture
+    // the port adds for itself since step 67) and its cell a frame of that file's
+    // units (frameUnits). timer.png has no hd or fullhd twin, so it comes back as
+    // named at density 1 and the cell is 32 x 32 units, as before.
     const Art::Timer& timer = m_artRules.timer;
-    const std::string timerImage = originalImage(timer.sprite);
-    const glm::dvec2 timerSheetPx = imageSizePx(timerImage);
+    const Sprites::Image& timerSheet = drawnImage(originalImage(timer.sprite));
+    const glm::dvec2 timerCellPx = frameUnits(timerSheet, timer.columns, timer.rows);
     for (std::size_t i = 0; i < m_sprites.size(); ++i) {
         const DrawnSprite& drawn = m_sprites[i];
         if (drawn.crystal < 0) continue;
         const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
         if (!crystal.timed || !(crystal.lifeS > 0.0)) continue;
-        if (timerSheetPx == glm::dvec2(0.0)) {
-            SUPERSONIC_LOG_WARN("Magic Portals") << "no dial behind the timed crystals: " << timerImage
+        if (timerCellPx == glm::dvec2(0.0)) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "no dial behind the timed crystals: " << timerSheet.path
                                                  << " could not be read" << std::endl;
             break;
         }
         TimerDial dial;
         dial.crystal = drawn.crystal;
         dial.sprite = static_cast<int>(i);
-        dial.quad = makeSprite(registry, "Magic Portals Timer", timerImage, timer.additive);
+        dial.quad = makeSprite(registry, "Magic Portals Timer", timerSheet.path, timer.additive);
         auto& animation = registry.emplace<SpriteAnimationComponent>(dial.quad);
         animation.columns = static_cast<uint32_t>(timer.columns);
         animation.rows = static_cast<uint32_t>(timer.rows);
         animation.frameCount = 1;
         animation.playing = false;
-        dial.cellPx = timerSheetPx / glm::dvec2(timer.columns, timer.rows);
+        dial.cellPx = timerCellPx;
         dial.z = slotAfter(drawn.sprite.zIndex + timer.zOffset);
         dial.lookZ = drawn.lookZ + static_cast<double>(timer.zOffset);
         dial.atPx = drawn.centrePx;
@@ -2579,18 +2585,28 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     // what is in m_sprites: a ring pushed before the dials would put a dial a slot
     // deeper. All ten sit at one depth, the -5 AddEntity gives them, and they are
     // added, so the order between them cannot show.
+    //
+    // Its picture is the tier file the original draws (drawnImage, as every
+    // picture the port adds for itself since step 67): hd/white_ring.png, 256 x
+    // 256 texels at density 2, so the same 128 units as the 1x file, and the file
+    // the levels' own antiportal rings draw (step 66). Only its sampling changes:
+    // its size is scaleToSize's, below. A level with no well resolves nothing.
     const GravityWell::Ring& ring = m_level.wells.rules.ring;
-    const std::string ringImage = originalImage(ring.sprite);
+    const Sprites::Image* ringImage =
+        m_level.wells.wells.empty() ? nullptr : &drawnImage(originalImage(ring.sprite));
     const int ringZIndex = static_cast<int>(std::floor(ring.z));
-    if (!m_level.wells.wells.empty() && imageSizePx(ringImage) == glm::dvec2(0.0)) {
+    if (ringImage != nullptr && ringImage->units == glm::ivec2(0)) {
         SUPERSONIC_LOG_WARN("Magic Portals")
-            << "no ring round the gravity wells: " << ringImage << " could not be read" << std::endl;
-    } else {
+            << "no ring round the gravity wells: " << ringImage->path << " could not be read" << std::endl;
+    } else if (ringImage != nullptr) {
         const float ringZ = slotAfter(ringZIndex);
         for (const GravityWell::Well& well : m_level.wells.wells) {
             DrawnSprite made;
             made.sprite.node = well.name + "#ring";
-            made.sprite.texture = ringImage;
+            made.sprite.texture = ringImage->path;
+            made.sprite.tier = ringImage->tier;
+            made.sprite.density = ringImage->density;
+            made.sprite.texels = ringImage->texels;
             made.sprite.atPx = well.atPx;
             // The SIZE scaleToSize gives it - radius x 2 less the shrink - and not
             // white_ring.png's own 128, which is only what that scale is measured
@@ -2609,7 +2625,7 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             made.ownerPx = well.atPx;
             // No lightmap: a bake belongs to an entity the level file placed, named
             // by its id, and this one is added while the level runs.
-            made.quad = makeSprite(registry, "Magic Portals Well Ring", ringImage, ring.additive);
+            made.quad = makeSprite(registry, "Magic Portals Well Ring", ringImage->path, ring.additive);
             m_sprites.push_back(std::move(made));
         }
     }

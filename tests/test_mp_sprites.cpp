@@ -15,6 +15,7 @@
 #include "core/AudioClip.hpp"
 
 #include "sim/Art.hpp"
+#include "sim/GravityWell.hpp"
 #include "sim/Lighting.hpp"
 #include "sim/Loading.hpp"
 #include "sim/Particles.hpp"
@@ -1035,16 +1036,19 @@ void TheOriginalsImagesAreCutAsTheEntsSay() {
 
 // 00_order 2.3: the pictures the port draws for itself and every particle bitmap, by
 // the names its data gives, through the rule a level's art takes (Sprites::Drawn).
-// The APK's hd files for the player's two sheets, the beholder, the rolling stone and
-// two particle bitmaps are each exactly twice their 1x file, so every frame keeps the
-// 1x file's units, and the engine's even split (SpriteAnimationComponent) cuts each
-// sheet where Tiers::FrameCut does. The rest have no tier file and draw as named.
+// The APK's hd files for the player's two sheets, the beholder, the rolling stone, a
+// gravity well's ring and two particle bitmaps are each exactly twice their 1x file,
+// so every frame keeps the 1x file's units, and the engine's even split
+// (SpriteAnimationComponent) cuts each sheet where Tiers::FrameCut does. The rest,
+// a timed crystal's dial among them, have no tier file and draw as named.
 void ThePortsOwnPicturesAreDrawnFromTheirTiers() {
     Art::Rules rules;
     std::string error;
     CHECK_MSG(Art::LoadRules(kPortData + "/art.json", rules, error), error);
     Loading::Rules loading;
     CHECK_MSG(Loading::LoadRules(kPortData + "/ui.json", loading, error), error);
+    GravityWell::Rules wells;
+    CHECK_MSG(GravityWell::LoadRules(kPortData + "/gravitywell.json", wells, error), error);
     const Tiers::Rules tiers = TheTiers();
     const std::string entities = kOriginal + "/entities/";
 
@@ -1065,6 +1069,12 @@ void ThePortsOwnPicturesAreDrawnFromTheirTiers() {
         {rules.spike.sprite, rules.spike.columns, rules.spike.rows, "", {16, 32}, {16, 32}},
         {"normalmaps/" + rules.character.normal, 1, 1, "", {128, 128}, {128, 128}},
         {"normalmaps/" + rules.torchLight.normal, 1, 1, "", {32, 64}, {32, 64}},
+        // The two pictures the port adds for itself since the merge of steps 68-73:
+        // a timed crystal's dial, timer.png as named, eight cells of 32 x 32; and a
+        // gravity well's ring, hd/white_ring.png, 256 texels at density 2 - the 1x
+        // file's 128 units, which scaleToSize then sizes to the well.
+        {rules.timer.sprite, rules.timer.columns, rules.timer.rows, "", {128, 64}, {32, 32}},
+        {wells.ring.sprite, 1, 1, "hd", {256, 256}, {128, 128}},
     };
     for (const Sheet& sheet : sheets) {
         Sprites::Image image;
