@@ -12562,7 +12562,8 @@ records the move, and the rows above carry the verification's readings. Scripts 
   number of 5-bit levels (41, 58, 58, 66, 74 and 91 grey). Its maximum is 11 levels, the fix round's 16-bit blend
   model's peak; the port's is one level above it. Its lowest, 0.179, lies under the row's minimum band.
 - **The brief's max / min fallback is not open.** systems_3_4 4b(5) reports max / min "instead of tuning" only "if
-  the port's max reads about 10 % low"; this one reads 6.7 % high. LEFT FOR THE OWNER now lists three options.
+  the port's max reads about 10 % low"; this one reads 6.7 % high. LEFT FOR THE OWNER listed three options when this
+  round closed; the third verification removed them (the row passes about the ring's drawn centre).
 - The row stays **NOT MET as written**, the merge's deviation. Nothing in this step can move it without drawing less
   than the decoded 0.400.
 - **Superseded by the third verification**, which kept these readings and not their attribution: `blink_42.py` reads
