@@ -1,6 +1,0 @@
-# research.rs: research without the essence is refused and spends nothing.
-seed 7
-ticks 20
-building forge 0 0.0 0.0
-essence 10.0
-0 research building=0 upgrade=munitions

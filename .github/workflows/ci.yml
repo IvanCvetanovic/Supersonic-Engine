@@ -400,16 +400,16 @@ jobs:
           # the line that DEFINES add_engine_test, which is how a check like
           # this reports one more suite than exists and is quietly disbelieved.
           #
-          # BOTH REGISTRARS, and missing the second one was worse than not
-          # checking. add_port_test wraps add_engine_test, so the thirteen
-          # Wolf Brigade suites register and run like any other - but they do
-          # not match the pattern above. The check therefore counted 48 while
-          # ctest ran 61, and its own error message would have talked the docs
-          # into printing a number a reader disproves by running the suites.
-          engine=$(grep -cE '^add_engine_test\([a-z_]+\)$' tests/CMakeLists.txt)
-          port=$(grep -cE '^add_port_test\([a-z_]+\)$' tests/CMakeLists.txt)
-          actual=$(( engine + port ))
-          echo "tests/CMakeLists.txt registers $actual suites ($engine engine, $port port)."
+          # Digits allowed in the name. Without them test_light2d did not
+          # match, and the check counted one suite fewer than ctest runs.
+          #
+          # ONE REGISTRAR since the games left for their own repositories:
+          # add_port_test, the Wolf Brigade suites' wrapper, went with them.
+          # Missing a second registrar was worse than not checking - it once
+          # counted 48 while ctest ran 61 - so a new wrapper has to be counted
+          # here the day it is added.
+          actual=$(grep -cE '^add_engine_test\([a-z0-9_]+\)$' tests/CMakeLists.txt)
+          echo "tests/CMakeLists.txt registers $actual suites."
           test "$actual" -gt 0
 
           fail=0

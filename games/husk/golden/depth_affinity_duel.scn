@@ -1,7 +1,0 @@
-# depth_stack.rs: a tier-2 Flora stalker duels an identical enemy.
-seed 9
-ticks 600
-map 60
-affinity Flora 300.0
-unit stalker 0 0.0 -0.8
-unit stalker 1 0.0 0.8

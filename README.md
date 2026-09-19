@@ -9,7 +9,7 @@ Data-oriented ECS core · physically based renderer · dockable editor · hot-re
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#requirements)
 [![Vulkan 1.2](https://img.shields.io/badge/Vulkan-1.2-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](#renderer)
 [![CMake 3.20+](https://img.shields.io/badge/CMake-3.20%2B-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#build)
-[![Tests](https://img.shields.io/badge/tests-68%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
+[![Tests](https://img.shields.io/badge/tests-57%20suites-14171C?style=flat-square&labelColor=14171C&color=35D6E8)](#testing)
 [![Warnings](https://img.shields.io/badge/%2FW4-zero%20warnings-14171C?style=flat-square&labelColor=14171C&color=6B7A85)](#code-standards)
 [![License: MIT](https://img.shields.io/badge/license-MIT-14171C?style=flat-square&labelColor=14171C&color=FF7A3D)](LICENSE)
 
@@ -117,8 +117,10 @@ first file that needs a window:
   (`CMakeLists.txt:147`, `:174`, `:319`), so an NDK configure no longer dies on
   X11 and Wayland. The compile then fails at `src/platform/Window.hpp`, which
   includes `GLFW/glfw3.h`, and at `vulkan/vulkan.hpp`, which the NDK sysroot
-  does not ship — measured on 27 August and recorded under Phase 5 of
-  [the Wolf Brigade port plan](docs/planning/2026-08-25-wolf-brigade-port.md).
+  does not ship — measured on 27 August with the NDK toolchain file and
+  recorded under Phase 5 of the Wolf Brigade port plan, which has since moved
+  with the port (`supersonic/docs/planning/2026-08-25-wolf-brigade-port.md` in
+  [The-Wolf-Brigade](https://github.com/IvanCvetanovic/The-Wolf-Brigade)).
   Nothing yet stands where GLFW would: no `ANativeWindow` surface path.
 - `AndroidManifest.xml` expects a NativeActivity to `dlopen`
   `libSupersonicEngine.so`. CMake produces a static library and an *executable*
@@ -235,7 +237,7 @@ Built that way, the engine contributes these and nothing else:
 | `Shaders` | Recompiles the GLSL into the engine's `assets/shaders`. Only the editor depends on it, so a game's build leaves the committed SPIR-V alone unless it builds this by name |
 | `SUPERSONIC_ENGINE_DIR` | The engine checkout's root |
 | `SUPERSONIC_ASSET_ROOT` | Where the game finds the engine's runtime files when run from anywhere else — below |
-| `SUPERSONIC_BUILD_EDITOR`, `SUPERSONIC_BUILD_SCRIPT_PLUGIN`, `SUPERSONIC_BUILD_TESTS` | ON only when the engine is the top-level project; the games under `games/` likewise |
+| `SUPERSONIC_BUILD_EDITOR`, `SUPERSONIC_BUILD_SCRIPT_PLUGIN`, `SUPERSONIC_BUILD_TESTS` | ON only when the engine is the top-level project |
 
 **A game runs from anywhere.** A game opens the engine's files — every shader
 first — by paths relative to its working directory, which is why the editor is
@@ -300,8 +302,23 @@ plugins/       Hot-reloadable C++ gameplay scripts
 platform/      Android and Apple target scaffolding
 tests/         Pure-logic regression suites
 docs/          Screenshots, and the planning records under docs/planning/
+cmake/         The suite rule and harness a game builds against, the Vulkan import library
 .github/       CI: manual-dispatch only (Actions -> CI -> Run workflow)
 ```
+
+**The games are not here.** The three ports that measured this engine were
+built under `games/` until 19 September 2026. Each now lives in its own
+repository with the engine as a submodule pinned to a commit, beside its suites
+and its planning records:
+
+| Game | Repository | The port |
+|---|---|---|
+| Wolf Brigade | [The-Wolf-Brigade](https://github.com/IvanCvetanovic/The-Wolf-Brigade) | `supersonic/`, beside the Godot original |
+| HUSK | [Test-Game](https://github.com/IvanCvetanovic/Test-Game) | `supersonic/`, beside the Rust original |
+| Magic Portals | [Magic-Portals-Remake](https://github.com/IvanCvetanovic/Magic-Portals-Remake) | the repository itself: `game/`, `tests/`, `docs/planning/` |
+
+How they build against the engine: [Building a game against the
+engine](#building-a-game-against-the-engine).
 
 Roughly 19,200 lines of engine source across 73 translation units, or 26,700
 lines counting headers — excluding vendored dependencies and the two
@@ -315,7 +332,7 @@ translation units that exist only to compile VMA and tinygltf.
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Sixty-eight suites, each a plain executable with no test framework behind it —
+Fifty-seven suites, each a plain executable with no test framework behind it —
 pulling one in for pure-logic checks would cost more than it returns.
 
 There is also a scene that exists to be rendered rather than to be played:
@@ -687,6 +704,10 @@ prefab cannot name an entity in a scene it is not part of.
 Split into what is done and what is next, because a list on which every box is
 ticked has stopped being a roadmap. The README is already comfortable calling
 Android "not functional"; extending that register forward costs nothing.
+
+Wolf Brigade, HUSK and Magic Portals, which much of what follows was measured
+against, have moved to their own repositories —
+[where each one lives](#repository-layout).
 
 ## Shipped
 

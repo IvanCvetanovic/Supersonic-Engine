@@ -1,8 +1,0 @@
-// Abandoned logging truck, rusting where the road used to be (STEEL). [TUNE]
-(
-    name: "Old Truck",
-    affinity: Steel,
-    essence: 1000.0,
-    footprint: (2, 2),
-    size: (2.0, 1.1),
-)

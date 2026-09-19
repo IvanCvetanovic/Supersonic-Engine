@@ -1,6 +1,0 @@
-# terrain.rs: a unit climbs a plateau only by its ramp.
-seed 5
-ticks 400
-install missions/plateau.ron
-unit stalker 0 -18.0 18.0
-0 point units=0 attack=0 x=18.0 y=18.0 queued=0

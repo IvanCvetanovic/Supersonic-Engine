@@ -1,7 +1,0 @@
-# ai.rs: a rifleman, a nearer stalker, and a golem at y=5 - inside its taunt radius.
-seed 4
-ticks 300
-map 60
-unit soldier 1 0.0 0.0
-unit stalker 0 0.0 3.0
-unit golem 0 0.0 5.0

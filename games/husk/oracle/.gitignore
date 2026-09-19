@@ -1,2 +1,0 @@
-# A build in place; the usual one goes to CARGO_TARGET_DIR elsewhere.
-/target/

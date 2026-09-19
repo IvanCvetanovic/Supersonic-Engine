@@ -1,8 +1,0 @@
-# research.rs: Munitions completes on schedule and buffs only the player's units.
-seed 7
-ticks 640
-building forge 0 0.0 0.0
-essence 1000.0
-unit stalker 0 20.0 0.0
-unit stalker 1 -20.0 0.0
-0 research building=0 upgrade=munitions

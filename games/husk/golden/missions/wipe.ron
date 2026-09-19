@@ -1,4 +1,0 @@
-(
-    name: "test",
-    triggers: [(name: "wiped", when: [PlayerWiped], actions: [Defeat])],
-)

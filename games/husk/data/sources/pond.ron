@@ -1,8 +1,0 @@
-// Pond (brief §4.1 example: Aqua 150). [TUNE]
-(
-    name: "Pond",
-    affinity: Aqua,
-    essence: 1500.0,
-    footprint: (3, 3),
-    size: (2.7, 0.25),
-)

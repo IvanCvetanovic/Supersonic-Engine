@@ -1,7 +1,0 @@
-# terrain.rs: a diamond plateau raised only inside; a unit walks around it.
-seed 5
-ticks 300
-map 30
-poly 1 0.0,-10.0 10.0,0.0 0.0,10.0 -10.0,0.0
-unit stalker 0 -18.0 0.0
-0 point units=0 attack=0 x=18.0 y=0.0 queued=0

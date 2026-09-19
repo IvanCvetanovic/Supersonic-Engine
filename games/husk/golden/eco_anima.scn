@@ -1,6 +1,0 @@
-# economy.rs: anima drains proportionally from a living ancient tree.
-seed 4
-ticks 4000
-unit siphon 0 10.0 -20.0
-source ancient_tree 13.0 -20.0
-0 extract units=0 source=1 queued=0

@@ -1,7 +1,0 @@
-# hero.rs: the hero picks up knuckles, then drops them.
-seed 27
-ticks 200
-hero 8.0 -30.0
-item rebar_knuckles 11.0 -30.0
-0 pickup hero=0 item=1 queued=0
-80 drop hero=0 slot=0

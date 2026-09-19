@@ -1,5 +1,0 @@
-# mission.rs: a scripted encounter and objective XP that levels the hero.
-seed 45
-ticks 40
-hero 8.0 -30.0
-install missions/ambush.ron

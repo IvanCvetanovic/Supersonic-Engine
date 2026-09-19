@@ -1,8 +1,0 @@
-# research.rs: research in progress, and research completed, both survive a save.
-seed 7
-ticks 900
-building forge 0 0.0 0.0
-essence 100000.0
-0 research building=0 upgrade=munitions
-5 snapshot
-700 snapshot

@@ -1,8 +1,0 @@
-# hero.rs: a wounded hero surges an enemy and lifesteals.
-seed 51
-ticks 200
-hero 8.0 -30.0
-unit stalker 1 12.0 -30.0
-0 learn hero=0 ability=0
-0 hp 0 100.0
-0 cast hero=0 ability=0 target=id:1 queued=0

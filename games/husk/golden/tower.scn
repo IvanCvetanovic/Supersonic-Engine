@@ -1,5 +1,0 @@
-# tower.rs: a Tower shoots and kills a nearby enemy, and survives.
-seed 7
-ticks 420
-building tower 0 0.0 -30.0
-unit stalker 1 6.0 -30.0

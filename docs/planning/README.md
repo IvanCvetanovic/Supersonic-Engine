@@ -18,19 +18,34 @@ directory and that section disagree, that section is right.
 | [2026-08-19-findings.md](2026-08-19-findings.md) | 19 Aug 2026 | A consolidated audit of the engine — correctness defects, architectural debt, missing capability, infrastructure — with the six workstreams it was sorted into |
 | [2026-08-19-two-games.md](2026-08-19-two-games.md) | 19 Aug 2026 | Whether this engine could host two real games that already exist, read from their source. The reasoning behind Phases 8–14 |
 | [2026-08-19-plan.md](2026-08-19-plan.md) | 19 Aug 2026 | The execution plan: Phases 0–14, their ordering constraints, and a status block written as the work ran |
-| [2026-08-25-wolf-brigade-port.md](2026-08-25-wolf-brigade-port.md) | 25 Aug 2026 | What it would take to port the Godot game Wolf Brigade to this engine, read from both trees. Phased, costed, and led by the finding that the game has no art yet |
 | [2026-08-22-gap-audit.md](2026-08-22-gap-audit.md) | 22 Aug 2026 | A verification pass over the whole engine asking what is left, with every claim tied to a file and line |
 | [2026-08-27-engine-roadmap.md](2026-08-27-engine-roadmap.md) | 27 Aug 2026 | What to build next and what not to, ordered by the finding that the determinism work was nearly done. Its Phase 5 table is the list of things deliberately not being built, with a reason per line |
 | [2026-08-28-determinism-audit.md](2026-08-28-determinism-audit.md) | 28 Aug 2026 | What the determinism story was actually missing. Falsifies the premise the 27 August roadmap is ordered by, with the test that says so |
 | [2026-08-28-competing-with-godot.md](2026-08-28-competing-with-godot.md) | 28 Aug 2026 | What it would take to compete with Godot on versatility and performance, costed in one-person weeks. Led by the finding that the engine's differentiator is unenforced by CI and blind to the only game in the tree |
 | [2026-09-10-migration-readiness.md](2026-09-10-migration-readiness.md) | 10 Sep 2026 | Whether Wolf Brigade, HUSK and Magic Portals Remake can start moving onto the engine, read from all four trees - and what a first Linux build on a second machine found: a compiler crash, a fixture that only worked on MSVC, and determinism that does not cross to glibc |
-| [2026-09-10-husk-port.md](2026-09-10-husk-port.md) | 10 Sep 2026 | The HUSK simulation port, written as it runs: pinned commit, the Rust oracle and the bit-for-bit standard, the order of work and its one gate, and the traps listed before they bite |
-| [2026-09-10-wolf-brigade-resync.md](2026-09-10-wolf-brigade-resync.md) | 10 Sep 2026 | Bringing the Wolf Brigade port from the game's `ebf3d27` to `50741d1`, 36 commits that made it a hero-first game. Written as it runs, on the `wb-resync` branch, against the same harness-number standard as the port |
-| [2026-09-10-magic-portals-spike.md](2026-09-10-magic-portals-spike.md) | 10 Sep 2026 | The Magic Portals Remake spike: an oracle that is behavioural rather than numeric, and the rule written down for it; a strict reader for the converted levels, which stay outside the repository; a remake bug that costs all ten hinges their limits; and the measured answers, each built where it was needed: S1 (per-axis locks), F1's descending half (a kinematic body's velocity in its contacts; the sideways half was moot, every mover is vertical), and F2 confirmed, so the player is dynamic. Found on the way: queries that could not see hull colliders, and a narrowphase face bias that gave separated shapes' ties to edge axes |
-| [2026-09-10-magic-portals-port.md](2026-09-10-magic-portals-port.md) | 10 Sep 2026 | The Magic Portals port, on level30: five acceptance items (walk and land, buttons hold doors, crates on buttons, crystals and the exit, portals), what is out of scope, and the decisions taken before any code - a material for colliders with no rigid body, the oracle's masses, the port's own trigger queries, movers that write their velocity - plus the original's materials, which the remake drops. Then the steps as built: movers and a door that carries its rider, and the player, at the remake's 980 px/s² world gravity and gripping nothing, which was measured at the seam in level30's floor. Then buttons and their doors: only dynamic bodies press, as probed in the remake, through the port's own exact trigger test. Then crystals and the exit, which only the player triggers, firing on entry, with the remake's UNVERIFIED exit gate tested both ways. Then portals: placement against a budget of a pair, entries tracked per portal and per body, the pair spent on use, and a crate portalled onto a raised button to open its door. Then the layer: one shared tick for the suites and the layer, taps read through the camera, and level30 played from the spawn to the exit with taps and walking alone |
-| [2026-09-11-magic-portals-remaster.md](2026-09-11-magic-portals-remaster.md) | 11 Sep 2026 | Magic Portals beyond level30: the whole game, drawn with the original's sprites. The owner's answers (static portals stay, the camera follows without dragging, the original art read from outside the repository), an inventory that starts all 128 levels and says why each one does or does not play, and the order it gives. Then the steps as built: static portals first, because the game's first level is solved with them |
 | [2026-09-10-cross-platform-determinism.md](2026-09-10-cross-platform-determinism.md) | 10 Sep 2026 | Making the determinism claim hold across C runtimes. It measures which libm call parts Windows from Linux first (an `atan2f` on tick 29, where glibc is the one an ulp off), then replaces libm on the simulation path with functions IEEE pins down everywhere |
 | [2026-09-19-engine-as-a-dependency.md](2026-09-19-engine-as-a-dependency.md) | 19 Sep 2026 | What a game's build took from this tree without naming it, before the three ports moved to repositories of their own: targets defined twice, C++20 and the platform definition held only by the directory, the test rule reached by path, and shaders found only from the engine's root. Then the engine handing those over - the top level deciding what builds, a harness target and `supersonic_add_test`, and one rule for where a game's files resolve from - proven to change no compile line but a spelling and no picture |
+
+## Moved with their games
+
+On 19 September 2026 the three game ports left `games/` for repositories of
+their own, and the records that are about one game went with them, with their
+history. They are dated records like the ones above: a link in one into this
+repository means the engine as it was when the record was written.
+
+| Document | Date | Now in |
+|---|---|---|
+| 2026-08-25-wolf-brigade-port.md | 25 Aug 2026 | [The-Wolf-Brigade](https://github.com/IvanCvetanovic/The-Wolf-Brigade), `supersonic/docs/planning/`. Phases 1, 2, 4 and 5 are engine work the port asked for; the README restates the one engine fact it was linked for |
+| 2026-09-10-wolf-brigade-resync.md | 10 Sep 2026 | [The-Wolf-Brigade](https://github.com/IvanCvetanovic/The-Wolf-Brigade), `supersonic/docs/planning/` |
+| 2026-09-10-husk-port.md | 10 Sep 2026 | [Test-Game](https://github.com/IvanCvetanovic/Test-Game), `supersonic/docs/planning/` |
+| 2026-09-10-magic-portals-spike.md | 10 Sep 2026 | [Magic-Portals-Remake](https://github.com/IvanCvetanovic/Magic-Portals-Remake), `docs/planning/` |
+| 2026-09-10-magic-portals-port.md | 10 Sep 2026 | [Magic-Portals-Remake](https://github.com/IvanCvetanovic/Magic-Portals-Remake), `docs/planning/` |
+| 2026-09-11-magic-portals-remaster.md | 11 Sep 2026 | [Magic-Portals-Remake](https://github.com/IvanCvetanovic/Magic-Portals-Remake), `docs/planning/`. Many of its steps are engine changes, each also recorded in this repository's own commit |
+
+The records that stay here and mention a game - the two-games reading, the
+migration-readiness survey, the roadmaps - are about the engine, and so is
+[2026-09-19-engine-as-a-dependency.md](2026-09-19-engine-as-a-dependency.md),
+which records the move itself.
 
 ## What the two-games document changed
 

@@ -1,9 +1,0 @@
-# ai.rs: low ground cannot acquire an enemy up on a plateau; a second enemy on
-# the same tier, spawned a tick later, is acquired at once.
-seed 3
-ticks 300
-map 30
-plateau 2.0 -10.0 12.0 10.0 1
-unit golem 1 -2.0 0.0
-unit stalker 0 5.0 0.0
-1 unit stalker 0 0.0 0.0

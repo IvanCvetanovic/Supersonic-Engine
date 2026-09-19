@@ -57,8 +57,8 @@ cmake --build build --parallel
 
 A game builds the engine with `add_subdirectory(engine)` and gets
 `SupersonicCore`, `Supersonic::TestHarness` and `supersonic_add_test` - no
-editor, plugin, engine suites or games, which default ON only when the engine
-is the top-level project. The contract and a minimal `CMakeLists.txt` are in
+editor, plugin or engine suites, which default ON only when the engine is the
+top-level project. The contract and a minimal `CMakeLists.txt` are in
 [README.md](README.md#building-a-game-against-the-engine). Two things to keep
 true when changing the engine's CMake: nothing a game needs may live only in a
 directory-scoped setting (a subproject's parent inherits none of them - carry
@@ -71,16 +71,15 @@ subproject build would define twice.
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-Sixty-eight suites. Rather than repeat the list here - the copy that used to
+Fifty-seven suites. Rather than repeat the list here - the copy that used to
 live in this file had fallen thirteen entries behind - see the table in
 [README.md](README.md#testing), or read it from the build, which is where CI
 gets it:
 
 ```bash
-# Both registrars. add_port_test wraps add_engine_test, so the fifteen Wolf
-# Brigade suites run like any other and a count of the first pattern alone
-# reports 53 against a ctest run of 68.
-grep -cE '^add_(engine|port)_test\([a-z_]+\)$' tests/CMakeLists.txt
+# One registrar since the game ports left for their own repositories, and
+# digits in the pattern: without them test_light2d is not counted.
+grep -cE '^add_engine_test\([a-z0-9_]+\)$' tests/CMakeLists.txt
 ```
 
 They cover the maths conventions, transform parenting and play/stop snapshots,
@@ -188,10 +187,12 @@ and floats are written as their bits.
 
 > **This is about the DEMO SCENE, not about the engine.** Since the pointer
 > joined a recorded tick, a session played with a mouse — Wolf Brigade's taps,
-> drags and orders included — records and replays, and `test_wb_hud` carries
-> that claim end to end: a tap recorded in one run selects the same unit in the
-> next, through the file, with the devices left at rest. What is still scoped is
-> the SCREENSHOT-level check below.
+> drags and orders included — records and replays. The suite that carries that
+> claim end to end, `test_wb_hud` (a tap recorded in one run selects the same
+> unit in the next, through the file, with the devices left at rest), moved with
+> the port to The-Wolf-Brigade repository's `supersonic/tests`; here,
+> `test_replay` holds the engine's half, the pointer in the file included. What
+> is still scoped is the SCREENSHOT-level check below.
 >
 > A replay only tests what the scene actually reads. **`MainScene` reads no
 > input inside a tick**, so replaying it reproduces whatever it is fed — change

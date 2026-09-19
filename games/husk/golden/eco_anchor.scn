@@ -1,7 +1,0 @@
-# economy.rs: a siphon places and builds an Anchor, raising the Will cap.
-seed 6
-ticks 600
-building sanctum 0 0.0 -20.0
-unit siphon 0 4.0 -16.0
-essence 500.0
-2 place builder=1 kind=anchor x=8.0 y=-14.0

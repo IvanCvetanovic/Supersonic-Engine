@@ -1,5 +1,0 @@
-# mission.rs: an objective chain reaches Victory, and the first outcome is final.
-seed 46
-ticks 90
-unit stalker 0 0.0 -30.0
-install missions/chain.ron

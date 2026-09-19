@@ -1,8 +1,0 @@
-// Fuel tank (brief §4.1 example: Pyre 100). [TUNE]
-(
-    name: "Fuel Tank",
-    affinity: Pyre,
-    essence: 1000.0,
-    footprint: (2, 2),
-    size: (1.4, 1.1),
-)

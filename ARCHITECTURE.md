@@ -1565,7 +1565,8 @@ turn” without a branch at every use.
 world axes: a locked axis is one the body neither moves along nor turns about.
 The case that asked for them is a 2D game on this 3D solver. The Magic Portals
 port locks position z and rotation x and y; unlocked, a resting crate left its
-plane by 30 px in a minute (`docs/planning/2026-09-10-magic-portals-spike.md`).
+plane by 30 px in a minute (`docs/planning/2026-09-10-magic-portals-spike.md`,
+now in the Magic-Portals-Remake repository with the port).
 
 - **Rotation lock:** the inverse inertia with the locked axes projected out,
   P I⁻¹ P, built once where the tensor is.

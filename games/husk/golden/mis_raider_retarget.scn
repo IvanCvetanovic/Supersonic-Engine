@@ -1,7 +1,0 @@
-# mission.rs: raiders crack a fragile Sanctum, then retarget the live stalker.
-seed 71
-ticks 300
-building sanctum 0 6.0 -20.0
-hp 0 5.0
-unit stalker 0 20.0 -20.0
-install missions/raid_1.ron

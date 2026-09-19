@@ -1,6 +1,0 @@
-# m5.rs: a Heartwood run saved and restored mid-run continues bit-identically.
-seed 71
-ticks 800
-mission heartwood
-0 extract units=35 source=0 queued=0
-400 snapshot

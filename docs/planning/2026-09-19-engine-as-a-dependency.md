@@ -151,3 +151,43 @@ finds `assets/shaders` there: 5 checks, 0 failures. Its executable, declared a
 game and launched from an empty directory, logged that its assets resolve from
 the engine the build named, rendered 20 frames with validation on, wrote its
 screenshot and exited 0 - and left that directory empty.
+
+## Step 2, as built: the games removed
+
+On its own branch, `games-out`, because the three game repositories pin their
+submodule to it; `main` stays at step 1 until the owner moves it.
+
+Removed, 536 files, every path the three surveys listed as a port's:
+`games/wolfbrigade` (67), `games/husk` (246) and `games/magicportals` (151);
+the 18 `test_wb_*` suites and `WolfBrigadeFixture.hpp`, their one helper; the
+3 `test_husk_*` and 44 `test_mp_*` suites; and the six records about one game,
+listed with where each went in this directory's README. From the files that
+stay: the games block of the top-level `CMakeLists.txt` with its three options,
+and the three registrars and 241 lines of `tests/CMakeLists.txt`.
+`TestHarness.hpp` stays; it is the engine's, and the games reach it through
+`Supersonic::TestHarness`.
+
+**The suite count.** CI's documented-counts job added `add_engine_test` and
+`add_port_test` lines, 56 + 18 = 74, against "sixty-eight" in the README, AGENTS
+and CONTRIBUTING - failing before any of this. With `add_port_test` gone it
+counts one registrar, and its pattern now allows digits: `test_light2d` never
+matched, so the check had been one short of what ctest runs. 57 suites, which
+is the number ctest runs and the number the documents now say.
+
+**Pointers, not scrubbing.** The README says where each game lives (Repository
+layout, and a line at the head of the Roadmap), and restates the Android
+measurement it used to link into the Wolf Brigade plan for. AGENTS moves the
+replay claim `test_wb_hud` carried to where that suite went. ARCHITECTURE says
+where the spike record it cites for per-axis locks now is. What merely mentions
+a game stays as it was: the Roadmap's entries, ARCHITECTURE's examples, the
+comments in `src/` and one in `tests/test_audio.cpp` that names
+`test_mp_sprites`.
+
+Measured, in a new build directory outside the tree (MSVC 14.50, Ninja,
+Release, validation ON): no compiler warning. The eleven vendored translation
+units print MSVC's D9025 note, their `/W0` overriding the target's `/W4`, as
+every clean build of this tree does. The `Shaders` target recompiled all
+seventeen `.spv` into `assets/shaders`, byte-identical to the committed ones.
+ctest, once: 57 of 57 passed, 6,771 checks, none blocked. `AllPasses.scene`
+from the engine's root: `[Counts]` identical and screenshot `160662a5`, as
+before step 1.

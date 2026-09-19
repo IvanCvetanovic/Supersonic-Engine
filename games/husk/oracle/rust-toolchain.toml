@@ -1,3 +1,0 @@
-[toolchain]
-# The game's own pin (Test-Game/rust-toolchain.toml at 721e19e).
-channel = "1.96.0"

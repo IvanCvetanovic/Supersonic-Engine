@@ -7,10 +7,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Whether the engine is being built for itself, or as part of a game's build
 # that added this directory with add_subdirectory(). The editor, the script
-# plugin, the engine's own suites and the games under games/ are the engine's
-# business and default ON only in the first case; a game gets SupersonicCore,
-# the test harness (cmake/SupersonicTesting.cmake) and nothing it did not ask
-# for.
+# plugin and the engine's own suites are the engine's business and default ON
+# only in the first case; a game gets SupersonicCore, the test harness
+# (cmake/SupersonicTesting.cmake) and nothing it did not ask for.
 #
 # PROJECT_IS_TOP_LEVEL is set by project() on CMake 3.21 and later. The minimum
 # stays 3.20 rather than rising to claim it: raising it would also switch on
@@ -289,8 +288,8 @@ target_compile_definitions(SupersonicCore PUBLIC
 # to the library's consumers as well, because a game that builds the engine as
 # a subproject is not in this tree and inherits neither. The engine's headers
 # are C++20, so a consumer compiling them as anything older fails on the first
-# one; the platform definition keeps its compile lines the ones this tree's own
-# games have.
+# one; the platform definition keeps its compile lines the ones the games had
+# while they were built in this tree.
 target_compile_features(SupersonicCore PUBLIC cxx_std_20)
 target_compile_definitions(SupersonicCore PUBLIC ${SUPERSONIC_PLATFORM_DEFINITION})
 
@@ -431,7 +430,7 @@ endif()
 # folder when it is packaged, then the working directory, then this.
 #
 # Empty when the engine is built for itself. Its editor and every game in its
-# tree run from this root, and a build that bakes no path behaves exactly as it
+# tree ran from this root, and a build that bakes no path behaves exactly as it
 # did before the rule. When the engine is built as part of another project it
 # defaults to this checkout, which is what lets a game in its own repository
 # run from its own root, or from anywhere. A relative value is taken from here.
@@ -557,52 +556,15 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/SupersonicTesting.cmake)
 # ---------------------------------------------------------------------------
 # Games built on the engine
 # ---------------------------------------------------------------------------
-#
-# Off by default: these link the engine the way anyone else would, and are not
-# part of building it. Turn one on with -DSUPERSONIC_BUILD_WOLFBRIGADE=ON.
-# The ported SIMULATION is not gated, and the executable is.
-#
-# The port is verified by C++ tests that reproduce the numbers the original's
-# headless harnesses print, so the simulation has to be built whenever the tests
-# are. It is pure logic - no renderer, no window - and costs a handful of
-# translation units.
-#
-# All of it only when the engine is built for itself. A game that builds the
-# engine as a subproject defines targets of its own, and these would be a second
-# copy of them - or of another game nobody asked for.
-if (SUPERSONIC_IS_TOP_LEVEL)
-add_subdirectory(games/wolfbrigade/sim)
+# None live here. Each game is its own repository and builds this one as a
+# subproject, from a submodule pinned to a commit - Wolf Brigade in
+# The-Wolf-Brigade/supersonic, HUSK in Test-Game/supersonic and Magic Portals
+# in Magic-Portals-Remake. README.md, "Building a game against the engine",
+# is what they build against.
 
-option(SUPERSONIC_BUILD_WOLFBRIGADE "Build the Wolf Brigade port spike executable" OFF)
-
-# Added unconditionally, and the option now gates only the EXECUTABLE inside it.
-# The layer that turns the simulation into a picture is a library for the same
-# reason the simulation is: a test has to be able to link it. While it lived in
-# an executable nobody builds by default, the one piece of code that decides
-# whether the HUD is wired to the game at all was the only piece nothing could
-# check - and the screenshot tool cannot answer that question either, because it
-# captures the offscreen 3D target and the UI is drawn over that, in ImGui's
-# draw list, on its way to the swapchain.
-add_subdirectory(games/wolfbrigade)
-
-# HUSK, split the same way. games/husk/sim is the simulation, ported from Rust
-# and held to the original's per-tick hashes; HuskGame is the layer that draws
-# it. Both are unconditional because tests link them, and the option gates only
-# the executable.
-option(SUPERSONIC_BUILD_HUSK "Build the HUSK executable" OFF)
-add_subdirectory(games/husk)
-
-# Magic Portals, from the Godot remake, split the same way - except that what the
-# option gates is a measurement tool rather than a game: the spike that measures
-# the physics gaps before the port commits to a body model
-# (docs/planning/2026-09-10-magic-portals-spike.md).
-option(SUPERSONIC_BUILD_MAGICPORTALS "Build the Magic Portals spike tool" OFF)
-add_subdirectory(games/magicportals)
-endif() # SUPERSONIC_IS_TOP_LEVEL
 
 # The engine's own suites. Off by default when the engine is built as part of
-# another project, whose ctest would otherwise run them as its own. They also
-# link the games above, which that project does not have.
+# another project, whose ctest would otherwise run them as its own.
 option(SUPERSONIC_BUILD_TESTS "Build engine unit tests" ${SUPERSONIC_IS_TOP_LEVEL})
 if (SUPERSONIC_BUILD_TESTS)
     enable_testing()
