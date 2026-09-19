@@ -12624,3 +12624,97 @@ Step 61's decision 2, `int(texels / D)` units: the ring's 128 and the dial's 32 
 - **Carried, untouched here:** step 67's `ParticleCellUnits` latent divide, step 73's `buildLights` slot count, step
   71's R1 refusal and step 72's 1-07 draw order, the MPR `docs/parity-backlog.md` still citing steps 83-85, and the
   UI fold-in (step 67).
+
+## Step 75 - nine suites that skip with 77 and would be reported failed, and the mark on a suite's own line (built)
+
+A gap in the test build found during the work, not a visuals step. On a clone without the converted levels, nine
+Magic Portals suites exit 77 as the others that read them do, but the `SKIP_RETURN_CODE 77` list in
+`tests/CMakeLists.txt` did not name them, so ctest would report them **Failed** where it reports the rest **Skipped**.
+That follows from ctest's rule (a non-zero exit without the property is a failure); no run without the levels was
+made to see it. Besides this record, `tests/CMakeLists.txt` is the only file changed: no source, data file, object or
+binary. **On this machine, which has the levels, every suite runs exactly as before; the mark decides only what ctest
+calls a 77.**
+
+**WHAT WAS WRONG.**
+- **27 suites can exit 77, all the same way**: `main` prints `SKIPPED` and the path it looked in, then returns 77
+  before its first check, when the converted levels are absent (and, for some, `chapters.json` or the remake's
+  `entity_roles.json`, `player.json` or `portals.json`). Searched over `tests/`, `games/` and `src/` (`.cpp`,
+  `.hpp`, `.h`, `.c`, `.inl`) for `return 77`, `return (77)`, `exit(77)`, `_Exit(77)` and a name assigned 77: no
+  other form, no named constant, no helper (the one other `= 77;` is `test_tilemap`'s `bakedHash`).
+  `test::summary` returns 0 or 1 only. No suite outside `test_mp_*` exits 77.
+- **The list named 18 of them.** The nine it missed are the suites steps 21 to 30 added: `test_mp_turrets` and
+  `test_mp_fire` (step 21, `0fa1df6` and `2629612`), `test_mp_hinge` (22, `924c36e`), `test_mp_minions` (23,
+  `ff2d392`), `test_mp_keys` (24, `14b4d48`), `test_mp_diamonds` (25, `9590cb0`), `test_mp_fields` (26, `524ba20`),
+  `test_mp_ghost` (28, `b261791`) and `test_mp_torch` (30, `1595f85`). Step 11b's `test_mp_boss` (`20ff46f`) joined
+  the list before them, and step 31's `test_mp_zerog` (`3f6c306`) and every suite since joined it after them.
+- **No suite was listed that never exits 77.**
+- `test_mp_turrets`' comment said it "skips with 77 like the rest". That was true of the binary, not of ctest.
+- **The other 17 never exit 77.** Eleven read nothing from outside the repository (`tscn`, `geometry`, `portal`,
+  `scores`, `camera`, `hud`, `levelend`, `popup`, `frontdoor`, `info`, `select`). Six skip only a part and still
+  return their summary (`sprites`, `lighting`, `sky`, `tiers`, `motion`, `sounds`); their comments say "never with
+  77", and ctest reports them passed without the data, by design.
+
+**WHAT CHANGED** (`tests/CMakeLists.txt`, CRLF kept).
+- **`add_mp_test(name [SKIPS_WITH_77])`.** The function reads the word with `cmake_parse_arguments` and sets
+  `SKIP_RETURN_CODE 77` on that suite's test. **Any other word stops the configure** (`FATAL_ERROR`), except one
+  CMake reads as false (`0`, `OFF`, `NO`, `N`, `FALSE`, `IGNORE`, `NOTFOUND` or `*-NOTFOUND`, in any case): the guard
+  tests the leftover words' value, so such a word passes and leaves the suite unmarked. No misspelling of the mark is
+  one of those, so a misspelt mark is never quietly dropped: `add_engine_test` ignores extra arguments, so a
+  misspelling would otherwise do nothing. Checked in a scratch `cmake -P` copy of the parse: no word gives FALSE, the
+  word TRUE, `SKIP_WITH_77` an error; a second copy, after review, let `OFF`, `off`, `NO`, `N`, `FALSE`, `0`,
+  `IGNORE`, `NOTFOUND` and `X-NOTFOUND` through unmarked.
+- **The 27 calls carry the mark, and the separate `set_tests_properties` list is gone.** A list 150 lines below the
+  calls is what the nine were added without. The mark sits on the line the next suite is written on, beside
+  neighbours that show it. The list's comment moved to the function's, and it now says what ctest does with a 77
+  that has no mark: a FAIL.
+- `test_mp_turrets`' comment now names the role table as well as the levels, and drops "like the rest".
+- **Considered and not taken:** setting the property on every Magic Portals suite. It would work, since a suite
+  that never returns 77 is not affected, but then the property would no longer say which suites can skip. Also not
+  taken: having CMake search each source for `return 77`. That depends on how the line is written, and a source
+  edit does not re-run the configure.
+
+| Suites | Exit 77 without their data | Listed before | Listed after |
+|---|---|---|---|
+| `levels`, `play`, `start`, `statics`, `chapters`, `timed`, `movers`, `hazards`, `demolish`, `launchers`, `shot`, `boss`, `layer`, `zerog`, `bounce`, `wells`, `dragon`, `darkdragon` (18) | yes | yes | yes |
+| `turrets`, `fire`, `hinge`, `minions`, `ghost`, `torch`, `keys`, `diamonds`, `fields` (9) | yes | **no: Failed by ctest's rule (not run)** | **yes** |
+| `tscn`, `geometry`, `portal`, `scores`, `camera`, `hud`, `levelend`, `popup`, `frontdoor`, `info`, `select`, `sprites`, `lighting`, `sky`, `tiers`, `motion`, `sounds` (17) | no | no | no |
+
+**VERIFIED, without compiling, linking or launching a suite.**
+- **Before the edit, the build was up to date**: a dry run on a verbatim copy of `build.ninja` (the build's own `-n`
+  stops at the glob re-check, as step 73 found) reported **no work to do**.
+- **The reconfigure**: `port_build.bat` re-ran CMake and reported **`ninja: no work to do.`**, rc 0. Nothing in its
+  log compiles or links; the only `.exe`s it names are `vswhere.exe` (the environment's notice) and `glslc.exe`
+  (CMake's shader-compiler line). **`build.ninja` is byte-identical before and after** (md5 `20d3e2d3`). Only
+  `tests/CTestTestfile.cmake` changed (`6ddd8e33` -> `334c258a`), and a dry run on the new `build.ninja` also reports
+  no work to do. A last comment-only edit to the function's comment re-ran CMake once more to the same `no work to
+  do`: `CTestTestfile.cmake` became `1be33e22`, since the line numbers it records moved by one, and the ctest listing
+  is identical.
+- **`ctest --show-only=json-v1`** (ctest 3.29.2; it launches no test), before and after: **`SKIP_RETURN_CODE 77` on
+  18 tests, then on 27**. The 27 are exactly the sources with a `return 77;`, and none has the property without one.
+  There are 122 tests in the same order before and after, with every command and every other property identical.
+- **A misstep, recorded:** the first attempt was `port_build.bat --target rebuild_cache`. Its first CMake run
+  succeeded, but the target's own nested run failed at `ninja -t restat build.ninja` with "failed recompaction:
+  Permission denied": the outer ninja still had `.ninja_log` open. Nothing was built, and the plain build above
+  then re-ran CMake cleanly. **Do not use `rebuild_cache` through `port_build.bat`.**
+- **After review, text only:** the function comment was reworded within its eleven lines (the false-word exception
+  above, "would report" for a failure reasoned rather than seen, and the remake's data no longer said to sit beside
+  the levels), so no line number `CTestTestfile.cmake` records moves. With comments stripped, `tests/CMakeLists.txt`
+  is identical to the file reconfigured above. CMake was not re-run for it.
+
+**SKIPPED NOT DEMONSTRATED.** None of the nine can be pointed at an empty folder: each takes `kLevels` and `kData`
+from `MAGICPORTALS_LEVELS_DIR` and `MAGICPORTALS_DATA_DIR`, PUBLIC compile definitions of `MagicPortalsSim`
+(`games/magicportals/sim/CMakeLists.txt:112-113`). No suite reads an environment variable or an argument. Showing
+**Skipped** would take one of two things: a different `-DSUPERSONIC_MAGICPORTALS_LEVELS`, which recompiles and
+relinks every suite (each a fresh binary for Smart App Control), or moving the remake's `out/levels`, which is
+not to be done. So the change is shown by the property ctest reads, not by a run.
+
+**SMART APP CONTROL.** Nothing was linked, and no test binary or game was launched. The only programs run were
+Strawberry's `cmake.exe`, `ninja.exe` and `ctest.exe`, plus `vcvars64.bat`. No refusal, no notification.
+
+**LEFT FOR THE OWNER.**
+- **The mark is declared, not checked**: a new suite that returns 77 without the mark is still possible. The
+  function comment and the 27 marked calls make that harder to miss, and a misspelt mark now stops the configure.
+  A word CMake reads as false (`OFF`, `0`, ...) still passes unmarked; `if (DEFINED MP_UNPARSED_ARGUMENTS)` would
+  stop those too, and was left out because the review round changed text only.
+- **Skipped** is still to be seen on a machine without the levels (a fresh clone, or CI). There, all 27 should
+  report Skipped, with the path each one looked in.

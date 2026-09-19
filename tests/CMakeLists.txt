@@ -132,20 +132,39 @@ target_link_libraries(test_husk_layer PRIVATE HuskGame)
 # remake's harnesses assert behaviour over Godot's 2D solver, which is not being
 # reimplemented, so only what the converter and the role table decide is pinned
 # exactly. The acceptance rule is in docs/planning/2026-09-10-magic-portals-spike.md.
+#
+# SKIPS_WITH_77 marks a suite that reads the converted levels from outside this
+# repository - some of them chapters.json or the remake's data as well - so on a
+# build machine they can simply be absent. Such a suite exits 77 before its first
+# check, printing the path it looked in, and ctest reports it SKIPPED: never a
+# pass. But ctest knows 77 only from the test's SKIP_RETURN_CODE, and without it
+# the same exit is a FAIL. The mark sits on the suite's own line because a
+# separate list of names is what nine suites were added without, so a fresh clone
+# would report them failed. A misspelt mark stops the configure rather than being
+# dropped; only a word CMake reads as false (OFF, NO, 0, IGNORE...) gets through.
+# A suite that skips only a part of itself and still returns its summary takes no
+# mark: that part is skipped without the data, and never with 77.
 function(add_mp_test name)
+    cmake_parse_arguments(PARSE_ARGV 1 MP "SKIPS_WITH_77" "" "")
+    if (MP_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "add_mp_test(${name}): unknown argument ${MP_UNPARSED_ARGUMENTS}")
+    endif()
     add_engine_test(${name})
     target_link_libraries(${name} PRIVATE MagicPortalsSim)
+    if (MP_SKIPS_WITH_77)
+        set_tests_properties(${name} PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 endfunction()
 
 add_mp_test(test_mp_tscn)
-add_mp_test(test_mp_levels)
+add_mp_test(test_mp_levels SKIPS_WITH_77)
 add_mp_test(test_mp_geometry)
 add_mp_test(test_mp_portal)
-add_mp_test(test_mp_play)
+add_mp_test(test_mp_play SKIPS_WITH_77)
 
 # The carrancas of chapter 2, and the fireballs they spit. Reads the converted
-# levels, so it skips with 77 like the rest when they are absent.
-add_mp_test(test_mp_turrets)
+# levels and the remake's role table, so it skips with 77 when they are absent.
+add_mp_test(test_mp_turrets SKIPS_WITH_77)
 
 # The medals, kept between runs. Pure sim: a temporary directory and no window.
 # The ONE Magic Portals suite that touches a filesystem, and it touches only its
@@ -153,71 +172,71 @@ add_mp_test(test_mp_turrets)
 # Paths::saveDir being empty by default buys.
 add_mp_test(test_mp_scores)
 # Every converted level started as the port starts one: the remaster's inventory.
-add_mp_test(test_mp_start)
+add_mp_test(test_mp_start SKIPS_WITH_77)
 # Static portals, on the tutorial levels that ship them.
-add_mp_test(test_mp_statics)
+add_mp_test(test_mp_statics SKIPS_WITH_77)
 # The level order (chapters.json), and the camera's arithmetic.
-add_mp_test(test_mp_chapters)
+add_mp_test(test_mp_chapters SKIPS_WITH_77)
 add_mp_test(test_mp_camera)
 # Timed crystals, which go a set time after a level starts.
-add_mp_test(test_mp_timed)
+add_mp_test(test_mp_timed SKIPS_WITH_77)
 # Moving platforms, lifts, and no-portal zones that patrol.
-add_mp_test(test_mp_movers)
+add_mp_test(test_mp_movers SKIPS_WITH_77)
 # Hazards, and where they kill.
-add_mp_test(test_mp_hazards)
+add_mp_test(test_mp_hazards SKIPS_WITH_77)
 # Rolling stones, and the walls they break.
-add_mp_test(test_mp_demolish)
+add_mp_test(test_mp_demolish SKIPS_WITH_77)
 # Fire agents, burning crates and barrel bombs - and the asymmetry between them,
 # that fire kills the player where a blast cannot reach one.
-add_mp_test(test_mp_fire)
+add_mp_test(test_mp_fire SKIPS_WITH_77)
 # Seesaws and spinning platforms. No tick of its own: the joint is attached when
 # the level is built and the engine's solver does the rest.
-add_mp_test(test_mp_hinge)
+add_mp_test(test_mp_hinge SKIPS_WITH_77)
 # The minions of worlds 3 and 4: spawned from a marker, walking a prefix of
 # waypoints, and taken by the floor that kills them and nothing else.
-add_mp_test(test_mp_minions)
+add_mp_test(test_mp_minions SKIPS_WITH_77)
 # Chapter 3's boss: the ghost of level 3-32, which only fire can hurt and which
 # drops the only key its level has.
-add_mp_test(test_mp_ghost)
+add_mp_test(test_mp_ghost SKIPS_WITH_77)
 # Chapter 4's torches, and the wall of light one drops. The inventory counts
 # roles and light_wall.ent has none, so only this suite can tell a played level
 # from one with an unremovable solid across it.
-add_mp_test(test_mp_torch)
+add_mp_test(test_mp_torch SKIPS_WITH_77)
 # Chapter 4's first eighteen levels, where gravity is zero, the walking buttons
 # do nothing, and the recoil of a portal shot is the only way to move. The one
 # remaining level property, and the last thing stopping a level starting.
-add_mp_test(test_mp_zerog)
+add_mp_test(test_mp_zerog SKIPS_WITH_77)
 # The slabs that bob in chapter 4's weightless rooms. One pixel of travel, and
 # the suite watches the BODY is kinematic - a static one would carry nothing.
-add_mp_test(test_mp_bounce)
+add_mp_test(test_mp_bounce SKIPS_WITH_77)
 # Chapter 4's gravity wells: a solid circle that pulls every dynamic body in, and
 # the no-portal zone its callback adds that no level file mentions.
-add_mp_test(test_mp_wells)
+add_mp_test(test_mp_wells SKIPS_WITH_77)
 # Chapter 2's boss: the dragon that cannot be killed, and the claw that eats its
 # level's floor behind a camera locked to the dragon itself. The inventory counts
 # roles, and the claw's four names have none - so only this suite can tell a
 # level whose floor really goes from one where the claw is drawn and inert.
-add_mp_test(test_mp_dragon)
+add_mp_test(test_mp_dragon SKIPS_WITH_77)
 # Chapter 4's boss, and the last level of the game: summoned by the player's own
 # light, hurt only by a barrel bomb its own fireball sets off, and the holder of
 # the only key its level has.
-add_mp_test(test_mp_darkdragon)
+add_mp_test(test_mp_darkdragon SKIPS_WITH_77)
 # Keys, the keyholes they open and the locked doors that go with them - paired by
 # colour, and picked up at a distance rather than on contact.
-add_mp_test(test_mp_keys)
+add_mp_test(test_mp_keys SKIPS_WITH_77)
 # Shock diamonds: the carried thing only a character may hold, which kills the
 # first minion it comes within range of and deletes itself. Selected by entity
 # name rather than by role, because the fire diamond shares the role.
-add_mp_test(test_mp_diamonds)
+add_mp_test(test_mp_diamonds SKIPS_WITH_77)
 # Shock fields: a lethal ring that swings about the node that placed it, polled
 # every frame rather than entered. The node is the CENTRE of the swing.
-add_mp_test(test_mp_fields)
+add_mp_test(test_mp_fields SKIPS_WITH_77)
 # Launchers, what they throw, and what takes it back.
-add_mp_test(test_mp_launchers)
+add_mp_test(test_mp_launchers SKIPS_WITH_77)
 # The portal shot: a tap fires, and the portal opens where the shot arrives.
-add_mp_test(test_mp_shot)
+add_mp_test(test_mp_shot SKIPS_WITH_77)
 # Chapter 1's boss, the beholder of level31, as the original's script plays it.
-add_mp_test(test_mp_boss)
+add_mp_test(test_mp_boss SKIPS_WITH_77)
 # A level's own art: the sprites the converter wrote, their order and blend.
 # Its reader is tested on files it writes, so it runs anywhere; only the part
 # that reads the converted levels is skipped without them, and never with 77.
@@ -278,17 +297,8 @@ add_mp_test(test_mp_select)
 
 # The layer, attached to a bare registry: no window, no Vulkan. It drives taps
 # through the camera, and plays level30 from the spawn to the exit.
-add_mp_test(test_mp_layer)
+add_mp_test(test_mp_layer SKIPS_WITH_77)
 target_link_libraries(test_mp_layer PRIVATE MagicPortalsGame)
-
-# test_mp_levels and test_mp_play read the converted levels from outside this
-# repository - and test_mp_play the remake's role table - so on a build machine
-# they can simply be absent. Each exits 77 then, which ctest reports as SKIPPED
-# with the path it looked in - never as a pass.
-set_tests_properties(test_mp_levels test_mp_play test_mp_start test_mp_statics test_mp_chapters test_mp_timed
-                     test_mp_movers test_mp_hazards test_mp_demolish test_mp_launchers test_mp_shot test_mp_boss test_mp_layer
-                     test_mp_zerog test_mp_bounce test_mp_wells test_mp_dragon test_mp_darkdragon
-                     PROPERTIES SKIP_RETURN_CODE 77)
 
 # The simulation's own sin, cos, asin, atan2 and pow, pinned bit for bit so the
 # determinism claim holds across C runtimes (DetMath.hpp).
