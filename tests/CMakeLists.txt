@@ -236,6 +236,11 @@ add_mp_test(test_mp_sky)
 # writes, and over the original's own tier folders, which are skipped without them and
 # never with 77.
 add_mp_test(test_mp_tiers)
+# The small motions the original's scripts give an entity: motions.json and sim/Motion -
+# linearMotion's step, clamp, wrap, cos phase and axis, and the crystals' and keys' bob -
+# pure, and a census of the converted levels' crystals and keys, which is skipped
+# without them and never with 77.
+add_mp_test(test_mp_motion)
 # The sounds: the decoded AudioManager as data, and that every file it names is
 # really in the original's soundfx/. The reader runs anywhere; only the part
 # that opens the original's own files is skipped without them, never with 77.

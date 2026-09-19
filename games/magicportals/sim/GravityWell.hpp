@@ -17,6 +17,10 @@
 //     Nothing in the level file says `antiportal`; it exists only in the
 //     callback, which is why a port reading the .tscn alone would never find it.
 //     Game::Start hands one to Portals::State::zones for each well.
+//   - and A GREEN RING, which is that same added entity SEEN: white_ring.png at
+//     the zone's own diameter, added, painted (0.25, 0.5, 0.25) by the callback
+//     that adds it. It is the one part of a well that is drawn rather than felt,
+//     and it is drawn by the layer from `Rules::ring` (gravitywell.json).
 //
 // THE FORCE, decoded (ETHCallback_gravity_area, bytes 461443..462571):
 //
@@ -42,11 +46,28 @@
 
 namespace MagicPortals::GravityWell {
 
+// THE RING the agent adds with that zone, and the one thing about a well that is
+// seen rather than felt: an antiportal.ent, sized to the zone and painted green
+// by `area.SetColor(vector3(0.5, 1, 0.5) * 0.5)`. It is renamed `gravity_area` at
+// AddEntity, so the callback it gets is the force above and not
+// ETHCallback_antiportal: no blink, no turn, one size. gravitywell.json `ring`
+// carries the instructions, and the rest of the row is antiportal.ent's own file.
+struct Ring {
+    std::string sprite;       // its <Sprite>: white_ring.png
+    bool additive = false;    // its blendMode 1
+    glm::dvec3 colour{0.0};   // what the callback paints it: (0.25, 0.5, 0.25)
+    glm::dvec3 emissive{0.0}; // its <EmissiveColor>, rgb: (1, 1, 1)
+    bool applyLight = false;  // its applyLight
+    bool isStatic = false;    // its static
+    double z = 0.0;           // AddEntity's vector3(pos, -5): its depth, and its lighting height
+};
+
 struct Rules {
     double forceZeroGravity = 0.0; // 0.18, where the world's gravity is V2_ZERO
     double forceWithGravity = 0.0; // 0.5, where it is not
     double referenceFrameMs = 0.0; // 16.6666: the frame the force is quoted per
     double zoneShrinkPx = 0.0;     // 24: the antiportal's SIZE is radius*2 - this
+    Ring ring;                     // and what that antiportal looks like
 };
 
 // False, with `error`, for a file that does not read, and for one whose numbers
@@ -58,12 +79,17 @@ struct Well {
     glm::dvec2 atPx{0.0};
     double radiusPx = 0.0;
 
-    // The radius INSIDE WHICH NO PORTAL MAY OPEN, which is not the well's own.
-    // The agent sizes its antiportal to radius*2 - 24 and an antiportal refuses
-    // a tap within half its size, so this is radius - 12. gravitywell.json shows
-    // the arithmetic; getting it wrong is 12 px of silently wrong zone at every
-    // placement in the game.
-    double ZoneRadiusPx(const Rules& rules) const { return radiusPx - rules.zoneShrinkPx * 0.5; }
+    // THE SIZE the agent's scaleToSize gives its antiportal, across: radius*2 -
+    // 24, which is what is DRAWN. 188 units at level16c's radius of 106.
+    double RingSizePx(const Rules& rules) const { return radiusPx * 2.0 - rules.zoneShrinkPx; }
+
+    // The radius INSIDE WHICH NO PORTAL MAY OPEN, which is not the well's own:
+    // an antiportal refuses a tap within GetSize().x * 0.5, so it is half the
+    // size above - radius - 12, at every one of the ten placements. Derived from
+    // the ring in that order, as the original derives it, so that a ruling about
+    // the refusal (00_order R2) cannot move the picture; getting it wrong is 12
+    // px of silently wrong zone at every placement in the game.
+    double ZoneRadiusPx(const Rules& rules) const { return RingSizePx(rules) * 0.5; }
 };
 
 // The velocity a single well adds to a body this tick, in the engine's plane.

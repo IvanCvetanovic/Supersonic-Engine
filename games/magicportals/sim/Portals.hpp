@@ -60,6 +60,13 @@ struct Rules {
     // half of white_ring.png's 128 px frame, because the original's test is
     // GetSize().x * 0.5 on the field entity itself. placement.json says why.
     double antiportalRadiusPx = 0.0;
+    // The entity AntiPortalManager collects (either spelling) and the Scale it
+    // gives each one it collects (placement.json `antiportal.manager`, decoded):
+    // the ring is drawn at white_ring.png's 128 units x this x the node's own
+    // scale, 64 x scale, and the original refuses a tap in half of that. What the
+    // port plays is still antiportalRadiusPx; only the picture reads these.
+    std::string antiportalEntity;
+    double antiportalManagerScale = 0.0;
 
     // How long a tap is refused for, in milliseconds, both decoded. The remake
     // carries 0.0 s and 0.25 s and says of them "the names are real; the numbers
@@ -82,10 +89,11 @@ struct Rules {
 // refused, but nothing plays by it - LoadPlacement replaces it.
 bool LoadRules(const std::string& path, Rules& out, std::string& error);
 
-// The port's own placement.json, over the top: the two decoded radii. Both must
-// be there and above zero. A missing one is an error rather than a default,
-// because a default here would be a guess written into code - which is the
-// mistake this file exists to undo.
+// The port's own placement.json, over the top: the two decoded radii, and the
+// antiportal manager's entity and Scale. All must be there, the numbers above
+// zero. A missing one is an error rather than a default, because a default
+// here would be a guess written into code - which is the mistake this file
+// exists to undo.
 bool LoadPlacement(const std::string& path, Rules& out, std::string& error);
 
 // An antiportal. A tap within collision_radius_px times its `scale` is refused

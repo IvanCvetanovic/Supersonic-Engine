@@ -32,6 +32,7 @@
 #include "sim/Locking.hpp"
 #include "sim/MainMenu.hpp"
 #include "sim/MenuState.hpp"
+#include "sim/Motion.hpp"
 #include "sim/Particles.hpp"
 #include "sim/Pause.hpp"
 #include "sim/Popup.hpp"
@@ -333,6 +334,55 @@ public:
     };
     std::vector<EmitterReport> EmitterReports() const;
 
+    // Each timed crystal's dial (art.json timer), for the suites, in the crystals'
+    // order: as the last tick left it.
+    struct TimerReport {
+        std::string crystal;     // the crystal's node
+        bool drawn = false;      // its quad is there
+        bool shrinking = false;  // the time is up, or the crystal was taken a tick ago or more
+        float z = 0.0f;
+        float crystalZ = 0.0f;   // its crystal's picture's
+        int frame = 0;           // the cell it shows
+        glm::dvec2 scale{1.0};   // its pulse or its shrink
+        double alpha = 0.0;      // the alpha tint is given
+        glm::dvec2 atPx{0.0};    // where it is drawn, in the level's pixels
+    };
+    std::vector<TimerReport> TimerReports() const;
+
+    // Each crystal's and key's linearMotion (sim/Motion, motions.json), for the
+    // suites, in the level's drawing order (m_sprites'): as the last tick left it.
+    struct MotionReport {
+        std::string node;           // the entity's node
+        bool crystal = false;       // a crystal's, or else a key's
+        bool drawn = false;         // its picture is there
+        entt::entity quad{entt::null}; // that picture
+        bool moving = false;        // its script calls linearMotion now: a live crystal, an unowned unspent key
+        Motion::Linear motion;      // the start angle, the angle, whether the first call has run
+        glm::dvec2 offsetPx{0.0};   // what the last call put on its picture, 0 while it does not move
+        glm::dvec2 centrePx{0.0};   // where its picture was last drawn
+        glm::dvec2 ownerPx{0.0};    // where its entity stands: its particles' origin
+    };
+    std::vector<MotionReport> MotionReports() const;
+
+    // Each placed picture whose own callback motions.json's `placed` names (the hint
+    // arrow, the dashed circle and square, the tapping hand), for the suites, in the
+    // level's drawing order: as the last tick left it.
+    struct PlacedReport {
+        std::string node;              // the entity's node
+        std::string entity;            // its row's entity, without .ent
+        bool drawn = false;            // its picture is there
+        entt::entity quad{entt::null}; // that picture
+        bool moves = false;            // its linearMotion runs (its row calls one and its node has speed and stride)
+        Motion::Linear motion;         // that call's arguments and angle
+        glm::dvec2 offsetPx{0.0};      // what the last call put on its picture
+        double turnedDeg = 0.0;        // what AddToAngle has turned it by, counter-clockwise
+        float alpha = 1.0f;            // the alpha its colour is drawn at
+        glm::dvec2 centrePx{0.0};      // where its picture was last drawn
+        glm::dvec2 ownerPx{0.0};       // where its entity stands
+        double ownerAngleDeg = 0.0;    // and its angle, Ethanon's
+    };
+    std::vector<PlacedReport> PlacedReports() const;
+
     // A screen point (Input's coordinates) as the point in the level under it,
     // in the remake's pixels. False when there is no viewport or camera.
     bool ScreenToLevelPx(const entt::registry& registry, const glm::vec2& screenPoint, glm::dvec2& outPx) const;
@@ -557,13 +607,17 @@ private:
         Sprites::Sprite sprite;
         entt::entity quad{entt::null};
         float z{0.0f};
-        // C, the instance colour, as its node gives it (eth_color), and a timed
-        // crystal's fade, which multiplies its alpha. What the ambient does to
-        // them is syncLighting's.
+        // C, the instance colour, as its node gives it (eth_color), and a
+        // keyhole's fade, which multiplies its alpha. What the ambient does to
+        // them is syncLighting's. A timed crystal does not fade: its dial counts
+        // it down (m_timers).
         glm::vec4 colour{1.0f};
         float fade{1.0f};
+        // Where its picture was last drawn, in the level's pixels.
+        glm::dvec2 centrePx{0.0};
         // The scale a script gave its entity (ETHEntity::Scale), which multiplies its
-        // picture and its particle systems: a static portal's 0.8, and 1 otherwise.
+        // picture and its particle systems: a static portal's 0.8, an antiportal's
+        // manager's 0.5 times its node's scale, and 1 otherwise.
         double scale{1.0};
         glm::dvec3 emissive{0.0}; // its node's eth_emissive
         std::string lightmap;     // its node's eth_lightmap, on disk; empty = none
@@ -589,6 +643,17 @@ private:
         int zone{-1};         // in portals.zones
         int sky{-1};          // in m_sky.skies: pinned to the camera, not where the level put it
         bool satellite{false}; // m_sky's satellite, pinned the same way
+        int motion{-1};       // in m_motions: a crystal or key its script bobs
+        bool antiportal{false}; // ETHCallback_antiportal blinks and turns it (art.json)
+        int placed{-1};       // in m_placed: a picture its own callback sways, fades or turns
+    };
+    // A placed picture's callback (motions.json `placed`): its row, its
+    // linearMotion when it has one, and its turn.
+    struct PlacedScript {
+        std::size_t row{0}; // in m_motionRules.placed
+        bool moves{false};
+        Motion::Linear motion;
+        Motion::Turn turn;
     };
 
     void bindInput();
@@ -647,6 +712,16 @@ private:
     float readInput(entt::registry& registry);
     void syncDrawables(entt::registry& registry);
     void syncSprites(entt::registry& registry);
+    // The timed crystals' dials, after syncSprites has placed their crystals: on
+    // the tick, as ETHCallback_timer runs a frame.
+    void syncTimers(entt::registry& registry);
+    // One linearMotion call for every crystal and key whose script makes one this
+    // tick (sim/Motion), and one call of every placed picture's callback, BEFORE
+    // syncSprites draws where they leave them.
+    void advanceMotions(float fixedDelta);
+    // Whether a picture's script calls linearMotion now: a crystal while it lives,
+    // a key while no one carries it and it has not found its keyhole.
+    bool motionRuns(const DrawnSprite& drawn) const;
     void syncBoss(entt::registry& registry);
     // The carrancas' fireballs. Its own function rather than a block inside
     // syncBoss: they belong to a turret, not to the beholder, and every level
@@ -783,6 +858,24 @@ private:
     Sky::Rules m_skyRules;                  // the port's sky.json
     Tiers::Rules m_tierRules;               // the port's tiers.json: which file of a level's image is drawn
     Sky::Controller m_sky;                  // the level's StaticSky, built with its sprites
+    Motion::Rules m_motionRules;            // the port's motions.json
+    // One per crystal and key whose picture is drawn, in the level's drawing order
+    // (DrawnSprite::motion). Picture-side only: never Game::Level or the state hash.
+    std::vector<Motion::Linear> m_motions;
+    // One per drawn picture a `placed` row names (DrawnSprite::placed). Picture-side
+    // only, like m_motions; its start angles are constants and draw from no stream.
+    std::vector<PlacedScript> m_placed;
+    // What ETHCallback_antiportal's AddToAngle has turned the level's rings by. One
+    // for all of them: the original turns each ring by its own callback, and they
+    // run on the same frames with the same step, so they hold one angle between
+    // them. Reset with the level, like the level's age, which the blink reads.
+    Motion::Turn m_antiportalTurn;
+    // The start angles' stream, re-seeded for every level it builds with this mixed
+    // with the level's name (Motion::LevelSeed), so a level's phases are its own,
+    // do not depend on what was played before it, and no other generator's draws
+    // move (00_order K8). The original's are randF(PI) off a clock-seeded generator
+    // and cannot be recovered; this is the port's determinism choice.
+    static constexpr std::uint32_t kMotionSeed = 20260917u;
     std::vector<entt::entity> m_portalQuads; // one per placed portal, when its image is there
     entt::entity m_shotQuad{entt::null};    // the shot in flight, when its image is there
     entt::entity m_playerQuad{entt::null};  // the player, when its image is there
@@ -836,6 +929,27 @@ private:
     std::vector<entt::entity> m_spikes; // one per spike in flight
     float m_beholderZ{0.5f};
     float m_spikeZ{0.5f};
+
+    // A timed crystal's dial (art.json timer), which the original adds behind the
+    // crystal and which outlives it: once the time is up or the crystal is taken,
+    // the crystal's picture goes and the dial shrinks away where it last stood -
+    // from the tick the time is up, or from the tick after the one it is taken on.
+    // Its own quads, not m_sprites', whose indices are the drawing slots.
+    struct TimerDial {
+        int crystal{-1};          // in goals.crystals
+        int sprite{-1};           // the crystal's picture in m_sprites, whose drawn centre it takes
+        entt::entity quad{entt::null};
+        glm::dvec2 cellPx{0.0};   // one cell of timer.png
+        float z{0.0f};            // after the sprites at or below the crystal's z_index + zOffset
+        double lookZ{0.0};        // the crystal's eth_z + zOffset: its lighting height
+        glm::dvec2 atPx{0.0};     // where it is drawn: the crystal's centre, kept once it is gone
+        glm::dvec2 scale{1.0};    // the pulse, then the shrink
+        double alpha{0.0};
+        int frame{0};
+        bool taken{false};        // the crystal was taken: its last live tick is drawn, then it shrinks
+        bool shrinking{false};
+    };
+    std::vector<TimerDial> m_timers;
 
     // The carrancas' fireballs, one quad per fireball in flight (Turrets.hpp).
     //

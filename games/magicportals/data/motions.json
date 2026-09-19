@@ -1,0 +1,214 @@
+{
+  "_about": [
+    "The small motions the original's scripts give an entity: linearMotion, and the callbacks that",
+    "call it. Decoded from android_game.bin through the remake's asbc listing",
+    "(out/parity/asbc/all_functions.txt, md5 48fe65ce8baea16b94ed84d8d7be84b0). The visuals plan's",
+    "step 3.2 (the remake's out/parity/visuals/briefs/00_order.md section 7; systems_9_10.md 10b), planning",
+    "step 69 of docs/planning/2026-09-11-magic-portals-remaster.md; `placed` is step 3.3 (systems_9_10.md 10a), planning",
+    "step 70. Read by sim/Motion.",
+    "",
+    "Every number below is the script's. The one thing that is not is the start angle each crystal or",
+    "key is given: the original draws it with randF(PI) from a generator re-seeded from its clock, so",
+    "its phases are unrecoverable and the port draws its own, from a stream in the level's drawing order",
+    "seeded for each level with MagicPortalsLayer's kMotionSeed mixed with the level's name",
+    "(Motion::LevelSeed). Only their distribution is the original's.",
+    "",
+    "A motion moves the PICTURE and what the entity carries (its sparkles, a timed crystal's dial). The",
+    "port keeps pick-up on the node: the original tests its 26 u range from the moved position, at most",
+    "1.5 u away, and the port's crystal and key tests do not move (a recorded divergence, systems_9_10",
+    "10b(4))."
+  ],
+
+  "linear_motion": {
+    "frame_cap_ms": 200.0,
+    "wrap_rad": 6.2831854820251465,
+    "_source": [
+      "linearMotion(ETHEntity thisEntity, bool vertical, float angle, float startAngle),",
+      "utilEntityEffect.angelscript bytes 327527..328407:",
+      "  ins 1-12    CheckCustomData('originalPos'); when absent (the first call):",
+      "  ins 13-27   SetVector3('originalPos', GetPosition())",
+      "  ins 28-39   SetFloat('angle', startAngle)",
+      "  ins 41-51   speed = GetFloat('speed')",
+      "  ins 53-68   AddToFloat('angle', g_timeManager.unitsPerSecond(speed))",
+      "  ins 70-98   if GetFloat('angle') > PI x 2f (CpyGtoV4 PI; MULIf 2f; CMPf; JNP):",
+      "              AddToFloat('angle', -PI x 2f). Once, not a modulo",
+      "  ins 100-110 stride = GetFloat('stride')",
+      "  ins 112-129 offset = cos(GetFloat('angle')) x stride x sign(speed)",
+      "  ins 131-142 m = rotateZ(degreeToRadian(angle))",
+      "  ins 144-178 v = vertical ? vector3(0, offset, 0) : vector3(offset, 0, 0); v = multiply(v, m)",
+      "  ins 180-208 SetPosition(GetVector3('originalPos') + v x g_scale.getScale())",
+      "So the angle is stepped BEFORE the offset is read, and the first frame drawn already has one step",
+      "in it (00_order 8.0 rule 6: the draw reads the position the callback wrote).",
+      "",
+      "STimeManager::unitsPerSecond(float speed), STimeManager.angelscript bytes 8045..8162: ins 3-15",
+      "speed x min(200, GetLastFrameElapsedTime()) / 1000.0 (SetV8 shows the low bits only; the constant is",
+      "exactly 1000.0, 00_order 8.0 rule 2); ins 16-18 x m_factor, which STimeManager's constructor sets to",
+      "1 and pause() to 0. frame_cap_ms is that 200.",
+      "",
+      "wrap_rad is PI x 2f in float: PI is registered as the float 3.141592654f",
+      "(ETHScriptObjRegister.cpp:512-515, GameMath.h's constant::PI), so 6.2831854820251465.",
+      "",
+      "rotateZ and multiply: Ethanon GameMath.h RotateZ builds rows (cos, sin; -sin, cos) and",
+      "Multiply(Vector3, Matrix4x4) takes (x a11 + y a12, x a21 + y a22), bound as multiply(const vector3 &in,",
+      "const matrix4x4 &in) (ETHScriptWrapper.Math.generic.cpp:55): (x cos a + y sin a, -x sin a + y cos a),",
+      "a positive angle turning counter-clockwise on the +y-down screen.",
+      "",
+      "g_scale.getScale() is m_scaleFactor, screen height / 256 (00_order 8.12a): the level's units times it",
+      "are screen pixels, so in the port's level units it is 1 and the amplitude is the stride."
+    ]
+  },
+
+  "crystal": {
+    "entities": ["crystal"],
+    "speed": 2.0,
+    "stride": 1.5,
+    "vertical": true,
+    "axis_deg": 0.0,
+    "start_angle_from": 0.0,
+    "start_angle_to": 3.1415927410125732,
+    "_source": [
+      "ETHCallback_crystal, ETHCallback_crystal.angelscript bytes 424324..424766, every frame the crystal",
+      "lives (entity names crystal and crystal.ent: 35 and 435 placements, both run ETHCallback_crystal):",
+      "  ins 1-12    CheckCustomData('speed') != 0 skips to ins 83. No crystal placement carries `speed`",
+      "              (systems_9_10's census10: 470 crystals, 0 with speed), so every one takes the defaults:",
+      "  ins 14-25   SetFloat('speed', 2f)",
+      "  ins 27-38   SetFloat('stride', 1.5f)",
+      "  ins 40-58   squaredRange = scale(26)^2 (the pick-up range; the port's Goals keeps its own test)",
+      "  ins 60-82   a uint `time`: addTimerToCrystal (step 68's dial) and the temp-alert sound",
+      "  ins 83-96   linearMotion(thisEntity, vertical = true (SetV1 1), angle = 0f, startAngle =",
+      "              randF(PI)). A call pushes its last argument first (00_order 8.0 rule 3): the randF",
+      "              result at ins 87 is startAngle, the 0f at ins 88 is angle, the 1 at ins 89-90 vertical",
+      "randF(PI) is Randomizer::Float(PI), m_mt.rand(PI), uniform on [0, PI]",
+      "(ETHScriptWrapper.generic.cpp:338; gs2d Randomizer.cpp:44-47). It is called every frame and read",
+      "only on the first. So: a period of PI seconds, an amplitude of 1.5 units, a phase of its own.",
+      "",
+      "crystal.ent is static=1: its callback runs only while its bucket is on screen (00_order 8.12c), so the",
+      "original starts a crystal's bob when it is first seen and holds it while it is not. The port starts",
+      "every crystal on the level's first tick; with a random phase the two cannot be told apart."
+    ],
+    "_measured": [
+      "systems_9_10 10b (bob2.py, bob_period.py) on the original's library frames: 161 crystals in 74",
+      "levels; peak-to-peak over a crystal's frames median 1.60 u, p90 2.85, max 3.38 (the decode's",
+      "3.0); mean |dy| 1.10 / 0.52 / 0.66 u over 2.5 / 3.5 / 6.0 s (134 / 147 / 130 crystals); the",
+      "period fit's nearest minimum 3.20 s. Phases differ per crystal (same-frame spread median 1.60 u)."
+    ]
+  },
+
+  "key": {
+    "entities": ["key"],
+    "speed": 2.0,
+    "stride": 1.5,
+    "vertical": true,
+    "axis_deg": 0.0,
+    "start_angle_from": 0.0,
+    "start_angle_to": 3.1415927410125732,
+    "_source": [
+      "ETHCallback_key, ETHCallback_key.angelscript bytes 438490..442683 (entity names key and key.ent: 8",
+      "and 31 placements; key_pos is another entity):",
+      "  ins 1-12    CheckCustomData('speed') != 0 skips the setup; no key carries `speed`",
+      "  ins 14-38   SetFloat('speed', 2f); SetFloat('stride', 1.5f)",
+      "  ins 60-71   SetInt('ownerID', -1)",
+      "  ins 204-220 GetUInt('foundKeyhole') != 0: the fly-in to its keyhole (ins 221-652), which never",
+      "              reaches the bob",
+      "  ins 653-665 GetInt('ownerID') >= 0 (CMPIi 0; JNS): the carried branch at ins 860",
+      "  ins 666-679 otherwise linearMotion(thisEntity, true, 0f, randF(PI)), the crystal's call, and",
+      "              then the pick-up scan from the moved position (ins 680-857)",
+      "  ins 978-991 the carried branch writes SetVector3('originalPos', GetPosition()) every frame and",
+      "              never touches `angle`",
+      "So a key bobs only while no one carries it and it has not found its keyhole; a dropped key bobs",
+      "about where it was dropped and takes up its swing at the angle it was picked up at. key.ent is",
+      "static=0, so its callback runs on every frame, seen or not."
+    ]
+  },
+
+  "placed": [
+    {
+      "entity": "hand_drawn_arrow",
+      "linear_motion": { "vertical": false, "axis": "node", "axis_add_deg": 0.0, "start_angle": 0.0 },
+      "set_alpha": 0.55,
+      "spin_deg_s": 0.0,
+      "_source": [
+        "ETHCallback_hand_drawn_arrow, MiscCallbacks.angelscript bytes 343339..343470, every frame (entity",
+        "hand_drawn_arrow.ent, static=1: 8 placements, on 1-01, 1-08, 1-09, 1-10 at 45, 1-12 at 50 and -50, and",
+        "2-32 twice):",
+        "  ins 1       PshC4 0f                   startAngle = 0 (a call pushes its last argument first)",
+        "  ins 2-5     GetAngle()                 angle = the entity's own angle",
+        "  ins 6-7     SetV1 v3, v0; PshV4        vertical = 0, false (00_order 8.0 rule 1: v0 is the constant 0)",
+        "  ins 8-13    linearMotion(thisEntity, false, GetAngle(), 0f)",
+        "  ins 15-17   SetAlpha(0.55f)",
+        "So it swings along its own angle by its node's stride at its node's speed (every placement carries",
+        "speed 4 and stride 2.5: a period of pi/2 s, 2.5 units either way), starting a whole stride forward, at",
+        "alpha 0.55 over the colour the level gave it (SetAlpha writes m_v4Color.w, ETHEntity.cpp:505-508)."
+      ],
+      "_measured": [
+        "systems_9_10 10a (arrow.py) on the original's library frames of 1-08: drawn alpha 0.547 / 0.549 / 0.535 /",
+        "0.547 (core 163 over background 52), along its axis -1.49 / +0.18 / +1.98 / +1.21 u from the node and",
+        "0.02 u across it."
+      ]
+    },
+    {
+      "entity": "dashed_circle",
+      "linear_motion": { "vertical": true, "axis": "fixed", "axis_add_deg": 0.0, "start_angle": 0.0 },
+      "set_alpha": 0.55,
+      "spin_deg_s": 8.0,
+      "_source": [
+        "ETHCallback_dashed_circle, MiscCallbacks.angelscript bytes 342895..343043, every frame (entity",
+        "dashed_circle.ent, static=1: 9 placements, on 1-02, 1-03 twice, 1-05 twice, 1-16 twice and 4-05 twice):",
+        "  ins 1       PshC4 0f                   startAngle = 0",
+        "  ins 2       PshC4 0f                   angle = 0, a constant: the turn below never tilts the bob",
+        "  ins 3-4     SetV1 v3, v1; PshV4        vertical = 1, true",
+        "  ins 5-10    linearMotion(thisEntity, true, 0f, 0f)",
+        "  ins 12-14   SetAlpha(0.55f)",
+        "  ins 16-23   AddToAngle(g_timeManager.unitsPerSecond(8f)): 8 degrees a second, capped and paused as",
+        "              linear_motion's step is. AddToAngle adds to m_angle (ETHEntityController.cpp:145-148),",
+        "              which the draw turns the picture by, counter-clockwise on the screen",
+        "              (ETHRenderEntity.cpp:105, GLES2Sprite.cpp:268-270; the converter wrote it negated, tscn.py:432-433).",
+        "So it bobs up and down by its node's stride at its node's speed (every placement: 0.6 units, 1.5 rad/s,",
+        "a period of 4.19 s), from 0.6 below, turning 8 degrees a second, at alpha 0.55."
+      ]
+    },
+    {
+      "entity": "dashed_square",
+      "linear_motion": null,
+      "set_alpha": 0.55,
+      "spin_deg_s": 0.0,
+      "_source": [
+        "ETHCallback_dashed_square, MiscCallbacks.angelscript bytes 343043..343129, every frame (entity",
+        "dashed_square.ent, static=1: 1 placement, on 1-08):",
+        "  ins 1-3     SetAlpha(0.55f), and nothing else.",
+        "Its .ent and its node carry speed 1.5 and stride 0.6, which no call reads: it does not move."
+      ]
+    },
+    {
+      "entity": "hand_tap",
+      "linear_motion": { "vertical": false, "axis": "node", "axis_add_deg": -90.0, "start_angle": 0.0 },
+      "set_alpha": null,
+      "spin_deg_s": 0.0,
+      "_source": [
+        "ETHCallback_hand_tap, MiscCallbacks.angelscript bytes 344140..344990, every frame (entity hand_tap.ent,",
+        "static=0: 7 placements, on 1-02, 1-03 twice, 1-16 twice (one at 95 degrees) and 1-27 twice):",
+        "  ins 1       PshC4 0f                   startAngle = 0",
+        "  ins 2-6     GetAngle(); SUBIf 90f      angle = the entity's own angle less 90",
+        "  ins 7-8     SetV1 v2, v0; PshV4        vertical = 0, false",
+        "  ins 9-14    linearMotion(thisEntity, false, GetAngle() - 90f, 0f)",
+        "  ins 16-22   only when not paused: the touches, and ins 60-170 a release within scale(30) of it adds",
+        "              smoke_vanish.ent and deletes it (System 7's, not built here)",
+        "No SetAlpha anywhere in the callback (null): it is drawn at the alpha the level gives it. A hand at angle",
+        "0 swings along 0 - 90, which rotateZ turns down the screen; every placement carries speed 3 and",
+        "stride 4 (a period of 2.09 s, 4 units either way)."
+      ]
+    }
+  ],
+
+  "_placed_notes": [
+    "Every one of the 25 placements above carries both `speed` and `stride` (the port's test_mp_motion census);",
+    "Motion::FromNode refuses a node without them, and the layer then draws it still, as GetFloat's 0 would.",
+    "None of the four .ent files has a particle system and no node carries a light or a halo, so nothing but the",
+    "picture moves; and no row draws a random start angle, so the crystals' and keys' start-angle stream draws",
+    "exactly what it drew before.",
+    "Three of the four are static=1, so the original runs their callbacks only while their bucket is on screen",
+    "(00_order 8.12c): it starts a swing, and turns the circle, from the frame it is first seen, and holds them",
+    "while it is not. The port runs every one from the level's first tick (a recorded divergence, as 3.2's for",
+    "the crystal)."
+  ]
+}

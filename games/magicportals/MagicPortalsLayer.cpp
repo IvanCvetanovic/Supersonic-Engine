@@ -239,6 +239,7 @@ void MagicPortalsLayer::OnAttach(entt::registry& registry) {
                       Art::LoadRules(m_paths.portData + "/art.json", m_artRules, error) &&
                       Sky::LoadRules(m_paths.portData + "/sky.json", m_skyRules, error) &&
                       Tiers::LoadRules(m_paths.portData + "/tiers.json", m_tierRules, error) &&
+                      Motion::LoadRules(m_paths.portData + "/motions.json", m_motionRules, error) &&
                       Hud::LoadRules(m_paths.portData + "/ui.json", m_hudRules, error) &&
                       Pause::LoadRules(m_paths.portData + "/ui.json", m_pauseRules, error) &&
                       LevelEnd::LoadRules(m_paths.portData + "/ui.json", m_levelEndRules, error) &&
@@ -551,6 +552,11 @@ void MagicPortalsLayer::unloadLevel(entt::registry& registry, bool keepLightmaps
     m_thrown.clear();
     for (DrawnSprite& drawn : m_sprites) destroy(drawn.quad);
     m_sprites.clear();
+    m_motions.clear();
+    m_placed.clear();
+    m_antiportalTurn = Motion::Turn{};
+    for (TimerDial& dial : m_timers) destroy(dial.quad);
+    m_timers.clear();
     // The walk arrows and the corner buttons go with the level they were built
     // for, and so does what the level opened with.
     unloadControls();
@@ -967,6 +973,25 @@ std::vector<MagicPortalsLayer::EmitterReport> MagicPortalsLayer::EmitterReports(
                 report.anyReleased = true;
             }
         }
+        reports.push_back(std::move(report));
+    }
+    return reports;
+}
+
+std::vector<MagicPortalsLayer::TimerReport> MagicPortalsLayer::TimerReports() const {
+    std::vector<TimerReport> reports;
+    reports.reserve(m_timers.size());
+    for (const TimerDial& dial : m_timers) {
+        TimerReport report;
+        report.crystal = m_level.goals.crystals[static_cast<std::size_t>(dial.crystal)].name;
+        report.drawn = dial.quad != entt::null;
+        report.shrinking = dial.shrinking;
+        report.z = dial.z;
+        report.crystalZ = m_sprites[static_cast<std::size_t>(dial.sprite)].z;
+        report.frame = dial.frame;
+        report.scale = dial.scale;
+        report.alpha = dial.alpha;
+        report.atPx = dial.atPx;
         reports.push_back(std::move(report));
     }
     return reports;
@@ -2340,6 +2365,17 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         }
         return -1;
     };
+    // The start angles of the crystals' and keys' bobs, drawn in the level's drawing
+    // order (Sprites::Find's: z_index, then the file's order) from a stream seeded
+    // afresh for this level, from kMotionSeed and its name.
+    m_motions.clear();
+    m_placed.clear();
+    // And the rings' turn, from nothing, at the rate their callback adds
+    // (art.json antiportal).
+    m_antiportalTurn = Motion::Turn{};
+    m_antiportalTurn.degPerS = m_artRules.antiportal.spinDegPerS;
+    Motion::Phases phases(Motion::LevelSeed(
+        kMotionSeed, m_current >= 0 ? m_chapters.levels[static_cast<std::size_t>(m_current)].name : std::string()));
     for (Sprites::Sprite& sprite : sprites) {
         DrawnSprite drawn;
         drawn.quad = makeSprite(registry, "Magic Portals Sprite", sprite.texture, sprite.additive);
@@ -2380,6 +2416,7 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
             drawn.scale = m_artRules.staticPortal.scale;
         }
         drawn.ownerPx = sprite.atPx;
+        drawn.centrePx = Sprites::CentrePx(sprite);
         // Godot's rotation is clockwise and the converter wrote it as Ethanon's
         // angle negated (tscn.py:433).
         drawn.ownerAngleDeg = -sprite.rotation * 180.0 / 3.14159265358979323846;
@@ -2389,6 +2426,68 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
         drawn.crystal = indexOf(m_level.goals.crystals, sprite.node);
         drawn.staticPortal = indexOf(m_level.portals.statics, sprite.node);
         drawn.zone = indexOf(m_level.portals.zones, sprite.node);
+        // AN ANTIPORTAL IS DRAWN AT HALF ITS NODE'S SCALE (placement.json
+        // antiportal.manager): Game::preLoop scales the entity by its node's `scale`
+        // and AntiPortalManager's constructor then calls Scale(0.5) on every entity
+        // it collects, so white_ring.png's 128 units are drawn 64 x scale across.
+        // Keyed by the entity, as the manager collects it: an anti_portal_agent or a
+        // no_portal zone is not one of its fields and keeps its own size.
+        //
+        // The node's `scale` is its custom data, which SGlobalScale::scaleEntity
+        // applies (CheckCustomData, GetFloat, Scale); the port reads it for a zone
+        // only. It is not the Sprite2D `scale` that step 9.1 (00_order, K9) has
+        // Sprites::Find apply: that one is the entity's <Scale> element, 1 for
+        // antiportal.ent, and multiplies on top of this line, not in place of it.
+        if (const Tscn::Node* node = m_data.scene.FindNode(sprite.node);
+            drawn.zone >= 0 && node != nullptr && BareEntityName(*node) == m_level.portals.rules.antiportalEntity) {
+            drawn.scale = m_level.portals.rules.antiportalManagerScale *
+                          m_level.portals.zones[static_cast<std::size_t>(drawn.zone)].scale;
+        }
+        // AND IT BLINKS AND TURNS (art.json antiportal): ETHCallback_antiportal is
+        // named for the entity less its .ent, so it runs for every placement of it,
+        // either spelling, whatever the port made of the node. The size above is the
+        // manager's and this is the callback's: two facts about one entity, each
+        // where the file it was decoded from keeps it.
+        if (const Tscn::Node* node = m_data.scene.FindNode(sprite.node);
+            node != nullptr && BareEntityName(*node) == m_artRules.antiportal.entity) {
+            drawn.antiportal = true;
+        }
+        // ETHCallback_crystal and ETHCallback_key each call linearMotion with their
+        // row's arguments; the callback is named by the entity less its .ent, so both
+        // spellings of a placement bob. A crystal or key under any other entity runs
+        // another script and does not.
+        if (const Tscn::Node* node = m_data.scene.FindNode(sprite.node); node != nullptr) {
+            const std::string entity = BareEntityName(*node);
+            const Motion::Row* row = nullptr;
+            if (drawn.crystal >= 0 && m_motionRules.crystal.Names(entity)) row = &m_motionRules.crystal;
+            if (drawn.key >= 0 && m_motionRules.key.Names(entity)) row = &m_motionRules.key;
+            if (row != nullptr) {
+                drawn.motion = static_cast<int>(m_motions.size());
+                m_motions.push_back(Motion::Start(*row, phases.Next(*row)));
+            }
+            // A PLACED PICTURE'S OWN CALLBACK (motions.json `placed`): the hint arrow,
+            // the dashed circle and square, the tapping hand. Its swing takes the
+            // node's speed and stride and a constant start angle, so it draws nothing
+            // from `phases`; its SetAlpha writes the colour's alpha, as Ethanon's
+            // writes m_v4Color.w (no node of these carries an eth_color); its turn is
+            // syncSprites'.
+            if (const Motion::Placed* placed = m_motionRules.FindPlaced(entity); placed != nullptr) {
+                PlacedScript script;
+                script.row = static_cast<std::size_t>(placed - m_motionRules.placed.data());
+                if (placed->moves) {
+                    std::string why;
+                    script.moves = Motion::FromNode(*placed, *node, script.motion, why);
+                    // GetFloat of a datum a node lacks is 0, and a speed of 0 moves nothing.
+                    if (!script.moves) {
+                        SUPERSONIC_LOG_WARN("Magic Portals") << "drawn without its swing: " << why << std::endl;
+                    }
+                }
+                script.turn.degPerS = placed->spinDegPerS;
+                if (placed->setsAlpha) drawn.colour.a = static_cast<float>(placed->alpha);
+                drawn.placed = static_cast<int>(m_placed.size());
+                m_placed.push_back(script);
+            }
+        }
         if (m_sky.running) {
             for (std::size_t t = 0; t < m_sky.skies.size(); ++t) {
                 if (m_sky.skies[t].node == sprite.node) drawn.sky = static_cast<int>(t);
@@ -2433,6 +2532,87 @@ void MagicPortalsLayer::buildSprites(entt::registry& registry) {
     }
     m_beholderZ = slotAfter(adderZ);
     m_spikeZ = slotAfter(kSpikeZIndex);
+    // A TIMED CRYSTAL'S DIAL (art.json timer), which addTimerToCrystal adds
+    // `zOffset` behind its crystal: after the sprites at or below the crystal's
+    // z_index + zOffset and before the next, so what stands between the two
+    // covers it, as depth would in the original. One per timed crystal whose
+    // picture is drawn; the crystal's box has none. A `time` of 0 never runs
+    // down in Goals, so it has no dial to count.
+    const Art::Timer& timer = m_artRules.timer;
+    const std::string timerImage = originalImage(timer.sprite);
+    const glm::dvec2 timerSheetPx = imageSizePx(timerImage);
+    for (std::size_t i = 0; i < m_sprites.size(); ++i) {
+        const DrawnSprite& drawn = m_sprites[i];
+        if (drawn.crystal < 0) continue;
+        const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
+        if (!crystal.timed || !(crystal.lifeS > 0.0)) continue;
+        if (timerSheetPx == glm::dvec2(0.0)) {
+            SUPERSONIC_LOG_WARN("Magic Portals") << "no dial behind the timed crystals: " << timerImage
+                                                 << " could not be read" << std::endl;
+            break;
+        }
+        TimerDial dial;
+        dial.crystal = drawn.crystal;
+        dial.sprite = static_cast<int>(i);
+        dial.quad = makeSprite(registry, "Magic Portals Timer", timerImage, timer.additive);
+        auto& animation = registry.emplace<SpriteAnimationComponent>(dial.quad);
+        animation.columns = static_cast<uint32_t>(timer.columns);
+        animation.rows = static_cast<uint32_t>(timer.rows);
+        animation.frameCount = 1;
+        animation.playing = false;
+        dial.cellPx = timerSheetPx / glm::dvec2(timer.columns, timer.rows);
+        dial.z = slotAfter(drawn.sprite.zIndex + timer.zOffset);
+        dial.lookZ = drawn.lookZ + static_cast<double>(timer.zOffset);
+        dial.atPx = drawn.centrePx;
+        dial.alpha = timer.alpha;
+        m_timers.push_back(dial);
+    }
+    // A GRAVITY WELL'S GREEN RING (gravitywell.json `ring`), which no level file
+    // pictures: ETHCallback_gravity_agent adds an antiportal.ent at the agent's own
+    // position the first time it runs (a static agent's first frame on screen),
+    // sizes it to radius x 2 - 24, its edge 12 units inside the well's reach, and
+    // paints it green. Built here with the level instead; step 73 records why.
+    // A picture with no node, like the dark dragon's dropped platform, and the ten
+    // of them across five levels are the only wells in the game.
+    //
+    // Added after every slotAfter above has been taken, because that lambda counts
+    // what is in m_sprites: a ring pushed before the dials would put a dial a slot
+    // deeper. All ten sit at one depth, the -5 AddEntity gives them, and they are
+    // added, so the order between them cannot show.
+    const GravityWell::Ring& ring = m_level.wells.rules.ring;
+    const std::string ringImage = originalImage(ring.sprite);
+    const int ringZIndex = static_cast<int>(std::floor(ring.z));
+    if (!m_level.wells.wells.empty() && imageSizePx(ringImage) == glm::dvec2(0.0)) {
+        SUPERSONIC_LOG_WARN("Magic Portals")
+            << "no ring round the gravity wells: " << ringImage << " could not be read" << std::endl;
+    } else {
+        const float ringZ = slotAfter(ringZIndex);
+        for (const GravityWell::Well& well : m_level.wells.wells) {
+            DrawnSprite made;
+            made.sprite.node = well.name + "#ring";
+            made.sprite.texture = ringImage;
+            made.sprite.atPx = well.atPx;
+            // The SIZE scaleToSize gives it - radius x 2 less the shrink - and not
+            // white_ring.png's own 128, which is only what that scale is measured
+            // from. The manager's 0.5 is not in it: this entity is called
+            // `gravity_area` before the manager ever looks for an antiportal.
+            made.sprite.sizePx = glm::dvec2(well.RingSizePx(m_level.wells.rules));
+            made.sprite.additive = ring.additive;
+            made.sprite.zIndex = ringZIndex;
+            made.z = ringZ;
+            made.colour = glm::vec4(static_cast<glm::vec3>(ring.colour), 1.0f);
+            made.emissive = ring.emissive;
+            made.isStatic = ring.isStatic;
+            made.applyLight = ring.applyLight;
+            made.lookZ = ring.z;
+            made.centrePx = well.atPx;
+            made.ownerPx = well.atPx;
+            // No lightmap: a bake belongs to an entity the level file placed, named
+            // by its id, and this one is added while the level runs.
+            made.quad = makeSprite(registry, "Magic Portals Well Ring", ringImage, ring.additive);
+            m_sprites.push_back(std::move(made));
+        }
+    }
     m_artReady = true;
     // And what the level's own art does not show: the entities' particles.
     buildEmitters(registry);
@@ -2466,13 +2646,17 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             ownerPx = Sky::SatellitePx(m_sky, m_follow.centrePx, ViewPx());
             centrePx += ownerPx - sprite.atPx;
         } else if (drawn.crystal >= 0) {
+            // A timed crystal does not fade: the original goes at its time, and
+            // counts it down on the dial behind it (syncTimers).
             const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
             gone = crystal.collected || crystal.expired;
-            // A timed crystal fades as it runs out: the remake's guess, as the
-            // box's is, and here as the alpha the remake fades.
-            drawn.fade = 1.0f;
-            if (crystal.timed && crystal.leftS < 2.0) {
-                drawn.fade = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
+            // Where its bob has put it (advanceMotions, this tick): picture and
+            // sparkles together, and its dial after them. The pick-up box stays on
+            // the node: the picture moves, not the crystal Goals takes.
+            if (!gone && drawn.motion >= 0) {
+                const glm::dvec2 bob = Motion::OffsetPx(m_motions[static_cast<std::size_t>(drawn.motion)]);
+                centrePx += bob;
+                ownerPx += bob;
             }
         } else if (drawn.key >= 0) {
             // A key is not a body (Keys.hpp): where the carry left it, picture and
@@ -2485,6 +2669,14 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
                    m_level.keys.keyholes[static_cast<std::size_t>(key.opened)].gone;
             centrePx += key.atPx - sprite.atPx;
             ownerPx = key.atPx;
+            // Lying unowned, it bobs about where it lies: where the level put it, or
+            // where it was dropped (ETHCallback_key rewrites originalPos on every
+            // carried frame). Carried or spent, it does not.
+            if (!gone && motionRuns(drawn)) {
+                const glm::dvec2 bob = Motion::OffsetPx(m_motions[static_cast<std::size_t>(drawn.motion)]);
+                centrePx += bob;
+                ownerPx += bob;
+            }
         } else if (drawn.diamond >= 0) {
             const Diamonds::Diamond& diamond = m_level.diamonds.diamonds[static_cast<std::size_t>(drawn.diamond)];
             gone = diamond.gone;
@@ -2502,6 +2694,21 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             const Portals::NoPortalZone& zone = m_level.portals.zones[static_cast<std::size_t>(drawn.zone)];
             centrePx += zone.CentreNowPx() - zone.centrePx;
             ownerPx += zone.CentreNowPx() - zone.centrePx;
+        } else if (drawn.placed >= 0) {
+            // Where its own callback put it this tick (advanceMotions): swung by its
+            // linearMotion, and turned by AddToAngle about its own point,
+            // counter-clockwise as Ethanon's angle and the engine's +z both turn.
+            const PlacedScript& script = m_placed[static_cast<std::size_t>(drawn.placed)];
+            if (script.moves) {
+                const glm::dvec2 swing = Motion::OffsetPx(script.motion);
+                centrePx += swing;
+                ownerPx += swing;
+            }
+            if (script.turn.turnedDeg != 0.0) {
+                const double turnedRad = script.turn.turnedDeg * 3.14159265358979323846 / 180.0;
+                rotation = Units::ToWorldRotation(sprite.rotation - turnedRad);
+                ownerAngleDeg += script.turn.turnedDeg;
+            }
         } else if (drawn.body != entt::null) {
             // A body the level took away - a wall a stone broke - takes its picture.
             gone = !registry.valid(drawn.body);
@@ -2519,13 +2726,25 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
                 ownerAngleDeg = static_cast<double>(rotation) * 180.0 / 3.14159265358979323846;
             }
         }
+        // WHAT ITS OWN CALLBACK HAS TURNED IT BY (art.json antiportal): a ring turns
+        // about its own point, over whatever angle the level gave it,
+        // counter-clockwise as Ethanon's angle and the engine's +z both turn. Its
+        // picture is symmetric, so this moves almost no pixel; it is still what the
+        // original does, and a sheet or a tier that is not symmetric would show it.
+        if (drawn.antiportal) {
+            const double turnedRad = m_antiportalTurn.turnedDeg * 3.14159265358979323846 / 180.0;
+            rotation = Units::ToWorldRotation(sprite.rotation - turnedRad);
+            ownerAngleDeg += m_antiportalTurn.turnedDeg;
+        }
         if (gone) {
             registry.destroy(drawn.quad);
             drawn.quad = entt::null;
             continue;
         }
-        // At the scale a script gave its entity: 1 but for a static portal's 0.8.
+        // At the scale a script gave its entity: 1 but for a static portal's 0.8 and
+        // an antiportal's 0.5 times its node's scale.
         placeSprite(registry, drawn.quad, centrePx, sizePx * drawn.scale, drawn.z, rotation);
+        drawn.centrePx = centrePx;
         drawn.ownerPx = ownerPx;
         drawn.ownerAngleDeg = ownerAngleDeg;
     }
@@ -2574,6 +2793,152 @@ void MagicPortalsLayer::syncSprites(entt::registry& registry) {
             m_sprites.push_back(std::move(made));
             m_platformDrawn = true;
         }
+    }
+}
+
+bool MagicPortalsLayer::motionRuns(const DrawnSprite& drawn) const {
+    if (drawn.motion < 0 || drawn.quad == entt::null) return false;
+    if (drawn.crystal >= 0) {
+        // ETHCallback_crystal runs while the crystal is there; taken or expired, it
+        // is deleted.
+        const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(drawn.crystal)];
+        return !crystal.collected && !crystal.expired;
+    }
+    if (drawn.key >= 0) {
+        // ETHCallback_key ins 204-220 send a key that found its keyhole to its fly-in,
+        // and ins 653-665 a carried one to the carried branch: neither bobs.
+        const Keys::Key& key = m_level.keys.keys[static_cast<std::size_t>(drawn.key)];
+        return key.owner == entt::null && !key.spent;
+    }
+    return false;
+}
+
+void MagicPortalsLayer::advanceMotions(float fixedDelta) {
+    // The tick is the frame the callbacks run on. A paused or popped-up level is not
+    // stepped, which is the original's m_factor 0: the angle holds.
+    const double frameMs = static_cast<double>(fixedDelta) * 1000.0;
+    for (const DrawnSprite& drawn : m_sprites) {
+        if (!motionRuns(drawn)) continue;
+        Motion::Advance(m_motionRules, m_motions[static_cast<std::size_t>(drawn.motion)], frameMs);
+    }
+    // The placed pictures' callbacks run every frame their picture is there: the
+    // arrow's, the circle's and the hand's linearMotion, and the circle's AddToAngle.
+    for (const DrawnSprite& drawn : m_sprites) {
+        if (drawn.placed < 0 || drawn.quad == entt::null) continue;
+        PlacedScript& script = m_placed[static_cast<std::size_t>(drawn.placed)];
+        if (script.moves) Motion::Advance(m_motionRules, script.motion, frameMs);
+        Motion::Advance(m_motionRules, script.turn, frameMs);
+    }
+    // And ETHCallback_antiportal's AddToAngle, once for every ring the level placed:
+    // they are turned by the same step on the same frames, so the port keeps one
+    // angle for them (m_antiportalTurn). Its step is unitsPerSecond's, capped at
+    // motions.json's frame_cap_ms, where the blink's clock (the level's age) is not:
+    // getLastFrameElapsedTime is not capped at 200 - only at the loop's own 1000 ms
+    // (Min(1000.0f, ComputeElapsedTimeF(video)), android/main.cpp:180-181; art.json
+    // antiportal).
+    Motion::Advance(m_motionRules, m_antiportalTurn, frameMs);
+}
+
+std::vector<MagicPortalsLayer::PlacedReport> MagicPortalsLayer::PlacedReports() const {
+    std::vector<PlacedReport> reports;
+    reports.reserve(m_placed.size());
+    for (const DrawnSprite& drawn : m_sprites) {
+        if (drawn.placed < 0) continue;
+        const PlacedScript& script = m_placed[static_cast<std::size_t>(drawn.placed)];
+        PlacedReport report;
+        report.node = drawn.sprite.node;
+        report.entity = m_motionRules.placed[script.row].entity;
+        report.drawn = drawn.quad != entt::null;
+        report.quad = drawn.quad;
+        report.moves = script.moves;
+        report.motion = script.motion;
+        report.offsetPx = script.moves ? Motion::OffsetPx(script.motion) : glm::dvec2(0.0);
+        report.turnedDeg = script.turn.turnedDeg;
+        report.alpha = drawn.colour.a * drawn.fade;
+        report.centrePx = drawn.centrePx;
+        report.ownerPx = drawn.ownerPx;
+        report.ownerAngleDeg = drawn.ownerAngleDeg;
+        reports.push_back(std::move(report));
+    }
+    return reports;
+}
+
+std::vector<MagicPortalsLayer::MotionReport> MagicPortalsLayer::MotionReports() const {
+    std::vector<MotionReport> reports;
+    reports.reserve(m_motions.size());
+    for (const DrawnSprite& drawn : m_sprites) {
+        if (drawn.motion < 0) continue;
+        MotionReport report;
+        report.node = drawn.sprite.node;
+        report.crystal = drawn.crystal >= 0;
+        report.drawn = drawn.quad != entt::null;
+        report.quad = drawn.quad;
+        report.moving = motionRuns(drawn);
+        report.motion = m_motions[static_cast<std::size_t>(drawn.motion)];
+        report.offsetPx = report.moving ? Motion::OffsetPx(report.motion) : glm::dvec2(0.0);
+        report.centrePx = drawn.centrePx;
+        report.ownerPx = drawn.ownerPx;
+        reports.push_back(std::move(report));
+    }
+    return reports;
+}
+
+// ETHCallback_timer, once a tick (art.json timer has the bytecode). The port's
+// tick is the frame the script runs on, and the crystal's clock is Goals', whose
+// time left counts down from the level's first tick as the dial's elapsedTime
+// counts up from the frame it is added on. While the time lasts: the crystal's
+// drawn centre, the cell of the time elapsed, and the pulse whose leg shortens as
+// it runs out. Once the time is up, on the tick Goals expires the crystal, the
+// dial keeps its last place, cell and scale, shrinks and fades a frame's worth a
+// tick, and goes once its scale as the original stores it, x m_scaleFactor, is
+// below goneBelowScale (Art::Timer::Gone). A crystal taken early gives the dial one
+// more live tick first (below), and shrinks it from the next. The crystal_vanish
+// burst at the time is not drawn (the visuals plan's 10.2).
+void MagicPortalsLayer::syncTimers(entt::registry& registry) {
+    using namespace Supersonic;
+    const Art::Timer& timer = m_artRules.timer;
+    const double tickMs = static_cast<double>(kTick) * 1000.0;
+    for (TimerDial& dial : m_timers) {
+        if (dial.quad == entt::null) continue;
+        const Goals::Crystal& crystal = m_level.goals.crystals[static_cast<std::size_t>(dial.crystal)];
+        const double timeMs = crystal.lifeS * 1000.0;
+        double elapsedMs = (crystal.lifeS - crystal.leftS) * 1000.0;
+        if (crystal.expired || dial.taken) {
+            dial.shrinking = true;
+        } else if (crystal.collected) {
+            // TAKEN THIS TICK. ETHCallback_timer adds the frame to elapsedTime (ins
+            // 1-13) and copies it into a local (ins 24-27) before it looks for the
+            // crystal. Finding it gone, it adds the whole time to the datum (ins
+            // 80-91), skips SetPositionXY (ins 92) and compares the LOCAL (ins
+            // 102-103): this frame still pulses and sets its cell (ins 204-252)
+            // where the dial stood, and the x 0.9 starts on the next. Goals stops
+            // a crystal's clock on the tick it is taken, where the script's local
+            // already holds this frame: its elapsed is Goals' and one tick more.
+            // Taken on the tick its time runs out, that local is past the time,
+            // and the dial shrinks at once (ins 102 is strict).
+            dial.taken = true;
+            elapsedMs += tickMs;
+            if (elapsedMs > timeMs) dial.shrinking = true;
+        }
+        if (dial.shrinking) {
+            const double decay = timer.DecayOver(kTick);
+            dial.scale *= decay;
+            dial.alpha *= decay;
+            if (timer.Gone(dial.scale.x)) {
+                registry.destroy(dial.quad);
+                dial.quad = entt::null;
+                continue;
+            }
+        } else {
+            if (!dial.taken) dial.atPx = m_sprites[static_cast<std::size_t>(dial.sprite)].centrePx;
+            dial.frame = timer.FrameAt(elapsedMs, timeMs);
+            dial.scale = timer.PulseAt(elapsedMs, timeMs);
+            dial.alpha = timer.alpha;
+        }
+        auto& animation = registry.get<SpriteAnimationComponent>(dial.quad);
+        animation.firstFrame = static_cast<uint32_t>(dial.frame);
+        animation.frame = 0;
+        placeSprite(registry, dial.quad, dial.atPx, dial.cellPx * dial.scale, dial.z, 0.0f);
     }
 }
 
@@ -2761,16 +3126,9 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
         glm::dvec2 centrePx, sizePx;
         boxPx(crystal.box, centrePx, sizePx);
         placeBox(registry, m_crystals[i], centrePx, glm::dvec2(14.0), kMarkerZ, kMarkerDepth, 0.785398f);
-        // A timed crystal dims and brightens as it runs out: the remake's fade,
-        // 0.4 + 0.6 |sin(12 t)| over its last two seconds, as brightness over the
-        // dark ground rather than as alpha. A guess, as the remake's is
-        // (behaviours.gd:227-230). The original has crystal_temp_alert.mp3, so it
-        // warns somehow, but not necessarily like this. Nothing depends on it.
-        float brightness = 1.0f;
-        if (crystal.timed && crystal.leftS < 2.0) {
-            brightness = 0.4f + 0.6f * static_cast<float>(std::fabs(std::sin(crystal.leftS * 12.0)));
-        }
-        registry.get<MaterialComponent>(m_crystals[i]).albedoColor = glm::vec4(kCrystalColour * brightness, 1.0f);
+        // A timed crystal's box does not blink either: the remake's guessed fade
+        // is gone with its picture's (syncSprites), and a box has no dial.
+        registry.get<MaterialComponent>(m_crystals[i]).albedoColor = glm::vec4(kCrystalColour, 1.0f);
     }
     {
         glm::dvec2 centrePx, sizePx;
@@ -2859,7 +3217,8 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     }
 
     // No-portal zones, as the square round the circle a tap is refused in, where
-    // each is now: a patrolling one moves.
+    // each is now: a patrolling one moves. The circle the port PLAYS, which is not
+    // the ring's half until the refusal radius is the original's (placement.json).
     const std::vector<Portals::NoPortalZone>& zones = m_level.portals.zones;
     for (std::size_t i = 0; i < m_zones.size() && i < zones.size(); ++i) {
         const double sizePx = m_level.portals.rules.antiportalRadiusPx * zones[i].scale * 2.0;
@@ -2876,6 +3235,7 @@ void MagicPortalsLayer::syncDrawables(entt::registry& registry) {
     }
 
     syncSprites(registry);
+    syncTimers(registry);
 
     // The art in place of the boxes, unless B asks for them or there is no art.
     // What no level pictures - the player, the portals a shot opens, the shot -
@@ -2961,8 +3321,16 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
         receiver.normal = drawn.normal;
         receiver.z = drawn.lookZ;
         receiver.runtimeBake = runtimeBake;
-        tint(registry, drawn.quad, drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade), drawn.emissive,
-             runtimeBake ? noLightmap : drawn.lightmap, receiver);
+        glm::vec4 colour = drawn.colour * glm::vec4(1.0f, 1.0f, 1.0f, drawn.fade);
+        // A RING'S BLINK (art.json antiportal): its callback writes the entity's rgb
+        // every frame and keeps its alpha (SetColor, ETHEntity.cpp:493-498), over
+        // whatever colour the level gave it - no placement gives one. Its clock is
+        // the level's age, the game time since its first tick, which a pause stands
+        // still as the original's m_factor 0 stands blinkElapsedTime still.
+        if (drawn.antiportal) {
+            colour = glm::vec4(glm::vec3(m_artRules.antiportal.ColourAt(m_levelAgeMs)), colour.a);
+        }
+        tint(registry, drawn.quad, colour, drawn.emissive, runtimeBake ? noLightmap : drawn.lightmap, receiver);
     }
     // What no level places, with its .ent's emissive (art.json, launchers.json).
     // None has a lightmap: a bake belongs to an entity the level file placed.
@@ -2979,6 +3347,13 @@ void MagicPortalsLayer::syncLighting(entt::registry& registry) {
     };
     tint(registry, m_playerQuad, white, m_artRules.character.emissive, {},
          receiverOf(m_artRules.character, m_playerZ));
+    // A timed crystal's dial at its alpha, which the sprite path weights its base
+    // by (shader.frag:477-478), as a keyhole's fade is. timer.ent's emissive 1
+    // makes min(1, ambient + 1) whole on every level, chapter 4's dark ones too.
+    for (const TimerDial& dial : m_timers) {
+        tint(registry, dial.quad, glm::vec4(1.0f, 1.0f, 1.0f, static_cast<float>(dial.alpha)),
+             m_artRules.timer.emissive, {}, receiverOf(m_artRules.timer, dial.lookZ));
+    }
     for (const entt::entity quad : m_portalQuads) {
         tint(registry, quad, white, m_artRules.portal.emissive, {}, receiverOf(m_artRules.portal, 0.0));
     }
@@ -4624,6 +4999,9 @@ void MagicPortalsLayer::stepLevel(entt::registry& registry, float direction, flo
         m_noGravityColumn = Art::UpdateNoGravity(m_artRules.character, m_noGravityPlayer, m_direction != 0.0f,
                                                  static_cast<double>(fixedDelta) * 1000.0);
     }
+    // linearMotion's calls BEFORE the pictures are placed: a call steps the angle and
+    // writes the position in one, and the frame draws what it wrote (motions.json).
+    advanceMotions(fixedDelta);
     syncDrawables(registry);
     m_pushing = pushing;
     // StaticSky::update's order: every sky placed (syncSprites, just now), and
