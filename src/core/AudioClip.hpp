@@ -12,6 +12,11 @@ namespace Supersonic {
 // nothing to decode into and nothing to play. This is a deliberately small
 // uncompressed-WAV reader: enough to make AudioSourceComponent mean something
 // without pulling in a codec dependency.
+//
+// It has since grown two compressed formats, each decoded whole into the same
+// PCM so nothing downstream learns a new format: MP3 through the platform, and
+// Ogg Vorbis through stb_vorbis - the one vendored codec, public domain, a
+// single file beside stb_image.
 struct AudioClip {
     uint16_t channels{0};
     uint32_t sampleRate{0};
@@ -59,8 +64,30 @@ struct AudioClip {
     // they are does not.
     static bool LoadMp3(const std::string& path, AudioClip& out, std::string& error);
 
+    // Decodes an Ogg Vorbis file to interleaved 16-bit PCM.
+    //
+    // Through stb_vorbis rather than the platform, so unlike LoadMp3 it works
+    // the same on every platform the engine builds for and needs no system
+    // decoder to be present. The price is the one vendored codec; it is a single
+    // public-domain file, compiled in its own TU (StbVorbisImplementation.cpp).
+    //
+    // Why at all: Penumbra, the second Ethanon port on the engine, ships its
+    // sound effects as .ogg, and decoding them where they are keeps the bargain
+    // LoadMp3 keeps - no derived copies of somebody else's assets.
+    //
+    // The whole file is read and decoded here, on the calling thread; Vorbis
+    // is real work, not a copy, so a game with long clips loads them before it
+    // plays them. One or two channels, as LoadWav and LoadMp3 accept. What
+    // stb_vorbis cannot read is refused with a reason: an Ogg stream that is
+    // not Vorbis (Opus, FLAC), and floor-0 files from before 2004. A chained
+    // file decodes only its first stream, and a file cut short part way
+    // through the audio decodes as far as it goes - stb_vorbis reports the end
+    // of the data, not why it ended.
+    static bool LoadOgg(const std::string& path, AudioClip& out, std::string& error);
+
     // Decodes by the file's extension: .wav through LoadWav, .mp3 through
-    // LoadMp3, anything else refused by name. Case-insensitive.
+    // LoadMp3, .ogg through LoadOgg, anything else refused by name.
+    // Case-insensitive.
     static bool Load(const std::string& path, AudioClip& out, std::string& error);
 };
 

@@ -129,7 +129,7 @@ Teardown order is load-bearing: `EditorLayer` must be destroyed before
 | Meshes | `MeshRegistry` | Cube/Sphere/Plane/Terrain primitives, OBJ, and glTF |
 | glTF/GLB | `GltfLoader` (tinygltf) | Bakes each node's transform chain into its primitives |
 | Textures | `TextureRegistry` (stb_image) | Cached by path; one material descriptor set per triple of maps, given back to a freeable pool of 1024 when a texture is dropped |
-| Audio | `AudioClip` | Uncompressed RIFF/WAVE |
+| Audio | `AudioClip` | Uncompressed RIFF/WAVE; Ogg Vorbis (stb_vorbis); MP3 on Windows (Media Foundation). All decoded whole to PCM |
 
 Both registries cache failures so a missing or broken asset is not reopened
 every frame, and both fall back to something visible (unit cube, checkerboard)
@@ -2863,6 +2863,24 @@ downstream — by the mixer and by the `WAVEFORMATEX` the XAudio2 path builds
 from the bit depth alone. `AudioMixer`'s comment claiming the loader only
 accepts 32-bit as IEEE float states the assumption, not a check. The mixer can
 also decode 24-bit samples, which the loader will never hand it.
+
+`AudioClip::Load` chooses the decoder by extension, case-insensitively, and
+refuses any other name by name rather than handing it to the WAV parser, whose
+"not a RIFF/WAVE file" would send the reader to the wrong place. `.mp3` goes
+through Media Foundation, which ships with Windows — no dependency, and no MP3
+anywhere else. `.ogg` goes through `stb_vorbis`, the one vendored codec: a
+single public-domain file, compiled once in `StbVorbisImplementation.cpp` so its
+warnings are silenced without silencing the loader, and the same on every
+platform. Both decode to 16-bit PCM and take one or two channels, as the WAV
+reader does. `LoadOgg` reads the whole file and decodes it from memory, so a
+missing file, a file that is not Ogg, one cut short after its first page and
+an Ogg stream that is not Vorbis (Opus, FLAC) each say which they are. The
+limits are stb_vorbis's: a chained file decodes only its first stream, floor-0
+files from before 2004 are refused, and a file damaged part way through its
+audio decodes as far as it goes and succeeds, because stb_vorbis reports only
+that the data ended. Decoding either format is real work rather than a copy, so
+the first-play hitch described next is larger for them: a game with long Ogg or
+MP3 clips calls `AudioEngine::LoadClip` for them before it plays them.
 
 Clips are decoded whole into memory the first time something plays them, on the
 game thread, inside `AudioSystem::Update`. A long ambient track is a hitch on

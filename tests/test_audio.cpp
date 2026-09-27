@@ -1,4 +1,4 @@
-// Tests for the WAV reader behind the audio system.
+// Tests for the sound decoders behind the audio system.
 //
 // The engine previously linked no audio library and AudioSystem discarded every
 // volume it computed, so there was nothing to test. These cover the decode path
@@ -540,7 +540,8 @@ static void testAClipWithNoBitDepthIsRefusedRatherThanSilent() {
 
 // --- Deciding a decoder by the file's name --------------------------------
 //
-// The engine reads WAV and, on Windows, MP3. What it must never do is guess:
+// The engine reads WAV, Ogg Vorbis and, on Windows, MP3. What it must never
+// do is guess:
 // a name it does not know is refused by name rather than fed to the WAV
 // parser, which would report "not a RIFF/WAVE file" and send whoever reads
 // that message looking in the wrong place.
@@ -577,9 +578,131 @@ void testAMissingMp3FailsWithAReasonRatherThanCrashing() {
     CHECK(!clip.valid());
 }
 
+// --- Ogg Vorbis -----------------------------------------------------------
+//
+// stb_vorbis decodes and cannot encode, and no Vorbis file is shipped here, so
+// this suite cannot make a valid one. What it can prove is the edge, which is
+// where a decoder handed somebody else's file goes wrong: a name that is
+// missing, empty, not Ogg at all, or Ogg that promises more than it holds is
+// refused with a reason and an empty clip - never read past its end, never
+// handed to the device.
+//
+// The real decode is proved against Penumbra's own sound effects, in that
+// port's suites, which know where the original's files are - the same split as
+// the mp3s above.
+
+namespace {
+
+// The header of the first page of an Ogg stream whose one packet is
+// packetBytes long. The CRC is left zero: stb_vorbis checks page CRCs only
+// when it searches for a page (seeking, or resynchronising pushed data), and
+// these files are meant to be refused for what the page holds.
+std::string oggFirstPageHeader(uint8_t packetBytes) {
+    std::string page("OggS", 4);
+    page.push_back('\0');                             // stream structure version
+    page.push_back('\x02');                           // beginning of stream
+    page.append(8, '\0');                             // granule position
+    page.append("\x01\x02\x03\x04", 4);               // serial number
+    page.append(4, '\0');                             // page sequence number
+    page.append(4, '\0');                             // CRC
+    page.push_back('\x01');                           // one segment,
+    page.push_back(static_cast<char>(packetBytes));   // holding the whole packet
+    return page;
+}
+
+void writeBytes(const std::string& path, const std::string& bytes) {
+    std::ofstream f(path, std::ios::binary);
+    f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+
+// Valid before the load, so a failing load is seen to EMPTY the clip rather
+// than leave the previous sound's samples in it.
+AudioClip aClipWithSamples() {
+    AudioClip clip;
+    clip.channels = 1;
+    clip.sampleRate = 44100;
+    clip.bitsPerSample = 16;
+    clip.pcm.assign(64, 1);
+    return clip;
+}
+
+} // namespace
+
+void testAMissingOggFailsWithAReasonRatherThanCrashing() {
+    AudioClip clip = aClipWithSamples();
+    std::string error;
+    CHECK(!AudioClip::LoadOgg("no_such_sound_file_here.ogg", clip, error));
+    CHECK_MSG(error.find("no_such_sound_file_here.ogg") != std::string::npos,
+              "a failed Ogg load names the file: " + error);
+    CHECK_MSG(!clip.valid(), "and leaves the clip empty rather than holding the last sound");
+
+    // Through Load, in capitals. The extension decides, case-insensitively, so
+    // this must reach LoadOgg and not the refusal for names the engine does
+    // not read - which would send whoever reads it off to convert a file the
+    // engine can decode.
+    clip = aClipWithSamples();
+    error.clear();
+    CHECK(!AudioClip::Load("NO_SUCH_SOUND_FILE_HERE.OGG", clip, error));
+    CHECK_MSG(!error.empty() && error.find("not a sound this engine reads") == std::string::npos,
+              "an .ogg is a sound the engine reads: " + error);
+    CHECK(!clip.valid());
+}
+
+void testAFileThatIsNotOggVorbisIsRefusedCleanly() {
+    // Four shapes of wrong, each deeper than the last: nothing at all; bytes
+    // that are not Ogg; an Ogg stream that is Opus; and a real Vorbis
+    // identification header with the file ending straight after it. The last
+    // is the one that takes stb_vorbis past its first page and into reading
+    // the next, so it is the one where a read past the end would show.
+    std::string opus = oggFirstPageHeader(19);
+    opus.append("OpusHead", 8);
+    opus.push_back('\x01');                           // version
+    opus.push_back('\x02');                           // channels
+    opus.append("\x38\x01", 2);                       // pre-skip, 312
+    opus.append("\x80\xBB\x00\x00", 4);               // 48000 Hz
+    opus.append(2, '\0');                             // output gain
+    opus.push_back('\0');                             // channel mapping family
+
+    std::string vorbis = oggFirstPageHeader(30);
+    vorbis.append("\x01vorbis", 7);
+    vorbis.append(4, '\0');                           // vorbis_version
+    vorbis.push_back('\x01');                         // channels
+    vorbis.append("\x44\xAC\x00\x00", 4);             // 44100 Hz
+    vorbis.append(12, '\0');                          // bitrates: maximum, nominal, minimum
+    vorbis.push_back('\xB8');                         // block sizes 256 and 2048
+    vorbis.push_back('\x01');                         // framing
+    // ...and no comment or setup header: the file ends here.
+
+    struct Case {
+        const char* path;
+        std::string bytes;
+    };
+    const Case cases[] = {
+        { "test_audio_empty_tmp.ogg", std::string() },
+        { "test_audio_text_tmp.ogg", "this is definitely not an ogg vorbis file, not even close" },
+        { "test_audio_opus_tmp.ogg", opus },
+        { "test_audio_headers_only_tmp.ogg", vorbis },
+    };
+
+    for (const Case& c : cases) {
+        writeBytes(c.path, c.bytes);
+        AudioClip clip = aClipWithSamples();
+        std::string error;
+        const bool ok = AudioClip::Load(c.path, clip, error);
+        std::remove(c.path);
+
+        CHECK_MSG(!ok, std::string(c.path) + " must be refused");
+        CHECK_MSG(error.find(c.path) != std::string::npos,
+                  "and the reason must name the file: " + error);
+        CHECK_MSG(!clip.valid(), std::string(c.path) + " must leave the clip empty");
+    }
+}
+
 static void runTests() {
     testAnUnknownSoundExtensionIsRefusedByName();
     testAMissingMp3FailsWithAReasonRatherThanCrashing();
+    testAMissingOggFailsWithAReasonRatherThanCrashing();
+    testAFileThatIsNotOggVorbisIsRefusedCleanly();
     testLoadsValidWav();
     testSkipsUnknownChunks();
     testRejectsNonRiff();
@@ -613,4 +736,8 @@ static void runTests() {
 // Raised from 47 with the two decoder-choice cases, which need no device: they
 // only ask AudioClip which loader a name resolves to. A floor left behind by
 // the tests it guards stops guarding, which is the one thing it is for.
-TEST_MAIN("test_audio", 54)
+//
+// Raised from 54 to 72 with the two Ogg Vorbis cases, eighteen checks and none
+// of them near a device: six for a missing file, three for each of four files
+// that are not Ogg Vorbis.
+TEST_MAIN("test_audio", 72)

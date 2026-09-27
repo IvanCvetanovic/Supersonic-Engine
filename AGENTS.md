@@ -86,7 +86,7 @@ They cover the maths conventions, transform parenting and play/stop snapshots,
 frustum and cascade fitting, viewport picking, mesh generation and OBJ parsing,
 glTF import and skinning, animation blending, scene and prefab persistence,
 material assets, editor undo/redo, physics, spot and point shadow setup, the UI
-canvas and its input routing, the audio mixer and WAV decoder, the job system,
+canvas and its input routing, the audio mixer and decoders, the job system,
 the script registry, packaged-game manifests and command-line parsing. Disable
 with `-DSUPERSONIC_BUILD_TESTS=OFF`.
 

@@ -2,8 +2,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cstring>
 #include <fstream>
+#include <memory>
+
+// Declarations only. The implementation is compiled once, with its warnings
+// silenced, in StbVorbisImplementation.cpp; this file stays at /W4.
+#define STB_VORBIS_HEADER_ONLY
+#include <stb_vorbis.c>
 
 #if defined(_WIN32)
 // Media Foundation decodes MP3 and ships with Windows, so this costs no
@@ -47,6 +54,48 @@ std::string extensionOf(const std::string& path) {
     return ext;
 }
 
+// How many frames LoadOgg asks stb_vorbis for at a time. A buffer size, not a
+// limit - the loop pulls until the stream ends - and the step
+// stb_vorbis_decode_memory itself grows by.
+constexpr int kVorbisFramesPerPull = 4096;
+
+// stb_vorbis is C: its decoder is released by a function, not a destructor,
+// and every early return in LoadOgg has to release it.
+struct VorbisCloser {
+    void operator()(stb_vorbis* decoder) const { stb_vorbis_close(decoder); }
+};
+
+// stb_vorbis says why it refused a file with a number. The ones a person can
+// act on are said in words; the rest keep the number, which is what to look up
+// in stb_vorbis.c's STBVorbisError.
+std::string vorbisRefusal(const std::string& path, int code, const std::vector<uint8_t>& bytes) {
+    switch (code) {
+    case VORBIS_missing_capture_pattern:
+        // stb_vorbis says this of ANY page it expected and did not find, the
+        // first included - so a Vorbis file cut short after its first page
+        // would be reported as "not Ogg", and whoever reads that goes looking
+        // at the format instead of the copy. The first four bytes tell them apart.
+        if (bytes.size() >= 4 && std::memcmp(bytes.data(), "OggS", 4) == 0) {
+            return path + " is cut short or damaged after its first Ogg page";
+        }
+        return path + " is not an Ogg file";
+    case VORBIS_invalid_first_page:
+    case VORBIS_ogg_skeleton_not_supported:
+        // Also what a truncated identification header produces, which is why
+        // this does not claim to know what the stream is instead.
+        return path + " does not begin with a Vorbis stream (Opus and FLAC in Ogg are not read)";
+    case VORBIS_feature_not_supported:
+        return path + " uses Vorbis floor 0, which predates 2004 and is not decoded";
+    case VORBIS_unexpected_eof:
+        return path + " ends inside its Vorbis headers";
+    case VORBIS_outofmem:
+        return "out of memory decoding " + path;
+    default:
+        return "cannot decode " + path + " as Ogg Vorbis (stb_vorbis error " +
+               std::to_string(code) + ")";
+    }
+}
+
 #if defined(_WIN32)
 
 // Media Foundation is started once per process and never shut down.
@@ -85,9 +134,100 @@ bool AudioClip::Load(const std::string& path, AudioClip& out, std::string& error
     const std::string ext = extensionOf(path);
     if (ext == ".wav") return LoadWav(path, out, error);
     if (ext == ".mp3") return LoadMp3(path, out, error);
+    if (ext == ".ogg") return LoadOgg(path, out, error);
     out = AudioClip{};
-    error = path + " is not a sound this engine reads (.wav or .mp3)";
+    error = path + " is not a sound this engine reads (.wav, .mp3 or .ogg)";
     return false;
+}
+
+bool AudioClip::LoadOgg(const std::string& path, AudioClip& out, std::string& error) {
+    out = AudioClip{};
+
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        error = "cannot open " + path;
+        return false;
+    }
+
+    // tellg is -1 on a stream that cannot say where it is, and stb_vorbis
+    // takes the length as an int. Both are refused rather than truncated into
+    // a length that is not the file's.
+    const std::streamoff size = file.tellg();
+    if (size < 0) {
+        error = "cannot read the size of " + path;
+        return false;
+    }
+    if (size == 0) {
+        error = path + " is empty";
+        return false;
+    }
+    if (size > INT_MAX) {
+        error = path + " is too large to decode in one piece";
+        return false;
+    }
+
+    // Declared before the decoder, so destroyed after it: stb_vorbis reads
+    // straight out of this buffer for as long as it is open.
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!file) {
+        error = "read error on " + path;
+        return false;
+    }
+
+    // From memory rather than stb_vorbis_decode_filename, which opens the path
+    // with fopen: this way a missing file and a file that is not Vorbis give
+    // different answers, and the path is opened the way LoadWav opens it.
+    int code = 0;
+    std::unique_ptr<stb_vorbis, VorbisCloser> decoder(
+        stb_vorbis_open_memory(bytes.data(), static_cast<int>(bytes.size()), &code, nullptr));
+    if (!decoder) {
+        error = vorbisRefusal(path, code, bytes);
+        return false;
+    }
+
+    // The same channel limit LoadWav and LoadMp3 state, and for the same
+    // reason: the backend computes its block alignment from it. Checked before
+    // decoding rather than after, because the headers already say, and a file
+    // that will be refused should not cost its whole decode first.
+    const stb_vorbis_info info = stb_vorbis_get_info(decoder.get());
+    if (info.channels <= 0 || info.channels > 2) {
+        error = path + " has unsupported channel count " + std::to_string(info.channels);
+        return false;
+    }
+    const int channels = info.channels;
+
+    std::vector<short> chunk(static_cast<size_t>(kVorbisFramesPerPull) * static_cast<size_t>(channels));
+    std::vector<uint8_t> pcm;
+    for (;;) {
+        const int frames = stb_vorbis_get_samples_short_interleaved(
+            decoder.get(), channels, chunk.data(), static_cast<int>(chunk.size()));
+        if (frames <= 0) break;
+
+        // Byte by byte, because the clip's contract is little-endian, not the
+        // host's order. LoadWav and LoadMp3 get that for free by copying bytes
+        // that are already little-endian; these are shorts.
+        const size_t count = static_cast<size_t>(frames) * static_cast<size_t>(channels);
+        const size_t at = pcm.size();
+        pcm.resize(at + count * 2);
+        for (size_t i = 0; i < count; ++i) {
+            const auto sample = static_cast<uint16_t>(chunk[i]);
+            pcm[at + 2 * i] = static_cast<uint8_t>(sample & 0xFFu);
+            pcm[at + 2 * i + 1] = static_cast<uint8_t>(sample >> 8);
+        }
+    }
+
+    if (pcm.empty()) {
+        error = path + " decoded to no audio at all";
+        return false;
+    }
+
+    out.channels = static_cast<uint16_t>(channels);
+    out.sampleRate = info.sample_rate;
+    out.bitsPerSample = 16;
+    out.pcm = std::move(pcm);
+    return true;
 }
 
 bool AudioClip::LoadMp3(const std::string& path, AudioClip& out, std::string& error) {

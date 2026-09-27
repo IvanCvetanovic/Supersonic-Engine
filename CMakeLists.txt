@@ -304,6 +304,9 @@ set(VENDORED_SOURCES
     # the two above carry VMA's and tinygltf's. The engine's own code in this
     # file is small; the alternative is /W4 on somebody else's sprintf.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/ScreenCapture.cpp
+    # stb_vorbis, which decodes AudioClip::LoadOgg's files. The loader includes
+    # only its declarations, so its warnings are confined to this one TU.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core/StbVorbisImplementation.cpp
 )
 
 # PRIVATE, not PUBLIC: the engine's own warning level is the engine's business.

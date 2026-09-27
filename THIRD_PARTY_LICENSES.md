@@ -15,7 +15,7 @@ what you may build with the engine beyond keeping the notices below.
 | [GLM](https://github.com/g-truc/glm) | — | The Happy Bunny License **or** MIT, at your option | © 2005 G-Truc Creation |
 | [Dear ImGui](https://github.com/ocornut/imgui) | docking branch | MIT | © 2014–2026 Omar Cornut |
 | [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) | — | MIT | © 2016–2026 Cedric Guillemet and contributors |
-| [stb](https://github.com/nothings/stb) (`stb_image`, `stb_image_write`) | — | Public domain (Unlicense) **or** MIT, at your option | Sean Barrett |
+| [stb](https://github.com/nothings/stb) (`stb_image`, `stb_image_write`, `stb_vorbis` 1.22) | — | Public domain (Unlicense) **or** MIT, at your option | Sean Barrett |
 | [tinygltf](https://github.com/syoyo/tinygltf) | — | MIT | © 2015–present Syoyo Fujita, Aurélien Chatelain and contributors |
 | [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | 3.1.0 | MIT | © 2017–2024 Advanced Micro Devices, Inc. |
 | [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers) | 1.3.290 | Apache-2.0 **or** MIT, at your option | © 2015–2023 The Khronos Group Inc. |
@@ -36,11 +36,12 @@ third_party/Vulkan-Headers-1.3.290/LICENSE.md
 third_party/Vulkan-Headers-1.3.290/LICENSES/          Apache-2.0.txt, MIT.txt
 ```
 
-Three carry their licence in the header comment rather than in a separate file:
+Four carry their licence in a comment in the file rather than in a separate file:
 
 ```
 third_party/imguizmo/ImGuizmo.h        MIT, at the top of the file
 third_party/stb/stb_image.h            dual public-domain / MIT, at the foot of the file
+third_party/stb/stb_vorbis.c           dual public-domain / MIT, at the foot of the file
 third_party/tinygltf/tiny_gltf.h       MIT, at the top of the file
 ```
 

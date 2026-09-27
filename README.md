@@ -76,7 +76,7 @@ code quietly contradicts.
 - **World queries** — raycast, sphere overlap and a ground check against *colliders* rather than render bounds, available to C++ and to hot-reloaded scripts
 - **Collision** — sort-and-sweep broadphase; a narrowphase of four shapes and four pair tests, because a sphere is a capsule whose segment has no length: nearest points between segments for the round pairs, segment-against-box for a capsule or sphere against a crate, the separating axis theorem over fifteen axes with Sutherland–Hodgman clipping for box against box, and a heightfield for terrain — which is a function rather than a triangle soup, so the cells a shape can touch are an index range and the seams need no internal-edge filtering. Mass-weighted impulse response with Coulomb friction, slop-limited positional correction so stacks settle instead of vibrating, speculative contacts so a fast body lands on a wall rather than through it, immovable collider-only obstacles, and non-resolving trigger volumes
 - **Joints** — point, distance and hinge constraints between two bodies or between a body and a fixed point in the world, solved in the same iteration as the contacts so a body held by a rope *and* resting on the floor satisfies both at once. A rope resists stretching only, so a chain can fold; the position pass sweeps four times re-reading as it goes, which is what makes a five-link rope hang at its length rather than half a per cent longer
-- **3D audio** on XAudio2 with a from-scratch WAV decoder, inverse-distance attenuation and listener-relative panning
+- **3D audio** on XAudio2 with a from-scratch WAV decoder, Ogg Vorbis through `stb_vorbis` and MP3 through Media Foundation on Windows, inverse-distance attenuation and listener-relative panning
 - **In-game UI** — text, panels, buttons and a text field, anchored so a HUD authored at one resolution survives every other; a script reads what was typed and hears it submitted
 - **Particle systems** with per-emitter pools, so two emitters cannot starve each other
 - **Job system** — a worker pool with a counter fence, used where the work is genuinely independent: terrain generation, per-vertex tangent bases and particle integration. Command recording, the transform hierarchy, scripts and collision response stay on the main thread on purpose, and the code says why
@@ -372,7 +372,7 @@ verified by a screenshot of geometry it never touched.
 | `test_decomposition` | Concave collision: watertightness, the L's volume against its hull's, that the pieces cover the mesh and invent nothing, and that the notch stays empty |
 | `test_environmentmap` | IBL on the CPU: the cube face mapping, a constant sky irradiating to itself, both prefilter endpoints, and the Radiance decoder |
 | `test_assetdatabase` | Asset identity: minting, sidecars, rename-by-content adoption, which route a reference resolved by, and re-pointing a scene that is already open |
-| `test_audio` | WAV decoding including the shipped clip, and reloading a clip without freeing what is playing it |
+| `test_audio` | WAV decoding including the shipped clip, MP3 and Ogg Vorbis refusing what they cannot read, and reloading a clip without freeing what is playing it |
 | `test_scripts` | Script registry and dispatch |
 | `test_blending` | Cross-fade between clips, blend weights, clip switching |
 | `test_spotlight` | Cone angles, the straight-down lookAt collapse, shadow frustum fit |
