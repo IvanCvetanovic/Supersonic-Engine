@@ -19,12 +19,14 @@
 #include "core/RenderSystem.hpp"
 #include "core/SceneSerializer.hpp"
 #include "renderer/MaterialSetLedger.hpp"
+#include "renderer/TextureRegistry.hpp"
 #include "renderer/VulkanPipeline.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
+#include <concepts>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -1265,6 +1267,21 @@ static void testAMaterialSetHasFiveBindingsAndTheOverlayIsThird() {
     // guarantees (maxPerStageDescriptorSamplers).
     CHECK(VulkanPipeline::kSamplersPerSceneSet + VulkanPipeline::kMaterialBindingCount <= 16u);
 }
+
+// A game written before the gloss map asks for a sprite's set by four ids
+// (Magic Portals' --visit-levels does). Held at compile time, because the
+// registry cannot be built without a device: that call must still compile,
+// and so must the five-id one the engine makes.
+template <typename Registry>
+concept TakesFourMaps = requires(Registry& registry) {
+    { registry.AcquireMaterialSet(0u, 1u, 2u, 4u) } -> std::same_as<vk::DescriptorSet>;
+};
+template <typename Registry>
+concept TakesFiveMaps = requires(Registry& registry) {
+    { registry.AcquireMaterialSet(0u, 1u, 2u, 4u, 0u) } -> std::same_as<vk::DescriptorSet>;
+};
+static_assert(TakesFourMaps<TextureRegistry>, "a caller from before the gloss map still compiles");
+static_assert(TakesFiveMaps<TextureRegistry>, "and the engine's own five-id call does");
 
 static void testASlotWithNoTextureFallsBackToItsOwnNeutral() {
     // Five textures exist (ids 0 to 4); an id past them names nothing. The

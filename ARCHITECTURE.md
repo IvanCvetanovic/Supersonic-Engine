@@ -476,6 +476,10 @@ the 2D sprite path's highlight alone (below): white when unnamed, so a specular
 strength by itself is a uniform gloss, and black when named and unreadable, so a
 missing file adds no highlight. Per entity like the overlay, repointed, saved as
 `"GlossTexture"` only when named, and in the resource signature.
+`AcquireMaterialSet` keeps its four-id form beside the five-id one, meaning the
+white neutral: a game's own call from before the gloss map - Magic Portals'
+`--visit-levels` asks for each lightmapped sprite's set by four ids - still
+compiles and still gets the set the renderer draws that sprite with.
 The path is per entity and not on `MaterialAsset`: an overlay is one surface's
 own bake. It is repointed with the other maps, but deliberately **not watched**
 for hot reload: a 2D game names hundreds (Magic Portals ships 730), `Watch` never

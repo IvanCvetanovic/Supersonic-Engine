@@ -79,6 +79,17 @@ public:
     vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId, uint32_t ormId,
                                          uint32_t overlayId, uint32_t glossId);
 
+    // The four-map form every caller used before the gloss map, and what it
+    // still means: no gloss, the white neutral. Kept for the callers outside
+    // the engine - Magic Portals' --visit-levels asks for the set each of its
+    // lightmapped sprites is drawn with, by four ids, and this is that set,
+    // since a material naming no gloss map resolves to white. The engine's own
+    // calls all pass five ids, so each says what every slot of its set is.
+    vk::DescriptorSet AcquireMaterialSet(uint32_t albedoId, uint32_t normalId, uint32_t ormId,
+                                         uint32_t overlayId) {
+        return AcquireMaterialSet(albedoId, normalId, ormId, overlayId, m_whiteTexture);
+    }
+
     // Drops a cached path so the next Acquire re-reads it from disk, and
     // queues the old image for deferred destruction. This is what makes editing
     // a texture and seeing the result possible without restarting - the
