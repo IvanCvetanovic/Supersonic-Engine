@@ -4,9 +4,16 @@
 // the binary is identical, and packaging is a copy rather than a build. If it
 // does not parse, the player gets an editor - which is precisely what
 // packaging used to produce every time.
+//
+// And the window it declares, then changes while it runs: fullscreen from the
+// manifest or a flag, and the requests a layer makes through WindowControl,
+// which are latched and applied a frame later rather than acted on inside the
+// tick that made them.
 
 #include "TestHarness.hpp"
 #include "core/GameRuntime.hpp"
+#include "core/Input.hpp"
+#include "core/WindowControl.hpp"
 #include "platform/ExecutablePath.hpp"
 
 #include <filesystem>
@@ -207,6 +214,227 @@ static void testHalfAnOverrideIsNotAnOverride() {
     CHECK_EQ(h, uint32_t{1080});
 }
 
+
+// --- Fullscreen, declared and overridden ------------------------------------
+
+static void testAManifestCanAskForFullscreen() {
+    const auto manifest = GameRuntime::Parse(
+        R"({ "Game": true, "Title": "Penumbra", "Width": 1024, "Height": 768, "Fullscreen": true })");
+    CHECK(manifest.isGame);
+    CHECK_MSG(manifest.fullscreen, "the key is read");
+    CHECK_MSG(manifest.width == 1024 && manifest.height == 768,
+              "and the size beside it is still the size, the one it comes back to");
+}
+
+static void testAManifestThatSaysNothingIsWindowed() {
+    // Every manifest written before the key existed.
+    CHECK(!GameRuntime::Parse(R"({ "Game": true, "Title": "Old" })").fullscreen);
+    CHECK(!GameRuntime::Parse(R"({ "Game": true, "Fullscreen": false })").fullscreen);
+
+    // Read only once the file is a game's, like every key but Game: a stray
+    // manifest in a build tree must not take the editor fullscreen.
+    const auto stray = GameRuntime::Parse(R"({ "Fullscreen": true })");
+    CHECK(!stray.isGame);
+    CHECK_MSG(!stray.fullscreen, "a file that is not a game's asks for nothing");
+}
+
+static void testFullscreenSurvivesTheRoundTripThePackagerUses() {
+    GameManifest manifest;
+    manifest.isGame = true;
+    manifest.title = "Penumbra";
+    manifest.width = 1024;
+    manifest.height = 768;
+    manifest.fullscreen = true;
+
+    const auto reparsed = GameRuntime::Parse(GameRuntime::Serialize(manifest));
+    CHECK(reparsed.isGame);
+    CHECK(reparsed.fullscreen);
+    CHECK_EQ(reparsed.width, uint32_t{1024});
+    CHECK_EQ(reparsed.height, uint32_t{768});
+}
+
+static void testAWindowedGameGetsTheManifestItAlwaysDid() {
+    // Byte for byte, not merely "no Fullscreen key": this literal is what
+    // Serialize wrote before the key existed, and a packaged windowed game
+    // must go on shipping exactly it.
+    GameManifest manifest;
+    manifest.isGame = true;
+    manifest.title = "Plain";
+
+    const std::string expected = "{\n"
+                                 "  \"Game\": true,\n"
+                                 "  \"Title\": \"Plain\",\n"
+                                 "  \"StartupScene\": \"assets/scenes/MainScene.scene\"\n"
+                                 "}\n";
+    const std::string text = GameRuntime::Serialize(manifest);
+    CHECK_MSG(text == expected, "a windowed game's manifest is unchanged: " + text);
+}
+
+static void testTheWindowedFlagBeatsTheFullscreenFlagWhichBeatsTheManifest() {
+    GameManifest windowed;
+    windowed.isGame = true;
+    GameManifest fullscreen = windowed;
+    fullscreen.fullscreen = true;
+
+    // Nobody says anything: the manifest answers.
+    CHECK(!GameRuntime::ResolveFullscreen(windowed, false, false));
+    CHECK(GameRuntime::ResolveFullscreen(fullscreen, false, false));
+
+    // --fullscreen over a windowed game.
+    CHECK(GameRuntime::ResolveFullscreen(windowed, true, false));
+
+    // --windowed over a fullscreen game, which is the one a headless capture
+    // needs: without it, a run with --frames covers the desk it runs on.
+    CHECK_MSG(!GameRuntime::ResolveFullscreen(fullscreen, false, true),
+              "--windowed must beat a fullscreen manifest");
+}
+
+
+// --- The window a game changes while it runs ---------------------------------
+//
+// WindowControl latches requests in a class with no platform behind it, so the
+// deferral - the whole design, since a request comes from inside a tick - is
+// checked here against a stand-in window. The GLFW half cannot run in a suite.
+namespace {
+
+class StandInWindow final : public WindowControl {
+public:
+    bool IsFullscreen() const override { return fullscreen; }
+    glm::uvec2 WindowSize() const override { return size; }
+    std::vector<DisplayMode> DisplayModes() const override { return {}; }
+    DisplayMode DesktopMode() const override { return {}; }
+
+    bool fullscreen{false};
+    glm::uvec2 size{1280u, 720u};
+};
+
+} // namespace
+
+static void testARequestWaitsToBeTaken() {
+    StandInWindow window;
+    CHECK_MSG(!window.Pending().Any(), "nothing is asked for at first");
+
+    window.SetFullscreen(true);
+    CHECK(window.Pending().Any());
+    CHECK(window.Pending().setFullscreen && window.Pending().fullscreen);
+    CHECK_MSG(!window.IsFullscreen(),
+              "asking changes nothing about what the window is until it is applied");
+
+    const WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.setFullscreen && taken.fullscreen);
+    CHECK_MSG(!taken.setWindowedSize, "and nothing that was not asked for");
+    CHECK_MSG(!window.Pending().Any(), "taking the requests forgets them");
+    CHECK_MSG(!window.TakeRequests().Any(), "so a second frame applies nothing again");
+}
+
+static void testTheLastRequestBeforeTheFrameWins() {
+    // A toggle pressed twice between two frames is back where it started, not
+    // applied twice; a size asked for twice is the second size.
+    StandInWindow window;
+    window.SetFullscreen(true);
+    window.SetFullscreen(false);
+    CHECK(window.SetWindowedSize(1280, 720));
+    CHECK(window.SetWindowedSize(1024, 768));
+
+    const WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.setFullscreen);
+    CHECK_MSG(!taken.fullscreen, "the later answer");
+    CHECK(taken.setWindowedSize);
+    CHECK_EQ(taken.windowedSize.x, 1024u);
+    CHECK_EQ(taken.windowedSize.y, 768u);
+}
+
+static void testAnUnusableWindowedSizeIsRefusedAndLatchesNothing() {
+    StandInWindow window;
+    CHECK_MSG(!window.SetWindowedSize(8, 8), "too small to see");
+    CHECK_MSG(!window.SetWindowedSize(1920, 99999), "too large to be meant");
+    CHECK_MSG(!window.SetWindowedSize(0, 720), "half a size");
+    CHECK_MSG(!window.Pending().Any(), "and a refusal asks for nothing");
+
+    // The manifest's own bounds, inclusive, so the three places a size comes
+    // from cannot disagree about which ones exist.
+    CHECK(window.SetWindowedSize(GameManifest::kMinimumExtent, GameManifest::kMinimumExtent));
+    CHECK(window.SetWindowedSize(GameManifest::kMaximumExtent, GameManifest::kMaximumExtent));
+    CHECK(!WindowControl::IsUsableWindowSize(GameManifest::kMinimumExtent - 1, 720));
+    CHECK(!WindowControl::IsUsableWindowSize(1280, GameManifest::kMaximumExtent + 1));
+
+    // A refused request does not cancel one already accepted.
+    CHECK(window.SetWindowedSize(1280, 720));
+    CHECK(!window.SetWindowedSize(4, 4));
+    const WindowControl::Requests taken = window.TakeRequests();
+    CHECK(taken.setWindowedSize);
+    CHECK_EQ(taken.windowedSize.x, 1280u);
+    CHECK_EQ(taken.windowedSize.y, 720u);
+}
+
+static void testHidingTheCursorIsTheSameRequestInputArbitrates() {
+    // Through Input and nowhere else, so the editor's hold on the pointer and
+    // a window without focus still veto it. And a locked pointer is left
+    // locked either way: hiding the cursor must not end a mouse-look.
+    StandInWindow window;
+
+    Input::SetCursorMode(CursorMode::Normal);
+    window.SetCursorVisible(false);
+    CHECK(Input::RequestedCursorMode() == CursorMode::Hidden);
+    window.SetCursorVisible(true);
+    CHECK(Input::RequestedCursorMode() == CursorMode::Normal);
+
+    Input::SetCursorMode(CursorMode::Locked);
+    window.SetCursorVisible(false);
+    CHECK_MSG(Input::RequestedCursorMode() == CursorMode::Locked, "hiding leaves a lock alone");
+    window.SetCursorVisible(true);
+    CHECK_MSG(Input::RequestedCursorMode() == CursorMode::Locked, "and so does showing");
+
+    CHECK_MSG(!window.Pending().Any(), "the pointer is not a window request");
+    Input::SetCursorMode(CursorMode::Normal);
+}
+
+static void testTheModesAMenuListsAreTheTrueColourOnesOnceEach() {
+    using Mode = WindowControl::VideoMode;
+    const std::vector<Mode> reported = {
+        {1920, 1080, 8, 8, 8, 60},
+        {800, 600, 5, 6, 5, 60},     // 16-bit: dropped
+        {1280, 720, 8, 8, 8, 60},
+        {1920, 1080, 8, 8, 8, 60},   // listed twice by the platform
+        {1920, 1080, 8, 8, 8, 144},
+        {1280, 1024, 8, 8, 8, 60},
+        {1280, 720, 5, 6, 5, 60},    // 16-bit twin of a kept mode
+        {0, 0, 8, 8, 8, 60},         // nothing
+    };
+
+    const std::vector<DisplayMode> modes = WindowControl::SelectDisplayModes(reported);
+    const std::vector<DisplayMode> expected = {
+        {1280, 720, 60}, {1280, 1024, 60}, {1920, 1080, 60}, {1920, 1080, 144}};
+    CHECK_EQ(modes.size(), expected.size());
+    CHECK_MSG(modes == expected, "smallest first, then by rate, each once");
+    CHECK(WindowControl::SelectDisplayModes({}).empty());
+}
+
+static void testAWindowGoesFullscreenOnTheMonitorHoldingMostOfIt() {
+    using Rect = WindowControl::ScreenRect;
+    // A 1080p screen, a 1440p one to its right, and one to the left of the
+    // primary, which is where negative desktop coordinates come from.
+    const std::vector<Rect> monitors = {
+        {0, 0, 1920, 1080}, {1920, 0, 2560, 1440}, {-1920, 0, 1920, 1080}};
+
+    CHECK_EQ(WindowControl::MonitorUnder({100, 100, 800, 600}, monitors), 0);
+
+    // Straddling: 120 columns on the first, 680 on the second.
+    CHECK_EQ(WindowControl::MonitorUnder({1800, 100, 800, 600}, monitors), 1);
+
+    CHECK_EQ(WindowControl::MonitorUnder({-1000, 200, 800, 600}, monitors), 2);
+
+    // Split exactly in half: the first, not whichever was looked at last.
+    CHECK_EQ(WindowControl::MonitorUnder({1520, 100, 800, 600}, monitors), 0);
+
+    // Off every screen: nobody's, and the caller takes the primary.
+    CHECK_EQ(WindowControl::MonitorUnder({-9000, -9000, 100, 100}, monitors), -1);
+    CHECK_EQ(WindowControl::MonitorUnder({100, 100, 800, 600}, {}), -1);
+
+    // Touching an edge is not overlapping it.
+    CHECK_EQ(WindowControl::MonitorUnder({1920, 1440, 100, 100}, monitors), -1);
+}
+
 // WHERE A GAME'S ENGINE FILES COME FROM: ChooseAssetRoot, asked of made-up
 // directories. The filesystem is never touched - the predicate is a set - so
 // these hold on any machine and move nobody's working directory.
@@ -347,6 +575,19 @@ static void runTests() {
 
     testTheFlagBeatsTheManifestWhichBeatsTheDefault();
     testHalfAnOverrideIsNotAnOverride();
+
+    testAManifestCanAskForFullscreen();
+    testAManifestThatSaysNothingIsWindowed();
+    testFullscreenSurvivesTheRoundTripThePackagerUses();
+    testAWindowedGameGetsTheManifestItAlwaysDid();
+    testTheWindowedFlagBeatsTheFullscreenFlagWhichBeatsTheManifest();
+
+    testARequestWaitsToBeTaken();
+    testTheLastRequestBeforeTheFrameWins();
+    testAnUnusableWindowedSizeIsRefusedAndLatchesNothing();
+    testHidingTheCursorIsTheSameRequestInputArbitrates();
+    testTheModesAMenuListsAreTheTrueColourOnesOnceEach();
+    testAWindowGoesFullscreenOnTheMonitorHoldingMostOfIt();
 
     testAPackagedFolderOutranksEverything();
     testARunFromTheEnginesRootIsLeftAsItWas();

@@ -220,6 +220,25 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     // second.
     InputPolling::InstallCallbacks(*m_window);
 
+    // Fullscreen from the first frame, when the flag or the manifest asks.
+    //
+    // Before the device and the swapchain rather than as the first frame's
+    // request, so the first swapchain is already the monitor's size instead of
+    // being built at the windowed one and thrown away a frame later. Through the
+    // same call a game makes at run time, so there is one way in. The window is
+    // still created at the resolved size first: that is the size it comes back
+    // to when the player asks for a window.
+    //
+    // The resized flag the switch raised is cleared, because nothing has been
+    // sized yet for it to be news to - left up, it would make the first
+    // DrawFrame rebuild the swapchain it had just been handed and skip drawing.
+    m_windowControl = std::make_unique<NativeWindowControl>(*m_window);
+    if (GameRuntime::ResolveFullscreen(m_manifest, m_options.fullscreen, m_options.windowed)) {
+        m_windowControl->SetFullscreen(true);
+        m_windowControl->ApplyPending();
+        m_window->ResetResizedFlag();
+    }
+
     auto requiredExtensions = m_window->GetRequiredExtensions();
     m_vulkanContext = std::make_unique<VulkanContext>(requiredExtensions);
 
@@ -364,6 +383,13 @@ SupersonicApp::SupersonicApp(const LaunchOptions& options, const GameManifest* m
     // the registry is exactly what a scene load does, and the object doing it
     // should not live inside the thing being cleared.
     m_registry.ctx().insert_or_assign<SceneManager*>(&m_sceneManager);
+
+    // And the window, for the same reason again: a layer cannot reach the
+    // Window, deliberately, so the options screen of a game had nothing to call
+    // for "Fullscreen" or a resolution. As the base class, so a game sees the
+    // requests and the queries and not the applying, which is the frame's job.
+    m_registry.ctx().insert_or_assign<WindowControl*>(
+        static_cast<WindowControl*>(m_windowControl.get()));
 
     // The two registries a game has to reach, and only those two.
     //
@@ -648,6 +674,10 @@ SupersonicApp::~SupersonicApp() {
     // context anything can ask for - worse than the gap this closes.
     m_registry.ctx().erase<MeshRegistry*>();
 
+    // The same, for the window control and the window it holds a reference
+    // to, both of which go below.
+    m_registry.ctx().erase<WindowControl*>();
+
     // Order matters: the editor frees an ImGui descriptor set, which must
     // happen before ImGui_ImplVulkan_Shutdown runs in ~VulkanRenderer.
     if (m_editorLayer) {
@@ -659,6 +689,7 @@ SupersonicApp::~SupersonicApp() {
     m_swapchain.reset();
     m_vulkanDevice.reset();
     m_vulkanContext.reset();
+    m_windowControl.reset();
     m_window.reset();
     m_audioEngine.reset();
     m_animationLibrary.reset();
@@ -1191,6 +1222,17 @@ void SupersonicApp::Run() {
                     << "Set " << madeEmissive << " material(s) emissive above 1.0.";
             }
         }
+
+        // What a game asked of the window last frame - fullscreen, a size -
+        // applied here and never where it was asked for, which was inside a
+        // tick with the frame half-built around it.
+        //
+        // BEFORE the poll, so the size change it makes arrives in this frame's
+        // events on platforms that queue them. From there it takes the path a
+        // hand-dragged edge takes: the resized flag DrawFrame checks before it
+        // acquires, and ImGui's display size, which the game view hands the
+        // offscreen target to rebuild at the top of the next frame.
+        m_windowControl->ApplyPending();
 
         m_window->PollEvents();
 

@@ -381,8 +381,8 @@ verified by a screenshot of geometry it never touched.
 | `test_uiinput` | UI hit testing, press and release routing |
 | `test_screenoverlay` | The screen overlay drawn after the tone map: where a quad lands in clip space and texture space, that order is draw order, the blend it is drawn with, and that the shader carries the same vertex table. And the composite under it: the four numbers each scene encoding sends, and that the shader's branches are numbered as the enum is |
 | `test_mixer` | Voice mixing: volume, summing, clamping rather than wrapping, looping, pitch and sample-rate conversion, panning, mono and 8-bit clips. There is no bus gain to test — the only volume is per voice |
-| `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths, and where a game's files resolve from: its own folder, the working directory, or the engine root the build named |
-| `test_launchoptions` | Argument parsing, missing values, malformed counts |
+| `test_gameruntime` | Manifest parsing, packaged-game detection, executable-relative paths, and where a game's files resolve from: its own folder, the working directory, or the engine root the build named. And the window: the `Fullscreen` key and which of it and the two flags wins, a windowed game's manifest unchanged byte for byte, and `WindowControl`'s latch against a stand-in window — nothing applies until taken, the last request wins, a refused size latches nothing, hiding the cursor leaves a lock alone — with the modes a menu lists and the monitor a window goes fullscreen on |
+| `test_launchoptions` | Argument parsing, missing values, malformed counts, and `--fullscreen` refused beside `--windowed` |
 | `test_json` | Depth limit, trailing content, duplicate keys, malformed input |
 | `test_scenemanager` | Deferred loads, Save As, failed-save and failed-load behaviour |
 | `test_assetwatcher` | Change detection, deleted and restored files, duplicate watches, and a write the engine made itself |
@@ -782,6 +782,14 @@ against, have moved to their own repositories —
 - [x] A game declares the window it opens at, in its manifest, with `--window
       1920x1080` to override it for one run. It is the render resolution too:
       in game mode the offscreen target follows the window
+- [x] A game can change its window while it runs: fullscreen and back, a
+      windowed size, the modes its monitor offers and the pointer shown or
+      hidden, through `WindowControl*` in the registry context. The requests
+      are applied at the top of the next frame and reach the swapchain and the
+      offscreen target by the path a dragged edge already took. Fullscreen is
+      at the monitor's current mode, so nothing resynchronises; a manifest can
+      start there with `"Fullscreen": true`, and `--fullscreen` / `--windowed`
+      override it for one run
 - [x] Several frames of one run: `--screenshot-every 30` beside `--screenshot
       shot.png` writes `shot_f30.png` … `shot_f420.png` over `--frames 420`,
       and `shot.png` as before. Under `--fixed-step` the stamped frames

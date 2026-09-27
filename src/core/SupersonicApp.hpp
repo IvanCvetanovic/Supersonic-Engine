@@ -10,6 +10,7 @@
 #include "core/ScreenOverlay.hpp"
 
 #include "platform/Window.hpp"
+#include "platform/NativeWindowControl.hpp"
 #include "renderer/VulkanContext.hpp"
 #include "renderer/VulkanDevice.hpp"
 #include "renderer/VulkanSwapchain.hpp"
@@ -120,6 +121,13 @@ private:
     SceneManager m_sceneManager;
 
     std::unique_ptr<Window> m_window;
+
+    // What a game may ask of the window - fullscreen, a size, the modes its
+    // monitor offers - published into the registry context as WindowControl*.
+    // Its requests are applied at the top of the frame, before events are
+    // polled; see NativeWindowControl::ApplyPending.
+    std::unique_ptr<NativeWindowControl> m_windowControl;
+
     std::unique_ptr<VulkanContext> m_vulkanContext;
     std::unique_ptr<VulkanDevice> m_vulkanDevice;
     std::unique_ptr<VulkanSwapchain> m_swapchain;

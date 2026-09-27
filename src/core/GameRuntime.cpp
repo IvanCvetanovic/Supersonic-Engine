@@ -67,6 +67,8 @@ GameManifest Parse(const std::string& text) {
         manifest.height = 0;
     }
 
+    manifest.fullscreen = root["Fullscreen"].AsBool(false);
+
     return manifest;
 }
 
@@ -82,6 +84,12 @@ std::string Serialize(const GameManifest& manifest) {
     if (manifest.width != 0 && manifest.height != 0) {
         out << ",\n  \"Width\": " << manifest.width
             << ",\n  \"Height\": " << manifest.height;
+    }
+
+    // The same: written only when asked for, so a windowed game's manifest is
+    // byte for byte the one it always was.
+    if (manifest.fullscreen) {
+        out << ",\n  \"Fullscreen\": true";
     }
 
     out << "\n}\n";
@@ -103,6 +111,12 @@ void ResolveWindowSize(const GameManifest& manifest, uint32_t optionWidth,
         outWidth = optionWidth;
         outHeight = optionHeight;
     }
+}
+
+bool ResolveFullscreen(const GameManifest& manifest, bool optionFullscreen, bool optionWindowed) {
+    if (optionWindowed) return false;
+    if (optionFullscreen) return true;
+    return manifest.fullscreen;
 }
 
 GameManifest Load() {

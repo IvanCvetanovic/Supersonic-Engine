@@ -69,6 +69,16 @@ struct LaunchOptions {
     uint32_t windowWidth = 0;
     uint32_t windowHeight = 0;
 
+    // --fullscreen and --windowed: open covering the monitor, or in a window,
+    // whatever the manifest says. Neither means the manifest answers.
+    //
+    // Two flags rather than one, because the run that most needs overriding is
+    // the other direction: a headless capture of a game that ships fullscreen
+    // wants a window, not the whole of the desk it is being run on. Refused
+    // together, as --record and --replay are, rather than one quietly winning.
+    bool fullscreen = false;
+    bool windowed = false;
+
     // Write every tick's input to this file, and a state hash every so often.
     //
     // Empty means record nothing, which is every ordinary run. A recording is

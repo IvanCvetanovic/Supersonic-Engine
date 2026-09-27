@@ -45,6 +45,8 @@ const char* LaunchOptions::Usage() {
            "  --window <WxH>  open at this size instead of the manifest's, e.g.\n"
            "                  --window 1920x1080. This is the render resolution\n"
            "                  for a game: the offscreen target follows the window\n"
+           "  --fullscreen    open covering the monitor, at its current mode\n"
+           "  --windowed      open in a window, even if the manifest says fullscreen\n"
            "  --import-assets give every asset under assets/ a stable identity,\n"
            "                  writing a .meta beside each, then exit\n"
            "  --help          print this message\n";
@@ -128,6 +130,10 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
 
             options.windowWidth = width;
             options.windowHeight = height;
+        } else if (arg == "--fullscreen") {
+            options.fullscreen = true;
+        } else if (arg == "--windowed") {
+            options.windowed = true;
         } else if (arg == "--import-assets") {
             options.importAssets = true;
         } else if (arg == "--screenshot") {
@@ -197,6 +203,12 @@ LaunchOptions LaunchOptions::Parse(int argc, const char* const* argv) {
     if (!options.recordPath.empty() && !options.replayPath.empty()) {
         return fail("--record and --replay cannot both be given: a run cannot "
                     "record the input it is being fed");
+    }
+
+    // Refused for the reason above: whichever one won, the other was typed by
+    // somebody who expected it to do something.
+    if (options.fullscreen && options.windowed) {
+        return fail("--fullscreen and --windowed cannot both be given");
     }
 
     // After the loop for the same reason: --screenshot may come after it.

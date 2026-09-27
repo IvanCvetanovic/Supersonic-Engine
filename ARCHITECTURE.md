@@ -38,6 +38,7 @@ than left as an aspiration the code quietly contradicts.
 `SupersonicApp::Run` owns the frame. The order is deliberate and load-bearing:
 
 ```
+apply window requests             <- fullscreen, windowed size; before the poll
 poll events
 apply pending viewport resize     <- before ImGui::NewFrame; see below
 ImGui::NewFrame                   <- computes WantCaptureMouse/Keyboard
@@ -1045,6 +1046,13 @@ and `cursorMode`. The delta is not an axis — an axis is bipolar and clamped to
 movement and there is no maximum. `cursorMode` reports the effective mode, so a
 script tests whether it actually has the pointer before treating motion as a
 look.
+
+`WindowControl::SetCursorVisible` (§8b) is not a way round any of this. It is
+`SetCursorMode` spelled for an options screen — false turns Normal into Hidden,
+true turns Hidden into Normal, and a Locked pointer is left alone, being
+invisible already — so it answers to both vetoes. A cursor mode set on the
+window directly would be one `InputPolling` did not know it had applied, and so
+could never give back.
 
 ### 6c. Who owns the keyboard
 
@@ -2299,6 +2307,51 @@ where it was asked for would invalidate what the caller is walking. The editor
 keeps only what is genuinely its own — dropping a selection that names an entity
 in a scene that is gone, and resetting an undo stack that describes one.
 
+**Changing the window.** The size was decided once, before the window existed,
+and after that only the player dragging an edge could touch it: a layer cannot
+reach the `Window`, so the "Fullscreen" line on a game's options screen had
+nothing to call, and neither did a resolution list. `WindowControl` is published
+as `WindowControl*` beside `SceneManager*`, for the same reason and in the same
+shape:
+
+| | |
+|---|---|
+| `IsFullscreen()`, `WindowSize()` | what the window is now — the size in screen coordinates, which in game mode is the render resolution |
+| `DisplayModes()`, `DesktopMode()` | the 8-bit-per-channel modes of the monitor the window is mostly on, smallest first, each once; and the mode it runs at now, which is what fullscreen opens at. Read live, so call them when a menu opens |
+| `SetFullscreen(bool)` | cover that monitor at its current mode, or go back to the windowed size and position (maximised again if it was) |
+| `SetWindowedSize(w, h)` | the windowed size; while fullscreen, the size it comes back at. Refused outside the manifest's 64..16384 |
+| `SetCursorVisible(bool)` | the same request as `Input::SetCursorMode(CursorMode::Hidden)`, made through it — see §6b |
+
+The queries are live and the requests are deferred, and the deferral is the
+design again: a toggle is pressed inside a tick, several systems deep, and the
+swapchain and the offscreen target both have to follow the new size.
+`SupersonicApp::Run` applies the requests at the top of the next frame, before
+events are polled, and from there a mode change takes exactly the path a
+hand-dragged edge takes: the framebuffer callback raises the resized flag
+`DrawFrame` checks before it acquires, and ImGui's display size is what the game
+view hands the offscreen target to rebuild at the top of the frame after. There
+is no second resize path to disagree with the first. The last request before
+the frame wins, a refused size latches nothing, and the latch lives in the
+GLFW-free base class so a suite checks it against a stand-in window;
+`NativeWindowControl` is the platform half, the split `Input` and `InputPolling`
+make.
+
+Fullscreen is at the monitor's *current* mode, which GLFW recognises and does
+not switch: no black screen while the display resynchronises, and leaving is as
+quick as entering. The price is that a game in fullscreen renders at the
+monitor's resolution. `GLFW_AUTO_ICONIFY` stays at its default, minimising on
+focus loss, because GLFW keeps a fullscreen window topmost and without it an
+alt-tab would leave the game drawn over whatever was switched to. A game can
+also *start* fullscreen: the manifest's `Fullscreen` key or `--fullscreen`,
+overridden for one run by `--windowed`, applied before the swapchain is first
+built so it starts at the monitor's size.
+
+Two things it does not do. A toggle moves the window's origin, so the frame
+after one reports a pointer delta of however far the pointer moved relative to
+the window — `Input` rebases the delta only when the cursor mode changes. And
+there is no exclusive mode at another resolution: a list of modes is for a
+windowed size, or for a game's own scaling.
+
 Still fused: the scene target lives in `EditorLayer`, and the scene pipeline is
 built against its render pass. A game needs that target too — it is the HDR and
 bloom chain — so this is misplaced ownership rather than a missing feature.
@@ -2569,6 +2622,7 @@ one.
 | `StartupScene` | `assets/scenes/MainScene.scene` | Scene loaded before the first frame. |
 | `Width` | `1280` | The window the game opens at, in pixels. In game mode the offscreen target follows the window every frame, so it is the render resolution too. |
 | `Height` | `720` | The other half. Half a size is not a size, so a manifest naming one without the other gets the default pair rather than that width against somebody else's height. A value outside 64..16384 is refused *and logged* — a size nobody can see is a mistake, and a window they did not ask for with nothing to explain it is worse. |
+| `Fullscreen` | `false` | Open covering the monitor, at its current mode, so the render resolution is the monitor's; `Width` and `Height` are then the size it returns to when the player asks for a window. Written only when true, so a windowed game's manifest is the one it always was. `--fullscreen` and `--windowed` override it for one run, and `GameRuntime::ResolveFullscreen` is that order. |
 
 The `Game` key, not the file's existence, is the switch, so a stray manifest in a
 build tree cannot turn the editor into a game. `Parse` returns immediately when

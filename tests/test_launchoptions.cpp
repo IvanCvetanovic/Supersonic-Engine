@@ -420,6 +420,46 @@ static void testASizeNobodyCouldUseIsRefused() {
     CHECK_MSG(LaunchOptions::Parse(3, edge).ok, "the smallest allowed size works");
 }
 
+
+// --- --fullscreen and --windowed: the mode for one run ------------------------
+
+static void testNeitherModeFlagLeavesItToTheManifest() {
+    const auto options = parse({"--frames", "60"});
+    CHECK(options.ok);
+    CHECK_MSG(!options.fullscreen && !options.windowed,
+              "no flag, no opinion: the manifest answers");
+}
+
+static void testTheModeFlagsAreRead() {
+    const auto full = parse({"--fullscreen"});
+    CHECK(full.ok);
+    CHECK(full.fullscreen);
+    CHECK(!full.windowed);
+
+    const auto windowed = parse({"--windowed"});
+    CHECK(windowed.ok);
+    CHECK(windowed.windowed);
+    CHECK(!windowed.fullscreen);
+
+    // Each takes no value, so the flag after it is still a flag.
+    const auto capture = parse({"--windowed", "--window", "1024x768", "--frames", "300"});
+    CHECK(capture.ok);
+    CHECK(capture.windowed);
+    CHECK_EQ(capture.windowWidth, uint32_t{1024});
+    CHECK_EQ(capture.maxFrames, 300);
+}
+
+static void testFullscreenAndWindowedTogetherAreRefused() {
+    // As --record with --replay: whichever won, the other was typed by somebody
+    // expecting it to do something.
+    const auto both = parse({"--fullscreen", "--windowed"});
+    CHECK_MSG(!both.ok, "both at once is refused");
+
+    const auto reversed = parse({"--windowed", "--fullscreen"});
+    CHECK_MSG(!reversed.ok, "in either order");
+    CHECK_MSG(both.error == reversed.error, "with the same message: " + both.error);
+}
+
 static void runTests() {
     testRecordAndReplayTakePaths();
     testRecordingAReplayIsRefused();
@@ -452,6 +492,10 @@ static void runTests() {
     testNoWindowFlagLeavesItToWhoeverElseHasAnOpinion();
     testASizeThatIsAlmostRightIsRefusedRatherThanGuessed();
     testASizeNobodyCouldUseIsRefused();
+
+    testNeitherModeFlagLeavesItToTheManifest();
+    testTheModeFlagsAreRead();
+    testFullscreenAndWindowedTogetherAreRefused();
 }
 
 TEST_MAIN("test_launchoptions", 138)

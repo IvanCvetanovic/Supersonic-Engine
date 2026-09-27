@@ -166,6 +166,20 @@ a 755x389 editor viewport. In the editor the flag sizes the window and the
 offscreen target still follows the viewport; **in game mode the offscreen
 target follows the window**, so there the flag really is the render resolution.
 
+```bash
+# Open covering the monitor, at the mode it is already in; or in a window,
+# whatever the manifest says.
+./build/Debug/SupersonicEngine.exe --fullscreen
+./build/Debug/SupersonicEngine.exe --frames 300 --windowed --window 1280x720
+```
+
+`--fullscreen` and `--windowed` override a manifest's `Fullscreen` key for one
+run, and are refused together. `--windowed` is the one a script wants: a
+headless capture of a game that ships fullscreen would otherwise cover the desk
+it runs on, and render at the monitor's resolution rather than the one asked
+for. A game changes the mode itself, while it runs, through `WindowControl`
+(`ARCHITECTURE.md` §8b).
+
 ### Recording a run and playing it back
 
 ```bash

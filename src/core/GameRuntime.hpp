@@ -43,6 +43,15 @@ struct GameManifest {
     uint32_t width{0};
     uint32_t height{0};
 
+    // Whether it opens covering the monitor rather than in a window.
+    //
+    // At the monitor's current mode, so the render resolution is then the
+    // monitor's, and width and height are the size it returns to when the
+    // player asks for a window - see WindowControl, which is how a game changes
+    // it once running. False is what every manifest written before this says
+    // by having no such key.
+    bool fullscreen{false};
+
     // What the engine opens at when nothing asks for anything, which is the
     // literal that used to be the only answer.
     static constexpr uint32_t kDefaultWidth = 1280;
@@ -94,6 +103,16 @@ inline constexpr const char* kManifestFilename = "game.manifest";
 // together; half a size is not a size.
 void ResolveWindowSize(const GameManifest& manifest, uint32_t optionWidth,
                        uint32_t optionHeight, uint32_t& outWidth, uint32_t& outHeight);
+
+// Whether the window opens fullscreen: `--windowed`, then `--fullscreen`, then
+// the manifest.
+//
+// The same order as the size and for the same reason - the flag is for one
+// run, and the one run that most needs it is a headless capture of a game that
+// ships fullscreen, which would otherwise cover the desk it is being run on.
+// The two flags together are refused by the parser, so their order here only
+// decides a case that cannot arrive.
+bool ResolveFullscreen(const GameManifest& manifest, bool optionFullscreen, bool optionWindowed);
 
 } // namespace GameRuntime
 
