@@ -145,9 +145,10 @@ void TextureRegistry::giveBack(std::vector<vk::DescriptorSet> sets) {
 
 vk::DescriptorSet TextureRegistry::fallbackSet() const {
     // Every slot named. A brace-initialised array zero-fills what it is not
-    // given, and id 0 is the white albedo: an overlay of white.
+    // given, and id 0 is the white albedo: an overlay of white. The gloss IS
+    // white, named rather than left to the zero-fill, so the key says so.
     const MaterialKey fallbackKey{m_whiteTexture, m_flatNormalTexture, m_neutralOrmTexture,
-                                  m_blackTexture};
+                                  m_blackTexture, m_whiteTexture};
     if (auto it = m_materialSets.find(fallbackKey); it != m_materialSets.end()) return it->second;
     return nullptr;
 }
@@ -293,14 +294,18 @@ uint32_t TextureRegistry::Acquire(const std::string& path, bool srgb, uint32_t f
 }
 
 vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_t normalId,
-                                                      uint32_t ormId, uint32_t overlayId) {
+                                                      uint32_t ormId, uint32_t overlayId,
+                                                      uint32_t glossId) {
     // Each slot falls back to its OWN neutral, not to a shared one. A missing
     // albedo is a mistake worth seeing, so it gets the checkerboard; a missing
     // normal, ORM or overlay map is the ordinary case - most materials have
-    // none of them - so they get values that change nothing at all.
+    // none of them - so they get values that change nothing at all. The gloss
+    // is white, what an unnamed one resolves to: a sprite asking for a
+    // highlight with no map gets it uniform.
     const MaterialKey key = MaterialSets::ResolveKey(
-        MaterialKey{albedoId, normalId, ormId, overlayId}, static_cast<uint32_t>(m_textures.size()),
-        MaterialKey{m_checkerTexture, m_flatNormalTexture, m_neutralOrmTexture, m_blackTexture});
+        MaterialKey{albedoId, normalId, ormId, overlayId, glossId}, static_cast<uint32_t>(m_textures.size()),
+        MaterialKey{m_checkerTexture, m_flatNormalTexture, m_neutralOrmTexture, m_blackTexture,
+                    m_whiteTexture});
     if (auto it = m_materialSets.find(key); it != m_materialSets.end()) {
         return it->second;
     }
@@ -316,9 +321,9 @@ vk::DescriptorSet TextureRegistry::AcquireMaterialSet(uint32_t albedoId, uint32_
 
     // Written binding by binding from the key itself, so adding a map means
     // adding it to the key and to the layout and nowhere else - which is how
-    // the overlay, the fourth, arrived. The previous shape named each texture
-    // in a local and would have needed a third of everything, in three places,
-    // all of them easy to half-do.
+    // the overlay, the fourth, arrived, and the gloss, the fifth. The previous
+    // shape named each texture in a local and would have needed a third of
+    // everything, in three places, all of them easy to half-do.
     //
     // Resolved BEFORE the set is allocated, because each of these can throw,
     // and a throw after the allocation would leave a set the pool counts and

@@ -2,6 +2,7 @@
 #include "core/RenderSystem.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 
 #include <limits>
@@ -216,6 +217,24 @@ void RenderSystem::ApplySprite2D(const MaterialComponent& material, PushConstant
         // x is the overlay's strength; w stays the cutoff, which the discard
         // above every exit of shader.frag reads for every path alike.
         push.material = glm::vec4(sprite.overlayStrength, 0.0f, 0.0f, material.alphaCutoff);
+
+        // Standing up: the switch, and the base line in y, which the flat
+        // sprite left at zero. Without the switch y stays zero, so a sprite
+        // that never asked writes the bytes it always wrote.
+        if (sprite.vertical) {
+            push.flags |= PushConstantData::kVertical2D;
+            push.material.y = sprite.verticalBaseY;
+        }
+
+        // The highlight: its strength in z, where zero is the off switch the
+        // shader tests, and its power in probeIndex - an int only the PBR exit
+        // reads, which a sprite never reaches - as the float's own bits, so
+        // nothing is rounded. Only when it is on, so probeIndex is otherwise
+        // what the gather put there.
+        if (sprite.specularStrength > 0.0f) {
+            push.material.z = sprite.specularStrength;
+            push.probeIndex = std::bit_cast<int32_t>(sprite.specularPower);
+        }
     }
 
     // Any path, not only a sprite's: every exit of shader.frag honours it. And
@@ -289,6 +308,10 @@ uint64_t RenderSystem::ResourceSignature(const MeshComponent* mesh,
         signature = MixSignature(signature, &present, 1);
         signature = MixSignature(signature, material->overlayTexturePath.data(),
                                  material->overlayTexturePath.size());
+        // And the gloss map, for the same reason: it is a fifth binding.
+        signature = MixSignature(signature, &present, 1);
+        signature = MixSignature(signature, material->glossTexturePath.data(),
+                                 material->glossTexturePath.size());
     } else {
         signature = MixSignature(signature, &absent, 1);
     }
@@ -503,11 +526,21 @@ void RenderSystem::SyncResources(entt::registry& registry, MeshRegistry& meshes,
                                         ? textures.GetBlackTexture()
                                         : textures.Acquire(material->overlayTexturePath, decodeColour,
                                                            textures.GetBlackTexture());
+            // DATA, like the ORM map: a gloss is a multiplier, and a transfer
+            // function applied on read would bend it. White when unnamed, so a
+            // strength alone is a uniform gloss; black when named and
+            // unreadable, so a missing file adds no highlight it never had,
+            // rather than a full one.
+            renderable.glossTextureID = material->glossTexturePath.empty()
+                                      ? textures.GetWhiteTexture()
+                                      : textures.Acquire(material->glossTexturePath, false,
+                                                         textures.GetBlackTexture());
         } else {
             renderable.albedoTextureID = textures.GetWhiteTexture();
             renderable.normalTextureID = textures.GetFlatNormalTexture();
             renderable.ormTextureID = textures.GetNeutralOrmTexture();
             renderable.overlayTextureID = textures.GetBlackTexture();
+            renderable.glossTextureID = textures.GetWhiteTexture();
         }
     }
 }
@@ -597,7 +630,8 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
                     textures.AcquireMaterialSet(renderable.albedoTextureID,
                                                 renderable.normalTextureID,
                                                 renderable.ormTextureID,
-                                                renderable.overlayTextureID)) {
+                                                renderable.overlayTextureID,
+                                                renderable.glossTextureID)) {
                 caster.alphaCutoff = alpha.cutoff;
                 caster.baseAlpha = alpha.baseAlpha;
                 caster.materialSet = set;
@@ -660,7 +694,8 @@ void RenderSystem::GatherShadowCasters(entt::registry& registry, MeshRegistry& m
                         textures.AcquireMaterialSet(section.albedoTextureID,
                                                     section.normalTextureID,
                                                     section.ormTextureID,
-                                                    textures.GetBlackTexture())) {
+                                                    textures.GetBlackTexture(),
+                                                    textures.GetWhiteTexture())) {
                     surfaceCaster.alphaCutoff = resolved.alphaCutoff;
                     surfaceCaster.baseAlpha = alpha.baseAlpha * resolved.baseColor.a;
                     surfaceCaster.materialSet = set;
@@ -1203,7 +1238,8 @@ void RenderSystem::Render(
                 glm::dot(centre - viewPosition, frustum.ViewDirection()),
                 renderable.sortKey,
                 static_cast<uint32_t>(transparent.size()),
-                EquationFor(material->blend)});
+                EquationFor(material->blend),
+                renderable.glossTextureID});
             continue;
         }
 
@@ -1220,7 +1256,8 @@ void RenderSystem::Render(
             renderable.normalTextureID,
             renderable.ormTextureID,
             renderable.overlayTextureID,
-            renderable.sortKey});
+            renderable.sortKey,
+            renderable.glossTextureID});
     }
 
     // Only when somebody has an opinion. With every key equal this returns
@@ -1283,6 +1320,7 @@ void RenderSystem::Render(
             uint32_t normal = draw.normalTextureID;
             uint32_t orm = draw.ormTextureID;
             uint32_t overlay = draw.overlayTextureID;
+            uint32_t gloss = draw.glossTextureID;
             uint32_t firstIndex = 0;
             uint32_t indexCount = draw.indexCount;
 
@@ -1296,7 +1334,9 @@ void RenderSystem::Render(
                 // A file's surface carries no overlay (MeshMaterial has none),
                 // and the entity's belongs to the entity's maps, which a
                 // multi-surface mesh does not draw with. So black: it adds nothing.
+                // Nor a gloss, and only a 2D sprite reads one: the neutral white.
                 overlay = textures.GetBlackTexture();
+                gloss = textures.GetWhiteTexture();
             }
 
             // One set per combination of maps, cached, so surfaces and entities
@@ -1308,7 +1348,7 @@ void RenderSystem::Render(
             // it, exactly as distance ordering destroyed it for the transparent
             // pass.
             const vk::DescriptorSet materialSet =
-                textures.AcquireMaterialSet(albedo, normal, orm, overlay);
+                textures.AcquireMaterialSet(albedo, normal, orm, overlay, gloss);
 
             PassItem item;
             item.key = PassDraw{ static_cast<uint64_t>(draw.meshID), firstIndex, indexCount,
@@ -1420,7 +1460,8 @@ void RenderSystem::Render(
 
                 const vk::DescriptorSet blendedSet =
                     textures.AcquireMaterialSet(draw.albedoTextureID, draw.normalTextureID,
-                                                draw.ormTextureID, draw.overlayTextureID);
+                                                draw.ormTextureID, draw.overlayTextureID,
+                                                draw.glossTextureID);
 
                 PassItem item;
 
@@ -1546,7 +1587,8 @@ void RenderSystem::Render(
     // bound, which is exactly what the two binds above make true.
     vk::DescriptorSet whiteSet = textures.AcquireMaterialSet(
         textures.GetWhiteTexture(), textures.GetFlatNormalTexture(),
-        textures.GetNeutralOrmTexture(), textures.GetBlackTexture());
+        textures.GetNeutralOrmTexture(), textures.GetBlackTexture(),
+        textures.GetWhiteTexture());
     if (whiteSet) {
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                          transparentPipeline.GetLayout(),

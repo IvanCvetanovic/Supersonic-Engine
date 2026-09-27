@@ -183,6 +183,11 @@ public:
         uint32_t overlayTextureID{0};
 
         int32_t sortKey{0};
+
+        // The gloss map's, LAST: the gather builds this positionally, and a
+        // field added in the middle would shift every value after it into its
+        // neighbour's place without a word from the compiler.
+        uint32_t glossTextureID{0};
     };
 
     // Orders a gathered opaque list by sortKey, ascending and STABLY.
@@ -382,6 +387,10 @@ public:
         // How it composites with what is behind it (MaterialComponent::blend):
         // mixed, added, or premultiplied. Not a sort key: see BlendRun.
         BlendEquation blend{BlendEquation::Mix};
+
+        // The gloss map's, last for the reason OpaqueDraw gives. 0 is the
+        // white texture, which is also the gloss map's neutral.
+        uint32_t glossTextureID{0};
     };
 
     // Orders blended draws back to front, then by sort key, then by gather

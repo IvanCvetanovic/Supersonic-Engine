@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -1170,7 +1171,7 @@ static void testASetDroppedFromTheCacheStillFillsThePool() {
     MaterialSets::Ledger ledger(3);
     std::map<SetKey, int> cache;
     for (int i = 0; i < 3; ++i) {
-        cache.emplace(SetKey{uint32_t(i), 100, 200, 300}, 1000 + i);
+        cache.emplace(SetKey{uint32_t(i), 100, 200, 300, 400}, 1000 + i);
         ledger.Taken();
     }
     CHECK_MSG(!ledger.HasRoom(), "three sets taken fill a pool of three");
@@ -1209,23 +1210,25 @@ static void testEveryBindingIsSearchedForADeadTexture() {
     // The overlay binding is the one the port drops most: a level's lightmaps
     // are invalidated every time it unloads.
     std::map<SetKey, int> cache{
-        {SetKey{1, 2, 3, 15}, 10},    // albedo
-        {SetKey{4, 5, 6, 15}, 20},
-        {SetKey{7, 1, 9, 15}, 30},    // normal
-        {SetKey{10, 11, 1, 15}, 40},  // ORM
-        {SetKey{12, 13, 14, 15}, 50},
-        {SetKey{16, 17, 18, 1}, 60},  // overlay
+        {SetKey{1, 2, 3, 15, 19}, 10},    // albedo
+        {SetKey{4, 5, 6, 15, 19}, 20},
+        {SetKey{7, 1, 9, 15, 19}, 30},    // normal
+        {SetKey{10, 11, 1, 15, 19}, 40},  // ORM
+        {SetKey{12, 13, 14, 15, 19}, 50},
+        {SetKey{16, 17, 18, 1, 19}, 60},  // overlay
+        {SetKey{20, 21, 22, 23, 1}, 70},  // gloss
     };
 
     CHECK_MSG(MaterialSets::TakeNaming(cache, {}).empty(), "no dead ids take nothing");
     CHECK_MSG(MaterialSets::TakeNaming(cache, {99}).empty(), "an id no set names takes nothing");
-    CHECK_EQ(cache.size(), size_t{6});
+    CHECK_EQ(cache.size(), size_t{7});
 
     const std::vector<int> taken = MaterialSets::TakeNaming(cache, {1});
-    CHECK_EQ(taken.size(), size_t{4});
-    CHECK_MSG(taken == std::vector<int>({10, 30, 40, 60}), "every binding that names it, the overlay's too, in key order");
+    CHECK_EQ(taken.size(), size_t{5});
+    CHECK_MSG(taken == std::vector<int>({10, 30, 40, 60, 70}),
+              "every binding that names it, the overlay's and the gloss map's too, in key order");
     CHECK_EQ(cache.size(), size_t{2});
-    CHECK_MSG(cache.count(SetKey{4, 5, 6, 15}) == 1 && cache.count(SetKey{12, 13, 14, 15}) == 1,
+    CHECK_MSG(cache.count(SetKey{4, 5, 6, 15, 19}) == 1 && cache.count(SetKey{12, 13, 14, 15, 19}) == 1,
               "and nothing that does not");
 
     const std::vector<int> two = MaterialSets::TakeNaming(cache, {13, 5});
@@ -1252,34 +1255,45 @@ static void testThePoolHoldsTheWalkWithRoomToSpare() {
 // writes over the fields the unlit path never reads, and the factors the
 // premultiplied pipeline composites with. None of it needs a device.
 
-static void testAMaterialSetHasFourBindingsAndTheOverlayIsThird() {
-    CHECK_EQ(VulkanPipeline::kMaterialBindingCount, uint32_t{4});
+static void testAMaterialSetHasFiveBindingsAndTheOverlayIsThird() {
+    // Appended, so no binding before it moved: the overlay is still 3.
+    CHECK_EQ(VulkanPipeline::kMaterialBindingCount, uint32_t{5});
     CHECK_EQ(VulkanPipeline::kOverlayBinding, uint32_t{3});
-    CHECK_EQ(sizeof(SetKey) / sizeof(uint32_t), size_t{4});
+    CHECK_EQ(VulkanPipeline::kGlossBinding, uint32_t{4});
+    CHECK_EQ(sizeof(SetKey) / sizeof(uint32_t), size_t{5});
+    // The fragment stage's sampler count, against the sixteen every device
+    // guarantees (maxPerStageDescriptorSamplers).
+    CHECK(VulkanPipeline::kSamplersPerSceneSet + VulkanPipeline::kMaterialBindingCount <= 16u);
 }
 
 static void testASlotWithNoTextureFallsBackToItsOwnNeutral() {
     // Five textures exist (ids 0 to 4); an id past them names nothing. The
     // neutrals are distinct numbers so a slot handed another slot's neutral is
     // caught.
-    const SetKey fallbacks{103, 101, 102, 104};  // checker, flat normal, neutral ORM, black
+    // checker, flat normal, neutral ORM, black, and white for the gloss
+    const SetKey fallbacks{103, 101, 102, 104, 100};
     const uint32_t count = 5;
 
-    const SetKey named = MaterialSets::ResolveKey(SetKey{0, 1, 2, 4}, count, fallbacks);
-    CHECK_MSG(named == SetKey({0, 1, 2, 4}), "ids that name textures are kept, every slot");
+    const SetKey named = MaterialSets::ResolveKey(SetKey{0, 1, 2, 4, 3}, count, fallbacks);
+    CHECK_MSG(named == SetKey({0, 1, 2, 4, 3}), "ids that name textures are kept, every slot");
 
-    const SetKey none = MaterialSets::ResolveKey(SetKey{0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu},
-                                                 count, fallbacks);
+    const SetKey none = MaterialSets::ResolveKey(
+        SetKey{0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu}, count, fallbacks);
     CHECK_MSG(none == fallbacks, "each slot naming nothing gets its own neutral, in binding order");
 
-    const SetKey onlyOverlay = MaterialSets::ResolveKey(SetKey{3, 1, 2, 5}, count, fallbacks);
+    const SetKey onlyOverlay = MaterialSets::ResolveKey(SetKey{3, 1, 2, 5, 0}, count, fallbacks);
     CHECK_MSG(onlyOverlay[VulkanPipeline::kOverlayBinding] == 104,
               "an overlay past the end is black - white would add a full-bright copy of nothing");
-    CHECK_MSG(onlyOverlay[0] == 3 && onlyOverlay[1] == 1 && onlyOverlay[2] == 2,
-              "and the other three are left alone");
+    CHECK_MSG(onlyOverlay[0] == 3 && onlyOverlay[1] == 1 && onlyOverlay[2] == 2 && onlyOverlay[4] == 0,
+              "and the others are left alone");
 
-    const SetKey edge = MaterialSets::ResolveKey(SetKey{5, 4, 4, 4}, count, fallbacks);
-    CHECK_MSG(edge == SetKey({103, 4, 4, 4}), "the last id is a texture; one past it is not");
+    const SetKey onlyGloss = MaterialSets::ResolveKey(SetKey{3, 1, 2, 4, 7}, count, fallbacks);
+    CHECK_MSG(onlyGloss[VulkanPipeline::kGlossBinding] == 100,
+              "a gloss past the end is its own neutral, white: a strength alone is a uniform gloss");
+    CHECK_MSG(onlyGloss[VulkanPipeline::kOverlayBinding] == 4, "and the overlay beside it is left alone");
+
+    const SetKey edge = MaterialSets::ResolveKey(SetKey{5, 4, 4, 4, 4}, count, fallbacks);
+    CHECK_MSG(edge == SetKey({103, 4, 4, 4, 4}), "the last id is a texture; one past it is not");
 }
 
 static void testAPremultipliedColourIsTakenWhole() {
@@ -1318,10 +1332,12 @@ static void testTheSwitchesTheSlotAndTheMaskShareAWordWithoutTouching() {
     CHECK_EQ(PushConstantData::kSprite2D, 2);
     CHECK_EQ(PushConstantData::kNormalYDown, 4);
     CHECK_EQ(PushConstantData::kPremultiplied, 8);
+    CHECK_EQ(PushConstantData::kVertical2D, 16);
     CHECK_EQ(kLightMaskShift, kUvSlotShift + 12);
 
     const int32_t switches = PushConstantData::kUnlit | PushConstantData::kSprite2D |
-                             PushConstantData::kNormalYDown | PushConstantData::kPremultiplied;
+                             PushConstantData::kNormalYDown | PushConstantData::kPremultiplied |
+                             PushConstantData::kVertical2D;
     int32_t flags = PackUvSlot(switches, 4095);
     flags = PackLightMask(flags, 0xFF);
     CHECK_EQ(UnpackUvSlot(flags), 4095);
@@ -1373,6 +1389,8 @@ static void testTheShaderReadsTheSwitchesFromTheSameBits() {
               "FLAG_NORMAL_Y_DOWN is kNormalYDown's bit");
     CHECK_MSG(declares("FLAG_PREMULTIPLIED", bitOf(PushConstantData::kPremultiplied)),
               "FLAG_PREMULTIPLIED is kPremultiplied's bit");
+    CHECK_MSG(declares("FLAG_VERTICAL_2D", bitOf(PushConstantData::kVertical2D)),
+              "FLAG_VERTICAL_2D is kVertical2D's bit");
 
     const size_t maskAt = source.find("const int LIGHT_MASK_SHIFT");
     CHECK_MSG(maskAt != std::string::npos, "shader.frag declares LIGHT_MASK_SHIFT");
@@ -1385,6 +1403,9 @@ static void testTheShaderReadsTheSwitchesFromTheSameBits() {
     CHECK_MSG(source.find("layout(set = 1, binding = " + std::to_string(VulkanPipeline::kOverlayBinding) +
                           ") uniform sampler2D overlayMap;") != std::string::npos,
               "the overlay is sampled from the binding the registry writes it to");
+    CHECK_MSG(source.find("layout(set = 1, binding = " + std::to_string(VulkanPipeline::kGlossBinding) +
+                          ") uniform sampler2D glossMap;") != std::string::npos,
+              "and the gloss map from its own");
 }
 
 static void testTheShaderReadsThe2DLightsAsTheRendererWritesThem() {
@@ -1434,10 +1455,13 @@ static void testTheShaderReadsThe2DLightsAsTheRendererWritesThem() {
     CHECK_EQ(offsetof(GpuLight2D, layers), size_t(28));
 
     CHECK_MSG(squeezed(withoutComments(between("layout(std430, set = 0, binding = 12)", "} light2D;"))) ==
-                  "layout(std430,set=0,binding=12)readonlybufferLight2DBuffer{uintcount;uint_pad0;"
-                  "uint_pad1;uint_pad2;Light2Dlights[];}light2D;",
-              "binding 12 is a count, three words of padding and the lights: GpuLight2DHeader, 16 bytes");
+                  "layout(std430,set=0,binding=12)readonlybufferLight2DBuffer{uintcount;floateyeMirrorY;"
+                  "floateyeHeight;uint_pad2;Light2Dlights[];}light2D;",
+              "binding 12 is a count, the eye's two numbers, a word of padding and the lights: "
+              "GpuLight2DHeader, 16 bytes");
     CHECK_EQ(sizeof(GpuLight2DHeader), size_t(16));
+    CHECK_EQ(offsetof(GpuLight2DHeader, eyeMirrorY), size_t(4));
+    CHECK_EQ(offsetof(GpuLight2DHeader, eyeHeight), size_t(8));
 
     CHECK_MSG(squeezed(between("const uint MAX_LIGHTS_2D", ";")) ==
                   "constuintMAX_LIGHTS_2D=" + std::to_string(kMaxLights2D) + "u;",
@@ -1455,6 +1479,16 @@ static void testTheShaderReadsThe2DLightsAsTheRendererWritesThem() {
               "the light loop takes the surface's height from emissive.w");
     CHECK_MSG(source.find("vec3 tint = texel * instances[fragInstance].emissive.rgb;") != std::string::npos,
               "and the tint without the ambient from emissive.rgb");
+    // And what the stand-up and the highlight write: the base line from
+    // material.y, the strength from material.z, the power's bits from
+    // probeIndex.
+    CHECK_MSG(source.find("float baseY = instances[fragInstance].material.y;") != std::string::npos,
+              "a standing sprite's base line is material.y");
+    CHECK_MSG(source.find("float specularStrength = instances[fragInstance].material.z;") != std::string::npos,
+              "the specular strength is material.z");
+    CHECK_MSG(source.find("float specularPower = intBitsToFloat(instances[fragInstance].probeIndex);") !=
+                  std::string::npos,
+              "and the power is probeIndex's bits, as a float");
 }
 
 static void testA2DSpriteWritesItsRecordAndNothingElseDoes() {
@@ -1522,6 +1556,45 @@ static void testA2DSpriteWritesItsRecordAndNothingElseDoes() {
     RenderSystem::ApplySprite2D(noDown, record);
     CHECK((record.flags & PushConstantData::kNormalYDown) == 0);
     CHECK_EQ(int(UnpackLightMask(record.flags)), 0);
+
+    // Standing up: the switch and the base line, and nothing else moves.
+    MaterialComponent standing = sprite;
+    standing.sprite2D.vertical = true;
+    standing.sprite2D.verticalBaseY = -336.0f;
+    record = untouched;
+    RenderSystem::ApplySprite2D(standing, record);
+    CHECK((record.flags & PushConstantData::kVertical2D) != 0);
+    CHECK_MSG(record.material.y == -336.0f, "material.y is the base line");
+    CHECK_MSG(record.material.x == 0.5f && record.material.z == 0.0f && record.material.w == 0.125f,
+              "and x, z and w are what they were");
+    CHECK_MSG(record.probeIndex == untouched.probeIndex, "no highlight, so probeIndex is left");
+
+    // A base line without the switch is inert: y stays the zero a flat sprite writes.
+    MaterialComponent lying = sprite;
+    lying.sprite2D.verticalBaseY = -336.0f;
+    record = untouched;
+    RenderSystem::ApplySprite2D(lying, record);
+    CHECK((record.flags & PushConstantData::kVertical2D) == 0);
+    CHECK(record.material.y == 0.0f);
+
+    // The highlight: the strength in z, the power's bits in probeIndex.
+    MaterialComponent shiny = sprite;
+    shiny.sprite2D.specularStrength = 0.5f;
+    shiny.sprite2D.specularPower = 71.0f;
+    record = untouched;
+    RenderSystem::ApplySprite2D(shiny, record);
+    CHECK_MSG(record.material.z == 0.5f, "material.z is the specular strength");
+    CHECK_MSG(std::bit_cast<float>(record.probeIndex) == 71.0f, "probeIndex carries the power, bit for bit");
+    CHECK_MSG((record.flags & PushConstantData::kVertical2D) == 0 && record.material.y == 0.0f,
+              "and a highlight does not stand a sprite up");
+
+    // A power with no strength is no highlight, and writes nothing.
+    MaterialComponent dull = sprite;
+    dull.sprite2D.specularPower = 71.0f;
+    record = untouched;
+    RenderSystem::ApplySprite2D(dull, record);
+    CHECK(record.material.z == 0.0f);
+    CHECK(record.probeIndex == untouched.probeIndex);
 }
 
 static void testOnlyABlendedPremultipliedMaterialSaysSo() {
@@ -1564,17 +1637,44 @@ static void testAnOverlayAndA2DSpriteSurviveASaveAndLoad() {
     material.sprite2D.normalYDown = true;
     material.sprite2D.overlayStrength = 0.75f;
 
+    // And a second sprite that stands up and shines, with a gloss map.
+    const auto shiny = makeEntity(registry, "Shiny Statue");
+    auto& statue = registry.get<MaterialComponent>(shiny);
+    statue.unlit = true;
+    statue.glossTexturePath = "assets/textures/floor_tiles.png";
+    statue.sprite2D.enabled = true;
+    statue.sprite2D.vertical = true;
+    statue.sprite2D.verticalBaseY = -336.0f;
+    statue.sprite2D.specularStrength = 0.5f;
+    statue.sprite2D.specularPower = 71.0f;
+
     const std::string text = SceneSerializer::SerializeToString(registry);
     CHECK_MSG(text.find("\"Blend\": \"Premultiplied\"") != std::string::npos, "the blend was written, by name");
     CHECK_MSG(text.find("\"OverlayTexture\"") != std::string::npos, "the overlay was written");
     CHECK_MSG(text.find("\"Sprite2D\"") != std::string::npos, "and the 2D block");
 
+    CHECK_MSG(text.find("\"GlossTexture\"") != std::string::npos, "the gloss map was written");
+    CHECK_MSG(text.find("\"Vertical\": true") != std::string::npos, "and the stand-up");
+    CHECK_MSG(text.find("\"SpecularPower\"") != std::string::npos, "and the highlight");
+
     entt::registry loaded;
     CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
     bool found = false;
+    bool foundStatue = false;
     for (auto e : loaded.view<MaterialComponent>()) {
         const auto& m = loaded.get<MaterialComponent>(e);
+        if (m.sprite2D.vertical) {
+            foundStatue = true;
+            CHECK(m.glossTexturePath == "assets/textures/floor_tiles.png");
+            CHECK_NEAR(m.sprite2D.verticalBaseY, -336.0f);
+            CHECK_NEAR(m.sprite2D.specularStrength, 0.5f);
+            CHECK_NEAR(m.sprite2D.specularPower, 71.0f);
+            continue;
+        }
         found = true;
+        CHECK_MSG(m.glossTexturePath.empty() && m.sprite2D.specularStrength == 0.0f &&
+                      m.sprite2D.specularPower == 50.0f && m.sprite2D.verticalBaseY == 0.0f,
+                  "the lit wall came back with neither");
         CHECK(m.blend == MaterialComponent::BlendMode::Premultiplied);
         CHECK(m.overlayTexturePath == "assets/textures/uv_grid.png");
         CHECK(m.sprite2D.enabled);
@@ -1586,6 +1686,20 @@ static void testAnOverlayAndA2DSpriteSurviveASaveAndLoad() {
         CHECK_NEAR(m.sprite2D.overlayStrength, 0.75f);
     }
     CHECK_MSG(found, "the entity came back");
+    CHECK_MSG(foundStatue, "and so did the statue");
+
+    // A block that uses neither writes neither, so it saves to the text it
+    // saved before they existed: its last key is still OverlayStrength.
+    const size_t wall = text.find("\"OverlayStrength\": 0.75");
+    CHECK(wall != std::string::npos);
+    if (wall != std::string::npos) {
+        const size_t lineEnd = text.find('\n', wall);
+        const size_t close = text.find('}', wall);
+        CHECK_MSG(lineEnd != std::string::npos && close != std::string::npos &&
+                      text.substr(wall, lineEnd - wall) == "\"OverlayStrength\": 0.75" &&
+                      text.find_first_not_of(" \n\r", lineEnd) == close,
+                  "the wall's block ends at OverlayStrength, as before");
+    }
     cleanup();
 }
 
@@ -1597,6 +1711,7 @@ static void testAMaterialThatNeverUsedThemWritesNeither() {
     makeEntity(registry, "Plain");
     const std::string text = SceneSerializer::SerializeToString(registry);
     CHECK_MSG(text.find("OverlayTexture") == std::string::npos, "no overlay key");
+    CHECK_MSG(text.find("GlossTexture") == std::string::npos, "no gloss key");
     CHECK_MSG(text.find("Sprite2D") == std::string::npos, "no 2D block");
 
     entt::registry loaded;
@@ -1647,7 +1762,7 @@ static void testABlendThisBuildDoesNotKnowMixes() {
 }
 
 static void runTests() {
-    testAMaterialSetHasFourBindingsAndTheOverlayIsThird();
+    testAMaterialSetHasFiveBindingsAndTheOverlayIsThird();
     testASlotWithNoTextureFallsBackToItsOwnNeutral();
     testAPremultipliedColourIsTakenWhole();
     testTheSwitchesTheSlotAndTheMaskShareAWordWithoutTouching();
@@ -1707,4 +1822,4 @@ static void runTests() {
     cleanup();
 }
 
-TEST_MAIN("test_materials", 330)
+TEST_MAIN("test_materials", 365)

@@ -43,7 +43,7 @@ std::array<uint32_t, N> ResolveKey(const std::array<uint32_t, N>& ids, uint32_t 
     return key;
 }
 
-// A set is a few bytes of pool: four image-sampler descriptors. 1024 is twice
+// A set is a few bytes of pool: five image-sampler descriptors. 1024 is twice
 // the old cap, with the margin the Magic Portals port asks for - one set per
 // lightmapped sprite, at most 21 lightmaps in one level - once sets are given
 // back when a level lets its textures go.

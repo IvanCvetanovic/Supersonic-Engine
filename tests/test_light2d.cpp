@@ -17,7 +17,10 @@
 #include "core/Components.hpp"
 #include "core/Light2D.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <string>
 #include <vector>
 
 #include <entt/entt.hpp>
@@ -388,6 +391,420 @@ static void testTheAddIsTheTintTimesTheColourAndClampedPerChannel() {
     CHECK(none == glm::vec3(0.0f));
 }
 
+// --- the header's eye ----------------------------------------------------------
+
+static void testTheHeaderCarriesTheFramesEye() {
+    // Two of the header's spare words, so the record and the array behind it
+    // do not move: the offsets are the layout test_materials holds the shader to.
+    CHECK_EQ(offsetof(GpuLight2DHeader, count), size_t(0));
+    CHECK_EQ(offsetof(GpuLight2DHeader, eyeMirrorY), size_t(4));
+    CHECK_EQ(offsetof(GpuLight2DHeader, eyeHeight), size_t(8));
+    CHECK_EQ(sizeof(GpuLight2DHeader), size_t(16));
+
+    // Without a Light2DEye the words are the zeros they were as padding, so a
+    // scene that never heard of the eye uploads the bytes it uploaded before.
+    entt::registry registry;
+    GpuLight2DHeader header = Light2D::MakeHeader(registry, 3);
+    CHECK_EQ(header.count, 3u);
+    CHECK_MSG(header.eyeMirrorY == 0.0f && header.eyeHeight == 0.0f && header.pad2 == 0u,
+              "no eye in the context is zeros, as the padding was");
+
+    // Penumbra's: camera top at y 240, a 768-pixel screen.
+    registry.ctx().emplace<Light2DEye>(Light2DEye{-(240.0f + 0.75f * 768.0f), 768.0f});
+    header = Light2D::MakeHeader(registry, 0);
+    CHECK_EQ(header.count, 0u);
+    CHECK_NEAR(header.eyeMirrorY, -816.0f);
+    CHECK_NEAR(header.eyeHeight, 768.0f);
+}
+
+// --- standing up ---------------------------------------------------------------
+
+static void testAStandingSpriteFacesDownTheScreen() {
+    // Ethanon's ET_VERTICAL: a flat texel faces +y in its y-down pixels, down
+    // the screen. In the engine's y-up world that is -y, and a light has to be
+    // BELOW the sprite's base line on screen to reach it.
+    const glm::vec3 flat = Light2D::WorldNormal(kFlat, true, spriteModel(0.0f));
+    const Light2D::StoodUp up = Light2D::StandUp(glm::vec3(3.0f, 20.0f, 0.0f), flat, 0.0f);
+    CHECK_NEAR(up.normal.x, 0.0f);
+    CHECK_NEAR(up.normal.y, -1.0f);
+    CHECK_NEAR(up.normal.z, 0.0f);
+
+    // The fragment 20 units up the sprite is 20 units HIGH, on the base line.
+    CHECK_NEAR(up.point.x, 3.0f);
+    CHECK_NEAR(up.point.y, 0.0f);
+    CHECK_NEAR(up.point.z, 20.0f);
+
+    const float range = 50.0f;
+    CHECK_NEAR(addOf(lightAt(glm::vec3(3.0f, -10.0f, 20.0f), range), up.point, up.normal),
+               1.0f - 100.0f / 2500.0f);
+    CHECK_MSG(addOf(lightAt(glm::vec3(3.0f, 10.0f, 20.0f), range), up.point, up.normal) == 0.0f,
+              "a light above the base line is behind a standing sprite");
+    CHECK_NEAR(addOf(lightAt(glm::vec3(3.0f, 0.0f, 45.0f), range), up.point, up.normal), 0.0f);
+
+    // Lying flat, the same texel is lit from above instead, by the light a
+    // standing one turns its back on.
+    CHECK(addOf(lightAt(glm::vec3(3.0f, 30.0f, 10.0f), range), glm::vec3(3.0f, 20.0f, 0.0f), flat) > 0.0f);
+}
+
+static void testAStandingSpriteTakesItsHeightFromItsRow() {
+    // One sprite on the line y = -100 at height 5, and a light in front of it
+    // at the height of the row 40 units up. That row faces it square on; the
+    // base row sees it from above, at a slant and further away. A flat sprite
+    // lights every row at one height, which is what this replaces.
+    const glm::vec3 flat = Light2D::WorldNormal(kFlat, true, spriteModel(0.0f));
+    const float baseY = -100.0f;
+    const Light2D::StoodUp upper = Light2D::StandUp(glm::vec3(0.0f, -60.0f, 5.0f), flat, baseY);
+    const Light2D::StoodUp base = Light2D::StandUp(glm::vec3(0.0f, -100.0f, 5.0f), flat, baseY);
+    CHECK_NEAR(upper.point.z, 45.0f);
+    CHECK_NEAR(base.point.z, 5.0f);
+    CHECK_NEAR(upper.point.y, baseY);
+    CHECK_NEAR(base.point.y, baseY);
+
+    const GpuLight2D light = lightAt(glm::vec3(0.0f, -130.0f, 45.0f), 100.0f);
+    CHECK_NEAR(addOf(light, upper.point, upper.normal), 1.0f - 900.0f / 10000.0f);    // facing 1
+    CHECK_NEAR(addOf(light, base.point, base.normal), (1.0f - 2500.0f / 10000.0f) * 0.6f);  // 30/50
+}
+
+static void testAStandingSpriteTurnsItsPaintedNormalsWithIt() {
+    const glm::mat4 model = spriteModel(0.0f);
+
+    // Painted facing up the image: standing, it faces the sky.
+    const Light2D::StoodUp sky = Light2D::StandUp(glm::vec3(0.0f), Light2D::WorldNormal(kImageUp, false, model), 0.0f);
+    CHECK_NEAR(sky.normal.x, 0.0f);
+    CHECK_NEAR(sky.normal.y, 0.0f);
+    CHECK_NEAR(sky.normal.z, 1.0f);
+    CHECK_NEAR(addOf(lightAt(glm::vec3(0.0f, 0.0f, 3.0f), 10.0f), sky.point, sky.normal), 0.91f);
+    CHECK(addOf(lightAt(glm::vec3(0.0f, -3.0f, 0.0f), 10.0f), sky.point, sky.normal) == 0.0f);
+
+    // Painted facing image-right: still right, and a mirror still flips it.
+    const Light2D::StoodUp right = Light2D::StandUp(glm::vec3(0.0f), Light2D::WorldNormal(kImageRight, false, model), 0.0f);
+    CHECK_NEAR(right.normal.x, 1.0f);
+    CHECK_NEAR(right.normal.y, 0.0f);
+    const Light2D::StoodUp mirrored = Light2D::StandUp(
+        glm::vec3(0.0f), Light2D::WorldNormal(kImageRight, false, spriteModel(0.0f, -1.0f)), 0.0f);
+    CHECK_NEAR(mirrored.normal.x, -1.0f);
+
+    // Not renormalised by standing up, any more than lying down: a rotation.
+    const glm::vec3 half = Light2D::WorldNormal(glm::vec3(0.75f, 0.5f, 0.5f), false, model);
+    CHECK_NEAR(glm::length(Light2D::StandUp(glm::vec3(0.0f), half, 0.0f).normal), 0.5f);
+}
+
+// --- the highlight ---------------------------------------------------------------
+
+static void testAHighlightIsBlinnFromTheEyeTimesTheGloss() {
+    // A flat texel at the origin, a light straight above it at height 4 and an
+    // eye straight above it too (mirrorY 0 puts the eye's y at -L.y = 0): the
+    // half vector IS the normal, so the highlight is the gloss at full shine.
+    const glm::vec3 flat = Light2D::WorldNormal(kFlat, false, spriteModel(0.0f));
+    GpuLight2D light = lightAt(glm::vec3(0.0f, 0.0f, 4.0f), 8.0f);
+    light.color = glm::vec3(0.5f, 0.25f, 0.125f);
+
+    Light2D::Highlight highlight;
+    highlight.gloss = glm::vec3(0.5f, 1.0f, 1.0f);
+    highlight.power = 50.0f;
+    highlight.eyeMirrorY = 0.0f;
+    highlight.eyeHeight = 768.0f;
+
+    const glm::vec3 eye = Light2D::EyeFor(light.position, highlight.eyeMirrorY, highlight.eyeHeight);
+    CHECK_NEAR(eye.x, 0.0f);
+    CHECK_NEAR(eye.y, 0.0f);
+    CHECK_NEAR(eye.z, 768.0f);
+
+    const glm::vec3 tint(0.2f);
+    const float attenuation = 1.0f - 16.0f / 64.0f;
+    const glm::vec3 add = Light2D::SpecularContribution(light, 1, glm::vec3(0.0f), flat, tint, highlight);
+    // diffuse (tint x color x att x facing 1) + color x gloss x att x shine 1
+    CHECK_NEAR(add.r, 0.2f * 0.5f * attenuation + 0.5f * 0.5f * attenuation);
+    CHECK_NEAR(add.g, 0.2f * 0.25f * attenuation + 0.25f * attenuation);
+    CHECK_NEAR(add.b, 0.2f * 0.125f * attenuation + 0.125f * attenuation);
+
+    // Off the peak the power decides how fast it goes: a sharper exponent
+    // keeps less of the same angle. The eye at y 400, 768 up: the half vector
+    // is about 14 degrees off the normal, where 0.97^20 is 0.56 and ^50 0.23.
+    highlight.eyeMirrorY = 200.0f;
+    const float soft = [&] {
+        Light2D::Highlight h = highlight;
+        h.power = 20.0f;
+        return Light2D::SpecularContribution(light, 1, glm::vec3(0.0f), flat, glm::vec3(0.0f), h).g;
+    }();
+    const float sharp = Light2D::SpecularContribution(light, 1, glm::vec3(0.0f), flat, glm::vec3(0.0f), highlight).g;
+    CHECK(soft > sharp);
+    CHECK(sharp > 0.0f);
+}
+
+static void testNoGlossIsTheDiffuseTermExactly() {
+    // A zero gloss (a zero strength, a black map or a transparent texel) adds
+    // exactly nothing, to the bit: the shader's own zero-strength test runs the
+    // old loop instead, and this is why nothing would move if it did not.
+    const glm::vec3 normal = Light2D::WorldNormal(glm::vec3(0.8f, 0.4f, 0.7f), true, spriteModel(0.3f));
+    const glm::vec3 surface(1.0f, -2.0f, 0.5f);
+    const glm::vec3 tint(0.7f, 0.5f, 0.3f);
+    Light2D::Highlight none;
+    none.eyeMirrorY = -500.0f;
+    none.eyeHeight = 768.0f;
+    for (const glm::vec3 position : {glm::vec3(3.0f, 1.0f, 2.0f), glm::vec3(-4.0f, -1.0f, 6.0f),
+                                     glm::vec3(0.5f, -3.0f, -1.0f)}) {
+        GpuLight2D light = lightAt(position, 9.0f);
+        light.color = glm::vec3(2.0f, 1.4f, 0.6f);
+        const glm::vec3 diffuse = Light2D::Contribution(light, 1, surface, normal, tint);
+        const glm::vec3 withNone = Light2D::SpecularContribution(light, 1, surface, normal, tint, none);
+        CHECK(diffuse == withNone);
+    }
+}
+
+static void testALightBehindTakesBackItsOwnHighlight() {
+    // One clamp over the sum, as the one pass that drew both: behind the
+    // surface the diffuse is negative and eats into the highlight, where two
+    // clamps would have kept the highlight whole.
+    const glm::vec3 right = Light2D::WorldNormal(kImageRight, false, spriteModel(0.0f));
+    const GpuLight2D light = lightAt(glm::vec3(-1.0f, 0.0f, 1.0f), 10.0f);   // behind, and above
+    Light2D::Highlight highlight;
+    highlight.gloss = glm::vec3(1.0f);
+    highlight.power = 1.0f;
+    highlight.eyeMirrorY = 0.0f;
+    highlight.eyeHeight = 0.0f;
+
+    // The eye mirrors the light to y 0 at height 0: (-1, 0, 0), straight
+    // behind too - so the half vector points back and there is nothing to
+    // take back from.
+    CHECK(Light2D::SpecularContribution(light, 1, glm::vec3(0.0f), right, glm::vec3(1.0f), highlight) ==
+          glm::vec3(0.0f));
+
+    // A texel leaning right, (0.8, 0, 0.6), with a light behind it at (-2, 0, 2)
+    // - dot(L - P, N) = -0.4 - and the eye high above. The half vector is
+    // between them and still on the texel's side, so there is a highlight
+    // (dot(N, H) about 0.25), and the negative diffuse eats into it.
+    const glm::vec3 leaning(0.8f, 0.0f, 0.6f);
+    const GpuLight2D behind = lightAt(glm::vec3(-2.0f, 0.0f, 2.0f), 10.0f);
+    Light2D::Highlight high = highlight;
+    high.eyeHeight = 768.0f;
+    CHECK_MSG(Light2D::Contribution(behind, 1, glm::vec3(0.0f), leaning, glm::vec3(1.0f)) == glm::vec3(0.0f),
+              "the light is behind the texel: no diffuse on its own");
+    const glm::vec3 alone = Light2D::SpecularContribution(behind, 1, glm::vec3(0.0f), leaning,
+                                                          glm::vec3(0.0f), high);
+    const glm::vec3 withDiffuse = Light2D::SpecularContribution(behind, 1, glm::vec3(0.0f), leaning,
+                                                                glm::vec3(1.0f), high);
+    const float attenuation = 1.0f - 8.0f / 100.0f;
+    const float diffuse = attenuation * (-0.4f / std::sqrt(8.0f));
+    CHECK(alone.r > 0.1f);
+    CHECK_MSG(withDiffuse.r > 0.0f && withDiffuse.r < alone.r, "one clamp over the sum, not one per term");
+    CHECK_NEAR(withDiffuse.r, alone.r + diffuse);
+
+    // Degenerate: eye and light exactly opposite through the fragment, so
+    // their unit vectors cancel. The guard gives no shine rather than a NaN.
+    const GpuLight2D above = lightAt(glm::vec3(0.0f, 5.0f, 0.0f), 10.0f);
+    Light2D::Highlight opposite = highlight;   // mirror 0, height 0: the eye at (0, -5, 0)
+    const glm::vec3 flat = Light2D::WorldNormal(kFlat, false, spriteModel(0.0f));
+    const glm::vec3 cancelled = Light2D::SpecularContribution(above, 1, glm::vec3(0.0f), flat, glm::vec3(0.0f), opposite);
+    CHECK(std::isfinite(cancelled.r) && std::isfinite(cancelled.g) && std::isfinite(cancelled.b));
+    CHECK_NEAR(cancelled.r, 0.0f);
+}
+
+static void testTheHighlightKeepsTheRangeAndTheMask() {
+    const glm::vec3 flat = Light2D::WorldNormal(kFlat, false, spriteModel(0.0f));
+    Light2D::Highlight highlight;
+    highlight.gloss = glm::vec3(1.0f);
+    highlight.eyeHeight = 768.0f;
+    const GpuLight2D light = lightAt(glm::vec3(0.0f, 0.0f, 5.0f), 5.0f, 0b10);
+    CHECK_MSG(Light2D::SpecularContribution(light, 0b10, glm::vec3(0.0f), flat, kWhite, highlight) ==
+                  glm::vec3(0.0f),
+              "at the range there is no highlight either");
+    const GpuLight2D inside = lightAt(glm::vec3(0.0f, 0.0f, 2.0f), 5.0f, 0b10);
+    CHECK(Light2D::SpecularContribution(inside, 0b10, glm::vec3(0.0f), flat, kWhite, highlight).r > 0.0f);
+    CHECK(Light2D::SpecularContribution(inside, 0b01, glm::vec3(0.0f), flat, kWhite, highlight) ==
+          glm::vec3(0.0f));
+}
+
+// --- held to the original -------------------------------------------------------
+//
+// Ethanon 0.7.12's light pass for one pixel, transliterated from the Cg the game
+// shipped (hPixelLight.cg, vPixelLight.cg, pixelLightVS.cg) in ITS axes - y down
+// the screen - and set against the engine's frame through the mapping a port
+// uses: world (x, -y), heights as they are, normalYDown, the light's colour
+// times the scene's lightIntensity, the base line at -y, the eye's mirror line
+// at -(camY + 0.75 screenH), and the specular strength divided by the intensity.
+
+namespace {
+
+struct EthLight {
+    glm::vec3 position;   // pixels, y down; z the height
+    glm::vec3 color;      // raw: lightIntensity is separate in 0.7.12
+    float range;
+};
+
+// n = -normalize(2 * (nm - 0.5)); vertical: normalColor.xzy, z *= -1.
+glm::vec3 ethNormal(const glm::vec3& texel, bool vertical) {
+    glm::vec3 n = -glm::normalize(2.0f * (texel - 0.5f));
+    if (vertical) {
+        n = glm::vec3(n.x, n.z, n.y);
+        n.z *= -1.0f;
+    }
+    return n;
+}
+
+float ethAttenuation(const glm::vec3& lightVec, float range) {
+    const float squaredDist = glm::dot(lightVec, lightVec);
+    const float squaredRange = std::max(squaredDist, range * range);
+    return 1.0f - squaredDist / squaredRange;
+}
+
+// vPixelLight main, and mainSpecular (both h and v) when `gloss` is given; the
+// 8-bit target clamps the pass. hPixelLight main is left out: its * T.a is the
+// engine's Alpha blend, not the light term.
+glm::vec3 ethPass(const EthLight& light, float lightIntensity, const glm::vec3& pixel3D,
+                  const glm::vec3& texel, bool vertical, const glm::vec3& diffuse, float diffuseAlpha,
+                  const glm::vec3* gloss, float specularPower, const glm::vec3& fakeEye) {
+    const glm::vec3 n = ethNormal(texel, vertical);
+    const glm::vec3 lightVec = pixel3D - light.position;
+    const float attenBias = ethAttenuation(lightVec, light.range);
+    if (gloss == nullptr) {
+        const float diffuseLight = glm::dot(glm::normalize(lightVec), n);
+        return glm::clamp(diffuse * diffuseLight * attenBias * light.color * lightIntensity, 0.0f, 1.0f);
+    }
+    const glm::vec3 eyeVec = pixel3D - fakeEye;
+    const glm::vec3 halfVec = glm::normalize(lightVec / glm::length(lightVec) + eyeVec / glm::length(eyeVec));
+    const float diffuseLight = glm::dot(lightVec / glm::length(lightVec), n);
+    const glm::vec3 specular =
+        light.color * std::pow(glm::clamp(glm::dot(n, halfVec), 0.0f, 1.0f), specularPower);
+    return glm::clamp((diffuse * diffuseLight * light.color * lightIntensity + specular * diffuseAlpha * *gloss) *
+                          attenBias,
+                      0.0f, 1.0f);
+}
+
+// An encoded texel whose decoded vector is `direction`, unit length, so the
+// engine's not renormalising and 0.7.12's renormalising agree.
+glm::vec3 texelFacing(const glm::vec3& direction) {
+    return glm::normalize(direction) * 0.5f + 0.5f;
+}
+
+} // namespace
+
+static void testAStandingSpriteIsLitAsVPixelLightLitIt() {
+    // A barrel-like sprite standing at Ethanon (400, 336, 0): its rows from 336
+    // up to 300, lit by a fire at (460, 346, 16) - below the base line, so in
+    // front - and one at (380, 320, 30), behind it.
+    const float lightIntensity = 2.0f;
+    const glm::vec3 entity(400.0f, 336.0f, 0.0f);
+    const glm::vec3 diffuse(0.8f, 0.6f, 0.5f);   // texel x instance colour
+    const std::vector<EthLight> lights{
+        {glm::vec3(460.0f, 346.0f, 16.0f), glm::vec3(1.0f, 0.7f, 0.3f), 150.0f},
+        {glm::vec3(380.0f, 320.0f, 30.0f), glm::vec3(0.5f, 0.5f, 1.0f), 120.0f},
+        {glm::vec3(410.0f, 420.0f, 60.0f), glm::vec3(0.9f, 0.9f, 0.9f), 200.0f},
+    };
+    const std::vector<glm::vec3> texels{
+        texelFacing(glm::vec3(0.0f, 0.0f, 1.0f)),     // flat
+        texelFacing(glm::vec3(0.6f, 0.0f, 0.8f)),     // leaning right
+        texelFacing(glm::vec3(-0.3f, 0.5f, 0.8f)),    // left and down the image
+        texelFacing(glm::vec3(0.2f, -0.7f, 0.5f)),    // up the image
+    };
+
+    int compared = 0;
+    int lit = 0;
+    float worst = 0.0f;
+    for (const EthLight& light : lights) {
+        GpuLight2D engineLight;
+        engineLight.position = glm::vec3(light.position.x, -light.position.y, light.position.z);
+        engineLight.range = light.range;
+        engineLight.color = light.color * lightIntensity;
+        engineLight.layers = 1u;
+        for (const glm::vec3& texel : texels) {
+            for (const glm::vec2 pixel : {glm::vec2(390.0f, 336.0f), glm::vec2(405.0f, 318.0f),
+                                          glm::vec2(420.0f, 300.0f)}) {
+                // pixelLightVS verticalSprite_ppl: (x - ox + u w, y, z + oy - v h),
+                // i.e. the row drawn at screen y is at z + (entity.y - y).
+                const glm::vec3 ethPixel(pixel.x, entity.y, entity.z + (entity.y - pixel.y));
+                const glm::vec3 expected = ethPass(light, lightIntensity, ethPixel, texel, true, diffuse, 1.0f,
+                                                   nullptr, 0.0f, glm::vec3(0.0f));
+
+                const glm::vec3 flat = Light2D::WorldNormal(texel, true, spriteModel(0.0f));
+                const Light2D::StoodUp up =
+                    Light2D::StandUp(glm::vec3(pixel.x, -pixel.y, entity.z), flat, -entity.y);
+                const glm::vec3 got = Light2D::Contribution(engineLight, 1, up.point, up.normal, diffuse);
+
+                worst = std::max(worst, glm::length(got - expected));
+                ++compared;
+                if (expected != glm::vec3(0.0f)) ++lit;
+            }
+        }
+    }
+    CHECK_EQ(compared, 36);
+    CHECK_MSG(lit >= 12, "enough of the cases are lit for the comparison to mean something");
+    CHECK_MSG(worst < 1e-4f, "every pixel within 1e-4 of vPixelLight: " + std::to_string(worst));
+}
+
+static void testAHighlightIsMainSpecularThroughThePortsMapping() {
+    // Both mainSpecular variants, h and v, at two camera positions (the eye
+    // moves with the camera), a partly transparent texel, gloss 0.5 grey and
+    // the powers the game uses.
+    const float lightIntensity = 2.0f;
+    const float screenH = 768.0f;
+    const float specularBrightness = 1.0f;
+    const glm::vec3 diffuse(0.7f, 0.55f, 0.4f);
+    const float texelAlpha = 0.6f;
+    const glm::vec3 gloss(0.5f);
+    const std::vector<EthLight> lights{
+        {glm::vec3(520.0f, 380.0f, 40.0f), glm::vec3(1.0f, 0.7f, 0.3f), 200.0f},
+        {glm::vec3(300.0f, 700.0f, 16.0f), glm::vec3(0.6f, 0.8f, 1.0f), 450.0f},
+    };
+    const std::vector<glm::vec3> texels{
+        texelFacing(glm::vec3(0.0f, 0.0f, 1.0f)),
+        texelFacing(glm::vec3(0.5f, 0.3f, 0.8f)),
+        texelFacing(glm::vec3(-0.4f, -0.4f, 0.8f)),
+    };
+
+    int compared = 0;
+    int shining = 0;
+    float worst = 0.0f;
+    for (const float cameraY : {0.0f, 240.0f}) {
+        Light2D::Highlight highlight;
+        highlight.eyeMirrorY = -(cameraY + 0.75f * screenH);
+        highlight.eyeHeight = 768.0f;
+        highlight.gloss = gloss * (specularBrightness / lightIntensity) * texelAlpha;
+        for (const float power : {50.0f, 20.0f}) {
+            highlight.power = power;
+            for (const EthLight& light : lights) {
+                GpuLight2D engineLight;
+                engineLight.position = glm::vec3(light.position.x, -light.position.y, light.position.z);
+                engineLight.range = light.range;
+                engineLight.color = light.color * lightIntensity;
+                engineLight.layers = 1u;
+                // ETHFakeEyePositionManager, real time.
+                const glm::vec3 fakeEye(light.position.x, 2.0f * cameraY + 1.5f * screenH - light.position.y,
+                                        768.0f);
+                const glm::vec3 glossColor = gloss * specularBrightness;
+                for (const glm::vec3& texel : texels) {
+                    // Horizontal: (x - ox + u w, y - oy + v h, z), at z 4.
+                    const glm::vec3 hPixel(500.0f, 420.0f, 4.0f);
+                    const glm::vec3 hExpected = ethPass(light, lightIntensity, hPixel, texel, false, diffuse,
+                                                        texelAlpha, &glossColor, power, fakeEye);
+                    const glm::vec3 hGot = Light2D::SpecularContribution(
+                        engineLight, 1, glm::vec3(hPixel.x, -hPixel.y, hPixel.z),
+                        Light2D::WorldNormal(texel, true, spriteModel(0.0f)), diffuse, highlight);
+                    worst = std::max(worst, glm::length(hGot - hExpected));
+
+                    // Vertical: standing at (480, 560, 0), the row drawn at 530.
+                    const glm::vec3 vPixel(470.0f, 560.0f, 0.0f + (560.0f - 530.0f));
+                    const glm::vec3 vExpected = ethPass(light, lightIntensity, vPixel, texel, true, diffuse,
+                                                        texelAlpha, &glossColor, power, fakeEye);
+                    const Light2D::StoodUp up = Light2D::StandUp(
+                        glm::vec3(470.0f, -530.0f, 0.0f), Light2D::WorldNormal(texel, true, spriteModel(0.0f)),
+                        -560.0f);
+                    const glm::vec3 vGot =
+                        Light2D::SpecularContribution(engineLight, 1, up.point, up.normal, diffuse, highlight);
+                    worst = std::max(worst, glm::length(vGot - vExpected));
+
+                    compared += 2;
+                    if (hExpected != glm::vec3(0.0f)) ++shining;
+                    if (vExpected != glm::vec3(0.0f)) ++shining;
+                }
+            }
+        }
+    }
+    CHECK_EQ(compared, 48);
+    CHECK_MSG(shining >= 16, "enough of the cases are lit for the comparison to mean something");
+    CHECK_MSG(worst < 1e-4f, "every pixel within 1e-4 of mainSpecular: " + std::to_string(worst));
+}
+
 static void runTests() {
     testTheGatherPacksWhatTheShaderReads();
     testAParentedLightIsWhereItsParentPutIt();
@@ -404,6 +821,17 @@ static void runTests() {
     testNothingReachesAtOrBeyondTheRange();
     testOnlyTheLayersInTheMaskLight();
     testTheAddIsTheTintTimesTheColourAndClampedPerChannel();
+
+    testTheHeaderCarriesTheFramesEye();
+    testAStandingSpriteFacesDownTheScreen();
+    testAStandingSpriteTakesItsHeightFromItsRow();
+    testAStandingSpriteTurnsItsPaintedNormalsWithIt();
+    testAHighlightIsBlinnFromTheEyeTimesTheGloss();
+    testNoGlossIsTheDiffuseTermExactly();
+    testALightBehindTakesBackItsOwnHighlight();
+    testTheHighlightKeepsTheRangeAndTheMask();
+    testAStandingSpriteIsLitAsVPixelLightLitIt();
+    testAHighlightIsMainSpecularThroughThePortsMapping();
 }
 
-TEST_MAIN("test_light2d", 80)
+TEST_MAIN("test_light2d", 140)

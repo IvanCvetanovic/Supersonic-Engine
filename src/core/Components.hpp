@@ -696,6 +696,21 @@ struct MaterialComponent {
     // below for its own fields.
     std::string overlayTexturePath;
 
+    // A gloss map: how much of a 2D light's specular highlight each texel
+    // takes, per channel (Sprite2DLight::specularStrength, below). Ethanon's
+    // <Gloss>, which its mainSpecular shaders multiply into the highlight
+    // whole, so the rgb is kept rather than one channel of it.
+    //
+    // Data, never decoded: it is a multiplier, as the ORM map's channels are.
+    // Read by the 2D sprite path only, and only while specularStrength is
+    // above zero; every other path binds it and never samples it. A material
+    // without one binds a 1x1 white texture, so specularStrength alone is a
+    // uniform gloss rather than no highlight at all.
+    //
+    // Per entity and not on MaterialAsset, like the overlay: the port that
+    // asked for it assigns one per sprite definition.
+    std::string glossTexturePath;
+
     // A 2D sprite's light, carried in the unlit path's per-draw fields
     // (PushConstantData, whose layout is documented beside kSprite2D).
     // Meaningful only with `unlit`; the PBR path ignores it.
@@ -729,6 +744,68 @@ struct MaterialComponent {
 
         // How much of the overlay is added. 1 is all of it.
         float overlayStrength{1.0f};
+
+        // --- Standing up -----------------------------------------------------
+        //
+        // A sprite of something upright - a statue, a barrel, a pillar, a
+        // character drawn from the side - lit as a plane standing on the
+        // ground rather than lying on it. Ethanon lit its ET_VERTICAL entities
+        // this way (pixelLightVS.cg verticalSprite_ppl, vPixelLight.cg): a row
+        // higher up the image is HIGHER in the lighting space, not further up
+        // the ground, and the face of the image looks towards the bottom of
+        // the screen.
+        //
+        // It is the flat sprite's own lighting frame turned a quarter turn
+        // about the world x axis, through the line y = verticalBaseY at the
+        // surface's height, so the point and the normal turn together:
+        //   P = (fragment x, verticalBaseY, height + (fragment y - verticalBaseY))
+        //   N = (n.x, -n.z, n.y)   for n the flat sprite's normal (WorldNormal)
+        // A flat texel then faces world -y, and only a light below the base
+        // line reaches it; a texel painted facing image-up faces the sky.
+        //
+        // Heights rise one unit per world unit up the sprite, so a scaled
+        // sprite stands as tall as it is drawn. Not turned about z: Ethanon
+        // drew its vertical entities at angle 0, and the stand-up is only
+        // meaningful for a sprite whose up is world +y (a mirror in x is fine).
+        //
+        // The light is added at full weight over a partly transparent texel in
+        // the original (vPixelLight does not weight it by the texel's alpha);
+        // that is BlendMode::Premultiplied's job, as it is for any sprite.
+        bool vertical{false};
+
+        // With `vertical`: the world y of the line the sprite stands on. Every
+        // fragment is lit as if at this y, and the fragment at this y is at
+        // `height`. Not necessarily the quad's bottom edge - Ethanon's pivot
+        // put a barrel's base 14 pixels above it.
+        float verticalBaseY{0.0f};
+
+        // --- The specular highlight ----------------------------------------
+        //
+        // Blinn-Phong, per 2D light, as Ethanon's mainSpecular added it to the
+        // light's diffuse term (hPixelLight.cg, vPixelLight.cg):
+        //   H    = normalize(normalize(L - P) + normalize(Eye - P))
+        //   spec = light.color * pow(saturate(dot(N, H)), specularPower)
+        //          * gloss.rgb * specularStrength * albedo alpha * attenuation
+        // summed with the diffuse term BEFORE the per-light clamp, so a light
+        // behind the surface takes back some of its own highlight, as the
+        // single clamped pass it reproduces did. Eye is the frame's
+        // Light2DEye (core/Light2D.hpp), a point per light.
+        //
+        // The albedo's alpha is in the term, and the diffuse term alongside it
+        // is still the one above, so a glossy sprite drawn as Ethanon drew
+        // one - its whole light pass unweighted by alpha - is Premultiplied.
+        //
+        // light.color is colour x intensity (Light2DComponent). An engine whose
+        // specular ignored a scene-wide light intensity, as Ethanon 0.7.12's
+        // did, divides that intensity out of this strength.
+        //
+        // Zero is no highlight, and the shader then runs exactly the
+        // arithmetic it ran before the highlight existed.
+        float specularStrength{0.0f};
+
+        // The Blinn exponent: higher is a smaller, sharper highlight. 50 is
+        // what nearly every Ethanon entity carries. Must be above zero.
+        float specularPower{50.0f};
 
         bool operator==(const Sprite2DLight&) const = default;
     };
@@ -951,8 +1028,8 @@ struct RenderableComponent {
     //
     // The literals match the order TextureRegistry uploads its built-ins in,
     // which is fragile and is why SyncResources overwrites these three and the
-    // overlay below - all four - from the registry on the first resolve rather
-    // than trusting them.
+    // overlay and gloss below - all five - from the registry on the first
+    // resolve rather than trusting them.
     uint32_t albedoTextureID{0};
     uint32_t normalTextureID{1};
     uint32_t ormTextureID{2};
@@ -961,6 +1038,11 @@ struct RenderableComponent {
     // when the material names none. The literal is TextureRegistry's fifth
     // built-in, uploaded after the checker so the three above did not move.
     uint32_t overlayTextureID{4};
+
+    // The gloss map (MaterialComponent::glossTexturePath), 1x1 white when the
+    // material names none. The literal is TextureRegistry's first built-in,
+    // the white albedo; white is 1 in every channel whatever its colour space.
+    uint32_t glossTextureID{0};
 
     bool isVisible{true};
     bool castsShadow{true};

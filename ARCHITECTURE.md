@@ -433,11 +433,14 @@ those lights are tied to the camera's depth slices, chosen by importance and
 given shadow slots, none of which means anything to a flat sprite under an
 orthographic camera. `Light2D::GatherLights2D` packs every enabled
 `Light2DComponent` as a 32-byte std430 record (world x and y, the light's
-**height** as z, range, colour x intensity, layers) behind a 16-byte count, at
+**height** as z, range, colour x intensity, layers) behind a 16-byte header, at
 most `kMaxLights2D` (64). A light of zero colour is left out, as Ethanon leaves it
 out; one past the cap is dropped and logged once per change. The buffer is
 written every frame, a count of zero included, because `shadeSprite2D` reads the
-count for every 2D sprite fragment.
+count for every 2D sprite fragment. The header is the count, the frame's
+specular eye (`Light2DEye`, two floats, below) and a word of padding:
+`Light2D::MakeHeader` builds it, zeros for the eye when the registry context
+holds none, which are the bytes the padding was.
 
 The three sampler shapes are not interchangeable. The cascades must be one array
 image because the per-fragment cascade choice is not dynamically uniform — it
@@ -450,8 +453,10 @@ layered image, because a spot is sampled exactly like a cascade.
 
 Set 1 is albedo, a tangent-space normal map, one packed map holding
 occlusion, roughness and metallic in R, G and B - the channels glTF packs them
-into - and an additive **overlay** (binding 3). A single set is what previously
-forced every object to sample one globally bound texture.
+into - an additive **overlay** (binding 3) and a **gloss** map (binding 4). A
+single set is what previously forced every object to sample one globally bound
+texture. Five, with the scene set's eight, is thirteen samplers in the fragment
+stage, under the sixteen `maxPerStageDescriptorSamplers` every device guarantees.
 
 The overlay is `MaterialComponent::overlayTexturePath`: a map sampled at the
 surface's own coordinates and added after everything that multiplies the albedo,
@@ -461,9 +466,16 @@ never reads it. A material without one binds a built-in 1x1 black **data**
 texture (`TextureRegistry::GetBlackTexture`), uploaded after the checkerboard so
 the ids `RenderableComponent`'s literals name for the other built-ins did not
 move, and protected from `Invalidate` like them. Each slot of a set falls back to
-its own neutral - checkerboard, flat normal, neutral ORM, black -
+its own neutral - checkerboard, flat normal, neutral ORM, black, white -
 in `MaterialSets::ResolveKey`, which `test_materials` holds to it. A mesh
-section has no overlay (a file's surface names none), so sections bind black.
+section has no overlay or gloss (a file's surface names neither), so sections
+bind black and white.
+
+The gloss map is `MaterialComponent::glossTexturePath`, sampled as **data** by
+the 2D sprite path's highlight alone (below): white when unnamed, so a specular
+strength by itself is a uniform gloss, and black when named and unreadable, so a
+missing file adds no highlight. Per entity like the overlay, repointed, saved as
+`"GlossTexture"` only when named, and in the resource signature.
 The path is per entity and not on `MaterialAsset`: an overlay is one surface's
 own bake. It is repointed with the other maps, but deliberately **not watched**
 for hot reload: a 2D game names hundreds (Magic Portals ships 730), `Watch` never
@@ -484,9 +496,10 @@ overwrites it:
 |---|---|---|
 | `albedoColor.rgb` | tint | tint x ambient |
 | `albedoColor.a` | alpha factor | alpha factor |
-| `material.x` / `.y`, `.z` / `.w` | roughness / metallic, ao / cutoff | overlay strength / 0 / cutoff |
+| `material.x` / `.y`, `.z` / `.w` | roughness / metallic, ao / cutoff | overlay strength / base line (`kVertical2D`, else 0), specular strength (0 = none) / cutoff |
 | `emissive.rgb` / `.w` | emission / occlusion strength | tint without ambient / lighting height |
-| `flags` bits 0-3 | unlit | unlit, `kSprite2D`, `kNormalYDown`, `kPremultiplied` |
+| `probeIndex` | environment slot | the specular power's float bits, while the strength is above 0 |
+| `flags` bits 0-4 | unlit | unlit, `kSprite2D`, `kNormalYDown`, `kPremultiplied`, `kVertical2D` |
 | `flags` bits 8-19 / 20-27 | UV slot / unused | UV slot / 2D light mask (`PackLightMask`) |
 
 **The 2D light term.** After the base, a sprite whose light mask is not zero
@@ -503,11 +516,42 @@ the light at full weight over a partly transparent texel are what a GLES2-era 2D
 engine's separate `One, One` light pass does. A mask of zero skips the normal
 fetch and the loop, and then the path's output is its base to the bit.
 
-The loop has a CPU twin, `Light2D::WorldNormal` and `Light2D::Contribution`,
-which `test_light2d` tests the way `ClusterGrid::ClusterForFragment` stands in for
-`clusterIndexFor`. The shader's copies of the four switches, the mask's shift and
-width, the light record, the buffer's header and its cap are held to the C++ by
-`test_materials`, which reads `shader.frag` as it reads the UV slot's.
+**Standing up.** `sprite2D.vertical` lights an upright thing - a statue, a
+barrel, a pillar - as a plane standing on the ground rather than lying on it,
+as Ethanon lit its `ET_VERTICAL` entities (`pixelLightVS.cg`
+`verticalSprite_ppl`, `vPixelLight.cg`). It is the flat frame above turned a
+quarter turn about the world x axis through the base line
+`y = sprite2D.verticalBaseY` (`material.y`) at the surface's height, point and
+normal alike: `P = (x, baseY, height + (y - baseY))`, `N = (n.x, -n.z, n.y)`. A
+row higher up the sprite is higher in the lighting space, every row stands on
+the base line, and a flat texel faces world -y, down the screen, so only a light
+below the base line reaches it. Ethanon added a vertical sprite's light
+unweighted by the texel's alpha; that is `BlendMode::Premultiplied`, as it is
+for any sprite, not a second mechanism.
+
+**The highlight.** `sprite2D.specularStrength` above zero adds Ethanon's
+`mainSpecular` to each light's term, before the one clamp:
+`colour * gloss.rgb * strength * albedo alpha * pow(saturate(dot(N, H)), power) * (1 - d2/r2)`,
+`H` the Blinn half vector between the light and an eye. The eye is one point
+per light, `(L.x, 2 * mirrorY - L.y, height)` - Ethanon's fake eye, the light
+mirrored across a line three quarters down its screen at height 768 - from the
+registry context's `Light2DEye`, which a game sets as its camera moves; it rides
+in binding 12's header. The strength travels in `material.z` and the power in
+`probeIndex`, which only the PBR exit reads. A strength of zero runs the loop the
+path ran before, unchanged, rather than a second loop fed zeros. The colour is
+colour x intensity: a port of an engine whose highlight ignored a scene-wide
+intensity divides it out of the strength. The original's light-pass alpha test
+(a pass whose alpha is 1/255 or less draws nothing) is not modelled, for the
+diffuse term or this one.
+
+The loop has a CPU twin, `Light2D::WorldNormal`, `StandUp`, `Contribution` and
+`SpecularContribution`, which `test_light2d` tests the way
+`ClusterGrid::ClusterForFragment` stands in for `clusterIndexFor` - and holds to
+the original's Cg, transliterated in the suite, through the mapping a port
+uses. The shader's copies of the five switches, the mask's shift and width, the
+light record, the buffer's header and its cap, the gloss binding and the fields
+the stand-up and the highlight read are held to the C++ by `test_materials`,
+which reads `shader.frag` as it reads the UV slot's.
 
 One packed map rather than three separate ones, because that is what an
 exporter writes and what an author paints, and because three bindings would
@@ -558,8 +602,8 @@ read by both the layout and `TextureRegistry`'s descriptor pool. It used to be
 a literal `2` in each, which is the shape of mistake that does not fail: a
 pool sized for two bindings while the layout declares three does not error, it
 quietly runs out of sets a third early, hundreds of materials into a scene
-nobody was testing. The set cache is keyed on the whole quadruple of texture ids,
-ordered rather than hashed - four 32-bit ids do not pack into a 64-bit key,
+nobody was testing. The set cache is keyed on all five texture ids,
+ordered rather than hashed - five 32-bit ids do not pack into a 64-bit key,
 and a hash collision would render one material with another's maps and say
 nothing about it.
 

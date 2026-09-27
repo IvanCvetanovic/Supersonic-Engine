@@ -637,6 +637,19 @@ void InspectorPanel::drawComponents(entt::registry& registry, entt::entity entit
                                   "material drawn as a 2D sprite (sprite2D.enabled).");
             }
 
+            // The fifth, for the same reason: saved, so it must be seen.
+            char glossBuffer[512] = {};
+            const size_t glossLen = std::min(material.glossTexturePath.size(), sizeof(glossBuffer) - 1);
+            std::memcpy(glossBuffer, material.glossTexturePath.data(), glossLen);
+            if (ImGui::InputText("Gloss Map", glossBuffer, sizeof(glossBuffer))) {
+                material.glossTexturePath = glossBuffer;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("How much of a 2D light's specular highlight each texel\n"
+                                  "takes. Read only by a 2D sprite whose specular strength\n"
+                                  "is above zero (sprite2D.specularStrength).");
+            }
+
             // The texture coordinate transform, applied to all three maps
             // above. Collapsed by default because the identity is what almost
             // every material wants and an always-open block of three more

@@ -36,14 +36,40 @@ static_assert(offsetof(GpuLight2D, layers) == 28, "GpuLight2D layout shifted");
 
 // What precedes the array in the buffer. A runtime-sized array in std430 starts
 // at its element's alignment, and a struct holding a vec3 aligns to 16, so the
-// count takes sixteen bytes and not four.
+// count takes sixteen bytes and not four - and two of the twelve it left spare
+// carry the frame's specular eye (Light2DEye), which is per frame like the
+// count, and read only by a sprite with a highlight.
 struct GpuLight2DHeader {
     uint32_t count{0};
-    uint32_t pad0{0};
-    uint32_t pad1{0};
+    float eyeMirrorY{0.0f};
+    float eyeHeight{0.0f};
     uint32_t pad2{0};
 };
 static_assert(sizeof(GpuLight2DHeader) == 16, "the 2D light buffer's header is 16 bytes");
+static_assert(offsetof(GpuLight2DHeader, count) == 0, "GpuLight2DHeader layout shifted");
+static_assert(offsetof(GpuLight2DHeader, eyeMirrorY) == 4, "GpuLight2DHeader layout shifted");
+static_assert(offsetof(GpuLight2DHeader, eyeHeight) == 8, "GpuLight2DHeader layout shifted");
+
+// Where the specular highlight of every 2D sprite is seen from, this frame
+// (MaterialComponent::Sprite2DLight::specularStrength).
+//
+// Not one point but one PER LIGHT: a light at L is seen from
+//   Eye = (L.x, 2 * mirrorY - L.y, height)
+// the light mirrored across the world line y = mirrorY, at a fixed height.
+// That is Ethanon's fake eye (ETHFakeEyePositionManager, set by 0.7.12 in its
+// light pass), which in its y-down pixels was (L.x, 2 camY + 1.5 screenH - L.y,
+// 768): the line three quarters of the way down the screen, at 768. A port
+// with a y-up world, one unit per pixel, has
+//   mirrorY = -(camY + 0.75 * screenH),  height = 768
+// and has to set it whenever its camera moves, because the eye moves with it.
+//
+// In the registry's context, runtime only, like ViewportInfo: nothing saves it,
+// and a scene without one sees highlights from (L.x, -L.y, 0). It costs nothing
+// to a sprite without a highlight, which never reads it.
+struct Light2DEye {
+    float mirrorY{0.0f};
+    float height{0.0f};
+};
 
 // The buffer's size at capacity: what the renderer allocates per frame in flight
 // and what its descriptor names.
@@ -75,6 +101,10 @@ uint32_t GatherLights2D(const entt::registry& registry,
                         uint32_t capacity,
                         uint32_t* outDropped = nullptr);
 
+// The header the renderer writes in front of those lights: their count, and the
+// registry context's Light2DEye, or zeros when it has none.
+GpuLight2DHeader MakeHeader(const entt::registry& registry, uint32_t count);
+
 // A TRANSLITERATION of shadeSprite2D's light loop in assets/shaders/shader.frag,
 // kept beside it the way ClusterGrid::ClusterForFragment is kept beside
 // clusterIndexFor. The shader is the one description that draws and the one no
@@ -98,6 +128,42 @@ glm::vec3 WorldNormal(const glm::vec3& encodedTexel, bool normalYDown, const glm
 glm::vec3 Contribution(const GpuLight2D& light, uint8_t mask,
                        const glm::vec3& surface, const glm::vec3& normal,
                        const glm::vec3& tint);
+
+// A standing sprite's point and normal (Sprite2DLight::vertical), as the shader
+// turns the flat ones before the loop: a quarter turn about the world x axis
+// through the line y = baseY at the surface's height,
+//   point  = (flat.x, baseY, flat.z + (flat.y - baseY))
+//   normal = (n.x, -n.z, n.y)
+// `flatPoint` is (fragment x, fragment y, the surface's height) and `flatNormal`
+// what WorldNormal gives.
+struct StoodUp {
+    glm::vec3 point{0.0f};
+    glm::vec3 normal{0.0f};
+};
+StoodUp StandUp(const glm::vec3& flatPoint, const glm::vec3& flatNormal, float baseY);
+
+// What the shader reads once per fragment for the highlight
+// (Sprite2DLight::specularStrength above zero).
+struct Highlight {
+    // gloss.rgb x specularStrength x the albedo texel's alpha.
+    glm::vec3 gloss{0.0f};
+    float power{50.0f};
+    // The frame's Light2DEye.
+    float eyeMirrorY{0.0f};
+    float eyeHeight{0.0f};
+};
+
+// Where a light at `lightPosition` is seen from (Light2DEye's formula).
+glm::vec3 EyeFor(const glm::vec3& lightPosition, float eyeMirrorY, float eyeHeight);
+
+// What one light adds WITH the highlight: the diffuse term above plus
+//   color * gloss * pow(saturate(dot(N, H)), power) * attenuation,
+//   H = normalize(normalize(L - P) + normalize(Eye - P)),
+// summed BEFORE the one clamp. Zero when the layers share no bit with `mask`,
+// and at or beyond the range.
+glm::vec3 SpecularContribution(const GpuLight2D& light, uint8_t mask,
+                               const glm::vec3& surface, const glm::vec3& normal,
+                               const glm::vec3& tint, const Highlight& highlight);
 
 } // namespace Light2D
 

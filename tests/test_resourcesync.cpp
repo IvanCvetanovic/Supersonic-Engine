@@ -268,6 +268,41 @@ static void testTheOverlayIsInTheSignatureToo() {
               "a sprite's light settings are not a resource, so they do not re-resolve it");
 }
 
+static void testTheGlossMapIsInTheSignatureToo() {
+    // The fifth path, and one a sprite gains when its definition says <Gloss>.
+    // Missed here, the resolve is skipped and the highlight keeps the white
+    // gloss every material starts with.
+    const MeshComponent m = mesh("Quad");
+
+    MaterialComponent none = material("wall.png");
+    MaterialComponent glossy = material("wall.png");
+    glossy.glossTexturePath = "entities/gloss/gray.bmp";
+    CHECK_MSG(sig(&m, &none) != sig(&m, &glossy), "gaining a gloss map must re-resolve the entity");
+
+    MaterialComponent other = glossy;
+    other.glossTexturePath = "entities/gloss/white.bmp";
+    CHECK_MSG(sig(&m, &glossy) != sig(&m, &other), "and so must swapping it for another");
+
+    MaterialComponent again = material("wall.png");
+    again.glossTexturePath = "entities/gloss/gray.bmp";
+    CHECK_MSG(sig(&m, &glossy) == sig(&m, &again), "an unchanged gloss map must keep its signature");
+
+    // The same file as the overlay is another binding, and another colour space.
+    MaterialComponent asOverlay = material("wall.png");
+    asOverlay.overlayTexturePath = "entities/gloss/gray.bmp";
+    CHECK_MSG(sig(&m, &glossy) != sig(&m, &asOverlay), "the gloss map's path is not the overlay's");
+
+    // The highlight's numbers select no texture, so they re-resolve nothing.
+    MaterialComponent shiny = none;
+    shiny.sprite2D.enabled = true;
+    shiny.sprite2D.specularStrength = 0.5f;
+    shiny.sprite2D.specularPower = 71.0f;
+    shiny.sprite2D.vertical = true;
+    shiny.sprite2D.verticalBaseY = -336.0f;
+    CHECK_MSG(sig(&m, &none) == sig(&m, &shiny),
+              "the stand-up and the highlight are not resources, so they do not re-resolve it");
+}
+
 static void runTests() {
     testTheSameInputsGiveTheSameSignature();
     testEveryPathThatSelectsAResourceIsInTheSignature();
@@ -278,6 +313,7 @@ static void runTests() {
     testThePackedMapIsInTheSignatureToo();
     testTheSceneColourSpaceIsInTheSignature();
     testTheOverlayIsInTheSignatureToo();
+    testTheGlossMapIsInTheSignatureToo();
 }
 
-TEST_MAIN("test_resourcesync", 29)
+TEST_MAIN("test_resourcesync", 34)

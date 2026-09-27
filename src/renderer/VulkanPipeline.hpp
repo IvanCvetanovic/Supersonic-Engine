@@ -184,17 +184,23 @@ struct PushConstantData {
     //   albedoColor.rgb  tint                     tint x ambient
     //   albedoColor.a    alpha factor             alpha factor (unchanged)
     //   material.x       roughness                overlay strength
-    //   material.y, .z   metallic, ao             0, unused
+    //   material.y       metallic                 the base line's world y, with kVertical2D; else 0
+    //   material.z       ao                       specular strength, 0 = no highlight
     //   material.w       alpha cutoff             alpha cutoff (unchanged)
     //   emissive.rgb     emission                 tint WITHOUT ambient, for a light term
     //   emissive.w       occlusion strength       lighting height, world units
+    //   probeIndex       environment slot         the specular power's float bits, while
+    //                                             the strength is above 0; else untouched
     //   flags 8..19      UV slot                  UV slot (unchanged)
     //   flags 20..27     unused                   2D light mask (PackLightMask)
     //
     // The light term reads emissive.rgb, emissive.w, the mask and kNormalYDown,
     // against the frame's Light2DComponents at scene binding 12 (core/Light2D).
     // It was added to the shader without changing this layout, which is what
-    // carrying them from the start was for.
+    // carrying them from the start was for. The stand-up (kVertical2D) and the
+    // highlight took material.y and .z, which the sprite path had left at zero,
+    // and probeIndex, which only the PBR exit reads: a sprite leaves the shader
+    // before it.
     static constexpr int32_t kSprite2D = 1 << 1;
 
     // With kSprite2D: the normal map's green channel points down the image.
@@ -204,6 +210,10 @@ struct PushConstantData {
     // OneMinusSrcAlpha (MaterialComponent::BlendMode::Premultiplied). Honoured
     // by every exit of shader.frag.
     static constexpr int32_t kPremultiplied = 1 << 3;
+
+    // With kSprite2D: the sprite stands up (MaterialComponent::Sprite2DLight::
+    // vertical), on the base line material.y carries.
+    static constexpr int32_t kVertical2D = 1 << 4;
 
     // The low byte is switches; the twelve bits above it are a UV transform
     // slot. The packing itself, and the reasons for its shape, are in
@@ -430,18 +440,26 @@ public:
     static constexpr uint32_t kMaterialSet = 1;
 
     // How many samplers a material set holds: albedo, normal, the packed
-    // occlusion/roughness/metallic map, and the additive overlay
-    // (MaterialComponent::overlayTexturePath), in binding order.
+    // occlusion/roughness/metallic map, the additive overlay
+    // (MaterialComponent::overlayTexturePath) and the gloss map
+    // (MaterialComponent::glossTexturePath), in binding order.
     //
     // Public because TextureRegistry sizes its descriptor pool from it. That
     // used to be a literal 2 in each of the two files, which is the shape of
     // mistake that does not fail: a pool sized for two bindings while the
     // layout declares three simply runs out of sets a third early, hundreds of
     // materials later, in a scene nobody was testing.
-    static constexpr uint32_t kMaterialBindingCount = 4;
+    //
+    // Five, with the scene set's kSamplersPerSceneSet, is thirteen samplers
+    // in the fragment stage, under the sixteen maxPerStageDescriptorSamplers
+    // every device guarantees. A sixth map, or a third probe, crosses it.
+    static constexpr uint32_t kMaterialBindingCount = 5;
 
     // Where the overlay sits in the set, and in TextureRegistry's key.
     static constexpr uint32_t kOverlayBinding = 3;
+
+    // And the gloss map, appended after it so no binding moved.
+    static constexpr uint32_t kGlossBinding = 4;
 
 private:
     void createDescriptorSetLayout();

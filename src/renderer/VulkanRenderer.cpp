@@ -1563,9 +1563,9 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     }
 
     // One contiguous write, header then records, so the count and the array it
-    // counts can never come from two different frames.
-    GpuLight2DHeader light2DHeader{};
-    light2DHeader.count = light2DCount;
+    // counts can never come from two different frames. The header carries the
+    // frame's specular eye (Light2DEye) beside the count.
+    const GpuLight2DHeader light2DHeader = Light2D::MakeHeader(registry, light2DCount);
     m_light2DScratch.resize(sizeof(GpuLight2DHeader) + sizeof(GpuLight2D) * light2DCount);
     std::memcpy(m_light2DScratch.data(), &light2DHeader, sizeof(GpuLight2DHeader));
     if (light2DCount > 0) {
@@ -1956,7 +1956,8 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
                 const uint32_t image = quad.texture.empty() ? white : textures.Acquire(quad.texture, false, white);
                 sets.push_back(textures.AcquireMaterialSet(image, textures.GetFlatNormalTexture(),
                                                            textures.GetNeutralOrmTexture(),
-                                                           textures.GetBlackTexture()));
+                                                           textures.GetBlackTexture(),
+                                                           textures.GetWhiteTexture()));
             }
 
             offscreen.RecordOverlay(cmd, [&](vk::CommandBuffer pass) {

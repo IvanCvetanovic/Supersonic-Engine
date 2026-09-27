@@ -243,6 +243,9 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         if (!mat->overlayTexturePath.empty()) {
             writeAssetRef(out, indent, "OverlayTexture", mat->overlayTexturePath, ",\n");
         }
+        if (!mat->glossTexturePath.empty()) {
+            writeAssetRef(out, indent, "GlossTexture", mat->glossTexturePath, ",\n");
+        }
         if (mat->sprite2D != MaterialComponent::Sprite2DLight{}) {
             const MaterialComponent::Sprite2DLight& sprite = mat->sprite2D;
             out << indent << "  \"Sprite2D\": {\n";
@@ -254,7 +257,24 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
             out << indent << "    \"LightMask\": " << static_cast<int>(sprite.lightMask) << ",\n";
             out << indent << "    \"NormalYDown\": " << (sprite.normalYDown ? "true" : "false") << ",\n";
             out << indent << "    \"OverlayStrength\": "
-                << jsonSafe(sprite.overlayStrength, "sprite2D.overlayStrength") << "\n";
+                << jsonSafe(sprite.overlayStrength, "sprite2D.overlayStrength");
+            // The stand-up and the highlight only when either differs from
+            // its default, for the reason the block itself is conditional: a
+            // sprite that uses neither saves to the text it saved before them.
+            const MaterialComponent::Sprite2DLight defaults{};
+            if (sprite.vertical != defaults.vertical || sprite.verticalBaseY != defaults.verticalBaseY) {
+                out << ",\n" << indent << "    \"Vertical\": " << (sprite.vertical ? "true" : "false") << ",\n";
+                out << indent << "    \"VerticalBaseY\": "
+                    << jsonSafe(sprite.verticalBaseY, "sprite2D.verticalBaseY");
+            }
+            if (sprite.specularStrength != defaults.specularStrength ||
+                sprite.specularPower != defaults.specularPower) {
+                out << ",\n" << indent << "    \"SpecularStrength\": "
+                    << jsonSafe(sprite.specularStrength, "sprite2D.specularStrength") << ",\n";
+                out << indent << "    \"SpecularPower\": "
+                    << jsonSafe(sprite.specularPower, "sprite2D.specularPower");
+            }
+            out << "\n";
             out << indent << "  },\n";
         }
         out << indent << "  \"OcclusionStrength\": "
@@ -844,6 +864,8 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         // Absent from every scene written before overlays, and from every one
         // that names none since: no overlay, which adds nothing.
         material.overlayTexturePath = readAssetRef(m, "OverlayTexture");
+        // The same for the gloss map: absent is none, a uniform gloss of one.
+        material.glossTexturePath = readAssetRef(m, "GlossTexture");
         // Absent likewise, and each field on its own falls back to the default,
         // so a block missing a key reads as the sprite it would have been.
         if (m.Has("Sprite2D")) {
@@ -856,6 +878,10 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
                 std::clamp(sprite["LightMask"].AsNumber(defaults.lightMask), 0.0, 255.0));
             material.sprite2D.normalYDown = sprite["NormalYDown"].AsBool(defaults.normalYDown);
             material.sprite2D.overlayStrength = sprite["OverlayStrength"].AsFloat(defaults.overlayStrength);
+            material.sprite2D.vertical = sprite["Vertical"].AsBool(defaults.vertical);
+            material.sprite2D.verticalBaseY = sprite["VerticalBaseY"].AsFloat(defaults.verticalBaseY);
+            material.sprite2D.specularStrength = sprite["SpecularStrength"].AsFloat(defaults.specularStrength);
+            material.sprite2D.specularPower = sprite["SpecularPower"].AsFloat(defaults.specularPower);
         }
         material.occlusionStrength = m["OcclusionStrength"].AsFloat(1.0f);
         material.roughness = m["Roughness"].AsFloat(0.4f);

@@ -424,7 +424,8 @@ void VulkanPipeline::createDescriptorSetLayout() {
     // ---- Set 1: per-material ----
     // binding 0: albedo, binding 1: tangent-space normal map, binding 2: the
     // packed occlusion/roughness/metallic map, binding 3: the additive overlay
-    // the 2D sprite path adds after its multiply (1x1 black when unnamed).
+    // the 2D sprite path adds after its multiply (1x1 black when unnamed),
+    // binding 4: the gloss its highlight takes (1x1 white when unnamed).
     // Rebound per draw, which is what lets each entity carry its own maps
     // rather than sharing one global sampler.
     //

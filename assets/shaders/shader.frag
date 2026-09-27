@@ -55,6 +55,11 @@ layout(set = 1, binding = 2) uniform sampler2D ormMap;
 // multiply by the 2D sprite path only (shadeSprite2D). Materials without one
 // bind a 1x1 black texture, so the add needs no branch either.
 layout(set = 1, binding = 3) uniform sampler2D overlayMap;
+// How much of a 2D light's specular highlight each texel takes, per channel,
+// sampled by shadeSprite2D alone and only while the draw's specular strength is
+// above zero. Materials without one bind a 1x1 white texture: a strength alone
+// is then a uniform gloss.
+layout(set = 1, binding = 4) uniform sampler2D glossMap;
 
 // Must match Engine::PushConstantData.
 // A push constant block must be declared identically in every stage of a
@@ -95,21 +100,23 @@ layout(location = 6) flat in int fragInstance;
 // Must match VulkanPipeline::PushConstantData::kUnlit.
 const int FLAG_UNLIT = 1;
 
-// Must match PushConstantData::kSprite2D, kNormalYDown and kPremultiplied, and
-// Components.hpp's kLightMaskShift and kLightMaskBits. test_materials reads
-// these lines. The mask and the normal switch are read by shadeSprite2D's light
-// loop.
+// Must match PushConstantData::kSprite2D, kNormalYDown, kPremultiplied and
+// kVertical2D, and Components.hpp's kLightMaskShift and kLightMaskBits.
+// test_materials reads these lines. The mask, the normal switch and the
+// stand-up are read by shadeSprite2D's light loop.
 const int FLAG_SPRITE2D      = 1 << 1;
 const int FLAG_NORMAL_Y_DOWN = 1 << 2;
 const int FLAG_PREMULTIPLIED = 1 << 3;
+const int FLAG_VERTICAL_2D   = 1 << 4;
 const int LIGHT_MASK_SHIFT   = 20;
 const uint LIGHT_MASK_BITS   = 0xFFu;
 
 // Set 0, binding 12: every 2D point light in the frame (Light2DComponent),
 // gathered by Light2D::GatherLights2D. Must match core/Light2D.hpp's GpuLight2D
-// and GpuLight2DHeader: std430 puts the array at 16, after the count and three
-// words of padding, with a 32-byte stride. The renderer writes the count every
-// frame, zero included, because the loop below reads it for every 2D sprite.
+// and GpuLight2DHeader: std430 puts the array at 16, after the count, the
+// specular eye's two numbers and a word of padding, with a 32-byte stride. The
+// renderer writes the header every frame, zero included, because the loop below
+// reads the count for every 2D sprite.
 struct Light2D {
     vec3  position;   // world x, world y; z = the light's height
     float range;
@@ -117,10 +124,10 @@ struct Light2D {
     uint  layers;
 };
 layout(std430, set = 0, binding = 12) readonly buffer Light2DBuffer {
-    uint count;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
+    uint  count;
+    float eyeMirrorY;   // Light2DEye: a light at L is seen from
+    float eyeHeight;    //   (L.x, 2 * eyeMirrorY - L.y, eyeHeight)
+    uint  _pad2;
     Light2D lights[];
 } light2D;
 
@@ -410,14 +417,17 @@ float spotShadowFactor(int slot, float NdotL) {
 // record's fields mean what that path gives them: albedoColor.rgb is already
 // tint x ambient (RenderSystem::ApplySprite2D), material.x is the overlay's
 // strength, emissive.rgb is the tint WITHOUT the ambient and emissive.w the
-// surface's lighting height.
+// surface's lighting height. material.y is a standing sprite's base line
+// (FLAG_VERTICAL_2D), material.z the specular strength, and probeIndex the
+// specular power's bits while that strength is above zero.
 //
 // The overlay is NOT scaled by the tint or the ambient: a baked light term
 // already carries its surface's albedo, and the engines it reproduces add it
 // straight (Ethanon's add1.ps, gl_FragColor = v_color * diffuse + t1).
 //
-// The light loop has a CPU twin, Light2D::WorldNormal and Light2D::Contribution
-// (core/Light2D.cpp), which test_light2d tests. Change both or neither.
+// The light loop has a CPU twin, Light2D::WorldNormal, StandUp, Contribution
+// and SpecularContribution (core/Light2D.cpp), which test_light2d tests. Change
+// both or neither.
 vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
     int flags = instances[fragInstance].flags;
 
@@ -452,21 +462,77 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
         // emissive.w is the lighting height; the fragment's own z is only its
         // draw depth, a slot in the sprites' order.
         vec3 p = vec3(fragWorldPos.xy, instances[fragInstance].emissive.w);
+
+        // STOOD UP (Sprite2DLight::vertical): the flat frame above turned a
+        // quarter turn about the world x axis, through the base line
+        // (material.y) at the surface's height, the point and the normal
+        // alike. A row higher up the sprite is higher in the lighting space,
+        // every row stands on the base line, and the image's face looks down
+        // the screen, towards -y - Ethanon's verticalSprite_ppl and
+        // vPixelLight's (n.x, n.z, -n.y), mirrored into a y-up world.
+        if ((flags & FLAG_VERTICAL_2D) != 0) {
+            float baseY = instances[fragInstance].material.y;
+            p = vec3(fragWorldPos.x, baseY, p.z + (fragWorldPos.y - baseY));
+            n = vec3(n.x, -n.z, n.y);
+        }
+
         // emissive.rgb is the colour WITHOUT ambient: a light is not dimmed by
         // the room it is in.
         vec3 tint = texel * instances[fragInstance].emissive.rgb;
 
-        for (uint i = 0u; i < count; ++i) {
-            if ((light2D.lights[i].layers & mask) == 0u) continue;
-            vec3 v = light2D.lights[i].position - p;
-            float d2 = dot(v, v);
-            float r2 = light2D.lights[i].range * light2D.lights[i].range;
-            if (d2 >= r2) continue;                       // the falloff is exactly 0 there
-            float attenuation = 1.0 - d2 / r2;
-            float facing = dot(v, n) * inversesqrt(max(d2, 1e-12));
-            // A light behind the surface is a negative colour, clamped to
-            // nothing rather than subtracted.
-            lit += clamp(tint * light2D.lights[i].color * (attenuation * facing), 0.0, 1.0);
+        // material.z is the specular strength, and zero is no highlight: this
+        // loop is then the one the path always ran, unchanged, rather than a
+        // second one fed zeros that a compiler may contract differently.
+        float specularStrength = instances[fragInstance].material.z;
+        if (specularStrength <= 0.0) {
+            for (uint i = 0u; i < count; ++i) {
+                if ((light2D.lights[i].layers & mask) == 0u) continue;
+                vec3 v = light2D.lights[i].position - p;
+                float d2 = dot(v, v);
+                float r2 = light2D.lights[i].range * light2D.lights[i].range;
+                if (d2 >= r2) continue;                       // the falloff is exactly 0 there
+                float attenuation = 1.0 - d2 / r2;
+                float facing = dot(v, n) * inversesqrt(max(d2, 1e-12));
+                // A light behind the surface is a negative colour, clamped to
+                // nothing rather than subtracted.
+                lit += clamp(tint * light2D.lights[i].color * (attenuation * facing), 0.0, 1.0);
+            }
+        } else {
+            // THE HIGHLIGHT (Sprite2DLight::specularStrength): Blinn, from the
+            // frame's fake eye, times the gloss, the strength and the texel's
+            // OWN alpha - hPixelLight/vPixelLight's mainSpecular. The power
+            // rides in probeIndex as a float's bits; only the PBR exit reads
+            // that field as an index, and a sprite never reaches it.
+            vec3 gloss = texture(glossMap, uv).rgb * (specularStrength * albedoTex.a);
+            float specularPower = intBitsToFloat(instances[fragInstance].probeIndex);
+
+            for (uint i = 0u; i < count; ++i) {
+                if ((light2D.lights[i].layers & mask) == 0u) continue;
+                vec3 v = light2D.lights[i].position - p;
+                float d2 = dot(v, v);
+                float r2 = light2D.lights[i].range * light2D.lights[i].range;
+                if (d2 >= r2) continue;
+                float attenuation = 1.0 - d2 / r2;
+                float facing = dot(v, n) * inversesqrt(max(d2, 1e-12));
+
+                // The eye is a point PER LIGHT: the light mirrored across the
+                // line y = eyeMirrorY, at a fixed height (Light2DEye). Both
+                // halves of the half vector are guarded like the facing, and
+                // so is their sum, which is zero when eye and light are exactly
+                // opposite.
+                vec3 l = light2D.lights[i].position;
+                vec3 e = vec3(l.x, 2.0 * light2D.eyeMirrorY - l.y, light2D.eyeHeight) - p;
+                vec3 h = v * inversesqrt(max(d2, 1e-12)) + e * inversesqrt(max(dot(e, e), 1e-12));
+                h *= inversesqrt(max(dot(h, h), 1e-12));
+                float nh = clamp(dot(n, h), 0.0, 1.0);
+                float shine = nh > 0.0 ? pow(nh, specularPower) : 0.0;
+
+                // Summed with the diffuse term BEFORE the clamp, as the one
+                // pass that drew both did: a light behind the surface takes
+                // back part of its own highlight.
+                lit += clamp(tint * light2D.lights[i].color * (attenuation * facing)
+                             + light2D.lights[i].color * gloss * (shine * attenuation), 0.0, 1.0);
+            }
         }
     }
 
