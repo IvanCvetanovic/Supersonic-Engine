@@ -110,6 +110,7 @@ VulkanRenderer::~VulkanRenderer() {
     m_clusterRangeBuffers.clear();
     m_lightIndexBuffers.clear();
     m_light2DBuffers.clear();
+    m_shadow2DBuffers.clear();
     m_meshRegistry.reset();
     m_screenOverlayPipeline.reset();
     if (m_screenOverlayRenderPass) {
@@ -675,6 +676,16 @@ void VulkanRenderer::createUniformBuffers() {
     }
     m_light2DScratch.reserve(kLight2DBufferBytes);
     m_light2DGather.reserve(kMaxLights2D);
+    m_light2DEntities.reserve(kMaxLights2D);
+
+    // The shadows those lights cast, scene binding 13: a count, the per-light
+    // ranges, the mask and kMaxShadows2D strips, sized at capacity likewise.
+    m_shadow2DBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        m_shadow2DBuffers[i] = makeStorage(kShadow2DBufferBytes);
+    }
+    m_shadow2DScratch.reserve(kShadow2DBufferBytes);
+    m_shadow2DGather.reserve(kMaxShadows2D);
 
     SUPERSONIC_LOG_INFO("VulkanRenderer") << "Created " << m_uniformBuffers.size() << " VMA Uniform Buffers, "
               << m_jointPaletteBuffers.size() << " joint palettes ("
@@ -700,15 +711,13 @@ void VulkanRenderer::createDescriptorPool() {
     poolSizes[1].descriptorCount =
         static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * VulkanPipeline::kSamplersPerSceneSet;
 
-    // SEVEN storage buffers per frame: the joint palette at binding 2, the three
-    // clustered-light buffers at 5, 6 and 7, the texture coordinate transforms
-    // at 10, the per-draw instance records at 11, and the 2D point lights at 12.
-    // Omitting any of them makes allocateDescriptorSets throw at startup, which
-    // presents as a launch failure rather than as a rendering bug - so the count
-    // is spelled out rather than left as a number somebody has to remember to
-    // bump.
+    // Every storage buffer the scene layout declares, per frame in flight (the
+    // list is at VulkanPipeline::kStorageBuffersPerSceneSet). A literal seven
+    // stood here when the 2D shadows added an eighth: a lenient desktop driver
+    // allocated the set anyway, SwiftShader refused it at startup.
     poolSizes[2].type = vk::DescriptorType::eStorageBuffer;
-    poolSizes[2].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * 7u;
+    poolSizes[2].descriptorCount =
+        static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT) * VulkanPipeline::kStorageBuffersPerSceneSet;
 
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
@@ -919,7 +928,12 @@ void VulkanRenderer::createDescriptorSets() {
         light2DInfo.offset = 0;
         light2DInfo.range = kLight2DBufferBytes;
 
-        std::array<vk::WriteDescriptorSet, 13> writes{};
+        vk::DescriptorBufferInfo shadow2DInfo{};
+        shadow2DInfo.buffer = m_shadow2DBuffers[i]->GetBuffer();
+        shadow2DInfo.offset = 0;
+        shadow2DInfo.range = kShadow2DBufferBytes;
+
+        std::array<vk::WriteDescriptorSet, 14> writes{};
 
         writes[0].dstSet = m_descriptorSets[i];
         writes[0].dstBinding = 0;
@@ -999,6 +1013,12 @@ void VulkanRenderer::createDescriptorSets() {
         writes[12].descriptorType = vk::DescriptorType::eStorageBuffer;
         writes[12].descriptorCount = 1;
         writes[12].pBufferInfo = &light2DInfo;
+
+        writes[13].dstSet = m_descriptorSets[i];
+        writes[13].dstBinding = 13;
+        writes[13].descriptorType = vk::DescriptorType::eStorageBuffer;
+        writes[13].descriptorCount = 1;
+        writes[13].pBufferInfo = &shadow2DInfo;
 
         m_deviceRef.GetDevice().updateDescriptorSets(writes, nullptr);
     }
@@ -1610,7 +1630,7 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
     // an uninitialised one, in front of the shader.
     uint32_t light2DDropped = 0;
     const uint32_t light2DCount = Light2D::GatherLights2D(
-        registry, m_light2DGather, kMaxLights2D, &light2DDropped);
+        registry, m_light2DGather, kMaxLights2D, &light2DDropped, &m_light2DEntities);
 
     // Said once per change, like the froxel list and the transforms. A dropped
     // light fails quietly: some sprite is simply darker than it was authored.
@@ -1635,6 +1655,25 @@ void VulkanRenderer::DrawFrame(entt::registry& registry,
                     sizeof(GpuLight2D) * light2DCount);
     }
     m_light2DBuffers[m_currentFrame]->UploadData(m_light2DScratch.data(), m_light2DScratch.size());
+
+    // The shadows of exactly those lights, in the same order, so a light
+    // dropped over the cap takes its strips with it. Uploaded every frame on
+    // the same terms as the lights: a frame without a strip still says zero,
+    // and then that one word is all it writes.
+    uint32_t shadow2DDropped = 0;
+    Light2D::GatherShadows2D(registry, m_light2DEntities, m_shadow2DRanges, m_shadow2DGather, kMaxShadows2D,
+                             &shadow2DDropped);
+    if (shadow2DDropped != m_shadow2DDropReportedFor) {
+        m_shadow2DDropReportedFor = shadow2DDropped;
+        if (shadow2DDropped > 0) {
+            SUPERSONIC_LOG_WARN("VulkanRenderer")
+                << "The 2D shadow buffer is full: " << shadow2DDropped
+                << " Light2DShadowsComponent strip(s) shadow nothing this frame. Raise kMaxShadows2D "
+                   "(core/Light2D.hpp)." << std::endl;
+        }
+    }
+    Light2D::PackShadows2D(registry, m_shadow2DRanges, m_shadow2DGather, m_shadow2DScratch);
+    m_shadow2DBuffers[m_currentFrame]->UploadData(m_shadow2DScratch.data(), m_shadow2DScratch.size());
 
     // Culling frustum for the scene pass. Each cascade carries its own for the
     // depth pass - an object behind the camera can still cast a shadow into

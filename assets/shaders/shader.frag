@@ -112,6 +112,9 @@ const int FLAG_VERTICAL_2D   = 1 << 4;
 // only by shadeSprite2D's light loop, and only when set.
 const int FLAG_BAKED_EYE_2D  = 1 << 5;
 const int FLAG_LIGHT_ALPHA_TEST_2D = 1 << 6;
+// Must match PushConstantData::kLightShadows2D. Read only by shadeSprite2D's
+// light loop, and only when set.
+const int FLAG_LIGHT_SHADOWS_2D = 1 << 7;
 const int LIGHT_MASK_SHIFT   = 20;
 const uint LIGHT_MASK_BITS   = 0xFFu;
 
@@ -147,6 +150,36 @@ const uint LIGHT_BAKED_BIT = 0x100u;
 // Direct3D 9's ALPHAREF 1 with GREATER on an 8-bit alpha: a light pass whose
 // alpha rounds to 1/255 or less draws nothing. Must match kLightPassAlphaRef.
 const float LIGHT_PASS_ALPHA_REF = 1.5 / 255.0;
+
+// Set 0, binding 13: the shadows the 2D lights cast (Light2DShadowsComponent),
+// gathered by Light2D::GatherShadows2D in the lights' own order and packed by
+// PackShadows2D. Must match core/Light2D.hpp's GpuShadow2DHeader, the offsets
+// beside it and GpuShadow2D: std430 puts the ranges at 16, the mask at
+// 16 + 8 * MAX_LIGHTS_2D and the strips after it at a 64-byte stride. Nothing
+// past the count is read while it is zero, and only by a sprite with
+// FLAG_LIGHT_SHADOWS_2D.
+const uint MAX_SHADOW_MASK_TEXELS_2D = 1024u;
+struct Shadow2D {
+    vec4  bounds;       // min x, min y, max x, max y of the corners
+    vec2  corners[5];   // world xy, the strip's order
+    float opacity;
+    float pad;
+};
+layout(std430, set = 0, binding = 13) readonly buffer Shadow2DBuffer {
+    uint  count;
+    uint  maskWidth;
+    uint  maskHeight;
+    uint  pad;
+    uvec2 ranges[MAX_LIGHTS_2D];   // light i's strips: first, count
+    float mask[MAX_SHADOW_MASK_TEXELS_2D];
+    Shadow2D strips[];
+} shadow2D;
+
+// Ethanon's projected shadow is gs2d's RM_THREE_TRIANGLES: five corners with
+// these texture coordinates, in these three triangles. Must match
+// kShadowStripUv and kShadowStripTriangles.
+const vec2 SHADOW_STRIP_UV[5] = vec2[5](vec2(0.0, 0.0), vec2(0.0, 1.0), vec2(0.5, 0.0), vec2(1.0, 1.0), vec2(1.0, 0.0));
+const ivec3 SHADOW_STRIP_TRIANGLES[3] = ivec3[3](ivec3(0, 1, 2), ivec3(2, 1, 3), ivec3(2, 3, 4));
 
 // The UV slot lives in the twelve bits ABOVE the switches. Must match
 // PushConstantData::kUvSlotShift and kUvSlotMask.
@@ -424,6 +457,64 @@ float spotShadowFactor(int slot, float NdotL) {
     return lit / 9.0;
 }
 
+// A light's own shadows (FLAG_LIGHT_SHADOWS_2D). CPU twins: Light2D::
+// ShadowMaskAt, ShadowStripUv and ShadowKeep (core/Light2D.cpp), which
+// test_light2d tests. Change both or neither.
+//
+// The mask at uv: bilinear between texel centres, edges clamped; 1 without one.
+float shadowMask2D(vec2 uv) {
+    uint w = shadow2D.maskWidth;
+    uint h = shadow2D.maskHeight;
+    if (w == 0u || h == 0u || w * h > MAX_SHADOW_MASK_TEXELS_2D) return 1.0;
+    vec2 t = uv * vec2(float(w), float(h)) - 0.5;
+    vec2 base = floor(t);
+    vec2 f = t - base;
+    ivec2 i0 = ivec2(base);
+    ivec2 top = ivec2(int(w) - 1, int(h) - 1);
+    ivec2 a = clamp(i0, ivec2(0), top);
+    ivec2 b = clamp(i0 + 1, ivec2(0), top);
+    float upper = mix(shadow2D.mask[uint(a.y) * w + uint(a.x)], shadow2D.mask[uint(a.y) * w + uint(b.x)], f.x);
+    float lower = mix(shadow2D.mask[uint(b.y) * w + uint(a.x)], shadow2D.mask[uint(b.y) * w + uint(b.x)], f.x);
+    return mix(upper, lower, f.y);
+}
+
+// Whether `at` lies in strip s, and where in its texture: the first of its
+// three triangles that holds it, so a point on an edge two share counts once.
+bool shadowStripUv2D(uint s, vec2 at, out vec2 stripUv) {
+    for (int t = 0; t < 3; ++t) {
+        ivec3 tri = SHADOW_STRIP_TRIANGLES[t];
+        vec2 a = shadow2D.strips[s].corners[tri.x];
+        vec2 e1 = shadow2D.strips[s].corners[tri.y] - a;
+        vec2 e2 = shadow2D.strips[s].corners[tri.z] - a;
+        vec2 d = at - a;
+        float den = e1.x * e2.y - e2.x * e1.y;
+        if (abs(den) < 1e-12) continue;
+        float wb = (d.x * e2.y - e2.x * d.y) / den;
+        float wc = (e1.x * d.y - d.x * e1.y) / den;
+        float wa = 1.0 - wb - wc;
+        if (wa < 0.0 || wb < 0.0 || wc < 0.0) continue;
+        stripUv = SHADOW_STRIP_UV[tri.x] * wa + SHADOW_STRIP_UV[tri.y] * wb + SHADOW_STRIP_UV[tri.z] * wc;
+        return true;
+    }
+    stripUv = vec2(0.0);
+    return false;
+}
+
+// What of light i survives its own strips at `at`: the product of
+// (1 - opacity * mask) over the strips that hold it.
+float lightShadowKeep2D(uint i, vec2 at) {
+    uvec2 range = shadow2D.ranges[i];
+    float keep = 1.0;
+    for (uint s = range.x; s < range.x + range.y; ++s) {
+        vec4 bounds = shadow2D.strips[s].bounds;
+        if (at.x < bounds.x || at.y < bounds.y || at.x > bounds.z || at.y > bounds.w) continue;
+        vec2 stripUv;
+        if (!shadowStripUv2D(s, at, stripUv)) continue;
+        keep *= 1.0 - shadow2D.strips[s].opacity * shadowMask2D(stripUv);
+    }
+    return keep;
+}
+
 // A 2D sprite (PushConstantData::kSprite2D): the texel times the tint times the
 // ambient, plus the overlay, clamped the way a fixed-point target clamps one
 // draw's output, plus one clamped term per 2D light that reaches it. The
@@ -508,6 +599,15 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
         float passAlphaScale = albedoTex.a * colorAlpha * passIntensity
                              * ((flags & FLAG_VERTICAL_2D) != 0 ? 1.0 : albedoTex.a);
 
+        // A LIGHT'S OWN SHADOWS (Sprite2DLight::lightShadows): each light's
+        // clamped add, highlight included, times what of that light survives
+        // the strips it casts, looked up at the fragment's world xy - a shadow
+        // baked into Ethanon's lightmap darkened its own light's pass and
+        // nothing else. After the alpha test, which decides whether the light
+        // adds at all. Off, or in a frame without a strip, the add is the one
+        // it always was.
+        bool lightShadows = (flags & FLAG_LIGHT_SHADOWS_2D) != 0 && shadow2D.count > 0u;
+
         // material.z is the specular strength, and zero is no highlight: this
         // loop is then the one the path always ran, unchanged, rather than a
         // second one fed zeros that a compiler may contract differently.
@@ -524,7 +624,9 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
                 if (alphaTest && passAlphaScale * attenuation * facing < LIGHT_PASS_ALPHA_REF) continue;
                 // A light behind the surface is a negative colour, clamped to
                 // nothing rather than subtracted.
-                lit += clamp(tint * light2D.lights[i].color * (attenuation * facing), 0.0, 1.0);
+                vec3 add = clamp(tint * light2D.lights[i].color * (attenuation * facing), 0.0, 1.0);
+                if (lightShadows) add *= lightShadowKeep2D(i, fragWorldPos.xy);
+                lit += add;
             }
         } else {
             // THE HIGHLIGHT (Sprite2DLight::specularStrength): Blinn, from the
@@ -579,8 +681,10 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
                 // Summed with the diffuse term BEFORE the clamp, as the one
                 // pass that drew both did: a light behind the surface takes
                 // back part of its own highlight.
-                lit += clamp(tint * light2D.lights[i].color * (attenuation * facing)
-                             + light2D.lights[i].color * gloss * (shine * attenuation), 0.0, 1.0);
+                vec3 add = clamp(tint * light2D.lights[i].color * (attenuation * facing)
+                                 + light2D.lights[i].color * gloss * (shine * attenuation), 0.0, 1.0);
+                if (lightShadows) add *= lightShadowKeep2D(i, fragWorldPos.xy);
+                lit += add;
             }
         }
     }

@@ -1,6 +1,8 @@
 // Regression tests for 2D point lights: the gather that packs Light2DComponents
 // for scene binding 12, and the light loop of shader.frag's shadeSprite2D through
-// its CPU transliteration, Light2D::Contribution.
+// its CPU transliteration, Light2D::Contribution. And a light's own shadows
+// (Light2DShadowsComponent): the gather and packing for scene binding 13, and
+// the loop's shadow lookup through ShadowMaskAt, ShadowStripUv and ShadowKeep.
 //
 // Every failure here draws something plausible. A normal read along the wrong
 // axis lights a wall from the far side of its torch, and the room still looks
@@ -20,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -975,6 +978,223 @@ static void testTheLightPassIsAlphaTestedAsEthanonsWas() {
     CHECK(Light2D::SpecularContribution(weak, 1, farOff, flat, kWhite, highlight, &faint) == glm::vec3(0.0f));
 }
 
+// --- a light's own shadows ------------------------------------------------------
+
+namespace {
+
+// A strip laid out as its own texture: corner k at kShadowStripUv[k] x (w, h)
+// from `origin`, so a point's texture coordinate is plain arithmetic.
+Light2DShadowsComponent::Strip rectangleStrip(const glm::vec2& origin, float w, float h, float opacity) {
+    Light2DShadowsComponent::Strip strip;
+    for (int k = 0; k < 5; ++k) {
+        strip.corners[k] = origin + glm::vec2(kShadowStripUv[k][0] * w, kShadowStripUv[k][1] * h);
+    }
+    strip.opacity = opacity;
+    return strip;
+}
+
+GpuShadow2D gpuOf(const Light2DShadowsComponent::Strip& strip) {
+    entt::registry registry;
+    const auto light = registry.create();
+    registry.emplace<Light2DComponent>(light);
+    registry.emplace<Light2DShadowsComponent>(light).strips.push_back(strip);
+    std::vector<glm::uvec2> ranges;
+    std::vector<GpuShadow2D> strips;
+    Light2D::GatherShadows2D(registry, {light}, ranges, strips, kMaxShadows2D);
+    return strips.empty() ? GpuShadow2D{} : strips[0];
+}
+
+} // namespace
+
+static void testTheShadowRecordsAreTheShadersLayout() {
+    CHECK_EQ(sizeof(GpuShadow2D), size_t(64));
+    CHECK_EQ(offsetof(GpuShadow2D, corners), size_t(16));
+    CHECK_EQ(offsetof(GpuShadow2D, opacity), size_t(56));
+    CHECK_EQ(sizeof(GpuShadow2DHeader), size_t(16));
+    CHECK_EQ(kShadow2DRangesOffset, 16u);
+    CHECK_EQ(kShadow2DMaskOffset, 16u + 8u * 64u);
+    CHECK_EQ(kShadow2DStripsOffset, 16u + 8u * 64u + 4u * 1024u);
+    CHECK_EQ(kShadow2DBufferBytes, kShadow2DStripsOffset + 64u * kMaxShadows2D);
+    CHECK_MSG(kLight2DBufferBytes == 16u + 32u * 64u, "and binding 12 is the size it was");
+}
+
+static void testTheShadowGatherFollowsTheLightsOrder() {
+    entt::registry registry;
+    const auto a = registry.create();
+    registry.emplace<Light2DComponent>(a);
+    auto& aShadows = registry.emplace<Light2DShadowsComponent>(a);
+    aShadows.strips.push_back(rectangleStrip(glm::vec2(0.0f), 10.0f, 20.0f, 1.0f));
+    aShadows.strips.push_back(rectangleStrip(glm::vec2(-5.0f, 3.0f), 4.0f, 2.0f, 0.5f));
+    const auto b = registry.create();
+    registry.emplace<Light2DComponent>(b);   // casts nothing
+    const auto c = registry.create();
+    registry.emplace<Light2DComponent>(c);
+    registry.emplace<Light2DShadowsComponent>(c).strips.push_back(rectangleStrip(glm::vec2(100.0f), 1.0f, 1.0f, 0.25f));
+    const auto off = registry.create();
+    registry.emplace<Light2DComponent>(off).enabled = false;   // not gathered, so its strips go nowhere
+    registry.emplace<Light2DShadowsComponent>(off).strips.push_back(rectangleStrip(glm::vec2(0.0f), 1.0f, 1.0f, 1.0f));
+
+    std::vector<GpuLight2D> lights;
+    std::vector<entt::entity> entities;
+    CHECK_EQ(Light2D::GatherLights2D(registry, lights, kMaxLights2D, nullptr, &entities), 3u);
+    CHECK_EQ(entities.size(), size_t(3));
+
+    std::vector<glm::uvec2> ranges;
+    std::vector<GpuShadow2D> strips;
+    uint32_t dropped = 99;
+    CHECK_EQ(Light2D::GatherShadows2D(registry, entities, ranges, strips, kMaxShadows2D, &dropped), 3u);
+    CHECK_EQ(dropped, 0u);
+    CHECK_EQ(ranges.size(), size_t(3));
+    uint32_t next = 0;
+    for (size_t i = 0; i < entities.size(); ++i) {
+        const auto* own = registry.try_get<Light2DShadowsComponent>(entities[i]);
+        const uint32_t expected = own != nullptr ? static_cast<uint32_t>(own->strips.size()) : 0u;
+        CHECK_EQ(ranges[i].y, expected);
+        if (expected > 0) {
+            CHECK_MSG(ranges[i].x == next, "each light's strips follow the last one's");
+            // The records are that light's strips, in its order, boxed.
+            for (uint32_t s = 0; s < expected; ++s) {
+                const GpuShadow2D& gpu = strips[ranges[i].x + s];
+                CHECK_NEAR(gpu.opacity, own->strips[s].opacity);
+                CHECK_NEAR(gpu.corners[3].x, own->strips[s].corners[3].x);
+                CHECK_NEAR(gpu.bounds.x, own->strips[s].corners[0].x);
+                CHECK_NEAR(gpu.bounds.w, own->strips[s].corners[1].y);
+            }
+        }
+        next += expected;
+    }
+
+    // Over the cap: a light keeps the strips that fit, the rest are counted.
+    CHECK_EQ(Light2D::GatherShadows2D(registry, entities, ranges, strips, 2u, &dropped), 2u);
+    CHECK_EQ(dropped, 1u);
+    CHECK_EQ(ranges[0].y + ranges[1].y + ranges[2].y, 2u);
+}
+
+static void testTheShadowBufferIsPackedAtItsOffsets() {
+    entt::registry registry;
+    std::vector<uint8_t> bytes;
+
+    // No strip: the header alone, and a count of zero.
+    Light2D::PackShadows2D(registry, {}, {}, bytes);
+    CHECK_EQ(bytes.size(), sizeof(GpuShadow2DHeader));
+    GpuShadow2DHeader header;
+    std::memcpy(&header, bytes.data(), sizeof(header));
+    CHECK_EQ(header.count, 0u);
+    CHECK_EQ(header.maskWidth, 0u);
+
+    // A 2 x 2 mask and two strips over two lights.
+    Light2DShadowMask mask;
+    mask.width = 2;
+    mask.height = 2;
+    mask.alpha = {0.0f, 0.25f, 0.5f, 1.0f};
+    registry.ctx().emplace<Light2DShadowMask>(mask);
+    const std::vector<glm::uvec2> ranges = {glm::uvec2(0, 1), glm::uvec2(1, 1)};
+    std::vector<GpuShadow2D> strips(2);
+    strips[0].opacity = 0.5f;
+    strips[1].opacity = 0.75f;
+    strips[1].corners[4] = glm::vec2(7.0f, -9.0f);
+    Light2D::PackShadows2D(registry, ranges, strips, bytes);
+    CHECK_EQ(bytes.size(), size_t(kShadow2DStripsOffset + 2u * sizeof(GpuShadow2D)));
+    std::memcpy(&header, bytes.data(), sizeof(header));
+    CHECK_EQ(header.count, 2u);
+    CHECK_EQ(header.maskWidth, 2u);
+    CHECK_EQ(header.maskHeight, 2u);
+    glm::uvec2 second;
+    std::memcpy(&second, bytes.data() + kShadow2DRangesOffset + 8, sizeof(second));
+    CHECK(second == glm::uvec2(1, 1));
+    float texel = 0.0f;
+    std::memcpy(&texel, bytes.data() + kShadow2DMaskOffset + 3 * sizeof(float), sizeof(float));
+    CHECK_NEAR(texel, 1.0f);
+    GpuShadow2D back;
+    std::memcpy(&back, bytes.data() + kShadow2DStripsOffset + sizeof(GpuShadow2D), sizeof(back));
+    CHECK_NEAR(back.opacity, 0.75f);
+    CHECK_NEAR(back.corners[4].y, -9.0f);
+
+    // A mask whose texels do not match its size is no mask.
+    registry.ctx().get<Light2DShadowMask>().alpha.pop_back();
+    Light2D::PackShadows2D(registry, ranges, strips, bytes);
+    std::memcpy(&header, bytes.data(), sizeof(header));
+    CHECK_EQ(header.maskWidth, 0u);
+    CHECK_EQ(header.maskHeight, 0u);
+}
+
+static void testTheMaskIsBilinearBetweenTexelCentres() {
+    // Two columns, 0 on the left, 1 on the right; two rows alike.
+    const float mask[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+    CHECK_NEAR(Light2D::ShadowMaskAt(mask, 2, 2, glm::vec2(0.25f, 0.25f)), 0.0f);   // a texel's centre
+    CHECK_NEAR(Light2D::ShadowMaskAt(mask, 2, 2, glm::vec2(0.75f, 0.75f)), 1.0f);
+    CHECK_NEAR(Light2D::ShadowMaskAt(mask, 2, 2, glm::vec2(0.5f, 0.5f)), 0.5f);     // halfway between
+    CHECK_NEAR(Light2D::ShadowMaskAt(mask, 2, 2, glm::vec2(0.375f, 0.9f)), 0.25f);
+    CHECK_NEAR(Light2D::ShadowMaskAt(mask, 2, 2, glm::vec2(0.0f, 0.0f)), 0.0f);     // clamped, not wrapped
+    CHECK_NEAR(Light2D::ShadowMaskAt(mask, 2, 2, glm::vec2(1.0f, 1.0f)), 1.0f);
+    // No mask, or one larger than the buffer holds: the full opacity.
+    CHECK_NEAR(Light2D::ShadowMaskAt(nullptr, 0, 0, glm::vec2(0.3f)), 1.0f);
+    CHECK_NEAR(Light2D::ShadowMaskAt(mask, 64, 64, glm::vec2(0.3f)), 1.0f);
+}
+
+static void testAPointFindsItsPlaceInTheStrip() {
+    // Laid out as its texture, 10 wide and 20 long: uv is position / size.
+    const GpuShadow2D strip = gpuOf(rectangleStrip(glm::vec2(0.0f), 10.0f, 20.0f, 1.0f));
+    glm::vec2 uv(-1.0f);
+    CHECK(Light2D::ShadowStripUv(strip, glm::vec2(2.0f, 15.0f), uv));
+    CHECK_NEAR(uv.x, 0.2f);
+    CHECK_NEAR(uv.y, 0.75f);
+    CHECK(Light2D::ShadowStripUv(strip, glm::vec2(8.0f, 3.0f), uv));
+    CHECK_NEAR(uv.x, 0.8f);
+    CHECK_NEAR(uv.y, 0.15f);
+    CHECK(Light2D::ShadowStripUv(strip, glm::vec2(2.5f, 10.0f), uv));   // on the edge two triangles share
+    CHECK_NEAR(uv.x, 0.25f);
+    CHECK_NEAR(uv.y, 0.5f);
+    CHECK(!Light2D::ShadowStripUv(strip, glm::vec2(11.0f, 10.0f), uv));
+    CHECK(!Light2D::ShadowStripUv(strip, glm::vec2(5.0f, -0.5f), uv));
+
+    // Ethanon's own shape: the far corners fanned out. Every corner is its own
+    // texture coordinate.
+    Light2DShadowsComponent::Strip fan = rectangleStrip(glm::vec2(0.0f), 10.0f, 20.0f, 1.0f);
+    fan.corners[0] = glm::vec2(-6.0f, 0.0f);
+    fan.corners[4] = glm::vec2(16.0f, 0.0f);
+    const GpuShadow2D fanned = gpuOf(fan);
+    for (int k = 0; k < 5; ++k) {
+        CHECK(Light2D::ShadowStripUv(fanned, fanned.corners[k], uv));
+        CHECK_NEAR(uv.x, kShadowStripUv[k][0]);
+        CHECK_NEAR(uv.y, kShadowStripUv[k][1]);
+    }
+    CHECK(Light2D::ShadowStripUv(fanned, glm::vec2(-2.0f, 2.0f), uv));   // in the fan, outside the rectangle
+    CHECK(!Light2D::ShadowStripUv(fanned, glm::vec2(-2.0f, 19.0f), uv));
+}
+
+static void testALightKeepsWhatItsShadowsLeave() {
+    // What the bake did: the light's pass, then each shadow black over it with
+    // alpha opacity x mask - (1 - a1)(1 - a2) of the light survives two.
+    std::vector<GpuShadow2D> strips = {gpuOf(rectangleStrip(glm::vec2(0.0f), 10.0f, 20.0f, 0.5f)),
+                                       gpuOf(rectangleStrip(glm::vec2(5.0f, 0.0f), 10.0f, 20.0f, 0.75f)),
+                                       gpuOf(rectangleStrip(glm::vec2(0.0f), 10.0f, 20.0f, 1.0f))};
+    const glm::uvec2 firstTwo(0, 2);
+    CHECK_NEAR(Light2D::ShadowKeep(strips, firstTwo, nullptr, 0, 0, glm::vec2(2.0f, 10.0f)), 0.5f);
+    CHECK_NEAR(Light2D::ShadowKeep(strips, firstTwo, nullptr, 0, 0, glm::vec2(7.0f, 10.0f)), 0.5f * 0.25f);
+    CHECK_NEAR(Light2D::ShadowKeep(strips, firstTwo, nullptr, 0, 0, glm::vec2(12.0f, 10.0f)), 0.25f);
+    CHECK_NEAR(Light2D::ShadowKeep(strips, firstTwo, nullptr, 0, 0, glm::vec2(30.0f, 10.0f)), 1.0f);
+    // On the edge the strip's own triangles share, it counts once.
+    CHECK_NEAR(Light2D::ShadowKeep(strips, glm::uvec2(0, 1), nullptr, 0, 0, glm::vec2(2.5f, 10.0f)), 0.5f);
+    // Only the light's own range: the third strip is another light's.
+    CHECK_NEAR(Light2D::ShadowKeep(strips, glm::uvec2(2, 1), nullptr, 0, 0, glm::vec2(2.0f, 10.0f)), 0.0f);
+    CHECK_NEAR(Light2D::ShadowKeep(strips, glm::uvec2(0, 0), nullptr, 0, 0, glm::vec2(2.0f, 10.0f)), 1.0f);
+
+    // Through a mask: clear rows at the far end, full at the base.
+    const float mask[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+    CHECK_NEAR(Light2D::ShadowKeep(strips, glm::uvec2(0, 1), mask, 2, 2, glm::vec2(2.0f, 2.0f)), 1.0f);
+    CHECK_NEAR(Light2D::ShadowKeep(strips, glm::uvec2(0, 1), mask, 2, 2, glm::vec2(2.0f, 18.0f)), 0.5f);
+    CHECK_NEAR(Light2D::ShadowKeep(strips, glm::uvec2(0, 1), mask, 2, 2, glm::vec2(2.0f, 10.0f)), 0.75f);
+
+    // The keep multiplies the light's whole clamped add, as the shader does:
+    // a light that would add 0.8 adds 0.4 under a strip of opacity 0.5.
+    const glm::vec3 flat = Light2D::WorldNormal(kFlat, false, spriteModel(0.0f));
+    const GpuLight2D light = lightAt(glm::vec3(2.0f, 10.0f, 4.0f), 100.0f);
+    const glm::vec3 surface(2.0f, 10.0f, 0.0f);
+    const glm::vec3 add = Light2D::Contribution(light, 1, surface, flat, kWhite);
+    CHECK_NEAR(add.r * Light2D::ShadowKeep(strips, firstTwo, nullptr, 0, 0, glm::vec2(surface)), add.r * 0.5f);
+}
+
 static void runTests() {
     testTheGatherPacksWhatTheShaderReads();
     testAParentedLightIsWhereItsParentPutIt();
@@ -1004,6 +1224,13 @@ static void runTests() {
     testAHighlightIsMainSpecularThroughThePortsMapping();
     testABakedLightIsSeenFromTheSpritesOwnEye();
     testTheLightPassIsAlphaTestedAsEthanonsWas();
+
+    testTheShadowRecordsAreTheShadersLayout();
+    testTheShadowGatherFollowsTheLightsOrder();
+    testTheShadowBufferIsPackedAtItsOffsets();
+    testTheMaskIsBilinearBetweenTexelCentres();
+    testAPointFindsItsPlaceInTheStrip();
+    testALightKeepsWhatItsShadowsLeave();
 }
 
 TEST_MAIN("test_light2d", 140)

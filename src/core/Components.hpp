@@ -858,6 +858,17 @@ struct MaterialComponent {
         // before.
         bool lightAlphaTest{false};
 
+        // --- A light's own shadows ------------------------------------------
+        //
+        // Each light's add is multiplied by what of that light survives the
+        // shadows it casts (Light2DShadowsComponent, core/Light2D.hpp) at the
+        // fragment's world xy, as a shadow baked into Ethanon's lightmap took
+        // away its own light and nothing else: the ambient, the overlay and
+        // every other light are untouched. The whole add, highlight included,
+        // after the alpha test above decides whether the light adds at all.
+        // Off, and for a light that casts nothing, every light adds as before.
+        bool lightShadows{false};
+
         bool operator==(const Sprite2DLight&) const = default;
     };
     Sprite2DLight sprite2D;

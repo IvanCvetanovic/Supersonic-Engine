@@ -342,10 +342,21 @@ private:
     std::vector<std::unique_ptr<VulkanBuffer>> m_light2DBuffers;
     std::vector<uint8_t> m_light2DScratch;
     std::vector<GpuLight2D> m_light2DGather;
+    std::vector<entt::entity> m_light2DEntities;   // the entity of each gathered light
 
     // How many 2D lights were dropped over the cap when that was last said, so
     // it is said once per change. Zero means within the cap.
     uint32_t m_light2DDropReportedFor{0};
+
+    // The shadows those lights cast (Light2DShadowsComponent), scene binding
+    // 13: a 16-byte count, the per-light ranges, the mask and the strips, one
+    // buffer per frame in flight, sized at kMaxShadows2D. Written every frame,
+    // a count of zero included, like the lights.
+    std::vector<std::unique_ptr<VulkanBuffer>> m_shadow2DBuffers;
+    std::vector<uint8_t> m_shadow2DScratch;
+    std::vector<glm::uvec2> m_shadow2DRanges;
+    std::vector<GpuShadow2D> m_shadow2DGather;
+    uint32_t m_shadow2DDropReportedFor{0};
 
     // Reused between frames so the gather does not allocate every frame.
     std::vector<glm::mat4> m_paletteScratch;

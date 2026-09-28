@@ -251,6 +251,10 @@ void RenderSystem::ApplySprite2D(const MaterialComponent& material, PushConstant
         // The light pass's alpha test: a switch alone; the intensity it needs
         // is the frame's (Light2DAlphaTest, the 2D light header).
         if (sprite.lightAlphaTest) push.flags |= PushConstantData::kLightAlphaTest2D;
+
+        // A light's own shadows: a switch alone; the strips are the frame's
+        // (scene binding 13).
+        if (sprite.lightShadows) push.flags |= PushConstantData::kLightShadows2D;
     }
 
     // Any path, not only a sprite's: every exit of shader.frag honours it. And

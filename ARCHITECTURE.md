@@ -383,7 +383,7 @@ directional-*only*: a point light sitting in slot 0 still reaches its cube
 through the later branch, and a second directional light is lit but never
 shadowed. One shadowed directional light is the limit.
 
-**Descriptor sets.** Set 0 is per-frame and has thirteen bindings; set 1 is
+**Descriptor sets.** Set 0 is per-frame and has fourteen bindings; set 1 is
 per-material and has four, rebound per draw.
 
 | Set 0 | Contents | Stages |
@@ -401,6 +401,7 @@ per-material and has four, rebound per draw.
 | 10 | this frame's texture coordinate transforms, storage buffer | fragment |
 | 11 | this frame's per-draw records, one per INSTANCE, storage buffer | vertex + fragment |
 | 12 | this frame's 2D point lights (`Light2DComponent`), a count and a flat list, storage buffer | fragment |
+| 13 | the shadows those 2D lights cast (`Light2DShadowsComponent`): a count, per-light ranges, a mask and the strips, storage buffer | fragment |
 
 Bindings 5 through 7 are why there is no `MAX_LIGHTS` any more: the light array
 used to live inside the uniform block as a fixed eight, and a storage buffer
@@ -556,6 +557,23 @@ uses. The shader's copies of the five switches, the mask's shift and width, the
 light record, the buffer's header and its cap, the gloss binding and the fields
 the stand-up and the highlight read are held to the C++ by `test_materials`,
 which reads `shader.frag` as it reads the UV slot's.
+
+**A light's own shadows.** Ethanon baked a static light into each static
+sprite's lightmap with the shadows cast from it drawn over that light's pass
+alone, so such a shadow took away its own light and never the ambient or
+another lamp. A light may carry the shadows it casts as a
+`Light2DShadowsComponent` (strips of Ethanon's projected-shadow shape, five
+corners in world xy, and an opacity), and the registry context a
+`Light2DShadowMask` (the shadow image's alpha). `Light2D::GatherShadows2D`
+packs them in `GatherLights2D`'s own light order into binding 13 - a 16-byte
+header, one (first, count) per light, the mask, the strips at 64 bytes - so a
+light dropped over the cap takes its strips with it. A sprite that asks
+(`sprite2D.lightShadows`, the low byte's last switch) multiplies each light's
+clamped add, highlight included, by the product of `1 - opacity * mask(uv)` over
+that light's strips covering the fragment's world xy; the alpha test decides
+first whether the light adds at all. Without the switch, or with no strip in
+the frame, the add is the one it was. Its CPU twin is `Light2D::ShadowMaskAt`,
+`ShadowStripUv` and `ShadowKeep`.
 
 One packed map rather than three separate ones, because that is what an
 exporter writes and what an author paints, and because three bindings would

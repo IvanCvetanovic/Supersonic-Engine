@@ -31,6 +31,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <map>
 #include <sstream>
@@ -1266,6 +1267,10 @@ static void testAMaterialSetHasFiveBindingsAndTheOverlayIsThird() {
     // The fragment stage's sampler count, against the sixteen every device
     // guarantees (maxPerStageDescriptorSamplers).
     CHECK(VulkanPipeline::kSamplersPerSceneSet + VulkanPipeline::kMaterialBindingCount <= 16u);
+    // The scene set's storage buffers, which size the descriptor pool (bindings
+    // 2, 5-7, 10, 11, 12, 13). createDescriptorSetLayout throws if the layout
+    // and this number ever disagree; this pins the number itself.
+    CHECK_EQ(VulkanPipeline::kStorageBuffersPerSceneSet, uint32_t{8});
 }
 
 // A game written before the gloss map asks for a sprite's set by four ids
@@ -1674,6 +1679,144 @@ static void testA2DSpriteWritesItsRecordAndNothingElseDoes() {
     CHECK_MSG(std::memcmp(&record, &untested, sizeof(record)) == 0, "the switch is the only byte it changes");
 }
 
+static void testALightsOwnShadowsAreASwitchAndABinding() {
+    // The switch: the low byte's last bit, and the only byte it changes.
+    CHECK_EQ(PushConstantData::kLightShadows2D, 128);
+    const int32_t switches = PushConstantData::kUnlit | PushConstantData::kSprite2D |
+                             PushConstantData::kNormalYDown | PushConstantData::kPremultiplied |
+                             PushConstantData::kVertical2D | PushConstantData::kBakedEye2D |
+                             PushConstantData::kLightAlphaTest2D | PushConstantData::kLightShadows2D;
+    int32_t flags = PackUvSlot(switches, 4095);
+    flags = PackLightMask(flags, 0xFF);
+    CHECK_MSG((flags & 0xFF) == switches && UnpackUvSlot(flags) == 4095 && int(UnpackLightMask(flags)) == 0xFF,
+              "all eight switches, the slot and the mask share the word without touching");
+
+    MaterialComponent sprite;
+    sprite.unlit = true;
+    sprite.sprite2D.enabled = true;
+    sprite.sprite2D.lightMask = 1;
+    MaterialComponent shadowed = sprite;
+    shadowed.sprite2D.lightShadows = true;
+    PushConstantData record{};
+    record.flags = PushConstantData::kUnlit;
+    PushConstantData plain = record;
+    RenderSystem::ApplySprite2D(shadowed, record);
+    RenderSystem::ApplySprite2D(sprite, plain);
+    CHECK((record.flags & PushConstantData::kLightShadows2D) != 0);
+    CHECK((plain.flags & PushConstantData::kLightShadows2D) == 0);
+    record.flags &= ~PushConstantData::kLightShadows2D;
+    CHECK_MSG(std::memcmp(&record, &plain, sizeof(record)) == 0, "the switch is the only byte it changes");
+    // Not a sprite: nothing.
+    MaterialComponent notASprite = shadowed;
+    notASprite.sprite2D.enabled = false;
+    PushConstantData other{};
+    other.flags = PushConstantData::kUnlit;
+    RenderSystem::ApplySprite2D(notASprite, other);
+    CHECK((other.flags & PushConstantData::kLightShadows2D) == 0);
+
+    // The shader spells the bit, the block and the strip as core/Light2D.hpp does.
+    std::ifstream file("assets/shaders/shader.frag");
+    CHECK_MSG(file.good(), "shader.frag must be readable from the working directory");
+    if (!file.good()) return;
+    const std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    const auto squeezed = [](std::string text) {
+        text.erase(std::remove_if(text.begin(), text.end(),
+                                  [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }),
+                   text.end());
+        return text;
+    };
+    const auto between = [&source](const std::string& start, const std::string& end) {
+        const size_t at = source.find(start);
+        if (at == std::string::npos) return std::string();
+        const size_t stop = source.find(end, at);
+        if (stop == std::string::npos) return std::string();
+        return source.substr(at, stop - at + end.size());
+    };
+    const auto withoutComments = [](const std::string& text) {
+        std::string out;
+        size_t i = 0;
+        while (i < text.size()) {
+            if (text.compare(i, 2, "//") == 0) {
+                while (i < text.size() && text[i] != '\n') ++i;
+            } else {
+                out += text[i++];
+            }
+        }
+        return out;
+    };
+    CHECK_MSG(squeezed(between("const int FLAG_LIGHT_SHADOWS_2D", ";")) == "constintFLAG_LIGHT_SHADOWS_2D=1<<7;",
+              "FLAG_LIGHT_SHADOWS_2D is kLightShadows2D's bit");
+    CHECK_MSG(squeezed(between("const uint MAX_SHADOW_MASK_TEXELS_2D", ";")) ==
+                  "constuintMAX_SHADOW_MASK_TEXELS_2D=" + std::to_string(kMaxShadowMask2DTexels) + "u;",
+              "MAX_SHADOW_MASK_TEXELS_2D is kMaxShadowMask2DTexels");
+    CHECK_MSG(squeezed(withoutComments(between("struct Shadow2D {", "};"))) ==
+                  "structShadow2D{vec4bounds;vec2corners[5];floatopacity;floatpad;};",
+              "the shader's Shadow2D is GpuShadow2D's members, in its order");
+    CHECK_MSG(squeezed(withoutComments(between("layout(std430, set = 0, binding = 13)", "} shadow2D;"))) ==
+                  "layout(std430,set=0,binding=13)readonlybufferShadow2DBuffer{uintcount;uintmaskWidth;"
+                  "uintmaskHeight;uintpad;uvec2ranges[MAX_LIGHTS_2D];floatmask[MAX_SHADOW_MASK_TEXELS_2D];"
+                  "Shadow2Dstrips[];}shadow2D;",
+              "binding 13 is GpuShadow2DHeader, the ranges, the mask and the strips");
+    // std430 puts them where the offsets say: a uvec2 array at 16, 8 a light,
+    // then a float array, then the vec4-aligned strips.
+    CHECK_EQ(kShadow2DRangesOffset, uint32_t(sizeof(GpuShadow2DHeader)));
+    CHECK_EQ(kShadow2DMaskOffset, kShadow2DRangesOffset + 8u * kMaxLights2D);
+    CHECK_EQ(kShadow2DStripsOffset, kShadow2DMaskOffset + 4u * kMaxShadowMask2DTexels);
+    CHECK_EQ(kShadow2DStripsOffset % 16u, 0u);
+
+    std::ostringstream uv;
+    uv << "constvec2SHADOW_STRIP_UV[5]=vec2[5](";
+    for (int k = 0; k < 5; ++k) {
+        uv << (k > 0 ? "," : "") << "vec2(" << std::fixed << std::setprecision(1) << kShadowStripUv[k][0] << ","
+           << kShadowStripUv[k][1] << ")";
+    }
+    uv << ");";
+    CHECK_MSG(squeezed(between("const vec2 SHADOW_STRIP_UV", ";")) == uv.str(),
+              "SHADOW_STRIP_UV is kShadowStripUv: " + uv.str());
+    std::ostringstream triangles;
+    triangles << "constivec3SHADOW_STRIP_TRIANGLES[3]=ivec3[3](";
+    for (int t = 0; t < 3; ++t) {
+        triangles << (t > 0 ? "," : "") << "ivec3(" << kShadowStripTriangles[t][0] << ","
+                  << kShadowStripTriangles[t][1] << "," << kShadowStripTriangles[t][2] << ")";
+    }
+    triangles << ");";
+    CHECK_MSG(squeezed(between("const ivec3 SHADOW_STRIP_TRIANGLES", ";")) == triangles.str(),
+              "SHADOW_STRIP_TRIANGLES is kShadowStripTriangles: " + triangles.str());
+
+    // The loop multiplies the clamped add, in both loops, and only with the
+    // switch and a strip in the frame.
+    CHECK_MSG(source.find("bool lightShadows = (flags & FLAG_LIGHT_SHADOWS_2D) != 0 && shadow2D.count > 0u;") !=
+                  std::string::npos,
+              "the loop asks for the switch and a strip");
+    size_t uses = 0;
+    for (size_t at = source.find("if (lightShadows) add *= lightShadowKeep2D(i, fragWorldPos.xy);");
+         at != std::string::npos;
+         at = source.find("if (lightShadows) add *= lightShadowKeep2D(i, fragWorldPos.xy);", at + 1)) {
+        ++uses;
+    }
+    CHECK_MSG(uses == 2, "both light loops take their own light's shadows");
+
+    // And the switch survives a save and a load.
+    cleanup();
+    entt::registry registry;
+    const auto entity = makeEntity(registry, "Shadowed Floor");
+    auto& floor = registry.get<MaterialComponent>(entity);
+    floor.unlit = true;
+    floor.sprite2D.enabled = true;
+    floor.sprite2D.lightShadows = true;
+    const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("\"LightShadows\": true") != std::string::npos, "the switch was written");
+    entt::registry loaded;
+    CHECK(SceneSerializer::DeserializeFromString(loaded, text).ok);
+    bool found = false;
+    for (auto e : loaded.view<MaterialComponent>()) {
+        found = true;
+        CHECK(loaded.get<MaterialComponent>(e).sprite2D.lightShadows);
+    }
+    CHECK_MSG(found, "and came back");
+    cleanup();
+}
+
 static void testOnlyABlendedPremultipliedMaterialSaysSo() {
     MaterialComponent material;
     material.blend = MaterialComponent::BlendMode::Premultiplied;
@@ -1862,6 +2005,7 @@ static void runTests() {
     testTheShaderReadsTheSwitchesFromTheSameBits();
     testTheShaderReadsThe2DLightsAsTheRendererWritesThem();
     testA2DSpriteWritesItsRecordAndNothingElseDoes();
+    testALightsOwnShadowsAreASwitchAndABinding();
     testOnlyABlendedPremultipliedMaterialSaysSo();
     testAnOverlayAndA2DSpriteSurviveASaveAndLoad();
     testAMaterialThatNeverUsedThemWritesNeither();

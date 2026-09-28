@@ -101,6 +101,97 @@ struct Light2DAlphaTest {
 inline constexpr uint32_t kLight2DBufferBytes =
     static_cast<uint32_t>(sizeof(GpuLight2DHeader) + sizeof(GpuLight2D) * kMaxLights2D);
 
+// --- A light's own shadows (opt-in) ---------------------------------------------
+//
+// Ethanon 0.7.12 baked each static light into every static sprite's lightmap
+// with the shadows static entities cast from it (ETHRenderEntity::
+// GenerateLightmap): the light's pass drawn alone into a scratch target, each
+// shadow drawn black over THAT target, and the result added into the lightmap.
+// So a baked shadow took away its own light and nothing else - not the room's
+// ambient, not another lamp - where a shadow drawn over the finished frame
+// darkens everything under it.
+//
+// Here a light carries the shadows it casts (Light2DShadowsComponent), and a
+// sprite that asks (Sprite2DLight::lightShadows) multiplies each light's add by
+// what of that light survives them at the fragment:
+//   keep = the product, over the light's strips covering the fragment's world
+//          xy, of (1 - opacity * mask(uv))
+// A light without strips, a sprite without the switch and a frame without a
+// strip are the arithmetic they always were.
+//
+// A strip is Ethanon's projected shadow (dynaShadowVS.cg, drawn with gs2d's
+// RM_THREE_TRIANGLES): five corners in world xy whose texture coordinates are
+// fixed, (0,0) (0,1) (0.5,0) (1,1) (1,0), making the triangles (0,1,2) (2,1,3)
+// (2,3,4). The mask (Light2DShadowMask) is the shadow image's alpha, sampled
+// bilinearly between texel centres with its edges clamped.
+
+// How many strips one frame may carry, over every light.
+inline constexpr uint32_t kMaxShadows2D = 256;
+
+// The largest mask, in texels (32 x 32, the size of Ethanon's shadow.dds).
+inline constexpr uint32_t kMaxShadowMask2DTexels = 1024;
+
+// The strip's texture coordinates and its triangles, corner by corner. Must
+// match SHADOW_STRIP_UV and SHADOW_STRIP_TRIANGLES in shader.frag.
+inline constexpr float kShadowStripUv[5][2] = {{0.0f, 0.0f}, {0.0f, 1.0f}, {0.5f, 0.0f}, {1.0f, 1.0f}, {1.0f, 0.0f}};
+inline constexpr uint32_t kShadowStripTriangles[3][3] = {{0, 1, 2}, {2, 1, 3}, {2, 3, 4}};
+
+// One strip as the shader reads it (shader.frag's Shadow2D, scene binding 13).
+// std430: a vec4, then five vec2 at a stride of 8, then two scalars - 64 bytes.
+struct GpuShadow2D {
+    glm::vec4 bounds{0.0f};     // min x, min y, max x, max y of the corners
+    glm::vec2 corners[5]{};     // world xy
+    float opacity{0.0f};
+    float pad{0.0f};
+};
+static_assert(sizeof(GpuShadow2D) == 64, "GpuShadow2D must match its std430 stride");
+static_assert(offsetof(GpuShadow2D, bounds) == 0, "GpuShadow2D layout shifted");
+static_assert(offsetof(GpuShadow2D, corners) == 16, "GpuShadow2D layout shifted");
+static_assert(offsetof(GpuShadow2D, opacity) == 56, "GpuShadow2D layout shifted");
+
+// The front of scene binding 13: how many strips, and the mask's size (0 x 0
+// when the frame has none, which the shader reads as a mask of 1).
+struct GpuShadow2DHeader {
+    uint32_t count{0};
+    uint32_t maskWidth{0};
+    uint32_t maskHeight{0};
+    uint32_t pad{0};
+};
+static_assert(sizeof(GpuShadow2DHeader) == 16, "the 2D shadow buffer's header is 16 bytes");
+
+// Scene binding 13, in bytes: the header; one (first, count) per gathered light,
+// in GatherLights2D's order, kMaxLights2D of them; the mask, row by row from
+// v = 0, kMaxShadowMask2DTexels floats; then the strips. Must match
+// shader.frag's Shadow2DBuffer, which test_materials reads.
+inline constexpr uint32_t kShadow2DRangesOffset = static_cast<uint32_t>(sizeof(GpuShadow2DHeader));
+inline constexpr uint32_t kShadow2DMaskOffset = kShadow2DRangesOffset + 8u * kMaxLights2D;
+inline constexpr uint32_t kShadow2DStripsOffset = kShadow2DMaskOffset + 4u * kMaxShadowMask2DTexels;
+inline constexpr uint32_t kShadow2DBufferBytes =
+    kShadow2DStripsOffset + static_cast<uint32_t>(sizeof(GpuShadow2D)) * kMaxShadows2D;
+static_assert(kShadow2DStripsOffset % 16 == 0, "the strips start on their vec4's alignment");
+
+// On a Light2DComponent's entity: the shadows that light casts, which darken
+// its own add on the sprites that ask for them (Sprite2DLight::lightShadows) and
+// nothing else. Runtime only, like Light2DEye: nothing saves it, and a game sets
+// it each frame from whatever casts.
+struct Light2DShadowsComponent {
+    struct Strip {
+        glm::vec2 corners[5]{};   // world xy, in the strip's order (kShadowStripUv)
+        float opacity{1.0f};      // how much of the light the mask's full alpha removes
+    };
+    std::vector<Strip> strips;
+};
+
+// The shadow image's alpha, which every strip samples (kShadowStripUv). In the
+// registry's context, runtime only. Without one, or with a size that does not
+// match its texels or exceeds kMaxShadowMask2DTexels, a strip removes its full
+// opacity wherever it covers.
+struct Light2DShadowMask {
+    uint32_t width{0};
+    uint32_t height{0};
+    std::vector<float> alpha;   // width x height, rows from v = 0, 0..1
+};
+
 // The 2D lights, gathered and shaded without Vulkan, like ClusterGrid beside it:
 // the gather is a walk over components and the shading is arithmetic, and the
 // suites touch no Vulkan entry point.
@@ -120,11 +211,37 @@ namespace Light2D {
 //   counted into `outDropped` when given, so the caller can say so. A dropped
 //   light is a sprite left darker than it should be, with nothing else to tell.
 //
-// Returns how many were written. `out` is cleared first.
+// Returns how many were written. `out` is cleared first. With `outEntities`,
+// the entity each packed light came from, index for index (cleared first too):
+// GatherShadows2D's input.
 uint32_t GatherLights2D(const entt::registry& registry,
                         std::vector<GpuLight2D>& out,
                         uint32_t capacity,
-                        uint32_t* outDropped = nullptr);
+                        uint32_t* outDropped = nullptr,
+                        std::vector<entt::entity>* outEntities = nullptr);
+
+// The shadows of the lights GatherLights2D packed (`lights`, its outEntities),
+// light by light in that order: `outRanges[i]` is light i's (first, count) into
+// `outStrips`, (0, 0) for a light without a Light2DShadowsComponent. Each
+// strip's bounds are its corners' box. Past `capacity` a strip is dropped and
+// counted into `outDropped`; a light keeps those of its strips that fit.
+// Returns how many strips were written. Both outputs are cleared first.
+uint32_t GatherShadows2D(const entt::registry& registry,
+                         const std::vector<entt::entity>& lights,
+                         std::vector<glm::uvec2>& outRanges,
+                         std::vector<GpuShadow2D>& outStrips,
+                         uint32_t capacity,
+                         uint32_t* outDropped = nullptr);
+
+// Scene binding 13 as the renderer uploads it (kShadow2DBufferBytes at most):
+// the header alone when `strips` is empty - the shader reads nothing past the
+// count then - else the header, kMaxLights2D ranges (zeros past `ranges`), the
+// context's Light2DShadowMask padded with zeros to kMaxShadowMask2DTexels, and
+// the strips. `out` is resized to the bytes to upload.
+void PackShadows2D(const entt::registry& registry,
+                   const std::vector<glm::uvec2>& ranges,
+                   const std::vector<GpuShadow2D>& strips,
+                   std::vector<uint8_t>& out);
 
 // The header the renderer writes in front of those lights: their count, the
 // registry context's Light2DEye and Light2DAlphaTest, or zeros for either it
@@ -229,6 +346,23 @@ glm::vec3 SpecularContribution(const GpuLight2D& light, uint8_t mask,
                                const glm::vec3& surface, const glm::vec3& normal,
                                const glm::vec3& tint, const Highlight& highlight,
                                const PassAlpha* passAlpha = nullptr);
+
+// A light's own shadows (Sprite2DLight::lightShadows), as shadeSprite2D reads
+// scene binding 13: shadowMask2D, shadowStripUv2D and lightShadowKeep2D.
+
+// The mask at `uv`: bilinear between texel centres, edges clamped. 1 when the
+// size is zero (no mask) or past kMaxShadowMask2DTexels.
+float ShadowMaskAt(const float* mask, uint32_t width, uint32_t height, const glm::vec2& uv);
+
+// Whether `at` (world xy) lies in the strip, and where in its texture: the
+// first of the three triangles that holds it, so a point on an edge two share is
+// counted once. A degenerate triangle holds nothing.
+bool ShadowStripUv(const GpuShadow2D& strip, const glm::vec2& at, glm::vec2& outUv);
+
+// What of a light survives its strips `range` (first, count into `strips`) at
+// `at`: the product of (1 - opacity * mask(uv)) over those that hold it.
+float ShadowKeep(const std::vector<GpuShadow2D>& strips, const glm::uvec2& range,
+                 const float* mask, uint32_t maskWidth, uint32_t maskHeight, const glm::vec2& at);
 
 } // namespace Light2D
 

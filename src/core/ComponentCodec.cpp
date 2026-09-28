@@ -286,6 +286,9 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
             if (sprite.lightAlphaTest != defaults.lightAlphaTest) {
                 out << ",\n" << indent << "    \"LightAlphaTest\": " << (sprite.lightAlphaTest ? "true" : "false");
             }
+            if (sprite.lightShadows != defaults.lightShadows) {
+                out << ",\n" << indent << "    \"LightShadows\": " << (sprite.lightShadows ? "true" : "false");
+            }
             out << "\n";
             out << indent << "  },\n";
         }
@@ -898,6 +901,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             material.sprite2D.bakedEye = sprite["BakedEye"].AsBool(defaults.bakedEye);
             material.sprite2D.bakedEyeY = sprite["BakedEyeY"].AsFloat(defaults.bakedEyeY);
             material.sprite2D.lightAlphaTest = sprite["LightAlphaTest"].AsBool(defaults.lightAlphaTest);
+            material.sprite2D.lightShadows = sprite["LightShadows"].AsBool(defaults.lightShadows);
         }
         material.occlusionStrength = m["OcclusionStrength"].AsFloat(1.0f);
         material.roughness = m["Roughness"].AsFloat(0.4f);

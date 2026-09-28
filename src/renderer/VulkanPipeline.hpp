@@ -227,6 +227,11 @@ struct PushConstantData {
     // was (Sprite2DLight::lightAlphaTest).
     static constexpr int32_t kLightAlphaTest2D = 1 << 6;
 
+    // With kSprite2D: each light's add is multiplied by what of it survives its
+    // own shadows (Sprite2DLight::lightShadows, scene binding 13). The last of
+    // the low byte's switches.
+    static constexpr int32_t kLightShadows2D = 1 << 7;
+
     // The low byte is switches; the twelve bits above it are a UV transform
     // slot. The packing itself, and the reasons for its shape, are in
     // Components.hpp beside UvTransform - it is a protocol shared with the
@@ -447,6 +452,21 @@ public:
     //   binding 9  prefilteredMap      1
     static constexpr uint32_t kSamplersPerSceneSet =
         2u + PointShadow::kMaxShadowCasters + 2u * kMaxEnvironmentProbes;
+
+    // The storage buffers the scene set declares, which the descriptor pool is
+    // sized from - for the same reason as the samplers above. The 2D shadows
+    // (binding 13) went in with the pool still budgeting seven, and a strict
+    // driver (SwiftShader, on an Android emulator) refused the allocation at
+    // startup. createDescriptorSetLayout now checks this count against the
+    // bindings it builds.
+    //
+    //   binding 2      joint palette
+    //   bindings 5-7   clustered lights (three buffers)
+    //   binding 10     texture coordinate transforms
+    //   binding 11     per-draw instance records
+    //   binding 12     2D point lights
+    //   binding 13     2D shadows
+    static constexpr uint32_t kStorageBuffersPerSceneSet = 8u;
 
     static constexpr uint32_t kSceneSet = 0;
     static constexpr uint32_t kMaterialSet = 1;

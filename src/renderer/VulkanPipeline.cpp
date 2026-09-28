@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 
 namespace Supersonic {
 
@@ -409,12 +410,34 @@ void VulkanPipeline::createDescriptorSetLayout() {
     light2DBinding.descriptorCount = 1;
     light2DBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
 
-    const std::array<vk::DescriptorSetLayoutBinding, 13> sceneBindings = {
+    // The shadows those lights cast (Light2DShadowsComponent, core/Light2D.hpp),
+    // read only by a sprite that asks for them (Sprite2DLight::lightShadows).
+    // Its own binding rather than more of binding 12, whose last member is the
+    // lights' open-ended array.
+    vk::DescriptorSetLayoutBinding shadow2DBinding{};
+    shadow2DBinding.binding = 13;
+    shadow2DBinding.descriptorType = vk::DescriptorType::eStorageBuffer;
+    shadow2DBinding.descriptorCount = 1;
+    shadow2DBinding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+    const std::array<vk::DescriptorSetLayoutBinding, 14> sceneBindings = {
         uboBinding, shadowBinding, paletteBinding, pointShadowBinding, spotShadowBinding,
         clusterBindings[0], clusterBindings[1], clusterBindings[2],
         environmentBindings[0], environmentBindings[1], uvTransformBinding,
-        instanceBinding, light2DBinding
+        instanceBinding, light2DBinding, shadow2DBinding
     };
+
+    // VulkanRenderer's pool is sized from kStorageBuffersPerSceneSet; a set that
+    // declares more than the pool budgets fails only on drivers that enforce it.
+    uint32_t storageBuffers = 0;
+    for (const vk::DescriptorSetLayoutBinding& binding : sceneBindings) {
+        if (binding.descriptorType == vk::DescriptorType::eStorageBuffer) storageBuffers += binding.descriptorCount;
+    }
+    if (storageBuffers != kStorageBuffersPerSceneSet) {
+        throw std::logic_error("VulkanPipeline: the scene set declares " + std::to_string(storageBuffers) +
+                               " storage buffers but kStorageBuffersPerSceneSet is " +
+                               std::to_string(kStorageBuffersPerSceneSet));
+    }
 
     vk::DescriptorSetLayoutCreateInfo sceneInfo{};
     sceneInfo.bindingCount = static_cast<uint32_t>(sceneBindings.size());
