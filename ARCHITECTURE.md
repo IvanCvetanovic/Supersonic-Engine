@@ -2932,7 +2932,8 @@ nothing above `AudioEngine` carries a platform branch.
 | Linux, ALSA headers present | ALSA | `AudioMixer`, on a thread the engine owns | `SUPERSONIC_AUDIO_ALSA=1`, defined when `find_path` and `find_library` both succeed |
 | Linux, headers absent | none | — | CMake prints `Audio backend: none (install libasound2-dev for sound on Linux)` and carries on |
 | Android | AAudio | `AudioMixer`, pulled from AAudio's data callback on AAudio's own thread; the stream pauses with the activity and is reopened on a thread of the engine's when the device disconnects (the reopen is unexercised; the rest was seen only through `dumpsys audio` on an emulator run with `-no-audio`) | `SUPERSONIC_AUDIO_AAUDIO=1`, unconditional under the NDK (API 26+) |
-| macOS, anything else | none | — | falls through to the `#else` no-op |
+| macOS, iOS | CoreAudio | `AudioMixer`, pulled from an output audio unit's render callback (the default output unit on macOS, RemoteIO on iOS), which converts the mixer's 48 kHz 16-bit stereo to the device's format; on iOS stopped when the app leaves the screen or its audio session is interrupted. Measured on GitHub's macOS runners: 384000 frames pulled in 750 callbacks by the macOS game's virtual sound device, and RemoteIO pulling in the iOS simulator; the stop and restart are unexercised | `SUPERSONIC_AUDIO_COREAUDIO=1`, unconditional under `APPLE` |
+| anything else | none | — | falls through to the `#else` no-op |
 
 A missing ALSA package must not fail the build for someone who does not care
 about sound, so the no-backend path is a real implementation rather than a
@@ -3094,6 +3095,6 @@ Listed rather than hidden.
 |---|---|
 | Windows | Working. Primary development target. |
 | Linux | Should build and run; not verified on hardware. |
-| macOS | Instance creation is wired for MoltenVK (portability enumeration + bit). Not verified on hardware. |
+| macOS | **A game runs.** GLFW, MoltenVK linked directly (`SUPERSONIC_MOLTENVK_LIBRARY`) or through a loader, CoreAudio. Measured on GitHub's macos-15 arm64 runner (Apple Paravirtual GPU): Penumbra's suites pass and its app bundle renders a level. The README's Platforms section says what it took. |
 | Android | **A game runs** (not the editor). `src/platform/android/` implements the native-surface `Window` (`WindowBackend.hpp`), `InputPolling`, `NativeWindowControl` and `Gamepads` over NativeActivity, and owns `android_main`; the game builds as a SHARED library with a `SupersonicMain`. Measured on an API 33 x86_64 emulator (SwiftShader Vulkan 1.2): menu, taps, a level, suspend/resume with the surface rebuilt. The README's Platforms section lists what is not done. |
-| iOS | **Not functional.** Same windowing problem, plus bundling and signing. |
+| iOS | **Builds and starts a game; no frame drawn yet.** `src/platform/ios/` implements the native-surface `Window`, `InputPolling`, `NativeWindowControl` and `Gamepads` over UIKit and owns `main()`; the game defines `SupersonicMain`. In the iOS simulator the engine initialises and the game loads a level, then the first draw fails: the simulator's GPU (Metal family Apple 2) has no base-instance drawing, which `RenderSystem`'s instanced batches need. Builds for devices; not run on one (signing). |

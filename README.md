@@ -107,7 +107,8 @@ code quietly contradicts.
 Developed and tested on **Windows** with MSVC. **Linux** and **macOS** (MoltenVK)
 build from the same tree.
 
-**Android runs a game, as a NativeActivity shared library; iOS does not work.**
+**Android runs a game, as a NativeActivity shared library.** (macOS and iOS:
+below.)
 Measured on 28 September 2026: Penumbra (a game built on this engine in its
 own repository) boots to its main menu on an API 33 x86_64 emulator, renders
 through this Vulkan renderer (SwiftShader, Vulkan 1.2), takes taps on the menu
@@ -154,12 +155,68 @@ as clicks and loads its first level. What that took, all of it under
   loader, VMA's entry points fetched at run time (`libvulkan.so` below API 28
   does not export the 1.1 ones), no validation layers.
 
-Not done: the editor (it needs GLFW), iOS, immersive mode (hiding the
+Not done: the editor (it needs GLFW), immersive mode (hiding the
 navigation bar is a UI-thread call and a NativeActivity has no Java), and a
 gamepad or multi-touch run on real hardware - `adb shell input` injects one
 pointer at a time. Penumbra's `tools/build_android.sh` is the working build
 and packaging (NDK toolchain, aapt2, zipalign, apksigner - no Gradle);
 `platform/android/` here still describes the older attempt at the editor.
+
+**macOS runs a game; iOS builds one and starts it.** Measured on 28 September
+2026 on GitHub's macos-15 arm64 runners (Xcode 26.3, MoltenVK 1.4.2), through
+Penumbra's `.github/workflows/apple.yml`: on macOS Penumbra builds, its 17
+suites pass, and its `Penumbra.app` renders a level on the runner's "Apple
+Paravirtual device" through GLFW and MoltenVK, with CoreAudio pulling from the
+runner's virtual sound device. For iOS it builds for the simulator and for
+devices; in the simulator the app launches, the engine initialises completely
+and the game loads its level - and then stops at the first draw, because the
+simulator's GPU (Metal family Apple 2) cannot draw with a non-zero base
+instance, which `RenderSystem`'s instanced batches use (`gl_InstanceIndex`
+into the instance buffer). No iOS device has run it. What it took, all of it
+under `__APPLE__`, `SUPERSONIC_PLATFORM_IOS` or `if (APPLE)` / `if (IOS)`:
+
+- **MoltenVK linked into the program** when a build names one
+  (`SUPERSONIC_MOLTENVK_LIBRARY`: a `libMoltenVK.a` from the release's static
+  xcframework, or a dylib), with the frameworks it needs - no loader, no ICD
+  manifest, and no validation layers. iOS has no loader to link; a Mac app
+  bundle is simplest this way too. Unset, the SDK and loader lookup is as it
+  was.
+- **GLFW on macOS**: `glfwInitVulkanLoader(vkGetInstanceProcAddr)`, so GLFW
+  uses the Vulkan the program linked instead of looking for
+  `libvulkan.1.dylib`; `GLFW_COCOA_CHDIR_RESOURCES` off, so `glfwInit` does not
+  move the working directory into a bundle's `Resources` after
+  `AnchorAssetRoot` chose it. Objective-C is enabled beside Objective-C++, or
+  CMake compiles GLFW's `.m` files as Objective-C++, which fails.
+- **Portability**: the enumeration extension and bit only where the instance
+  offers them (MoltenVK without a loader answers for itself), and
+  `VK_KHR_portability_subset` enabled on the device when it is advertised.
+- **The iOS backend** (`src/platform/ios/`), the native-surface seam Android
+  uses: `main()` hands the process to `UIApplicationMain`; a scene delegate
+  owns a window whose view is backed by a `CAMetalLayer`, sized to the safe
+  area's width (black beside the notch) and running to the bottom edge; the
+  surface comes from `VK_EXT_metal_surface`. The game's `SupersonicMain` is
+  entered from a run-loop timer, and each `Window::PollEvents` runs UIKit's run
+  loop until it has nothing to deliver, drains a per-frame autorelease pool,
+  and waits there while the app is in the background. Touches become contacts
+  (eight stable ids, the first finger the mouse), a hardware keyboard's keys
+  and GameController's pads are read, a loss of focus is latched for one frame
+  (resign-active and enter-background usually arrive together), the surface is
+  released in the background and rebuilt on return. `SafeArea::Get` answers
+  what remains unsafe inside the view (the home-indicator band).
+- **Array and cube image views** are only sampled (every attachment is a
+  per-layer view), and on Apple say so with `VkImageViewUsageCreateInfo`:
+  MoltenVK refuses an array view of an attachment image on a GPU that cannot
+  render to layered attachments (the simulator's).
+- **Metal argument buffers off where they are Tier 1** (the simulator, A11 and
+  A12 devices): MoltenVK's encoder path killed the simulator's Metal service
+  writing ImGui's sampler descriptor.
+- **Audio**: CoreAudio's output unit (the default output on macOS, RemoteIO on
+  iOS) pulled from `AudioMixer`, stopped with the app and with audio-session
+  interruptions on iOS, and an ambient `AVAudioSession`.
+
+Not done on Apple: a run on an iOS device (it needs a signing identity), the
+base-instance draw on the simulator (a renderer change), signing and
+notarising a Mac build, the editor on iOS.
 
 ---
 
