@@ -406,8 +406,8 @@ static void testTheHeaderCarriesTheFramesEye() {
     entt::registry registry;
     GpuLight2DHeader header = Light2D::MakeHeader(registry, 3);
     CHECK_EQ(header.count, 3u);
-    CHECK_MSG(header.eyeMirrorY == 0.0f && header.eyeHeight == 0.0f && header.pad2 == 0u,
-              "no eye in the context is zeros, as the padding was");
+    CHECK_MSG(header.eyeMirrorY == 0.0f && header.eyeHeight == 0.0f && header.passAlphaIntensity == 0.0f,
+              "no eye and no alpha test in the context is zeros, as the padding was");
 
     // Penumbra's: camera top at y 240, a 768-pixel screen.
     registry.ctx().emplace<Light2DEye>(Light2DEye{-(240.0f + 0.75f * 768.0f), 768.0f});
@@ -805,6 +805,176 @@ static void testAHighlightIsMainSpecularThroughThePortsMapping() {
     CHECK_MSG(worst < 1e-4f, "every pixel within 1e-4 of mainSpecular: " + std::to_string(worst));
 }
 
+// --- a baked light's eye -------------------------------------------------------
+
+static void testABakedLightIsSeenFromTheSpritesOwnEye() {
+    // The gather marks a baked light above the layer byte, and only a baked one.
+    entt::registry registry;
+    const auto plain = registry.create();
+    registry.emplace<TransformComponent>(plain);
+    registry.emplace<Light2DComponent>(plain).layers = 0x02;
+    const auto baked = registry.create();
+    registry.emplace<TransformComponent>(baked);
+    auto& bakedLight = registry.emplace<Light2DComponent>(baked);
+    bakedLight.layers = 0x02;
+    bakedLight.baked = true;
+    std::vector<GpuLight2D> gathered;
+    CHECK_EQ(Light2D::GatherLights2D(registry, gathered, kMaxLights2D), 2u);
+    int plainSeen = 0;
+    int bakedSeen = 0;
+    for (const GpuLight2D& g : gathered) {
+        if (g.layers == 0x02u) ++plainSeen;
+        if (g.layers == (0x02u | kLight2DBakedBit)) ++bakedSeen;
+    }
+    CHECK_MSG(plainSeen == 1 && bakedSeen == 1, "a baked light carries kLight2DBakedBit, a plain one its byte alone");
+
+    // The bit is above every mask, so which sprites a light reaches is unchanged.
+    const glm::vec3 flat = Light2D::WorldNormal(kFlat, false, spriteModel(0.0f));
+    GpuLight2D marked = lightAt(glm::vec3(0.0f, 0.0f, 4.0f), 8.0f, 0x02u | kLight2DBakedBit);
+    CHECK(addOf(marked, glm::vec3(0.0f), flat, 0x02) == addOf(lightAt(glm::vec3(0.0f, 0.0f, 4.0f), 8.0f, 0x02u),
+                                                              glm::vec3(0.0f), flat, 0x02));
+    CHECK(addOf(marked, glm::vec3(0.0f), flat, 0x01) == 0.0f);
+
+    // Ethanon's lightmap bake, a static glossy tile whose top edge is at y 256
+    // and z -4, lit by a static torch: the receiver is moved to the render
+    // target's corner and the eye set at (L.x, 1.5 screenH, 768) there
+    // (ETHScene::GenerateLightmaps, ETHShaderManager::SetFakeEyePosition with
+    // drawToTarget), which in the world is (L.x, top + 1.5 screenH, z + 768),
+    // wherever the camera is.
+    const float lightIntensity = 2.0f;
+    const float screenH = 768.0f;
+    const float top = 256.0f;
+    const float tileZ = -4.0f;
+    const EthLight torch{glm::vec3(300.0f, 330.0f, 20.0f), glm::vec3(1.0f, 0.7f, 0.3f), 227.5f};
+    const glm::vec3 bakeEye(torch.position.x, top + 1.5f * screenH, tileZ + 768.0f);
+    const glm::vec3 diffuse(0.6f, 0.5f, 0.45f);
+    const glm::vec3 gloss(0.8f);
+
+    GpuLight2D engineTorch;
+    engineTorch.position = glm::vec3(torch.position.x, -torch.position.y, torch.position.z);
+    engineTorch.range = torch.range;
+    engineTorch.color = torch.color * lightIntensity;
+    engineTorch.layers = 1u | kLight2DBakedBit;
+    GpuLight2D liveTorch = engineTorch;
+    liveTorch.layers = 1u;
+
+    int compared = 0;
+    int shining = 0;
+    float worst = 0.0f;
+    float moved = 0.0f;
+    for (const glm::vec3& texel : {texelFacing(glm::vec3(0.0f, 0.0f, 1.0f)), texelFacing(glm::vec3(0.1f, 0.5f, 0.8f)),
+                                   texelFacing(glm::vec3(-0.2f, 0.6f, 0.7f))}) {
+        const glm::vec3 pixel(320.0f, 300.0f, tileZ);
+        const glm::vec3 expected = ethPass(torch, lightIntensity, pixel, texel, false, diffuse, 1.0f, &gloss, 60.0f,
+                                           bakeEye);
+        const glm::vec3 normal = Light2D::WorldNormal(texel, true, spriteModel(0.0f));
+        const glm::vec3 surface(pixel.x, -pixel.y, pixel.z);
+        glm::vec3 first(0.0f);
+        for (const float cameraY : {0.0f, 180.0f}) {
+            Light2D::Highlight highlight;
+            highlight.gloss = gloss / lightIntensity;
+            highlight.power = 60.0f;
+            highlight.eyeMirrorY = -(cameraY + 0.75f * screenH);
+            highlight.eyeHeight = 768.0f;
+            highlight.bakedEye = true;
+            highlight.bakedEyeY = -(top + 1.5f * screenH);
+            highlight.spriteHeight = tileZ;
+            const glm::vec3 got =
+                Light2D::SpecularContribution(engineTorch, 1, surface, normal, diffuse, highlight);
+            worst = std::max(worst, glm::length(got - expected));
+            if (cameraY == 0.0f) first = got;
+            moved = std::max(moved, glm::length(got - first));
+
+            // A light that is not baked is still seen from the frame's eye, and
+            // a sprite without the switch sees a baked one from there too.
+            Light2D::Highlight frameEye = highlight;
+            frameEye.bakedEye = false;
+            CHECK(Light2D::SpecularContribution(liveTorch, 1, surface, normal, diffuse, highlight) ==
+                  Light2D::SpecularContribution(liveTorch, 1, surface, normal, diffuse, frameEye));
+            CHECK(Light2D::SpecularContribution(engineTorch, 1, surface, normal, diffuse, frameEye) ==
+                  Light2D::SpecularContribution(liveTorch, 1, surface, normal, diffuse, frameEye));
+            ++compared;
+            if (expected != glm::vec3(0.0f)) ++shining;
+        }
+    }
+    CHECK_EQ(compared, 6);
+    CHECK_MSG(shining >= 4, "enough of the cases are lit for the comparison to mean something");
+    CHECK_MSG(worst < 1e-4f, "every pixel within 1e-4 of the bake's mainSpecular: " + std::to_string(worst));
+    CHECK_MSG(moved == 0.0f, "and the highlight does not move with the camera");
+
+    const glm::vec3 eye = Light2D::BakedEyeFor(glm::vec3(5.0f, 6.0f, 7.0f), -900.0f, -4.0f, 768.0f);
+    CHECK_NEAR(eye.x, 5.0f);
+    CHECK_NEAR(eye.y, -900.0f);
+    CHECK_NEAR(eye.z, 764.0f);
+}
+
+// --- the light pass's alpha test ---------------------------------------------------
+
+static void testTheLightPassIsAlphaTestedAsEthanonsWas() {
+    // The frame's intensity reaches the header's last word.
+    entt::registry registry;
+    registry.ctx().emplace<Light2DAlphaTest>(Light2DAlphaTest{2.0f});
+    CHECK_NEAR(Light2D::MakeHeader(registry, 0).passAlphaIntensity, 2.0f);
+
+    // The pass's alpha, per variant (hPixelLight/vPixelLight main, mainSpecular).
+    Light2D::PassAlpha pass;
+    pass.albedoAlpha = 0.5f;
+    pass.colorAlpha = 1.0f;
+    pass.intensity = 2.0f;
+    CHECK_NEAR(Light2D::PassAlphaOf(pass, 0.8f, 0.5f), 0.5f * 1.0f * 2.0f * 0.5f * 0.5f * 0.8f);
+    pass.vertical = true;
+    CHECK_NEAR(Light2D::PassAlphaOf(pass, 0.8f, 0.5f), 0.5f * 1.0f * 2.0f * 0.5f * 0.8f);
+    pass.glossAlpha = 0.5f;
+    CHECK_NEAR(Light2D::PassAlphaOf(pass, 0.8f, 0.5f, true, 0.25f), 0.5f * 0.5f * (0.8f * 2.0f + 0.25f * 0.5f * 2.0f));
+
+    // An opaque texel at the very edge of a light's reach: its pass alpha,
+    // facing x falloff x 2, is under 1.5/255, so it adds nothing - and the
+    // colour it would have added is under a level anyway.
+    const glm::vec3 flat = Light2D::WorldNormal(kFlat, false, spriteModel(0.0f));
+    const GpuLight2D light = lightAt(glm::vec3(0.0f, 0.0f, 4.0f), 100.0f);
+    Light2D::PassAlpha opaque;
+    opaque.intensity = 2.0f;
+    const glm::vec3 edge(99.9f, 0.0f, 0.0f);
+    const float untested = addOf(light, edge, flat);
+    CHECK_MSG(untested > 0.0f && untested < 1.0f / 255.0f, "untested, the edge adds a sliver under one level");
+    CHECK(Light2D::Contribution(light, 1, edge, flat, kWhite, &opaque) == glm::vec3(0.0f));
+    // Well inside the reach it is the untested add exactly.
+    const glm::vec3 inside(10.0f, 0.0f, 0.0f);
+    CHECK(Light2D::Contribution(light, 1, inside, flat, kWhite, &opaque) ==
+          Light2D::Contribution(light, 1, inside, flat, kWhite));
+
+    // A faint edge texel (alpha 8/255) of a standing sprite, whose pass
+    // (vPixelLight main) does not weight the colour by that alpha: a light of
+    // facing x falloff x 2 under 0.19 is tested away - a colour of up to 0.19 x
+    // the texel, added at full weight over the background untested - and one
+    // above adds. The geometry is a flat texel's; only the alpha is at issue.
+    Light2D::PassAlpha faint;
+    faint.albedoAlpha = 8.0f / 255.0f;
+    faint.intensity = 2.0f;
+    faint.vertical = true;
+    const GpuLight2D weak = lightAt(glm::vec3(0.0f, 0.0f, 1.0f), 100.0f);   // grazing: facing about 1/d
+    const glm::vec3 closeBy(3.0f, 0.0f, 0.0f);
+    const float weakAlpha = Light2D::PassAlphaOf(faint, 1.0f / std::sqrt(10.0f), 1.0f - 10.0f / 10000.0f);
+    CHECK(weakAlpha > Light2D::kLightPassAlphaRef);   // facing 0.32: the pass survives
+    CHECK(Light2D::Contribution(weak, 1, closeBy, flat, kWhite, &faint) == Light2D::Contribution(weak, 1, closeBy, flat, kWhite));
+    const glm::vec3 farOff(30.0f, 0.0f, 0.0f);         // facing 0.033, falloff 0.91: alpha 0.0019
+    CHECK(Light2D::Contribution(weak, 1, farOff, flat, kWhite) != glm::vec3(0.0f));
+    CHECK(Light2D::Contribution(weak, 1, farOff, flat, kWhite, &faint) == glm::vec3(0.0f));
+
+    // With a highlight the highlight's own share can keep a pass the diffuse
+    // alone would lose: mainSpecular's alpha adds shine x gloss alpha.
+    Light2D::Highlight highlight;
+    highlight.gloss = glm::vec3(1.0f);
+    highlight.power = 1.0f;
+    highlight.eyeMirrorY = 0.0f;
+    highlight.eyeHeight = 768.0f;
+    faint.glossAlpha = 1.0f;
+    CHECK(Light2D::SpecularContribution(weak, 1, farOff, flat, kWhite, highlight, &faint) ==
+          Light2D::SpecularContribution(weak, 1, farOff, flat, kWhite, highlight));
+    faint.glossAlpha = 0.0f;
+    CHECK(Light2D::SpecularContribution(weak, 1, farOff, flat, kWhite, highlight, &faint) == glm::vec3(0.0f));
+}
+
 static void runTests() {
     testTheGatherPacksWhatTheShaderReads();
     testAParentedLightIsWhereItsParentPutIt();
@@ -832,6 +1002,8 @@ static void runTests() {
     testTheHighlightKeepsTheRangeAndTheMask();
     testAStandingSpriteIsLitAsVPixelLightLitIt();
     testAHighlightIsMainSpecularThroughThePortsMapping();
+    testABakedLightIsSeenFromTheSpritesOwnEye();
+    testTheLightPassIsAlphaTestedAsEthanonsWas();
 }
 
 TEST_MAIN("test_light2d", 140)

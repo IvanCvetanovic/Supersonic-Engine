@@ -202,6 +202,9 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
         out << indent << "  \"Range\": " << jsonSafe(light->range, "Light2DComponent.range") << ",\n";
         out << indent << "  \"Height\": " << jsonSafe(light->height, "Light2DComponent.height") << ",\n";
         out << indent << "  \"Layers\": " << static_cast<int>(light->layers) << ",\n";
+        // Only when set, so a light that is not baked saves to the text it
+        // saved before the field existed.
+        if (light->baked) out << indent << "  \"Baked\": true,\n";
         out << indent << "  \"Enabled\": " << (light->enabled ? "true" : "false") << "\n";
         out << indent << "},\n";
     }
@@ -273,6 +276,15 @@ void Write(entt::registry& registry, entt::entity entity, std::ostream& out,
                     << jsonSafe(sprite.specularStrength, "sprite2D.specularStrength") << ",\n";
                 out << indent << "    \"SpecularPower\": "
                     << jsonSafe(sprite.specularPower, "sprite2D.specularPower");
+            }
+            // The baked eye and the pass's alpha test likewise, each only when
+            // it differs from its default.
+            if (sprite.bakedEye != defaults.bakedEye || sprite.bakedEyeY != defaults.bakedEyeY) {
+                out << ",\n" << indent << "    \"BakedEye\": " << (sprite.bakedEye ? "true" : "false") << ",\n";
+                out << indent << "    \"BakedEyeY\": " << jsonSafe(sprite.bakedEyeY, "sprite2D.bakedEyeY");
+            }
+            if (sprite.lightAlphaTest != defaults.lightAlphaTest) {
+                out << ",\n" << indent << "    \"LightAlphaTest\": " << (sprite.lightAlphaTest ? "true" : "false");
             }
             out << "\n";
             out << indent << "  },\n";
@@ -818,6 +830,7 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
         light.layers = static_cast<uint8_t>(
             std::clamp(l["Layers"].AsNumber(defaults.layers), 0.0, 255.0));
         light.enabled = l["Enabled"].AsBool(defaults.enabled);
+        light.baked = l["Baked"].AsBool(defaults.baked);
     }
 
     if (node.Has("Camera")) {
@@ -882,6 +895,9 @@ void Read(entt::registry& registry, entt::entity entity, const Json::Value& node
             material.sprite2D.verticalBaseY = sprite["VerticalBaseY"].AsFloat(defaults.verticalBaseY);
             material.sprite2D.specularStrength = sprite["SpecularStrength"].AsFloat(defaults.specularStrength);
             material.sprite2D.specularPower = sprite["SpecularPower"].AsFloat(defaults.specularPower);
+            material.sprite2D.bakedEye = sprite["BakedEye"].AsBool(defaults.bakedEye);
+            material.sprite2D.bakedEyeY = sprite["BakedEyeY"].AsFloat(defaults.bakedEyeY);
+            material.sprite2D.lightAlphaTest = sprite["LightAlphaTest"].AsBool(defaults.lightAlphaTest);
         }
         material.occlusionStrength = m["OcclusionStrength"].AsFloat(1.0f);
         material.roughness = m["Roughness"].AsFloat(0.4f);
