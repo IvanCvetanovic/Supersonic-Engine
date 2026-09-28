@@ -234,7 +234,23 @@ void RenderSystem::ApplySprite2D(const MaterialComponent& material, PushConstant
         if (sprite.specularStrength > 0.0f) {
             push.material.z = sprite.specularStrength;
             push.probeIndex = std::bit_cast<int32_t>(sprite.specularPower);
+
+            // A baked light's eye: the switch, and the eye's y in
+            // skinJointCount - which only the skinned vertex path reads, and
+            // only while skinPaletteBase is not -1. A skinned draw has both
+            // overwritten by the skin block after this, and the shader takes
+            // the switch only from a draw whose skinPaletteBase is still -1, so
+            // it keeps its joints and goes without. Only with a highlight, the
+            // one thing the eye enters.
+            if (sprite.bakedEye) {
+                push.flags |= PushConstantData::kBakedEye2D;
+                push.skinJointCount = std::bit_cast<int32_t>(sprite.bakedEyeY);
+            }
         }
+
+        // The light pass's alpha test: a switch alone; the intensity it needs
+        // is the frame's (Light2DAlphaTest, the 2D light header).
+        if (sprite.lightAlphaTest) push.flags |= PushConstantData::kLightAlphaTest2D;
     }
 
     // Any path, not only a sprite's: every exit of shader.frag honours it. And

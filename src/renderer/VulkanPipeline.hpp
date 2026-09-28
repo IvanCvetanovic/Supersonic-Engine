@@ -191,6 +191,8 @@ struct PushConstantData {
     //   emissive.w       occlusion strength       lighting height, world units
     //   probeIndex       environment slot         the specular power's float bits, while
     //                                             the strength is above 0; else untouched
+    //   skinJointCount   joint count              the baked eye's world y as a float's bits,
+    //                                             with kBakedEye2D on an unskinned draw; else untouched
     //   flags 8..19      UV slot                  UV slot (unchanged)
     //   flags 20..27     unused                   2D light mask (PackLightMask)
     //
@@ -214,6 +216,16 @@ struct PushConstantData {
     // With kSprite2D: the sprite stands up (MaterialComponent::Sprite2DLight::
     // vertical), on the base line material.y carries.
     static constexpr int32_t kVertical2D = 1 << 4;
+
+    // With kSprite2D and a highlight: a baked light (Light2DComponent::baked)
+    // is seen from the sprite's own eye (Sprite2DLight::bakedEye), whose world
+    // y rides in skinJointCount as a float's bits - a field only the skinned
+    // vertex path reads, which a draw with skinPaletteBase -1 never takes.
+    static constexpr int32_t kBakedEye2D = 1 << 5;
+
+    // With kSprite2D: each light's add is alpha-tested as Ethanon's light pass
+    // was (Sprite2DLight::lightAlphaTest).
+    static constexpr int32_t kLightAlphaTest2D = 1 << 6;
 
     // The low byte is switches; the twelve bits above it are a UV transform
     // slot. The packing itself, and the reasons for its shape, are in

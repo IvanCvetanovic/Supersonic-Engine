@@ -1350,11 +1350,14 @@ static void testTheSwitchesTheSlotAndTheMaskShareAWordWithoutTouching() {
     CHECK_EQ(PushConstantData::kNormalYDown, 4);
     CHECK_EQ(PushConstantData::kPremultiplied, 8);
     CHECK_EQ(PushConstantData::kVertical2D, 16);
+    CHECK_EQ(PushConstantData::kBakedEye2D, 32);
+    CHECK_EQ(PushConstantData::kLightAlphaTest2D, 64);
     CHECK_EQ(kLightMaskShift, kUvSlotShift + 12);
 
     const int32_t switches = PushConstantData::kUnlit | PushConstantData::kSprite2D |
                              PushConstantData::kNormalYDown | PushConstantData::kPremultiplied |
-                             PushConstantData::kVertical2D;
+                             PushConstantData::kVertical2D | PushConstantData::kBakedEye2D |
+                             PushConstantData::kLightAlphaTest2D;
     int32_t flags = PackUvSlot(switches, 4095);
     flags = PackLightMask(flags, 0xFF);
     CHECK_EQ(UnpackUvSlot(flags), 4095);
@@ -1408,6 +1411,10 @@ static void testTheShaderReadsTheSwitchesFromTheSameBits() {
               "FLAG_PREMULTIPLIED is kPremultiplied's bit");
     CHECK_MSG(declares("FLAG_VERTICAL_2D", bitOf(PushConstantData::kVertical2D)),
               "FLAG_VERTICAL_2D is kVertical2D's bit");
+    CHECK_MSG(declares("FLAG_BAKED_EYE_2D", bitOf(PushConstantData::kBakedEye2D)),
+              "FLAG_BAKED_EYE_2D is kBakedEye2D's bit");
+    CHECK_MSG(declares("FLAG_LIGHT_ALPHA_TEST_2D", bitOf(PushConstantData::kLightAlphaTest2D)),
+              "FLAG_LIGHT_ALPHA_TEST_2D is kLightAlphaTest2D's bit");
 
     const size_t maskAt = source.find("const int LIGHT_MASK_SHIFT");
     CHECK_MSG(maskAt != std::string::npos, "shader.frag declares LIGHT_MASK_SHIFT");
@@ -1473,12 +1480,24 @@ static void testTheShaderReadsThe2DLightsAsTheRendererWritesThem() {
 
     CHECK_MSG(squeezed(withoutComments(between("layout(std430, set = 0, binding = 12)", "} light2D;"))) ==
                   "layout(std430,set=0,binding=12)readonlybufferLight2DBuffer{uintcount;floateyeMirrorY;"
-                  "floateyeHeight;uint_pad2;Light2Dlights[];}light2D;",
-              "binding 12 is a count, the eye's two numbers, a word of padding and the lights: "
+                  "floateyeHeight;floatpassAlphaIntensity;Light2Dlights[];}light2D;",
+              "binding 12 is a count, the eye's two numbers, the pass alpha's intensity and the lights: "
               "GpuLight2DHeader, 16 bytes");
     CHECK_EQ(sizeof(GpuLight2DHeader), size_t(16));
     CHECK_EQ(offsetof(GpuLight2DHeader, eyeMirrorY), size_t(4));
     CHECK_EQ(offsetof(GpuLight2DHeader, eyeHeight), size_t(8));
+    CHECK_EQ(offsetof(GpuLight2DHeader, passAlphaIntensity), size_t(12));
+
+    // The baked light's bit above the layer byte, and the pass's alpha reference.
+    std::ostringstream baked;
+    baked << "constuintLIGHT_BAKED_BIT=0x" << std::uppercase << std::hex << kLight2DBakedBit << "u;";
+    CHECK_MSG(squeezed(between("const uint LIGHT_BAKED_BIT", ";")) == baked.str(),
+              "LIGHT_BAKED_BIT is kLight2DBakedBit: " + baked.str());
+    CHECK_MSG(kLight2DBakedBit > static_cast<uint32_t>(kLightMaskBits), "and it lies above every mask");
+    CHECK_MSG(squeezed(between("const float LIGHT_PASS_ALPHA_REF", ";")) ==
+                  "constfloatLIGHT_PASS_ALPHA_REF=1.5/255.0;",
+              "LIGHT_PASS_ALPHA_REF is 1.5/255, as kLightPassAlphaRef");
+    CHECK_NEAR(Light2D::kLightPassAlphaRef, 1.5f / 255.0f);
 
     CHECK_MSG(squeezed(between("const uint MAX_LIGHTS_2D", ";")) ==
                   "constuintMAX_LIGHTS_2D=" + std::to_string(kMaxLights2D) + "u;",
@@ -1612,6 +1631,47 @@ static void testA2DSpriteWritesItsRecordAndNothingElseDoes() {
     RenderSystem::ApplySprite2D(dull, record);
     CHECK(record.material.z == 0.0f);
     CHECK(record.probeIndex == untouched.probeIndex);
+
+    // A baked light's eye: the switch and the eye's y in skinJointCount, with a
+    // highlight; skinPaletteBase stays the -1 that keeps the vertex path off it.
+    MaterialComponent baked = shiny;
+    baked.sprite2D.bakedEye = true;
+    baked.sprite2D.bakedEyeY = -1312.0f;
+    PushConstantData unskinned{};
+    unskinned.flags = PushConstantData::kUnlit;
+    record = unskinned;
+    RenderSystem::ApplySprite2D(baked, record);
+    CHECK((record.flags & PushConstantData::kBakedEye2D) != 0);
+    CHECK_MSG(std::bit_cast<float>(record.skinJointCount) == -1312.0f, "skinJointCount carries the eye, bit for bit");
+    CHECK_MSG(record.skinPaletteBase == -1, "and the draw stays unskinned");
+    CHECK_MSG(std::bit_cast<float>(record.probeIndex) == 71.0f && record.material.z == 0.5f,
+              "the highlight's own fields are what they were");
+
+    // Without a highlight the eye enters nothing, and nothing is written.
+    MaterialComponent eyeOnly = sprite;
+    eyeOnly.sprite2D.bakedEye = true;
+    eyeOnly.sprite2D.bakedEyeY = -1312.0f;
+    record = unskinned;
+    RenderSystem::ApplySprite2D(eyeOnly, record);
+    CHECK((record.flags & PushConstantData::kBakedEye2D) == 0);
+    CHECK(record.skinJointCount == unskinned.skinJointCount);
+
+    // And a shiny sprite that did not ask writes the record it always wrote.
+    PushConstantData before = unskinned;
+    RenderSystem::ApplySprite2D(shiny, before);
+    CHECK((before.flags & (PushConstantData::kBakedEye2D | PushConstantData::kLightAlphaTest2D)) == 0);
+    CHECK(before.skinJointCount == unskinned.skinJointCount);
+
+    // The light pass's alpha test: a switch, and nothing else.
+    MaterialComponent tested = sprite;
+    tested.sprite2D.lightAlphaTest = true;
+    record = untouched;
+    RenderSystem::ApplySprite2D(tested, record);
+    PushConstantData untested = untouched;
+    RenderSystem::ApplySprite2D(sprite, untested);
+    CHECK((record.flags & PushConstantData::kLightAlphaTest2D) != 0);
+    record.flags &= ~PushConstantData::kLightAlphaTest2D;
+    CHECK_MSG(std::memcmp(&record, &untested, sizeof(record)) == 0, "the switch is the only byte it changes");
 }
 
 static void testOnlyABlendedPremultipliedMaterialSaysSo() {
@@ -1664,8 +1724,21 @@ static void testAnOverlayAndA2DSpriteSurviveASaveAndLoad() {
     statue.sprite2D.verticalBaseY = -336.0f;
     statue.sprite2D.specularStrength = 0.5f;
     statue.sprite2D.specularPower = 71.0f;
+    statue.sprite2D.bakedEye = true;
+    statue.sprite2D.bakedEyeY = -1312.0f;
+    statue.sprite2D.lightAlphaTest = true;
+
+    // And a baked 2D light, on an entity with no material of its own.
+    const auto torch = registry.create();
+    registry.emplace<TagComponent>(torch, "Baked Torch");
+    registry.emplace<TransformComponent>(torch);
+    auto& torchLight = registry.emplace<Light2DComponent>(torch);
+    torchLight.baked = true;
 
     const std::string text = SceneSerializer::SerializeToString(registry);
+    CHECK_MSG(text.find("\"BakedEyeY\"") != std::string::npos && text.find("\"LightAlphaTest\": true") != std::string::npos,
+              "the baked eye and the alpha test were written");
+    CHECK_MSG(text.find("\"Baked\": true") != std::string::npos, "and the light's baked switch");
     CHECK_MSG(text.find("\"Blend\": \"Premultiplied\"") != std::string::npos, "the blend was written, by name");
     CHECK_MSG(text.find("\"OverlayTexture\"") != std::string::npos, "the overlay was written");
     CHECK_MSG(text.find("\"Sprite2D\"") != std::string::npos, "and the 2D block");
@@ -1686,6 +1759,9 @@ static void testAnOverlayAndA2DSpriteSurviveASaveAndLoad() {
             CHECK_NEAR(m.sprite2D.verticalBaseY, -336.0f);
             CHECK_NEAR(m.sprite2D.specularStrength, 0.5f);
             CHECK_NEAR(m.sprite2D.specularPower, 71.0f);
+            CHECK(m.sprite2D.bakedEye);
+            CHECK_NEAR(m.sprite2D.bakedEyeY, -1312.0f);
+            CHECK(m.sprite2D.lightAlphaTest);
             continue;
         }
         found = true;

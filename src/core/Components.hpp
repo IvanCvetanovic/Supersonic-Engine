@@ -427,6 +427,14 @@ struct Light2DComponent {
     uint8_t layers{1};
 
     bool enabled{true};
+
+    // A light an engine with lightmaps would have BAKED into the sprites that
+    // do not move (Ethanon's static light on a static entity). It reaches every
+    // sprite its layers reach, as any light does; only a sprite that asks for
+    // Sprite2DLight::bakedEye treats it differently, seeing its highlight from
+    // that sprite's own fixed eye instead of the frame's Light2DEye. Off, and
+    // on every sprite that does not ask, it is the light it always was.
+    bool baked{false};
 };
 
 // A 2D affine transform on texture coordinates.
@@ -806,6 +814,49 @@ struct MaterialComponent {
         // The Blinn exponent: higher is a smaller, sharper highlight. 50 is
         // what nearly every Ethanon entity carries. Must be above zero.
         float specularPower{50.0f};
+
+        // --- A baked light's eye ---------------------------------------------
+        //
+        // Ethanon 0.7.12 drew the static lights on a static entity into a
+        // lightmap once, when the scene loaded, and its highlight in that bake
+        // was seen from an eye fixed to the ENTITY rather than to the camera
+        // (ETHShaderManager::SetFakeEyePosition with drawToTarget): the eye
+        // stayed where it was when the camera moved, and so did the highlight.
+        //
+        // With bakedEye, a light whose Light2DComponent::baked is set is seen
+        // from
+        //   Eye = (L.x, bakedEyeY, height + Light2DEye.height)
+        // - the light's own x, a fixed world y, and the frame eye's height
+        // above this sprite's `height` - and every other light from the
+        // frame's Light2DEye as before. Read only with a highlight
+        // (specularStrength above zero): the eye enters nothing else.
+        //
+        // bakedEyeY rides in the draw's skinJointCount as a float's bits, a
+        // field only the skinned vertex path reads, and a draw is skinned only
+        // when its skinPaletteBase is not -1, which a sprite's always is; a
+        // skinned draw keeps its own and ignores this. Off, the draw writes
+        // the bytes it always wrote.
+        bool bakedEye{false};
+        float bakedEyeY{0.0f};
+
+        // --- The light pass's alpha test --------------------------------------
+        //
+        // Ethanon drew each light as its own One, One pass under Direct3D 9's
+        // alpha test (ALPHAREF 1, GREATER), so a light whose pass came out with
+        // an alpha of 1/255 or less added nothing at that texel - the highlight
+        // included. The pass's alpha was the light's colour alpha, which it
+        // held at 1, times everything else the pass multiplied
+        // (hPixelLight.cg, vPixelLight.cg):
+        //   flat, no highlight     a.tex * a.colour * facing * att * I * a.tex
+        //   standing, no highlight a.tex * a.colour * facing * att * I
+        //   with a highlight       a.tex * att * (a.colour * facing * I
+        //                                         + shine * gloss.a * specularStrength * I)
+        // where I is the frame's Light2DAlphaTest::intensity (the scene-wide
+        // light intensity Ethanon kept apart from the colour, which a
+        // Light2DComponent folds in) and a light's add is skipped when a is
+        // below 1.5/255, the 8-bit value 1 rounded. Off, every light adds as
+        // before.
+        bool lightAlphaTest{false};
 
         bool operator==(const Sprite2DLight&) const = default;
     };

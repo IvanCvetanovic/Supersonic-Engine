@@ -37,7 +37,8 @@ uint32_t GatherLights2D(const entt::registry& registry,
         gpu.position = glm::vec3(world.x, world.y, light.height);
         gpu.range = light.range;
         gpu.color = color;
-        gpu.layers = light.layers;
+        // A light that is not baked packs the layer byte alone, as it always did.
+        gpu.layers = light.baked ? (static_cast<uint32_t>(light.layers) | kLight2DBakedBit) : light.layers;
         out.push_back(gpu);
     }
 
@@ -52,7 +53,22 @@ GpuLight2DHeader MakeHeader(const entt::registry& registry, uint32_t count) {
         header.eyeMirrorY = eye->mirrorY;
         header.eyeHeight = eye->height;
     }
+    if (const Light2DAlphaTest* alphaTest = registry.ctx().find<Light2DAlphaTest>()) {
+        header.passAlphaIntensity = alphaTest->intensity;
+    }
     return header;
+}
+
+float PassAlphaOf(const PassAlpha& pass, float facing, float attenuation, bool highlighted, float shine) {
+    if (highlighted) {
+        // albedoTex.a * attenuation * (colorAlpha * facing * I + shine * glossAlpha * I)
+        return pass.albedoAlpha * attenuation *
+               (pass.colorAlpha * facing * pass.intensity + shine * pass.glossAlpha * pass.intensity);
+    }
+    // passAlphaScale * attenuation * facing, the scale taking the texel's alpha
+    // twice for a flat sprite (hPixelLight's main weights its whole output by it)
+    const float scale = pass.albedoAlpha * pass.colorAlpha * pass.intensity * (pass.vertical ? 1.0f : pass.albedoAlpha);
+    return scale * attenuation * facing;
 }
 
 glm::vec3 WorldNormal(const glm::vec3& encodedTexel, bool normalYDown, const glm::mat4& model) {
@@ -67,7 +83,7 @@ glm::vec3 WorldNormal(const glm::vec3& encodedTexel, bool normalYDown, const glm
 
 glm::vec3 Contribution(const GpuLight2D& light, uint8_t mask,
                        const glm::vec3& surface, const glm::vec3& normal,
-                       const glm::vec3& tint) {
+                       const glm::vec3& tint, const PassAlpha* passAlpha) {
     // if ((light2D.lights[i].layers & mask) == 0u) continue;
     if ((light.layers & static_cast<uint32_t>(mask)) == 0u) return glm::vec3(0.0f);
 
@@ -82,6 +98,10 @@ glm::vec3 Contribution(const GpuLight2D& light, uint8_t mask,
     const float attenuation = 1.0f - d2 / r2;
     // float facing = dot(v, n) * inversesqrt(max(d2, 1e-12));
     const float facing = glm::dot(v, normal) * (1.0f / std::sqrt(std::max(d2, 1e-12f)));
+    // if (alphaTest && passAlphaScale * attenuation * facing < LIGHT_PASS_ALPHA_REF) continue;
+    if (passAlpha != nullptr && PassAlphaOf(*passAlpha, facing, attenuation) < kLightPassAlphaRef) {
+        return glm::vec3(0.0f);
+    }
     // lit += clamp(tint * color * (attenuation * facing), 0.0, 1.0);
     return glm::clamp(tint * light.color * (attenuation * facing), 0.0f, 1.0f);
 }
@@ -100,9 +120,15 @@ glm::vec3 EyeFor(const glm::vec3& lightPosition, float eyeMirrorY, float eyeHeig
     return glm::vec3(lightPosition.x, 2.0f * eyeMirrorY - lightPosition.y, eyeHeight);
 }
 
+glm::vec3 BakedEyeFor(const glm::vec3& lightPosition, float bakedEyeY, float spriteHeight, float eyeHeight) {
+    // vec3(l.x, bakedEyeY, instances[fragInstance].emissive.w + light2D.eyeHeight)
+    return glm::vec3(lightPosition.x, bakedEyeY, spriteHeight + eyeHeight);
+}
+
 glm::vec3 SpecularContribution(const GpuLight2D& light, uint8_t mask,
                                const glm::vec3& surface, const glm::vec3& normal,
-                               const glm::vec3& tint, const Highlight& highlight) {
+                               const glm::vec3& tint, const Highlight& highlight,
+                               const PassAlpha* passAlpha) {
     const auto inverseLength = [](float squared) { return 1.0f / std::sqrt(std::max(squared, 1e-12f)); };
 
     // The loop's head is Contribution's, line for line.
@@ -114,8 +140,13 @@ glm::vec3 SpecularContribution(const GpuLight2D& light, uint8_t mask,
     const float attenuation = 1.0f - d2 / r2;
     const float facing = glm::dot(v, normal) * inverseLength(d2);
 
-    // vec3 e = vec3(l.x, 2.0 * eyeMirrorY - l.y, eyeHeight) - p;
-    const glm::vec3 e = EyeFor(light.position, highlight.eyeMirrorY, highlight.eyeHeight) - surface;
+    // vec3 e = (bakedEye && (layers & LIGHT_BAKED_BIT) != 0u)
+    //     ? vec3(l.x, bakedEyeY, emissive.w + eyeHeight) - p
+    //     : vec3(l.x, 2.0 * eyeMirrorY - l.y, eyeHeight) - p;
+    const glm::vec3 e =
+        (highlight.bakedEye && (light.layers & kLight2DBakedBit) != 0u)
+            ? BakedEyeFor(light.position, highlight.bakedEyeY, highlight.spriteHeight, highlight.eyeHeight) - surface
+            : EyeFor(light.position, highlight.eyeMirrorY, highlight.eyeHeight) - surface;
     // vec3 h = v * inversesqrt(max(d2, 1e-12)) + e * inversesqrt(max(dot(e, e), 1e-12));
     glm::vec3 h = v * inverseLength(d2) + e * inverseLength(glm::dot(e, e));
     // h *= inversesqrt(max(dot(h, h), 1e-12));
@@ -124,6 +155,12 @@ glm::vec3 SpecularContribution(const GpuLight2D& light, uint8_t mask,
     const float nh = glm::clamp(glm::dot(normal, h), 0.0f, 1.0f);
     // float shine = nh > 0.0 ? pow(nh, specularPower) : 0.0;
     const float shine = nh > 0.0f ? std::pow(nh, highlight.power) : 0.0f;
+
+    // if (alphaTest && albedoTex.a * attenuation * (colorAlpha * facing * I + shine * glossAlpha * I)
+    //                  < LIGHT_PASS_ALPHA_REF) continue;
+    if (passAlpha != nullptr && PassAlphaOf(*passAlpha, facing, attenuation, true, shine) < kLightPassAlphaRef) {
+        return glm::vec3(0.0f);
+    }
 
     // lit += clamp(tint * color * (attenuation * facing)
     //              + color * gloss * (shine * attenuation), 0.0, 1.0);

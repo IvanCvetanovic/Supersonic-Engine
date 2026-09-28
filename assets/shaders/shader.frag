@@ -108,13 +108,18 @@ const int FLAG_SPRITE2D      = 1 << 1;
 const int FLAG_NORMAL_Y_DOWN = 1 << 2;
 const int FLAG_PREMULTIPLIED = 1 << 3;
 const int FLAG_VERTICAL_2D   = 1 << 4;
+// Must match PushConstantData::kBakedEye2D and kLightAlphaTest2D. Both are read
+// only by shadeSprite2D's light loop, and only when set.
+const int FLAG_BAKED_EYE_2D  = 1 << 5;
+const int FLAG_LIGHT_ALPHA_TEST_2D = 1 << 6;
 const int LIGHT_MASK_SHIFT   = 20;
 const uint LIGHT_MASK_BITS   = 0xFFu;
 
 // Set 0, binding 12: every 2D point light in the frame (Light2DComponent),
 // gathered by Light2D::GatherLights2D. Must match core/Light2D.hpp's GpuLight2D
 // and GpuLight2DHeader: std430 puts the array at 16, after the count, the
-// specular eye's two numbers and a word of padding, with a 32-byte stride. The
+// specular eye's two numbers and the pass alpha's intensity (a word of padding
+// until the alpha test needed it), with a 32-byte stride. The
 // renderer writes the header every frame, zero included, because the loop below
 // reads the count for every 2D sprite.
 struct Light2D {
@@ -127,13 +132,21 @@ layout(std430, set = 0, binding = 12) readonly buffer Light2DBuffer {
     uint  count;
     float eyeMirrorY;   // Light2DEye: a light at L is seen from
     float eyeHeight;    //   (L.x, 2 * eyeMirrorY - L.y, eyeHeight)
-    uint  _pad2;
+    float passAlphaIntensity;   // Light2DAlphaTest; 0 without one
     Light2D lights[];
 } light2D;
 
 // Must match kMaxLights2D. The buffer is sized for this many, so a count above
 // it (which the renderer never writes) would read past the end.
 const uint MAX_LIGHTS_2D = 64u;
+
+// Light2DComponent::baked, above the layer byte of a light's layers. Must match
+// kLight2DBakedBit.
+const uint LIGHT_BAKED_BIT = 0x100u;
+
+// Direct3D 9's ALPHAREF 1 with GREATER on an 8-bit alpha: a light pass whose
+// alpha rounds to 1/255 or less draws nothing. Must match kLightPassAlphaRef.
+const float LIGHT_PASS_ALPHA_REF = 1.5 / 255.0;
 
 // The UV slot lives in the twelve bits ABOVE the switches. Must match
 // PushConstantData::kUvSlotShift and kUvSlotMask.
@@ -480,6 +493,21 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
         // the room it is in.
         vec3 tint = texel * instances[fragInstance].emissive.rgb;
 
+        // THE LIGHT PASS'S ALPHA TEST (Sprite2DLight::lightAlphaTest). Ethanon
+        // drew each light as its own pass under Direct3D 9's alpha test, and a
+        // pass whose alpha came out below LIGHT_PASS_ALPHA_REF drew nothing.
+        // That alpha is everything the pass multiplied except the light's
+        // colour, whose alpha Ethanon held at 1: the texel's alpha (twice for a
+        // flat sprite, whose whole pass hPixelLight weights by it), the draw's,
+        // the facing, the falloff and the scene-wide intensity
+        // (Light2DAlphaTest; 1 when the frame gives none). Off, no light is
+        // skipped and the arithmetic below is what it always was.
+        bool alphaTest = (flags & FLAG_LIGHT_ALPHA_TEST_2D) != 0;
+        float passIntensity = light2D.passAlphaIntensity > 0.0 ? light2D.passAlphaIntensity : 1.0;
+        float colorAlpha = instances[fragInstance].albedoColor.a;
+        float passAlphaScale = albedoTex.a * colorAlpha * passIntensity
+                             * ((flags & FLAG_VERTICAL_2D) != 0 ? 1.0 : albedoTex.a);
+
         // material.z is the specular strength, and zero is no highlight: this
         // loop is then the one the path always ran, unchanged, rather than a
         // second one fed zeros that a compiler may contract differently.
@@ -493,6 +521,7 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
                 if (d2 >= r2) continue;                       // the falloff is exactly 0 there
                 float attenuation = 1.0 - d2 / r2;
                 float facing = dot(v, n) * inversesqrt(max(d2, 1e-12));
+                if (alphaTest && passAlphaScale * attenuation * facing < LIGHT_PASS_ALPHA_REF) continue;
                 // A light behind the surface is a negative colour, clamped to
                 // nothing rather than subtracted.
                 lit += clamp(tint * light2D.lights[i].color * (attenuation * facing), 0.0, 1.0);
@@ -503,8 +532,20 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
             // OWN alpha - hPixelLight/vPixelLight's mainSpecular. The power
             // rides in probeIndex as a float's bits; only the PBR exit reads
             // that field as an index, and a sprite never reaches it.
-            vec3 gloss = texture(glossMap, uv).rgb * (specularStrength * albedoTex.a);
+            vec4 glossTexel = texture(glossMap, uv);
+            vec3 gloss = glossTexel.rgb * (specularStrength * albedoTex.a);
             float specularPower = intBitsToFloat(instances[fragInstance].probeIndex);
+            // The highlight's share of the pass's alpha (the test above).
+            float glossAlpha = glossTexel.a * specularStrength;
+
+            // THE BAKED EYE (Sprite2DLight::bakedEye): a light marked baked is
+            // seen from the sprite's own fixed eye, as Ethanon's lightmap bake
+            // saw it - the light's x, the y that rides in skinJointCount, and
+            // the frame eye's height above the sprite's own height. Only on a
+            // draw that is not skinned, which is the only kind that carries it.
+            bool bakedEye = (flags & FLAG_BAKED_EYE_2D) != 0 && instances[fragInstance].skinPaletteBase < 0;
+            float bakedEyeY = intBitsToFloat(instances[fragInstance].skinJointCount);
+            float bakedEyeZ = instances[fragInstance].emissive.w + light2D.eyeHeight;
 
             for (uint i = 0u; i < count; ++i) {
                 if ((light2D.lights[i].layers & mask) == 0u) continue;
@@ -521,11 +562,19 @@ vec4 shadeSprite2D(vec2 uv, vec4 albedoTex) {
                 // so is their sum, which is zero when eye and light are exactly
                 // opposite.
                 vec3 l = light2D.lights[i].position;
-                vec3 e = vec3(l.x, 2.0 * light2D.eyeMirrorY - l.y, light2D.eyeHeight) - p;
+                vec3 e = (bakedEye && (light2D.lights[i].layers & LIGHT_BAKED_BIT) != 0u)
+                       ? vec3(l.x, bakedEyeY, bakedEyeZ) - p
+                       : vec3(l.x, 2.0 * light2D.eyeMirrorY - l.y, light2D.eyeHeight) - p;
                 vec3 h = v * inversesqrt(max(d2, 1e-12)) + e * inversesqrt(max(dot(e, e), 1e-12));
                 h *= inversesqrt(max(dot(h, h), 1e-12));
                 float nh = clamp(dot(n, h), 0.0, 1.0);
                 float shine = nh > 0.0 ? pow(nh, specularPower) : 0.0;
+
+                if (alphaTest && albedoTex.a * attenuation
+                                     * (colorAlpha * facing * passIntensity + shine * glossAlpha * passIntensity)
+                                 < LIGHT_PASS_ALPHA_REF) {
+                    continue;
+                }
 
                 // Summed with the diffuse term BEFORE the clamp, as the one
                 // pass that drew both did: a light behind the surface takes
